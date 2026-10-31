@@ -15,9 +15,9 @@ use roomkit::model::{
 use roomkit::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CloseRoomOptions,
     CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
-    DetachChannelOptions, HookExecution, HookSpec, HookTrigger, HostChannel, InboundResult,
-    MuteOptions, PostOptions, ProcessInboundOptions, RoomKitError, SendEventOptions,
-    SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateEventOptions,
+    DetachChannelOptions, HookOptions, HookTrigger, HostChannel, InboundResult, MuteOptions,
+    PostOptions, ProcessInboundOptions, RoomKitError, SendEventOptions, SetAccessOptions,
+    SetVisibilityOptions, UnmuteOptions, UpdateEventOptions,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use crate::agents;
 use crate::errors::{error_of, named};
 use crate::run::Run;
-use crate::scripted::{ScriptedChannel, hook_handler};
+use crate::scripted::{ScriptedChannel, hook_handler, session_hook_handler};
 use crate::templates::{complete_event, complete_participant, system_source};
 
 /// Why a call could not even be made: a scenario the runner cannot read.
@@ -431,20 +431,27 @@ pub(crate) fn register_hook(
     hook: &Value,
 ) -> Result<Result<(), RoomKitError>, Unreadable> {
     let trigger: HookTrigger = field(hook, "trigger")?;
-    let execution: HookExecution = optional(hook, "execution")?.unwrap_or(HookExecution::Sync);
-    if trigger.is_tool_trigger() {
-        return agents::register_tool_hook(run, hook, trigger, execution);
-    }
-    let name = hook["name"].as_str().unwrap_or_default();
-    let mut spec = HookSpec::new(name, trigger, execution);
-    spec.priority = optional(hook, "priority")?.unwrap_or_default();
-    if let Some(timeout) = optional::<u64>(hook, "timeout_ms")? {
-        spec.timeout = Duration::from_millis(timeout);
-    }
-    spec.fail_closed = optional(hook, "fail_closed")?.unwrap_or_default();
-    spec.needs_lock = optional(hook, "needs_lock")?.unwrap_or(true);
-    spec.filter.channel_types = optional::<BTreeSet<ChannelType>>(hook, "channel_types")?;
-    spec.filter.channel_ids = optional::<BTreeSet<ChannelId>>(hook, "channel_ids")?;
-    spec.filter.directions = optional::<BTreeSet<EventDirection>>(hook, "directions")?;
-    Ok(run.kit().hook(spec, hook_handler(hook, run)).map(drop))
+    let defaults = HookOptions::default();
+    let options = HookOptions {
+        execution: optional(hook, "execution")?.unwrap_or(defaults.execution),
+        priority: optional(hook, "priority")?.unwrap_or(defaults.priority),
+        name: hook["name"].as_str().unwrap_or_default().to_owned(),
+        timeout: optional::<u64>(hook, "timeout_ms")?
+            .map_or(defaults.timeout, Duration::from_millis),
+        channel_types: optional::<BTreeSet<ChannelType>>(hook, "channel_types")?,
+        channel_ids: optional::<BTreeSet<ChannelId>>(hook, "channel_ids")?,
+        directions: optional::<BTreeSet<EventDirection>>(hook, "directions")?,
+        fail_closed: optional(hook, "fail_closed")?.unwrap_or(defaults.fail_closed),
+        needs_lock: optional(hook, "needs_lock")?.unwrap_or(defaults.needs_lock),
+        ..defaults
+    };
+    let kit = run.kit();
+    let registered = if trigger.is_tool_trigger() {
+        kit.hook(trigger, agents::tool_hook_handler(hook, run), options)
+    } else if trigger == HookTrigger::OnSessionStarted {
+        kit.hook(trigger, session_hook_handler(hook, run), options)
+    } else {
+        kit.hook(trigger, hook_handler(hook, run), options)
+    };
+    Ok(registered.map(drop))
 }

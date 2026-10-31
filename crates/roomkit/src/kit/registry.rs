@@ -4,17 +4,16 @@ use std::convert::Infallible;
 use std::future::Future;
 use std::sync::Arc;
 
-use roomkit_core::model::{ChannelId, RoomContext, RoomEvent};
+use roomkit_core::model::{ChannelId, RoomContext};
 use roomkit_core::ops::FrameworkEvent as CoreEvent;
-use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTrigger};
+use roomkit_core::rules::hook_registry::{HookTrigger, RegistrationError};
 
 use super::{RoomKit, write};
 use crate::channel::{Channel, DynChannel};
 use crate::error::RoomKitError;
-use crate::hooks::{HookError, HookHandler, HookReturn, Observer};
+use crate::hooks::{Closure, HookHandler, HookOptions, HookPayload, IntoHookReturn};
 use crate::registered::{Registered, RegisteredChannel};
 use crate::store::ConversationStore;
-use crate::tool_calls::{ToolCallEvent, ToolHandler, ToolHookSpec, ToolUse, ToolVerdict};
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Registers a channel, then emits `channel_registered`.
@@ -92,221 +91,96 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(Some(Arc::new(unregistered)))
     }
 
-    /// Registers a hook whose handler is a closure, given the payload and
-    /// the room (RFC §9.1). The closure's argument types are the ones it is
-    /// called with, so they need no annotation:
+    /// Registers a hook on `trigger` (RFC §9.1): Python's
+    /// `RoomKit.hook(trigger, execution, priority, name, timeout,
+    /// channel_types, channel_ids, directions, event_types, fail_closed,
+    /// needs_lock)`, its keywords in `options`. The closure takes the
+    /// trigger's payload, its type written on its argument: a [`RoomEvent`]
+    /// for an event's or a lifecycle change's trigger, a
+    /// [`ToolCallEvent`] for `BEFORE_TOOL_USE` and `ON_TOOL_CALL`, a
+    /// [`SessionStartedEvent`](crate::SessionStartedEvent) for
+    /// `ON_SESSION_STARTED`. It returns a `HookResult`, one or what it
+    /// raised, or `()`, Python's `None`; what an ASYNC hook returns is
+    /// discarded.
     ///
     /// ```
     /// # fn register(kit: &roomkit::RoomKit) -> Result<(), roomkit::RoomKitError> {
     /// use roomkit::model::hook::{AllowOptions, BlockOptions};
-    /// use roomkit::model::{EventContent, HookResult};
-    /// use roomkit::{HookExecution, HookSpec, HookTrigger};
+    /// use roomkit::model::{EventContent, HookResult, RoomContext, RoomEvent};
+    /// use roomkit::{HookOptions, HookTrigger};
     ///
-    /// let spec = HookSpec::new("spam_filter", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    /// kit.hook(spec, |event, _context| {
-    ///     let spam = matches!(&event.content, EventContent::Text(text) if text.body.contains("spam"));
-    ///     async move {
-    ///         Ok(if spam {
-    ///             HookResult::block("spam", BlockOptions::default())
-    ///         } else {
-    ///             HookResult::allow(AllowOptions::default())
-    ///         })
-    ///     }
-    /// })?;
+    /// let options = HookOptions { name: "spam_filter".to_owned(), ..Default::default() };
+    /// kit.hook(
+    ///     HookTrigger::BeforeBroadcast,
+    ///     |event: RoomEvent, _context: RoomContext| {
+    ///         let spam = matches!(&event.content, EventContent::Text(text) if text.body.contains("spam"));
+    ///         async move {
+    ///             if spam {
+    ///                 HookResult::block("spam", BlockOptions::default())
+    ///             } else {
+    ///                 HookResult::allow(AllowOptions::default())
+    ///             }
+    ///         }
+    ///     },
+    ///     options,
+    /// )?;
     /// # Ok(())
     /// # }
     /// ```
     ///
-    /// A handler of a type of its own registers with
-    /// [`hook_handler`](Self::hook_handler). A tool trigger's payload is a
-    /// tool call, no event: its hooks register with
-    /// [`before_tool_use`](Self::before_tool_use),
-    /// [`on_tool_call`](Self::on_tool_call) and
-    /// [`observe_tool_calls`](Self::observe_tool_calls).
-    ///
     /// # Errors
     ///
     /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
-    /// §12.10.4); [`RoomKitError::Value`] when the registration breaks a rule
-    /// of RFC §9.1, and for a tool trigger.
-    pub fn hook<F, Fut>(&self, spec: HookSpec, handler: F) -> Result<HookId, RoomKitError>
+    /// §12.10.4), and [`RoomKitError::Value`], Python's `ValueError`, when the
+    /// registration breaks a rule of RFC §9.1 or its handler takes another
+    /// payload than its trigger's.
+    pub fn hook<P, F, Fut, R>(
+        &self,
+        trigger: HookTrigger,
+        handler: F,
+        options: HookOptions,
+    ) -> Result<(), RoomKitError>
     where
-        F: Fn(RoomEvent, RoomContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = HookReturn> + Send + 'static,
+        P: HookPayload,
+        F: Fn(P, RoomContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = R> + Send + 'static,
+        R: IntoHookReturn<P>,
     {
-        self.hook_handler(spec, handler)
+        self.hook_handler(trigger, Closure(handler), options)
     }
 
     /// Registers a hook whose handler is a type of its own implementing
-    /// [`HookHandler`] (RFC §9.1).
+    /// [`HookHandler`] (RFC §9.1), as [`hook`](Self::hook) does.
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
-    /// §12.10.4), and [`RoomKitError::Value`] when the registration breaks a
-    /// rule of RFC §9.1.
-    pub fn hook_handler(
+    /// As [`hook`](Self::hook).
+    pub fn hook_handler<P: HookPayload>(
         &self,
-        spec: HookSpec,
-        handler: impl HookHandler,
-    ) -> Result<HookId, RoomKitError> {
-        self.inner.open()?;
-        let handler: Arc<dyn HookHandler> = Arc::new(handler);
-        let id = self.inner.try_change_config(|config| {
-            let id = config.hooks.register(spec)?;
-            // The handler is in place before an operation can see the hook.
-            write(&self.inner.hooks).insert(id, handler);
-            Ok::<HookId, RoomKitError>(id)
-        })?;
-        Ok(id)
-    }
-
-    /// Registers a SYNC `BEFORE_BROADCAST` hook named `name`, with the RFC's
-    /// defaults (RFC §9.5).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
-    /// §12.10.4), and [`RoomKitError::Value`] when the name is taken.
-    pub fn before_broadcast<F, Fut>(&self, name: &str, handler: F) -> Result<HookId, RoomKitError>
-    where
-        F: Fn(RoomEvent, RoomContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = HookReturn> + Send + 'static,
-    {
-        let spec = HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync);
-        self.hook(spec, handler)
-    }
-
-    /// Registers an ASYNC observer on `trigger` (RFC §9.3): it runs after the
-    /// fact, and what it raises is logged. An observer of a lifecycle
-    /// trigger reads the change its payload reports in its system content:
-    /// `code` names it, `data` holds what it changed, as Python's payload
-    /// does.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
-    /// §12.10.4), and [`RoomKitError::Value`] when the name is taken.
-    pub fn observe<F, Fut>(
-        &self,
-        name: &str,
         trigger: HookTrigger,
-        handler: F,
-    ) -> Result<HookId, RoomKitError>
-    where
-        F: Fn(RoomEvent, RoomContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let spec = HookSpec::new(name, trigger, HookExecution::Async);
-        self.hook_handler(spec, Observer(handler))
-    }
-
-    /// Registers a `BEFORE_TOOL_USE` hook (RFC §9.3): the gate of every call
-    /// an agent's tool loop runs, once the call passed the agent's own
-    /// checks (RFC §21.1), in chain order. It reads the call with the
-    /// arguments the hooks before it left, and allows it, rewrites its
-    /// arguments, or blocks it with words the model reads. The trigger
-    /// fails closed: a hook that raises or runs past its timeout refuses the
-    /// call, the model reading the fixed refusal and the hook's observers
-    /// its error.
-    ///
-    /// An approval that holds the call until a person answers:
-    ///
-    /// ```
-    /// # fn register(kit: &roomkit::RoomKit) -> Result<(), roomkit::RoomKitError> {
-    /// use std::time::Duration;
-    /// use roomkit::{ToolHookSpec, ToolUse};
-    ///
-    /// let spec = ToolHookSpec::new("approve").with_timeout(Duration::from_secs(300));
-    /// kit.before_tool_use(spec, |event, _context| {
-    ///     let wipes = event.call.name.starts_with("delete_");
-    ///     async move {
-    ///         Ok(if wipes { ToolUse::block("A manager must approve this.") } else { ToolUse::Allow })
-    ///     }
-    /// })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
-    /// §12.10.4), and [`RoomKitError::Value`] when the name is taken.
-    pub fn before_tool_use<F, Fut>(
-        &self,
-        spec: impl Into<ToolHookSpec>,
-        handler: F,
-    ) -> Result<HookId, RoomKitError>
-    where
-        F: Fn(ToolCallEvent, RoomContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<ToolUse, HookError>> + Send + 'static,
-    {
-        let spec = spec
-            .into()
-            .on(HookTrigger::BeforeToolUse, HookExecution::Sync);
-        self.tool_hook(spec, ToolHandler::gate(handler))
-    }
-
-    /// Registers a SYNC `ON_TOOL_CALL` hook (RFC §9.3): it reads each call
-    /// an agent's tool loop served, with its result as the hooks before it
-    /// left it, and keeps the result, replaces it, or withholds it, which
-    /// fails the call `blocked`. A hook that raises or runs past its timeout
-    /// is skipped. A call that was refused or failed never reaches it: it
-    /// reaches the observers only ([`observe_tool_calls`](Self::observe_tool_calls)).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
-    /// §12.10.4), and [`RoomKitError::Value`] when the name is taken.
-    pub fn on_tool_call<F, Fut>(
-        &self,
-        spec: impl Into<ToolHookSpec>,
-        handler: F,
-    ) -> Result<HookId, RoomKitError>
-    where
-        F: Fn(ToolCallEvent, RoomContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<ToolVerdict, HookError>> + Send + 'static,
-    {
-        let spec = spec.into().on(HookTrigger::OnToolCall, HookExecution::Sync);
-        self.tool_hook(spec, ToolHandler::verdict(handler))
-    }
-
-    /// Registers an ASYNC `ON_TOOL_CALL` observer (RFC §9.3): it reads every
-    /// call an agent's tool loop makes once, when it ended, served, refused
-    /// or failed, with its outcome, the result as the model read it and, for
-    /// the observers alone, what failed (`error_detail`). It runs in the
-    /// background, what it raises logged. It runs as a task of the turn
-    /// that made the call: a post it makes while the turn's delivery runs
-    /// draws one of the cascade's passes, and what it sends is at least as
-    /// deep as the turn was, once the turn is over too (RFC §8.3).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
-    /// §12.10.4), and [`RoomKitError::Value`] when the name is taken.
-    pub fn observe_tool_calls<F, Fut>(
-        &self,
-        spec: impl Into<ToolHookSpec>,
-        handler: F,
-    ) -> Result<HookId, RoomKitError>
-    where
-        F: Fn(ToolCallEvent, RoomContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let spec = spec
-            .into()
-            .on(HookTrigger::OnToolCall, HookExecution::Async);
-        self.tool_hook(spec, ToolHandler::observer(handler))
-    }
-
-    /// Registers the tool hook `spec` with `handler`.
-    fn tool_hook(&self, spec: HookSpec, handler: ToolHandler) -> Result<HookId, RoomKitError> {
+        handler: impl HookHandler<P>,
+        options: HookOptions,
+    ) -> Result<(), RoomKitError> {
         self.inner.open()?;
+        let spec = options.spec(trigger);
+        if !P::accepts(trigger) {
+            return Err(RegistrationError::PayloadMismatch {
+                hook: spec.name,
+                trigger,
+            }
+            .into());
+        }
+        let handler: Arc<dyn HookHandler<P>> = Arc::new(handler);
+        let kept = P::kept(handler);
         self.inner.try_change_config(|config| {
-            let id = config.hooks.register_tool_hook(spec)?;
-            // The handler is in place before a turn can see the hook.
-            write(&self.inner.tool_hooks).insert(id, handler);
-            Ok::<HookId, RoomKitError>(id)
+            let id = if trigger.is_tool_trigger() {
+                config.hooks.register_tool_hook(spec)?
+            } else {
+                config.hooks.register(spec)?
+            };
+            // The handler is in place before an operation can see the hook.
+            write(&self.inner.hooks).insert(id, kept);
+            Ok::<(), RoomKitError>(())
         })
     }
 }

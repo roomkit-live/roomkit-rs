@@ -22,9 +22,9 @@ use roomkit::model::{
 use roomkit::testing::{EchoAgent, EchoAgentOptions, SequentialEnvironment, kit_with_environment};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ChannelOf, ConversationStore,
-    CreateRoomOptions, DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, HookTrigger,
-    InMemoryStore, InboundRoomRouter, ProcessInboundOptions, RoomKit, RoomKitOptions, RouteOptions,
-    RouterFuture, WeakRoomKit,
+    CreateRoomOptions, DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, HookExecution,
+    HookOptions, HookTrigger, InMemoryStore, InboundRoomRouter, ProcessInboundOptions, RoomKit,
+    RoomKitOptions, RouteOptions, RouterFuture, WeakRoomKit,
 };
 use serde_json::{Value, json};
 
@@ -155,18 +155,26 @@ fn kit_with_agent_on(options: RoomKitOptions) -> (RoomKit, Sms) {
     ))
     .unwrap();
     let attaching = kit.clone();
-    kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
-        let kit = attaching.clone();
-        async move {
-            kit.attach_channel(
-                &event.room_id,
-                &channel("ai"),
-                AttachChannelOptions::default(),
-            )
-            .await
-            .unwrap();
-        }
-    })
+    kit.hook(
+        HookTrigger::OnRoomCreated,
+        move |event: RoomEvent, _| {
+            let kit = attaching.clone();
+            async move {
+                kit.attach_channel(
+                    &event.room_id,
+                    &channel("ai"),
+                    AttachChannelOptions::default(),
+                )
+                .await
+                .unwrap();
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "welcome".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     (kit, sms)
 }

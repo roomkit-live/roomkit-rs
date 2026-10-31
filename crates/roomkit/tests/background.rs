@@ -19,7 +19,7 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    GetTimelineOptions, HookExecution, HookSpec, HookTrigger, ProcessInboundOptions, RoomKit,
+    GetTimelineOptions, HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomKit,
     RoomKitError, RoomKitOptions,
 };
 use roomkit_core::rules::transcoding::text_of;
@@ -143,13 +143,21 @@ async fn idle_waits_for_an_observer_hook_running_after_its_call() {
     let gate = Gate::default();
     let observed = Arc::new(AtomicBool::new(false));
     let (hook_gate, hook_observed) = (gate.clone(), Arc::clone(&observed));
-    kit.observe("audit", HookTrigger::AfterBroadcast, move |_, _| {
-        let (gate, observed) = (hook_gate.clone(), Arc::clone(&hook_observed));
-        async move {
-            gate.pass().await;
-            observed.store(true, Ordering::SeqCst);
-        }
-    })
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        move |_: RoomEvent, _| {
+            let (gate, observed) = (hook_gate.clone(), Arc::clone(&hook_observed));
+            async move {
+                gate.pass().await;
+                observed.store(true, Ordering::SeqCst);
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "audit".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     kit.process_inbound(
         message("Bonjour"),
@@ -266,10 +274,17 @@ async fn close_gives_a_delivery_in_progress_its_grace() {
 #[tokio::test(start_paused = true)]
 async fn close_ends_a_call_stuck_before_its_commit() {
     let kit = room().await;
-    kit.before_broadcast("stuck", |_, _| async {
-        pending::<()>().await;
-        Ok(HookResult::allow(AllowOptions::default()))
-    })
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |_: RoomEvent, _| async {
+            pending::<()>().await;
+            Ok(HookResult::allow(AllowOptions::default()))
+        },
+        HookOptions {
+            name: "stuck".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let call = spawn_bonjour(&kit);
     tokio::time::sleep(BRIEF).await;
@@ -307,16 +322,24 @@ async fn close_cuts_an_after_broadcast_observer_at_the_grace() {
     let observed = Arc::new(Mutex::new(Vec::new()));
     for (name, runs) in [("three", 3), ("nine", 9)] {
         let observed = Arc::clone(&observed);
-        let mut spec = HookSpec::new(name, HookTrigger::AfterBroadcast, HookExecution::Async);
-        spec.timeout = Duration::from_secs(30);
-        kit.hook(spec, move |_event, _| {
-            let observed = Arc::clone(&observed);
-            async move {
-                tokio::time::sleep(Duration::from_secs(runs)).await;
-                observed.lock().unwrap().push(name);
-                Ok(HookResult::allow(AllowOptions::default()))
-            }
-        })
+        let spec = HookOptions {
+            execution: HookExecution::Async,
+            name: name.to_owned(),
+            timeout: Duration::from_secs(30),
+            ..Default::default()
+        };
+        kit.hook(
+            HookTrigger::AfterBroadcast,
+            move |_event: RoomEvent, _| {
+                let observed = Arc::clone(&observed);
+                async move {
+                    tokio::time::sleep(Duration::from_secs(runs)).await;
+                    observed.lock().unwrap().push(name);
+                    Ok(HookResult::allow(AllowOptions::default()))
+                }
+            },
+            spec,
+        )
         .unwrap();
     }
     kit.process_inbound(message("Bonjour"), in_room())
@@ -348,13 +371,21 @@ async fn close_gives_an_observer_its_grace() {
     let observed = Arc::new(Mutex::new(Vec::new()));
     for (name, runs) in [("brief", 1), ("endless", 3600)] {
         let observed = Arc::clone(&observed);
-        kit.observe(name, HookTrigger::BeforeBroadcast, move |_, _| {
-            let observed = Arc::clone(&observed);
-            async move {
-                tokio::time::sleep(Duration::from_secs(runs)).await;
-                observed.lock().unwrap().push(name);
-            }
-        })
+        kit.hook(
+            HookTrigger::BeforeBroadcast,
+            move |_: RoomEvent, _| {
+                let observed = Arc::clone(&observed);
+                async move {
+                    tokio::time::sleep(Duration::from_secs(runs)).await;
+                    observed.lock().unwrap().push(name);
+                }
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: name.to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
     }
     kit.process_inbound(message("Bonjour"), in_room())

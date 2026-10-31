@@ -19,8 +19,8 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, HookTrigger, MuteOptions, ProcessInboundOptions,
-    RoomKit, UnmuteOptions,
+    AttachChannelOptions, CreateRoomOptions, HookExecution, HookOptions, HookTrigger, MuteOptions,
+    ProcessInboundOptions, RoomKit, UnmuteOptions,
 };
 
 use shared::text_of;
@@ -48,10 +48,18 @@ fn observe_mutes(kit: &RoomKit, changes: &Log<String>) -> Result<(), Box<dyn Err
         ("on_unmuted", HookTrigger::OnChannelUnmuted),
     ] {
         let changes = changes.clone();
-        kit.observe(name, trigger, move |event, _| {
-            let changes = changes.clone();
-            async move { changes.push(text_of(&event.content)) }
-        })?;
+        kit.hook(
+            trigger,
+            move |event: RoomEvent, _| {
+                let changes = changes.clone();
+                async move { changes.push(text_of(&event.content)) }
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: name.to_owned(),
+                ..Default::default()
+            },
+        )?;
     }
     Ok(())
 }
@@ -180,7 +188,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     checks.expect(
         "ON_CHANNEL_MUTED and ON_CHANNEL_UNMUTED fire once each: muting a muted channel fires nothing",
-        fired == ["channel muted", "channel unmuted"],
+        fired == ["Channel assistant muted", "Channel assistant unmuted"],
     );
     Ok(checks.finish())
 }

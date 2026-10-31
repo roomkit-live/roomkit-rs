@@ -17,11 +17,11 @@ use roomkit::{
     ArchiveRoomOptions, AttachChannelOptions, Channel, ChannelDeclaration, CheckAllTimersOptions,
     CheckRoomTimersOptions, CloseRoomOptions, CommitEventOptions, ConversationStore,
     CreateRoomOptions, DeleteEventOptions, DetachChannelOptions, GetBindingOptions, GetRoomOptions,
-    GetTimelineOptions, HookExecution, HookSpec, HookTrigger, InMemoryStore, ListBindingsOptions,
-    ListMembersOptions, MuteOptions, PauseRoomOptions, PostOptions, ProcessInboundOptions,
-    ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitError, SendEventOptions,
-    SetAccessOptions, SetVisibilityOptions, ToolCallEvent, ToolUse, ToolVerdict, UnmuteOptions,
-    UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
+    GetTimelineOptions, HookExecution, HookFuture, HookHandler, HookOptions, HookTrigger,
+    InMemoryStore, ListBindingsOptions, ListMembersOptions, MuteOptions, PauseRoomOptions,
+    PostOptions, ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit,
+    RoomKitError, SendEventOptions, SetAccessOptions, SetVisibilityOptions, ToolCallEvent,
+    UnmuteOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -244,14 +244,23 @@ async fn the_kit_s_rooms<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<(&'stati
     ]
 }
 
+/// A hook of its own type, which lets every event through.
+struct Allow;
+
+impl HookHandler for Allow {
+    fn call(&self, _event: RoomEvent, _context: RoomContext) -> HookFuture {
+        Box::pin(async { Ok(Some(HookResult::allow(AllowOptions::default()))) })
+    }
+}
+
 /// The kit's registrations, each made once: whether it was refused.
 fn the_kit_s_registrations<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<(&'static str, bool)> {
+    let late = || HookOptions {
+        name: "late".to_owned(),
+        ..Default::default()
+    };
     let allow =
         |_: RoomEvent, _: RoomContext| async { Ok(HookResult::allow(AllowOptions::default())) };
-    let spec = || HookSpec::new("late", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    let observer = |_: RoomEvent, _: RoomContext| async {};
-    let gate = |_: ToolCallEvent, _: RoomContext| async { Ok(ToolUse::Allow) };
-    let verdict = |_: ToolCallEvent, _: RoomContext| async { Ok(ToolVerdict::Keep) };
     let tool_observer = |_: ToolCallEvent, _: RoomContext| async {};
     vec![
         (
@@ -262,24 +271,24 @@ fn the_kit_s_registrations<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<(&'sta
             "unregister_channel",
             refused(kit.unregister_channel(&channel("sms"))),
         ),
-        ("hook", refused(kit.hook(spec(), allow))),
-        ("hook_handler", refused(kit.hook_handler(spec(), allow))),
         (
-            "before_broadcast",
-            refused(kit.before_broadcast("late", allow)),
+            "hook",
+            refused(kit.hook(HookTrigger::BeforeBroadcast, allow, late())),
         ),
         (
-            "observe",
-            refused(kit.observe("late", HookTrigger::AfterBroadcast, observer)),
+            "hook_handler",
+            refused(kit.hook_handler(HookTrigger::BeforeBroadcast, Allow, late())),
         ),
         (
-            "before_tool_use",
-            refused(kit.before_tool_use("late", gate)),
-        ),
-        ("on_tool_call", refused(kit.on_tool_call("late", verdict))),
-        (
-            "observe_tool_calls",
-            refused(kit.observe_tool_calls("late", tool_observer)),
+            "hook on a tool trigger",
+            refused(kit.hook(
+                HookTrigger::OnToolCall,
+                tool_observer,
+                HookOptions {
+                    execution: HookExecution::Async,
+                    ..late()
+                },
+            )),
         ),
     ]
 }
@@ -320,33 +329,40 @@ fn sending_hook(
 ) {
     let weak = kit.downgrade();
     let (entered, go, answered) = (Arc::clone(entered), Arc::clone(go), Arc::clone(answered));
-    let spec = HookSpec::new("late", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    kit.hook(spec, move |event, _context| {
-        let (weak, entered, go, answered) = (
-            weak.clone(),
-            Arc::clone(&entered),
-            Arc::clone(&go),
-            Arc::clone(&answered),
-        );
-        let ours = text_of(&event.content) == text;
-        async move {
-            if ours && let Some(kit) = weak.upgrade() {
-                entered.notify_one();
-                go.notified().await;
-                let content = TextContent::new("from the hook");
-                let sent = kit
-                    .send_event(
-                        &room("r"),
-                        &channel("sms"),
-                        content,
-                        SendEventOptions::default(),
-                    )
-                    .await;
-                answered.lock().unwrap().push(format!("{:?}", sent.err()));
+    let spec = HookOptions {
+        name: "late".to_owned(),
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _context| {
+            let (weak, entered, go, answered) = (
+                weak.clone(),
+                Arc::clone(&entered),
+                Arc::clone(&go),
+                Arc::clone(&answered),
+            );
+            let ours = text_of(&event.content) == text;
+            async move {
+                if ours && let Some(kit) = weak.upgrade() {
+                    entered.notify_one();
+                    go.notified().await;
+                    let content = TextContent::new("from the hook");
+                    let sent = kit
+                        .send_event(
+                            &room("r"),
+                            &channel("sms"),
+                            content,
+                            SendEventOptions::default(),
+                        )
+                        .await;
+                    answered.lock().unwrap().push(format!("{:?}", sent.err()));
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        spec,
+    )
     .unwrap();
 }
 
@@ -399,10 +415,9 @@ async fn a_call_an_observer_makes_as_the_kit_closes_is_refused() {
         (Arc::clone(&entered), Arc::clone(&go)),
         Arc::clone(&answered),
     );
-    kit.observe(
-        "audit",
+    kit.hook(
         HookTrigger::BeforeBroadcast,
-        move |_event, _context| {
+        move |_event: RoomEvent, _context| {
             let (weak, (entered, go), noted) = (weak.clone(), gates.clone(), Arc::clone(&noted));
             async move {
                 entered.notify_one();
@@ -414,6 +429,11 @@ async fn a_call_an_observer_makes_as_the_kit_closes_is_refused() {
                     noted.lock().unwrap().push(format!("{:?}", committed.err()));
                 }
             }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "audit".to_owned(),
+            ..Default::default()
         },
     )
     .unwrap();

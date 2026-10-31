@@ -6,10 +6,9 @@ use std::sync::atomic::AtomicUsize;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
-use roomkit::model::{ChannelSet, EventStatus, EventType, HookResult, Visibility};
+use roomkit::model::{ChannelSet, EventStatus, EventType, HookResult, RoomEvent, Visibility};
 use roomkit::{
-    DetachChannelOptions, HookExecution, HookSpec, HookTrigger, MuteOptions, RoomKit,
-    SetVisibilityOptions,
+    DetachChannelOptions, HookOptions, HookTrigger, MuteOptions, RoomKit, SetVisibilityOptions,
 };
 use roomkit_ai::testing::ScriptedRound;
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
@@ -37,20 +36,27 @@ async fn a_row_the_streaming_target_may_not_read_is_never_handed_to_it() {
         let runs = Arc::new(AtomicUsize::new(0));
         let (room, _model) =
             Room::new(rounds, lookup(runs, None), Streaming::new(Stop::Never)).await;
-        let spec = HookSpec::new("judge", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+        let spec = HookOptions {
+            name: "judge".to_owned(),
+            ..Default::default()
+        };
         room.kit
-            .hook(spec, move |mut event, _context| async move {
-                if roomkit_core::rules::transcoding::text_of(&event.content) != "Secret part." {
-                    return Ok(HookResult::allow(AllowOptions::default()));
-                }
-                if !narrowed {
-                    return Ok(HookResult::block("secret", BlockOptions::default()));
-                }
-                event.visibility = ChannelSet::new([channel("web")])
-                    .map(Visibility::Channels)
-                    .unwrap();
-                Ok(HookResult::modify(event, ModifyOptions::default()))
-            })
+            .hook(
+                HookTrigger::BeforeBroadcast,
+                move |mut event: RoomEvent, _context| async move {
+                    if roomkit_core::rules::transcoding::text_of(&event.content) != "Secret part." {
+                        return Ok(HookResult::allow(AllowOptions::default()));
+                    }
+                    if !narrowed {
+                        return Ok(HookResult::block("secret", BlockOptions::default()));
+                    }
+                    event.visibility = ChannelSet::new([channel("web")])
+                        .map(Visibility::Channels)
+                        .unwrap();
+                    Ok(HookResult::modify(event, ModifyOptions::default()))
+                },
+                spec,
+            )
             .unwrap();
         room.says("Tell me.").await;
         let mut read = vec![
@@ -210,21 +216,24 @@ async fn a_hook_hiding_the_tool_rows_leaves_the_text_streaming() {
     ];
     let runs = Arc::new(AtomicUsize::new(0));
     let (room, _model) = Room::new(rounds, lookup(runs, None), Streaming::new(Stop::Never)).await;
-    let spec = HookSpec::new(
-        "hide_tools",
-        HookTrigger::BeforeBroadcast,
-        HookExecution::Sync,
-    );
+    let spec = HookOptions {
+        name: "hide_tools".to_owned(),
+        ..Default::default()
+    };
     room.kit
-        .hook(spec, |mut event, _context| async move {
-            if event.r#type == EventType::Message {
-                return Ok(HookResult::allow(AllowOptions::default()));
-            }
-            event.visibility = ChannelSet::new([channel("web")])
-                .map(Visibility::Channels)
-                .unwrap();
-            Ok(HookResult::modify(event, ModifyOptions::default()))
-        })
+        .hook(
+            HookTrigger::BeforeBroadcast,
+            |mut event: RoomEvent, _context| async move {
+                if event.r#type == EventType::Message {
+                    return Ok(HookResult::allow(AllowOptions::default()));
+                }
+                event.visibility = ChannelSet::new([channel("web")])
+                    .map(Visibility::Channels)
+                    .unwrap();
+                Ok(HookResult::modify(event, ModifyOptions::default()))
+            },
+            spec,
+        )
         .unwrap();
     room.says("Where is my order?").await;
     assert_eq!(

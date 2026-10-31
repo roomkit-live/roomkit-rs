@@ -15,7 +15,7 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, EventFilter, EventQuery, HookExecution, HookSpec, HookTrigger,
+    CreateRoomOptions, EventFilter, EventQuery, HookExecution, HookOptions, HookTrigger,
     InboundResult, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
@@ -416,14 +416,22 @@ pub(crate) async fn open(door: Door, witness: &Witness, gated: bool) -> (RoomKit
     let closer = Closer::new(&kit, witness, gated);
     let hook = |trigger, execution| {
         let work = closer.clone();
-        let spec = HookSpec::new("quit", trigger, execution);
-        kit.hook(spec, move |_event, _context| {
-            let work = work.clone();
-            async move {
-                work.close().await;
-                Ok(HookResult::allow(AllowOptions::default()))
-            }
-        })
+        let spec = HookOptions {
+            execution,
+            name: "quit".to_owned(),
+            ..Default::default()
+        };
+        kit.hook(
+            trigger,
+            move |_event: RoomEvent, _context| {
+                let work = work.clone();
+                async move {
+                    work.close().await;
+                    Ok(HookResult::allow(AllowOptions::default()))
+                }
+            },
+            spec,
+        )
         .unwrap();
     };
     match door {

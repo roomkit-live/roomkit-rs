@@ -12,16 +12,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit::model::hook::AllowOptions;
+use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit::model::{
-    ChannelType, EventContent, EventType, InboundMessage, Metadata, RoomEvent, TextContent,
-    ToolCallContent, ToolCallOutcome,
+    ChannelType, EventContent, EventType, HookResult, InboundMessage, Metadata, RoomEvent,
+    TextContent, ToolCallContent, ToolCallOutcome,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookSpec,
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookOptions,
     HookTrigger, MuteOptions, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
-    SendEventOptions, ToolUse, ToolVerdict, current_turn_host,
+    SendEventOptions, ToolCallEvent, current_turn_host,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiAgent, ToolDefinition, ToolError, ToolOutput, Tools};
@@ -91,20 +91,23 @@ async fn an_inbound_message_on_the_agent_s_channel_is_refused() {
     );
 }
 
-/// RFC §9.3: a tool trigger's payload is a tool call, no event.
+/// RFC §9.3: a tool trigger hands its hooks a tool call, no event.
 #[tokio::test]
 async fn a_tool_trigger_takes_no_event_hook() {
     let room = Room::new(ScriptedProvider::new([]), Tools::new()).await;
-    let spec = HookSpec::new("approve", HookTrigger::BeforeToolUse, HookExecution::Sync);
-    let registered = room.kit.hook(spec, |_event, _context| async {
-        Ok(roomkit::model::HookResult::allow(AllowOptions::default()))
-    });
+    let spec = HookOptions {
+        name: "approve".to_owned(),
+        ..Default::default()
+    };
+    let registered = room.kit.hook(
+        HookTrigger::BeforeToolUse,
+        |_event: RoomEvent, _context| async { Ok(HookResult::allow(AllowOptions::default())) },
+        spec,
+    );
     assert_eq!(
         registered.map(drop),
         Err(RoomKitError::Value(
-            "hook \"approve\": BeforeToolUse takes a tool call, not an event: register it as a \
-             tool hook"
-                .to_owned()
+            "hook \"approve\": BeforeToolUse hands its hooks a ToolCallEvent".to_owned()
         ))
     );
 }
@@ -123,17 +126,29 @@ async fn a_sync_on_tool_call_hook_replaces_then_withholds_a_result() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let saw = Arc::clone(&seen);
     room.kit
-        .on_tool_call("redact", move |event, _context| {
-            saw.lock().unwrap().push(event.result.clone());
-            let second = event.call.id == "c2";
-            async move {
-                Ok(if second {
-                    ToolVerdict::block("Withheld by policy")
-                } else {
-                    ToolVerdict::Replace(json!({ "order": "1", "status": "[redacted]" }))
-                })
-            }
-        })
+        .hook(
+            HookTrigger::OnToolCall,
+            move |event: ToolCallEvent, _context| {
+                saw.lock().unwrap().push(event.result.clone());
+                let second = event.tool_call_id == "c2";
+                async move {
+                    Ok(if second {
+                        HookResult::block("Withheld by policy", BlockOptions::default())
+                    } else {
+                        let mut redacted = HookResult::allow(AllowOptions::default());
+                        redacted.metadata.insert(
+                            "result".to_owned(),
+                            json!({ "order": "1", "status": "[redacted]" }),
+                        );
+                        redacted
+                    })
+                }
+            },
+            HookOptions {
+                name: "redact".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
     room.says("Orders 1 and 2?").await;
     let timeline = room.timeline().await;
@@ -163,10 +178,9 @@ async fn a_sync_on_tool_call_hook_replaces_then_withholds_a_result() {
     );
 }
 
-/// RFC §9.3: a result withheld with no reason reads `{"error": "blocked"}`,
-/// as the reference implementation writes it, and so does one withheld
-/// with a blank reason, as a blank `ToolUse::Block` reason reads the fixed
-/// refusal (the reference implementation keeps it as written).
+/// RFC §9.3: a result withheld with an empty reason reads `{"error":
+/// "blocked"}`, and one withheld with a blank reason reads it as written,
+/// as the Python implementation writes them.
 #[tokio::test]
 async fn a_result_withheld_without_a_reason_reads_blocked() {
     let model = ScriptedProvider::new([
@@ -176,16 +190,103 @@ async fn a_result_withheld_without_a_reason_reads_blocked() {
     ]);
     let room = Room::new(model.clone(), served()).await;
     room.kit
-        .on_tool_call("withhold", |event, _context| {
-            let reason = (event.call.id == "c2").then(|| "  ".to_owned());
-            async move { Ok(ToolVerdict::Block(reason)) }
-        })
+        .hook(
+            HookTrigger::OnToolCall,
+            |event: ToolCallEvent, _context| {
+                let reason = if event.tool_call_id == "c2" { "  " } else { "" };
+                async move { Ok(HookResult::block(reason, BlockOptions::default())) }
+            },
+            HookOptions {
+                name: "withhold".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
     room.says("Orders 1 and 2?").await;
     assert_eq!(
         tool_results(&model)[2],
-        [r#"{"error": "blocked"}"#, r#"{"error": "blocked"}"#]
+        [r#"{"error": "blocked"}"#, r#"{"error": "  "}"#]
     );
+}
+
+/// RFC §8.2: the gate's decision on each call emits `before_tool_use`, and
+/// each call's report `tool_call`, its failure's markers when they are
+/// set, as the Python implementation's executor emits them.
+#[tokio::test]
+async fn tool_calls_emit_before_tool_use_and_tool_call() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("c1", "lookup_order", r#"{"order": "1"}"#)]),
+        ScriptedRound::calling("", [("c2", "lookup_order", r#"{"order": "2"}"#)]),
+        ScriptedRound::answering("Done."),
+    ]);
+    let room = Room::new(model, served()).await;
+    refuse_call(&room.kit, "c2", "Not order 2.");
+    let emitted = Arc::new(Mutex::new(Vec::new()));
+    for event_type in ["before_tool_use", "tool_call"] {
+        let noted = Arc::clone(&emitted);
+        room.kit.on(event_type, move |event| {
+            noted.lock().unwrap().push((
+                event.r#type,
+                event.room_id,
+                event.channel_id,
+                Value::Object(event.data),
+            ));
+            std::future::ready(())
+        });
+    }
+    room.says("Orders 1 and 2?").await;
+    roomkit::testing::idle(&room.kit).await;
+    let at = |event_type: &str, data: Value| {
+        (
+            event_type.to_owned(),
+            Some(room_id()),
+            Some(channel("assistant")),
+            data,
+        )
+    };
+    assert_eq!(
+        emitted.lock().unwrap().clone(),
+        [
+            at(
+                "before_tool_use",
+                json!({ "tool_name": "lookup_order", "tool_call_id": "c1", "allowed": true, "reason": null })
+            ),
+            at(
+                "tool_call",
+                json!({ "tool_name": "lookup_order", "tool_call_id": "c1", "channel_type": "ai" })
+            ),
+            at(
+                "before_tool_use",
+                json!({ "tool_name": "lookup_order", "tool_call_id": "c2", "allowed": false, "reason": "Not order 2." })
+            ),
+            at(
+                "tool_call",
+                json!({ "tool_name": "lookup_order", "tool_call_id": "c2", "channel_type": "ai", "is_error": true, "refused": true })
+            ),
+        ]
+    );
+}
+
+/// A `BEFORE_TOOL_USE` hook refusing the call `refused` with `reason`.
+fn refuse_call(kit: &RoomKit, refused: &'static str, reason: &'static str) {
+    kit.hook(
+        HookTrigger::BeforeToolUse,
+        move |event: ToolCallEvent, _context| {
+            let blocks = event.tool_call_id == refused;
+            async move {
+                Ok(if blocks {
+                    HookResult::block(reason, BlockOptions::default())
+                } else {
+                    HookResult::allow(AllowOptions::default())
+                })
+            }
+        },
+        HookOptions {
+            name: "approve".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
 }
 
 /// RFC §21.1: the call runs with the arguments `BEFORE_TOOL_USE` left, and
@@ -199,13 +300,20 @@ async fn a_rewritten_call_runs_with_its_new_arguments_unless_they_do_not_fit() {
     ]);
     let room = Room::new(model, served()).await;
     room.kit
-        .before_tool_use("rewrite", |event, _context| {
-            let mut arguments = Metadata::new();
-            if event.call.id == "c1" {
-                arguments.insert("order".to_owned(), "7".into());
-            }
-            async move { Ok(ToolUse::Rewrite(arguments)) }
-        })
+        .hook(
+            HookTrigger::BeforeToolUse,
+            |mut event: ToolCallEvent, _context| {
+                event.arguments = Metadata::new();
+                if event.tool_call_id == "c1" {
+                    event.arguments.insert("order".to_owned(), "7".into());
+                }
+                async move { Ok(HookResult::modify(event, ModifyOptions::default())) }
+            },
+            HookOptions {
+                name: "rewrite".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
     room.says("Orders?").await;
     let timeline = room.timeline().await;
@@ -508,22 +616,7 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
                 .await
                 .unwrap();
         }
-        let weak = kit.downgrade();
-        kit.observe("greeting", trigger, move |_event, _context| {
-            let kit = weak.upgrade().unwrap();
-            async move {
-                let greeting = SendEventOptions::default();
-                kit.send_event(
-                    &room_id(),
-                    &channel("sms"),
-                    TextContent::new("Welcome."),
-                    greeting,
-                )
-                .await
-                .unwrap();
-            }
-        })
-        .unwrap();
+        greet_on(&kit, trigger);
         let message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new("Go."));
         kit.process_inbound(
             message,
@@ -546,6 +639,34 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
         assert_eq!(greeting.chain_depth, 1, "{tool}");
         kit.close().await.unwrap();
     }
+}
+
+/// An ASYNC hook on `trigger` greeting the room's SMS sender.
+fn greet_on(kit: &RoomKit, trigger: HookTrigger) {
+    let weak = kit.downgrade();
+    kit.hook(
+        trigger,
+        move |_event: RoomEvent, _context| {
+            let kit = weak.upgrade().unwrap();
+            async move {
+                let greeting = SendEventOptions::default();
+                kit.send_event(
+                    &room_id(),
+                    &channel("sms"),
+                    TextContent::new("Welcome."),
+                    greeting,
+                )
+                .await
+                .unwrap();
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "greeting".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
 }
 
 /// RFC §8.3 "Reentry cap": a turn is one stream, read to its end whichever

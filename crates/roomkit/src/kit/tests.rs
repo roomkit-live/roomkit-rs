@@ -20,8 +20,10 @@ use roomkit_core::model::{
 use roomkit_core::ops::{
     ChannelDeclaration, EffectId, Environment, Next, Operation, Outcome, ProtocolError, Step,
 };
-use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
+use roomkit_core::rules::hook_registry::HookTrigger;
 use tokio::sync::Notify;
+
+use crate::HookOptions;
 
 use super::{
     AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
@@ -77,11 +79,16 @@ async fn checked_room() -> RoomKit {
     )
     .await
     .unwrap();
-    let mut spec = HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    spec.needs_lock = false;
-    kit.hook(spec, |_, _| async {
-        Ok(HookResult::allow(AllowOptions::default()))
-    })
+    let spec = HookOptions {
+        name: "scanner".to_owned(),
+        needs_lock: false,
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |_: RoomEvent, _| async { Ok(HookResult::allow(AllowOptions::default())) },
+        spec,
+    )
     .unwrap();
     kit
 }
@@ -322,10 +329,18 @@ fn a_call_whose_runtime_shuts_down_under_it_is_cancelled() {
     let first = runtime();
     let kit = first.block_on(checked_room());
     unbounded(&kit);
-    kit.before_broadcast("stuck", |_, _| async {
-        std::future::pending::<()>().await;
-        Ok(HookResult::allow(AllowOptions::default()))
-    })
+    let stuck = HookOptions {
+        name: "stuck".to_owned(),
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |_: RoomEvent, _| async {
+            std::future::pending::<()>().await;
+            Ok(HookResult::allow(AllowOptions::default()))
+        },
+        stuck,
+    )
     .unwrap();
     let room = room_id();
     let mut call = std::pin::pin!(kit.process_inbound(

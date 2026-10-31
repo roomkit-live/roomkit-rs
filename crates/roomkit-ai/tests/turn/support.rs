@@ -10,8 +10,8 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, HookExecution, HookSpec, HookTrigger, InboundResult, PostOptions,
-    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions,
+    CreateRoomOptions, HookExecution, HookOptions, HookTrigger, InboundResult, PostOptions,
+    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions, ToolCallEvent,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -128,10 +128,18 @@ impl Room {
         let details = Arc::new(Mutex::new(Vec::new()));
         let noted = Arc::clone(&details);
         self.kit
-            .observe_tool_calls("audit", move |event, _context| {
-                noted.lock().unwrap().push(event.error_detail.clone());
-                async {}
-            })
+            .hook(
+                HookTrigger::OnToolCall,
+                move |event: ToolCallEvent, _context| {
+                    noted.lock().unwrap().push(event.error_detail.clone());
+                    async {}
+                },
+                HookOptions {
+                    execution: HookExecution::Async,
+                    name: "audit".to_owned(),
+                    ..Default::default()
+                },
+            )
             .unwrap();
         details
     }
@@ -207,40 +215,48 @@ pub(crate) async fn observer_loop(after_the_turn: bool) -> Vec<u32> {
     let posted = Arc::new(Mutex::new(Vec::new()));
     let (posting, weak) = (Arc::clone(&posted), kit.downgrade());
     let calls = Arc::new(Mutex::new(0_usize));
-    kit.observe_tool_calls("audit", move |_event, _context| {
-        let (posted, kit, mut turns) = (Arc::clone(&posting), weak.upgrade(), turns.clone());
-        let call = {
-            let mut calls = calls.lock().unwrap();
-            *calls += 1;
-            *calls
-        };
-        async move {
-            if after_the_turn {
-                // The turn that made the call is over, its answer
-                // delivered, as a slow progress card would find it.
-                let _over = turns.wait_for(|answered| *answered >= call).await;
+    kit.hook(
+        HookTrigger::OnToolCall,
+        move |_event: ToolCallEvent, _context| {
+            let (posted, kit, mut turns) = (Arc::clone(&posting), weak.upgrade(), turns.clone());
+            let call = {
+                let mut calls = calls.lock().unwrap();
+                *calls += 1;
+                *calls
+            };
+            async move {
+                if after_the_turn {
+                    // The turn that made the call is over, its answer
+                    // delivered, as a slow progress card would find it.
+                    let _over = turns.wait_for(|answered| *answered >= call).await;
+                }
+                let Some(kit) = kit else { return };
+                if posted.lock().unwrap().len() >= ROUNDS {
+                    return;
+                }
+                let post = SendEventOptions::default();
+                if let Ok(event) = kit
+                    .send_event(
+                        &room_id(),
+                        &channel("sms"),
+                        TextContent::new("called"),
+                        post,
+                    )
+                    .await
+                {
+                    posted
+                        .lock()
+                        .unwrap()
+                        .push((event.index, event.chain_depth));
+                }
             }
-            let Some(kit) = kit else { return };
-            if posted.lock().unwrap().len() >= ROUNDS {
-                return;
-            }
-            let post = SendEventOptions::default();
-            if let Ok(event) = kit
-                .send_event(
-                    &room_id(),
-                    &channel("sms"),
-                    TextContent::new("called"),
-                    post,
-                )
-                .await
-            {
-                posted
-                    .lock()
-                    .unwrap()
-                    .push((event.index, event.chain_depth));
-            }
-        }
-    })
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "audit".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new("Go"));
     kit.process_inbound(
@@ -402,52 +418,7 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
             .await
             .unwrap();
     }
-    let calling = kit.downgrade();
-    match echo {
-        Echo::HookSend => {
-            let spec = HookSpec::new("echo", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-            kit.hook(spec, move |event, _context| {
-                let kit = calling
-                    .upgrade()
-                    .filter(|_| event.source.channel_id == channel("assistant"));
-                async move {
-                    if let Some(kit) = kit {
-                        let echo = SendEventOptions::default();
-                        // Past the budget the call is refused, its event
-                        // stored refused.
-                        let _sent = kit
-                            .send_event(&room_id(), &channel("sms"), TextContent::new("Echo"), echo)
-                            .await;
-                    }
-                    Ok(HookResult::allow(AllowOptions::default()))
-                }
-            })
-            .unwrap();
-        }
-        Echo::ObserverPost => {
-            kit.observe(
-                "echo",
-                HookTrigger::AfterBroadcast,
-                move |event, _context| {
-                    let kit = calling
-                        .upgrade()
-                        .filter(|_| event.source.channel_id == channel("assistant"));
-                    async move {
-                        if let Some(kit) = kit {
-                            let post = PostOptions {
-                                addressed_to: vec![channel("assistant")],
-                                ..Default::default()
-                            };
-                            // Past the hook calls the post is stored refused.
-                            let echo = TextContent::new("Echo");
-                            let _posted = kit.post(&room_id(), echo, post).await;
-                        }
-                    }
-                },
-            )
-            .unwrap();
-        }
-    }
+    register_echo(&kit, echo);
     let message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new("Go"));
     kit.process_inbound(
         message,
@@ -469,6 +440,73 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
         .count();
     kit.close().await.unwrap();
     (model.turns.load(Ordering::SeqCst), capped)
+}
+
+/// Registers the hook `echo` names, calling into the room on every row of
+/// the agent's turns.
+fn register_echo(kit: &RoomKit, echo: Echo) {
+    let calling = kit.downgrade();
+    match echo {
+        Echo::HookSend => {
+            let spec = HookOptions {
+                name: "echo".to_owned(),
+                ..Default::default()
+            };
+            kit.hook(
+                HookTrigger::BeforeBroadcast,
+                move |event: RoomEvent, _context| {
+                    let kit = calling
+                        .upgrade()
+                        .filter(|_| event.source.channel_id == channel("assistant"));
+                    async move {
+                        if let Some(kit) = kit {
+                            let echo = SendEventOptions::default();
+                            // Past the budget the call is refused, its event
+                            // stored refused.
+                            let _sent = kit
+                                .send_event(
+                                    &room_id(),
+                                    &channel("sms"),
+                                    TextContent::new("Echo"),
+                                    echo,
+                                )
+                                .await;
+                        }
+                        Ok(HookResult::allow(AllowOptions::default()))
+                    }
+                },
+                spec,
+            )
+            .unwrap();
+        }
+        Echo::ObserverPost => {
+            kit.hook(
+                HookTrigger::AfterBroadcast,
+                move |event: RoomEvent, _context| {
+                    let kit = calling
+                        .upgrade()
+                        .filter(|_| event.source.channel_id == channel("assistant"));
+                    async move {
+                        if let Some(kit) = kit {
+                            let post = PostOptions {
+                                addressed_to: vec![channel("assistant")],
+                                ..Default::default()
+                            };
+                            // Past the hook calls the post is stored refused.
+                            let echo = TextContent::new("Echo");
+                            let _posted = kit.post(&room_id(), echo, post).await;
+                        }
+                    }
+                },
+                HookOptions {
+                    execution: HookExecution::Async,
+                    name: "echo".to_owned(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+    }
 }
 
 /// Every row of a room's timeline, the refused ones included.

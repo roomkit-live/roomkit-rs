@@ -21,11 +21,11 @@ use roomkit::testing::{
 use roomkit::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
     CloseRoomOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
-    DetachChannelOptions, GetBindingOptions, GetRoomOptions, GetTimelineOptions,
-    ListBindingsOptions, ListMembersOptions, MuteOptions, PauseRoomOptions, PostOptions,
-    ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitError,
-    RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
-    UpdateBindingMetadataOptions, UpdateEventOptions,
+    DetachChannelOptions, GetBindingOptions, GetRoomOptions, GetTimelineOptions, HookOptions,
+    HookTrigger, ListBindingsOptions, ListMembersOptions, MuteOptions, PauseRoomOptions,
+    PostOptions, ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit,
+    RoomKitError, RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions,
+    UnmuteOptions, UpdateBindingMetadataOptions, UpdateEventOptions,
 };
 
 const START_MILLIS: i64 = 1_792_677_780_000;
@@ -409,19 +409,26 @@ async fn a_replay_is_never_handed_to_another_organization() {
         .unwrap();
     let answers = Arc::new(std::sync::Mutex::new(Vec::new()));
     let (hook_kit, hook_answers) = (kit.clone(), Arc::clone(&answers));
-    kit.before_broadcast("relay", move |event, _| {
-        let (kit, answers) = (hook_kit.clone(), Arc::clone(&hook_answers));
-        async move {
-            if event.source.channel_id == channel("sms") {
-                let replayed = kit
-                    .send_event(&room_id(), &channel("ws"), balance(), held("clinic"))
-                    .await
-                    .map(|event| event.id);
-                answers.lock().unwrap().push(replayed);
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, answers) = (hook_kit.clone(), Arc::clone(&hook_answers));
+            async move {
+                if event.source.channel_id == channel("sms") {
+                    let replayed = kit
+                        .send_event(&room_id(), &channel("ws"), balance(), held("clinic"))
+                        .await
+                        .map(|event| event.id);
+                    answers.lock().unwrap().push(replayed);
+                }
+                Ok(roomkit::model::HookResult::allow(AllowOptions::default()))
             }
-            Ok(roomkit::model::HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        HookOptions {
+            name: "relay".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let options = ProcessInboundOptions {
         room_id: Some(room_id()),

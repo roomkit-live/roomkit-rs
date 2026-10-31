@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit::model::HookResult;
 use roomkit::model::hook::AllowOptions;
-use roomkit::{HookExecution, HookSpec, HookTrigger, RoomKit};
+use roomkit::model::{HookResult, RoomEvent};
+use roomkit::{HookOptions, HookTrigger, RoomKit};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
 use serde_json::json;
@@ -220,18 +220,25 @@ async fn a_turn_is_cut_at_once_when_the_kit_closes() {
 /// it does not need the lock (RFC §9.5.1).
 fn closing_hook(kit: &RoomKit, closer: &Closer, needs_lock: bool) {
     let work = closer.clone();
-    let mut spec = HookSpec::new("quit", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    spec.needs_lock = needs_lock;
-    kit.hook(spec, move |event, _context| {
-        let work = work.clone();
-        let is_one = text_of(&event.content) == "One.";
-        async move {
-            if is_one {
-                work.close().await;
+    let spec = HookOptions {
+        name: "quit".to_owned(),
+        needs_lock,
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _context| {
+            let work = work.clone();
+            let is_one = text_of(&event.content) == "One.";
+            async move {
+                if is_one {
+                    work.close().await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        spec,
+    )
     .unwrap();
 }
 

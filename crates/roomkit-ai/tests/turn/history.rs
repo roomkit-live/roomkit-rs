@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, ModifyOptions};
-use roomkit::model::{EventContent, EventType, HookResult, Metadata};
-use roomkit::{HookExecution, HookSpec, HookTrigger, ToolVerdict, UpdateEventOptions};
+use roomkit::model::{EventContent, EventType, HookResult, Metadata, RoomEvent};
+use roomkit::{HookOptions, HookTrigger, ToolCallEvent, UpdateEventOptions};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiAgent, AiProvider, AiRequest, Done, ProviderResponse, ProviderStream, ProviderToolCall,
@@ -165,9 +165,20 @@ async fn a_hook_s_rewrite_is_what_is_replayed() {
     ]);
     let room = Room::new(model.clone(), served()).await;
     room.kit
-        .on_tool_call("rewrite", |_event, _context| async {
-            Ok(ToolVerdict::Replace(json!("as the hook rewrote it")))
-        })
+        .hook(
+            HookTrigger::OnToolCall,
+            |_event: ToolCallEvent, _context| async {
+                let mut rewritten = HookResult::allow(AllowOptions::default());
+                rewritten
+                    .metadata
+                    .insert("result".to_owned(), json!("as the hook rewrote it"));
+                Ok(rewritten)
+            },
+            HookOptions {
+                name: "rewrite".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
     room.says("first").await;
     room.says("second").await;
@@ -321,19 +332,22 @@ async fn every_row_of_a_turn_carries_the_turn_s_own_correlation_id() {
         ScriptedRound::answering("Two."),
     ]);
     let room = Room::new(model, served()).await;
-    let spec = HookSpec::new(
-        "reference",
-        HookTrigger::BeforeBroadcast,
-        HookExecution::Sync,
-    );
+    let spec = HookOptions {
+        name: "reference".to_owned(),
+        ..Default::default()
+    };
     room.kit
-        .hook(spec, |mut event, _context| async move {
-            if event.source.channel_id != channel("sms") {
-                return Ok(HookResult::allow(AllowOptions::default()));
-            }
-            event.correlation_id = Some("integrator-ref".to_owned());
-            Ok(HookResult::modify(event, ModifyOptions::default()))
-        })
+        .hook(
+            HookTrigger::BeforeBroadcast,
+            |mut event: RoomEvent, _context| async move {
+                if event.source.channel_id != channel("sms") {
+                    return Ok(HookResult::allow(AllowOptions::default()));
+                }
+                event.correlation_id = Some("integrator-ref".to_owned());
+                Ok(HookResult::modify(event, ModifyOptions::default()))
+            },
+            spec,
+        )
         .unwrap();
     room.says("first").await;
     room.says("second").await;

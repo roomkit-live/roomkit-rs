@@ -22,7 +22,8 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, HookTrigger, ProcessInboundOptions, RoomKit,
+    AttachChannelOptions, CreateRoomOptions, HookExecution, HookOptions, HookTrigger,
+    ProcessInboundOptions, RoomKit,
 };
 
 use shared::{Checks, Log};
@@ -61,10 +62,9 @@ fn welcome_newcomers(
     welcomed: &Log<ChannelId>,
 ) -> Result<(), Box<dyn Error>> {
     let noted = attached.clone();
-    kit.observe(
-        "note_newcomer",
+    kit.hook(
         HookTrigger::OnChannelAttached,
-        move |event, _| {
+        move |event: RoomEvent, _| {
             let noted = noted.clone();
             async move {
                 // The payload names the channel attached in its system
@@ -80,25 +80,37 @@ fn welcome_newcomers(
                 }
             }
         },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "note_newcomer".to_owned(),
+            ..Default::default()
+        },
     )?;
     let (attached, welcomed) = (attached.clone(), welcomed.clone());
-    kit.before_broadcast("inject_welcome", move |event, _| {
-        let newcomer = event.source.channel_id.clone();
-        let first_message =
-            attached.entries().contains(&newcomer) && !welcomed.entries().contains(&newcomer);
-        if first_message {
-            welcomed.push(newcomer.clone());
-        }
-        async move {
-            if !first_message {
-                return Ok(HookResult::allow(AllowOptions::default()));
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let newcomer = event.source.channel_id.clone();
+            let first_message =
+                attached.entries().contains(&newcomer) && !welcomed.entries().contains(&newcomer);
+            if first_message {
+                welcomed.push(newcomer.clone());
             }
-            // An allow lets the message through, with the events it injects.
-            Ok(HookResult::allow(AllowOptions {
-                injected: Some(vec![welcome(&event, &newcomer)?]),
-            }))
-        }
-    })?;
+            async move {
+                if !first_message {
+                    return Ok(HookResult::allow(AllowOptions::default()));
+                }
+                // An allow lets the message through, with the events it injects.
+                Ok(HookResult::allow(AllowOptions {
+                    injected: Some(vec![welcome(&event, &newcomer)?]),
+                }))
+            }
+        },
+        HookOptions {
+            name: "inject_welcome".to_owned(),
+            ..Default::default()
+        },
+    )?;
     Ok(())
 }
 

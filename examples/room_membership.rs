@@ -23,12 +23,12 @@ use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelId, ChannelType, DeleteContent, DeleteType, EventContent, EventId, EventType,
     HookResult, InboundMessage, Participant, ParticipantId, ParticipantRole, ParticipantStatus,
-    RoomId, TextContent,
+    RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, InboundResult,
-    ProcessInboundOptions, RoomKit, StoreError,
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookOptions, HookTrigger,
+    InboundResult, ProcessInboundOptions, RoomKit, StoreError,
 };
 
 use shared::{Checks, Clock, Log, is_deleted};
@@ -56,16 +56,23 @@ impl Team {
         let rosters = Log::new();
         let read = rosters.clone();
         // Every hook and channel reads the room's participants in its context.
-        kit.before_broadcast("roster", move |_, context| {
-            let active = context
-                .participants
-                .iter()
-                .filter(|member| member.status == ParticipantStatus::Active)
-                .filter_map(|member| member.display_name.clone())
-                .collect();
-            read.push(active);
-            async { Ok(HookResult::allow(AllowOptions::default())) }
-        })?;
+        kit.hook(
+            HookTrigger::BeforeBroadcast,
+            move |_: RoomEvent, context| {
+                let active = context
+                    .participants
+                    .iter()
+                    .filter(|member| member.status == ParticipantStatus::Active)
+                    .filter_map(|member| member.display_name.clone())
+                    .collect();
+                read.push(active);
+                async { Ok(HookResult::allow(AllowOptions::default())) }
+            },
+            HookOptions {
+                name: "roster".to_owned(),
+                ..Default::default()
+            },
+        )?;
         let room = RoomId::new("team")?;
         kit.create_room(CreateRoomOptions {
             room_id: Some(room.clone()),

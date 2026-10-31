@@ -17,8 +17,7 @@ use roomkit::testing::{
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    DeliveryHandle, HookExecution, HookSpec, HookTrigger, ProcessInboundOptions, RoomKit,
-    RoomKitOptions,
+    DeliveryHandle, HookOptions, HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
 use tokio::sync::Notify;
 
@@ -120,21 +119,28 @@ async fn answers_under_the_close() -> [Vec<String>; 2] {
     }
     let handles: Arc<Mutex<Vec<DeliveryHandle>>> = Arc::default();
     let (hook_kit, hook_handles) = (kit.clone(), Arc::clone(&handles));
-    let spec = HookSpec::new("side", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    kit.hook(spec, move |event, _| {
-        let (kit, handles) = (hook_kit.clone(), Arc::clone(&hook_handles));
-        async move {
-            if text_of(&event.content) == "hello" {
-                let deferred = ProcessInboundOptions {
-                    defer_delivery: true,
-                    ..into(room_id())
-                };
-                let side = kit.process_inbound(message("side"), deferred).await?;
-                handles.lock().unwrap().push(side.delivery.unwrap());
+    let spec = HookOptions {
+        name: "side".to_owned(),
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, handles) = (hook_kit.clone(), Arc::clone(&hook_handles));
+            async move {
+                if text_of(&event.content) == "hello" {
+                    let deferred = ProcessInboundOptions {
+                        defer_delivery: true,
+                        ..into(room_id())
+                    };
+                    let side = kit.process_inbound(message("side"), deferred).await?;
+                    handles.lock().unwrap().push(side.delivery.unwrap());
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        spec,
+    )
     .unwrap();
     let outer_kit = kit.clone();
     let outer = tokio::spawn(async move {

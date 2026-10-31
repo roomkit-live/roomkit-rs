@@ -107,9 +107,7 @@ pub use roomkit_core::ops::{ChannelDeclaration, default_inbound_event};
 pub use roomkit_core::rules::addresses::{
     AddressForm, Addressing, CountryCode, InvalidCountryCode,
 };
-pub use roomkit_core::rules::hook_registry::{
-    HookExecution, HookFilter, HookId, HookSpec, HookTrigger,
-};
+pub use roomkit_core::rules::hook_registry::{HookExecution, HookTrigger};
 pub use roomkit_core::rules::{visibility_allows, visible_events};
 // Outside the public API: the Python implementation keeps it private, and the
 // agent's crate reads it across crates (RFC §6.4).
@@ -125,7 +123,10 @@ pub use self::channel::{Channel, ChannelError, EventDraft};
 pub use self::context::keep_context;
 pub use self::error::RoomKitError;
 pub use self::events::FrameworkEvent;
-pub use self::hooks::{HookError, HookFuture, HookHandler, HookReturn};
+pub use self::hooks::{
+    HookError, HookFuture, HookHandler, HookOptions, HookPayload, HookReturn, IntoHookReturn,
+    SessionStartedEvent,
+};
 pub use self::host::HostChannel;
 pub use self::inbound::{DeliveryHandle, InboundResult};
 pub use self::kit::{
@@ -149,7 +150,9 @@ pub use self::store::{
     StoreError, StoreFailure, TargetUpdate,
 };
 pub use self::stream::{DeliveryStream, ResponseItem, ResponseStream, StreamItem};
-pub use self::tool_calls::{ToolCallEvent, ToolHookSpec, ToolUse, ToolVerdict};
+pub use self::tool_calls::ToolCallEvent;
+#[doc(hidden)]
+pub use self::tool_calls::ToolCallReport;
 pub use self::turn::{ToolGate, TurnHost, current_turn_host};
 pub use self::turns::TurnTimeouts;
 

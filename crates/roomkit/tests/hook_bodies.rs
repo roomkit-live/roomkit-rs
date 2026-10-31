@@ -27,9 +27,9 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, DeleteEventOptions, HookTrigger, InboundResult, InboundRoomRouter,
-    PostOptions, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, RouteOptions,
-    RouterFuture, SendEventOptions, UpdateEventOptions, keep_context,
+    CreateRoomOptions, DeleteEventOptions, HookExecution, HookOptions, HookTrigger, InboundResult,
+    InboundRoomRouter, PostOptions, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
+    RouteOptions, RouterFuture, SendEventOptions, UpdateEventOptions, keep_context,
 };
 use roomkit_core::rules::transcoding::text_of;
 
@@ -172,23 +172,31 @@ async fn a_hook_posting_after_every_event_stops_at_the_cap() {
     let kit = room(1).await;
     let posted: Kept<Option<String>> = kept();
     let (hook_kit, hook_posted) = (kit.clone(), Arc::clone(&posted));
-    kit.observe("notice", HookTrigger::AfterBroadcast, move |event, _| {
-        let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
-        async move {
-            if event.r#type == EventType::Message && len(&posted) <= 2 * BUDGET {
-                let notice = PostOptions::default();
-                let event = kit
-                    .post(
-                        &room_id(),
-                        TextContent::new(format!("Noted {}.", len(&posted))),
-                        notice,
-                    )
-                    .await
-                    .unwrap();
-                push(&posted, event.blocked_by);
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
+            async move {
+                if event.r#type == EventType::Message && len(&posted) <= 2 * BUDGET {
+                    let notice = PostOptions::default();
+                    let event = kit
+                        .post(
+                            &room_id(),
+                            TextContent::new(format!("Noted {}.", len(&posted))),
+                            notice,
+                        )
+                        .await
+                        .unwrap();
+                    push(&posted, event.blocked_by);
+                }
             }
-        }
-    })
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "notice".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     kit.process_inbound(
         message("hi"),
@@ -215,23 +223,31 @@ async fn an_observer_of_before_broadcast_posting_on_every_event_stops_at_the_cap
     let kit = room(1).await;
     let posted: Kept<Option<String>> = kept();
     let (hook_kit, hook_posted) = (kit.clone(), Arc::clone(&posted));
-    kit.observe("notice", HookTrigger::BeforeBroadcast, move |event, _| {
-        let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
-        async move {
-            if event.r#type == EventType::Message && len(&posted) <= 2 * BUDGET {
-                let notice = PostOptions::default();
-                let event = kit
-                    .post(
-                        &room_id(),
-                        TextContent::new(format!("Noted {}.", len(&posted))),
-                        notice,
-                    )
-                    .await
-                    .unwrap();
-                push(&posted, event.blocked_by);
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
+            async move {
+                if event.r#type == EventType::Message && len(&posted) <= 2 * BUDGET {
+                    let notice = PostOptions::default();
+                    let event = kit
+                        .post(
+                            &room_id(),
+                            TextContent::new(format!("Noted {}.", len(&posted))),
+                            notice,
+                        )
+                        .await
+                        .unwrap();
+                    push(&posted, event.blocked_by);
+                }
             }
-        }
-    })
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "notice".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     kit.process_inbound(
         message("hi"),
@@ -268,29 +284,37 @@ async fn an_observer_of_before_broadcast_s_call_returns_with_its_delivery_result
         .unwrap();
     let results: Kept<Vec<String>> = kept();
     let (hook_kit, hook_results) = (kit.clone(), Arc::clone(&results));
-    kit.observe("watcher", HookTrigger::BeforeBroadcast, move |event, _| {
-        let (kit, results) = (hook_kit.clone(), Arc::clone(&hook_results));
-        async move {
-            if text_of(&event.content) == "hi" {
-                let again = kit
-                    .process_inbound(
-                        message("again"),
-                        ProcessInboundOptions {
-                            room_id: Some(room_id()),
-                            ..Default::default()
-                        },
-                    )
-                    .await;
-                let delivered = again
-                    .unwrap()
-                    .delivery_results
-                    .keys()
-                    .map(ToString::to_string)
-                    .collect();
-                push(&results, delivered);
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, results) = (hook_kit.clone(), Arc::clone(&hook_results));
+            async move {
+                if text_of(&event.content) == "hi" {
+                    let again = kit
+                        .process_inbound(
+                            message("again"),
+                            ProcessInboundOptions {
+                                room_id: Some(room_id()),
+                                ..Default::default()
+                            },
+                        )
+                        .await;
+                    let delivered = again
+                        .unwrap()
+                        .delivery_results
+                        .keys()
+                        .map(ToString::to_string)
+                        .collect();
+                    push(&results, delivered);
+                }
             }
-        }
-    })
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "watcher".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     kit.process_inbound(
         message("hi"),
@@ -335,23 +359,31 @@ async fn a_hook_opening_a_room_after_every_event_stops_at_the_cap() {
     let calls: Kept<()> = kept();
     let (hook_kit, hook_answers, hook_calls) =
         (kit.clone(), Arc::clone(&answers), Arc::clone(&calls));
-    kit.observe("open", HookTrigger::AfterBroadcast, move |event, _| {
-        let (kit, answers, calls) = (
-            hook_kit.clone(),
-            Arc::clone(&hook_answers),
-            Arc::clone(&hook_calls),
-        );
-        async move {
-            if event.r#type == EventType::Message && len(&calls) <= 2 * BUDGET {
-                push(&calls, ());
-                let result: InboundResult = kit
-                    .process_inbound(message("again"), ProcessInboundOptions::default())
-                    .await
-                    .unwrap();
-                push(&answers, result.reason);
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, answers, calls) = (
+                hook_kit.clone(),
+                Arc::clone(&hook_answers),
+                Arc::clone(&hook_calls),
+            );
+            async move {
+                if event.r#type == EventType::Message && len(&calls) <= 2 * BUDGET {
+                    push(&calls, ());
+                    let result: InboundResult = kit
+                        .process_inbound(message("again"), ProcessInboundOptions::default())
+                        .await
+                        .unwrap();
+                    push(&answers, result.reason);
+                }
             }
-        }
-    })
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "open".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     kit.process_inbound(
         message("hi"),
@@ -388,26 +420,34 @@ async fn a_judge_posting_back_after_each_answer_stops_at_the_depth_limit() {
         .unwrap();
     let depths: Kept<u32> = kept();
     let (hook_kit, hook_depths) = (kit.clone(), Arc::clone(&depths));
-    kit.observe("judge", HookTrigger::AfterBroadcast, move |event, _| {
-        let (kit, depths) = (hook_kit.clone(), Arc::clone(&hook_depths));
-        async move {
-            if event.source.channel_id != channel("a")
-                || event.blocked_by.is_some()
-                || len(&depths) >= 4 * BUDGET
-            {
-                return;
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, depths) = (hook_kit.clone(), Arc::clone(&hook_depths));
+            async move {
+                if event.source.channel_id != channel("a")
+                    || event.blocked_by.is_some()
+                    || len(&depths) >= 4 * BUDGET
+                {
+                    return;
+                }
+                let again = PostOptions {
+                    addressed_to: vec![channel("a")],
+                    ..Default::default()
+                };
+                let posted = kit
+                    .post(&room_id(), TextContent::new("@a again"), again)
+                    .await
+                    .unwrap();
+                push(&depths, posted.chain_depth);
             }
-            let again = PostOptions {
-                addressed_to: vec![channel("a")],
-                ..Default::default()
-            };
-            let posted = kit
-                .post(&room_id(), TextContent::new("@a again"), again)
-                .await
-                .unwrap();
-            push(&depths, posted.chain_depth);
-        }
-    })
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "judge".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let mut hello = message("@a hello");
     hello.addressed_to = Some(vec![channel("a")]);
@@ -439,42 +479,50 @@ async fn a_mutation_hook_changing_again_stops_at_the_cap() {
         } else {
             HookTrigger::OnEventUpdated
         };
-        kit.observe("again", trigger, move |event, _| {
-            let (kit, sent) = (hook_kit.clone(), Arc::clone(&hook_sent));
-            async move {
-                if len(&sent) > 2 * BUDGET {
-                    return;
-                }
-                let n = len(&sent);
-                if deleting {
-                    let options = SendEventOptions {
-                        addressed_to: Some(Vec::new()),
-                        ..from_u(EventType::Message)
-                    };
-                    let text = TextContent::new(format!("m{n}"));
-                    let another = kit
-                        .send_event(&room_id(), &channel("sms"), text, options)
-                        .await
-                        .unwrap();
-                    push(&sent, another.blocked_by.clone());
-                    if another.blocked_by.is_none() {
-                        let (delete, options) = delete_of(&another.id);
-                        let deleted = kit
-                            .send_event(&room_id(), &channel("sms"), delete, options)
+        kit.hook(
+            trigger,
+            move |event: RoomEvent, _| {
+                let (kit, sent) = (hook_kit.clone(), Arc::clone(&hook_sent));
+                async move {
+                    if len(&sent) > 2 * BUDGET {
+                        return;
+                    }
+                    let n = len(&sent);
+                    if deleting {
+                        let options = SendEventOptions {
+                            addressed_to: Some(Vec::new()),
+                            ..from_u(EventType::Message)
+                        };
+                        let text = TextContent::new(format!("m{n}"));
+                        let another = kit
+                            .send_event(&room_id(), &channel("sms"), text, options)
                             .await
                             .unwrap();
-                        push(&sent, deleted.blocked_by);
+                        push(&sent, another.blocked_by.clone());
+                        if another.blocked_by.is_none() {
+                            let (delete, options) = delete_of(&another.id);
+                            let deleted = kit
+                                .send_event(&room_id(), &channel("sms"), delete, options)
+                                .await
+                                .unwrap();
+                            push(&sent, deleted.blocked_by);
+                        }
+                    } else {
+                        let (edit, options) = edit_of(&event.id, &format!("v{n}"));
+                        let edited = kit
+                            .send_event(&room_id(), &channel("sms"), edit, options)
+                            .await
+                            .unwrap();
+                        push(&sent, edited.blocked_by);
                     }
-                } else {
-                    let (edit, options) = edit_of(&event.id, &format!("v{n}"));
-                    let edited = kit
-                        .send_event(&room_id(), &channel("sms"), edit, options)
-                        .await
-                        .unwrap();
-                    push(&sent, edited.blocked_by);
                 }
-            }
-        })
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "again".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
         let first = kit
             .send_event(
@@ -520,22 +568,30 @@ async fn a_hook_posting_once_per_message_posts_for_every_message() {
     let kit = room(1).await;
     let posted: Kept<Option<String>> = kept();
     let (hook_kit, hook_posted) = (kit.clone(), Arc::clone(&posted));
-    kit.observe("receipt", HookTrigger::AfterBroadcast, move |event, _| {
-        let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
-        async move {
-            if event.source.channel_id == channel("sms") {
-                let receipt = kit
-                    .post(
-                        &room_id(),
-                        TextContent::new("Received."),
-                        PostOptions::default(),
-                    )
-                    .await
-                    .unwrap();
-                push(&posted, receipt.blocked_by);
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
+            async move {
+                if event.source.channel_id == channel("sms") {
+                    let receipt = kit
+                        .post(
+                            &room_id(),
+                            TextContent::new("Received."),
+                            PostOptions::default(),
+                        )
+                        .await
+                        .unwrap();
+                    push(&posted, receipt.blocked_by);
+                }
             }
-        }
-    })
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "receipt".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     for n in 0..=BUDGET {
         kit.process_inbound(
@@ -571,45 +627,49 @@ async fn a_task_the_hook_starts_calls_as_work_of_its_own() {
         let sent: Kept<(u32, Option<String>)> = kept();
         let over = Arc::new(tokio::sync::Notify::new());
         let (hook_kit, hook_sent, hook_over) = (kit.clone(), Arc::clone(&sent), Arc::clone(&over));
-        let mut spec = roomkit::HookSpec::new(
-            "start",
-            HookTrigger::AfterBroadcast,
-            roomkit::HookExecution::Async,
-        );
-        spec.timeout = Duration::from_millis(10);
-        kit.hook(spec, move |event, _| {
-            let (kit, sent, over) = (
-                hook_kit.clone(),
-                Arc::clone(&hook_sent),
-                Arc::clone(&hook_over),
-            );
-            async move {
-                if text_of(&event.content) != "hi" {
-                    return Ok(HookResult::allow(AllowOptions::default()));
-                }
-                tokio::spawn(keep_context(async move {
-                    over.notified().await;
-                    for n in 0..=2 * BUDGET {
-                        let later = SendEventOptions::default();
-                        let event = kit
-                            .send_event(
-                                &room_id(),
-                                &channel("sms"),
-                                TextContent::new(format!("later {n}")),
-                                later,
-                            )
-                            .await
-                            .unwrap();
-                        push(&sent, (event.chain_depth, event.blocked_by));
+        let spec = HookOptions {
+            execution: HookExecution::Async,
+            name: "start".to_owned(),
+            timeout: Duration::from_millis(10),
+            ..Default::default()
+        };
+        kit.hook(
+            HookTrigger::BeforeBroadcast,
+            move |event: RoomEvent, _| {
+                let (kit, sent, over) = (
+                    hook_kit.clone(),
+                    Arc::clone(&hook_sent),
+                    Arc::clone(&hook_over),
+                );
+                async move {
+                    if text_of(&event.content) != "hi" {
+                        return Ok(HookResult::allow(AllowOptions::default()));
                     }
-                }));
-                match ends {
-                    Ends::Returns => Ok(HookResult::allow(AllowOptions::default())),
-                    Ends::Raises => Err("the hook's body fails".into()),
-                    Ends::TimesOut => std::future::pending().await,
+                    tokio::spawn(keep_context(async move {
+                        over.notified().await;
+                        for n in 0..=2 * BUDGET {
+                            let later = SendEventOptions::default();
+                            let event = kit
+                                .send_event(
+                                    &room_id(),
+                                    &channel("sms"),
+                                    TextContent::new(format!("later {n}")),
+                                    later,
+                                )
+                                .await
+                                .unwrap();
+                            push(&sent, (event.chain_depth, event.blocked_by));
+                        }
+                    }));
+                    match ends {
+                        Ends::Returns => Ok(HookResult::allow(AllowOptions::default())),
+                        Ends::Raises => Err("the hook's body fails".into()),
+                        Ends::TimesOut => std::future::pending().await,
+                    }
                 }
-            }
-        })
+            },
+            spec,
+        )
         .unwrap();
         kit.process_inbound(
             message("hi"),
@@ -645,28 +705,36 @@ async fn a_task_the_hook_starts_continues_the_chain_it_names() {
     let tap = roomkit::testing::EventTap::on(&kit, &["chain_depth_exceeded"]);
     let failures: Kept<RoomKitError> = kept();
     let (hook_kit, hook_failures) = (kit.clone(), Arc::clone(&failures));
-    kit.observe("judge", HookTrigger::AfterBroadcast, move |event, _| {
-        let (kit, failures) = (hook_kit.clone(), Arc::clone(&hook_failures));
-        async move {
-            if event.source.channel_id != channel("ai") || event.blocked_by.is_some() {
-                return;
-            }
-            // Not kept: the task's calls are work of its own.
-            tokio::spawn(async move {
-                let again = PostOptions {
-                    addressed_to: vec![channel("ai")],
-                    chain_depth: event.chain_depth + 1,
-                    ..Default::default()
-                };
-                if let Err(error) = kit
-                    .post(&room_id(), TextContent::new("Try again."), again)
-                    .await
-                {
-                    push(&failures, error);
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, failures) = (hook_kit.clone(), Arc::clone(&hook_failures));
+            async move {
+                if event.source.channel_id != channel("ai") || event.blocked_by.is_some() {
+                    return;
                 }
-            });
-        }
-    })
+                // Not kept: the task's calls are work of its own.
+                tokio::spawn(async move {
+                    let again = PostOptions {
+                        addressed_to: vec![channel("ai")],
+                        chain_depth: event.chain_depth + 1,
+                        ..Default::default()
+                    };
+                    if let Err(error) = kit
+                        .post(&room_id(), TextContent::new("Try again."), again)
+                        .await
+                    {
+                        push(&failures, error);
+                    }
+                });
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "judge".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     kit.process_inbound(
         message("hi"),
@@ -722,28 +790,37 @@ async fn a_notice_per_answer_costs_the_agents_no_answer() {
     }
     let notices: Kept<Option<String>> = kept();
     let (hook_kit, hook_notices) = (kit.clone(), Arc::clone(&notices));
-    kit.observe("notice", HookTrigger::AfterBroadcast, move |event, _| {
-        let (kit, notices) = (hook_kit.clone(), Arc::clone(&hook_notices));
-        async move {
-            if event.source.channel_id.as_str().starts_with("agent-") && event.blocked_by.is_none()
-            {
-                let noted = SendEventOptions {
-                    addressed_to: Some(Vec::new()),
-                    ..Default::default()
-                };
-                let noted = kit
-                    .send_event(
-                        &room_id(),
-                        &channel("sms"),
-                        TextContent::new("Noted."),
-                        noted,
-                    )
-                    .await
-                    .unwrap();
-                push(&notices, noted.blocked_by);
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, notices) = (hook_kit.clone(), Arc::clone(&hook_notices));
+            async move {
+                if event.source.channel_id.as_str().starts_with("agent-")
+                    && event.blocked_by.is_none()
+                {
+                    let noted = SendEventOptions {
+                        addressed_to: Some(Vec::new()),
+                        ..Default::default()
+                    };
+                    let noted = kit
+                        .send_event(
+                            &room_id(),
+                            &channel("sms"),
+                            TextContent::new("Noted."),
+                            noted,
+                        )
+                        .await
+                        .unwrap();
+                    push(&notices, noted.blocked_by);
+                }
             }
-        }
-    })
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "notice".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     kit.process_inbound(
         message("hi"),
@@ -789,49 +866,57 @@ async fn a_hook_changing_its_room_on_every_change_stops_at_the_cap() {
         };
         let (hook_kit, hook_refused, hook_ran) =
             (kit.clone(), Arc::clone(&refused), Arc::clone(&ran));
-        kit.observe("again", trigger, move |event, _| {
-            let (kit, refused, ran) = (
-                hook_kit.clone(),
-                Arc::clone(&hook_refused),
-                Arc::clone(&hook_ran),
-            );
-            async move {
-                push(&ran, ());
-                if len(&ran) > 4 * BUDGET {
-                    return;
-                }
-                let changed = if deleting {
-                    let x = SendEventOptions {
-                        addressed_to: Some(Vec::new()),
-                        ..Default::default()
-                    };
-                    let sent = kit
-                        .send_event(&room_id(), &channel("sms"), TextContent::new("x"), x)
-                        .await
-                        .unwrap();
-                    if sent.blocked_by.is_some() {
-                        push(&refused, None);
+        kit.hook(
+            trigger,
+            move |event: RoomEvent, _| {
+                let (kit, refused, ran) = (
+                    hook_kit.clone(),
+                    Arc::clone(&hook_refused),
+                    Arc::clone(&hook_ran),
+                );
+                async move {
+                    push(&ran, ());
+                    if len(&ran) > 4 * BUDGET {
                         return;
                     }
-                    kit.delete_event(&room_id(), &sent.id, DeleteEventOptions::default())
-                        .await
-                        .map(|_| ())
-                } else {
-                    let mut metadata = event.metadata.clone();
-                    metadata.insert("n".to_owned(), len(&ran).into());
-                    let updates = UpdateEventOptions {
-                        metadata: Some(metadata),
-                        ..UpdateEventOptions::default()
+                    let changed = if deleting {
+                        let x = SendEventOptions {
+                            addressed_to: Some(Vec::new()),
+                            ..Default::default()
+                        };
+                        let sent = kit
+                            .send_event(&room_id(), &channel("sms"), TextContent::new("x"), x)
+                            .await
+                            .unwrap();
+                        if sent.blocked_by.is_some() {
+                            push(&refused, None);
+                            return;
+                        }
+                        kit.delete_event(&room_id(), &sent.id, DeleteEventOptions::default())
+                            .await
+                            .map(|_| ())
+                    } else {
+                        let mut metadata = event.metadata.clone();
+                        metadata.insert("n".to_owned(), len(&ran).into());
+                        let updates = UpdateEventOptions {
+                            metadata: Some(metadata),
+                            ..UpdateEventOptions::default()
+                        };
+                        kit.update_event(&room_id(), &event.id, updates)
+                            .await
+                            .map(|_| ())
                     };
-                    kit.update_event(&room_id(), &event.id, updates)
-                        .await
-                        .map(|_| ())
-                };
-                if let Err(error) = changed {
-                    push(&refused, Some(error));
+                    if let Err(error) = changed {
+                        push(&refused, Some(error));
+                    }
                 }
-            }
-        })
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "again".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
         let first = kit
             .send_event(
@@ -899,43 +984,51 @@ async fn a_direct_change_past_the_cap_writes_nothing() {
             .unwrap();
         let refused: Kept<RoomKitError> = kept();
         let (hook_kit, hook_refused) = (kit.clone(), Arc::clone(&refused));
-        kit.observe("bulk", HookTrigger::AfterBroadcast, move |event, _| {
-            let (kit, refused, spare) = (
-                hook_kit.clone(),
-                Arc::clone(&hook_refused),
-                spare.id.clone(),
-            );
-            async move {
-                if text_of(&event.content) != "hi" {
-                    return;
-                }
-                for n in 0..30 {
-                    let mut metadata = roomkit::model::Metadata::new();
-                    metadata.insert("n".to_owned(), n.into());
-                    let updates = UpdateEventOptions {
-                        metadata: Some(metadata),
-                        ..UpdateEventOptions::default()
+        kit.hook(
+            HookTrigger::AfterBroadcast,
+            move |event: RoomEvent, _| {
+                let (kit, refused, spare) = (
+                    hook_kit.clone(),
+                    Arc::clone(&hook_refused),
+                    spare.id.clone(),
+                );
+                async move {
+                    if text_of(&event.content) != "hi" {
+                        return;
+                    }
+                    for n in 0..30 {
+                        let mut metadata = roomkit::model::Metadata::new();
+                        metadata.insert("n".to_owned(), n.into());
+                        let updates = UpdateEventOptions {
+                            metadata: Some(metadata),
+                            ..UpdateEventOptions::default()
+                        };
+                        kit.update_event(&room_id(), &spare, updates).await.unwrap();
+                    }
+                    let one_more = if deleting {
+                        kit.delete_event(&room_id(), &event.id, DeleteEventOptions::default())
+                            .await
+                            .map(|_| ())
+                    } else {
+                        let updates = UpdateEventOptions {
+                            content: Some(TextContent::new("changed").into()),
+                            ..UpdateEventOptions::default()
+                        };
+                        kit.update_event(&room_id(), &event.id, updates)
+                            .await
+                            .map(|_| ())
                     };
-                    kit.update_event(&room_id(), &spare, updates).await.unwrap();
+                    if let Err(error) = one_more {
+                        push(&refused, error);
+                    }
                 }
-                let one_more = if deleting {
-                    kit.delete_event(&room_id(), &event.id, DeleteEventOptions::default())
-                        .await
-                        .map(|_| ())
-                } else {
-                    let updates = UpdateEventOptions {
-                        content: Some(TextContent::new("changed").into()),
-                        ..UpdateEventOptions::default()
-                    };
-                    kit.update_event(&room_id(), &event.id, updates)
-                        .await
-                        .map(|_| ())
-                };
-                if let Err(error) = one_more {
-                    push(&refused, error);
-                }
-            }
-        })
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "bulk".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
         let hi = kit
             .send_event(
@@ -1032,19 +1125,26 @@ async fn work_outside_a_hook_body_draws_nothing() {
         if locked_hook {
             let (hook_kit, hook_failures, hook_target) =
                 (kit.clone(), Arc::clone(&failures), Arc::clone(&target_id));
-            kit.before_broadcast("updates", move |event, _| {
-                let (kit, failures) = (hook_kit.clone(), Arc::clone(&hook_failures));
-                let target = hook_target
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .clone();
-                async move {
-                    if let (Some(target), "go") = (target, text_of(&event.content).as_str()) {
-                        update_sixty_times(&kit, &target, &failures).await;
+            kit.hook(
+                HookTrigger::BeforeBroadcast,
+                move |event: RoomEvent, _| {
+                    let (kit, failures) = (hook_kit.clone(), Arc::clone(&hook_failures));
+                    let target = hook_target
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .clone();
+                    async move {
+                        if let (Some(target), "go") = (target, text_of(&event.content).as_str()) {
+                            update_sixty_times(&kit, &target, &failures).await;
+                        }
+                        Ok(HookResult::allow(AllowOptions::default()))
                     }
-                    Ok(HookResult::allow(AllowOptions::default()))
-                }
-            })
+                },
+                HookOptions {
+                    name: "updates".to_owned(),
+                    ..Default::default()
+                },
+            )
             .unwrap();
         } else {
             kit.register_channel(Updating {
@@ -1119,41 +1219,56 @@ async fn a_locked_hook_s_update_whose_body_posts_back_stops_at_the_cap() {
         .unwrap()
         .id;
     let hook_kit = kit.clone();
-    kit.before_broadcast("touch", move |event, _| {
-        let (kit, target) = (hook_kit.clone(), target.clone());
-        async move {
-            if event.source.channel_id == channel("a") {
-                let mut metadata = roomkit::model::Metadata::new();
-                metadata.insert("by".to_owned(), event.id.as_str().into());
-                let updates = UpdateEventOptions {
-                    metadata: Some(metadata),
-                    ..UpdateEventOptions::default()
-                };
-                kit.update_event(&room_id(), &target, updates).await?;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, target) = (hook_kit.clone(), target.clone());
+            async move {
+                if event.source.channel_id == channel("a") {
+                    let mut metadata = roomkit::model::Metadata::new();
+                    metadata.insert("by".to_owned(), event.id.as_str().into());
+                    let updates = UpdateEventOptions {
+                        metadata: Some(metadata),
+                        ..UpdateEventOptions::default()
+                    };
+                    kit.update_event(&room_id(), &target, updates).await?;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        HookOptions {
+            name: "touch".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let posted: Kept<(u32, Option<String>)> = kept();
     let (hook_kit, hook_posted) = (kit.clone(), Arc::clone(&posted));
-    kit.observe("again", HookTrigger::OnEventUpdated, move |_, _| {
-        let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
-        async move {
-            if len(&posted) > 200 {
-                return;
+    kit.hook(
+        HookTrigger::OnEventUpdated,
+        move |_: RoomEvent, _| {
+            let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
+            async move {
+                if len(&posted) > 200 {
+                    return;
+                }
+                let again = PostOptions {
+                    addressed_to: vec![channel("a")],
+                    ..Default::default()
+                };
+                let event = kit
+                    .post(&room_id(), TextContent::new("@a again"), again)
+                    .await
+                    .unwrap();
+                push(&posted, (event.chain_depth, event.blocked_by));
             }
-            let again = PostOptions {
-                addressed_to: vec![channel("a")],
-                ..Default::default()
-            };
-            let event = kit
-                .post(&room_id(), TextContent::new("@a again"), again)
-                .await
-                .unwrap();
-            push(&posted, (event.chain_depth, event.blocked_by));
-        }
-    })
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "again".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let mut hello = message("@a hello");
     hello.addressed_to = Some(vec![channel("a")]);
@@ -1208,53 +1323,66 @@ async fn a_hook_of_a_call_a_body_makes_draws_nothing() {
             .unwrap()
             .id;
         let hook_kit = kit.clone();
-        kit.observe("send", HookTrigger::AfterBroadcast, move |event, _| {
-            let kit = hook_kit.clone();
-            async move {
-                if text_of(&event.content) == "hi" {
-                    let x = SendEventOptions {
-                        addressed_to: Some(Vec::new()),
-                        ..Default::default()
-                    };
-                    kit.send_event(&room_id(), &channel("sms"), TextContent::new("x"), x)
-                        .await
-                        .unwrap();
+        kit.hook(
+            HookTrigger::AfterBroadcast,
+            move |event: RoomEvent, _| {
+                let kit = hook_kit.clone();
+                async move {
+                    if text_of(&event.content) == "hi" {
+                        let x = SendEventOptions {
+                            addressed_to: Some(Vec::new()),
+                            ..Default::default()
+                        };
+                        kit.send_event(&room_id(), &channel("sms"), TextContent::new("x"), x)
+                            .await
+                            .unwrap();
+                    }
                 }
-            }
-        })
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "send".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
         let failures: Kept<RoomKitError> = kept();
         let (hook_kit, hook_failures, hook_target) =
             (kit.clone(), Arc::clone(&failures), target.clone());
-        let mut spec = roomkit::HookSpec::new(
-            "updates",
+        let spec = HookOptions {
+            execution: HookExecution::Sync,
+            name: "updates".to_owned(),
+            needs_lock,
+            ..Default::default()
+        };
+        kit.hook(
             HookTrigger::BeforeBroadcast,
-            roomkit::HookExecution::Sync,
-        );
-        spec.needs_lock = needs_lock;
-        kit.hook(spec, move |event, _| {
-            let (kit, failures, target) = (
-                hook_kit.clone(),
-                Arc::clone(&hook_failures),
-                hook_target.clone(),
-            );
-            async move {
-                if text_of(&event.content) == "x" {
-                    for n in 0..15 {
-                        let mut metadata = roomkit::model::Metadata::new();
-                        metadata.insert("n".to_owned(), n.into());
-                        let updates = UpdateEventOptions {
-                            metadata: Some(metadata),
-                            ..UpdateEventOptions::default()
-                        };
-                        if let Err(error) = kit.update_event(&room_id(), &target, updates).await {
-                            push(&failures, error);
+            move |event: RoomEvent, _| {
+                let (kit, failures, target) = (
+                    hook_kit.clone(),
+                    Arc::clone(&hook_failures),
+                    hook_target.clone(),
+                );
+                async move {
+                    if text_of(&event.content) == "x" {
+                        for n in 0..15 {
+                            let mut metadata = roomkit::model::Metadata::new();
+                            metadata.insert("n".to_owned(), n.into());
+                            let updates = UpdateEventOptions {
+                                metadata: Some(metadata),
+                                ..UpdateEventOptions::default()
+                            };
+                            if let Err(error) = kit.update_event(&room_id(), &target, updates).await
+                            {
+                                push(&failures, error);
+                            }
                         }
                     }
+                    Ok(HookResult::allow(AllowOptions::default()))
                 }
-                Ok(HookResult::allow(AllowOptions::default()))
-            }
-        })
+            },
+            spec,
+        )
         .unwrap();
         kit.send_event(
             &room_id(),

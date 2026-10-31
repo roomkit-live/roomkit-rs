@@ -24,7 +24,7 @@ use roomkit::testing::{
     RecordingTransport, RecordingTransportOptions, SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookSpec,
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookOptions,
     HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
 use roomkit_ai::{AiError, ToolDefinition, ToolOutput, Tools};
@@ -169,12 +169,20 @@ impl Room {
 /// The events `ON_ERROR` fires with in `room`, as an observer receives them.
 fn on_error(room: &Room) -> mpsc::UnboundedReceiver<RoomEvent> {
     let (errors, reported) = mpsc::unbounded_channel();
-    let spec = HookSpec::new("errors", HookTrigger::OnError, HookExecution::Async);
+    let spec = HookOptions {
+        execution: HookExecution::Async,
+        name: "errors".to_owned(),
+        ..Default::default()
+    };
     room.kit
-        .hook(spec, move |event, _| {
-            errors.send(event).unwrap();
-            async { Ok(roomkit::model::HookResult::allow(AllowOptions::default())) }
-        })
+        .hook(
+            HookTrigger::OnError,
+            move |event: RoomEvent, _| {
+                errors.send(event).unwrap();
+                async { Ok(roomkit::model::HookResult::allow(AllowOptions::default())) }
+            },
+            spec,
+        )
         .unwrap();
     reported
 }

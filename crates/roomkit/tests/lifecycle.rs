@@ -23,9 +23,10 @@ use roomkit::testing::{
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CheckAllTimersOptions,
     CheckRoomTimersOptions, CloseRoomOptions, ConversationStore, CreateRoomOptions,
-    DetachChannelOptions, FrameworkEvent, GetBindingOptions, HookTrigger, ListMembersOptions,
-    MuteOptions, ProcessInboundOptions, ReopenRoomOptions, RoomKit, RoomKitError, RoomKitOptions,
-    SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateBindingMetadataOptions,
+    DetachChannelOptions, FrameworkEvent, GetBindingOptions, HookExecution, HookOptions,
+    HookTrigger, ListMembersOptions, MuteOptions, ProcessInboundOptions, ReopenRoomOptions,
+    RoomKit, RoomKitError, RoomKitOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
+    UpdateBindingMetadataOptions,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -204,10 +205,18 @@ mod timers {
         let clock = Clock::new();
         let (kit, _sms) = timed_room(&clock).await;
         let (seen, mut fired) = mpsc::unbounded_channel();
-        kit.observe("on_paused", HookTrigger::OnRoomPaused, move |event, _| {
-            seen.send(event).unwrap();
-            ready(())
-        })
+        kit.hook(
+            HookTrigger::OnRoomPaused,
+            move |event: RoomEvent, _| {
+                seen.send(event).unwrap();
+                ready(())
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "on_paused".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
         clock.advance(90);
         kit.check_all_timers(CheckAllTimersOptions::default())
@@ -641,12 +650,19 @@ mod unregistering {
     fn unregistering_during_the_call(kit: &RoomKit, channel_id: &str) {
         let unregistering = kit.clone();
         let channel_id = channel(channel_id);
-        kit.before_broadcast("unplug", move |_, _| {
-            unregistering.unregister_channel(&channel_id).unwrap();
-            ready(Ok(roomkit::model::HookResult::allow(
-                AllowOptions::default(),
-            )))
-        })
+        kit.hook(
+            HookTrigger::BeforeBroadcast,
+            move |_: RoomEvent, _| {
+                unregistering.unregister_channel(&channel_id).unwrap();
+                ready(Ok(roomkit::model::HookResult::allow(
+                    AllowOptions::default(),
+                )))
+            },
+            HookOptions {
+                name: "unplug".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
     }
 
@@ -819,19 +835,27 @@ mod creating {
         ))
         .unwrap();
         let attaching = kit.clone();
-        kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
-            let kit = attaching.clone();
-            async move {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                kit.attach_channel(
-                    &event.room_id,
-                    &channel("ai"),
-                    AttachChannelOptions::default(),
-                )
-                .await
-                .unwrap();
-            }
-        })
+        kit.hook(
+            HookTrigger::OnRoomCreated,
+            move |event: RoomEvent, _| {
+                let kit = attaching.clone();
+                async move {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    kit.attach_channel(
+                        &event.room_id,
+                        &channel("ai"),
+                        AttachChannelOptions::default(),
+                    )
+                    .await
+                    .unwrap();
+                }
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "welcome".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
         kit.create_room(CreateRoomOptions {
             room_id: Some(room_id()),
@@ -1252,13 +1276,21 @@ mod bindings {
             ("on_unmuted", HookTrigger::OnChannelUnmuted),
         ] {
             let seen = seen.clone();
-            kit.observe(name, trigger, move |event, _| {
-                let seen = seen.clone();
-                async move {
-                    seen.send(roomkit_core::rules::transcoding::text_of(&event.content))
-                        .unwrap();
-                }
-            })
+            kit.hook(
+                trigger,
+                move |event: RoomEvent, _| {
+                    let seen = seen.clone();
+                    async move {
+                        seen.send(roomkit_core::rules::transcoding::text_of(&event.content))
+                            .unwrap();
+                    }
+                },
+                HookOptions {
+                    execution: HookExecution::Async,
+                    name: name.to_owned(),
+                    ..Default::default()
+                },
+            )
             .unwrap();
         }
         kit.mute(&room_id(), agent.channel_id(), MuteOptions::default())
@@ -1287,12 +1319,16 @@ mod bindings {
     async fn channel_attached_payload_is_pythons() {
         let (kit, _sms, _agent) = sms_and_agent().await;
         let (seen, mut fired) = mpsc::unbounded_channel();
-        kit.observe(
-            "on_attached",
+        kit.hook(
             HookTrigger::OnChannelAttached,
-            move |event, _| {
+            move |event: RoomEvent, _| {
                 seen.send(event).unwrap();
                 ready(())
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "on_attached".to_owned(),
+                ..Default::default()
             },
         )
         .unwrap();

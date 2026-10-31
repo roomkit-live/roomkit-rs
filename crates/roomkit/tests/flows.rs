@@ -8,7 +8,6 @@
     reason = "a test fails on a broken fixture"
 )]
 use std::future::{Future, ready};
-use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -28,7 +27,7 @@ use roomkit::testing::{
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
     CommitEventOptions, ConversationStore, CreateRoomOptions, EventDraft, HookExecution,
-    HookHandler, HookReturn, HookSpec, HookTrigger, PostOptions, ProcessInboundOptions, RoomKit,
+    HookFuture, HookHandler, HookOptions, HookTrigger, PostOptions, ProcessInboundOptions, RoomKit,
     RoomKitError, RoomKitOptions, SendEventOptions, UpdateEventOptions, WeakRoomKit,
     default_inbound_event,
 };
@@ -278,16 +277,23 @@ async fn an_addressed_agent_unregistered_before_its_turn_reads_as_unavailable() 
 #[tokio::test]
 async fn the_timeline_reads_without_the_refused_events_by_default() {
     let (kit, sms) = sms_and_agent().await;
-    kit.before_broadcast("refuse_all", |event, _| {
-        let refuse = event.source.channel_id.as_str() == "sms";
-        async move {
-            Ok(if refuse {
-                HookResult::block("closed for the night", BlockOptions::default())
-            } else {
-                HookResult::allow(AllowOptions::default())
-            })
-        }
-    })
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |event: RoomEvent, _| {
+            let refuse = event.source.channel_id.as_str() == "sms";
+            async move {
+                Ok(if refuse {
+                    HookResult::block("closed for the night", BlockOptions::default())
+                } else {
+                    HookResult::allow(AllowOptions::default())
+                })
+            }
+        },
+        HookOptions {
+            name: "refuse_all".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     kit.process_inbound(
         message(&sms, "Hello?"),
@@ -343,12 +349,20 @@ async fn two_messages_sent_together_take_distinct_indexes() {
 async fn an_after_broadcast_observer_runs_after_the_delivery() {
     let (kit, sms) = sms_and_agent().await;
     let (seen, mut observed) = mpsc::unbounded_channel();
-    kit.observe("audit", HookTrigger::AfterBroadcast, move |event, _| {
-        let seen = seen.clone();
-        async move {
-            seen.send(text_of(&event.content)).unwrap();
-        }
-    })
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        move |event: RoomEvent, _| {
+            let seen = seen.clone();
+            async move {
+                seen.send(text_of(&event.content)).unwrap();
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "audit".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     kit.process_inbound(
         message(&sms, "Bonjour"),
@@ -367,19 +381,34 @@ async fn an_after_broadcast_observer_runs_after_the_delivery() {
 #[tokio::test]
 async fn an_async_hook_on_before_broadcast_observes_the_payload_the_chain_left() {
     let (kit, sms) = sms_and_agent().await;
-    kit.before_broadcast("rewrite", |event, _| {
-        let mut rewritten = event;
-        rewritten.content = TextContent::new("rewritten").into();
-        ready(Ok(HookResult::modify(rewritten, ModifyOptions::default())))
-    })
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |event: RoomEvent, _| {
+            let mut rewritten = event;
+            rewritten.content = TextContent::new("rewritten").into();
+            ready(Ok(HookResult::modify(rewritten, ModifyOptions::default())))
+        },
+        HookOptions {
+            name: "rewrite".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let (seen, mut observed) = mpsc::unbounded_channel();
-    kit.observe("watcher", HookTrigger::BeforeBroadcast, move |event, _| {
-        let seen = seen.clone();
-        async move {
-            seen.send(text_of(&event.content)).unwrap();
-        }
-    })
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let seen = seen.clone();
+            async move {
+                seen.send(text_of(&event.content)).unwrap();
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "watcher".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     kit.process_inbound(
         message(&sms, "original"),
@@ -397,16 +426,19 @@ async fn an_async_hook_on_before_broadcast_observes_the_payload_the_chain_left()
 async fn a_hook_past_its_timeout_lets_the_message_through_and_is_reported() {
     let (kit, sms) = sms_and_agent().await;
     let tap = EventTap::on(&kit, &["hook_timeout"]);
-    let mut spec = HookSpec::new(
-        "slow_scan",
+    let spec = HookOptions {
+        name: "slow_scan".to_owned(),
+        timeout: Duration::from_millis(20),
+        ..Default::default()
+    };
+    kit.hook(
         HookTrigger::BeforeBroadcast,
-        HookExecution::Sync,
-    );
-    spec.timeout = Duration::from_millis(20);
-    kit.hook(spec, |_, _| async {
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        Ok(HookResult::allow(AllowOptions::default()))
-    })
+        |_: RoomEvent, _| async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            Ok(HookResult::allow(AllowOptions::default()))
+        },
+        spec,
+    )
     .unwrap();
     let result = kit
         .process_inbound(
@@ -428,21 +460,24 @@ async fn a_hook_past_its_timeout_lets_the_message_through_and_is_reported() {
 #[tokio::test]
 async fn a_hook_s_closure_reads_its_event_without_annotations() {
     let (kit, sms) = sms_and_agent().await;
-    let spec = HookSpec::new(
-        "spam_filter",
+    let spec = HookOptions {
+        name: "spam_filter".to_owned(),
+        ..Default::default()
+    };
+    kit.hook(
         HookTrigger::BeforeBroadcast,
-        HookExecution::Sync,
-    );
-    kit.hook(spec, |event, _| {
-        let spam = text_of(&event.content).contains("spam");
-        async move {
-            Ok(if spam {
-                HookResult::block("spam", BlockOptions::default())
-            } else {
-                HookResult::allow(AllowOptions::default())
-            })
-        }
-    })
+        |event: RoomEvent, _| {
+            let spam = text_of(&event.content).contains("spam");
+            async move {
+                Ok(if spam {
+                    HookResult::block("spam", BlockOptions::default())
+                } else {
+                    HookResult::allow(AllowOptions::default())
+                })
+            }
+        },
+        spec,
+    )
     .unwrap();
     let result = kit
         .process_inbound(
@@ -462,19 +497,15 @@ async fn a_hook_s_closure_reads_its_event_without_annotations() {
 struct Blocklist(&'static str);
 
 impl HookHandler for Blocklist {
-    fn call(
-        &self,
-        event: RoomEvent,
-        _context: RoomContext,
-    ) -> Pin<Box<dyn Future<Output = HookReturn> + Send>> {
+    fn call(&self, event: RoomEvent, _context: RoomContext) -> HookFuture {
         let named = text_of(&event.content).contains(self.0);
         let reason = format!("blocklisted {:?}", self.0);
         Box::pin(async move {
-            Ok(if named {
+            Ok(Some(if named {
                 HookResult::block(reason, BlockOptions::default())
             } else {
                 HookResult::allow(AllowOptions::default())
-            })
+            }))
         })
     }
 }
@@ -482,12 +513,12 @@ impl HookHandler for Blocklist {
 #[tokio::test]
 async fn a_hook_handler_of_its_own_type_is_registered_with_hook_handler() {
     let (kit, sms) = sms_and_agent().await;
-    let spec = HookSpec::new(
-        "blocklist",
-        HookTrigger::BeforeBroadcast,
-        HookExecution::Sync,
-    );
-    kit.hook_handler(spec, Blocklist("scam")).unwrap();
+    let spec = HookOptions {
+        name: "blocklist".to_owned(),
+        ..Default::default()
+    };
+    kit.hook_handler(HookTrigger::BeforeBroadcast, Blocklist("scam"), spec)
+        .unwrap();
     let result = kit
         .process_inbound(
             message(&sms, "Not a scam"),
@@ -499,6 +530,47 @@ async fn a_hook_handler_of_its_own_type_is_registered_with_hook_handler() {
         .await
         .unwrap();
     assert_eq!(result.reason.as_deref(), Some("blocklisted \"scam\""));
+}
+
+/// RFC §9.3: a SYNC hook that returns nothing, Python's `None`, gives an
+/// unusable result: the message goes through, unless the hook fails
+/// closed, which blocks it naming the hook.
+#[tokio::test]
+async fn a_sync_hook_returning_nothing_fails_open_unless_it_fails_closed() {
+    let mut outcomes = Vec::new();
+    for fail_closed in [false, true] {
+        let (kit, sms) = sms_and_agent().await;
+        let silent = HookOptions {
+            name: "silent".to_owned(),
+            fail_closed,
+            ..Default::default()
+        };
+        kit.hook(
+            HookTrigger::BeforeBroadcast,
+            |_: RoomEvent, _| async {},
+            silent,
+        )
+        .unwrap();
+        let result = kit
+            .process_inbound(
+                message(&sms, "Hello"),
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        outcomes.push((result.blocked, result.reason));
+        kit.close().await.unwrap();
+    }
+    assert_eq!(
+        outcomes,
+        [
+            (false, None),
+            (true, Some("hook_invalid_result:silent".to_owned()))
+        ]
+    );
 }
 
 #[tokio::test]
@@ -875,14 +947,14 @@ async fn a_link_s_scheme_a_struct_literal_holds_enters_in_lower_case() {
     let (kit, sms) = sms_and_agent().await;
     let (read, mut hook_read) = mpsc::unbounded_channel();
     kit.hook(
-        HookSpec::new(
-            "media_reader",
-            HookTrigger::BeforeBroadcast,
-            HookExecution::Sync,
-        ),
+        HookTrigger::BeforeBroadcast,
         move |event: RoomEvent, _context| {
             read.send(media_url(&event.content)).unwrap();
             ready(Ok(HookResult::allow(AllowOptions::default())))
+        },
+        HookOptions {
+            name: "media_reader".to_owned(),
+            ..Default::default()
         },
     )
     .unwrap();
@@ -1030,27 +1102,38 @@ async fn delivered_through(text: &str) -> Vec<Option<String>> {
             .await
             .unwrap();
     }
-    let spec = HookSpec::new("shouter", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    kit.hook(spec, |mut event: RoomEvent, _context| {
-        let answer = match text_of(&event.content).as_str() {
-            "modify" => {
-                event.content = shouting_media();
-                HookResult::modify(event, ModifyOptions::default())
-            }
-            "inject" => {
-                let source = EventSource::new(channel("gate"), ChannelType::WEBSOCKET);
-                let injected = InjectedEvent {
-                    target_channel_ids: Some(vec![channel("audit")]),
-                    ..InjectedEvent::new(RoomEvent::new(event.room_id, source, shouting_media()))
-                };
-                HookResult::allow(AllowOptions {
-                    injected: Some(vec![injected]),
-                })
-            }
-            _ => HookResult::allow(AllowOptions::default()),
-        };
-        ready(Ok(answer))
-    })
+    let spec = HookOptions {
+        name: "shouter".to_owned(),
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |mut event: RoomEvent, _context| {
+            let answer = match text_of(&event.content).as_str() {
+                "modify" => {
+                    event.content = shouting_media();
+                    HookResult::modify(event, ModifyOptions::default())
+                }
+                "inject" => {
+                    let source = EventSource::new(channel("gate"), ChannelType::WEBSOCKET);
+                    let injected = InjectedEvent {
+                        target_channel_ids: Some(vec![channel("audit")]),
+                        ..InjectedEvent::new(RoomEvent::new(
+                            event.room_id,
+                            source,
+                            shouting_media(),
+                        ))
+                    };
+                    HookResult::allow(AllowOptions {
+                        injected: Some(vec![injected]),
+                    })
+                }
+                _ => HookResult::allow(AllowOptions::default()),
+            };
+            ready(Ok(answer))
+        },
+        spec,
+    )
     .unwrap();
     let message = InboundMessage::new(channel("gate"), "u1", TextContent::new(text));
     let routed = ProcessInboundOptions {
@@ -1096,23 +1179,30 @@ async fn a_hook_answering_a_content_its_model_refuses_reads_as_raising() {
 async fn raised_by_answering(injecting: bool) -> (String, (bool, Vec<String>)) {
     let (kit, sms) = sms_and_agent().await;
     let name = if injecting { "injector" } else { "rewriter" };
-    let spec = HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    kit.hook(spec, move |mut event: RoomEvent, _context| {
-        let answer = if injecting {
-            let injected = RoomEvent::new(
-                event.room_id.clone(),
-                EventSource::new(channel("sms"), ChannelType::SMS),
-                javascript_media(),
-            );
-            HookResult::allow(AllowOptions {
-                injected: Some(vec![InjectedEvent::new(injected)]),
-            })
-        } else {
-            event.content = javascript_media();
-            HookResult::modify(event, ModifyOptions::default())
-        };
-        ready(Ok(answer))
-    })
+    let spec = HookOptions {
+        name: name.to_owned(),
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |mut event: RoomEvent, _context| {
+            let answer = if injecting {
+                let injected = RoomEvent::new(
+                    event.room_id.clone(),
+                    EventSource::new(channel("sms"), ChannelType::SMS),
+                    javascript_media(),
+                );
+                HookResult::allow(AllowOptions {
+                    injected: Some(vec![InjectedEvent::new(injected)]),
+                })
+            } else {
+                event.content = javascript_media();
+                HookResult::modify(event, ModifyOptions::default())
+            };
+            ready(Ok(answer))
+        },
+        spec,
+    )
     .unwrap();
     let errors = EventTap::on(&kit, &["hook_error"]);
     kit.process_inbound(

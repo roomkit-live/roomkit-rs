@@ -11,7 +11,7 @@ use roomkit::model::hook::AllowOptions;
 use roomkit::model::{ChannelBinding, ChannelOutput, HookResult, RoomContext, RoomEvent, RoomId};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    HookExecution, HookSpec, HookTrigger, RoomKit,
+    HookExecution, HookOptions, HookTrigger, RoomKit, ToolCallEvent,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
@@ -264,16 +264,24 @@ async fn a_close_from_an_observer_waits_for_the_run_that_fired_it() {
     let kit = kit_with(&witness).await;
     let closer = Closer::new(&kit, &witness, false);
     let work = closer.clone();
-    let spec = HookSpec::new("quit", HookTrigger::BeforeBroadcast, HookExecution::Async);
-    kit.hook(spec, move |_event, _context| {
-        let (work, gate) = (work.clone(), gate.clone());
-        async move {
-            gate.began().await;
-            gate.go();
-            work.close().await;
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+    let spec = HookOptions {
+        execution: HookExecution::Async,
+        name: "quit".to_owned(),
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |_event: RoomEvent, _context| {
+            let (work, gate) = (work.clone(), gate.clone());
+            async move {
+                gate.began().await;
+                gate.go();
+                work.close().await;
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        spec,
+    )
     .unwrap();
     let started = Instant::now();
     let call = spawn_message(&kit, "Bye.", room_id());
@@ -334,15 +342,23 @@ async fn a_close_from_a_tool_s_observer_cuts_its_turn() {
     ]);
     attach_agent(&kit, model, tools).await;
     let work = closer.clone();
-    kit.observe_tool_calls("quit", move |event, _context| {
-        let work = work.clone();
-        let quick_ended = event.call.name == "quick" && event.outcome.is_some();
-        async move {
-            if quick_ended {
-                work.close().await;
+    kit.hook(
+        HookTrigger::OnToolCall,
+        move |event: ToolCallEvent, _context| {
+            let work = work.clone();
+            let quick_ended = event.name == "quick";
+            async move {
+                if quick_ended {
+                    work.close().await;
+                }
             }
-        }
-    })
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "quit".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let started = Instant::now();
     let call = spawn_message(&kit, "Go.", room_id());
@@ -385,19 +401,26 @@ async fn a_spared_run_s_queued_set_is_dropped() {
     *witness.closes_on_delivery.lock().unwrap() = Some(one_closes.clone());
     let two_closes = Closer::new(&kit, &witness, true);
     let work = two_closes.clone();
-    let spec = HookSpec::new("keep", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    kit.hook(spec, move |event, _context| {
-        let work = work.clone();
-        let is_two = roomkit_core::rules::transcoding::text_of(&event.content) == "Two.";
-        async move {
-            if is_two {
-                drop(tokio::spawn(roomkit::keep_context(async move {
-                    work.close().await;
-                })));
+    let spec = HookOptions {
+        name: "keep".to_owned(),
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _context| {
+            let work = work.clone();
+            let is_two = roomkit_core::rules::transcoding::text_of(&event.content) == "Two.";
+            async move {
+                if is_two {
+                    drop(tokio::spawn(roomkit::keep_context(async move {
+                        work.close().await;
+                    })));
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        spec,
+    )
     .unwrap();
     let model = ScriptedProvider::new([
         ScriptedRound::answering("Hi."),
@@ -606,10 +629,9 @@ async fn queued_observer_runs(
         let kit = kit_with(&witness).await;
         let seen = Arc::new(tokio::sync::Notify::new());
         let (weak, telling) = (kit.downgrade(), Arc::clone(&seen));
-        kit.observe(
-            "obs",
+        kit.hook(
             HookTrigger::BeforeBroadcast,
-            move |event, _context| {
+            move |event: RoomEvent, _context| {
                 let (weak, telling) = (weak.clone(), Arc::clone(&telling));
                 let second = roomkit_core::rules::transcoding::text_of(&event.content) == "second";
                 async move {
@@ -621,6 +643,11 @@ async fn queued_observer_runs(
                         drop(kit.close().await);
                     }
                 }
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "obs".to_owned(),
+                ..Default::default()
             },
         )
         .unwrap();

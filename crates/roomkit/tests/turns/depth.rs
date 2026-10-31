@@ -11,7 +11,10 @@ use std::sync::{Arc, Mutex};
 use pretty_assertions::assert_eq;
 use roomkit::model::TextContent;
 use roomkit::testing::TurnTap;
-use roomkit::{RoomKitError, SendEventOptions, current_turn_host};
+use roomkit::{
+    HookExecution, HookOptions, HookTrigger, RoomKitError, SendEventOptions, ToolCallEvent,
+    current_turn_host,
+};
 use roomkit_ai::ToolOutput;
 use tokio::sync::Notify;
 
@@ -28,24 +31,32 @@ async fn observed() -> (roomkit::RoomKit, Arc<Notify>, Sent) {
     let go = Arc::new(Notify::new());
     let sent: Sent = Arc::default();
     let (waits, noted) = (Arc::clone(&go), Arc::clone(&sent));
-    kit.observe_tool_calls("follow_up", move |_event, context| {
-        let (waits, noted) = (Arc::clone(&waits), Arc::clone(&noted));
-        let room = context.room.id.clone();
-        async move {
-            waits.notified().await;
-            let turn = current_turn_host().unwrap();
-            let note = TextContent::new("Following up.");
-            let sent = turn
-                .send_event(&room, &channel("sms"), note, SendEventOptions::default())
-                .await;
-            noted.lock().unwrap().push(match sent {
-                Ok(event) => Ok(event.chain_depth),
-                Err(RoomKitError::TurnLink { reason, .. }) => Err(reason),
-                Err(RoomKitError::RemoteTurn { kind, .. }) => Err(kind),
-                Err(error) => Err(error.to_string()),
-            });
-        }
-    })
+    kit.hook(
+        HookTrigger::OnToolCall,
+        move |_event: ToolCallEvent, context| {
+            let (waits, noted) = (Arc::clone(&waits), Arc::clone(&noted));
+            let room = context.room.id.clone();
+            async move {
+                waits.notified().await;
+                let turn = current_turn_host().unwrap();
+                let note = TextContent::new("Following up.");
+                let sent = turn
+                    .send_event(&room, &channel("sms"), note, SendEventOptions::default())
+                    .await;
+                noted.lock().unwrap().push(match sent {
+                    Ok(event) => Ok(event.chain_depth),
+                    Err(RoomKitError::TurnLink { reason, .. }) => Err(reason),
+                    Err(RoomKitError::RemoteTurn { kind, .. }) => Err(kind),
+                    Err(error) => Err(error.to_string()),
+                });
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "follow_up".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     (kit, go, sent)
 }

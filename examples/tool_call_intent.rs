@@ -23,12 +23,16 @@
 use std::error::Error;
 use std::process::ExitCode;
 
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, InboundMessage, RoomEvent, RoomId, TextContent,
-    ToolCallContent,
+    ChannelId, ChannelType, EventContent, HookResult, InboundMessage, RoomEvent, RoomId,
+    TextContent, ToolCallContent,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
-use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, ToolUse};
+use roomkit::{
+    AttachChannelOptions, CreateRoomOptions, HookOptions, HookTrigger, ProcessInboundOptions,
+    ToolCallEvent,
+};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::{Value, json};
@@ -71,10 +75,17 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let (kit, sms, room) = project_room(&endpoint, &received).await?;
     let approvals = Log::new();
     let asked = approvals.clone();
-    kit.before_tool_use("approve", move |event, _context| {
-        asked.push(event.call.intent.clone());
-        async { Ok(ToolUse::Allow) }
-    })?;
+    kit.hook(
+        HookTrigger::BeforeToolUse,
+        move |event: ToolCallEvent, _context| {
+            asked.push(event.intent.clone());
+            async { Ok(HookResult::allow(AllowOptions::default())) }
+        },
+        HookOptions {
+            name: "approve".to_owned(),
+            ..Default::default()
+        },
+    )?;
 
     let message = InboundMessage::new(
         sms.channel_id().clone(),

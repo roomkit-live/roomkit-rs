@@ -23,8 +23,8 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookTrigger, ProcessInboundOptions,
-    RoomKit,
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookOptions,
+    HookTrigger, ProcessInboundOptions, RoomKit,
 };
 
 use shared::text_of;
@@ -222,11 +222,19 @@ fn observe_changes(kit: &RoomKit, changed: &Log<Change>) -> Result<(), Box<dyn E
         ("projection_deleted", HookTrigger::OnEventDeleted),
     ] {
         let changed = changed.clone();
-        kit.observe(name, trigger, move |event, context| {
-            let changed = changed.clone();
-            let newest = context.recent_events.last().map(|newest| newest.id.clone());
-            async move { changed.push((trigger, event, newest)) }
-        })?;
+        kit.hook(
+            trigger,
+            move |event: RoomEvent, context| {
+                let changed = changed.clone();
+                let newest = context.recent_events.last().map(|newest| newest.id.clone());
+                async move { changed.push((trigger, event, newest)) }
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: name.to_owned(),
+                ..Default::default()
+            },
+        )?;
     }
     Ok(())
 }
@@ -243,18 +251,25 @@ fn has_card_number(text: &str) -> bool {
 
 /// Blocks an edit whose new text holds a card number (RFC §10.1 step 9).
 fn moderate_edits(kit: &RoomKit) -> Result<(), Box<dyn Error>> {
-    kit.before_broadcast("card_scanner", |event, _| async move {
-        let corrects_to_a_card = if let EventContent::Edit(edit) = &event.content {
-            has_card_number(&text_of(&edit.new_content))
-        } else {
-            false
-        };
-        Ok(if corrects_to_a_card {
-            HookResult::block("card number in an edit", BlockOptions::default())
-        } else {
-            HookResult::allow(AllowOptions::default())
-        })
-    })?;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |event: RoomEvent, _| async move {
+            let corrects_to_a_card = if let EventContent::Edit(edit) = &event.content {
+                has_card_number(&text_of(&edit.new_content))
+            } else {
+                false
+            };
+            Ok(if corrects_to_a_card {
+                HookResult::block("card number in an edit", BlockOptions::default())
+            } else {
+                HookResult::allow(AllowOptions::default())
+            })
+        },
+        HookOptions {
+            name: "card_scanner".to_owned(),
+            ..Default::default()
+        },
+    )?;
     Ok(())
 }
 

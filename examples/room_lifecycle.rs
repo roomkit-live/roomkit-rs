@@ -19,14 +19,15 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventType, InboundMessage, Room, RoomId, RoomStatus, RoomTimers,
-    TextContent,
+    ChannelId, ChannelType, EventType, InboundMessage, Room, RoomEvent, RoomId, RoomStatus,
+    RoomTimers, TextContent,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CloseRoomOptions,
-    ConversationStore, CreateRoomOptions, HookTrigger, InboundResult, PauseRoomOptions,
-    ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitError,
+    ConversationStore, CreateRoomOptions, HookExecution, HookOptions, HookTrigger, InboundResult,
+    PauseRoomOptions, ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit,
+    RoomKitError,
 };
 
 use shared::text_of;
@@ -114,12 +115,20 @@ fn observe_transitions(kit: &RoomKit, transitions: &Log<String>) -> Result<(), B
         ("on_closed", HookTrigger::OnRoomClosed),
     ] {
         let transitions = transitions.clone();
-        kit.observe(name, trigger, move |event, context| {
-            let transitions = transitions.clone();
-            async move {
-                transitions.push(format!("{}: {}", context.room.id, text_of(&event.content)));
-            }
-        })?;
+        kit.hook(
+            trigger,
+            move |event: RoomEvent, context| {
+                let transitions = transitions.clone();
+                async move {
+                    transitions.push(format!("{}: {}", context.room.id, text_of(&event.content)));
+                }
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: name.to_owned(),
+                ..Default::default()
+            },
+        )?;
     }
     Ok(())
 }
@@ -302,11 +311,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "ON_ROOM_PAUSED and ON_ROOM_CLOSED fire for each room, by hand or by timer",
         fired
             == [
-                "support: room closed",
-                "support: room paused",
-                "support: room paused",
-                "timed: room closed",
-                "timed: room paused",
+                "support: Room support closed",
+                "support: Room support paused",
+                "support: Room support paused",
+                "timed: Room timed closed by timer",
+                "timed: Room timed paused by timer",
             ],
     );
     Ok(checks.finish())

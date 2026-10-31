@@ -24,9 +24,9 @@ use roomkit::testing::{
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CommitEventOptions,
-    ConversationStore, CreateRoomOptions, DeleteEventOptions, EventFilter, HookTrigger,
-    InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions,
-    UpdateEventOptions,
+    ConversationStore, CreateRoomOptions, DeleteEventOptions, EventFilter, HookExecution,
+    HookOptions, HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    SendEventOptions, UpdateEventOptions,
 };
 use roomkit_core::rules::edits::is_deleted;
 use roomkit_core::rules::edits::is_edited;
@@ -300,12 +300,20 @@ async fn target(kit: &RoomKit) -> Option<RoomEvent> {
 /// The payloads of `trigger` from now on.
 fn observed(kit: &RoomKit, trigger: HookTrigger) -> mpsc::UnboundedReceiver<RoomEvent> {
     let (seen, observed) = mpsc::unbounded_channel();
-    kit.observe("projection", trigger, move |event, _| {
-        let seen = seen.clone();
-        async move {
-            seen.send(event).unwrap();
-        }
-    })
+    kit.hook(
+        trigger,
+        move |event: RoomEvent, _| {
+            let seen = seen.clone();
+            async move {
+                seen.send(event).unwrap();
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "projection".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     observed
 }
@@ -433,13 +441,20 @@ mod an_edit {
         let room = room().await;
         let mut updated = observed(&room.kit, HookTrigger::OnEventUpdated);
         room.kit
-            .before_broadcast("no_edits", |event, _| async move {
-                Ok(if event.r#type == EventType::Edit {
-                    HookResult::block("edits are closed", BlockOptions::default())
-                } else {
-                    HookResult::allow(AllowOptions::default())
-                })
-            })
+            .hook(
+                HookTrigger::BeforeBroadcast,
+                |event: RoomEvent, _| async move {
+                    Ok(if event.r#type == EventType::Edit {
+                        HookResult::block("edits are closed", BlockOptions::default())
+                    } else {
+                        HookResult::allow(AllowOptions::default())
+                    })
+                },
+                HookOptions {
+                    name: "no_edits".to_owned(),
+                    ..Default::default()
+                },
+            )
             .unwrap();
         let result = send(&room.kit, edit_from(CUSTOMER, "I need 50000$")).await;
         assert_eq!(
@@ -878,16 +893,23 @@ mod changes_at_once {
         let locked = Arc::new(Notify::new());
         let holding = Arc::clone(&locked);
         room.kit
-            .before_broadcast("slow_scan", move |event, _| {
-                let holding = Arc::clone(&holding);
-                async move {
-                    if event.r#type == EventType::Edit {
-                        holding.notify_one();
-                        tokio::time::sleep(Duration::from_millis(50)).await;
+            .hook(
+                HookTrigger::BeforeBroadcast,
+                move |event: RoomEvent, _| {
+                    let holding = Arc::clone(&holding);
+                    async move {
+                        if event.r#type == EventType::Edit {
+                            holding.notify_one();
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                        Ok(HookResult::allow(AllowOptions::default()))
                     }
-                    Ok(HookResult::allow(AllowOptions::default()))
-                }
-            })
+                },
+                HookOptions {
+                    name: "slow_scan".to_owned(),
+                    ..Default::default()
+                },
+            )
             .unwrap();
         let kit = room.kit.clone();
         let editing =

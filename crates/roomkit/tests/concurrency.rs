@@ -18,14 +18,15 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
-    ChannelId, ChannelType, EventStatus, EventType, HookResult, InboundMessage, RoomId, TextContent,
+    ChannelId, ChannelType, EventStatus, EventType, HookResult, InboundMessage, RoomEvent, RoomId,
+    TextContent,
 };
 use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
 };
 use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookSpec,
-    HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookOptions, HookTrigger,
+    ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
 use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::Barrier;
@@ -75,18 +76,25 @@ async fn rooms() -> (RoomKit, RecordingTransport) {
     ))
     .unwrap();
     let meeting = Arc::new(Barrier::new(TASKS));
-    let mut check = HookSpec::new("meeting", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    check.needs_lock = false;
-    kit.hook(check, move |event, _| {
-        let meeting = Arc::clone(&meeting);
-        async move {
-            let first = (0..TASKS).any(|task| text_of(&event.content) == sent(task, 0));
-            if first && event.room_id == room(0) {
-                meeting.wait().await;
+    let check = HookOptions {
+        name: "meeting".to_owned(),
+        needs_lock: false,
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let meeting = Arc::clone(&meeting);
+            async move {
+                let first = (0..TASKS).any(|task| text_of(&event.content) == sent(task, 0));
+                if first && event.room_id == room(0) {
+                    meeting.wait().await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        check,
+    )
     .unwrap();
     for index in 0..ROOMS {
         kit.create_room(CreateRoomOptions {

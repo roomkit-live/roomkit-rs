@@ -24,9 +24,8 @@ use roomkit::testing::{
     RecordingTransport, RecordingTransportOptions, SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookReturn,
-    HookSpec, HookTrigger, InboundResult, PauseRoomOptions, ProcessInboundOptions, RoomKit,
-    RoomKitOptions,
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookError, HookOptions,
+    HookTrigger, InboundResult, PauseRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
 use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::Notify;
@@ -48,10 +47,12 @@ fn message(text: &str) -> InboundMessage {
 
 /// A SYNC `BEFORE_BROADCAST` hook named `name`, off the room lock or under
 /// it.
-fn before_broadcast(name: &str, needs_lock: bool) -> HookSpec {
-    let mut spec = HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    spec.needs_lock = needs_lock;
-    spec
+fn before_broadcast(name: &str, needs_lock: bool) -> HookOptions {
+    HookOptions {
+        name: name.to_owned(),
+        needs_lock,
+        ..Default::default()
+    }
 }
 
 /// A kit with an SMS transport attached to `room_1`.
@@ -84,14 +85,18 @@ async fn message_held_in_its_hook(
 ) -> (Arc<Notify>, tokio::task::JoinHandle<InboundResult>) {
     let (started, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     let (hook_started, hook_go) = (Arc::clone(&started), Arc::clone(&go));
-    kit.hook(before_broadcast("scanner", needs_lock), move |_, _| {
-        let (started, go) = (Arc::clone(&hook_started), Arc::clone(&hook_go));
-        async move {
-            started.notify_one();
-            go.notified().await;
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |_: RoomEvent, _| {
+            let (started, go) = (Arc::clone(&hook_started), Arc::clone(&hook_go));
+            async move {
+                started.notify_one();
+                go.notified().await;
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        before_broadcast("scanner", needs_lock),
+    )
     .unwrap();
     let call = {
         let kit = kit.clone();
@@ -217,22 +222,26 @@ async fn two_overlapping_checks_commit_in_ticket_order() {
         Arc::clone(&go),
         Arc::clone(&second_checked),
     );
-    kit.hook(before_broadcast("scanner", false), move |event, _| {
-        let (held, go, second_checked) = (
-            Arc::clone(&signals.0),
-            Arc::clone(&signals.1),
-            Arc::clone(&signals.2),
-        );
-        async move {
-            if text_of(&event.content) == "first" {
-                held.notify_one();
-                go.notified().await;
-            } else {
-                second_checked.notify_one();
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (held, go, second_checked) = (
+                Arc::clone(&signals.0),
+                Arc::clone(&signals.1),
+                Arc::clone(&signals.2),
+            );
+            async move {
+                if text_of(&event.content) == "first" {
+                    held.notify_one();
+                    go.notified().await;
+                } else {
+                    second_checked.notify_one();
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        before_broadcast("scanner", false),
+    )
     .unwrap();
     let first = sent(&kit, "first");
     tokio::time::timeout(BOUND, held.notified()).await.unwrap();
@@ -278,16 +287,22 @@ async fn a_message_no_check_fires_for_commits_during_another_s_check() {
         .unwrap();
     let (held, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     let (hook_held, hook_go) = (Arc::clone(&held), Arc::clone(&go));
-    let mut spec = before_broadcast("scanner", false);
-    spec.filter.channel_ids = Some([channel("sms")].into());
-    kit.hook(spec, move |_, _| {
-        let (held, go) = (Arc::clone(&hook_held), Arc::clone(&hook_go));
-        async move {
-            held.notify_one();
-            go.notified().await;
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+    let spec = HookOptions {
+        channel_ids: Some([channel("sms")].into()),
+        ..before_broadcast("scanner", false)
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |_: RoomEvent, _| {
+            let (held, go) = (Arc::clone(&hook_held), Arc::clone(&hook_go));
+            async move {
+                held.notify_one();
+                go.notified().await;
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        spec,
+    )
     .unwrap();
     let customer = sent(&kit, "Bonjour");
     tokio::time::timeout(BOUND, held.notified()).await.unwrap();
@@ -327,15 +342,19 @@ async fn a_message_no_check_fires_for_commits_during_another_s_check() {
 async fn a_call_cancelled_during_its_off_lock_check_releases_its_ticket() {
     let kit = room().await;
     let hung = Arc::new(AtomicBool::new(false));
-    kit.hook(before_broadcast("scanner", false), move |_, _| {
-        let first = !hung.swap(true, Ordering::SeqCst);
-        async move {
-            if first {
-                tokio::time::sleep(Duration::from_secs(3600)).await;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |_: RoomEvent, _| {
+            let first = !hung.swap(true, Ordering::SeqCst);
+            async move {
+                if first {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        before_broadcast("scanner", false),
+    )
     .unwrap();
     let dropped = tokio::time::timeout(
         Duration::from_millis(50),
@@ -374,20 +393,26 @@ async fn a_call_cancelled_during_its_off_lock_check_releases_its_ticket() {
 #[tokio::test]
 async fn a_call_cancelled_in_a_locked_hook_after_its_check_leaves_everything_free() {
     let kit = room().await;
-    kit.hook(before_broadcast("scanner", false), |_, _| async {
-        Ok(HookResult::allow(AllowOptions::default()))
-    })
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |_: RoomEvent, _| async { Ok(HookResult::allow(AllowOptions::default())) },
+        before_broadcast("scanner", false),
+    )
     .unwrap();
     let hung = Arc::new(AtomicBool::new(false));
-    kit.hook(before_broadcast("policy", true), move |_, _| {
-        let first = !hung.swap(true, Ordering::SeqCst);
-        async move {
-            if first {
-                tokio::time::sleep(Duration::from_secs(3600)).await;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |_: RoomEvent, _| {
+            let first = !hung.swap(true, Ordering::SeqCst);
+            async move {
+                if first {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        before_broadcast("policy", true),
+    )
     .unwrap();
     let dropped = tokio::time::timeout(
         Duration::from_millis(50),
@@ -490,13 +515,13 @@ async fn block_and_inject(needs_lock: bool) -> B2 {
     let to_customer = notice("Message blocked. Do not send your SIN by SMS.", now);
     let to_advisor = notice("The client attempted to send a SIN. Blocked.", now);
     kit.hook(
-        before_broadcast("sensitivity_scanner", needs_lock),
-        move |event, context| {
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, context| {
             let found = has_sin(&text_of(&event.content));
             let (to_customer, to_advisor) = (to_customer.clone(), to_advisor.clone());
             async move {
                 if !found {
-                    return HookReturn::Ok(HookResult::allow(AllowOptions::default()));
+                    return Ok::<_, HookError>(HookResult::allow(AllowOptions::default()));
                 }
                 let observation = Observation {
                     created_at: event.created_at,
@@ -526,6 +551,7 @@ async fn block_and_inject(needs_lock: bool) -> B2 {
                 ))
             }
         },
+        before_broadcast("sensitivity_scanner", needs_lock),
     )
     .unwrap();
     kit.create_room(CreateRoomOptions {

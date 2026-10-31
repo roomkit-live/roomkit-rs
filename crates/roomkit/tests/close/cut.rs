@@ -18,7 +18,7 @@ use roomkit::model::{
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CommitEventOptions,
-    ConversationStore, GetRoomOptions, HookExecution, HookSpec, HookTrigger, InMemoryStore,
+    ConversationStore, GetRoomOptions, HookExecution, HookOptions, HookTrigger, InMemoryStore,
     PauseRoomOptions, SendEventOptions,
 };
 use tokio::sync::Notify;
@@ -392,26 +392,29 @@ async fn a_spared_run_whose_read_back_hangs_ends_within_its_unwind() {
     let kit = kit_of(store, &[&Holding::new("ws", [])], &["r"]).await;
     let go = Arc::new(Notify::new());
     let (weak, waiting) = (kit.downgrade(), Arc::clone(&go));
-    let spec = HookSpec::new(
-        "late_closer",
+    let spec = HookOptions {
+        name: "late_closer".to_owned(),
+        ..Default::default()
+    };
+    kit.hook(
         HookTrigger::BeforeBroadcast,
-        HookExecution::Sync,
-    );
-    kit.hook(spec, move |event, _context| {
-        let (weak, waiting) = (weak.clone(), Arc::clone(&waiting));
-        let ours = text_of(&event.content) == "slow";
-        async move {
-            if ours {
-                tokio::spawn(roomkit::keep_context(async move {
-                    waiting.notified().await;
-                    if let Some(kit) = weak.upgrade() {
-                        drop(kit.close().await);
-                    }
-                }));
+        move |event: RoomEvent, _context| {
+            let (weak, waiting) = (weak.clone(), Arc::clone(&waiting));
+            let ours = text_of(&event.content) == "slow";
+            async move {
+                if ours {
+                    tokio::spawn(roomkit::keep_context(async move {
+                        waiting.notified().await;
+                        if let Some(kit) = weak.upgrade() {
+                            drop(kit.close().await);
+                        }
+                    }));
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        spec,
+    )
     .unwrap();
     let call = spawn_said(&kit, "slow", "r");
     committing.notified().await;
@@ -589,10 +592,9 @@ async fn the_close_takes_its_grace_with_every_kind_of_work_stuck() {
     let kit = kit_of(store, &[&held], &["send", "write", "observer", "lock"]).await;
     let (observing, locking) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     let told = Arc::clone(&observing);
-    kit.observe(
-        "observer",
+    kit.hook(
         HookTrigger::AfterBroadcast,
-        move |event, _context| {
+        move |event: RoomEvent, _context| {
             let told = Arc::clone(&told);
             let ours = text_of(&event.content) == "observed";
             async move {
@@ -602,21 +604,33 @@ async fn the_close_takes_its_grace_with_every_kind_of_work_stuck() {
                 }
             }
         },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "observer".to_owned(),
+            ..Default::default()
+        },
     )
     .unwrap();
     let told = Arc::clone(&locking);
-    let spec = HookSpec::new("locker", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    kit.hook(spec, move |event, _context| {
-        let told = Arc::clone(&told);
-        let ours = text_of(&event.content) == "locked";
-        async move {
-            if ours {
-                told.notify_one();
-                std::future::pending::<()>().await;
+    let spec = HookOptions {
+        name: "locker".to_owned(),
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _context| {
+            let told = Arc::clone(&told);
+            let ours = text_of(&event.content) == "locked";
+            async move {
+                if ours {
+                    told.notify_one();
+                    std::future::pending::<()>().await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        spec,
+    )
     .unwrap();
     a_send_held(&kit, &held, "send").await;
     let calls = [

@@ -20,8 +20,8 @@ use roomkit::model::{
 use roomkit::testing::{EventTap, RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, EventFilter,
-    EventQuery, InMemoryStore, ProcessInboundOptions, RoomCounters, RoomFilter, RoomKit,
-    RoomKitError, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
+    EventQuery, HookOptions, HookTrigger, InMemoryStore, ProcessInboundOptions, RoomCounters,
+    RoomFilter, RoomKit, RoomKitError, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
 };
 use tokio::sync::Notify;
 
@@ -653,22 +653,29 @@ async fn a_call_cut_before_its_commit_does_not_read_an_adopted_entry_s() {
     let hanging = Arc::new(Notify::new());
     let hook_kit = kit.clone();
     let signal = Arc::clone(&hanging);
-    kit.before_broadcast("inject_then_hang", move |event, _| {
-        let kit = hook_kit.clone();
-        let hanging = Arc::clone(&signal);
-        async move {
-            if event.source.channel_id == channel("sms") {
-                let injected = TextContent::new("Heads up");
-                let options = SendEventOptions::default();
-                kit.send_event(&room_id(), &channel("ws"), injected, options)
-                    .await
-                    .unwrap();
-                hanging.notify_one();
-                std::future::pending::<()>().await;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let kit = hook_kit.clone();
+            let hanging = Arc::clone(&signal);
+            async move {
+                if event.source.channel_id == channel("sms") {
+                    let injected = TextContent::new("Heads up");
+                    let options = SendEventOptions::default();
+                    kit.send_event(&room_id(), &channel("ws"), injected, options)
+                        .await
+                        .unwrap();
+                    hanging.notify_one();
+                    std::future::pending::<()>().await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        HookOptions {
+            name: "inject_then_hang".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let ended = closed_while_its_hook_hangs(&kit, &hanging).await;
     assert_eq!(
@@ -698,14 +705,21 @@ async fn a_call_cut_before_its_commit_does_not_read_its_channel_s_record() {
     .unwrap();
     let hanging = Arc::new(Notify::new());
     let signal = Arc::clone(&hanging);
-    kit.before_broadcast("hang", move |_, _| {
-        let hanging = Arc::clone(&signal);
-        async move {
-            hanging.notify_one();
-            std::future::pending::<()>().await;
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |_: RoomEvent, _| {
+            let hanging = Arc::clone(&signal);
+            async move {
+                hanging.notify_one();
+                std::future::pending::<()>().await;
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        HookOptions {
+            name: "hang".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let ended = closed_while_its_hook_hangs(&kit, &hanging).await;
     let attached = kit.store().list_bindings(&room_id()).await.unwrap().len();

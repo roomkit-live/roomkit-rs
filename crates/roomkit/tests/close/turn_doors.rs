@@ -7,10 +7,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{EventContent, EventType, TextContent, ToolCallStatus};
+use roomkit::model::{EventContent, EventType, RoomEvent, TextContent, ToolCallStatus};
 use roomkit::{
-    AttachChannelOptions, ConversationStore, EventQuery, InMemoryStore, ProcessInboundOptions,
-    RoomKit, SendEventOptions, TurnTimeouts, keep_context,
+    AttachChannelOptions, ConversationStore, EventQuery, HookOptions, InMemoryStore,
+    ProcessInboundOptions, RoomKit, SendEventOptions, TurnTimeouts, keep_context,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
@@ -301,26 +301,29 @@ async fn a_tool_awaiting_the_close_runs_on_and_logs_nothing_after_it() {
 async fn sibling_agent(kit: &RoomKit, notes: &Arc<Mutex<Vec<String>>>) {
     use roomkit::model::HookResult;
     use roomkit::model::hook::AllowOptions;
-    use roomkit::{HookExecution, HookSpec, HookTrigger, current_turn_host};
+    use roomkit::{HookTrigger, current_turn_host};
 
     let entered = Arc::new(Notify::new());
     let told = Arc::clone(&entered);
-    let spec = HookSpec::new(
-        "slow_note",
+    let spec = HookOptions {
+        name: "slow_note".to_owned(),
+        ..Default::default()
+    };
+    kit.hook(
         HookTrigger::BeforeBroadcast,
-        HookExecution::Sync,
-    );
-    kit.hook(spec, move |event, _context| {
-        let told = Arc::clone(&told);
-        let ours = roomkit_core::rules::transcoding::text_of(&event.content) == "note";
-        async move {
-            if ours {
-                told.notify_one();
-                tokio::time::sleep(Duration::from_secs(1)).await;
+        move |event: RoomEvent, _context| {
+            let told = Arc::clone(&told);
+            let ours = roomkit_core::rules::transcoding::text_of(&event.content) == "note";
+            async move {
+                if ours {
+                    told.notify_one();
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        spec,
+    )
     .unwrap();
     let (weak, noting_a, noting_b) = (kit.downgrade(), Arc::clone(notes), Arc::clone(notes));
     let tools = Tools::new()

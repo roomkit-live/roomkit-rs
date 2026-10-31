@@ -12,11 +12,11 @@ mod support;
 
 use std::path::Path;
 
-use roomkit::model::{ChannelId, ChannelType, RoomId};
+use roomkit::model::{ChannelId, ChannelType, RoomEvent, RoomId};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookTrigger, RoomKit,
-    RoomKitOptions,
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookOptions,
+    HookTrigger, RoomKit, RoomKitOptions,
 };
 use roomkit_sqlite::SqliteStore;
 
@@ -59,10 +59,9 @@ async fn left_after_drop(held: Held) -> (bool, usize) {
         Held::Strongly => (Some(kit.clone()), None),
         Held::Weakly => (None, Some(kit.downgrade())),
     };
-    kit.observe(
-        "attach_agent",
+    kit.hook(
         HookTrigger::OnRoomCreated,
-        move |event, _| {
+        move |event: RoomEvent, _| {
             let kit = strong
                 .clone()
                 .or_else(|| weak.as_ref().and_then(roomkit::WeakRoomKit::upgrade));
@@ -77,6 +76,11 @@ async fn left_after_drop(held: Held) -> (bool, usize) {
                     .unwrap();
                 }
             }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "attach_agent".to_owned(),
+            ..Default::default()
         },
     )
     .unwrap();

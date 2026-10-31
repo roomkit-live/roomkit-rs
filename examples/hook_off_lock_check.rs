@@ -18,10 +18,12 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use roomkit::model::hook::AllowOptions;
-use roomkit::model::{ChannelId, ChannelType, HookResult, InboundMessage, RoomId, TextContent};
+use roomkit::model::{
+    ChannelId, ChannelType, HookResult, InboundMessage, RoomEvent, RoomId, TextContent,
+};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, HookExecution, HookSpec, HookTrigger, InboundResult,
+    AttachChannelOptions, CreateRoomOptions, HookOptions, HookTrigger, InboundResult,
     ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
 };
 
@@ -37,26 +39,29 @@ const PROCESS_TIMEOUT: Duration = Duration::from_secs(1);
 /// Registers the scanner, off the room lock. It notes in `scans` when each
 /// scan starts and ends; the message `hang` it never answers.
 fn scan_off_the_lock(kit: &RoomKit, scans: &Log<String>) -> Result<(), Box<dyn Error>> {
-    let mut spec = HookSpec::new(
-        "pii_scan",
-        HookTrigger::BeforeBroadcast,
-        HookExecution::Sync,
-    );
-    spec.needs_lock = false;
+    let spec = HookOptions {
+        name: "pii_scan".to_owned(),
+        needs_lock: false,
+        ..Default::default()
+    };
     let scans = scans.clone();
-    kit.hook(spec, move |event, _| {
-        let (scans, text) = (scans.clone(), text_of(&event.content));
-        async move {
-            scans.push(format!("{text} scan starts"));
-            if text == "hang" {
-                std::future::pending::<()>().await;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (scans, text) = (scans.clone(), text_of(&event.content));
+            async move {
+                scans.push(format!("{text} scan starts"));
+                if text == "hang" {
+                    std::future::pending::<()>().await;
+                }
+                // Stands in for the scanner's HTTP round trip.
+                tokio::time::sleep(SCAN).await;
+                scans.push(format!("{text} scan ends"));
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            // Stands in for the scanner's HTTP round trip.
-            tokio::time::sleep(SCAN).await;
-            scans.push(format!("{text} scan ends"));
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })?;
+        },
+        spec,
+    )?;
     Ok(())
 }
 

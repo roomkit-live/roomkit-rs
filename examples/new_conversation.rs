@@ -16,10 +16,11 @@
 use std::error::Error;
 use std::process::ExitCode;
 
-use roomkit::model::{ChannelId, InboundMessage, RoomId, TextContent};
+use roomkit::model::{ChannelId, InboundMessage, RoomEvent, RoomId, TextContent};
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
-    AttachChannelOptions, ConversationStore, HookTrigger, ProcessInboundOptions, RoomKit,
+    AttachChannelOptions, ConversationStore, HookExecution, HookOptions, HookTrigger,
+    ProcessInboundOptions, RoomKit,
 };
 
 use shared::text_of;
@@ -81,10 +82,9 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.register_channel(agent.clone())?;
     let attaching = kit.downgrade();
     let agent_id = agent.channel_id().clone();
-    kit.observe(
-        "attach_agent",
+    kit.hook(
         HookTrigger::OnRoomCreated,
-        move |event, _| {
+        move |event: RoomEvent, _| {
             let (kit, agent_id) = (attaching.upgrade(), agent_id.clone());
             async move {
                 // No kit once the host dropped it. The hook's failure would
@@ -95,6 +95,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
                         .await;
                 }
             }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "attach_agent".to_owned(),
+            ..Default::default()
         },
     )?;
     let events = shared::framework_events(&kit, &["room_created"]);

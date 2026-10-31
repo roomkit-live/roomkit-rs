@@ -18,7 +18,7 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    HookExecution, HookSpec, HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    HookOptions, HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
 use tokio::sync::Notify;
 
@@ -163,9 +163,14 @@ async fn deferred_delivery_returns_at_the_commit() {
 #[tokio::test]
 async fn a_deferred_call_s_refusal_is_returned_at_once() {
     let (kit, sms, _held) = room().await;
-    kit.before_broadcast("refuse", |_, _| async {
-        Ok(HookResult::block("spam", BlockOptions::default()))
-    })
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |_: RoomEvent, _| async { Ok(HookResult::block("spam", BlockOptions::default())) },
+        HookOptions {
+            name: "refuse".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let result = kit.process_inbound(hello(&sms), deferred()).await.unwrap();
     let delivery = result.delivery.clone().unwrap();
@@ -195,18 +200,25 @@ async fn a_deferred_call_refused_before_the_lock_has_no_handle() {
     let mut unaddressed = hello(&sms);
     unaddressed.event_type = EventType::Instruction;
     let instruction = kit.process_inbound(unaddressed, deferred()).await.unwrap();
-    let mut off_lock = HookSpec::new("slow", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    off_lock.needs_lock = false;
+    let off_lock = HookOptions {
+        name: "slow".to_owned(),
+        needs_lock: false,
+        ..Default::default()
+    };
     let options = RoomKitOptions {
         process_timeout: Duration::from_millis(100),
         ..RoomKitOptions::default()
     };
     let timed = RoomKit::new(options);
     timed
-        .hook(off_lock, |_, _| async {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            Ok(HookResult::allow(AllowOptions::default()))
-        })
+        .hook(
+            HookTrigger::BeforeBroadcast,
+            |_: RoomEvent, _| async {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                Ok(HookResult::allow(AllowOptions::default()))
+            },
+            off_lock,
+        )
         .unwrap();
     let sms_2 = RecordingTransport::new(
         channel("sms"),

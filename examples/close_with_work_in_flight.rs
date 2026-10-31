@@ -46,8 +46,8 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    GetTimelineOptions, InboundResult, ProcessInboundOptions, RoomKit, RoomKitError,
-    SendEventOptions,
+    GetTimelineOptions, HookOptions, HookTrigger, InboundResult, ProcessInboundOptions, RoomKit,
+    RoomKitError, SendEventOptions,
 };
 use roomkit_ai::{AiAgent, AiProvider, AiRequest, Done, ProviderEvent, ProviderStream};
 use serde_json::json;
@@ -201,17 +201,24 @@ async fn kit(
         .await?;
     }
     let in_hook = Arc::clone(in_hook);
-    kit.before_broadcast("slow-check", move |event, _context| {
-        let in_hook = Arc::clone(&in_hook);
-        let checked = text_of(&event.content) == "checked slowly";
-        async move {
-            if checked {
-                in_hook.notify_one();
-                tokio::time::sleep(Duration::from_secs(1)).await;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _context| {
+            let in_hook = Arc::clone(&in_hook);
+            let checked = text_of(&event.content) == "checked slowly";
+            async move {
+                if checked {
+                    in_hook.notify_one();
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })?;
+        },
+        HookOptions {
+            name: "slow-check".to_owned(),
+            ..Default::default()
+        },
+    )?;
     Ok(kit)
 }
 

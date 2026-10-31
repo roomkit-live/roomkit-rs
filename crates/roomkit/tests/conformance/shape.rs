@@ -49,6 +49,7 @@ const TOOL: &[&str] = &[
     "raises",
     "fails",
     "refuses",
+    "declines",
     "hangs",
 ];
 const RAISES: &[&str] = &["kind", "message"];

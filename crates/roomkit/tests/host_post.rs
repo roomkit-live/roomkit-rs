@@ -23,7 +23,7 @@ use roomkit::testing::EventTap;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
     CommitEventOptions, ConversationStore, CreateRoomOptions, DetachChannelOptions, EventFilter,
-    EventQuery, HookExecution, HookSpec, HookTrigger, HostChannel, InMemoryStore, PostOptions,
+    EventQuery, HookOptions, HookTrigger, HostChannel, InMemoryStore, PostOptions,
     ProcessInboundOptions, RoomCounters, RoomFilter, RoomKit, RoomKitError, RoomKitOptions,
     SendEventOptions, StoreError, TargetUpdate,
 };
@@ -1005,32 +1005,39 @@ async fn a_post_replayed_from_the_room_s_work_draws_no_pass() {
         let posted = Arc::new(Mutex::new(Vec::new()));
         let (hook_kit, hook_posted) = (kit.clone(), Arc::clone(&posted));
         let framework = EventTap::on(&kit, &["room_channel_attached"]);
-        let mut ack = HookSpec::new("ack", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-        ack.needs_lock = needs_lock;
-        kit.hook(ack, move |event, _| {
-            let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
-            async move {
-                if event.source.channel_id == channel("sms") {
-                    for _ in 0..12 {
-                        let ack = PostOptions {
-                            idempotency_key: Some("ack".to_owned()),
-                            ..Default::default()
-                        };
-                        let event = kit.post(&room_id(), text("Received."), ack).await?;
+        let ack = HookOptions {
+            name: "ack".to_owned(),
+            needs_lock,
+            ..Default::default()
+        };
+        kit.hook(
+            HookTrigger::BeforeBroadcast,
+            move |event: RoomEvent, _| {
+                let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
+                async move {
+                    if event.source.channel_id == channel("sms") {
+                        for _ in 0..12 {
+                            let ack = PostOptions {
+                                idempotency_key: Some("ack".to_owned()),
+                                ..Default::default()
+                            };
+                            let event = kit.post(&room_id(), text("Received."), ack).await?;
+                            posted.lock().unwrap().push(event.id);
+                        }
+                        let event = kit
+                            .post(
+                                &room_id(),
+                                text("We answer within the hour."),
+                                PostOptions::default(),
+                            )
+                            .await?;
                         posted.lock().unwrap().push(event.id);
                     }
-                    let event = kit
-                        .post(
-                            &room_id(),
-                            text("We answer within the hour."),
-                            PostOptions::default(),
-                        )
-                        .await?;
-                    posted.lock().unwrap().push(event.id);
+                    Ok(HookResult::allow(AllowOptions::default()))
                 }
-                Ok(HookResult::allow(AllowOptions::default()))
-            }
-        })
+            },
+            ack,
+        )
         .unwrap();
         let message = InboundMessage::new(channel("sms"), CUSTOMER, text("Hello?"));
         tokio::time::timeout(

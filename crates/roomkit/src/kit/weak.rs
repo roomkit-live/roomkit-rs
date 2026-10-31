@@ -26,23 +26,31 @@ use crate::store::InMemoryStore;
 /// Appendix B.1):
 ///
 /// ```
-/// use roomkit::model::ChannelId;
+/// use roomkit::model::{ChannelId, RoomEvent};
 /// use roomkit::testing::{EchoAgent, EchoAgentOptions};
-/// use roomkit::{HookTrigger, RoomKit};
+/// use roomkit::{HookExecution, HookOptions, HookTrigger, RoomKit};
 ///
 /// let kit = RoomKit::new(Default::default());
 /// let agent = ChannelId::new("ai")?;
 /// kit.register_channel(EchoAgent::new(agent.clone(), "You said: ", EchoAgentOptions::default()))?;
 /// let attaching = kit.downgrade();
-/// kit.observe("attach_agent", HookTrigger::OnRoomCreated, move |event, _| {
-///     let (kit, agent) = (attaching.upgrade(), agent.clone());
-///     async move {
-///         if let Some(kit) = kit {
-///             // The hook's failure would be logged.
-///             let _attached = kit.attach_channel(&event.room_id, &agent, Default::default()).await;
+/// kit.hook(
+///     HookTrigger::OnRoomCreated,
+///     move |event: RoomEvent, _| {
+///         let (kit, agent) = (attaching.upgrade(), agent.clone());
+///         async move {
+///             if let Some(kit) = kit {
+///                 // The hook's failure would be logged.
+///                 let _attached = kit.attach_channel(&event.room_id, &agent, Default::default()).await;
+///             }
 ///         }
-///     }
-/// })?;
+///     },
+///     HookOptions {
+///         execution: HookExecution::Async,
+///         name: "attach_agent".to_owned(),
+///         ..Default::default()
+///     },
+/// )?;
 ///
 /// // The hook does not keep the kit: dropped, the kit is freed.
 /// let watching = kit.downgrade();

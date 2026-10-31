@@ -14,8 +14,8 @@ use roomkit::model::{
 };
 use roomkit::{
     AttachChannelOptions, CloseRoomOptions, CommitEventOptions, ConversationStore, EventQuery,
-    GetRoomOptions, HookExecution, HookSpec, HookTrigger, InMemoryStore, ListBindingsOptions,
-    RoomKit, SendEventOptions,
+    GetRoomOptions, HookOptions, HookTrigger, InMemoryStore, ListBindingsOptions, RoomKit,
+    SendEventOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
@@ -58,19 +58,26 @@ async fn a_delivery_queued_as_the_kit_closes_is_never_sent() {
 /// the room's admission order, when it does not need the lock.
 fn locking_hook(kit: &RoomKit, entered: &Arc<Notify>, release: &Arc<Notify>, needs_lock: bool) {
     let (entered, release) = (Arc::clone(entered), Arc::clone(release));
-    let mut spec = HookSpec::new("locker", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    spec.needs_lock = needs_lock;
-    kit.hook(spec, move |event, _context| {
-        let (entered, release) = (Arc::clone(&entered), Arc::clone(&release));
-        let ours = text_of(&event.content) == "locker";
-        async move {
-            if ours {
-                entered.notify_one();
-                release.notified().await;
+    let spec = HookOptions {
+        name: "locker".to_owned(),
+        needs_lock,
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _context| {
+            let (entered, release) = (Arc::clone(&entered), Arc::clone(&release));
+            let ours = text_of(&event.content) == "locker";
+            async move {
+                if ours {
+                    entered.notify_one();
+                    release.notified().await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        spec,
+    )
     .unwrap();
 }
 

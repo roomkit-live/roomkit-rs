@@ -12,8 +12,8 @@ use roomkit::model::{
     ChannelOutput, ChannelType, HookResult, InboundMessage, RoomContext, RoomEvent,
 };
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, DeliveryStream, EventDraft, HookReturn, StreamItem,
-    default_inbound_event,
+    Channel, ChannelDeclaration, ChannelError, DeliveryStream, EventDraft, HookError,
+    SessionStartedEvent, StreamItem, default_inbound_event,
 };
 use serde_json::{Value, json};
 use tokio::sync::watch;
@@ -395,10 +395,46 @@ impl Channel for ScriptedChannel {
 }
 
 /// The handler of a scripted hook: it records its call, then reacts.
+/// What a scripted session hook gives.
+type SessionHookFuture = std::pin::Pin<
+    Box<dyn Future<Output = Result<HookResult<SessionStartedEvent>, HookError>> + Send>,
+>;
+
+/// The handler of the scripted hook `spec` on `ON_SESSION_STARTED`: it
+/// records its call, its payload no event, then reacts.
+pub(crate) fn session_hook_handler(
+    spec: &Value,
+    run: &Arc<Run>,
+) -> impl Fn(SessionStartedEvent, RoomContext) -> SessionHookFuture + Send + Sync + 'static {
+    let reactions = Arc::new(Reactions::new(spec.get("reactions")));
+    let name = spec["name"].as_str().unwrap_or_default().to_owned();
+    let trigger = spec["trigger"].as_str().unwrap_or_default().to_owned();
+    let run = Arc::downgrade(run);
+    move |_payload: SessionStartedEvent, context: RoomContext| {
+        let reactions = Arc::clone(&reactions);
+        let (name, trigger, run) = (name.clone(), trigger.clone(), Weak::clone(&run));
+        Box::pin(async move {
+            let allow = HookResult::allow(AllowOptions::default());
+            let Some(run) = run.upgrade() else {
+                return Ok(allow);
+            };
+            let room_id = context.room.id.to_string();
+            run.record_hook(&name, &trigger, &room_id, None);
+            if let Some(reaction) = reactions.pick(&json!({ "room_id": room_id })) {
+                perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
+            }
+            Ok(allow)
+        })
+    }
+}
+
 pub(crate) fn hook_handler(
     spec: &Value,
     run: &Arc<Run>,
-) -> impl Fn(RoomEvent, RoomContext) -> std::pin::Pin<Box<dyn Future<Output = HookReturn> + Send>>
+) -> impl Fn(
+    RoomEvent,
+    RoomContext,
+) -> std::pin::Pin<Box<dyn Future<Output = Result<HookResult, HookError>> + Send>>
 + Send
 + Sync
 + 'static {
@@ -414,7 +450,7 @@ pub(crate) fn hook_handler(
                 return Ok(HookResult::allow(AllowOptions::default()));
             };
             let room_id = context.room.id.to_string();
-            run.record_hook(&name, &trigger, &room_id, &payload);
+            run.record_hook(&name, &trigger, &room_id, Some(&payload));
             let Some(reaction) = reactions.pick(&event_subject(&payload, &room_id)) else {
                 return Ok(HookResult::allow(AllowOptions::default()));
             };

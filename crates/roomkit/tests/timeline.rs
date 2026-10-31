@@ -6,11 +6,13 @@
 
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, BlockOptions};
-use roomkit::model::{ChannelId, ChannelType, HookResult, InboundMessage, RoomId, TextContent};
+use roomkit::model::{
+    ChannelId, ChannelType, HookResult, InboundMessage, RoomEvent, RoomId, TextContent,
+};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, GetTimelineOptions, ProcessInboundOptions, RoomKit,
-    RoomKitError, RoomKitOptions,
+    AttachChannelOptions, CreateRoomOptions, GetTimelineOptions, HookOptions, HookTrigger,
+    ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
 };
 use roomkit_core::rules::transcoding::text_of;
 
@@ -41,13 +43,20 @@ async fn a_room_that_refused_one_message() -> RoomKit {
     )
     .await
     .unwrap();
-    kit.before_broadcast("no_spam", |event, _| async move {
-        if text_of(&event.content) == "spam" {
-            Ok(HookResult::block("spam", BlockOptions::default()))
-        } else {
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |event: RoomEvent, _| async move {
+            if text_of(&event.content) == "spam" {
+                Ok(HookResult::block("spam", BlockOptions::default()))
+            } else {
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        HookOptions {
+            name: "no_spam".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     for text in ["one", "spam", "two", "three"] {
         let message = InboundMessage::new(

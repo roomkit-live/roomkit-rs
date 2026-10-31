@@ -6,8 +6,10 @@
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
-use roomkit::ToolUse;
+use roomkit::model::HookResult;
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{EventContent, EventType, ToolCallContent, ToolCallOutcome};
+use roomkit::{HookExecution, HookOptions, HookTrigger, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
 use serde_json::{Value, json};
@@ -54,7 +56,7 @@ type Seen = Arc<Mutex<Vec<(Value, Option<String>)>>>;
 
 /// What the kit's observers read of each call: its tool, its outcome, its
 /// intent.
-type Reported = Arc<Mutex<Vec<(String, Option<ToolCallOutcome>, Option<String>)>>>;
+type Reported = Arc<Mutex<Vec<(String, bool, Option<String>)>>>;
 
 /// Each tool row of the room.
 async fn rows(room: &Room) -> Vec<Row> {
@@ -124,13 +126,20 @@ async fn a_call_s_intent_rides_apart_from_its_arguments() {
     let seen: Seen = Arc::default();
     let before = Arc::clone(&seen);
     room.kit
-        .before_tool_use("watch", move |event, _context| {
-            before.lock().unwrap().push((
-                Value::Object(event.call.arguments.clone()),
-                event.call.intent.clone(),
-            ));
-            async { Ok(ToolUse::Allow) }
-        })
+        .hook(
+            HookTrigger::BeforeToolUse,
+            move |event: ToolCallEvent, _context| {
+                before
+                    .lock()
+                    .unwrap()
+                    .push((Value::Object(event.arguments.clone()), event.intent.clone()));
+                async { Ok(HookResult::allow(AllowOptions::default())) }
+            },
+            HookOptions {
+                name: "watch".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
     room.says("Files?").await;
     let command = json!({ "command": "ls" });
@@ -338,28 +347,43 @@ async fn a_refused_or_failed_call_is_reported_with_its_intent() {
     );
     let room = Room::equipped(model, tools, |agent| agent.with_tool_call_intents(true)).await;
     room.kit
-        .before_tool_use("approve", |event, _context| {
-            let blocks = event.call.name == "shell";
-            async move {
-                Ok(if blocks {
-                    ToolUse::block("not now")
-                } else {
-                    ToolUse::Allow
-                })
-            }
-        })
+        .hook(
+            HookTrigger::BeforeToolUse,
+            |event: ToolCallEvent, _context| {
+                let blocks = event.name == "shell";
+                async move {
+                    Ok(if blocks {
+                        HookResult::block("not now", BlockOptions::default())
+                    } else {
+                        HookResult::allow(AllowOptions::default())
+                    })
+                }
+            },
+            HookOptions {
+                name: "approve".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
     let reported: Reported = Arc::default();
     let observed = Arc::clone(&reported);
     room.kit
-        .observe_tool_calls("audit", move |event, _context| {
-            observed.lock().unwrap().push((
-                event.call.name.clone(),
-                event.outcome,
-                event.call.intent.clone(),
-            ));
-            async {}
-        })
+        .hook(
+            HookTrigger::OnToolCall,
+            move |event: ToolCallEvent, _context| {
+                observed.lock().unwrap().push((
+                    event.name.clone(),
+                    event.refused,
+                    event.intent.clone(),
+                ));
+                async {}
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "audit".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
     room.says("Clean?").await;
     roomkit::testing::idle(&room.kit).await;
@@ -368,16 +392,8 @@ async fn a_refused_or_failed_call_is_reported_with_its_intent() {
     assert_eq!(
         reports,
         [
-            (
-                "fail".to_owned(),
-                Some(ToolCallOutcome::Failed),
-                Some("J'échoue.".to_owned())
-            ),
-            (
-                "shell".to_owned(),
-                Some(ToolCallOutcome::Refused),
-                Some("Je nettoie.".to_owned())
-            ),
+            ("fail".to_owned(), false, Some("J'échoue.".to_owned())),
+            ("shell".to_owned(), true, Some("Je nettoie.".to_owned())),
         ]
     );
     assert!(received.lock().unwrap().is_empty());

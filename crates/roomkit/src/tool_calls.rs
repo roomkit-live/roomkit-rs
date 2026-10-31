@@ -1,61 +1,134 @@
-//! The tool hooks (RFC §9.3): `BEFORE_TOOL_USE`, which gates each call an
-//! agent's tool loop makes, and `ON_TOOL_CALL`, which reports each call's
-//! outcome. Their payload is a tool call, no event, so they register on the
-//! kit through typed registrations ([`RoomKit::before_tool_use`],
-//! [`RoomKit::on_tool_call`], [`RoomKit::observe_tool_calls`]), and an
-//! agent runs them through its turn ([`TurnHost`](crate::TurnHost)).
-//!
-//! [`RoomKit::before_tool_use`]: crate::RoomKit::before_tool_use
-//! [`RoomKit::on_tool_call`]: crate::RoomKit::on_tool_call
-//! [`RoomKit::observe_tool_calls`]: crate::RoomKit::observe_tool_calls
+//! The tool hooks' payload (RFC §9.3): `BEFORE_TOOL_USE`, which gates each
+//! call an agent's tool loop makes, and `ON_TOOL_CALL`, which reports each
+//! call's outcome, register on the kit as every hook does
+//! ([`RoomKit::hook`](crate::RoomKit::hook)), their payload a
+//! [`ToolCallEvent`]; an agent runs them through its turn
+//! ([`TurnHost`](crate::TurnHost)).
 
-use std::future::Future;
-use std::sync::Arc;
-use std::time::Duration;
-
-use roomkit_core::model::{ChannelId, Metadata, RoomContext, RoomId, ToolCall, ToolCallOutcome};
-use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
+use roomkit_core::model::{
+    ChannelId, ChannelType, Metadata, RoomId, Timestamp, ToolCall, ToolCallOutcome,
+};
+use roomkit_core::ops::{Environment, SystemEnvironment};
 use serde_json::Value;
 
-use crate::channel::BoxFuture;
-use crate::hooks::HookError;
-
-/// A tool call as its hooks read it (RFC §9.3): the agent that makes it, its
-/// room, the call with the arguments it runs with (or those the gate had
-/// when it stopped it), and, once it ended, its outcome, the result as the
-/// model reads it and what failed.
+/// A tool call as its hooks read it (RFC §9.3), Python's
+/// `ToolCallEvent(channel_id, channel_type, tool_call_id, name, arguments,
+/// result=None, room_id=None, session=None, timestamp=<factory>,
+/// is_error=False, cancelled=False, structured_content=None,
+/// error_detail=None, refused=False, refused_but_ran=False, intent=None)`.
 ///
-/// `BEFORE_TOOL_USE` reads a call that has not run: no outcome, a `null`
-/// result. `ON_TOOL_CALL` reads every call once it ended.
+/// `BEFORE_TOOL_USE` reads a call that has not run: no result. A hook
+/// returns `HookResult::modify(event)` to run the call with the event's
+/// arguments, or `metadata["arguments"]` to rewrite them for the call
+/// alone. `ON_TOOL_CALL` reads every call once it ended, its result as the
+/// model reads it: `None` for a call nothing served, which a SYNC hook may
+/// serve.
 #[derive(Clone, Debug, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Python's ToolCallEvent carries its four markers as booleans"
+)]
 pub struct ToolCallEvent {
     /// The agent whose turn makes the call.
     pub channel_id: ChannelId,
+    /// Its type.
+    pub channel_type: ChannelType,
+    /// The call's id.
+    pub tool_call_id: String,
+    /// The tool's name.
+    pub name: String,
+    /// Its arguments, a mapping (RFC §6.4).
+    pub arguments: Metadata,
+    /// What the model reads of the call: a text as a JSON string, any other
+    /// value as itself; `None` before it ran, and for a call nothing served.
+    pub result: Option<Value>,
     /// The turn's room.
-    pub room_id: RoomId,
-    /// The call.
-    pub call: ToolCall,
-    /// How the call ended; `None` before it runs.
-    pub outcome: Option<ToolCallOutcome>,
-    /// The result as the model reads it: a text as a JSON string, any other
-    /// value as itself; `null` before the call ends.
-    pub result: Value,
+    pub room_id: Option<RoomId>,
+    /// When the event was made.
+    pub timestamp: Timestamp,
+    /// The call ended other than served: refused, failed, blocked, served
+    /// by nothing or cancelled.
+    pub is_error: bool,
+    /// The call was cut before its outcome.
+    pub cancelled: bool,
+    /// The structured copy a surface renders of its result, when it has
+    /// one.
+    pub structured_content: Option<Value>,
     /// What failed, for the observers alone: a raised error's kind and
-    /// message, a failing gate's name and error (RFC §9.3). Never the
-    /// model's to read.
+    /// message, a failing gate's name and error. Never the model's to read.
     pub error_detail: Option<String>,
+    /// The call was refused before it ran.
+    pub refused: bool,
+    /// An agent that runs its own tools ran it although it was refused:
+    /// always `false` here, the agents of this crate never do.
+    pub refused_but_ran: bool,
+    /// The sentence the model wrote for the person with the call (RFC §6.4,
+    /// `tool_call_intents`).
+    pub intent: Option<String>,
 }
 
 impl ToolCallEvent {
-    /// The call `call` of the agent `channel_id` in `room_id`, not run yet.
-    pub fn new(channel_id: ChannelId, room_id: RoomId, call: ToolCall) -> Self {
+    /// The call `tool_call_id` of the tool `name` with `arguments`, by the
+    /// agent `channel_id` of `channel_type`, not run yet; the other fields
+    /// at Python's defaults, the timestamp the system clock's.
+    pub fn new(
+        channel_id: ChannelId,
+        channel_type: ChannelType,
+        tool_call_id: impl Into<String>,
+        name: impl Into<String>,
+        arguments: Metadata,
+    ) -> Self {
         Self {
             channel_id,
-            room_id,
+            channel_type,
+            tool_call_id: tool_call_id.into(),
+            name: name.into(),
+            arguments,
+            result: None,
+            room_id: None,
+            timestamp: SystemEnvironment.now(),
+            is_error: false,
+            cancelled: false,
+            structured_content: None,
+            error_detail: None,
+            refused: false,
+            refused_but_ran: false,
+            intent: None,
+        }
+    }
+}
+
+/// A call of an agent's tool loop as the loop and its turn's host hand it
+/// to each other (RFC §9.3): the call with the arguments it runs with, and,
+/// once it ended, its outcome, the result as the model reads it and what
+/// failed. The hooks read it as a [`ToolCallEvent`].
+///
+/// For roomkit-ai's tool loop, which reads its outcome: outside the public
+/// API.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolCallReport {
+    /// The call.
+    pub call: ToolCall,
+    /// How it ended; `None` before it runs.
+    pub outcome: Option<ToolCallOutcome>,
+    /// What the model reads; `null` before the call ends.
+    pub result: Value,
+    /// What failed, for the observers alone.
+    pub error_detail: Option<String>,
+    /// The structured copy of its result.
+    pub structured_content: Option<Value>,
+}
+
+impl ToolCallReport {
+    /// `call`, not run yet.
+    pub fn new(call: ToolCall) -> Self {
+        Self {
             call,
             outcome: None,
             result: Value::Null,
             error_detail: None,
+            structured_content: None,
         }
     }
 
@@ -74,207 +147,34 @@ impl ToolCallEvent {
         self
     }
 
-    /// Whether the call ended other than served: refused, failed, blocked,
-    /// served by nothing or cancelled (RFC §9.3).
-    pub fn is_error(&self) -> bool {
-        self.outcome
-            .is_some_and(|outcome| outcome != ToolCallOutcome::Served)
-    }
-
-    /// Whether the call was refused before it ran.
-    pub fn refused(&self) -> bool {
-        self.outcome == Some(ToolCallOutcome::Refused)
-    }
-
-    /// Whether the call was cut before its outcome.
-    pub fn cancelled(&self) -> bool {
-        self.outcome == Some(ToolCallOutcome::Cancelled)
-    }
-}
-
-/// What a `BEFORE_TOOL_USE` hook decides on a call (RFC §9.3, §9.4).
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum ToolUse {
-    /// The call goes on.
-    Allow,
-    /// The call goes on with these arguments, which the agent checks again
-    /// against the tool's schema (RFC §21.1).
-    Rewrite(Metadata),
-    /// The call is refused before it runs. The model reads the reason, the
-    /// hook's own words, as `{"error": "<reason>"}`; with none, the fixed
-    /// refusal `Tool 'x' denied by pre-execution hook.`.
-    Block(Option<String>),
-}
-
-impl ToolUse {
-    /// Refuses the call, the model reading `reason`.
-    pub fn block(reason: impl Into<String>) -> Self {
-        Self::Block(Some(reason.into()))
-    }
-}
-
-/// What a SYNC `ON_TOOL_CALL` hook decides on a served call's result (RFC
-/// §9.3).
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum ToolVerdict {
-    /// The result stands, as the hooks before left it.
-    Keep,
-    /// The model reads this value instead, a text as it is and any other
-    /// value as its JSON; the next hook reads it too.
-    Replace(Value),
-    /// The result is withheld: the call fails, `blocked`, and the model
-    /// reads the reason, the hook's own words, as `{"error": "<reason>"}`;
-    /// with none, or a blank one, `{"error": "blocked"}`.
-    Block(Option<String>),
-}
-
-impl ToolVerdict {
-    /// Withholds the result, the model reading `reason`.
-    pub fn block(reason: impl Into<String>) -> Self {
-        Self::Block(Some(reason.into()))
-    }
-}
-
-/// How a tool hook registers: its name, unique among the kit's hooks, its
-/// place in its chain (lower first), and the longest it may run (RFC
-/// §9.1). A name alone gives the RFC's defaults: priority 0, 30 seconds.
-///
-/// ```
-/// use std::time::Duration;
-/// use roomkit::ToolHookSpec;
-///
-/// // An approval that waits for a person needs more than 30 seconds.
-/// let spec = ToolHookSpec::new("approve").with_timeout(Duration::from_secs(300));
-/// assert_eq!(spec.timeout, Duration::from_secs(300));
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct ToolHookSpec {
-    /// The hook's name.
-    pub name: String,
-    /// Its place in the chain: lower first.
-    pub priority: i32,
-    /// The longest it may run. A `BEFORE_TOOL_USE` hook past it refuses the
-    /// call (RFC §9.3); any other is skipped.
-    pub timeout: Duration,
-}
-
-impl ToolHookSpec {
-    /// A hook named `name`, with priority 0 and a 30-second timeout.
-    pub fn new(name: impl Into<String>) -> Self {
-        let defaults = HookSpec::new("", HookTrigger::OnToolCall, HookExecution::Sync);
-        Self {
-            name: name.into(),
-            priority: defaults.priority,
-            timeout: defaults.timeout,
+    /// The call as its observers read it, by the agent `channel_id` of
+    /// `channel_type` in `room_id`, made at `timestamp`: no result before
+    /// it ran.
+    pub(crate) fn event(
+        &self,
+        channel_id: &ChannelId,
+        channel_type: &ChannelType,
+        room_id: &RoomId,
+        timestamp: Timestamp,
+    ) -> ToolCallEvent {
+        let outcome = self.outcome;
+        ToolCallEvent {
+            channel_id: channel_id.clone(),
+            channel_type: channel_type.clone(),
+            tool_call_id: self.call.id.clone(),
+            name: self.call.name.clone(),
+            arguments: self.call.arguments.clone(),
+            result: outcome.is_some().then(|| self.result.clone()),
+            room_id: Some(room_id.clone()),
+            timestamp,
+            is_error: outcome.is_some_and(|outcome| outcome != ToolCallOutcome::Served),
+            cancelled: outcome == Some(ToolCallOutcome::Cancelled),
+            structured_content: self.structured_content.clone(),
+            error_detail: self.error_detail.clone(),
+            refused: outcome == Some(ToolCallOutcome::Refused),
+            refused_but_ran: false,
+            intent: self.call.intent.clone(),
         }
-    }
-
-    /// The same hook, at `priority` in its chain.
-    #[must_use]
-    pub fn with_priority(mut self, priority: i32) -> Self {
-        self.priority = priority;
-        self
-    }
-
-    /// The same hook, bounded by `timeout`.
-    #[must_use]
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
-    /// The registration on `trigger`, run as `execution`.
-    pub(crate) fn on(self, trigger: HookTrigger, execution: HookExecution) -> HookSpec {
-        let mut spec = HookSpec::new(self.name, trigger, execution);
-        spec.priority = self.priority;
-        spec.timeout = self.timeout;
-        spec
-    }
-}
-
-impl From<&str> for ToolHookSpec {
-    fn from(name: &str) -> Self {
-        Self::new(name)
-    }
-}
-
-impl From<String> for ToolHookSpec {
-    fn from(name: String) -> Self {
-        Self::new(name)
-    }
-}
-
-/// A `BEFORE_TOOL_USE` hook's handler, boxed.
-pub(crate) type GateHandler = dyn Fn(ToolCallEvent, RoomContext) -> BoxFuture<'static, Result<ToolUse, HookError>>
-    + Send
-    + Sync;
-
-/// A SYNC `ON_TOOL_CALL` hook's handler, boxed.
-pub(crate) type VerdictHandler = dyn Fn(ToolCallEvent, RoomContext) -> BoxFuture<'static, Result<ToolVerdict, HookError>>
-    + Send
-    + Sync;
-
-/// An ASYNC `ON_TOOL_CALL` hook's handler, boxed.
-pub(crate) type ObserverHandler =
-    dyn Fn(ToolCallEvent, RoomContext) -> BoxFuture<'static, ()> + Send + Sync;
-
-/// The handler of a tool hook, by what it decides.
-#[derive(Clone)]
-pub(crate) enum ToolHandler {
-    /// A `BEFORE_TOOL_USE` hook.
-    Gate(Arc<GateHandler>),
-    /// A SYNC `ON_TOOL_CALL` hook.
-    Verdict(Arc<VerdictHandler>),
-    /// An ASYNC `ON_TOOL_CALL` hook.
-    Observer(Arc<ObserverHandler>),
-}
-
-impl std::fmt::Debug for ToolHandler {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let kind = match self {
-            Self::Gate(_) => "Gate",
-            Self::Verdict(_) => "Verdict",
-            Self::Observer(_) => "Observer",
-        };
-        formatter.debug_tuple(kind).finish_non_exhaustive()
-    }
-}
-
-impl ToolHandler {
-    /// `handler` as a `BEFORE_TOOL_USE` hook's.
-    pub(crate) fn gate<F, Fut>(handler: F) -> Self
-    where
-        F: Fn(ToolCallEvent, RoomContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<ToolUse, HookError>> + Send + 'static,
-    {
-        Self::Gate(Arc::new(move |event, context| {
-            Box::pin(handler(event, context))
-        }))
-    }
-
-    /// `handler` as a SYNC `ON_TOOL_CALL` hook's.
-    pub(crate) fn verdict<F, Fut>(handler: F) -> Self
-    where
-        F: Fn(ToolCallEvent, RoomContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<ToolVerdict, HookError>> + Send + 'static,
-    {
-        Self::Verdict(Arc::new(move |event, context| {
-            Box::pin(handler(event, context))
-        }))
-    }
-
-    /// `handler` as an ASYNC `ON_TOOL_CALL` hook's.
-    pub(crate) fn observer<F, Fut>(handler: F) -> Self
-    where
-        F: Fn(ToolCallEvent, RoomContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        Self::Observer(Arc::new(move |event, context| {
-            Box::pin(handler(event, context))
-        }))
     }
 }
 
@@ -299,30 +199,41 @@ mod tests {
         );
     }
 
+    /// Python's four markers follow the call's outcome; a call that has
+    /// not run has no result.
     #[test]
     fn a_call_s_markers_follow_its_outcome() {
-        let call = ToolCall::new("call_1", "lookup", Metadata::new());
-        let event = ToolCallEvent::new(
+        let report = ToolCallReport::new(ToolCall::new("call_1", "lookup", Metadata::new()));
+        let (agent, room) = (
             ChannelId::new("ai").unwrap(),
             RoomId::new("room_1").unwrap(),
-            call,
         );
-        let markers =
-            |event: &ToolCallEvent| (event.is_error(), event.refused(), event.cancelled());
+        let read = |report: ToolCallReport| {
+            let event = report.event(&agent, &ChannelType::AI, &room, Timestamp::UNIX_EPOCH);
+            (
+                event.is_error,
+                event.refused,
+                event.cancelled,
+                event.result.is_some(),
+            )
+        };
+        let ended = |outcome| report.clone().ended(outcome, Value::from("x"));
         assert_eq!(
             [
-                markers(&event),
-                markers(&event.clone().ended(ToolCallOutcome::Served, Value::Null)),
-                markers(&event.clone().ended(ToolCallOutcome::Refused, Value::Null)),
-                markers(&event.clone().ended(ToolCallOutcome::Blocked, Value::Null)),
-                markers(&event.ended(ToolCallOutcome::Cancelled, Value::Null)),
+                read(report.clone()),
+                read(ended(ToolCallOutcome::Served)),
+                read(ended(ToolCallOutcome::Refused)),
+                read(ended(ToolCallOutcome::Blocked)),
+                read(ended(ToolCallOutcome::Unserved)),
+                read(ended(ToolCallOutcome::Cancelled)),
             ],
             [
-                (false, false, false),
-                (false, false, false),
-                (true, true, false),
-                (true, false, false),
-                (true, false, true),
+                (false, false, false, false),
+                (false, false, false, true),
+                (true, true, false, true),
+                (true, false, false, true),
+                (true, false, false, true),
+                (true, false, true, true),
             ]
         );
     }

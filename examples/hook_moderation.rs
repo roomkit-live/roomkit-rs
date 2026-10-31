@@ -19,7 +19,7 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, HookExecution, HookSpec, HookTrigger, InboundResult,
+    AttachChannelOptions, CreateRoomOptions, HookOptions, HookTrigger, InboundResult,
     ProcessInboundOptions, RoomKit,
 };
 
@@ -63,50 +63,61 @@ fn redacted(text: &str) -> String {
 }
 
 /// A SYNC `BEFORE_BROADCAST` hook named `name` at `priority`.
-fn before_broadcast(name: &str, priority: i32) -> HookSpec {
-    let mut spec = HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    spec.priority = priority;
-    spec
+fn before_broadcast(name: &str, priority: i32) -> HookOptions {
+    HookOptions {
+        name: name.to_owned(),
+        priority,
+        ..Default::default()
+    }
 }
 
 /// Registers the filter, at priority 0, and the redactor, at priority 1;
 /// each notes in `ran` its name and the text it read.
 fn moderate(kit: &RoomKit, ran: &Log<String>) -> Result<(), Box<dyn Error>> {
     let noted = ran.clone();
-    kit.hook(before_broadcast("profanity_filter", 0), move |event, _| {
-        let text = text_of(&event.content);
-        noted.push(format!("profanity_filter read {text:?}"));
-        let found = prohibited_word(&text);
-        async move {
-            Ok(match found {
-                Some(word) => {
-                    HookResult::block(format!("prohibited word {word:?}"), BlockOptions::default())
-                }
-                None => HookResult::allow(AllowOptions::default()),
-            })
-        }
-    })?;
-    let noted = ran.clone();
-    kit.hook(before_broadcast("pii_redactor", 1), move |event, _| {
-        let text = text_of(&event.content);
-        noted.push(format!("pii_redactor read {text:?}"));
-        let clean = redacted(&text);
-        async move {
-            if clean == text {
-                return Ok(HookResult::allow(AllowOptions::default()));
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let text = text_of(&event.content);
+            noted.push(format!("profanity_filter read {text:?}"));
+            let found = prohibited_word(&text);
+            async move {
+                Ok(match found {
+                    Some(word) => HookResult::block(
+                        format!("prohibited word {word:?}"),
+                        BlockOptions::default(),
+                    ),
+                    None => HookResult::allow(AllowOptions::default()),
+                })
             }
-            // The replacement is the event every channel receives, and the
-            // one the room stores.
-            let modified = RoomEvent {
-                content: TextContent::new(clean).into(),
-                ..event
-            };
-            Ok(HookResult {
-                reason: Some("phone number redacted".into()),
-                ..HookResult::modify(modified, ModifyOptions::default())
-            })
-        }
-    })?;
+        },
+        before_broadcast("profanity_filter", 0),
+    )?;
+    let noted = ran.clone();
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let text = text_of(&event.content);
+            noted.push(format!("pii_redactor read {text:?}"));
+            let clean = redacted(&text);
+            async move {
+                if clean == text {
+                    return Ok(HookResult::allow(AllowOptions::default()));
+                }
+                // The replacement is the event every channel receives, and the
+                // one the room stores.
+                let modified = RoomEvent {
+                    content: TextContent::new(clean).into(),
+                    ..event
+                };
+                Ok(HookResult {
+                    reason: Some("phone number redacted".into()),
+                    ..HookResult::modify(modified, ModifyOptions::default())
+                })
+            }
+        },
+        before_broadcast("pii_redactor", 1),
+    )?;
     Ok(())
 }
 

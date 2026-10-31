@@ -12,7 +12,8 @@ use roomkit::model::{
 use roomkit::testing::TurnTap;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, DeliveryStream, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    CreateRoomOptions, DeliveryStream, HookExecution, HookOptions, HookTrigger,
+    ProcessInboundOptions, RoomKit, RoomKitOptions, ToolCallEvent,
 };
 use roomkit_ai::AiAgent;
 use roomkit_ai::ToolOutput;
@@ -75,12 +76,20 @@ async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_c
     .await;
     let observed = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&observed);
-    kit.observe_tool_calls("audit", move |event, _context| {
-        seen.lock()
-            .unwrap()
-            .push((event.outcome, event.error_detail.clone()));
-        async {}
-    })
+    kit.hook(
+        HookTrigger::OnToolCall,
+        move |event: ToolCallEvent, _context| {
+            seen.lock()
+                .unwrap()
+                .push((event.cancelled, event.error_detail.clone()));
+            async {}
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "audit".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let tap = TurnTap::on(&kit);
     let asking = tokio::spawn({
@@ -133,10 +142,7 @@ async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_c
             Ok((true, Some("kit_closed".to_owned()))),
             vec!["control cancel kit_closed", "frame end"],
             vec!["cut"],
-            vec![(
-                Some(ToolCallOutcome::Cancelled),
-                Some("cancelled: kit_closed".to_owned())
-            )],
+            vec![(true, Some("cancelled: kit_closed".to_owned()))],
             Some((
                 Some(ToolCallOutcome::Cancelled),
                 Some("kit_closed".to_owned())

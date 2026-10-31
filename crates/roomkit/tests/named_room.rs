@@ -23,8 +23,8 @@ use roomkit::testing::{
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, HookExecution, HookSpec, HookTrigger, ProcessInboundOptions, RoomFilter,
-    RoomKit, RoomKitError, RoomKitOptions,
+    CreateRoomOptions, HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomFilter,
+    RoomKit, RoomKitError, RoomKitOptions, SessionStartedEvent,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -124,20 +124,28 @@ async fn two_messages_naming_one_missing_room_create_it_once() {
 async fn an_agent_attached_by_an_on_room_created_hook_answers_the_first_message() {
     let (kit, sms) = kit_without_rooms();
     let attaching = kit.clone();
-    kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
-        let kit = attaching.clone();
-        async move {
-            // Slow enough that an attach not awaited would come too late.
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            kit.attach_channel(
-                &event.room_id,
-                &channel("ai"),
-                AttachChannelOptions::default(),
-            )
-            .await
-            .unwrap();
-        }
-    })
+    kit.hook(
+        HookTrigger::OnRoomCreated,
+        move |event: RoomEvent, _| {
+            let kit = attaching.clone();
+            async move {
+                // Slow enough that an attach not awaited would come too late.
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                kit.attach_channel(
+                    &event.room_id,
+                    &channel("ai"),
+                    AttachChannelOptions::default(),
+                )
+                .await
+                .unwrap();
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "welcome".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     kit.process_inbound(
         message(&sms, "Bonjour"),
@@ -209,13 +217,20 @@ async fn a_participant_the_host_stores_is_in_the_context_a_hook_reads() {
     );
     kit.store().create_participant(jean.clone()).await.unwrap();
     let (seen, mut read) = mpsc::unbounded_channel();
-    kit.before_broadcast("roster", move |_, context| {
-        let seen = seen.clone();
-        async move {
-            seen.send(context.participants).unwrap();
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |_: RoomEvent, context| {
+            let seen = seen.clone();
+            async move {
+                seen.send(context.participants).unwrap();
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        HookOptions {
+            name: "roster".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     kit.process_inbound(
         message(&sms, "Bonjour"),
@@ -236,12 +251,20 @@ async fn a_participant_the_host_stores_is_in_the_context_a_hook_reads() {
 async fn an_on_room_created_hook_that_hangs_is_bounded_by_its_timeout() {
     let (kit, sms) = kit_without_rooms();
     let tap = EventTap::on(&kit, &["hook_timeout"]);
-    let mut spec = HookSpec::new("stuck", HookTrigger::OnRoomCreated, HookExecution::Async);
-    spec.timeout = Duration::from_millis(50);
-    kit.hook(spec, |_, _| async {
-        tokio::time::sleep(Duration::from_secs(3600)).await;
-        Ok(HookResult::allow(AllowOptions::default()))
-    })
+    let spec = HookOptions {
+        execution: HookExecution::Async,
+        name: "stuck".to_owned(),
+        timeout: Duration::from_millis(50),
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::OnRoomCreated,
+        |_: RoomEvent, _| async {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            Ok(HookResult::allow(AllowOptions::default()))
+        },
+        spec,
+    )
     .unwrap();
     let room = room_id();
     let sent = tokio::time::timeout(
@@ -267,6 +290,56 @@ async fn an_on_room_created_hook_that_hangs_is_bounded_by_its_timeout() {
     );
 }
 
+/// RFC §9.2, §10.1 step 2: an `ON_SESSION_STARTED` hook is handed the
+/// session the first message started, Python's `SessionStartedEvent`, and
+/// reads it whatever its filters, as Python fires it.
+#[tokio::test]
+async fn session_started_hands_a_session_started_event() {
+    let (kit, sms) = kit_without_rooms();
+    let (seen, mut read) = mpsc::unbounded_channel();
+    kit.hook(
+        HookTrigger::OnSessionStarted,
+        move |session: SessionStartedEvent, _| {
+            seen.send(session).unwrap();
+            async {}
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "greet".to_owned(),
+            channel_types: Some([ChannelType::WEBSOCKET].into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    kit.process_inbound(
+        message(&sms, "Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let session = tokio::time::timeout(Duration::from_secs(5), read.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (
+            session.room_id,
+            session.channel_id,
+            session.channel_type,
+            session.participant_id
+        ),
+        (
+            room_id(),
+            channel("sms"),
+            ChannelType::SMS,
+            "+15551234567".to_owned()
+        )
+    );
+}
+
 /// Decision 1 of step 2b, gap G-068: the caller gives up while the hooks of
 /// the room its message created run. The room is completed all the same:
 /// the hooks finish, the channel is attached with a binding naming the
@@ -277,13 +350,21 @@ async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
     let (kit, sms) = kit_without_rooms();
     let (observing, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     let (started, released) = (Arc::clone(&observing), Arc::clone(&go));
-    kit.observe("welcome", HookTrigger::OnRoomCreated, move |_, _| {
-        let (started, released) = (Arc::clone(&started), Arc::clone(&released));
-        async move {
-            started.notify_one();
-            released.notified().await;
-        }
-    })
+    kit.hook(
+        HookTrigger::OnRoomCreated,
+        move |_: RoomEvent, _| {
+            let (started, released) = (Arc::clone(&started), Arc::clone(&released));
+            async move {
+                started.notify_one();
+                released.notified().await;
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "welcome".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let session_started = Arc::new(Notify::new());
     let started_notice = Arc::clone(&session_started);
@@ -474,18 +555,26 @@ async fn a_room_created_for_an_sms_sender_answers_at_their_number() {
     ))
     .unwrap();
     let attaching = kit.clone();
-    kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
-        let kit = attaching.clone();
-        async move {
-            kit.attach_channel(
-                &event.room_id,
-                &channel("ai"),
-                AttachChannelOptions::default(),
-            )
-            .await
-            .unwrap();
-        }
-    })
+    kit.hook(
+        HookTrigger::OnRoomCreated,
+        move |event: RoomEvent, _| {
+            let kit = attaching.clone();
+            async move {
+                kit.attach_channel(
+                    &event.room_id,
+                    &channel("ai"),
+                    AttachChannelOptions::default(),
+                )
+                .await
+                .unwrap();
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "welcome".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     kit.process_inbound(
         customer("Bonjour"),

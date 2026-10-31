@@ -31,6 +31,11 @@ pub(crate) fn invalid_rewritten_arguments(name: &str, why: &str) -> String {
     error_envelope(&format!("Invalid rewritten arguments for '{name}': {why}"))
 }
 
+/// A call nothing served, neither its tool nor a hook (RFC §9.3).
+pub(crate) fn unserved(name: &str) -> String {
+    error_envelope(&format!("No handler for tool {name}"))
+}
+
 /// A call whose tool raised an error of `kind` (RFC §9.3).
 pub(crate) fn failed(name: &str, kind: &str) -> String {
     error_envelope(&format!("Tool '{name}' failed ({kind})"))

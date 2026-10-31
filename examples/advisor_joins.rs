@@ -20,12 +20,12 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelId, ChannelSet, ChannelType, InboundMessage, RoomId, TextContent, Visibility,
+    ChannelId, ChannelSet, ChannelType, InboundMessage, RoomEvent, RoomId, TextContent, Visibility,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, FrameworkEvent, HookTrigger, MuteOptions,
-    ProcessInboundOptions, RoomKit, SetVisibilityOptions, UnmuteOptions,
+    AttachChannelOptions, CreateRoomOptions, FrameworkEvent, HookExecution, HookOptions,
+    HookTrigger, MuteOptions, ProcessInboundOptions, RoomKit, SetVisibilityOptions, UnmuteOptions,
 };
 
 use shared::text_of;
@@ -220,10 +220,18 @@ fn observe_mutes(kit: &RoomKit, fired: &Log<String>) -> Result<(), Box<dyn Error
         ("on_unmuted", HookTrigger::OnChannelUnmuted),
     ] {
         let fired = fired.clone();
-        kit.observe(name, trigger, move |event, _| {
-            let fired = fired.clone();
-            async move { fired.push(text_of(&event.content)) }
-        })?;
+        kit.hook(
+            trigger,
+            move |event: RoomEvent, _| {
+                let fired = fired.clone();
+                async move { fired.push(text_of(&event.content)) }
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: name.to_owned(),
+                ..Default::default()
+            },
+        )?;
     }
     Ok(())
 }
@@ -261,7 +269,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     checks.expect(
         "muting and unmuting the agent fire ON_CHANNEL_MUTED and ON_CHANNEL_UNMUTED once each, its visibility changes neither",
-        hooks == ["channel muted", "channel unmuted"],
+        hooks == ["Channel ai_support muted", "Channel ai_support unmuted"],
     );
     checks.expect(
         "the agent's suggestion is committed visible to the advisor only",

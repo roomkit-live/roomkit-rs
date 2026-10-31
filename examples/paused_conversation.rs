@@ -18,14 +18,15 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelId, ChannelType, InboundMessage, Room, RoomId, RoomStatus, RoomTimers, TextContent,
+    ChannelId, ChannelType, InboundMessage, Room, RoomEvent, RoomId, RoomStatus, RoomTimers,
+    TextContent,
 };
 use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
 };
 use roomkit::{
-    AttachChannelOptions, CheckAllTimersOptions, ConversationStore, CreateRoomOptions, HookTrigger,
-    ProcessInboundOptions, RoomKit,
+    AttachChannelOptions, CheckAllTimersOptions, ConversationStore, CreateRoomOptions,
+    HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomKit,
 };
 
 use shared::{Checks, Clock, SmsNumber};
@@ -87,10 +88,9 @@ async fn status(kit: &RoomKit, room_id: &RoomId) -> Result<Option<RoomStatus>, B
 fn agent_joins_every_room(kit: &RoomKit, agent: &ChannelId) -> Result<(), Box<dyn Error>> {
     // The kit holds the hook, so the hook holds the kit weakly.
     let (attaching, agent) = (kit.downgrade(), agent.clone());
-    kit.observe(
-        "agent_joins",
+    kit.hook(
         HookTrigger::OnRoomCreated,
-        move |event, _| {
+        move |event: RoomEvent, _| {
             let (kit, agent) = (attaching.upgrade(), agent.clone());
             async move {
                 // A failure would be logged; the example's checks see it.
@@ -100,6 +100,11 @@ fn agent_joins_every_room(kit: &RoomKit, agent: &ChannelId) -> Result<(), Box<dy
                         .await;
                 }
             }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "agent_joins".to_owned(),
+            ..Default::default()
         },
     )?;
     Ok(())

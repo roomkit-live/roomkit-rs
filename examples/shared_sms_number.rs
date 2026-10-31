@@ -17,13 +17,15 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventType, InboundMessage, Metadata, ParticipantId, RoomId, TextContent,
+    ChannelId, ChannelType, EventType, InboundMessage, Metadata, ParticipantId, RoomEvent, RoomId,
+    TextContent,
 };
 use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
 };
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, HookTrigger, ProcessInboundOptions, RoomKit,
+    AttachChannelOptions, CreateRoomOptions, HookExecution, HookOptions, HookTrigger,
+    ProcessInboundOptions, RoomKit,
 };
 
 use shared::{Checks, SmsNumber};
@@ -54,10 +56,9 @@ async fn text(
 fn agent_joins_every_room(kit: &RoomKit, agent: &ChannelId) -> Result<(), Box<dyn Error>> {
     // The kit holds the hook, so the hook holds the kit weakly.
     let (attaching, agent) = (kit.downgrade(), agent.clone());
-    kit.observe(
-        "agent_joins",
+    kit.hook(
         HookTrigger::OnRoomCreated,
-        move |event, _| {
+        move |event: RoomEvent, _| {
             let (kit, agent) = (attaching.upgrade(), agent.clone());
             async move {
                 // A failure would be logged; the example's checks see it.
@@ -67,6 +68,11 @@ fn agent_joins_every_room(kit: &RoomKit, agent: &ChannelId) -> Result<(), Box<dy
                         .await;
                 }
             }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "agent_joins".to_owned(),
+            ..Default::default()
         },
     )?;
     Ok(())

@@ -41,7 +41,7 @@ use roomkit::testing::{
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, HookExecution, HookSpec, HookTrigger, InboundResult, PauseRoomOptions,
+    CreateRoomOptions, HookOptions, HookTrigger, InboundResult, PauseRoomOptions,
     ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
 use tokio::sync::Notify;
@@ -102,18 +102,25 @@ async fn room_with(kit: RoomKit) -> RoomKit {
 /// that outlasts the timeout the first time it runs and allows at once
 /// after.
 fn slow_the_first_time(kit: &RoomKit, needs_lock: bool) {
-    let mut spec = HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    spec.needs_lock = needs_lock;
+    let spec = HookOptions {
+        name: "scanner".to_owned(),
+        needs_lock,
+        ..Default::default()
+    };
     let slowed = Arc::new(AtomicBool::new(false));
-    kit.hook(spec, move |_, _| {
-        let first = !slowed.swap(true, Ordering::SeqCst);
-        async move {
-            if first {
-                tokio::time::sleep(Duration::from_secs(3600)).await;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |_: RoomEvent, _| {
+            let first = !slowed.swap(true, Ordering::SeqCst);
+            async move {
+                if first {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        spec,
+    )
     .unwrap();
 }
 
@@ -233,12 +240,19 @@ async fn a_timeout_during_a_locked_hook_releases_the_lock_and_names_the_event() 
 #[tokio::test]
 async fn a_hook_s_own_timeout_stays_a_hook_error() {
     let kit = room_bound_by(BOUND).await;
-    let mut spec = HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    spec.timeout = Duration::from_millis(20);
-    kit.hook(spec, |_, _| async {
-        tokio::time::sleep(Duration::from_secs(3600)).await;
-        Ok(HookResult::allow(AllowOptions::default()))
-    })
+    let spec = HookOptions {
+        name: "scanner".to_owned(),
+        timeout: Duration::from_millis(20),
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |_: RoomEvent, _| async {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            Ok(HookResult::allow(AllowOptions::default()))
+        },
+        spec,
+    )
     .unwrap();
     let tap = EventTap::on(&kit, &["hook_timeout", "hook_error", "process_timeout"]);
     let result = send(&kit, "Bonjour").await;
@@ -451,12 +465,19 @@ async fn a_timeout_past_the_clocks_range_bounds_nothing() {
 #[tokio::test(start_paused = true)]
 async fn process_timeout_defaults_to_30_seconds() {
     let kit = room_with(RoomKit::new(RoomKitOptions::default())).await;
-    let mut spec = HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    spec.timeout = Duration::from_secs(60);
-    kit.hook(spec, |_, _| async {
-        tokio::time::sleep(Duration::from_secs(31)).await;
-        Ok(HookResult::allow(AllowOptions::default()))
-    })
+    let spec = HookOptions {
+        name: "scanner".to_owned(),
+        timeout: Duration::from_secs(60),
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |_: RoomEvent, _| async {
+            tokio::time::sleep(Duration::from_secs(31)).await;
+            Ok(HookResult::allow(AllowOptions::default()))
+        },
+        spec,
+    )
     .unwrap();
     let room = room_id();
     let call = kit.process_inbound(

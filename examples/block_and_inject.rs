@@ -15,7 +15,11 @@ use roomkit::model::{
     ChannelId, ChannelType, EventDirection, EventSource, EventStatus, HookResult, InboundMessage,
     InjectedEvent, Observation, RoomEvent, RoomId, TextContent, Timestamp,
 };
-use roomkit::{AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions};
+use roomkit::testing::RecordingTransport;
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookOptions, HookTrigger,
+    ProcessInboundOptions, RoomKit,
+};
 
 use shared::text_of;
 use shared::{Checks, Clock, recording};
@@ -65,6 +69,51 @@ fn refusal(notices: [(RoomEvent, ChannelId); 2], observation: Observation) -> Ho
     )
 }
 
+/// Registers the scanner: a SYNC `BEFORE_BROADCAST` hook that blocks a
+/// message holding a SIN, tells the customer and the advisor, and records
+/// an observation.
+fn sensitivity_scanner(
+    kit: &RoomKit,
+    customer: &RecordingTransport,
+    advisor: &RecordingTransport,
+    now: Timestamp,
+) -> Result<(), Box<dyn Error>> {
+    let to_customer = notice("Message blocked. Do not send your SIN by SMS.", now)?;
+    let to_advisor = notice("The client attempted to send a SIN. Blocked.", now)?;
+    let (customer_id, advisor_id) = (customer.channel_id().clone(), advisor.channel_id().clone());
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, context| {
+            let found = has_sin(&text_of(&event.content));
+            let (to_customer, to_advisor) = (to_customer.clone(), to_advisor.clone());
+            let (customer_id, advisor_id) = (customer_id.clone(), advisor_id.clone());
+            async move {
+                if !found {
+                    return Ok(HookResult::allow(AllowOptions::default()));
+                }
+                let observation = Observation {
+                    created_at: event.created_at,
+                    ..Observation::new(
+                        "obs_sin".parse()?,
+                        context.room.id.clone(),
+                        customer_id.clone(),
+                        "SIN sent by SMS",
+                    )
+                };
+                Ok(refusal(
+                    [(to_customer, customer_id), (to_advisor, advisor_id)],
+                    observation,
+                ))
+            }
+        },
+        HookOptions {
+            name: "sensitivity_scanner".to_owned(),
+            ..Default::default()
+        },
+    )?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let clock = Clock::new();
@@ -76,32 +125,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.register_channel(customer.clone())?;
     kit.register_channel(advisor.clone())?;
 
-    let to_customer = notice("Message blocked. Do not send your SIN by SMS.", now)?;
-    let to_advisor = notice("The client attempted to send a SIN. Blocked.", now)?;
-    let (customer_id, advisor_id) = (customer.channel_id().clone(), advisor.channel_id().clone());
-    kit.before_broadcast("sensitivity_scanner", move |event, context| {
-        let found = has_sin(&text_of(&event.content));
-        let (to_customer, to_advisor) = (to_customer.clone(), to_advisor.clone());
-        let (customer_id, advisor_id) = (customer_id.clone(), advisor_id.clone());
-        async move {
-            if !found {
-                return Ok(HookResult::allow(AllowOptions::default()));
-            }
-            let observation = Observation {
-                created_at: event.created_at,
-                ..Observation::new(
-                    "obs_sin".parse()?,
-                    context.room.id.clone(),
-                    customer_id.clone(),
-                    "SIN sent by SMS",
-                )
-            };
-            Ok(refusal(
-                [(to_customer, customer_id), (to_advisor, advisor_id)],
-                observation,
-            ))
-        }
-    })?;
+    sensitivity_scanner(&kit, &customer, &advisor, now)?;
 
     let room = RoomId::new("room_1")?;
     kit.create_room(CreateRoomOptions {

@@ -110,7 +110,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use roomkit::model::{EventContent, EventType, RoomEvent, RoomId, TextContent};
-use roomkit::{ConversationStore, HookTrigger, PostOptions};
+use roomkit::{ConversationStore, HookExecution, HookOptions, HookTrigger, PostOptions};
 use roomkit_sqlite::SqliteStore;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
@@ -863,16 +863,22 @@ async fn a_client_leaves_while_it_joins(checks: &mut Checks) -> Result<(), Box<d
         AgentServer::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
     let (created, mut creating) = mpsc::channel(1);
     let (release, released) = watch::channel(false);
-    server
-        .kit()
-        .observe("hold_the_porch", HookTrigger::OnRoomCreated, move |_, _| {
+    server.kit().hook(
+        HookTrigger::OnRoomCreated,
+        move |_: RoomEvent, _| {
             let (created, mut released) = (created.clone(), released.clone());
             async move {
                 // The check waits for one, and the release outlives the hook.
                 let _told = created.send(()).await;
                 let _released = released.wait_for(|go| *go).await;
             }
-        })?;
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "hold_the_porch".to_owned(),
+            ..Default::default()
+        },
+    )?;
     let mut ivan = TcpStream::connect(server.address()).await?;
     let request = Client::upgrade_request(
         server.address(),

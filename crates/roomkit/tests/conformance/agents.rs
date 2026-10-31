@@ -3,18 +3,16 @@
 //! and scripted tools, and the hooks on the tool triggers, which register
 //! through the kit's typed registrations.
 
-use std::future::pending;
+use std::future::{Future, pending};
 use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, ready};
-use std::time::Duration;
 
 use futures_core::Stream;
 
-use roomkit::model::{ChannelId, Metadata, RoomContext, ToolCall};
-use roomkit::{
-    HookExecution, HookTrigger, RoomKitError, ToolCallEvent, ToolHookSpec, ToolUse, ToolVerdict,
-};
+use roomkit::model::hook::AllowOptions;
+use roomkit::model::{ChannelId, HookAction, HookResult, Metadata, RoomContext, ToolCall};
+use roomkit::{HookError, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiAgent, AiProvider, AiRequest, ProviderError, ProviderEvent, ProviderStream, ToolContext,
@@ -25,16 +23,6 @@ use serde_json::{Value, json};
 use crate::run::{Run, Scope};
 use crate::scripted::{Reactions, perform};
 use roomkit_core::rules::transcript::Role;
-
-/// The members a tool hook of this runner cannot apply, which the tool
-/// registrations do not take.
-const NOT_FOR_TOOL_HOOKS: [&str; 5] = [
-    "channel_types",
-    "channel_ids",
-    "directions",
-    "fail_closed",
-    "needs_lock",
-];
 
 /// A scenario's scripted model: `ScriptedProvider`'s script, the model
 /// waiting between two of a round's deltas, so that a reader is handed
@@ -187,6 +175,9 @@ async fn answer(tool: &Value) -> Result<ToolOutput, ToolError> {
     if let Some(refusal) = words("refuses") {
         return Err(ToolError::refused(refusal));
     }
+    if tool["declines"].as_bool() == Some(true) {
+        return Err(ToolError::unserved("the call is not this tool's"));
+    }
     pending().await
 }
 
@@ -222,58 +213,23 @@ fn request(request: &AiRequest) -> Value {
     json!({ "tool_results": results })
 }
 
-/// Registers the hook `spec` on the tool trigger `trigger`, run as
-/// `execution`, through the kit's typed registrations.
-pub(crate) fn register_tool_hook(
-    run: &Arc<Run>,
+/// The handler of the scripted hook `spec` on a tool trigger: it records
+/// its call, then reacts.
+pub(crate) fn tool_hook_handler(
     spec: &Value,
-    trigger: HookTrigger,
-    execution: HookExecution,
-) -> Result<Result<(), RoomKitError>, String> {
-    if let Some(member) = NOT_FOR_TOOL_HOOKS.iter().find(|m| spec.get(**m).is_some()) {
-        return Err(format!("{member}: a tool hook takes none"));
-    }
-    let mut hook = ToolHookSpec::new(spec["name"].as_str().unwrap_or_default());
-    hook = hook.with_priority(
-        spec.get("priority")
-            .and_then(Value::as_i64)
-            .and_then(|p| i32::try_from(p).ok())
-            .unwrap_or_default(),
-    );
-    if let Some(timeout) = spec.get("timeout_ms").and_then(Value::as_u64) {
-        hook = hook.with_timeout(Duration::from_millis(timeout));
-    }
+    run: &Arc<Run>,
+) -> impl Fn(ToolCallEvent, RoomContext) -> Pin<Box<dyn Future<Output = ToolHookReturn> + Send>>
++ Send
++ Sync
++ 'static {
     let scripted = ToolHook::new(spec, run);
-    let kit = run.kit();
-    let registered = match (trigger, execution) {
-        (HookTrigger::BeforeToolUse, HookExecution::Sync) => {
-            kit.before_tool_use(hook, move |event, context| {
-                let scripted = scripted.clone();
-                async move { scripted.gate(event, context).await }
-            })
-        }
-        (HookTrigger::OnToolCall, HookExecution::Sync) => {
-            kit.on_tool_call(hook, move |event, context| {
-                let scripted = scripted.clone();
-                async move { scripted.verdict(event, context).await }
-            })
-        }
-        (HookTrigger::OnToolCall, HookExecution::Async) => {
-            kit.observe_tool_calls(hook, move |event, context| {
-                let scripted = scripted.clone();
-                async move {
-                    // An observer's failure is logged by the kit's rule; here
-                    // its reaction runs, and what it raises is dropped.
-                    let _observed = scripted.react(&event, &context).await;
-                }
-            })
-        }
-        (trigger, execution) => {
-            return Err(format!("no tool hook on {trigger:?} runs {execution:?}"));
-        }
-    };
-    Ok(registered.map(drop))
+    move |event: ToolCallEvent, context: RoomContext| {
+        let scripted = scripted.clone();
+        Box::pin(async move { scripted.react(event, context).await })
+    }
 }
+
+type ToolHookReturn = Result<HookResult<ToolCallEvent>, HookError>;
 
 /// A scripted hook on a tool trigger: it records its call, then reacts.
 #[derive(Clone)]
@@ -283,8 +239,6 @@ struct ToolHook {
     reactions: Arc<Reactions>,
     run: Weak<Run>,
 }
-
-type HookOutcome<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 impl ToolHook {
     fn new(spec: &Value, run: &Arc<Run>) -> Self {
@@ -297,64 +251,79 @@ impl ToolHook {
     }
 
     /// Records the call, runs its reaction, and gives the reaction's
-    /// `result`, if any.
-    async fn react(&self, event: &ToolCallEvent, context: &RoomContext) -> HookOutcome<Value> {
+    /// `result` as a hook's result.
+    async fn react(&self, event: ToolCallEvent, context: RoomContext) -> ToolHookReturn {
+        let allow = || HookResult::allow(AllowOptions::default());
         let Some(run) = self.run.upgrade() else {
-            return Ok(Value::Null);
+            return Ok(allow());
         };
         let room_id = context.room.id.to_string();
         run.record_tool_hook(
             &self.name,
             &self.trigger,
             &room_id,
-            &tool_call_record(event),
+            &tool_call_record(&event),
         );
         let Some(reaction) = self.reactions.pick(&json!({ "room_id": room_id })) else {
-            return Ok(Value::Null);
+            return Ok(allow());
         };
         perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
-        Ok(reaction.get("result").cloned().unwrap_or(Value::Null))
+        match reaction.get("result") {
+            Some(result) => Ok(tool_hook_result(result, event)?),
+            None => Ok(allow()),
+        }
     }
+}
 
-    async fn gate(&self, event: ToolCallEvent, context: RoomContext) -> HookOutcome<ToolUse> {
-        let result = self.react(&event, &context).await?;
-        Ok(match result["action"].as_str() {
-            Some("block") => ToolUse::Block(result["reason"].as_str().map(str::to_owned)),
-            Some("modify") => match result["event"]["arguments"].as_object() {
-                Some(arguments) => ToolUse::Rewrite(arguments.clone()),
-                None => return Err("a modify of a tool call patches its arguments".into()),
-            },
-            Some(_) | None => ToolUse::Allow,
-        })
+/// A scenario's hook result on a tool call, a modify's `event` read as a
+/// patch on the call, as the Python harness reads it.
+fn tool_hook_result(
+    spec: &Value,
+    event: ToolCallEvent,
+) -> Result<HookResult<ToolCallEvent>, String> {
+    let action: HookAction = serde_json::from_value(spec["action"].clone())
+        .map_err(|error| format!("action: {error}"))?;
+    let mut result = HookResult::new(action);
+    result.reason = spec["reason"].as_str().map(str::to_owned);
+    if let Some(metadata) = spec["metadata"].as_object() {
+        result.metadata.clone_from(metadata);
     }
+    if let Some(patch) = spec.get("event") {
+        result.event = Some(patched_tool_call(event, patch)?);
+    }
+    Ok(result)
+}
 
-    async fn verdict(
-        &self,
-        event: ToolCallEvent,
-        context: RoomContext,
-    ) -> HookOutcome<ToolVerdict> {
-        let result = self.react(&event, &context).await?;
-        Ok(match result["action"].as_str() {
-            Some("block") => ToolVerdict::Block(result["reason"].as_str().map(str::to_owned)),
-            Some("modify") => match result["event"].get("result") {
-                Some(replaced) => ToolVerdict::Replace(replaced.clone()),
-                None => return Err("a modify of a tool call patches its result".into()),
-            },
-            Some(_) | None => ToolVerdict::Keep,
-        })
+/// `event` with the fields `patch` names replaced.
+fn patched_tool_call(mut event: ToolCallEvent, patch: &Value) -> Result<ToolCallEvent, String> {
+    for (field, value) in patch.as_object().into_iter().flatten() {
+        match field.as_str() {
+            "arguments" => {
+                event.arguments = value
+                    .as_object()
+                    .cloned()
+                    .ok_or("a tool call's arguments are an object")?;
+            }
+            "result" => event.result = (!value.is_null()).then(|| value.clone()),
+            "structured_content" => {
+                event.structured_content = (!value.is_null()).then(|| value.clone());
+            }
+            other => return Err(format!("{other}: no tool call field the harness patches")),
+        }
     }
+    Ok(event)
 }
 
 /// A tool hook's payload as a scenario reads it (README, "Expectations").
 fn tool_call_record(event: &ToolCallEvent) -> Value {
     json!({
-        "name": event.call.name,
-        "tool_call_id": event.call.id,
-        "arguments": event.call.arguments,
+        "name": event.name,
+        "tool_call_id": event.tool_call_id,
+        "arguments": event.arguments,
         "result": event.result,
-        "is_error": event.is_error(),
-        "refused": event.refused(),
-        "cancelled": event.cancelled(),
+        "is_error": event.is_error,
+        "refused": event.refused,
+        "cancelled": event.cancelled,
         "error_detail": event.error_detail,
     })
 }

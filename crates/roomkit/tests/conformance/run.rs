@@ -180,15 +180,18 @@ impl Run {
         name: &str,
         trigger: &str,
         room_id: &str,
-        payload: &RoomEvent,
+        payload: Option<&RoomEvent>,
     ) {
         if !self.recording.load(Ordering::SeqCst) {
             return;
         }
+        let event = payload.map_or(Value::Null, |payload| {
+            serde_json::to_value(payload).unwrap_or_default()
+        });
         let call = json!({
             "trigger": trigger,
             "room_id": room_id,
-            "event": serde_json::to_value(payload).unwrap_or_default(),
+            "event": event,
         });
         let mut observed = lock(&self.observed);
         observed

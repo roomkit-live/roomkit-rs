@@ -5,10 +5,12 @@
 //! (`tasks/probes/step4-m8/skills_m8_probe.out`).
 
 use pretty_assertions::assert_eq;
+use roomkit::model::HookResult;
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{
     EventContent, EventType, InboundMessage, TextContent, ToolCallContent, ToolCallOutcome,
 };
-use roomkit::{ProcessInboundOptions, SendEventOptions, ToolHookSpec, ToolVerdict};
+use roomkit::{HookOptions, HookTrigger, ProcessInboundOptions, SendEventOptions, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiError, SkillRegistry, ToolDefinition, ToolOutput, ToolPolicy, Tools};
 use serde_json::json;
@@ -263,16 +265,23 @@ async fn an_activation_withheld_by_a_hook_is_not_recorded() {
     let room = Room::new(model.clone(), skills(&tree), |agent| agent).await;
     let withheld = std::sync::atomic::AtomicBool::new(false);
     room.kit
-        .on_tool_call(ToolHookSpec::new("withhold"), move |_event, _context| {
-            let first = !withheld.swap(true, std::sync::atomic::Ordering::SeqCst);
-            async move {
-                Ok(if first {
-                    ToolVerdict::block("withheld by the host")
-                } else {
-                    ToolVerdict::Keep
-                })
-            }
-        })
+        .hook(
+            HookTrigger::OnToolCall,
+            move |_event: ToolCallEvent, _context| {
+                let first = !withheld.swap(true, std::sync::atomic::Ordering::SeqCst);
+                async move {
+                    Ok(if first {
+                        HookResult::block("withheld by the host", BlockOptions::default())
+                    } else {
+                        HookResult::allow(AllowOptions::default())
+                    })
+                }
+            },
+            HookOptions {
+                name: "withhold".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
     room.says("Activate").await;
     room.says("Next").await;

@@ -22,9 +22,9 @@ use roomkit::testing::{EchoAgent, EchoAgentOptions, SequentialEnvironment, kit_w
 use roomkit::{
     Addressing, AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ChannelOf,
     CloseRoomOptions, ConversationStore, CreateRoomOptions, DefaultInboundRoomRouter,
-    DefaultInboundRoomRouterOptions, HookTrigger, InMemoryStore, InboundRoomRouter,
-    ProcessInboundOptions, RoomFilter, RoomKit, RoomKitError, RoomKitOptions, RouteOptions,
-    RouterError, RouterFuture, WeakRoomKit,
+    DefaultInboundRoomRouterOptions, HookExecution, HookOptions, HookTrigger, InMemoryStore,
+    InboundRoomRouter, ProcessInboundOptions, RoomFilter, RoomKit, RoomKitError, RoomKitOptions,
+    RouteOptions, RouterError, RouterFuture, WeakRoomKit,
 };
 use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::{Barrier, Notify};
@@ -150,18 +150,26 @@ fn kit_with_agent_on(options: RoomKitOptions) -> (RoomKit, Provider) {
     ))
     .unwrap();
     let attaching = kit.clone();
-    kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
-        let kit = attaching.clone();
-        async move {
-            kit.attach_channel(
-                &event.room_id,
-                &channel("ai"),
-                AttachChannelOptions::default(),
-            )
-            .await
-            .unwrap();
-        }
-    })
+    kit.hook(
+        HookTrigger::OnRoomCreated,
+        move |event: RoomEvent, _| {
+            let kit = attaching.clone();
+            async move {
+                kit.attach_channel(
+                    &event.room_id,
+                    &channel("ai"),
+                    AttachChannelOptions::default(),
+                )
+                .await
+                .unwrap();
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "welcome".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     (kit, sms)
 }
@@ -605,18 +613,26 @@ async fn a_chat_is_answered_in_its_chat_and_keeps_its_room() {
         ))
         .unwrap();
         let attaching = kit.clone();
-        kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
-            let kit = attaching.clone();
-            async move {
-                kit.attach_channel(
-                    &event.room_id,
-                    &channel("ai"),
-                    AttachChannelOptions::default(),
-                )
-                .await
-                .unwrap();
-            }
-        })
+        kit.hook(
+            HookTrigger::OnRoomCreated,
+            move |event: RoomEvent, _| {
+                let kit = attaching.clone();
+                async move {
+                    kit.attach_channel(
+                        &event.room_id,
+                        &channel("ai"),
+                        AttachChannelOptions::default(),
+                    )
+                    .await
+                    .unwrap();
+                }
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "welcome".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
         let in_the_chat = |author: &str, text: &str| {
             let mut message =

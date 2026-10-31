@@ -106,6 +106,13 @@ pub enum ToolError {
     /// the observers too.
     #[error("{0}")]
     Failed(String),
+    /// The call is not this tool's to serve, Python's
+    /// `UnservedToolCallError`: nothing served it, and a SYNC `ON_TOOL_CALL`
+    /// hook may serve it; when none does, the call fails and the model reads
+    /// `{"error": "No handler for tool x"}` (RFC §9.3, §21.4). The message
+    /// goes to the log alone.
+    #[error("{0}")]
+    Unserved(String),
     /// The tool raised an error of `kind`, saying `message`.
     #[error("{kind}: {message}")]
     Raised {
@@ -125,6 +132,11 @@ impl ToolError {
     /// A failure the model reads as `words`.
     pub fn failed(words: impl Into<String>) -> Self {
         Self::Failed(words.into())
+    }
+
+    /// A call that is not this tool's to serve, saying why for the log.
+    pub fn unserved(message: impl Into<String>) -> Self {
+        Self::Unserved(message.into())
     }
 
     /// `error`, raised by the tool: the model reads its kind, the name of

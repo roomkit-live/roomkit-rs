@@ -316,14 +316,10 @@ pub enum RegistrationError {
         /// The refused hook.
         hook: String,
     },
-    /// A hook on a tool trigger registered as an event's hook, or a hook on
-    /// another trigger as a tool hook: a tool trigger's payload is a tool
-    /// call, no event (RFC §9.3).
-    #[error("hook {hook:?}: {trigger:?} {}", if .trigger.is_tool_trigger() {
-        "takes a tool call, not an event: register it as a tool hook"
-    } else {
-        "takes an event, not a tool call"
-    })]
+    /// A hook whose handler takes another payload than its trigger hands
+    /// (RFC §9.2): a tool trigger hands a tool call, `ON_SESSION_STARTED` a
+    /// session's start, every other trigger an event.
+    #[error("hook {hook:?}: {trigger:?} hands its hooks {}", payload_of(*.trigger))]
     PayloadMismatch {
         /// The refused hook.
         hook: String,
@@ -501,6 +497,9 @@ impl HookRegistry {
             .collect()
     }
 
+    /// The hooks of `trigger` whose filter admits `subject`; a session's
+    /// start's hooks read no filter, as the Python implementation fires them
+    /// (`skip_event_filter`).
     fn matching<'registry>(
         &'registry self,
         trigger: HookTrigger,
@@ -508,7 +507,10 @@ impl HookRegistry {
     ) -> impl Iterator<Item = (&'registry HookId, &'registry HookSpec)> {
         self.hooks
             .iter()
-            .filter(move |(_, spec)| spec.trigger == trigger && spec.filter.admits(subject))
+            .filter(move |(_, spec)| {
+                spec.trigger == trigger
+                    && (trigger == HookTrigger::OnSessionStarted || spec.filter.admits(subject))
+            })
             .map(|(id, spec)| (id, spec))
     }
 
@@ -550,6 +552,17 @@ fn payload_mismatch(spec: HookSpec) -> RegistrationError {
     RegistrationError::PayloadMismatch {
         hook: spec.name,
         trigger: spec.trigger,
+    }
+}
+
+/// The payload `trigger` hands its hooks, as a refusal names it.
+fn payload_of(trigger: HookTrigger) -> &'static str {
+    if trigger.is_tool_trigger() {
+        "a ToolCallEvent"
+    } else if trigger == HookTrigger::OnSessionStarted {
+        "a SessionStartedEvent"
+    } else {
+        "a RoomEvent"
     }
 }
 

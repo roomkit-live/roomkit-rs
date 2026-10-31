@@ -8,10 +8,12 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use roomkit_core::model::{
-    ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent, EventDirection, EventId,
-    EventSource, Metadata, RoomContext, RoomEvent, RoomId, ToolCall, ToolCallOutcome,
+    ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent, EventId, HookAction,
+    Metadata, RoomContext, RoomEvent, RoomId, Timestamp, ToolCall, ToolCallOutcome,
 };
-use roomkit_core::rules::hook_registry::{HookSpec, HookTrigger};
+use roomkit_core::ops::{Environment, SystemEnvironment};
+use roomkit_core::rules::hook_chain::HookOutcome;
+use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
 use serde_json::Value;
 use tokio::task::AbortHandle;
 
@@ -19,11 +21,12 @@ use crate::channel::{BoxFuture, DynChannel};
 use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::events::FrameworkEvent;
+use crate::hooks::{self, HookHandler};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::stream::ResponseStream;
 use crate::tasks::Kind;
-use crate::tool_calls::{ToolCallEvent, ToolHandler, ToolUse, ToolVerdict, error_envelope};
+use crate::tool_calls::{ToolCallEvent, ToolCallReport, error_envelope};
 use crate::turns::{HostLink, TurnError, send_event_arguments};
 use crate::{RoomKit, SendEventOptions};
 
@@ -105,6 +108,10 @@ impl std::fmt::Debug for TurnHost {
     }
 }
 
+/// What the model reads under `metadata["arguments"]` of a
+/// `BEFORE_TOOL_USE` hook's result: the arguments the call runs with.
+const ARGUMENTS: &str = "arguments";
+
 /// What the gate decided on a call before it runs (RFC §9.3, §21.1).
 ///
 /// For roomkit-ai's tool loop, which reads it from
@@ -122,6 +129,9 @@ pub enum ToolGate {
         text: String,
         /// What failed, for the observers alone.
         error_detail: Option<String>,
+        /// The reason a hook's block gave, for the `before_tool_use`
+        /// framework event.
+        reason: Option<String>,
     },
 }
 
@@ -208,38 +218,135 @@ impl TurnHost {
     }
 
     /// Runs the kit's `BEFORE_TOOL_USE` hooks on `call`, in chain order
-    /// (RFC §9.3): each reads the arguments the one before left. A block
-    /// refuses the call with its reason; a hook that raises or runs past its
-    /// timeout refuses it with the fixed refusal, the trigger failing closed,
-    /// its name and error going to the observers alone.
+    /// (RFC §9.3), as the Python implementation runs them: a hook's
+    /// `HookResult::modify(event)` is read by the next and runs the call
+    /// with the event's arguments; a rewrite under `metadata["arguments"]`
+    /// is shown to no later hook, and the last one has the last word,
+    /// arguments that are not an object refusing the call. A block refuses
+    /// the call with its reason. The trigger fails closed: a hook that
+    /// raises, runs past its timeout or returns nothing refuses the call
+    /// with the fixed refusal, its name and error for the observers alone.
+    /// The ASYNC hooks observe the call and decide nothing. Emits the
+    /// `before_tool_use` framework event (RFC §8.2).
     ///
     /// For roomkit-ai's tool loop, which calls it once per call: a tool or
     /// a channel that calls it too runs the hooks twice.
     #[doc(hidden)]
     pub async fn before_tool_use(&self, call: &ToolCall) -> ToolGate {
-        let mut arguments = call.arguments.clone();
-        for (spec, handler) in self.hooks(HookTrigger::BeforeToolUse) {
-            let ToolHandler::Gate(gate) = handler else {
-                continue;
-            };
-            let mut gated = call.clone();
-            gated.arguments = arguments.clone();
-            let event = self.event(gated);
-            let decided =
-                tokio::time::timeout(spec.timeout, gate(event, self.shared.context.clone())).await;
-            match decided {
-                Ok(Ok(ToolUse::Allow)) => {}
-                Ok(Ok(ToolUse::Rewrite(rewritten))) => arguments = rewritten,
-                Ok(Ok(ToolUse::Block(reason))) => return blocked(call, reason),
-                Ok(Err(error)) => return failed_closed(call, &spec, &error.to_string()),
-                Err(_elapsed) => {
-                    let late = format!("did not answer within {} s", spec.timeout.as_secs_f64());
-                    return failed_closed(call, &spec, &late);
+        let hooks = self.hooks(HookTrigger::BeforeToolUse);
+        let original = self.event_of(&ToolCallReport::new(call.clone()));
+        self.observe_with(&hooks, &original, &ExecutionContext::current(), 0);
+        let gate = self.gate(&hooks, original).await;
+        let (allowed, reason) = match &gate {
+            ToolGate::Allowed(_) => (true, None),
+            ToolGate::Refused { reason, .. } => (false, reason.clone()),
+        };
+        self.emit_before_tool_use(call, allowed, reason);
+        match gate {
+            ToolGate::Allowed(arguments) => {
+                self.runs(call, &arguments);
+                ToolGate::Allowed(arguments)
+            }
+            refused @ ToolGate::Refused { .. } => refused,
+        }
+    }
+
+    /// The decision of the SYNC `BEFORE_TOOL_USE` chain of `hooks` on
+    /// `original`, the call as the model made it, as the Python
+    /// implementation's `before_tool_decision` reads it: rewritten
+    /// arguments that are not an object refuse the call before a block's
+    /// reason or a failure is read.
+    async fn gate(
+        &self,
+        hooks: &[(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)],
+        original: ToolCallEvent,
+    ) -> ToolGate {
+        let mut current = original.clone();
+        let mut rewritten: Option<Value> = None;
+        let mut ended = None;
+        for (spec, handler) in hooks
+            .iter()
+            .filter(|(spec, _)| spec.execution == HookExecution::Sync)
+        {
+            let ran = hooks::run(
+                Arc::clone(handler),
+                current.clone(),
+                self.shared.context.clone(),
+                spec.timeout,
+                |_| None,
+            )
+            .await;
+            let result = match ran {
+                HookOutcome::Returned(result) => result,
+                HookOutcome::Raised(error) => {
+                    ended = Some(failed_closed(&original.name, spec, &error.message));
+                    break;
                 }
+                HookOutcome::TimedOut => {
+                    let late = format!("timeout ({}s)", python_seconds(spec.timeout));
+                    ended = Some(failed_closed(&original.name, spec, &late));
+                    break;
+                }
+                HookOutcome::Invalid { what, .. } => {
+                    ended = Some(failed_closed(&original.name, spec, &what));
+                    break;
+                }
+            };
+            if let Some(arguments) = result.metadata.get(ARGUMENTS) {
+                rewritten = Some(arguments.clone());
+            }
+            match (result.action, result.event) {
+                (HookAction::Block, _) => {
+                    ended = Some(blocked(&original.name, result.reason));
+                    break;
+                }
+                (HookAction::Modify, Some(modified)) => current = modified,
+                (HookAction::Modify, None) => {
+                    let unusable = "modify returned nothing, expected ToolCallEvent";
+                    ended = Some(failed_closed(&original.name, spec, unusable));
+                    break;
+                }
+                (HookAction::Allow, _) => {}
             }
         }
-        self.runs(call, &arguments);
-        ToolGate::Allowed(arguments)
+        match rewritten {
+            Some(Value::Object(_)) | None => {}
+            Some(_) => {
+                tracing::error!(
+                    target: "roomkit::hooks",
+                    tool = %original.name,
+                    "a BEFORE_TOOL_USE hook returned non-object arguments: the call is refused"
+                );
+                return blocked(&original.name, None);
+            }
+        }
+        match (ended, rewritten) {
+            (Some(refused), _) => refused,
+            (None, Some(Value::Object(arguments))) => ToolGate::Allowed(arguments),
+            (None, _) => ToolGate::Allowed(current.arguments),
+        }
+    }
+
+    /// Emits the `before_tool_use` framework event of `call` (RFC §8.2), as
+    /// the Python implementation's executor emits it.
+    fn emit_before_tool_use(&self, call: &ToolCall, allowed: bool, reason: Option<String>) {
+        let mut data = Metadata::new();
+        data.insert("tool_name".to_owned(), Value::from(call.name.as_str()));
+        data.insert("tool_call_id".to_owned(), Value::from(call.id.as_str()));
+        data.insert("allowed".to_owned(), Value::Bool(allowed));
+        data.insert("reason".to_owned(), reason.map_or(Value::Null, Value::from));
+        self.emit("before_tool_use", data);
+    }
+
+    /// Emits the framework event `event_type` with `data`, about the
+    /// turn's room and agent.
+    fn emit(&self, event_type: &str, data: Metadata) {
+        let ids = (
+            Some(self.shared.room_id.clone()),
+            Some(self.shared.channel_id.clone()),
+            None,
+        );
+        self.shared.kit.emit(event_type.to_owned(), ids, data);
     }
 
     /// The gate let `call` run with `arguments`: they cross before what
@@ -272,44 +379,66 @@ impl TurnHost {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Runs the kit's SYNC `ON_TOOL_CALL` hooks on `event`, a served call,
-    /// in chain order (RFC §9.3): each reads the result as the one before
-    /// left it, may replace it, or withhold it, which fails the call
-    /// `blocked`. A hook that raises or runs past its timeout is skipped. A
-    /// call that was not served is returned as it is: a firing that cannot
-    /// serve it reaches the observers only.
+    /// Runs the kit's SYNC `ON_TOOL_CALL` hooks on `report`, a served call
+    /// or one nothing served, in chain order (RFC §9.3), as the Python
+    /// implementation runs them: each reads the call as the one before left
+    /// it; `metadata["result"]` replaces the result, a JSON `null` included,
+    /// and `metadata["structured_content"]` its structured copy;
+    /// `modify(event)` carries a new result; a block withholds the result,
+    /// which fails the call `blocked` with no structured copy. A hook may
+    /// serve a call nothing served. A hook that raises, runs past its
+    /// timeout or returns nothing is skipped, unless it fails closed, which
+    /// withholds the result. A call refused, failed or cancelled is returned
+    /// as it is: it reaches the observers only.
     ///
     /// For roomkit-ai's tool loop, which calls it once per call: a tool or
     /// a channel that calls it too runs the hooks twice.
     #[doc(hidden)]
-    pub async fn on_tool_call(&self, mut event: ToolCallEvent) -> ToolCallEvent {
-        if event.outcome != Some(ToolCallOutcome::Served) {
-            return event;
+    pub async fn on_tool_call(&self, mut report: ToolCallReport) -> ToolCallReport {
+        let unserved = report.outcome == Some(ToolCallOutcome::Unserved);
+        if report.outcome != Some(ToolCallOutcome::Served) && !unserved {
+            return report;
         }
-        for (spec, handler) in self.hooks(HookTrigger::OnToolCall) {
-            let ToolHandler::Verdict(verdict) = handler else {
-                continue;
-            };
-            let decided = tokio::time::timeout(
+        let hooks = self.hooks(HookTrigger::OnToolCall);
+        let mut event = self.event_of(&report);
+        // The chain reads a call nothing served as Python hands it: no
+        // result, and no error yet.
+        event.is_error = false;
+        if unserved {
+            event.result = None;
+        }
+        let mut chain = ToolCallChain::new(event);
+        for (spec, handler) in hooks
+            .iter()
+            .filter(|(spec, _)| spec.execution == HookExecution::Sync)
+        {
+            let ran = hooks::run(
+                Arc::clone(handler),
+                chain.current.clone(),
+                self.shared.context.clone(),
                 spec.timeout,
-                verdict(event.clone(), self.shared.context.clone()),
+                |_| None,
             )
             .await;
-            match decided {
-                Ok(Ok(ToolVerdict::Keep)) => {}
-                Ok(Ok(ToolVerdict::Replace(result))) => event.result = result,
-                Ok(Ok(ToolVerdict::Block(reason))) => {
-                    let withheld = Value::String(withheld(reason));
-                    return event.ended(ToolCallOutcome::Blocked, withheld);
-                }
-                Ok(Err(error)) => skipped(&spec, &error.to_string()),
-                Err(_elapsed) => skipped(&spec, "it did not answer within its timeout"),
+            if let Some(reason) = chain.read(spec, ran) {
+                return withheld(report, &reason);
             }
         }
-        event
+        let Some(result) = chain.current.result else {
+            // Nothing served the call: the loop reports it failed, once,
+            // with what the hooks that failed said.
+            report.error_detail = chain.errors_detail();
+            return report;
+        };
+        if unserved {
+            report.outcome = Some(ToolCallOutcome::Served);
+        }
+        report.result = result;
+        report.structured_content = chain.current.structured_content.and_then(renderable);
+        report
     }
 
-    /// Reports `event`, a call that ended, to the kit's ASYNC `ON_TOOL_CALL`
+    /// Reports `report`, a call that ended, to the kit's ASYNC `ON_TOOL_CALL`
     /// hooks, each run in the background within its timeout, what it raises
     /// logged (RFC §9.3: every call fires `ON_TOOL_CALL` once).
     ///
@@ -322,20 +451,20 @@ impl TurnHost {
     /// For roomkit-ai's tool loop, which calls it once per call: a tool or
     /// a channel that calls it too runs the hooks twice.
     #[doc(hidden)]
-    pub fn report_tool_call(&self, event: &ToolCallEvent) {
+    pub fn report_tool_call(&self, report: &ToolCallReport) {
         {
             let mut calls = self.calls();
             if let Some(position) = calls
                 .running
                 .iter()
-                .position(|call| call.id == event.call.id)
+                .position(|call| call.id == report.call.id)
             {
                 calls.running.remove(position);
             }
         }
         let execution = ExecutionContext::current();
         let floor = execution.turn_depth().unwrap_or(0);
-        self.observe(event, &execution, floor);
+        self.observe(report, &execution, floor);
     }
 
     /// Reports the calls the turn's cut stopped while they ran `cancelled`
@@ -349,29 +478,54 @@ impl TurnHost {
             let read = format!(
                 "{{\"error\": \"Tool call cancelled\", \"tool\": {tool}, \"hint\": \"{CUT_HINT}\"}}"
             );
-            let event = ToolCallEvent::new(
-                self.shared.channel_id.clone(),
-                self.shared.room_id.clone(),
-                call,
-            )
-            .ended(ToolCallOutcome::Cancelled, Value::String(read))
-            .with_error_detail(format!("cancelled: {reason}"));
-            self.observe(&event, execution, self.shared.response_depth);
+            let report = ToolCallReport::new(call)
+                .ended(ToolCallOutcome::Cancelled, Value::String(read))
+                .with_error_detail(format!("cancelled: {reason}"));
+            self.observe(&report, execution, self.shared.response_depth);
         }
     }
 
-    /// Runs the kit's ASYNC `ON_TOOL_CALL` hooks on `event` in the
-    /// background, in `execution`, at least `floor` deep.
-    fn observe(&self, event: &ToolCallEvent, execution: &ExecutionContext, floor: u32) {
-        for (spec, handler) in self.hooks(HookTrigger::OnToolCall) {
-            let ToolHandler::Observer(observer) = handler else {
-                continue;
-            };
-            let observing = observer(event.clone(), self.shared.context.clone());
+    /// Reports `report` to the kit's ASYNC `ON_TOOL_CALL` hooks in the
+    /// background, in `execution`, at least `floor` deep, and emits its
+    /// `tool_call` framework event (RFC §8.2).
+    fn observe(&self, report: &ToolCallReport, execution: &ExecutionContext, floor: u32) {
+        let event = self.event_of(report);
+        let hooks = self.hooks(HookTrigger::OnToolCall);
+        self.observe_with(&hooks, &event, execution, floor);
+        self.emit_tool_call(&event);
+    }
+
+    /// Runs the ASYNC hooks of `hooks` on `event` in the background, each
+    /// within its timeout, what it raises logged (RFC §9.3), in
+    /// `execution`, at least `floor` deep.
+    fn observe_with(
+        &self,
+        hooks: &[(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)],
+        event: &ToolCallEvent,
+        execution: &ExecutionContext,
+        floor: u32,
+    ) {
+        for (spec, handler) in hooks
+            .iter()
+            .filter(|(spec, _)| spec.execution == HookExecution::Async)
+        {
+            let observing = hooks::run(
+                Arc::clone(handler),
+                event.clone(),
+                self.shared.context.clone(),
+                spec.timeout,
+                |_| None,
+            );
             let name = spec.name.clone();
             let bounded = async move {
-                if tokio::time::timeout(spec.timeout, observing).await.is_err() {
-                    tracing::warn!(target: "roomkit::hooks", hook = %name, "a tool call's observer timed out");
+                match observing.await {
+                    HookOutcome::TimedOut => {
+                        tracing::warn!(target: "roomkit::hooks", hook = %name, "a tool call's observer timed out");
+                    }
+                    HookOutcome::Raised(error) => {
+                        tracing::warn!(target: "roomkit::hooks", hook = %name, error = %error.message, "a tool call's observer raised");
+                    }
+                    HookOutcome::Returned(_) | HookOutcome::Invalid { .. } => {}
                 }
             };
             let task = execution
@@ -384,6 +538,33 @@ impl TurnHost {
         }
     }
 
+    /// Emits the `tool_call` framework event of `event` (RFC §8.2), its
+    /// failure's and cancellation's markers when they are set, as the
+    /// Python implementation emits it.
+    fn emit_tool_call(&self, event: &ToolCallEvent) {
+        let mut data = Metadata::new();
+        data.insert("tool_name".to_owned(), Value::from(event.name.as_str()));
+        data.insert(
+            "tool_call_id".to_owned(),
+            Value::from(event.tool_call_id.as_str()),
+        );
+        data.insert(
+            "channel_type".to_owned(),
+            serde_json::to_value(&event.channel_type).unwrap_or_default(),
+        );
+        for (marker, set) in [
+            ("is_error", event.is_error),
+            ("cancelled", event.cancelled),
+            ("refused", event.refused),
+            ("refused_but_ran", event.refused_but_ran),
+        ] {
+            if set {
+                data.insert(marker.to_owned(), Value::Bool(true));
+            }
+        }
+        self.emit("tool_call", data);
+    }
+
     /// Runs `future` as this turn's work: [`current_turn_host`] gives this host
     /// while it runs.
     pub(crate) async fn scope<F: Future>(self, future: F) -> F::Output {
@@ -392,81 +573,194 @@ impl TurnHost {
 
     /// The kit's hooks on `trigger` for this agent's calls, its SYNC chain
     /// in chain order, then its observers.
-    fn hooks(&self, trigger: HookTrigger) -> Vec<(HookSpec, ToolHandler)> {
-        let source = EventSource {
-            direction: EventDirection::Outbound,
-            ..EventSource::new(
-                self.shared.channel_id.clone(),
-                self.shared.channel_type.clone(),
-            )
-        };
-        self.shared.kit.tool_hooks(trigger, &source)
+    fn hooks(&self, trigger: HookTrigger) -> Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)> {
+        self.shared
+            .kit
+            .tool_hooks(trigger, &self.shared.channel_id, &self.shared.channel_type)
     }
 
-    /// `call` as its hooks read it.
-    fn event(&self, call: ToolCall) -> ToolCallEvent {
-        ToolCallEvent::new(
-            self.shared.channel_id.clone(),
-            self.shared.room_id.clone(),
-            call,
+    /// `report` as its hooks read it, now.
+    fn event_of(&self, report: &ToolCallReport) -> ToolCallEvent {
+        report.event(
+            &self.shared.channel_id,
+            &self.shared.channel_type,
+            &self.shared.room_id,
+            self.shared.kit.now(),
         )
     }
 }
 
-/// What the model reads of a result a hook withheld: its reason in an
-/// error's envelope, or `{"error": "blocked"}` when it gave none, as the
-/// reference implementation writes it (RFC §9.3). A blank reason reads as
-/// none, as a blank `ToolUse::Block` reason does; the reference
-/// implementation keeps it as written (docs/rfc-gaps.md).
-fn withheld(reason: Option<String>) -> String {
-    let reason = reason.filter(|reason| !reason.trim().is_empty());
-    error_envelope(reason.as_deref().unwrap_or("blocked"))
+/// `report` with its result withheld by a hook: the model reads `reason`
+/// in an error's envelope, the call fails `blocked`, with no structured
+/// copy (RFC §9.3).
+fn withheld(report: ToolCallReport, reason: &str) -> ToolCallReport {
+    let mut report = report.ended(
+        ToolCallOutcome::Blocked,
+        Value::String(error_envelope(reason)),
+    );
+    report.structured_content = None;
+    report
+}
+
+/// `copy` as a structured copy a surface can render: an object, or none,
+/// as the Python implementation reads it.
+fn renderable(copy: Value) -> Option<Value> {
+    if copy.is_object() {
+        return Some(copy);
+    }
+    tracing::warn!(
+        target: "roomkit::hooks",
+        "an ON_TOOL_CALL hook left a structured_content that is not an object: \
+         the call's structured copy is dropped"
+    );
+    None
+}
+
+/// The SYNC `ON_TOOL_CALL` chain on one call, as the Python
+/// implementation folds it: the call as the last hook left it, whether it
+/// stands served, and what the hooks that failed said.
+struct ToolCallChain {
+    current: ToolCallEvent,
+    served: bool,
+    errors: Vec<(String, String)>,
+}
+
+impl ToolCallChain {
+    fn new(event: ToolCallEvent) -> Self {
+        Self {
+            served: event.result.is_some(),
+            current: event,
+            errors: Vec::new(),
+        }
+    }
+
+    /// Folds what the hook `spec` produced into the call; the reason its
+    /// result is withheld when the hook blocked or failed closed.
+    fn read(&mut self, spec: &HookSpec, ran: HookOutcome<ToolCallEvent>) -> Option<String> {
+        let result = match ran {
+            HookOutcome::Returned(result) => result,
+            HookOutcome::Raised(error) => return self.failed(spec, "hook_error", error.message),
+            HookOutcome::TimedOut => {
+                let late = format!("timeout ({}s)", python_seconds(spec.timeout));
+                return self.failed(spec, "hook_timeout", late);
+            }
+            HookOutcome::Invalid { what, .. } => {
+                return self.failed(spec, "hook_invalid_result", what);
+            }
+        };
+        if result.action == HookAction::Block {
+            let reason = result.reason.filter(|reason| !reason.is_empty());
+            return Some(reason.unwrap_or_else(|| "blocked".to_owned()));
+        }
+        let mut rewrote = false;
+        match (result.action, result.event) {
+            (HookAction::Modify, Some(modified)) => {
+                self.current = modified;
+                rewrote = true;
+            }
+            (HookAction::Modify, None) => {
+                let unusable = "modify returned nothing, expected ToolCallEvent".to_owned();
+                let closed = self.failed(spec, "hook_invalid_result", unusable);
+                if closed.is_some() {
+                    return closed;
+                }
+            }
+            (HookAction::Allow | HookAction::Block, _) => {}
+        }
+        if rewrote || !result.metadata.is_empty() {
+            self.fold(&result.metadata);
+        }
+        None
+    }
+
+    /// Writes a hook's `metadata` rewrite into the call: `result` replaces
+    /// its result, `structured_content` its structured copy; a served call
+    /// a hook empties stays served, its result `null`.
+    fn fold(&mut self, metadata: &Metadata) {
+        if let Some(result) = metadata.get("result") {
+            self.current.result = (!result.is_null()).then(|| result.clone());
+        }
+        if let Some(copy) = metadata.get("structured_content") {
+            self.current.structured_content = renderable(copy.clone());
+        }
+        if self.served && self.current.result.is_none() {
+            self.current.result = Some(Value::from("null"));
+        }
+        self.served = self.current.result.is_some();
+    }
+
+    /// The hook `spec` failed with `error`, of `outcome`: the reason the
+    /// result is withheld when the hook fails closed; else it is skipped.
+    fn failed(&mut self, spec: &HookSpec, outcome: &str, error: String) -> Option<String> {
+        tracing::warn!(
+            target: "roomkit::hooks",
+            hook = %spec.name,
+            %error,
+            "an ON_TOOL_CALL hook failed"
+        );
+        self.errors.push((spec.name.clone(), error));
+        spec.fail_closed.then(|| format!("{outcome}:{}", spec.name))
+    }
+
+    /// What the hooks that failed said, for the observers alone.
+    fn errors_detail(&self) -> Option<String> {
+        if self.errors.is_empty() {
+            return None;
+        }
+        let said: Vec<String> = self
+            .errors
+            .iter()
+            .map(|(hook, error)| format!("{hook}: {error}"))
+            .collect();
+        Some(said.join("; "))
+    }
+}
+
+/// `duration` in seconds as Python prints a float: `30.0`, `0.5`.
+fn python_seconds(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs_f64();
+    if seconds.fract() == 0.0 {
+        format!("{seconds:.1}")
+    } else {
+        format!("{seconds}")
+    }
 }
 
 /// A call refused by a hook's block: its reason as the model reads it, or
 /// the fixed refusal when it gave none (RFC §9.3).
-fn blocked(call: &ToolCall, reason: Option<String>) -> ToolGate {
-    let text = match reason.filter(|reason| !reason.trim().is_empty()) {
-        Some(reason) => error_envelope(&reason),
-        None => denied(call),
+fn blocked(name: &str, reason: Option<String>) -> ToolGate {
+    let reason = reason.filter(|reason| !reason.is_empty());
+    let text = match &reason {
+        Some(reason) => error_envelope(reason),
+        None => denied(name),
     };
     ToolGate::Refused {
         text,
         error_detail: None,
+        reason,
     }
 }
 
 /// A call refused because the gate `spec` failed with `error`: the fixed
 /// refusal, the gate's name and error for the observers (RFC §9.3).
-fn failed_closed(call: &ToolCall, spec: &HookSpec, error: &str) -> ToolGate {
+fn failed_closed(name: &str, spec: &HookSpec, error: &str) -> ToolGate {
     tracing::warn!(
         target: "roomkit::hooks",
         hook = %spec.name,
-        tool = %call.name,
+        tool = %name,
         %error,
         "a BEFORE_TOOL_USE hook failed: the call is refused"
     );
     ToolGate::Refused {
-        text: denied(call),
+        text: denied(name),
         error_detail: Some(format!("{}: {error}", spec.name)),
+        reason: None,
     }
 }
 
 /// The fixed refusal of a call the gate stopped (RFC §9.3).
-fn denied(call: &ToolCall) -> String {
-    error_envelope(&format!(
-        "Tool '{}' denied by pre-execution hook.",
-        call.name
-    ))
-}
-
-fn skipped(spec: &HookSpec, error: &str) {
-    tracing::warn!(
-        target: "roomkit::hooks",
-        hook = %spec.name,
-        %error,
-        "an ON_TOOL_CALL hook failed: it is skipped"
-    );
+fn denied(name: &str) -> String {
+    error_envelope(&format!("Tool '{name}' denied by pre-execution hook."))
 }
 
 /// What the turn backend needs of its kit, whatever its store: the owner's
@@ -480,13 +774,18 @@ pub(crate) trait TurnKit: Send + Sync {
         event: DirectEvent,
     ) -> BoxFuture<'static, Result<RoomEvent, RoomKitError>>;
 
-    /// The tool hooks of `trigger` that fire for calls of `source`: its
-    /// SYNC chain in chain order, then its observers.
+    /// The tool hooks of `trigger` that fire for calls of the agent
+    /// `channel_id` of `channel_type`: its SYNC chain in chain order, then
+    /// its observers.
     fn tool_hooks(
         &self,
         trigger: HookTrigger,
-        source: &EventSource,
-    ) -> Vec<(HookSpec, ToolHandler)>;
+        channel_id: &ChannelId,
+        channel_type: &ChannelType,
+    ) -> Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)>;
+
+    /// The kit's clock, now.
+    fn now(&self) -> Timestamp;
 
     /// Runs `task` in the background, tracked, in the turn's unit; `false`
     /// once the kit is shut down.
@@ -537,11 +836,19 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
     fn tool_hooks(
         &self,
         trigger: HookTrigger,
-        source: &EventSource,
-    ) -> Vec<(HookSpec, ToolHandler)> {
+        channel_id: &ChannelId,
+        channel_type: &ChannelType,
+    ) -> Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)> {
         self.upgrade()
-            .map(|inner| inner.tool_hooks(trigger, source))
+            .map(|inner| inner.tool_hooks(trigger, channel_id, channel_type))
             .unwrap_or_default()
+    }
+
+    fn now(&self) -> Timestamp {
+        self.upgrade().map_or_else(
+            || SystemEnvironment.now(),
+            |inner| inner.environment().now(),
+        )
     }
 
     fn spawn_tracked(&self, task: BoxFuture<'static, ()>) -> Option<AbortHandle> {

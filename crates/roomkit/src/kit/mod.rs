@@ -37,12 +37,12 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, PoisonError, RwLock, Weak};
 
-use roomkit_core::model::{ChannelId, EventSource, InboundMessage, RoomEvent, RoomId};
+use roomkit_core::model::{ChannelId, ChannelType, InboundMessage, RoomEvent, RoomId};
 use roomkit_core::ops::{
     Entry, Environment, FrameworkEvent as CoreEvent, Inbound, InboundTarget, KitConfig,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
-use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookTrigger};
+use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookSubject, HookTrigger};
 
 use self::inject::Entered;
 pub use self::options::{
@@ -62,7 +62,7 @@ use crate::driver;
 use crate::environment::SystemEnvironment;
 use crate::error::RoomKitError;
 use crate::events::{FrameworkEvent, Handled, Handler, Handlers};
-use crate::hooks::HookHandler;
+use crate::hooks::{HookHandler, Kept};
 use crate::inbound::InboundResult;
 use crate::locks::RoomMutexes;
 use crate::queues::{RoomLanes, RoomTickets};
@@ -72,7 +72,7 @@ use crate::router::{
 };
 use crate::store::{ConversationStore, InMemoryStore};
 use crate::tasks::Tasks;
-use crate::tool_calls::ToolHandler;
+use crate::tool_calls::ToolCallEvent;
 use crate::turns::Turns;
 use crate::unwind;
 
@@ -120,9 +120,8 @@ impl<S> Clone for RoomKit<S> {
 pub(crate) struct Inner<S> {
     config: RwLock<Arc<KitConfig>>,
     channels: RwLock<HashMap<ChannelId, Arc<dyn DynChannel>>>,
-    hooks: RwLock<HashMap<HookId, Arc<dyn HookHandler>>>,
-    /// The handlers of the tool hooks (RFC §9.3), whose payload is no event.
-    tool_hooks: RwLock<HashMap<HookId, ToolHandler>>,
+    /// The handlers of the hooks, by the payload their trigger hands them.
+    pub(crate) hooks: RwLock<HashMap<HookId, Kept>>,
     /// The routing strategy (RFC §10.4), fixed at the kit's construction.
     router: Arc<dyn InboundRoomRouter>,
     pub(crate) store: Arc<S>,
@@ -181,7 +180,6 @@ impl<S: ConversationStore> RoomKit<S> {
             config: RwLock::new(Arc::new(config)),
             channels: RwLock::new(HashMap::new()),
             hooks: RwLock::new(HashMap::new()),
-            tool_hooks: RwLock::new(HashMap::new()),
             router: inbound_router.unwrap_or_else(|| default_router(&store, kit)),
             store,
             locks: RoomMutexes::default(),
@@ -452,32 +450,41 @@ impl<S> Inner<S> {
         &*self.router
     }
 
-    pub(crate) fn hook(&self, hook: HookId) -> Option<Arc<dyn HookHandler>> {
-        read(&self.hooks).get(&hook).cloned()
-    }
-
-    /// The tool hooks of `trigger` that fire for the calls of an agent of
-    /// `source`: its SYNC chain in chain order, then its observers (RFC
-    /// §9.2, §9.3).
+    /// The tool hooks of `trigger` that fire for the calls of the agent
+    /// `channel_id` of `channel_type`: its SYNC chain in chain order, then
+    /// its observers (RFC §9.2, §9.3).
     pub(crate) fn tool_hooks(
         &self,
         trigger: HookTrigger,
-        source: &EventSource,
-    ) -> Vec<(HookSpec, ToolHandler)> {
+        channel_id: &ChannelId,
+        channel_type: &ChannelType,
+    ) -> Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)> {
         let config = Arc::clone(&read(&self.config));
-        let handlers = read(&self.tool_hooks);
+        let handlers = read(&self.hooks);
         let registry = &config.hooks;
+        let subject = HookSubject::of_channel(channel_id, channel_type);
         registry
-            .chain(trigger, source)
+            .chain(trigger, subject)
             .into_iter()
-            .chain(registry.observers(trigger, source))
-            .filter_map(|id| Some((registry.get(id)?.clone(), handlers.get(&id)?.clone())))
+            .chain(registry.observers(trigger, subject))
+            .filter_map(|id| {
+                let Kept::ToolCall(handler) = handlers.get(&id)? else {
+                    return None;
+                };
+                Some((registry.get(id)?.clone(), Arc::clone(handler)))
+            })
             .collect()
     }
 
-    pub(crate) fn hook_with_spec(&self, hook: HookId) -> Option<(Arc<dyn HookHandler>, HookSpec)> {
+    /// The handler of `hook`, whatever its payload, and its registration.
+    pub(crate) fn hook_with_spec(&self, hook: HookId) -> Option<(Kept, HookSpec)> {
         let spec = read(&self.config).hooks.get(hook).cloned()?;
-        Some((self.hook(hook)?, spec))
+        Some((self.kept_hook(hook)?, spec))
+    }
+
+    /// The handler of `hook`, whatever its payload.
+    pub(crate) fn kept_hook(&self, hook: HookId) -> Option<Kept> {
+        read(&self.hooks).get(&hook).cloned()
     }
 
     /// Emits the framework event `notice` reports, now: the end of its

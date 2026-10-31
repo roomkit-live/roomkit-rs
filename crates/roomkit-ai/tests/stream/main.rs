@@ -22,7 +22,7 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, DeliveryStream, HookExecution, HookSpec, HookTrigger, InboundResult,
+    CreateRoomOptions, DeliveryStream, HookExecution, HookOptions, HookTrigger, InboundResult,
     ProcessInboundOptions, RoomKit, RoomKitOptions, StreamItem,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
@@ -461,12 +461,19 @@ async fn a_streaming_target_reads_the_deltas_then_each_row_the_store_holds() {
     .await;
     let judged = Arc::new(Mutex::new(Vec::new()));
     let noting = Arc::clone(&judged);
-    let spec = HookSpec::new("judge", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    let spec = HookOptions {
+        name: "judge".to_owned(),
+        ..Default::default()
+    };
     room.kit
-        .hook(spec, move |event, _context| {
-            noting.lock().unwrap().push(event.r#type);
-            async { Ok(HookResult::allow(AllowOptions::default())) }
-        })
+        .hook(
+            HookTrigger::BeforeBroadcast,
+            move |event: RoomEvent, _context| {
+                noting.lock().unwrap().push(event.r#type);
+                async { Ok(HookResult::allow(AllowOptions::default())) }
+            },
+            spec,
+        )
         .unwrap();
     let result = room.says("Where is order 42?").await;
     assert_eq!(result.error, None);
@@ -569,15 +576,19 @@ async fn a_reader_that_stops_at_a_call_s_start_runs_no_call() {
     let updated = Arc::new(Mutex::new(Vec::new()));
     let noting = Arc::clone(&updated);
     room.kit
-        .observe(
-            "updated",
+        .hook(
             HookTrigger::OnEventUpdated,
-            move |event, _context| {
+            move |event: RoomEvent, _context| {
                 noting
                     .lock()
                     .unwrap()
                     .push(roomkit_core::rules::transcoding::text_of(&event.content));
                 async {}
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "updated".to_owned(),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -661,10 +672,18 @@ async fn a_response_that_fails_stores_its_text_and_hands_it_to_the_target_first(
     let errors = Arc::new(AtomicUsize::new(0));
     let counting = Arc::clone(&errors);
     room.kit
-        .observe("errors", HookTrigger::OnError, move |_event, _context| {
-            counting.fetch_add(1, Ordering::SeqCst);
-            async {}
-        })
+        .hook(
+            HookTrigger::OnError,
+            move |_event: RoomEvent, _context| {
+                counting.fetch_add(1, Ordering::SeqCst);
+                async {}
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "errors".to_owned(),
+                ..Default::default()
+            },
+        )
         .unwrap();
     let result = room.says("What is the answer?").await;
     assert!(
@@ -783,16 +802,20 @@ async fn a_turn_ending_on_no_text_writes_its_record_on_its_last_message() {
     let updated = Arc::new(Mutex::new(Vec::new()));
     let noting = Arc::clone(&updated);
     room.kit
-        .observe(
-            "updated",
+        .hook(
             HookTrigger::OnEventUpdated,
-            move |event, _context| {
+            move |event: RoomEvent, _context| {
                 let reason = event.metadata.get("loop_end_reason").cloned();
                 noting.lock().unwrap().push((
                     roomkit_core::rules::transcoding::text_of(&event.content),
                     reason,
                 ));
                 async {}
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "updated".to_owned(),
+                ..Default::default()
             },
         )
         .unwrap();

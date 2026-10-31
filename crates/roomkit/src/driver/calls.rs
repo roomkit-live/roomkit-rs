@@ -237,8 +237,8 @@ pub(super) async fn hook<S: ConversationStore>(
             timeout,
             ..
         } => {
-            let outcome = match inner.hook(hook) {
-                Some(handler) => hooks::run(handler, *event, *context, timeout).await,
+            let outcome = match inner.kept_hook(hook) {
+                Some(kept) => hooks::run_kept(kept, *event, *context, timeout).await,
                 None => {
                     HookOutcome::Raised(ErrorRecord::new("HookError", "the hook has no handler"))
                 }
@@ -506,12 +506,12 @@ fn observe<S: ConversationStore>(
     event: &RoomEvent,
     context: &RoomContext,
 ) -> Option<impl Future<Output = ()> + Send + 'static> {
-    let (handler, spec) = inner.hook_with_spec(hook)?;
+    let (kept, spec) = inner.hook_with_spec(hook)?;
     let inner = Arc::clone(inner);
     let (event, context) = (event.clone(), context.clone());
     Some(async move {
         let room_id = event.room_id.clone();
-        let outcome = hooks::run(handler, event, context, spec.timeout).await;
+        let outcome = hooks::run_kept(kept, event, context, spec.timeout).await;
         inner.report_observer(&spec, trigger, room_id, &outcome);
     })
 }

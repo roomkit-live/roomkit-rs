@@ -3,7 +3,9 @@
 //! call runs through its gate, then its tool, concurrently with the
 //! others, and the model reads each outcome in its next round:
 //!
-//! - `lookup_order` is served, and its result is what the model reads;
+//! - `lookup_order` is served, and its result is what the model reads; it
+//!   runs with the order number a `BEFORE_TOOL_USE` hook rewrote under
+//!   `metadata["arguments"]`, `#42` read as `42` (RFC §9.3);
 //! - `delete_customer` is refused by the agent's tool policy, before
 //!   anything else looks at it (RFC §21.1), so the approval hook never
 //!   sees it;
@@ -32,13 +34,15 @@ use std::error::Error;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomEvent, RoomId,
-    TextContent, ToolCallContent, ToolCallOutcome,
+    ChannelId, ChannelType, EventContent, EventType, HookResult, InboundMessage, Metadata,
+    RoomEvent, RoomId, TextContent, ToolCallContent, ToolCallOutcome,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, ToolHookSpec, ToolUse,
+    AttachChannelOptions, CreateRoomOptions, HookExecution, HookOptions, HookTrigger,
+    ProcessInboundOptions, ToolCallEvent,
 };
 use roomkit_ai::{ToolDefinition, ToolError, ToolOutput, ToolPolicy, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
@@ -64,7 +68,7 @@ fn script() -> Vec<Reply> {
         Reply::calling(
             "Let me look into order 42.",
             [
-                ("call_1", "lookup_order", order),
+                ("call_1", "lookup_order", r##"{"order": "#42"}"##),
                 ("call_2", "delete_customer", r#"{"customer": "alice"}"#),
                 ("call_3", "cancel_order", order),
                 ("call_4", "refund_order", order),
@@ -104,8 +108,8 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     print_rows(&timeline);
     let audit = audit.entries();
     println!("The audit read:");
-    for (tool, outcome, detail) in &audit {
-        println!("  {tool}: {outcome:?}, {detail:?}");
+    for (tool, is_error, detail) in &audit {
+        println!("  {tool}: is_error {is_error}, {detail:?}");
     }
     let mut checks = Checks::default();
     checks.expect("the turn did not fail", result.error.is_none());
@@ -183,37 +187,84 @@ async fn shop_room(
     Ok((kit, sms, room))
 }
 
-/// What one call's observer reads: the tool, the outcome, what failed.
-type Audited = (String, Option<ToolCallOutcome>, Option<String>);
+/// What one call's observer reads: the tool, whether it failed, what
+/// failed.
+type Audited = (String, bool, Option<String>);
 
 /// The kit's tool hooks: an approval, where a cancellation waits for a
-/// manager who is not there, and an audit of every call; what each saw.
+/// manager who is not there, a rewrite of an order number, and an audit of
+/// every call; what the approval and the audit saw.
 fn watch_the_calls(kit: &roomkit::RoomKit) -> Result<(Log<String>, Log<Audited>), Box<dyn Error>> {
     let approvals = Log::new();
     let asked = approvals.clone();
-    let spec = ToolHookSpec::new("approve").with_timeout(Duration::from_secs(300));
-    kit.before_tool_use(spec, move |event, _context| {
-        asked.push(event.call.name.clone());
-        let cancels = event.call.name == "cancel_order";
-        async move {
-            Ok(if cancels {
-                ToolUse::block(NEEDS_APPROVAL)
-            } else {
-                ToolUse::Allow
-            })
-        }
-    })?;
+    kit.hook(
+        HookTrigger::BeforeToolUse,
+        move |event: ToolCallEvent, _context| {
+            asked.push(event.name.clone());
+            let cancels = event.name == "cancel_order";
+            async move {
+                Ok(if cancels {
+                    HookResult::block(NEEDS_APPROVAL, BlockOptions::default())
+                } else {
+                    HookResult::allow(AllowOptions::default())
+                })
+            }
+        },
+        // An approval that waits for a person needs more than 30 seconds.
+        HookOptions {
+            name: "approve".to_owned(),
+            timeout: Duration::from_secs(300),
+            ..Default::default()
+        },
+    )?;
+    kit.hook(
+        HookTrigger::BeforeToolUse,
+        |event: ToolCallEvent, _context| {
+            let rewritten = normalized_order(&event.arguments);
+            async move {
+                let mut result = HookResult::allow(AllowOptions::default());
+                if let Some(arguments) = rewritten {
+                    result
+                        .metadata
+                        .insert("arguments".to_owned(), Value::Object(arguments));
+                }
+                Ok(result)
+            }
+        },
+        HookOptions {
+            name: "normalize".to_owned(),
+            priority: 1,
+            ..Default::default()
+        },
+    )?;
     let audit = Log::new();
     let audited = audit.clone();
-    kit.observe_tool_calls("audit", move |event, _context| {
-        audited.push((
-            event.call.name.clone(),
-            event.outcome,
-            event.error_detail.clone(),
-        ));
-        async {}
-    })?;
+    kit.hook(
+        HookTrigger::OnToolCall,
+        move |event: ToolCallEvent, _context| {
+            audited.push((
+                event.name.clone(),
+                event.is_error,
+                event.error_detail.clone(),
+            ));
+            async {}
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "audit".to_owned(),
+            ..Default::default()
+        },
+    )?;
     Ok((approvals, audit))
+}
+
+/// `arguments` with an order number written `#42` read as `42`; `None` when
+/// there is nothing to rewrite.
+fn normalized_order(arguments: &Metadata) -> Option<Metadata> {
+    let order = arguments.get("order")?.as_str()?.strip_prefix('#')?;
+    let mut rewritten = arguments.clone();
+    rewritten.insert("order".to_owned(), Value::from(order));
+    Some(rewritten)
 }
 
 /// The checks of the room's rows: the round's text, a start per call, the
@@ -251,8 +302,9 @@ fn check_each_call(
             .to_owned()
     };
     checks.expect(
-        "lookup_order is served, and the model reads its result",
+        "lookup_order is served with the order number the hook rewrote, and the model reads its result",
         outcome("lookup_order") == Some(ToolCallOutcome::Served)
+            && end("lookup_order").is_some_and(|row| row.arguments.get("order") == Some(&json!("42")))
             && read("lookup_order") == r#"{"order":"42","shipped":"Monday","status":"shipped"}"#,
     );
     checks.expect(

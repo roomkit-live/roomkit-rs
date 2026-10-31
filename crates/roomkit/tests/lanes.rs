@@ -28,8 +28,8 @@ use roomkit::testing::{
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, HookTrigger, MuteOptions, PauseRoomOptions, ProcessInboundOptions,
-    RoomFilter, RoomKit, RoomKitOptions,
+    CreateRoomOptions, HookExecution, HookOptions, HookTrigger, MuteOptions, PauseRoomOptions,
+    ProcessInboundOptions, RoomFilter, RoomKit, RoomKitOptions,
 };
 use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::{Barrier, Notify};
@@ -128,9 +128,15 @@ async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
         RecordingTransportOptions::default(),
     ))
     .unwrap();
-    kit.observe("welcome", HookTrigger::OnRoomCreated, |_, _| {
-        tokio::time::sleep(Duration::from_millis(50))
-    })
+    kit.hook(
+        HookTrigger::OnRoomCreated,
+        |_: RoomEvent, _| tokio::time::sleep(Duration::from_millis(50)),
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "welcome".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let tap = EventTap::on(&kit, &STEP_2_EVENTS);
     let start = Arc::new(Barrier::new(2));
@@ -355,12 +361,20 @@ async fn a_call_dropped_during_its_delivery_still_delivers_its_event() {
     .unwrap();
     let broadcast_over = Arc::new(Notify::new());
     let observed = Arc::clone(&broadcast_over);
-    kit.observe("audit", HookTrigger::AfterBroadcast, move |event, _| {
-        if text_of(&event.content) == "Bonjour" {
-            observed.notify_one();
-        }
-        ready(())
-    })
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        move |event: RoomEvent, _| {
+            if text_of(&event.content) == "Bonjour" {
+                observed.notify_one();
+            }
+            ready(())
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "audit".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let tap = EventTap::on(&kit, &["event_processed"]);
     let room = room_id();
@@ -509,10 +523,18 @@ async fn a_call_dropped_during_its_agent_s_turn_cuts_the_turn_and_delivers_its_e
     }
     let observed = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&observed);
-    kit.observe("audit", HookTrigger::AfterBroadcast, move |event, _| {
-        seen.lock().unwrap().push(text_of(&event.content));
-        ready(())
-    })
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        move |event: RoomEvent, _| {
+            seen.lock().unwrap().push(text_of(&event.content));
+            ready(())
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "audit".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let room = room_id();
     let call = kit.process_inbound(
@@ -573,14 +595,21 @@ async fn the_delivery_cursor_follows_the_lane() {
     ))
     .unwrap();
     kit.register_channel(slow.clone()).unwrap();
-    kit.before_broadcast("no_spam", |event, _| {
-        let spam = text_of(&event.content) == "spam";
-        ready(Ok(if spam {
-            HookResult::block("spam", BlockOptions::default())
-        } else {
-            HookResult::allow(AllowOptions::default())
-        }))
-    })
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |event: RoomEvent, _| {
+            let spam = text_of(&event.content) == "spam";
+            ready(Ok(if spam {
+                HookResult::block("spam", BlockOptions::default())
+            } else {
+                HookResult::allow(AllowOptions::default())
+            }))
+        },
+        HookOptions {
+            name: "no_spam".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let room = room_id();
     let store = kit.store();
@@ -649,15 +678,22 @@ async fn the_delivery_cursor_follows_the_lane() {
 async fn a_call_dropped_under_the_room_lock_leaves_the_lane_and_the_lock_free() {
     let kit = room_with_agent().await;
     let hung = Arc::new(AtomicBool::new(false));
-    kit.before_broadcast("slow_scan", move |_, _| {
-        let first = !hung.swap(true, Ordering::SeqCst);
-        async move {
-            if first {
-                tokio::time::sleep(Duration::from_secs(3600)).await;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |_: RoomEvent, _| {
+            let first = !hung.swap(true, Ordering::SeqCst);
+            async move {
+                if first {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
             }
-            Ok(HookResult::allow(AllowOptions::default()))
-        }
-    })
+        },
+        HookOptions {
+            name: "slow_scan".to_owned(),
+            ..Default::default()
+        },
+    )
     .unwrap();
     let dropped = tokio::time::timeout(
         Duration::from_millis(50),
