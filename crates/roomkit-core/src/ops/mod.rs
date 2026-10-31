@@ -103,6 +103,7 @@ impl Cx<'_> {
             event: Box::new(payload.clone()),
             context: Box::new(context.clone()),
             after_delivery: None,
+            then: None,
         });
     }
 
@@ -145,8 +146,28 @@ impl Cx<'_> {
         budget: &ReentryBudget,
         floor: u32,
     ) {
+        self.fire_within_then(trigger, payload, context, (budget, floor), None);
+    }
+
+    /// Fires `trigger`'s observers of `payload` as [`fire_within`] does, in
+    /// the work of `budget` at least `floor` deep, then publishes `then`
+    /// once every one has ended; at once when no hook observes it, as the
+    /// Python implementation's `_fire_async_hooks(then=...)` does.
+    ///
+    /// [`fire_within`]: Self::fire_within
+    pub(crate) fn fire_within_then(
+        &mut self,
+        trigger: HookTrigger,
+        payload: &RoomEvent,
+        context: &RoomContext,
+        (budget, floor): (&ReentryBudget, u32),
+        then: Option<FrameworkEvent>,
+    ) {
         let hooks = self.config.hooks.observers(trigger, payload);
         if hooks.is_empty() {
+            if let Some(event) = then {
+                self.io.notify(Notice::FrameworkEvent(event));
+            }
             return;
         }
         self.io.notify(Notice::AsyncHooks {
@@ -158,6 +179,7 @@ impl Cx<'_> {
                 budget: budget.clone(),
                 floor,
             }),
+            then,
         });
     }
 

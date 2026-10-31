@@ -437,8 +437,7 @@ mod an_accepted_instruction {
             [
                 "on_event ai <- evt_2",
                 "leave lane room_1 evt_2",
-                "fire after_broadcast",
-                "emit event_processed",
+                "fire after_broadcast, then emit event_processed",
             ]
         );
     }

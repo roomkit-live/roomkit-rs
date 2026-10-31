@@ -11,7 +11,8 @@ use roomkit_core::model::{
 };
 use roomkit_core::ops::{
     AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, Environment,
-    HookAnswer, HookRequest, KIT_CLOSED, Notice, Outcome, StoreOutcome, StoreRequest,
+    FrameworkEvent as CoreEvent, HookAnswer, HookRequest, KIT_CLOSED, Notice, Outcome,
+    StoreOutcome, StoreRequest,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookTrigger};
@@ -416,13 +417,23 @@ pub(super) fn perform<S: ConversationStore>(
             event,
             context,
             after_delivery,
+            then,
         } => {
-            for hook in hooks {
-                let Some(observing) = observe(inner, trigger, hook, &event, &context) else {
-                    continue;
-                };
+            let observers: Vec<_> = hooks
+                .into_iter()
+                .filter_map(|hook| observe(inner, trigger, hook, &event, &context))
+                .collect();
+            let countdown = then.map(|then| Countdown::new(inner, observers.len(), then));
+            for observing in observers {
+                let ticket = countdown.as_ref().map(Countdown::ticket);
                 let observing =
                     in_its_work(trigger, &event.room_id, after_delivery.as_ref(), observing);
+                let observing = async move {
+                    observing.await;
+                    if let Some(handled) = ticket.and_then(Ticket::finish) {
+                        handled.wait().await;
+                    }
+                };
                 // Nothing waits for an observer: a close one calls spares it
                 // alone; the kit's close gives it its grace, then cuts it.
                 if inner.tasks.spawn_alone(Kind::Observer, observing).is_none() {
@@ -433,9 +444,88 @@ pub(super) fn perform<S: ConversationStore>(
                     );
                 }
             }
+            if let Some(countdown) = countdown {
+                // No observer could run: the event follows at once.
+                return countdown.ticket().finish();
+            }
         }
     }
     None
+}
+
+/// The observers a framework event follows, as the Python implementation's
+/// `then` follows its hooks (RFC §8.2 `event_processed`): the last of them
+/// to end, finished, failed or cut, publishes it. No task of its own waits
+/// for them, which a close called from one of them would wait for in turn.
+struct Countdown {
+    shared: Arc<CountdownState>,
+}
+
+struct CountdownState {
+    left: std::sync::atomic::AtomicUsize,
+    then: std::sync::Mutex<Option<CoreEvent>>,
+    publish: Box<dyn Fn(CoreEvent) -> Option<Handled> + Send + Sync>,
+}
+
+/// One observer's place in a [`Countdown`]: its end counts, however it
+/// ends.
+struct Ticket {
+    shared: Option<Arc<CountdownState>>,
+}
+
+impl Countdown {
+    /// A countdown over `observers` observers, then `then`, the event
+    /// published by `inner`; one more ticket stands for the firing itself,
+    /// which [`perform`] ends once every observer is spawned.
+    fn new<S: ConversationStore>(inner: &Arc<Inner<S>>, observers: usize, then: CoreEvent) -> Self {
+        let kit = Arc::downgrade(inner);
+        Self {
+            shared: Arc::new(CountdownState {
+                left: std::sync::atomic::AtomicUsize::new(observers.saturating_add(1)),
+                then: std::sync::Mutex::new(Some(then)),
+                publish: Box::new(move |event| kit.upgrade().and_then(|inner| inner.emit(event))),
+            }),
+        }
+    }
+
+    fn ticket(&self) -> Ticket {
+        Ticket {
+            shared: Some(Arc::clone(&self.shared)),
+        }
+    }
+}
+
+impl Ticket {
+    /// Counts this end: the event's handlers to wait for when it was the
+    /// last.
+    fn finish(mut self) -> Option<Handled> {
+        let shared = self.shared.take()?;
+        shared.count()
+    }
+}
+
+impl Drop for Ticket {
+    fn drop(&mut self) {
+        // An observer that panicked or was cut ends all the same.
+        if let Some(shared) = self.shared.take() {
+            drop(shared.count());
+        }
+    }
+}
+
+impl CountdownState {
+    fn count(&self) -> Option<Handled> {
+        let previous = self.left.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        if previous != 1 {
+            return None;
+        }
+        let then = self
+            .then
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()?;
+        (self.publish)(then)
+    }
 }
 
 /// `observing`, a hook's body on `trigger`, run as the work

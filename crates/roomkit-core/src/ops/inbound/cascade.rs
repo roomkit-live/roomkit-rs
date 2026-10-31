@@ -323,16 +323,20 @@ impl Machine {
             return self.dropped(cx, reason, set);
         }
         let event = set.event();
-        report::after_broadcast(cx, event, set.context(), &self.cascade.budget);
-        match set.kind() {
-            SetKind::Root => self.settle_root(cx, set, &outcome),
+        let processed = match set.kind() {
+            SetKind::Root => {
+                self.settle_root(cx, set, &outcome);
+                true
+            }
             SetKind::Adopted(entry) => {
                 report::root_deliveries(cx, event, &outcome);
                 self.adopted_deliveries
                     .insert(entry, delivered(set, &outcome));
+                true
             }
-            SetKind::Response | SetKind::Injected => {}
-        }
+            SetKind::Response | SetKind::Injected => false,
+        };
+        report::after_broadcast(cx, event, set.context(), &self.cascade.budget, processed);
         self.side_effects
             .collect(outcome.tasks, outcome.observations, Some(set.context()));
         self.side_effects.update_metadata(outcome.metadata_updates);

@@ -160,6 +160,7 @@ pub(crate) fn report_after_release(
         event: Box::new(payload),
         context: Box::new(context.clone()),
         after_delivery: None,
+        then: None,
     })
 }
 

@@ -220,6 +220,11 @@ pub enum Notice {
         /// while it runs (RFC §8.3, §9.2, §9.5.1, §10.1 step 16, §10.3);
         /// `None` for any other.
         after_delivery: Option<AfterDelivery>,
+        /// The framework event to publish once every hook has ended, as the
+        /// Python implementation's `then`: an inbound event's
+        /// `event_processed`, once its `AFTER_BROADCAST` hooks are over
+        /// (RFC §8.2).
+        then: Option<FrameworkEvent>,
     },
     /// Stop reading the stream the [`ChannelRequest::ReadStream`] effect
     /// `effect` reads, its turn cut from outside (RFC §10.1 "Explicit

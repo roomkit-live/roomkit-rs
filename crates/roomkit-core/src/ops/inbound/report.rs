@@ -13,8 +13,9 @@ use crate::rules::hook_chain::{HookIncident, HookProblem};
 use crate::rules::hook_registry::HookTrigger;
 
 /// Reports the deliveries of the inbound event itself: each success and
-/// failure, a partial failure when any target failed, then the event's end
-/// (RFC §8.2). A response's deliveries are not reported.
+/// failure, and a partial failure when any target failed (RFC §8.2); its
+/// end follows its `AFTER_BROADCAST` hooks ([`after_broadcast`]). A
+/// response's deliveries are not reported.
 pub(super) fn root_deliveries(cx: &mut Cx<'_>, event: &RoomEvent, outcome: &SetOutcome) {
     let room_id = &event.room_id;
     for channel_id in &outcome.delivered {
@@ -50,25 +51,32 @@ pub(super) fn root_deliveries(cx: &mut Cx<'_>, event: &RoomEvent, outcome: &SetO
             },
         );
     }
-    notify(
-        cx,
-        FrameworkEvent::EventProcessed {
-            room_id: room_id.clone(),
-            event_id: event.id.clone(),
-        },
-    );
 }
 
 /// Fires the `AFTER_BROADCAST` observers of an event whose delivery set
 /// completed (RFC §10.1 step 16), their bodies the work of the cascade
-/// drawing on `budget` while they run (gap G-087).
+/// drawing on `budget` while they run (gap G-087). For the inbound event,
+/// `processed`, its `event_processed` follows once they are over, at once
+/// when none observes it, as the Python implementation emits it (RFC §8.2).
 pub(super) fn after_broadcast(
     cx: &mut Cx<'_>,
     event: &RoomEvent,
     context: &RoomContext,
     budget: &ReentryBudget,
+    processed: bool,
 ) {
-    cx.fire_as_cascade_work(HookTrigger::AfterBroadcast, event, context, budget, 0);
+    let then = processed.then(|| FrameworkEvent::EventProcessed {
+        room_id: event.room_id.clone(),
+        event_id: event.id.clone(),
+    });
+    let floor = event.chain_depth.saturating_add(1);
+    cx.fire_within_then(
+        HookTrigger::AfterBroadcast,
+        event,
+        context,
+        (budget, floor),
+        then,
+    );
 }
 
 /// Fires the mutation trigger of an edit or a delete committed as `change`,

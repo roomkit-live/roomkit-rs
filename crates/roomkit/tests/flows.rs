@@ -376,6 +376,56 @@ async fn an_after_broadcast_observer_runs_after_the_delivery() {
     assert_eq!(next(&mut observed).await, "Bonjour");
 }
 
+/// RFC §8.2: an inbound event's `event_processed` follows its
+/// `AFTER_BROADCAST` hooks, once they are over, as the Python
+/// implementation emits it (RMK-1020).
+#[tokio::test]
+async fn event_processed_follows_the_after_broadcast_hooks() {
+    let (kit, sms) = sms_and_agent().await;
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (hooked, released) = (Arc::clone(&order), Arc::clone(&release));
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        move |event: RoomEvent, _| {
+            let (hooked, released) = (Arc::clone(&hooked), Arc::clone(&released));
+            async move {
+                if event.source.channel_id == channel("sms") {
+                    released.notified().await;
+                    hooked.lock().unwrap().push("after_broadcast");
+                }
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "audit".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let noted = Arc::clone(&order);
+    kit.on("event_processed", move |_| {
+        noted.lock().unwrap().push("event_processed");
+        ready(())
+    });
+    kit.process_inbound(
+        message(&sms, "Hello"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    release.notify_one();
+    roomkit::testing::idle(&kit).await;
+    assert_eq!(
+        order.lock().unwrap().clone(),
+        ["after_broadcast", "event_processed"]
+    );
+    kit.close().await.unwrap();
+}
+
 /// RFC §9.2, §9.3: a hook registered ASYNC on `BEFORE_BROADCAST` observes
 /// the event the SYNC chain allowed, as its hooks left it.
 #[tokio::test]

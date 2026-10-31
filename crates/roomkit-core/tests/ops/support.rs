@@ -923,13 +923,17 @@ impl Sim {
             .collect()
     }
 
-    /// The framework events emitted, in order.
+    /// The framework events emitted, in order; one that follows a firing's
+    /// hooks as it is fired.
     pub(crate) fn framework_events(&self) -> Vec<&FrameworkEvent> {
         self.notices
             .iter()
             .filter_map(|notice| match notice {
-                Notice::FrameworkEvent(event) => Some(event),
-                Notice::AsyncHooks { .. } | Notice::StopReading { .. } => None,
+                Notice::FrameworkEvent(event)
+                | Notice::AsyncHooks {
+                    then: Some(event), ..
+                } => Some(event),
+                Notice::AsyncHooks { then: None, .. } | Notice::StopReading { .. } => None,
             })
             .collect()
     }
@@ -1869,7 +1873,20 @@ fn entry_name(entry: &Entry) -> String {
 fn journal_line(notice: &Notice) -> String {
     match notice {
         Notice::FrameworkEvent(event) => format!("emit {}", event_name(event)),
-        Notice::AsyncHooks { trigger, .. } => format!("fire {}", trigger_name(*trigger)),
+        Notice::AsyncHooks {
+            trigger,
+            then: None,
+            ..
+        } => format!("fire {}", trigger_name(*trigger)),
+        Notice::AsyncHooks {
+            trigger,
+            then: Some(event),
+            ..
+        } => format!(
+            "fire {}, then emit {}",
+            trigger_name(*trigger),
+            event_name(event)
+        ),
         Notice::StopReading { effect } => format!("stop reading {effect:?}"),
     }
 }
