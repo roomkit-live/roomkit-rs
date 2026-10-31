@@ -10,7 +10,6 @@
 //! kit a strategy of its own in
 //! [`RoomKitOptions::inbound_router`](crate::RoomKitOptions::inbound_router).
 
-use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
@@ -18,14 +17,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use roomkit_core::model::{
-    ChannelId, ChannelType, Identity, Metadata, RoomContext, RoomId, RoomStatus,
+    ChannelId, ChannelType, Identity, Metadata, ParticipantId, RoomContext, RoomId, RoomStatus,
 };
 use roomkit_core::rules::addresses::{AddressForm, Addressing};
 use roomkit_core::rules::routing::{self, Candidate, Refusal, RouteQuery, Sender};
 
 use crate::registered::RegisteredChannel;
-use crate::store::rooms::rooms_read_by;
-use crate::store::{self, ConversationStore, RoomFilter, StoreError};
+use crate::store::{
+    ConversationStore, EventFilter, FindRoomIdByBindingOptions, FindRoomIdByParticipantOptions,
+    FindRoomIdsByChannelOptions, ListEventsOptions, RoomFilter, StoreError,
+};
 
 /// What a router failed with. The message fails with it, before anything is
 /// written (RFC §10.4).
@@ -44,6 +45,10 @@ pub type ChannelOf = Arc<dyn Fn(&ChannelId) -> Option<Arc<dyn RegisteredChannel>
 /// The sender name the framework's own messages carry, which names no
 /// correspondent (RFC §10.4).
 const SYSTEM_SENDER: &str = "system";
+
+/// How many events a read of who a room heard on a channel asks the store
+/// for at a time, as Python's `_HISTORY_PAGE`.
+const HISTORY_PAGE: u64 = 200;
 
 /// A routing strategy (RFC §10.4 `InboundRoomRouter`): the room a message
 /// that names none belongs to, or `None` for a new room.
@@ -128,12 +133,16 @@ pub struct RouteOptions {
 /// one room bound to the channel, ACTIVE or PAUSED with a `group` binding,
 /// when it admits the sender, else a new room (gap G-045).
 ///
-/// It reads every ACTIVE and PAUSED room of the caller's organization the
-/// channel reaches, with its bindings and participants, and what the room
-/// has heard on the channel when it is the one room bound to it step 3
-/// considers, then decides on what it read, comparing addresses in the
-/// form of the channel `channel_of` gives; without one, addresses compare
-/// as written and no binding's recipient names anyone. A strategy wrapping
+/// It reads the store as the Python implementation's router does: step 1
+/// through `find_room_id_by_binding` (the channel's recipient key naming a
+/// binding's recipient), then `find_room_id_by_participant`, among the
+/// ACTIVE and PAUSED rooms of the caller's organization; step 3 through
+/// `find_room_ids_by_channel`, the ACTIVE rooms bound to the channel and
+/// the PAUSED ones bound as a `group`. The one room step 3 reads is read
+/// whole, with who it heard on the channel, and admits the sender as the
+/// rules say ([`rules::routing`](roomkit_core::rules::routing)), comparing
+/// addresses in the form of the channel `channel_of` gives; without one,
+/// addresses compare as written and no binding's recipient names anyone. A strategy wrapping
 /// the default calls its [`route`](InboundRoomRouter::route) for the rooms
 /// it does not decide itself. A room step 3 refuses because its binding
 /// holds a value under the recipient key that is not a recipient is logged
@@ -225,8 +234,26 @@ impl<S: ConversationStore> InboundRoomRouter for DefaultInboundRoomRouter<S> {
     ) -> RouterFuture<'a> {
         let query = self.query(channel_id, channel_type, options);
         Box::pin(async move {
-            let candidates = candidates(&*self.store, &query).await?;
-            let routed = routing::routed(&query, &candidates);
+            let store = &*self.store;
+            if let Some(room_id) = senders_room(store, &query).await? {
+                return Ok(Some(room_id));
+            }
+            let bound = step_three_rooms(store, &query).await?;
+            let [sole] = bound.as_slice() else {
+                if bound.len() > 1 {
+                    tracing::debug!(
+                        target: "roomkit::router",
+                        channel_id = %query.channel_id,
+                        "the channel is bound to several active or paused group rooms: the \
+                         router does not guess which one the message belongs to"
+                    );
+                }
+                return Ok(None);
+            };
+            let Some(candidate) = candidate(store, sole, &query).await? else {
+                return Ok(None);
+            };
+            let routed = routing::routed(&query, &[candidate]);
             if let Some((room_id, Refusal::NotARecipient(kind))) = &routed.refused {
                 not_a_recipient(room_id, &query, kind);
             }
@@ -279,70 +306,128 @@ fn not_a_recipient(room_id: &RoomId, query: &RouteQuery, kind: &str) {
     );
 }
 
-/// The rooms the default strategy reads for `query`: every ACTIVE and
-/// PAUSED room of the caller's organization the channel reaches, binding it
-/// or holding a participant reached through it, with what the room heard on
-/// the channel when it is the one room bound to it step 3 considers (gap
-/// G-045).
-///
-/// The rooms are listed once per status, so that the router reads no
-/// CLOSED or ARCHIVED room, which pile up on a channel over time. The
-/// PAUSED rooms are listed first: a room a message resumes between the two
-/// lists is in both, and read once. A room paused between them is in
-/// neither, and the message is routed without it (gap G-055).
-///
-/// # Errors
-///
-/// Returns the store's error when a read fails.
-async fn candidates<S: ConversationStore>(
+/// Step 1 (RFC §10.4): the newest ACTIVE or PAUSED room of the caller's
+/// organization that is the sender's conversation on the channel, as
+/// Python's `_senders_room` reads it: the room whose binding of the
+/// channel names the sender, as its correspondent or, naming none, as its
+/// recipient under the channel's recipient key (RFC §5.7), else the room
+/// holding a participant the sender is, reached through the channel (RFC
+/// §5.5), the sender named by their address or the identity resolved for
+/// it; `None` for a message with no address.
+async fn senders_room<S: ConversationStore>(
     store: &S,
     query: &RouteQuery,
-) -> Result<Vec<Candidate>, StoreError> {
-    let mut candidates = Vec::new();
-    let mut read = HashSet::new();
-    for status in [RoomStatus::Paused, RoomStatus::Active] {
-        let filter = RoomFilter {
-            statuses: Some(vec![status]),
-            organization_id: query.organization_id.clone(),
-        };
-        for room in rooms_read_by(store, &filter).await? {
-            if !read.insert(room.id.clone()) {
-                continue;
-            }
-            let (room, bindings, participants) = store.load_room_context(&room.id).await?;
-            let Some(room) = room else {
-                continue;
-            };
-            let reached = bindings
-                .iter()
-                .any(|binding| binding.channel_id == query.channel_id)
-                || participants
-                    .iter()
-                    .any(|participant| participant.connected_via.contains(&query.channel_id));
-            if reached {
-                candidates.push(Candidate::new(RoomContext {
-                    room,
-                    bindings,
-                    participants,
-                    recent_events: Vec::new(),
-                    author_register: None,
-                }));
-            }
-        }
-    }
-    let bound: Vec<&Candidate> = candidates
-        .iter()
-        .filter(|candidate| routing::step_three_considers(query, candidate))
-        .collect();
-    let Some(sole) = routing::sole_bound(query, &bound).map(|sole| sole.room.id.clone()) else {
-        return Ok(candidates);
+) -> Result<Option<RoomId>, StoreError> {
+    let Some(address) = query.sender.address.as_deref() else {
+        return Ok(None);
     };
-    let events = store::whole_timeline(store, &sole).await?;
-    if let Some(candidate) = candidates
-        .iter_mut()
-        .find(|candidate| candidate.room.id == sole)
-    {
-        candidate.heard = routing::heard(&events, &query.channel_id);
+    let step_one = RoomFilter {
+        statuses: Some(vec![RoomStatus::Active, RoomStatus::Paused]),
+        organization_id: query.organization_id.clone(),
+    };
+    let by_binding = FindRoomIdByBindingOptions {
+        identity_id: query.sender.identity_id.clone(),
+        room_filter: Some(step_one.clone()),
+        recipient_key: query.form.recipient_key.clone(),
+    };
+    let found = store
+        .find_room_id_by_binding(&query.channel_id, address, by_binding)
+        .await?;
+    if found.is_some() {
+        return Ok(found);
     }
-    Ok(candidates)
+    let by_participant = FindRoomIdByParticipantOptions {
+        identity_id: query.sender.identity_id.clone(),
+        room_filter: Some(step_one),
+    };
+    store
+        .find_room_id_by_participant(&query.channel_id, address, by_participant)
+        .await
+}
+
+/// The rooms step 3 reads (RFC §10.4), as Python's `_step_three_rooms`:
+/// up to two, the ACTIVE rooms bound to the channel, then the PAUSED ones
+/// whose binding of it is `group`, a group's conversation being the
+/// channel's; any other PAUSED room is no one's to be admitted into.
+async fn step_three_rooms<S: ConversationStore>(
+    store: &S,
+    query: &RouteQuery,
+) -> Result<Vec<RoomId>, StoreError> {
+    let of = |status| RoomFilter {
+        statuses: Some(vec![status]),
+        organization_id: query.organization_id.clone(),
+    };
+    let active = FindRoomIdsByChannelOptions {
+        room_filter: Some(of(RoomStatus::Active)),
+        ..FindRoomIdsByChannelOptions::default()
+    };
+    let mut rooms = store
+        .find_room_ids_by_channel(&query.channel_id, active)
+        .await?;
+    if rooms.len() > 1 {
+        return Ok(rooms);
+    }
+    let paused_groups = FindRoomIdsByChannelOptions {
+        room_filter: Some(of(RoomStatus::Paused)),
+        group: Some(true),
+        ..FindRoomIdsByChannelOptions::default()
+    };
+    rooms.extend(
+        store
+            .find_room_ids_by_channel(&query.channel_id, paused_groups)
+            .await?,
+    );
+    rooms.truncate(2);
+    Ok(rooms)
+}
+
+/// The one room step 3 reads, as the rules read it: its bindings, its
+/// participants, and who it heard on the channel; `None` once the store
+/// no longer holds it.
+async fn candidate<S: ConversationStore>(
+    store: &S,
+    room_id: &RoomId,
+    query: &RouteQuery,
+) -> Result<Option<Candidate>, StoreError> {
+    let (room, bindings, participants) = store.load_room_context(room_id).await?;
+    let Some(room) = room else {
+        return Ok(None);
+    };
+    let mut candidate = Candidate::new(RoomContext {
+        bindings,
+        participants,
+        ..RoomContext::new(room)
+    });
+    candidate.heard = heard_on(store, room_id, &query.channel_id).await?;
+    Ok(Some(candidate))
+}
+
+/// Who the room heard on `channel_id`: the participants its received
+/// events of the channel name, read a page at a time, as Python's
+/// `_heard_from_other` reads them.
+async fn heard_on<S: ConversationStore>(
+    store: &S,
+    room_id: &RoomId,
+    channel_id: &ChannelId,
+) -> Result<Vec<ParticipantId>, StoreError> {
+    let mut heard = Vec::new();
+    let mut offset = 0;
+    loop {
+        let options = ListEventsOptions {
+            offset,
+            limit: HISTORY_PAGE,
+            event_filter: Some(EventFilter {
+                source_channel_id: Some(channel_id.clone()),
+                ..EventFilter::default()
+            }),
+            ..ListEventsOptions::default()
+        };
+        let page = store.list_events(room_id, options).await?;
+        heard.extend(routing::heard(&page, channel_id));
+        let read = u64::try_from(page.len()).unwrap_or(u64::MAX);
+        if read < HISTORY_PAGE {
+            return Ok(heard);
+        }
+        offset += read;
+    }
 }

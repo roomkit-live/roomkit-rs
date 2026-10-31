@@ -1246,19 +1246,31 @@ mod bindings {
         );
     }
 
-    /// `get_binding` of a channel the room does not bind fails, as the
-    /// Python implementation's raises `ChannelNotFoundError`.
+    /// `get_binding` of a channel the room does not bind fails, in a room
+    /// the store does not hold too, as the Python implementation's raises
+    /// `ChannelNotFoundError` (lot 1's review-A probe 10).
     #[tokio::test]
     async fn get_binding_of_an_unbound_channel_fails() {
         let (kit, _sms, _agent) = sms_and_agent().await;
-        assert_eq!(
-            kit.get_binding(&room_id(), &channel("ws"), GetBindingOptions::default())
-                .await,
-            Err(RoomKitError::ChannelNotFound {
-                room_id: room_id(),
-                channel_id: channel("ws")
+        let missing = RoomId::new("room_9").unwrap();
+        let unbound = [(room_id(), channel("ws")), (missing, channel("sms"))];
+        let mut reads = Vec::new();
+        for (room, bound) in &unbound {
+            reads.push(
+                kit.get_binding(room, bound, GetBindingOptions::default())
+                    .await,
+            );
+        }
+        let refused: Vec<_> = unbound
+            .into_iter()
+            .map(|(room_id, channel_id)| {
+                Err(RoomKitError::ChannelNotFound {
+                    room_id,
+                    channel_id,
+                })
             })
-        );
+            .collect();
+        assert_eq!(reads, refused);
     }
 
     /// RFC §5.5: `list_members` gives the ACTIVE participants, the others
