@@ -199,7 +199,10 @@ async fn a_turn_never_accepted_fails_at_the_accept_timeout() {
     let kit = kit_with(agent.clone()).await;
     crate::testing::set_turn_timeouts(
         &kit,
-        TurnTimeouts::new().with_accept(Duration::from_secs(4)),
+        TurnTimeouts {
+            accept: Duration::from_secs(4),
+            ..Default::default()
+        },
     );
     kit.inner
         .turns

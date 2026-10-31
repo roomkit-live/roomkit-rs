@@ -16,8 +16,8 @@ use pretty_assertions::assert_eq;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    DirectEvent, EventContent, EventType, HookResult, InboundMessage, RoomContext, RoomEvent,
-    RoomId, TextContent, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    EventContent, EventType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    TextContent, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
@@ -821,12 +821,18 @@ async fn an_event_a_tool_sends_is_stored_after_the_round_s_text_and_start() {
     let definition = ToolDefinition::new("notify", "Notify", json!({ "type": "object" }));
     let tools = Tools::new().tool(definition, |_call, context| {
         let turn = context.turn().cloned();
+        let room = context.room_id.clone();
         async move {
             if let Some(turn) = turn {
-                let note = DirectEvent::new(channel("web"), TextContent::new("Noted."));
-                turn.send_event(note)
-                    .await
-                    .map_err(|error| roomkit_ai::ToolError::raised(&error))?;
+                let note = TextContent::new("Noted.");
+                turn.send_event(
+                    &room,
+                    &channel("web"),
+                    note,
+                    roomkit::SendEventOptions::default(),
+                )
+                .await
+                .map_err(|error| roomkit_ai::ToolError::raised(&error))?;
             }
             Ok(ToolOutput::Text("done".to_owned()))
         }

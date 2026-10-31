@@ -50,7 +50,7 @@ use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
 pub(crate) use self::codec::send_event_arguments;
-pub use self::error::TurnError;
+pub(crate) use self::error::TurnError;
 pub(crate) use self::error::{CHANNEL_ERROR, TURN_LINK_ERROR, record_of, variant_name};
 pub(crate) use self::executor::HostLink;
 use self::memory::Request;
@@ -395,7 +395,7 @@ fn cross<T: Serialize + serde::de::DeserializeOwned>(
     carried: Carried,
     message: &T,
 ) -> Result<T, RoomKitError> {
-    let failed = |why: String| RoomKitError::Turn(TurnError::new("frame_invalid", why));
+    let failed = |why: String| TurnError::new("frame_invalid", why).into_kit_error();
     let raw = serde_json::to_string(message).map_err(|error| failed(error.to_string()))?;
     if raw.len() > MAX_MESSAGE_BYTES {
         return Err(failed(format!(

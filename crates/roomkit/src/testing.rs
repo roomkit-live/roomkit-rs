@@ -60,10 +60,7 @@ pub async fn idle<S>(kit: &RoomKit<S>) {
 /// keeps the bounds it started with.
 #[doc(hidden)]
 pub fn set_turn_timeouts<S>(kit: &RoomKit<S>, timeouts: TurnTimeouts) {
-    // The cancel bound is read as it is set: a field set directly is kept
-    // to a millisecond too, as `with_cancel` keeps it.
-    let timeouts = timeouts.with_cancel(timeouts.cancel);
-    kit.inner.turns.set_timeouts(timeouts);
+    kit.inner.turns.set_timeouts(timeouts.bounded());
 }
 
 /// A delivery a [`RecordingTransport`] made.

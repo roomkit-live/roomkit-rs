@@ -11,7 +11,7 @@ use roomkit::model::{
     EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent,
 };
 use roomkit::transcript::conversation;
-use roomkit::{Channel, ChannelDeclaration, ChannelError, EventDraft, current_turn};
+use roomkit::{Channel, ChannelDeclaration, ChannelError, EventDraft, current_turn_host};
 
 use serde_json::Value;
 
@@ -416,7 +416,7 @@ impl<P: AiProvider> Channel for AiAgent<P> {
             &context.room.id,
         )
         .await;
-        let turn = current_turn();
+        let turn = current_turn_host();
         let stands_alone = stands_alone(&event);
         let system_prompt = self.turn_system_prompt(&context, stands_alone);
         let tools = ToolContext::new(context.room.id.clone(), self.id().clone())

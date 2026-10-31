@@ -161,6 +161,7 @@ pub(crate) fn decode_loop_end(reason: String, usage: Metadata) -> ResponseItem {
 pub(crate) fn send_event_arguments(
     room_id: &RoomId,
     event: DirectEvent,
+    organization_id: Option<String>,
     floor: u32,
 ) -> Result<Metadata, Uncarried> {
     let arguments = SendEvent {
@@ -178,7 +179,7 @@ pub(crate) fn send_event_arguments(
         parent_event_id: event.parent_event_id,
         idempotency_key: event.idempotency_key,
         addressed_to: event.addressed_to,
-        organization_id: None,
+        organization_id,
         standalone: event.standalone,
     };
     match serde_json::to_value(arguments) {

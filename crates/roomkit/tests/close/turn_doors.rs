@@ -299,10 +299,9 @@ async fn a_tool_awaiting_the_close_runs_on_and_logs_nothing_after_it() {
 /// and notes what that verb came to in `notes`; a SYNC hook holds the
 /// note's pass a second, telling `entered`.
 async fn sibling_agent(kit: &RoomKit, notes: &Arc<Mutex<Vec<String>>>) {
-    use roomkit::model::DirectEvent;
     use roomkit::model::HookResult;
     use roomkit::model::hook::AllowOptions;
-    use roomkit::{HookExecution, HookSpec, HookTrigger, current_turn};
+    use roomkit::{HookExecution, HookSpec, HookTrigger, current_turn_host};
 
     let entered = Arc::new(Notify::new());
     let told = Arc::clone(&entered);
@@ -342,14 +341,23 @@ async fn sibling_agent(kit: &RoomKit, notes: &Arc<Mutex<Vec<String>>>) {
         )
         .tool(
             ToolDefinition::new("b_send", "Send.", json!({ "type": "object" })),
-            move |_call, _context| {
+            move |_call, context| {
                 let noting = Arc::clone(&noting_b);
                 async move {
-                    let turn = current_turn().unwrap();
-                    let note = DirectEvent::new(channel("agent"), TextContent::new("note"));
-                    let read = match turn.send_event(note).await {
+                    let turn = current_turn_host().unwrap();
+                    let note = TextContent::new("note");
+                    let read = match turn
+                        .send_event(
+                            &context.room_id,
+                            &channel("agent"),
+                            note,
+                            SendEventOptions::default(),
+                        )
+                        .await
+                    {
                         Ok(_) => "sent".to_owned(),
-                        Err(roomkit::RoomKitError::Turn(error)) => error.kind,
+                        Err(roomkit::RoomKitError::TurnLink { reason, .. }) => reason,
+                        Err(roomkit::RoomKitError::RemoteTurn { kind, .. }) => kind,
                         Err(error) => format!("{error:?}"),
                     };
                     noting.lock().unwrap().push(format!("b {read}"));

@@ -8,7 +8,7 @@
 //! messages and the executor's beat. The work runs in a copy of the
 //! context of the owner's call that submitted the turn, its stream in a
 //! copy of the context of the call that first read it, each within the
-//! turn's host ([`crate::current_turn`]).
+//! turn's host ([`crate::current_turn_host`]).
 //!
 //! - A `cancel` drops the work: the channel's `on_event()` or its stream,
 //!   and the tool calls it was running, which are reported `cancelled` to

@@ -57,33 +57,15 @@ impl TurnTimeouts {
         Self::default()
     }
 
-    /// The same bounds, the owner waiting `accept` for an executor.
-    #[must_use]
-    pub fn with_accept(mut self, accept: Duration) -> Self {
-        self.accept = accept.max(SHORTEST);
-        self
-    }
-
-    /// The same bounds, each side beating every `interval`.
-    #[must_use]
-    pub fn with_heartbeat_interval(mut self, interval: Duration) -> Self {
-        self.heartbeat_interval = interval.max(SHORTEST);
-        self
-    }
-
-    /// The same bounds, a side silent for `timeout` taken for lost.
-    #[must_use]
-    pub fn with_heartbeat_timeout(mut self, timeout: Duration) -> Self {
-        self.heartbeat_timeout = timeout.max(SHORTEST);
-        self
-    }
-
-    /// The same bounds, the owner waiting `cancel` for a cancelled turn's
-    /// end.
-    #[must_use]
-    pub fn with_cancel(mut self, cancel: Duration) -> Self {
-        self.cancel = cancel.max(SHORTEST);
-        self
+    /// The same bounds, each under a millisecond taken as a millisecond: a
+    /// zero would make a timer spin.
+    pub(crate) fn bounded(self) -> Self {
+        Self {
+            accept: self.accept.max(SHORTEST),
+            heartbeat_interval: self.heartbeat_interval.max(SHORTEST),
+            heartbeat_timeout: self.heartbeat_timeout.max(SHORTEST),
+            cancel: self.cancel.max(SHORTEST),
+        }
     }
 
     /// The interval each side beats at, never zero.
@@ -91,10 +73,11 @@ impl TurnTimeouts {
         self.heartbeat_interval.max(SHORTEST)
     }
 
-    /// How many intervals in a row with no message make the other side
-    /// lost: counted per interval, so a stall of the counting side counts
-    /// once.
-    pub(crate) fn silent_intervals(&self) -> u32 {
+    /// How many intervals in a row with no message make a side lost,
+    /// Python's `silent_intervals`: `heartbeat_timeout` over
+    /// `heartbeat_interval`, rounded, 1 at least. Counted per interval, so a
+    /// stall of the counting side's own loop counts once.
+    pub fn silent_intervals(&self) -> u32 {
         intervals(self.heartbeat_timeout, self.interval())
     }
 
@@ -191,12 +174,24 @@ mod tests {
 
     #[test]
     fn a_zero_is_taken_as_a_millisecond() {
-        let timeouts = TurnTimeouts::new()
-            .with_heartbeat_interval(Duration::ZERO)
-            .with_heartbeat_timeout(Duration::ZERO);
+        let timeouts = TurnTimeouts {
+            accept: Duration::ZERO,
+            heartbeat_interval: Duration::ZERO,
+            heartbeat_timeout: Duration::ZERO,
+            cancel: Duration::ZERO,
+        }
+        .bounded();
         assert_eq!(
-            (timeouts.interval(), timeouts.silent_intervals()),
-            (Duration::from_millis(1), 1)
+            (timeouts, timeouts.silent_intervals()),
+            (
+                TurnTimeouts {
+                    accept: Duration::from_millis(1),
+                    heartbeat_interval: Duration::from_millis(1),
+                    heartbeat_timeout: Duration::from_millis(1),
+                    cancel: Duration::from_millis(1),
+                },
+                1
+            )
         );
     }
 }

@@ -247,13 +247,25 @@ impl HostLink {
         }
     }
 
+    /// Whether the turn it serves still runs.
+    pub(crate) fn is_open(&self) -> bool {
+        self.open.load(Ordering::Acquire)
+    }
+
+    /// Whether a verb can still reach the owner: during the turn, or after
+    /// it as a `room_call` while the kit's turn backend lives.
+    pub(crate) fn reaches_owner(&self) -> bool {
+        self.is_open() || self.turns.strong_count() > 0
+    }
+
     /// Runs `verb` with `arguments` on the owner, the turn's work at least
     /// `floor` deep: its result.
     ///
     /// # Errors
     ///
     /// What the verb raised on the owner, rebuilt; a link's failure, or a
-    /// verb refused, as [`RoomKitError::Turn`].
+    /// verb refused, as [`RoomKitError::RemoteTurn`] or
+    /// [`RoomKitError::TurnLink`].
     pub(crate) async fn verb(
         &self,
         verb: &str,
@@ -285,10 +297,11 @@ impl HostLink {
         };
         if let Err(Uncarried(why)) = self.sender.send(&frame) {
             self.withdraw(&call_id, false);
-            return Err(RoomKitError::Turn(TurnError::new(
+            return Err(TurnError::new(
                 "TypeError",
                 format!("the arguments of verb {verb:?} cannot cross the turn backend: {why}"),
-            )));
+            )
+            .into_kit_error());
         }
         let withdrawn = Withdraw {
             link: self,
@@ -297,10 +310,10 @@ impl HostLink {
         let result = answered.await;
         withdrawn.disarm();
         result.unwrap_or_else(|_gone| {
-            Err(RoomKitError::Turn(TurnError::new(
-                "owner_lost",
-                "the turn ended before the verb was answered",
-            )))
+            Err(
+                TurnError::new("owner_lost", "the turn ended before the verb was answered")
+                    .into_kit_error(),
+            )
         })
     }
 
@@ -343,7 +356,7 @@ impl HostLink {
             .map(|(_, answer)| answer)
             .collect();
         for answer in pending {
-            drop(answer.send(Err(RoomKitError::Turn(error.clone()))));
+            drop(answer.send(Err(error.clone().into_kit_error())));
         }
         self.settled.notify_waiters();
     }

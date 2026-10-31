@@ -1,5 +1,5 @@
 //! An agent's turn, as the code it runs reaches it (RFC §10.6.5, §21.4):
-//! [`current_turn`] gives the [`TurnHost`] of the intelligence turn the
+//! [`current_turn_host`] gives the [`TurnHost`] of the intelligence turn the
 //! current task runs within, which writes to the turn's room and runs the
 //! kit's tool hooks (RFC §9.3).
 
@@ -8,15 +8,14 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use roomkit_core::model::{
-    ChannelId, ChannelOutput, ChannelType, DirectEvent, EventDirection, EventSource, Metadata,
-    RoomContext, RoomEvent, RoomId, ToolCall, ToolCallOutcome,
+    ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent, EventDirection, EventSource,
+    Metadata, RoomContext, RoomEvent, RoomId, ToolCall, ToolCallOutcome,
 };
 use roomkit_core::ops::FrameworkEvent;
 use roomkit_core::rules::hook_registry::{HookSpec, HookTrigger};
 use serde_json::Value;
 use tokio::task::AbortHandle;
 
-use crate::RoomKit;
 use crate::channel::{BoxFuture, DynChannel};
 use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
@@ -26,6 +25,7 @@ use crate::stream::ResponseStream;
 use crate::tasks::Kind;
 use crate::tools::{ToolCallEvent, ToolHandler, ToolUse, ToolVerdict, error_envelope};
 use crate::turns::{HostLink, TurnError, send_event_arguments};
+use crate::{RoomKit, SendEventOptions};
 
 tokio::task_local! {
     static TURN: TurnHost;
@@ -44,9 +44,9 @@ tokio::task_local! {
 ///
 /// ```
 /// // Outside every turn there is none.
-/// assert!(roomkit::current_turn().is_none());
+/// assert!(roomkit::current_turn_host().is_none());
 /// ```
-pub fn current_turn() -> Option<TurnHost> {
+pub fn current_turn_host() -> Option<TurnHost> {
     TURN.try_with(Clone::clone).ok()
 }
 
@@ -126,19 +126,16 @@ pub enum ToolGate {
 }
 
 impl TurnHost {
-    /// The turn's room.
-    pub fn room_id(&self) -> &RoomId {
-        &self.shared.room_id
+    /// Whether the turn it serves still runs, Python's `open`.
+    pub fn open(&self) -> bool {
+        self.shared.link.is_open()
     }
 
-    /// The agent whose turn it is.
-    pub fn channel_id(&self) -> &ChannelId {
-        &self.shared.channel_id
-    }
-
-    /// The room as the turn received it (RFC §21.4 `current_tool_room()`).
-    pub fn context(&self) -> &RoomContext {
-        &self.shared.context
+    /// Whether a verb can still reach the room's owner, Python's
+    /// `reachable`: during the turn, or after it from work the turn began
+    /// while the kit lives (RFC §10.6.3 `room_call`).
+    pub fn reachable(&self) -> bool {
+        self.shared.link.reaches_owner()
     }
 
     /// Answers the turn with `stream`, its response as it is written (RFC
@@ -169,31 +166,44 @@ impl TurnHost {
             .take()
     }
 
-    /// Injects `event` into the turn's room, as
-    /// [`RoomKit::send_event`](crate::RoomKit::send_event) does, at least as
-    /// deep as the turn's response while the turn runs, and as the work
-    /// that sends it otherwise (RFC §10.5, §8.3, §10.6.5).
+    /// Sends `content` from `channel_id` into `room_id`, as
+    /// [`RoomKit::send_event`](crate::RoomKit::send_event) does, with the
+    /// same options: Python's `TurnHost.send_event(room_id, channel_id,
+    /// content, **options)`. The event is at least as deep as the turn's
+    /// response while the turn runs, and as the work that sends it
+    /// otherwise (RFC §10.5, §8.3, §10.6.5). The owner refuses a room other
+    /// than the turn's, and an organization other than its room's.
     ///
     /// # Errors
     ///
     /// As `send_event`, the kit's error rebuilt when it carries no data;
-    /// [`RoomKitError::Turn`] for any other, for a link that failed, and for a
-    /// call after the turn that the owner refuses: one made once a later
-    /// turn of the agent was sent in the room.
-    pub async fn send_event(&self, event: DirectEvent) -> Result<RoomEvent, RoomKitError> {
+    /// [`RoomKitError::TurnLink`] for a link that failed;
+    /// [`RoomKitError::RemoteTurn`] for any other, among them the owner's
+    /// refusal of another room and of a call after the turn made once a
+    /// later turn of the agent was sent in the room.
+    pub async fn send_event(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+        content: impl Into<EventContent>,
+        options: SendEventOptions,
+    ) -> Result<RoomEvent, RoomKitError> {
         let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
-        let arguments = send_event_arguments(&self.shared.room_id, event, floor)
-            .map_err(|why| RoomKitError::Turn(TurnError::new("TypeError", why.0)))?;
+        let organization_id = options.organization_id.clone();
+        let event = options.event(channel_id.clone(), content.into());
+        let arguments = send_event_arguments(room_id, event, organization_id, floor)
+            .map_err(|why| TurnError::new("TypeError", why.0).into_kit_error())?;
         let sent = self
             .shared
             .link
             .verb(crate::turns::SEND_EVENT, arguments, floor)
             .await?;
         serde_json::from_value(sent).map_err(|error| {
-            RoomKitError::Turn(TurnError::new(
+            TurnError::new(
                 "frame_invalid",
                 format!("the event sent could not be read: {error}"),
-            ))
+            )
+            .into_kit_error()
         })
     }
 
@@ -374,7 +384,7 @@ impl TurnHost {
         }
     }
 
-    /// Runs `future` as this turn's work: [`current_turn`] gives this host
+    /// Runs `future` as this turn's work: [`current_turn_host`] gives this host
     /// while it runs.
     pub(crate) async fn scope<F: Future>(self, future: F) -> F::Output {
         TURN.scope(self, future).await
@@ -589,7 +599,7 @@ pub(crate) fn within_current_turn<F>(future: F) -> impl Future<Output = F::Outpu
 where
     F: Future + Send + 'static,
 {
-    let turn = current_turn();
+    let turn = current_turn_host();
     async move {
         match turn {
             Some(turn) => TURN.scope(turn, future).await,

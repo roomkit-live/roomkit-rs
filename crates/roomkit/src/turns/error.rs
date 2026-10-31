@@ -40,12 +40,11 @@ pub(crate) const TURN_LINK_ERROR: &str = "TurnLinkError";
 /// never for a model.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 #[error("{message}")]
-#[non_exhaustive]
-pub struct TurnError {
+pub(crate) struct TurnError {
     /// The failure's reason, or the kind of the error it stands for.
-    pub kind: String,
+    pub(crate) kind: String,
     /// What it says.
-    pub message: String,
+    pub(crate) message: String,
 }
 
 impl TurnError {
@@ -59,6 +58,22 @@ impl TurnError {
     /// The failure of a link, by its reason.
     pub(crate) fn link(failure: &LinkFailure) -> Self {
         Self::new(failure.reason(), failure.message())
+    }
+
+    /// The kit's error it is: Python's `TurnLinkError` for a link's
+    /// failure, its `RemoteTurnError` for another.
+    pub(crate) fn into_kit_error(self) -> RoomKitError {
+        if is_link_reason(&self.kind) {
+            return RoomKitError::TurnLink {
+                reason: self.kind,
+                message: Some(self.message),
+            };
+        }
+        RoomKitError::RemoteTurn {
+            message: self.message,
+            kind: self.kind,
+            bases: Vec::new(),
+        }
     }
 
     /// The error a turn's failure is recorded as on the owner: a link's
@@ -142,15 +157,23 @@ pub(crate) fn kit_error(error: &RoomKitError) -> WireError {
 }
 
 /// The kit error a crossed error is: a variant that carries no data, or an
-/// unknown channel, as itself; any other as a [`TurnError`] keeping its
-/// kind and message.
+/// unknown channel, as itself; a link's failure as Python's
+/// `TurnLinkError`; any other as its `RemoteTurnError`, keeping its kind,
+/// its message and its bases.
 pub(crate) fn rebuild_kit_error(error: &WireError) -> RoomKitError {
     if error.kind == KIT_ERROR
         && let Some(rebuilt) = rebuilt_variant(error)
     {
         return rebuilt;
     }
-    RoomKitError::Turn(TurnError::new(error.kind.clone(), error.message.clone()))
+    if is_link_reason(&error.kind) {
+        return TurnError::new(error.kind.clone(), error.message.clone()).into_kit_error();
+    }
+    RoomKitError::RemoteTurn {
+        message: error.message.clone(),
+        kind: error.kind.clone(),
+        bases: error.bases.clone(),
+    }
 }
 
 fn rebuilt_variant(error: &WireError) -> Option<RoomKitError> {
@@ -213,7 +236,8 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::Lock(_) => "Lock",
         RoomKitError::Channel { .. } => "Channel",
         RoomKitError::Router(_) => "Router",
-        RoomKitError::Turn(_) => "Turn",
+        RoomKitError::RemoteTurn { .. } => "RemoteTurn",
+        RoomKitError::TurnLink { .. } => "TurnLink",
         RoomKitError::Internal(_) => "Internal",
     };
     (variant, fields)
@@ -281,7 +305,11 @@ mod tests {
             [
                 RoomKitError::KitClosed,
                 unknown(),
-                RoomKitError::Turn(TurnError::new("RoomKitError", reentrant().to_string()))
+                RoomKitError::RemoteTurn {
+                    message: reentrant().to_string(),
+                    kind: "RoomKitError".to_owned(),
+                    bases: Vec::new(),
+                }
             ]
         );
     }

@@ -21,7 +21,7 @@
 //!
 //! A call runs through its gate (RFC §21.1), then the kit's tool hooks
 //! (RFC §9.3), which the agent reaches through its turn
-//! ([`roomkit::current_turn`]): `BEFORE_TOOL_USE` before it runs,
+//! ([`roomkit::current_turn_host`]): `BEFORE_TOOL_USE` before it runs,
 //! `ON_TOOL_CALL` once it ended.
 //!
 //! ```

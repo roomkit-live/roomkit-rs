@@ -68,7 +68,7 @@
 //! wraps the task's future in [`keep_context`], so that it runs within the
 //! call's context and acts for the call while the call runs, awaited or not
 //! (decision 2 of step 3), its turn's host given too
-//! ([`current_turn`](crate::current_turn)); a task spawned without it has
+//! ([`current_turn_host`](crate::current_turn_host)); a task spawned without it has
 //! none, and waits for the room as any task does. A frame lends its lease on a lock only
 //! while its call runs, as it stands in an admission order: once a locked
 //! hook is over, a task it left running holds nothing of the lock its run

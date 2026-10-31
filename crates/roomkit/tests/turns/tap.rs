@@ -17,9 +17,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{DirectEvent, EventType, TextContent};
+use roomkit::model::{EventType, TextContent};
 use roomkit::testing::{TappedMessage, TurnTap};
-use roomkit::{ConversationStore, current_turn};
+use roomkit::{ConversationStore, SendEventOptions, current_turn_host};
 use roomkit_ai::{ToolError, ToolOutput};
 use serde_json::Value;
 
@@ -161,12 +161,17 @@ fn fixture_lines(messages: &[(String, Value)]) -> String {
 /// the loop's end, the stream's end, then the turn's end.
 #[tokio::test(start_paused = true)]
 async fn the_probe_s_turn_carries_python_s_messages() {
-    let kit = kit(|_call, _context| async {
-        let turn = current_turn().unwrap();
-        let note = DirectEvent::new(channel("ai"), TextContent::new("(looking it up)"));
-        turn.send_event(note)
-            .await
-            .map_err(|error| ToolError::raised(&error))?;
+    let kit = kit(|_call, context| async move {
+        let turn = current_turn_host().unwrap();
+        let note = TextContent::new("(looking it up)");
+        turn.send_event(
+            &context.room_id,
+            &channel("ai"),
+            note,
+            SendEventOptions::default(),
+        )
+        .await
+        .map_err(|error| ToolError::raised(&error))?;
         Ok(ToolOutput::Text("42".to_owned()))
     })
     .await;

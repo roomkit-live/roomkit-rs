@@ -9,9 +9,9 @@
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{DirectEvent, TextContent};
+use roomkit::model::TextContent;
 use roomkit::testing::TurnTap;
-use roomkit::{RoomKitError, current_turn};
+use roomkit::{RoomKitError, SendEventOptions, current_turn_host};
 use roomkit_ai::ToolOutput;
 use tokio::sync::Notify;
 
@@ -28,16 +28,20 @@ async fn observed() -> (roomkit::RoomKit, Arc<Notify>, Sent) {
     let go = Arc::new(Notify::new());
     let sent: Sent = Arc::default();
     let (waits, noted) = (Arc::clone(&go), Arc::clone(&sent));
-    kit.observe_tool_calls("follow_up", move |_event, _context| {
+    kit.observe_tool_calls("follow_up", move |_event, context| {
         let (waits, noted) = (Arc::clone(&waits), Arc::clone(&noted));
+        let room = context.room.id.clone();
         async move {
             waits.notified().await;
-            let turn = current_turn().unwrap();
-            let note = DirectEvent::new(channel("sms"), TextContent::new("Following up."));
-            let sent = turn.send_event(note).await;
+            let turn = current_turn_host().unwrap();
+            let note = TextContent::new("Following up.");
+            let sent = turn
+                .send_event(&room, &channel("sms"), note, SendEventOptions::default())
+                .await;
             noted.lock().unwrap().push(match sent {
                 Ok(event) => Ok(event.chain_depth),
-                Err(RoomKitError::Turn(error)) => Err(error.kind),
+                Err(RoomKitError::TurnLink { reason, .. }) => Err(reason),
+                Err(RoomKitError::RemoteTurn { kind, .. }) => Err(kind),
                 Err(error) => Err(error.to_string()),
             });
         }
@@ -88,13 +92,18 @@ async fn a_verb_after_its_turn_is_refused_once_a_later_turn_was_sent() {
 /// stored, at which depths, and how many of them `BLOCKED` by the
 /// cascade's budget.
 async fn sends_through_the_turn(sends: usize) -> (usize, Vec<u32>, usize) {
-    let kit = kit(move |_call, _context| async move {
-        let turn = current_turn().unwrap();
+    let kit = kit(move |_call, context| async move {
+        let turn = current_turn_host().unwrap();
         for index in 0..sends {
-            let note = DirectEvent::new(channel("ai"), TextContent::new(format!("Note {index}")));
-            turn.send_event(note)
-                .await
-                .map_err(|error| roomkit_ai::ToolError::raised(&error))?;
+            let note = TextContent::new(format!("Note {index}"));
+            turn.send_event(
+                &context.room_id,
+                &channel("ai"),
+                note,
+                SendEventOptions::default(),
+            )
+            .await
+            .map_err(|error| roomkit_ai::ToolError::raised(&error))?;
         }
         Ok(ToolOutput::Text("42".to_owned()))
     })

@@ -14,14 +14,14 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
-    ChannelType, DirectEvent, EventContent, EventType, InboundMessage, Metadata, RoomEvent,
-    TextContent, ToolCallContent, ToolCallOutcome,
+    ChannelType, EventContent, EventType, InboundMessage, Metadata, RoomEvent, TextContent,
+    ToolCallContent, ToolCallOutcome,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookSpec,
     HookTrigger, MuteOptions, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
-    SendEventOptions, ToolUse, ToolVerdict, current_turn,
+    SendEventOptions, ToolUse, ToolVerdict, current_turn_host,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiAgent, ToolDefinition, ToolError, ToolOutput, Tools};
@@ -405,10 +405,15 @@ async fn a_tool_writes_to_its_room_at_the_turn_s_depth() {
     let notifies = Tools::new().tool(
         ToolDefinition::new("notify", "Tells the room", json!({ "type": "object" })),
         |_call, context| async move {
-            let turn = context.turn().cloned().or_else(current_turn).unwrap();
-            let notice = DirectEvent::new(channel("sms"), TextContent::new("Order on its way"));
+            let turn = context.turn().cloned().or_else(current_turn_host).unwrap();
+            let notice = TextContent::new("Order on its way");
             let sent = turn
-                .send_event(notice)
+                .send_event(
+                    &context.room_id,
+                    &channel("sms"),
+                    notice,
+                    SendEventOptions::default(),
+                )
                 .await
                 .map_err(|error| ToolError::raised(&error))?;
             Ok(ToolOutput::Text(format!(

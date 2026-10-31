@@ -16,7 +16,7 @@ use roomkit_core::rules::lifecycle::Transition;
 use thiserror::Error;
 
 use crate::store::{StoreError, StoreFailure};
-use crate::turns::{self, TurnError};
+use crate::turns;
 
 /// Why a kit call failed: the Python implementation's `RoomKitError`, each
 /// variant named after one of its exception classes without the `Error`
@@ -234,13 +234,32 @@ pub enum RoomKitError {
     /// propagates the router's exception.
     #[error("the router failed: {}", .0.message)]
     Router(ErrorRecord),
-    /// A call across the turn backend failed (RFC §10.6.8): a turn's host
-    /// verb whose link failed or that its owner refused, or one whose error
-    /// on the owner this side does not rebuild, its kind and message kept.
-    /// Lot 3 of step 5 names it after Python's `RemoteTurnError` and
-    /// `TurnLinkError`.
-    #[error(transparent)]
-    Turn(#[from] TurnError),
+    /// Python's `RemoteTurnError(message, *, kind, bases=())`: an error
+    /// raised across the turn backend (RFC §10.6.8), by a turn's host verb
+    /// that its owner refused or by the owner's work, of a class this side
+    /// does not rebuild. `kind` is the class it had, `bases` the classes
+    /// that class derives from, nearest first.
+    #[error("{message}")]
+    RemoteTurn {
+        /// What it says.
+        message: String,
+        /// The class it had on the other side.
+        kind: String,
+        /// The classes that class derives from, nearest first.
+        bases: Vec<String>,
+    },
+    /// Python's `TurnLinkError(reason, message=None)`: a turn the turn
+    /// backend could not carry to its end (RFC §10.6.8). `reason` is
+    /// `no_executor`, `executor_lost`, `owner_lost`, `frame_lost`,
+    /// `frame_invalid`, `backend_closed` or `cancelled`; `message`, when
+    /// set, says what failed in place of Python's default.
+    #[error("{}", turn_link_message(reason, message.as_deref()))]
+    TurnLink {
+        /// The link's failure reason.
+        reason: String,
+        /// What it says, `None` for Python's default.
+        message: Option<String>,
+    },
     /// A defect of this crate, where Python asserts: the driver broke the
     /// core's effect protocol, or a run ended with neither its event nor a
     /// refusal.
@@ -294,7 +313,7 @@ impl RoomKitError {
             Self::Lock(record) | Self::Router(record) | Self::Channel { error: record, .. } => {
                 record.error_type.clone()
             }
-            Self::Turn(error) => error.to_record().error_type,
+            Self::RemoteTurn { kind, .. } => remote_class_name(kind),
             Self::Internal(_) => "AssertionError".to_owned(),
             Self::Store(_) => turns::CHANNEL_ERROR.to_owned(),
             Self::RoomNotFound(_)
@@ -314,6 +333,7 @@ impl RoomKitError {
             | Self::EventNotFound(_)
             | Self::IdempotencyKeyTaken { .. }
             | Self::ProviderDelivery { .. }
+            | Self::TurnLink { .. }
             | Self::KitClosed
             | Self::ShutdownCancelled => format!("{}Error", turns::variant_name(self)),
         }
@@ -766,6 +786,40 @@ mod tests {
         );
     }
 
+    /// Python's `TurnLinkError` says its default unless given a message, and
+    /// a `RemoteTurnError` is reported under the last name of the class it
+    /// had, as `error_type_name` reads it.
+    #[test]
+    fn a_turn_s_errors_read_as_python_s_classes() {
+        let closed = RoomKitError::TurnLink {
+            reason: "backend_closed".to_owned(),
+            message: None,
+        };
+        let lost = RoomKitError::TurnLink {
+            reason: "executor_lost".to_owned(),
+            message: None,
+        };
+        let remote = RoomKitError::RemoteTurn {
+            message: "the provider failed".to_owned(),
+            kind: "shop.errors:ProviderError".to_owned(),
+            bases: vec!["roomkit.providers:ProviderError".to_owned()],
+        };
+        assert_eq!(
+            [&closed, &lost, &remote].map(|error| (error.to_string(), error.class_name())),
+            [
+                (
+                    "The turn ended: its turn backend closed".to_owned(),
+                    "TurnLinkError".to_owned()
+                ),
+                (
+                    "The turn ended without its executor: executor_lost".to_owned(),
+                    "TurnLinkError".to_owned()
+                ),
+                ("the provider failed".to_owned(), "ProviderError".to_owned()),
+            ]
+        );
+    }
+
     /// `ReentrantCallError` and `AddressLinkedError` name only what
     /// Python's messages name (`_reentrance.py`, `store/base.py`'s
     /// `address_linked`): the room; the channel type, never the address
@@ -812,5 +866,28 @@ mod tests {
                 "'del\\x7f'"
             ]
         );
+    }
+}
+
+/// What a [`RoomKitError::TurnLink`] says without a message of its own, as
+/// Python's `TurnLinkError` says it.
+fn turn_link_message(reason: &str, message: Option<&str>) -> String {
+    match message {
+        Some(message) => message.to_owned(),
+        None if reason == "backend_closed" => "The turn ended: its turn backend closed".to_owned(),
+        None => format!("The turn ended without its executor: {reason}"),
+    }
+}
+
+/// The class a [`RoomKitError::RemoteTurn`] is reported under, as Python's
+/// `error_type_name` reads it: the last name of the class it had, else
+/// `RemoteTurnError`.
+fn remote_class_name(kind: &str) -> String {
+    let name = kind.rsplit(':').next().unwrap_or(kind);
+    let name = name.rsplit('.').next().unwrap_or(name);
+    if name.is_empty() {
+        "RemoteTurnError".to_owned()
+    } else {
+        name.to_owned()
     }
 }

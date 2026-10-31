@@ -25,12 +25,12 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use roomkit::model::{ChannelId, ChannelType, DirectEvent, InboundMessage, RoomId, TextContent};
+use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::transcript::Role;
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
-    current_turn,
+    current_turn_host,
 };
 use roomkit_ai::{
     AiAgent, AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderResponse,
@@ -109,11 +109,18 @@ fn kit_writing(calls: bool, deltas: usize, writes: bool) -> RoomKit {
         "Look it up.",
         json!({ "type": "object", "properties": { "q": { "type": "string" } } }),
     );
-    let tools = Tools::new().tool(lookup, move |_call, _context| async move {
+    let tools = Tools::new().tool(lookup, move |_call, context| async move {
         if writes {
-            let turn = current_turn().unwrap();
-            let note = DirectEvent::new(channel("ai"), TextContent::new("(looking it up)"));
-            turn.send_event(note).await.unwrap();
+            let turn = current_turn_host().unwrap();
+            let note = TextContent::new("(looking it up)");
+            turn.send_event(
+                &context.room_id,
+                &channel("ai"),
+                note,
+                roomkit::SendEventOptions::default(),
+            )
+            .await
+            .unwrap();
         }
         Ok(ToolOutput::Text("42".to_owned()))
     });

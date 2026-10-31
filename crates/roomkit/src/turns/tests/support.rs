@@ -22,7 +22,7 @@ use crate::testing::{RecordingTransport, RecordingTransportOptions};
 use crate::turns::observe::{Carried, Fate};
 use crate::{
     AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, ProcessInboundOptions, RoomKit,
-    RoomKitError, RoomKitOptions, SendEventOptions, current_turn,
+    RoomKitError, RoomKitOptions, SendEventOptions, current_turn_host,
 };
 
 pub(super) fn channel(id: &str) -> ChannelId {
@@ -314,7 +314,7 @@ impl Channel for Streaming {
             if own {
                 return Ok(ChannelOutput::default());
             }
-            Ok(current_turn()
+            Ok(current_turn_host()
                 .unwrap()
                 .respond_with_stream(Box::pin(deltas)))
         }
@@ -398,7 +398,7 @@ impl Channel for Panicking {
 }
 
 /// An agent whose `on_event` does its work before its future, as the
-/// examples write it: it reads `current_turn()` there, and spawns the task
+/// examples write it: it reads `current_turn_host()` there, and spawns the task
 /// that posts a note into the room, wrapped in `keep_context` as its
 /// rustdoc shows; its future awaits the task, then answers.
 #[derive(Clone)]
@@ -437,7 +437,10 @@ impl Channel for Eager {
         let own = event.source.channel_id == self.declaration.channel_id;
         let kit = self.kit.lock().unwrap().clone();
         let posting = kit.filter(|_| !own).map(|kit| {
-            self.turned.lock().unwrap().push(current_turn().is_some());
+            self.turned
+                .lock()
+                .unwrap()
+                .push(current_turn_host().is_some());
             let room_id = event.room_id.clone();
             tokio::spawn(crate::keep_context(async move {
                 let note = TextContent::new("(note)");

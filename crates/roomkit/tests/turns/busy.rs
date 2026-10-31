@@ -24,9 +24,11 @@ async fn a_tool_blocking_its_thread_past_the_heartbeat_timeout_ends_normally() {
     .await;
     roomkit::testing::set_turn_timeouts(
         &kit,
-        TurnTimeouts::new()
-            .with_heartbeat_interval(Duration::from_millis(5))
-            .with_heartbeat_timeout(Duration::from_millis(25)),
+        TurnTimeouts {
+            heartbeat_interval: Duration::from_millis(5),
+            heartbeat_timeout: Duration::from_millis(25),
+            ..Default::default()
+        },
     );
     let result = asks(&kit, "What is it?").await;
     let rows: Vec<EventType> = kit

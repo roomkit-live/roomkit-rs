@@ -20,7 +20,7 @@ use roomkit::testing::TurnTap;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, DeliveryStream, ProcessInboundOptions, ResponseItem, RoomKit,
-    RoomKitOptions, StreamItem, current_turn, text_of,
+    RoomKitOptions, StreamItem, current_turn_host, text_of,
 };
 use roomkit_ai::AiAgent;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
@@ -281,7 +281,7 @@ impl Channel for Writing {
                 ResponseItem::Text("d ".to_owned()),
                 ResponseItem::End(record),
             ]);
-            Ok(current_turn()
+            Ok(current_turn_host()
                 .unwrap()
                 .respond_with_stream(Box::pin(Items(items))))
         }
