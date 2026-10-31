@@ -257,12 +257,7 @@ impl Pump {
         data: Metadata,
     ) {
         let facts = &self.state.facts;
-        if !emitted_by_its_turn(
-            facts,
-            &event_type,
-            room_id.as_deref(),
-            channel_id.as_deref(),
-        ) {
+        if !emitted_by_its_turn(facts, &event_type, room_id, channel_id) {
             tracing::warn!(
                 target: "roomkit::turns",
                 room_id = %facts.room_id,
