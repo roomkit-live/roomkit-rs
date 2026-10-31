@@ -605,8 +605,61 @@ impl From<ConfigError> for RoomKitError {
 
 #[doc(hidden)]
 impl From<RegistrationError> for RoomKitError {
+    /// The refusal as Python's `RoomKit.hook` raises it, a `ValueError`
+    /// with its words; a handler of another payload than its trigger's,
+    /// which only Rust's types can refuse, in its own.
     fn from(error: RegistrationError) -> Self {
-        Self::Value(error.to_string())
+        Self::Value(match error {
+            RegistrationError::DuplicateName { name } => format!(
+                "A hook named {} is already registered in this scope: a hook's name is unique \
+                 within its scope (RFC §9.1)",
+                repr(&name)
+            ),
+            RegistrationError::ReservedName { name } => format!(
+                "Hook name {} is a value the framework writes in blocked_by; a block of this \
+                 hook would read as the framework's",
+                repr(&name)
+            ),
+            RegistrationError::FailClosedAsync { hook } => format!(
+                "Hook {}: fail_closed=True needs a SYNC hook; an ASYNC hook cannot block",
+                repr(&hook)
+            ),
+            RegistrationError::OffLockOutsideBeforeBroadcast {
+                hook,
+                execution,
+                trigger,
+            } => format!(
+                "Hook {}: needs_lock=False is only supported on a SYNC BEFORE_BROADCAST hook, \
+                 not {} {}",
+                repr(&hook),
+                wire_name(&execution),
+                wire_name(&trigger)
+            ),
+            RegistrationError::LockOrdering {
+                locked,
+                locked_priority,
+                off_lock,
+                off_lock_priority,
+            } => {
+                let (locked, off_lock) = (repr(&locked), repr(&off_lock));
+                format!(
+                    "Hook {locked} (priority {locked_priority}) needs the room lock but is \
+                     ordered before off-lock hook {off_lock} (priority {off_lock_priority}). \
+                     Off-lock hooks run first (RFC §9.5.1): give {off_lock} a priority at or \
+                     below {locked_priority}, or keep it needs_lock=True. Channel and event \
+                     filters are not considered."
+                )
+            }
+            other @ RegistrationError::PayloadMismatch { .. } | other => other.to_string(),
+        })
+    }
+}
+
+/// `value` as Python prints its enum member's value: its wire name.
+fn wire_name(value: &impl serde::Serialize) -> String {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(name)) => name,
+        _ => String::new(),
     }
 }
 
@@ -697,6 +750,7 @@ mod tests {
     use roomkit_core::ops::{
         CheckTimers, HoldOutcome, KitConfig, Next, Operation, SequentialEnvironment,
     };
+    use roomkit_core::rules::hook_registry::{HookExecution, HookTrigger};
 
     use super::*;
 
@@ -812,6 +866,49 @@ mod tests {
     /// Python's `TurnLinkError` says its default unless given a message, and
     /// a `RemoteTurnError` is reported under the last name of the class it
     /// had, as `error_type_name` reads it.
+    /// A refused hook registration reads as Python's `ValueError`, word
+    /// for word (probe `tasks/probes/step5-lot3/py_registration.out`).
+    #[test]
+    fn a_refused_registration_reads_as_python_s() {
+        let refusals = [
+            RegistrationError::DuplicateName {
+                name: "a".to_owned(),
+            },
+            RegistrationError::FailClosedAsync {
+                hook: "y".to_owned(),
+            },
+            RegistrationError::OffLockOutsideBeforeBroadcast {
+                hook: "x".to_owned(),
+                execution: HookExecution::Async,
+                trigger: HookTrigger::OnRoomCreated,
+            },
+            RegistrationError::LockOrdering {
+                locked: "locked".to_owned(),
+                locked_priority: -1,
+                off_lock: "scan".to_owned(),
+                off_lock_priority: 0,
+            },
+        ];
+        let read: Vec<String> = refusals
+            .into_iter()
+            .map(|refusal| RoomKitError::from(refusal).to_string())
+            .collect();
+        assert_eq!(
+            read,
+            [
+                "A hook named 'a' is already registered in this scope: a hook's name is unique \
+                 within its scope (RFC §9.1)",
+                "Hook 'y': fail_closed=True needs a SYNC hook; an ASYNC hook cannot block",
+                "Hook 'x': needs_lock=False is only supported on a SYNC BEFORE_BROADCAST hook, not \
+                 async on_room_created",
+                "Hook 'locked' (priority -1) needs the room lock but is ordered before off-lock \
+                 hook 'scan' (priority 0). Off-lock hooks run first (RFC §9.5.1): give 'scan' a \
+                 priority at or below -1, or keep it needs_lock=True. Channel and event filters \
+                 are not considered.",
+            ]
+        );
+    }
+
     #[test]
     fn a_turn_s_errors_read_as_python_s_classes() {
         let closed = RoomKitError::TurnLink {
