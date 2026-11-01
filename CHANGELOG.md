@@ -22,6 +22,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A turn host's verb for another room or organization raises
   `RoomKitError::Value`, Python's `ValueError`, no longer a
   `RemoteTurn` named `PermissionError`.
+- `FromUrlOptions::connect_timeout`, Python's `from_url(connect_timeout=60.0)`
+  (RMK-1108): an HTTP server's handshake and discovery take the bound the
+  caller gives, 60 seconds by default. Python now bounds its connection and
+  refuses URL credentials, fragments and the transport's headers as Rust
+  does (RMK-1068), so neither is a Rust-only exception any more.
 - `TurnTimeouts::silent_intervals` rounds a half to the even neighbour, as
   Python's `round` (RMK-1093): a 5 s heartbeat timeout over a 2 s interval
   is 2 silent intervals, no longer 3; the accept bound counts alike.

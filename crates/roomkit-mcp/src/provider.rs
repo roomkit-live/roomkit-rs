@@ -74,9 +74,10 @@ impl fmt::Debug for FromCommandOptions {
 }
 
 /// What [`McpToolProvider::from_url`] takes beside the URL: Python's
-/// `*, tool_filter=None, headers=None, label=None`, over Streamable HTTP.
+/// `*, tool_filter=None, headers=None, label=None, connect_timeout=60.0`,
+/// over Streamable HTTP.
 #[cfg(feature = "http")]
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct FromUrlOptions {
     /// Keeps the tools whose names it admits; every tool without.
     #[expect(clippy::type_complexity, reason = "Python's Callable[[str], bool]")]
@@ -88,6 +89,20 @@ pub struct FromUrlOptions {
     /// aliases naming this server. Letters, digits and `_ . -`, 64 at most,
     /// no `__` and no final `_`.
     pub label: Option<String>,
+    /// How long the handshake and the listing may take.
+    pub connect_timeout: Duration,
+}
+
+#[cfg(feature = "http")]
+impl Default for FromUrlOptions {
+    fn default() -> Self {
+        Self {
+            tool_filter: None,
+            headers: BTreeMap::new(),
+            label: None,
+            connect_timeout: Duration::from_secs(60),
+        }
+    }
 }
 
 #[cfg(feature = "http")]
@@ -96,6 +111,7 @@ impl fmt::Debug for FromUrlOptions {
         f.debug_struct("FromUrlOptions")
             .field("headers", &self.headers.keys().collect::<Vec<_>>())
             .field("label", &self.label)
+            .field("connect_timeout", &self.connect_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -210,11 +226,9 @@ impl McpToolProvider {
     /// The server at `url`, over Streamable HTTP: Python's
     /// `MCPToolProvider.from_url`.
     ///
-    /// Its handshake and tool discovery are bounded at 60 seconds, as a
-    /// command's: past them, [`connect`](Self::connect) fails, the HTTP
-    /// worker drained and the negotiated session deleted. Python leaves
-    /// this connection unbounded: Rust only until Python bounds it too
-    /// (decided 2026-11-01; RMK-1108).
+    /// Its handshake and tool discovery are bounded by `connect_timeout`
+    /// (60 seconds), as a command's: past them, [`connect`](Self::connect)
+    /// fails, the HTTP worker drained and the negotiated session deleted.
     ///
     /// # Errors
     ///
@@ -228,8 +242,9 @@ impl McpToolProvider {
             tool_filter,
             headers,
             label,
+            connect_timeout,
         } = options;
-        let mut http = crate::http::McpHttp::new(url)?;
+        let mut http = crate::http::McpHttp::new(url)?.connect_timeout(connect_timeout);
         for (name, value) in &headers {
             http = http.header(name, value)?;
         }

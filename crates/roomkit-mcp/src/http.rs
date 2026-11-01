@@ -26,14 +26,13 @@ use std::{collections::HashMap, fmt, future::Future, time::Duration};
 pub(crate) struct McpHttp {
     url: Url,
     headers: HashMap<HeaderName, HeaderValue>,
-    /// The bound on the handshake and the discovery: 60 seconds unless a
-    /// test sets another, as a command's (RMK-1108).
+    /// The bound on the handshake and the discovery: 60 seconds unless
+    /// `FromUrlOptions::connect_timeout` says another, as a command's.
     timeout: Option<Duration>,
 }
 
-/// How long an HTTP server's handshake and discovery may take, as a started
-/// server's: Rust only until Python bounds it too (decided 2026-11-01;
-/// RMK-1108).
+/// How long an HTTP server's handshake and discovery may take by default, as
+/// a started server's: Python's `from_url(connect_timeout=60.0)` (RMK-1108).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 /// `connecting`, within `bound` when there is one.
 async fn bounded<T>(

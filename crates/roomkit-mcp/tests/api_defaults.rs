@@ -45,6 +45,8 @@ fn from_command_options_defaults_as_python() {
 #[test]
 fn from_url_options_defaults_as_python() {
     let defaults = FromUrlOptions::default();
+    // roomkit.tools.MCPToolProvider.from_url(connect_timeout) = 60.0
+    assert_eq!(defaults.connect_timeout, Duration::from_secs(60));
     // roomkit.tools.MCPToolProvider.from_url(headers) = None
     assert!(defaults.headers.is_empty());
     // roomkit.tools.MCPToolProvider.from_url(label) = None
