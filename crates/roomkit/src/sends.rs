@@ -112,7 +112,10 @@ impl Sends {
             if self.bucket(channel_id).take(rate, Instant::now()) {
                 return;
             }
-            tokio::time::sleep(Duration::from_secs_f64(1.0 / rate)).await;
+            // A rate so small that its wait overflows a `Duration` waits
+            // the longest one, as Python's limiter sleeps.
+            let wait = Duration::try_from_secs_f64(1.0 / rate).unwrap_or(Duration::MAX);
+            tokio::time::sleep(wait).await;
         }
     }
 
@@ -297,11 +300,16 @@ fn delay(policy: &RetryPolicy, attempt: u32) -> Duration {
     Duration::try_from_secs_f64(seconds).unwrap_or(Duration::ZERO)
 }
 
-/// Whether `error` may be tried again under `policy` (RFC §13.2): the
-/// error's own word first, a kit error's `retryable`; then the policy's
-/// list, its class or a base of it, every error retried without one.
+/// Whether `error` may be tried again under `policy` (RFC §13.2): never
+/// the send's own cancel, which Python's retry, catching `Exception`, lets
+/// through; the error's own word first, a kit error's `retryable`; then
+/// the policy's list, its class or a base of it, every error retried
+/// without one.
 fn retryable(error: &ChannelError, policy: &RetryPolicy) -> bool {
     let kit_error = error.downcast_ref::<RoomKitError>();
+    if matches!(kit_error, Some(RoomKitError::Cancelled)) {
+        return false;
+    }
     if let Some(declared) = kit_error.and_then(RoomKitError::retryable) {
         return declared;
     }
@@ -311,19 +319,13 @@ fn retryable(error: &ChannelError, policy: &RetryPolicy) -> bool {
     let class = kit_error.map_or_else(|| "ChannelError".to_owned(), RoomKitError::class_name);
     let builtin = matches!(
         kit_error,
-        Some(
-            RoomKitError::Value(_) | RoomKitError::Cancelled | RoomKitError::ExceptionGroup { .. }
-        )
+        Some(RoomKitError::Value(_) | RoomKitError::ExceptionGroup { .. })
     );
     let mut names = vec![class.as_str()];
     if kit_error.is_some() && !builtin {
         names.push("RoomKitError");
     }
-    // `CancelledError` is a `BaseException` alone.
-    if !matches!(kit_error, Some(RoomKitError::Cancelled)) {
-        names.push("Exception");
-    }
-    names.push("BaseException");
+    names.extend(["Exception", "BaseException"]);
     classes
         .iter()
         .any(|listed| names.contains(&listed.as_str()))
@@ -334,6 +336,23 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    /// A rate so small that its wait overflows a `Duration` waits all the
+    /// same, as Python's limiter sleeps
+    /// (`tasks/probes/step5-review/py_tiny_rate.out`).
+    #[tokio::test]
+    async fn a_tiny_rate_s_wait_waits() {
+        let sends = Sends::default();
+        let channel_id = ChannelId::new("c").unwrap();
+        let limit = RateLimit {
+            max_per_hour: Some(1e-16),
+            ..RateLimit::default()
+        };
+        sends.wait_for_token(&channel_id, &limit).await;
+        let second = sends.wait_for_token(&channel_id, &limit);
+        let waited = tokio::time::timeout(Duration::from_millis(10), second).await;
+        assert!(waited.is_err());
+    }
 
     /// The breaker's states (roomkit's `CircuitBreaker`): open at the fifth
     /// failure in a row, one probe through once the recovery passed; a

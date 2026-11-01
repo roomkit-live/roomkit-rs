@@ -756,6 +756,11 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **A send's own cancel is not tried again**, as Python's retry, which
+  catches `Exception`, lets `CancelledError` through, whatever the
+  policy's `retryable_errors` list; and **a rate so small that its wait
+  overflows a `Duration` waits** rather than panicking, as Python's
+  limiter sleeps.
 - **`FromCommandOptions`'s `Debug` shows how many arguments, never
   them**, as `McpCommand`'s: an argument may hold a secret
   (`--token ...`).

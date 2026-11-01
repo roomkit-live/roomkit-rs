@@ -39,6 +39,8 @@ enum Failure {
     Plain,
     /// A provider's refusal that says it may not be retried.
     Refused,
+    /// The send's own cancel, Python's `CancelledError`.
+    Cancelled,
 }
 
 /// A transport whose first `failures` sends fail as `failure`, noting when
@@ -113,6 +115,7 @@ impl Channel for Flaky {
         } else {
             Err(match self.failure {
                 Failure::Plain => "flaky".into(),
+                Failure::Cancelled => RoomKitError::Cancelled.into(),
                 Failure::Refused => RoomKitError::ProviderDelivery {
                     result: ProviderResult {
                         error: Some("rejected".to_owned()),
@@ -242,8 +245,10 @@ fn failed(code: &str, message: &str, retryable: bool) -> Read {
 
 /// RFC §13.2: a send that fails is tried again within the policy's
 /// retries, an error that says it may not be retried sent once, the
-/// policy's list matching the error's class or a base of it; the delay
-/// grows by the exponent from the base, up to the most.
+/// policy's list matching the error's class or a base of it; a send's own
+/// cancel is never tried again, as Python's retry catches no
+/// `CancelledError` (`tasks/probes/step5-review/py_agent_errors.out`); the
+/// delay grows by the exponent from the base, up to the most.
 #[tokio::test(start_paused = true)]
 async fn a_failed_send_is_tried_again_as_its_binding_s_policy_says() {
     let cases = [
@@ -271,6 +276,14 @@ async fn a_failed_send_is_tried_again_as_its_binding_s_policy_says() {
             Flaky::new(1, Failure::Plain),
             policy(2, Some(&["Exception"])),
             (2, sent_ok()),
+        ),
+        (
+            Flaky::new(3, Failure::Cancelled),
+            policy(2, Some(&["BaseException"])),
+            (
+                1,
+                failed("CancelledError", &RoomKitError::Cancelled.to_string(), true),
+            ),
         ),
     ];
     for (ws, policy, (sends, read)) in cases {
