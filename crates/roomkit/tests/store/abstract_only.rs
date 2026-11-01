@@ -572,7 +572,7 @@ fn results(status: &str) -> roomkit::model::Metadata {
     serde_json::from_value(serde_json::json!({ "sms": { "status": status } })).unwrap()
 }
 
-/// Python: tests/test_store_binding_contract.py::test_the_default_delivery_record_writes_the_results_or_says_it_cannot.
+/// Python: `tests/test_store_binding_contract.py::test_the_default_delivery_record_writes_the_results_or_says_it_cannot`.
 /// The default record writes the results through `update_event`, which a
 /// store writing the row as given lets it do; over one keeping the stored
 /// results it fails, nothing written, rather than record nothing.
@@ -602,7 +602,7 @@ async fn the_default_delivery_record_writes_the_results_or_says_it_cannot() {
     );
 }
 
-/// Python: tests/test_store_binding_contract.py::test_the_default_target_write_keeps_the_recorded_results.
+/// Python: `tests/test_store_binding_contract.py::test_the_default_target_write_keeps_the_recorded_results`.
 /// A change's target written through the provided method keeps the
 /// delivery results recorded on the row since its copy was read.
 #[tokio::test]
@@ -628,7 +628,7 @@ async fn the_default_target_write_keeps_the_recorded_results() {
     );
 }
 
-/// Python: tests/test_store_binding_contract.py::test_the_default_target_write_marks_a_deleted_target_s_edits.
+/// Python: `tests/test_store_binding_contract.py::test_the_default_target_write_marks_a_deleted_target_s_edits`.
 /// The provided method marks a deleted target's edits, told by their
 /// content's target, a row typed otherwise that carries an edit included;
 /// a target the room lacks is not found.
@@ -673,7 +673,7 @@ async fn the_default_target_write_marks_a_deleted_target_s_edits() {
     );
 }
 
-/// Python: tests/test_store_binding_contract.py::test_a_room_is_written_if_it_still_holds_what_the_write_was_computed_from,
+/// Python: `tests/test_store_binding_contract.py::test_a_room_is_written_if_it_still_holds_what_the_write_was_computed_from`,
 /// on the provided method: a room is written only while it holds the
 /// status, the pause and the last activity the write was computed from, its
 /// counters kept.

@@ -34,7 +34,8 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "store.delete_room"
         | "store.room_exists"
         | "store.list_read_markers"
-        | "list_read_markers" => &["room_id"],
+        | "list_read_markers"
+        | "store.get_room" => &["room_id"],
         "store.add_binding" | "store.update_binding" => &["binding"],
         "store.remove_binding" | "store.binding_exists" => &["room_id", "channel_id"],
         "store.add_participant" => &["participant"],
@@ -53,7 +54,6 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "store.get_event" => &["event_id"],
         "store.record_delivery_results" => &["room_id", "event_id", "results"],
         "store.write_change_target" => &["room_id", "target"],
-        "store.get_room" => &["room_id"],
         "store.update_room_if" => &["room", "status", "paused_at", "last_activity_at"],
         "store.add_task" | "store.update_task" => &["task"],
         "store.get_task" => &["task_id"],
