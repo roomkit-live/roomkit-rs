@@ -105,6 +105,8 @@ pub(crate) struct Run {
     events: EventTap,
     events_read: Mutex<usize>,
     pub(crate) background: Mutex<HashMap<String, JoinHandle<Value>>>,
+    /// The tasks `delegate` returned, by their id.
+    pub(crate) tasks: Mutex<HashMap<String, roomkit::tasks::DelegatedTask>>,
     /// The work scripted turns left for after them (`after_turn`).
     after_turn: Mutex<Vec<JoinHandle<()>>>,
     /// The scripted agents' models, by channel.
@@ -139,6 +141,7 @@ impl Run {
             events,
             events_read: Mutex::new(0),
             background: Mutex::default(),
+            tasks: Mutex::default(),
             after_turn: Mutex::default(),
             models: Mutex::default(),
         }
@@ -369,11 +372,18 @@ impl Run {
             return;
         };
         let run = Arc::clone(self);
+        let run_kit = self.kit.clone();
         let work = tokio::spawn(roomkit::keep_context(async move {
             let ended = async {
                 while host.open() {
                     tokio::time::sleep(Duration::from_millis(1)).await;
                 }
+            };
+            let ended = async {
+                ended.await;
+                // The owner reads the turn's frames on its own: work after
+                // the turn is made once the kit's own work for it is over.
+                roomkit::testing::idle(&run_kit).await;
             };
             if tokio::time::timeout(GATE_BOUND, ended).await.is_err() {
                 run.problem(format!(

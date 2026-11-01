@@ -16,15 +16,16 @@ use roomkit::model::{
     ChannelId, EventContent, HookResult, Metadata, Observation, RoomContext, RoomId,
 };
 use roomkit::orchestration::{PostAsyncOptions, RecentOptions, StatusLevel};
+use roomkit::tasks::DelegatedTask;
 use roomkit::{
-    HookError, ListObservationsOptions, ListTasksOptions, PostStatusOptions, SubmitFeedbackOptions,
-    TurnHost, UpdateRoomMetadataOptions, current_turn_host,
+    DelegateOptions, HookError, ListObservationsOptions, ListTasksOptions, PostStatusOptions,
+    SubmitFeedbackOptions, TurnHost, UpdateRoomMetadataOptions, current_turn_host,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::calls::{Called, Unreadable, dump, field, finish, optional, send_event_options};
-use crate::run::{Run, Scope};
+use crate::run::{Run, Scope, lock};
 use crate::scripted::perform;
 use crate::templates::complete_observation;
 
@@ -52,6 +53,20 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
         ],
         "list_observations" => &["room_id"],
         "list_tasks" => &["room_id", "status"],
+        "delegate" => &[
+            "room_id",
+            "agent_id",
+            "task",
+            "wait",
+            "context",
+            "share_channels",
+            "notify",
+            "post_status",
+            "brief",
+            "conversation",
+            "hand_back",
+        ],
+        "task.wait" => &["task_id"],
         "host.send_event" => &[
             "room_id",
             "channel_id",
@@ -150,7 +165,63 @@ pub(crate) async fn call(
             let outcome = kit.list_tasks(&room()?, options).await;
             (finish(run, name, outcome, dump), None)
         }
+        "delegate" => delegate(run, spec).await?,
+        "task.wait" => {
+            let task_id: String = field(spec, "task_id")?;
+            let task = lock(&run.tasks)
+                .get(&task_id)
+                .cloned()
+                .ok_or_else(|| format!("no task {task_id:?} was delegated"))?;
+            let outcome = task.wait(roomkit::tasks::WaitOptions::default()).await;
+            (finish(run, name, outcome, dump), None)
+        }
         verb => host_call(run, verb, spec).await?,
+    })
+}
+
+/// `delegate` with the scenario's keywords: the task, its label its id.
+async fn delegate(run: &Arc<Run>, spec: &Value) -> Result<(Called, Option<String>), Unreadable> {
+    let defaults = DelegateOptions::default();
+    if optional::<u64>(spec, "conversation")?.unwrap_or(0) != 0 {
+        return Err("conversation is not in 0.x".to_owned());
+    }
+    let options = DelegateOptions {
+        wait: optional(spec, "wait")?.unwrap_or(defaults.wait),
+        context: optional(spec, "context")?,
+        share_channels: optional(spec, "share_channels")?,
+        notify: optional(spec, "notify")?,
+        post_status: optional(spec, "post_status")?.unwrap_or(defaults.post_status),
+        brief: optional(spec, "brief")?,
+        hand_back: optional(spec, "hand_back")?.unwrap_or(defaults.hand_back),
+        organization_id: organization_id(spec),
+        ..DelegateOptions::default()
+    };
+    let (room, agent, task): (RoomId, ChannelId, String) = (
+        field(spec, "room_id")?,
+        field(spec, "agent_id")?,
+        field(spec, "task")?,
+    );
+    let outcome = run.kit().delegate(&room, &agent, task, options).await;
+    let id = outcome.as_ref().ok().map(|task| task.id.clone());
+    if let Ok(task) = &outcome {
+        lock(&run.tasks).insert(task.id.clone(), task.clone());
+    }
+    Ok((finish(run, "delegate", outcome, task_record), id))
+}
+
+/// A task as the suite reads it (README, "Calls").
+fn task_record(task: &DelegatedTask) -> Value {
+    json!({
+        "id": task.id,
+        "child_room_id": task.child_room_id,
+        "parent_room_id": task.parent_room_id,
+        "agent_id": task.agent_id,
+        "task": task.task,
+        "brief": task.brief,
+        "description": task.description,
+        "hand_back": task.hand_back,
+        "status": task.status(),
+        "result": task.result(),
     })
 }
 
