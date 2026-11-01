@@ -1196,6 +1196,20 @@ class TheGate(unittest.TestCase):
             with self.subTest(label):
                 self.assertEqual(parity.blocking(report), [reason])
 
+    def test_a_default_no_test_asserts_is_found(self) -> None:
+        report = run(
+            [
+                struct("roomkit::RoomKit", methods=["pub async fn attach_channel(&self, room_id: &RoomId, options: AttachChannelOptions)"]),
+                struct("roomkit::AttachChannelOptions", fields=[("access", "Access")]),
+            ],
+            {"roomkit.RoomKit": {"attach_channel": ["async def", "room_id", "access=<Access.READ_WRITE: 'read_write'>"]}},
+        )
+        marker = "// roomkit.RoomKit.attach_channel(access) = <Access.READ_WRITE: 'read_write'>"
+        self.assertEqual(
+            (parity.missing_defaults(report, ""), parity.missing_defaults(report, marker)),
+            (["roomkit.RoomKit.attach_channel(access)"], []),
+        )
+
 
 class ThePin(unittest.TestCase):
     def setUp(self) -> None:

@@ -83,6 +83,9 @@ class Comparison:
                 self.member_maps.setdefault(item, {})[(owner, python_member or "")] = entry
         self.applied: set[int] = set()
         self.options_used: set[str] = set()
+        # The Python parameters a Rust option stands for, each with its
+        # default: (the Python parameter, its default, the Rust field).
+        self.defaulted: list[tuple[str, str, str]] = []
         self.families_read: set[str] = set()
         self.builtin_errors_read: set[str] = set()
         self.findings: list[Finding] = []
@@ -525,6 +528,8 @@ class Comparison:
                 self._find("python", f"{python_path}({param.name})", "no Rust parameter", *owner)
                 continue
             taken.add(pair.path)
+            if not param.required and not param.variadic and not pair.positional:
+                self.defaulted.append((f"{python_path}({param.name})", param.default or "", pair.path))
             if param.required and not pair.positional:
                 self._find("rust", pair.path, "Python requires it: a positional parameter", *owner)
             elif not param.required and not param.variadic and pair.positional:

@@ -101,11 +101,14 @@ report lists it as due once the snapshot holds that name.
 
 The report exits 0 whatever it finds (step 5, lot 0), but with `--gate`,
 the gate before the tag (lot 6): it exits 1 on a finding no entry covers, a
-dead entry or a pending entry. An input it cannot read whole (the surface,
+dead entry or a pending entry, and, given the defaults tests
+(`--defaults FILE...`), on a Python default a Rust option stands for that
+no line of them names. An input it cannot read whole (the surface,
 the snapshot, its fingerprint, the mapping) exits 2.
 
 Usage: python3 scripts/api-parity.py SURFACE [--python DIR] [--mapping FILE]
                                      [--rules-only] [--json OUT] [--gate]
+                                     [--defaults FILE...]
        python3 scripts/api-parity.py --spec NAME [--python DIR]
 """
 
@@ -121,7 +124,7 @@ from typing import TextIO
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from api_parity import ParityError  # noqa: E402
-from api_parity.cover import Report, blocking, compare  # noqa: E402
+from api_parity.cover import Report, blocking, compare, missing_defaults  # noqa: E402
 from api_parity.mapping import Mapping, Rules, load_mapping, variant_name  # noqa: E402
 from api_parity.report import as_json, render  # noqa: E402
 from api_parity.sides import Python, Surface, fingerprint, load_python, load_surface, spec_hash  # noqa: E402
@@ -137,6 +140,7 @@ __all__ = [
     "compare",
     "fingerprint",
     "load_python",
+    "missing_defaults",
     "spec_hash",
     "variant_name",
 ]
@@ -151,6 +155,9 @@ def main(argv: list[str] | None = None, out: TextIO = sys.stdout, log: TextIO = 
     parser.add_argument("--json", type=Path, help="also write the findings as JSON there")
     parser.add_argument("--spec", metavar="NAME", help="print the py_spec of a Python name, for a [[map]] entry")
     parser.add_argument("--gate", action="store_true", help="exit 1 on what fails the gate before the tag")
+    parser.add_argument(
+        "--defaults", type=Path, nargs="*", default=[], help="the defaults tests, which the gate checks name each default"
+    )
     args = parser.parse_args(argv)
     try:
         python = load_python(args.python)
@@ -169,6 +176,13 @@ def main(argv: list[str] | None = None, out: TextIO = sys.stdout, log: TextIO = 
     if args.json:
         args.json.write_text(json.dumps(as_json(report), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     failing = blocking(report) if args.gate else []
+    if args.gate and args.defaults:
+        tests = "\n".join(path.read_text(encoding="utf-8") for path in args.defaults)
+        unasserted = missing_defaults(report, tests)
+        for python in unasserted:
+            print(f"api-parity: no defaults line names {python}", file=log)
+        if unasserted:
+            failing.append(f"{len(unasserted)} default{'' if len(unasserted) == 1 else 's'} no test asserts")
     if failing:
         print(f"api-parity: the gate fails: {'; '.join(failing)}", file=log)
         return 1

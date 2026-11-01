@@ -29,6 +29,9 @@ class Report:
     moved: list[Entry]
     pending: dict[str, list[Entry]]
     due: list[Entry]
+    # The Python parameters a Rust option stands for, with their defaults:
+    # (the Python parameter, its default, the Rust field).
+    defaulted: list[tuple[str, str, str]]
 
 
 def compare(surface: Surface, python: Python, mapping: Mapping) -> Report:
@@ -47,7 +50,15 @@ def compare(surface: Surface, python: Python, mapping: Mapping) -> Report:
     for entry in mapping.of("pending"):
         pending.setdefault(entry.lot, []).append(entry)
     due = [entry for entry in mapping.of("exception") if entry.until and python.exists(entry.until)]
-    return Report(surface, python, mapping, items, findings, uncovered, dead, moved, pending, due)
+    defaulted = sorted(set(comparison.defaulted))
+    return Report(surface, python, mapping, items, findings, uncovered, dead, moved, pending, due, defaulted)
+
+
+def missing_defaults(report: Report, tests: str) -> list[str]:
+    """The defaulted Python parameters a Rust option stands for that
+    `tests`, the defaults tests' text, names in no line (lot 6: rustdoc shows
+    no default, so a test asserts each)."""
+    return [python for python, _, _ in report.defaulted if python not in tests]
 
 
 def blocking(report: Report) -> list[str]:
