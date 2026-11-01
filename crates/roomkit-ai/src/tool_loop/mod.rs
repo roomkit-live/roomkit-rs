@@ -15,6 +15,7 @@
 mod calls;
 mod generation;
 mod intents;
+mod rules;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,7 +26,8 @@ use roomkit_core::rules::transcript::Message;
 use serde_json::Value;
 
 use self::generation::Generation;
-use crate::provider::{AiContext, AiProvider, ProviderError, ai_messages, ran_out_of_room};
+use self::rules::{Limits, final_round_reason};
+use crate::provider::{AiContext, AiProvider, ProviderError, ai_messages};
 use crate::stream::{Items, Yielder, items, join_all};
 use crate::tools::ToolContext;
 use crate::tools::ToolPolicy;
@@ -62,11 +64,20 @@ pub(crate) struct ToolEnd {
 /// The items of a turn's loop, or the provider's error that ended it.
 pub(crate) type TurnItems<'a> = Items<'a, Result<TurnItem, ProviderError>>;
 
-/// How an agent's loop runs: its bounds and its system prompt.
+/// How an agent's loop runs: its bounds.
 #[derive(Clone, Debug)]
 pub(crate) struct Bounds {
     /// The most rounds of calls a turn runs (Appendix A.9, 50 by default).
     pub(crate) max_rounds: u32,
+    /// How long the loop may run, read between rounds (Appendix A.9, 300
+    /// seconds by default); `None` sets no deadline.
+    pub(crate) loop_timeout: Option<Duration>,
+    /// After how many rounds of calls the loop logs that it still runs (25
+    /// by default).
+    pub(crate) warn_after: u32,
+    /// How many times a round with no call to run is tried again (1 by
+    /// default).
+    pub(crate) max_empty_retries: u32,
     /// The longest a call's tool may take (RFC §21.6, 30 seconds by
     /// default); `None` bounds nothing.
     pub(crate) tool_timeout: Option<Duration>,
@@ -99,17 +110,19 @@ impl<P: AiProvider> Loop<P> {
         items(move |out| self.rounds(conversation, out))
     }
 
-    /// Runs rounds until the model answers, the round bound passes, or the
-    /// provider fails.
+    /// Runs rounds until the model answers, the round bound or the deadline
+    /// passes, or the provider fails; a round with no call to run may be
+    /// tried again, in a round's place (Appendix A.9).
     async fn rounds(
         self,
         mut messages: Vec<Message>,
         out: Yielder<Result<TurnItem, ProviderError>>,
     ) {
         let declared = self.shown_tools(self.toolbox.declared(&self.policy));
-        let mut usage = Metadata::new();
-        let mut usage_complete = true;
+        let mut spent = Spent::default();
         let mut had_tool_round = false;
+        let mut tool_rounds = 0;
+        let mut limits = Limits::starting(&self.bounds);
         for round in 0..=self.bounds.max_rounds {
             let context = AiContext {
                 messages: ai_messages(&self.shown_messages(&messages)),
@@ -124,49 +137,77 @@ impl<P: AiProvider> Loop<P> {
                     Ok(generation) => generation,
                     Err(error) => {
                         let end = LoopEndMarker {
-                            usage,
+                            usage: spent.usage,
                             usage_complete: Some(false),
-                            ..self.end_of(LoopEndReason::Error, round)
+                            ..self.end_of(LoopEndReason::Error, tool_rounds, limits.timeout)
                         };
-                        return failed(round, end, error, &out).await;
+                        return failed(had_tool_round, end, error, &out).await;
                     }
                 };
             self.take_intents(&mut generation.calls);
-            add_usage(&mut usage, &generation.done.usage);
-            usage_complete &= ["input_tokens", "output_tokens"].iter().all(|key| {
-                generation
-                    .done
-                    .usage
-                    .get(*key)
-                    .and_then(Value::as_u64)
-                    .is_some()
-            });
-            let end = |reason, usage| LoopEndMarker {
-                usage,
-                last_usage: Some(generation.done.usage.clone()),
-                usage_complete: Some(usage_complete),
-                ..self.end_of(reason, round)
-            };
+            spent.count(&generation.done.usage);
             if generation.calls.is_empty() {
-                let reason = final_reason(&generation, had_tool_round);
-                return out.give(Ok(TurnItem::End(end(reason, usage)))).await;
+                let finish_reason = generation.done.finish_reason.as_deref();
+                if let Some(said) =
+                    limits.try_again(had_tool_round, &generation.text, finish_reason)
+                {
+                    messages.extend(said);
+                    continue;
+                }
+                let limit = limits.passed();
+                let reason =
+                    final_round_reason(had_tool_round, &generation.text, finish_reason, limit);
+                return self.end(reason, tool_rounds, &limits, spent, &out).await;
             }
             if round == self.bounds.max_rounds {
-                tracing::warn!(target: "roomkit::ai", max_rounds = round, "the tool loop reached its round bound");
-                let reason = LoopEndReason::MaxRounds;
-                return out.give(Ok(TurnItem::End(end(reason, usage)))).await;
+                break;
+            }
+            if let Some(limit) = limits.reached(tool_rounds) {
+                return self.end(limit, tool_rounds, &limits, spent, &out).await;
             }
             had_tool_round = true;
+            limits.warn_if_due(tool_rounds);
             messages.extend(self.round_of_calls(generation, &out).await);
+            tool_rounds += 1;
         }
+        // The round bound passed, a try in the last round's place included.
+        tracing::warn!(target: "roomkit::ai", max_rounds = self.bounds.max_rounds, "the tool loop reached its round bound");
+        self.end(LoopEndReason::MaxRounds, tool_rounds, &limits, spent, &out)
+            .await;
+    }
+
+    /// Ends the loop for `reason` after `rounds` rounds of calls, with what
+    /// its generations used.
+    async fn end(
+        &self,
+        reason: LoopEndReason,
+        rounds: u32,
+        limits: &Limits,
+        spent: Spent,
+        out: &Yielder<Result<TurnItem, ProviderError>>,
+    ) {
+        let end = LoopEndMarker {
+            usage: spent.usage,
+            last_usage: Some(spent.last),
+            usage_complete: Some(spent.complete),
+            ..self.end_of(reason, rounds, limits.timeout)
+        };
+        out.give(Ok(TurnItem::End(end))).await;
     }
 
     /// The end of the loop for `reason` after `rounds` rounds of calls, the
-    /// round bound it ran under, its model and provider; no usage yet.
-    fn end_of(&self, reason: LoopEndReason, rounds: u32) -> LoopEndMarker {
+    /// round bound and the deadline it ran under, its model and provider;
+    /// no usage yet.
+    fn end_of(
+        &self,
+        reason: LoopEndReason,
+        rounds: u32,
+        timeout: Option<Duration>,
+    ) -> LoopEndMarker {
         LoopEndMarker {
             rounds,
             max_rounds: Some(self.bounds.max_rounds),
+            timeout,
             model: Some(self.provider.model_name().to_owned()),
             provider: Some(self.provider.name().to_owned()),
             ..LoopEndMarker::new(reason)
@@ -216,31 +257,46 @@ impl<P: AiProvider> Loop<P> {
     }
 }
 
-/// The provider failed in `round`: after a round, the loop ends `error`,
-/// its rounds kept (RFC §6.4 "A turn cut short"); then the error.
+/// The provider failed: after a round of calls, the loop ends `error`, its
+/// rounds kept (RFC §6.4 "A turn cut short"); then the error.
 async fn failed(
-    round: u32,
+    after_round: bool,
     end: LoopEndMarker,
     error: ProviderError,
     out: &Yielder<Result<TurnItem, ProviderError>>,
 ) {
-    if round > 0 {
+    if after_round {
         out.give(Ok(TurnItem::End(end))).await;
     }
     out.give(Err(error)).await;
 }
 
-/// Why a loop whose round made no call ends there (RFC §6.4): an answer, or
-/// a turn that ran no call, completes; after a round of calls, no text reads
-/// as the room running out, or as an empty answer.
-fn final_reason(generation: &Generation, had_tool_round: bool) -> LoopEndReason {
-    if !generation.text.trim().is_empty() || !had_tool_round {
-        return LoopEndReason::Completed;
+/// What a turn's generations used: their counters summed, the last one's,
+/// and whether every one reported its input and output tokens.
+struct Spent {
+    usage: Metadata,
+    last: Metadata,
+    complete: bool,
+}
+
+impl Default for Spent {
+    fn default() -> Self {
+        Self {
+            usage: Metadata::new(),
+            last: Metadata::new(),
+            complete: true,
+        }
     }
-    if ran_out_of_room(generation.done.finish_reason.as_deref()) {
-        LoopEndReason::Truncated
-    } else {
-        LoopEndReason::EmptyResponse
+}
+
+impl Spent {
+    /// Counts one generation's `used` counters.
+    fn count(&mut self, used: &Metadata) {
+        add_usage(&mut self.usage, used);
+        self.complete &= ["input_tokens", "output_tokens"]
+            .iter()
+            .all(|key| used.get(*key).and_then(Value::as_u64).is_some());
+        self.last.clone_from(used);
     }
 }
 

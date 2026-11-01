@@ -848,7 +848,8 @@ async fn a_streaming_channel_that_fails_while_a_call_runs_lets_it_finish() {
 }
 
 /// RFC §6.4 "The turn's record": a turn that ends on no text, an empty
-/// answer after a round, writes its record on the last message it wrote
+/// answer after a round, asked again once and empty again, writes its
+/// record on the last message it wrote
 /// once it ends, `ON_EVENT_UPDATED` firing; the message is not delivered
 /// again. (Milestone 5 wrote it into the rows the turn returned, and
 /// fired nothing.)
@@ -856,6 +857,7 @@ async fn a_streaming_channel_that_fails_while_a_call_runs_lets_it_finish() {
 async fn a_turn_ending_on_no_text_writes_its_record_on_its_last_message() {
     let rounds = vec![
         ScriptedRound::calling("Let me check.", [("call_1", "lookup_order", "{}")]),
+        ScriptedRound::answering(""),
         ScriptedRound::answering(""),
     ];
     let runs = Arc::new(AtomicUsize::new(0));

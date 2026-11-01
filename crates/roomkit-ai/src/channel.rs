@@ -50,6 +50,17 @@ pub struct AiChannelOptions {
     pub tools: Vec<ToolEntry>,
     /// The most rounds of calls a turn runs (Appendix A.9).
     pub max_tool_rounds: u32,
+    /// How long a turn's tool loop may run, read between its rounds
+    /// (Appendix A.9): past it, the loop ends `timeout` before the round's
+    /// calls run. `None`, or zero, sets no deadline.
+    pub tool_loop_timeout: Option<Duration>,
+    /// After how many rounds of calls the loop logs that it is still
+    /// running.
+    pub tool_loop_warn_after: u32,
+    /// How many times a turn tries again a round that ended with no call to
+    /// run: an empty answer after a round of calls, or a call the provider
+    /// could not hand over (RFC §6.4).
+    pub max_empty_retries: u32,
     /// The longest a tool's call may take (RFC §21.6); `None` bounds
     /// nothing.
     pub tool_timeout: Option<Duration>,
@@ -84,6 +95,9 @@ impl Default for AiChannelOptions {
             tool_handler: None,
             tools: Vec::new(),
             max_tool_rounds: 50,
+            tool_loop_timeout: Some(Duration::from_secs(300)),
+            tool_loop_warn_after: 25,
+            max_empty_retries: 1,
             tool_timeout: Some(Duration::from_secs(30)),
             skills: None,
             skills_in_prompt: true,
@@ -122,7 +136,12 @@ impl fmt::Debug for AiChannelOptions {
 ///   hooks) and within the bound per call (RFC §21.6, 30 seconds by
 ///   default), then hands their results to the next round;
 /// - the loop ends when the model answers without calling, or at the
-///   generation past its round bound (50 by default), whose calls never run.
+///   generation past its round bound (50 by default), whose calls never run;
+/// - past its deadline (300 seconds by default), read between rounds, the
+///   loop ends `timeout`, the round's calls left unrun;
+/// - an empty answer after a round of calls, or a call the provider could
+///   not hand over, is tried again with a word to the model, once by
+///   default (`max_empty_retries`).
 ///
 /// A call goes to the tool handler first, then to each tool serving itself,
 /// the first that serves it winning, as Python's `compose_tool_handlers`.
@@ -213,6 +232,9 @@ impl<P: AiProvider> AiChannel<P> {
             tool_handler,
             tools,
             max_tool_rounds,
+            tool_loop_timeout,
+            tool_loop_warn_after,
+            max_empty_retries,
             tool_timeout,
             skills,
             skills_in_prompt,
@@ -250,6 +272,9 @@ impl<P: AiProvider> AiChannel<P> {
             policy,
             bounds: Bounds {
                 max_rounds: max_tool_rounds,
+                loop_timeout: tool_loop_timeout.filter(|timeout| !timeout.is_zero()),
+                warn_after: tool_loop_warn_after,
+                max_empty_retries,
                 tool_timeout,
             },
             system_prompt: Arc::new(RwLock::new(

@@ -4,6 +4,7 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+mod bounds;
 mod history;
 mod intents;
 mod servers;

@@ -844,12 +844,6 @@ rust = "roomkit_ai::AiChannelOptions"
 members = ["tool_call_intents_required"]
 reason = "Rust only (dd6ab1b, 2026-10-30, rfc-gaps 'Opt-in required tool-call intents'): a question for the maintainer, Python too or Rust as Python"
 
-[[pending]]
-lot = 5
-python = "roomkit.AIChannel.__init__"
-params = ["tool_loop_timeout_seconds", "tool_loop_warn_after", "max_empty_retries"]
-reason = "lot 5, Appendix A.9: the loop's deadline, its warning and its empty-answer retries, a commit of their own"
-
 [[missing]]
 python = "roomkit.AIChannel.__init__"
 params = [

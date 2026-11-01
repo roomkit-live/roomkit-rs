@@ -675,6 +675,17 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Added
 
+- **The tool loop's bounds of Appendix A.9**, as Python's `AIChannel`:
+  `AiChannelOptions::tool_loop_timeout` (300 s by default; `None` or zero
+  sets none) is read between rounds, the loop ending `timeout` before the
+  round's calls run; `tool_loop_warn_after` (25) logs a loop still running;
+  `max_empty_retries` (1) asks the model again, in a round's place, after
+  an empty answer that follows a round of calls (the results are above:
+  write the answer) or a call its provider could not hand over
+  (`malformed_function_call`, `unexpected_tool_call`), what it wrote kept
+  before the word to it. A response that ran out of room is not asked
+  again. The loop's end states its deadline (`timeout_seconds`) and counts
+  the rounds of calls that ran, a try not among them.
 - `TransportChannel::new(channel_id, channel_type, TransportChannelOptions {
   capabilities, addressing, country_code, defaults, requires_recipient })`,
   Python's `TransportChannel`: its addresses by its addressing declaration,
