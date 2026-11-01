@@ -19,8 +19,8 @@ use roomkit::orchestration::{PostAsyncOptions, RecentOptions, StatusLevel};
 use roomkit::tasks::DelegatedTask;
 use roomkit::{
     CancelTaskOptions, DelegateOptions, HookError, ListObservationsOptions, ListTasksOptions,
-    PostStatusOptions, SubmitFeedbackOptions, TurnHost, UpdateRoomMetadataOptions,
-    current_turn_host,
+    PostStatusOptions, StartTaskOptions, SubmitFeedbackOptions, TurnHost,
+    UpdateRoomMetadataOptions, current_turn_host,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -68,6 +68,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "hand_back",
         ],
         "task.wait" | "host.wait_task" | "cancel_task" => &["task_id"],
+        "start_task" => &["room_id", "agent_id", "task", "hand_back"],
         "host.send_event" => &[
             "room_id",
             "channel_id",
@@ -180,6 +181,7 @@ pub(crate) async fn call(
             (finish(run, name, outcome, dump), None)
         }
         "delegate" => delegate(run, spec).await?,
+        "start_task" => start_task(run, spec).await?,
         "task.wait" => {
             let task_id: String = field(spec, "task_id")?;
             let task = lock(&run.tasks)
@@ -204,11 +206,9 @@ pub(crate) async fn call(
 /// `delegate` with the scenario's keywords: the task, its label its id.
 async fn delegate(run: &Arc<Run>, spec: &Value) -> Result<(Called, Option<String>), Unreadable> {
     let defaults = DelegateOptions::default();
-    if optional::<u64>(spec, "conversation")?.unwrap_or(0) != 0 {
-        return Err("conversation is not in 0.x".to_owned());
-    }
     let options = DelegateOptions {
         wait: optional(spec, "wait")?.unwrap_or(defaults.wait),
+        conversation: optional(spec, "conversation")?.unwrap_or(defaults.conversation),
         context: optional(spec, "context")?,
         share_channels: optional(spec, "share_channels")?,
         notify: optional(spec, "notify")?,
@@ -229,6 +229,25 @@ async fn delegate(run: &Arc<Run>, spec: &Value) -> Result<(Called, Option<String
         lock(&run.tasks).insert(task.id.clone(), task.clone());
     }
     Ok((finish(run, "delegate", outcome, task_record), id))
+}
+
+/// `start_task` with the scenario's keywords: the task, its label its id.
+async fn start_task(run: &Arc<Run>, spec: &Value) -> Result<(Called, Option<String>), Unreadable> {
+    let options = StartTaskOptions {
+        hand_back: optional(spec, "hand_back")?,
+        organization_id: organization_id(spec),
+    };
+    let (room, agent, task): (RoomId, ChannelId, String) = (
+        field(spec, "room_id")?,
+        field(spec, "agent_id")?,
+        field(spec, "task")?,
+    );
+    let outcome = run.kit().start_task(&room, &agent, task, options).await;
+    let id = outcome.as_ref().ok().map(|task| task.id.clone());
+    if let Ok(task) = &outcome {
+        lock(&run.tasks).insert(task.id.clone(), task.clone());
+    }
+    Ok((finish(run, "start_task", outcome, task_record), id))
 }
 
 /// A task as the suite reads it (README, "Calls").
@@ -302,11 +321,9 @@ async fn host_call(
         }
         "host.delegate" => {
             let defaults = DelegateOptions::default();
-            if optional::<u64>(spec, "conversation")?.unwrap_or(0) != 0 {
-                return Err("conversation is not in 0.x".to_owned());
-            }
             let options = DelegateOptions {
                 context: optional(spec, "context")?,
+                conversation: optional(spec, "conversation")?.unwrap_or(defaults.conversation),
                 share_channels: optional(spec, "share_channels")?,
                 notify: optional(spec, "notify")?,
                 post_status: optional(spec, "post_status")?.unwrap_or(defaults.post_status),
