@@ -756,6 +756,11 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **A stream's error message names a transient failure as Python reads
+  it**: `rate_limit_exceeded`, `overloaded_error` or `error_503` name
+  none, `_` being a letter of a word to Python's `\b`, and `rate  limit`
+  none, one separator at most; roomkit-rs split words at `_` and at any run
+  of separators, and read them retryable.
 - **`OpenAiConfig::extra_body` wins over RoomKit's own members, and an
   `Authorization` in `default_headers` replaces the key's bearer**, as
   Python's client sends them: a member RoomKit wrote (`temperature`,

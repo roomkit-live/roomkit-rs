@@ -141,32 +141,75 @@ fn retryable_status(status: u16) -> bool {
     matches!(status, 408 | 409 | 429 | 500..=599)
 }
 
-/// Whether `message`, which came with no status, names a transient failure:
-/// a retried status, a rate limit or an overload, as whole words (Python's
-/// `_names_transient`: `rate[ _-]?limit(ed|s)?`, `too many requests`,
-/// `overloaded`, or a status number).
+/// Whether `message`, which came with no status, names a transient failure,
+/// as Python's `_names_transient` reads it: `rate[ _-]?limit(ed|s)?`, `too
+/// many requests` or `overloaded`, in any case, or a retried status
+/// (`[45]\d\d`), each a whole word, a word's letters including `_`.
 fn names_transient(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    let words: Vec<&str> = lower
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|word| !word.is_empty())
+    let chars: Vec<char> = message.chars().collect();
+    let in_word = |at: usize| {
+        chars
+            .get(at)
+            .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+    };
+    let whole = |start: usize, end: usize| (start == 0 || !in_word(start - 1)) && !in_word(end);
+    (0..chars.len()).any(|start| {
+        transient_words_at(&chars, start)
+            .into_iter()
+            .any(|end| whole(start, end))
+            || status_at(&chars, start)
+                .is_some_and(|(end, status)| whole(start, end) && retryable_status(status))
+    })
+}
+
+/// Where each of the transient words that start at `start` in `chars`
+/// ends: each way `rate[ _-]?limit(ed|s)?` reads there, `too many
+/// requests`, `overloaded`.
+fn transient_words_at(chars: &[char], start: usize) -> Vec<usize> {
+    let mut ends: Vec<usize> = ["too many requests", "overloaded"]
+        .into_iter()
+        .filter_map(|words| spelled_at(chars, start, words))
         .collect();
-    let limit = |word: &str| matches!(word, "limit" | "limits" | "limited");
-    let named = words.iter().enumerate().any(|(at, word)| {
-        let next = words.get(at + 1).copied();
-        (*word == "rate" && next.is_some_and(limit))
-            || matches!(
-                *word,
-                "ratelimit" | "ratelimits" | "ratelimited" | "overloaded"
-            )
-            || (*word == "too" && next == Some("many") && words.get(at + 2) == Some(&"requests"))
-    });
-    named
-        || words
-            .iter()
-            .filter(|word| word.len() == 3)
-            .filter_map(|word| word.parse::<u16>().ok())
-            .any(retryable_status)
+    if let Some(rate) = spelled_at(chars, start, "rate") {
+        for separator in ["", " ", "_", "-"] {
+            let Some(limit) = spelled_at(chars, rate, separator)
+                .and_then(|after| spelled_at(chars, after, "limit"))
+            else {
+                continue;
+            };
+            ends.push(limit);
+            ends.extend(
+                ["ed", "s"]
+                    .into_iter()
+                    .filter_map(|suffix| spelled_at(chars, limit, suffix)),
+            );
+        }
+    }
+    ends
+}
+
+/// Where `text` ends when `chars` spell it at `at`, in any case.
+fn spelled_at(chars: &[char], at: usize, text: &str) -> Option<usize> {
+    let mut end = at;
+    for expected in text.chars() {
+        let found = chars.get(end)?;
+        if !found.eq_ignore_ascii_case(&expected) {
+            return None;
+        }
+        end += 1;
+    }
+    Some(end)
+}
+
+/// The status a number of three digits starting `4` or `5` at `start`
+/// says, and where it ends.
+fn status_at(chars: &[char], start: usize) -> Option<(usize, u16)> {
+    let digits = chars.get(start..start + 3)?;
+    if !matches!(digits.first(), Some('4' | '5')) {
+        return None;
+    }
+    let number: String = digits.iter().collect();
+    number.parse().ok().map(|status| (start + 3, status))
 }
 
 impl From<OpenAiError> for ProviderError {
@@ -207,6 +250,31 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    /// Python's `_names_transient`: its words read as Python's regular
+    /// expressions read them, `_` a letter of a word and one separator at
+    /// most (`tasks/probes/step5-review/mcp-openai/py_names_transient.out`).
+    #[test]
+    fn a_message_names_a_transient_failure_as_python_reads_it() {
+        let messages = [
+            "rate_limit_exceeded",
+            "overloaded_error",
+            "error_503",
+            "rate  limit",
+            "Rate limit reached",
+            "HTTP 503",
+            "ratelimited: retry",
+            "Too many requests",
+            "rate-limits",
+            "HTTP 404",
+        ];
+        assert_eq!(
+            messages.map(names_transient),
+            [
+                false, false, false, false, true, true, true, true, true, false
+            ]
+        );
+    }
 
     /// Python's `provider_error`: a status decides, a lost connection is
     /// retried, an unreadable answer is not, a message is read for a
