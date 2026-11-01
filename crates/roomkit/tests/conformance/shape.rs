@@ -27,6 +27,7 @@ const KIT: &[&str] = &[
     "identity_resolver",
     "identity_channel_types",
     "identity_timeout_ms",
+    "delivery_backend",
 ];
 const RESOLVER: &[&str] = &["answers"];
 const RESOLVER_ANSWER: &[&str] = &["when", "repeat", "gate", "fail", "result"];
@@ -40,6 +41,12 @@ const IDENTITY_HOOK: &[&str] = &[
     "reactions",
 ];
 const IDENTITY_REACTION: &[&str] = &["when", "repeat", "gate", "fail", "result"];
+const DELIVERY_BACKEND: &[&str] = &[
+    "retry_delay_ms",
+    "max_retry_delay_ms",
+    "max_queue_size",
+    "max_dead_letter_size",
+];
 const CHANNEL: &[&str] = &[
     "id",
     "type",
@@ -255,6 +262,12 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
     optional(setup, SETUP, "setup", &mut found);
     optional(&setup["kit"], KIT, "setup.kit", &mut found);
     identity(setup, &mut found);
+    optional(
+        &setup["kit"]["delivery_backend"],
+        DELIVERY_BACKEND,
+        "setup.kit.delivery_backend",
+        &mut found,
+    );
     for (position, channel) in items(&setup["channels"]) {
         self::channel(channel, &format!("setup.channels[{position}]"), &mut found);
     }

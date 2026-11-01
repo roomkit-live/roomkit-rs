@@ -39,6 +39,23 @@ impl InboundRoomRouter for ScriptedRouter {
     }
 }
 
+/// The in-memory delivery backend a scenario's `setup.kit` names (README,
+/// "Setup"), its bounds in milliseconds and counts.
+fn delivery_backend(kit: &Value) -> Option<roomkit::InMemoryDeliveryBackend> {
+    let spec = kit.get("delivery_backend")?;
+    let defaults = roomkit::InMemoryDeliveryBackendOptions::default();
+    let millis = |key: &str| spec[key].as_u64().map(Duration::from_millis);
+    let count = |key: &str| spec[key].as_u64().and_then(|n| usize::try_from(n).ok());
+    let options = roomkit::InMemoryDeliveryBackendOptions {
+        retry_delay: millis("retry_delay_ms").unwrap_or(defaults.retry_delay),
+        max_retry_delay: millis("max_retry_delay_ms").unwrap_or(defaults.max_retry_delay),
+        max_queue_size: count("max_queue_size").unwrap_or(defaults.max_queue_size),
+        max_dead_letter_size: count("max_dead_letter_size")
+            .unwrap_or(defaults.max_dead_letter_size),
+    };
+    roomkit::InMemoryDeliveryBackend::new(options).ok()
+}
+
 /// The kit's options a scenario's setup names, over `options`: its
 /// chain-depth limit, its `process_timeout` and its router.
 fn kit_options<S>(mut options: RoomKitOptions<S>, kit: &Value) -> RoomKitOptions<S> {
@@ -62,12 +79,20 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     // The store's file, when it has one, goes once the run is over.
     let setup = scenario.get("setup").cloned().unwrap_or_default();
     let slot = RunSlot::default();
+    let backend = delivery_backend(&setup["kit"]);
+    let queue = backend.clone();
     let (kit, _store_file) = crate::new_kit(|options| {
-        identity::kit_options(kit_options(options, &setup["kit"]), &setup["kit"], &slot)
+        let mut options =
+            identity::kit_options(kit_options(options, &setup["kit"]), &setup["kit"], &slot);
+        if let Some(backend) = queue {
+            options.delivery_backend = Some(Arc::new(backend));
+        }
+        options
     })
     .await;
     let run = Arc::new(Run::new(kit, scenario));
     slot.set(&run);
+    *lock(&run.backend) = backend;
     if let Err(problem) = set_up(&run, &setup).await {
         return vec![format!("setup: {problem}")];
     }
@@ -126,6 +151,11 @@ async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
         identity::register_identity_hook(run, hook)
             .map_err(|error| format!("register {hook}: {error}"))?;
     }
+    // Entered, as Python's `async with` starts its delivery backend.
+    run.kit()
+        .start()
+        .await
+        .map_err(|error| format!("start: {error}"))?;
     run.idle().await;
     Ok(())
 }

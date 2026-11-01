@@ -18,11 +18,11 @@ use roomkit::providers::sms::WebhookMeta;
 use roomkit::{
     AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
     CloseRoomOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
-    DeliverOptions, DetachChannelOptions, HookOptions, HookTrigger, HostChannel, InboundResult,
-    MuteOptions, MuteOutputOptions, PostOptions, ProcessDeliveryStatusOptions,
-    ProcessInboundOptions, ProcessWebhookOptions, RemoveRoomHookOptions, RoomKitError,
-    SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions,
-    UpdateEventOptions,
+    DeliverOptions, DeliveryStrategy, DetachChannelOptions, HookOptions, HookTrigger, HostChannel,
+    Immediate, InboundResult, MuteOptions, MuteOutputOptions, PostOptions,
+    ProcessDeliveryStatusOptions, ProcessInboundOptions, ProcessWebhookOptions, Queued,
+    RemoveRoomHookOptions, RoomKitError, SendEventOptions, SetAccessOptions, SetVisibilityOptions,
+    UnmuteOptions, UnmuteOutputOptions, UpdateEventOptions, WaitForIdle,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -347,14 +347,18 @@ pub(crate) fn send_event_options(spec: &Value) -> Result<SendEventOptions, Unrea
     Ok(options)
 }
 
-fn deliver_options(spec: &Value) -> Result<DeliverOptions, Unreadable> {
-    if let Some(strategy) = optional::<String>(spec, "strategy")?
-        && strategy != "immediate"
-    {
-        return Err(format!("strategy {strategy}: not run by this runner yet"));
-    }
+fn deliver_options(spec: &Value) -> Result<DeliverOptions<crate::Store>, Unreadable> {
+    let strategy: Option<std::sync::Arc<dyn DeliveryStrategy<crate::Store>>> =
+        match optional::<String>(spec, "strategy")?.as_deref() {
+            None => None,
+            Some("immediate") => Some(std::sync::Arc::new(Immediate)),
+            Some("wait_for_idle") => Some(std::sync::Arc::new(WaitForIdle::default())),
+            Some("queued") => Some(std::sync::Arc::new(Queued::default())),
+            Some(other) => return Err(format!("strategy {other}: no such strategy")),
+        };
     Ok(DeliverOptions {
         channel_id: optional(spec, "channel_id")?,
+        strategy,
         metadata: optional(spec, "metadata")?.unwrap_or_default(),
         addressed_to: optional(spec, "addressed_to")?,
         idempotency_key: optional(spec, "idempotency_key")?,

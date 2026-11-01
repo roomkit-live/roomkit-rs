@@ -59,6 +59,8 @@ pub(crate) const SCENARIO_BOUND: Duration = Duration::from_secs(60);
 
 /// The kit the scenarios run on, over the SQLite store.
 pub(crate) type Kit = RoomKit<SqliteStore>;
+/// The store of the kit the runner builds.
+pub(crate) type Store = SqliteStore;
 
 /// A kit over a store on a new file, built with what `configure` makes of
 /// the defaults, and the file, removed once the run is over.

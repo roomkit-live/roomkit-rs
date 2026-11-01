@@ -42,6 +42,8 @@ use crate::scenarios::{scenarios, suite};
 /// The kit the scenarios run on, over the in-memory store; roomkit-sqlite
 /// runs them on its store too (crates/roomkit-sqlite/tests/conformance).
 pub(crate) type Kit = RoomKit<InMemoryStore>;
+/// The store of the kit the runner builds.
+pub(crate) type Store = InMemoryStore;
 
 /// A kit over an empty store, built with what `configure` makes of the
 /// defaults, and what keeps the store until the run ends: nothing here.

@@ -111,6 +111,9 @@ pub(crate) struct Run {
     after_turn: Mutex<Vec<JoinHandle<()>>>,
     /// The scripted agents' models, by channel.
     pub(crate) models: Mutex<BTreeMap<String, ScriptedProvider>>,
+    /// The in-memory delivery backend the kit was built with, whose queue
+    /// and worker the idle wait waits for (README, "Setup").
+    pub(crate) backend: Mutex<Option<roomkit::InMemoryDeliveryBackend>>,
 }
 
 impl Run {
@@ -144,6 +147,7 @@ impl Run {
             tasks: Mutex::default(),
             after_turn: Mutex::default(),
             models: Mutex::default(),
+            backend: Mutex::default(),
         }
     }
 
@@ -562,7 +566,7 @@ impl Run {
                     || lock(&self.after_turn)
                         .iter()
                         .any(|work| !work.is_finished());
-                if !running {
+                if !running && !self.backend_busy().await {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(1)).await;
@@ -572,6 +576,18 @@ impl Run {
             self.problem(format!("the kit did not go idle within {CALL_BOUND:?}"));
         }
         self.drain_events();
+    }
+}
+
+impl Run {
+    /// Whether the kit's in-memory delivery backend still holds work: an
+    /// item queued, waiting out its retry delay, or claimed by its worker.
+    async fn backend_busy(&self) -> bool {
+        let Some(backend) = lock(&self.backend).clone() else {
+            return false;
+        };
+        let depth = roomkit::DeliveryBackend::<crate::Store>::get_queue_depth(&backend).await;
+        depth.unwrap_or_default() > 0 || backend.in_flight() > 0
     }
 }
 
