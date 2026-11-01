@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `RoomKit::list_tasks`, a room's tasks of the status it names, for the
+  organization it names (RFC §5.10, §17.2).
 - The status bus, Python's `roomkit.orchestration` (RFC §19.8):
   `StatusBus`, `StatusEntry`, `StatusLevel`, `InMemoryStatusBackend` and
   the `backend::StatusBackend` trait; `RoomKitOptions::status_bus` and
