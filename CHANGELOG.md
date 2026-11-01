@@ -18,6 +18,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   kept for `wait_task`, and the room's tasks as the status bus lists them.
   After the turn, a verb that needs it is refused before it is sent, a
   `RuntimeError` as Python's.
+- Breaking: a sender the identity step leaves pending gets a record of its
+  own, `pending-` and 16 hex digits of the SHA-256 of the channel and the
+  address, and the event is sent under it (RFC §11.2, RMK-1138): a sender
+  naming itself after an identity no longer takes that identity's record.
+  The address still names the record on its channel, for routing and for
+  the identification an advisor gives it.
 - A resolver's `IdentificationStatus::Rejected` holds the message when no
   identity hook answers (RFC §11.2, RMK-1151): blocked with the resolver's
   `message`, else `identity_rejected`, nothing stored, as Python's.
