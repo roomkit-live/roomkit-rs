@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use roomkit_core::model::{
     ChannelCategory, ChannelId, ChannelType, EventSource, EventStatus, EventType, Metadata, Room,
-    RoomEvent, RoomId, TaskStatus, TextContent, Visibility,
+    RoomContext, RoomEvent, RoomId, TaskStatus, TextContent, Visibility,
 };
 use roomkit_core::ops::{DelegatedAnswer, DelegatedTurn};
 use roomkit_core::rules::transcript::fence;
@@ -26,6 +26,8 @@ use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::orchestration::{PostOptions, StatusLevel};
 use crate::store::ConversationStore;
+use crate::store::GetConversationOptions;
+use crate::tasks::brief::{conversation_block, worker_description};
 use crate::tasks::text::{bounded_text, identifier, one_line, quoted};
 use crate::tasks::{
     DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, OnCompleteCallback, SubmitOptions,
@@ -35,6 +37,14 @@ use crate::{
     AttachChannelOptions, CreateRoomOptions, DeliverOptions, GetRoomOptions, SendEventOptions,
     UpdateBindingMetadataOptions, UpdateRoomMetadataOptions, driver,
 };
+
+/// The fewest of the parent room's latest messages a delegation's
+/// conversation is read from: Python's `recent_limit` floor.
+const CONVERSATION_FLOOR: u64 = 50;
+
+/// The key of a room's private state holding its register of authors,
+/// which labels the conversation's lines (RFC §6.4).
+const AUTHOR_REGISTER: &str = "author_register";
 
 /// How a background task's result reaches the room (RFC §23.3 step 8).
 const HAND_BACKS: [&str; 2] = ["relay", "post"];
@@ -89,6 +99,10 @@ pub struct DelegateOptions {
     pub post_status: bool,
     /// Python `brief=None`: what the agent is told instead of the task.
     pub brief: Option<String>,
+    /// Python `conversation=0`: how many of the parent room's last
+    /// messages the agent is handed, those the notified channel may read,
+    /// quoted as data (RFC §23.3 step 4); none at 0.
+    pub conversation: u64,
     /// Python `hand_back='relay'`: `relay`, the notified channel is told
     /// the result; `post`, it is posted as the notified agent's message.
     pub hand_back: String,
@@ -107,6 +121,7 @@ impl Default for DelegateOptions {
             on_complete: None,
             post_status: true,
             brief: None,
+            conversation: 0,
             hand_back: "relay".to_owned(),
             organization_id: None,
         }
@@ -234,6 +249,7 @@ impl<S: ConversationStore> RoomKit<S> {
         task: impl Into<String>,
         options: DelegateOptions,
     ) -> Result<DelegatedTask, RoomKitError> {
+        let task = task.into();
         self.inner.open()?;
         let parent = self
             .parent_room(room_id, options.organization_id.as_deref())
@@ -244,6 +260,11 @@ impl<S: ConversationStore> RoomKit<S> {
         let notify = options.notify.clone().unwrap_or_else(|| agent_id.clone());
         self.check_hand_back(room_id, &options.hand_back, &notify, options.wait)
             .await?;
+        let conversation = self
+            .room_conversation(room_id, &notify, options.conversation)
+            .await?;
+        let description =
+            worker_description(&task, options.brief.as_deref(), conversation.as_deref());
         let child_room_id = RoomId::new(format!("{room_id}::task-{}", short_hex()))
             .map_err(|error| RoomKitError::Value(error.to_string()))?;
         let handle = DelegatedTask::new(
@@ -253,8 +274,8 @@ impl<S: ConversationStore> RoomKit<S> {
             agent_id.clone(),
             task,
             DelegatedTaskOptions {
+                description: Some(description),
                 brief: options.brief.clone(),
-                description: None,
                 hand_back: options.hand_back.clone(),
             },
         );
@@ -322,6 +343,40 @@ impl<S: ConversationStore> RoomKit<S> {
             )));
         }
         Ok(())
+    }
+
+    /// The parent room's last `count` messages `reader` may read, set apart
+    /// as data for the worker (RFC §23.3 step 4): read from a context of
+    /// the room's latest messages, `4 * count` and 50 at least, as Python's
+    /// `_room_conversation` builds it.
+    async fn room_conversation(
+        &self,
+        room_id: &RoomId,
+        reader: &ChannelId,
+        count: u64,
+    ) -> Result<Option<String>, RoomKitError> {
+        if count == 0 {
+            return Ok(None);
+        }
+        let store = self.store();
+        let (room, bindings, participants) = store.load_room_context(room_id).await?;
+        let Some(room) = room else {
+            return Ok(None);
+        };
+        let options = GetConversationOptions {
+            limit: count.saturating_mul(4).max(CONVERSATION_FLOOR),
+            after_index: None,
+        };
+        let recent_events = store.get_conversation(room_id, options).await?;
+        let author_register = store.get_private_state(room_id, AUTHOR_REGISTER).await?;
+        let context = RoomContext {
+            room,
+            bindings,
+            participants,
+            recent_events,
+            author_register,
+        };
+        Ok(conversation_block(&context, reader, count))
     }
 
     /// Whether the kit registers `channel_id` as an intelligence channel.

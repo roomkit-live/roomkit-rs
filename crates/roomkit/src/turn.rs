@@ -329,7 +329,7 @@ impl TurnHost {
             notify: options.notify,
             post_status: options.post_status,
             brief: options.brief,
-            conversation: 0,
+            conversation: options.conversation,
             hand_back: options.hand_back,
         };
         let task_id = self.verb(DELEGATE, &arguments).await?;
@@ -1235,11 +1235,6 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         let kit = self.upgrade().map(|inner| RoomKit { inner });
         Box::pin(async move {
             let kit = kit.ok_or(RoomKitError::KitClosed)?;
-            if arguments.conversation != 0 {
-                return Err(RoomKitError::Value(
-                    "delegate(conversation) is not in 0.x".to_owned(),
-                ));
-            }
             let Delegate {
                 room_id,
                 agent_id,
@@ -1249,8 +1244,8 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
                 notify,
                 post_status,
                 brief,
+                conversation,
                 hand_back,
-                ..
             } = arguments;
             let options = DelegateOptions {
                 context,
@@ -1258,6 +1253,7 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
                 notify,
                 post_status,
                 brief,
+                conversation,
                 hand_back,
                 ..DelegateOptions::default()
             };

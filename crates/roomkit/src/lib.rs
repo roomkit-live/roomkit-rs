@@ -153,7 +153,6 @@ pub use self::hooks::{
 };
 pub use self::host::{HostChannel, HostChannelOptions};
 pub use self::inbound::{DeliveryHandle, InboundResult};
-pub use self::kit::CancelTaskOptions;
 pub use self::kit::{
     AddMemberOptions, EnsureParticipantOptions, IsMemberOptions, RemoveMemberOptions,
     RenameMemberOptions, ResolveParticipantOptions,
@@ -168,6 +167,7 @@ pub use self::kit::{
     RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
     UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
+pub use self::kit::{CancelTaskOptions, StartTaskOptions};
 pub use self::kit::{
     DelegateOptions, DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions,
 };

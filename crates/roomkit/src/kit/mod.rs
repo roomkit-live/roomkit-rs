@@ -38,6 +38,7 @@ mod registry;
 mod room_hooks;
 mod rooms;
 mod shutdown;
+mod start_task;
 mod status;
 mod task_cancel;
 mod tasks;
@@ -85,6 +86,7 @@ pub use self::options::{
 pub use self::output::{MuteOutputOptions, UnmuteOutputOptions};
 pub use self::read_markers::{ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions};
 pub use self::room_hooks::{AddRoomHookOptions, RemoveRoomHookOptions};
+pub use self::start_task::StartTaskOptions;
 pub use self::status::{
     ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,
 };

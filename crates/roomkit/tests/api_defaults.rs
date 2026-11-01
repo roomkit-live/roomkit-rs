@@ -475,6 +475,8 @@ fn delegate_options_defaults_as_python() {
     assert!(defaults.post_status);
     // roomkit.RoomKit.delegate(brief) = None
     assert!(defaults.brief.is_none());
+    // roomkit.RoomKit.delegate(conversation) = 0
+    assert_eq!(defaults.conversation, 0);
     // roomkit.RoomKit.delegate(hand_back) = 'relay'
     assert_eq!(defaults.hand_back, "relay");
     // roomkit.RoomKit.delegate(organization_id) = None
@@ -969,6 +971,15 @@ fn status_backend_options_defaults_as_python() {
     assert!(recent.agent_id.is_none());
     // roomkit.orchestration.StatusBackend.recent(status) = None
     assert!(recent.status.is_none());
+}
+
+#[test]
+fn start_task_options_defaults_as_python() {
+    let defaults = roomkit::StartTaskOptions::default();
+    // roomkit.RoomKit.start_task(hand_back) = None
+    assert!(defaults.hand_back.is_none());
+    // roomkit.RoomKit.start_task(organization_id) = None
+    assert!(defaults.organization_id.is_none());
 }
 
 #[test]

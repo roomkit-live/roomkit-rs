@@ -21,6 +21,7 @@
 // they change: it starts, refusing every new call and cutting what has
 // not started; its grace ends, cutting what is left; it seals the kit.
 
+pub(crate) mod brief;
 mod delegated;
 mod hosted;
 pub(crate) mod lines;
