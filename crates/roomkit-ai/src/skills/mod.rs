@@ -20,9 +20,11 @@ mod activation;
 mod error;
 mod files;
 mod frontmatter;
+mod model;
 mod registry;
 mod texts;
 pub(crate) mod tools;
 
 pub use self::error::SkillError;
-pub use self::registry::{Skill, SkillRegistry};
+pub use self::model::{DiscoverOptions, Skill, SkillMetadata};
+pub use self::registry::SkillRegistry;

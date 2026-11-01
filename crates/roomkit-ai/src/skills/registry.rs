@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use super::error::SkillError;
 use super::files::{self, OpenFailure, ReadFailure, SKILL_FILE_MAX};
 use super::frontmatter::{self, Fields};
+use super::model::{DiscoverOptions, Skill, SkillMetadata};
 use super::texts::{escaped, quoted_name};
 
 /// The most characters a skill's name takes (RFC §24.1).
@@ -17,52 +18,6 @@ const DESCRIPTION_MAX: usize = 1024;
 
 /// The most characters the manifest takes: every system prompt carries it.
 pub(crate) const MANIFEST_MAX: usize = 64 * 1024;
-
-/// A skill (RFC §24.2): its metadata, read from its `SKILL.md`'s
-/// frontmatter, its instructions, the file's body, and its directory,
-/// resolved, where its references are read.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Skill {
-    name: String,
-    description: String,
-    license: Option<String>,
-    compatibility: Option<String>,
-    instructions: String,
-    path: PathBuf,
-}
-
-impl Skill {
-    /// Its name: lowercase letters and digits in hyphen-separated runs, at
-    /// most 64 characters, its directory's name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// What it does, at most 1,024 characters.
-    pub fn description(&self) -> &str {
-        &self.description
-    }
-
-    /// Its license, when its frontmatter names one.
-    pub fn license(&self) -> Option<&str> {
-        self.license.as_deref()
-    }
-
-    /// What it needs to run, as free text, when its frontmatter says.
-    pub fn compatibility(&self) -> Option<&str> {
-        self.compatibility.as_deref()
-    }
-
-    /// Its instructions: its `SKILL.md`'s body.
-    pub fn instructions(&self) -> &str {
-        &self.instructions
-    }
-
-    /// Its directory, resolved.
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
 
 /// The skills an agent serves (RFC §24.3), read from the host's own
 /// directories: each a directory holding a `SKILL.md` whose frontmatter
@@ -76,23 +31,29 @@ impl Skill {
 /// - its `SKILL.md` is missing, longer than 256 KiB, not UTF-8, a link out
 ///   of its directory, or has no frontmatter;
 /// - its frontmatter is past 65,536 characters or 64 brackets open at
-///   once, cannot be read whole line by line, or declares `allowed_tools`
-///   or `requires`, since this implementation gates no tool;
+///   once, holds a line that may hide a key or a field the registry reads
+///   that cannot be read whole line by line, or declares `allowed_tools`
+///   or `requires`, since this implementation gates no tool (another key
+///   it cannot read whole is left out of `extra_metadata`);
 /// - its name is missing, not kebab-case, longer than 64 characters or not
 ///   its directory's; its description is missing or longer than 1,024
 ///   characters;
 /// - the manifest of all its skills would pass 65,536 characters.
 ///
-/// A skill registered under a name the registry holds replaces it, keeping
-/// its place.
+/// Discovery that is not strict ([`DiscoverOptions::strict`]) logs and
+/// skips each directory it cannot scan and each skill it cannot load; the
+/// manifest's bound still fails it. A skill registered under a name the
+/// registry holds replaces it, keeping its place.
 ///
 /// ```
-/// use roomkit_ai::SkillRegistry;
+/// use roomkit_ai::{DiscoverOptions, SkillRegistry};
 ///
 /// let mut skills = SkillRegistry::new();
-/// let error = skills.discover(&["no/such/directory"]).unwrap_err();
+/// let error = skills
+///     .discover(&["no/such/directory"], DiscoverOptions::default())
+///     .unwrap_err();
 /// assert!(error.to_string().starts_with("Skill directory not found"));
-/// assert!(skills.is_empty());
+/// assert!(!skills.has_entries());
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SkillRegistry {
@@ -111,75 +72,97 @@ impl SkillRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`SkillError::Discovery`] for a directory that does not
-    /// exist or cannot be scanned, or a subdirectory that leads out of it;
-    /// [`SkillError::Parse`] and [`SkillError::Validation`] for the first
-    /// skill that cannot be loaded; [`SkillError::ManifestTooLarge`] past
-    /// the manifest's bound. The registry is then as it was.
+    /// When [`DiscoverOptions::strict`], returns [`SkillError::Discovery`]
+    /// for a directory that does not exist or cannot be scanned, or a
+    /// subdirectory that leads out of it, and [`SkillError::Parse`] and
+    /// [`SkillError::Validation`] for the first skill that cannot be
+    /// loaded; in either mode, [`SkillError::ManifestTooLarge`] past the
+    /// manifest's bound. The registry is then as it was.
     ///
     /// The directories are a slice, so that one directory is never read as
     /// the components of its path:
     ///
     /// ```compile_fail,E0308
+    /// use roomkit_ai::{DiscoverOptions, SkillRegistry};
+    ///
     /// let directory = std::path::PathBuf::from("skills");
-    /// let _found = roomkit_ai::SkillRegistry::new().discover(&directory);
+    /// let _found = SkillRegistry::new().discover(&directory, DiscoverOptions::default());
     /// ```
-    pub fn discover<P: AsRef<Path>>(&mut self, directories: &[P]) -> Result<usize, SkillError> {
+    pub fn discover<P: AsRef<Path>>(
+        &mut self,
+        directories: &[P],
+        options: DiscoverOptions,
+    ) -> Result<usize, SkillError> {
         let mut found: Vec<PathBuf> = Vec::new();
         for directory in directories {
-            for candidate in candidates(directory.as_ref())? {
+            for candidate in candidates(directory.as_ref(), options.strict)? {
                 if !found.contains(&candidate) {
                     found.push(candidate);
                 }
             }
         }
-        let skills = found
-            .iter()
-            .map(|directory| load(directory))
-            .collect::<Result<Vec<Skill>, SkillError>>()?;
-        let count = self.commit(skills)?;
-        Ok(count)
+        let mut skills = Vec::new();
+        for directory in &found {
+            match load(directory) {
+                Ok(skill) => skills.push(skill),
+                Err(error) => skipped(options.strict, error)?,
+            }
+        }
+        self.commit(skills)
     }
 
-    /// Registers the skill in `directory`, a link to it followed, and
-    /// returns it.
+    /// Registers the skill in `skill_dir`, a link to it followed, and
+    /// returns its metadata.
     ///
     /// # Errors
     ///
-    /// Returns [`SkillError::Discovery`] for a directory that does not
-    /// exist, [`SkillError::Parse`] and [`SkillError::Validation`] for a
-    /// skill that cannot be loaded, and [`SkillError::ManifestTooLarge`]
-    /// past the manifest's bound. The registry is then as it was.
-    pub fn register(&mut self, directory: impl AsRef<Path>) -> Result<&Skill, SkillError> {
-        let directory = directory.as_ref();
-        let resolved = directory
-            .canonicalize()
-            .map_err(|_unresolved| SkillError::discovery(directory, "Skill directory not found"))?;
+    /// Returns [`SkillError::Parse`] for a directory whose `SKILL.md`
+    /// cannot be read, the directory missing included, or parsed,
+    /// [`SkillError::Validation`] for metadata that does not validate, and
+    /// [`SkillError::ManifestTooLarge`] past the manifest's bound. The
+    /// registry is then as it was.
+    pub fn register(&mut self, skill_dir: impl AsRef<Path>) -> Result<SkillMetadata, SkillError> {
+        let skill_dir = skill_dir.as_ref();
+        let resolved = skill_dir.canonicalize().map_err(|error| {
+            SkillError::parse(
+                &label(skill_dir),
+                format!("Unable to read SKILL.md: {error}"),
+            )
+        })?;
         let skill = load(&resolved)?;
-        let name = skill.name.clone();
+        let metadata = skill.metadata.clone();
         self.commit(vec![skill])?;
-        self.get(&name)
-            .ok_or_else(|| SkillError::parse(&name, "the skill was registered and then not found"))
+        Ok(metadata)
     }
 
-    /// The skill `name`.
-    pub fn get(&self, name: &str) -> Option<&Skill> {
-        self.skills.iter().find(|skill| skill.name == name)
+    /// The metadata of the skill `name`.
+    pub fn get_metadata(&self, name: &str) -> Option<&SkillMetadata> {
+        self.get_skill(name).map(|skill| &skill.metadata)
     }
 
-    /// Its skills, in the order they were registered.
-    pub fn skills(&self) -> &[Skill] {
-        &self.skills
+    /// The skill `name` whole, with its instructions.
+    pub fn get_skill(&self, name: &str) -> Option<&Skill> {
+        self.skills.iter().find(|skill| skill.name() == name)
+    }
+
+    /// The metadata of its skills, in the order they were registered.
+    pub fn all_metadata(&self) -> Vec<&SkillMetadata> {
+        self.skills.iter().map(|skill| &skill.metadata).collect()
+    }
+
+    /// The names of its skills, in the order they were registered.
+    pub fn skill_names(&self) -> Vec<&str> {
+        self.skills.iter().map(Skill::name).collect()
     }
 
     /// How many skills it holds.
-    pub fn len(&self) -> usize {
+    pub fn skill_count(&self) -> usize {
         self.skills.len()
     }
 
-    /// Whether it holds no skill.
-    pub fn is_empty(&self) -> bool {
-        self.skills.is_empty()
+    /// Whether the model has anything to be told: a skill it can activate.
+    pub fn has_entries(&self) -> bool {
+        !self.skills.is_empty()
     }
 
     /// Copies the registry, optionally narrowed to `names` (RFC §24.3).
@@ -191,7 +174,9 @@ impl SkillRegistry {
             skills: self
                 .skills
                 .iter()
-                .filter(|skill| names.is_none_or(|names| names.contains(&skill.name)))
+                .filter(|skill| {
+                    names.is_none_or(|names| names.iter().any(|name| name == skill.name()))
+                })
                 .cloned()
                 .collect(),
         }
@@ -200,10 +185,10 @@ impl SkillRegistry {
     /// The tools [`crate::AiAgent::with_skills`] registers for this registry.
     /// An empty registry registers no tools (RFC §24.3).
     pub fn tool_definitions(&self) -> Vec<crate::ToolDefinition> {
-        if self.is_empty() {
-            Vec::new()
-        } else {
+        if self.has_entries() {
             super::tools::SkillTools::definitions()
+        } else {
+            Vec::new()
         }
     }
 
@@ -221,10 +206,10 @@ impl SkillRegistry {
         let mut next = self.skills.clone();
         let mut names: Vec<String> = Vec::new();
         for skill in skills {
-            if !names.contains(&skill.name) {
-                names.push(skill.name.clone());
+            if !names.iter().any(|name| name == skill.name()) {
+                names.push(skill.name().to_owned());
             }
-            match next.iter_mut().find(|held| held.name == skill.name) {
+            match next.iter_mut().find(|held| held.name() == skill.name()) {
                 Some(held) => *held = skill,
                 None => next.push(skill),
             }
@@ -241,9 +226,38 @@ impl SkillRegistry {
     }
 }
 
+/// Fails with `error` when discovery is strict; otherwise logs it, and
+/// what it names is skipped.
+fn skipped(strict: bool, error: SkillError) -> Result<(), SkillError> {
+    if strict {
+        return Err(error);
+    }
+    tracing::warn!(target: "roomkit::skills", %error, "skill discovery skipped what it could not load");
+    Ok(())
+}
+
 /// The skill directories of `directory`, resolved, in name order: each
-/// subdirectory holding a `SKILL.md`.
-fn candidates(directory: &Path) -> Result<Vec<PathBuf>, SkillError> {
+/// subdirectory holding a `SKILL.md`; when discovery is not `strict`, none
+/// for a directory it cannot scan, and none for a subdirectory it cannot
+/// take.
+fn candidates(directory: &Path, strict: bool) -> Result<Vec<PathBuf>, SkillError> {
+    let (resolved, children) = match children(directory) {
+        Ok(read) => read,
+        Err(error) => return skipped(strict, error).map(|()| Vec::new()),
+    };
+    let mut found = Vec::new();
+    for child in children {
+        match candidate(&child, &resolved) {
+            Ok(Some(skill)) => found.push(skill),
+            Ok(None) => {}
+            Err(error) => skipped(strict, error)?,
+        }
+    }
+    Ok(found)
+}
+
+/// `directory`, resolved, and its entries, in name order.
+fn children(directory: &Path) -> Result<(PathBuf, Vec<PathBuf>), SkillError> {
     let not_found = || SkillError::discovery(directory, "Skill directory not found");
     let resolved = directory
         .canonicalize()
@@ -258,37 +272,40 @@ fn candidates(directory: &Path) -> Result<Vec<PathBuf>, SkillError> {
         .collect::<io::Result<_>>()
         .map_err(|_unreadable| scanned())?;
     children.sort();
-    let mut found = Vec::new();
-    for child in children {
-        if !child.is_dir() {
-            continue;
-        }
-        let inspected = || SkillError::discovery(&child, "Skill candidate cannot be inspected");
-        let skill = child.canonicalize().map_err(|_unresolved| inspected())?;
-        // A link to a directory is followed, never out of the one scanned.
-        if !files::is_below(&skill, &resolved) {
-            return Err(SkillError::discovery(
-                &child,
-                "Skill candidate escapes discovery directory",
-            ));
-        }
-        if files::find_skill_file(&skill)
-            .map_err(|_unreadable| inspected())?
-            .is_some()
-        {
-            found.push(skill);
-        }
+    Ok((resolved, children))
+}
+
+/// `child`, an entry of the directory `scanned`, resolved, when it is a
+/// skill directory: a directory holding a `SKILL.md`.
+fn candidate(child: &Path, scanned: &Path) -> Result<Option<PathBuf>, SkillError> {
+    if !child.is_dir() {
+        return Ok(None);
     }
-    Ok(found)
+    let inspected = || SkillError::discovery(child, "Skill candidate cannot be inspected");
+    let skill = child.canonicalize().map_err(|_unresolved| inspected())?;
+    // A link to a directory is followed, never out of the one scanned.
+    if !files::is_below(&skill, scanned) {
+        return Err(SkillError::discovery(
+            child,
+            "Skill candidate escapes discovery directory",
+        ));
+    }
+    let held = files::find_skill_file(&skill).map_err(|_unreadable| inspected())?;
+    Ok(held.map(|_file| skill))
+}
+
+/// The name of `directory`, which a failure names the skill by.
+fn label(directory: &Path) -> String {
+    directory
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// The skill in `directory`, resolved: its `SKILL.md` read and parsed, its
 /// metadata validated.
 fn load(directory: &Path) -> Result<Skill, SkillError> {
-    let label = directory
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let label = label(directory);
     let content = skill_file(directory, &label)?;
     let (text, body) =
         frontmatter::split(&content).map_err(|reason| SkillError::parse(&label, reason))?;
@@ -301,10 +318,17 @@ fn load(directory: &Path) -> Result<Skill, SkillError> {
         });
     }
     Ok(Skill {
-        name: fields.name.unwrap_or_default(),
-        description: fields.description.unwrap_or_default(),
-        license: fields.license.filter(|license| !license.is_empty()),
-        compatibility: fields.compatibility.filter(|text| !text.is_empty()),
+        metadata: SkillMetadata {
+            name: fields.name.unwrap_or_default(),
+            description: fields.description.unwrap_or_default(),
+            license: fields.license.filter(|license| !license.is_empty()),
+            compatibility: fields.compatibility.filter(|text| !text.is_empty()),
+            extra_metadata: fields
+                .extra
+                .into_iter()
+                .map(|(key, text)| (key, text.into()))
+                .collect(),
+        },
         instructions: body.to_owned(),
         path: directory.to_path_buf(),
     })
@@ -397,11 +421,12 @@ fn manifest(skills: &[Skill]) -> String {
     }
     let mut lines = vec!["<available_skills>".to_owned()];
     for skill in skills {
-        lines.push(format!("  <skill name=\"{}\">", escaped(&skill.name)));
+        let metadata = &skill.metadata;
+        lines.push(format!("  <skill name=\"{}\">", escaped(&metadata.name)));
         let fields = [
-            ("description", Some(skill.description.as_str())),
-            ("license", skill.license.as_deref()),
-            ("compatibility", skill.compatibility.as_deref()),
+            ("description", Some(metadata.description.as_str())),
+            ("license", metadata.license.as_deref()),
+            ("compatibility", metadata.compatibility.as_deref()),
         ];
         for (tag, value) in fields {
             if let Some(value) = value.filter(|value| !value.is_empty()) {

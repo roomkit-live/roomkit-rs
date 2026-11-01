@@ -66,7 +66,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The public API in the Python implementation's terms (step 5, lot 1: the
 kit, its construction and its calls; lot 2: the model and the errors;
 lot 3: the hooks, the framework events and the turn's host; lot 4: the
-channels, the addresses, the routing and the store).
+channels, the addresses, the routing and the store; lot 5: the skills).
 
 ### Changed
 
@@ -575,6 +575,15 @@ channels, the addresses, the routing and the store).
   `usage`, `max_rounds`, `timeout`, `budget_tokens`, `budget_usd`), with
   RMK-1029's `last_usage`, `usage_complete`, `model` and `provider`; the
   kit writes the turn's record from it.
+- **The skills take Python's names**: `Skill` is Python's `Skill(metadata,
+  instructions, path)`, its fields public, `name()` and `description()` its
+  metadata's; `license()`, `compatibility()`, `instructions()` and `path()`
+  go. `SkillRegistry` reads `get_skill`, `get_metadata`, `all_metadata`,
+  `skill_names`, `skill_count` and `has_entries` for `get`, `skills`, `len`
+  and `is_empty`; `register(skill_dir)` returns the skill's metadata;
+  `discover(directories, DiscoverOptions)` takes Python's `strict`. A
+  directory `register` cannot resolve fails `SkillError::Parse`, as
+  Python's, where it failed `Discovery`.
 
 ### Added
 
@@ -588,6 +597,13 @@ channels, the addresses, the routing and the store).
   table by channel type.
 - `model::LoopEndMarker` and `model::LoopEndReason`, Python's
   `roomkit.models.LoopEndMarker` and its reasons.
+- `SkillMetadata { name, description, license, compatibility,
+  extra_metadata }`, Python's `SkillMetadata`, what a skill's frontmatter
+  declares: its other keys, each read as the fields are, as texts; one the
+  line reading cannot read whole is left out, the skill read all the same.
+- `DiscoverOptions { strict }`, Python's `discover(strict=False)`: discovery
+  logs and skips each directory it cannot scan and each skill it cannot
+  load, and registers the rest; the manifest's bound still fails it.
 - `ToolError::Unserved`, Python's `UnservedToolCallError`: a tool declines a
   call that is not its to serve, and a SYNC `ON_TOOL_CALL` hook may serve
   it; the model reads `{"error": "No handler for tool x"}` when none does.

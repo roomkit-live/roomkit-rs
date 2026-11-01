@@ -12,7 +12,9 @@ use roomkit::model::{
 };
 use roomkit::{HookOptions, HookTrigger, ProcessInboundOptions, SendEventOptions, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiError, SkillRegistry, ToolDefinition, ToolOutput, ToolPolicy, Tools};
+use roomkit_ai::{
+    AiError, DiscoverOptions, SkillRegistry, ToolDefinition, ToolOutput, ToolPolicy, Tools,
+};
 use serde_json::json;
 
 use super::support::{Room, TempDir, channel, prompts, room_id, skill_md, tool_results};
@@ -43,7 +45,9 @@ fn skills(tree: &TempDir) -> SkillRegistry {
         tree.skill("skills", &format!("extra-{n}"), "Does a thing");
     }
     let mut skills = SkillRegistry::new();
-    skills.discover(&[tree.path().join("skills")]).unwrap();
+    skills
+        .discover(&[tree.path().join("skills")], DiscoverOptions::default())
+        .unwrap();
     skills
 }
 

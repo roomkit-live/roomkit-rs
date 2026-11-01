@@ -69,7 +69,7 @@ pub use self::provider::{
     AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderResponse, ProviderStream,
     ProviderToolCall,
 };
-pub use self::skills::{Skill, SkillError, SkillRegistry};
+pub use self::skills::{DiscoverOptions, Skill, SkillError, SkillMetadata, SkillRegistry};
 pub use self::tools::{
     ToolContext, ToolDefinition, ToolError, ToolOutput, ToolPolicy, Tools, Toolset, arguments,
 };

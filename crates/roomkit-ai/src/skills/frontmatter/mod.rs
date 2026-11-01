@@ -7,8 +7,10 @@
 //! `compatibility`) or refuses the skill: a plain text, folded over the
 //! lines indented under it; a quoted text on its line; a block scalar
 //! (`|`, `>`, with `-` or `+`); a list in either YAML form (`[a, b]` on the
-//! key's line, or `- item` lines), its items joined by commas. It does not
-//! read the other keys' values, and refuses:
+//! key's line, or `- item` lines), its items joined by commas. It reads
+//! the other keys' values the same way, as Python's `extra_metadata`
+//! keeps them, and leaves out one it cannot read whole (a nested map, say),
+//! the skill read all the same. It refuses:
 //!
 //! - a frontmatter past 65,536 characters, or holding more than 64
 //!   brackets and braces open at once (§24.1);
@@ -44,13 +46,15 @@ const GATING_KEYS: [&str; 3] = ["allowed_tools", "allowed-tools", "requires"];
 const FIELDS: [&str; 4] = ["name", "description", "license", "compatibility"];
 
 /// The fields of a frontmatter the registry uses, each absent when the
-/// frontmatter does not give it, or gives it no value.
+/// frontmatter does not give it, or gives it no value, and its other keys
+/// with their texts, in the order they first appear.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Fields {
     pub(crate) name: Option<String>,
     pub(crate) description: Option<String>,
     pub(crate) license: Option<String>,
     pub(crate) compatibility: Option<String>,
+    pub(crate) extra: Vec<(String, String)>,
 }
 
 impl Fields {
@@ -62,6 +66,24 @@ impl Fields {
             2 => Some(&mut self.license),
             3 => Some(&mut self.compatibility),
             _ => None,
+        }
+    }
+
+    /// Records `value` for the other key `key`: the last given holds, at
+    /// the place the key first took; no value takes the key out.
+    fn record_extra(&mut self, key: &str, value: Option<String>) {
+        let held = self.extra.iter().position(|(name, _)| name == key);
+        match (held, value) {
+            (Some(at), Some(value)) => {
+                if let Some(entry) = self.extra.get_mut(at) {
+                    entry.1 = value;
+                }
+            }
+            (None, Some(value)) => self.extra.push((key.to_owned(), value)),
+            (Some(at), None) => {
+                self.extra.remove(at);
+            }
+            (None, None) => {}
         }
     }
 }
@@ -110,7 +132,7 @@ pub(crate) fn read(text: &str) -> Result<Fields, String> {
     for (number, line) in text.lines().enumerate() {
         reader.line(number + 1, line)?;
     }
-    reader.finish(true)?;
+    reader.continued(|reader| reader.finish(true))?;
     Ok(reader.fields)
 }
 
@@ -157,8 +179,8 @@ enum Open {
     /// No key, or a key whose value ended on its line.
     #[default]
     Closed,
-    /// A key this reader does not read: the lines indented under it are
-    /// its value's.
+    /// A key whose value this reader leaves unread, another key's it
+    /// cannot read whole: the lines indented under it are its value's.
     Skipped,
     /// A field whose value ended on its line.
     Ended { field: usize, text: Option<String> },
@@ -183,10 +205,26 @@ enum Open {
     },
 }
 
+impl Open {
+    /// The field whose value is open, if any.
+    fn field(&self) -> Option<usize> {
+        match self {
+            Self::Closed | Self::Skipped => None,
+            Self::Ended { field, .. }
+            | Self::Items { field, .. }
+            | Self::Plain { field, .. }
+            | Self::Block { field, .. } => Some(*field),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct Reader {
     fields: Fields,
     open: Open,
+    /// The other keys, each field past [`FIELDS`] naming its own:
+    /// `extra[field - FIELDS.len()]`.
+    extra: Vec<String>,
 }
 
 impl Reader {
@@ -197,16 +235,33 @@ impl Reader {
             return Ok(());
         }
         if line.starts_with(char::is_whitespace) {
-            return self.indented(line);
+            return self.continued(|reader| reader.indented(line));
         }
         if line.starts_with('#') {
-            return self.comment();
+            return self.continued(Self::comment);
         }
         if is_item(line) {
-            return self.item(line);
+            return self.continued(|reader| reader.item(line));
         }
-        self.finish(false)?;
+        self.continued(|reader| reader.finish(false))?;
         self.key_line(number, line)
+    }
+
+    /// Reads on with `step` in the value the reader is in: another key's
+    /// that the step cannot read is left out, its lines skipped, where a
+    /// field's refuses the skill.
+    fn continued(
+        &mut self,
+        step: impl FnOnce(&mut Self) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let extra = self.open.field().is_some_and(|field| field >= FIELDS.len());
+        match step(self) {
+            Err(_unread) if extra => {
+                self.open = Open::Skipped;
+                Ok(())
+            }
+            read => read,
+        }
     }
 
     fn blank(&mut self) {
@@ -312,7 +367,9 @@ impl Reader {
             ));
         }
         let Some(field) = FIELDS.iter().position(|field| *field == key) else {
-            self.open = Open::Skipped;
+            let field = FIELDS.len() + self.extra.len();
+            self.extra.push(key.to_owned());
+            self.open = open_value(field, value).unwrap_or(Open::Skipped);
             return Ok(());
         };
         self.open = open_value(field, value)?;
@@ -342,6 +399,11 @@ impl Reader {
         };
         if let Some(slot) = self.fields.slot(field) {
             *slot = value;
+        } else if let Some(key) = field
+            .checked_sub(FIELDS.len())
+            .and_then(|at| self.extra.get(at))
+        {
+            self.fields.record_extra(key, value);
         }
         Ok(())
     }

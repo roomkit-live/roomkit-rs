@@ -139,10 +139,13 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit.EventNotFoundError" = ["0"]
 "roomkit.IdempotencyKeyTakenError" = ["room_id", "channel_id", "key"]
 
+# Python's messages name the directory and why, the skill and why, the
+# skill and the rules it breaks.
 [rules.error_families."roomkit_ai::SkillError"]
-"roomkit.skills.SkillDiscoveryError" = []
-"roomkit.skills.SkillParseError" = []
-"roomkit.skills.SkillValidationError" = []
+"roomkit.skills.SkillDiscoveryError" = ["path", "reason"]
+"roomkit.skills.SkillParseError" = ["skill", "reason"]
+"roomkit.skills.SkillValidationError" = ["skill", "reasons"]
+"roomkit.skills.SkillManifestTooLargeError" = []
 
 # The architecture table's mappings that a rule gives no name to.
 
@@ -339,13 +342,6 @@ members = ["new", "as_str"]
 approved = "2026-10-27"
 until = "roomkit.ChannelType.__init__"
 reason = "decision 19: ChannelType stays open, Rust is right and Python aligns (RMK-1010 item 1, RMK-986); until Python's open ChannelType gains its constructor"
-
-[[exception]]
-rust = "roomkit_ai::SkillError"
-members = ["ManifestTooLarge"]
-approved = "2026-10-27"
-until = "roomkit.skills.SkillManifestTooLargeError"
-reason = "decision 19: the skills manifest bound stays, Rust is right and Python aligns (RMK-1010 item 6); until Python's skill error family gains the class"
 
 [[exception]]
 rust = "roomkit::RoomKitOptions"
@@ -609,6 +605,16 @@ members = [
 reason = "not in 0.x: skill gating, references and scripts, skills served by MCP, unavailable and unlisted skills"
 
 [[missing]]
+python = "roomkit.SkillMetadata"
+members = ["gated_tool_names", "gates", "required_tool_names"]
+reason = "not in 0.x: skill gating; a skill that gates or requires tools is refused"
+
+[[missing]]
+python = "roomkit.SkillMetadata.__init__"
+params = ["allowed_tools"]
+reason = "not in 0.x: skill gating; a skill that gates or requires tools is refused"
+
+[[missing]]
 python = "roomkit.SkillRegistry.__init__"
 params = ["requires_match"]
 reason = "not in 0.x: requires_match (convention 3: no empty options struct)"
@@ -672,33 +678,6 @@ lot = 5
 python = "roomkit.SQLiteStore"
 members = ["__init__"]
 reason = "lot 5: SqliteStore::new(SqliteStoreOptions) opens lazily, close(); OpenError gives way to SqliteSchemaError"
-
-[[pending]]
-lot = 5
-python = "roomkit.Skill"
-members = ["__init__"]
-reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
-
-[[pending]]
-lot = 5
-python = "roomkit.SkillRegistry"
-members = [
-    "all_metadata", "get_metadata", "get_skill", "has_entries", "skill_count",
-    "skill_names",
-]
-reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
-
-[[pending]]
-lot = 5
-python = "roomkit.SkillRegistry.discover"
-params = ["strict"]
-reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
-
-[[pending]]
-lot = 5
-python = "roomkit.SkillRegistry.register"
-params = ["skill_dir"]
-reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
 
 [[pending]]
 lot = 5
@@ -782,30 +761,6 @@ reason = "decision 11: AiChannel and Python's provider contract and types (AiCon
 lot = 5
 rust = "roomkit_ai::ProviderToolCall"
 reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
-
-[[pending]]
-lot = 5
-rust = "roomkit_ai::Skill"
-members = ["license", "compatibility"]
-reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
-
-[[pending]]
-lot = 5
-rust = "roomkit_ai::SkillError"
-members = ["Discovery::path", "Discovery::reason", "Parse::skill", "Parse::reason", "Validation::skill", "Validation::reasons"]
-reason = "lot 5: SkillError keeps its variants under the error naming rule (convention 5); Python's classes take a message, and the fields each variant carries are lot 5's to list in [rules] error_families or drop"
-
-[[pending]]
-lot = 5
-rust = "roomkit_ai::SkillRegistry"
-members = ["get", "skills", "len", "is_empty"]
-reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
-
-[[pending]]
-lot = 5
-rust = "roomkit_ai::SkillRegistry::register"
-params = ["directory"]
-reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
 
 [[pending]]
 lot = 5

@@ -39,7 +39,7 @@ use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
     RoomKitOptions,
 };
-use roomkit_ai::{SkillRegistry, ToolPolicy};
+use roomkit_ai::{DiscoverOptions, SkillRegistry, ToolPolicy};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use roomkit_sqlite::SqliteStore;
 use serde_json::Value;
@@ -126,7 +126,10 @@ fn examples(name: &str) -> PathBuf {
 /// on the malformed skill, naming it, and registers nothing.
 fn a_malformed_skill_fails_discovery(checks: &mut Checks) {
     let mut skills = SkillRegistry::new();
-    let failed = skills.discover(&[examples("skills"), examples("skills-broken")]);
+    let failed = skills.discover(
+        &[examples("skills"), examples("skills-broken")],
+        DiscoverOptions::default(),
+    );
     let error = failed
         .err()
         .map(|error| error.to_string())
@@ -135,7 +138,7 @@ fn a_malformed_skill_fails_discovery(checks: &mut Checks) {
     checks.expect(
         "a malformed skill fails discovery, names itself, and leaves the registry empty",
         error.starts_with("Validation failed for order-tracking: Invalid name 'order_tracking'")
-            && skills.is_empty(),
+            && !skills.has_entries(),
     );
 }
 
@@ -155,10 +158,10 @@ impl Shop {
         checks: &mut Checks,
     ) -> Result<Self, Box<dyn Error>> {
         let mut skills = SkillRegistry::new();
-        let found = skills.discover(&[examples("skills")])?;
+        let found = skills.discover(&[examples("skills")], DiscoverOptions::default())?;
         checks.expect(
             "discovery registers the two skills of examples/skills/",
-            found == 2 && skills.get("order-returns").is_some(),
+            found == 2 && skills.get_skill("order-returns").is_some(),
         );
         let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
             .with_system_prompt(SYSTEM_PROMPT);

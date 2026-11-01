@@ -10,7 +10,9 @@ use std::{env, fs, process};
 use pretty_assertions::assert_eq;
 use roomkit::model::ToolCallOutcome;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiError, SkillRegistry, ToolDefinition, ToolOutput, ToolPolicy, Tools};
+use roomkit_ai::{
+    AiError, DiscoverOptions, SkillRegistry, ToolDefinition, ToolOutput, ToolPolicy, Tools,
+};
 use serde_json::json;
 
 use super::support::{Room, agent, connected, fake};
@@ -188,7 +190,9 @@ async fn a_server_s_tool_named_like_a_skill_tool_is_refused() {
     )
     .unwrap();
     let mut skills = SkillRegistry::new();
-    skills.discover(&[&directory]).unwrap();
+    skills
+        .discover(&[&directory], DiscoverOptions::default())
+        .unwrap();
     let server = connected("skill-names").await;
     let model = ScriptedProvider::new([]);
     let after_skills = agent(&model)

@@ -280,7 +280,7 @@ impl<P: AiProvider> AiAgent<P> {
     /// Returns [`AiError::DuplicateTool`] when the agent serves either
     /// tool already: its skills are given once.
     pub fn with_skills(mut self, skills: SkillRegistry) -> Result<Self, AiError> {
-        if skills.is_empty() {
+        if !skills.has_entries() {
             return Ok(self);
         }
         let tools = Arc::new(SkillTools::new(skills));

@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::activation::{self, Activations};
 use super::files;
-use super::registry::{Skill, SkillRegistry};
+use super::registry::SkillRegistry;
 use super::texts::{
     self, ACTIVATE_DESCRIPTION, ACTIVATE_SKILL, ACTIVE_HEADING, ALREADY_ACTIVE, PREAMBLE,
     READ_DESCRIPTION, READ_SKILL_REFERENCE, quoted_name,
@@ -102,7 +102,7 @@ impl SkillTools {
         if activations.needs_hydration(turn.room) {
             let names: Vec<String> = activation::activated_in(turn.history, turn.agent)
                 .into_iter()
-                .filter(|name| self.registry.get(name).is_some())
+                .filter(|name| self.registry.get_skill(name).is_some())
                 .collect();
             activations.hydrate(turn.room, &names);
         }
@@ -114,15 +114,9 @@ impl SkillTools {
     fn instructions(&self, active: &[String]) -> Option<String> {
         let sections: Vec<String> = active
             .iter()
-            .filter_map(|name| self.registry.get(name))
-            .filter(|skill| !skill.instructions().trim().is_empty())
-            .map(|skill| {
-                format!(
-                    "## Skill: {}\n{}",
-                    skill.name(),
-                    skill.instructions().trim()
-                )
-            })
+            .filter_map(|name| self.registry.get_skill(name))
+            .filter(|skill| !skill.instructions.trim().is_empty())
+            .map(|skill| format!("## Skill: {}\n{}", skill.name(), skill.instructions.trim()))
             .collect();
         (!sections.is_empty()).then(|| format!("{ACTIVE_HEADING}\n\n{}", sections.join("\n\n")))
     }
@@ -138,8 +132,8 @@ impl SkillTools {
         context: &ToolContext,
     ) -> Result<ToolOutput, ToolError> {
         let name = argument(call, "name");
-        let Some(skill) = self.registry.get(name) else {
-            let names: Vec<&str> = self.registry.skills().iter().map(Skill::name).collect();
+        let Some(skill) = self.registry.get_skill(name) else {
+            let names = self.registry.skill_names();
             return Err(ToolError::Refused(texts::object(&[
                 (
                     "error",
@@ -149,7 +143,7 @@ impl SkillTools {
             ])));
         };
         let active = !context.stands_alone && self.lock().is_active(&context.room_id, name);
-        let path = skill.path().to_path_buf();
+        let path = skill.path.clone();
         let references = blocking(move || files::list_references(&path)).await;
         let mut answer = if active {
             vec![
@@ -162,7 +156,7 @@ impl SkillTools {
             vec![
                 ("name", json!(skill.name())),
                 ("description", json!(skill.description())),
-                ("instructions", json!(skill.instructions())),
+                ("instructions", json!(skill.instructions)),
             ]
         };
         if let Some(references) = references.filter(|names| !names.is_empty()) {
@@ -175,14 +169,14 @@ impl SkillTools {
     /// what the model reads of why it cannot be read (RFC §24.6).
     async fn read(&self, call: &ToolCall) -> Result<ToolOutput, ToolError> {
         let (skill_name, filename) = (argument(call, "skill_name"), argument(call, "filename"));
-        let Some(skill) = self.registry.get(skill_name) else {
+        let Some(skill) = self.registry.get_skill(skill_name) else {
             let error = format!("Skill {} not found", quoted_name(skill_name));
             return Err(ToolError::Refused(texts::object(&[(
                 "error",
                 json!(error),
             )])));
         };
-        let (path, name) = (skill.path().to_path_buf(), filename.to_owned());
+        let (path, name) = (skill.path.clone(), filename.to_owned());
         let read = blocking(move || files::read_reference(&path, &name))
             .await
             .unwrap_or_else(|| Err(format!("Reference cannot be read: {filename}")));
@@ -225,7 +219,7 @@ impl DynToolset for SkillTools {
             return;
         }
         let name = argument(call, "name");
-        if self.registry.get(name).is_some() {
+        if self.registry.get_skill(name).is_some() {
             self.lock().activate(&context.room_id, name);
         }
     }

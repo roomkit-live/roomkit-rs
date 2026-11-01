@@ -77,14 +77,33 @@ fn the_last_of_a_key_given_twice_holds() {
     );
 }
 
-/// The keys the registry does not read are not read: a nested map, a flow
-/// list, a block, Agent Skills' `allowed-tools`, which gates nothing here.
+/// The other keys are read as the fields are, each its text, as Python's
+/// `extra_metadata` keeps them; one this reading cannot read whole (a
+/// nested map, a flow list left open) is left out, never refusing the
+/// skill, and one with no value is too.
 #[test]
-fn another_key_s_value_is_left_unread() {
+fn another_key_s_value_is_kept_as_text_when_read_whole() {
     let frontmatter = "description: x\nmetadata:\n  author: acme\n  version: \"1.0\"\n\
                        tags: [a, b]\nnotes: |\n  anything: at all\n  - here\n\
-                       custom-field: Bash(git:*)\nbroken: [\nitems:\n- one";
-    assert_eq!(description(frontmatter), Ok(Some("x".to_owned())));
+                       custom-field: Bash(git:*)\nbroken: [\nitems:\n- one\nempty:\n\
+                       version: \"1.0\"\nversion: \"2.0\"";
+    let fields = read(frontmatter).unwrap();
+    assert_eq!(fields.description.as_deref(), Some("x"));
+    let extra: Vec<(&str, &str)> = fields
+        .extra
+        .iter()
+        .map(|(key, text)| (key.as_str(), text.as_str()))
+        .collect();
+    assert_eq!(
+        extra,
+        [
+            ("tags", "a, b"),
+            ("notes", "anything: at all\n- here\n"),
+            ("custom-field", "Bash(git:*)"),
+            ("items", "one"),
+            ("version", "2.0"),
+        ]
+    );
 }
 
 /// RFC §24.1: a skill that gates or requires tools is refused, whatever
@@ -198,6 +217,7 @@ fn each_field_the_registry_reads_is_read() {
             description: Some("d".to_owned()),
             license: Some("MIT".to_owned()),
             compatibility: Some("Needs nothing".to_owned()),
+            extra: vec![("version".to_owned(), "1.2".to_owned())],
         })
     );
 }
