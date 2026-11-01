@@ -35,6 +35,8 @@ mod shape;
 mod store_calls;
 #[path = "../support/mod.rs"]
 mod support;
+#[path = "../../../roomkit/tests/conformance/task_calls.rs"]
+mod task_calls;
 #[path = "../../../roomkit/tests/conformance/templates.rs"]
 mod templates;
 

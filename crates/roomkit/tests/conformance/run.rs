@@ -109,7 +109,12 @@ pub(crate) struct Run {
 impl Run {
     /// A run of `scenario` on `kit`, recording nothing yet.
     pub(crate) fn new(kit: crate::Kit, scenario: &Value) -> Self {
-        let events = EventTap::on(&kit, &LEVEL_0_EVENTS);
+        let tapped: Vec<&str> = LEVEL_0_EVENTS
+            .iter()
+            .chain(&crate::task_calls::LEVEL_2_EVENTS)
+            .copied()
+            .collect();
+        let events = EventTap::on(&kit, &tapped);
         let asserted_actions = scenario["expect"]["actions"]
             .as_object()
             .map(|actions| actions.keys().cloned().collect())
@@ -215,6 +220,35 @@ impl Run {
             "room_id": room_id,
             "event": event,
         });
+        let mut observed = lock(&self.observed);
+        observed
+            .hooks
+            .entry(name.to_owned())
+            .or_default()
+            .push(call);
+        observed.hook_order.push(name.to_owned());
+    }
+
+    /// Records a call of the hook `name` whose payload is no event, a
+    /// status entry or an observation, under `member` (README,
+    /// "Expectations").
+    pub(crate) fn record_payload_hook(
+        &self,
+        name: &str,
+        trigger: &str,
+        room_id: &str,
+        member: &str,
+        payload: Value,
+    ) {
+        if !self.recording.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut call = json!({
+            "trigger": trigger,
+            "room_id": room_id,
+            "event": null,
+        });
+        call[member] = payload;
         let mut observed = lock(&self.observed);
         observed
             .hooks

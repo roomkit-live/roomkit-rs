@@ -10,9 +10,10 @@ use std::time::Duration;
 
 use roomkit::model::{
     Access, ChannelCategory, ChannelId, ChannelType, DeliveryStatus, EventContent, EventDirection,
-    EventId, EventSource, EventType, InboundMessage, Metadata, Participant, ParticipantId,
-    RoomEvent, RoomId, RoomTimers, Visibility,
+    EventId, EventSource, EventType, InboundMessage, Metadata, Observation, Participant,
+    ParticipantId, RoomEvent, RoomId, RoomTimers, Visibility,
 };
+use roomkit::orchestration::StatusEntry;
 use roomkit::providers::sms::WebhookMeta;
 use roomkit::{
     AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
@@ -29,6 +30,7 @@ use crate::agents;
 use crate::errors::{error_of, named};
 use crate::run::Run;
 use crate::scripted::{ScriptedChannel, hook_handler, session_hook_handler, status_hook_handler};
+use crate::task_calls::payload_hook_handler;
 use crate::templates::{complete_event, complete_participant, system_source};
 
 /// Why a call could not even be made: a scenario the runner cannot read.
@@ -165,6 +167,9 @@ pub(crate) async fn call(
         }
         store if crate::store_calls::handles(store) => {
             crate::store_calls::call(run, store, spec).await?
+        }
+        task if crate::task_calls::handles(task) => {
+            crate::task_calls::call(run, task, spec).await?
         }
         _ => (lifecycle_call(run, name, spec).await?, None),
     })
@@ -307,7 +312,7 @@ async fn binding_call(
     Ok(finish(run, name, outcome, dump))
 }
 
-fn send_event_options(spec: &Value) -> Result<SendEventOptions, Unreadable> {
+pub(crate) fn send_event_options(spec: &Value) -> Result<SendEventOptions, Unreadable> {
     let mut options = SendEventOptions::default();
     if let Some(event_type) = optional::<EventType>(spec, "event_type")? {
         options.event_type = event_type;
@@ -526,13 +531,23 @@ fn add_room_hook(
             .then(|| agents::tool_hook_handler(hook, run)),
         hook_handler(hook, run),
     );
+    let status = payload_hook_handler::<StatusEntry>(hook, run, "status_entry");
+    let feedback = payload_hook_handler::<Observation>(hook, run, "observation");
     Ok(async move {
-        let added = match tool {
-            Some(tool) => {
+        let added = match (tool, trigger) {
+            (Some(tool), _) => {
                 kit.add_room_hook(&room, trigger, execution, tool, options)
                     .await
             }
-            None => {
+            (None, HookTrigger::OnStatusPosted) => {
+                kit.add_room_hook(&room, trigger, execution, status, options)
+                    .await
+            }
+            (None, HookTrigger::OnFeedback) => {
+                kit.add_room_hook(&room, trigger, execution, feedback, options)
+                    .await
+            }
+            (None, _) => {
                 kit.add_room_hook(&room, trigger, execution, event, options)
                     .await
             }
@@ -568,6 +583,12 @@ pub(crate) fn register_hook(
         kit.hook(trigger, session_hook_handler(hook, run), options)
     } else if trigger == HookTrigger::OnDeliveryStatus {
         kit.hook(trigger, status_hook_handler(hook, run), options)
+    } else if trigger == HookTrigger::OnStatusPosted {
+        let handler = payload_hook_handler::<StatusEntry>(hook, run, "status_entry");
+        kit.hook(trigger, handler, options)
+    } else if trigger == HookTrigger::OnFeedback {
+        let handler = payload_hook_handler::<Observation>(hook, run, "observation");
+        kit.hook(trigger, handler, options)
     } else {
         kit.hook(trigger, hook_handler(hook, run), options)
     };

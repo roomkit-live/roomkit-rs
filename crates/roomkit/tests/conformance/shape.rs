@@ -205,7 +205,10 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "remove_room_hook" => &["room_id", "name"],
         "process_delivery_status" => &["status"],
         "process_webhook" => &["meta", "channel_id"],
-        store => return crate::store_calls::arguments(store),
+        other => {
+            return crate::task_calls::arguments(other)
+                .or_else(|| crate::store_calls::arguments(other));
+        }
     })
 }
 
