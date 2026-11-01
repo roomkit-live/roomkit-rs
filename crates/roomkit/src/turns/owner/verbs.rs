@@ -28,7 +28,8 @@ use crate::turns::wire::{
 /// The refusal of a verb the host may not ask.
 const PERMISSION_ERROR: &str = "PermissionError";
 
-/// The refusal of a verb or arguments the owner does not know.
+/// The refusal of a verb or arguments the owner does not know, and of a
+/// verb for another room or organization than the turn's.
 const VALUE_ERROR: &str = "ValueError";
 
 /// Runs `verb` for the turn `facts` names, during the turn: its result as
@@ -66,7 +67,8 @@ pub(super) async fn serve(
 }
 
 /// Refuses a verb that names another room, or another organization, than
-/// the turn's.
+/// the turn's, as the Python implementation's owner refuses it
+/// (`ValueError`).
 fn within_its_room(
     facts: &Facts,
     room_id: &RoomId,
@@ -74,10 +76,10 @@ fn within_its_room(
 ) -> Result<(), Box<WireError>> {
     if room_id != &facts.room_id {
         return Err(refusal(
-            PERMISSION_ERROR,
+            VALUE_ERROR,
             format!(
-                "The host of a turn in room {} may not write to room {room_id}",
-                facts.room_id
+                "A turn's host acts for its room {:?}, not for {room_id}",
+                facts.room_id.as_str()
             ),
         ));
     }
@@ -85,11 +87,8 @@ fn within_its_room(
         && Some(organization_id) != facts.organization_id.as_deref()
     {
         return Err(refusal(
-            PERMISSION_ERROR,
-            format!(
-                "The host of a turn in room {} acts for its room's organization, not {organization_id}",
-                facts.room_id
-            ),
+            VALUE_ERROR,
+            format!("A turn's host acts in its room's organization, not in {organization_id:?}"),
         ));
     }
     Ok(())

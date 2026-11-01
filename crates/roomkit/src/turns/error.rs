@@ -4,7 +4,7 @@
 
 use std::error::Error;
 
-use roomkit_core::model::{ChannelId, DeliveryError, ErrorRecord, Metadata};
+use roomkit_core::model::{ChannelId, DeliveryError, ErrorRecord, Metadata, RoomId};
 use roomkit_core::ops::{ChannelOutcome, Outcome, Raised};
 use serde_json::Value;
 use thiserror::Error;
@@ -22,6 +22,9 @@ pub(crate) const CHANNEL_ERROR: &str = "ChannelError";
 
 /// The kind a kit's error crosses as, its variant among its attributes.
 const KIT_ERROR: &str = "RoomKitError";
+
+/// The kind a builtin `ValueError` crosses as.
+const VALUE_ERROR: &str = "ValueError";
 
 /// The attribute that names a kit error's variant.
 const VARIANT: &str = "variant";
@@ -291,6 +294,11 @@ pub(crate) fn rebuild_kit_error(error: &WireError) -> RoomKitError {
     {
         return rebuilt;
     }
+    // A builtin crosses as itself, as the Python implementation's codec
+    // rebuilds it: a `ValueError` is the kit's.
+    if error.kind == VALUE_ERROR {
+        return RoomKitError::Value(error.message.clone());
+    }
     if is_link_reason(&error.kind) {
         return TurnError::new(error.kind.clone(), error.message.clone()).into_kit_error();
     }
@@ -318,6 +326,11 @@ fn rebuilt_variant(error: &WireError) -> Option<RoomKitError> {
             let id = error.attributes.get("channel_id")?.as_str()?;
             RoomKitError::ChannelNotRegistered(ChannelId::new(id).ok()?)
         }
+        "RoomNotFound" => {
+            let id = error.attributes.get("room_id")?.as_str()?;
+            RoomKitError::RoomNotFound(RoomId::new(id).ok()?)
+        }
+        "Value" => RoomKitError::Value(error.message.clone()),
         _ => return None,
     })
 }
@@ -332,7 +345,10 @@ pub(crate) fn variant_name(error: &RoomKitError) -> &'static str {
 fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
     let mut fields = Metadata::new();
     let variant = match error {
-        RoomKitError::RoomNotFound(_) => "RoomNotFound",
+        RoomKitError::RoomNotFound(room_id) => {
+            fields.insert("room_id".to_owned(), Value::from(room_id.as_str()));
+            "RoomNotFound"
+        }
         RoomKitError::RoomAlreadyExists(_) => "RoomAlreadyExists",
         RoomKitError::RoomClosed { .. } => "RoomClosed",
         RoomKitError::TransitionRefused { .. } => "TransitionRefused",
@@ -457,7 +473,7 @@ mod tests {
     fn a_kit_error_comes_back_as_itself_or_as_a_turn_error() {
         let unknown = || RoomKitError::ChannelNotRegistered(ChannelId::new("sms").unwrap());
         let reentrant = || RoomKitError::ReentrantCall {
-            room_id: roomkit_core::model::RoomId::new("room_1").unwrap(),
+            room_id: RoomId::new("room_1").unwrap(),
         };
         let rebuilt = [RoomKitError::KitClosed, unknown(), reentrant()]
             .map(|error| rebuild_kit_error(&kit_error(&error)));

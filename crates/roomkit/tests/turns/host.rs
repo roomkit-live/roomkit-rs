@@ -14,7 +14,9 @@ use roomkit_ai::ToolResult;
 use crate::support::{asks, channel, kit};
 
 /// RFC §10.6.5 (MUST): the host of a turn writes to the turn's room only;
-/// a send naming another room is refused by the owner, nothing stored there.
+/// a send naming another room is refused by the owner with Python's
+/// `ValueError`, nothing stored there.
+// Python: tests/test_turns_host.py::test_a_host_acts_only_for_its_turns_room_and_organization[send_event]
 #[tokio::test(start_paused = true)]
 async fn a_turn_s_host_refuses_another_room() {
     let read: Arc<Mutex<Option<String>>> = Arc::default();
@@ -33,7 +35,7 @@ async fn a_turn_s_host_refuses_another_room() {
                 )
                 .await;
             *noted.lock().unwrap() = Some(match sent {
-                Err(RoomKitError::RemoteTurn { kind, .. }) => kind,
+                Err(RoomKitError::Value(_)) => "ValueError".to_owned(),
                 other => format!("{other:?}"),
             });
             Ok(ToolResult::Text("42".to_owned()))
@@ -55,7 +57,7 @@ async fn a_turn_s_host_refuses_another_room() {
         .unwrap();
     assert_eq!(
         (read.lock().unwrap().clone(), elsewhere.len()),
-        (Some("PermissionError".to_owned()), 0)
+        (Some("ValueError".to_owned()), 0)
     );
 }
 
