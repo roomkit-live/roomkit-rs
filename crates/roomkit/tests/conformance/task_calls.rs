@@ -18,8 +18,9 @@ use roomkit::model::{
 use roomkit::orchestration::{PostAsyncOptions, RecentOptions, StatusLevel};
 use roomkit::tasks::DelegatedTask;
 use roomkit::{
-    DelegateOptions, HookError, ListObservationsOptions, ListTasksOptions, PostStatusOptions,
-    SubmitFeedbackOptions, TurnHost, UpdateRoomMetadataOptions, current_turn_host,
+    CancelTaskOptions, DelegateOptions, HookError, ListObservationsOptions, ListTasksOptions,
+    PostStatusOptions, SubmitFeedbackOptions, TurnHost, UpdateRoomMetadataOptions,
+    current_turn_host,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -66,7 +67,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "conversation",
             "hand_back",
         ],
-        "task.wait" | "host.wait_task" => &["task_id"],
+        "task.wait" | "host.wait_task" | "cancel_task" => &["task_id"],
         "host.send_event" => &[
             "room_id",
             "channel_id",
@@ -187,6 +188,14 @@ pub(crate) async fn call(
                 .ok_or_else(|| format!("no task {task_id:?} was delegated"))?;
             let outcome = task.wait(roomkit::tasks::WaitOptions::default()).await;
             (finish(run, name, outcome, dump), None)
+        }
+        "cancel_task" => {
+            let task_id: String = field(spec, "task_id")?;
+            let options = CancelTaskOptions {
+                organization_id: organization_id(spec),
+            };
+            let cancelled = kit.cancel_task(&task_id, options).await;
+            (Ok(Value::Bool(cancelled)), None)
         }
         verb => host_call(run, verb, spec).await?,
     })
