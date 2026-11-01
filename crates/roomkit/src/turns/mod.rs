@@ -37,7 +37,7 @@ mod records;
 #[cfg(test)]
 mod tests;
 mod timeouts;
-mod wire;
+pub(crate) mod wire;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};

@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use roomkit_core::model::{
     ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent, EventId, HookAction,
-    Metadata, RoomContext, RoomEvent, RoomId, Timestamp, ToolCall, ToolCallOutcome,
+    Metadata, Observation, Room, RoomContext, RoomEvent, RoomId, Timestamp, ToolCall,
+    ToolCallOutcome,
 };
 use roomkit_core::ops::{Environment, SystemEnvironment};
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -23,12 +24,17 @@ use crate::error::RoomKitError;
 use crate::events::FrameworkEvent;
 use crate::hooks::{self, HookHandler};
 use crate::kit::Inner;
+use crate::orchestration::{StatusEntry, StatusLevel};
 use crate::store::ConversationStore;
 use crate::stream::ResponseStream;
 use crate::tasks::Kind;
 use crate::tool_calls::{ToolCallEvent, ToolCallReport, error_envelope};
+use crate::turns::wire::{
+    ADD_OBSERVATION, AddObservation, POST_STATUS, PostStatus, UPDATE_ROOM_METADATA,
+    UpdateRoomMetadata,
+};
 use crate::turns::{HostLink, TurnError, send_event_arguments};
-use crate::{RoomKit, SendEventOptions};
+use crate::{RoomKit, SendEventOptions, UpdateRoomMetadataOptions};
 
 tokio::task_local! {
     static TURN: TurnHost;
@@ -219,6 +225,90 @@ impl TurnHost {
             )
             .into_kit_error()
         })
+    }
+
+    /// Posts `agent_id`'s `action` at `status` on the kit's status bus
+    /// (RFC §19.8), as [`StatusBus::post`](crate::orchestration::StatusBus::post)
+    /// does on the room's owner: Python's `TurnHost.post_status(agent_id,
+    /// action, status, *, detail='', metadata=None)`. The entry names the
+    /// turn's room in its metadata's `room_id` when it names none, and
+    /// fires that room's `ON_STATUS_POSTED` hooks.
+    ///
+    /// # Errors
+    ///
+    /// [`RoomKitError::Value`] for a status naming another room than the
+    /// turn's, or one only the framework posts: a task's (action `task`),
+    /// or a worker run's entry (metadata `task_run`); a link's failure as
+    /// [`send_event`](Self::send_event)'s.
+    pub async fn post_status(
+        &self,
+        agent_id: impl Into<String>,
+        action: impl Into<String>,
+        status: StatusLevel,
+        options: PostStatusOptions,
+    ) -> Result<(), RoomKitError> {
+        let arguments = PostStatus {
+            agent_id: agent_id.into(),
+            action: action.into(),
+            status,
+            detail: options.detail,
+            metadata: options.metadata,
+        };
+        self.verb(POST_STATUS, &arguments).await.map(drop)
+    }
+
+    /// Merges `metadata` into the turn's room's metadata on the room's
+    /// owner, as [`RoomKit::update_room_metadata`] does: the room as stored
+    /// after. Python's `TurnHost.update_room_metadata(room_id, metadata, *,
+    /// organization_id=None)`.
+    ///
+    /// # Errors
+    ///
+    /// [`RoomKitError::Value`] for another room than the turn's, or another
+    /// organization than its room's; the kit's error otherwise.
+    pub async fn update_room_metadata(
+        &self,
+        room_id: &RoomId,
+        metadata: Metadata,
+        options: UpdateRoomMetadataOptions,
+    ) -> Result<Room, RoomKitError> {
+        let arguments = UpdateRoomMetadata {
+            room_id: room_id.clone(),
+            metadata,
+            organization_id: options.organization_id,
+        };
+        let room = self.verb(UPDATE_ROOM_METADATA, &arguments).await?;
+        decoded(room)
+    }
+
+    /// Stores `observation` for its room on the room's owner (RFC §5.11):
+    /// Python's `TurnHost.add_observation(observation)`.
+    ///
+    /// # Errors
+    ///
+    /// [`RoomKitError::Value`] for an observation of another room than the
+    /// turn's; the store's error otherwise.
+    pub async fn add_observation(&self, observation: Observation) -> Result<(), RoomKitError> {
+        let arguments = AddObservation { observation };
+        self.verb(ADD_OBSERVATION, &arguments).await.map(drop)
+    }
+
+    /// Sends `verb` with `arguments` to the room's owner, at least as deep
+    /// as the current work: its result as data.
+    async fn verb<T: serde::Serialize>(
+        &self,
+        verb: &str,
+        arguments: &T,
+    ) -> Result<Value, RoomKitError> {
+        let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
+        let Ok(Value::Object(arguments)) = serde_json::to_value(arguments) else {
+            return Err(TurnError::new(
+                "TypeError",
+                format!("the arguments of verb {verb:?} cannot cross the turn backend"),
+            )
+            .into_kit_error());
+        };
+        self.shared.link.verb(verb, arguments, floor).await
     }
 
     /// Runs the kit's `BEFORE_TOOL_USE` hooks on `call`, in chain order
@@ -899,6 +989,25 @@ pub(crate) trait TurnKit: Send + Sync {
     /// Whether the current task is one the kit's `close()` is called from:
     /// a turn run in it runs on whatever cuts it (RFC §12.10.4).
     fn acting(&self) -> bool;
+
+    /// Posts `entry` on the kit's status bus, its publication run in the
+    /// background as the kit's own work (RFC §19.8).
+    fn post_status(&self, entry: StatusEntry) -> Result<(), RoomKitError>;
+
+    /// Merges `metadata` into `room_id`'s metadata, for `organization_id`
+    /// (RFC §5.1).
+    fn update_room_metadata(
+        &self,
+        room_id: RoomId,
+        metadata: Metadata,
+        organization_id: Option<String>,
+    ) -> BoxFuture<'static, Result<Room, RoomKitError>>;
+
+    /// Stores `observation` for its room (RFC §5.11).
+    fn add_observation(
+        &self,
+        observation: Observation,
+    ) -> BoxFuture<'static, Result<(), RoomKitError>>;
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
@@ -954,6 +1063,47 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         self.upgrade().is_some_and(|inner| inner.tasks.acting())
     }
 
+    fn post_status(&self, entry: StatusEntry) -> Result<(), RoomKitError> {
+        let inner = self.upgrade().ok_or(RoomKitError::KitClosed)?;
+        inner.open()?;
+        let publication = inner.status_bus.publication(entry);
+        if inner
+            .tasks
+            .spawn_alone(Kind::Observer, publication)
+            .is_none()
+        {
+            return Err(RoomKitError::KitClosed);
+        }
+        Ok(())
+    }
+
+    fn update_room_metadata(
+        &self,
+        room_id: RoomId,
+        metadata: Metadata,
+        organization_id: Option<String>,
+    ) -> BoxFuture<'static, Result<Room, RoomKitError>> {
+        let kit = self.upgrade().map(|inner| RoomKit { inner });
+        Box::pin(async move {
+            let kit = kit.ok_or(RoomKitError::KitClosed)?;
+            let options = UpdateRoomMetadataOptions { organization_id };
+            kit.update_room_metadata(&room_id, metadata, options).await
+        })
+    }
+
+    fn add_observation(
+        &self,
+        observation: Observation,
+    ) -> BoxFuture<'static, Result<(), RoomKitError>> {
+        let kit = self.upgrade().map(|inner| RoomKit { inner });
+        Box::pin(async move {
+            let kit = kit.ok_or(RoomKitError::KitClosed)?;
+            kit.inner.open()?;
+            kit.store().add_observation(observation).await?;
+            Ok(())
+        })
+    }
+
     fn emit(
         &self,
         event_type: String,
@@ -973,6 +1123,28 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         };
         drop(inner.events.emit(&inner.tasks, event));
     }
+}
+
+/// A verb's result read as `T`.
+fn decoded<T: serde::de::DeserializeOwned>(result: Value) -> Result<T, RoomKitError> {
+    serde_json::from_value(result).map_err(|error| {
+        TurnError::new(
+            "frame_invalid",
+            format!("the verb's result could not be read: {error}"),
+        )
+        .into_kit_error()
+    })
+}
+
+/// What [`TurnHost::post_status`] takes beside the agent, its action and
+/// its level: Python's `post_status(..., *, detail='', metadata=None)`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PostStatusOptions {
+    /// Python `detail=''`: what the entry says.
+    pub detail: String,
+    /// Python `metadata=None`: what else it carries; its `room_id`, when it
+    /// names one, is the turn's room.
+    pub metadata: Option<Metadata>,
 }
 
 /// The host of the turn the intelligence channel `channel_id` takes in

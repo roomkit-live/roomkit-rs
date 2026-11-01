@@ -11,12 +11,13 @@ use std::time::Duration;
 
 use roomkit_core::model::{
     ChannelId, ChannelType, DeliveryStatus, ErrorRecord, EventContent, EventDirection, EventType,
-    HookAction, HookResult, RoomContext, RoomEvent, RoomId, Timestamp,
+    HookAction, HookResult, Observation, RoomContext, RoomEvent, RoomId, Timestamp,
 };
 use roomkit_core::ops::{Environment, SystemEnvironment};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookFilter, HookSpec, HookTrigger};
 
+use crate::orchestration::StatusEntry;
 use crate::tool_calls::ToolCallEvent;
 
 /// What a hook's handler failed with. A SYNC hook that fails lets the event
@@ -290,6 +291,8 @@ impl HookRegistration {
             Kept::ToolCall(_) => ToolCallEvent::accepts(self.trigger),
             Kept::Session(_) => SessionStartedEvent::accepts(self.trigger),
             Kept::Status(_) => DeliveryStatus::accepts(self.trigger),
+            Kept::StatusEntry(_) => StatusEntry::accepts(self.trigger),
+            Kept::Observation(_) => Observation::accepts(self.trigger),
         }
     }
 
@@ -372,14 +375,17 @@ mod sealed {
     impl Sealed for crate::tool_calls::ToolCallEvent {}
     impl Sealed for super::SessionStartedEvent {}
     impl Sealed for roomkit_core::model::DeliveryStatus {}
+    impl Sealed for crate::orchestration::StatusEntry {}
+    impl Sealed for roomkit_core::model::Observation {}
 }
 
 /// What a trigger hands its hooks (RFC §9.2): a [`RoomEvent`] for the
 /// event and lifecycle triggers, a [`ToolCallEvent`] for `BEFORE_TOOL_USE`
 /// and `ON_TOOL_CALL`, a [`SessionStartedEvent`] for `ON_SESSION_STARTED`,
-/// a [`DeliveryStatus`] for `ON_DELIVERY_STATUS`.
-/// A registration whose handler takes another payload than its trigger's
-/// is refused.
+/// a [`DeliveryStatus`] for `ON_DELIVERY_STATUS`, a [`StatusEntry`] for
+/// `ON_STATUS_POSTED`, an [`Observation`] for `ON_FEEDBACK`. A
+/// registration whose handler takes another payload than its trigger's is
+/// refused.
 pub trait HookPayload: sealed::Sealed + Clone + Send + Sync + 'static {
     /// Whether `trigger` hands this payload.
     #[doc(hidden)]
@@ -395,7 +401,10 @@ impl HookPayload for RoomEvent {
         !trigger.is_tool_trigger()
             && !matches!(
                 trigger,
-                HookTrigger::OnSessionStarted | HookTrigger::OnDeliveryStatus
+                HookTrigger::OnSessionStarted
+                    | HookTrigger::OnDeliveryStatus
+                    | HookTrigger::OnStatusPosted
+                    | HookTrigger::OnFeedback
             )
     }
 
@@ -434,6 +443,26 @@ impl HookPayload for DeliveryStatus {
     }
 }
 
+impl HookPayload for StatusEntry {
+    fn accepts(trigger: HookTrigger) -> bool {
+        trigger == HookTrigger::OnStatusPosted
+    }
+
+    fn kept(handler: Arc<dyn HookHandler<Self>>) -> Kept {
+        Kept::StatusEntry(handler)
+    }
+}
+
+impl HookPayload for Observation {
+    fn accepts(trigger: HookTrigger) -> bool {
+        trigger == HookTrigger::OnFeedback
+    }
+
+    fn kept(handler: Arc<dyn HookHandler<Self>>) -> Kept {
+        Kept::Observation(handler)
+    }
+}
+
 /// A hook's handler as the kit keeps it, by its payload.
 #[doc(hidden)]
 #[derive(Clone)]
@@ -446,6 +475,10 @@ pub enum Kept {
     Session(Arc<dyn HookHandler<SessionStartedEvent>>),
     /// A delivery status's hook.
     Status(Arc<dyn HookHandler<DeliveryStatus>>),
+    /// A status entry's hook.
+    StatusEntry(Arc<dyn HookHandler<StatusEntry>>),
+    /// A feedback's hook.
+    Observation(Arc<dyn HookHandler<Observation>>),
 }
 
 impl std::fmt::Debug for Kept {
@@ -455,6 +488,8 @@ impl std::fmt::Debug for Kept {
             Self::ToolCall(_) => "Kept::ToolCall",
             Self::Session(_) => "Kept::Session",
             Self::Status(_) => "Kept::Status",
+            Self::StatusEntry(_) => "Kept::StatusEntry",
+            Self::Observation(_) => "Kept::Observation",
         })
     }
 }
@@ -519,6 +554,10 @@ pub(crate) async fn run_kept(
         Kept::Status(_) => HookOutcome::Raised(ErrorRecord::new(
             "HookError",
             "a delivery status's hook does not run on an event",
+        )),
+        Kept::StatusEntry(_) | Kept::Observation(_) => HookOutcome::Raised(ErrorRecord::new(
+            "HookError",
+            "a hook whose payload is no event does not run on an event",
         )),
     }
 }

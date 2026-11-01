@@ -24,11 +24,13 @@ use roomkit::HostChannelOptions;
 use roomkit::InMemoryStore;
 use roomkit::ListBindingsOptions;
 use roomkit::ListMembersOptions;
+use roomkit::ListObservationsOptions;
 use roomkit::MuteOptions;
 use roomkit::MuteOutputOptions;
 use roomkit::NormalizeOptions;
 use roomkit::PauseRoomOptions;
 use roomkit::PostOptions;
+use roomkit::PostStatusOptions;
 use roomkit::ProcessInboundOptions;
 use roomkit::RemoveRoomHookOptions;
 use roomkit::ReopenRoomOptions;
@@ -38,11 +40,13 @@ use roomkit::RouteOptions;
 use roomkit::SendEventOptions;
 use roomkit::SetAccessOptions;
 use roomkit::SetVisibilityOptions;
+use roomkit::SubmitFeedbackOptions;
 use roomkit::TransportChannelOptions;
 use roomkit::UnmuteOptions;
 use roomkit::UnmuteOutputOptions;
 use roomkit::UpdateBindingMetadataOptions;
 use roomkit::UpdateEventOptions;
+use roomkit::UpdateRoomMetadataOptions;
 use roomkit::model::Access;
 use roomkit::model::AgentResponsePolicy;
 use roomkit::model::EventType;
@@ -50,6 +54,7 @@ use roomkit::model::Visibility;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::hook::BlockOptions;
 use roomkit::model::hook::ModifyOptions;
+use roomkit::orchestration;
 use roomkit::store;
 use roomkit::testing::EchoAgentOptions;
 use roomkit::testing::RecordingTransportOptions;
@@ -413,6 +418,8 @@ fn room_kit_options_defaults_as_python() {
     assert_eq!(defaults.process_timeout, Duration::from_secs(30));
     // roomkit.RoomKit.__init__(realtime) = None
     assert!(defaults.realtime.is_none());
+    // roomkit.RoomKit.__init__(status_bus) = None
+    assert!(defaults.status_bus.is_none());
     // roomkit.RoomKit.__init__(store) = None
     let store: Arc<InMemoryStore> = defaults.store;
     assert_eq!(Arc::strong_count(&store), 1);
@@ -753,4 +760,91 @@ fn process_webhook_options_defaults_as_python() {
     let defaults = roomkit::ProcessWebhookOptions::default();
     // roomkit.RoomKit.process_webhook(organization_id) = None
     assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn list_observations_options_defaults_as_python() {
+    let defaults = ListObservationsOptions::default();
+    // roomkit.RoomKit.list_observations(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn update_room_metadata_options_defaults_as_python() {
+    let defaults = UpdateRoomMetadataOptions::default();
+    // roomkit.RoomKit.update_room_metadata(organization_id) = None
+    // roomkit.TurnHost.update_room_metadata(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn submit_feedback_options_defaults_as_python() {
+    let defaults = SubmitFeedbackOptions::default();
+    // roomkit.RoomKit.submit_feedback(event_id) = None
+    assert!(defaults.event_id.is_none());
+    // roomkit.RoomKit.submit_feedback(channel_id) = None
+    assert!(defaults.channel_id.is_none());
+    // roomkit.RoomKit.submit_feedback(comment) = ''
+    assert_eq!(defaults.comment, "");
+    // roomkit.RoomKit.submit_feedback(dimension) = 'overall'
+    assert_eq!(defaults.dimension, "overall");
+    // roomkit.RoomKit.submit_feedback(metadata) = None
+    assert!(defaults.metadata.is_none());
+    // roomkit.RoomKit.submit_feedback(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn post_status_options_defaults_as_python() {
+    let defaults = PostStatusOptions::default();
+    // roomkit.TurnHost.post_status(detail) = ''
+    assert_eq!(defaults.detail, "");
+    // roomkit.TurnHost.post_status(metadata) = None
+    assert!(defaults.metadata.is_none());
+}
+
+#[test]
+fn status_bus_options_defaults_as_python() {
+    let defaults = orchestration::StatusBusOptions::default();
+    // roomkit.orchestration.StatusBus.__init__(backend) = None
+    assert!(defaults.backend.is_none());
+    // roomkit.orchestration.StatusBus.__init__(persist_path) = None
+    assert!(defaults.persist_path.is_none());
+    let post = orchestration::PostOptions::default();
+    // roomkit.orchestration.StatusBus.post(detail) = ''
+    assert_eq!(post.detail, "");
+    // roomkit.orchestration.StatusBus.post(metadata) = None
+    assert!(post.metadata.is_none());
+    let post_async = orchestration::PostAsyncOptions::default();
+    // roomkit.orchestration.StatusBus.post_async(detail) = ''
+    assert_eq!(post_async.detail, "");
+    // roomkit.orchestration.StatusBus.post_async(metadata) = None
+    assert!(post_async.metadata.is_none());
+    let recent = orchestration::RecentOptions::default();
+    // roomkit.orchestration.StatusBus.recent(n) = 10
+    assert_eq!(recent.n, 10);
+    // roomkit.orchestration.StatusBus.recent(agent_id) = None
+    assert!(recent.agent_id.is_none());
+    // roomkit.orchestration.StatusBus.recent(status) = None
+    assert!(recent.status.is_none());
+    // roomkit.orchestration.StatusBus.has_completed(agent_id) = None
+    assert!(
+        orchestration::HasCompletedOptions::default()
+            .agent_id
+            .is_none()
+    );
+}
+
+#[test]
+fn status_backend_options_defaults_as_python() {
+    let backend = orchestration::InMemoryStatusBackendOptions::default();
+    // roomkit.orchestration.InMemoryStatusBackend.__init__(max_entries) = 500
+    assert_eq!(backend.max_entries, 500);
+    // roomkit.orchestration.InMemoryStatusBackend.__init__(persist_path) = None
+    assert!(backend.persist_path.is_none());
+    let recent = orchestration::backend::RecentOptions::default();
+    // roomkit.orchestration.StatusBackend.recent(agent_id) = None
+    assert!(recent.agent_id.is_none());
+    // roomkit.orchestration.StatusBackend.recent(status) = None
+    assert!(recent.status.is_none());
 }

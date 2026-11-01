@@ -464,3 +464,54 @@ fn message() -> EventType {
 
 /// The verb `send_event` (RFC §10.6.5).
 pub(crate) const SEND_EVENT: &str = "send_event";
+
+/// The verb `post_status` (RFC §10.6.5, §19.8).
+pub(crate) const POST_STATUS: &str = "post_status";
+
+/// The verb `update_room_metadata` (RFC §10.6.5).
+pub(crate) const UPDATE_ROOM_METADATA: &str = "update_room_metadata";
+
+/// The verb `add_observation` (RFC §10.6.5, §5.11).
+pub(crate) const ADD_OBSERVATION: &str = "add_observation";
+
+/// The verbs a host still sends after its turn ended (RFC §10.6.5), for
+/// the turn's room: Python's `BETWEEN_TURNS`.
+pub(crate) const BETWEEN_TURNS: [&str; 4] = [
+    SEND_EVENT,
+    POST_STATUS,
+    UPDATE_ROOM_METADATA,
+    ADD_OBSERVATION,
+];
+
+/// `post_status`'s arguments, as the Python implementation's `PostStatus`
+/// record names them: an entry on the kit's status bus.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PostStatus {
+    pub(crate) agent_id: String,
+    pub(crate) action: String,
+    pub(crate) status: crate::orchestration::StatusLevel,
+    #[serde(default)]
+    pub(crate) detail: String,
+    #[serde(default)]
+    pub(crate) metadata: Option<Metadata>,
+}
+
+/// `update_room_metadata`'s arguments, as the Python implementation's
+/// `UpdateRoomMetadata` record names them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UpdateRoomMetadata {
+    pub(crate) room_id: RoomId,
+    pub(crate) metadata: Metadata,
+    #[serde(default)]
+    pub(crate) organization_id: Option<String>,
+}
+
+/// `add_observation`'s arguments, as the Python implementation's
+/// `AddObservation` record names them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AddObservation {
+    pub(crate) observation: Observation,
+}

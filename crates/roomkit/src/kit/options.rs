@@ -69,6 +69,11 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// (RFC §8.4), an [`InMemoryRealtime`](crate::realtime::InMemoryRealtime)
     /// by default; the kit's close closes it.
     pub realtime: Option<Arc<dyn crate::realtime::RealtimeBackend>>,
+    /// Python `status_bus=None`: the bus the kit's agents post their
+    /// statuses to (RFC §19.8), an in-memory one by default; the kit
+    /// subscribes to it, so that an entry naming a room fires that room's
+    /// `ON_STATUS_POSTED` hooks, and its close closes it.
+    pub status_bus: Option<crate::orchestration::StatusBus>,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -90,6 +95,7 @@ impl<S> RoomKitOptions<S> {
             agent_response_policy: AgentResponsePolicy::AgentChain,
             process_timeout: PROCESS_TIMEOUT,
             realtime: None,
+            status_bus: None,
         }
     }
 }
@@ -103,6 +109,7 @@ impl<S> fmt::Debug for RoomKitOptions<S> {
             .field("agent_response_policy", &self.agent_response_policy)
             .field("process_timeout", &self.process_timeout)
             .field("realtime", &self.realtime.is_some())
+            .field("status_bus", &self.status_bus.is_some())
             .finish_non_exhaustive()
     }
 }

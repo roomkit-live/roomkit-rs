@@ -36,6 +36,7 @@ mod registry;
 mod room_hooks;
 mod rooms;
 mod shutdown;
+mod status;
 #[cfg(test)]
 mod tests;
 mod timeline;
@@ -73,6 +74,7 @@ pub use self::options::{
 pub use self::output::{MuteOutputOptions, UnmuteOutputOptions};
 pub use self::read_markers::{ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions};
 pub use self::room_hooks::{AddRoomHookOptions, RemoveRoomHookOptions};
+pub use self::status::{ListObservationsOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions};
 pub use self::weak::WeakRoomKit;
 use crate::channel::DynChannel;
 use crate::context;
@@ -177,6 +179,8 @@ pub(crate) struct Inner<S> {
     store_released: AtomicBool,
     /// The backend of the kit's ephemeral events (RFC §8.4).
     pub(crate) realtime: Arc<dyn crate::realtime::RealtimeBackend>,
+    /// The kit's status bus (RFC §19.8), which the kit subscribes to.
+    pub(crate) status_bus: crate::orchestration::StatusBus,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -204,6 +208,7 @@ impl<S: ConversationStore> RoomKit<S> {
             agent_response_policy,
             process_timeout,
             realtime,
+            status_bus,
         } = options;
         let mut config = KitConfig::new();
         config.max_chain_depth = max_chain_depth;
@@ -231,7 +236,9 @@ impl<S: ConversationStore> RoomKit<S> {
             store_released: AtomicBool::new(false),
             realtime: realtime
                 .unwrap_or_else(|| Arc::new(crate::realtime::InMemoryRealtime::default())),
+            status_bus: status_bus.unwrap_or_default(),
         });
+        inner.subscribe_status_bus();
         Self { inner }
     }
 

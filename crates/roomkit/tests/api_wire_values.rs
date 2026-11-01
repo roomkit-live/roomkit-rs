@@ -95,6 +95,24 @@ fn hook_trigger_serializes_to_python_s_values() {
             ("BEFORE_TOOL_USE", HookTrigger::BeforeToolUse),
             ("ON_TOOL_CALL", HookTrigger::OnToolCall),
             ("ON_DELIVERY_STATUS", HookTrigger::OnDeliveryStatus),
+            ("ON_STATUS_POSTED", HookTrigger::OnStatusPosted),
+            ("ON_FEEDBACK", HookTrigger::OnFeedback),
+        ],
+    );
+}
+
+/// `roomkit.orchestration.StatusLevel`'s members.
+#[test]
+fn status_level_serializes_to_python_s_values() {
+    use roomkit::orchestration::StatusLevel;
+    serializes_to(
+        "roomkit.orchestration.StatusLevel",
+        &[
+            ("OK", StatusLevel::Ok),
+            ("FAILED", StatusLevel::Failed),
+            ("PENDING", StatusLevel::Pending),
+            ("INFO", StatusLevel::Info),
+            ("COMPLETED", StatusLevel::Completed),
         ],
     );
 }

@@ -1,0 +1,116 @@
+//! The kit's status bus (RFC §19.8): Python's
+//! `tests/test_framework_status_bus.py`. What a scenario says of it, an
+//! entry's framework event and its room's hooks, is in the shared suite
+//! (`status/`).
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use roomkit::orchestration::backend::{RecentOptions as BackendRecentOptions, StatusBackend};
+use roomkit::orchestration::{
+    InMemoryStatusBackend, PostAsyncOptions, PostOptions, RecentOptions, StatusBus,
+    StatusBusOptions, StatusEntry, StatusLevel,
+};
+use roomkit::{RoomKit, RoomKitOptions};
+
+/// A backend that notes its close, the in-memory one doing the rest.
+#[derive(Default)]
+struct Closing {
+    kept: InMemoryStatusBackend,
+    closed: AtomicBool,
+}
+
+type Future<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
+type Callback = Arc<dyn Fn(StatusEntry) -> Future<'static, ()> + Send + Sync>;
+
+impl StatusBackend for Closing {
+    fn publish(&self, entry: StatusEntry) -> Future<'_, ()> {
+        self.kept.publish(entry)
+    }
+
+    fn recent(&self, n: usize, options: BackendRecentOptions) -> Future<'_, Vec<StatusEntry>> {
+        self.kept.recent(n, options)
+    }
+
+    fn subscribe(&self, callback: Callback) -> Future<'_, ()> {
+        self.kept.subscribe(callback)
+    }
+
+    fn unsubscribe(&self, callback: Callback) -> Future<'_, ()> {
+        self.kept.unsubscribe(callback)
+    }
+
+    fn close(&self) -> Future<'_, ()> {
+        self.closed.store(true, Ordering::SeqCst);
+        Box::pin(async {})
+    }
+}
+
+// Python: tests/test_framework_status_bus.py::test_status_bus_custom_instance
+#[tokio::test]
+async fn the_kit_s_bus_is_the_one_its_options_name() {
+    let bus = StatusBus::default();
+    let kit = RoomKit::new(RoomKitOptions {
+        status_bus: Some(bus.clone()),
+        ..RoomKitOptions::default()
+    });
+    bus.post_async(
+        "exec",
+        "search",
+        StatusLevel::Ok,
+        PostAsyncOptions::default(),
+    )
+    .await;
+    let seen = kit.status_bus().recent(RecentOptions::default()).await;
+    assert_eq!(
+        seen.iter()
+            .map(|entry| entry.action.as_str())
+            .collect::<Vec<_>>(),
+        ["search"]
+    );
+}
+
+// Python: tests/test_framework_status_bus.py::test_close_closes_status_bus
+#[tokio::test]
+async fn the_kit_s_close_closes_its_bus() {
+    let backend = Arc::new(Closing::default());
+    let held: Arc<dyn StatusBackend> = Arc::clone(&backend);
+    let bus = StatusBus::new(StatusBusOptions {
+        backend: Some(held),
+        ..StatusBusOptions::default()
+    });
+    let kit = RoomKit::new(RoomKitOptions {
+        status_bus: Some(bus),
+        ..RoomKitOptions::default()
+    });
+    kit.close().await.unwrap();
+    assert!(backend.closed.load(Ordering::SeqCst));
+}
+
+// Python: tests/test_framework_status_bus.py::test_framework_event_on_post_sync
+#[tokio::test]
+async fn a_status_posted_without_waiting_is_a_framework_event_too() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let heard: Arc<Mutex<Vec<String>>> = Arc::default();
+    let hears = Arc::clone(&heard);
+    kit.on("status_posted", move |event| {
+        let agent = event.data["agent_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        hears.lock().unwrap().push(agent);
+        async {}
+    })
+    .unwrap();
+    kit.status_bus()
+        .post("voice", "greet", StatusLevel::Info, PostOptions::default());
+    roomkit::testing::idle(&kit).await;
+    for _ in 0..10 {
+        if !heard.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(heard.lock().unwrap().clone(), ["voice"]);
+}
