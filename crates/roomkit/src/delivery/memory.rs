@@ -14,7 +14,7 @@ use super::backend::{
 };
 use super::item::{DeliveryItem, DeliveryItemStatus, check_retry_delays, retry_delay};
 use super::outcome::DeliveryOutcomeStatus;
-use super::worker::{RunWorkerLoopOptions, run_worker_loop};
+use super::worker::{RunWorkerLoopOptions, run_for};
 use crate::error::RoomKitError;
 use crate::kit::RoomKit;
 use crate::store::ConversationStore;
@@ -343,8 +343,9 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
                 batch_size: 5,
                 poll_timeout: Duration::from_secs(2),
             };
+            let kit = kit.downgrade();
             *worker = Some(tokio::spawn(async move {
-                run_worker_loop(backend, kit, &worker_id, options).await;
+                run_for(backend, kit, &worker_id, options).await;
             }));
             tracing::info!(target: "roomkit::delivery", worker = %self.shared.worker_id, "in-memory delivery worker started");
             Ok(())

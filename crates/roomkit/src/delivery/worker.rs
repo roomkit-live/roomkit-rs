@@ -8,7 +8,7 @@ use super::backend::{DeliveryBackend, DequeueOptions, NackOptions};
 use super::execute::{ExecuteDeliveryOptions, execute_delivery};
 use super::item::DeliveryItem;
 use super::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
-use crate::kit::RoomKit;
+use crate::kit::{RoomKit, WeakRoomKit};
 use crate::store::ConversationStore;
 
 /// How long the worker waits before it reads the queue again once a read,
@@ -48,6 +48,29 @@ pub async fn run_worker_loop<S: ConversationStore>(
     worker_id: &str,
     options: RunWorkerLoopOptions,
 ) {
+    work(&*backend, || Some(kit.clone()), worker_id, options).await;
+}
+
+/// [`run_worker_loop`] for the kit `kit` holds weakly, as its own backend's
+/// worker: the kit holds the backend, so a worker holding the kit would
+/// keep a kit no one holds alive, and running. It ends once the kit is
+/// gone.
+pub(crate) async fn run_for<S: ConversationStore>(
+    backend: Arc<dyn DeliveryBackend<S>>,
+    kit: WeakRoomKit<S>,
+    worker_id: &str,
+    options: RunWorkerLoopOptions,
+) {
+    work(&*backend, || kit.upgrade(), worker_id, options).await;
+}
+
+/// The worker's loop over the kit `kit` gives, until it gives none.
+async fn work<S: ConversationStore>(
+    backend: &dyn DeliveryBackend<S>,
+    kit: impl Fn() -> Option<RoomKit<S>>,
+    worker_id: &str,
+    options: RunWorkerLoopOptions,
+) {
     let dequeue = DequeueOptions {
         batch_size: options.batch_size,
         timeout: options.poll_timeout,
@@ -61,13 +84,16 @@ pub async fn run_worker_loop<S: ConversationStore>(
                 continue;
             }
         };
+        let Some(kit) = kit() else {
+            return;
+        };
         for mut item in items {
             let outcome =
                 execute_delivery(&kit, &mut item, ExecuteDeliveryOptions::default()).await;
             if let Err(error) = backend.executed(&item).await {
                 tracing::warn!(target: "roomkit::delivery", item = %item.id, %error, "the item's outcome was not kept");
             }
-            settle(&*backend, &item, &outcome).await;
+            settle(backend, &item, &outcome).await;
             tracing::debug!(target: "roomkit::delivery", item = %item.id, status = ?outcome.status, reason = ?outcome.reason, "delivery executed");
         }
     }

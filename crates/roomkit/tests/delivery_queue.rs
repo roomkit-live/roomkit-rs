@@ -480,6 +480,21 @@ async fn the_kit_s_worker_dead_letters_a_target_it_never_reaches() {
     assert_eq!(backend.in_flight(), 0);
 }
 
+// Rust alone: the kit holds its backend, whose worker holds the kit weakly,
+// so a kit no one holds is gone though its worker was started.
+#[tokio::test]
+async fn a_started_kit_no_one_holds_is_gone() {
+    let options = RoomKitOptions {
+        delivery_backend: Some(Arc::new(InMemoryDeliveryBackend::default())),
+        ..RoomKitOptions::default()
+    };
+    let kit: Kit = RoomKit::new(options);
+    kit.start().await.unwrap();
+    let weak = kit.downgrade();
+    drop(kit);
+    assert!(weak.upgrade().is_none());
+}
+
 // Python: tests/delivery/test_targeted.py::test_enqueue_replay_preserves_address_and_key
 #[tokio::test]
 async fn a_queued_item_keeps_its_address_and_key_across_a_retry() {
