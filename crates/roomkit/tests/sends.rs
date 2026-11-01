@@ -247,8 +247,10 @@ fn failed(code: &str, message: &str, retryable: bool) -> Read {
 /// retries, an error that says it may not be retried sent once, the
 /// policy's list matching the error's class or a base of it; a send's own
 /// cancel is never tried again, as Python's retry catches no
-/// `CancelledError` (`tasks/probes/step5-review/py_agent_errors.out`); the
-/// delay grows by the exponent from the base, up to the most.
+/// `CancelledError` (`tasks/probes/step5-review/py_agent_errors.out`: one
+/// send, `CancelledError`, retryable), its message the kit error's words
+/// as every kit error's, where Python's `str()` of it is empty; the delay
+/// grows by the exponent from the base, up to the most.
 #[tokio::test(start_paused = true)]
 async fn a_failed_send_is_tried_again_as_its_binding_s_policy_says() {
     let cases = [
