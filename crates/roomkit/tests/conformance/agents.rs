@@ -191,10 +191,10 @@ fn tool_policy(spec: &Value) -> ToolPolicy {
             .map(str::to_owned)
             .collect::<Vec<_>>()
     };
-    let allowed = patterns("allow")
-        .into_iter()
-        .fold(ToolPolicy::new(), ToolPolicy::allow);
-    patterns("deny").into_iter().fold(allowed, ToolPolicy::deny)
+    ToolPolicy {
+        allow: patterns("allow"),
+        deny: patterns("deny"),
+    }
 }
 
 /// Each request `model` received, as the scenario reads it: the tool

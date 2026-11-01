@@ -213,7 +213,10 @@ async fn the_policy_does_not_govern_the_skill_tools() {
         agent
             .with_tools(tools)
             .unwrap()
-            .with_tool_policy(ToolPolicy::new().deny("*"))
+            .with_tool_policy(ToolPolicy {
+                deny: vec!["*".into()],
+                ..ToolPolicy::default()
+            })
     })
     .await;
     room.says("Go").await;

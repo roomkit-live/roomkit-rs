@@ -66,7 +66,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The public API in the Python implementation's terms (step 5, lot 1: the
 kit, its construction and its calls; lot 2: the model and the errors;
 lot 3: the hooks, the framework events and the turn's host; lot 4: the
-channels, the addresses, the routing and the store; lot 5: the skills).
+channels, the addresses, the routing and the store; lot 5: the skills,
+the tool policy).
 
 ### Changed
 
@@ -584,6 +585,10 @@ channels, the addresses, the routing and the store; lot 5: the skills).
   `discover(directories, DiscoverOptions)` takes Python's `strict`. A
   directory `register` cannot resolve fails `SkillError::Parse`, as
   Python's, where it failed `Discovery`.
+- **`ToolPolicy` is Python's `ToolPolicy(allow=[], deny=[])`**: its
+  `allow` and `deny` fields are public, built by struct update, and
+  `is_allowed(tool_name)` reads it; `new()`, `allow(pattern)`,
+  `deny(pattern)` and `permits(name)` go.
 
 ### Added
 

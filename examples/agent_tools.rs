@@ -162,7 +162,10 @@ async fn shop_room(
         .with_system_prompt(SYSTEM_PROMPT);
     let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?
         .with_tools(shop())?
-        .with_tool_policy(ToolPolicy::new().deny("delete_*"))
+        .with_tool_policy(ToolPolicy {
+            deny: vec!["delete_*".into()],
+            ..ToolPolicy::default()
+        })
         .with_tool_timeout(Some(BOUND));
     let kit = shared::kit();
     let sms = RecordingTransport::new(

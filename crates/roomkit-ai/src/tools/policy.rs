@@ -1,11 +1,13 @@
 //! Which tools an agent may call (RFC §21.1 `ToolPolicy`).
 
 /// Glob patterns over tool names (`*` any characters, `?` one), applied to
-/// every tool the agent declares or runs (RFC §21.1):
+/// every tool the agent declares or runs (RFC §21.1): Python's
+/// `ToolPolicy(allow=[], deny=[])`.
 ///
-/// 1. a name `deny` matches is denied, whatever `allow` says;
-/// 2. with `allow` given, a name it does not match is denied;
-/// 3. any other name is allowed.
+/// 1. With neither list, every tool is allowed.
+/// 2. A name `deny` matches is denied, whatever `allow` says.
+/// 3. With `allow` given, a name it does not match is denied.
+/// 4. Any other name is allowed.
 ///
 /// A denied tool is never declared to the model, and a call to it is
 /// refused before its arguments are read: `Tool 'x' is not permitted by the
@@ -14,42 +16,28 @@
 /// ```
 /// use roomkit_ai::ToolPolicy;
 ///
-/// let policy = ToolPolicy::new().allow("search_*").allow("get_?").deny("search_admin*");
-/// assert!(policy.permits("search_orders"));
-/// assert!(policy.permits("get_x"));
-/// assert!(!policy.permits("search_admin_users"));
-/// assert!(!policy.permits("delete_orders"));
+/// let policy = ToolPolicy {
+///     allow: vec!["search_*".into(), "get_?".into()],
+///     deny: vec!["search_admin*".into()],
+/// };
+/// assert!(policy.is_allowed("search_orders"));
+/// assert!(policy.is_allowed("get_x"));
+/// assert!(!policy.is_allowed("search_admin_users"));
+/// assert!(!policy.is_allowed("delete_orders"));
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ToolPolicy {
-    allow: Vec<String>,
-    deny: Vec<String>,
+    /// The names allowed: with one pattern given, only the names they
+    /// match are.
+    pub allow: Vec<String>,
+    /// The names denied, whatever `allow` says.
+    pub deny: Vec<String>,
 }
 
 impl ToolPolicy {
-    /// A policy that allows every tool.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// The same policy, allowing the names `pattern` matches: once one
-    /// pattern is allowed, only allowed names are.
-    #[must_use]
-    pub fn allow(mut self, pattern: impl Into<String>) -> Self {
-        self.allow.push(pattern.into());
-        self
-    }
-
-    /// The same policy, denying the names `pattern` matches.
-    #[must_use]
-    pub fn deny(mut self, pattern: impl Into<String>) -> Self {
-        self.deny.push(pattern.into());
-        self
-    }
-
-    /// Whether the agent may call the tool `name`.
-    pub fn permits(&self, name: &str) -> bool {
-        let matches = |pattern: &String| glob_matches(pattern, name);
+    /// Whether the agent may call the tool `tool_name`.
+    pub fn is_allowed(&self, tool_name: &str) -> bool {
+        let matches = |pattern: &String| glob_matches(pattern, tool_name);
         !self.deny.iter().any(matches) && (self.allow.is_empty() || self.allow.iter().any(matches))
     }
 }
@@ -114,7 +102,10 @@ mod tests {
 
     #[test]
     fn deny_wins_over_allow() {
-        let policy = ToolPolicy::new().allow("*").deny("admin_*");
-        assert!(!policy.permits("admin_wipe"));
+        let policy = ToolPolicy {
+            allow: vec!["*".into()],
+            deny: vec!["admin_*".into()],
+        };
+        assert!(!policy.is_allowed("admin_wipe"));
     }
 }

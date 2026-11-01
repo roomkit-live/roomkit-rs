@@ -87,7 +87,10 @@ async fn a_tool_the_policy_denies_is_not_declared_and_refused() {
     let agent = agent(&model)
         .with_tools(server)
         .unwrap()
-        .with_tool_policy(ToolPolicy::new().deny("fail*"));
+        .with_tool_policy(ToolPolicy {
+            deny: vec!["fail*".into()],
+            ..ToolPolicy::default()
+        });
     let room = Room::with(agent).await;
     room.says("Cancel order 7.").await;
     let declared = model.requests().remove(0).tools;

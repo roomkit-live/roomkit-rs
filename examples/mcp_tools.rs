@@ -135,7 +135,10 @@ async fn shop_room(
     let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?
         .with_server_instructions("shop", server.instructions())?
         .with_tools(server.clone())?
-        .with_tool_policy(ToolPolicy::new().deny("wipe_*"));
+        .with_tool_policy(ToolPolicy {
+            deny: vec!["wipe_*".into()],
+            ..ToolPolicy::default()
+        });
     let kit = shared::kit();
     kit.register_channel(RecordingTransport::new(
         ChannelId::new("sms")?,

@@ -43,7 +43,10 @@
 //! let agent = AiAgent::new(ChannelId::new("assistant")?, model)
 //!     .with_system_prompt("You answer a shop's customers.")
 //!     .with_tools(tools)?
-//!     .with_tool_policy(ToolPolicy::new().deny("admin_*"));
+//!     .with_tool_policy(ToolPolicy {
+//!         deny: vec!["admin_*".into()],
+//!         ..ToolPolicy::default()
+//!     });
 //! let kit = RoomKit::new(Default::default());
 //! kit.register_channel(agent)?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())

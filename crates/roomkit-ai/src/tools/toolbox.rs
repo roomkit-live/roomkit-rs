@@ -93,7 +93,7 @@ impl Toolbox {
     /// policy's word, save for a tool of the agent's own that it does not
     /// govern (RFC §21.1).
     pub(crate) fn permits(&self, policy: &ToolPolicy, name: &str) -> bool {
-        self.exempt.contains(name) || policy.permits(name)
+        self.exempt.contains(name) || policy.is_allowed(name)
     }
 
     /// Whether a call to `name` is work the agent did, which its later

@@ -681,18 +681,6 @@ reason = "lot 5: SqliteStore::new(SqliteStoreOptions) opens lazily, close(); Ope
 
 [[pending]]
 lot = 5
-python = "roomkit.ToolPolicy"
-members = ["is_allowed"]
-reason = "lot 5: ToolPolicy { allow, deny } and is_allowed, as Python's"
-
-[[pending]]
-lot = 5
-python = "roomkit.ToolPolicy.__init__"
-params = ["allow", "deny"]
-reason = "lot 5: ToolPolicy { allow, deny } and is_allowed, as Python's"
-
-[[pending]]
-lot = 5
 python = "roomkit.providers.ai.AIProvider"
 members = [
     "close", "generate_stream", "generate_structured_stream", "model_name",
@@ -781,12 +769,6 @@ reason = "lot 5: ToolError, AiError and SkillError keep their variants under the
 lot = 5
 rust = "roomkit_ai::ToolOutput"
 reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
-
-[[pending]]
-lot = 5
-rust = "roomkit_ai::ToolPolicy"
-members = ["allow", "deny", "permits"]
-reason = "lot 5: ToolPolicy { allow, deny } and is_allowed, as Python's"
 
 [[pending]]
 lot = 5

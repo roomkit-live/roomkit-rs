@@ -169,7 +169,10 @@ impl Shop {
         // stay declared (RFC §21.1).
         let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?
             .with_skills(skills)?
-            .with_tool_policy(ToolPolicy::new().deny("*"));
+            .with_tool_policy(ToolPolicy {
+                deny: vec!["*".into()],
+                ..ToolPolicy::default()
+            });
         let kit = RoomKit::new(RoomKitOptions::with_store(
             SqliteStore::open(database).await?,
         ));
