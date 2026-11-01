@@ -19,7 +19,7 @@ use tokio::task::JoinHandle;
 use crate::calls;
 use crate::harness::literal_rooms;
 use crate::normalize::{Observed, is_lifecycle_record};
-use crate::scripted::Gates;
+use crate::scripted::{GATE_BOUND, Gates};
 
 /// A call that has not returned by then fails the scenario instead of
 /// hanging it; so does a kit that does not go idle.
@@ -105,6 +105,8 @@ pub(crate) struct Run {
     events: EventTap,
     events_read: Mutex<usize>,
     pub(crate) background: Mutex<HashMap<String, JoinHandle<Value>>>,
+    /// The work scripted turns left for after them (`after_turn`).
+    after_turn: Mutex<Vec<JoinHandle<()>>>,
     /// The scripted agents' models, by channel.
     pub(crate) models: Mutex<BTreeMap<String, ScriptedProvider>>,
 }
@@ -137,6 +139,7 @@ impl Run {
             events,
             events_read: Mutex::new(0),
             background: Mutex::default(),
+            after_turn: Mutex::default(),
             models: Mutex::default(),
         }
     }
@@ -358,6 +361,33 @@ impl Run {
         observed.framework_events.push(Value::Object(flat));
     }
 
+    /// Starts the work a turn leaves for after it: a task holding the
+    /// turn's context, which makes `actions` in order once the turn ended.
+    pub(crate) fn leave_after_turn(self: &Arc<Self>, actions: Vec<Value>, scope: Scope) {
+        let Some(host) = roomkit::current_turn_host() else {
+            self.problem("an after_turn reaction outside a turn: no turn's host".to_owned());
+            return;
+        };
+        let run = Arc::clone(self);
+        let work = tokio::spawn(roomkit::keep_context(async move {
+            let ended = async {
+                while host.open() {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            };
+            if tokio::time::timeout(GATE_BOUND, ended).await.is_err() {
+                run.problem(format!(
+                    "a turn did not end within {GATE_BOUND:?} for its after_turn"
+                ));
+                return;
+            }
+            for action in actions {
+                run.run_action(action, scope.clone()).await;
+            }
+        }));
+        lock(&self.after_turn).push(work);
+    }
+
     /// A call a hook or a channel makes while it runs; its outcome is kept.
     pub(crate) fn run_action(
         self: &Arc<Self>,
@@ -518,7 +548,10 @@ impl Run {
                 roomkit::testing::idle(&self.kit).await;
                 let running = lock(&self.background)
                     .values()
-                    .any(|handle| !handle.is_finished());
+                    .any(|handle| !handle.is_finished())
+                    || lock(&self.after_turn)
+                        .iter()
+                        .any(|work| !work.is_finished());
                 if !running {
                     break;
                 }

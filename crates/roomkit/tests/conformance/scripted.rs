@@ -24,7 +24,7 @@ use crate::run::{Run, Scope};
 use crate::templates::{complete_event, complete_observation, complete_task, hook_result};
 
 /// How long a step waits for a call to reach a gate before the scenario fails.
-const GATE_BOUND: Duration = Duration::from_secs(5);
+pub(crate) const GATE_BOUND: Duration = Duration::from_secs(5);
 
 /// What a reaction's `fail` raises.
 #[derive(Debug)]
@@ -169,6 +169,9 @@ pub(crate) async fn perform(
         .flatten()
     {
         run.run_action(action.clone(), scope.clone()).await;
+    }
+    if let Some(later) = reaction.get("after_turn").and_then(Value::as_array) {
+        run.leave_after_turn(later.clone(), scope.clone());
     }
     match reaction.get("fail").and_then(Value::as_str) {
         Some(message) => Err(ScriptedFailure(message.to_owned())),

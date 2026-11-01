@@ -121,6 +121,7 @@ const REACTION: &[&str] = &[
     "stop_after",
     "parsed",
     "refuse",
+    "after_turn",
 ];
 const REFUSE: &[&str] = &["error", "code", "retryable", "provider_message_id"];
 const WHEN: &[&str] = &[
@@ -431,13 +432,15 @@ fn reaction(reaction: &Value, path: &str, found: &mut Vec<String>) {
             found,
         );
     }
-    for (index, action) in items(&reaction["do"]) {
-        call(
-            action,
-            &["as", "expect"],
-            &format!("{path}.do[{index}]"),
-            found,
-        );
+    for member in ["do", "after_turn"] {
+        for (index, action) in items(&reaction[member]) {
+            call(
+                action,
+                &["as", "expect"],
+                &format!("{path}.{member}[{index}]"),
+                found,
+            );
+        }
     }
 }
 
