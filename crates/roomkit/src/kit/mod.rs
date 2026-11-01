@@ -74,7 +74,9 @@ pub use self::options::{
 pub use self::output::{MuteOutputOptions, UnmuteOutputOptions};
 pub use self::read_markers::{ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions};
 pub use self::room_hooks::{AddRoomHookOptions, RemoveRoomHookOptions};
-pub use self::status::{ListObservationsOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions};
+pub use self::status::{
+    ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,
+};
 pub use self::weak::WeakRoomKit;
 use crate::channel::DynChannel;
 use crate::context;

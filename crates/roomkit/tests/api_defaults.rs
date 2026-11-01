@@ -25,6 +25,7 @@ use roomkit::InMemoryStore;
 use roomkit::ListBindingsOptions;
 use roomkit::ListMembersOptions;
 use roomkit::ListObservationsOptions;
+use roomkit::ListTasksOptions;
 use roomkit::MuteOptions;
 use roomkit::MuteOutputOptions;
 use roomkit::NormalizeOptions;
@@ -847,4 +848,13 @@ fn status_backend_options_defaults_as_python() {
     assert!(recent.agent_id.is_none());
     // roomkit.orchestration.StatusBackend.recent(status) = None
     assert!(recent.status.is_none());
+}
+
+#[test]
+fn list_tasks_options_defaults_as_python() {
+    let defaults = ListTasksOptions::default();
+    // roomkit.RoomKit.list_tasks(status) = None
+    assert!(defaults.status.is_none());
+    // roomkit.RoomKit.list_tasks(organization_id) = None
+    assert!(defaults.organization_id.is_none());
 }

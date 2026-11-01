@@ -13,6 +13,7 @@ use std::task::{Context, Waker};
 
 use roomkit_core::model::{
     ChannelId, ChannelType, Confidence, EventId, Metadata, Observation, Room, RoomContext, RoomId,
+    Task, TaskStatus,
 };
 use roomkit_core::ops::{Environment, UpdateRoomMetadata};
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -46,6 +47,17 @@ pub struct UpdateRoomMetadataOptions {
 /// `list_observations(room_id, *, organization_id=None)`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ListObservationsOptions {
+    /// Python `organization_id=None`: the organization the call acts for
+    /// (RFC §17.2); a room of another organization is not found.
+    pub organization_id: Option<String>,
+}
+
+/// What [`RoomKit::list_tasks`] takes beside the room: Python's
+/// `list_tasks(room_id, status=None, *, organization_id=None)`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ListTasksOptions {
+    /// Python `status=None`: only the tasks of this status.
+    pub status: Option<TaskStatus>,
     /// Python `organization_id=None`: the organization the call acts for
     /// (RFC §17.2); a room of another organization is not found.
     pub organization_id: Option<String>,
@@ -139,6 +151,30 @@ impl<S: ConversationStore> RoomKit<S> {
             .await?;
         self.store()
             .list_observations(room_id)
+            .await
+            .map_err(|error| self.read_failed(error))
+    }
+
+    /// The room's tasks (RFC §5.10), of the status `options` names, as the
+    /// store lists them. It answers during the kit's close and after it,
+    /// while the store does.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RoomKitError::RoomNotFound`] for a room the organization
+    /// `options` names does not reach; the store's error when it fails.
+    pub async fn list_tasks(
+        &self,
+        room_id: &RoomId,
+        options: ListTasksOptions,
+    ) -> Result<Vec<Task>, RoomKitError> {
+        self.reached(room_id, options.organization_id.as_deref())
+            .await?;
+        let filter = crate::store::ListTasksOptions {
+            status: options.status,
+        };
+        self.store()
+            .list_tasks(room_id, filter)
             .await
             .map_err(|error| self.read_failed(error))
     }
