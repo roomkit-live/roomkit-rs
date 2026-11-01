@@ -425,6 +425,60 @@ async fn an_argument_a_closed_schema_does_not_declare_is_refused() {
     );
 }
 
+/// RFC §21.4: a handler answering `{"error": "Unknown tool..."}`, as text
+/// or as JSON and in any case, declines the call, the channel's sole
+/// handler as a composition's: nothing served it, as Python's
+/// `declined_answer` reads every answer
+/// (`tasks/probes/step5-review/ai/py_envelope_single_handler.out`).
+#[tokio::test]
+async fn an_unknown_tool_answer_declines_the_call() {
+    let declining = |answer: ToolResult| {
+        roomkit_ai::ToolHandler::new(move |_name, _arguments| {
+            let answer = answer.clone();
+            async move { Ok(answer) }
+        })
+    };
+    let lower = || ToolResult::from(r#"{"error": "unknown tool lookup"}"#);
+    let handlers = [
+        declining(ToolResult::Json(json!({ "error": "Unknown tool: lookup" }))),
+        declining(lower()),
+        roomkit_ai::compose_tool_handlers(vec![
+            declining(lower()),
+            declining(ToolResult::from("served")),
+        ])
+        .unwrap(),
+    ];
+    let mut read = Vec::new();
+    for handler in handlers {
+        let model = ScriptedProvider::new([
+            ScriptedRound::calling("", [("c1", "lookup", "{}")]),
+            ScriptedRound::answering("Done."),
+        ]);
+        let room = Room::equipped(model, Tools::new(), |options| AiChannelOptions {
+            tools: vec![AiTool::new("lookup", "Look a word up").unwrap().into()],
+            tool_handler: Some(handler),
+            ..options
+        })
+        .await;
+        room.says("Look it up.").await;
+        let timeline = room.timeline().await;
+        let end = end_row(&timeline, "c1");
+        read.push((end.outcome, end.result.clone()));
+    }
+    let unserved = (
+        Some(ToolCallOutcome::Unserved),
+        json!(r#"{"error": "No handler for tool lookup"}"#),
+    );
+    assert_eq!(
+        read,
+        [
+            unserved.clone(),
+            unserved,
+            (Some(ToolCallOutcome::Served), json!("served"))
+        ]
+    );
+}
+
 /// RFC §21.1: the call runs with the arguments `BEFORE_TOOL_USE` left, and
 /// arguments it left that do not fit the schema are refused as rewritten.
 #[tokio::test]

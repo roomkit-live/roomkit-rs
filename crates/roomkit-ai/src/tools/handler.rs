@@ -151,7 +151,8 @@ impl std::fmt::Debug for ToolEntry {
 /// Python's `compose_tool_handlers(*handlers)`. A handler that declines a
 /// call, with [`ToolError::UnservedToolCall`] or the answer
 /// `{"error": "Unknown tool: ..."}` (RFC §21.4), hands it to the next; the
-/// last handler's answer is the composition's, a decline included.
+/// last handler's answer is the composition's, a decline included, which
+/// the channel reads as a call nothing served.
 ///
 /// # Errors
 ///
@@ -183,13 +184,17 @@ pub fn compose_tool_handlers(handlers: Vec<ToolHandler>) -> Result<ToolHandler, 
 }
 
 /// Whether `answer` says the call is not its handler's to serve: the
-/// envelope `{"error": "Unknown tool: ..."}`, as text or as JSON.
+/// envelope `{"error": "Unknown tool: ..."}`, as text or as JSON, its error
+/// starting `unknown tool` in any case, as Python's
+/// `is_unknown_tool_answer` reads it.
 fn is_unknown_tool_answer(answer: &ToolResult) -> bool {
+    const UNKNOWN: &str = "unknown tool";
     let unknown = |value: &Value| {
         value
             .get("error")
             .and_then(Value::as_str)
-            .is_some_and(|error| error.starts_with("Unknown tool:"))
+            .and_then(|error| error.get(..UNKNOWN.len()))
+            .is_some_and(|start| start.eq_ignore_ascii_case(UNKNOWN))
     };
     match answer {
         ToolResult::Json(value) => unknown(value),
@@ -287,10 +292,17 @@ impl DynToolset for ServedBy {
             channel_id: Some(context.channel_id.clone()),
         };
         // The handler is called within its call, as Python sets the call's
-        // context before it calls the handler.
+        // context before it calls the handler; its answer may decline the
+        // call, as Python's `declined_answer` reads it (RFC §21.4).
         let handler = self.handler.clone();
         Box::pin(within_call(within, async move {
-            handler.call(call.name, call.arguments).await
+            match handler.call(call.name.clone(), call.arguments).await {
+                Ok(answer) if is_unknown_tool_answer(&answer) => Err(ToolError::unserved(format!(
+                    "tool '{}' is not served here",
+                    call.name
+                ))),
+                answered => answered,
+            }
         }))
     }
 }

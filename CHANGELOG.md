@@ -752,6 +752,12 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **A tool handler answering `{"error": "Unknown tool..."}` declines the
+  call, a channel's sole handler as a composition's**, as Python's
+  `declined_answer` reads every answer (RFC §21.4): the model reads
+  `No handler for tool <name>` and the call ends unserved, where a sole or
+  last handler's envelope counted as served. The envelope's error is read
+  as Python's, starting `unknown tool` in any case.
 - **A modern OpenAI model takes Python's profile on OpenAI's endpoint**, as
   `OpenAIConfig.model_post_init`: `gpt-4.1`, `gpt-5`, `gpt-6`, `o1`, `o3` and
   `o4` send their token bound as `max_completion_tokens`, and all but
