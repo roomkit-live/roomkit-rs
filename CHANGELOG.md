@@ -13,7 +13,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and one naming a room fires its `ON_STATUS_POSTED` hooks.
 - `RoomKit::update_room_metadata`, `list_observations` and
   `submit_feedback` (RFC §5.1, §15.9), the last firing `ON_FEEDBACK` and
-  emitting `feedback`; a feedback naming no channel is refused for now.
+  emitting `feedback`.
+- Breaking: `Observation.channel_id` is an `Option<ChannelId>`, `None`
+  written `""` as Python writes the observation of a feedback naming no
+  channel; `Observation::new` takes `Some(id)`, an id or `None`.
 - `TurnHost::post_status`, `update_room_metadata` and `add_observation`,
   run on the room's owner during the turn and after it (RFC §10.6.5).
 - A turn host's verb for another room or organization raises
