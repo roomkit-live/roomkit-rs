@@ -756,6 +756,9 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **A turn whose stream is cancelled after it wrote reads
+  `The turn ended in the middle of its stream`**, as Python's turn backend
+  reports it, where it read `The turn ended before its output`.
 - **A send's own cancel is not tried again**, as Python's retry, which
   catches `Exception`, lets `CancelledError` through, whatever the
   policy's `retryable_errors` list; and **a rate so small that its wait

@@ -135,19 +135,34 @@ pub(crate) fn channel_error(error: &(dyn Error + 'static)) -> WireError {
     record
 }
 
-/// What a turn whose work ended cancelled reads, as Python's turn backend
-/// reports it.
+/// What a turn whose work ended cancelled before its output reads, as
+/// Python's turn backend reports it.
 const ENDED_BEFORE_ITS_OUTPUT: &str = "The turn ended before its output";
 
-/// `error`, an agent's `on_event()` or its response failing, as it
-/// crosses, as Python's turn backend reports an agent's raised error
-/// (RMK-1047): a kit error under its code or its Python class's name, as a
-/// transport's failure reads (`RoomKitError::Value` as `ValueError`); a
-/// cancel as the turn ending before its output, Python's `TurnLinkError`;
-/// any other as a channel's.
+/// What a turn whose stream ended cancelled reads, as Python's turn backend
+/// reports it.
+const ENDED_IN_ITS_STREAM: &str = "The turn ended in the middle of its stream";
+
+/// `error`, an agent's `on_event()` failing, as it crosses, as Python's
+/// turn backend reports an agent's raised error (RMK-1047): see
+/// [`failure`].
 pub(crate) fn turn_failure(error: &(dyn Error + Send + Sync + 'static)) -> WireError {
+    failure(error, ENDED_BEFORE_ITS_OUTPUT)
+}
+
+/// `error`, an agent's response stream failing, as it crosses: see
+/// [`failure`], a cancel as the turn ending in the middle of its stream.
+pub(crate) fn stream_failure(error: &(dyn Error + Send + Sync + 'static)) -> WireError {
+    failure(error, ENDED_IN_ITS_STREAM)
+}
+
+/// `error` as it crosses: a kit error under its code or its Python class's
+/// name, as a transport's failure reads (`RoomKitError::Value` as
+/// `ValueError`); a cancel as Python's `TurnLinkError`, saying `cancelled`;
+/// any other as a channel's.
+fn failure(error: &(dyn Error + Send + Sync + 'static), cancelled: &str) -> WireError {
     match error.downcast_ref::<RoomKitError>() {
-        Some(RoomKitError::Cancelled) => one(TURN_LINK_ERROR, ENDED_BEFORE_ITS_OUTPUT.to_owned()),
+        Some(RoomKitError::Cancelled) => one(TURN_LINK_ERROR, cancelled.to_owned()),
         Some(kit_error) => one(
             kit_error.code().unwrap_or_else(|| kit_error.class_name()),
             error.to_string(),

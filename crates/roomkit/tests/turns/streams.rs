@@ -356,21 +356,32 @@ async fn deltas_yielded_together_cross_as_one_item() {
     kit.close().await.unwrap();
 }
 
-/// A response's items, each ready at once.
-struct Items(VecDeque<ResponseItem>);
+/// A response's items, each ready at once, then the error it fails with,
+/// if any.
+struct Items(VecDeque<ResponseItem>, Option<ChannelError>);
 
 impl Stream for Items {
     type Item = Result<ResponseItem, ChannelError>;
 
     fn poll_next(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Poll::Ready(self.get_mut().0.pop_front().map(Ok))
+        let items = self.get_mut();
+        Poll::Ready(
+            items
+                .0
+                .pop_front()
+                .map(Ok)
+                .or_else(|| items.1.take().map(Err)),
+        )
     }
 }
 
 /// An intelligence channel whose own stream writes text, a call's start,
 /// two deltas, the call's end, then text again, as `ResponseItem` lets a
-/// channel write it; the call carries its intent (RFC §6.4).
-struct Writing;
+/// channel write it; the call carries its intent (RFC §6.4). One that is
+/// `cut` writes text, then its stream is cancelled.
+struct Writing {
+    cut: bool,
+}
 
 impl Writing {
     /// The configuration the kit keeps of the channel.
@@ -435,9 +446,17 @@ impl Channel for Writing {
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         let own = event.source.channel_id == channel("ai");
+        let cut = self.cut;
         async move {
             if own {
                 return Ok(ChannelOutput::default());
+            }
+            if cut {
+                let items = VecDeque::from([ResponseItem::Text("The ".to_owned())]);
+                let cancelled = Some(roomkit::RoomKitError::Cancelled.into());
+                return Ok(current_turn_host()
+                    .unwrap()
+                    .respond_with_stream(Box::pin(Items(items, cancelled))));
             }
             let mut start = ToolCallContent::new("look", "c1");
             start.intent = Some("I look.".to_owned());
@@ -455,7 +474,7 @@ impl Channel for Writing {
             ]);
             Ok(current_turn_host()
                 .unwrap()
-                .respond_with_stream(Box::pin(Items(items))))
+                .respond_with_stream(Box::pin(Items(items, None))))
         }
     }
 
@@ -635,7 +654,7 @@ async fn text_written_inside_a_call_crosses_in_order() {
         read: Arc::default(),
     };
     kit.register_channel(target.clone()).unwrap();
-    kit.register_channel(Writing).unwrap();
+    kit.register_channel(Writing { cut: false }).unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room()),
         ..Default::default()
@@ -713,6 +732,53 @@ async fn text_written_inside_a_call_crosses_in_order() {
                 "Message \"b c d \""
             ])
         )
+    );
+    kit.close().await.unwrap();
+}
+
+/// A turn whose stream is cancelled after it wrote fails as Python's
+/// turn backend reports it, `TurnLinkError`, "The turn ended in the middle
+/// of its stream" (`tasks/probes/step5-review/py_stream_cancelled.out`);
+/// it read "The turn ended before its output".
+#[tokio::test]
+async fn a_stream_cancelled_after_it_wrote_ends_in_the_middle_of_its_stream() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(roomkit::testing::RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        roomkit::testing::RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    kit.register_channel(Writing { cut: true }).unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["sms", "ai"] {
+        kit.attach_channel(&room(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let message = InboundMessage::new(channel("sms"), "+15550000001", TextContent::new("Go."));
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    };
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        kit.process_inbound(message, options),
+    )
+    .await
+    .expect("the call returns")
+    .unwrap();
+    assert_eq!(
+        result.error.map(|error| (error.error_type, error.message)),
+        Some((
+            "TurnLinkError".to_owned(),
+            "The turn ended in the middle of its stream".to_owned()
+        ))
     );
     kit.close().await.unwrap();
 }
