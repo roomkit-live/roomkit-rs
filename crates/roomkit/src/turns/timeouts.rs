@@ -75,7 +75,8 @@ impl TurnTimeouts {
 
     /// How many intervals in a row with no message make a side lost,
     /// Python's `silent_intervals`: `heartbeat_timeout` over
-    /// `heartbeat_interval`, rounded, 1 at least. Counted per interval, so a
+    /// `heartbeat_interval`, rounded as Python's `round`, a half to the even
+    /// neighbour, 1 at least. Counted per interval, so a
     /// stall of the counting side's own loop counts once.
     pub fn silent_intervals(&self) -> u32 {
         intervals(self.heartbeat_timeout, self.interval())
@@ -132,7 +133,8 @@ impl Beat {
     }
 }
 
-/// How many `interval`s `bound` lasts, rounded, at least one.
+/// How many `interval`s `bound` lasts, rounded as Python's `round` (a half
+/// to the even neighbour: 2.5 intervals are 2), at least one.
 fn intervals(bound: Duration, interval: Duration) -> u32 {
     let ratio = bound.as_secs_f64() / interval.as_secs_f64();
     // A ratio past u32::MAX is a bound no turn reaches.
@@ -141,7 +143,7 @@ fn intervals(bound: Duration, interval: Duration) -> u32 {
         clippy::cast_sign_loss,
         reason = "a positive ratio, clamped to u32's range first"
     )]
-    let rounded = ratio.round().clamp(1.0, f64::from(u32::MAX)) as u32;
+    let rounded = ratio.round_ties_even().clamp(1.0, f64::from(u32::MAX)) as u32;
     rounded
 }
 
@@ -170,6 +172,27 @@ mod tests {
                 5
             )
         );
+    }
+
+    // Python: src/roomkit/turns/base.py::TurnTimeouts.silent_intervals and
+    // turns/_owner_turn.py::_silence_limit, Python's `round`: a half rounds
+    // to the even neighbour (RMK-1093).
+    #[test]
+    fn the_intervals_round_a_half_to_even() {
+        let at = |interval: u64, bound: u64| TurnTimeouts {
+            accept: Duration::from_millis(bound),
+            heartbeat_interval: Duration::from_millis(interval),
+            heartbeat_timeout: Duration::from_millis(bound),
+            cancel: Duration::from_secs(5),
+        };
+        let counted: Vec<(u32, u32)> = [(2000, 5000), (2000, 7000), (2000, 3000), (2000, 900)]
+            .into_iter()
+            .map(|(interval, bound)| {
+                let timeouts = at(interval, bound);
+                (timeouts.silent_intervals(), timeouts.accept_intervals())
+            })
+            .collect();
+        assert_eq!(counted, vec![(2, 2), (4, 4), (2, 2), (1, 1)]);
     }
 
     #[test]
