@@ -136,8 +136,7 @@ A service depends on `roomkit` and on the crates it needs beside it:
   MCP server's instructions, and `MockAiProvider`, Python's mock, for tests.
 - `roomkit-openai`: `OpenAiAiProvider`, Python's `OpenAIAIProvider`, the
   provider of an OpenAI-compatible Chat Completions endpoint, or stateless
-  Responses with `OpenAiConfig { api: OpenAiApi::Responses, .. }` on `main`
-  (unreleased).
+  Responses with `OpenAiConfig { api: OpenAiApi::Responses, .. }`.
   Both support streamed text and function tools.
 - `roomkit-sqlite`: `SqliteStore`, a store in one SQLite file, on the Python
   implementation's schema, for one process at a time: either
