@@ -37,6 +37,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A turn's link failure reads as Python's `TurnLinkError` says it, its
   reason no longer heading the message (RMK-1106).
 
+- A store that keeps no private state of its own, the trait's provided
+  `get_private_state` and `set_private_state` keeping it in the room's
+  metadata, says so once with a warning, as Python's (RMK-1101).
+
 ## [0.1.0] — 2026-11-01
 
 The first release of roomkit-rs, the Rust implementation of RoomKit: Level 0

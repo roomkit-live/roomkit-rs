@@ -6,6 +6,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 mod abstract_only;
+mod abstract_only_store;
 mod suite;
 
 use roomkit::InMemoryStore;

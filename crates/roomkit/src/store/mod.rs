@@ -15,8 +15,9 @@ mod options;
 pub(crate) mod query;
 pub(crate) mod rooms;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::sync::{Mutex, PoisonError};
 
 use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelType, EventContent, EventId, EventType, Identity, IdentityId,
@@ -125,6 +126,30 @@ pub(crate) async fn whole_timeline<S: ConversationStore>(
             return Ok(events);
         }
     }
+}
+
+/// Says once per store type that `S` keeps each room's private state in
+/// its metadata, as Python's `_warn_private_state_in_metadata` says it once
+/// per store: a trait's provided method holds no state of the store's own,
+/// so the store types that warned are kept for the process.
+fn warn_private_state_in_metadata<S: ?Sized>() {
+    static WARNED: Mutex<BTreeSet<&'static str>> = Mutex::new(BTreeSet::new());
+    let store = std::any::type_name::<S>();
+    let first = WARNED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(store);
+    if !first {
+        return;
+    }
+    let name = store.rsplit("::").next().unwrap_or(store);
+    tracing::warn!(
+        target: "roomkit::store",
+        "{name} keeps each room's private state, the register of authors among it, in \
+         the room's metadata, which clients may read: the register's digests name the \
+         room's senders to whoever tries every phone number or name. Implement \
+         get_private_state() and set_private_state() to keep it apart."
+    );
 }
 
 /// Whether `named`, a stored id, names the sender known by
@@ -497,14 +522,16 @@ pub trait ConversationStore: Send + Sync + 'static {
 
     /// The room's private state under `key` (RFC §14.1), which its metadata
     /// never shows: `None` when nothing is stored there, or the room is
-    /// unknown. Provided, as Python provides it, over the metadata; a store
-    /// keeping private state apart overrides both.
+    /// unknown. Provided, as Python provides it, over the metadata, which
+    /// clients may read, saying so once per store type with a warning; a
+    /// store keeping private state apart overrides both.
     fn get_private_state(
         &self,
         room_id: &RoomId,
         key: &str,
     ) -> impl Future<Output = Result<Option<Metadata>, StoreError>> + Send {
         async move {
+            warn_private_state_in_metadata::<Self>();
             let room = self.get_room(room_id).await?;
             Ok(room.and_then(|room| room.metadata.get(key)?.as_object().cloned()))
         }
@@ -512,7 +539,8 @@ pub trait ConversationStore: Send + Sync + 'static {
 
     /// Writes the room's private state under `key`, `None` removing it;
     /// nothing for an unknown room (RFC §14.1). Provided, as Python provides
-    /// it, through [`patch_room_metadata`](Self::patch_room_metadata).
+    /// it, through [`patch_room_metadata`](Self::patch_room_metadata), with
+    /// [`get_private_state`](Self::get_private_state)'s warning.
     fn set_private_state(
         &self,
         room_id: &RoomId,
@@ -520,6 +548,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         value: Option<Metadata>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send {
         async move {
+            warn_private_state_in_metadata::<Self>();
             let (patch, unset) = match value {
                 Some(value) => (
                     Metadata::from_iter([(key.to_owned(), value.into())]),
