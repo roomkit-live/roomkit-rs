@@ -50,6 +50,7 @@ use tokio::task::{self, AbortHandle, JoinError, JoinHandle, JoinSet};
 use tokio::time::Instant;
 
 pub(crate) use self::calls::cut_by_close;
+pub(crate) use self::calls::load_context;
 use self::calls::{WentOn, Written};
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::in_flight::InFlight;

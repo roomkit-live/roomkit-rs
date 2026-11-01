@@ -94,6 +94,7 @@ fn hook_trigger_serializes_to_python_s_values() {
             ("BEFORE_TTS", HookTrigger::BeforeTts),
             ("BEFORE_TOOL_USE", HookTrigger::BeforeToolUse),
             ("ON_TOOL_CALL", HookTrigger::OnToolCall),
+            ("ON_DELIVERY_STATUS", HookTrigger::OnDeliveryStatus),
         ],
     );
 }

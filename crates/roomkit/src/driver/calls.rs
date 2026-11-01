@@ -140,7 +140,7 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
 /// one included (`get_conversation`),
 /// and its register of authors, its private state (gap G-089); `None` for
 /// a room the store lacks.
-async fn load_context<S: ConversationStore>(
+pub(crate) async fn load_context<S: ConversationStore>(
     store: &S,
     room_id: &RoomId,
     recent_events: RecentEvents,

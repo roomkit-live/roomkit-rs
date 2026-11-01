@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit_core::model::{
-    ChannelId, ChannelType, ErrorRecord, EventContent, EventDirection, EventType, HookAction,
-    HookResult, RoomContext, RoomEvent, RoomId, Timestamp,
+    ChannelId, ChannelType, DeliveryStatus, ErrorRecord, EventContent, EventDirection, EventType,
+    HookAction, HookResult, RoomContext, RoomEvent, RoomId, Timestamp,
 };
 use roomkit_core::ops::{Environment, SystemEnvironment};
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -289,6 +289,7 @@ impl HookRegistration {
             Kept::Event(_) => RoomEvent::accepts(self.trigger),
             Kept::ToolCall(_) => ToolCallEvent::accepts(self.trigger),
             Kept::Session(_) => SessionStartedEvent::accepts(self.trigger),
+            Kept::Status(_) => DeliveryStatus::accepts(self.trigger),
         }
     }
 
@@ -370,11 +371,13 @@ mod sealed {
     impl Sealed for roomkit_core::model::RoomEvent {}
     impl Sealed for crate::tool_calls::ToolCallEvent {}
     impl Sealed for super::SessionStartedEvent {}
+    impl Sealed for roomkit_core::model::DeliveryStatus {}
 }
 
 /// What a trigger hands its hooks (RFC §9.2): a [`RoomEvent`] for the
 /// event and lifecycle triggers, a [`ToolCallEvent`] for `BEFORE_TOOL_USE`
-/// and `ON_TOOL_CALL`, a [`SessionStartedEvent`] for `ON_SESSION_STARTED`.
+/// and `ON_TOOL_CALL`, a [`SessionStartedEvent`] for `ON_SESSION_STARTED`,
+/// a [`DeliveryStatus`] for `ON_DELIVERY_STATUS`.
 /// A registration whose handler takes another payload than its trigger's
 /// is refused.
 pub trait HookPayload: sealed::Sealed + Clone + Send + Sync + 'static {
@@ -389,7 +392,11 @@ pub trait HookPayload: sealed::Sealed + Clone + Send + Sync + 'static {
 
 impl HookPayload for RoomEvent {
     fn accepts(trigger: HookTrigger) -> bool {
-        !trigger.is_tool_trigger() && trigger != HookTrigger::OnSessionStarted
+        !trigger.is_tool_trigger()
+            && !matches!(
+                trigger,
+                HookTrigger::OnSessionStarted | HookTrigger::OnDeliveryStatus
+            )
     }
 
     fn kept(handler: Arc<dyn HookHandler<Self>>) -> Kept {
@@ -417,6 +424,16 @@ impl HookPayload for SessionStartedEvent {
     }
 }
 
+impl HookPayload for DeliveryStatus {
+    fn accepts(trigger: HookTrigger) -> bool {
+        trigger == HookTrigger::OnDeliveryStatus
+    }
+
+    fn kept(handler: Arc<dyn HookHandler<Self>>) -> Kept {
+        Kept::Status(handler)
+    }
+}
+
 /// A hook's handler as the kit keeps it, by its payload.
 #[doc(hidden)]
 #[derive(Clone)]
@@ -427,6 +444,8 @@ pub enum Kept {
     ToolCall(Arc<dyn HookHandler<ToolCallEvent>>),
     /// A session's start's hook.
     Session(Arc<dyn HookHandler<SessionStartedEvent>>),
+    /// A delivery status's hook.
+    Status(Arc<dyn HookHandler<DeliveryStatus>>),
 }
 
 impl std::fmt::Debug for Kept {
@@ -435,6 +454,7 @@ impl std::fmt::Debug for Kept {
             Self::Event(_) => "Kept::Event",
             Self::ToolCall(_) => "Kept::ToolCall",
             Self::Session(_) => "Kept::Session",
+            Self::Status(_) => "Kept::Status",
         })
     }
 }
@@ -495,6 +515,10 @@ pub(crate) async fn run_kept(
         Kept::ToolCall(_) => HookOutcome::Raised(ErrorRecord::new(
             "HookError",
             "a tool call's hook does not run on an event",
+        )),
+        Kept::Status(_) => HookOutcome::Raised(ErrorRecord::new(
+            "HookError",
+            "a delivery status's hook does not run on an event",
         )),
     }
 }

@@ -740,3 +740,17 @@ fn recording_transport_options_defaults_as_python() {
     // roomkit.testing.RecordingTransport.__init__(capabilities) = None
     assert!(defaults.capabilities.is_none());
 }
+
+#[test]
+fn process_delivery_status_options_defaults_as_python() {
+    let defaults = roomkit::ProcessDeliveryStatusOptions::default();
+    // roomkit.RoomKit.process_delivery_status(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn process_webhook_options_defaults_as_python() {
+    let defaults = roomkit::ProcessWebhookOptions::default();
+    // roomkit.RoomKit.process_webhook(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}

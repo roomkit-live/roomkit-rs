@@ -50,6 +50,7 @@
 mod channel;
 mod context;
 mod cursors;
+mod delivery;
 mod driver;
 mod environment;
 mod error;
@@ -60,6 +61,7 @@ mod host;
 mod inbound;
 mod kit;
 mod locks;
+pub mod providers;
 mod queues;
 pub mod realtime;
 mod registered;
@@ -83,15 +85,15 @@ pub mod model {
         Access, AgentResponsePolicy, AudioContent, ChannelBinding, ChannelCapabilities,
         ChannelCategory, ChannelDirection, ChannelId, ChannelMediaType, ChannelOutput, ChannelSet,
         ChannelType, CompositeContent, Confidence, DeleteContent, DeleteType, DeliveryError,
-        DeliveryResult, DeliveryResultStatus, EditContent, EditSource, ErrorRecord, EventContent,
-        EventDirection, EventId, EventSource, EventStatus, EventType, HookAction, HookResult,
-        IdentificationStatus, Identity, IdentityId, InboundMessage, InjectedEvent, Latitude,
-        LocationContent, Longitude, MediaContent, Metadata, ModelError, Observation, ObservationId,
-        Participant, ParticipantId, ParticipantRole, ParticipantStatus, ProviderResult, RateLimit,
-        RetryPolicy, RichContent, RichFormat, Room, RoomContext, RoomEvent, RoomId, RoomStatus,
-        RoomTimers, SystemContent, Task, TaskId, TaskStatus, TemplateContent, TextContent,
-        ThreadSummary, Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus,
-        VerificationStatus, VideoContent, Visibility,
+        DeliveryResult, DeliveryResultStatus, DeliveryStatus, EditContent, EditSource, ErrorRecord,
+        EventContent, EventDirection, EventId, EventSource, EventStatus, EventType, HookAction,
+        HookResult, IdentificationStatus, Identity, IdentityId, InboundMessage, InjectedEvent,
+        Latitude, LocationContent, Longitude, MediaContent, Metadata, ModelError, Observation,
+        ObservationId, Participant, ParticipantId, ParticipantRole, ParticipantStatus,
+        ProviderResult, RateLimit, RetryPolicy, RichContent, RichFormat, Room, RoomContext,
+        RoomEvent, RoomId, RoomStatus, RoomTimers, SystemContent, Task, TaskId, TaskStatus,
+        TemplateContent, TextContent, ThreadSummary, Timestamp, ToolCallContent, ToolCallOutcome,
+        ToolCallStatus, VerificationStatus, VideoContent, Visibility,
     };
 
     pub use crate::stream::{LoopEndMarker, LoopEndReason};
@@ -143,6 +145,7 @@ pub use self::kit::{
     UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
 pub use self::kit::{ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions};
+pub use self::kit::{ProcessDeliveryStatusOptions, ProcessWebhookOptions};
 pub use self::kit::{
     PublishPresenceOptions, PublishReactionOptions, PublishReadReceiptOptions,
     PublishToolCallOptions, PublishTypingOptions, SubscribeRoomOptions,

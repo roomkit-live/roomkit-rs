@@ -47,6 +47,7 @@ roomkit_openai = ["roomkit.providers.openai"]
 roomkit_mcp = ["roomkit.tools"]
 roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::realtime" = ["roomkit.realtime"]
+"roomkit::providers::sms" = ["roomkit.providers.sms"]
 
 # The Rust types a Python builtin stands for (decision 4; the architecture
 # table's "Types and values" and "Errors"), by path: the strong ids, values
@@ -460,7 +461,7 @@ members = [
     "ON_CONFERENCE_PARTICIPANT_LEFT", "ON_CONFERENCE_TRACK_MUTED",
     "ON_CONFERENCE_TRACK_PUBLISHED", "ON_CONFERENCE_TRACK_UNMUTED",
     "ON_CONFERENCE_TRACK_UNPUBLISHED", "ON_CONNECTION_QUALITY_CHANGED",
-    "ON_DELIVERY_STATUS", "ON_DISPATCH_DECISION", "ON_DTMF", "ON_FEEDBACK",
+    "ON_DISPATCH_DECISION", "ON_DTMF", "ON_FEEDBACK",
     "ON_HANDOFF", "ON_HANDOFF_REJECTED", "ON_IDENTITY_AMBIGUOUS",
     "ON_IDENTITY_UNKNOWN", "ON_INPUT_AUDIO_LEVEL", "ON_OUTPUT_AUDIO_LEVEL",
     "ON_PARTIAL_TRANSCRIPTION", "ON_PARTICIPANT_IDENTIFIED",
@@ -564,10 +565,9 @@ reason = "not in 0.x: a channel's per-room verbs, through the turn backend (RFC 
 [[missing]]
 python = "roomkit.RoomKit"
 members = [
-    "cancel_delivery", "deliver", "delivery_backend", "on_delivery_status",
-    "process_delivery_status", "process_webhook",
+    "cancel_delivery", "deliver", "delivery_backend",
 ]
-reason = "not in 0.x: the delivery backend, delivery cancellation and status webhooks"
+reason = "not in 0.x: the delivery backend and delivery cancellation (parity stream F, RMK-1133)"
 
 [[missing]]
 python = "roomkit.RoomKit"

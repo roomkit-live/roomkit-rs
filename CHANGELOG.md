@@ -15,6 +15,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (RMK-1123): a channel's echo of its own output stays outbound, the
   channel's own words, and authors none of the messages of the participant
   it names (RFC §10.3 Validation rule 3).
+- A provider's delivery status reaches its room, as Python's does
+  (RMK-1133): `process_delivery_status` dispatches a `DeliveryStatus` to
+  the `ON_DELIVERY_STATUS` hooks of the room it names, else of the room
+  its recipient's binding of its channel names (RFC §10.4), and returns
+  while they run; `on_delivery_status` registers a handler of the status
+  alone; `process_webhook` takes a `WebhookMeta` (`roomkit::providers::sms`)
+  as a message received or a delivery status.
 - The inbound pipeline keeps what a channel's `handle_inbound` parsed, as
   Python's does (RMK-1083): the message's type, visibility, address,
   thread, idempotency key, depth, response scope and instant fill only the

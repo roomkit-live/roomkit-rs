@@ -12,6 +12,8 @@
 //! - `inject`: direct injection and records committed outside the
 //!   pipeline;
 //! - `post`: the host's own voice;
+//! - `delivery`: what providers report of the messages sent, and their
+//!   webhooks;
 //! - `timeline`: a room's timeline;
 //! - `timers`: applying room timers, on demand or in the background;
 //! - `background`: waiting for the kit's background work, and ending it;
@@ -21,6 +23,7 @@
 mod addresses;
 mod background;
 mod bindings;
+mod delivery;
 mod engine;
 mod ephemeral;
 mod events;
@@ -44,13 +47,14 @@ use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, PoisonError, RwLock, Weak};
 
-use roomkit_core::model::{ChannelId, ChannelType, InboundMessage, RoomEvent, RoomId};
+use roomkit_core::model::{ChannelId, ChannelType, InboundMessage, RoomId};
 use roomkit_core::ops::{
     Entry, Environment, FrameworkEvent as CoreEvent, Inbound, InboundTarget, KitConfig,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookSubject, HookTrigger, Removed};
 
+pub use self::delivery::{ProcessDeliveryStatusOptions, ProcessWebhookOptions};
 pub use self::engine::{HasHooksOptions, HookEngine};
 pub use self::ephemeral::{
     PublishPresenceOptions, PublishReactionOptions, PublishReadReceiptOptions,
@@ -549,12 +553,12 @@ impl<S> Inner<S> {
 
     /// Logs what an observer of `room_id` raised, and reports its timeout
     /// (RFC §8.2 `hook_timeout`).
-    pub(crate) fn report_observer(
+    pub(crate) fn report_observer<P>(
         &self,
         spec: &HookSpec,
         trigger: HookTrigger,
         room_id: RoomId,
-        outcome: &HookOutcome<RoomEvent>,
+        outcome: &HookOutcome<P>,
     ) {
         match outcome {
             // What an observer returns is discarded, as Python discards an
