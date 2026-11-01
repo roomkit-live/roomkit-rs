@@ -6,6 +6,37 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The inbound pipeline keeps what a channel's `handle_inbound` parsed, as
+  Python's does (RMK-1083): the message's type, visibility, address,
+  thread, idempotency key, depth, response scope and instant fill only the
+  fields the parse left unset, so an SMS with media is stored `MMS` and a
+  key read off the wire dedupes a redelivery. An instruction carries
+  `standalone` only when it stands alone. Breaking: `default_inbound_event`
+  takes the channel, `default_inbound_event(self, &message, &context)`,
+  and sources the event from its id, type and provider.
+- The kit calls a channel's own address and streaming methods where
+  Python's does (RMK-1082): `normalize_address` on every inbound sender
+  before routing and on the correspondent an attach names,
+  `conversation_address` and `reply_metadata` to route and record a
+  sender, `recipient_address` and `recipient_metadata` to write an
+  attach's recipient, and `supports_streaming_delivery_for` per room as a
+  response streams. A channel that keeps the default `reply_metadata`
+  records no recipient for a routed sender, as Python's does; a host's
+  addresses on a `TransportChannel` attach are written in E.164.
+- A delivery's context holds its event, as Python's broadcast context does
+  (RMK-1070): the room's window read before the commit, then the committed
+  event as its newest; a hook still reads the window.
+- The default router's step 3 reads a room's history on the channel only
+  up to the first other sender, and none for a `group` binding, as
+  Python's does (RMK-1100).
+- A delivery set with a failure emits `broadcast_partial_failure` first,
+  then each `delivery_succeeded`, then each `delivery_failed`, Python's
+  order (RMK-1095).
+- `visible_events` reads the deleted marks of the received events alone,
+  as Python's does (RMK-1102).
+- A turn's link failure reads as Python's `TurnLinkError` says it, its
+  reason no longer heading the message (RMK-1106).
+
 ## [0.1.0] — 2026-11-01
 
 The first release of roomkit-rs, the Rust implementation of RoomKit: Level 0
