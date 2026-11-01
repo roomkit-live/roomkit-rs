@@ -196,7 +196,7 @@ impl<S: ConversationStore> Queued<S> {
             my_turn: Some(my_turn),
         };
         if !drains && let Waited::Outcome(outcome) = waiter.wait().await {
-            return outcome;
+            return *outcome;
         }
         waiter.my_turn = None;
         let holds = PassOn {
@@ -220,7 +220,7 @@ impl<S: ConversationStore> Queued<S> {
                 .queue
                 .retain(|waiting| !waiting.withdrawn() || waiting.id == mine);
             match state.queue.first() {
-                Some(head) if head.id == mine => Some(self.take_batch(&mut state)),
+                Some(head) if head.id == mine => Some(Self::take_batch(&mut state)),
                 Some(_) | None => None,
             }
         };
@@ -232,7 +232,7 @@ impl<S: ConversationStore> Queued<S> {
 
     /// The batch the queue's head heads: it, and the compatible requests
     /// behind it, taken out of the queue in order.
-    fn take_batch(&self, state: &mut Drain<S>) -> Vec<Waiting<S>> {
+    fn take_batch(state: &mut Drain<S>) -> Vec<Waiting<S>> {
         let queue = mem::take(&mut state.queue);
         let mut queue = queue.into_iter();
         let Some(first) = queue.next() else {
@@ -295,7 +295,7 @@ struct Waiter<S> {
 /// What a waiting caller waited for.
 enum Waited {
     /// Its request's outcome, given by the batch that carried it.
-    Outcome(Result<DeliveryOutcome, RoomKitError>),
+    Outcome(Box<Result<DeliveryOutcome, RoomKitError>>),
     /// The drain, handed to it: its request heads the queue.
     Turn,
 }
@@ -311,11 +311,11 @@ impl<S> Waiter<S> {
             return Waited::Turn;
         };
         tokio::select! {
-            delivered = &mut *outcome => Waited::Outcome(delivered.map_err(|_| withdrawn())),
+            delivered = &mut *outcome => Waited::Outcome(Box::new(delivered.map_err(|_| withdrawn()))),
             passed = turn => match passed {
                 Ok(()) => Waited::Turn,
                 // Its entry left the queue unhanded: a batch carried it.
-                Err(_) => Waited::Outcome(outcome.await.map_err(|_| withdrawn())),
+                Err(_) => Waited::Outcome(Box::new(outcome.await.map_err(|_| withdrawn()))),
             },
         }
     }
@@ -512,9 +512,11 @@ mod tests {
             .unwrap();
         events
             .into_iter()
-            .filter_map(|event| match event.content {
-                EventContent::Text(text) => Some(text.body),
-                _ => None,
+            .filter_map(|event| {
+                let EventContent::Text(text) = event.content else {
+                    return None;
+                };
+                Some(text.body)
             })
             .collect()
     }

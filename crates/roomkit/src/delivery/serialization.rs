@@ -21,13 +21,11 @@ pub fn serialize_strategy<S: 'static>(strategy: Option<&dyn DeliveryStrategy<S>>
     let Some(strategy) = strategy else {
         return immediate();
     };
-    match strategy.serialized() {
-        Some(Value::Object(serialized)) => serialized.into_iter().collect(),
-        Some(_) | None => {
-            tracing::warn!(target: "roomkit::delivery", "a strategy with no serialized form is kept as immediate");
-            immediate()
-        }
+    if let Some(Value::Object(serialized)) = strategy.serialized() {
+        return serialized.into_iter().collect();
     }
+    tracing::warn!(target: "roomkit::delivery", "a strategy with no serialized form is kept as immediate");
+    immediate()
 }
 
 /// The strategy `data`, a serialized one, names: Python's

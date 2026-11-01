@@ -87,7 +87,7 @@ impl DeliveryStrategy for Recording {
 }
 
 fn with(strategy: &Arc<Recording>) -> ExecuteDeliveryOptions {
-    let strategy: Arc<dyn DeliveryStrategy> = strategy.clone();
+    let strategy: Arc<dyn DeliveryStrategy> = Arc::<Recording>::clone(strategy);
     ExecuteDeliveryOptions {
         strategy: Some(strategy),
         hook_engine: None,
@@ -106,20 +106,21 @@ async fn the_strategy_is_given_the_item_s_request() {
         ..DeliveryItem::new(room(), "hello")
     };
     execute_delivery(&kit, &mut item, with(&strategy)).await;
-    let given = strategy.given.lock().unwrap();
-    assert_eq!(given.len(), 1);
-    assert_eq!(
-        (given[0].room_id.clone(), given[0].content.as_str()),
-        (room(), "hello")
-    );
-    assert_eq!(given[0].channel_id, Some(channel("ch1")));
-    assert_eq!(given[0].metadata["key"], "val");
-    drop(given);
+    {
+        let given = strategy.given.lock().unwrap();
+        assert_eq!(given.len(), 1);
+        assert_eq!(
+            (given[0].room_id.clone(), given[0].content.as_str()),
+            (room(), "hello")
+        );
+        assert_eq!(given[0].channel_id, Some(channel("ch1")));
+        assert_eq!(given[0].metadata["key"], "val");
+    }
     kit.close().await.unwrap();
 }
 
 /// Registers hooks on both delivery triggers that push `hook` on `order`;
-/// the AFTER_DELIVER one also hands its event over `seen`.
+/// the `AFTER_DELIVER` one also hands its event over `seen`.
 fn delivery_hooks(kit: &Kit, order: &Arc<Mutex<Vec<&'static str>>>) -> Arc<Mutex<Vec<RoomEvent>>> {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let before = Arc::clone(order);
@@ -183,7 +184,7 @@ async fn after_deliver_reports_a_strategy_that_raised() {
     assert_eq!(outcome.status, DeliveryOutcomeStatus::Failed);
     assert_eq!(outcome.reason.as_deref(), Some("strategy_failed"));
     assert_eq!(outcome.error.unwrap().code, "ValueError");
-    let seen = seen.lock().unwrap();
+    let seen = seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].metadata["error"], "bad");
     kit.close().await.unwrap();
@@ -238,7 +239,7 @@ async fn after_deliver_sees_the_rewrite_and_the_real_outcome() {
     let outcome = execute_delivery(&kit, &mut item, ExecuteDeliveryOptions::default()).await;
     idle(&kit).await;
     assert_eq!(outcome.status, DeliveryOutcomeStatus::Sent);
-    let seen = seen.lock().unwrap();
+    let seen = seen.lock().unwrap().clone();
     assert_eq!(
         seen[0].content,
         EventContent::from(TextContent::new("redacted"))
@@ -334,13 +335,11 @@ async fn published(kit: &Kit) -> usize {
         .count()
 }
 
-fn dead_letters(backend: &InMemoryDeliveryBackend) -> impl Future<Output = Vec<DeliveryItem>> + '_ {
-    async move {
-        let options = GetDeadLetterItemsOptions::default();
-        DeliveryBackend::<InMemoryStore>::get_dead_letter_items(backend, options)
-            .await
-            .unwrap()
-    }
+async fn dead_letters(backend: &InMemoryDeliveryBackend) -> Vec<DeliveryItem> {
+    let options = GetDeadLetterItemsOptions::default();
+    DeliveryBackend::<InMemoryStore>::get_dead_letter_items(backend, options)
+        .await
+        .unwrap()
 }
 
 async fn depth(backend: &InMemoryDeliveryBackend) -> usize {
@@ -375,7 +374,7 @@ async fn the_worker_acks_an_item_sent() {
     until(async || backend.in_flight() == 0 && published(&kit).await == 1).await;
     worker.abort();
     assert!(worker.await.unwrap_err().is_cancelled());
-    assert!(dead_letters(&backend).await.is_empty());
+    assert_eq!(dead_letters(&backend).await, Vec::<DeliveryItem>::new());
     assert_eq!(depth(&backend).await, 0);
     kit.close().await.unwrap();
 }
@@ -422,7 +421,7 @@ async fn a_failed_nack_is_retried_without_repeating_the_delivery() {
     enqueue(&flaky.inner, item).await;
     let order = Arc::new(Mutex::new(Vec::new()));
     let seen = delivery_hooks(&kit, &order);
-    let shared: Arc<dyn DeliveryBackend> = flaky.clone();
+    let shared: Arc<dyn DeliveryBackend> = Arc::<Flaky>::clone(&flaky);
     let worker = tokio::spawn(run_worker_loop(shared, kit.clone(), "w1", worker_options()));
     until(async || !dead_letters(&flaky.inner).await.is_empty()).await;
     worker.abort();

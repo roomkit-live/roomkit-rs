@@ -6,32 +6,24 @@
 //! form ([`serialize_strategy`], [`deserialize_strategy`]); and the room a
 //! delivery status belongs to.
 
-mod backend;
+pub(crate) mod backend;
 pub(crate) mod execute;
-mod item;
-mod memory;
-mod outcome;
-mod queued;
+pub(crate) mod item;
+pub(crate) mod memory;
+pub(crate) mod outcome;
+pub(crate) mod queued;
 mod serialization;
 pub(crate) mod status;
-mod strategy;
+pub(crate) mod strategy;
 pub(crate) mod targets;
 mod worker;
 
 use roomkit_core::rules::publications::{self, PUBLICATION_KEY_PREFIX};
 
-pub use self::backend::{
-    DeliveryBackend, DeliveryBackendError, DequeueOptions, GetDeadLetterItemsOptions, NackOptions,
-};
+// Python's `roomkit.delivery`; the rest of the area is the crate root's,
+// as Python's `roomkit`.
 pub use self::execute::{ExecuteDeliveryOptions, execute_delivery};
-pub use self::item::{DeliveryItem, DeliveryItemStatus};
-pub use self::memory::{InMemoryDeliveryBackend, InMemoryDeliveryBackendOptions};
-pub use self::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
-pub use self::queued::{Queued, QueuedOptions};
 pub use self::serialization::{deserialize_strategy, serialize_strategy};
-pub use self::strategy::{
-    DeliveryContext, DeliveryStrategy, Immediate, WaitForIdle, WaitForIdleOptions,
-};
 pub use self::worker::{RunWorkerLoopOptions, run_worker_loop};
 use crate::error::RoomKitError;
 

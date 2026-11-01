@@ -96,7 +96,7 @@ pub async fn execute_delivery<S: ConversationStore>(
         let strategy = options
             .strategy
             .unwrap_or_else(|| deserialize_strategy(&item.strategy));
-        let context = DeliveryContext {
+        let delivery = DeliveryContext {
             content: content.clone(),
             channel_id: item.channel_id.clone(),
             metadata: item.metadata.clone(),
@@ -107,7 +107,7 @@ pub async fn execute_delivery<S: ConversationStore>(
             instruction: item.instruction,
             ..DeliveryContext::new(kit.clone(), item.room_id.clone(), String::new())
         };
-        let outcome = match strategy.deliver(context).await {
+        let outcome = match strategy.deliver(delivery).await {
             Ok(Some(outcome)) => outcome,
             Ok(None) => DeliveryOutcome {
                 reason: Some("strategy_outcome_unknown".to_owned()),
@@ -235,7 +235,7 @@ async fn hook_context<S: ConversationStore>(
 /// item's id, its session, its channel, its strategy and, after it, its
 /// outcome and its error.
 fn hook_event<S>(inner: &Arc<Inner<S>>, item: &DeliveryItem, trigger: HookTrigger) -> RoomEvent {
-    let request = &*item;
+    let request = item;
     let after = trigger == HookTrigger::AfterDeliver;
     let published = item
         .outcome

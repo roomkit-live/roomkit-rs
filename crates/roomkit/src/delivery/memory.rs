@@ -252,7 +252,10 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
                 item.status = match status {
                     DeliveryOutcomeStatus::Sent => DeliveryItemStatus::Delivered,
                     DeliveryOutcomeStatus::Blocked => DeliveryItemStatus::Blocked,
-                    _ => DeliveryItemStatus::Unknown,
+                    DeliveryOutcomeStatus::Queued
+                    | DeliveryOutcomeStatus::Unavailable
+                    | DeliveryOutcomeStatus::Failed
+                    | DeliveryOutcomeStatus::Unknown => DeliveryItemStatus::Unknown,
                 };
             }
             Ok(())

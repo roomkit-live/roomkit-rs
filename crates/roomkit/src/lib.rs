@@ -99,7 +99,7 @@ pub mod model {
         Visibility,
     };
 
-    pub use crate::delivery::{DeliveryOutcome, DeliveryOutcomeStatus};
+    pub use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
     pub use crate::stream::{LoopEndMarker, LoopEndReason};
     /// What a hook returns: [`HookResult`]'s constructors and their options,
     /// Python's keywords of `HookResult.allow`, `block` and `modify`.
@@ -136,11 +136,14 @@ pub use roomkit_core::rules::instructions::turn_context;
 
 pub use self::channel::{Channel, ChannelDeclaration, ChannelError, default_inbound_event};
 pub use self::context::keep_context;
-pub use self::delivery::{
-    DeliveryBackend, DeliveryBackendError, DeliveryContext, DeliveryItem, DeliveryItemStatus,
-    DeliveryStrategy, DequeueOptions, GetDeadLetterItemsOptions, Immediate,
-    InMemoryDeliveryBackend, InMemoryDeliveryBackendOptions, NackOptions, Queued, QueuedOptions,
-    WaitForIdle, WaitForIdleOptions,
+pub use self::delivery::backend::{
+    DeliveryBackend, DeliveryBackendError, DequeueOptions, GetDeadLetterItemsOptions, NackOptions,
+};
+pub use self::delivery::item::{DeliveryItem, DeliveryItemStatus};
+pub use self::delivery::memory::{InMemoryDeliveryBackend, InMemoryDeliveryBackendOptions};
+pub use self::delivery::queued::{Queued, QueuedOptions};
+pub use self::delivery::strategy::{
+    DeliveryContext, DeliveryStrategy, Immediate, WaitForIdle, WaitForIdleOptions,
 };
 pub use self::error::RoomKitError;
 pub use self::events::FrameworkEvent;

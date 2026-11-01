@@ -12,17 +12,16 @@ use roomkit_core::rules::hook_registry::{HookExecution, HookSubject, HookTrigger
 use super::options::{GetRoomOptions, ProcessInboundOptions};
 use super::{Inner, RoomKit, read};
 use crate::delivery::execute::reject_invalid;
+use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
 use crate::delivery::status::room_of_status;
-use crate::delivery::{
-    DeliveryBackend, DeliveryItem, DeliveryOutcome, DeliveryOutcomeStatus, DeliveryStrategy,
-    ExecuteDeliveryOptions, Immediate, execute_delivery, serialize_strategy,
-};
+use crate::delivery::{ExecuteDeliveryOptions, execute_delivery, serialize_strategy};
 use crate::driver;
 use crate::error::RoomKitError;
 use crate::hooks::{self, HookOptions, Kept};
 use crate::providers::sms::WebhookMeta;
 use crate::store::{ConversationStore, InMemoryStore};
 use crate::tasks::Kind;
+use crate::{DeliveryBackend, DeliveryItem, DeliveryStrategy, Immediate};
 
 /// What [`RoomKit::deliver`] takes beside the room and the content:
 /// Python's `deliver(room_id, content, *, channel_id=None, strategy=None,
