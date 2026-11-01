@@ -118,6 +118,11 @@ class Rules:
     def builtin(self, path: str) -> Builtin | None:
         return self.builtins.get(path)
 
+    def ruled_types(self) -> list[str]:
+        """The Rust types a rule maps, by path: its builtins, its literals and
+        its error families."""
+        return [*self.builtins, *self.literals, *self.error_families]
+
     def python_type_name(self, rust: str) -> str:
         """A Rust type's name with its acronyms in Python's casing."""
         left, out = tokens(rust), []

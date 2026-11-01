@@ -103,12 +103,13 @@ The report exits 0 whatever it finds (step 5, lot 0), but with `--gate`,
 the gate before the tag (lot 6): it exits 1 on a finding no entry covers, a
 dead entry or a pending entry, and, given the defaults tests
 (`--defaults FILE...`), on a Python default a Rust option stands for that
-no line of them names. An input it cannot read whole (the surface,
+no line of them names; given the names table (`--architecture FILE`), on an
+exception or a rule no row of it names. An input it cannot read whole (the surface,
 the snapshot, its fingerprint, the mapping) exits 2.
 
 Usage: python3 scripts/api-parity.py SURFACE [--python DIR] [--mapping FILE]
                                      [--rules-only] [--json OUT] [--gate]
-                                     [--defaults FILE...]
+                                     [--defaults FILE...] [--architecture FILE]
        python3 scripts/api-parity.py --spec NAME [--python DIR]
 """
 
@@ -124,7 +125,7 @@ from typing import TextIO
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from api_parity import ParityError  # noqa: E402
-from api_parity.cover import Report, blocking, compare, missing_defaults  # noqa: E402
+from api_parity.cover import Report, blocking, compare, missing_defaults, unwritten  # noqa: E402
 from api_parity.mapping import Mapping, Rules, load_mapping, variant_name  # noqa: E402
 from api_parity.report import as_json, render  # noqa: E402
 from api_parity.sides import Python, Surface, fingerprint, load_python, load_surface, spec_hash  # noqa: E402
@@ -141,6 +142,7 @@ __all__ = [
     "fingerprint",
     "load_python",
     "missing_defaults",
+    "unwritten",
     "spec_hash",
     "variant_name",
 ]
@@ -157,6 +159,9 @@ def main(argv: list[str] | None = None, out: TextIO = sys.stdout, log: TextIO = 
     parser.add_argument("--gate", action="store_true", help="exit 1 on what fails the gate before the tag")
     parser.add_argument(
         "--defaults", type=Path, nargs="*", default=[], help="the defaults tests, which the gate checks name each default"
+    )
+    parser.add_argument(
+        "--architecture", type=Path, help="the names table, which the gate checks names each exception and rule"
     )
     args = parser.parse_args(argv)
     try:
@@ -183,6 +188,12 @@ def main(argv: list[str] | None = None, out: TextIO = sys.stdout, log: TextIO = 
             print(f"api-parity: no defaults line names {python}", file=log)
         if unasserted:
             failing.append(f"{len(unasserted)} default{'' if len(unasserted) == 1 else 's'} no test asserts")
+    if args.gate and args.architecture:
+        rowless = unwritten(report.mapping, args.architecture.read_text(encoding="utf-8"))
+        for name in rowless:
+            print(f"api-parity: no row of the names table names {name}", file=log)
+        if rowless:
+            failing.append(f"{len(rowless)} entr{'y' if len(rowless) == 1 else 'ies'} or rules with no row")
     if failing:
         print(f"api-parity: the gate fails: {'; '.join(failing)}", file=log)
         return 1

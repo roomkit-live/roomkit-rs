@@ -54,6 +54,29 @@ def compare(surface: Surface, python: Python, mapping: Mapping) -> Report:
     return Report(surface, python, mapping, items, findings, uncovered, dead, moved, pending, due, defaulted)
 
 
+def unwritten(mapping: Mapping, architecture: str) -> list[str]:
+    """The entries and rules the architecture's names table names nothing
+    of (lot 6, rule 3): an `[[exception]]` whose Rust item, Python class,
+    member or parameter no row names, and a `builtins`, `literals` or
+    `error_families` rule whose Rust type none does. A name counts written
+    after a backtick, `::` or `.`."""
+
+    def written(name: str) -> bool:
+        return any(f"{mark}{name}" in architecture for mark in ("`", "::", "."))
+
+    missing = []
+    for entry in mapping.of("exception"):
+        names = [*entry.members, *entry.params]
+        if entry.rust:
+            names.append(entry.rust.rsplit("::", 1)[-1])
+        if entry.python:
+            names += [part for part in entry.python.split("(")[0].split(".") if not part.startswith("__")][-1:]
+        if not any(written(name) for name in names):
+            missing.append(entry.rust or entry.python or "?")
+    missing += [path for path in mapping.rules.ruled_types() if not written(path.rsplit("::", 1)[-1])]
+    return missing
+
+
 def missing_defaults(report: Report, tests: str) -> list[str]:
     """The defaulted Python parameters a Rust option stands for that
     `tests`, the defaults tests' text, names in no line (lot 6: rustdoc shows

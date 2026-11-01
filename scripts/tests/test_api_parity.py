@@ -1196,6 +1196,21 @@ class TheGate(unittest.TestCase):
             with self.subTest(label):
                 self.assertEqual(parity.blocking(report), [reason])
 
+    def test_an_exception_or_a_rule_no_row_names_is_found(self) -> None:
+        mapping = parity.Mapping.from_table(
+            {
+                "rules": {**RULES, "builtins": {"roomkit::model::RoomId": {"python": "str", "members": ["new"]}}},
+                "exception": [{"rust": "roomkit::WeakRoomKit", "approved": "2026-10-27", "reason": "an Arc cycle"}],
+            }
+        )
+        self.assertEqual(
+            (
+                parity.unwritten(mapping, "no table"),
+                parity.unwritten(mapping, "| a hook holding the kit | `WeakRoomKit` |\n| `str` ids | `RoomId` |"),
+            ),
+            (["roomkit::WeakRoomKit", "roomkit::model::RoomId"], []),
+        )
+
     def test_a_default_no_test_asserts_is_found(self) -> None:
         report = run(
             [
