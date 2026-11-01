@@ -89,8 +89,11 @@ pub struct Observation {
     pub id: ObservationId,
     /// The room it is about.
     pub room_id: RoomId,
-    /// The channel that produced it.
-    pub channel_id: ChannelId,
+    /// The channel that produced it; `None` for none, which the serialized
+    /// form writes as Python's empty `channel_id` (a feedback naming no
+    /// channel, RFC §15.9).
+    #[serde(with = "empty_as_none")]
+    pub channel_id: Option<ChannelId>,
     /// The observation, as text.
     pub content: String,
     /// Its category, for example `sentiment` or `compliance_violation`.
@@ -114,7 +117,7 @@ impl Observation {
     pub fn new(
         id: ObservationId,
         room_id: RoomId,
-        channel_id: ChannelId,
+        channel_id: impl Into<Option<ChannelId>>,
         content: impl Into<String>,
     ) -> Self {
         use crate::ops::{Environment, SystemEnvironment};
@@ -127,14 +130,14 @@ impl Observation {
     pub fn at(
         id: ObservationId,
         room_id: RoomId,
-        channel_id: ChannelId,
+        channel_id: impl Into<Option<ChannelId>>,
         content: impl Into<String>,
         created_at: Timestamp,
     ) -> Self {
         Self {
             id,
             room_id,
-            channel_id,
+            channel_id: channel_id.into(),
             content: content.into(),
             category: None,
             confidence: Confidence::FULL,
@@ -224,5 +227,35 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(parsed.confidence, Confidence::FULL);
+    }
+}
+
+/// An observation's channel in the serialized form: Python's `str`, empty
+/// for none.
+mod empty_as_none {
+    use serde::de::Error as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use crate::model::ChannelId;
+
+    #[expect(
+        clippy::ref_option,
+        reason = "serde's `with` hands the field by reference"
+    )]
+    pub(super) fn serialize<S: Serializer>(
+        channel_id: &Option<ChannelId>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(channel_id.as_ref().map_or("", ChannelId::as_str))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<ChannelId>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        if text.is_empty() {
+            return Ok(None);
+        }
+        ChannelId::new(text).map(Some).map_err(D::Error::custom)
     }
 }
