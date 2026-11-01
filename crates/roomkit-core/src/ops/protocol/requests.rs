@@ -6,8 +6,9 @@ use std::time::Duration;
 use super::EffectId;
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, ChannelType, DeliveryError, ErrorRecord, EventId,
-    EventUpdates, Identity, InboundMessage, Metadata, Observation, ProviderResult, Room,
-    RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp,
+    EventUpdates, Identity, IdentityHookResult, IdentityResult, InboundMessage, Metadata,
+    Observation, Participant, ProviderResult, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
+    Task, Timestamp,
 };
 use crate::ops::RecentEvents;
 use crate::rules::hook_chain::HookOutcome;
@@ -42,6 +43,15 @@ pub enum Request {
         /// What the router is asked.
         query: Box<RouteQuery>,
     },
+    /// Identity resolution (RFC §10.1 step 5, §11): the kit's resolver,
+    /// and its identity hooks.
+    Identity(IdentityRequest),
+}
+
+impl From<IdentityRequest> for Request {
+    fn from(request: IdentityRequest) -> Self {
+        Self::Identity(request)
+    }
 }
 
 impl From<HoldRequest> for Request {
@@ -286,6 +296,18 @@ pub enum StoreRequest {
         /// of no organization (gap G-060).
         organization_id: Option<String>,
     },
+    /// Store a participant of a room (RFC §14.1 `add_participant`). Answer
+    /// [`StoreOutcome::Stored`].
+    AddParticipant {
+        /// The participant, its room named.
+        participant: Box<Participant>,
+    },
+    /// Write a participant of a room whole (RFC §14.1
+    /// `update_participant`). Answer [`StoreOutcome::Stored`].
+    UpdateParticipant {
+        /// The participant, its room named.
+        participant: Box<Participant>,
+    },
 }
 
 /// A call of a channel (RFC §6.1), answered by a [`ChannelOutcome`].
@@ -414,6 +436,51 @@ pub enum HookRequest {
     },
 }
 
+/// What identity resolution asks of the driver (RFC §10.1 step 5, §11),
+/// answered by an [`IdentityAnswer`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum IdentityRequest {
+    /// Ask the kit's identity resolver who sent `message` (RFC §11.1), with
+    /// the room's context, within `timeout` (RFC §11.5). Answer
+    /// [`IdentityAnswer::Resolved`], [`IdentityAnswer::TimedOut`] past the
+    /// timeout, or [`Outcome::Failed`] for a resolver that raised.
+    Resolve {
+        /// The message, its sender in its channel's form.
+        message: Box<InboundMessage>,
+        /// The room's context, whole.
+        context: Box<RoomContext>,
+        /// How long the resolver may take.
+        timeout: Duration,
+    },
+    /// Run the kit's identity hooks of `trigger` whose filters admit
+    /// `event`, in registration order, until one answers (RFC §11.2): one
+    /// that raises is logged and the next one runs. Answer
+    /// [`IdentityAnswer::Hooked`] with the first answer, `None` when none
+    /// answered.
+    RunHooks {
+        /// `ON_IDENTITY_AMBIGUOUS` or `ON_IDENTITY_UNKNOWN`.
+        trigger: HookTrigger,
+        /// The event the message parsed to.
+        event: Box<RoomEvent>,
+        /// The room's context, whole.
+        context: Box<RoomContext>,
+        /// What the resolver said of the sender, its address and channel
+        /// type filled in.
+        result: Box<IdentityResult>,
+    },
+}
+
+/// The driver's answer to an [`IdentityRequest`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum IdentityAnswer {
+    /// What the resolver said of the sender.
+    Resolved(Box<IdentityResult>),
+    /// The resolver did not answer within its timeout (RFC §11.5).
+    TimedOut,
+    /// The first identity hook's answer, `None` when none answered.
+    Hooked(Option<Box<IdentityHookResult>>),
+}
+
 /// The driver's answer to an effect, of its request's family, or one of
 /// the answers every request may get.
 #[derive(Clone, Debug, PartialEq)]
@@ -435,6 +502,14 @@ pub enum Outcome {
     /// request would have taken is not held: a lock or a ticket's turn
     /// waited for is not granted, a hook given up on is not heard.
     DeadlinePassed,
+    /// Identity resolution's answer.
+    Identity(IdentityAnswer),
+}
+
+impl From<IdentityAnswer> for Outcome {
+    fn from(outcome: IdentityAnswer) -> Self {
+        Self::Identity(outcome)
+    }
 }
 
 impl From<HoldOutcome> for Outcome {

@@ -12,8 +12,8 @@
 use serde_json::Value;
 
 use crate::model::{
-    Access, ChannelBinding, ChannelId, EventType, Metadata, RoomId, SystemContent, Timestamp,
-    Visibility,
+    Access, ChannelBinding, ChannelId, EventType, Metadata, ParticipantId, RoomId, SystemContent,
+    Timestamp, Visibility,
 };
 use crate::rules::lifecycle::Transition;
 
@@ -59,6 +59,13 @@ pub(crate) enum Record {
         threshold: u64,
         at: Timestamp,
     },
+    /// A sender identity resolution identified joined the room (RFC §10.1
+    /// step 5, §11.2), the Python implementation's
+    /// `participant_joined_identified`.
+    JoinedIdentified(ParticipantId),
+    /// A sender identity resolution left pending joined the room, the
+    /// Python implementation's `participant_joined_pending`.
+    JoinedPending(ParticipantId),
 }
 
 impl Record {
@@ -125,6 +132,7 @@ impl Record {
             | Self::VisibilityChanged { .. }
             | Self::MetadataUpdated { .. } => EventType::ChannelUpdated,
             Self::Timer { .. } => EventType::System,
+            Self::JoinedIdentified(_) | Self::JoinedPending(_) => EventType::ParticipantJoined,
         }
     }
 
@@ -186,6 +194,8 @@ impl Record {
                 threshold,
                 at,
             } => Parts::of_timer(room_id, *transition, *threshold, *at),
+            Self::JoinedIdentified(participant_id) => Parts::of_join(participant_id, "identified"),
+            Self::JoinedPending(participant_id) => Parts::of_join(participant_id, "pending"),
         };
         SystemContent {
             body,
@@ -231,6 +241,24 @@ impl Parts {
                 ("channel_id", channel_id.as_str().into()),
                 (old_key, old.into()),
                 (field, new.into()),
+            ],
+        }
+    }
+
+    /// A sender joining the room as identity resolution left them,
+    /// `identified` or `pending` (RFC §10.1 step 5).
+    fn of_join(participant_id: &ParticipantId, status: &'static str) -> Self {
+        let (how, code) = if status == "identified" {
+            ("as identified", "participant_joined_identified")
+        } else {
+            ("with pending identification", "participant_joined_pending")
+        };
+        Self {
+            body: format!("Participant {participant_id} joined {how}"),
+            code,
+            data: vec![
+                ("participant_id", participant_id.as_str().into()),
+                ("status", status.into()),
             ],
         }
     }

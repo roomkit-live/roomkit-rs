@@ -75,6 +75,7 @@ mod edits;
 mod entry;
 mod holds;
 mod host_post;
+mod identity;
 mod instructions;
 mod job;
 mod named_room;
@@ -408,6 +409,9 @@ struct CallFacts {
     /// The call's bound, its deadline set at its start from
     /// `process_timeout` (RFC §13.6).
     bound: Bound,
+    /// What the trigger's pass writes of the message's sender, as step 5
+    /// left them (RFC §10.1 step 5).
+    participation: Option<identity::Participation>,
 }
 
 impl CallFacts {
@@ -419,6 +423,7 @@ impl CallFacts {
             channel_id: None,
             direct: None,
             bound: Bound::Unbounded,
+            participation: None,
         }
     }
 }

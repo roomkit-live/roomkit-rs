@@ -377,6 +377,7 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::Lock(_) => "Lock",
         RoomKitError::Channel { .. } => "Channel",
         RoomKitError::Router(_) => "Router",
+        RoomKitError::Identity(_) => "Identity",
         RoomKitError::RemoteTurn { .. } => "RemoteTurn",
         RoomKitError::TurnLink { .. } => "TurnLink",
         RoomKitError::Internal(_) => "Internal",

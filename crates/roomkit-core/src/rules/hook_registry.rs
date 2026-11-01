@@ -86,6 +86,14 @@ pub enum HookTrigger {
     /// `submit_feedback` recorded a rating as an observation of the room
     /// (RFC §15.9); its payload is the observation.
     OnFeedback,
+    /// Identity resolution found several candidates for a sender (RFC
+    /// §10.1 step 5, §11.2): its identity hooks decide, registered apart;
+    /// a hook registered here observes.
+    OnIdentityAmbiguous,
+    /// Identity resolution found no identity for a sender (RFC §10.1 step
+    /// 5, §11.2): its identity hooks decide, registered apart; a hook
+    /// registered here observes.
+    OnIdentityUnknown,
 }
 
 impl HookTrigger {
@@ -114,7 +122,9 @@ impl HookTrigger {
             | Self::OnTaskCreated
             | Self::OnDeliveryStatus
             | Self::OnStatusPosted
-            | Self::OnFeedback => HookExecution::Async,
+            | Self::OnFeedback
+            | Self::OnIdentityAmbiguous
+            | Self::OnIdentityUnknown => HookExecution::Async,
         }
     }
 
@@ -141,7 +151,9 @@ impl HookTrigger {
             | Self::OnTaskCreated
             | Self::OnDeliveryStatus
             | Self::OnStatusPosted
-            | Self::OnFeedback => false,
+            | Self::OnFeedback
+            | Self::OnIdentityAmbiguous
+            | Self::OnIdentityUnknown => false,
         }
     }
 
@@ -171,7 +183,9 @@ impl HookTrigger {
             | Self::BeforeTts
             | Self::OnDeliveryStatus
             | Self::OnStatusPosted
-            | Self::OnFeedback => false,
+            | Self::OnFeedback
+            | Self::OnIdentityAmbiguous
+            | Self::OnIdentityUnknown => false,
         }
     }
 

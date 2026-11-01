@@ -21,7 +21,9 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use super::lookalike::{person_name, skeletons};
-use crate::model::{ChannelType, EventStatus, Metadata, Participant, RoomContext, RoomEvent};
+use crate::model::{
+    ChannelType, EventStatus, IdentificationStatus, Metadata, Participant, RoomContext, RoomEvent,
+};
 
 /// The event metadata key holding the record of its author, fixed when the
 /// event is committed: `{"name": "Alice", "rank": 2, "source": "<digest>"}`.
@@ -116,6 +118,51 @@ impl<'a> People<'a> {
             .get(identity.as_str())
             .and_then(|records| records.first().copied())
             .unwrap_or(record)
+    }
+}
+
+/// Whether the room has identified `event`'s sender (RFC §11.6 case 2):
+/// the record its id names on its channel is IDENTIFIED. A PENDING or
+/// AMBIGUOUS record is no answer, and an id naming nobody on the channel
+/// names nobody at all.
+pub(crate) fn sender_identified(event: &RoomEvent, participants: &[Participant]) -> bool {
+    People::new(participants)
+        .named(event)
+        .is_some_and(|record| record.identification == IdentificationStatus::Identified)
+}
+
+/// Whether `event`'s id is a participant's the room reached through other
+/// channels only (RFC §5.5): it names nobody on the event's channel, and
+/// read back on its own it would name them.
+pub(crate) fn names_another(event: &RoomEvent, participants: &[Participant]) -> bool {
+    let people = People::new(participants);
+    event
+        .source
+        .participant_id
+        .as_ref()
+        .is_some_and(|id| people.by_id.contains_key(id.as_str()) && people.named(event).is_none())
+}
+
+/// The id of the record a pending sender gets of their own when their id is
+/// a participant's reached through other channels only (RFC §5.5): one per
+/// sender and channel, so their next message finds it again. The Python
+/// implementation's `own_record_id`.
+pub(crate) fn own_record_id(channel_id: &str, sender_id: &str) -> String {
+    format!("pending-{}", digest(channel_id, &[sender_id.to_owned()]))
+}
+
+impl<'a> People<'a> {
+    /// The record `event`'s id names on its channel, as
+    /// [`named_on`](Self::named_on) reads it.
+    fn named(&self, event: &RoomEvent) -> Option<&'a Participant> {
+        self.named_on(
+            event
+                .source
+                .participant_id
+                .as_ref()
+                .map(crate::model::ParticipantId::as_str),
+            event.source.channel_id.as_str(),
+        )
     }
 }
 

@@ -28,6 +28,7 @@ use std::mem;
 use super::answers::MessageAnswers;
 use super::charge::DeliveryCharge;
 use super::deadline::Stopped;
+use super::identity::{self, Identification, Identified};
 use super::instructions::{self, Admission};
 use super::named_room::{Mode, Named, NamedRoom};
 use super::{InboundError, InboundResult, result, stamp};
@@ -168,6 +169,8 @@ pub(super) struct Arrival {
     /// The depth of the turn the call runs within, which the event takes
     /// at least (RFC §8.3).
     chain_floor: u32,
+    /// What step 5 decided of the sender, once the message arrived.
+    identified: Option<Identified>,
     state: State,
 }
 
@@ -187,6 +190,8 @@ enum State {
         /// The room's context, whole, for the off-lock check.
         context: Box<RoomContext>,
     },
+    /// Step 5: who sent the message (RFC §11).
+    Identifying(Box<Identification>),
     Done,
 }
 
@@ -218,6 +223,7 @@ impl Arrival {
             room: None,
             charge: DeliveryCharge::new(None),
             chain_floor: 0,
+            identified: None,
             state: State::Start,
         }
     }
@@ -282,6 +288,7 @@ impl Arrival {
                 effect: awaited, ..
             } => *awaited == effect,
             State::Naming(step) => step.awaits(effect),
+            State::Identifying(step) => step.awaits(effect),
             State::Start | State::Done => false,
         }
     }
@@ -327,7 +334,20 @@ impl Arrival {
                 effect: expected,
                 id,
                 context,
-            } if expected == effect => Progress::Done(self.on_parsed(id, context, outcome)),
+            } if expected == effect => self.after_parse(cx, id, context, outcome),
+            State::Identifying(mut step) => match step.accept(cx, effect, outcome) {
+                Progress::Waiting => {
+                    self.state = State::Identifying(step);
+                    Progress::Waiting
+                }
+                Progress::Done(resolved) => Progress::Done(resolved.map(|resolved| {
+                    self.identified = Some(resolved.identified);
+                    Arrived {
+                        event: resolved.event,
+                        context: resolved.context,
+                    }
+                })),
+            },
             state @ (State::Start
             | State::Resolving(_)
             | State::Routing(_)
@@ -509,6 +529,40 @@ impl Arrival {
                 ..context
             },
         })
+    }
+
+    /// What step 5 decided of the message's sender, once it arrived: the
+    /// event goes on, with what its pass writes of them, or is held. A
+    /// message no resolution ran for goes on.
+    pub(super) fn take_identified(&mut self) -> Identified {
+        self.identified.take().unwrap_or(Identified::Proceed(None))
+    }
+
+    /// The event the channel parsed is stamped (step 4), then its sender
+    /// resolved when step 5 runs for it (RFC §11.4, §11.6).
+    fn after_parse(
+        &mut self,
+        cx: &mut Cx<'_>,
+        id: EventId,
+        context: Box<RoomContext>,
+        outcome: Outcome,
+    ) -> Arriving {
+        let arrived = match self.on_parsed(id, context, outcome) {
+            Ok(arrived) => arrived,
+            Err(stopped) => return Progress::Done(Err(stopped)),
+        };
+        if !identity::wanted(cx.config, &self.channel, &arrived.event, &arrived.context) {
+            return Progress::Done(Ok(arrived));
+        }
+        let step = Identification::start(
+            cx,
+            arrived.event,
+            arrived.context,
+            &self.message,
+            self.bound,
+        );
+        self.state = State::Identifying(Box::new(step));
+        Progress::Waiting
     }
 
     /// Stamps the event the channel parsed (RFC §10.1 step 4), in the room

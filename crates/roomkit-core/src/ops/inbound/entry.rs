@@ -4,6 +4,7 @@
 
 use super::arrival::{self, Admitted, Arrival};
 use super::deadline::{self, Stopped};
+use super::identity::Identified;
 use super::{Call, InboundTarget, Machine, MessageAnswers, Stage, result};
 use crate::model::InboundMessage;
 use crate::ops::io::Bound;
@@ -91,7 +92,13 @@ impl Machine {
                     // G-070).
                     self.cascade.draw_on(draw.clone());
                 }
-                self.after_arrival(cx, arrived);
+                match arrival.take_identified() {
+                    Identified::Held(held) => self.hold_for_identity(cx, held, &arrived.event),
+                    Identified::Proceed(participation) => {
+                        self.call.participation = participation;
+                        self.after_arrival(cx, arrived);
+                    }
+                }
             }
             Err(stopped) => {
                 self.call.room_id = arrival.room().cloned();

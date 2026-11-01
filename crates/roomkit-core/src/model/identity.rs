@@ -1,10 +1,11 @@
-//! A person known across channels (RFC §5.6).
+//! A person known across channels (RFC §5.6), and what identity resolution
+//! says of a sender (RFC §11.1, §11.3).
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{ChannelType, IdentityId, Metadata};
+use super::{ChannelType, IdentificationStatus, IdentityId, InjectedEvent, Metadata};
 
 /// A person known across channels, by the addresses they use on each type
 /// of channel (RFC §5.6).
@@ -94,6 +95,179 @@ impl Identity {
         addresses.retain(|linked| linked != address);
         if addresses.is_empty() {
             self.channel_addresses.remove(channel_type);
+        }
+    }
+}
+
+/// What an identity resolver says of a message's sender (RFC §11.1), the
+/// Python implementation's `IdentityResult`.
+///
+/// The pipeline fills `address` with the message's sender and
+/// `channel_type` with its channel's type where the resolver left them
+/// unset, before the identity hooks read it (RFC §11.2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdentityResult {
+    /// Where resolution stands: identified, ambiguous, pending, unknown,
+    /// challenge sent or rejected.
+    pub status: IdentificationStatus,
+    /// The sender, when identified.
+    #[serde(default)]
+    pub identity: Option<Identity>,
+    /// The identities the sender may be, when ambiguous.
+    #[serde(default)]
+    pub candidates: Vec<Identity>,
+    /// The address resolved.
+    #[serde(default)]
+    pub address: Option<String>,
+    /// The type of the channel the address was used on.
+    #[serde(default)]
+    pub channel_type: Option<ChannelType>,
+    /// The kind of challenge a resolver put to the sender.
+    #[serde(default)]
+    pub challenge_type: Option<String>,
+    /// The resolver's words: a challenge's are the reason the message is
+    /// blocked with (RFC §10.1 step 5).
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+impl IdentityResult {
+    /// A result of `status` and nothing else, Python's
+    /// `IdentityResult(status=…)`: a caller sets the other fields by struct
+    /// update.
+    pub fn new(status: IdentificationStatus) -> Self {
+        Self {
+            status,
+            identity: None,
+            candidates: Vec::new(),
+            address: None,
+            channel_type: None,
+            challenge_type: None,
+            message: None,
+        }
+    }
+}
+
+/// What an identity hook answers (RFC §11.3), the Python implementation's
+/// `IdentityHookResult`.
+///
+/// ```
+/// use roomkit_core::model::identity::RejectOptions;
+/// use roomkit_core::model::{IdentificationStatus, IdentityHookResult};
+///
+/// let result = IdentityHookResult::reject(RejectOptions::default());
+/// assert_eq!(result.status, IdentificationStatus::Rejected);
+/// assert_eq!(result.reason.as_deref(), Some("Unknown sender"));
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct IdentityHookResult {
+    /// The outcome: identified, pending, challenge sent or rejected.
+    pub status: IdentificationStatus,
+    /// The sender, for an identified outcome.
+    #[serde(default)]
+    pub identity: Option<Identity>,
+    /// A pending sender's name; not read by the framework.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// The identities a pending sender may be, read on
+    /// `ON_IDENTITY_UNKNOWN` only.
+    #[serde(default)]
+    pub candidates: Option<Vec<Identity>>,
+    /// A challenge's event, committed as an injected event (RFC §9.4).
+    #[serde(default)]
+    pub inject: Option<InjectedEvent>,
+    /// A rejection's reason, the block's.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The kind of challenge; not read by the framework.
+    #[serde(default)]
+    pub challenge_type: Option<String>,
+    /// A challenge's words; not read by the framework.
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// What [`IdentityHookResult::pending`] takes: Python's keywords.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PendingOptions {
+    /// The sender's name, as far as the hook knows it.
+    pub display_name: Option<String>,
+    /// The identities the sender may be.
+    pub candidates: Option<Vec<Identity>>,
+}
+
+/// What [`IdentityHookResult::challenge`] takes beside its event: Python's
+/// keywords.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ChallengeOptions {
+    /// The challenge's words.
+    pub message: Option<String>,
+}
+
+/// What [`IdentityHookResult::reject`] takes: Python's keywords.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RejectOptions {
+    /// Why the sender is refused, the block's reason: Python's `reason="Unknown sender"`.
+    pub reason: String,
+}
+
+impl Default for RejectOptions {
+    fn default() -> Self {
+        Self {
+            reason: "Unknown sender".to_owned(),
+        }
+    }
+}
+
+impl IdentityHookResult {
+    /// A result of `status` and nothing else, Python's
+    /// `IdentityHookResult(status=…)`: a caller sets the other fields by
+    /// struct update.
+    pub fn new(status: IdentificationStatus) -> Self {
+        Self {
+            status,
+            identity: None,
+            display_name: None,
+            candidates: None,
+            inject: None,
+            reason: None,
+            challenge_type: None,
+            message: None,
+        }
+    }
+
+    /// The sender is `identity` (RFC §11.3).
+    pub fn resolved(identity: Identity) -> Self {
+        Self {
+            identity: Some(identity),
+            ..Self::new(IdentificationStatus::Identified)
+        }
+    }
+
+    /// The sender joins pending, to be resolved later (RFC §11.3).
+    pub fn pending(options: PendingOptions) -> Self {
+        Self {
+            display_name: options.display_name,
+            candidates: options.candidates,
+            ..Self::new(IdentificationStatus::Pending)
+        }
+    }
+
+    /// The message is held and `inject`, the question put to the sender,
+    /// committed (RFC §11.3, §9.4).
+    pub fn challenge(inject: InjectedEvent, options: ChallengeOptions) -> Self {
+        Self {
+            inject: Some(inject),
+            message: options.message,
+            ..Self::new(IdentificationStatus::ChallengeSent)
+        }
+    }
+
+    /// The message is refused, with the options' reason (RFC §11.3).
+    pub fn reject(options: RejectOptions) -> Self {
+        Self {
+            reason: Some(options.reason),
+            ..Self::new(IdentificationStatus::Rejected)
         }
     }
 }

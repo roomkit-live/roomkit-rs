@@ -31,11 +31,13 @@
 mod decision;
 mod gates;
 
+use std::collections::VecDeque;
 use std::mem;
 
 use super::delivery::Placement;
 use super::direct::DirectCall;
 use super::edits::Accepted;
+use super::identity::Participation;
 use super::queues::Lineage;
 use crate::model::{
     ChannelId, ErrorRecord, InjectedEvent, Observation, RoomContext, RoomEvent, RoomStatus, Task,
@@ -278,6 +280,10 @@ pub(super) struct CommitPass {
     /// The ASYNC hooks of `BEFORE_BROADCAST` observing the event the chain
     /// allowed, until the pass is over.
     observed: Option<Box<Observed>>,
+    /// What the trigger's pass writes of its sender once the status gate
+    /// let the event through, as identity resolution left them (RFC §10.1
+    /// step 5).
+    participation: Option<Box<Participation>>,
 }
 
 /// What the hooks decided, which the pass applies once it has read the room
@@ -302,6 +308,13 @@ enum State {
     CheckingKey {
         effect: EffectId,
         context: Box<RoomContext>,
+    },
+    /// The sender's record is written, as identity resolution left them,
+    /// each write in turn (RFC §10.1 step 5).
+    Participating {
+        effect: EffectId,
+        context: Box<RoomContext>,
+        writes: VecDeque<StoreRequest>,
     },
     /// Step 8 reads the event the thread parent names, then the root a
     /// reply names, to root it.
@@ -374,6 +387,7 @@ impl State {
             | Self::LoadingContext(effect)
             | Self::ApplyingTimers { effect, .. }
             | Self::CheckingKey { effect, .. }
+            | Self::Participating { effect, .. }
             | Self::RootingParent { effect, .. }
             | Self::ReadingTarget { effect, .. }
             | Self::RunningHook { effect, .. }
@@ -414,6 +428,7 @@ impl CommitPass {
             placement: Placement::Missing,
             timer_hooks: TimerHooks::default(),
             observed: None,
+            participation: None,
         }
     }
 
@@ -436,6 +451,15 @@ impl CommitPass {
     /// checks before the hooks (gap G-069); `None` for any other event.
     pub(super) fn checking(self, direct: Option<DirectCall>) -> Self {
         Self { direct, ..self }
+    }
+
+    /// The trigger's pass, writing its sender's record as `participation`
+    /// says once the status gate let the event through (RFC §10.1 step 5).
+    pub(super) fn participating(self, participation: Option<Participation>) -> Self {
+        Self {
+            participation: participation.map(Box::new),
+            ..self
+        }
     }
 
     /// Whether the pass waits for `effect`.
@@ -488,6 +512,9 @@ impl CommitPass {
                 Err(error) => self.release(cx, Err(Abort::Store(error))),
             },
             State::CheckingKey { context, .. } => self.on_key(cx, context, outcome),
+            State::Participating {
+                context, writes, ..
+            } => self.on_participant_written(cx, context, writes, outcome),
             State::RootingParent {
                 context, rooting, ..
             } => self.on_parent(cx, context, rooting, outcome),
@@ -575,8 +602,10 @@ impl CommitPass {
                 self.release(cx, Err(expired))
             }
             // The commit, the place and the release carry no deadline (RFC
-            // §13.6): `Io` answers them with no `DeadlinePassed`.
+            // §13.6): `Io` answers them with no `DeadlinePassed`, nor the
+            // writes of the sender's record.
             state @ (State::Start
+            | State::Participating { .. }
             | State::ReadingTimeline { .. }
             | State::Committing { .. }
             | State::Placing { .. }

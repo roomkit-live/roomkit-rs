@@ -27,6 +27,7 @@ mod delivery;
 mod engine;
 mod ephemeral;
 mod events;
+mod identity;
 mod inject;
 mod options;
 mod output;
@@ -50,7 +51,8 @@ use std::sync::{Arc, PoisonError, RwLock, Weak};
 
 use roomkit_core::model::{ChannelId, ChannelType, InboundMessage, RoomId};
 use roomkit_core::ops::{
-    Entry, Environment, FrameworkEvent as CoreEvent, Inbound, InboundTarget, KitConfig,
+    Entry, Environment, FrameworkEvent as CoreEvent, IdentityConfig, Inbound, InboundTarget,
+    KitConfig,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookSubject, HookTrigger, Removed};
@@ -61,6 +63,8 @@ pub use self::ephemeral::{
     PublishPresenceOptions, PublishReactionOptions, PublishReadReceiptOptions,
     PublishToolCallOptions, PublishTypingOptions, SubscribeRoomOptions,
 };
+pub use self::identity::IdentityHookOptions;
+pub(crate) use self::identity::run_identity_hooks;
 use self::inject::Entered;
 pub use self::options::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
@@ -86,6 +90,7 @@ use crate::environment::SystemEnvironment;
 use crate::error::RoomKitError;
 use crate::events::{FrameworkEvent, Handled, Handler, Handlers};
 use crate::hooks::{HookHandler, Kept};
+use crate::identity::IdentityResolver;
 use crate::inbound::InboundResult;
 use crate::locks::RoomMutexes;
 use crate::queues::{RoomLanes, RoomTickets};
@@ -183,6 +188,11 @@ pub(crate) struct Inner<S> {
     pub(crate) realtime: Arc<dyn crate::realtime::RealtimeBackend>,
     /// The kit's status bus (RFC §19.8), which the kit subscribes to.
     pub(crate) status_bus: crate::orchestration::StatusBus,
+    /// Who sent an inbound message (RFC §11.1), fixed at the kit's
+    /// construction.
+    pub(crate) identity_resolver: Option<Arc<dyn IdentityResolver>>,
+    /// The identity hooks (RFC §11.2), in their registration order.
+    pub(crate) identity_hooks: RwLock<Vec<identity::IdentityHook>>,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -211,11 +221,18 @@ impl<S: ConversationStore> RoomKit<S> {
             process_timeout,
             realtime,
             status_bus,
+            identity_resolver,
+            identity_channel_types,
+            identity_timeout,
         } = options;
         let mut config = KitConfig::new();
         config.max_chain_depth = max_chain_depth;
         config.agent_response_policy = agent_response_policy;
         config.process_timeout = Some(process_timeout);
+        config.identity = identity_resolver.as_ref().map(|_| IdentityConfig {
+            channel_types: identity_channel_types.clone(),
+            timeout: identity_timeout,
+        });
         let inner = Arc::new_cyclic(|kit: &Weak<Inner<S>>| Inner {
             config: RwLock::new(Arc::new(config)),
             channels: RwLock::new(HashMap::new()),
@@ -239,6 +256,8 @@ impl<S: ConversationStore> RoomKit<S> {
             realtime: realtime
                 .unwrap_or_else(|| Arc::new(crate::realtime::InMemoryRealtime::default())),
             status_bus: status_bus.unwrap_or_default(),
+            identity_resolver,
+            identity_hooks: RwLock::new(Vec::new()),
         });
         inner.subscribe_status_bus();
         Self { inner }

@@ -4,10 +4,11 @@
 
 use super::{
     ChannelOutcome, ChannelRequest, EffectId, HoldOutcome, HoldRequest, HookAnswer, HookRequest,
-    Outcome, ProtocolError, Request, StoreOutcome, StoreRequest,
+    IdentityAnswer, IdentityRequest, Outcome, ProtocolError, Request, StoreOutcome, StoreRequest,
 };
 use crate::model::{
-    ChannelId, ChannelOutput, DeliveryError, ErrorRecord, Identity, RoomContext, RoomEvent, RoomId,
+    ChannelId, ChannelOutput, DeliveryError, ErrorRecord, Identity, IdentityHookResult,
+    IdentityResult, RoomContext, RoomEvent, RoomId,
 };
 use crate::rules::hook_chain::HookOutcome;
 
@@ -41,6 +42,10 @@ pub(crate) enum RequestKind {
     RunHook,
     RunObservers,
     Route,
+    /// The kit's identity resolver asked (RFC §11.1).
+    ResolveSender,
+    /// The kit's identity hooks run (RFC §11.2).
+    RunIdentityHooks,
 }
 
 impl Request {
@@ -58,6 +63,8 @@ impl Request {
             Self::Hook(HookRequest::RunHook { .. }) => RequestKind::RunHook,
             Self::Hook(HookRequest::RunObservers { .. }) => RequestKind::RunObservers,
             Self::Route { .. } => RequestKind::Route,
+            Self::Identity(IdentityRequest::Resolve { .. }) => RequestKind::ResolveSender,
+            Self::Identity(IdentityRequest::RunHooks { .. }) => RequestKind::RunIdentityHooks,
         }
     }
 }
@@ -91,7 +98,9 @@ impl StoreRequest {
             | Self::UpdateRoom { .. }
             | Self::StoreBinding { .. }
             | Self::DeleteBinding { .. }
-            | Self::UpdateEvent { .. } => RequestKind::Write,
+            | Self::UpdateEvent { .. }
+            | Self::AddParticipant { .. }
+            | Self::UpdateParticipant { .. } => RequestKind::Write,
             Self::ResolveIdentity { .. } => RequestKind::ResolveIdentity,
         }
     }
@@ -137,6 +146,8 @@ impl RequestKind {
             Self::RunHook => "Ran",
             Self::RunObservers => "Observed",
             Self::Route => "Routed",
+            Self::ResolveSender => "Resolved or TimedOut",
+            Self::RunIdentityHooks => "Hooked",
         }
     }
 
@@ -188,6 +199,13 @@ impl RequestKind {
             Self::RunHook => matches!(outcome, Outcome::Hook(HookAnswer::Ran(_))),
             Self::RunObservers => matches!(outcome, Outcome::Hook(HookAnswer::Observed)),
             Self::Route => matches!(outcome, Outcome::Routed(_)),
+            Self::ResolveSender => matches!(
+                outcome,
+                Outcome::Identity(IdentityAnswer::Resolved(_) | IdentityAnswer::TimedOut)
+            ),
+            Self::RunIdentityHooks => {
+                matches!(outcome, Outcome::Identity(IdentityAnswer::Hooked(_)))
+            }
         }
     }
 
@@ -207,7 +225,8 @@ impl RequestKind {
             | Outcome::Store(_)
             | Outcome::Channel(_)
             | Outcome::Hook(_)
-            | Outcome::Routed(_) => self.answered_by(outcome),
+            | Outcome::Routed(_)
+            | Outcome::Identity(_) => self.answered_by(outcome),
         };
         if fits {
             Ok(())
@@ -392,6 +411,24 @@ impl Outcome {
         }
     }
 
+    /// What the resolver said of the sender, `None` past its timeout (RFC
+    /// §11.5).
+    pub(crate) fn into_sender(self) -> Result<Option<Box<IdentityResult>>, ErrorRecord> {
+        match self {
+            Self::Identity(IdentityAnswer::Resolved(result)) => Ok(Some(result)),
+            Self::Identity(IdentityAnswer::TimedOut) => Ok(None),
+            other => Err(other.into_failure()),
+        }
+    }
+
+    /// The first identity hook's answer, `None` when none answered.
+    pub(crate) fn into_hooked(self) -> Result<Option<Box<IdentityHookResult>>, ErrorRecord> {
+        match self {
+            Self::Identity(IdentityAnswer::Hooked(result)) => Ok(result),
+            other => Err(other.into_failure()),
+        }
+    }
+
     /// The room a router chose, `None` for a new room.
     pub(crate) fn into_routed(self) -> Result<Option<RoomId>, ErrorRecord> {
         match self {
@@ -468,6 +505,9 @@ impl Outcome {
             Self::Hook(HookAnswer::Ran(_)) => "Ran",
             Self::Hook(HookAnswer::Observed) => "Observed",
             Self::Routed(_) => "Routed",
+            Self::Identity(IdentityAnswer::Resolved(_)) => "Resolved",
+            Self::Identity(IdentityAnswer::TimedOut) => "TimedOut",
+            Self::Identity(IdentityAnswer::Hooked(_)) => "Hooked",
             Self::Failed(_) => "Failed",
             Self::DeadlinePassed => "DeadlinePassed",
         }

@@ -218,7 +218,8 @@ impl Work {
             | Request::Hold(_)
             | Request::Store(_)
             | Request::Hook(_)
-            | Request::Route { .. } => (None, None),
+            | Request::Route { .. }
+            | Request::Identity(_) => (None, None),
         };
         Self {
             locked: effect.locked.clone(),

@@ -54,9 +54,9 @@ use roomkit_core::model::{
 use roomkit_core::ops::{
     ChannelConfig, ChannelOutcome, ChannelRequest, CommitRecord, Decided, DeleteEvent, Effect,
     EffectId, Entry, Environment, FrameworkEvent, HoldOutcome, HoldRequest, HookAnswer,
-    HookRequest, Inbound, InboundError, InboundResult, InboundTarget, KitConfig, MutationError,
-    Notice, Outcome, Request, SequentialEnvironment, Settled, StoreOutcome, StoreRequest,
-    UpdateEvent, default_inbound_event,
+    HookRequest, IdentityRequest, Inbound, InboundError, InboundResult, InboundTarget, KitConfig,
+    MutationError, Notice, Outcome, Request, SequentialEnvironment, Settled, StoreOutcome,
+    StoreRequest, UpdateEvent, default_inbound_event,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTrigger};
@@ -1090,6 +1090,18 @@ impl Sim {
                 address,
                 ..
             }) => format!("resolve_identity {} {address}", type_name(channel_type)),
+            Request::Store(StoreRequest::AddParticipant { participant }) => {
+                format!("add participant {}", participant.id)
+            }
+            Request::Store(StoreRequest::UpdateParticipant { participant }) => {
+                format!("update participant {}", participant.id)
+            }
+            Request::Identity(IdentityRequest::Resolve { message, .. }) => {
+                format!("resolve sender {}", message.sender_id)
+            }
+            Request::Identity(IdentityRequest::RunHooks { trigger, .. }) => {
+                format!("identity hooks {trigger:?}")
+            }
             Request::Route { query } => format!("route {} {}", query.channel_id, query.sender_id),
             Request::Channel(ChannelRequest::HandleInbound { channel_id, .. }) => {
                 format!("handle_inbound {channel_id}")
@@ -1188,6 +1200,12 @@ impl Sim {
                 organization_id,
             }) => self.resolve_identity(&channel_type, &address, organization_id.as_deref()),
             Request::Route { query } => self.execute_route(*query),
+            // No simulated kit resolves its senders (RFC §11): the core asks
+            // none.
+            Request::Identity(_) => Outcome::Failed(ErrorRecord::new(
+                "IdentityUnavailable",
+                "the simulated kit has no identity resolver",
+            )),
             Request::Store(StoreRequest::GetEvent { event_id }) => self.get_event(&event_id),
             Request::Store(StoreRequest::UpdateEvent { event_id, updates }) => {
                 let room = self.room_of_event(&event_id);
@@ -1411,8 +1429,11 @@ impl Sim {
             | Request::Store(
                 StoreRequest::LoadContext { .. }
                 | StoreRequest::GetEventByIdempotencyKey { .. }
-                | StoreRequest::PersistSideEffects { .. },
+                | StoreRequest::PersistSideEffects { .. }
+                | StoreRequest::AddParticipant { .. }
+                | StoreRequest::UpdateParticipant { .. },
             )
+            | Request::Identity(_)
             | Request::Channel(_)
             | Request::Hook(HookRequest::RunHook { .. }) => return None,
         };
@@ -1656,10 +1677,23 @@ impl Sim {
                 self.bindings.push(binding);
                 Outcome::Store(StoreOutcome::Stored)
             }
+            StoreRequest::AddParticipant { participant }
+            | StoreRequest::UpdateParticipant { participant } => {
+                self.write_participant(*participant)
+            }
             StoreRequest::ResolveIdentity { .. }
             | StoreRequest::GetEvent { .. }
             | StoreRequest::UpdateEvent { .. } => panic!("not a room's store request"),
         }
+    }
+
+    /// Stores `participant`, in place of the room's record of its id.
+    fn write_participant(&mut self, participant: Participant) -> Outcome {
+        self.trace
+            .push(format!("write participant {}", participant.id));
+        self.participants.retain(|held| held.id != participant.id);
+        self.participants.push(participant);
+        Outcome::Store(StoreOutcome::Stored)
     }
 
     /// Removes `event_id` from the timeline under the room's lock, with its
@@ -1861,6 +1895,8 @@ fn store_room(request: &StoreRequest) -> &RoomId {
         StoreRequest::Commit { event, .. } => &event.room_id,
         StoreRequest::CreateRoom { room } => &room.id,
         StoreRequest::StoreBinding { binding } => &binding.room_id,
+        StoreRequest::AddParticipant { participant }
+        | StoreRequest::UpdateParticipant { participant } => &participant.room_id,
         StoreRequest::ResolveIdentity { .. }
         | StoreRequest::GetEvent { .. }
         | StoreRequest::UpdateEvent { .. } => panic!("not a room's store request"),

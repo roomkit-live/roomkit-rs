@@ -234,6 +234,10 @@ pub enum RoomKitError {
     /// propagates the router's exception.
     #[error("the router failed: {}", .0.message)]
     Router(ErrorRecord),
+    /// The kit's identity resolver failed (RFC §11.1), as Python propagates
+    /// the resolver's exception. Nothing was written.
+    #[error("the identity resolver failed: {}", .0.message)]
+    Identity(ErrorRecord),
     /// Python's `RemoteTurnError(message, *, kind, bases=())`: an error
     /// raised across the turn backend (RFC §10.6.8), by a turn's host verb
     /// that its owner refused or by the owner's work, of a class this side
@@ -310,9 +314,10 @@ impl RoomKitError {
             Self::Value(_) => "ValueError".to_owned(),
             Self::Cancelled => "CancelledError".to_owned(),
             Self::ExceptionGroup { .. } => "ExceptionGroup".to_owned(),
-            Self::Lock(record) | Self::Router(record) | Self::Channel { error: record, .. } => {
-                record.error_type.clone()
-            }
+            Self::Lock(record)
+            | Self::Router(record)
+            | Self::Identity(record)
+            | Self::Channel { error: record, .. } => record.error_type.clone(),
             Self::RemoteTurn { kind, .. } => remote_class_name(kind),
             Self::Internal(_) => "AssertionError".to_owned(),
             Self::Store(_) => turns::CHANNEL_ERROR.to_owned(),
@@ -478,6 +483,7 @@ impl From<InboundError> for RoomKitError {
                 reached_elsewhere,
             },
             InboundError::Routing(error) => Self::Router(error),
+            InboundError::Identity(error) => Self::Identity(error),
             InboundError::StandaloneOutsideInstruction => {
                 Self::Value("standalone applies to an INSTRUCTION only".to_owned())
             }

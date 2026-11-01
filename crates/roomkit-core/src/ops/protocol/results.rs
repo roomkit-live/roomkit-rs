@@ -181,4 +181,8 @@ pub enum InboundError {
     /// call decided stands.
     #[error("the room's admission ticket failed: {0:?}")]
     Ticket(ErrorRecord),
+    /// The kit's identity resolver failed (RFC §11.1), as the Python
+    /// implementation propagates what it raised. Nothing was written.
+    #[error("the identity resolver failed: {0:?}")]
+    Identity(ErrorRecord),
 }

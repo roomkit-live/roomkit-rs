@@ -58,6 +58,7 @@ mod events;
 mod history;
 mod hooks;
 mod host;
+pub mod identity;
 mod inbound;
 mod kit;
 mod locks;
@@ -88,13 +89,14 @@ pub mod model {
         ChannelType, CompositeContent, Confidence, DeleteContent, DeleteType, DeliveryError,
         DeliveryResult, DeliveryResultStatus, DeliveryStatus, EditContent, EditSource, ErrorRecord,
         EventContent, EventDirection, EventId, EventSource, EventStatus, EventType, HookAction,
-        HookResult, IdentificationStatus, Identity, IdentityId, InboundMessage, InjectedEvent,
-        Latitude, LocationContent, Longitude, MediaContent, Metadata, ModelError, Observation,
-        ObservationId, Participant, ParticipantId, ParticipantRole, ParticipantStatus,
-        ProviderResult, RateLimit, RetryPolicy, RichContent, RichFormat, Room, RoomContext,
-        RoomEvent, RoomId, RoomStatus, RoomTimers, SystemContent, Task, TaskId, TaskStatus,
-        TemplateContent, TextContent, ThreadSummary, Timestamp, ToolCallContent, ToolCallOutcome,
-        ToolCallStatus, VerificationStatus, VideoContent, Visibility,
+        HookResult, IdentificationStatus, Identity, IdentityHookResult, IdentityId, IdentityResult,
+        InboundMessage, InjectedEvent, Latitude, LocationContent, Longitude, MediaContent,
+        Metadata, ModelError, Observation, ObservationId, Participant, ParticipantId,
+        ParticipantRole, ParticipantStatus, ProviderResult, RateLimit, RetryPolicy, RichContent,
+        RichFormat, Room, RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, SystemContent,
+        Task, TaskId, TaskStatus, TemplateContent, TextContent, ThreadSummary, Timestamp,
+        ToolCallContent, ToolCallOutcome, ToolCallStatus, VerificationStatus, VideoContent,
+        Visibility,
     };
 
     pub use crate::stream::{LoopEndMarker, LoopEndReason};
@@ -102,6 +104,12 @@ pub mod model {
     /// Python's keywords of `HookResult.allow`, `block` and `modify`.
     pub mod hook {
         pub use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
+    }
+    /// What an identity hook answers: [`IdentityHookResult`]'s constructors'
+    /// options, Python's keywords of `IdentityHookResult.pending`,
+    /// `challenge` and `reject`.
+    pub mod identity {
+        pub use roomkit_core::model::identity::{ChallengeOptions, PendingOptions, RejectOptions};
     }
     // Outside the public API: the Python implementation keeps them private,
     // and the workspace's crates read them across crates. `ToolCall` leaves
@@ -139,11 +147,11 @@ pub use self::kit::{
     AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
     CheckRoomTimersOptions, CloseRoomOptions, CommitEventOptions, CreateRoomOptions,
     DeleteEventOptions, DetachChannelOptions, GetBindingOptions, GetRoomOptions,
-    GetTimelineOptions, HasHooksOptions, HookEngine, ListBindingsOptions, ListMembersOptions,
-    MuteOptions, MuteOutputOptions, PauseRoomOptions, PostOptions, ProcessInboundOptions,
-    RemoveRoomHookOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitOptions,
-    SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions,
-    UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
+    GetTimelineOptions, HasHooksOptions, HookEngine, IdentityHookOptions, ListBindingsOptions,
+    ListMembersOptions, MuteOptions, MuteOutputOptions, PauseRoomOptions, PostOptions,
+    ProcessInboundOptions, RemoveRoomHookOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit,
+    RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
+    UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
 pub use self::kit::{
     ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,

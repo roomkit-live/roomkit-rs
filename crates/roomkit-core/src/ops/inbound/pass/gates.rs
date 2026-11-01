@@ -3,10 +3,14 @@
 //! key, the provisional index and the event's thread root, and an edit's
 //! or a delete's target.
 
+use std::collections::VecDeque;
+
 use super::{CommitPass, PassOrigin, PassResult, State};
 use crate::model::RoomContext;
 use crate::ops::inbound::direct::DirectCall;
+use crate::ops::inbound::identity;
 use crate::ops::lifecycle::gate::{self, Gate};
+use crate::ops::lifecycle::record;
 use crate::ops::protocol::{KeyHeld, Outcome, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Abort, Cx};
@@ -73,6 +77,52 @@ impl CommitPass {
             super::super::report::room_refused(cx, &self.event, &self.origin, status);
             return self.release(cx, Ok(PassResult::Refused { status }));
         }
+        let mut context = context;
+        if let Some(participation) = self.participation.take() {
+            let writes = identity::writes(cx, *participation, &self.event, &mut context);
+            return self.write_participant(cx, context, writes);
+        }
+        self.after_status(cx, context)
+    }
+
+    /// Writes the next of `writes`, the sender's record as identity
+    /// resolution left them (RFC §10.1 step 5), under the lock and with no
+    /// deadline, as every write; once all are done, the gate goes on.
+    fn write_participant(
+        &mut self,
+        cx: &mut Cx<'_>,
+        context: Box<RoomContext>,
+        mut writes: VecDeque<StoreRequest>,
+    ) -> State {
+        match writes.pop_front() {
+            Some(write) => State::Participating {
+                effect: record::issue_write(cx, write),
+                context,
+                writes,
+            },
+            None => self.after_status(cx, context),
+        }
+    }
+
+    /// A write of the sender's record is answered: the next one goes out;
+    /// a store that fails it fails the event, nothing of it committed.
+    pub(super) fn on_participant_written(
+        &mut self,
+        cx: &mut Cx<'_>,
+        context: Box<RoomContext>,
+        writes: VecDeque<StoreRequest>,
+        outcome: Outcome,
+    ) -> State {
+        match outcome.into_written() {
+            Ok(()) => self.write_participant(cx, context, writes),
+            Err(error) => self.release(cx, Err(Abort::Store(error))),
+        }
+    }
+
+    /// The gate past the room's status: the provisional index, an injected
+    /// event's visibility, then the idempotency check of an entry's key or
+    /// step 8.
+    fn after_status(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
         self.event.index = context.room.event_count;
         if let PassOrigin::Injected { targets } = &self.origin {
             self.event.visibility =

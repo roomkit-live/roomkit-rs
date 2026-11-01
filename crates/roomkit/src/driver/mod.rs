@@ -832,6 +832,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             Request::Route { query } => self.spawn(id, work, deadline, async move {
                 calls::route(&inner, &query).await
             }),
+            Request::Identity(request) => self.spawn(id, work, deadline, async move {
+                calls::identity(&inner, request).await
+            }),
         }
         None
     }

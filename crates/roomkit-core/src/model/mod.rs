@@ -20,7 +20,7 @@ mod direct;
 mod error;
 mod event;
 pub mod hook;
-mod identity;
+pub mod identity;
 mod ids;
 mod inbound;
 mod media_url;
@@ -53,7 +53,7 @@ pub use direct::DirectEvent;
 pub use error::ModelError;
 pub use event::{EventDirection, EventSource, EventStatus, EventType, RoomEvent, ThreadSummary};
 pub use hook::{HookAction, HookResult, InjectedEvent};
-pub use identity::Identity;
+pub use identity::{Identity, IdentityHookResult, IdentityResult};
 pub use ids::{
     ChannelId, EventId, HOST_CHANNEL_ID, IdentityId, ObservationId, ParticipantId, RoomId, TaskId,
 };

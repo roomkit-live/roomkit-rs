@@ -49,6 +49,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::realtime" = ["roomkit.realtime"]
 "roomkit::providers::sms" = ["roomkit.providers.sms"]
 "roomkit::orchestration" = ["roomkit.orchestration"]
+"roomkit::identity" = ["roomkit.identity"]
 
 # The Rust types a Python builtin stands for (decision 4; the architecture
 # table's "Types and values" and "Errors"), by path: the strong ids, values
@@ -60,6 +61,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 [rules.builtins]
 "roomkit::ChannelError" = { python = "Exception" }
 "roomkit::RouterError" = { python = "Exception" }
+"roomkit::identity::IdentityError" = { python = "Exception" }
 "roomkit::model::RoomId" = { python = "str", members = ["new", "as_str"] }
 "roomkit::model::EventId" = { python = "str", members = ["new", "as_str"] }
 "roomkit::model::ChannelId" = { python = "str", members = ["new", "as_str"] }
@@ -317,9 +319,9 @@ reason = "tokio does not carry task-locals into a spawned task (decision 18)"
 
 [[exception]]
 rust = "roomkit::RoomKitError"
-members = ["Store", "Lock", "Channel", "Router"]
+members = ["Store", "Lock", "Channel", "Router", "Identity"]
 approved = "2026-10-27"
-reason = "a variant carries a foreign error, the cause kept: what Python propagates as the store driver, the lock manager, a channel or the router raised it (the architecture table, Errors)"
+reason = "a variant carries a foreign error, the cause kept: what Python propagates as the store driver, the lock manager, a channel, the router or the identity resolver raised it (the architecture table, Errors; Identity approved 2026-11-01, RMK-1134)"
 
 [[exception]]
 rust = "roomkit::RoomKitError"
@@ -381,6 +383,23 @@ reason = "the kit holds its realtime backend as a trait object, as its router: R
 rust = "roomkit::RouterFuture"
 approved = "2026-10-27"
 reason = "the kit holds its router as a trait object: InboundRoomRouter::route returns a boxed future"
+
+[[exception]]
+rust = "roomkit::identity::IdentityFuture"
+approved = "2026-11-01"
+reason = "the kit holds its identity resolver as a trait object, as its router: IdentityResolver::resolve returns a boxed future (parity stream E, RMK-1134)"
+
+[[exception]]
+rust = "roomkit::RoomKit::identity_hook"
+params = ["handler"]
+approved = "2026-11-01"
+reason = "Rust has no decorator: the function @kit.identity_hook(...) decorates is the call's argument, as kit.hook's (parity stream E, RMK-1134)"
+
+[[exception]]
+rust = "roomkit::Channel"
+members = ["sender_is_participant"]
+approved = "2026-11-01"
+reason = "Python's class attribute Channel.sender_is_participant, which the snapshot does not record: a trait method, false by default (RFC 11.6; parity stream E, RMK-1134)"
 
 [[exception]]
 rust = "roomkit::ChannelOf"
@@ -463,7 +482,7 @@ members = [
     "ON_CONFERENCE_TRACK_PUBLISHED", "ON_CONFERENCE_TRACK_UNMUTED",
     "ON_CONFERENCE_TRACK_UNPUBLISHED", "ON_CONNECTION_QUALITY_CHANGED",
     "ON_DISPATCH_DECISION", "ON_DTMF", "ON_HANDOFF", "ON_HANDOFF_REJECTED",
-    "ON_IDENTITY_AMBIGUOUS", "ON_IDENTITY_UNKNOWN", "ON_INPUT_AUDIO_LEVEL",
+    "ON_INPUT_AUDIO_LEVEL",
     "ON_OUTPUT_AUDIO_LEVEL", "ON_PARTIAL_TRANSCRIPTION",
     "ON_PARTICIPANT_IDENTIFIED", "ON_PARTICIPANT_JOINED",
     "ON_PARTICIPANT_LEFT", "ON_PARTICIPANT_UPDATED", "ON_PHASE_TRANSITION",
@@ -479,7 +498,7 @@ members = [
     "ON_VIDEO_SESSION_STARTED", "ON_VIDEO_TRACK_ADDED",
     "ON_VIDEO_TRACK_REMOVED", "ON_VISION_RESULT",
 ]
-reason = "not in 0.x: the 64 hook triggers Rust lacks"
+reason = "not in 0.x: the 62 hook triggers Rust lacks"
 
 [[missing]]
 python = "roomkit.InboundMessage.__init__"
@@ -533,8 +552,7 @@ reason = "not in 0.x: the engine is the kit's, built with it; its chains run in 
 python = "roomkit.RoomKit"
 members = [
     "add_member", "check_verifications", "complete_verification",
-    "ensure_participant", "identity_enabled_for", "identity_hook",
-    "identity_resolver", "identity_timeout", "is_member",
+    "ensure_participant", "is_member",
     "record_failed_attempt", "remove_member", "rename_member",
     "request_verification", "resolve_participant", "revoke_verification",
     "sender_verification", "verification_of",
@@ -590,8 +608,8 @@ reason = "not in 0.x: voice and video"
 [[missing]]
 python = "roomkit.RoomKit.__init__"
 params = [
-    "identity_resolver", "identity_channel_types", "lock_manager",
-    "identity_timeout", "stt", "tts", "voice", "task_runner",
+    "lock_manager",
+    "stt", "tts", "voice", "task_runner",
     "delivery_strategy", "delivery_backend", "telemetry",
     "inbound_rate_limit", "orchestration", "persistence_policy",
     "delivery_gap_timeout", "delivery_claim_lock_manager",

@@ -1,6 +1,6 @@
 //! What a kit knows of itself: its channels, its hooks and its limits.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use thiserror::Error;
@@ -73,6 +73,10 @@ pub struct ChannelConfig {
     /// `recent_events_window`): what a context of a room it is bound to
     /// holds at least. None by default: a transport reads no history.
     pub recent_events_window: usize,
+    /// Whether the channel names its own senders: its inbound `sender_id`
+    /// is a room's `Participant.id`, not an address, which no identity
+    /// resolver is asked about (RFC §11.6). `false` by default.
+    pub sender_is_participant: bool,
 }
 
 impl ChannelConfig {
@@ -98,6 +102,7 @@ impl ChannelConfig {
             chat_key: addresses::chat_key(&channel_type).map(str::to_owned),
             supports_streaming_delivery: false,
             recent_events_window: 0,
+            sender_is_participant: false,
             channel_type,
             category,
             direction,
@@ -192,6 +197,20 @@ pub struct KitConfig {
     /// policy of its own, step 2's among them (RFC §19.3.1): the agent
     /// chain by default.
     pub agent_response_policy: AgentResponsePolicy,
+    /// Identity resolution (RFC §10.1 step 5, §11): `None`, the default,
+    /// when the kit has no identity resolver.
+    pub identity: Option<IdentityConfig>,
+}
+
+/// How a kit resolves its senders' identities (RFC §11.4, §11.5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IdentityConfig {
+    /// The channel types resolution runs for; `None`, every type (RFC
+    /// §11.4).
+    pub channel_types: Option<BTreeSet<ChannelType>>,
+    /// How long the resolver may take before its answer is read as UNKNOWN
+    /// (RFC §11.5).
+    pub timeout: Duration,
 }
 
 impl KitConfig {
@@ -203,7 +222,21 @@ impl KitConfig {
             max_chain_depth: DEFAULT_MAX_CHAIN_DEPTH,
             process_timeout: None,
             agent_response_policy: AgentResponsePolicy::default(),
+            identity: None,
         }
+    }
+
+    /// Whether identity resolution runs for a channel of `channel_type`
+    /// (RFC §11.4): the kit has a resolver, and no restriction or one that
+    /// names the type. The Python implementation's
+    /// `identity_enabled_for(channel_type)`.
+    pub fn identity_enabled_for(&self, channel_type: &ChannelType) -> bool {
+        self.identity.as_ref().is_some_and(|identity| {
+            identity
+                .channel_types
+                .as_ref()
+                .is_none_or(|types| types.contains(channel_type))
+        })
     }
 
     /// Registers a channel.

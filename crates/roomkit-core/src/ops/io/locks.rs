@@ -133,7 +133,8 @@ fn lock_request(request: &Request) -> Option<(RoomId, Step)> {
         | Request::Store(_)
         | Request::Channel(_)
         | Request::Hook(_)
-        | Request::Route { .. } => None,
+        | Request::Route { .. }
+        | Request::Identity(_) => None,
     }
 }
 

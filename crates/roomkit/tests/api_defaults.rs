@@ -21,6 +21,7 @@ use roomkit::HasHooksOptions;
 use roomkit::HookExecution;
 use roomkit::HookOptions;
 use roomkit::HostChannelOptions;
+use roomkit::IdentityHookOptions;
 use roomkit::InMemoryStore;
 use roomkit::ListBindingsOptions;
 use roomkit::ListMembersOptions;
@@ -48,13 +49,18 @@ use roomkit::UnmuteOutputOptions;
 use roomkit::UpdateBindingMetadataOptions;
 use roomkit::UpdateEventOptions;
 use roomkit::UpdateRoomMetadataOptions;
+use roomkit::identity::MockIdentityResolverOptions;
 use roomkit::model::Access;
 use roomkit::model::AgentResponsePolicy;
 use roomkit::model::EventType;
+use roomkit::model::IdentificationStatus;
 use roomkit::model::Visibility;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::hook::BlockOptions;
 use roomkit::model::hook::ModifyOptions;
+use roomkit::model::identity::ChallengeOptions;
+use roomkit::model::identity::PendingOptions;
+use roomkit::model::identity::RejectOptions;
 use roomkit::orchestration;
 use roomkit::store;
 use roomkit::testing::EchoAgentOptions;
@@ -421,9 +427,50 @@ fn room_kit_options_defaults_as_python() {
     assert!(defaults.realtime.is_none());
     // roomkit.RoomKit.__init__(status_bus) = None
     assert!(defaults.status_bus.is_none());
+    // roomkit.RoomKit.__init__(identity_resolver) = None
+    assert!(defaults.identity_resolver.is_none());
+    // roomkit.RoomKit.__init__(identity_channel_types) = None
+    assert!(defaults.identity_channel_types.is_none());
+    // roomkit.RoomKit.__init__(identity_timeout) = 10.0
+    assert_eq!(defaults.identity_timeout, Duration::from_secs(10));
     // roomkit.RoomKit.__init__(store) = None
     let store: Arc<InMemoryStore> = defaults.store;
     assert_eq!(Arc::strong_count(&store), 1);
+}
+
+#[test]
+fn identity_hook_options_defaults_as_python() {
+    let defaults = IdentityHookOptions::default();
+    // roomkit.RoomKit.identity_hook(channel_types) = None
+    assert!(defaults.channel_types.is_none());
+    // roomkit.RoomKit.identity_hook(channel_ids) = None
+    assert!(defaults.channel_ids.is_none());
+    // roomkit.RoomKit.identity_hook(directions) = None
+    assert!(defaults.directions.is_none());
+}
+
+#[test]
+fn mock_identity_resolver_options_defaults_as_python() {
+    let defaults = MockIdentityResolverOptions::default();
+    // roomkit.identity.MockIdentityResolver.__init__(mapping) = None
+    assert!(defaults.mapping.is_empty());
+    // roomkit.identity.MockIdentityResolver.__init__(ambiguous) = None
+    assert!(defaults.ambiguous.is_empty());
+    // roomkit.identity.MockIdentityResolver.__init__(unknown_status) = <IdentificationStatus.UNKNOWN: 'unknown'>
+    assert_eq!(defaults.unknown_status, IdentificationStatus::Unknown);
+}
+
+#[test]
+fn identity_hook_result_options_defaults_as_python() {
+    // roomkit.models.IdentityHookResult.challenge(message) = None
+    assert!(ChallengeOptions::default().message.is_none());
+    let pending = PendingOptions::default();
+    // roomkit.models.IdentityHookResult.pending(display_name) = None
+    assert!(pending.display_name.is_none());
+    // roomkit.models.IdentityHookResult.pending(candidates) = None
+    assert!(pending.candidates.is_none());
+    // roomkit.models.IdentityHookResult.reject(reason) = 'Unknown sender'
+    assert_eq!(RejectOptions::default().reason, "Unknown sender");
 }
 
 #[test]

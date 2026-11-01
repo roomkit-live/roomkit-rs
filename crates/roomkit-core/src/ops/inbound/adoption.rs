@@ -49,11 +49,13 @@ use super::cascade::{self, entry_result, replay_result};
 use super::deadline::Stopped;
 use super::direct::{self, DirectCall};
 use super::host_post::HostPost;
+use super::identity::{Held, Identified, Participation};
 use super::pass::{CommitPass, PassOrigin, PassReport, PassResult};
+use super::queues::Lineage;
 use super::record::{RecordPass, RecordReport};
 use super::work_read::{Read, WorkRead};
 use super::{InboundError, InboundResult, Machine, MessageAnswers, result};
-use crate::model::{InboundMessage, Post, RoomEvent, RoomId};
+use crate::model::{InboundMessage, InjectedEvent, Post, RoomEvent, RoomId};
 use crate::ops::io::{Bound, Io};
 use crate::ops::protocol::{EffectId, Entry, EntryId, Outcome};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
@@ -113,7 +115,8 @@ enum RunState {
 /// Where an adopted entry stands after an answer.
 enum Advanced {
     Waiting,
-    Arrived(Box<RoomEvent>),
+    /// The message arrived, with what step 5 decided of its sender.
+    Arrived(Box<RoomEvent>, Identified),
     /// A post's room took it: it is injected.
     Posted,
     /// A direct injection's room and key were read: the room took it, as
@@ -195,7 +198,9 @@ impl AdoptedRun {
         match &mut self.state {
             RunState::Arriving(arrival) => match arrival.accept(cx, effect, outcome) {
                 Progress::Waiting => Advanced::Waiting,
-                Progress::Done(Ok(arrived)) => Advanced::Arrived(Box::new(arrived.event)),
+                Progress::Done(Ok(arrived)) => {
+                    Advanced::Arrived(Box::new(arrived.event), arrival.take_identified())
+                }
                 Progress::Done(Err(Stopped::Failed(error))) => {
                     Advanced::Stopped(Box::new(Err(error)))
                 }
@@ -451,7 +456,7 @@ impl Machine {
             return;
         };
         let (event, call) = read.into_parts();
-        self.enter_pass(cx, adopted, event, Some(call));
+        self.enter_pass(cx, adopted, event, Some(call), None);
     }
 
     /// The entry's event goes through its pass, within its caller's reentry
@@ -464,10 +469,13 @@ impl Machine {
         adopted: Adopted,
         mut event: RoomEvent,
         direct: Option<DirectCall>,
+        participation: Option<Participation>,
     ) {
         let charged = direct.is_none();
         let state = if charged || self.cascade.budget.take_pass() {
-            let pass = CommitPass::new(PassOrigin::Adopted(adopted.id), event).checking(direct);
+            let pass = CommitPass::new(PassOrigin::Adopted(adopted.id), event)
+                .checking(direct)
+                .participating(participation);
             let mut pass = Box::new(pass);
             within(cx, &adopted, |cx| pass.start(cx));
             RunState::Passing(pass)
@@ -504,7 +512,12 @@ impl Machine {
         let advanced = within(cx, &adopted, |cx| run.accept(cx, effect, outcome));
         match advanced {
             Advanced::Waiting => self.adopted.running.insert(index, run),
-            Advanced::Arrived(event) => self.enter_pass(cx, adopted, *event, None),
+            Advanced::Arrived(event, Identified::Proceed(participation)) => {
+                self.enter_pass(cx, adopted, *event, None, participation);
+            }
+            Advanced::Arrived(event, Identified::Held(held)) => {
+                self.hold_entry(cx, &adopted, held, &event);
+            }
             Advanced::Posted => self.on_entry_posted(cx, adopted, run),
             Advanced::WorkRead(read) => self.on_entry_key(cx, adopted, run, read),
             Advanced::Stopped(stopped) => self.settle_entry(cx, &adopted, *stopped),
@@ -515,6 +528,24 @@ impl Machine {
             }
             Advanced::Recorded(Ok(report)) => self.on_adopted_record(cx, &adopted, report),
         }
+    }
+
+    /// The entry's message step 5 held (RFC §10.1 step 5): the challenge a
+    /// hook put to its sender is queued as an injected event of the
+    /// cascade, and its caller answered with the refusal, nothing of the
+    /// message stored.
+    fn hold_entry(&mut self, cx: &mut Cx<'_>, adopted: &Adopted, held: Held, event: &RoomEvent) {
+        let challenge: Vec<InjectedEvent> = held.challenge.into_iter().map(|c| *c).collect();
+        for job in self.injected(cx, challenge, event, Lineage::Call) {
+            self.cascade.queue(job);
+        }
+        let refused = InboundResult {
+            blocked: true,
+            reason: Some(held.reason),
+            refused_before_the_lock: true,
+            ..InboundResult::default()
+        };
+        self.settle_entry(cx, adopted, Ok(refused));
     }
 
     /// The entry's pass is over: its caller is answered, and the pass adds

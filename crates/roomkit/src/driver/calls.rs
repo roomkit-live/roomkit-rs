@@ -5,16 +5,17 @@
 use std::convert::Infallible;
 use std::mem;
 use std::sync::Arc;
+use std::time::Duration;
 
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, EventId, EventUpdates,
-    Metadata, ModelError, Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
-    Timestamp,
+    IdentificationStatus, IdentityResult, InboundMessage, Metadata, ModelError, Observation,
+    RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp,
 };
 use roomkit_core::ops::{
     AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId,
-    FrameworkEvent as CoreEvent, HookAnswer, HookRequest, KIT_CLOSED, Notice, Outcome,
-    RecentEvents, StoreOutcome, StoreRequest,
+    FrameworkEvent as CoreEvent, HookAnswer, HookRequest, IdentityAnswer, IdentityRequest,
+    KIT_CLOSED, Notice, Outcome, RecentEvents, StoreOutcome, StoreRequest,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookTrigger};
@@ -27,7 +28,7 @@ use crate::context::{ExecutionContext, HookBody, RunShared};
 use crate::error::RoomKitError;
 use crate::events::Handled;
 use crate::hooks;
-use crate::kit::Inner;
+use crate::kit::{Inner, run_identity_hooks};
 use crate::router;
 use crate::sends::CIRCUIT_OPEN;
 use crate::store::{
@@ -38,7 +39,7 @@ use crate::stream::{self, KeptStream, Stops};
 use crate::tasks::{Kind, Marks};
 use crate::turn::TurnKit;
 use crate::turns::{self, Answer};
-use crate::unwind::unwinding;
+use crate::unwind::{self, unwinding};
 
 /// The key of a room's private state holding its register of authors (RFC
 /// §10.1 step 12, §14.1), Python's `AUTHOR_REGISTER`.
@@ -130,9 +131,70 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
             )
             .await
             .map(StoreOutcome::Resolved),
+        StoreRequest::AddParticipant { participant } => store
+            .add_participant(*participant)
+            .await
+            .map(|_| StoreOutcome::Stored),
+        StoreRequest::UpdateParticipant { participant } => store
+            .update_participant(*participant)
+            .await
+            .map(|_| StoreOutcome::Stored),
     };
     answer.map_or_else(|error| Outcome::Failed(error.to_record()), Outcome::from)
 }
+
+/// Carries out identity resolution's request (RFC §10.1 step 5, §11): the
+/// kit's resolver asked within its timeout, or its identity hooks run.
+pub(super) async fn identity<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    request: IdentityRequest,
+) -> Outcome {
+    match request {
+        IdentityRequest::Resolve {
+            message,
+            context,
+            timeout,
+        } => resolve_sender(inner, &message, &context, timeout).await,
+        IdentityRequest::RunHooks {
+            trigger,
+            event,
+            context,
+            result,
+        } => {
+            let answer = run_identity_hooks(inner, trigger, &event, &context, &result).await;
+            IdentityAnswer::Hooked(answer.map(Box::new)).into()
+        }
+    }
+}
+
+/// Asks the kit's resolver who sent `message` (RFC §11.1), within
+/// `timeout`: past it, the answer is `TimedOut` (RFC §11.5); what the
+/// resolver raised, or a panic in it, fails the message.
+async fn resolve_sender<S>(
+    inner: &Inner<S>,
+    message: &InboundMessage,
+    context: &RoomContext,
+    timeout: Duration,
+) -> Outcome {
+    let Some(resolver) = inner.identity_resolver.clone() else {
+        // The core asks only a kit with a resolver.
+        let unknown = IdentityResult::new(IdentificationStatus::Unknown);
+        return IdentityAnswer::Resolved(Box::new(unknown)).into();
+    };
+    let answered = unwinding(resolver.resolve(message, context));
+    match tokio::time::timeout(timeout, answered).await {
+        Err(_) => IdentityAnswer::TimedOut.into(),
+        Ok(Ok(Ok(result))) => IdentityAnswer::Resolved(Box::new(result)).into(),
+        Ok(Ok(Err(error))) => Outcome::Failed(ErrorRecord::new(IDENTITY_ERROR, error.to_string())),
+        Ok(Err(panic)) => {
+            Outcome::Failed(ErrorRecord::new(IDENTITY_ERROR, unwind::message(&*panic)))
+        }
+    }
+}
+
+/// The class name a resolver's failure carries, as a router's carries
+/// `RouterError`: a boxed Rust error has none of its own.
+const IDENTITY_ERROR: &str = "IdentityError";
 
 /// The room's context (RFC §10.1 step 3), as the Python implementation's
 /// kit builds it: the room, its bindings and participants, its latest

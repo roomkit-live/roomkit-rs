@@ -217,6 +217,16 @@ pub trait Channel: Send + Sync + 'static {
         0
     }
 
+    /// Python's class attribute `sender_is_participant`: whether the
+    /// channel names its own senders, its inbound `sender_id` a room's
+    /// `Participant.id` rather than an address, which no identity resolver
+    /// is asked about (RFC §11.6). `false` by default: a channel reading
+    /// its sender off the wire, or handed it by the integrator, carries an
+    /// address.
+    fn sender_is_participant(&self) -> bool {
+        false
+    }
+
     /// Whether the channel, a transport, takes a streamed response as it is
     /// written ([`deliver_stream`](Channel::deliver_stream), RFC §6.1):
     /// `false` by default.
@@ -552,6 +562,7 @@ pub(crate) fn config_of<C: Channel>(channel: &C) -> ChannelConfig {
     config.recipient_key = channel.recipient_key();
     config.supports_streaming_delivery = channel.supports_streaming_delivery();
     config.recent_events_window = channel.recent_events_window();
+    config.sender_is_participant = channel.sender_is_participant();
     let (addressing, country_code) = channel.address_config();
     config.addressing = addressing.addressing;
     config.chat_key = addressing.chat_key;

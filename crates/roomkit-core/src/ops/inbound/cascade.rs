@@ -236,7 +236,7 @@ impl Machine {
 
     /// The passes of the events a pass's hooks injected, each within the
     /// cascade's reentry budget (gap G-021), but an instruction (gap G-042).
-    fn injected(
+    pub(super) fn injected(
         &mut self,
         cx: &mut Cx<'_>,
         injected: Vec<InjectedEvent>,

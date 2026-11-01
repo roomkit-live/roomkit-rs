@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    Access, ChannelId, ChannelType, EventId, EventType, RoomId, RoomStatus, Visibility,
+    Access, ChannelId, ChannelType, EventId, EventType, IdentificationStatus, IdentityId, RoomId,
+    RoomStatus, Visibility,
 };
 use crate::rules::hook_registry::HookTrigger;
 
@@ -244,9 +245,65 @@ pub enum FrameworkEvent {
         /// The timeout, in seconds.
         timeout: f64,
     },
+    /// The inbound pipeline ended with an identity for the sender, found by
+    /// the resolver or supplied by an identity hook (RFC §10.1 step 5,
+    /// §11.2).
+    #[non_exhaustive]
+    IdentityResolved {
+        /// The room.
+        room_id: RoomId,
+        /// The message's channel.
+        channel_id: ChannelId,
+        /// The event the message parsed to.
+        event_id: EventId,
+        /// The sender's identity.
+        identity_id: IdentityId,
+        /// Its name.
+        display_name: Option<String>,
+        /// The resolution's status, the resolver's answer.
+        status: IdentificationStatus,
+    },
+    /// Identity resolution timed out for an inbound sender (RFC §11.5): the
+    /// sender is read as UNKNOWN.
+    #[non_exhaustive]
+    IdentityTimeout {
+        /// The room.
+        room_id: RoomId,
+        /// The message's channel.
+        channel_id: ChannelId,
+        /// The timeout, in seconds.
+        timeout: f64,
+    },
 }
 
 impl FrameworkEvent {
+    /// An [`IdentityResolved`](Self::IdentityResolved) event,
+    /// `identity_resolved` (RFC §8.2), of `event`'s sender, `identity`.
+    pub fn identity_resolved(
+        event: &crate::model::RoomEvent,
+        identity: &crate::model::Identity,
+        status: IdentificationStatus,
+    ) -> Self {
+        Self::IdentityResolved {
+            room_id: event.room_id.clone(),
+            channel_id: event.source.channel_id.clone(),
+            event_id: event.id.clone(),
+            identity_id: identity.id.clone(),
+            display_name: identity.display_name.clone(),
+            status,
+        }
+    }
+
+    /// An [`IdentityTimeout`](Self::IdentityTimeout) event,
+    /// `identity_timeout` (RFC §8.2).
+    pub fn identity_timeout(room_id: RoomId, channel_id: ChannelId, timeout: f64) -> Self {
+        Self::IdentityTimeout {
+            room_id,
+            channel_id,
+            timeout,
+        }
+    }
+
     /// A [`ChannelRegistered`](Self::ChannelRegistered) event, `channel_registered` (RFC §8.2).
     pub fn channel_registered(channel_id: ChannelId, channel_type: ChannelType) -> Self {
         Self::ChannelRegistered {

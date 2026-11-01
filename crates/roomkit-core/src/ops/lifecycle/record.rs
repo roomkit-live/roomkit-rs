@@ -78,6 +78,8 @@ pub(crate) fn issue_write(cx: &mut Cx<'_>, request: StoreRequest) -> EffectId {
         | StoreRequest::DeleteBinding { .. }
         | StoreRequest::UpdateEvent { .. }
         | StoreRequest::DeleteEvent { .. }
-        | StoreRequest::ResolveIdentity { .. } => cx.io.issue(request),
+        | StoreRequest::ResolveIdentity { .. }
+        | StoreRequest::AddParticipant { .. }
+        | StoreRequest::UpdateParticipant { .. } => cx.io.issue(request),
     }
 }

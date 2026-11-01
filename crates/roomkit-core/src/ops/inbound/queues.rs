@@ -357,8 +357,9 @@ impl Machine {
         event: RoomEvent,
         checked: Option<HookChain<RoomEvent>>,
     ) {
-        let pass =
-            CommitPass::trigger(event, self.call.bound, checked).checking(self.call.direct.clone());
+        let pass = CommitPass::trigger(event, self.call.bound, checked)
+            .checking(self.call.direct.clone())
+            .participating(self.call.participation.take());
         self.cascade
             .lead(Job::Pass(Box::new(pass), PassOrigin::Trigger));
         self.stage.enter(Stage::Cascade);

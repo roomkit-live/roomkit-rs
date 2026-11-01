@@ -4,16 +4,18 @@
 //! arguments: one `<Call>Options` per call, Python's defaulted parameters
 //! with their names and defaults (decision 1).
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit_core::model::{
     Access, AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId,
-    DirectEvent, EventContent, EventId, EventSource, EventType, Metadata, ParticipantId, Post,
-    RateLimit, RetryPolicy, RoomId, RoomTimers, Timestamp, Visibility,
+    ChannelType, DirectEvent, EventContent, EventId, EventSource, EventType, Metadata,
+    ParticipantId, Post, RateLimit, RetryPolicy, RoomId, RoomTimers, Timestamp, Visibility,
 };
 
+use crate::identity::IdentityResolver;
 use crate::router::InboundRoomRouter;
 use crate::store::{EventFilter, InMemoryStore, ListEventsOptions};
 
@@ -23,9 +25,13 @@ const MAX_CHAIN_DEPTH: u32 = 5;
 /// Python's `process_timeout=30.0` (RFC §13.6).
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Python's `identity_timeout=10.0` (RFC §11.5).
+pub(super) const IDENTITY_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// What [`RoomKit::new`](crate::RoomKit::new) builds a kit with, Python's
-/// `RoomKit(store=None, inbound_router=None, max_chain_depth=5,
-/// agent_response_policy=AGENT_CHAIN, process_timeout=30.0)`.
+/// `RoomKit(store=None, identity_resolver=None, identity_channel_types=None,
+/// inbound_router=None, max_chain_depth=5, agent_response_policy=AGENT_CHAIN,
+/// identity_timeout=10.0, process_timeout=30.0)`.
 ///
 /// The in-memory store, with one keyword changed:
 ///
@@ -74,6 +80,17 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// subscribes to it, so that an entry naming a room fires that room's
     /// `ON_STATUS_POSTED` hooks, and its close closes it.
     pub status_bus: Option<crate::orchestration::StatusBus>,
+    /// Python `identity_resolver=None`: who sent an inbound message (RFC
+    /// §10.1 step 5, §11), asked once its channel parsed it; `None`
+    /// resolves no sender.
+    pub identity_resolver: Option<Arc<dyn IdentityResolver>>,
+    /// Python `identity_channel_types=None`: the channel types identity
+    /// resolution runs for (RFC §11.4); `None`, every type.
+    pub identity_channel_types: Option<BTreeSet<ChannelType>>,
+    /// Python `identity_timeout=10.0`: how long the resolver may take, past
+    /// which the sender reads as UNKNOWN and `identity_timeout` is emitted
+    /// (RFC §11.5).
+    pub identity_timeout: Duration,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -96,6 +113,9 @@ impl<S> RoomKitOptions<S> {
             process_timeout: PROCESS_TIMEOUT,
             realtime: None,
             status_bus: None,
+            identity_resolver: None,
+            identity_channel_types: None,
+            identity_timeout: IDENTITY_TIMEOUT,
         }
     }
 }
@@ -110,6 +130,9 @@ impl<S> fmt::Debug for RoomKitOptions<S> {
             .field("process_timeout", &self.process_timeout)
             .field("realtime", &self.realtime.is_some())
             .field("status_bus", &self.status_bus.is_some())
+            .field("identity_resolver", &self.identity_resolver.is_some())
+            .field("identity_channel_types", &self.identity_channel_types)
+            .field("identity_timeout", &self.identity_timeout)
             .finish_non_exhaustive()
     }
 }
