@@ -32,12 +32,13 @@ use super::instructions::{self, Admission};
 use super::named_room::{Mode, Named, NamedRoom};
 use super::{InboundError, InboundResult, result, stamp};
 use crate::model::{
-    ChannelType, EventId, Identity, InboundMessage, RoomContext, RoomEvent, RoomId,
+    ChannelType, EventId, EventType, Identity, InboundMessage, RoomContext, RoomEvent, RoomId,
 };
 use crate::ops::io::Bound;
 use crate::ops::protocol::{ChannelRequest, EffectId, Outcome, Request, StoreRequest};
 use crate::ops::{ChannelConfig, Cx, KitConfig, Progress};
 use crate::rules::chain_depth::Draw;
+use crate::rules::instructions::InstructionRefusal;
 use crate::rules::routing::{RouteQuery, Sender};
 use crate::rules::{addresses, idempotency, permissions};
 
@@ -164,6 +165,9 @@ pub(super) struct Arrival {
     /// as the delivering one, or that routing places, its charge on that
     /// delivery's budget once its final room is known (gap G-070).
     charge: DeliveryCharge,
+    /// The depth of the turn the call runs within, which the event takes
+    /// at least (RFC §8.3).
+    chain_floor: u32,
     state: State,
 }
 
@@ -213,6 +217,7 @@ impl Arrival {
             routes: 0,
             room: None,
             charge: DeliveryCharge::new(None),
+            chain_floor: 0,
             state: State::Start,
         }
     }
@@ -222,6 +227,7 @@ impl Arrival {
     /// where its replies go (RFC §5.7, §10.4).
     pub(super) fn answered(mut self, answers: Option<MessageAnswers>) -> Self {
         if let Some(answers) = answers {
+            self.chain_floor = answers.chain_floor;
             self.sender = answers.sender(&self.message);
         }
         self
@@ -521,6 +527,15 @@ impl Arrival {
         })?;
         let mut event = stamp::stamp_trigger(*parsed, &self.message, id);
         event.room_id.clone_from(&context.room.id);
+        // At least as deep as the turn the call runs within, whatever depth
+        // the parse set (RFC §8.3), as Python's `_at_least_as_deep`.
+        event.chain_depth = event.chain_depth.max(self.chain_floor);
+        // An instruction is never stored: a key its parse set refuses it as
+        // the message's would have (RFC §10.1.1 rule 2).
+        if event.r#type == EventType::Instruction && event.idempotency_key.is_some() {
+            let refused = instructions::refused(InstructionRefusal::NotIdempotent);
+            return Err(Stopped::Refused(Box::new(refused)));
+        }
         Ok(Arrived { event, context })
     }
 }

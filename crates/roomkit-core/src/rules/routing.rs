@@ -628,6 +628,8 @@ pub fn heard(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<ParticipantId>
         .filter(|event| &event.source.channel_id == channel_id)
         .filter(|event| event.status != EventStatus::Blocked)
         .filter_map(|event| event.source.participant_id.clone())
+        // What the framework writes names no correspondent (RFC §10.4).
+        .filter(|participant| participant.as_str() != SYSTEM_SENDER)
         .collect()
 }
 

@@ -26,7 +26,9 @@ pub(super) fn root_deliveries(cx: &mut Cx<'_>, event: &RoomEvent, outcome: &SetO
                 room_id: room_id.clone(),
                 event_id: event.id.clone(),
                 failed: outcome.failures.len(),
-                total: outcome.targets,
+                // The deliveries that ended, as Python counts them: neither
+                // an agent's turn nor a target that is not delivered to.
+                total: outcome.delivered.len() + outcome.failures.len(),
                 errors: outcome.failures.clone(),
             },
         );

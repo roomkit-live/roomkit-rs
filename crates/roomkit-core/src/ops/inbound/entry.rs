@@ -107,6 +107,7 @@ impl Machine {
             Stopped::Failed(error) => self.end(cx, Err(error)),
             Stopped::Expired => self.expire(cx, None),
             Stopped::PastBudget => self.end(cx, Ok(result::past_the_budget())),
+            Stopped::Refused(refused) => self.end(cx, Ok(*refused)),
         }
     }
 }

@@ -28,6 +28,10 @@ pub struct MessageAnswers {
     /// or the chat under the channel's recipient key, none on a channel
     /// with no addressee of its own.
     pub reply_metadata: BTreeMap<String, String>,
+    /// The depth of the turn the call runs within (RFC §8.3), which the
+    /// message's event takes at least, whatever depth its parse set: 0
+    /// outside a turn.
+    pub chain_floor: u32,
 }
 
 impl MessageAnswers {
@@ -50,6 +54,7 @@ impl MessageAnswers {
         Self {
             conversation: address.unwrap_or_default(),
             reply_metadata,
+            chain_floor: 0,
         }
     }
 

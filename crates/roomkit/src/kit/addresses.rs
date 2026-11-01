@@ -8,20 +8,23 @@ use roomkit_core::ops::MessageAnswers;
 
 use super::Inner;
 use crate::channel::DynChannel;
+use crate::context::ExecutionContext;
 
 impl<S> Inner<S> {
     /// Writes `message`'s sender in its channel's form by the channel's own
     /// `normalize_address`, before anything reads it (RFC §10.1 step 1), and
     /// what the channel answers of the message: the conversation it belongs
     /// to and where replies to it go (`conversation_address`,
-    /// `reply_metadata`), which the core routes and records it by. `None`
-    /// for a channel not registered, which the core fails.
+    /// `reply_metadata`), which the core routes and records it by, and the
+    /// depth of the turn the call runs within, which its event takes at
+    /// least. `None` for a channel not registered, which the core fails.
     pub(crate) fn answer(&self, message: &mut InboundMessage) -> Option<MessageAnswers> {
         let channel = self.channel(&message.channel_id)?;
         message.sender_id = channel.normalize_address(&message.sender_id);
         Some(MessageAnswers {
             conversation: channel.conversation_address(message),
             reply_metadata: channel.reply_metadata(message),
+            chain_floor: ExecutionContext::current().turn_depth().unwrap_or(0),
         })
     }
 }

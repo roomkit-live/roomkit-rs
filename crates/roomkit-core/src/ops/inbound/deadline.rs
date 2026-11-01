@@ -39,6 +39,10 @@ pub(super) enum Stopped {
     /// the reentry budget of the cascade that delivers: refused with no
     /// event (gap G-070).
     PastBudget,
+    /// Refused before its pass with nothing written, `.0` the call's
+    /// result: an instruction whose parse gave it a key (RFC §10.1.1 rule
+    /// 2).
+    Refused(Box<InboundResult>),
 }
 
 /// The deadline of a call starting at `now`: `now` plus the kit's

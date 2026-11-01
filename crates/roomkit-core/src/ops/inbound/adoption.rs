@@ -209,6 +209,9 @@ impl AdoptedRun {
                 Progress::Done(Err(Stopped::PastBudget)) => {
                     Advanced::Stopped(Box::new(Ok(result::past_the_budget())))
                 }
+                Progress::Done(Err(Stopped::Refused(refused))) => {
+                    Advanced::Stopped(Box::new(Ok(*refused)))
+                }
             },
             RunState::Posting(post) => match post.accept(cx, effect, outcome) {
                 Progress::Waiting => Advanced::Waiting,
@@ -217,11 +220,11 @@ impl AdoptedRun {
                     Advanced::Stopped(Box::new(Err(error)))
                 }
                 // An adopted entry carries no deadline (gap G-070).
-                Progress::Done(Err(Stopped::Expired | Stopped::PastBudget)) => {
-                    Advanced::Stopped(Box::new(Err(InboundError::Store(
-                        Abort::DeadlinePassed(None).into_record(),
-                    ))))
-                }
+                Progress::Done(Err(
+                    Stopped::Expired | Stopped::PastBudget | Stopped::Refused(_),
+                )) => Advanced::Stopped(Box::new(Err(InboundError::Store(
+                    Abort::DeadlinePassed(None).into_record(),
+                )))),
             },
             RunState::ReadingWork(read) => match read.accept(cx, effect, outcome) {
                 Progress::Waiting => Advanced::Waiting,
@@ -231,11 +234,11 @@ impl AdoptedRun {
                 }
                 // An adopted entry carries no deadline (gap G-070), and is
                 // never refused past the budget before its room is read.
-                Progress::Done(Err(Stopped::Expired | Stopped::PastBudget)) => {
-                    Advanced::Stopped(Box::new(Err(InboundError::Store(
-                        Abort::DeadlinePassed(None).into_record(),
-                    ))))
-                }
+                Progress::Done(Err(
+                    Stopped::Expired | Stopped::PastBudget | Stopped::Refused(_),
+                )) => Advanced::Stopped(Box::new(Err(InboundError::Store(
+                    Abort::DeadlinePassed(None).into_record(),
+                )))),
             },
             RunState::Passing(pass) => match pass.accept(cx, effect, outcome) {
                 Progress::Waiting => Advanced::Waiting,

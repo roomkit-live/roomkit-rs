@@ -12,7 +12,7 @@ use crate::model::{
     InjectedEvent, Metadata, ParticipantId, RoomEvent, RoomId, TextContent, Timestamp, Visibility,
 };
 use crate::ops::ChannelConfig;
-use crate::rules::{chain_depth, edits, instructions, permissions};
+use crate::rules::{chain_depth, edits, idempotency, instructions, permissions};
 
 /// The event a channel that keeps no data of its own parses from `message`:
 /// its content, its provider data, and its sender, in the channel's form
@@ -113,6 +113,8 @@ fn fill_from_message(event: &mut RoomEvent, message: &InboundMessage) {
     if event.addressed_to.is_none() {
         event.addressed_to.clone_from(&message.addressed_to);
     }
+    // A blank key the parse set is no key, as Python's model reads it.
+    event.idempotency_key = idempotency::key(event.idempotency_key.take());
     if event.idempotency_key.is_none() {
         event.idempotency_key.clone_from(&message.idempotency_key);
     }

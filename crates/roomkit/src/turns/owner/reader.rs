@@ -103,14 +103,11 @@ impl OwnerTurn {
                 Some(Main::Error(error)) => return Err(TurnFailure::crossed(&error)),
                 Some(Main::Failed(error)) => Err(error.to_record()),
                 Some(Main::End) if cutting => Err(TurnError::link_reason("cancelled").to_record()),
-                Some(Main::End) => Err(TurnError::new(
+                // An end, or a frame that is not the output, as Python's
+                // owner reads either.
+                Some(Main::End | Main::Item(..) | Main::Record(_)) => Err(TurnError::new(
                     "executor_lost",
                     "The turn ended before its output",
-                )
-                .to_record()),
-                Some(Main::Item(..) | Main::Record(_)) => Err(TurnError::new(
-                    "frame_invalid",
-                    "A frame of the turn could not be read: an item came before its output",
                 )
                 .to_record()),
                 None => Err(TurnError::link_reason("backend_closed").to_record()),
@@ -139,13 +136,10 @@ impl OwnerTurn {
                 }
                 Some(Main::Error(error)) => Read::Failed(Box::new(RemoteError(error))),
                 Some(Main::Failed(error)) => Read::Failed(Box::new(error)),
-                Some(Main::End) => Read::Failed(Box::new(TurnError::new(
+                // An end, or a second output, as Python's owner reads either.
+                Some(Main::End | Main::Output(..)) => Read::Failed(Box::new(TurnError::new(
                     "executor_lost",
                     "The turn ended in the middle of its stream",
-                ))),
-                Some(Main::Output(..)) => Read::Failed(Box::new(TurnError::new(
-                    "frame_invalid",
-                    "A frame of the turn could not be read: a second output came",
                 ))),
                 None => Read::Failed(Box::new(TurnError::link_reason("backend_closed"))),
             };
