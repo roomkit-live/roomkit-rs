@@ -11,6 +11,7 @@ use roomkit_core::rules::hook_registry::{HookExecution, HookSubject, HookTrigger
 
 use super::options::{GetRoomOptions, ProcessInboundOptions};
 use super::{Inner, RoomKit, read};
+use crate::context::ExecutionContext;
 use crate::delivery::execute::reject_invalid;
 use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
 use crate::delivery::status::room_of_status;
@@ -52,7 +53,8 @@ pub struct DeliverOptions<S = InMemoryStore> {
     /// delivery naming one is refused.
     pub session_id: Option<String>,
     /// Python `chain_depth=0`: the chain the content continues (RFC §8.3);
-    /// made within a turn, at least the turn's response's.
+    /// made within a turn or an ASYNC hook's body, at least that work's,
+    /// queued as executed at once.
     pub chain_depth: u32,
     /// Python `instruction=False`: the content is the application's
     /// direction to the agents it addresses, an `INSTRUCTION` never stored
@@ -141,7 +143,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Brings `content` into the room `room_id` from outside it, for the
     /// room's agents (RFC §22): a background task's result, an external
     /// event, a scheduled nudge. Python's `deliver(room_id, content, ...)`,
-    /// its keywords in `options`, with the immediate strategy.
+    /// its keywords in `options`: delivered by the strategy they name, else
+    /// the kit's, else [`Immediate`]; with a delivery backend, enqueued for
+    /// its worker.
     ///
     /// The content enters the room as a message the framework's own sender,
     /// `system`, writes on the room's transport (or the one `options`
@@ -152,11 +156,14 @@ impl<S: ConversationStore> RoomKit<S> {
     /// or rewrite it; `AFTER_DELIVER` observes the outcome, whatever it is
     /// (RFC §22.3).
     ///
-    /// Returns the actual outcome (RFC §22.1): `sent` once the turn the
-    /// publication asked for is over (`turn_complete`), `blocked` by a hook,
-    /// the room or the request's form, `unavailable` for a destination it
-    /// cannot reach, `failed`; the published event, a keyed replay's
-    /// original as a `duplicate`, and the inbound result in `inbound`.
+    /// Returns the actual outcome (RFC §22.1): `sent` once published, the
+    /// turn it asked for over when the call waited for it
+    /// (`turn_complete`; [`Queued`](crate::Queued) reports a batch at its
+    /// publication), `blocked` by a hook, the room or the request's form,
+    /// `unavailable` for a destination it cannot reach, `failed`; the
+    /// published event, a keyed replay's original as a `duplicate`, and the
+    /// inbound result in `inbound`. With a delivery backend, `queued`,
+    /// naming its item, unless its form refuses it.
     ///
     /// # Errors
     ///
@@ -187,6 +194,11 @@ impl<S: ConversationStore> RoomKit<S> {
         let strategy = strategy
             .or_else(|| self.inner.delivery_strategy.clone())
             .unwrap_or_else(|| Arc::new(Immediate));
+        // Made within a turn or an ASYNC hook's body, the content continues
+        // at least that work's chain (RFC §8.3), when it runs here as when a
+        // worker runs it later, outside the work.
+        let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
+        let chain_depth = chain_depth.max(floor);
         let mut item = DeliveryItem {
             channel_id,
             metadata,
