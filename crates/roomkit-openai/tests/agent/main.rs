@@ -246,8 +246,8 @@ async fn a_turn_posts_the_system_prompt_and_the_conversation_to_chat_completions
 async fn the_configuration_shapes_the_completion_request_as_python_s() {
     let room = Room::configured(vec![Reply::completion("Yes.")], API_KEY, |config| {
         OpenAiConfig {
-            supports_custom_temperature: false,
-            use_max_completion_tokens: true,
+            supports_custom_temperature: Some(false),
+            use_max_completion_tokens: Some(true),
             include_stream_usage: false,
             ..config
         }
@@ -330,7 +330,7 @@ async fn a_call_s_result_goes_back_in_the_next_completion() {
 async fn extra_body_and_default_headers_win_as_python_s() {
     let room = Room::configured(vec![Reply::completion("Yes.")], API_KEY, |config| {
         OpenAiConfig {
-            use_max_completion_tokens: true,
+            use_max_completion_tokens: Some(true),
             extra_body: Some(
                 serde_json::from_value(
                     json!({ "temperature": 0.1, "max_completion_tokens": 7, "top_k": 3 }),

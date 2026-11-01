@@ -50,10 +50,6 @@ impl OpenAiApi {
 /// Its `Debug` never prints the API key, nor the base URL's user
 /// information, path or query, which may carry credentials.
 #[derive(Clone)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "Python's OpenAIConfig switches, one field each"
-)]
 pub struct OpenAiConfig {
     /// The key a request carries as its bearer token; empty sends none.
     pub api_key: String,
@@ -72,14 +68,16 @@ pub struct OpenAiConfig {
     /// (`stream_options.include_usage`).
     pub include_stream_usage: bool,
     /// Whether the token bound is sent as `max_completion_tokens`, as
-    /// OpenAI's reasoning models take it, rather than `max_tokens`. On
-    /// OpenAI's own endpoint, a model Python's profile names (`gpt-4.1`,
-    /// `gpt-5`, `gpt-6`, `o1`, `o3`, `o4`) takes it whatever this says.
-    pub use_max_completion_tokens: bool,
+    /// OpenAI's reasoning models take it, rather than `max_tokens`. `None`,
+    /// a switch left unset, is Python's profile: on OpenAI's own endpoint,
+    /// a model it names (`gpt-4.1`, `gpt-5`, `gpt-6`, `o1`, `o3`, `o4`)
+    /// takes it, any other does not.
+    pub use_max_completion_tokens: Option<bool>,
     /// Whether the model takes a temperature: one that refuses it is sent
-    /// none. On OpenAI's own endpoint, a model Python's profile names
-    /// (`gpt-5`, `gpt-6`, `o1`, `o3`, `o4`) is sent none whatever this says.
-    pub supports_custom_temperature: bool,
+    /// none. `None`, a switch left unset, is Python's profile: on OpenAI's
+    /// own endpoint, a model it names (`gpt-5`, `gpt-6`, `o1`, `o3`, `o4`)
+    /// takes none, any other does.
+    pub supports_custom_temperature: Option<bool>,
     /// How hard a reasoning model thinks (`reasoning_effort`), when set.
     pub reasoning_effort: Option<String>,
     /// Headers every request carries; an `Authorization` among them
@@ -112,8 +110,8 @@ impl OpenAiConfig {
             timeout: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(5),
             include_stream_usage: true,
-            use_max_completion_tokens: false,
-            supports_custom_temperature: true,
+            use_max_completion_tokens: None,
+            supports_custom_temperature: None,
             reasoning_effort: None,
             default_headers: None,
             extra_body: None,
@@ -129,17 +127,20 @@ impl OpenAiConfig {
         self.base_url.as_deref().unwrap_or(OPENAI_BASE_URL)
     }
 
-    /// Whether the token bound goes as `max_completion_tokens`: the switch,
-    /// or Python's profile of a modern model on OpenAI's own endpoint
-    /// (`OpenAIConfig.model_post_init`).
+    /// Whether the token bound goes as `max_completion_tokens`: the switch
+    /// when set, else Python's profile of a modern model on OpenAI's own
+    /// endpoint (`OpenAIConfig.model_post_init`).
     pub(crate) fn takes_max_completion_tokens(&self) -> bool {
-        self.use_max_completion_tokens || self.profiled(&MAX_COMPLETION_TOKEN_MODELS)
+        self.use_max_completion_tokens
+            .unwrap_or_else(|| self.profiled(&MAX_COMPLETION_TOKEN_MODELS))
     }
 
-    /// Whether a temperature is sent: the switch, unless Python's profile
-    /// fixes the model's temperature on OpenAI's own endpoint.
+    /// Whether a temperature is sent: the switch when set, else unless
+    /// Python's profile fixes the model's temperature on OpenAI's own
+    /// endpoint.
     pub(crate) fn takes_temperature(&self) -> bool {
-        self.supports_custom_temperature && !self.profiled(&FIXED_TEMPERATURE_MODELS)
+        self.supports_custom_temperature
+            .unwrap_or_else(|| !self.profiled(&FIXED_TEMPERATURE_MODELS))
     }
 
     /// Whether the model starts with one of `prefixes` on OpenAI's own

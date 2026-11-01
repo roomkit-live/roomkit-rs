@@ -806,7 +806,11 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
   `o4` send their token bound as `max_completion_tokens`, and all but
   `gpt-4.1` send no temperature, where `OpenAiConfig::new` left both
   switches at the older models' defaults and OpenAI refused the request.
-  Behind another `base_url`, the switches alone say.
+  **BREAKING:** `use_max_completion_tokens` and
+  `supports_custom_temperature` are `Option<bool>`: `None`, the default,
+  lets the profile decide, and a value set wins, as a switch Python's
+  caller sets does (`Some(true)` for `true`). Behind another `base_url`,
+  `None` reads `false` and `true`.
 - **An MCP call that fails with no words fails with none**, as Python's
   `ToolFailedError(error_text(result))`, where it read `Tool '<name>' failed
   with no message`; and **an HTTP MCP server's connection is unbounded**,

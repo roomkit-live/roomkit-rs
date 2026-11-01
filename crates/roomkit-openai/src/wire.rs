@@ -542,8 +542,10 @@ mod tests {
 
     /// Python's `OpenAIConfig.model_post_init`: on OpenAI's own endpoint a
     /// modern model takes `max_completion_tokens`, and the reasoning ones no
-    /// temperature; behind another `base_url` the switches alone say
-    /// (`tasks/probes/step5-review/mcp-openai/py_openai_wire.out`).
+    /// temperature, unless the caller set the switch; behind another
+    /// `base_url` the switches alone say
+    /// (`tasks/probes/step5-review/mcp-openai/py_openai_wire.out`,
+    /// `fixes/py_openai_explicit_switch.out`).
     #[test]
     fn a_modern_model_on_openai_s_endpoint_takes_python_s_profile() {
         let request = Request {
@@ -553,9 +555,11 @@ mod tests {
             temperature: Some(0.7),
             max_tokens: None,
         };
-        let shape = |base_url: Option<&str>, model: &str| {
+        let set = |base_url: Option<&str>, model: &str, switches: (Option<bool>, Option<bool>)| {
             let config = OpenAiConfig {
                 base_url: base_url.map(str::to_owned),
+                use_max_completion_tokens: switches.0,
+                supports_custom_temperature: switches.1,
                 ..OpenAiConfig::new("sk-1", model)
             };
             let body = serde_json::to_value(CompletionRequest::new(&config, &request)).unwrap();
@@ -564,6 +568,7 @@ mod tests {
                 body.get("temperature").is_some(),
             )
         };
+        let shape = |base_url: Option<&str>, model: &str| set(base_url, model, (None, None));
         assert_eq!(
             [
                 shape(None, "gpt-6-luna"),
@@ -571,13 +576,19 @@ mod tests {
                 shape(None, "gpt-4.1-mini"),
                 shape(None, "gpt-4o"),
                 shape(Some("http://localhost:8000/v1"), "gpt-6-luna"),
+                set(None, "gpt-5-chat-latest", (None, Some(true))),
+                set(None, "gpt-4.1-mini", (Some(false), None)),
+                set(None, "gpt-4o", (Some(true), Some(false))),
             ],
             [
                 (true, false),
                 (true, false),
                 (true, true),
                 (false, true),
-                (false, true)
+                (false, true),
+                (true, true),
+                (false, true),
+                (true, false)
             ]
         );
     }
