@@ -16,8 +16,8 @@ use roomkit::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiAgent, AiContext, AiProvider, AiResponse, AiRole, AiTool, AiToolCall, ProviderError,
-    ToolOutput, Tools, tool_arguments,
+    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiRole, AiTool, AiToolCall,
+    ProviderError, ToolResult, Tools, tool_arguments,
 };
 use roomkit_core::ops::ChannelConfig;
 use serde_json::json;
@@ -33,22 +33,21 @@ pub(crate) fn room_id() -> RoomId {
 
 /// `lookup_order`, which takes an order's number.
 pub(crate) fn lookup() -> AiTool {
-    AiTool::new(
-        "lookup_order",
-        "Find an order by its number",
-        json!({
+    AiTool {
+        parameters: json!({
             "type": "object",
             "properties": { "order": { "type": "string" } },
             "required": ["order"],
         }),
-    )
+        ..AiTool::new("lookup_order", "Find an order by its number").unwrap()
+    }
 }
 
 /// `lookup_order`, finding every order shipped.
 pub(crate) fn served() -> Tools {
     Tools::new().tool(lookup(), |call, _context| async move {
         let order = call.arguments.get("order").cloned().unwrap_or_default();
-        Ok(ToolOutput::Json(
+        Ok(ToolResult::Json(
             json!({ "order": order, "status": "shipped" }),
         ))
     })
@@ -62,23 +61,25 @@ pub(crate) struct Room {
 
 impl Room {
     pub(crate) async fn new(model: ScriptedProvider, tools: Tools) -> Self {
-        Self::equipped(model, tools, |agent| agent).await
+        Self::equipped(model, tools, |options| options).await
     }
 
     /// The room, its agent adjusted by `adjust`.
     pub(crate) async fn equipped(
         model: ScriptedProvider,
         tools: Tools,
-        adjust: impl FnOnce(AiAgent<ScriptedProvider>) -> AiAgent<ScriptedProvider>,
+        adjust: impl FnOnce(AiChannelOptions) -> AiChannelOptions,
     ) -> Self {
-        let agent = AiAgent::new(channel("assistant"), model)
-            .with_tools(tools)
-            .unwrap();
-        Self::with_agent(adjust(agent)).await
+        let options = AiChannelOptions {
+            tools: tools.into(),
+            ..AiChannelOptions::default()
+        };
+        let agent = AiChannel::new(channel("assistant"), model, adjust(options)).unwrap();
+        Self::with_agent(agent).await
     }
 
     /// The room, its agent `agent`, on any provider.
-    pub(crate) async fn with_agent<P: AiProvider>(agent: AiAgent<P>) -> Self {
+    pub(crate) async fn with_agent<P: AiProvider>(agent: AiChannel<P>) -> Self {
         let kit = RoomKit::new(RoomKitOptions::default());
         let sms = RecordingTransport::new(
             channel("sms"),
@@ -251,9 +252,15 @@ pub(crate) async fn observer_loop(after_the_turn: bool) -> Vec<u32> {
         ]
     });
     let (answers, turns) = watch::channel(0);
-    let agent = AiAgent::new(channel("assistant"), ScriptedProvider::new(rounds))
-        .with_tools(served())
-        .unwrap();
+    let agent = AiChannel::new(
+        channel("assistant"),
+        ScriptedProvider::new(rounds),
+        AiChannelOptions {
+            tools: served().into(),
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
     let kit = RoomKit::new(RoomKitOptions {
         max_chain_depth: 3,
         ..Default::default()
@@ -423,9 +430,15 @@ pub(crate) async fn two_agents(rounds: usize) -> usize {
     ))
     .unwrap();
     for (id, model) in [("alpha", alpha.clone()), ("beta", beta.clone())] {
-        let agent = AiAgent::new(channel(id), model)
-            .with_tools(served())
-            .unwrap();
+        let agent = AiChannel::new(
+            channel(id),
+            model,
+            AiChannelOptions {
+                tools: served().into(),
+                ..AiChannelOptions::default()
+            },
+        )
+        .unwrap();
         kit.register_channel(agent).unwrap();
     }
     kit.create_room(CreateRoomOptions {
@@ -483,9 +496,15 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
         RecordingTransportOptions::default(),
     ))
     .unwrap();
-    let agent = AiAgent::new(channel("assistant"), model.clone())
-        .with_tools(served())
-        .unwrap();
+    let agent = AiChannel::new(
+        channel("assistant"),
+        model.clone(),
+        AiChannelOptions {
+            tools: served().into(),
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
     kit.register_channel(agent).unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room_id()),

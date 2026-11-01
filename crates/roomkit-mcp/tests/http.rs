@@ -9,9 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::any,
 };
-use roomkit::model::ToolCall;
-use roomkit_ai::{ToolContext, ToolOutput, Toolset};
-use roomkit_mcp::{McpError, McpHttp};
+use roomkit_mcp::{CallToolOptions, FromUrlOptions, McpError, McpToolProvider};
 use serde_json::{Value, json};
 use std::{
     sync::{Arc, Mutex},
@@ -55,14 +53,26 @@ impl Fixture {
         });
         Self { url, shared, task }
     }
-    fn client(&self) -> McpHttp {
-        McpHttp::new(&self.url)
+    fn client(&self) -> McpToolProvider {
+        self.labelled(None)
+    }
+    /// The fixture's provider, its tools named after `label` when given.
+    fn labelled(&self, label: Option<&str>) -> McpToolProvider {
+        let headers = [
+            ("authorization", "Bearer fixture-private-value"),
+            ("x-api-key", "fixture-key"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .collect();
+        let options = FromUrlOptions {
+            headers,
+            label: label.map(str::to_owned),
+            ..FromUrlOptions::default()
+        };
+        McpToolProvider::from_url(&self.url, options)
             .unwrap()
-            .header("authorization", "Bearer fixture-private-value")
-            .unwrap()
-            .header("x-api-key", "fixture-key")
-            .unwrap()
-            .connect_timeout(Duration::from_secs(3))
+            .with_connect_timeout(Duration::from_secs(3))
     }
 }
 impl Drop for Fixture {
@@ -185,33 +195,24 @@ async fn handle(
 }
 async fn roundtrip(mode: &'static str) {
     let fixture = Fixture::start(mode).await;
-    let server = fixture
-        .client()
-        .connect()
-        .await
-        .unwrap()
-        .with_label("remote")
-        .unwrap();
-    assert!(server.is_connected());
+    let server = fixture.labelled(Some("remote"));
+    server.connect().await.unwrap();
+    assert!(server.connected());
     assert_eq!(server.process_id(), None);
-    assert_eq!(server.instructions(), Some("Fixture instructions"));
-    assert_eq!(server.tools().first().unwrap().name, "mcp__remote__echo");
-    let context = ToolContext::new(
-        roomkit::model::RoomId::new("room").unwrap(),
-        roomkit::model::ChannelId::new("agent").unwrap(),
+    assert_eq!(
+        server.instructions().unwrap().as_deref(),
+        Some("Fixture instructions")
     );
+    assert_eq!(server.tool_names().unwrap(), ["echo"]);
     let answer = server
-        .call(
-            ToolCall::new("call", "mcp__remote__echo", serde_json::Map::new()),
-            context,
-        )
+        .call_tool("echo", serde_json::Map::new(), CallToolOptions::default())
         .await
         .unwrap();
-    assert_eq!(answer, ToolOutput::Text("fixture answer".into()));
+    assert_eq!(answer, "fixture answer");
     tokio::time::timeout(Duration::from_secs(6), server.close())
         .await
         .unwrap();
-    assert!(!server.is_connected());
+    assert!(!server.connected());
     let seen = fixture.shared.seen.lock().unwrap();
     assert!(seen.authorized);
     // Uncompressed even though the test build enables reqwest's gzip.
@@ -270,11 +271,10 @@ async fn oversized_json_and_sse_fail_before_discovery_completes() {
 #[tokio::test]
 async fn cancelled_discovery_deletes_its_session_before_returning() {
     let fixture = Fixture::start("hang").await;
+    let client = fixture.client();
     let error = tokio::time::timeout(
         Duration::from_secs(6),
-        fixture
-            .client()
-            .connect_until(fixture.shared.listing.notified()),
+        client.connect_until(fixture.shared.listing.notified()),
     )
     .await
     .unwrap()
@@ -285,16 +285,13 @@ async fn cancelled_discovery_deletes_its_session_before_returning() {
 #[tokio::test]
 async fn discovery_deadline_drains_the_connection() {
     let fixture = Fixture::start("hang").await;
-    let error = tokio::time::timeout(
-        Duration::from_secs(5),
-        fixture
-            .client()
-            .connect_timeout(Duration::from_millis(100))
-            .connect(),
-    )
-    .await
-    .unwrap()
-    .unwrap_err();
+    let client = fixture
+        .labelled(None)
+        .with_connect_timeout(Duration::from_millis(100));
+    let error = tokio::time::timeout(Duration::from_secs(5), client.connect())
+        .await
+        .unwrap()
+        .unwrap_err();
     assert!(matches!(
         error,
         McpError::Http {
@@ -307,16 +304,11 @@ async fn discovery_deadline_drains_the_connection() {
 #[tokio::test]
 async fn expired_session_never_replays_a_tool_call() {
     let fixture = Fixture::start("expired").await;
-    let server = fixture.client().connect().await.unwrap();
+    let server = fixture.client();
+    server.connect().await.unwrap();
     assert!(
         server
-            .call(
-                ToolCall::new("call", "echo", serde_json::Map::new()),
-                ToolContext::new(
-                    roomkit::model::RoomId::new("room").unwrap(),
-                    roomkit::model::ChannelId::new("agent").unwrap()
-                )
-            )
+            .call_tool("echo", serde_json::Map::new(), CallToolOptions::default())
             .await
             .is_err()
     );
@@ -332,14 +324,23 @@ fn rejects_url_credentials_and_transport_owned_headers() {
         "https://user:secret@example.com/mcp",
         "https://example.com/mcp#fragment",
     ] {
-        assert!(McpHttp::new(url).is_err());
+        let refused = McpToolProvider::from_url(url, FromUrlOptions::default());
+        assert!(
+            matches!(refused, Err(McpError::Configuration { .. })),
+            "{url}"
+        );
     }
     for header in ["Mcp-Session-Id", "host", "content-length", "accept"] {
+        let options = FromUrlOptions {
+            headers: [(header.to_owned(), "secret".to_owned())]
+                .into_iter()
+                .collect(),
+            ..FromUrlOptions::default()
+        };
+        let refused = McpToolProvider::from_url("http://localhost/mcp", options);
         assert!(
-            McpHttp::new("http://localhost/mcp")
-                .unwrap()
-                .header(header, "secret")
-                .is_err()
+            matches!(refused, Err(McpError::Configuration { .. })),
+            "{header}"
         );
     }
 }

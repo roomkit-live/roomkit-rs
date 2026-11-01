@@ -16,7 +16,7 @@ use roomkit::{
     ProcessInboundOptions, RoomKitOptions,
 };
 use roomkit_ai::testing::ScriptedProvider;
-use roomkit_ai::{AiAgent, SkillRegistry};
+use roomkit_ai::{AiChannel, AiChannelOptions, SkillRegistry};
 
 /// A directory removed with what it holds when dropped.
 pub(crate) struct TempDir {
@@ -109,7 +109,7 @@ impl Room {
     pub(crate) async fn new(
         model: ScriptedProvider,
         skills: SkillRegistry,
-        adjust: impl FnOnce(AiAgent<ScriptedProvider>) -> AiAgent<ScriptedProvider>,
+        adjust: impl FnOnce(AiChannelOptions) -> AiChannelOptions,
     ) -> Self {
         let kit = RoomKit::new(RoomKitOptions::default());
         let sms = RecordingTransport::new(
@@ -152,7 +152,7 @@ impl Room {
     pub(crate) fn replace_agent(&self, model: ScriptedProvider, skills: SkillRegistry) {
         drop(self.kit.unregister_channel(&channel("assistant")).unwrap());
         self.kit
-            .register_channel(agent(model, skills, |agent| agent))
+            .register_channel(agent(model, skills, |options| options))
             .unwrap();
     }
 
@@ -180,14 +180,14 @@ impl Room {
 fn agent(
     model: ScriptedProvider,
     skills: SkillRegistry,
-    adjust: impl FnOnce(AiAgent<ScriptedProvider>) -> AiAgent<ScriptedProvider>,
-) -> AiAgent<ScriptedProvider> {
-    adjust(
-        AiAgent::new(channel("assistant"), model)
-            .with_system_prompt("Base.")
-            .with_skills(skills)
-            .unwrap(),
-    )
+    adjust: impl FnOnce(AiChannelOptions) -> AiChannelOptions,
+) -> AiChannel<ScriptedProvider> {
+    let options = AiChannelOptions {
+        system_prompt: Some("Base.".into()),
+        skills: Some(skills),
+        ..AiChannelOptions::default()
+    };
+    AiChannel::new(channel("assistant"), model, adjust(options)).unwrap()
 }
 
 /// What each request of `model` carried as tool results, by request.

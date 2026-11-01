@@ -23,8 +23,8 @@ use roomkit::{
     DeliveryStream, ProcessInboundOptions, ResponseItem, RoomKit, RoomKitOptions, StreamItem,
     current_turn_host,
 };
-use roomkit_ai::AiAgent;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
+use roomkit_ai::{AiChannel, AiChannelOptions};
 use roomkit_core::ops::ChannelConfig;
 use serde_json::{Value, json};
 
@@ -150,8 +150,10 @@ async fn a_streaming_target_cannot_write_a_key_only_the_framework_writes() {
     declaration.recipient_key = None;
     kit.register_channel(Tagging { declaration }).unwrap();
     let model = ScriptedProvider::new([ScriptedRound::writing(["The answer ", "is 42."])]);
-    kit.register_channel(AiAgent::new(channel("ai"), model))
-        .unwrap();
+    kit.register_channel(
+        AiChannel::new(channel("ai"), model, AiChannelOptions::default()).unwrap(),
+    )
+    .unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room()),
         ..Default::default()
@@ -305,8 +307,10 @@ async fn deltas_yielded_together_cross_as_one_item() {
     kit.register_channel(target.clone()).unwrap();
     let words: Vec<String> = (0..200).map(|n| format!("w{n} ")).collect();
     let model = ScriptedProvider::new([ScriptedRound::writing(words.iter().map(String::as_str))]);
-    kit.register_channel(AiAgent::new(channel("ai"), model))
-        .unwrap();
+    kit.register_channel(
+        AiChannel::new(channel("ai"), model, AiChannelOptions::default()).unwrap(),
+    )
+    .unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room()),
         ..Default::default()

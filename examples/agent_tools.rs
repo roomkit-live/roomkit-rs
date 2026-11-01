@@ -44,8 +44,10 @@ use roomkit::{
     AttachChannelOptions, CreateRoomOptions, HookExecution, HookOptions, HookTrigger,
     ProcessInboundOptions, ToolCallEvent,
 };
-use roomkit_ai::{AiTool, ToolError, ToolOutput, ToolPolicy, Tools};
-use roomkit_openai::{OpenAiAgent, OpenAiConfig};
+use roomkit_ai::{
+    AiChannel, AiChannelOptions, AiError, AiTool, ToolEntry, ToolError, ToolHandler, ToolPolicy,
+    ToolResult,
+};
 use serde_json::{Value, json};
 
 use shared::{Checks, FakeOpenAi, Log, OpenAiEndpoint, Reply};
@@ -158,15 +160,18 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
 async fn shop_room(
     endpoint: &OpenAiEndpoint,
 ) -> Result<(roomkit::RoomKit, RecordingTransport, RoomId), Box<dyn Error>> {
-    let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
-        .with_system_prompt(SYSTEM_PROMPT);
-    let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?
-        .with_tools(shop())?
-        .with_tool_policy(ToolPolicy {
+    let options = AiChannelOptions {
+        system_prompt: Some(SYSTEM_PROMPT.to_owned()),
+        tools: shop()?,
+        tool_handler: Some(serving_shop()),
+        tool_policy: Some(ToolPolicy {
             deny: vec!["delete_*".into()],
             ..ToolPolicy::default()
-        })
-        .with_tool_timeout(Some(BOUND));
+        }),
+        tool_timeout: Some(BOUND),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(ChannelId::new("assistant")?, endpoint.provider()?, options)?;
     let kit = shared::kit();
     let sms = RecordingTransport::new(
         ChannelId::new("sms")?,
@@ -341,8 +346,8 @@ fn check_each_call(
     checks.expect("the audit reads every call once", audit.len() == 5);
 }
 
-/// The shop's tools: each answers its calls one way, the example's point.
-fn shop() -> Tools {
+/// The shop's tools, which [`serving_shop`] serves.
+fn shop() -> Result<Vec<ToolEntry>, AiError> {
     let order = || {
         json!({
             "type": "object",
@@ -350,35 +355,34 @@ fn shop() -> Tools {
             "required": ["order"],
         })
     };
-    Tools::new()
-        .tool(
-            AiTool::new("lookup_order", "Find an order by its number", order()),
-            |_call, _context| async {
-                Ok(ToolOutput::Json(
-                    json!({ "order": "42", "status": "shipped", "shipped": "Monday" }),
-                ))
-            },
-        )
-        .tool(
-            AiTool::new(
-                "delete_customer",
-                "Delete a customer's account",
-                json!({ "type": "object", "properties": { "customer": { "type": "string" } } }),
-            ),
-            |_call, _context| async { Ok(ToolOutput::from("deleted")) },
-        )
-        .tool(
-            AiTool::new("cancel_order", "Cancel an order", order()),
-            |_call, _context| async { Ok(ToolOutput::from("cancelled")) },
-        )
-        .tool(
-            AiTool::new("refund_order", "Refund an order", order()),
-            |_call, _context| async { Err(ToolError::raised(&DatabaseError)) },
-        )
-        .tool(
-            AiTool::new("track_parcel", "Track an order's parcel", order()),
-            |_call, _context| std::future::pending(),
-        )
+    let tool = |name: &str, description: &str, parameters: Value| {
+        AiTool::new(name, description).map(|tool| ToolEntry::from(AiTool { parameters, ..tool }))
+    };
+    let customer = json!({ "type": "object", "properties": { "customer": { "type": "string" } } });
+    Ok(vec![
+        tool("lookup_order", "Find an order by its number", order())?,
+        tool("delete_customer", "Delete a customer's account", customer)?,
+        tool("cancel_order", "Cancel an order", order())?,
+        tool("refund_order", "Refund an order", order())?,
+        tool("track_parcel", "Track an order's parcel", order())?,
+    ])
+}
+
+/// The handler serving the shop's tools by name: each answers its calls
+/// one way, the example's point.
+fn serving_shop() -> ToolHandler {
+    ToolHandler::new(|name, _arguments| async move {
+        match name.as_str() {
+            "lookup_order" => Ok(ToolResult::Json(
+                json!({ "order": "42", "status": "shipped", "shipped": "Monday" }),
+            )),
+            "delete_customer" => Ok(ToolResult::from("deleted")),
+            "cancel_order" => Ok(ToolResult::from("cancelled")),
+            "refund_order" => Err(ToolError::raised(&DatabaseError)),
+            "track_parcel" => std::future::pending().await,
+            _ => Err(ToolError::unserved(format!("not the shop's: {name}"))),
+        }
+    })
 }
 
 /// What the refund's database fails with: its message holds a password.

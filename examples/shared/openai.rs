@@ -6,7 +6,8 @@ use std::error::Error;
 use std::time::Duration;
 use std::{env, fmt, io};
 
-use roomkit_openai::OpenAiConfig;
+use roomkit_ai::ProviderError;
+use roomkit_openai::{OpenAiAiProvider, OpenAiConfig};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -84,11 +85,30 @@ impl OpenAiEndpoint {
         }
     }
 
-    /// The API's root as it may be shown: the crate's own redaction
-    /// (`OpenAiConfig::shown_base_url`), its scheme, host and port, never
-    /// its credentials.
+    /// The provider calling this endpoint: Python's
+    /// `OpenAIAIProvider(OpenAIConfig(api_key=..., model=..., base_url=...))`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`ProviderError`] building its HTTP client failed with.
+    pub fn provider(&self) -> Result<OpenAiAiProvider, ProviderError> {
+        OpenAiAiProvider::new(OpenAiConfig {
+            base_url: Some(self.base_url().to_owned()),
+            ..OpenAiConfig::new(self.api_key(), self.model())
+        })
+    }
+
+    /// The API's root as it may be shown: its scheme, host and port, never
+    /// its user information, path or query, which may carry credentials.
     pub fn shown_base_url(&self) -> String {
-        OpenAiConfig::new(self.base_url(), "", self.model()).shown_base_url()
+        let Some((scheme, rest)) = self.base_url().split_once("://") else {
+            return "(not a URL)".to_owned();
+        };
+        let authority = rest.split(['/', '?']).next().unwrap_or_default();
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_credentials, host)| host);
+        format!("{scheme}://{host}")
     }
 
     /// The fake, when the example runs against it.

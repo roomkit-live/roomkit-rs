@@ -11,7 +11,7 @@ use roomkit::model::hook::AllowOptions;
 use roomkit::model::{HookResult, RoomEvent};
 use roomkit::{HookOptions, HookTrigger, RoomKit};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiTool, ToolOutput, Tools};
+use roomkit_ai::{AiTool, ToolResult, Tools};
 use serde_json::json;
 use tokio::time::Instant;
 
@@ -121,10 +121,13 @@ async fn the_turns_a_spared_delivery_runs_are_cut() {
         let tool_ran = Arc::new(AtomicUsize::new(0));
         let ran = Arc::clone(&tool_ran);
         let tools = Tools::new().tool(
-            AiTool::new("post", "Post.", json!({ "type": "object" })),
+            AiTool {
+                parameters: json!({ "type": "object" }),
+                ..AiTool::new("post", "Post.").unwrap()
+            },
             move |_call, _context| {
                 ran.fetch_add(1, Ordering::SeqCst);
-                async { Ok(ToolOutput::Text("posted".to_owned())) }
+                async { Ok(ToolResult::Text("posted".to_owned())) }
             },
         );
         let model = if calls_a_tool {
@@ -185,10 +188,13 @@ async fn a_turn_is_cut_at_once_when_the_kit_closes() {
         };
         let kit = kit_with(&witness).await;
         let tools = Tools::new().tool(
-            AiTool::new("slow", "Slow.", json!({ "type": "object" })),
+            AiTool {
+                parameters: json!({ "type": "object" }),
+                ..AiTool::new("slow", "Slow.").unwrap()
+            },
             |_call, _context| async {
                 tokio::time::sleep(Duration::from_secs(30)).await;
-                Ok(ToolOutput::Text("slow".to_owned()))
+                Ok(ToolResult::Text("slow".to_owned()))
             },
         );
         let model = ScriptedProvider::new([

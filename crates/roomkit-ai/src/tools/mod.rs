@@ -1,16 +1,20 @@
-//! What an agent's tool loop calls (RFC §6.4, §21): toolsets, each serving
-//! the tools it declares behind one call, what a call answers with, and the
-//! policy that says which tools the agent may call.
+//! What an AI channel's tool loop calls (RFC §6.4, §21), in the Python
+//! implementation's shape: the tools a channel declares, the handler and
+//! the tools that serve their calls, what a call answers with, and the
+//! policy that says which tools the model may call.
 //!
-//! - [`Toolset`]: many tools behind one handler, as an MCP server or the
-//!   skills serve theirs; [`Tools`] holds the host's closures.
-//! - [`ToolOutput`] and [`ToolError`]: a call's answer, text or JSON, and
+//! - [`AiTool`]: what the model is told of a tool.
+//! - [`ToolHandler`], [`Tool`] and [`ToolEntry`]: a handler serving tools
+//!   by name, a tool serving itself, and either of them in a channel's
+//!   tools; [`compose_tool_handlers`] chains handlers.
+//! - [`ToolResult`] and [`ToolError`]: a call's answer, text or JSON, and
 //!   how it fails, which the model reads by its rule (RFC §9.3).
+//! - [`ToolCallContext`] and [`current_tool_call`]: the call a handler
+//!   runs within.
 //! - [`ToolPolicy`]: allow and deny patterns (RFC §21.1).
-//! - [`arguments`]: a call's arguments read into a type, the refusal the
-//!   model reads when they do not fit.
 
 mod builder;
+mod handler;
 mod policy;
 pub(crate) mod schema;
 pub(crate) mod toolbox;
@@ -24,16 +28,24 @@ use roomkit::model::{ChannelId, RoomId, ToolCall, ToolCallOutcome};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+#[doc(hidden)]
 pub use self::builder::Tools;
+pub(crate) use self::handler::served_by;
+pub use self::handler::{
+    Tool, ToolCallContext, ToolEntry, ToolFuture, ToolHandler, ToolResult, compose_tool_handlers,
+    current_tool_call,
+};
 pub use self::policy::ToolPolicy;
+#[doc(hidden)]
+pub use self::policy::{alias_server, served_tool_name};
+use crate::error::AiError;
 use crate::texts::error_envelope;
 
-/// A tool as the model is told of it (RFC §6.7 `AITool`): its name, what it
-/// does, and its parameters as a JSON Schema object.
+/// A tool as the model is told of it (RFC §6.7): Python's `AITool(*, name,
+/// description, parameters={})`, its parameters a JSON Schema object.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct AiTool {
-    /// The tool's name, one per agent (RFC §21.1 "One tool per name").
+    /// The tool's name, one per channel (RFC §21.1 "One tool per name").
     pub name: String,
     /// What it does, for the model.
     pub description: String,
@@ -42,52 +54,60 @@ pub struct AiTool {
 }
 
 impl AiTool {
-    /// The tool `name`, doing `description`, taking `parameters`.
-    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: Value) -> Self {
-        Self {
-            name: name.into(),
+    /// The tool `name`, doing `description`, taking no parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AiError::ToolName`] for a name no vendor accepts (RFC
+    /// §6.7): an empty one, or one with a character other than a letter, a
+    /// digit, `_`, `.`, `:` or `-`. A name some vendors refuse is refused by
+    /// their provider when it declares the tool.
+    ///
+    /// ```
+    /// use roomkit_ai::AiTool;
+    /// use serde_json::json;
+    ///
+    /// let lookup = AiTool {
+    ///     parameters: json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
+    ///     ..AiTool::new("lookup_order", "Find an order by its number")?
+    /// };
+    /// assert!(AiTool::new("files read", "Reads files").is_err());
+    /// # let _ = lookup;
+    /// # Ok::<(), roomkit_ai::AiError>(())
+    /// ```
+    pub fn new(name: impl Into<String>, description: impl Into<String>) -> Result<Self, AiError> {
+        let name = name.into();
+        Self::checked(&name)?;
+        Ok(Self {
+            name,
             description: description.into(),
+            parameters: Value::Object(serde_json::Map::new()),
+        })
+    }
+
+    /// Refuses `name` when no vendor accepts it (RFC §6.7).
+    pub(crate) fn checked(name: &str) -> Result<(), AiError> {
+        let accepted = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'));
+        if accepted {
+            Ok(())
+        } else {
+            Err(AiError::ToolName {
+                name: name.to_owned(),
+            })
+        }
+    }
+
+    /// The tool `name`, a name this crate gives, doing `description`,
+    /// taking `parameters`.
+    pub(crate) fn own(name: &str, description: &str, parameters: Value) -> Self {
+        Self {
+            name: name.to_owned(),
+            description: description.to_owned(),
             parameters,
         }
-    }
-}
-
-/// What a tool's call answers with (RFC §21.4): text, which the model reads
-/// as it is, or a JSON value, which it reads as its JSON.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum ToolOutput {
-    /// Text.
-    Text(String),
-    /// A JSON value.
-    Json(Value),
-}
-
-impl ToolOutput {
-    /// The output as its hooks read it: a text as a JSON string.
-    pub(crate) fn into_value(self) -> Value {
-        match self {
-            Self::Text(text) => Value::String(text),
-            Self::Json(value) => value,
-        }
-    }
-}
-
-impl From<String> for ToolOutput {
-    fn from(text: String) -> Self {
-        Self::Text(text)
-    }
-}
-
-impl From<&str> for ToolOutput {
-    fn from(text: &str) -> Self {
-        Self::Text(text.to_owned())
-    }
-}
-
-impl From<Value> for ToolOutput {
-    fn from(value: Value) -> Self {
-        Self::Json(value)
     }
 }
 
@@ -112,7 +132,7 @@ pub enum ToolError {
     /// `{"error": "No handler for tool x"}` (RFC §9.3, §21.4). The message
     /// goes to the log alone.
     #[error("{0}")]
-    Unserved(String),
+    UnservedToolCall(String),
     /// The tool raised an error of `kind`, saying `message`.
     #[error("{kind}: {message}")]
     Raised {
@@ -136,7 +156,7 @@ impl ToolError {
 
     /// A call that is not this tool's to serve, saying why for the log.
     pub fn unserved(message: impl Into<String>) -> Self {
-        Self::Unserved(message.into())
+        Self::UnservedToolCall(message.into())
     }
 
     /// `error`, raised by the tool: the model reads its kind, the name of
@@ -181,6 +201,7 @@ impl ToolError {
 /// # Errors
 ///
 /// Returns [`ToolError::Refused`] when the arguments do not fit `T`.
+#[doc(hidden)]
 pub fn arguments<T: DeserializeOwned>(call: &ToolCall) -> Result<T, ToolError> {
     serde_json::from_value(Value::Object(call.arguments.clone())).map_err(|error| {
         ToolError::Refused(error_envelope(&format!(
@@ -195,6 +216,7 @@ pub fn arguments<T: DeserializeOwned>(call: &ToolCall) -> Result<T, ToolError> {
 /// depth, without a kit of its own.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+#[doc(hidden)]
 pub struct ToolContext {
     /// The turn's room.
     pub room_id: RoomId,
@@ -236,71 +258,23 @@ impl ToolContext {
     }
 }
 
-/// Tools behind one handler (step 4, decision 7): the tools it declares,
-/// and the call that serves any of them. An MCP server and the skills are
-/// toolsets by nature; the host's closures register in [`Tools`].
-///
-/// Implement the call with `async fn`. It is called only with a call to a
-/// tool it declares, its arguments checked against the tool's schema and
-/// gated by the kit's `BEFORE_TOOL_USE` hooks, within the agent's bound
-/// per call (RFC §21.6).
-pub trait Toolset: Send + Sync + 'static {
-    /// The tools it serves, in the order they are declared to the model.
-    fn tools(&self) -> Vec<AiTool>;
-
-    /// Serves `call`.
-    fn call(
-        &self,
-        call: ToolCall,
-        context: ToolContext,
-    ) -> impl Future<Output = Result<ToolOutput, ToolError>> + Send;
-
-    /// Releases what the toolset holds, an MCP server's process say: the
-    /// agent serving it calls it when its kit shuts down
-    /// ([`Channel::close`](roomkit::Channel::close)), and a clone of the
-    /// agent shares its toolsets. It must not wait without bound.
-    ///
-    /// The default releases nothing.
-    fn close(&self) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-}
-
 /// A boxed, sendable future.
 pub(crate) type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// A [`Toolset`] behind a trait object.
+/// A set of tools behind one call, as a trait object: the channel's
+/// handler and its skills.
 pub(crate) trait DynToolset: Send + Sync {
     fn call(
         &self,
         call: ToolCall,
         context: ToolContext,
-    ) -> BoxFuture<'_, Result<ToolOutput, ToolError>>;
+    ) -> BoxFuture<'_, Result<ToolResult, ToolError>>;
 
     /// `call` ended `outcome`, the kit's `ON_TOOL_CALL` hooks run: what a
     /// toolset of the agent's own that keeps state on its calls records
     /// then, once nothing can withhold the result any more (RFC §24.4: an
     /// activation counts once its call is served).
     fn settled(&self, _call: &ToolCall, _outcome: ToolCallOutcome, _context: &ToolContext) {}
-
-    /// Releases what the toolset holds ([`Toolset::close`]).
-    fn close(&self) -> BoxFuture<'_, ()> {
-        Box::pin(async {})
-    }
-}
-
-impl<T: Toolset> DynToolset for T {
-    fn call(
-        &self,
-        call: ToolCall,
-        context: ToolContext,
-    ) -> BoxFuture<'_, Result<ToolOutput, ToolError>> {
-        Box::pin(Toolset::call(self, call, context))
-    }
-
-    fn close(&self) -> BoxFuture<'_, ()> {
-        Box::pin(Toolset::close(self))
-    }
 }
 
 /// The last segment of `T`'s name, without its generic arguments.

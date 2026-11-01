@@ -3,21 +3,35 @@
 //! within a bound.
 
 use pretty_assertions::assert_eq;
-use roomkit::model::ToolCall;
-use roomkit_ai::{ToolContext, ToolError, ToolOutput, Toolset};
+use roomkit::model::Metadata;
+use roomkit_ai::{ToolError, ToolResult};
+use roomkit_mcp::{AsToolHandlerOptions, CallToolOptions, McpError, McpToolProvider};
 use serde_json::{Value, json};
 
-use super::support::{channel, connected, room_id};
+use super::support::{connected, fake};
 
-fn call(name: &str, arguments: &Value) -> ToolCall {
-    ToolCall::new("call_1", name, arguments.as_object().cloned().unwrap())
+/// The mapping `arguments`.
+fn mapping(arguments: &Value) -> Metadata {
+    arguments.as_object().cloned().unwrap()
+}
+
+/// The call of `name` with `arguments` through `server`'s tool handler, as
+/// the model's call is served.
+async fn call(
+    server: &McpToolProvider,
+    name: &str,
+    arguments: &Value,
+) -> Result<ToolResult, ToolError> {
+    let handler = server
+        .as_tool_handler(AsToolHandlerOptions::default())
+        .unwrap();
+    handler.call(name.to_owned(), mapping(arguments)).await
 }
 
 /// What the fake server answers a call of `name` with `arguments`.
-async fn answer(name: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
+async fn answer(name: &str, arguments: &Value) -> Result<ToolResult, ToolError> {
     let server = connected("normal").await;
-    let context = ToolContext::new(room_id(), channel("assistant"));
-    let answer = server.call(call(name, arguments), context).await;
+    let answer = call(&server, name, arguments).await;
     server.close().await;
     answer
 }
@@ -26,7 +40,7 @@ async fn answer(name: &str, arguments: &Value) -> Result<ToolOutput, ToolError> 
 async fn a_call_answers_the_server_s_text() {
     assert_eq!(
         answer("echo", &json!({ "text": "Order 42 shipped." })).await,
-        Ok(ToolOutput::Text("Order 42 shipped.".to_owned()))
+        Ok(ToolResult::Text("Order 42 shipped.".to_owned()))
     );
 }
 
@@ -56,7 +70,7 @@ async fn what_is_not_text_reaches_the_model_as_a_note() {
     ]);
     assert_eq!(
         answer("content", &json!({})).await,
-        Ok(ToolOutput::Text(expected.to_string()))
+        Ok(ToolResult::Text(expected.to_string()))
     );
 }
 
@@ -64,7 +78,7 @@ async fn what_is_not_text_reaches_the_model_as_a_note() {
 /// was, within the bound.
 #[tokio::test]
 async fn a_result_past_its_bound_is_cut_with_a_note() {
-    let Ok(ToolOutput::Text(text)) = answer("big", &json!({ "chars": 150_000 })).await else {
+    let Ok(ToolResult::Text(text)) = answer("big", &json!({ "chars": 150_000 })).await else {
         panic!("the call failed");
     };
     assert_eq!(
@@ -81,77 +95,128 @@ async fn a_result_past_its_bound_is_cut_with_a_note() {
 async fn structured_content_alone_reads_as_its_json() {
     assert_eq!(
         answer("structured", &json!({})).await,
-        Ok(ToolOutput::Text(r#"{"status":"shipped"}"#.to_owned()))
+        Ok(ToolResult::Text(r#"{"status":"shipped"}"#.to_owned()))
     );
 }
 
-/// A call once the server is closed fails, the model reading the kind of
-/// failure only.
+/// A handler called once the server is closed fails as Python's raises,
+/// `RuntimeError`, the model reading the kind of failure only; what reads
+/// the server fails before it is connected and after it is closed.
 #[tokio::test]
 async fn a_call_after_the_close_fails() {
     let server = connected("normal").await;
+    let handler = server
+        .as_tool_handler(AsToolHandlerOptions::default())
+        .unwrap();
     server.close().await;
-    let context = ToolContext::new(room_id(), channel("assistant"));
-    let failed = server
-        .call(call("echo", &json!({ "text": "hi" })), context)
-        .await;
+    let failed = handler.call("echo".to_owned(), Metadata::new()).await;
     assert!(
-        matches!(&failed, Err(ToolError::Raised { kind, .. }) if kind == "McpError"),
+        matches!(&failed, Err(ToolError::Raised { kind, .. }) if kind == "RuntimeError"),
         "{failed:?}"
+    );
+    let never = fake("normal").provider();
+    for provider in [&server, &never] {
+        assert!(matches!(provider.get_tools(), Err(McpError::NotConnected)));
+        assert!(matches!(
+            provider.as_tool_handler(AsToolHandlerOptions::default()),
+            Err(McpError::NotConnected)
+        ));
+        assert!(matches!(
+            provider
+                .call_tool("echo", Metadata::new(), CallToolOptions::default())
+                .await,
+            Err(McpError::NotConnected)
+        ));
+    }
+}
+
+/// `call_tool` answers the server's text, a failed call as the envelope
+/// `{"error": ...}`, and calls any tool the server has: the filter shapes
+/// what a model is offered, not what the host calls.
+#[tokio::test]
+async fn call_tool_answers_text_and_calls_any_tool_of_the_server() {
+    let server = fake("normal").tools(&["echo"]).connect().await.unwrap();
+    let echo = server
+        .call_tool(
+            "echo",
+            mapping(&json!({ "text": "hi" })),
+            CallToolOptions::default(),
+        )
+        .await
+        .unwrap();
+    let fails = server
+        .call_tool("fails", Metadata::new(), CallToolOptions::default())
+        .await
+        .unwrap();
+    server.close().await;
+    assert_eq!(
+        (echo.as_str(), fails.as_str()),
+        ("hi", r#"{"error": "no order 7 try 42"}"#)
     );
 }
 
-/// RFC §21.2: labels and selections are per handle and enforced at dispatch.
+/// RFC §21.2: a provider's tools keep the server's names; its handler runs
+/// an MCP alias `mcp__<server>__<tool>` as `<tool>`, declines an alias
+/// naming another server than its label and a tool its connection did not
+/// keep, and with `gate_discovery` off forwards every other name.
 #[tokio::test]
-async fn labelled_selection_routes_only_its_tools_and_preserves_other_handles() {
-    let server = connected("normal").await;
-    let left = server
-        .clone()
-        .with_label("left")
-        .unwrap()
-        .with_tool_names(&["echo".into()])
+async fn a_labelled_handler_serves_its_aliases_and_its_tools_alone() {
+    let left = fake("normal")
+        .label("left")
+        .tools(&["echo"])
+        .connect()
+        .await
         .unwrap();
-    let right = server
-        .clone()
-        .with_label("right")
-        .unwrap()
-        .with_tool_names(&["echo".into()])
+    assert_eq!(left.tool_names().unwrap(), ["echo"]);
+    for name in ["echo", "mcp__left__echo"] {
+        assert_eq!(
+            call(&left, name, &json!({ "text": name })).await,
+            Ok(ToolResult::Text(name.to_owned()))
+        );
+    }
+    for name in ["mcp__right__echo", "mcp__left__fails", "fails"] {
+        let declined = call(&left, name, &json!({})).await;
+        assert!(
+            matches!(declined, Err(ToolError::UnservedToolCall(_))),
+            "{name}: {declined:?}"
+        );
+    }
+    let ungated = left
+        .as_tool_handler(AsToolHandlerOptions {
+            gate_discovery: false,
+        })
         .unwrap();
-    assert_eq!(
-        left.tools()
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["mcp__left__echo"]
-    );
-    let context = || ToolContext::new(room_id(), channel("assistant"));
-    assert_eq!(
-        left.call(call("mcp__left__echo", &json!({"text":"left"})), context())
-            .await,
-        Ok(ToolOutput::Text("left".into()))
-    );
-    assert_eq!(
-        right
-            .call(
-                call("mcp__right__echo", &json!({"text":"right"})),
-                context()
-            )
-            .await,
-        Ok(ToolOutput::Text("right".into()))
-    );
-    for name in ["echo", "mcp__right__echo", "mcp__left__fails"] {
-        assert!(left.call(call(name, &json!({})), context()).await.is_err());
-    }
-    for label in ["", "bad__alias", "tail_", "two words"] {
-        assert!(server.clone().with_label(label).is_err());
-    }
-    assert!(server.clone().with_tool_names(&["missing".into()]).is_err());
-    assert_eq!(
-        server.clone().with_tool_names(&[]).unwrap().tools(),
-        Vec::new()
-    );
-    assert!(server.is_connected());
+    let forwarded = ungated.call("fails".to_owned(), Metadata::new()).await;
+    let other = ungated
+        .call("mcp__right__echo".to_owned(), Metadata::new())
+        .await;
     left.close().await;
-    assert!(!right.is_connected());
-    assert_eq!(server.process_id(), None);
+    assert_eq!(forwarded, Err(ToolError::failed("no order 7 try 42")));
+    assert!(
+        matches!(other, Err(ToolError::UnservedToolCall(_))),
+        "{other:?}"
+    );
+}
+
+/// A label that cannot name its server in an alias is refused when the
+/// provider is built, as Python's raises `ValueError`; two providers of
+/// the same server, each its own connection, close apart.
+#[tokio::test]
+async fn a_bad_label_is_refused_and_providers_close_apart() {
+    for label in ["", "bad__alias", "tail_", "two words"] {
+        let refused = fake("normal").label(label).connect().await;
+        assert!(
+            matches!(refused, Err(McpError::Configuration { .. })),
+            "{label}"
+        );
+    }
+    let left = connected("normal").await;
+    let right = connected("normal").await;
+    let none = fake("normal").tools(&[]).connect().await.unwrap();
+    assert_eq!(none.get_tools().unwrap(), Vec::new());
+    none.close().await;
+    left.close().await;
+    assert_eq!((left.connected(), right.connected()), (false, true));
+    right.close().await;
+    assert_eq!(left.process_id(), None);
 }

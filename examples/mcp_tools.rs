@@ -13,9 +13,9 @@
 //!
 //! The server's instructions reach the model in the system prompt, under
 //! the host's name for the server, in a `<server_instructions>` block whose
-//! closing tag, which the server forges, is neutralised. The kit's close
-//! stops the server's process. Then two connections fail, and leave no
-//! process: a command that names no program, and a server that never
+//! closing tag, which the server forges, is neutralised. The host closes
+//! the provider once the kit is closed, which stops the server's process.
+//! Then two connections fail, and leave no process: a command that names no program, and a server that never
 //! answers the handshake, cut at the connect bound.
 //!
 //! The server is this example itself, started with `--mcp-server`, and the
@@ -38,9 +38,8 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions};
-use roomkit_ai::ToolPolicy;
-use roomkit_mcp::{McpCommand, McpError, McpServer};
-use roomkit_openai::{OpenAiAgent, OpenAiConfig};
+use roomkit_ai::{AiChannel, AiChannelOptions, ToolEntry, ToolPolicy};
+use roomkit_mcp::{AsToolHandlerOptions, FromCommandOptions, McpError, McpToolProvider};
 use serde_json::Value;
 
 use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Reply, mcp};
@@ -73,14 +72,20 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 
 async fn run() -> Result<ExitCode, Box<dyn Error>> {
     let mut checks = Checks::default();
-    let server = McpCommand::new(std::env::current_exe()?)
-        .arg(mcp::SERVER_FLAG)
-        .connect()
-        .await?;
-    let pid = server.process_id();
+    let options = FromCommandOptions {
+        args: vec![mcp::SERVER_FLAG.into()],
+        label: Some("shop".to_owned()),
+        ..FromCommandOptions::default()
+    };
+    let server = McpToolProvider::from_command(std::env::current_exe()?, options)?;
+    server.connect().await?;
+    // The server is this process's child, and leads a process group of its
+    // own.
+    let started = mcp::processes_left(&[]);
+    let groups = started.clone().unwrap_or_default();
     println!(
-        "The shop's MCP server runs as process {pid:?}, serving {} tools.",
-        roomkit_ai::Toolset::tools(&server).len()
+        "The shop's MCP server runs as process {groups:?}, serving {} tools.",
+        server.get_tools()?.len()
     );
     let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(&script()).await?);
     let (kit, room) = shop_room(&endpoint, &server).await?;
@@ -101,6 +106,7 @@ async fn run() -> Result<ExitCode, Box<dyn Error>> {
         )
         .await?;
     kit.close().await?;
+    server.close().await;
     let timeline = shared::timeline(&kit, &room).await?;
     print_ends(&timeline);
     checks.expect("the turn did not fail", result.error.is_none());
@@ -113,11 +119,10 @@ async fn run() -> Result<ExitCode, Box<dyn Error>> {
     check_the_instructions(&mut checks, &requests);
 
     // The server leads a process group of its own: nothing of it is left.
-    let groups: Vec<u32> = pid.into_iter().collect();
     checks.expect(
-        "the kit's close stops the server's process and its process group, and waits for it",
-        pid.is_some()
-            && server.process_id().is_none()
+        "the provider's close stops the server's process and its process group, and waits for it",
+        started.is_none_or(|started| !started.is_empty())
+            && !server.connected()
             && mcp::processes_left(&groups).is_none_or(|left| left.is_empty()),
     );
     check_the_failed_connections(&mut checks, &groups).await?;
@@ -128,17 +133,24 @@ async fn run() -> Result<ExitCode, Box<dyn Error>> {
 /// tools and instructions, and a policy that denies wiping.
 async fn shop_room(
     endpoint: &OpenAiEndpoint,
-    server: &McpServer,
+    server: &McpToolProvider,
 ) -> Result<(roomkit::RoomKit, RoomId), Box<dyn Error>> {
-    let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
-        .with_system_prompt(SYSTEM_PROMPT);
-    let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?
-        .with_server_instructions("shop", server.instructions())?
-        .with_tools(server.clone())?
-        .with_tool_policy(ToolPolicy {
+    let options = AiChannelOptions {
+        system_prompt: Some(SYSTEM_PROMPT.to_owned()),
+        tools: server
+            .get_tools()?
+            .into_iter()
+            .map(ToolEntry::from)
+            .collect(),
+        tool_handler: Some(server.as_tool_handler(AsToolHandlerOptions::default())?),
+        server_instructions: vec![("shop".to_owned(), server.instructions()?)],
+        tool_policy: Some(ToolPolicy {
             deny: vec!["wipe_*".into()],
             ..ToolPolicy::default()
-        });
+        }),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(ChannelId::new("assistant")?, endpoint.provider()?, options)?;
     let kit = shared::kit();
     kit.register_channel(RecordingTransport::new(
         ChannelId::new("sms")?,
@@ -243,19 +255,25 @@ async fn check_the_failed_connections(
     checks: &mut Checks,
     groups: &[u32],
 ) -> Result<(), Box<dyn Error>> {
-    let missing = McpCommand::new("/nonexistent/shop-mcp-server")
-        .connect()
-        .await
-        .err();
+    let missing = McpToolProvider::from_command(
+        "/nonexistent/shop-mcp-server",
+        FromCommandOptions::default(),
+    )?
+    .connect()
+    .await
+    .err();
     println!("A command naming no program: {missing:?}");
     checks.expect(
         "a missing command fails to start, and leaves no process",
         matches!(missing, Some(McpError::Spawn { .. }))
             && mcp::processes_left(groups).is_none_or(|left| left.is_empty()),
     );
-    let silent = McpCommand::new(std::env::current_exe()?)
-        .args([mcp::SERVER_FLAG, mcp::SILENT])
-        .connect_timeout(Duration::from_millis(300))
+    let options = FromCommandOptions {
+        args: vec![mcp::SERVER_FLAG.into(), mcp::SILENT.into()],
+        connect_timeout: Duration::from_millis(300),
+        ..FromCommandOptions::default()
+    };
+    let silent = McpToolProvider::from_command(std::env::current_exe()?, options)?
         .connect()
         .await
         .err();

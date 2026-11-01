@@ -5,13 +5,12 @@
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit_ai::Toolset;
 
 use super::support::connected;
 
 async fn names(mode: &str) -> Vec<String> {
     let server = connected(mode).await;
-    let names = server.tools().into_iter().map(|tool| tool.name).collect();
+    let names = server.tool_names().unwrap();
     server.close().await;
     names
 }
@@ -66,7 +65,7 @@ async fn a_listing_keeps_at_most_512_tools() {
 #[tokio::test]
 async fn a_tool_no_model_can_be_handed_is_left_out_and_a_description_cut() {
     let server = connected("names").await;
-    let tools = server.tools();
+    let tools = server.get_tools().unwrap();
     server.close().await;
     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
     let long = "y".repeat(128);

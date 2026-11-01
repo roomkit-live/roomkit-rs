@@ -27,8 +27,8 @@ use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookOptions,
     HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
-use roomkit_ai::{AiError, AiTool, ToolOutput, Tools};
-use roomkit_openai::{OpenAiAgent, OpenAiConfig};
+use roomkit_ai::{AiChannel, AiChannelOptions, AiContext, AiProvider, AiTool, ToolResult, Tools};
+use roomkit_openai::{OpenAiAiProvider, OpenAiConfig};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
@@ -67,7 +67,7 @@ impl Room {
         api_key: &str,
         adjust: impl FnOnce(OpenAiConfig) -> OpenAiConfig,
     ) -> Self {
-        Self::built(replies, api_key, adjust, |agent| agent).await
+        Self::built(replies, api_key, adjust, |options| options).await
     }
 
     /// The room, its agent serving `tools`.
@@ -76,7 +76,10 @@ impl Room {
             replies,
             API_KEY,
             |config| config,
-            |agent| agent.with_tools(tools).unwrap(),
+            |options| AiChannelOptions {
+                tools: tools.into(),
+                ..options
+            },
         )
         .await
     }
@@ -85,7 +88,7 @@ impl Room {
         replies: Vec<Reply>,
         api_key: &str,
         adjust: impl FnOnce(OpenAiConfig) -> OpenAiConfig,
-        equip: impl FnOnce(OpenAiAgent) -> OpenAiAgent,
+        equip: impl FnOnce(AiChannelOptions) -> AiChannelOptions,
     ) -> Self {
         let fake = FakeOpenAi::start(replies).await;
         let kit = kit_with_environment(
@@ -102,11 +105,16 @@ impl Room {
             ChannelType::WEBSOCKET,
             RecordingTransportOptions::default(),
         );
-        let config = adjust(
-            OpenAiConfig::new(fake.base_url(), api_key, "fake-model")
-                .with_system_prompt(SYSTEM_PROMPT),
-        );
-        let agent = equip(OpenAiAgent::new(channel("assistant"), config).unwrap());
+        let config = adjust(OpenAiConfig {
+            base_url: Some(fake.base_url().to_owned()),
+            ..OpenAiConfig::new(api_key, "fake-model")
+        });
+        let options = equip(AiChannelOptions {
+            system_prompt: Some(SYSTEM_PROMPT.into()),
+            ..AiChannelOptions::default()
+        });
+        let provider = OpenAiAiProvider::new(config).unwrap();
+        let agent = AiChannel::new(channel("assistant"), provider, options).unwrap();
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(web.clone()).unwrap();
         kit.register_channel(agent).unwrap();
@@ -203,6 +211,9 @@ fn messages(fake: &FakeOpenAi, index: usize) -> Vec<Value> {
         .clone()
 }
 
+/// The body Python's provider sends for the same turn, its temperature
+/// and its token bound included
+/// (`tasks/probes/step5-lot5/py_openai_body.out`).
 #[tokio::test]
 async fn a_turn_posts_the_system_prompt_and_the_conversation_to_chat_completions() {
     let room = Room::new(vec![Reply::completion("Yes.")], API_KEY).await;
@@ -222,6 +233,38 @@ async fn a_turn_posts_the_system_prompt_and_the_conversation_to_chat_completions
             ],
             "stream": true,
             "stream_options": { "include_usage": true },
+            "temperature": 0.7,
+            "max_tokens": 1024,
+        })
+    );
+}
+
+/// Python's configuration keywords on the wire: no temperature for a model
+/// that takes none, the bound as `max_completion_tokens`, no usage asked
+/// of the stream (`tasks/probes/step5-lot5/py_openai_body.out`).
+#[tokio::test]
+async fn the_configuration_shapes_the_completion_request_as_python_s() {
+    let room = Room::configured(vec![Reply::completion("Yes.")], API_KEY, |config| {
+        OpenAiConfig {
+            supports_custom_temperature: false,
+            use_max_completion_tokens: true,
+            include_stream_usage: false,
+            ..config
+        }
+    })
+    .await;
+    room.says(&room.sms, "+15550001", "Alice", "Are you open on Sunday?")
+        .await;
+    assert_eq!(
+        room.fake.requests()[0].body,
+        json!({
+            "model": "fake-model",
+            "messages": [
+                { "role": "system", "content": SYSTEM_PROMPT },
+                { "role": "user", "content": "Are you open on Sunday?" },
+            ],
+            "stream": true,
+            "max_completion_tokens": 1024,
         })
     );
 }
@@ -230,13 +273,12 @@ async fn a_turn_posts_the_system_prompt_and_the_conversation_to_chat_completions
 /// in the next completion, after the assistant's message that made it.
 #[tokio::test]
 async fn a_call_s_result_goes_back_in_the_next_completion() {
-    let lookup = AiTool::new(
-        "lookup_order",
-        "Find an order",
-        json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
-    );
+    let lookup = AiTool {
+        parameters: json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
+        ..AiTool::new("lookup_order", "Find an order").unwrap()
+    };
     let tools = Tools::new().tool(lookup, |_call, _context| async {
-        Ok(ToolOutput::Json(json!({ "status": "shipped" })))
+        Ok(ToolResult::Json(json!({ "status": "shipped" })))
     });
     let replies = vec![
         Reply::calling(
@@ -432,10 +474,15 @@ async fn an_unreachable_endpoint_fails_the_turn_without_naming_its_url() {
         ChannelType::SMS,
         RecordingTransportOptions::default(),
     );
-    let config = OpenAiConfig::new(format!("http://{address}/v1"), API_KEY, "m");
+    let config = OpenAiConfig {
+        base_url: Some(format!("http://{address}/v1")),
+        ..OpenAiConfig::new(API_KEY, "m")
+    };
+    let provider = OpenAiAiProvider::new(config).unwrap();
+    let agent =
+        AiChannel::new(channel("assistant"), provider, AiChannelOptions::default()).unwrap();
     kit.register_channel(sms.clone()).unwrap();
-    kit.register_channel(OpenAiAgent::new(channel("assistant"), config).unwrap())
-        .unwrap();
+    kit.register_channel(agent).unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room_id()),
         ..Default::default()
@@ -527,8 +574,9 @@ async fn a_redirect_is_refused_and_the_request_never_follows_it() {
 
 #[tokio::test]
 async fn a_completion_past_the_timeout_fails_the_turn() {
-    let room = Room::configured(vec![Reply::silent()], API_KEY, |config| {
-        config.with_timeout(Duration::from_millis(50))
+    let room = Room::configured(vec![Reply::silent()], API_KEY, |config| OpenAiConfig {
+        timeout: Duration::from_millis(50),
+        ..config
     })
     .await;
     let turn = room.says(&room.sms, "+15550001", "Alice", "Hi");
@@ -601,13 +649,12 @@ async fn a_streamed_call_s_fragments_fold_into_the_call_that_runs() {
     first.extend(ending("tool_calls", 20, 5));
     let mut second = vec![chunk(&json!({ "content": "Shipped." }))];
     second.extend(ending("stop", 40, 2));
-    let lookup = AiTool::new(
-        "lookup_order",
-        "Find an order",
-        json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
-    );
+    let lookup = AiTool {
+        parameters: json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
+        ..AiTool::new("lookup_order", "Find an order").unwrap()
+    };
     let tools = Tools::new().tool(lookup, |call, _context| async move {
-        Ok(ToolOutput::Json(
+        Ok(ToolResult::Json(
             json!({ "order": call.arguments["order"] }),
         ))
     });
@@ -664,55 +711,35 @@ async fn a_stream_whose_event_never_ends_is_cut_at_the_event_s_bound() {
 
 /// RFC §6.7: on OpenAI's own endpoint, a tool whose name OpenAI refuses
 /// (`[A-Za-z0-9_-]{1,128}`, the rule the reference implementation measured)
-/// is refused when the agent takes it, naming the tool and the rule, where
-/// the reference implementation fails every turn before its request
-/// (`tasks/probes/step4-m9/fix-pass/py_openai_tool_names.out`). A server
-/// behind another base URL decides itself.
-#[test]
-fn a_tool_name_openai_refuses_is_refused_when_the_agent_takes_it() {
-    let tools = |name: &str| {
-        Tools::new().tool(
-            AiTool::new(name, "Reads a file", json!({ "type": "object" })),
-            |_call, _context| async { Ok(ToolOutput::from("read")) },
-        )
+/// fails the request before it is sent, naming the tool and the rule, as
+/// Python's provider raises a `ProviderError` not retried
+/// (`tasks/probes/step4-m9/fix-pass/py_openai_tool_names.out`); the rule
+/// for each base URL is `names`' unit test.
+#[tokio::test]
+async fn a_tool_name_openai_refuses_fails_the_request_before_it_is_sent() {
+    let provider = OpenAiAiProvider::new(OpenAiConfig::new(API_KEY, "gpt-6-luna")).unwrap();
+    let tool = AiTool {
+        parameters: json!({ "type": "object" }),
+        ..AiTool::new("files.read", "Reads a file").unwrap()
     };
-    let refused = |base_url: &str, name: &str| {
-        let config = OpenAiConfig::new(base_url, API_KEY, "gpt-6-luna");
-        OpenAiAgent::new(channel("assistant"), config)
-            .unwrap()
-            .with_tools(tools(name))
-            .err()
+    let context = AiContext {
+        tools: vec![tool],
+        ..AiContext::default()
     };
-    let openai = "https://api.openai.com/v1";
-    let by_openai = |name: &str| {
-        Some(AiError::ToolName {
-            name: name.to_owned(),
-            vendor: "openai".to_owned(),
-            rule: "[A-Za-z0-9_-]{1,128}".to_owned(),
-        })
-    };
-    let (long, longest) = ("d".repeat(129), "c".repeat(128));
+    let failed = provider.generate(&context).await.unwrap_err();
     assert_eq!(
-        [
-            refused(openai, "files.read"),
-            refused(openai, "files:read"),
-            refused(openai, &long),
-            refused("HTTPS://API.OpenAI.com:443/v1/", "files.read"),
-            refused(openai, &longest),
-            refused(openai, "files_read-2"),
-            refused("http://localhost:8000/v1", "files.read"),
-            refused("https://user:key@api.openai.com/v1", "files.read"),
-        ],
-        [
-            by_openai("files.read"),
-            by_openai("files:read"),
-            by_openai(&long),
-            by_openai("files.read"),
-            None,
-            None,
-            None,
-            None,
-        ]
+        (
+            failed.message.as_str(),
+            failed.retryable,
+            failed.provider.as_str(),
+            failed.context_overflow
+        ),
+        (
+            "tool 'files.read': openai accepts tool names matching [A-Za-z0-9_-]{1,128}",
+            false,
+            "openai",
+            Some(false)
+        )
     );
 }
 

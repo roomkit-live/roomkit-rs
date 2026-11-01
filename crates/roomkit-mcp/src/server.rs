@@ -4,12 +4,12 @@
 use std::fmt;
 use std::sync::Arc;
 
-use rmcp::model::CallToolRequestParams;
+use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::{Peer, RoleClient, RunningService};
 use rmcp::transport::async_rw::AsyncRwTransport;
 use rmcp::{ClientCacheConfig, ServiceExt};
-use roomkit::model::ToolCall;
-use roomkit_ai::{AiTool, ToolContext, ToolError, ToolOutput, Toolset};
+use roomkit::model::Metadata;
+use roomkit_ai::AiTool;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Mutex, OnceCell};
 
@@ -17,7 +17,6 @@ use crate::command::McpCommand;
 use crate::error::{McpError, stderr_ending};
 use crate::listing;
 use crate::process::{ServerProcess, Started, Stderr};
-use crate::results;
 use crate::texts::bounded_message;
 
 /// The largest message the server may send, one line of JSON-RPC, in
@@ -25,56 +24,35 @@ use crate::texts::bounded_message;
 /// left to its bound.
 pub(crate) const MESSAGE_LIMIT: usize = 4 * 1024 * 1024;
 
-/// The kind of error the model reads a call failed with when the
-/// connection failed it: the server answered an error, or is gone (RFC
-/// §9.3: the observers read the message).
-const CALL_FAILED: &str = "McpError";
+/// How long a closing server is given to end, as Python's MCP SDK gives
+/// it: two seconds.
+pub(crate) const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// A connected MCP server over stdio or Streamable HTTP (RFC §21.2), serving its
-/// tools to an agent as a [`Toolset`], under their bare names by default.
-/// [`with_label`](Self::with_label) supplies host-qualified aliases, and
-/// [`with_tool_names`](Self::with_tool_names) restricts one handle's inventory.
+/// A connected MCP server over stdio or Streamable HTTP (RFC §21.2), behind
+/// an [`McpToolProvider`](crate::McpToolProvider): its process, its
+/// connection, its tools as it names them, its instructions.
 ///
-/// [`McpCommand::connect`] starts the command's process, runs the MCP
-/// handshake and lists the server's tools once, following the listing's
-/// cursor; no call lists them again. A connection that fails part-way
-/// stops the process and waits for it before the error is returned. What
-/// the server sends is bounded:
+/// A connection starts the command's process, runs the MCP handshake and
+/// lists the server's tools once, following the listing's cursor; no call
+/// lists them again. A connection that fails part-way stops the process
+/// and waits for it before the error is returned. What the server sends is
+/// bounded:
 /// - a message, one line, at 4 MiB: a longer one is dropped unread, and the
-///   call it answers is cut at the agent's bound per call (RFC §21.6);
+///   call it answers is cut at its bound;
 /// - the listing at 1,000 pages and 512 tools; a tool whose name no vendor
 ///   accepts or is longer than 128 characters, whose name is listed
 ///   already, or whose parameters' schema is over 32 KiB is left out with a
-///   warning; a description is cut at 4,096 characters, at a word;
-/// - a call's result at 100,000 characters, cut with a note saying how long
-///   it was.
+///   warning; a description is cut at 4,096 characters, at a word.
 ///
-/// A call answers the result's text, a note standing for what is not text
-/// (an image, audio, a binary resource, a resource link); a result that
-/// says `isError` is a failed call whose words the model reads (RFC
-/// §9.3); a call the server answers with an error, or that its connection
-/// fails, fails with `McpError`, its message for the call's observers
-/// alone. The agent's bound per call applies: a server that never answers
-/// is cut at it.
-///
-/// The server's instructions ([`instructions`](Self::instructions)) are
-/// its text, as it sent it: hand them to the agent
-/// ([`AiAgent::with_server_instructions`](roomkit_ai::AiAgent::with_server_instructions)),
-/// which frames and bounds them, rather than into a prompt.
-///
-/// [`close`](Self::close) closes the server's input, gives it the
-/// command's grace to exit (2 seconds by default), then sends its process
-/// group `SIGTERM`, and `SIGKILL` after the grace again, and returns once
-/// the server is waited for; an agent serving the tools closes it when its
-/// kit shuts down. Dropping the last clone ends the group the same way at
-/// once, and a server that exits on its own is waited for as it exits, what
-/// it started ended with it: no zombie and no orphan stays. Cloning shares
-/// the connection.
+/// [`close`](Self::close) closes the server's input, gives it the grace to
+/// exit, then sends its process group `SIGTERM`, and `SIGKILL` after the
+/// grace again, and returns once the server is waited for. Dropping the
+/// last clone ends the group the same way at once, and a server that exits
+/// on its own is waited for as it exits, what it started ended with it: no
+/// zombie and no orphan stays. Cloning shares the connection.
 #[derive(Clone)]
-pub struct McpServer {
+pub(crate) struct McpServer {
     inner: Arc<Inner>,
-    label: Option<String>,
-    selected: Option<std::collections::BTreeSet<String>>,
 }
 
 struct Inner {
@@ -98,7 +76,8 @@ struct Connection {
 
 impl McpServer {
     /// Starts `command`'s server, runs the MCP handshake and lists its
-    /// tools, within the command's connect bound ([`McpCommand::connect`]).
+    /// tools, within the command's connect bound, unless `cancelled` ends
+    /// first.
     pub(crate) async fn connect(
         command: McpCommand,
         cancelled: impl Future<Output = ()> + Send,
@@ -137,8 +116,6 @@ impl McpServer {
             "connected to an MCP server"
         );
         Ok(Self {
-            label: None,
-            selected: None,
             inner: Arc::new(Inner {
                 program,
                 peer: service.peer().clone(),
@@ -167,8 +144,6 @@ impl McpServer {
             .peer_info()
             .and_then(|info| info.instructions.clone());
         Self {
-            label: None,
-            selected: None,
             inner: Arc::new(Inner {
                 program: "http".into(),
                 peer: service.peer().clone(),
@@ -189,13 +164,13 @@ impl McpServer {
     /// What the server published, when it connected, on how to use its
     /// tools (its handshake's `instructions`), as it sent it; `None` when
     /// it published none (RFC §21.2).
-    pub fn instructions(&self) -> Option<&str> {
+    pub(crate) fn instructions(&self) -> Option<&str> {
         self.inner.instructions.as_deref()
     }
 
     /// The id the server's process was started with; `None` for HTTP or once
     /// the server is closed.
-    pub fn process_id(&self) -> Option<u32> {
+    pub(crate) fn process_id(&self) -> Option<u32> {
         if !self.is_connected() {
             return None;
         }
@@ -204,54 +179,8 @@ impl McpServer {
 
     /// Whether the transport is still open. An exited server is reported as
     /// disconnected without waiting for an explicit close (RFC §21.2).
-    pub fn is_connected(&self) -> bool {
+    pub(crate) fn is_connected(&self) -> bool {
         !self.inner.closed.initialized() && !self.inner.peer.is_transport_closed()
-    }
-
-    /// Serves this handle's tools as `mcp__<label>__<tool>` (RFC §21.2).
-    /// Other clones keep their own labels and selections, sharing one process.
-    /// Vendor name limits still apply to the complete alias.
-    ///
-    /// # Errors
-    ///
-    /// Refuses an empty label, more than 64 ASCII identifier characters, `__`,
-    /// or a trailing underscore. Letters, digits, `_`, `-` and `.` are accepted.
-    pub fn with_label(mut self, label: impl Into<String>) -> Result<Self, McpError> {
-        let label = label.into();
-        if label.is_empty()
-            || label.len() > 64
-            || label.contains("__")
-            || label.ends_with('_')
-            || !label
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
-        {
-            return Err(McpError::Configuration {
-                reason: "invalid server label",
-            });
-        }
-        self.label = Some(label);
-        Ok(self)
-    }
-
-    /// Limits this handle to the listed bare tool names. An empty selection
-    /// exposes no tools. Both discovery and dispatch enforce the selection;
-    /// another clone's selection is unchanged (RFC §21.1).
-    ///
-    /// # Errors
-    ///
-    /// Refuses names absent from the connection's discovered catalogue.
-    pub fn with_tool_names(mut self, names: &[String]) -> Result<Self, McpError> {
-        if names
-            .iter()
-            .any(|name| !self.inner.tools.iter().any(|tool| &tool.name == name))
-        {
-            return Err(McpError::Configuration {
-                reason: "selected tool was not discovered",
-            });
-        }
-        self.selected = Some(names.iter().cloned().collect());
-        Ok(self)
     }
 
     /// Closes the connection (RFC §21.2). HTTP connections drain their worker
@@ -261,7 +190,7 @@ impl McpServer {
     /// group is ended (`SIGTERM`, the grace, `SIGKILL`), and this returns
     /// once it is waited for. A call running fails. Called again, or beside
     /// a close running, it waits for that one's end.
-    pub async fn close(&self) {
+    pub(crate) async fn close(&self) {
         self.inner
             .closed
             .get_or_init(|| async {
@@ -314,7 +243,11 @@ async fn failed(error: McpError, process: ServerProcess, stderr: Stderr) -> McpE
         | McpError::Command { .. }
         | McpError::Spawn { .. }
         | McpError::Cancelled
-        | McpError::Configuration { .. }) => error,
+        | McpError::Configuration { .. }
+        | McpError::NotConnected
+        | McpError::AlreadyConnected
+        | McpError::Call { .. }
+        | McpError::CallTimeout { .. }) => error,
     }
 }
 
@@ -353,60 +286,27 @@ where
     }
 }
 
-impl Toolset for McpServer {
-    fn tools(&self) -> Vec<AiTool> {
-        self.inner
-            .tools
-            .iter()
-            .filter(|tool| {
-                self.selected
-                    .as_ref()
-                    .is_none_or(|names| names.contains(&tool.name))
-            })
-            .cloned()
-            .map(|mut tool| {
-                if let Some(label) = &self.label {
-                    tool.name = format!("mcp__{label}__{}", tool.name);
-                }
-                tool
-            })
-            .collect()
+impl McpServer {
+    /// The tools the server listed, as it names them.
+    pub(crate) fn listed(&self) -> Vec<AiTool> {
+        self.inner.tools.clone()
     }
 
-    async fn call(
+    /// Calls the tool `name`, as the server names it, with `arguments`: the
+    /// server's result as it sent it.
+    pub(crate) async fn call(
         &self,
-        mut call: ToolCall,
-        _context: ToolContext,
-    ) -> Result<ToolOutput, ToolError> {
-        if let Some(label) = &self.label {
-            let prefix = format!("mcp__{label}__");
-            let Some(name) = call.name.strip_prefix(&prefix) else {
-                return Err(ToolError::raised_as(
-                    CALL_FAILED,
-                    "tool does not belong to this server",
-                ));
-            };
-            call.name = name.to_owned();
-        }
-        if self
-            .selected
-            .as_ref()
-            .is_some_and(|names| !names.contains(&call.name))
-        {
-            return Err(ToolError::raised_as(CALL_FAILED, "tool is not selected"));
-        }
-        let params = CallToolRequestParams::new(call.name.clone()).with_arguments(call.arguments);
-        match self.inner.peer.call_tool(params).await {
-            Ok(result) => results::read(&call.name, result),
-            Err(error) => Err(ToolError::raised_as(
-                CALL_FAILED,
-                bounded_message(&error.to_string()),
-            )),
-        }
-    }
-
-    async fn close(&self) {
-        Self::close(self).await;
+        name: &str,
+        arguments: Metadata,
+    ) -> Result<CallToolResult, McpError> {
+        let params = CallToolRequestParams::new(name.to_owned()).with_arguments(arguments);
+        self.inner
+            .peer
+            .call_tool(params)
+            .await
+            .map_err(|error| McpError::Call {
+                message: bounded_message(&error.to_string()),
+            })
     }
 }
 
@@ -423,6 +323,26 @@ impl fmt::Debug for McpServer {
             .field("tools", &names)
             .field("closed", &self.inner.closed.initialized())
             .finish_non_exhaustive()
+    }
+}
+
+/// Refuses a label that is no identifier for the server's tools: letters,
+/// digits, `_`, `.` and `-`, 64 at most, with no `__` and no trailing `_`,
+/// which would make `mcp__<label>__<tool>` ambiguous.
+pub(crate) fn check_label(label: &str) -> Result<(), McpError> {
+    let valid = !label.is_empty()
+        && label.len() <= 64
+        && !label.contains("__")
+        && !label.ends_with('_')
+        && label
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'));
+    if valid {
+        Ok(())
+    } else {
+        Err(McpError::Configuration {
+            reason: "invalid server label",
+        })
     }
 }
 

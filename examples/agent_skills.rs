@@ -39,8 +39,7 @@ use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
     RoomKitOptions,
 };
-use roomkit_ai::{DiscoverOptions, SkillRegistry, ToolPolicy};
-use roomkit_openai::{OpenAiAgent, OpenAiConfig};
+use roomkit_ai::{AiChannel, AiChannelOptions, DiscoverOptions, SkillRegistry, ToolPolicy};
 use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 use serde_json::Value;
 
@@ -163,16 +162,18 @@ impl Shop {
             "discovery registers the two skills of examples/skills/",
             found == 2 && skills.get_skill("order-returns").is_some(),
         );
-        let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
-            .with_system_prompt(SYSTEM_PROMPT);
         // The policy denies every tool of the host: the skills' two tools
         // stay declared (RFC §21.1).
-        let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?
-            .with_skills(skills)?
-            .with_tool_policy(ToolPolicy {
+        let options = AiChannelOptions {
+            system_prompt: Some(SYSTEM_PROMPT.to_owned()),
+            skills: Some(skills),
+            tool_policy: Some(ToolPolicy {
                 deny: vec!["*".into()],
                 ..ToolPolicy::default()
-            });
+            }),
+            ..AiChannelOptions::default()
+        };
+        let agent = AiChannel::new(ChannelId::new("assistant")?, endpoint.provider()?, options)?;
         let kit = RoomKit::new(RoomKitOptions::with_store(SqliteStore::new(
             SqliteStoreOptions {
                 path: database.into(),

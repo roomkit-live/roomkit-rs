@@ -15,8 +15,8 @@ use roomkit::model::{ChannelId, HookAction, HookResult, Metadata, RoomContext, T
 use roomkit::{HookError, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiAgent, AiContext, AiProvider, AiResponse, AiRole, AiTool, ProviderError, ProviderStream,
-    StreamEvent, ToolContext, ToolError, ToolOutput, ToolPolicy, Tools,
+    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiRole, AiTool, ProviderError,
+    ProviderStream, StreamEvent, ToolContext, ToolError, ToolPolicy, ToolResult, Tools,
 };
 use serde_json::{Value, json};
 
@@ -77,7 +77,7 @@ impl Stream for PacedStream<'_> {
 }
 
 /// The scripted agent `spec` describes, and its model.
-pub(crate) fn scripted_agent(spec: &Value) -> Result<(AiAgent<Paced>, ScriptedProvider), String> {
+pub(crate) fn scripted_agent(spec: &Value) -> Result<(AiChannel<Paced>, ScriptedProvider), String> {
     let id = ChannelId::new(spec["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
     let rounds = spec["model"]["rounds"]
         .as_array()
@@ -86,16 +86,18 @@ pub(crate) fn scripted_agent(spec: &Value) -> Result<(AiAgent<Paced>, ScriptedPr
         .map(round)
         .collect::<Result<Vec<_>, _>>()?;
     let model = ScriptedProvider::new(rounds);
-    let mut agent = AiAgent::new(id, Paced(model.clone()))
-        .with_tools(tools(spec))
-        .map_err(|e| e.to_string())?;
+    let mut options = AiChannelOptions {
+        tools: tools(spec).into(),
+        ..AiChannelOptions::default()
+    };
     if let Some(policy) = spec.get("tool_policy") {
-        agent = agent.with_tool_policy(tool_policy(policy));
+        options.tool_policy = Some(tool_policy(policy));
     }
     if let Some(rounds) = spec.get("max_tool_rounds") {
         let rounds = rounds.as_u64().ok_or("max_tool_rounds: not a count")?;
-        agent = agent.with_max_rounds(u32::try_from(rounds).map_err(|e| e.to_string())?);
+        options.max_tool_rounds = u32::try_from(rounds).map_err(|e| e.to_string())?;
     }
+    let agent = AiChannel::new(id, Paced(model.clone()), options).map_err(|e| e.to_string())?;
     Ok((agent, model))
 }
 
@@ -151,13 +153,17 @@ fn tools(spec: &Value) -> Tools {
         .into_iter()
         .flatten()
         .fold(Tools::new(), |tools, tool| {
-            let definition = AiTool::new(
-                tool["name"].as_str().unwrap_or_default(),
-                tool["description"].as_str().unwrap_or_default(),
-                tool.get("parameters")
+            let definition = AiTool {
+                parameters: tool
+                    .get("parameters")
                     .cloned()
                     .unwrap_or_else(|| json!({ "type": "object" })),
-            );
+                ..AiTool::new(
+                    tool["name"].as_str().unwrap_or_default(),
+                    tool["description"].as_str().unwrap_or_default(),
+                )
+                .unwrap()
+            };
             let behaviour = tool.clone();
             tools.tool(definition, move |_call: ToolCall, _context: ToolContext| {
                 let behaviour = behaviour.clone();
@@ -167,10 +173,10 @@ fn tools(spec: &Value) -> Tools {
 }
 
 /// What a scripted tool answers.
-async fn answer(tool: &Value) -> Result<ToolOutput, ToolError> {
+async fn answer(tool: &Value) -> Result<ToolResult, ToolError> {
     let words = |key: &str| tool[key].as_str().map(str::to_owned);
     if let Some(text) = words("returns") {
-        return Ok(ToolOutput::Text(text));
+        return Ok(ToolResult::Text(text));
     }
     if let Some(raised) = tool.get("raises") {
         let field = |key: &str| raised[key].as_str().unwrap_or_default().to_owned();

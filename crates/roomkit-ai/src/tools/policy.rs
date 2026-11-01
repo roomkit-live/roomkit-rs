@@ -42,6 +42,31 @@ impl ToolPolicy {
     }
 }
 
+/// The server an MCP alias `mcp__<server>__<tool>` names, `None` for a name
+/// that is not an alias (RFC §21.2): the label a labelled MCP provider
+/// serves aliases under. For the MCP crate.
+#[doc(hidden)]
+pub fn alias_server(name: &str) -> Option<&str> {
+    let (server, _tool) = name.strip_prefix("mcp__")?.split_once("__")?;
+    Some(server)
+}
+
+/// The tool a call to `name` runs: an MCP alias `mcp__<server>__<tool>`
+/// runs `<tool>`, any other name runs as itself. For the MCP crate.
+#[doc(hidden)]
+pub fn served_tool_name(name: &str) -> &str {
+    name.strip_prefix("mcp__")
+        .and_then(|rest| rest.split_once("__"))
+        .map_or(name, |(_server, tool)| tool)
+}
+
+/// Whether `policy` admits a call to `name` under every name it is judged
+/// by: the name called, and the tool an MCP alias runs, so that no policy
+/// is passed by calling a tool under its alias (RFC §21.1).
+pub(crate) fn call_admitted(policy: &ToolPolicy, name: &str) -> bool {
+    policy.is_allowed(name) && policy.is_allowed(served_tool_name(name))
+}
+
 /// Whether `pattern`, where `*` matches any characters and `?` one, matches
 /// the whole of `name`.
 fn glob_matches(pattern: &str, name: &str) -> bool {

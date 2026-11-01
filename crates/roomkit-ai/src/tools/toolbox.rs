@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use roomkit::model::{ToolCall, ToolCallOutcome};
 
-use super::{AiTool, DynToolset, ToolContext, ToolPolicy, Toolset};
+use super::{AiTool, DynToolset, ToolContext, ToolPolicy};
 use crate::error::AiError;
 
 /// The toolsets an agent took, and the tools they declare, in the order
@@ -43,17 +43,14 @@ impl Toolbox {
     /// Returns [`AiError::DuplicateTool`] for a name the agent serves
     /// already, or that the toolset declares twice; the toolbox is left as
     /// it was.
-    pub(crate) fn add(&mut self, toolset: impl Toolset) -> Result<(), AiError> {
-        let declared = toolset.tools();
-        self.insert(Arc::new(toolset), declared, false)
+    pub(crate) fn add_dyn(
+        &mut self,
+        toolset: Arc<dyn DynToolset>,
+        declared: Vec<AiTool>,
+    ) -> Result<(), AiError> {
+        self.insert(toolset, declared, false)
     }
 
-    /// Takes `toolset`, the agent's own, declaring `declared`: tools that
-    /// only read or unlock, exempt from the policy (RFC §21.1).
-    ///
-    /// # Errors
-    ///
-    /// As [`add`](Self::add).
     pub(crate) fn add_own(
         &mut self,
         toolset: Arc<dyn DynToolset>,
@@ -93,7 +90,7 @@ impl Toolbox {
     /// policy's word, save for a tool of the agent's own that it does not
     /// govern (RFC §21.1).
     pub(crate) fn permits(&self, policy: &ToolPolicy, name: &str) -> bool {
-        self.exempt.contains(name) || policy.is_allowed(name)
+        self.exempt.contains(name) || super::policy::call_admitted(policy, name)
     }
 
     /// Whether a call to `name` is work the agent did, which its later
@@ -124,14 +121,6 @@ impl Toolbox {
             .map(|(tool, _)| tool)?;
         let toolset = self.toolsets.get(position)?;
         Some((tool, Arc::clone(toolset)))
-    }
-
-    /// Closes each toolset, one after the other, in the order the agent
-    /// took them.
-    pub(crate) async fn close(&self) {
-        for toolset in &self.toolsets {
-            toolset.close().await;
-        }
     }
 
     /// Tells the toolset serving `call`'s tool how the call ended, once its

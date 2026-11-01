@@ -1,35 +1,34 @@
-//! An AI agent channel for RoomKit, answering through an OpenAI-compatible
-//! Chat Completions endpoint or a Responses endpoint.
+//! A model provider for RoomKit, answering through an OpenAI-compatible
+//! Chat Completions endpoint or a Responses endpoint: Python's
+//! `roomkit.providers.openai`.
 //!
-//! [`OpenAiAgent`] is an intelligence channel (RFC §6.4), `roomkit-ai`'s
-//! [`AiAgent`](roomkit_ai::AiAgent) over the selected OpenAI wire: each
-//! event the room hands it is a turn, one tool loop whose generations are
-//! streamed generations (server-sent events),
-//! the text reaching a streaming channel of the room as it is written. The
-//! turn sends the agent's system prompt,
-//! then the room's recent messages as the conversation RFC §6.4 requires
-//! ([`roomkit_core::rules::transcript`]): each in the role of whoever wrote it, labelled
-//! by its speaker once several speak, an instruction marked as the
-//! application's, the agent's earlier rounds of tool calls replayed at
-//! their place as the assistant's calls and their results. It declares the
-//! tools the agent serves
-//! ([`OpenAiAgent::with_tools`]), runs the calls the model makes and sends
-//! their results back, and the room stores each row of the turn as it
-//! ends: each round's text, each call's start and end. A provider error
-//! fails the turn, the text it produced kept: the room keeps the event,
-//! `ON_ERROR` fires, and the caller reads the error on its result. A
-//! stream is bounded: a line or an event over 1 MiB, or an answer over 4
-//! MiB, fails the turn.
+//! [`OpenAiAiProvider`] is Python's `OpenAIAIProvider`, an
+//! [`AiProvider`](roomkit_ai::AiProvider) that `roomkit-ai`'s
+//! [`AiChannel`](roomkit_ai::AiChannel) runs its turns through: each
+//! generation is a streamed completion (server-sent events), the text
+//! reaching a streaming channel of the room as it is written. A request
+//! carries the channel's system prompt and the conversation RFC §6.4
+//! requires, declares the turn's tools, their names checked against
+//! OpenAI's rule on OpenAI's own endpoint, and Python's sampling keywords:
+//! the turn's temperature unless [`OpenAiConfig::supports_custom_temperature`]
+//! is off, the token bound ([`OpenAiConfig::max_tokens`], 1024). A failure
+//! reaches the loop as a [`ProviderError`](roomkit_ai::ProviderError), by
+//! Python's rule of what a retry may get past. A stream is bounded: a line
+//! or an event over 1 MiB, or an answer over 4 MiB, fails the turn.
 //!
 //! ```
 //! use roomkit::RoomKit;
 //! use roomkit::model::ChannelId;
-//! use roomkit_openai::{OpenAiAgent, OpenAiConfig};
+//! use roomkit_ai::{AiChannel, AiChannelOptions};
+//! use roomkit_openai::{OpenAiAiProvider, OpenAiConfig};
 //!
-//! let config = OpenAiConfig::new("https://api.openai.com/v1", "sk-...", "gpt-6-luna")
-//!     .with_system_prompt("You answer a bakery's customers, in a few words.")
-//!     .with_history(20);
-//! let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?;
+//! let provider = OpenAiAiProvider::new(OpenAiConfig::new("sk-...", "gpt-6-luna"))?;
+//! let options = AiChannelOptions {
+//!     system_prompt: Some("You answer a bakery's customers, in a few words.".into()),
+//!     max_context_events: 20,
+//!     ..AiChannelOptions::default()
+//! };
+//! let agent = AiChannel::new(ChannelId::new("assistant")?, provider, options)?;
 //! let kit = RoomKit::new(Default::default());
 //! kit.register_channel(agent)?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
@@ -40,9 +39,12 @@
 //!
 //! ```
 //! use roomkit_openai::{OpenAiApi, OpenAiConfig};
-//! let config = OpenAiConfig::new("https://api.openai.com/v1", "sk-...", "gpt-6-luna")
-//!     .with_api(OpenAiApi::Responses)
-//!     .with_reasoning_effort("medium");
+//! let config = OpenAiConfig {
+//!     api: OpenAiApi::Responses,
+//!     reasoning_effort: Some("medium".into()),
+//!     ..OpenAiConfig::new("sk-...", "gpt-6-luna")
+//! };
+//! # let _ = config;
 //! ```
 //!
 //! Responses uses `store: false` and replays supported output items in order
@@ -53,18 +55,17 @@
 //! tools and opt-in author image input, not hosted tools. OAuth login, token refresh and
 //! credential persistence are host responsibilities.
 
-mod agent;
 mod config;
 mod credentials;
 mod error;
 mod names;
+mod provider;
 mod request;
 mod responses;
 mod sse;
 mod stream;
 mod wire;
 
-pub use self::agent::OpenAiAgent;
 pub use self::config::{OpenAiApi, OpenAiConfig};
 pub use self::credentials::{TokenError, TokenFuture, TokenSource};
-pub use self::error::OpenAiError;
+pub use self::provider::OpenAiAiProvider;

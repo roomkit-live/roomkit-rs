@@ -10,10 +10,15 @@ use std::{env, fs, process};
 use pretty_assertions::assert_eq;
 use roomkit::model::ToolCallOutcome;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiError, AiTool, DiscoverOptions, SkillRegistry, ToolOutput, ToolPolicy, Tools};
+use roomkit_ai::{
+    AiChannel, AiChannelOptions, AiError, AiTool, DiscoverOptions, SkillRegistry, ToolEntry,
+    ToolPolicy,
+};
 use serde_json::json;
 
-use super::support::{Room, agent, connected, fake};
+use roomkit_mcp::AsToolHandlerOptions;
+
+use super::support::{Room, channel, connected, fake, serving};
 
 /// The model's script: one round calling `calls`, each `(id, tool,
 /// arguments)`, then the answer.
@@ -43,15 +48,12 @@ async fn outcomes(room: &Room) -> Vec<(String, Option<ToolCallOutcome>, String)>
 #[tokio::test]
 async fn the_server_s_tools_are_declared_and_its_answers_read() {
     let server = connected("normal").await;
-    let declared: Vec<String> = roomkit_ai::Toolset::tools(&server)
-        .into_iter()
-        .map(|tool| tool.name)
-        .collect();
+    let declared = server.tool_names().unwrap();
     let model = calling(&[
         ("call_1", "echo", r#"{"text": "Order 42 shipped."}"#),
         ("call_2", "fails", "{}"),
     ]);
-    let room = Room::with(agent(&model).with_tools(server).unwrap()).await;
+    let room = Room::with(serving(&model, &server, |options| options)).await;
     room.says("Where is order 42?").await;
     let request = model.requests().remove(0);
     let names: Vec<String> = request.tools.into_iter().map(|tool| tool.name).collect();
@@ -82,13 +84,13 @@ async fn the_server_s_tools_are_declared_and_its_answers_read() {
 async fn a_tool_the_policy_denies_is_not_declared_and_refused() {
     let server = connected("normal").await;
     let model = calling(&[("call_1", "fails", "{}")]);
-    let agent = agent(&model)
-        .with_tools(server)
-        .unwrap()
-        .with_tool_policy(ToolPolicy {
+    let agent = serving(&model, &server, |options| AiChannelOptions {
+        tool_policy: Some(ToolPolicy {
             deny: vec!["fail*".into()],
             ..ToolPolicy::default()
-        });
+        }),
+        ..options
+    });
     let room = Room::with(agent).await;
     room.says("Cancel order 7.").await;
     let declared = model.requests().remove(0).tools;
@@ -121,10 +123,10 @@ async fn a_call_the_server_never_answers_is_cut_at_the_agent_s_bound() {
         ScriptedRound::calling("", [("call_3", "echo", r#"{"text": "still here"}"#)]),
         ScriptedRound::answering("Done."),
     ]);
-    let agent = agent(&model)
-        .with_tools(server)
-        .unwrap()
-        .with_tool_timeout(Some(Duration::from_millis(200)));
+    let agent = serving(&model, &server, |options| AiChannelOptions {
+        tool_timeout: Some(Duration::from_millis(200)),
+        ..options
+    });
     let room = Room::with(agent).await;
     room.says("Where is order 42?").await;
     let failed = |tool: &str| {
@@ -150,27 +152,36 @@ async fn a_call_the_server_never_answers_is_cut_at_the_agent_s_bound() {
 }
 
 /// RFC §21.1 "One tool per name": a server's tool named like a host tool
-/// is refused when the agent takes the second, whichever comes first.
+/// is refused when the channel is built, whichever comes first.
 #[tokio::test]
 async fn a_server_s_tool_named_like_a_host_tool_is_refused() {
     let server = connected("normal").await;
-    let host = || {
-        Tools::new().tool(
-            AiTool::new("echo", "The host's echo", json!({ "type": "object" })),
-            |_call, _context| async { Ok(ToolOutput::from("host")) },
-        )
-    };
+    let host: ToolEntry = AiTool {
+        parameters: json!({ "type": "object" }),
+        ..AiTool::new("echo", "The host's echo").unwrap()
+    }
+    .into();
     let model = ScriptedProvider::new([]);
-    let after_host = agent(&model)
-        .with_tools(host())
+    let built = |tools: Vec<ToolEntry>| {
+        let options = AiChannelOptions {
+            tools,
+            tool_handler: Some(
+                server
+                    .as_tool_handler(AsToolHandlerOptions::default())
+                    .unwrap(),
+            ),
+            ..AiChannelOptions::default()
+        };
+        AiChannel::new(channel("assistant"), model.clone(), options).err()
+    };
+    let listed: Vec<ToolEntry> = server
+        .get_tools()
         .unwrap()
-        .with_tools(server.clone())
-        .err();
-    let before_host = agent(&model)
-        .with_tools(server.clone())
-        .unwrap()
-        .with_tools(host())
-        .err();
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let after_host = built([host.clone()].into_iter().chain(listed.clone()).collect());
+    let before_host = built(listed.into_iter().chain([host]).collect());
     server.close().await;
     let refused = Some(AiError::DuplicateTool {
         name: "echo".to_owned(),
@@ -178,8 +189,8 @@ async fn a_server_s_tool_named_like_a_host_tool_is_refused() {
     assert_eq!((after_host, before_host), (refused.clone(), refused));
 }
 
-/// RFC §21.1: a server's tool named like the agent's own skill tool is
-/// refused, whether the skills or the server come first.
+/// RFC §21.1: a server's tool named like the channel's own skill tool is
+/// refused when the channel is built.
 #[tokio::test]
 async fn a_server_s_tool_named_like_a_skill_tool_is_refused() {
     let directory = env::temp_dir().join(format!("roomkit-mcp-skills-{}", process::id()));
@@ -196,22 +207,30 @@ async fn a_server_s_tool_named_like_a_skill_tool_is_refused() {
         .unwrap();
     let server = connected("skill-names").await;
     let model = ScriptedProvider::new([]);
-    let after_skills = agent(&model)
-        .with_skills(skills.clone())
-        .unwrap()
-        .with_tools(server.clone())
-        .err();
-    let before_skills = agent(&model)
-        .with_tools(server.clone())
-        .unwrap()
-        .with_skills(skills)
-        .err();
+    let options = AiChannelOptions {
+        tools: server
+            .get_tools()
+            .unwrap()
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        tool_handler: Some(
+            server
+                .as_tool_handler(AsToolHandlerOptions::default())
+                .unwrap(),
+        ),
+        skills: Some(skills),
+        ..AiChannelOptions::default()
+    };
+    let refused = AiChannel::new(channel("assistant"), model, options).err();
     server.close().await;
     let _removed = fs::remove_dir_all(&directory);
-    let refused = Some(AiError::DuplicateTool {
-        name: "activate_skill".to_owned(),
-    });
-    assert_eq!((after_skills, before_skills), (refused.clone(), refused));
+    assert_eq!(
+        refused,
+        Some(AiError::DuplicateTool {
+            name: "activate_skill".to_owned(),
+        })
+    );
 }
 
 /// RFC §21.2, §6.4: the instructions the server published sit in their
@@ -226,11 +245,11 @@ async fn the_server_s_instructions_sit_in_their_block() {
         .await
         .unwrap();
     let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
-    let agent = agent(&model)
-        .with_server_instructions("orders", server.instructions())
-        .unwrap()
-        .with_tools(server)
-        .unwrap();
+    let instructions = vec![("orders".to_owned(), server.instructions().unwrap())];
+    let agent = serving(&model, &server, |options| AiChannelOptions {
+        server_instructions: instructions,
+        ..options
+    });
     let room = Room::with(agent).await;
     room.says("Hello").await;
     let prompt = model.requests().remove(0).system_prompt.unwrap();

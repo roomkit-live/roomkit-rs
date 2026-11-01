@@ -28,3 +28,5 @@ pub(crate) mod tools;
 pub use self::error::SkillError;
 pub use self::model::{DiscoverOptions, Skill, SkillMetadata};
 pub use self::registry::SkillRegistry;
+#[doc(hidden)]
+pub use self::texts::dumps;

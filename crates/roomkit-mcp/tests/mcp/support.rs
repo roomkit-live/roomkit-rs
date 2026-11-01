@@ -1,7 +1,9 @@
 //! The fake server's command, the process a test watches, and a room whose
 //! agent serves a server's tools on a scripted model.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use std::{env, fs, process};
@@ -15,9 +17,9 @@ use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
     RoomKitOptions,
 };
-use roomkit_ai::AiAgent;
 use roomkit_ai::testing::ScriptedProvider;
-use roomkit_mcp::{McpCommand, McpServer};
+use roomkit_ai::{AiChannel, AiChannelOptions};
+use roomkit_mcp::{AsToolHandlerOptions, FromCommandOptions, McpError, McpToolProvider};
 
 /// The stand-in server (`fixtures/fake_server.rs`).
 const FAKE: &str = env!("CARGO_BIN_EXE_fake-mcp-server");
@@ -25,18 +27,103 @@ const FAKE: &str = env!("CARGO_BIN_EXE_fake-mcp-server");
 /// The grace a test gives a server to exit at its close.
 pub(crate) const GRACE: Duration = Duration::from_millis(100);
 
+/// How a test starts the fake server: its arguments and its provider's
+/// options.
+#[derive(Clone, Debug)]
+pub(crate) struct Fake {
+    options: FromCommandOptions,
+}
+
+impl Fake {
+    /// The same server, `arg` after its arguments.
+    pub(crate) fn arg(mut self, arg: impl Into<OsString>) -> Self {
+        self.options.args.push(arg.into());
+        self
+    }
+
+    /// The same server, given the variable `key` set to `value`.
+    pub(crate) fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.options.env.insert(key.into(), value.into());
+        self
+    }
+
+    /// The same server, connecting within `bound`.
+    pub(crate) fn connect_timeout(mut self, bound: Duration) -> Self {
+        self.options.connect_timeout = bound;
+        self
+    }
+
+    /// The same server, labelled `label`.
+    pub(crate) fn label(mut self, label: &str) -> Self {
+        self.options.label = Some(label.to_owned());
+        self
+    }
+
+    /// The same server, only the tools `names` kept.
+    pub(crate) fn tools(mut self, names: &[&str]) -> Self {
+        let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+        self.options.tool_filter =
+            Some(Arc::new(move |name| names.iter().any(|kept| kept == name)));
+        self
+    }
+
+    /// The provider of this server, not connected, given [`GRACE`] to exit.
+    pub(crate) fn provider(self) -> McpToolProvider {
+        self.built().unwrap()
+    }
+
+    /// The provider of this server, connected.
+    pub(crate) async fn connect(self) -> Result<McpToolProvider, McpError> {
+        let provider = self.built()?;
+        provider.connect().await?;
+        Ok(provider)
+    }
+
+    /// The provider of this server, or why it is refused.
+    fn built(self) -> Result<McpToolProvider, McpError> {
+        Ok(McpToolProvider::from_command(FAKE, self.options)?.with_close_grace(GRACE))
+    }
+}
+
 /// The fake server in `mode`, connecting within 10 seconds, given
 /// [`GRACE`] to exit.
-pub(crate) fn fake(mode: &str) -> McpCommand {
-    McpCommand::new(FAKE)
-        .arg(mode)
-        .connect_timeout(Duration::from_secs(10))
-        .close_grace(GRACE)
+pub(crate) fn fake(mode: &str) -> Fake {
+    Fake {
+        options: FromCommandOptions {
+            args: vec![mode.into()],
+            connect_timeout: Duration::from_secs(10),
+            ..FromCommandOptions::default()
+        },
+    }
 }
 
 /// The fake server in `mode`, connected.
-pub(crate) async fn connected(mode: &str) -> McpServer {
+pub(crate) async fn connected(mode: &str) -> McpToolProvider {
     fake(mode).connect().await.unwrap()
+}
+
+/// A channel answering through `model`, serving `server`'s tools through
+/// its handler, as `adjust` adjusts its options.
+pub(crate) fn serving(
+    model: &ScriptedProvider,
+    server: &McpToolProvider,
+    adjust: impl FnOnce(AiChannelOptions) -> AiChannelOptions,
+) -> AiChannel<ScriptedProvider> {
+    let options = AiChannelOptions {
+        tools: server
+            .get_tools()
+            .unwrap()
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        tool_handler: Some(
+            server
+                .as_tool_handler(AsToolHandlerOptions::default())
+                .unwrap(),
+        ),
+        ..AiChannelOptions::default()
+    };
+    AiChannel::new(channel("assistant"), model.clone(), adjust(options)).unwrap()
 }
 
 /// A file the fake server writes its process's id to, removed when
@@ -59,13 +146,13 @@ impl PidFile {
     }
 
     /// `command`, writing its process's id to this file.
-    pub(crate) fn on(&self, command: McpCommand) -> McpCommand {
+    pub(crate) fn on(&self, command: Fake) -> Fake {
         command.arg("--pid-file").arg(&self.path)
     }
 
     /// `command`, a wrapper, having the server it starts as its child
     /// write its process's id to this file.
-    pub(crate) fn on_child(&self, command: McpCommand) -> McpCommand {
+    pub(crate) fn on_child(&self, command: Fake) -> Fake {
         command.arg("--child-pid-file").arg(&self.path)
     }
 
@@ -124,7 +211,7 @@ pub(crate) struct Room {
 
 impl Room {
     /// The room, its agent the one `agent` builds.
-    pub(crate) async fn with(agent: AiAgent<ScriptedProvider>) -> Self {
+    pub(crate) async fn with(agent: AiChannel<ScriptedProvider>) -> Self {
         let kit = RoomKit::new(RoomKitOptions::default());
         kit.register_channel(RecordingTransport::new(
             channel("sms"),
@@ -182,11 +269,6 @@ impl Room {
             })
             .collect()
     }
-}
-
-/// An agent on `model`.
-pub(crate) fn agent(model: &ScriptedProvider) -> AiAgent<ScriptedProvider> {
-    AiAgent::new(channel("assistant"), model.clone())
 }
 
 /// Every row of a room's timeline, the refused ones included.

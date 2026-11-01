@@ -9,14 +9,19 @@ use super::{replay::OUTPUT, wire};
 use crate::OpenAiConfig;
 use roomkit_core::rules::transcript::{Message, Role};
 
-fn request(message: Message) -> Result<Value, crate::OpenAiError> {
-    let config = OpenAiConfig::new("https://example.com/v1", "", "fake");
+fn request(message: Message) -> Result<Value, crate::error::OpenAiError> {
+    let config = OpenAiConfig {
+        base_url: Some("https://example.com/v1".into()),
+        ..OpenAiConfig::new("", "fake")
+    };
     wire::request(
         &config,
         &Request {
             system_prompt: None,
             messages: vec![message],
             tools: vec![],
+            temperature: None,
+            max_tokens: None,
         },
     )
 }

@@ -57,6 +57,17 @@ pub(crate) fn object(members: &[(&str, Value)]) -> String {
     written
 }
 
+/// `value` as Python's `json.dumps(value)` writes it by default: `", "`
+/// and `": "` between members, every character past ASCII escaped. For
+/// the MCP crate, whose `call_tool` answers a failed call as Python's
+/// `json.dumps({"error": ...})`.
+#[doc(hidden)]
+pub fn dumps(value: &Value) -> String {
+    let mut written = String::new();
+    json(&mut written, value);
+    written
+}
+
 /// `value`, written as Python's `json.dumps` writes it.
 fn json(written: &mut String, value: &Value) {
     match value {

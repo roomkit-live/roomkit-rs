@@ -21,9 +21,9 @@ use axum::Router;
 use axum::routing::get;
 use roomkit::model::{ChannelId, Participant, ParticipantId, RoomId};
 use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, RoomKit, RoomKitOptions,
+    AttachChannelOptions, Channel, ConversationStore, CreateRoomOptions, RoomKit, RoomKitOptions,
 };
-use roomkit_openai::{OpenAiAgent, OpenAiConfig};
+use roomkit_ai::{AiChannel, AiChannelOptions};
 use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, watch};
@@ -186,11 +186,15 @@ impl AgentServer {
             },
         )));
         let websocket = WebSocketChannel::new(ChannelId::new("websocket")?);
-        let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
-            .with_system_prompt(SYSTEM_PROMPT)
-            .with_history(HISTORY);
-        let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?.with_tools(orders())?;
-        let agent_id = agent.id().clone();
+        let options = AiChannelOptions {
+            system_prompt: Some(SYSTEM_PROMPT.to_owned()),
+            max_context_events: HISTORY,
+            tools: vec![orders()?],
+            ..AiChannelOptions::default()
+        };
+        let provider = endpoint.provider()?;
+        let agent = AiChannel::new(ChannelId::new("assistant")?, provider, options)?;
+        let agent_id = agent.channel_id();
         kit.register_channel(websocket.clone())?;
         kit.register_channel(agent)?;
 

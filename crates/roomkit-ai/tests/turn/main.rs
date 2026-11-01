@@ -24,7 +24,7 @@ use roomkit::{
     SendEventOptions, ToolCallEvent, current_turn_host,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiAgent, AiTool, ToolError, ToolOutput, Tools};
+use roomkit_ai::{AiChannel, AiChannelOptions, AiTool, ToolError, ToolResult, Tools};
 use serde_json::{Value, json};
 use tokio::sync::Barrier;
 
@@ -413,11 +413,15 @@ async fn a_call_past_its_bound_fails_as_a_timeout() {
         ScriptedRound::answering("Sorry."),
     ]);
     let hangs = Tools::new().tool(
-        AiTool::new("wait", "Never answers", json!({ "type": "object" })),
+        AiTool {
+            parameters: json!({ "type": "object" }),
+            ..AiTool::new("wait", "Never answers").unwrap()
+        },
         |_call, _context| std::future::pending(),
     );
-    let room = Room::equipped(model, hangs, |agent| {
-        agent.with_tool_timeout(Some(Duration::from_millis(20)))
+    let room = Room::equipped(model, hangs, |options| AiChannelOptions {
+        tool_timeout: Some(Duration::from_millis(20)),
+        ..options
     })
     .await;
     let details = room.observed_details();
@@ -448,17 +452,21 @@ async fn a_round_s_calls_run_together() {
     ]);
     let barrier = Arc::new(Barrier::new(2));
     let meets = Tools::new().tool(
-        AiTool::new("meet", "Waits for the other", json!({ "type": "object" })),
+        AiTool {
+            parameters: json!({ "type": "object" }),
+            ..AiTool::new("meet", "Waits for the other").unwrap()
+        },
         move |_call, _context| {
             let barrier = Arc::clone(&barrier);
             async move {
                 barrier.wait().await;
-                Ok(ToolOutput::Text("met".to_owned()))
+                Ok(ToolResult::Text("met".to_owned()))
             }
         },
     );
-    let room = Room::equipped(model, meets, |agent| {
-        agent.with_tool_timeout(Some(Duration::from_secs(5)))
+    let room = Room::equipped(model, meets, |options| AiChannelOptions {
+        tool_timeout: Some(Duration::from_secs(5)),
+        ..options
     })
     .await;
     tokio::time::timeout(Duration::from_secs(5), room.says("Meet?"))
@@ -577,7 +585,10 @@ async fn a_tool_writes_to_its_room_at_the_turn_s_depth() {
         ScriptedRound::answering("Notified."),
     ]);
     let notifies = Tools::new().tool(
-        AiTool::new("notify", "Tells the room", json!({ "type": "object" })),
+        AiTool {
+            parameters: json!({ "type": "object" }),
+            ..AiTool::new("notify", "Tells the room").unwrap()
+        },
         |_call, context| async move {
             let turn = context.turn().cloned().or_else(current_turn_host).unwrap();
             let notice = TextContent::new("Order on its way");
@@ -590,7 +601,7 @@ async fn a_tool_writes_to_its_room_at_the_turn_s_depth() {
                 )
                 .await
                 .map_err(|error| ToolError::raised(&error))?;
-            Ok(ToolOutput::Text(format!(
+            Ok(ToolResult::Text(format!(
                 "sent at depth {}",
                 sent.chain_depth
             )))
@@ -636,7 +647,10 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
         }
         let weak = kit.downgrade();
         let changes = Tools::new().tool(
-            AiTool::new(tool, "Changes the room", json!({ "type": "object" })),
+            AiTool {
+                parameters: json!({ "type": "object" }),
+                ..AiTool::new(tool, "Changes the room").unwrap()
+            },
             move |_call, _context| {
                 let kit = weak.upgrade().unwrap();
                 async move {
@@ -653,7 +667,7 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
                             .await
                             .unwrap();
                     }
-                    Ok(ToolOutput::Text("done".to_owned()))
+                    Ok(ToolResult::Text("done".to_owned()))
                 }
             },
         );
@@ -662,9 +676,15 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
             ScriptedRound::answering("Done."),
             ScriptedRound::answering("Hello."),
         ]);
-        let agent = AiAgent::new(channel("assistant"), model)
-            .with_tools(changes)
-            .unwrap();
+        let agent = AiChannel::new(
+            channel("assistant"),
+            model,
+            AiChannelOptions {
+                tools: changes.into(),
+                ..AiChannelOptions::default()
+            },
+        )
+        .unwrap();
         kit.register_channel(agent).unwrap();
         kit.create_room(CreateRoomOptions {
             room_id: Some(room_id()),

@@ -14,11 +14,6 @@ use crate::server::McpServer;
 /// of the tools, a first start that fetches its package included.
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// How long a server is given by default to exit once its input is closed,
-/// then once its group is sent `SIGTERM`, before `SIGKILL`: the reference
-/// implementation's.
-const DEFAULT_CLOSE_GRACE: Duration = Duration::from_secs(2);
-
 /// The variables of the host's environment a server inherits, as the
 /// reference implementation's MCP SDK gives them; any other the host passes
 /// with [`McpCommand::env`]. A host's environment holds its own secrets (a
@@ -58,23 +53,11 @@ const INHERITED: &[&str] = &[
 /// whole, so that what it starts (the real server, behind `npx` or `uvx`)
 /// goes with it: `SIGTERM` to the group, then `SIGKILL` once the grace is
 /// over. In its own group, the server no longer receives a terminal's
-/// Ctrl+C: a host stops it through its close, its kit's close or the
-/// drop of its last handle, which a Ctrl+C handler that closes the kit
+/// Ctrl+C: a host stops it through its close or the
+/// drop of its last handle, which a Ctrl+C handler that closes it
 /// covers. Elsewhere, the server's process alone is killed.
-///
-/// ```
-/// use std::time::Duration;
-///
-/// use roomkit_mcp::McpCommand;
-///
-/// let command = McpCommand::new("npx")
-///     .args(["-y", "@modelcontextprotocol/server-filesystem", "/srv/shop"])
-///     .env("LOG_LEVEL", "warning")
-///     .connect_timeout(Duration::from_secs(120));
-/// # let _ = command;
-/// ```
 #[derive(Clone)]
-pub struct McpCommand {
+pub(crate) struct McpCommand {
     program: OsString,
     args: Vec<OsString>,
     env: Vec<(OsString, OsString)>,
@@ -87,27 +70,20 @@ impl McpCommand {
     /// The command starting `program`, a path or a name the host's `PATH`
     /// resolves, with no argument, connecting within 60 seconds and given
     /// 2 seconds to exit at its close.
-    pub fn new(program: impl Into<OsString>) -> Self {
+    pub(crate) fn new(program: impl Into<OsString>) -> Self {
         Self {
             program: program.into(),
             args: Vec::new(),
             env: Vec::new(),
             current_dir: None,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            close_grace: DEFAULT_CLOSE_GRACE,
+            close_grace: crate::server::CLOSE_GRACE,
         }
-    }
-
-    /// The same command, `arg` after its arguments.
-    #[must_use]
-    pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
-        self.args.push(arg.into());
-        self
     }
 
     /// The same command, `args` after its arguments.
     #[must_use]
-    pub fn args<I, A>(mut self, args: I) -> Self
+    pub(crate) fn args<I, A>(mut self, args: I) -> Self
     where
         I: IntoIterator<Item = A>,
         A: Into<OsString>,
@@ -119,14 +95,14 @@ impl McpCommand {
     /// The same command, the server's environment holding `key` set to
     /// `value`, over an inherited one of that name.
     #[must_use]
-    pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+    pub(crate) fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
         self.env.push((key.into(), value.into()));
         self
     }
 
     /// The same command, the server started in `dir`.
     #[must_use]
-    pub fn current_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+    pub(crate) fn current_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.current_dir = Some(dir.into());
         self
     }
@@ -135,24 +111,22 @@ impl McpCommand {
     /// listing of the tools, past which the process is stopped and
     /// [`McpError::Timeout`] returned.
     #[must_use]
-    pub fn connect_timeout(mut self, bound: Duration) -> Self {
+    pub(crate) fn connect_timeout(mut self, bound: Duration) -> Self {
         self.connect_timeout = bound;
         self
     }
-
-    /// The same command, the server given `grace` to exit once its input
-    /// is closed at its close, then `grace` again once its group is sent
-    /// `SIGTERM` (at its close, a failed connection or a drop), before
-    /// `SIGKILL`.
+    /// The same command, its server given `grace` to exit at its close: a
+    /// test's, where Python's SDK gives two seconds.
     #[must_use]
-    pub fn close_grace(mut self, grace: Duration) -> Self {
+    pub(crate) fn close_grace(mut self, grace: Duration) -> Self {
         self.close_grace = grace;
         self
     }
 
     /// Starts the server, runs the MCP handshake and lists its tools, within
     /// the connect bound ([`connect_timeout`](Self::connect_timeout), 60
-    /// seconds by default).
+    /// seconds by default), until `cancelled` completes: cancellation stops
+    /// and reaps the server before returning (RFC §21.2).
     ///
     /// # Errors
     ///
@@ -163,18 +137,8 @@ impl McpCommand {
     /// (RFC §21.2). Each of the three carries the last lines the server
     /// wrote on its standard error, when it wrote any: a handshake's or a
     /// listing's message ends with them, and they are a timeout's `stderr`.
-    pub async fn connect(self) -> Result<McpServer, McpError> {
-        self.connect_until(std::future::pending()).await
-    }
-
-    /// Connects until the host's cancellation future completes. Cancellation
-    /// stops and reaps the server before returning (RFC §21.2).
-    ///
-    /// # Errors
-    ///
-    /// Returns the errors of [`connect`](Self::connect), or
     /// [`McpError::Cancelled`] when the host interrupts connecting.
-    pub async fn connect_until(
+    pub(crate) async fn connect_until(
         self,
         cancelled: impl Future<Output = ()> + Send,
     ) -> Result<McpServer, McpError> {
@@ -219,7 +183,7 @@ impl McpCommand {
     }
 
     /// Whether the command can start a process.
-    fn check(&self) -> Result<(), McpError> {
+    pub(crate) fn check(&self) -> Result<(), McpError> {
         let refuse = |reason: &str| {
             Err(McpError::Command {
                 reason: reason.to_owned(),

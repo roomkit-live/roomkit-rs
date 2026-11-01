@@ -2,7 +2,9 @@
 mod client;
 mod sse;
 
-use crate::{McpError, McpServer, listing, server::MESSAGE_LIMIT};
+use crate::error::McpError;
+use crate::listing;
+use crate::server::{MESSAGE_LIMIT, McpServer};
 use reqwest::{
     Url,
     header::{HeaderName, HeaderValue},
@@ -21,7 +23,7 @@ use std::{collections::HashMap, fmt, time::Duration};
 /// endpoints. The caller chooses its credential policy; this type never reads
 /// environment variables. Debug and errors omit the URL and header values.
 #[derive(Clone)]
-pub struct McpHttp {
+pub(crate) struct McpHttp {
     url: Url,
     headers: HashMap<HeaderName, HeaderValue>,
     timeout: Duration,
@@ -31,7 +33,7 @@ impl McpHttp {
     ///
     /// # Errors
     /// Refuses non-HTTP(S) URLs, user information, fragments and missing hosts.
-    pub fn new(url: &str) -> Result<Self, McpError> {
+    pub(crate) fn new(url: &str) -> Result<Self, McpError> {
         let url = Url::parse(url).map_err(|_| invalid("invalid endpoint URL"))?;
         if !matches!(url.scheme(), "http" | "https")
             || url.host_str().is_none()
@@ -55,7 +57,7 @@ impl McpHttp {
     /// # Errors
     /// Refuses invalid names/values, more than 32 headers, values over 8192 bytes,
     /// and headers owned by HTTP framing or MCP negotiation.
-    pub fn header(mut self, name: &str, value: &str) -> Result<Self, McpError> {
+    pub(crate) fn header(mut self, name: &str, value: &str) -> Result<Self, McpError> {
         let name =
             HeaderName::from_bytes(name.as_bytes()).map_err(|_| invalid("invalid header name"))?;
         if name.as_str().starts_with("mcp-")
@@ -88,25 +90,21 @@ impl McpHttp {
         }
         Ok(self)
     }
-    /// Sets the combined handshake and catalogue discovery deadline.
+    /// The same endpoint, its handshake and catalogue discovery bounded by
+    /// `timeout`.
     #[must_use]
-    pub const fn connect_timeout(mut self, timeout: Duration) -> Self {
+    pub(crate) const fn connect_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
-    /// Connects and discovers tools once (RFC §21.2).
+    /// Connects and discovers tools once (RFC §21.2), until cancelled.
+    /// Failure or cancellation drains the HTTP worker and attempts to delete
+    /// any negotiated session before returning.
     ///
     /// # Errors
-    /// Returns a safe transport failure, a timeout or invalid configuration.
-    pub async fn connect(self) -> Result<McpServer, McpError> {
-        self.connect_until(std::future::pending()).await
-    }
-    /// Connects until cancelled. Failure or cancellation drains the HTTP worker
-    /// and attempts to delete any negotiated session before returning.
-    ///
-    /// # Errors
-    /// Returns the errors of [`connect`](Self::connect), or [`McpError::Cancelled`].
-    pub async fn connect_until(
+    /// Returns a safe transport failure, a timeout, invalid configuration,
+    /// or [`McpError::Cancelled`].
+    pub(crate) async fn connect_until(
         self,
         cancelled: impl Future<Output = ()> + Send,
     ) -> Result<McpServer, McpError> {

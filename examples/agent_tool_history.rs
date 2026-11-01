@@ -22,8 +22,7 @@ use std::process::ExitCode;
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, RoomKit};
-use roomkit_ai::{AiTool, ToolOutput, Tools};
-use roomkit_openai::{OpenAiAgent, OpenAiConfig};
+use roomkit_ai::{AiChannel, AiChannelOptions, AiError, AiTool, ToolHandler, ToolResult};
 use serde_json::{Value, json};
 
 use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Reply};
@@ -145,8 +144,18 @@ fn check_the_history(checks: &mut Checks, first_turn: &[Value], second_turn: &[V
 async fn office(
     endpoint: &OpenAiEndpoint,
 ) -> Result<(RoomKit, RecordingTransport, RoomId), Box<dyn Error>> {
-    let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model());
-    let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?.with_tools(booking())?;
+    let options = AiChannelOptions {
+        tools: vec![booking()?.into()],
+        tool_handler: Some(ToolHandler::new(|_name, arguments| async move {
+            let mut booked = json!({ "booked": true, "booking_id": BOOKING, "end": "15:30" });
+            if let Value::Object(fields) = &mut booked {
+                fields.extend(arguments);
+            }
+            Ok(ToolResult::Json(booked))
+        })),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(ChannelId::new("assistant")?, endpoint.provider()?, options)?;
     let kit = shared::kit();
     let sms = RecordingTransport::new(
         ChannelId::new("sms")?,
@@ -172,8 +181,9 @@ async fn office(
     Ok((kit, sms, room))
 }
 
-/// `book_meeting_room`: the booking's number is only in its result.
-fn booking() -> Tools {
+/// `book_meeting_room`, which the agent's handler serves: the booking's
+/// number is only in its result.
+fn booking() -> Result<AiTool, AiError> {
     let parameters = json!({
         "type": "object",
         "properties": {
@@ -184,12 +194,8 @@ fn booking() -> Tools {
         },
         "required": ["room", "date", "start", "minutes"],
     });
-    let book = AiTool::new("book_meeting_room", "Book a meeting room", parameters);
-    Tools::new().tool(book, |call, _context| async move {
-        let mut booked = json!({ "booked": true, "booking_id": BOOKING, "end": "15:30" });
-        if let Value::Object(fields) = &mut booked {
-            fields.extend(call.arguments);
-        }
-        Ok(ToolOutput::Json(booked))
+    Ok(AiTool {
+        parameters,
+        ..AiTool::new("book_meeting_room", "Book a meeting room")?
     })
 }

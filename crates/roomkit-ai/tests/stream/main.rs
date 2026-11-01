@@ -27,8 +27,8 @@ use roomkit::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiAgent, AiContext, AiProvider, AiResponse, AiTool, ProviderStream, StreamEvent,
-    StreamTextDelta, ToolOutput, Tools,
+    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiTool, ProviderStream,
+    StreamEvent, StreamTextDelta, ToolResult, Tools,
 };
 use roomkit_core::ops::ChannelConfig;
 use serde_json::json;
@@ -350,11 +350,10 @@ impl AiProvider for Pieces {
 /// `lookup_order`, counting its runs, signalling `running` while it runs
 /// when given one.
 fn lookup(runs: Arc<AtomicUsize>, running: Option<Arc<Notify>>) -> Tools {
-    let definition = AiTool::new(
-        "lookup_order",
-        "Find an order",
-        json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
-    );
+    let definition = AiTool {
+        parameters: json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
+        ..AiTool::new("lookup_order", "Find an order").unwrap()
+    };
     Tools::new().tool(definition, move |_call, _context| {
         let (runs, running) = (Arc::clone(&runs), running.clone());
         async move {
@@ -363,7 +362,7 @@ fn lookup(runs: Arc<AtomicUsize>, running: Option<Arc<Notify>>) -> Tools {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
             runs.fetch_add(1, Ordering::SeqCst);
-            Ok(ToolOutput::Text("shipped".to_owned()))
+            Ok(ToolResult::Text("shipped".to_owned()))
         }
     })
 }
@@ -391,9 +390,15 @@ impl Room {
         let model = Pieces::new(rounds);
         let dropped = Arc::clone(&model.dropped);
         let kit = RoomKit::new(RoomKitOptions::default());
-        let agent = AiAgent::new(channel("agent"), model.clone())
-            .with_tools(tools(&kit))
-            .unwrap();
+        let agent = AiChannel::new(
+            channel("agent"),
+            model.clone(),
+            AiChannelOptions {
+                tools: tools(&kit).into(),
+                ..AiChannelOptions::default()
+            },
+        )
+        .unwrap();
         let web = RecordingTransport::new(
             channel("web"),
             ChannelType::WEBHOOK,
@@ -897,7 +902,10 @@ async fn a_turn_ending_on_no_text_writes_its_record_on_its_last_message() {
 /// stored the rows when the turn returned, the tool's event first.)
 #[tokio::test]
 async fn an_event_a_tool_sends_is_stored_after_the_round_s_text_and_start() {
-    let definition = AiTool::new("notify", "Notify", json!({ "type": "object" }));
+    let definition = AiTool {
+        parameters: json!({ "type": "object" }),
+        ..AiTool::new("notify", "Notify").unwrap()
+    };
     let tools = Tools::new().tool(definition, |_call, context| {
         let turn = context.turn().cloned();
         let room = context.room_id.clone();
@@ -913,7 +921,7 @@ async fn an_event_a_tool_sends_is_stored_after_the_round_s_text_and_start() {
                 .await
                 .map_err(|error| roomkit_ai::ToolError::raised(&error))?;
             }
-            Ok(ToolOutput::Text("done".to_owned()))
+            Ok(ToolResult::Text("done".to_owned()))
         }
     });
     let rounds = vec![
@@ -1018,7 +1026,7 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
     let model = Controlled::default();
     *model.events.lock().unwrap() = Some(events);
     let dropped = Arc::clone(&model.dropped);
-    let agent = AiAgent::new(channel("agent"), model);
+    let agent = AiChannel::new(channel("agent"), model, AiChannelOptions::default()).unwrap();
     let kit = RoomKit::new(RoomKitOptions::default());
     let ws = Streaming::new(Stop::Never);
     kit.register_channel(RecordingTransport::new(
@@ -1110,17 +1118,22 @@ async fn the_default_deliver_stream_delivers_one_buffered_event() {
         ScriptedRound::calling("", [("call_1", "lookup", "{}")]).in_pieces(["Let me ", "check."]),
         ScriptedRound::writing(["Done."]),
     ]);
-    let lookup = AiTool::new(
-        "lookup",
-        "Looks up",
-        serde_json::json!({ "type": "object" }),
-    );
+    let lookup = AiTool {
+        parameters: serde_json::json!({ "type": "object" }),
+        ..AiTool::new("lookup", "Looks up").unwrap()
+    };
     let tools = Tools::new().tool(lookup, |_call, _context| async {
-        Ok(ToolOutput::Text("found".to_owned()))
+        Ok(ToolResult::Text("found".to_owned()))
     });
-    let agent = AiAgent::new(channel("agent"), model)
-        .with_tools(tools)
-        .unwrap();
+    let agent = AiChannel::new(
+        channel("agent"),
+        model,
+        AiChannelOptions {
+            tools: tools.into(),
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
     let kit = RoomKit::new(RoomKitOptions::default());
     let sms = RecordingTransport::new(
         channel("sms"),

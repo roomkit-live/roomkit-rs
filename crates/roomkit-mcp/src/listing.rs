@@ -149,11 +149,9 @@ impl<'a> Catalogue<'a> {
                 "an MCP tool's description is cut"
             );
         }
-        Some(AiTool::new(
-            name,
-            bounded_text(description, DESCRIPTION_LIMIT),
-            parameters,
-        ))
+        AiTool::new(name, bounded_text(description, DESCRIPTION_LIMIT))
+            .ok()
+            .map(|tool| AiTool { parameters, ..tool })
     }
 }
 

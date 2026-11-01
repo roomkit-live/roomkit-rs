@@ -1,6 +1,7 @@
-//! What building an agent fails with.
+//! What building an AI channel fails with.
 
-/// What building an AI agent failed with.
+/// What building an AI channel failed with: what Python's raises as
+/// `ValueError`.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AiError {
@@ -24,15 +25,29 @@ pub enum AiError {
         /// The label.
         label: String,
     },
-    /// A tool's name is one the provider's vendor refuses (RFC §6.7): a
-    /// request declaring it would fail, on every turn.
-    #[error("tool {name:?}: {vendor} accepts tool names matching {rule}")]
+    /// A tool's name is one no vendor accepts (RFC §6.7): an empty one, or
+    /// one with a character other than a letter, a digit, `_`, `.`, `:` or
+    /// `-`. Python's `ValueError`, in its words.
+    #[error(
+        "tool name '{name}' is accepted by no provider: use letters, digits, '_', '.', ':' or '-'"
+    )]
     ToolName {
         /// The name.
         name: String,
-        /// The vendor whose rule refuses it.
-        vendor: String,
-        /// The names the vendor accepts, as a pattern matched whole.
-        rule: String,
+    },
+    /// A tool policy's pattern holds a bracket, which a pattern reads as
+    /// itself (RFC §21.1): a rule written as a character class would cover
+    /// none of the names it was written for. Python's `ValueError`.
+    #[error("tool pattern '{pattern}' holds a bracket: a pattern reads * and ? alone")]
+    ToolPattern {
+        /// The pattern.
+        pattern: String,
+    },
+    /// Fewer than two handlers were given to compose. Python's
+    /// `ValueError`.
+    #[error("compose_tool_handlers requires at least 2 handlers, {given} given")]
+    TooFewHandlers {
+        /// How many were given.
+        given: usize,
     },
 }

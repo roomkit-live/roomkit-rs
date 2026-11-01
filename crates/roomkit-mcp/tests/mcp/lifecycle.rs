@@ -9,19 +9,29 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::Metadata;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{ToolContext, ToolError, ToolOutput, Toolset};
-use roomkit_mcp::{McpCommand, McpError};
+use roomkit_ai::{ToolError, ToolResult};
+use roomkit_mcp::{AsToolHandlerOptions, FromCommandOptions, McpError, McpToolProvider};
 
-use super::support::{GRACE, PidFile, Room, agent, channel, exists, fake, gone_within, room_id};
+use super::support::{Fake, GRACE, PidFile, Room, exists, fake, gone_within, serving};
 
-fn echo(text: &str) -> roomkit::model::ToolCall {
-    let arguments = serde_json::json!({ "text": text });
-    roomkit::model::ToolCall::new("call_1", "echo", arguments.as_object().cloned().unwrap())
+/// The call of the tool `name` with the text `text` through `server`'s
+/// tool handler.
+async fn call(server: &McpToolProvider, name: &str, text: &str) -> Result<ToolResult, ToolError> {
+    let arguments: Metadata = serde_json::json!({ "text": text })
+        .as_object()
+        .cloned()
+        .unwrap();
+    let handler = server
+        .as_tool_handler(AsToolHandlerOptions::default())
+        .unwrap();
+    handler.call(name.to_owned(), arguments).await
 }
 
-fn context() -> ToolContext {
-    ToolContext::new(room_id(), channel("assistant"))
+/// A server that the command `program` starts, with no argument.
+fn command(program: &str) -> Result<McpToolProvider, McpError> {
+    McpToolProvider::from_command(program, FromCommandOptions::default())
 }
 
 /// RFC §21.2: the server stops when its connection closes, and the close
@@ -74,9 +84,7 @@ async fn a_server_that_exits_is_waited_for_at_once() {
     let pid_file = PidFile::new();
     let server = pid_file.on(fake("normal")).connect().await.unwrap();
     let pid = pid_file.pid();
-    let mut call = echo("");
-    call.name = "crash".to_owned();
-    let failed = server.call(call, context()).await;
+    let failed = call(&server, "crash", "").await;
     let reaped = gone_within(pid, Duration::from_secs(5)).await;
     assert!(
         matches!(&failed, Err(ToolError::Raised { kind, .. }) if kind == "McpError") && reaped,
@@ -101,7 +109,7 @@ impl Wrapped {
     }
 
     /// The wrapper, starting the fake server in `mode` as its child.
-    fn command(&self, mode: &str) -> McpCommand {
+    fn command(&self, mode: &str) -> Fake {
         self.server
             .on_child(self.wrapper.on(fake(&format!("wrap:{mode}"))))
     }
@@ -203,26 +211,29 @@ async fn a_wrapped_server_that_never_answers_is_stopped_before_the_error() {
     assert_eq!(wrapped.gone().await, (true, true));
 }
 
-/// The kit's close closes the agent serving the server's tools, which
-/// stops the server.
+/// The host connects and closes the provider, as Python's `async with`:
+/// the kit's close, which closes the channel serving its tools, leaves the
+/// server running, and the host's close stops it.
 #[tokio::test]
-async fn the_kit_s_close_stops_the_server_of_its_agent() {
+async fn the_host_s_close_stops_the_server_the_kit_s_close_leaves() {
     let pid_file = PidFile::new();
     let server = pid_file.on(fake("normal")).connect().await.unwrap();
     let pid = pid_file.pid();
     let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
-    let room = Room::with(agent(&model).with_tools(server).unwrap()).await;
+    let room = Room::with(serving(&model, &server, |options| options)).await;
     room.says("Hello").await;
-    let running = exists(pid);
     room.kit.close().await.unwrap();
-    assert_eq!((running, exists(pid)), (true, false));
+    let after_kit = exists(pid);
+    server.close().await;
+    assert_eq!((after_kit, exists(pid)), (true, false));
 }
 
 /// RFC §21.2: a command that names no program fails to start, and no
 /// process runs.
 #[tokio::test]
 async fn a_missing_command_fails_to_start() {
-    let refused = McpCommand::new("/nonexistent/roomkit-mcp-server")
+    let refused = command("/nonexistent/roomkit-mcp-server")
+        .unwrap()
         .connect()
         .await
         .err();
@@ -383,16 +394,18 @@ async fn a_listing_that_fails_stops_the_server_before_the_error() {
 #[tokio::test]
 async fn a_server_flooding_its_standard_error_is_not_blocked() {
     let server = fake("stderr-flood").connect().await.unwrap();
-    let answer = server.call(echo("still here"), context()).await;
+    let answer = call(&server, "echo", "still here").await;
     server.close().await;
-    assert_eq!(answer, Ok(ToolOutput::Text("still here".to_owned())));
+    assert_eq!(answer, Ok(ToolResult::Text("still here".to_owned())));
 }
 
-/// A command that cannot start a process is refused before anything runs.
+/// A command that cannot start a process is refused before anything runs,
+/// an empty one when the provider is built, as Python's raises
+/// `ValueError`.
 #[tokio::test]
 async fn a_command_that_cannot_start_a_process_is_refused() {
     let refused = [
-        McpCommand::new("").connect().await.err(),
+        command("").err(),
         fake("normal").env("A=B", "1").connect().await.err(),
         fake("normal").env("", "1").connect().await.err(),
         fake("normal").env("KEY", "a\0b").connect().await.err(),
@@ -416,11 +429,9 @@ async fn the_server_inherits_only_the_named_variables_and_its_own() {
         .connect()
         .await
         .unwrap();
-    let mut call = echo("");
-    call.name = "env".to_owned();
-    let answer = server.call(call, context()).await.unwrap();
+    let answer = call(&server, "env", "").await.unwrap();
     server.close().await;
-    let ToolOutput::Text(names) = answer else {
+    let ToolResult::Text(names) = answer else {
         panic!("{answer:?}");
     };
     let allowed = [
@@ -449,7 +460,7 @@ async fn an_argument_reaches_the_server_as_written() {
         .connect()
         .await
         .unwrap();
-    let instructions = server.instructions().map(str::to_owned);
+    let instructions = server.instructions().unwrap();
     server.close().await;
     assert_eq!(instructions.as_deref(), Some(written));
 }
@@ -463,12 +474,10 @@ async fn cancelling_connect_reaps_the_started_process() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     };
-    let result = tokio::time::timeout(
-        Duration::from_secs(5),
-        pid_file.on(fake("stderr-hang")).connect_until(cancelled),
-    )
-    .await
-    .unwrap();
+    let provider = pid_file.on(fake("stderr-hang")).provider();
+    let result = tokio::time::timeout(Duration::from_secs(5), provider.connect_until(cancelled))
+        .await
+        .unwrap();
     assert!(matches!(result, Err(McpError::Cancelled)));
     assert!(!exists(pid_file.pid()));
 }

@@ -18,7 +18,7 @@ use roomkit::{
     RoomKitOptions, store::CommitEventOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiAgent, AiContext, AiRole, AiTool, ToolOutput, Tools};
+use roomkit_ai::{AiChannel, AiChannelOptions, AiContext, AiRole, AiTool, ToolResult, Tools};
 use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 use serde_json::json;
 
@@ -150,10 +150,13 @@ async fn overlapping_turns_read_back_from_the_file_pair_by_their_correlation_id(
 /// `lookup_order`, finding every order shipped.
 fn lookup() -> Tools {
     let order = json!({ "type": "object", "properties": { "order": { "type": "string" } } });
-    let definition = AiTool::new("lookup_order", "Find an order", order);
+    let definition = AiTool {
+        parameters: order,
+        ..AiTool::new("lookup_order", "Find an order").unwrap()
+    };
     Tools::new().tool(definition, |call, _context| async move {
         let order = call.arguments.get("order").cloned().unwrap_or_default();
-        Ok(ToolOutput::Json(
+        Ok(ToolResult::Json(
             json!({ "order": order, "status": "shipped" }),
         ))
     })
@@ -172,9 +175,15 @@ async fn kit_on(file: &TempFile, model: ScriptedProvider, fresh: bool) -> RoomKi
         RecordingTransportOptions::default(),
     ))
     .unwrap();
-    let agent = AiAgent::new(id("assistant"), model)
-        .with_tools(lookup())
-        .unwrap();
+    let agent = AiChannel::new(
+        id("assistant"),
+        model,
+        AiChannelOptions {
+            tools: lookup().into(),
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
     kit.register_channel(agent).unwrap();
     if fresh {
         let options = CreateRoomOptions {

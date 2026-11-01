@@ -25,7 +25,7 @@ use roomkit::{
     AttachChannelOptions, Channel, CreateRoomOptions, ProcessInboundOptions, TransportChannel,
     TransportChannelOptions,
 };
-use roomkit_openai::{OpenAiAgent, OpenAiConfig};
+use roomkit_ai::{AiChannel, AiChannelOptions};
 use serde_json::Value;
 
 use shared::text_of;
@@ -43,10 +43,12 @@ const REPLIES: &[&str] = &[
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let endpoint = OpenAiEndpoint::from_env(REPLIES).await?;
     println!("The agent calls {}.", endpoint.shown_base_url());
-    let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
-        .with_system_prompt(SYSTEM_PROMPT)
-        .with_history(20);
-    let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?;
+    let options = AiChannelOptions {
+        system_prompt: Some(SYSTEM_PROMPT.to_owned()),
+        max_context_events: 20,
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(ChannelId::new("assistant")?, endpoint.provider()?, options)?;
 
     let kit = shared::kit();
     // Transports that keep a message's metadata, the sender's name its
@@ -61,7 +63,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ChannelType::WEBSOCKET,
         TransportChannelOptions::default(),
     );
-    let agent_id = agent.id().clone();
+    let agent_id = agent.channel_id();
     kit.register_channel(sms.clone())?;
     kit.register_channel(web.clone())?;
     kit.register_channel(agent)?;

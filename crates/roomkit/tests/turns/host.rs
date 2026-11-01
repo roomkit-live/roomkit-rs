@@ -9,7 +9,7 @@ use roomkit::{
     CreateRoomOptions, GetTimelineOptions, RoomKitError, SendEventOptions, TurnHost,
     current_turn_host,
 };
-use roomkit_ai::ToolOutput;
+use roomkit_ai::ToolResult;
 
 use crate::support::{asks, channel, kit};
 
@@ -36,7 +36,7 @@ async fn a_turn_s_host_refuses_another_room() {
                 Err(RoomKitError::RemoteTurn { kind, .. }) => kind,
                 other => format!("{other:?}"),
             });
-            Ok(ToolOutput::Text("42".to_owned()))
+            Ok(ToolResult::Text("42".to_owned()))
         }
     })
     .await;
@@ -71,7 +71,7 @@ async fn a_turn_s_host_is_open_during_the_turn_and_reachable_after_it() {
             let turn = current_turn_host().unwrap();
             let (open, reachable) = (turn.open(), turn.reachable());
             *keeps.lock().unwrap() = Some((turn, open, reachable));
-            Ok(ToolOutput::Text("42".to_owned()))
+            Ok(ToolResult::Text("42".to_owned()))
         }
     })
     .await;

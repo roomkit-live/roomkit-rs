@@ -21,7 +21,7 @@ use roomkit::{
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiContext, AiProvider, AiResponse, AiTool, ProviderError, ProviderStream, StreamDone,
-    StreamEvent, StreamTextDelta, ToolOutput, Tools,
+    StreamEvent, StreamTextDelta, ToolResult, Tools,
 };
 use roomkit_core::ops::ChannelConfig;
 use serde_json::json;
@@ -119,10 +119,13 @@ async fn attach_scripted<S: ConversationStore>(kit: &RoomKit<S>, left: Left) {
         }
         Left::Tool => {
             let tools = Tools::new().tool(
-                AiTool::new("slow", "Slow.", json!({ "type": "object" })),
+                AiTool {
+                    parameters: json!({ "type": "object" }),
+                    ..AiTool::new("slow", "Slow.").unwrap()
+                },
                 |_call, _context| async {
                     tokio::time::sleep(Duration::from_secs(30)).await;
-                    Ok(ToolOutput::Text("slow".to_owned()))
+                    Ok(ToolResult::Text("slow".to_owned()))
                 },
             );
             let model = ScriptedProvider::new([

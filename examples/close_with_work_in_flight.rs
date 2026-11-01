@@ -49,8 +49,8 @@ use roomkit::{
     SendEventOptions,
 };
 use roomkit_ai::{
-    AiAgent, AiContext, AiProvider, AiResponse, ProviderError, ProviderStream, StreamDone,
-    StreamEvent, StreamTextDelta,
+    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, ProviderError, ProviderStream,
+    StreamDone, StreamEvent, StreamTextDelta,
 };
 use serde_json::json;
 use tokio::sync::Notify;
@@ -197,7 +197,8 @@ async fn kit(
     let provider = LongAnswer {
         started: Arc::clone(started),
     };
-    kit.register_channel(AiAgent::new(id("agent"), provider))?;
+    let options = AiChannelOptions::default();
+    kit.register_channel(AiChannel::new(id("agent"), provider, options)?)?;
     for room_id in ["sends", "agent-room", "hooked"] {
         let options = CreateRoomOptions {
             room_id: Some(room(room_id)),

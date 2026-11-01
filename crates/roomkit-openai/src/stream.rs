@@ -18,9 +18,9 @@ use roomkit_ai::{AiResponse, ProviderError, ProviderStream, StreamEvent, TextStr
 
 use crate::request::{Request, push_end, push_text};
 
-use crate::agent::{ANSWER_LIMIT, OpenAiProvider, read_body};
 use crate::config::OpenAiApi;
 use crate::error::OpenAiError;
+use crate::provider::{ANSWER_LIMIT, OpenAiAiProvider, read_body};
 use crate::sse::Events;
 use crate::wire;
 
@@ -31,7 +31,7 @@ use folding::Folding;
 type Item = Result<StreamEvent, ProviderError>;
 
 /// The generation answering `request`, through `provider`, as a stream.
-pub(crate) fn answer(provider: &OpenAiProvider, request: Request) -> ProviderStream<'_> {
+pub(crate) fn answer(provider: &OpenAiAiProvider, request: Request) -> ProviderStream<'_> {
     let reading = Reading {
         provider,
         request,
@@ -77,7 +77,7 @@ impl Stream for Answer<'_> {
 
 /// Where a generation's read stands.
 struct Reading<'a> {
-    provider: &'a OpenAiProvider,
+    provider: &'a OpenAiAiProvider,
     request: Request,
     phase: Phase,
     /// The events read and not handed yet, in order.

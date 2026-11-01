@@ -20,14 +20,15 @@ use crate::stream::{Yielder, items};
 ///
 /// ```
 /// use roomkit::model::ChannelId;
-/// use roomkit_ai::AiAgent;
 /// use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
+/// use roomkit_ai::{AiChannel, AiChannelOptions};
 ///
 /// let model = ScriptedProvider::new([
 ///     ScriptedRound::calling("Let me check.", [("call_1", "lookup_order", r#"{"order": "42"}"#)]),
 ///     ScriptedRound::answering("Order 42 shipped on Monday."),
 /// ]);
-/// let agent = AiAgent::new(ChannelId::new("assistant")?, model.clone());
+/// let options = AiChannelOptions::default();
+/// let agent = AiChannel::new(ChannelId::new("assistant")?, model.clone(), options)?;
 /// # let _ = agent;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```

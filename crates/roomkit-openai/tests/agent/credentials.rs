@@ -1,7 +1,7 @@
 //! Renewable credentials are resolved for each request and errors retain the
 //! exact credential used by that response, never a shared mutable token.
 use super::{Reply, Room};
-use roomkit_openai::{TokenError, TokenFuture, TokenSource};
+use roomkit_openai::{OpenAiConfig, TokenError, TokenFuture, TokenSource};
 use serde_json::json;
 use std::sync::{
     Arc,
@@ -32,7 +32,10 @@ async fn a_rotating_source_is_resolved_again_and_its_current_error_is_redacted()
         "unused-static",
         |config| {
             let shared = Arc::clone(&source);
-            config.with_token_source(shared)
+            OpenAiConfig {
+                token_source: Some(shared),
+                ..config
+            }
         },
     )
     .await;
@@ -56,8 +59,9 @@ async fn a_rotating_source_is_resolved_again_and_its_current_error_is_redacted()
 }
 #[tokio::test]
 async fn a_failed_credential_source_never_falls_back_to_the_static_key() {
-    let room = Room::configured(vec![], "unused-static", |config| {
-        config.with_token_source(Arc::new(Refused))
+    let room = Room::configured(vec![], "unused-static", |config| OpenAiConfig {
+        token_source: Some(Arc::new(Refused)),
+        ..config
     })
     .await;
     let result = room.says(&room.sms, "alice", "Alice", "Hello").await;

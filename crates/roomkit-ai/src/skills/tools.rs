@@ -15,7 +15,7 @@ use super::texts::{
     self, ACTIVATE_DESCRIPTION, ACTIVATE_SKILL, ACTIVE_HEADING, ALREADY_ACTIVE, PREAMBLE,
     READ_DESCRIPTION, READ_SKILL_REFERENCE, quoted_name,
 };
-use crate::tools::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolOutput};
+use crate::tools::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolResult};
 
 /// The skills an agent serves: the registry, read only, and which skills
 /// are active in each room.
@@ -23,6 +23,9 @@ use crate::tools::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolOu
 pub(crate) struct SkillTools {
     registry: SkillRegistry,
     manifest: String,
+    /// Whether the system prompt lists the skills (Python's
+    /// `skills_in_prompt`).
+    listed: bool,
     activations: Mutex<Activations>,
 }
 
@@ -41,18 +44,26 @@ pub(crate) struct SkillTurn<'a> {
 }
 
 impl SkillTools {
-    pub(crate) fn new(registry: SkillRegistry) -> Self {
+    /// The tools of `registry`, the system prompt listing its skills when
+    /// `listed`.
+    pub(crate) fn new(registry: SkillRegistry, listed: bool) -> Self {
         Self {
             manifest: registry.to_prompt_xml(),
             registry,
+            listed,
             activations: Mutex::default(),
         }
+    }
+
+    /// The skills active in `room`, least recently used first.
+    pub(crate) fn active_names(&self, room: &RoomId) -> Vec<String> {
+        self.lock().active(room)
     }
 
     /// The two tools, as the reference implementation declares them.
     pub(crate) fn definitions() -> Vec<AiTool> {
         vec![
-            AiTool::new(
+            AiTool::own(
                 ACTIVATE_SKILL,
                 ACTIVATE_DESCRIPTION,
                 json!({
@@ -63,7 +74,7 @@ impl SkillTools {
                     "required": ["name"],
                 }),
             ),
-            AiTool::new(
+            AiTool::own(
                 READ_SKILL_REFERENCE,
                 READ_DESCRIPTION,
                 json!({
@@ -79,13 +90,16 @@ impl SkillTools {
     }
 
     /// The system prompt of `turn`: `base`, then the skills' preamble and
-    /// manifest, then the instructions of the skills active in its room
+    /// manifest when they are listed, then the instructions of the skills
+    /// active in its room
     /// (RFC §24.4), each part apart from the next by a blank line. A room
     /// served for the first time in this process is read again first from
     /// its stored rows; a turn that stands alone carries no active skill.
     pub(crate) fn system_prompt(&self, base: Option<&str>, turn: SkillTurn<'_>) -> String {
         let mut parts: Vec<&str> = base.into_iter().collect();
-        parts.extend([PREAMBLE, self.manifest.as_str()]);
+        if self.listed {
+            parts.extend([PREAMBLE, self.manifest.as_str()]);
+        }
         let active = if turn.stands_alone {
             None
         } else {
@@ -130,7 +144,7 @@ impl SkillTools {
         &self,
         call: &ToolCall,
         context: &ToolContext,
-    ) -> Result<ToolOutput, ToolError> {
+    ) -> Result<ToolResult, ToolError> {
         let name = argument(call, "name");
         let Some(skill) = self.registry.get_skill(name) else {
             let names = self.registry.skill_names();
@@ -162,12 +176,12 @@ impl SkillTools {
         if let Some(references) = references.filter(|names| !names.is_empty()) {
             answer.push(("references", json!(references)));
         }
-        Ok(ToolOutput::Text(texts::object(&answer)))
+        Ok(ToolResult::Text(texts::object(&answer)))
     }
 
     /// `read_skill_reference`: a reference of a skill the registry holds, or
     /// what the model reads of why it cannot be read (RFC §24.6).
-    async fn read(&self, call: &ToolCall) -> Result<ToolOutput, ToolError> {
+    async fn read(&self, call: &ToolCall) -> Result<ToolResult, ToolError> {
         let (skill_name, filename) = (argument(call, "skill_name"), argument(call, "filename"));
         let Some(skill) = self.registry.get_skill(skill_name) else {
             let error = format!("Skill {} not found", quoted_name(skill_name));
@@ -186,7 +200,7 @@ impl SkillTools {
             }
             Err(words) => texts::object(&[("error", json!(words))]),
         };
-        Ok(ToolOutput::Text(answer))
+        Ok(ToolResult::Text(answer))
     }
 
     fn lock(&self) -> MutexGuard<'_, Activations> {
@@ -201,7 +215,7 @@ impl DynToolset for SkillTools {
         &self,
         call: ToolCall,
         context: ToolContext,
-    ) -> BoxFuture<'_, Result<ToolOutput, ToolError>> {
+    ) -> BoxFuture<'_, Result<ToolResult, ToolError>> {
         Box::pin(async move {
             if call.name == ACTIVATE_SKILL {
                 self.activate(&call, &context).await

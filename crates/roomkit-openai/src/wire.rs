@@ -1,6 +1,7 @@
 //! The Chat Completions wire: the request a turn sends, and what it reads
 //! of the answer.
 
+use crate::config::OpenAiConfig;
 use crate::request::{RawCall, Request, Whole, done as finished};
 use reqwest::StatusCode;
 use roomkit::model::Metadata;
@@ -28,7 +29,14 @@ pub(crate) struct CompletionRequest<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<WireTool<'a>>,
     stream: bool,
-    stream_options: StreamOptions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
 }
 
 /// What a streamed completion sends beside its deltas.
@@ -81,9 +89,14 @@ struct WireToolFunction<'a> {
 }
 
 impl<'a> CompletionRequest<'a> {
-    /// The request asking `model` to answer `request`: its system prompt
-    /// when it has one, its conversation, its tools.
-    pub(crate) fn new(model: &'a str, request: &'a Request) -> Self {
+    /// The request asking `config`'s model to answer `request`: its system
+    /// prompt when it has one, its conversation, its tools, and Python's
+    /// sampling keywords: the turn's temperature unless the model takes
+    /// none, the turn's token bound over the configured one, under
+    /// `max_completion_tokens` when the configuration says, the stream's
+    /// usage when it asks for it.
+    pub(crate) fn new(config: &'a OpenAiConfig, request: &'a Request) -> Self {
+        let model = config.model.as_str();
         let system = request
             .system_prompt
             .as_deref()
@@ -110,14 +123,25 @@ impl<'a> CompletionRequest<'a> {
                 },
             })
             .collect();
+        let bound = request.max_tokens.unwrap_or(config.max_tokens);
+        let (max_tokens, max_completion_tokens) = if config.use_max_completion_tokens {
+            (None, Some(bound))
+        } else {
+            (Some(bound), None)
+        };
         Self {
             model,
             messages,
             tools,
             stream: true,
-            stream_options: StreamOptions {
+            stream_options: config.include_stream_usage.then_some(StreamOptions {
                 include_usage: true,
-            },
+            }),
+            temperature: request
+                .temperature
+                .filter(|_| config.supports_custom_temperature),
+            max_tokens,
+            max_completion_tokens,
         }
     }
 }
@@ -692,9 +716,15 @@ mod image_tests {
             system_prompt: None,
             messages: vec![message],
             tools: vec![],
+            temperature: None,
+            max_tokens: None,
         };
-        let chat =
-            serde_json::to_value(CompletionRequest::new("vision-fixture", &request)).unwrap();
+        let config = OpenAiConfig {
+            base_url: Some("http://localhost/v1".into()),
+            vision: true,
+            ..OpenAiConfig::new("", "vision-fixture")
+        };
+        let chat = serde_json::to_value(CompletionRequest::new(&config, &request)).unwrap();
         assert_eq!(
             chat.pointer("/messages/0/content/0/text"),
             Some(&Value::String("Describe this image".into()))
@@ -703,8 +733,6 @@ mod image_tests {
             chat.pointer("/messages/0/content/1/type"),
             Some(&Value::String("image_url".into()))
         );
-        let config =
-            crate::OpenAiConfig::new("http://localhost/v1", "", "vision-fixture").with_vision(true);
         let response = crate::responses::request(&config, &request).unwrap();
         assert_eq!(
             response.pointer("/input/0/content/1/type"),

@@ -20,8 +20,8 @@ use roomkit::{
     InboundResult, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
 };
 use roomkit_ai::{
-    AiContext, AiProvider, AiResponse, ProviderError, ProviderStream, StreamDone, StreamEvent,
-    StreamTextDelta,
+    AiChannelOptions, AiContext, AiProvider, AiResponse, ProviderError, ProviderStream, StreamDone,
+    StreamEvent, StreamTextDelta,
 };
 use roomkit_core::ops::ChannelConfig;
 use tokio::sync::Notify;
@@ -415,9 +415,15 @@ pub(crate) async fn attach_agent<S: ConversationStore>(
     model: impl AiProvider,
     tools: roomkit_ai::Tools,
 ) {
-    let agent = roomkit_ai::AiAgent::new(channel("agent"), model)
-        .with_tools(tools)
-        .unwrap();
+    let agent = roomkit_ai::AiChannel::new(
+        channel("agent"),
+        model,
+        AiChannelOptions {
+            tools: tools.into(),
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
     kit.register_channel(agent).unwrap();
     kit.attach_channel(
         &room("r"),

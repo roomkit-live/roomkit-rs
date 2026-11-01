@@ -80,6 +80,10 @@ pub(crate) struct Loop<P> {
     pub(crate) policy: ToolPolicy,
     pub(crate) bounds: Bounds,
     pub(crate) system_prompt: Option<String>,
+    /// How freely the model samples, handed to the provider.
+    pub(crate) temperature: Option<f64>,
+    /// The most tokens a generation writes, handed to the provider.
+    pub(crate) max_tokens: Option<u32>,
     /// The kit's turn, whose hooks each call runs; `None` outside the kit.
     pub(crate) turn: Option<TurnHost>,
     pub(crate) context: ToolContext,
@@ -110,8 +114,10 @@ impl<P: AiProvider> Loop<P> {
             let context = AiContext {
                 messages: ai_messages(&self.shown_messages(&messages)),
                 system_prompt: self.system_prompt.clone(),
+                temperature: self.temperature,
+                max_tokens: self.max_tokens,
                 tools: declared.clone(),
-                ..AiContext::default()
+                metadata: Metadata::new(),
             };
             let mut generation =
                 match Generation::read(&*self.provider, &context, round, &out).await {

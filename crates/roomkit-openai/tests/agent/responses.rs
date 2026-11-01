@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use pretty_assertions::assert_eq;
 use roomkit::model::{InboundMessage, RoomId, TextContent};
 use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions};
-use roomkit_ai::{AiTool, ToolOutput, Tools};
-use roomkit_openai::OpenAiApi;
+use roomkit_ai::{AiChannelOptions, AiTool, ToolResult, Tools};
+use roomkit_openai::{OpenAiApi, OpenAiConfig};
 use serde_json::{Value, json};
 
 use super::{API_KEY, Reply, Room, SYSTEM_PROMPT, channel, next, on_error};
@@ -49,27 +49,29 @@ async fn configured(replies: Vec<Reply>, tools: Tools) -> Room {
     Room::built(
         replies,
         API_KEY,
-        |config| {
-            config
-                .with_api(OpenAiApi::Responses)
-                .with_reasoning_effort("medium")
+        |config| OpenAiConfig {
+            api: OpenAiApi::Responses,
+            reasoning_effort: Some("medium".into()),
+            ..config
         },
-        |agent| agent.with_tools(tools).unwrap(),
+        |options| AiChannelOptions {
+            tools: tools.into(),
+            ..options
+        },
     )
     .await
 }
 
 fn lookup(count: &Arc<AtomicUsize>) -> Tools {
     let count = Arc::clone(count);
-    let tool = AiTool::new(
-        "lookup",
-        "Find an order",
-        json!({"type":"object",
+    let tool = AiTool {
+        parameters: json!({"type":"object",
         "properties":{"order":{"type":"string"}}, "required":["order"]}),
-    );
+        ..AiTool::new("lookup", "Find an order").unwrap()
+    };
     Tools::new().tool(tool, move |call, _| {
         count.fetch_add(1, Ordering::SeqCst);
-        async move { Ok(ToolOutput::Json(json!({"order":call.arguments["order"]}))) }
+        async move { Ok(ToolResult::Json(json!({"order":call.arguments["order"]}))) }
     })
 }
 
@@ -118,8 +120,9 @@ async fn streamed_text_is_not_duplicated_and_usage_counts_cached_tokens_separate
 #[tokio::test]
 async fn whole_json_responses_use_the_same_decoder_without_requiring_a_key() {
     let body = complete(vec![message("Yes.")]).to_string();
-    let room = Room::configured(vec![Reply::status(200, &body)], "", |config| {
-        config.with_api(OpenAiApi::Responses)
+    let room = Room::configured(vec![Reply::status(200, &body)], "", |config| OpenAiConfig {
+        api: OpenAiApi::Responses,
+        ..config
     })
     .await;
     assert_eq!(
@@ -389,13 +392,16 @@ async fn namespaced_tools_round_trip_with_fresh_credentials_and_history() {
             answer("Again"),
         ],
         "unused-static",
-        |config| {
-            config
-                .with_api(OpenAiApi::Responses)
-                .with_tool_namespace("functions", "Available tools")
-                .with_token_source(Arc::new(Credentials(AtomicUsize::new(0))))
+        |config| OpenAiConfig {
+            api: OpenAiApi::Responses,
+            tool_namespace: Some(("functions".into(), "Available tools".into())),
+            token_source: Some(Arc::new(Credentials(AtomicUsize::new(0)))),
+            ..config
         },
-        |agent| agent.with_tools(tools).unwrap(),
+        |options| AiChannelOptions {
+            tools: tools.into(),
+            ..options
+        },
     )
     .await;
     assert_eq!(
@@ -433,12 +439,15 @@ async fn a_call_in_an_unknown_namespace_never_executes() {
     let room = Room::built(
         vec![Reply::events(&[terminal(complete(vec![item]))])],
         "",
-        |config| {
-            config
-                .with_api(OpenAiApi::Responses)
-                .with_tool_namespace("functions", "Available tools")
+        |config| OpenAiConfig {
+            api: OpenAiApi::Responses,
+            tool_namespace: Some(("functions".into(), "Available tools".into())),
+            ..config
         },
-        |agent| agent.with_tools(tools).unwrap(),
+        |options| AiChannelOptions {
+            tools: tools.into(),
+            ..options
+        },
     )
     .await;
     assert!(
@@ -532,12 +541,15 @@ async fn a_single_tool_namespace_can_be_omitted_by_the_provider_and_is_restored_
     let room = Room::built(
         vec![reply, answer("Ready.")],
         API_KEY,
-        |config| {
-            config
-                .with_api(OpenAiApi::Responses)
-                .with_tool_namespace("functions", "Tools")
+        |config| OpenAiConfig {
+            api: OpenAiApi::Responses,
+            tool_namespace: Some(("functions".into(), "Tools".into())),
+            ..config
         },
-        |agent| agent.with_tools(lookup(&count)).unwrap(),
+        |options| AiChannelOptions {
+            tools: lookup(&count).into(),
+            ..options
+        },
     )
     .await;
     assert_eq!(

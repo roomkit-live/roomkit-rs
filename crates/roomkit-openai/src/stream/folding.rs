@@ -1,6 +1,7 @@
 //! The two protocols share transport bounds, but have distinct end markers.
 
-use crate::{OpenAiApi, OpenAiError, responses, wire};
+use crate::error::OpenAiError;
+use crate::{OpenAiApi, responses, wire};
 use roomkit_ai::StreamEvent;
 
 use crate::request::{push_end, push_text};

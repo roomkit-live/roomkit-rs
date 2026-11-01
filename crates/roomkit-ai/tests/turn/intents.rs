@@ -11,7 +11,7 @@ use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{EventContent, EventType, ToolCallContent, ToolCallOutcome};
 use roomkit::{HookExecution, HookOptions, HookTrigger, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiTool, ToolOutput, Tools};
+use roomkit_ai::{AiChannelOptions, AiTool, ToolResult, Tools};
 use serde_json::{Value, json};
 
 use super::support::Room;
@@ -23,14 +23,17 @@ const INTENT: &str = "Je recherche les fichiers texte du projet.";
 fn shell(received: &Arc<Mutex<Vec<Value>>>, parameters: Value) -> Tools {
     let received = Arc::clone(received);
     Tools::new().tool(
-        AiTool::new("shell", "Run a command", parameters),
+        AiTool {
+            parameters,
+            ..AiTool::new("shell", "Run a command").unwrap()
+        },
         move |call, _context| {
             assert_eq!(call.intent, None, "the tool never receives the intent");
             received
                 .lock()
                 .unwrap()
                 .push(Value::Object(call.arguments.clone()));
-            async { Ok(ToolOutput::Json(json!("a.txt"))) }
+            async { Ok(ToolResult::Json(json!("a.txt"))) }
         },
     )
 }
@@ -90,8 +93,11 @@ async fn off_nothing_is_taken_from_a_call() {
     let call = json!({ "command": "ls", "_roomkit_intent": INTENT });
     let model = ScriptedProvider::new([calling(&call), ScriptedRound::answering("Done.")]);
     let received = Arc::default();
-    let room = Room::equipped(model.clone(), shell(&received, closed()), |agent| {
-        agent.with_tool_call_intents_required(true)
+    let room = Room::equipped(model.clone(), shell(&received, closed()), |options| {
+        AiChannelOptions {
+            tool_call_intents_required: true,
+            ..options
+        }
     })
     .await;
     room.says("Files?").await;
@@ -119,8 +125,11 @@ async fn a_call_s_intent_rides_apart_from_its_arguments() {
         ScriptedRound::answering("Done.").with_usage(last_usage.as_object().unwrap().clone()),
     ]);
     let received = Arc::default();
-    let room = Room::equipped(model.clone(), shell(&received, closed()), |agent| {
-        agent.with_tool_call_intents(true)
+    let room = Room::equipped(model.clone(), shell(&received, closed()), |options| {
+        AiChannelOptions {
+            tool_call_intents: true,
+            ..options
+        }
     })
     .await;
     let seen: Seen = Arc::default();
@@ -212,8 +221,11 @@ async fn a_later_turn_reads_the_call_with_its_intent() {
         ScriptedRound::answering("Again."),
     ]);
     let received = Arc::default();
-    let room = Room::equipped(model.clone(), shell(&received, closed()), |agent| {
-        agent.with_tool_call_intents(true)
+    let room = Room::equipped(model.clone(), shell(&received, closed()), |options| {
+        AiChannelOptions {
+            tool_call_intents: true,
+            ..options
+        }
     })
     .await;
     room.says("Files?").await;
@@ -239,10 +251,12 @@ async fn a_tool_that_declares_the_property_keeps_it() {
     let call = json!({ "_roomkit_intent": "keep" });
     let model = ScriptedProvider::new([calling(&call), ScriptedRound::answering("Done.")]);
     let received = Arc::default();
-    let room = Room::equipped(model.clone(), shell(&received, owner.clone()), |agent| {
-        agent
-            .with_tool_call_intents(true)
-            .with_tool_call_intents_required(true)
+    let room = Room::equipped(model.clone(), shell(&received, owner.clone()), |options| {
+        AiChannelOptions {
+            tool_call_intents: true,
+            tool_call_intents_required: true,
+            ..options
+        }
     })
     .await;
     room.says("Label?").await;
@@ -267,11 +281,12 @@ async fn required_intents_are_presented_and_extracted_without_rejecting_missing_
         ScriptedRound::answering("Done."),
     ]);
     let received = Arc::default();
-    let room = Room::equipped(model.clone(), shell(&received, closed()), |agent| {
-        agent
-            .with_tool_call_intents(true)
-            .with_tool_call_intents_required(true)
-            .clone()
+    let room = Room::equipped(model.clone(), shell(&received, closed()), |options| {
+        AiChannelOptions {
+            tool_call_intents: true,
+            tool_call_intents_required: true,
+            ..options
+        }
     })
     .await;
     room.says("Inspect.").await;
@@ -303,8 +318,11 @@ async fn an_unusable_intent_never_fails_and_a_refusal_keeps_its_intent() {
         ScriptedRound::answering("Done."),
     ]);
     let received = Arc::default();
-    let room = Room::equipped(model, shell(&received, closed()), |agent| {
-        agent.with_tool_call_intents(true)
+    let room = Room::equipped(model, shell(&received, closed()), |options| {
+        AiChannelOptions {
+            tool_call_intents: true,
+            ..options
+        }
     })
     .await;
     room.says("Files?").await;
@@ -342,10 +360,17 @@ async fn a_refused_or_failed_call_is_reported_with_its_intent() {
     ]);
     let received = Arc::default();
     let tools = shell(&received, closed()).tool(
-        AiTool::new("fail", "Fails", json!({ "type": "object" })),
+        AiTool {
+            parameters: json!({ "type": "object" }),
+            ..AiTool::new("fail", "Fails").unwrap()
+        },
         |_call, _context| async { Err(roomkit_ai::ToolError::raised_as("RuntimeError", "broken")) },
     );
-    let room = Room::equipped(model, tools, |agent| agent.with_tool_call_intents(true)).await;
+    let room = Room::equipped(model, tools, |options| AiChannelOptions {
+        tool_call_intents: true,
+        ..options
+    })
+    .await;
     room.kit
         .hook(
             HookTrigger::BeforeToolUse,

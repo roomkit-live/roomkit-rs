@@ -1,5 +1,5 @@
 //! A tool call's intent (RFC §6.4): the sentence the model writes with a
-//! call, for the person. With `with_tool_call_intents(true)`, the agent
+//! call, for the person. With `tool_call_intents: true`, the agent
 //! shows its model each tool's schema with one optional property more,
 //! `_roomkit_intent`; the model fills it ("Je recherche les fichiers texte
 //! du projet."), and the loop takes it out of the call's arguments before
@@ -33,8 +33,7 @@ use roomkit::{
     AttachChannelOptions, CreateRoomOptions, HookOptions, HookTrigger, ProcessInboundOptions,
     ToolCallEvent,
 };
-use roomkit_ai::{AiTool, ToolOutput, Tools};
-use roomkit_openai::{OpenAiAgent, OpenAiConfig};
+use roomkit_ai::{AiChannel, AiChannelOptions, AiError, AiTool, ToolHandler, ToolResult};
 use serde_json::{Value, json};
 
 use shared::{Checks, FakeOpenAi, Log, OpenAiEndpoint, Reply};
@@ -50,22 +49,26 @@ fn script() -> Vec<Reply> {
     ]
 }
 
-/// `shell`, its schema closed, logging the arguments it receives.
-fn shell(received: &Log<Value>) -> Tools {
+/// `shell`, its schema closed.
+fn shell() -> Result<AiTool, AiError> {
+    Ok(AiTool {
+        parameters: json!({
+            "type": "object",
+            "properties": { "command": { "type": "string" } },
+            "required": ["command"],
+            "additionalProperties": false,
+        }),
+        ..AiTool::new("shell", "Run a shell command in the project.")?
+    })
+}
+
+/// The handler serving `shell`, logging the arguments it receives.
+fn running(received: &Log<Value>) -> ToolHandler {
     let received = received.clone();
-    let parameters = json!({
-        "type": "object",
-        "properties": { "command": { "type": "string" } },
-        "required": ["command"],
-        "additionalProperties": false,
-    });
-    Tools::new().tool(
-        AiTool::new("shell", "Run a shell command in the project.", parameters),
-        move |call, _context| {
-            received.push(Value::Object(call.arguments.clone()));
-            async { Ok(ToolOutput::Json(json!("notes.txt\ndocs/todo.txt"))) }
-        },
-    )
+    ToolHandler::new(move |_name, arguments| {
+        received.push(Value::Object(arguments));
+        async { Ok(ToolResult::Json(json!("notes.txt\ndocs/todo.txt"))) }
+    })
 }
 
 #[tokio::main]
@@ -149,10 +152,13 @@ async fn project_room(
     endpoint: &OpenAiEndpoint,
     received: &Log<Value>,
 ) -> Result<(roomkit::RoomKit, RecordingTransport, RoomId), Box<dyn Error>> {
-    let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model());
-    let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?
-        .with_tools(shell(received))?
-        .with_tool_call_intents(true);
+    let options = AiChannelOptions {
+        tools: vec![shell()?.into()],
+        tool_handler: Some(running(received)),
+        tool_call_intents: true,
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(ChannelId::new("assistant")?, endpoint.provider()?, options)?;
     let kit = shared::kit();
     let sms = RecordingTransport::new(
         ChannelId::new("sms")?,

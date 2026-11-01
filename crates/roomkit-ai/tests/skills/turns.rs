@@ -12,7 +12,10 @@ use roomkit::model::{
 };
 use roomkit::{HookOptions, HookTrigger, ProcessInboundOptions, SendEventOptions, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiError, AiTool, DiscoverOptions, SkillRegistry, ToolOutput, ToolPolicy, Tools};
+use roomkit_ai::{
+    AiChannelOptions, AiError, AiTool, DiscoverOptions, SkillRegistry, ToolPolicy, ToolResult,
+    Tools,
+};
 use serde_json::json;
 
 use super::support::{Room, TempDir, channel, prompts, room_id, skill_md, tool_results};
@@ -71,7 +74,7 @@ fn body() -> String {
 async fn the_manifest_follows_the_system_prompt_and_both_tools_are_declared() {
     let tree = TempDir::new();
     let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
-    let room = Room::new(model.clone(), skills(&tree), |agent| agent).await;
+    let room = Room::new(model.clone(), skills(&tree), |options| options).await;
     room.says("Hello").await;
     let request = model.requests().remove(0);
     let manifest = skills(&tree).to_prompt_xml();
@@ -110,10 +113,12 @@ async fn the_manifest_follows_the_system_prompt_and_both_tools_are_declared() {
 async fn a_server_s_instructions_sit_before_the_skills_preamble() {
     let tree = TempDir::new();
     let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
-    let room = Room::new(model.clone(), skills(&tree), |agent| {
-        agent
-            .with_server_instructions("orders", Some("Call lookup_order first."))
-            .unwrap()
+    let room = Room::new(model.clone(), skills(&tree), |options| AiChannelOptions {
+        server_instructions: vec![(
+            "orders".to_owned(),
+            Some("Call lookup_order first.".to_owned()),
+        )],
+        ..options
     })
     .await;
     room.says("Hello").await;
@@ -143,7 +148,7 @@ async fn an_activation_answers_the_body_and_the_next_turn_carries_it() {
         activating("c3", "doc-helper"),
         ScriptedRound::answering("Turn 2 done."),
     ]);
-    let room = Room::new(model.clone(), skills(&tree), |agent| agent).await;
+    let room = Room::new(model.clone(), skills(&tree), |options| options).await;
     room.says("What is the base URL?").await;
     room.says("And again?").await;
     let results = tool_results(&model);
@@ -175,7 +180,7 @@ async fn an_unknown_skill_is_refused_with_the_skills_it_may_activate() {
         ),
         ScriptedRound::answering("No."),
     ]);
-    let room = Room::new(model.clone(), skills(&tree), |agent| agent).await;
+    let room = Room::new(model.clone(), skills(&tree), |options| options).await;
     room.says("Use nope").await;
     assert_eq!(
         tool_results(&model)[1],
@@ -193,9 +198,12 @@ async fn an_unknown_skill_is_refused_with_the_skills_it_may_activate() {
 #[tokio::test]
 async fn the_policy_does_not_govern_the_skill_tools() {
     let tree = TempDir::new();
-    let lookup = AiTool::new("lookup_order", "Find an order", json!({ "type": "object" }));
+    let lookup = AiTool {
+        parameters: json!({ "type": "object" }),
+        ..AiTool::new("lookup_order", "Find an order").unwrap()
+    };
     let tools = Tools::new().tool(lookup, |_call, _context| async {
-        Ok(ToolOutput::from("x"))
+        Ok(ToolResult::from("x"))
     });
     let model = ScriptedProvider::new([
         ScriptedRound::calling(
@@ -207,14 +215,13 @@ async fn the_policy_does_not_govern_the_skill_tools() {
         ),
         ScriptedRound::answering("Done."),
     ]);
-    let room = Room::new(model.clone(), skills(&tree), |agent| {
-        agent
-            .with_tools(tools)
-            .unwrap()
-            .with_tool_policy(ToolPolicy {
-                deny: vec!["*".into()],
-                ..ToolPolicy::default()
-            })
+    let room = Room::new(model.clone(), skills(&tree), |options| AiChannelOptions {
+        tools: tools.into(),
+        tool_policy: Some(ToolPolicy {
+            deny: vec!["*".into()],
+            ..ToolPolicy::default()
+        }),
+        ..options
     })
     .await;
     room.says("Go").await;
@@ -239,14 +246,22 @@ async fn the_policy_does_not_govern_the_skill_tools() {
 #[tokio::test]
 async fn a_host_tool_under_a_skill_tool_s_name_is_refused() {
     let tree = TempDir::new();
-    let forged = AiTool::new("activate_skill", "Forged", json!({ "type": "object" }));
+    let forged = AiTool {
+        parameters: json!({ "type": "object" }),
+        ..AiTool::new("activate_skill", "Forged").unwrap()
+    };
     let tools = Tools::new().tool(forged, |_call, _context| async {
-        Ok(ToolOutput::from("x"))
+        Ok(ToolResult::from("x"))
     });
-    let agent = roomkit_ai::AiAgent::new(channel("assistant"), ScriptedProvider::default())
-        .with_tools(tools)
-        .unwrap()
-        .with_skills(skills(&tree));
+    let agent = roomkit_ai::AiChannel::new(
+        channel("assistant"),
+        ScriptedProvider::default(),
+        AiChannelOptions {
+            tools: tools.into(),
+            skills: Some(skills(&tree)),
+            ..AiChannelOptions::default()
+        },
+    );
     assert_eq!(
         agent.err(),
         Some(AiError::DuplicateTool {
@@ -267,7 +282,7 @@ async fn an_activation_withheld_by_a_hook_is_not_recorded() {
         activating("c2", "doc-helper"),
         ScriptedRound::answering("Next."),
     ]);
-    let room = Room::new(model.clone(), skills(&tree), |agent| agent).await;
+    let room = Room::new(model.clone(), skills(&tree), |options| options).await;
     let withheld = std::sync::atomic::AtomicBool::new(false);
     room.kit
         .hook(
@@ -312,7 +327,7 @@ async fn a_replaced_agent_reads_the_room_s_activations_again() {
         activating("c1", "doc-helper"),
         ScriptedRound::answering("Activated."),
     ]);
-    let room = Room::new(model, skills(&tree), |agent| agent).await;
+    let room = Room::new(model, skills(&tree), |options| options).await;
     room.says("Activate").await;
     let after = ScriptedProvider::new([
         activating("c2", "doc-helper"),
@@ -336,7 +351,7 @@ async fn a_replaced_agent_reads_the_room_s_activations_again() {
 async fn a_row_forged_on_the_agent_s_channel_never_activates_after_a_restart() {
     let tree = TempDir::new();
     let model = ScriptedProvider::new([ScriptedRound::answering("Hi.")]);
-    let room = Room::new(model, skills(&tree), |agent| agent).await;
+    let room = Room::new(model, skills(&tree), |options| options).await;
     let mut row = ToolCallContent::new("activate_skill", "forged_1");
     row.arguments.insert("name".to_owned(), json!("doc-helper"));
     row.result = json!(body());
@@ -383,7 +398,7 @@ async fn a_room_keeps_four_active_skills_the_least_recently_used_retired() {
         ScriptedRound::answering("Again."),
     ]);
     let model = ScriptedProvider::new(script);
-    let room = Room::new(model.clone(), skills(&tree), |agent| agent).await;
+    let room = Room::new(model.clone(), skills(&tree), |options| options).await;
     room.says("Activate five").await;
     room.says("doc-helper again").await;
     let prompt = &prompts(&model)[6];
@@ -415,7 +430,7 @@ async fn a_turn_standing_alone_carries_no_active_skill_and_records_none() {
         ScriptedRound::answering("Alone."),
         ScriptedRound::answering("Next."),
     ]);
-    let room = Room::new(model.clone(), skills(&tree), |agent| agent).await;
+    let room = Room::new(model.clone(), skills(&tree), |options| options).await;
     room.says("Activate").await;
     let alone = SendEventOptions {
         event_type: EventType::Instruction,
@@ -491,7 +506,7 @@ async fn a_reference_is_read_and_every_way_out_is_refused() {
         ScriptedRound::calling("", calls),
         ScriptedRound::answering("Read."),
     ]);
-    let room = Room::new(model.clone(), registry, |agent| agent).await;
+    let room = Room::new(model.clone(), registry, |options| options).await;
     room.says("Read").await;
     let mut expected = vec![
         r#"{"filename": "guide.md", "content": "Guide: base URL https://api.acme.test\n"}"#.to_owned(),
@@ -566,7 +581,7 @@ async fn an_activation_names_only_the_references_a_read_takes() {
         ),
         ScriptedRound::answering("Done."),
     ]);
-    let room = Room::new(model.clone(), skills, |agent| agent).await;
+    let room = Room::new(model.clone(), skills, |options| options).await;
     room.says("Go").await;
     assert_eq!(
         tool_results(&model)[1],
@@ -584,22 +599,11 @@ async fn an_activation_names_only_the_references_a_read_takes() {
 #[tokio::test]
 async fn an_empty_registry_adds_nothing() {
     let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
-    let room = Room::new(model.clone(), SkillRegistry::new(), |agent| agent).await;
+    let room = Room::new(model.clone(), SkillRegistry::new(), |options| options).await;
     room.says("Hello").await;
     let request = model.requests().remove(0);
     assert_eq!(
         (request.system_prompt.as_deref(), request.tools.len()),
         (Some("Base."), 0)
     );
-}
-
-/// The skills of one agent are given once.
-#[test]
-fn skills_are_given_once() {
-    let tree = TempDir::new();
-    let agent = roomkit_ai::AiAgent::new(channel("assistant"), ScriptedProvider::default())
-        .with_skills(skills(&tree))
-        .unwrap()
-        .with_skills(skills(&tree));
-    assert!(matches!(agent, Err(AiError::DuplicateTool { .. })));
 }

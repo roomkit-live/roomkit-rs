@@ -17,6 +17,10 @@ pub(crate) struct Request {
     pub(crate) system_prompt: Option<String>,
     pub(crate) messages: Vec<Message>,
     pub(crate) tools: Vec<AiTool>,
+    /// The turn's temperature, when it gives one.
+    pub(crate) temperature: Option<f64>,
+    /// The turn's token bound, over the configured one.
+    pub(crate) max_tokens: Option<u32>,
 }
 
 impl Request {
@@ -26,6 +30,8 @@ impl Request {
             system_prompt: context.system_prompt.clone(),
             messages: context.messages.iter().map(message).collect(),
             tools: context.tools.clone(),
+            temperature: context.temperature,
+            max_tokens: context.max_tokens,
         }
     }
 }

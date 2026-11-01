@@ -11,7 +11,7 @@
 {"direction":"frame","message":{"message":{"item":{"arguments":{"q":"x"},"duration_ms":0,"error":null,"kind":"tool_end","outcome":"served","refused_but_ran":false,"result":{"value":"42"},"start":4,"status":"completed","structured_content":null,"tool_id":"call-1","tool_name":"lookup"},"type":"item"},"seq":7,"turn_id":"turn-1"}}
 {"direction":"control","message":{"message":{"count":64,"read":3,"type":"pull"},"seq":4,"turn_id":"turn-1"}}
 {"direction":"frame","message":{"message":{"item":{"kind":"text","text":"It is 42."},"type":"item"},"seq":8,"turn_id":"turn-1"}}
-{"direction":"frame","message":{"message":{"record":{"ai_last_usage":{"input_tokens":20},"ai_provider":"scripted","ai_usage":{"input_tokens":30},"ai_usage_complete":false,"loop_end_reason":"completed"},"type":"record"},"seq":9,"turn_id":"turn-1"}}
+{"direction":"frame","message":{"message":{"record":{"ai_last_usage":{"input_tokens":20},"ai_model":"scripted","ai_provider":"scripted","ai_usage":{"input_tokens":30},"ai_usage_complete":false,"loop_end_reason":"completed"},"type":"record"},"seq":9,"turn_id":"turn-1"}}
 {"direction":"frame","message":{"message":{"item":{"budget_tokens":null,"budget_usd":null,"kind":"loop_end","max_rounds":50,"reason":"completed","rounds":1,"timeout_seconds":null,"usage":{"input_tokens":30}},"type":"item"},"seq":10,"turn_id":"turn-1"}}
 {"direction":"control","message":{"message":{"count":64,"read":5,"type":"pull"},"seq":5,"turn_id":"turn-1"}}
 {"direction":"frame","message":{"message":{"item":{"kind":"stream_end"},"type":"item"},"seq":11,"turn_id":"turn-1"}}

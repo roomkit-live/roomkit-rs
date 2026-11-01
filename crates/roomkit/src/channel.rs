@@ -280,7 +280,7 @@ pub trait Channel: Send + Sync + 'static {
     ///
     /// A channel that receives no message refuses it here with an error,
     /// before anything enters the room: an AI agent does
-    /// (`roomkit_ai::AiAgent`), since an event under its id is read as its
+    /// (`roomkit_ai::AiChannel`), since an event under its id is read as its
     /// own words.
     fn handle_inbound(
         &self,

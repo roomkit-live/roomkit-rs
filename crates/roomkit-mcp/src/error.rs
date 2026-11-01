@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-/// A connection or host configuration failure. A failed connection stops and
+/// A connection, host configuration or call failure. A failed connection stops and
 /// waits for its server before returning (RFC §21.2). A configuration error
 /// on a cloned handle leaves the other handles' connection open. Server text
 /// in an error is bounded and has terminal controls removed (see
@@ -68,6 +68,30 @@ pub enum McpError {
         /// What failed, bounded, then the last lines the server wrote on
         /// its standard error, as [`Handshake`](Self::Handshake)'s.
         message: String,
+    },
+    /// The provider is not connected: Python's `RuntimeError`, raised by
+    /// what reads a server before `async with` connects it or after it
+    /// closes.
+    #[error("MCPToolProvider is not connected: connect it first")]
+    NotConnected,
+    /// The provider is connected already: Python's `RuntimeError`, raised
+    /// by an `async with` entered twice.
+    #[error("MCPToolProvider is already connected: close it before connecting again")]
+    AlreadyConnected,
+    /// The server answered a call with an error, or its connection failed
+    /// the call: the MCP SDK's `McpError`.
+    #[error("the MCP call failed: {message}")]
+    Call {
+        /// What failed, bounded.
+        message: String,
+    },
+    /// A call got no answer within its bound: Python's `TimeoutError`.
+    #[error("the MCP call of {tool} got no answer within {} ms", .after.as_millis())]
+    CallTimeout {
+        /// The tool called.
+        tool: String,
+        /// The bound.
+        after: Duration,
     },
     /// The handshake and the listing did not end within the command's
     /// connect bound.

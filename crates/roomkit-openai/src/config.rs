@@ -1,15 +1,15 @@
-//! What an [`OpenAiAgent`](crate::OpenAiAgent) is configured with.
+//! What an [`OpenAiAiProvider`](crate::OpenAiAiProvider) is configured
+//! with: Python's `OpenAIConfig`.
 
+use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
-/// How many of the room's latest messages a turn sends by default: as many
-/// as a kit hands a turn, 50 messages.
-const DEFAULT_HISTORY: usize = 50;
+use roomkit::model::Metadata;
 
-/// How long a completion may take by default, from its request to the end
-/// of its answer.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
+/// OpenAI's own endpoint, which a configuration with no base URL calls.
+pub(crate) const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
 /// The HTTP API spoken by the provider. Selection is explicit; no fallback
 /// changes protocols or repeats a failed generation.
@@ -32,139 +32,88 @@ impl OpenAiApi {
     }
 }
 
-/// The endpoint an agent calls, the model it asks, its system prompt, how
-/// much of the room it sends and how long it waits.
+/// The endpoint a provider calls and how: Python's `OpenAIConfig(*, api_key,
+/// base_url=None, model, max_tokens=1024, timeout=30.0, connect_timeout=5.0,
+/// include_stream_usage=True, use_max_completion_tokens=False,
+/// supports_custom_temperature=True, reasoning_effort=None,
+/// default_headers=None, extra_body=None)`, built with
+/// [`OpenAiConfig::new`] and struct update.
 ///
-/// The configuration's `Debug` never prints the API key, nor the base URL's
-/// user information, path or query, which may carry credentials.
+/// Its `Debug` never prints the API key, nor the base URL's user
+/// information, path or query, which may carry credentials.
 #[derive(Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Python's OpenAIConfig switches, one field each"
+)]
 pub struct OpenAiConfig {
-    pub(crate) base_url: String,
-    pub(crate) api_key: String,
-    pub(crate) token_source: Option<std::sync::Arc<dyn crate::TokenSource>>,
-    pub(crate) model: String,
-    pub(crate) vision: bool,
-    pub(crate) api: OpenAiApi,
-    pub(crate) tool_namespace: Option<(String, String)>,
-    pub(crate) reasoning_effort: Option<String>,
-    pub(crate) system_prompt: Option<String>,
-    pub(crate) history: usize,
-    pub(crate) timeout: Duration,
+    /// The key a request carries as its bearer token; empty sends none.
+    pub api_key: String,
+    /// The endpoint's base URL; `None` calls OpenAI's own.
+    pub base_url: Option<String>,
+    /// The model asked.
+    pub model: String,
+    /// The most tokens a generation writes, unless its context says.
+    pub max_tokens: u32,
+    /// How long a request waits for the endpoint between two reads, and
+    /// for its writes (Python's `httpx.Timeout(timeout)`).
+    pub timeout: Duration,
+    /// How long a request waits for its connection.
+    pub connect_timeout: Duration,
+    /// Whether a streamed answer reports its usage
+    /// (`stream_options.include_usage`).
+    pub include_stream_usage: bool,
+    /// Whether the token bound is sent as `max_completion_tokens`, as
+    /// OpenAI's reasoning models take it, rather than `max_tokens`.
+    pub use_max_completion_tokens: bool,
+    /// Whether the model takes a temperature: one that refuses it is sent
+    /// none.
+    pub supports_custom_temperature: bool,
+    /// How hard a reasoning model thinks (`reasoning_effort`), when set.
+    pub reasoning_effort: Option<String>,
+    /// Headers every request carries.
+    pub default_headers: Option<BTreeMap<String, String>>,
+    /// Members every request's body carries, beside RoomKit's.
+    pub extra_body: Option<Metadata>,
+    /// Where the bearer token comes from before each generation, in place
+    /// of `api_key`: a renewable credential.
+    pub token_source: Option<Arc<dyn crate::TokenSource>>,
+    /// Whether the configured model takes images (RFC §6.4).
+    pub vision: bool,
+    /// The HTTP API spoken: Chat Completions by default.
+    pub api: OpenAiApi,
+    /// The namespace, its name and description, under which the Responses
+    /// API declares the tools.
+    pub tool_namespace: Option<(String, String)>,
 }
 
 impl OpenAiConfig {
-    /// Declare that the configured model accepts image input (RFC §6.4).
-    /// Disabled by default; this does not infer capabilities from a model name.
-    #[must_use]
-    pub fn with_vision(mut self, enabled: bool) -> Self {
-        self.vision = enabled;
-        self
-    }
-
-    /// A configuration calling `{base_url}/chat/completions` with `api_key`
-    /// as its bearer token, asking `model`. The base URL is the API's root,
-    /// `https://api.openai.com/v1` for OpenAI's, with no query or fragment;
-    /// an empty key sends no `Authorization` header, for a local server
-    /// that asks for none.
-    ///
-    /// It has no system prompt, sends every message the turn's context
-    /// holds, and waits 120 seconds for a completion.
-    pub fn new(
-        base_url: impl Into<String>,
-        api_key: impl Into<String>,
-        model: impl Into<String>,
-    ) -> Self {
+    /// The configuration calling OpenAI's own endpoint with `api_key` for
+    /// `model`, with Python's defaults.
+    pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
-            base_url: base_url.into(),
             api_key: api_key.into(),
-            token_source: None,
+            base_url: None,
             model: model.into(),
+            max_tokens: 1024,
+            timeout: Duration::from_secs(30),
+            connect_timeout: Duration::from_secs(5),
+            include_stream_usage: true,
+            use_max_completion_tokens: false,
+            supports_custom_temperature: true,
+            reasoning_effort: None,
+            default_headers: None,
+            extra_body: None,
+            token_source: None,
             vision: false,
             api: OpenAiApi::default(),
-            reasoning_effort: None,
             tool_namespace: None,
-            system_prompt: None,
-            history: DEFAULT_HISTORY,
-            timeout: DEFAULT_TIMEOUT,
         }
     }
 
-    /// Resolve credentials through a host-owned source before every generation.
-    /// This replaces the static API key, which is cleared. The source owns
-    /// refresh, account selection and storage; its Debug is never called here.
-    #[must_use]
-    pub fn with_token_source(mut self, source: std::sync::Arc<dyn crate::TokenSource>) -> Self {
-        self.api_key.clear();
-        self.token_source = Some(source);
-        self
-    }
-
-    /// Select Chat Completions or Responses, keeping the same API root and
-    /// bearer credential. Responses uses `store: false` and `stream: true`.
-    #[must_use]
-    pub fn with_api(mut self, api: OpenAiApi) -> Self {
-        self.api = api;
-        self
-    }
-
-    /// Group Responses function tools under one namespace. Required by some
-    /// account-based routes; Chat Completions ignores this setting. Names use
-    /// ASCII letters, digits, underscores or hyphens (1–64 characters).
-    #[must_use]
-    pub fn with_tool_namespace(
-        mut self,
-        name: impl Into<String>,
-        description: impl Into<String>,
-    ) -> Self {
-        self.tool_namespace = Some((name.into(), description.into()));
-        self
-    }
-
-    /// Set the model's reasoning effort. Responses writes `reasoning.effort`;
-    /// Chat Completions writes `reasoning_effort`. Omit this setting to keep
-    /// the provider's default; the endpoint validates supported effort names.
-    #[must_use]
-    pub fn with_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
-        self.reasoning_effort = Some(effort.into());
-        self
-    }
-
-    /// The base URL as it may be shown, in a log or on a screen: its
-    /// scheme, host and port, never its user information, path, query or
-    /// fragment, which may carry credentials; `(not a URL)` when it does
-    /// not parse.
-    pub fn shown_base_url(&self) -> String {
-        shown_url(&self.base_url)
-    }
-
-    /// The same configuration, with the system prompt every turn opens
-    /// with. It stays the same from turn to turn, so a provider that caches
-    /// a request's prefix keeps it (RFC §6.4).
-    #[must_use]
-    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
-        self.system_prompt = Some(prompt.into());
-        self
-    }
-
-    /// The same configuration, sending at most the room's latest
-    /// `messages` messages before the turn's input.
-    ///
-    /// A turn reads only the history the kit hands it: the room's latest 50
-    /// messages, and the agent's latest 60 tool-call rows, whose rounds it
-    /// replays. A value above what that window holds sends no more: it can
-    /// lower the history, never raise it.
-    #[must_use]
-    pub fn with_history(mut self, messages: usize) -> Self {
-        self.history = messages;
-        self
-    }
-
-    /// The same configuration, failing a turn whose completion takes longer
-    /// than `timeout`.
-    #[must_use]
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
+    /// The base URL the configuration calls.
+    pub(crate) fn base_url(&self) -> &str {
+        self.base_url.as_deref().unwrap_or(OPENAI_BASE_URL)
     }
 }
 
@@ -177,18 +126,23 @@ impl fmt::Debug for OpenAiConfig {
         } else {
             "hidden"
         };
+        let headers: Option<Vec<&String>> = self
+            .default_headers
+            .as_ref()
+            .map(|headers| headers.keys().collect());
         f.debug_struct("OpenAiConfig")
-            .field("base_url", &self.shown_base_url())
+            .field("base_url", &shown_url(self.base_url()))
             .field("api_key", &api_key)
             .field("model", &self.model)
+            .field("max_tokens", &self.max_tokens)
+            .field("timeout", &self.timeout)
+            .field("connect_timeout", &self.connect_timeout)
             .field("api", &self.api)
             .field("vision", &self.vision)
             .field("tool_namespace", &self.tool_namespace)
             .field("reasoning_effort", &self.reasoning_effort)
-            .field("system_prompt", &self.system_prompt)
-            .field("history", &self.history)
-            .field("timeout", &self.timeout)
-            .finish()
+            .field("default_headers", &headers)
+            .finish_non_exhaustive()
     }
 }
 

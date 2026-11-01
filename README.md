@@ -76,7 +76,8 @@ authenticate,
 `server_agent` shows what the service writes: the store made with
 `SqliteStore::new(SqliteStoreOptions { path })` and handed to
 `RoomKitOptions::with_store`, an
-`OpenAiAgent` registered on the kit with its `OpenAiConfig`, and a
+`AiChannel` over an `OpenAiAiProvider` and its `OpenAiConfig` registered
+on the kit, and a
 transport channel of its own whose messages it runs into their rooms. The
 documentation of each crate shows its own setup, compiled as a doctest.
 
@@ -128,13 +129,14 @@ A service depends on `roomkit` and on the crates it needs beside it:
   typed tool hooks, streamed delivery, the in-memory turn backend, the
   in-memory store, and the test channels of `roomkit::testing`. It
   re-exports the core's model as `roomkit::model`.
-- `roomkit-ai`: `AiAgent`, the AI channel over any `AiProvider`: the tool
-  loop, `Toolset`, `Tools` and `ToolPolicy`, streamed answers, skills from
-  the host's directories, an MCP server's instructions, and a scripted
-  provider for tests.
-- `roomkit-openai`: `OpenAiAgent`, `roomkit-ai`'s AI channel over an
-  OpenAI-compatible Chat Completions endpoint, or stateless Responses with
-  `OpenAiConfig::with_api(OpenAiApi::Responses)` on `main` (unreleased).
+- `roomkit-ai`: `AiChannel`, Python's `AIChannel`, the AI channel over any
+  `AiProvider`: the tool loop, `AiTool`, `ToolHandler`, `Tool` and
+  `ToolPolicy`, streamed answers, skills from the host's directories, an
+  MCP server's instructions, and a scripted provider for tests.
+- `roomkit-openai`: `OpenAiAiProvider`, Python's `OpenAIAIProvider`, the
+  provider of an OpenAI-compatible Chat Completions endpoint, or stateless
+  Responses with `OpenAiConfig { api: OpenAiApi::Responses, .. }` on `main`
+  (unreleased).
   Both support streamed text and function tools.
 - `roomkit-sqlite`: `SqliteStore`, a store in one SQLite file, on the Python
   implementation's schema, for one process at a time: either
@@ -142,8 +144,9 @@ A service depends on `roomkit` and on the crates it needs beside it:
   types are ones Python lists, but the two never share a file live. A type
   of your own (`ChannelType::new("slack")`) makes its room unreadable to
   Python until Python opens its type (RMK-986).
-- `roomkit-mcp`: `McpCommand`, optional `McpHttp` and `McpServer`, the tools of
-  an MCP server over stdio or Streamable HTTP, served to an AI agent as a `Toolset`.
+- `roomkit-mcp`: `McpToolProvider`, Python's `MCPToolProvider`, the tools of
+  an MCP server over stdio or Streamable HTTP and the handler an AI channel
+  serves them through; the host connects and closes it.
   Enable `features = ["http"]` for remote endpoints. HTTP supports JSON/SSE
   replies and explicit authentication headers; OAuth and legacy HTTP+SSE are
   not included. `close()` drains the worker and attempts bounded session deletion.

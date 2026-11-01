@@ -3,7 +3,7 @@
 //! failed, within a bound.
 
 use rmcp::model::{CallToolResult, ContentBlock, ResourceContents};
-use roomkit_ai::{ToolError, ToolOutput};
+use roomkit_ai::{ToolError, ToolResult, dumps};
 
 use crate::texts::bounded_result;
 
@@ -25,10 +25,9 @@ const MEDIA_TYPE_LIMIT: usize = 64;
 /// - a result with no part, its structured content as JSON;
 /// - a result that says `isError`, a failed call (the tool ran) whose words
 ///   the model reads, its parts' texts joined by spaces.
-pub(crate) fn read(name: &str, result: CallToolResult) -> Result<ToolOutput, ToolError> {
-    let texts: Vec<String> = result.content.iter().map(text_of).collect();
+pub(crate) fn read(name: &str, result: CallToolResult) -> Result<ToolResult, ToolError> {
     if result.is_error == Some(true) {
-        let words = texts.join(" ");
+        let words = error_text(&result);
         let words = if words.trim().is_empty() {
             format!("Tool '{name}' failed with no message")
         } else {
@@ -36,12 +35,36 @@ pub(crate) fn read(name: &str, result: CallToolResult) -> Result<ToolOutput, Too
         };
         return Err(ToolError::failed(bounded(name, &words)));
     }
+    Ok(ToolResult::Text(body(name, result)))
+}
+
+/// `result` as Python's `call_tool` returns it: its text, as [`read`]
+/// reads it, or for a result that says `isError` the envelope
+/// `{"error": "<its words>"}`, written as Python's `json.dumps` writes it.
+pub(crate) fn text(name: &str, result: CallToolResult) -> String {
+    if result.is_error == Some(true) {
+        let words = bounded(name, &error_text(&result));
+        return dumps(&serde_json::json!({ "error": words }));
+    }
+    body(name, result)
+}
+
+/// The words of a result that says `isError`: its parts' texts joined by
+/// spaces, as Python's `error_text` joins them.
+fn error_text(result: &CallToolResult) -> String {
+    let texts: Vec<String> = result.content.iter().map(text_of).collect();
+    texts.join(" ")
+}
+
+/// The text of a result that does not say `isError`, within the bound.
+fn body(name: &str, result: CallToolResult) -> String {
+    let texts: Vec<String> = result.content.iter().map(text_of).collect();
     let text = match (texts.as_slice(), result.structured_content) {
         ([only], _) => only.clone(),
         ([], Some(structured)) => structured.to_string(),
         (texts, _) => serde_json::Value::from(texts).to_string(),
     };
-    Ok(ToolOutput::Text(bounded(name, &text)))
+    bounded(name, &text)
 }
 
 /// `text` within [`RESULT_LIMIT`], with a warning naming the tool when it
@@ -97,4 +120,26 @@ fn note(kind: &str, media_type: Option<&str>) -> String {
         .collect();
     let named = if named.is_empty() { "unknown" } else { &named };
     format!("[{kind} content ({named}) not shown to the model]")
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    /// `call_tool` answers a failed call as Python's `json.dumps({"error":
+    /// error_text(result)})`: the parts' words joined by a space, every
+    /// character past ASCII escaped.
+    #[test]
+    fn a_failed_call_answers_python_s_error_envelope() {
+        let result = CallToolResult::error(vec![
+            ContentBlock::text("Commande déjà expédiée"),
+            ContentBlock::text("\"42\""),
+        ]);
+        assert_eq!(
+            text("cancel_order", result),
+            r#"{"error": "Commande d\u00e9j\u00e0 exp\u00e9di\u00e9e \"42\""}"#
+        );
+    }
 }

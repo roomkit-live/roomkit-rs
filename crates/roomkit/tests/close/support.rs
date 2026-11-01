@@ -19,7 +19,7 @@ use roomkit::{
     RoomKitError, RoomKitOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiAgent, AiProvider, AiTool, ToolOutput, Tools};
+use roomkit_ai::{AiChannel, AiChannelOptions, AiProvider, AiTool, ToolResult, Tools};
 use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
 use serde_json::json;
@@ -504,12 +504,15 @@ pub(crate) async fn open(door: Door, witness: &Witness, gated: bool) -> (RoomKit
 async fn closing_agent(kit: &RoomKit, closer: &Closer) {
     let work = closer.clone();
     let tools = Tools::new().tool(
-        AiTool::new("shut_down", "Shut down.", json!({ "type": "object" })),
+        AiTool {
+            parameters: json!({ "type": "object" }),
+            ..AiTool::new("shut_down", "Shut down.").unwrap()
+        },
         move |_call, _context| {
             let work = work.clone();
             async move {
                 work.close().await;
-                Ok(ToolOutput::Text("closed".to_owned()))
+                Ok(ToolResult::Text("closed".to_owned()))
             }
         },
     );
@@ -526,9 +529,15 @@ pub(crate) async fn attach_agent<S: ConversationStore>(
     model: impl AiProvider,
     tools: Tools,
 ) {
-    let agent = AiAgent::new(channel("agent"), model)
-        .with_tools(tools)
-        .unwrap();
+    let agent = AiChannel::new(
+        channel("agent"),
+        model,
+        AiChannelOptions {
+            tools: tools.into(),
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
     kit.register_channel(agent).unwrap();
     kit.attach_channel(
         &room_id(),

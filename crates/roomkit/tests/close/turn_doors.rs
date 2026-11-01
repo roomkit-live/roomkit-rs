@@ -13,7 +13,7 @@ use roomkit::{
     RoomKit, SendEventOptions, TurnTimeouts, keep_context,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiTool, ToolOutput, Tools};
+use roomkit_ai::{AiChannelOptions, AiTool, ToolResult, Tools};
 use serde_json::json;
 use tokio::sync::Notify;
 
@@ -134,12 +134,15 @@ impl Drop for ToolNote {
 async fn closing_agent(kit: &RoomKit, how: How, steps: &Arc<Mutex<Vec<String>>>) {
     let (weak, steps) = (kit.downgrade(), Arc::clone(steps));
     let tools = Tools::new().tool(
-        AiTool::new("shut_down", "Shut down.", json!({ "type": "object" })),
+        AiTool {
+            parameters: json!({ "type": "object" }),
+            ..AiTool::new("shut_down", "Shut down.").unwrap()
+        },
         move |_call, _context| {
             let (weak, steps) = (weak.clone(), Arc::clone(&steps));
             async move {
                 let Some(kit) = weak.upgrade() else {
-                    return Ok(ToolOutput::Text("gone".to_owned()));
+                    return Ok(ToolResult::Text("gone".to_owned()));
                 };
                 let mut note = Some(ToolNote(Arc::clone(&steps)));
                 let closed = match how {
@@ -157,7 +160,7 @@ async fn closing_agent(kit: &RoomKit, how: How, steps: &Arc<Mutex<Vec<String>>>)
                     .lock()
                     .unwrap()
                     .push(format!("closed {:?} {rows:?}", closed.is_ok()));
-                Ok(ToolOutput::Text("closed".to_owned()))
+                Ok(ToolResult::Text("closed".to_owned()))
             }
         },
     );
@@ -256,7 +259,10 @@ async fn a_tool_awaiting_the_close_runs_on_and_logs_nothing_after_it() {
         Arc::clone(&release),
     );
     let tools = Tools::new().tool(
-        AiTool::new("quit", "Quit.", json!({ "type": "object" })),
+        AiTool {
+            parameters: json!({ "type": "object" }),
+            ..AiTool::new("quit", "Quit.").unwrap()
+        },
         move |_call, _context| {
             let (weak, telling, waiting) =
                 (weak.clone(), Arc::clone(&telling), Arc::clone(&waiting));
@@ -266,7 +272,7 @@ async fn a_tool_awaiting_the_close_runs_on_and_logs_nothing_after_it() {
                 }
                 telling.notify_one();
                 waiting.notified().await;
-                Ok(ToolOutput::Text("closed".to_owned()))
+                Ok(ToolResult::Text("closed".to_owned()))
             }
         },
     );
@@ -328,7 +334,10 @@ async fn sibling_agent(kit: &RoomKit, notes: &Arc<Mutex<Vec<String>>>) {
     let (weak, noting_a, noting_b) = (kit.downgrade(), Arc::clone(notes), Arc::clone(notes));
     let tools = Tools::new()
         .tool(
-            AiTool::new("a_close", "Close.", json!({ "type": "object" })),
+            AiTool {
+                parameters: json!({ "type": "object" }),
+                ..AiTool::new("a_close", "Close.").unwrap()
+            },
             move |_call, _context| {
                 let (weak, waiting, noting) =
                     (weak.clone(), Arc::clone(&entered), Arc::clone(&noting_a));
@@ -338,12 +347,15 @@ async fn sibling_agent(kit: &RoomKit, notes: &Arc<Mutex<Vec<String>>>) {
                         let closed = kit.close().await;
                         noting.lock().unwrap().push(format!("a closed {closed:?}"));
                     }
-                    Ok(ToolOutput::Text("closed".to_owned()))
+                    Ok(ToolResult::Text("closed".to_owned()))
                 }
             },
         )
         .tool(
-            AiTool::new("b_send", "Send.", json!({ "type": "object" })),
+            AiTool {
+                parameters: json!({ "type": "object" }),
+                ..AiTool::new("b_send", "Send.").unwrap()
+            },
             move |_call, context| {
                 let noting = Arc::clone(&noting_b);
                 async move {
@@ -364,7 +376,7 @@ async fn sibling_agent(kit: &RoomKit, notes: &Arc<Mutex<Vec<String>>>) {
                         Err(error) => format!("{error:?}"),
                     };
                     noting.lock().unwrap().push(format!("b {read}"));
-                    Ok(ToolOutput::Text("sent".to_owned()))
+                    Ok(ToolResult::Text("sent".to_owned()))
                 }
             },
         );
@@ -372,10 +384,16 @@ async fn sibling_agent(kit: &RoomKit, notes: &Arc<Mutex<Vec<String>>>) {
         ScriptedRound::calling("", [("c1", "a_close", "{}"), ("c2", "b_send", "{}")]),
         ScriptedRound::answering("Done."),
     ]);
-    let agent = roomkit_ai::AiAgent::new(channel("agent"), model)
-        .with_tools(tools)
-        .unwrap()
-        .with_tool_timeout(None);
+    let agent = roomkit_ai::AiChannel::new(
+        channel("agent"),
+        model,
+        AiChannelOptions {
+            tools: tools.into(),
+            tool_timeout: None,
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
     kit.register_channel(agent).unwrap();
     kit.attach_channel(
         &room("r"),

@@ -1,9 +1,11 @@
 //! The tool names OpenAI's own endpoint accepts (RFC §6.7 "Declaring
-//! tools"): checked when the agent takes its tools, so that a name the
-//! vendor refuses fails the agent's construction, naming the tool and the
-//! rule, rather than every turn's request.
+//! tools"): checked when a request declares the turn's tools, so that a
+//! name the vendor refuses fails before anything is sent, naming the tool
+//! and the rule, as Python's provider checks them.
 
-use roomkit_ai::{AiError, AiTool};
+use roomkit_ai::AiTool;
+
+use crate::error::OpenAiError;
 
 /// The vendor the rule is OpenAI's.
 const VENDOR: &str = "openai";
@@ -17,7 +19,7 @@ const RULE: &str = "[A-Za-z0-9_-]{1,128}";
 const LONGEST: usize = 128;
 
 /// OpenAI's own endpoint, the one base URL whose rule this crate knows.
-const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+use crate::config::OPENAI_BASE_URL;
 
 /// The first of `tools` whose name OpenAI's endpoint refuses, as an error,
 /// when `base_url` is that endpoint; a server behind any other base URL
@@ -26,12 +28,12 @@ const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 /// # Errors
 ///
 /// Returns [`AiError::ToolName`] for that tool.
-pub(crate) fn check(base_url: &str, tools: &[AiTool]) -> Result<(), AiError> {
+pub(crate) fn check(base_url: &str, tools: &[AiTool]) -> Result<(), OpenAiError> {
     if !is_openai_endpoint(base_url) {
         return Ok(());
     }
     match tools.iter().find(|tool| !accepted(&tool.name)) {
-        Some(tool) => Err(AiError::ToolName {
+        Some(tool) => Err(OpenAiError::ToolName {
             name: tool.name.clone(),
             vendor: VENDOR.to_owned(),
             rule: RULE.to_owned(),
@@ -66,4 +68,41 @@ fn is_openai_endpoint(base_url: &str) -> bool {
         && url.host_str() == openai.host_str()
         && url.port_or_known_default() == openai.port_or_known_default()
         && url.path().trim_end_matches('/') == openai.path()
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::*;
+
+    /// RFC §6.7: on OpenAI's own endpoint, however it is written, a name
+    /// outside `[A-Za-z0-9_-]{1,128}` is refused; a server behind another
+    /// base URL, or OpenAI's with credentials, decides itself.
+    #[test]
+    fn a_tool_name_openai_refuses_is_refused_on_openai_s_endpoint_alone() {
+        let refused = |base_url: &str, name: &str| {
+            let tool = AiTool {
+                parameters: json!({ "type": "object" }),
+                ..AiTool::new(name, "Reads a file").unwrap()
+            };
+            check(base_url, &[tool]).is_err()
+        };
+        let openai = "https://api.openai.com/v1";
+        let (long, longest) = ("d".repeat(129), "c".repeat(128));
+        assert_eq!(
+            [
+                refused(openai, "files.read"),
+                refused(openai, "files:read"),
+                refused(openai, &long),
+                refused("HTTPS://API.OpenAI.com:443/v1/", "files.read"),
+                refused(openai, &longest),
+                refused(openai, "files_read-2"),
+                refused("http://localhost:8000/v1", "files.read"),
+                refused("https://user:key@api.openai.com/v1", "files.read"),
+            ],
+            [true, true, true, true, false, false, false, false]
+        );
+    }
 }

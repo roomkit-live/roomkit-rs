@@ -12,7 +12,7 @@ use super::generation::{Called, Partial};
 use super::{Loop, ToolEnd};
 use crate::provider::AiProvider;
 use crate::texts;
-use crate::tools::{ToolError, ToolOutput, schema};
+use crate::tools::{ToolError, ToolResult, schema};
 
 /// The kind a call past its bound reads as (RFC §21.6).
 const TIMED_OUT: &str = "ToolTimeoutError";
@@ -135,7 +135,7 @@ impl<P: AiProvider> Loop<P> {
 }
 
 /// `call`, served with `output`.
-fn served(call: ToolCall, output: ToolOutput) -> ToolCallReport {
+fn served(call: ToolCall, output: ToolResult) -> ToolCallReport {
     ToolCallReport::new(call).ended(ToolCallOutcome::Served, output.into_value())
 }
 
@@ -145,7 +145,7 @@ fn served(call: ToolCall, output: ToolOutput) -> ToolCallReport {
 fn failure(call: ToolCall, error: ToolError) -> ToolCallReport {
     match error {
         ToolError::Refused(words) => ended(call, ToolCallOutcome::Refused, words),
-        ToolError::Unserved(message) => {
+        ToolError::UnservedToolCall(message) => {
             tracing::debug!(target: "roomkit::ai", tool = %call.name, %message, "a tool declined a call");
             let text = texts::unserved(&call.name);
             ended(call, ToolCallOutcome::Unserved, text)

@@ -33,8 +33,9 @@ use roomkit::{
     current_turn_host,
 };
 use roomkit_ai::{
-    AiAgent, AiContext, AiProvider, AiResponse, AiRole, AiTool, AiToolCall, ProviderError,
-    ProviderStream, StreamDone, StreamEvent, StreamTextDelta, ToolOutput, Tools, tool_arguments,
+    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiRole, AiTool, AiToolCall,
+    ProviderError, ProviderStream, StreamDone, StreamEvent, StreamTextDelta, ToolResult, Tools,
+    tool_arguments,
 };
 use serde_json::json;
 
@@ -130,11 +131,10 @@ fn kit_writing(calls: bool, deltas: usize, writes: bool) -> RoomKit {
         RecordingTransportOptions::default(),
     ))
     .unwrap();
-    let lookup = AiTool::new(
-        "lookup",
-        "Look it up.",
-        json!({ "type": "object", "properties": { "q": { "type": "string" } } }),
-    );
+    let lookup = AiTool {
+        parameters: json!({ "type": "object", "properties": { "q": { "type": "string" } } }),
+        ..AiTool::new("lookup", "Look it up.").unwrap()
+    };
     let tools = Tools::new().tool(lookup, move |_call, context| async move {
         if writes {
             let turn = current_turn_host().unwrap();
@@ -148,11 +148,17 @@ fn kit_writing(calls: bool, deltas: usize, writes: bool) -> RoomKit {
             .await
             .unwrap();
         }
-        Ok(ToolOutput::Text("42".to_owned()))
+        Ok(ToolResult::Text("42".to_owned()))
     });
-    let agent = AiAgent::new(channel("ai"), Immediate { calls, deltas })
-        .with_tools(tools)
-        .unwrap();
+    let agent = AiChannel::new(
+        channel("ai"),
+        Immediate { calls, deltas },
+        AiChannelOptions {
+            tools: tools.into(),
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
     kit.register_channel(agent).unwrap();
     kit
 }

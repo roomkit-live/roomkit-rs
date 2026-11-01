@@ -12,8 +12,8 @@ use roomkit::model::{EventContent, EventType, HookResult, RoomEvent};
 use roomkit::{HookOptions, HookTrigger, ToolCallEvent, UpdateEventOptions};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiAgent, AiContext, AiMessage, AiProvider, AiResponse, AiRole, AiTool, AiToolResultPart,
-    ProviderError, ToolError, Tools, read_tool_calls,
+    AiChannel, AiChannelOptions, AiContext, AiMessage, AiProvider, AiResponse, AiRole, AiTool,
+    AiToolResultPart, ProviderError, ToolError, Tools, read_tool_calls,
 };
 use serde_json::json;
 
@@ -55,7 +55,10 @@ impl AiProvider for Whole {
 fn tools() -> Tools {
     let nothing = json!({ "type": "object", "properties": {} });
     served().tool(
-        AiTool::new("fail", "Fails", nothing),
+        AiTool {
+            parameters: nothing,
+            ..AiTool::new("fail", "Fails").unwrap()
+        },
         |_call, _context| async { Err(ToolError::raised_as("RuntimeError", "broken")) },
     )
 }
@@ -71,9 +74,14 @@ const ROUNDS: [&[(&str, &str, &str)]; 2] = [
 ];
 
 /// What the model was asked, generation by generation, when Alice asks
-/// twice in a room whose agent answers through `agent`.
-async fn two_turns<P: AiProvider>(agent: AiAgent<P>) {
-    let room = Room::with_agent(agent.with_tools(tools()).unwrap()).await;
+/// twice in a room whose agent answers through `model`.
+async fn two_turns<P: AiProvider>(model: P) {
+    let options = AiChannelOptions {
+        tools: tools().into(),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(channel("assistant"), model, options).unwrap();
+    let room = Room::with_agent(agent).await;
     room.says("first question").await;
     room.says("second question").await;
     room.kit.close().await.unwrap();
@@ -134,7 +142,7 @@ async fn an_earlier_round_reads_as_its_calls_then_their_results_streamed() {
         ScriptedRound::answering("Answer one.").in_pieces(["Answer ", "one."]),
         ScriptedRound::answering("Answer two.").in_pieces(["Answer ", "two."]),
     ]);
-    two_turns(AiAgent::new(channel("assistant"), model.clone())).await;
+    two_turns(model.clone()).await;
     check(&model.requests());
 }
 
@@ -169,7 +177,7 @@ async fn an_earlier_round_reads_as_its_calls_then_their_results_whole() {
         answering("Answer one."),
         answering("Answer two."),
     ]);
-    two_turns(AiAgent::new(channel("assistant"), model.clone())).await;
+    two_turns(model.clone()).await;
     check(&model.requests.lock().unwrap());
 }
 

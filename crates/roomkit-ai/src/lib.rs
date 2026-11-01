@@ -1,59 +1,64 @@
 //! The AI channel of RoomKit, over any model provider (RFC §6.4, §6.7,
-//! Appendix A.9).
+//! Appendix A.9), in the Python implementation's shape.
 //!
-//! - [`AiAgent`]: an intelligence channel whose turn runs one tool loop,
-//!   the same for every provider (step 4, decision 6): generate, run the
-//!   tools the model calls, hand back their results, generate again.
+//! - [`AiChannel`]: Python's `AIChannel`, an intelligence channel whose
+//!   turn runs one tool loop, the same for every provider (step 4,
+//!   decision 6): generate, run the tools the model calls, hand back their
+//!   results, generate again. [`AiChannelOptions`] holds Python's keywords.
 //! - [`AiProvider`]: a model, Python's provider contract: an
 //!   [`AiContext`] in, an [`AiResponse`] out, or its structured stream of
 //!   [`StreamEvent`]s (text, calls, the end), which the tool loop reads.
 //!   `roomkit-openai` implements it for OpenAI-compatible endpoints;
 //!   [`testing::ScriptedProvider`] answers from a script.
-//! - [`Toolset`] and [`Tools`]: the tools an agent serves, many behind one
-//!   handler (step 4, decision 7), and the host's closures.
-//! - [`ToolPolicy`]: which tools the agent may call (RFC §21.1).
+//! - [`AiTool`], [`ToolHandler`], [`Tool`] and [`ToolEntry`]: the tools a
+//!   channel declares, the handler serving them by name, and the tools that
+//!   serve themselves; an MCP server gives its tools and its handler
+//!   (`roomkit-mcp`).
+//! - [`ToolPolicy`]: which tools the model may call (RFC §21.1).
 //! - [`SkillRegistry`]: the skills of the host's directories (RFC §24),
-//!   which the agent lists in its system prompt and the model activates
-//!   ([`AiAgent::with_skills`]).
+//!   which the channel lists in its system prompt and the model activates.
 //! - The instructions an MCP server publishes, which the system prompt
 //!   carries under the host's label for the server, in a block they cannot
-//!   close ([`AiAgent::with_server_instructions`], RFC §21.2); the server's
-//!   tools are a [`Toolset`] (`roomkit-mcp`).
+//!   close ([`AiChannelOptions::server_instructions`], RFC §21.2).
 //!
 //! A call runs through its gate (RFC §21.1), then the kit's tool hooks
-//! (RFC §9.3), which the agent reaches through its turn
+//! (RFC §9.3), which the channel reaches through its turn
 //! ([`roomkit::current_turn_host`]): `BEFORE_TOOL_USE` before it runs,
-//! `ON_TOOL_CALL` once it ended.
+//! `ON_TOOL_CALL` once it ended. A handler reads the call it serves with
+//! [`current_tool_call`].
 //!
 //! ```
 //! use roomkit::RoomKit;
 //! use roomkit::model::ChannelId;
 //! use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-//! use roomkit_ai::{AiAgent, AiTool, ToolOutput, ToolPolicy, Tools};
+//! use roomkit_ai::{AiChannel, AiChannelOptions, AiTool, ToolHandler, ToolPolicy, ToolResult};
 //! use serde_json::json;
 //!
-//! let lookup = AiTool::new(
-//!     "lookup_order",
-//!     "Find an order by its number",
-//!     json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
-//! );
-//! let tools = Tools::new().tool(lookup, |_call, _context| async {
-//!     Ok(ToolOutput::Json(json!({ "status": "shipped" })))
+//! let lookup = AiTool {
+//!     parameters: json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
+//!     ..AiTool::new("lookup_order", "Find an order by its number")?
+//! };
+//! let handler = ToolHandler::new(|_name, _arguments| async {
+//!     Ok(ToolResult::Json(json!({ "status": "shipped" })))
 //! });
 //! let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
-//! let agent = AiAgent::new(ChannelId::new("assistant")?, model)
-//!     .with_system_prompt("You answer a shop's customers.")
-//!     .with_tools(tools)?
-//!     .with_tool_policy(ToolPolicy {
+//! let options = AiChannelOptions {
+//!     system_prompt: Some("You answer a shop's customers.".into()),
+//!     tools: vec![lookup.into()],
+//!     tool_handler: Some(handler),
+//!     tool_policy: Some(ToolPolicy {
 //!         deny: vec!["admin_*".into()],
 //!         ..ToolPolicy::default()
-//!     });
+//!     }),
+//!     ..AiChannelOptions::default()
+//! };
+//! let agent = AiChannel::new(ChannelId::new("assistant")?, model, options)?;
 //! let kit = RoomKit::new(Default::default());
 //! kit.register_channel(agent)?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-mod agent;
+mod channel;
 mod error;
 mod images;
 mod provider;
@@ -67,7 +72,7 @@ mod texts;
 mod tool_loop;
 mod tools;
 
-pub use self::agent::AiAgent;
+pub use self::channel::{AiChannel, AiChannelOptions};
 pub use self::error::AiError;
 #[doc(hidden)]
 pub use self::provider::read_tool_calls;
@@ -77,7 +82,12 @@ pub use self::provider::{
     ProviderErrorOptions, ProviderStream, StreamDone, StreamEvent, StreamTextDelta, StreamToolCall,
     TextStream, tool_arguments,
 };
+#[doc(hidden)]
+pub use self::skills::dumps;
 pub use self::skills::{DiscoverOptions, Skill, SkillError, SkillMetadata, SkillRegistry};
 pub use self::tools::{
-    AiTool, ToolContext, ToolError, ToolOutput, ToolPolicy, Tools, Toolset, arguments,
+    AiTool, Tool, ToolCallContext, ToolEntry, ToolError, ToolFuture, ToolHandler, ToolPolicy,
+    ToolResult, compose_tool_handlers, current_tool_call,
 };
+#[doc(hidden)]
+pub use self::tools::{ToolContext, Tools, alias_server, arguments, served_tool_name};

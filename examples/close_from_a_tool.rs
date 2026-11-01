@@ -33,8 +33,7 @@ use roomkit::{
     AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, ProcessInboundOptions, RoomKit,
     RoomKitError,
 };
-use roomkit_ai::{AiTool, ToolError, ToolOutput, Tools};
-use roomkit_openai::{OpenAiAgent, OpenAiConfig};
+use roomkit_ai::{AiChannel, AiChannelOptions, AiTool, ToolError, ToolHandler, ToolResult};
 use serde_json::json;
 use tokio::time::Instant;
 
@@ -169,10 +168,17 @@ async fn service_room(
     pager: &Pager,
     closed: &Log<Closed>,
 ) -> Result<RoomId, Box<dyn Error>> {
-    let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
-        .with_system_prompt("You run a service for its operator.");
-    let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?
-        .with_tools(shut_down(kit, pager, closed))?;
+    let definition = AiTool {
+        parameters: json!({ "type": "object" }),
+        ..AiTool::new("shut_down", "Shut the service down")?
+    };
+    let options = AiChannelOptions {
+        system_prompt: Some("You run a service for its operator.".to_owned()),
+        tools: vec![definition.into()],
+        tool_handler: Some(shut_down(kit, pager, closed)),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(ChannelId::new("assistant")?, endpoint.provider()?, options)?;
     kit.register_channel(RecordingTransport::new(
         ChannelId::new("sms")?,
         ChannelType::SMS,
@@ -197,16 +203,11 @@ async fn service_room(
     Ok(room)
 }
 
-/// The `shut_down` tool: it closes the kit, held weakly since the kit holds
-/// the agent, and notes what its close took.
-fn shut_down(kit: &RoomKit, pager: &Pager, closed: &Log<Closed>) -> Tools {
+/// The handler of the `shut_down` tool: it closes the kit, held weakly
+/// since the kit holds the agent, and notes what its close took.
+fn shut_down(kit: &RoomKit, pager: &Pager, closed: &Log<Closed>) -> ToolHandler {
     let (kit, pager, closed) = (kit.downgrade(), pager.clone(), closed.clone());
-    let definition = AiTool::new(
-        "shut_down",
-        "Shut the service down",
-        json!({ "type": "object" }),
-    );
-    Tools::new().tool(definition, move |_call, _context| {
+    ToolHandler::new(move |_name, _arguments| {
         let (kit, pager, closed) = (kit.upgrade(), pager.clone(), closed.clone());
         async move {
             let started = Instant::now();
@@ -216,7 +217,7 @@ fn shut_down(kit: &RoomKit, pager: &Pager, closed: &Log<Closed>) -> Tools {
                     .map_err(|error| ToolError::raised(&error))?;
             }
             closed.push((started.elapsed(), !pager.closes.entries().is_empty()));
-            Ok(ToolOutput::from("closed"))
+            Ok(ToolResult::from("closed"))
         }
     })
 }

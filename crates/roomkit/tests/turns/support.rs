@@ -15,7 +15,7 @@ use roomkit::{
     RoomKitOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiAgent, AiTool, ToolContext, ToolError, ToolOutput, Tools};
+use roomkit_ai::{AiChannel, AiChannelOptions, AiTool, ToolContext, ToolError, ToolResult, Tools};
 use serde_json::json;
 
 pub(crate) fn channel(id: &str) -> ChannelId {
@@ -28,11 +28,10 @@ pub(crate) fn room() -> RoomId {
 
 /// `lookup`, which takes a query.
 pub(crate) fn lookup() -> AiTool {
-    AiTool::new(
-        "lookup",
-        "Look it up.",
-        json!({ "type": "object", "properties": { "q": { "type": "string" } } }),
-    )
+    AiTool {
+        parameters: json!({ "type": "object", "properties": { "q": { "type": "string" } } }),
+        ..AiTool::new("lookup", "Look it up.").unwrap()
+    }
 }
 
 fn usage(tokens: u64) -> Metadata {
@@ -55,7 +54,7 @@ pub(crate) fn model() -> ScriptedProvider {
 pub(crate) async fn kit<F, Fut>(handler: F) -> RoomKit
 where
     F: Fn(ToolCall, ToolContext) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<ToolOutput, ToolError>> + Send + 'static,
+    Fut: Future<Output = Result<ToolResult, ToolError>> + Send + 'static,
 {
     let at: Timestamp = "2026-10-26T12:00:00Z".parse().unwrap();
     let kit = kit_with_environment(RoomKitOptions::default(), SequentialEnvironment::new(at));
@@ -65,9 +64,15 @@ where
         RecordingTransportOptions::default(),
     ))
     .unwrap();
-    let agent = AiAgent::new(channel("ai"), model())
-        .with_tools(Tools::new().tool(lookup(), handler))
-        .unwrap();
+    let agent = AiChannel::new(
+        channel("ai"),
+        model(),
+        AiChannelOptions {
+            tools: Tools::new().tool(lookup(), handler).into(),
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
     kit.register_channel(agent).unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room()),

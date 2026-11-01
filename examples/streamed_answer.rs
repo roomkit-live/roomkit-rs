@@ -46,8 +46,7 @@ use roomkit::{
     AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DeliveryStream,
     ProcessInboundOptions, RoomKit, StreamItem,
 };
-use roomkit_ai::{AiTool, ToolOutput, Tools};
-use roomkit_openai::{OpenAiAgent, OpenAiConfig};
+use roomkit_ai::{AiChannel, AiChannelOptions, AiTool, ToolHandler, ToolResult};
 use serde_json::{Value, json};
 
 use shared::text_of;
@@ -200,18 +199,21 @@ async fn bakery(
     shelves: &Arc<AtomicUsize>,
 ) -> Result<(RoomKit, Screen, RecordingTransport, RoomId), Box<dyn Error>> {
     let counted = Arc::clone(shelves);
-    let check = AiTool::new(
-        "check_shelves",
-        "How many loaves of a bread are left",
-        json!({ "type": "object", "properties": { "bread": { "type": "string" } } }),
-    );
-    let tools = Tools::new().tool(check, move |_call, _context| {
+    let check = AiTool {
+        parameters: json!({ "type": "object", "properties": { "bread": { "type": "string" } } }),
+        ..AiTool::new("check_shelves", "How many loaves of a bread are left")?
+    };
+    let handler = ToolHandler::new(move |_name, _arguments| {
         counted.fetch_add(1, Ordering::SeqCst);
-        async { Ok(ToolOutput::Json(json!({ "sourdough": 3 }))) }
+        async { Ok(ToolResult::Json(json!({ "sourdough": 3 }))) }
     });
-    let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
-        .with_system_prompt(SYSTEM_PROMPT);
-    let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?.with_tools(tools)?;
+    let options = AiChannelOptions {
+        system_prompt: Some(SYSTEM_PROMPT.to_owned()),
+        tools: vec![check.into()],
+        tool_handler: Some(handler),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(ChannelId::new("assistant")?, endpoint.provider()?, options)?;
     let kit = shared::kit();
     let screen = Screen::new(ChannelId::new("screen")?);
     let sms = RecordingTransport::new(

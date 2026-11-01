@@ -1,17 +1,16 @@
-//! What building an agent or running its turn fails with.
+//! What a provider's request fails with, before the loop reads it as a
+//! [`ProviderError`].
 
 use std::error::Error;
 
-/// What building an [`OpenAiAgent`](crate::OpenAiAgent) or running its turn
-/// failed with.
-///
-/// A turn's error reaches the kit as the channel's error: the kit records
-/// its message on the turn's `ON_ERROR` event and on the caller's result,
-/// and nothing of it reaches the room (RFC §6.4, §9.2). Its message never
-/// holds the API key.
+use roomkit_ai::{ProviderError, ProviderErrorOptions};
+
+/// What building a provider or its request failed with: crate-private, the
+/// loop reads each as a [`ProviderError`] (Python's rule of
+/// `provider_error`). Its message never holds the API key.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
-pub enum OpenAiError {
+pub(crate) enum OpenAiError {
     /// The host could not provide an authorized bearer credential.
     #[error("{0}")]
     Credential(#[from] crate::TokenError),
@@ -84,6 +83,17 @@ pub enum OpenAiError {
         /// API key removed.
         message: String,
     },
+    /// A tool's name is one the vendor refuses (RFC §6.7): checked before
+    /// the request, which never goes.
+    #[error("tool '{name}': {vendor} accepts tool names matching {rule}")]
+    ToolName {
+        /// The name.
+        name: String,
+        /// The vendor whose rule refuses it.
+        vendor: String,
+        /// The names the vendor accepts, as a pattern matched whole.
+        rule: String,
+    },
 }
 
 impl OpenAiError {
@@ -126,14 +136,123 @@ fn with_causes(error: &dyn Error) -> String {
     message
 }
 
-impl From<OpenAiError> for roomkit_ai::ProviderError {
-    /// The failure as the loop reads a provider's: its message, the error
-    /// itself its source.
+/// The statuses a retry may get past, Python's `RETRYABLE_STATUS_CODES`.
+fn retryable_status(status: u16) -> bool {
+    matches!(status, 408 | 409 | 429 | 500..=599)
+}
+
+/// Whether `message`, which came with no status, names a transient failure:
+/// a retried status, a rate limit or an overload, as whole words (Python's
+/// `_names_transient`: `rate[ _-]?limit(ed|s)?`, `too many requests`,
+/// `overloaded`, or a status number).
+fn names_transient(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let limit = |word: &str| matches!(word, "limit" | "limits" | "limited");
+    let named = words.iter().enumerate().any(|(at, word)| {
+        let next = words.get(at + 1).copied();
+        (*word == "rate" && next.is_some_and(limit))
+            || matches!(
+                *word,
+                "ratelimit" | "ratelimits" | "ratelimited" | "overloaded"
+            )
+            || (*word == "too" && next == Some("many") && words.get(at + 2) == Some(&"requests"))
+    });
+    named
+        || words
+            .iter()
+            .filter(|word| word.len() == 3)
+            .filter_map(|word| word.parse::<u16>().ok())
+            .any(retryable_status)
+}
+
+impl From<OpenAiError> for ProviderError {
+    /// The failure as every provider reads one (RFC §6.7, Python's
+    /// `provider_error`): a status decides whether a retry may succeed, a
+    /// lost connection may, an answer that could not be read may not; the
+    /// error itself is the source.
     fn from(error: OpenAiError) -> Self {
-        let options = roomkit_ai::ProviderErrorOptions {
-            provider: "OpenAIAIProvider".to_owned(),
-            ..roomkit_ai::ProviderErrorOptions::default()
+        let (retryable, status_code, context_overflow) = match &error {
+            OpenAiError::Status { status, code, .. } => (
+                retryable_status(*status),
+                Some(*status),
+                (code.as_deref() == Some("context_length_exceeded")).then_some(true),
+            ),
+            OpenAiError::Request { .. } => (true, None, None),
+            OpenAiError::StreamFailed { message } => (names_transient(message), None, None),
+            OpenAiError::ToolName { .. } => (false, None, Some(false)),
+            OpenAiError::Credential(_)
+            | OpenAiError::BaseUrl { .. }
+            | OpenAiError::Client { .. }
+            | OpenAiError::AnswerTooLong { .. }
+            | OpenAiError::Malformed { .. }
+            | OpenAiError::StreamLineTooLong { .. }
+            | OpenAiError::StreamEventTooLong { .. } => (false, None, None),
+        };
+        let options = ProviderErrorOptions {
+            retryable,
+            provider: "openai".to_owned(),
+            status_code,
+            context_overflow,
         };
         Self::new(error.to_string(), options).with_source(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    /// Python's `provider_error`: a status decides, a lost connection is
+    /// retried, an unreadable answer is not, a message is read for a
+    /// transient failure; OpenAI's `context_length_exceeded` code is an
+    /// overflow.
+    #[test]
+    fn a_failure_reads_as_python_s_provider_error() {
+        let status = |status, code: Option<&str>| OpenAiError::Status {
+            status,
+            error_type: None,
+            code: code.map(str::to_owned),
+            message: "m".to_owned(),
+        };
+        let read = |error: OpenAiError| {
+            let error = ProviderError::from(error);
+            (error.retryable, error.status_code, error.context_overflow)
+        };
+        assert_eq!(
+            [
+                read(status(429, None)),
+                read(status(503, None)),
+                read(status(400, Some("context_length_exceeded"))),
+                read(status(401, None)),
+                read(OpenAiError::Request {
+                    reason: "reset".to_owned()
+                }),
+                read(OpenAiError::Malformed {
+                    reason: "x".to_owned()
+                }),
+                read(OpenAiError::StreamFailed {
+                    message: "Rate limit reached".to_owned()
+                }),
+                read(OpenAiError::StreamFailed {
+                    message: "token limit".to_owned()
+                }),
+            ],
+            [
+                (true, Some(429), None),
+                (true, Some(503), None),
+                (false, Some(400), Some(true)),
+                (false, Some(401), None),
+                (true, None, None),
+                (false, None, None),
+                (true, None, None),
+                (false, None, None),
+            ]
+        );
     }
 }

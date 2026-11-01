@@ -15,9 +15,9 @@ use roomkit::{
     DeliveryStream, HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomKit,
     RoomKitOptions, ToolCallEvent,
 };
-use roomkit_ai::AiAgent;
-use roomkit_ai::ToolOutput;
+use roomkit_ai::ToolResult;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
+use roomkit_ai::{AiChannel, AiChannelOptions};
 use roomkit_core::ops::ChannelConfig;
 use serde_json::Value;
 use tokio::sync::Notify;
@@ -71,7 +71,7 @@ async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_c
             let _cut = cut;
             started.notify_one();
             std::future::pending::<()>().await;
-            Ok(ToolOutput::Text("never".to_owned()))
+            Ok(ToolResult::Text("never".to_owned()))
         }
     })
     .await;
@@ -262,8 +262,10 @@ async fn a_streaming_reader_that_leaves_crosses_as_close() {
     declaration.recipient_key = None;
     kit.register_channel(Leaving { declaration }).unwrap();
     let model = ScriptedProvider::new([ScriptedRound::writing(["The answer ", "is 42."])]);
-    kit.register_channel(AiAgent::new(channel("ai"), model))
-        .unwrap();
+    kit.register_channel(
+        AiChannel::new(channel("ai"), model, AiChannelOptions::default()).unwrap(),
+    )
+    .unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room()),
         ..Default::default()
@@ -324,7 +326,7 @@ async fn cancelling_a_detached_handle_joins_its_tool_and_keeps_the_kit_usable() 
             let _cut = cut;
             started.notify_one();
             std::future::pending::<()>().await;
-            Ok(ToolOutput::Text("never".to_owned()))
+            Ok(ToolResult::Text("never".to_owned()))
         }
     })
     .await;

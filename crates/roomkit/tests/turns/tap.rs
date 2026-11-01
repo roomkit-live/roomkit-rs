@@ -20,7 +20,7 @@ use pretty_assertions::assert_eq;
 use roomkit::model::{EventType, TextContent};
 use roomkit::testing::{TappedMessage, TurnTap};
 use roomkit::{ConversationStore, SendEventOptions, current_turn_host};
-use roomkit_ai::{ToolError, ToolOutput};
+use roomkit_ai::{ToolError, ToolResult};
 use serde_json::Value;
 
 use crate::support::{asks, channel, kit, received, room};
@@ -172,7 +172,7 @@ async fn the_probe_s_turn_carries_python_s_messages() {
         )
         .await
         .map_err(|error| ToolError::raised(&error))?;
-        Ok(ToolOutput::Text("42".to_owned()))
+        Ok(ToolResult::Text("42".to_owned()))
     })
     .await;
     let tap = TurnTap::on(&kit);

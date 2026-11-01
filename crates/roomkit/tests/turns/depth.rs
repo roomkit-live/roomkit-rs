@@ -15,7 +15,7 @@ use roomkit::{
     HookExecution, HookOptions, HookTrigger, RoomKitError, SendEventOptions, ToolCallEvent,
     current_turn_host,
 };
-use roomkit_ai::ToolOutput;
+use roomkit_ai::ToolResult;
 use tokio::sync::Notify;
 
 use crate::support::{asks, channel, kit};
@@ -27,7 +27,7 @@ type Sent = Arc<Mutex<Vec<Result<u32, String>>>>;
 /// A kit whose tool answers at once, and whose observer of its calls sends
 /// a note into the room through the turn once `go` tells it to.
 async fn observed() -> (roomkit::RoomKit, Arc<Notify>, Sent) {
-    let kit = kit(|_call, _context| async { Ok(ToolOutput::Text("42".to_owned())) }).await;
+    let kit = kit(|_call, _context| async { Ok(ToolResult::Text("42".to_owned())) }).await;
     let go = Arc::new(Notify::new());
     let sent: Sent = Arc::default();
     let (waits, noted) = (Arc::clone(&go), Arc::clone(&sent));
@@ -116,7 +116,7 @@ async fn sends_through_the_turn(sends: usize) -> (usize, Vec<u32>, usize) {
             .await
             .map_err(|error| roomkit_ai::ToolError::raised(&error))?;
         }
-        Ok(ToolOutput::Text("42".to_owned()))
+        Ok(ToolResult::Text("42".to_owned()))
     })
     .await;
     asks(&kit, "What is it?").await;

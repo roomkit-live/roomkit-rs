@@ -67,7 +67,10 @@ The public API in the Python implementation's terms (step 5, lot 1: the
 kit, its construction and its calls; lot 2: the model and the errors;
 lot 3: the hooks, the framework events and the turn's host; lot 4: the
 channels, the addresses, the routing and the store; lot 5: the skills,
-the tool policy, the SQLite store, the provider contract).
+the tool policy, the SQLite store, the provider contract, the AI channel,
+the OpenAI provider and the MCP provider). The entries that name
+`AiAgent`, `OpenAiAgent` or their builders read `AiChannel` and its
+options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Changed
 
@@ -613,6 +616,62 @@ the tool policy, the SQLite store, the provider contract).
   and `OpenError` go: a file of another schema version is refused with a
   `SqliteSchemaError` as the failure's cause, Python's
   `SQLiteSchemaError`, in its words for a newer version.
+- **`AiChannel` is Python's `AIChannel`** (`roomkit_ai`):
+  `AiChannel::new(channel_id, provider, AiChannelOptions { .. })` takes
+  Python's keywords and defaults (`system_prompt`, `temperature` 0.7,
+  `max_tokens`, `max_context_events` 50, `tool_handler`, `tools`,
+  `max_tool_rounds` 50, `tool_timeout` 30 s, `skills`, `skills_in_prompt`,
+  `tool_policy`, `server_instructions`, `tool_call_intents`), and refuses a
+  tool name no vendor accepts, a name two tools take and a policy pattern
+  holding a bracket. The tools are Python's: `AiTool { name, description,
+  parameters }`, whose `AiTool::new(name, description)` refuses a name no
+  vendor accepts; a `ToolHandler` serving calls by name
+  (`ToolHandler::new(|name, arguments| ..)`, called with `call`); `Tool`, a
+  tool serving its own calls; `ToolEntry`, either one in `tools`;
+  `ToolResult`, a text or a JSON value; `compose_tool_handlers` and
+  `current_tool_call()`, the `ToolCallContext` a handler runs within. A
+  handler declines a call that is not its own with
+  `ToolError::UnservedToolCall`, where it was `ToolError::Unserved`. The
+  channel's close closes its provider. `AiAgent`, `Tools`, `Toolset`,
+  `ToolContext`, `ToolOutput` and `arguments` leave the public API.
+- **`OpenAiAiProvider` is Python's `OpenAIAIProvider`**
+  (`roomkit_openai`): `OpenAiAiProvider::new(OpenAiConfig::new(api_key,
+  model))`, the configuration Python's `OpenAIConfig` in public fields
+  (`base_url`, `max_tokens` 1024, `timeout` 30 s, `connect_timeout` 5 s,
+  `include_stream_usage`, `use_max_completion_tokens`,
+  `supports_custom_temperature`, `reasoning_effort`, `default_headers`,
+  `extra_body`, and roomkit-rs's `api`, `vision`, `token_source`,
+  `tool_namespace`). A request carries the channel's temperature, unless
+  the model takes none, and its `max_tokens` or the configuration's, as
+  `max_tokens` or `max_completion_tokens`. Its errors are `ProviderError`s
+  read as Python's: retryable for 408, 409, 429, a 5xx, a lost connection
+  and a transient message, a context overflow for
+  `context_length_exceeded`. A tool name OpenAI refuses fails the request
+  before it is sent. `OpenAiAgent`, `OpenAiError` and the configuration's
+  builders (`with_system_prompt`, `with_history`, `with_timeout`,
+  `with_reasoning_effort`, `with_api`, `with_vision`, `with_token_source`,
+  `with_tool_namespace`, `shown_base_url`) go: the channel's options carry
+  the prompt and the history.
+- **`McpToolProvider` is Python's `MCPToolProvider`** (`roomkit_mcp`):
+  `McpToolProvider::from_command(command, FromCommandOptions { args, env,
+  cwd, tool_filter, label, connect_timeout })` and `from_url(url,
+  FromUrlOptions { tool_filter, headers, label })` refuse, when the
+  provider is built, a label that cannot name the server in an alias and a
+  command, URL or header that cannot work. The host `connect`s the
+  provider (Python's `async with`) and `close`s it; neither the channel's
+  close nor the kit's closes it. `get_tools()`, `tool_names()`,
+  `instructions()` and `as_tool_handler(AsToolHandlerOptions {
+  gate_discovery })` read a connected provider, `McpError::NotConnected`
+  otherwise, and its tools keep the server's names, where a label named
+  them `mcp__<label>__<tool>`. Its handler runs an alias
+  `mcp__<server>__<tool>` as `<tool>`, declines one naming another server
+  than its label and, with `gate_discovery`, a tool the connection did not
+  list; `call_tool(name, arguments, CallToolOptions { timeout })` calls any
+  tool of the server, the filter left out, and answers its text, a failed
+  call as `{"error": ...}`. A tool policy judges a call under its alias
+  and under the tool it runs. `McpCommand`, `McpServer` and `McpHttp`
+  leave the public API, with `with_label`, `with_tool_names` and
+  `close_grace`.
 
 ### Added
 
