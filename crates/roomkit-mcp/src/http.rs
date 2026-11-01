@@ -15,7 +15,7 @@ use rmcp::{
         StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
-use std::{collections::HashMap, fmt, time::Duration};
+use std::{collections::HashMap, fmt, future::Future, time::Duration};
 
 /// A remote MCP endpoint using Streamable HTTP (RFC §21.2).
 /// Requests accept JSON or SSE replies. Redirects and automatic replay after
@@ -26,10 +26,29 @@ use std::{collections::HashMap, fmt, time::Duration};
 pub(crate) struct McpHttp {
     url: Url,
     headers: HashMap<HeaderName, HeaderValue>,
-    timeout: Duration,
+    /// A test's bound on the connection; none by default, as Python bounds
+    /// only a server it starts.
+    timeout: Option<Duration>,
 }
+/// `connecting`, within `bound` when there is one.
+async fn bounded<T>(
+    bound: Option<Duration>,
+    connecting: impl Future<Output = Result<T, McpError>>,
+) -> Result<T, McpError> {
+    let Some(bound) = bound else {
+        return connecting.await;
+    };
+    tokio::time::timeout(bound, connecting)
+        .await
+        .unwrap_or(Err(McpError::Http {
+            status: None,
+            reason: "connection timed out",
+        }))
+}
+
 impl McpHttp {
-    /// Configures an endpoint without connecting, with a 60-second startup bound.
+    /// Configures an endpoint without connecting, its connection unbounded,
+    /// as Python's: only a server the host starts is bounded.
     ///
     /// # Errors
     /// Refuses non-HTTP(S) URLs, user information, fragments and missing hosts.
@@ -48,7 +67,7 @@ impl McpHttp {
         Ok(Self {
             url,
             headers: HashMap::new(),
-            timeout: Duration::from_secs(60),
+            timeout: None,
         })
     }
     /// Adds a header to every request, including session cleanup. For bearer
@@ -94,7 +113,7 @@ impl McpHttp {
     /// `timeout`.
     #[must_use]
     pub(crate) const fn connect_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.timeout = Some(timeout);
         self
     }
     /// Connects and discovers tools once (RFC §21.2), until cancelled.
@@ -136,7 +155,7 @@ impl McpHttp {
         let connected = tokio::select! {
             biased;
             () = cancelled => Err(McpError::Cancelled),
-            result = tokio::time::timeout(self.timeout, connecting) => result.unwrap_or(Err(McpError::Http {status:None,reason:"connection timed out"})),
+            result = bounded(self.timeout, connecting) => result,
         };
         match connected {
             Ok((service, tools)) => Ok(McpServer::from_http(service, tools, finished)),
@@ -157,5 +176,36 @@ impl fmt::Debug for McpHttp {
             .field("headers", &self.headers.len())
             .field("timeout", &self.timeout)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Python bounds the connection of a server it starts alone: an HTTP
+    /// endpoint's waits as long as it takes, unless a bound is set.
+    #[tokio::test]
+    async fn an_http_connection_is_unbounded_unless_a_bound_is_set() {
+        let slow = || async {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            Ok::<_, McpError>("connected")
+        };
+        let endpoint = McpHttp::new("http://localhost/mcp").unwrap();
+        let unbounded = bounded(endpoint.timeout, slow()).await;
+        let bounded_short = bounded(Some(Duration::from_millis(5)), slow()).await;
+        assert!(
+            matches!(
+                (unbounded, bounded_short),
+                (
+                    Ok("connected"),
+                    Err(McpError::Http {
+                        reason: "connection timed out",
+                        ..
+                    })
+                )
+            ),
+            "the bound"
+        );
     }
 }

@@ -47,11 +47,25 @@ async fn a_call_answers_the_server_s_text() {
 /// RFC §9.3: a result that says `isError` is a failed call, the tool ran,
 /// whose words the model reads, joined as the reference implementation
 /// joins them.
+///
+/// A result that says it failed with no words is a failure with none, as
+/// Python's `ToolFailedError(error_text(result))`.
 #[tokio::test]
 async fn is_error_fails_the_call_with_the_server_s_words() {
+    let server = connected("normal").await;
+    let ungated = server
+        .as_tool_handler(AsToolHandlerOptions {
+            gate_discovery: false,
+        })
+        .unwrap();
+    let wordless = ungated.call("nothing".to_owned(), Metadata::new()).await;
+    server.close().await;
     assert_eq!(
-        answer("fails", &json!({})).await,
-        Err(ToolError::failed("no order 7 try 42"))
+        (answer("fails", &json!({})).await, wordless),
+        (
+            Err(ToolError::failed("no order 7 try 42")),
+            Err(ToolError::failed(""))
+        )
     );
 }
 

@@ -752,6 +752,14 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **An MCP call that fails with no words fails with none**, as Python's
+  `ToolFailedError(error_text(result))`, where it read `Tool '<name>' failed
+  with no message`; and **an HTTP MCP server's connection is unbounded**,
+  as Python bounds only a server it starts, where it was cut at 60 seconds.
+- **A circuit breaker's probe that never ended lets another through** a
+  recovery later: a send the kit's close cut while it probed left the
+  channel's sends skipped for good (RMK-1048's review; Python's own,
+  RMK-1069).
 - **A binding's `retry_policy` and `rate_limit` guard its sends, with a
   circuit breaker** (RMK-1048), as Python's `EventRouter` applies them
   (RFC §10.2 step 3d, §13.1, §13.2), where they were checked at attach and

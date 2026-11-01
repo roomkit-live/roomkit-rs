@@ -393,8 +393,9 @@ impl McpToolProvider {
         })
     }
 
-    /// The same provider, its connection bounded by `bound`, where an HTTP
-    /// server's takes 60 seconds: for a test. Before it is connected only.
+    /// The same provider, its connection bounded by `bound`, where a
+    /// command's takes 60 seconds and an HTTP server's is unbounded, as
+    /// Python's: for a test. Before it is connected only.
     #[doc(hidden)]
     #[must_use]
     pub fn with_connect_timeout(self, bound: Duration) -> Self {

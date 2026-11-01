@@ -27,13 +27,7 @@ const MEDIA_TYPE_LIMIT: usize = 64;
 ///   the model reads, its parts' texts joined by spaces.
 pub(crate) fn read(name: &str, result: CallToolResult) -> Result<ToolResult, ToolError> {
     if result.is_error == Some(true) {
-        let words = error_text(&result);
-        let words = if words.trim().is_empty() {
-            format!("Tool '{name}' failed with no message")
-        } else {
-            words
-        };
-        return Err(ToolError::failed(bounded(name, &words)));
+        return Err(ToolError::failed(bounded(name, &error_text(&result))));
     }
     Ok(ToolResult::Text(body(name, result)))
 }
