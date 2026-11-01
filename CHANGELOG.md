@@ -18,6 +18,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   kept for `wait_task`, and the room's tasks as the status bus lists them.
   After the turn, a verb that needs it is refused before it is sent, a
   `RuntimeError` as Python's.
+- `RoomKit::ensure_participant`, `resolve_participant`, `add_member`,
+  `remove_member`, `rename_member` and `is_member`, as Python's (RFC §5.5,
+  RMK-1140, RMK-1141), with `EnsureParticipantOptions`,
+  `ResolveParticipantOptions`, `AddMemberOptions`, `RemoveMemberOptions`,
+  `RenameMemberOptions` and `IsMemberOptions`, and the triggers
+  `ON_PARTICIPANT_IDENTIFIED`, `_JOINED`, `_LEFT` and `_UPDATED`.
+- Breaking: `RoomKitError::ParticipantNotFound`'s `channel_id` is an
+  `Option<ChannelId>`, `None` for a member call.
 - Breaking: a sender the identity step leaves pending gets a record of its
   own, `pending-` and 16 hex digits of the SHA-256 of the channel and the
   address, and the event is sent under it (RFC §11.2, RMK-1138): a sender
