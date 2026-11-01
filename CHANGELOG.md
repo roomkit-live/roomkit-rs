@@ -14,6 +14,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   background task on the agent, told how to work and where its findings
   go, handed the room's last 12 messages. `TurnHost::delegate` carries the
   conversation too.
+- A member added again without an identity keeps the identification and
+  the identity their record had, as Python's (RFC §5.5, RMK-1141).
 - `RoomKit::cancel_task(task_id, CancelTaskOptions { organization_id })`,
   Python's (RFC §23.3, RMK-1144): a background task its runner holds ends
   `cancelled`, `ON_TASK_COMPLETED`, the status bus and the notified channel
