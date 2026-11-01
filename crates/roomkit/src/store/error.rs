@@ -5,7 +5,7 @@ use std::error::Error;
 use std::ops::Deref;
 
 use roomkit_core::model::{
-    ChannelId, ChannelType, ErrorRecord, EventId, IdentityId, ParticipantId, RoomId,
+    ChannelId, ChannelType, ErrorRecord, EventId, IdentityId, ParticipantId, RoomId, TaskId,
 };
 use thiserror::Error;
 
@@ -127,6 +127,10 @@ pub enum StoreError {
     /// an edit or a delete is gone by its commit.
     #[error("event {0} does not exist")]
     EventNotFound(EventId),
+    /// No task has the id (RFC §14.3 `update_task`): an update is no
+    /// creation, which `add_task` makes; nothing written.
+    #[error("task {0} does not exist")]
+    TaskNotFound(TaskId),
     /// The room holds an event of the same source channel with the same
     /// idempotency key (RFC §13.4, §14.3): the commit is refused, nothing
     /// written, and the event the key names is kept. The pipeline looks a
@@ -185,6 +189,7 @@ impl StoreError {
             Self::IdentityNotFound(_) => "IdentityNotFound",
             Self::AddressLinked { .. } => "AddressLinked",
             Self::EventNotFound(_) => "EventNotFound",
+            Self::TaskNotFound(_) => "TaskNotFound",
             Self::IdempotencyKeyTaken { .. } => "IdempotencyKeyTaken",
             Self::Value(_) => "Value",
             Self::Unavailable(_) => "StoreUnavailable",

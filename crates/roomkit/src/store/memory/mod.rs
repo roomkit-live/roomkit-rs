@@ -10,9 +10,10 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Metadata, Observation,
-    Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task, ThreadSummary,
+    Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task, TaskId, ThreadSummary,
+    Timestamp,
 };
-use roomkit_core::rules::{idempotency, lifecycle, routing};
+use roomkit_core::rules::{edits, idempotency, lifecycle, routing};
 
 use self::identities::Identities;
 use super::{
@@ -352,6 +353,29 @@ impl ConversationStore for InMemoryStore {
             record.room.clone_from(&room);
             Ok(room)
         })
+    }
+
+    /// One write under the store's lock: no commit falls between the
+    /// comparison and the write.
+    async fn update_room_if(
+        &self,
+        mut room: Room,
+        status: RoomStatus,
+        paused_at: Option<Timestamp>,
+        last_activity_at: Option<Timestamp>,
+    ) -> Result<Option<Room>, StoreError> {
+        let mut rooms = self.rooms();
+        let Some(record) = rooms.get_mut(&room.id) else {
+            return Ok(None);
+        };
+        if !super::room_holds(&record.room, status, paused_at, last_activity_at) {
+            return Ok(None);
+        }
+        room.event_count = record.room.event_count;
+        room.latest_index = record.room.latest_index;
+        room.delivered_index = record.room.delivered_index;
+        record.room.clone_from(&room);
+        Ok(Some(room))
     }
 
     /// One write under the store's lock: no commit falls between the read
@@ -863,6 +887,46 @@ impl ConversationStore for InMemoryStore {
         Ok(event)
     }
 
+    async fn record_delivery_results(
+        &self,
+        room_id: &RoomId,
+        event_id: &EventId,
+        results: Metadata,
+    ) -> Result<(), StoreError> {
+        if let Some(record) = self.rooms().get_mut(room_id)
+            && let Some(stored) = record.events.iter_mut().find(|event| &event.id == event_id)
+        {
+            stored.delivery_results = results;
+        }
+        Ok(())
+    }
+
+    /// One write under the store's lock: the target and its edits' marks.
+    async fn write_change_target(
+        &self,
+        room_id: &RoomId,
+        mut target: RoomEvent,
+    ) -> Result<(), StoreError> {
+        super::written::event(&mut target)?;
+        let mut rooms = self.rooms();
+        let events = rooms
+            .get_mut(room_id)
+            .map(|record| &mut record.events)
+            .ok_or_else(|| StoreError::EventNotFound(target.id.clone()))?;
+        let stored = events
+            .iter_mut()
+            .find(|stored| stored.id == target.id)
+            .ok_or_else(|| StoreError::EventNotFound(target.id.clone()))?;
+        target.delivery_results = mem::take(&mut stored.delivery_results);
+        let deleted = edits::is_deleted(&target);
+        let target_id = target.id.clone();
+        *stored = target;
+        if deleted {
+            events::mark_edits_deleted(events, &target_id);
+        }
+        Ok(())
+    }
+
     async fn delete_event(
         &self,
         room_id: &RoomId,
@@ -992,6 +1056,26 @@ impl ConversationStore for InMemoryStore {
             record.observations.push(observation.clone());
             Ok(observation)
         })
+    }
+
+    async fn get_task(&self, task_id: &TaskId) -> Result<Option<Task>, StoreError> {
+        Ok(self.rooms().values().find_map(|record| {
+            record
+                .tasks
+                .iter()
+                .find(|task| &task.id == task_id)
+                .cloned()
+        }))
+    }
+
+    async fn update_task(&self, task: Task) -> Result<Task, StoreError> {
+        let mut rooms = self.rooms();
+        let stored = rooms
+            .values_mut()
+            .find_map(|record| record.tasks.iter_mut().find(|stored| stored.id == task.id))
+            .ok_or_else(|| StoreError::TaskNotFound(task.id.clone()))?;
+        stored.clone_from(&task);
+        Ok(task)
     }
 
     async fn list_tasks(

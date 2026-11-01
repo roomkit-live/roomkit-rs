@@ -19,10 +19,12 @@ use std::collections::BTreeMap;
 use std::future::Future;
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, ChannelType, EventId, EventType, Identity, IdentityId, Metadata,
-    Observation, Participant, ParticipantId, Room, RoomEvent, RoomId, Task, ThreadSummary,
+    ChannelBinding, ChannelId, ChannelType, EventContent, EventId, EventType, Identity, IdentityId,
+    Metadata, Observation, Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task,
+    TaskId, ThreadSummary, Timestamp,
 };
 use roomkit_core::rules::addresses::written_recipient;
+use roomkit_core::rules::edits;
 use roomkit_core::rules::routing;
 
 pub use self::memory::InMemoryStore;
@@ -150,6 +152,58 @@ fn names_by_recipient(
     written_recipient(&binding.metadata, key).is_some_and(|recipient| recipient == address)
 }
 
+/// Whether `room` is still in `status`, with `paused_at` and its timers'
+/// `last_activity_at`: the state a timer transition was computed from, as
+/// Python's `room_holds` reads it.
+pub(crate) fn room_holds(
+    room: &Room,
+    status: RoomStatus,
+    paused_at: Option<Timestamp>,
+    last_activity_at: Option<Timestamp>,
+) -> bool {
+    room.status == status
+        && room.paused_at == paused_at
+        && room.timers.last_activity_at == last_activity_at
+}
+
+/// Marks every edit of `target_id` in the room deleted, through the store's
+/// own reads and writes, as Python's default `_mark_edits_deleted` does: an
+/// edit is told by its content's target, whatever its type.
+async fn mark_edits_deleted<S: ConversationStore + ?Sized>(
+    store: &S,
+    room_id: &RoomId,
+    target_id: &EventId,
+) -> Result<(), StoreError> {
+    let every_row = EventFilter {
+        include_blocked: true,
+        ..EventFilter::default()
+    };
+    let mut offset = 0;
+    loop {
+        let read = ListEventsOptions {
+            offset,
+            limit: TIMELINE_PAGE,
+            event_filter: Some(every_row.clone()),
+            ..ListEventsOptions::default()
+        };
+        let page = store.list_events(room_id, read).await?;
+        if page.is_empty() {
+            return Ok(());
+        }
+        offset = offset.saturating_add(u64::try_from(page.len()).unwrap_or(u64::MAX));
+        for mut edit in page {
+            let edits_target = matches!(
+                &edit.content,
+                EventContent::Edit(content) if &content.target_event_id == target_id
+            );
+            if edits_target {
+                edit.metadata.insert(edits::DELETED.to_owned(), true.into());
+                store.update_event(edit).await?;
+            }
+        }
+    }
+}
+
 /// A conversation store (RFC §14.1): Python's `ConversationStore`, the
 /// operations the pipeline and the kit use, by Python's names. Implement
 /// the methods with `async fn`; a store implements what Python's ABC makes
@@ -202,6 +256,38 @@ pub trait ConversationStore: Send + Sync + 'static {
     ///
     /// [`StoreError::RoomNotFound`] for a room the store lacks.
     fn update_room(&self, room: Room) -> impl Future<Output = Result<Room, StoreError>> + Send;
+
+    /// Writes `room` as [`update_room`](Self::update_room) does, only if the
+    /// stored room is still in `status`, with `paused_at` and
+    /// `last_activity_at` as its timers' last activity: a compare-and-set,
+    /// the write a timer transition computed from a room read earlier makes,
+    /// which a commit that resumed the room or moved its activity meanwhile
+    /// must not lose (RFC §5.1). Returns the room written, or `None` with
+    /// nothing written when the stored room moved or is gone. Provided as
+    /// Python provides it, a read, a comparison then a write, which is not
+    /// atomic: a store whose commits can run beside it overrides it with one
+    /// transaction, as the workspace's stores do.
+    ///
+    /// # Errors
+    ///
+    /// As [`update_room`](Self::update_room).
+    fn update_room_if(
+        &self,
+        room: Room,
+        status: RoomStatus,
+        paused_at: Option<Timestamp>,
+        last_activity_at: Option<Timestamp>,
+    ) -> impl Future<Output = Result<Option<Room>, StoreError>> + Send {
+        async move {
+            let Some(stored) = self.get_room(&room.id).await? else {
+                return Ok(None);
+            };
+            if !room_holds(&stored, status, paused_at, last_activity_at) {
+                return Ok(None);
+            }
+            Ok(Some(self.update_room(room).await?))
+        }
+    }
 
     /// Removes the keys `unset` names from the room's metadata, then writes
     /// `patch` on it, its `updated_at` the store's clock: the partial write
@@ -788,6 +874,85 @@ pub trait ConversationStore: Send + Sync + 'static {
         event: RoomEvent,
     ) -> impl Future<Output = Result<RoomEvent, StoreError>> + Send;
 
+    /// Writes `results`, the outcome of the event's delivery set, on the
+    /// event as stored, and nothing else of it (RFC §10.3, §14.3): the one
+    /// write of `delivery_results`, which every rewrite of the row keeps.
+    /// An event the room `room_id` does not hold is left alone. Provided as
+    /// Python provides it: the stored event written back with the results
+    /// through [`update_event`](Self::update_event), then read back, which
+    /// serves a store whose `update_event` writes the row as given; over one
+    /// that keeps the stored results, as its contract says, it fails saying
+    /// so rather than record nothing: such a store overrides this method.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Value`], nothing written, when `update_event` kept the
+    /// stored results (Python's `NotImplementedError`).
+    fn record_delivery_results(
+        &self,
+        room_id: &RoomId,
+        event_id: &EventId,
+        results: Metadata,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send {
+        async move {
+            let Some(mut stored) = self.get_event(event_id).await? else {
+                return Ok(());
+            };
+            if &stored.room_id != room_id {
+                return Ok(());
+            }
+            stored.delivery_results.clone_from(&results);
+            self.update_event(stored).await?;
+            let written = self.get_event(event_id).await?;
+            if written.is_some_and(|written| written.delivery_results == results) {
+                return Ok(());
+            }
+            let store = std::any::type_name::<Self>();
+            let name = store.rsplit("::").next().unwrap_or(store);
+            Err(StoreError::Value(format!(
+                "{name} keeps delivery_results on update_event: override record_delivery_results to write them"
+            )))
+        }
+    }
+
+    /// Writes `target` as the edit or the delete the persistence policy
+    /// keeps out of the timeline changed it (RFC §10.3): the target's row
+    /// alone, its stored delivery results kept, no row of the change, the
+    /// room's counters unmoved, and when the target is now deleted
+    /// (`metadata.deleted`) every edit of it marked deleted too, as
+    /// [`commit_event`](Self::commit_event) does with a change it stores.
+    /// Provided as Python provides it, through
+    /// [`update_event`](Self::update_event) and the store's reads, which is
+    /// not atomic: a store overrides it with one transaction.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::EventNotFound`], nothing written, for a target the room
+    /// `room_id` no longer holds.
+    fn write_change_target(
+        &self,
+        room_id: &RoomId,
+        mut target: RoomEvent,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send {
+        async move {
+            let Some(stored) = self
+                .get_event(&target.id)
+                .await?
+                .filter(|stored| &stored.room_id == room_id)
+            else {
+                return Err(StoreError::EventNotFound(target.id));
+            };
+            target.delivery_results = stored.delivery_results;
+            let deleted = edits::is_deleted(&target);
+            let target_id = target.id.clone();
+            self.update_event(target).await?;
+            if deleted {
+                mark_edits_deleted(self, room_id, &target_id).await?;
+            }
+            Ok(())
+        }
+    }
+
     /// Hard-deletes the room's event `event_id` (RFC §10.3), its replies
     /// one level deep with `cascade_replies`, and always the edits and
     /// deletes of what it removes; the events removed in §10.3's order, the
@@ -847,6 +1012,22 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         observation: Observation,
     ) -> impl Future<Output = Result<Observation, StoreError>> + Send;
+
+    /// The task `task_id`, whichever room holds it; `None` when the store
+    /// holds none.
+    fn get_task(
+        &self,
+        task_id: &TaskId,
+    ) -> impl Future<Output = Result<Option<Task>, StoreError>> + Send;
+
+    /// Writes `task` whole, keyed by its id, and returns it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::TaskNotFound`] for a task the store does not hold,
+    /// nothing written (RFC §14.3): an update is no creation, which
+    /// [`add_task`](Self::add_task) makes.
+    fn update_task(&self, task: Task) -> impl Future<Output = Result<Task, StoreError>> + Send;
 
     /// The room's tasks, of the status `options` names; none for a room the
     /// store lacks.

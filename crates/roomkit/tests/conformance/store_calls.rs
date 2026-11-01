@@ -8,12 +8,13 @@
 use std::sync::Arc;
 
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelType, EventId, EventType, Participant, ParticipantId, Room,
-    RoomEvent, RoomId, RoomStatus, Timestamp, Visibility,
+    ChannelBinding, ChannelId, ChannelType, EventId, EventType, Metadata, Participant,
+    ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task, TaskId, TaskStatus, Timestamp,
+    Visibility,
 };
 use roomkit::store::{
     CommitEventOptions, DeleteEventOptions, FindLatestRoomOptions, FindRoomIdByChannelOptions,
-    GetTimelineOptions,
+    GetTimelineOptions, ListTasksOptions,
 };
 use roomkit::{
     ConversationStore, EventFilter, ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions,
@@ -22,8 +23,9 @@ use roomkit::{
 use serde_json::Value;
 
 use crate::calls::{Called, Unreadable, dump, field, finish, optional};
+use crate::errors::named;
 use crate::run::Run;
-use crate::templates::{complete_event, complete_participant, now, system_source};
+use crate::templates::{complete_event, complete_participant, complete_task, now, system_source};
 
 /// Each store call's arguments, beside `call` and `organization_id`.
 pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
@@ -47,7 +49,15 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "newest_first",
         ],
         "store.get_thread_summaries" => &["room_id", "root_event_ids"],
-        "store.add_event" => &["event"],
+        "store.add_event" | "store.update_event" => &["event"],
+        "store.get_event" => &["event_id"],
+        "store.record_delivery_results" => &["room_id", "event_id", "results"],
+        "store.write_change_target" => &["room_id", "target"],
+        "store.get_room" => &["room_id"],
+        "store.update_room_if" => &["room", "status", "paused_at", "last_activity_at"],
+        "store.add_task" | "store.update_task" => &["task"],
+        "store.get_task" => &["task_id"],
+        "store.list_tasks" => &["room_id", "status"],
         "store.add_event_auto_index" => &["room_id", "event"],
         "store.delete_event" => &["room_id", "event_id", "cascade_replies"],
         "store.mark_read" | "mark_read" => &["room_id", "channel_id", "event_id"],
@@ -141,9 +151,20 @@ fn event_filter(spec: &Value) -> Result<Option<EventFilter>, Unreadable> {
     }))
 }
 
-/// A store call's outcome, its error named as a kit call's is.
+/// A store call's outcome, its error named as a kit call's is, but a
+/// task's, which no kit call meets.
 fn stored<T: serde::Serialize>(run: &Run, call: &str, outcome: Result<T, StoreError>) -> Called {
-    finish(run, call, outcome.map_err(RoomKitError::from), dump)
+    match outcome {
+        Err(StoreError::TaskNotFound(_)) => Err(named("task_not_found")),
+        outcome => finish(run, call, outcome.map_err(RoomKitError::from), dump),
+    }
+}
+
+/// A task from the template `spec["task"]`, in its own room.
+fn task(spec: &Value) -> Result<Task, Unreadable> {
+    let template = &spec["task"];
+    let room = template["room_id"].as_str().unwrap_or_default();
+    serde_json::from_value(complete_task(template, room)).map_err(|error| format!("task: {error}"))
 }
 
 /// A store call's outcome that is an event, and the event's id, which the
@@ -167,6 +188,9 @@ pub(crate) async fn call(
     let store = run.kit().store();
     Ok(match name {
         "store.add_event" => stored_event(run, name, store.add_event(event(spec, "event")?).await),
+        "store.update_event" => {
+            stored_event(run, name, store.update_event(event(spec, "event")?).await)
+        }
         "store.add_event_auto_index" => {
             let room: RoomId = field(spec, "room_id")?;
             let outcome = store
@@ -316,6 +340,56 @@ async fn events_and_markers(
             stored(run, name, outcome)
         }
         "store.list_read_markers" => stored(run, name, store.list_read_markers(&room()?).await),
+        _ => writes_and_tasks(run, name, spec).await?,
+    })
+}
+
+/// The store's event and room writes, and its tasks.
+async fn writes_and_tasks(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+    let store = run.kit().store();
+    let room = || field::<RoomId>(spec, "room_id");
+    Ok(match name {
+        "store.get_event" => {
+            let event: EventId = field(spec, "event_id")?;
+            stored(run, name, store.get_event(&event).await)
+        }
+        "store.record_delivery_results" => {
+            let (event, results): (EventId, Metadata) =
+                (field(spec, "event_id")?, field(spec, "results")?);
+            let outcome = store
+                .record_delivery_results(&room()?, &event, results)
+                .await;
+            stored(run, name, outcome)
+        }
+        "store.write_change_target" => {
+            let outcome = store
+                .write_change_target(&room()?, event(spec, "target")?)
+                .await;
+            stored(run, name, outcome)
+        }
+        "store.get_room" => stored(run, name, store.get_room(&room()?).await),
+        "store.update_room_if" => {
+            let room: Room = stamped(&spec["room"], &["created_at", "updated_at"], "room")?;
+            let status: RoomStatus = field(spec, "status")?;
+            let (paused_at, last_activity_at): (Option<Timestamp>, Option<Timestamp>) =
+                (field(spec, "paused_at")?, field(spec, "last_activity_at")?);
+            let outcome = store
+                .update_room_if(room, status, paused_at, last_activity_at)
+                .await;
+            stored(run, name, outcome)
+        }
+        "store.add_task" => stored(run, name, store.add_task(task(spec)?).await),
+        "store.update_task" => stored(run, name, store.update_task(task(spec)?).await),
+        "store.get_task" => {
+            let task: TaskId = field(spec, "task_id")?;
+            stored(run, name, store.get_task(&task).await)
+        }
+        "store.list_tasks" => {
+            let options = ListTasksOptions {
+                status: optional::<TaskStatus>(spec, "status")?,
+            };
+            stored(run, name, store.list_tasks(&room()?, options).await)
+        }
         other => return Err(format!("no call {other}")),
     })
 }

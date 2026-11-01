@@ -2276,6 +2276,7 @@
     "__init__": ["def", "reason", "narration"],
     "message_for": ["staticmethod", "reason"]
   },
+  "roomkit.TaskNotFoundError": {},
   "roomkit.TaskTurnFailedError": {
     "__init__": ["def", "error", "reason", "narration"]
   },
@@ -2302,6 +2303,9 @@
   },
   "roomkit.ThoughtEvent": {
     "__init__": ["def", "room_id", "channel_id", "thought", "previous=<factory>", "duration_ms=None"]
+  },
+  "roomkit.ThreadSummary": {
+    "__init__": ["def", "*", "root_event_id", "reply_count=0", "last_reply_at=None"]
   },
   "roomkit.Tool": {
     "__init__": ["def", "*args", "**kwargs"],

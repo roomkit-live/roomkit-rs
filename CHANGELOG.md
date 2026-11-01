@@ -31,6 +31,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `hook_timeout` framework event, SYNC and ASYNC, in the agent's room and
   channel, as Python does (RFC §8.2, RMK-1086); it was only logged.
 
+- The store's writes and tasks as Python's (RMK-1113):
+  `ConversationStore::update_room_if`, the compare-and-set of a timer
+  transition, `record_delivery_results`, the one write of an event's
+  delivery results, `write_change_target`, `get_task` and `update_task`.
+  The in-memory and SQLite stores write each in one step; the provided
+  defaults serve a store that overrides none. `update_task` of a task the
+  store lacks is refused `StoreError::TaskNotFound`, nothing written, as
+  Python's `TaskNotFoundError` (RFC §14.3). The Python API snapshot is
+  pinned at roomkit b938a855, which exports `ThreadSummary` and
+  `TaskNotFoundError`.
+
 - Read markers and added events as Python's (RMK-1113):
   `ConversationStore::add_event`, `add_event_auto_index`, `mark_read`,
   `mark_all_read`, `get_unread_count` and `list_read_markers`, and the kit's

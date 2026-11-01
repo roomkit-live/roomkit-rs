@@ -433,6 +433,14 @@ impl ConversationStore for StuckStore {
         self.store.list_observations(room_id).await
     }
 
+    async fn get_task(&self, task_id: &roomkit::model::TaskId) -> Result<Option<Task>, StoreError> {
+        self.store.get_task(task_id).await
+    }
+
+    async fn update_task(&self, task: Task) -> Result<Task, StoreError> {
+        self.store.update_task(task).await
+    }
+
     async fn add_event(&self, event: RoomEvent) -> Result<RoomEvent, StoreError> {
         self.store.add_event(event).await
     }

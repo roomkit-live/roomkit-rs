@@ -1,7 +1,8 @@
 //! A room's tasks and observations (RFC §5.10, §5.11, §10.1 step 15), in
 //! the `tasks` and `observations` tables, in the order they were stored.
 
-use roomkit::model::{Observation, RoomId, Task};
+use roomkit::StoreError;
+use roomkit::model::{Observation, RoomId, Task, TaskId};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::Failure;
@@ -33,6 +34,33 @@ pub(crate) fn store_task(connection: &Connection, task: &Task) -> Result<(), Fai
         ],
     )?;
     Ok(())
+}
+
+/// The task `task_id`, whichever room holds it.
+pub(crate) fn task(connection: &Connection, task_id: &TaskId) -> Result<Option<Task>, Failure> {
+    stored(
+        connection,
+        "SELECT data FROM tasks WHERE id = ?",
+        task_id.as_str(),
+    )?
+    .map(|data| records::read(&data))
+    .transpose()
+}
+
+/// Writes `task` over the stored task of its id; a task the file lacks is
+/// refused, nothing written (RFC §14.3).
+pub(crate) fn update_task(connection: &Connection, task: &Task) -> Result<(), Failure> {
+    let held = connection
+        .query_row(
+            "SELECT 1 FROM tasks WHERE id = ?",
+            [task.id.as_str()],
+            |_| Ok(()),
+        )
+        .optional()?;
+    if held.is_none() {
+        return Err(StoreError::TaskNotFound(task.id.clone()).into());
+    }
+    store_task(connection, task)
 }
 
 /// Stores `observation`, in place of an observation of the same id.

@@ -145,6 +145,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit.IdentityNotFoundError" = ["0"]
 "roomkit.AddressLinkedError" = ["channel_type"]
 "roomkit.EventNotFoundError" = ["0"]
+"roomkit.TaskNotFoundError" = ["0"]
 "roomkit.IdempotencyKeyTakenError" = ["room_id", "channel_id", "key"]
 
 # Python's messages name the directory and why, the skill and why, the
@@ -398,12 +399,6 @@ rust = "roomkit::testing::kit_with_environment"
 approved = "2026-10-27"
 reason = "decision 5: Python's tests patch the clock and uuid4; the sans-IO core takes them as an input"
 
-[[exception]]
-rust = "roomkit::model::ThreadSummary"
-approved = "2026-11-01"
-until = "roomkit.ThreadSummary"
-reason = "what get_thread_summaries returns, which Python exports from roomkit and roomkit.models (decided 2026-11-01, RMK-1113); until the pinned snapshot holds it (architecture: the Python names table)"
-
 # Python names of classes in scope that Rust lacks: not in 0.x (rule 5).
 
 [[exception]]
@@ -437,13 +432,12 @@ reason = "not in 0.x: agent identity, the thinker, owner-served tools and serial
 python = "roomkit.ConversationStore"
 members = [
     "claim_voice_delivery", "complete_voice_delivery", "connection",
-    "create_verification_request", "get_task", "get_verification",
+    "create_verification_request", "get_verification",
     "get_verification_request", "get_voice_delivery",
     "list_verifications_in_force", "put_verification",
-    "record_delivery_results", "update_room_if", "update_task",
-    "update_verification_request", "write_change_target",
+    "update_verification_request",
 ]
-reason = "not in 0.x: lot 4's list (event writes other than commit_event, conditional updates, threads, read markers, task updates, verification, voice deliveries, the connection)"
+reason = "not in 0.x: verification (parity stream C's lot 5, with stream H), voice deliveries and the connection"
 
 [[missing]]
 python = "roomkit.HookResult"

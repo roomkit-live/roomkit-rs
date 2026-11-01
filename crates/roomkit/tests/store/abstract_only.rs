@@ -21,6 +21,10 @@ use roomkit::{
 #[derive(Debug, Default)]
 struct AbstractOnly {
     store: InMemoryStore,
+    /// Its `update_event` writes the row as given, its delivery results
+    /// included, as a custom store may (Python's `_WritesTheRowAsGiven`);
+    /// otherwise it keeps the stored results, as the trait says.
+    writes_the_row_as_given: bool,
 }
 
 impl ConversationStore for AbstractOnly {
@@ -172,7 +176,14 @@ impl ConversationStore for AbstractOnly {
     }
 
     async fn update_event(&self, event: RoomEvent) -> Result<RoomEvent, StoreError> {
-        self.store.update_event(event).await
+        let results = event.delivery_results.clone();
+        let updated = self.store.update_event(event).await?;
+        if self.writes_the_row_as_given {
+            self.store
+                .record_delivery_results(&updated.room_id, &updated.id, results)
+                .await?;
+        }
+        Ok(updated)
     }
 
     async fn delete_event(
@@ -218,6 +229,14 @@ impl ConversationStore for AbstractOnly {
 
     async fn list_observations(&self, room_id: &RoomId) -> Result<Vec<Observation>, StoreError> {
         self.store.list_observations(room_id).await
+    }
+
+    async fn get_task(&self, task_id: &roomkit::model::TaskId) -> Result<Option<Task>, StoreError> {
+        self.store.get_task(task_id).await
+    }
+
+    async fn update_task(&self, task: Task) -> Result<Task, StoreError> {
+        self.store.update_task(task).await
     }
 
     async fn add_event(&self, event: RoomEvent) -> Result<RoomEvent, StoreError> {
@@ -524,4 +543,159 @@ async fn the_provided_auto_index_takes_the_room_s_count() {
     let added = store.add_event_auto_index(&room_id(), event).await.unwrap();
     kit.close().await.unwrap();
     assert_eq!(added.index, count);
+}
+
+/// An event of `room_1` from SMS saying `text`.
+fn said(text: &str) -> RoomEvent {
+    RoomEvent::new(
+        room_id(),
+        roomkit::model::EventSource::new(channel("sms"), ChannelType::SMS),
+        TextContent::new(text),
+    )
+}
+
+/// The store over `room_1`, with `said(text)` committed; the event as
+/// committed.
+async fn with_said(text: &str) -> (AbstractOnly, RoomEvent) {
+    let store = AbstractOnly::default();
+    store.create_room(Room::new(room_id())).await.unwrap();
+    let options = store::CommitEventOptions::default();
+    let event = store
+        .commit_event(&room_id(), said(text), options)
+        .await
+        .unwrap();
+    (store, event)
+}
+
+/// `results`, a channel's delivery result in the serialized form.
+fn results(status: &str) -> roomkit::model::Metadata {
+    serde_json::from_value(serde_json::json!({ "sms": { "status": status } })).unwrap()
+}
+
+/// Python: tests/test_store_binding_contract.py::test_the_default_delivery_record_writes_the_results_or_says_it_cannot.
+/// The default record writes the results through `update_event`, which a
+/// store writing the row as given lets it do; over one keeping the stored
+/// results it fails, nothing written, rather than record nothing.
+#[tokio::test]
+async fn the_default_delivery_record_writes_the_results_or_says_it_cannot() {
+    let (keeps, kept) = with_said("hi").await;
+    let refused = keeps
+        .record_delivery_results(&room_id(), &kept.id, results("failed"))
+        .await;
+    let unwritten = keeps.get_event(&kept.id).await.unwrap().unwrap();
+
+    let (mut as_given, given) = with_said("hi").await;
+    as_given.writes_the_row_as_given = true;
+    as_given
+        .record_delivery_results(&room_id(), &given.id, results("failed"))
+        .await
+        .unwrap();
+    let written = as_given.get_event(&given.id).await.unwrap().unwrap();
+
+    assert!(
+        matches!(&refused, Err(StoreError::Value(message)) if message.contains("override record_delivery_results")),
+        "{refused:?}"
+    );
+    assert_eq!(
+        (unwritten.delivery_results, written.delivery_results),
+        (roomkit::model::Metadata::new(), results("failed"))
+    );
+}
+
+/// Python: tests/test_store_binding_contract.py::test_the_default_target_write_keeps_the_recorded_results.
+/// A change's target written through the provided method keeps the
+/// delivery results recorded on the row since its copy was read.
+#[tokio::test]
+async fn the_default_target_write_keeps_the_recorded_results() {
+    let (store, read_before) = with_said("v1").await;
+    store
+        .store
+        .record_delivery_results(&room_id(), &read_before.id, results("failed"))
+        .await
+        .unwrap();
+    let mut edited = read_before.clone();
+    edited.content = TextContent::new("changed").into();
+
+    store
+        .write_change_target(&room_id(), edited.clone())
+        .await
+        .unwrap();
+
+    let after = store.get_event(&read_before.id).await.unwrap().unwrap();
+    assert_eq!(
+        (after.content, after.delivery_results),
+        (edited.content, results("failed"))
+    );
+}
+
+/// Python: tests/test_store_binding_contract.py::test_the_default_target_write_marks_a_deleted_target_s_edits.
+/// The provided method marks a deleted target's edits, told by their
+/// content's target, a row typed otherwise that carries an edit included;
+/// a target the room lacks is not found.
+#[tokio::test]
+async fn the_default_target_write_marks_a_deleted_target_s_edits() {
+    let (store, target) = with_said("v1").await;
+    let edit_content = roomkit::model::EditContent::new(target.id.clone(), TextContent::new("v2"));
+    let mut edit = said("edit");
+    edit.r#type = roomkit::model::EventType::Edit;
+    edit.content = edit_content.clone().into();
+    let mut untyped = said("untyped");
+    untyped.content = edit_content.into();
+    let options = store::CommitEventOptions::default;
+    let edit = store
+        .commit_event(&room_id(), edit, options())
+        .await
+        .unwrap();
+    let untyped = store
+        .commit_event(&room_id(), untyped, options())
+        .await
+        .unwrap();
+    let mut deleted = target.clone();
+    deleted.metadata.insert("deleted".to_owned(), true.into());
+
+    store
+        .write_change_target(&room_id(), deleted)
+        .await
+        .unwrap();
+    let missing = store.write_change_target(&room_id(), said("nowhere")).await;
+
+    let mut marks = Vec::new();
+    for row in [&edit, &untyped] {
+        let read = store.get_event(&row.id).await.unwrap().unwrap();
+        marks.push(read.metadata.get("deleted").cloned());
+    }
+    assert_eq!(
+        (
+            marks,
+            missing.map_err(|error| matches!(error, StoreError::EventNotFound(_)))
+        ),
+        (vec![Some(true.into()), Some(true.into())], Err(true))
+    );
+}
+
+/// Python: tests/test_store_binding_contract.py::test_a_room_is_written_if_it_still_holds_what_the_write_was_computed_from,
+/// on the provided method: a room is written only while it holds the
+/// status, the pause and the last activity the write was computed from, its
+/// counters kept.
+#[tokio::test]
+async fn the_default_conditional_room_write_holds_to_what_it_read() {
+    let (store, _event) = with_said("hi").await;
+    let stored = store.get_room(&room_id()).await.unwrap().unwrap();
+    let mut closed = Room::new(room_id());
+    closed.status = roomkit::model::RoomStatus::Closed;
+    let last = stored.timers.last_activity_at;
+
+    let refused = store
+        .update_room_if(closed.clone(), stored.status, stored.paused_at, None)
+        .await
+        .unwrap();
+    let written = store
+        .update_room_if(closed, stored.status, stored.paused_at, last)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (refused, written.map(|room| (room.status, room.event_count))),
+        (None, Some((roomkit::model::RoomStatus::Closed, 1)))
+    );
 }

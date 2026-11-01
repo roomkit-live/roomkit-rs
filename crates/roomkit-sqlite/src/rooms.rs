@@ -2,7 +2,7 @@
 //! the `rooms` and `private_state` tables.
 
 use roomkit::StoreError;
-use roomkit::model::{Metadata, Room, RoomId, Timestamp};
+use roomkit::model::{Metadata, Room, RoomId, RoomStatus, Timestamp};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
@@ -120,6 +120,28 @@ pub(crate) fn write(connection: &Connection, room: &Room, stored: &str) -> Resul
 /// Writes `room` whole over its row and returns it as stored: the
 /// counters the store manages keep their stored values, as Python's store
 /// keeps them, so that a stale copy never rewinds them (RFC §14.3).
+/// Writes `room` as [`update`] does, only if the stored room is still in
+/// `status`, with `paused_at` and its timers' `last_activity_at`, in the
+/// caller's transaction; `None` with nothing written otherwise.
+pub(crate) fn update_if(
+    connection: &Connection,
+    room: Room,
+    status: RoomStatus,
+    paused_at: Option<Timestamp>,
+    last_activity_at: Option<Timestamp>,
+) -> Result<Option<Room>, Failure> {
+    let Some(stored) = get(connection, &room.id)? else {
+        return Ok(None);
+    };
+    let holds = stored.room.status == status
+        && stored.room.paused_at == paused_at
+        && stored.room.timers.last_activity_at == last_activity_at;
+    if !holds {
+        return Ok(None);
+    }
+    update(connection, room).map(Some)
+}
+
 pub(crate) fn update(connection: &Connection, mut room: Room) -> Result<Room, Failure> {
     let Stored { room: held, data } = held(connection, &room.id)?;
     room.event_count = held.event_count;

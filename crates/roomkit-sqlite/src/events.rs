@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use roomkit::StoreError;
-use roomkit::model::{ChannelId, EventId, RoomEvent, RoomId, Timestamp};
+use roomkit::model::{ChannelId, EventId, Metadata, RoomEvent, RoomId, Timestamp};
 use roomkit_core::rules::edits::{self, Mutation};
 use roomkit_core::rules::{idempotency, lifecycle};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -88,6 +88,48 @@ pub(crate) fn commit(
     rooms::write(connection, &room, &data)?;
     write_row(connection, &event, None)?;
     Ok(event)
+}
+
+/// Writes `target`, the target of a change kept out of the timeline, over
+/// its row in `room_id`, its stored delivery results kept, and marks its
+/// edits deleted when it is now deleted, in the caller's transaction, as
+/// Python's `write_change_target`: a target the room lacks is refused,
+/// nothing written.
+pub(crate) fn write_target(
+    connection: &Connection,
+    room_id: &RoomId,
+    mut target: RoomEvent,
+) -> Result<(), Failure> {
+    let Some(held) = stored(connection, &target.id, Some(room_id))? else {
+        return Err(StoreError::EventNotFound(target.id).into());
+    };
+    target.delivery_results = held.event.delivery_results;
+    write_row(connection, &target, Some(&held.data))?;
+    if edits::is_deleted(&target) {
+        mark_edits_deleted(connection, room_id, &target.id)?;
+    }
+    Ok(())
+}
+
+/// Writes `results` as the room's event `event_id`'s delivery results, in
+/// its stored JSON in place, the rest of the row as stored, with Python's
+/// SQL; an event of another room, or none, is left alone.
+pub(crate) fn record_results(
+    connection: &Connection,
+    room_id: &RoomId,
+    event_id: &EventId,
+    results: &Metadata,
+) -> Result<(), Failure> {
+    connection.execute(
+        "UPDATE events SET data = json_set(data, '$.delivery_results', json(?))
+         WHERE id = ? AND room_id = ?",
+        params![
+            serde_json::to_string(results)?,
+            event_id.as_str(),
+            room_id.as_str()
+        ],
+    )?;
+    Ok(())
 }
 
 /// Stores `event` as it is, its index the caller's, the room's counters

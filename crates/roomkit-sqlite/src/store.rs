@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 use roomkit::RoomFilter;
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Metadata, Observation,
-    Participant, ParticipantId, Room, RoomEvent, RoomId, Task, ThreadSummary,
+    Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task, TaskId, ThreadSummary,
+    Timestamp,
 };
 use roomkit::store::{
     AdvanceDeliveredIndexOptions, CommitEventOptions, DeleteEventOptions, FindLatestRoomOptions,
@@ -148,6 +149,21 @@ impl ConversationStore for SqliteStore {
         self.database()
             .await?
             .read(move |connection| Ok(rooms::get(connection, &room_id)?.map(|stored| stored.room)))
+            .await
+    }
+
+    async fn update_room_if(
+        &self,
+        room: Room,
+        status: RoomStatus,
+        paused_at: Option<Timestamp>,
+        last_activity_at: Option<Timestamp>,
+    ) -> Result<Option<Room>, StoreError> {
+        self.database()
+            .await?
+            .write(move |connection| {
+                rooms::update_if(connection, room, status, paused_at, last_activity_at)
+            })
             .await
     }
 
@@ -604,6 +620,34 @@ impl ConversationStore for SqliteStore {
             .await
     }
 
+    async fn record_delivery_results(
+        &self,
+        room_id: &RoomId,
+        event_id: &EventId,
+        results: Metadata,
+    ) -> Result<(), StoreError> {
+        let (room_id, event_id) = (room_id.clone(), event_id.clone());
+        self.database()
+            .await?
+            .write(move |connection| {
+                events::record_results(connection, &room_id, &event_id, &results)
+            })
+            .await
+    }
+
+    async fn write_change_target(
+        &self,
+        room_id: &RoomId,
+        mut target: RoomEvent,
+    ) -> Result<(), StoreError> {
+        written::event(&mut target)?;
+        let room_id = room_id.clone();
+        self.database()
+            .await?
+            .write(move |connection| events::write_target(connection, &room_id, target))
+            .await
+    }
+
     async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
         let event_id = event_id.clone();
         self.database()
@@ -731,6 +775,24 @@ impl ConversationStore for SqliteStore {
             .write(move |connection| {
                 rooms::check(connection, &task.room_id)?;
                 side_effects::store_task(connection, &task)?;
+                Ok(task)
+            })
+            .await
+    }
+
+    async fn get_task(&self, task_id: &TaskId) -> Result<Option<Task>, StoreError> {
+        let task_id = task_id.clone();
+        self.database()
+            .await?
+            .read(move |connection| side_effects::task(connection, &task_id))
+            .await
+    }
+
+    async fn update_task(&self, task: Task) -> Result<Task, StoreError> {
+        self.database()
+            .await?
+            .write(move |connection| {
+                side_effects::update_task(connection, &task)?;
                 Ok(task)
             })
             .await

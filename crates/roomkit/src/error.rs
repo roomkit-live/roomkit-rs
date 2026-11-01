@@ -700,7 +700,8 @@ impl From<StoreError> for RoomKitError {
             // Python's `ParticipantExistsError` and
             // `ParticipantNotFoundError`.
             other @ (StoreError::ParticipantExists { .. }
-            | StoreError::ParticipantNotFound { .. }) => Self::Store(StoreFailure::new(other)),
+            | StoreError::ParticipantNotFound { .. }
+            | StoreError::TaskNotFound(_)) => Self::Store(StoreFailure::new(other)),
         }
     }
 }
