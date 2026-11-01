@@ -75,6 +75,11 @@ pub enum HookTrigger {
     /// withhold a served call's result, its ASYNC hooks observe every call
     /// (RFC §9.3).
     OnToolCall,
+    /// A provider reported where a message the room sent stands (RFC
+    /// §10.4, A delivery status follows its message): its payload is the
+    /// `DeliveryStatus`, no event, and every hook on it fires in the room,
+    /// its filter unread.
+    OnDeliveryStatus,
 }
 
 impl HookTrigger {
@@ -100,7 +105,8 @@ impl HookTrigger {
             | Self::OnChannelUnmuted
             | Self::OnSessionStarted
             | Self::OnError
-            | Self::OnTaskCreated => HookExecution::Async,
+            | Self::OnTaskCreated
+            | Self::OnDeliveryStatus => HookExecution::Async,
         }
     }
 
@@ -124,7 +130,8 @@ impl HookTrigger {
             | Self::OnChannelUnmuted
             | Self::OnSessionStarted
             | Self::OnError
-            | Self::OnTaskCreated => false,
+            | Self::OnTaskCreated
+            | Self::OnDeliveryStatus => false,
         }
     }
 
@@ -151,7 +158,8 @@ impl HookTrigger {
             | Self::OnError
             | Self::OnTaskCreated
             | Self::OnTranscription
-            | Self::BeforeTts => false,
+            | Self::BeforeTts
+            | Self::OnDeliveryStatus => false,
         }
     }
 
@@ -732,9 +740,9 @@ impl HookRegistry {
     }
 
     /// The hooks of `trigger` whose filter admits `subject`, the kit's and
-    /// those of the subject's room; a session's start's hooks read no
-    /// filter, as the Python implementation fires them
-    /// (`skip_event_filter`).
+    /// those of the subject's room; a session's start's hooks and a
+    /// delivery status's read no filter, as the Python implementation fires
+    /// them (`skip_event_filter`).
     fn matching<'registry>(
         &'registry self,
         trigger: HookTrigger,
@@ -743,7 +751,10 @@ impl HookRegistry {
         self.hooks.iter().filter(move |hook| {
             hook.spec.trigger == trigger
                 && hook.reaches(subject.room_id)
-                && (trigger == HookTrigger::OnSessionStarted || hook.spec.filter.admits(subject))
+                && (matches!(
+                    trigger,
+                    HookTrigger::OnSessionStarted | HookTrigger::OnDeliveryStatus
+                ) || hook.spec.filter.admits(subject))
         })
     }
 

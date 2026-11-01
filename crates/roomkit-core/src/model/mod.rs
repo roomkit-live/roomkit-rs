@@ -15,6 +15,7 @@ mod channel;
 mod content;
 mod context;
 mod delivery;
+mod delivery_status;
 mod direct;
 mod error;
 mod event;
@@ -47,6 +48,7 @@ pub use content::{
 };
 pub use context::RoomContext;
 pub use delivery::{DeliveryError, DeliveryResult, DeliveryResultStatus, ProviderResult};
+pub use delivery_status::DeliveryStatus;
 pub use direct::DirectEvent;
 pub use error::ModelError;
 pub use event::{EventDirection, EventSource, EventStatus, EventType, RoomEvent, ThreadSummary};
