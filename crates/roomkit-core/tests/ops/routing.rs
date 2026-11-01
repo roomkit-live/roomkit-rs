@@ -92,6 +92,9 @@ mod a_routed_sender {
                 "load_context room_1",
                 "lock room_1",
                 "load_context room_1",
+                // The record reads the room's whole timeline under the lock
+                // for another sender on the channel (RMK-1071).
+                "list_events room_1",
                 "store binding sms",
                 "release room_1",
                 "handle_inbound sms",
@@ -479,6 +482,7 @@ mod a_room_that_heard_another_sender_meanwhile {
                 "load_context room_1",
                 "lock room_1",
                 "load_context room_1",
+                "list_events room_1",
                 "release room_1",
                 "route sms +15551234567",
                 "store room new_room_1 Active",

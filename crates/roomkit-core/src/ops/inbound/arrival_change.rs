@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 use std::convert::Infallible;
 
-use crate::model::{ChannelBinding, RoomContext};
+use crate::model::{ChannelBinding, ParticipantId, RoomContext, RoomEvent};
 use crate::ops::Cx;
 use crate::ops::lifecycle::change::{self, Attached, Decision, SectionChange, Updated};
 use crate::ops::lifecycle::report::Reported;
@@ -89,7 +89,36 @@ impl SectionChange for ArrivalChange {
     ) -> Result<Decision<Recorded>, Infallible> {
         Ok(match self {
             Self::AttachAutomatically(binding) => attach_automatically(cx, binding, context),
-            Self::RecordSender(record) => record_sender(cx, record, context),
+            Self::RecordSender(record) => {
+                let heard = routing::heard(&context.recent_events, &record.binding.channel_id);
+                record_sender(cx, record, context, &heard)
+            }
+        })
+    }
+
+    /// A record that would name the sender on the binding reads the room's
+    /// whole timeline first, as Python's `_heard_from_other` scans it under
+    /// the lock: a room that heard another sender on the channel, however
+    /// long ago, is not theirs (RFC §10.4 step 3, RMK-1071).
+    fn reads_timeline(&self, context: &RoomContext) -> bool {
+        match self {
+            Self::RecordSender(record) => writes_a_record(record, context),
+            Self::AttachAutomatically(_) => false,
+        }
+    }
+
+    fn decide_on(
+        &self,
+        context: Box<RoomContext>,
+        timeline: &[RoomEvent],
+        cx: &Cx<'_>,
+    ) -> Result<Decision<Recorded>, Infallible> {
+        Ok(match self {
+            Self::AttachAutomatically(binding) => attach_automatically(cx, binding, context),
+            Self::RecordSender(record) => {
+                let heard = routing::heard(timeline, &record.binding.channel_id);
+                record_sender(cx, record, context, &heard)
+            }
         })
     }
 
@@ -143,6 +172,7 @@ fn record_sender(
     cx: &Cx<'_>,
     record: &SenderRecord,
     context: Box<RoomContext>,
+    heard: &[ParticipantId],
 ) -> Decision<Recorded> {
     let current = context.get_binding(&record.binding.channel_id).cloned();
     let kept = routing::kept_by_status(
@@ -167,7 +197,7 @@ fn record_sender(
     );
     match recording {
         Recording::Kept => Decision::unwritten(Recorded::Kept(context)),
-        Recording::Write(update) if still_admitted(record, &current, &context) => {
+        Recording::Write(update) if still_admitted(record, &current, &context, heard) => {
             let updated = update.apply(&current);
             change::store_updated(&current, updated, context).map(Recorded::Updated)
         }
@@ -177,6 +207,26 @@ fn record_sender(
         }
         Recording::Taken | Recording::Write(_) => Decision::unwritten(Recorded::Rerouted(context)),
     }
+}
+
+/// Whether recording the sender on the room as `context` holds it would
+/// write their record on the binding, the room's status keeping it the
+/// message's: the case whose check reads what the room heard.
+fn writes_a_record(record: &SenderRecord, context: &RoomContext) -> bool {
+    let Some(current) = context.get_binding(&record.binding.channel_id) else {
+        return false;
+    };
+    let kept = routing::kept_by_status(
+        context.room.status,
+        &record.sender,
+        &record.form,
+        &record.binding.channel_id,
+        Some(current),
+        &context.participants,
+    );
+    let recording =
+        routing::recording(current, &record.sender, &record.form, &context.participants);
+    kept && matches!(recording, Recording::Write(_))
 }
 
 /// Logs that the record found a value under `binding`'s recipient key, in
@@ -202,20 +252,22 @@ fn not_a_recipient(binding: &ChannelBinding, form: &AddressForm, kind: &str) {
 /// committed on the channel, through a room its caller named (gap G-053),
 /// or a member may have joined through it.
 ///
-/// What the room has heard is read from the events the locked section
-/// reads, the room's latest events, at least 50, refused ones
-/// set aside. That window holds every event committed since the router's
-/// read unless as many were committed in the room in between; the events
-/// before the read are the router's (the default router reads the whole
-/// timeline). A wider gap goes unseen (gap G-055).
-fn still_admitted(record: &SenderRecord, current: &ChannelBinding, context: &RoomContext) -> bool {
-    let heard = routing::heard(&context.recent_events, &current.channel_id);
+/// Who the room `heard` on the channel is read from its whole timeline
+/// under the lock, refused events set aside, as Python's
+/// `_heard_from_other` reads it (RMK-1071): a sender another wrote before,
+/// however long ago, is not admitted.
+fn still_admitted(
+    record: &SenderRecord,
+    current: &ChannelBinding,
+    context: &RoomContext,
+    heard: &[ParticipantId],
+) -> bool {
     let admitted = routing::still_admits(
         current,
         &record.sender,
         &record.form,
         &context.participants,
-        &heard,
+        heard,
     );
     if let Err(refusal) = admitted {
         tracing::debug!(

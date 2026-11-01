@@ -9,8 +9,11 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use roomkit::model::RoomId;
-use roomkit::{ArchiveRoomOptions, CloseRoomOptions, ConversationStore, RoomKitOptions};
+use roomkit::model::{ChannelId, ChannelType, RoomId};
+use roomkit::{
+    ArchiveRoomOptions, CloseRoomOptions, ConversationStore, InboundRoomRouter, RoomKitOptions,
+    RouteOptions, RouterFuture,
+};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
@@ -19,9 +22,31 @@ use crate::compare::compare;
 use crate::normalize::Observed;
 use crate::run::{Check, Run, Scope, lock};
 
+/// A router answering every routed message with one room (README,
+/// `kit.router`).
+struct ScriptedRouter(RoomId);
+
+impl InboundRoomRouter for ScriptedRouter {
+    fn route<'a>(
+        &'a self,
+        _channel_id: &'a ChannelId,
+        _channel_type: &'a ChannelType,
+        _options: RouteOptions,
+    ) -> RouterFuture<'a> {
+        let room = self.0.clone();
+        Box::pin(async move { Ok(Some(room)) })
+    }
+}
+
 /// The kit's options a scenario's setup names, over `options`: its
-/// chain-depth limit and its `process_timeout`.
+/// chain-depth limit, its `process_timeout` and its router.
 fn kit_options<S>(mut options: RoomKitOptions<S>, kit: &Value) -> RoomKitOptions<S> {
+    if let Some(room) = kit["router"]["room_id"]
+        .as_str()
+        .and_then(|id| RoomId::new(id).ok())
+    {
+        options.inbound_router = Some(Arc::new(ScriptedRouter(room)));
+    }
     if let Some(depth) = kit["max_chain_depth"].as_u64() {
         options.max_chain_depth = u32::try_from(depth).unwrap_or(u32::MAX);
     }

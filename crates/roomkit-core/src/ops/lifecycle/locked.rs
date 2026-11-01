@@ -13,7 +13,7 @@ use super::change::{Decision, SectionChange};
 use super::{record, report};
 use crate::model::{ErrorRecord, Room, RoomContext, RoomId};
 use crate::ops::io::Io;
-use crate::ops::protocol::{EffectId, Outcome, ProtocolError, Step};
+use crate::ops::protocol::{EffectId, Outcome, ProtocolError, Step, StoreRequest};
 use crate::ops::section::{Failure, Section, SectionWork};
 use crate::ops::{Cx, Environment, KitConfig, Progress};
 use crate::rules::chain_depth::Draw;
@@ -156,6 +156,9 @@ pub(crate) struct Changing<C: SectionChange> {
     organization_id: Option<String>,
     /// The write outstanding, and the decision's writes left after it.
     writing: Option<(EffectId, Box<Decision<C::Done>>)>,
+    /// The read of the room's timeline outstanding, and the room as the
+    /// section read it, for a change that reads it before deciding.
+    reading: Option<(EffectId, Box<RoomContext>)>,
     /// The room's work the change is made in, and the least depth of its
     /// trigger's calls; `None` outside the room's work.
     work: Option<(Draw, u32)>,
@@ -167,7 +170,20 @@ impl<C: SectionChange> Changing<C> {
             change,
             organization_id,
             writing: None,
+            reading: None,
             work: None,
+        }
+    }
+
+    /// Goes on with what the change decided: its writes, or its refusal.
+    fn decided(
+        &mut self,
+        cx: &mut Cx<'_>,
+        decided: Result<Decision<C::Done>, C::Refusal>,
+    ) -> Progress<SectionResult<C>> {
+        match decided {
+            Ok(decision) => self.write_next(cx, decision),
+            Err(refusal) => Progress::Done(Err(SectionError::Refused(refusal))),
         }
     }
 
@@ -213,20 +229,39 @@ impl<C: SectionChange> SectionWork for Changing<C> {
         (!admitted).then(|| self.missing(&room.id))
     }
 
-    /// Decides the change on the room as the gate left it.
+    /// Decides the change on the room as the gate left it, once the room's
+    /// timeline is read for a change that reads it.
     fn begin(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> Progress<SectionResult<C>> {
-        match self.change.decide(context, cx) {
-            Ok(decision) => self.write_next(cx, decision),
-            Err(refusal) => Progress::Done(Err(SectionError::Refused(refusal))),
+        if self.change.reads_timeline(&context) {
+            let request = StoreRequest::ListEvents {
+                room_id: context.room.id.clone(),
+            };
+            self.reading = Some((cx.io.issue(request), context));
+            return Progress::Waiting;
         }
+        let decided = self.change.decide(context, cx);
+        self.decided(cx, decided)
     }
 
     fn accept(
         &mut self,
         cx: &mut Cx<'_>,
-        _effect: EffectId,
+        effect: EffectId,
         outcome: Outcome,
     ) -> Progress<SectionResult<C>> {
+        if let Some((reading, context)) = self.reading.take() {
+            if reading != effect {
+                self.reading = Some((reading, context));
+                return Progress::Waiting;
+            }
+            return match outcome.into_events() {
+                Ok(timeline) => {
+                    let decided = self.change.decide_on(context, &timeline, cx);
+                    self.decided(cx, decided)
+                }
+                Err(error) => Progress::Done(Err(SectionError::Store(error))),
+            };
+        }
         let Some((_, decision)) = self.writing.take() else {
             return Progress::Waiting;
         };
@@ -239,9 +274,15 @@ impl<C: SectionChange> SectionWork for Changing<C> {
     }
 
     fn awaits(&self, effect: EffectId) -> bool {
-        self.writing
+        let writes = self
+            .writing
             .as_ref()
-            .is_some_and(|(writing, _)| *writing == effect)
+            .is_some_and(|(writing, _)| *writing == effect);
+        writes
+            || self
+                .reading
+                .as_ref()
+                .is_some_and(|(reading, _)| *reading == effect)
     }
 
     /// A failed release changes nothing the change did; a lifecycle change

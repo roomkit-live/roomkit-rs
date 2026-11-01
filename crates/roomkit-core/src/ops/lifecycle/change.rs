@@ -13,7 +13,7 @@ use std::fmt::Debug;
 use super::LifecycleError;
 use super::record;
 use super::report::Reported;
-use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomContext, RoomUpdates};
+use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomContext, RoomEvent, RoomUpdates};
 use crate::ops::Cx;
 use crate::ops::protocol::StoreRequest;
 use crate::rules::lifecycle::{self, Transition};
@@ -49,6 +49,25 @@ pub(crate) trait SectionChange: Debug {
     /// `reads_history`: no change does by default.
     fn reads_history(&self) -> bool {
         false
+    }
+
+    /// Whether the change reads the room's whole timeline under the lock
+    /// before it decides on `context`, the room as its section read it: no
+    /// change does by default.
+    fn reads_timeline(&self, _context: &RoomContext) -> bool {
+        false
+    }
+
+    /// Decides the change on `context` and the room's whole `timeline`, for
+    /// a change that reads it ([`reads_timeline`](Self::reads_timeline)): as
+    /// [`decide`](Self::decide) by default.
+    fn decide_on(
+        &self,
+        context: Box<RoomContext>,
+        _timeline: &[RoomEvent],
+        cx: &Cx<'_>,
+    ) -> Result<Decision<Self::Done>, Self::Refusal> {
+        self.decide(context, cx)
     }
 }
 
