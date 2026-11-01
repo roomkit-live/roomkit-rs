@@ -29,7 +29,7 @@ use crate::store::ConversationStore;
 use crate::tasks::text::{bounded_text, identifier, one_line, quoted};
 use crate::tasks::{
     DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, OnCompleteCallback, SubmitOptions,
-    TaskRunner,
+    TaskReach, TaskRunner,
 };
 use crate::{
     AttachChannelOptions, CreateRoomOptions, DeliverOptions, GetRoomOptions, SendEventOptions,
@@ -264,7 +264,7 @@ impl<S: ConversationStore> RoomKit<S> {
             self.run_inline(&handle, &options).await;
             return Ok(handle);
         }
-        self.run_background(&handle, options, notify).await?;
+        self.run_background(&handle, &options, notify).await?;
         Ok(handle)
     }
 
@@ -433,11 +433,48 @@ impl<S: ConversationStore> RoomKit<S> {
         }
     }
 
-    /// Runs the task's turn inline and ends it.
+    /// Runs the task's turn inline and ends it, recorded for its room as
+    /// ending with the turn that asked for it, or as the strategy's that
+    /// runs it without posting it (RFC §23.4).
     async fn run_inline(&self, task: &DelegatedTask, options: &DelegateOptions) {
+        let reach = if options.post_status {
+            TaskReach::Turn
+        } else {
+            TaskReach::Strategy
+        };
+        let _recorded = self.record_running(task, reach);
         task.set_status(TaskStatus::InProgress);
         let ended = Box::pin(self.delegated_turn(task, options.context.as_ref())).await;
-        let result = ended.into_result(task);
+        self.complete_inline(task, ended.into_result(task), options)
+            .await;
+    }
+
+    /// Records `task` running for its room as `reach` says, until the
+    /// guard drops: a run that never reached its completion is recorded
+    /// failed.
+    fn record_running(&self, task: &DelegatedTask, reach: TaskReach) -> RecordedRunning<'_> {
+        self.inner
+            .room_tasks
+            .start(&task.id, &task.parent_room_id, reach);
+        RecordedRunning {
+            record: &self.inner.room_tasks,
+            task_id: task.id.clone(),
+        }
+    }
+
+    /// Ends a task the caller presents itself, inline or never submitted:
+    /// its end for its room's `cancel_task`, its child room's status,
+    /// `ON_TASK_COMPLETED`, the status bus, its completion callback, then
+    /// its waiters. Nothing is handed back.
+    async fn complete_inline(
+        &self,
+        task: &DelegatedTask,
+        result: DelegatedTaskResult,
+        options: &DelegateOptions,
+    ) {
+        self.inner
+            .room_tasks
+            .end(&task.id, &status_name(result.status));
         self.record_task_end(&result).await;
         self.on_delegation_complete(&result).await;
         if options.post_status {
@@ -450,13 +487,49 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Submits the task to the kit's task runner, its end handed back to
-    /// `notify` (RFC §23.3 step 8).
+    /// `notify` (RFC §23.3 step 8), recorded for its room as one its
+    /// `cancel_task` cancels, or as the strategy's that runs it without
+    /// posting it (RFC §23.4). A submit that fails ends the task failed.
     async fn run_background(
         &self,
         task: &DelegatedTask,
-        options: DelegateOptions,
+        options: &DelegateOptions,
         notify: ChannelId,
     ) -> Result<(), RoomKitError> {
+        let reach = if options.post_status {
+            TaskReach::Tool
+        } else {
+            TaskReach::Strategy
+        };
+        self.inner
+            .room_tasks
+            .start(&task.id, &task.parent_room_id, reach);
+        let submitted = SubmitOptions {
+            context: options.context.clone(),
+            on_complete: Some(self.background_end(task, options, notify)),
+        };
+        let outcome = self
+            .task_runner()
+            .submit(self.clone(), task.clone(), submitted)
+            .await;
+        if let Err(error) = &outcome {
+            let ended = failed(error.to_string(), options.context.as_ref());
+            self.complete_inline(task, ended.into_result(task), options)
+                .await;
+        }
+        outcome
+    }
+
+    /// How a background task ends once its runner ended it: recorded ended
+    /// first, so a cancel meanwhile reads it ended, then `ON_TASK_COMPLETED`,
+    /// the status bus, its hand-back to `notify` unless `notify` cancelled
+    /// it itself, and the caller's callback.
+    fn background_end(
+        &self,
+        task: &DelegatedTask,
+        options: &DelegateOptions,
+        notify: ChannelId,
+    ) -> OnCompleteCallback {
         // Read now, in the call that delegated: the result continues that
         // turn's chain whenever it comes back (RFC §23.3).
         let chain_depth = ExecutionContext::current().turn_depth().unwrap_or(0);
@@ -464,7 +537,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let post_status = options.post_status;
         let user = options.on_complete.clone();
         let (hand_back, asked) = (task.hand_back.clone(), task.task.clone());
-        let on_complete: OnCompleteCallback = Arc::new(move |result: DelegatedTaskResult| {
+        Arc::new(move |result: DelegatedTaskResult| {
             let kit = kit.upgrade();
             let (notify, hand_back, asked, user) = (
                 notify.clone(),
@@ -476,11 +549,16 @@ impl<S: ConversationStore> RoomKit<S> {
                 let Some(kit) = kit else {
                     return;
                 };
+                kit.inner
+                    .room_tasks
+                    .end(&result.task_id, &status_name(result.status));
                 kit.on_delegation_complete(&result).await;
                 if post_status {
                     kit.post_task_ended(&result);
                 }
-                if hand_back == "post" {
+                if kit.cancelled_by_notified(&result, &notify) {
+                    tracing::debug!(target: "roomkit::tasks", task = %result.task_id, "the notified channel cancelled the task: its cancellation is not handed back");
+                } else if hand_back == "post" {
                     kit.post_result(&result, &notify, chain_depth, &asked).await;
                 } else {
                     kit.hand_back(&result, &notify, chain_depth, &asked).await;
@@ -489,14 +567,7 @@ impl<S: ConversationStore> RoomKit<S> {
                     user(result).await;
                 }
             })
-        });
-        let submitted = SubmitOptions {
-            context: options.context,
-            on_complete: Some(on_complete),
-        };
-        self.task_runner()
-            .submit(self.clone(), task.clone(), submitted)
-            .await
+        })
     }
 
     /// Runs a background task's turn, its child room marked in progress
@@ -797,6 +868,27 @@ impl<S: ConversationStore> RoomKit<S> {
             tracing::warn!(target: "roomkit::tasks", task = %result.task_id, %error, "the result was not posted");
         }
     }
+}
+
+/// A task recorded running for its room until it drops: one never ended
+/// by then is recorded failed, as Python's inline run's `finally` does.
+struct RecordedRunning<'a> {
+    record: &'a crate::tasks::RoomTaskRecord,
+    task_id: String,
+}
+
+impl Drop for RecordedRunning<'_> {
+    fn drop(&mut self) {
+        self.record.end(&self.task_id, "failed");
+    }
+}
+
+/// A task's status as its wire value names it.
+fn status_name(status: TaskStatus) -> String {
+    serde_json::to_value(status)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 /// Twelve hex characters of a fresh id, as Python's `uuid4().hex[:12]`.

@@ -153,6 +153,7 @@ pub use self::hooks::{
 };
 pub use self::host::{HostChannel, HostChannelOptions};
 pub use self::inbound::{DeliveryHandle, InboundResult};
+pub use self::kit::CancelTaskOptions;
 pub use self::kit::{
     AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
     CheckRoomTimersOptions, CloseRoomOptions, CommitEventOptions, CreateRoomOptions,

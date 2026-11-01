@@ -533,7 +533,7 @@ reason = "not ported: plumbing (lot 2)"
 [[missing]]
 python = "roomkit.RoomKit"
 members = [
-    "answer_input", "cancel_task", "claim_room_strategy",
+    "answer_input", "claim_room_strategy",
     "install_strategy", "regenerate_response",
     "regenerate_target", "reject_input", "room_strategy",
     "room_strategy_is_current", "setup_background", "setup_task_tools",

@@ -38,6 +38,7 @@ mod room_hooks;
 mod rooms;
 mod shutdown;
 mod status;
+mod task_cancel;
 mod tasks;
 #[cfg(test)]
 mod tests;
@@ -82,6 +83,7 @@ pub use self::room_hooks::{AddRoomHookOptions, RemoveRoomHookOptions};
 pub use self::status::{
     ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,
 };
+pub use self::task_cancel::CancelTaskOptions;
 pub use self::tasks::DelegateOptions;
 pub(crate) use self::tasks::TaskEnd;
 pub use self::weak::WeakRoomKit;
@@ -205,6 +207,10 @@ pub(crate) struct Inner<S> {
     pub(crate) delivery_strategy: Option<Arc<dyn crate::DeliveryStrategy<S>>>,
     /// The persistent queue deliveries are enqueued in (RFC §22.2).
     pub(crate) delivery_backend: Option<Arc<dyn crate::DeliveryBackend<S>>>,
+    /// What the kit knows of the tasks it runs for each room (RFC §23.4).
+    pub(crate) room_tasks: crate::tasks::RoomTaskRecord,
+    /// The cancels of a task under way, by task (RFC §23.4).
+    pub(crate) task_cancels: crate::tasks::TaskCancels,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -278,6 +284,8 @@ impl<S: ConversationStore> RoomKit<S> {
             host_tasks: crate::tasks::HostTasks::default(),
             delivery_strategy,
             delivery_backend,
+            room_tasks: crate::tasks::RoomTaskRecord::default(),
+            task_cancels: crate::tasks::TaskCancels::default(),
         });
         inner.subscribe_status_bus();
         Self { inner }

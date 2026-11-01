@@ -25,11 +25,13 @@ mod delegated;
 mod hosted;
 pub(crate) mod lines;
 mod marks;
+mod record;
 mod runner;
 pub(crate) mod text;
 
 pub use self::delegated::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, WaitOptions};
 pub(crate) use self::hosted::HostTasks;
+pub(crate) use self::record::{RoomTaskRecord, TaskCancel, TaskCancels, TaskReach};
 pub use self::runner::{InMemoryTaskRunner, OnCompleteCallback, SubmitOptions, TaskRunner};
 
 use std::collections::{HashMap, HashSet};

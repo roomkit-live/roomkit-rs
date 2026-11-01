@@ -972,6 +972,13 @@ fn status_backend_options_defaults_as_python() {
 }
 
 #[test]
+fn cancel_task_options_defaults_as_python() {
+    let defaults = roomkit::CancelTaskOptions::default();
+    // roomkit.RoomKit.cancel_task(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
 fn list_tasks_options_defaults_as_python() {
     let defaults = ListTasksOptions::default();
     // roomkit.RoomKit.list_tasks(status) = None
