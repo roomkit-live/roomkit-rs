@@ -12,8 +12,8 @@
 use serde_json::Value;
 
 use crate::model::{
-    Access, ChannelBinding, ChannelId, EventType, Metadata, ParticipantId, RoomId, SystemContent,
-    Timestamp, Visibility,
+    Access, ChannelBinding, ChannelId, EventType, IdentityId, Metadata, ParticipantId,
+    ParticipantStatus, RoomId, SystemContent, Timestamp, Visibility,
 };
 use crate::rules::lifecycle::Transition;
 
@@ -66,6 +66,29 @@ pub(crate) enum Record {
     /// A sender identity resolution left pending joined the room, the
     /// Python implementation's `participant_joined_pending`.
     JoinedPending(ParticipantId),
+    /// `resolve_participant` identified a pending participant as an
+    /// identity, of that display name (RFC §5.5, Appendix B.3).
+    ParticipantIdentified {
+        participant_id: ParticipantId,
+        display_name: Option<String>,
+        identity_id: IdentityId,
+        resolved_by: String,
+    },
+    /// `add_member` joined a member, under the identity it named (RFC §5.5).
+    MemberJoined {
+        participant_id: ParticipantId,
+        identity_id: Option<IdentityId>,
+    },
+    /// `remove_member` set a member's status (RFC §5.5).
+    MemberLeft {
+        participant_id: ParticipantId,
+        status: ParticipantStatus,
+    },
+    /// `rename_member` changed a member's display name (RFC §5.5).
+    MemberRenamed {
+        participant_id: ParticipantId,
+        display_name: String,
+    },
 }
 
 impl Record {
@@ -132,7 +155,12 @@ impl Record {
             | Self::VisibilityChanged { .. }
             | Self::MetadataUpdated { .. } => EventType::ChannelUpdated,
             Self::Timer { .. } => EventType::System,
-            Self::JoinedIdentified(_) | Self::JoinedPending(_) => EventType::ParticipantJoined,
+            Self::JoinedIdentified(_) | Self::JoinedPending(_) | Self::MemberJoined { .. } => {
+                EventType::ParticipantJoined
+            }
+            Self::ParticipantIdentified { .. } => EventType::ParticipantIdentified,
+            Self::MemberLeft { .. } => EventType::ParticipantLeft,
+            Self::MemberRenamed { .. } => EventType::ParticipantUpdated,
         }
     }
 
@@ -196,6 +224,29 @@ impl Record {
             } => Parts::of_timer(room_id, *transition, *threshold, *at),
             Self::JoinedIdentified(participant_id) => Parts::of_join(participant_id, "identified"),
             Self::JoinedPending(participant_id) => Parts::of_join(participant_id, "pending"),
+            Self::ParticipantIdentified {
+                participant_id,
+                display_name,
+                identity_id,
+                resolved_by,
+            } => Parts::of_identified(
+                participant_id,
+                display_name.as_deref(),
+                identity_id,
+                resolved_by,
+            ),
+            Self::MemberJoined {
+                participant_id,
+                identity_id,
+            } => Parts::of_member_joined(participant_id, identity_id.as_ref()),
+            Self::MemberLeft {
+                participant_id,
+                status,
+            } => Parts::of_member_left(participant_id, *status),
+            Self::MemberRenamed {
+                participant_id,
+                display_name,
+            } => Parts::of_member_renamed(participant_id, display_name),
         };
         SystemContent {
             body,
@@ -263,6 +314,71 @@ impl Parts {
         }
     }
 
+    /// `resolve_participant`'s identification of a pending participant
+    /// (RFC §5.5).
+    fn of_identified(
+        participant_id: &ParticipantId,
+        display_name: Option<&str>,
+        identity_id: &IdentityId,
+        resolved_by: &str,
+    ) -> Self {
+        Self {
+            body: format!(
+                "Participant {participant_id} identified as {}",
+                display_name.unwrap_or("None")
+            ),
+            code: "participant_identified",
+            data: vec![
+                ("participant_id", participant_id.as_str().into()),
+                ("identity_id", identity_id.as_str().into()),
+                ("resolved_by", resolved_by.into()),
+            ],
+        }
+    }
+
+    /// `add_member`'s join, under the identity it named (RFC §5.5).
+    fn of_member_joined(participant_id: &ParticipantId, identity_id: Option<&IdentityId>) -> Self {
+        Self {
+            body: format!("Participant {participant_id} joined"),
+            code: "participant_joined",
+            data: vec![
+                ("participant_id", participant_id.as_str().into()),
+                (
+                    "identity_id",
+                    identity_id.map_or(Value::Null, |id| id.as_str().into()),
+                ),
+            ],
+        }
+    }
+
+    /// `remove_member`'s leave, with the status it set (RFC §5.5).
+    fn of_member_left(participant_id: &ParticipantId, status: ParticipantStatus) -> Self {
+        Self {
+            body: format!("Participant {participant_id} left"),
+            code: "participant_left",
+            data: vec![
+                ("participant_id", participant_id.as_str().into()),
+                ("status", participant_status_name(status).into()),
+            ],
+        }
+    }
+
+    /// `rename_member`'s new display name (RFC §5.5), quoted as Python's
+    /// `{display_name!r}`.
+    fn of_member_renamed(participant_id: &ParticipantId, display_name: &str) -> Self {
+        Self {
+            body: format!(
+                "Participant {participant_id} is now displayed as {}",
+                python_repr(display_name)
+            ),
+            code: "participant_updated",
+            data: vec![
+                ("participant_id", participant_id.as_str().into()),
+                ("display_name", display_name.into()),
+            ],
+        }
+    }
+
     /// A timer's transition: a timer pauses or closes a room, nothing else.
     fn of_timer(room_id: &RoomId, transition: Transition, threshold: u64, at: Timestamp) -> Self {
         let (verb, code) = match transition {
@@ -290,6 +406,50 @@ fn access_name(access: Access) -> &'static str {
         Access::WriteOnly => "write_only",
         Access::None => "none",
     }
+}
+
+/// A participant status as the serialized form writes it.
+fn participant_status_name(status: ParticipantStatus) -> &'static str {
+    match status {
+        ParticipantStatus::Active => "active",
+        ParticipantStatus::Inactive => "inactive",
+        ParticipantStatus::Left => "left",
+        ParticipantStatus::Banned => "banned",
+    }
+}
+
+/// `text` as Python's `repr` of a `str` writes it, which the Python
+/// implementation's record of a rename quotes the name with (`{name!r}`):
+/// in single quotes, double ones when it holds a single quote and no double
+/// one, its backslashes, its quote and its control characters escaped.
+fn python_repr(text: &str) -> String {
+    use std::fmt::Write as _;
+    let quote = if text.contains('\'') && !text.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut written = String::with_capacity(text.len() + 2);
+    written.push(quote);
+    for character in text.chars() {
+        match character {
+            '\\' => written.push_str("\\\\"),
+            '\n' => written.push_str("\\n"),
+            '\r' => written.push_str("\\r"),
+            '\t' => written.push_str("\\t"),
+            _ if character == quote => {
+                written.push('\\');
+                written.push(character);
+            }
+            _ if character.is_ascii_control() => {
+                // Writing to a `String` does not fail.
+                let _ = write!(written, "\\x{:02x}", u32::from(character));
+            }
+            _ => written.push(character),
+        }
+    }
+    written.push(quote);
+    written
 }
 
 #[cfg(test)]

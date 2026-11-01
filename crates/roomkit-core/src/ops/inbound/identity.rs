@@ -34,11 +34,12 @@ use std::collections::VecDeque;
 use super::deadline::Stopped;
 use super::{InboundError, InboundResult, Machine, Stage, queues::Lineage};
 use crate::model::{
-    ChannelId, ChannelType, IdentificationStatus, Identity, IdentityHookResult, IdentityResult,
+    ChannelType, IdentificationStatus, Identity, IdentityHookResult, IdentityResult,
     InboundMessage, InjectedEvent, Participant, ParticipantId, RoomContext, RoomEvent,
 };
 use crate::ops::io::Bound;
 use crate::ops::lifecycle::record;
+use crate::ops::members::channels_reached;
 use crate::ops::protocol::{EffectId, IdentityRequest, Outcome, StoreRequest};
 use crate::ops::{ChannelConfig, Cx, FrameworkEvent, KitConfig, Notice, Progress};
 use crate::rules::authors;
@@ -605,23 +606,6 @@ fn fresh_pending_id(cx: &Cx<'_>) -> String {
         .take(8)
         .collect();
     format!("pending-{digits}")
-}
-
-/// The `connected_via` to store now that `channel_id` reached `existing`
-/// (RFC §5.5): the primary channel first, the rest in their order of first
-/// sight; `None` when the record lists them all already.
-fn channels_reached(existing: &Participant, channel_id: &ChannelId) -> Option<Vec<ChannelId>> {
-    let mut channels = vec![existing.channel_id.clone()];
-    for reached in existing
-        .connected_via
-        .iter()
-        .chain(std::iter::once(channel_id))
-    {
-        if !channels.contains(reached) {
-            channels.push(reached.clone());
-        }
-    }
-    (channels != existing.connected_via).then_some(channels)
 }
 
 impl Machine {

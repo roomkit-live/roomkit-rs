@@ -47,6 +47,7 @@ mod framework_events;
 mod inbound;
 mod io;
 mod lifecycle;
+mod members;
 mod protocol;
 mod rooting;
 mod section;
@@ -70,6 +71,7 @@ pub use lifecycle::{
     LifecycleError, LifecyclePayload, PauseRoom, ReopenRoom, ResumeRoom, TimersChecked,
     UpdateBinding, UpdateRoomMetadata,
 };
+pub use members::{ChangeMember, MemberChange, MemberError, Membered};
 pub use protocol::{
     AfterDelivery, AnswerOf, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Decided,
     Delivered, Effect, EffectId, Entry, EntryId, HoldOutcome, HoldRequest, HookAnswer, HookRequest,

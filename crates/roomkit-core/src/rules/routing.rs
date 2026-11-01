@@ -117,9 +117,10 @@ impl Sender {
 
     /// Whether `id`, which a binding or an event of `channel_id` names in a
     /// room holding `participants`, names this sender: it is their address
-    /// or their identity's id, or the id of a participant reached through
-    /// the channel who is them (RFC §10.4: "a participant or an event named
-    /// by either is the sender's own", §5.5).
+    /// or their identity's id, or the id or the identity of a participant
+    /// reached through the channel who is them (RFC §10.4: "a participant
+    /// or an event named by either is the sender's own", §5.5): a binding
+    /// `resolve_participant` made name the identity names its sender.
     pub fn named_by(
         &self,
         id: &str,
@@ -129,8 +130,13 @@ impl Sender {
     ) -> bool {
         self.is(id, form)
             || participants.iter().any(|participant| {
+                let names_it = form.normalize(participant.id.as_str()) == form.normalize(id)
+                    || participant
+                        .identity_id
+                        .as_ref()
+                        .is_some_and(|identity| identity.as_str() == id);
                 reached_through(participant, channel_id)
-                    && form.normalize(participant.id.as_str()) == form.normalize(id)
+                    && names_it
                     && self.is_participant_on(participant, form, channel_id)
             })
     }

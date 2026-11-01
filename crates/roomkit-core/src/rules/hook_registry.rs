@@ -107,6 +107,16 @@ pub enum HookTrigger {
     /// A delegated task ended (RFC §23.5): its payload is a
     /// `task_completed` event of the parent room, never stored.
     OnTaskCompleted,
+    /// `resolve_participant` identified a pending participant as an
+    /// identity (RFC §5.5, Appendix B.3); its payload is the system event
+    /// of the change.
+    OnParticipantIdentified,
+    /// `add_member` joined a member, or one who left again (RFC §5.5).
+    OnParticipantJoined,
+    /// `remove_member` set a member's status to LEFT or BANNED (RFC §5.5).
+    OnParticipantLeft,
+    /// `rename_member` changed a member's display name (RFC §5.5).
+    OnParticipantUpdated,
 }
 
 impl HookTrigger {
@@ -141,7 +151,11 @@ impl HookTrigger {
             | Self::OnIdentityUnknown
             | Self::AfterDeliver
             | Self::OnTaskDelegated
-            | Self::OnTaskCompleted => HookExecution::Async,
+            | Self::OnTaskCompleted
+            | Self::OnParticipantIdentified
+            | Self::OnParticipantJoined
+            | Self::OnParticipantLeft
+            | Self::OnParticipantUpdated => HookExecution::Async,
         }
     }
 
@@ -174,7 +188,11 @@ impl HookTrigger {
             | Self::BeforeDeliver
             | Self::AfterDeliver
             | Self::OnTaskDelegated
-            | Self::OnTaskCompleted => false,
+            | Self::OnTaskCompleted
+            | Self::OnParticipantIdentified
+            | Self::OnParticipantJoined
+            | Self::OnParticipantLeft
+            | Self::OnParticipantUpdated => false,
         }
     }
 
@@ -210,7 +228,11 @@ impl HookTrigger {
             | Self::BeforeDeliver
             | Self::AfterDeliver
             | Self::OnTaskDelegated
-            | Self::OnTaskCompleted => false,
+            | Self::OnTaskCompleted
+            | Self::OnParticipantIdentified
+            | Self::OnParticipantJoined
+            | Self::OnParticipantLeft
+            | Self::OnParticipantUpdated => false,
         }
     }
 
