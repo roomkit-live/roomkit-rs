@@ -154,11 +154,10 @@ pub use self::kit::{
     RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
     UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
+pub use self::kit::{DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions};
 pub use self::kit::{
     ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,
 };
-pub use self::kit::{DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions};
-pub use self::kit::{ListObservationsOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions};
 pub use self::kit::{ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions};
 pub use self::kit::{
     PublishPresenceOptions, PublishReactionOptions, PublishReadReceiptOptions,
