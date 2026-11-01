@@ -76,6 +76,9 @@ async fn work<S: ConversationStore>(
         timeout: options.poll_timeout,
     };
     loop {
+        if kit().is_none() {
+            return;
+        }
         let items = match backend.dequeue(worker_id, dequeue).await {
             Ok(items) => items,
             Err(error) => {
@@ -85,6 +88,7 @@ async fn work<S: ConversationStore>(
             }
         };
         let Some(kit) = kit() else {
+            give_back(backend, &items).await;
             return;
         };
         for mut item in items {
@@ -95,6 +99,18 @@ async fn work<S: ConversationStore>(
             }
             settle(backend, &item, &outcome).await;
             tracing::debug!(target: "roomkit::delivery", item = %item.id, status = ?outcome.status, reason = ?outcome.reason, "delivery executed");
+        }
+    }
+}
+
+/// Gives back `items`, claimed as the kit went: no kit executes them.
+async fn give_back<S: ConversationStore>(backend: &dyn DeliveryBackend<S>, items: &[DeliveryItem]) {
+    for item in items {
+        let options = NackOptions {
+            error: Some("the worker's kit is gone".to_owned()),
+        };
+        if let Err(error) = backend.nack(&item.id, options).await {
+            tracing::warn!(target: "roomkit::delivery", item = %item.id, %error, "an item claimed as the kit went was not given back");
         }
     }
 }

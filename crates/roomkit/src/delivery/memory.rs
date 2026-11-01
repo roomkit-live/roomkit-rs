@@ -134,11 +134,11 @@ impl InMemoryDeliveryBackend {
     }
 
     /// Queues `item` again once its retry delay passed, or dead-letters it
-    /// when the queue is full.
-    fn requeue_later(&self, item: DeliveryItem, delay: Duration) {
+    /// when the queue is full; held in `state` meanwhile, in the section
+    /// that took it out of flight.
+    fn requeue_later(&self, state: &mut State, item: DeliveryItem, delay: Duration) {
         let backend = self.clone();
         let id = item.id.clone();
-        let mut state = self.state();
         let timer = tokio::spawn(async move {
             tokio::time::sleep(delay).await;
             backend.requeue(&id);
@@ -289,8 +289,7 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
                 options.retry_delay,
                 options.max_retry_delay,
             );
-            drop(state);
-            self.requeue_later(item, delay);
+            self.requeue_later(&mut state, item, delay);
             Ok(())
         })
     }
@@ -337,7 +336,8 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
                 .worker
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            if worker.is_some() {
+            // A worker that ended, its kit gone, is none.
+            if worker.as_ref().is_some_and(|worker| !worker.is_finished()) {
                 return Ok(());
             }
             let backend: Arc<dyn DeliveryBackend<S>> = Arc::new(self.clone());
@@ -386,6 +386,9 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
                     self.bury(&mut state, item);
                 }
             }
+            drop(state);
+            // A dequeue waiting on another worker reads them now.
+            self.shared.queued.notify_waiters();
             tracing::info!(target: "roomkit::delivery", "in-memory delivery worker stopped");
             Ok(())
         })
