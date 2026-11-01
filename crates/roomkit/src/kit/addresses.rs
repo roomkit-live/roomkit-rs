@@ -25,6 +25,7 @@ impl<S> Inner<S> {
             conversation: channel.conversation_address(message),
             reply_metadata: channel.reply_metadata(message),
             chain_floor: ExecutionContext::current().turn_depth().unwrap_or(0),
+            publication: None,
         })
     }
 }

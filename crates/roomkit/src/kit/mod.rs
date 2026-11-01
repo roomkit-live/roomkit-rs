@@ -57,7 +57,7 @@ use roomkit_core::ops::{
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookSubject, HookTrigger, Removed};
 
-pub use self::delivery::{ProcessDeliveryStatusOptions, ProcessWebhookOptions};
+pub use self::delivery::{DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions};
 pub use self::engine::{HasHooksOptions, HookEngine};
 pub use self::ephemeral::{
     PublishPresenceOptions, PublishReactionOptions, PublishReadReceiptOptions,
@@ -397,14 +397,30 @@ impl<S: ConversationStore> RoomKit<S> {
     /// for itself. A refusal is no error: the result says it.
     pub async fn process_inbound(
         &self,
+        message: InboundMessage,
+        options: ProcessInboundOptions,
+    ) -> Result<InboundResult, RoomKitError> {
+        self.run_message(message, options, None).await
+    }
+
+    /// [`process_inbound`](Self::process_inbound) of `message`, the
+    /// delivery path's publication when `publication` names the key it
+    /// publishes it under, the one key of the framework's publication
+    /// namespace its event keeps (RFC §22.1).
+    pub(crate) async fn run_message(
+        &self,
         mut message: InboundMessage,
         options: ProcessInboundOptions,
+        publication: Option<String>,
     ) -> Result<InboundResult, RoomKitError> {
         // A content a struct literal built past its model's check is refused
         // before anything is read, as Python's model refuses it when built,
         // and one kept is written as its constructor writes it.
         message.content.check()?;
-        let answers = self.inner.answer(&mut message);
+        let answers = self.inner.answer(&mut message).map(|mut answers| {
+            answers.publication = publication;
+            answers
+        });
         let ProcessInboundOptions {
             room_id,
             defer_delivery,

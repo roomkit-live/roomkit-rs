@@ -99,6 +99,7 @@ pub mod model {
         Visibility,
     };
 
+    pub use crate::delivery::{DeliveryOutcome, DeliveryOutcomeStatus};
     pub use crate::stream::{LoopEndMarker, LoopEndReason};
     /// What a hook returns: [`HookResult`]'s constructors and their options,
     /// Python's keywords of `HookResult.allow`, `block` and `modify`.
@@ -156,8 +157,8 @@ pub use self::kit::{
 pub use self::kit::{
     ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,
 };
+pub use self::kit::{DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions};
 pub use self::kit::{ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions};
-pub use self::kit::{ProcessDeliveryStatusOptions, ProcessWebhookOptions};
 pub use self::kit::{
     PublishPresenceOptions, PublishReactionOptions, PublishReadReceiptOptions,
     PublishToolCallOptions, PublishTypingOptions, SubscribeRoomOptions,

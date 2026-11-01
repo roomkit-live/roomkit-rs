@@ -32,6 +32,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   caller gives, 60 seconds by default. Python now bounds its connection and
   refuses URL credentials, fragments and the transport's headers as Rust
   does (RMK-1068), so neither is a Rust-only exception any more.
+- `RoomKit::deliver` brings content into a room from outside it, as
+  Python's does (RMK-1133, RFC §22): a message the framework's own sender
+  writes on the room's transport, its address kept, its outcome reported
+  (`DeliveryOutcome`), `BEFORE_DELIVER` able to block or rewrite it and
+  `AFTER_DELIVER` observing it. A keyed delivery names one publication in
+  its room, stored under `roomkit:publication:<key>`: the pipeline drops a
+  key in that namespace from any other message, and `send_event`, `post`
+  and `commit_event` refuse one.
 - `TurnTimeouts::silent_intervals` rounds a half to the even neighbour, as
   Python's `round` (RMK-1093): a 5 s heartbeat timeout over a 2 s interval
   is 2 silent intervals, no longer 3; the accept bound counts alike.

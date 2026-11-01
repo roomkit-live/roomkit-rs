@@ -1,22 +1,62 @@
-//! What a provider reports of the messages the rooms sent (RFC §10.4, A
-//! delivery status follows its message), and its webhooks: Python's
+//! Proactive delivery (RFC §22): Python's `deliver`; and what a provider
+//! reports of the messages the rooms sent (RFC §10.4, A delivery status
+//! follows its message), and its webhooks: Python's
 //! `process_delivery_status`, `on_delivery_status` and `process_webhook`.
 
 use std::future::Future;
 use std::sync::Arc;
 
-use roomkit_core::model::{ChannelId, DeliveryStatus, RoomContext, RoomId};
+use roomkit_core::model::{ChannelId, DeliveryStatus, Metadata, RoomContext, RoomId};
 use roomkit_core::rules::hook_registry::{HookExecution, HookSubject, HookTrigger};
 
-use super::options::ProcessInboundOptions;
+use super::options::{GetRoomOptions, ProcessInboundOptions};
 use super::{Inner, RoomKit, read};
+use crate::delivery::DeliveryOutcome;
+use crate::delivery::execute::{Item, execute};
 use crate::delivery::status::room_of_status;
+use crate::delivery::targets::Request;
 use crate::driver;
 use crate::error::RoomKitError;
 use crate::hooks::{self, HookOptions, Kept};
 use crate::providers::sms::WebhookMeta;
 use crate::store::ConversationStore;
 use crate::tasks::Kind;
+
+/// What [`RoomKit::deliver`] takes beside the room and the content:
+/// Python's `deliver(room_id, content, *, channel_id=None, strategy=None,
+/// metadata=None, addressed_to=None, idempotency_key=None, session_id=None,
+/// chain_depth=0, instruction=False, organization_id=None)`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DeliverOptions {
+    /// Python `channel_id=None`: the transport that carries the content;
+    /// `None` takes the room's, a voice one first. An intelligence channel
+    /// named here is carried by the room's transport.
+    pub channel_id: Option<ChannelId>,
+    /// Python `metadata=None`: the metadata of the event it publishes.
+    pub metadata: Metadata,
+    /// Python `addressed_to=None`: the intelligence channels asked to act
+    /// (RFC §19.3). `None` keeps routing, an empty list solicits no agent;
+    /// it changes no visibility.
+    pub addressed_to: Option<Vec<ChannelId>>,
+    /// Python `idempotency_key=None`: the key naming one publication in the
+    /// room, whatever transport carries it (RFC §22.1). A blank one is
+    /// refused.
+    pub idempotency_key: Option<String>,
+    /// Python `session_id=None`: the realtime session the content is
+    /// injected into; this implementation has no realtime session, so a
+    /// delivery naming one is refused.
+    pub session_id: Option<String>,
+    /// Python `chain_depth=0`: the chain the content continues (RFC §8.3);
+    /// made within a turn, at least the turn's response's.
+    pub chain_depth: u32,
+    /// Python `instruction=False`: the content is the application's
+    /// direction to the agents it addresses, an `INSTRUCTION` never stored
+    /// (RFC §10.1.1), which needs `addressed_to` and no key.
+    pub instruction: bool,
+    /// Python `organization_id=None`: the organization the caller acts for
+    /// (RFC §17.2): the room is read with it before any hook runs.
+    pub organization_id: Option<String>,
+}
 
 /// What [`RoomKit::process_delivery_status`] takes beside the status:
 /// Python's `process_delivery_status(status, *, organization_id=None)`.
@@ -42,6 +82,83 @@ pub struct ProcessWebhookOptions {
 }
 
 impl<S: ConversationStore> RoomKit<S> {
+    /// Brings `content` into the room `room_id` from outside it, for the
+    /// room's agents (RFC §22): a background task's result, an external
+    /// event, a scheduled nudge. Python's `deliver(room_id, content, ...)`,
+    /// its keywords in `options`, with the immediate strategy.
+    ///
+    /// The content enters the room as a message the framework's own sender,
+    /// `system`, writes on the room's transport (or the one `options`
+    /// name), through the inbound pipeline: the room's agents read it and
+    /// act, the correspondent receives their answer, never the content
+    /// itself. A message for the correspondent is the host's own words:
+    /// [`post`](Self::post). `BEFORE_DELIVER` runs first and may block it
+    /// or rewrite it; `AFTER_DELIVER` observes the outcome, whatever it is
+    /// (RFC §22.3).
+    ///
+    /// Returns the actual outcome (RFC §22.1): `sent` once the turn the
+    /// publication asked for is over (`turn_complete`), `blocked` by a hook,
+    /// the room or the request's form, `unavailable` for a destination it
+    /// cannot reach, `failed`; the published event, a keyed replay's
+    /// original as a `duplicate`, and the inbound result in `inbound`.
+    ///
+    /// # Errors
+    ///
+    /// [`RoomKitError::RoomNotFound`] when `options` name an organization
+    /// and the room is missing or another organization's: nothing is
+    /// delivered or fired. Any other failure is the outcome's.
+    pub async fn deliver(
+        &self,
+        room_id: &RoomId,
+        content: impl Into<String>,
+        options: DeliverOptions,
+    ) -> Result<DeliveryOutcome, RoomKitError> {
+        let DeliverOptions {
+            channel_id,
+            metadata,
+            addressed_to,
+            idempotency_key,
+            session_id,
+            chain_depth,
+            instruction,
+            organization_id,
+        } = options;
+        if organization_id.is_some() {
+            self.get_room(room_id, GetRoomOptions { organization_id })
+                .await?;
+        }
+        let request = Request {
+            room_id: room_id.clone(),
+            content: content.into(),
+            channel_id,
+            metadata,
+            addressed_to,
+            idempotency_key,
+            session_id,
+            chain_depth,
+            instruction,
+            wait_for_turn: true,
+        };
+        let mut item = Item::new(request);
+        Ok(execute(self, &mut item).await)
+    }
+
+    /// Publishes `message`, the delivery path's, into the room `room_id`,
+    /// its delivery deferred, its key `publishing` admitted (RFC §22.1).
+    pub(crate) async fn publish_delivery(
+        &self,
+        message: roomkit_core::model::InboundMessage,
+        room_id: &RoomId,
+        publishing: Option<String>,
+    ) -> Result<crate::inbound::InboundResult, RoomKitError> {
+        let options = ProcessInboundOptions {
+            room_id: Some(room_id.clone()),
+            defer_delivery: true,
+            organization_id: None,
+        };
+        self.run_message(message, options, publishing).await
+    }
+
     /// Runs `handler` on every delivery status the kit processes from now
     /// on: Python's `@kit.on_delivery_status`, an ASYNC hook on
     /// `ON_DELIVERY_STATUS` (RFC §9.2), which every status dispatched in a

@@ -38,8 +38,9 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// As Python's `post` raises, nothing written:
     /// [`RoomKitError::ChannelNotRegistered`] for a channel no one
-    /// registered, [`RoomKitError::Value`] for one of another type or for
-    /// the id `host` held by one, [`RoomKitError::RoomNotFound`],
+    /// registered, [`RoomKitError::Value`] for one of another type, for
+    /// the id `host` held by one, or for a key in the framework's
+    /// publication namespace (RFC §22.1), [`RoomKitError::RoomNotFound`],
     /// [`RoomKitError::ParticipantNotFound`] for a speaker the host channel
     /// does not reach, and `send_event`'s refusals:
     /// [`RoomKitError::RoomClosed`], [`RoomKitError::ChannelNotFound`] for a
@@ -51,6 +52,7 @@ impl<S: ConversationStore> RoomKit<S> {
         content: impl Into<EventContent>,
         options: PostOptions,
     ) -> Result<RoomEvent, RoomKitError> {
+        crate::delivery::refuse_reserved(options.idempotency_key.as_deref())?;
         let mut content = content.into();
         // A content a struct literal built past its model's check is refused
         // before anything is written, as Python's model refuses it when built,

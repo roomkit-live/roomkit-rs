@@ -905,3 +905,24 @@ fn list_tasks_options_defaults_as_python() {
     // roomkit.RoomKit.list_tasks(organization_id) = None
     assert!(defaults.organization_id.is_none());
 }
+
+#[test]
+fn deliver_options_defaults_as_python() {
+    let defaults = roomkit::DeliverOptions::default();
+    // roomkit.RoomKit.deliver(channel_id) = None
+    assert!(defaults.channel_id.is_none());
+    // roomkit.RoomKit.deliver(metadata) = None
+    assert!(defaults.metadata.is_empty());
+    // roomkit.RoomKit.deliver(addressed_to) = None
+    assert!(defaults.addressed_to.is_none());
+    // roomkit.RoomKit.deliver(idempotency_key) = None
+    assert!(defaults.idempotency_key.is_none());
+    // roomkit.RoomKit.deliver(session_id) = None
+    assert!(defaults.session_id.is_none());
+    // roomkit.RoomKit.deliver(chain_depth) = 0
+    assert_eq!(defaults.chain_depth, 0);
+    // roomkit.RoomKit.deliver(instruction) = False
+    assert!(!defaults.instruction);
+    // roomkit.RoomKit.deliver(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}

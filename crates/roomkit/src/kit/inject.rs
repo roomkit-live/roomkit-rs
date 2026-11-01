@@ -72,8 +72,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// the refusal of an edit or a delete; [`RoomKitError::ChannelNotRegistered`]
     /// for an unregistered channel; [`RoomKitError::Value`] when the event
     /// cannot be one (the visibility `internal`, `standalone` on a type other
-    /// than an instruction, an instruction's refusal); or the store's or the
-    /// lock's failure before its commit.
+    /// than an instruction, an instruction's refusal, a key in the
+    /// framework's publication namespace, `roomkit:publication:`, RFC
+    /// §22.1); or the store's or the lock's failure before its commit.
     pub async fn send_event(
         &self,
         room_id: &RoomId,
@@ -95,6 +96,7 @@ impl<S: ConversationStore> RoomKit<S> {
         organization_id: Option<String>,
         mut event: DirectEvent,
     ) -> Result<RoomEvent, RoomKitError> {
+        crate::delivery::refuse_reserved(event.idempotency_key.as_deref())?;
         // A content a struct literal built past its model's check is refused
         // before anything is read, as Python's model refuses it when built,
         // and one kept is written as its constructor writes it.
@@ -128,7 +130,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// Returns [`RoomKitError::KitClosed`] once the kit's close started, or
     /// when it cut the call before its commit landed (RFC §12.10.4);
-    /// [`RoomKitError::Value`] when the record names another room,
+    /// [`RoomKitError::Value`] when the record names another room, or
+    /// carries a key in the framework's publication namespace (RFC §22.1),
     /// before anything is read; [`RoomKitError::RoomNotFound`] when the room
     /// does not exist; [`RoomKitError::RoomClosed`] when its status refuses
     /// events (RFC §5.1); [`RoomKitError::IdempotencyKeyTaken`] for a key
@@ -141,6 +144,7 @@ impl<S: ConversationStore> RoomKit<S> {
         mut event: RoomEvent,
         options: CommitEventOptions,
     ) -> Result<RoomEvent, RoomKitError> {
+        crate::delivery::refuse_reserved(event.idempotency_key.as_deref())?;
         event.check()?;
         let taken = (
             event.source.channel_id.clone(),

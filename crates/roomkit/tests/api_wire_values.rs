@@ -97,6 +97,8 @@ fn hook_trigger_serializes_to_python_s_values() {
             ("ON_DELIVERY_STATUS", HookTrigger::OnDeliveryStatus),
             ("ON_STATUS_POSTED", HookTrigger::OnStatusPosted),
             ("ON_FEEDBACK", HookTrigger::OnFeedback),
+            ("BEFORE_DELIVER", HookTrigger::BeforeDeliver),
+            ("AFTER_DELIVER", HookTrigger::AfterDeliver),
         ],
     );
 }
