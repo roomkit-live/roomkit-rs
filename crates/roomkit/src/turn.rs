@@ -35,7 +35,9 @@ tokio::task_local! {
 }
 
 /// The turn of an intelligence channel the current task runs within, while
-/// its `on_event()` runs; `None` anywhere else (RFC §21.4
+/// its `on_event()` runs and after it in work it began, as long as its host
+/// can reach the room's owner ([`TurnHost::reachable`]); `None` anywhere
+/// else, a host whose kit is gone included (RFC §21.4
 /// `current_turn_host()`).
 ///
 /// The kit's turn executor sets it around every intelligence turn's work,
@@ -50,6 +52,11 @@ tokio::task_local! {
 /// assert!(roomkit::current_turn_host().is_none());
 /// ```
 pub fn current_turn_host() -> Option<TurnHost> {
+    turn_in_scope().filter(TurnHost::reachable)
+}
+
+/// The turn's host the current task runs within, reachable or not.
+fn turn_in_scope() -> Option<TurnHost> {
     TURN.try_with(Clone::clone).ok()
 }
 
@@ -1000,7 +1007,7 @@ pub(crate) fn within_current_turn<F>(future: F) -> impl Future<Output = F::Outpu
 where
     F: Future + Send + 'static,
 {
-    let turn = current_turn_host();
+    let turn = turn_in_scope();
     async move {
         match turn {
             Some(turn) => TURN.scope(turn, future).await,

@@ -85,3 +85,37 @@ async fn a_turn_s_host_is_open_during_the_turn_and_reachable_after_it() {
         (true, true, false, true)
     );
 }
+
+/// Python's `current_turn_host()` (turns/host.py): `None` for a host that
+/// can no longer reach its owner (RMK-1094). Work a turn began reads the
+/// host while the kit lives, and none once the kit is gone.
+#[tokio::test(start_paused = true)]
+async fn work_a_turn_began_reads_no_host_once_the_kit_is_gone() {
+    let (go, went) = tokio::sync::oneshot::channel::<()>();
+    let went = Arc::new(Mutex::new(Some(went)));
+    let (read, reads) = tokio::sync::oneshot::channel::<(bool, bool)>();
+    let read = Arc::new(Mutex::new(Some(read)));
+    let kit = kit(move |_call, _context| {
+        let went = went.lock().unwrap().take();
+        let read = read.lock().unwrap().take();
+        async move {
+            if let (Some(went), Some(read)) = (went, read) {
+                tokio::spawn(roomkit::keep_context(async move {
+                    let before = current_turn_host().is_some();
+                    let _ = went.await;
+                    let _ = read.send((before, current_turn_host().is_some()));
+                }));
+            }
+            Ok(ToolResult::Text("42".to_owned()))
+        }
+    })
+    .await;
+
+    asks(&kit, "What is it?").await;
+    roomkit::testing::idle(&kit).await;
+    kit.close().await.unwrap();
+    drop(kit);
+    go.send(()).unwrap();
+
+    assert_eq!(reads.await.unwrap(), (true, false));
+}
