@@ -65,6 +65,7 @@ struct Recording {
     given: Mutex<Vec<DeliveryContext>>,
     order: Option<Arc<Mutex<Vec<&'static str>>>>,
     fails: Option<String>,
+    answers: Option<DeliveryOutcome>,
 }
 
 impl DeliveryStrategy for Recording {
@@ -80,7 +81,9 @@ impl DeliveryStrategy for Recording {
             self.given.lock().unwrap().push(ctx);
             match &self.fails {
                 Some(message) => Err(RoomKitError::Value(message.clone())),
-                None => Ok(Some(DeliveryOutcome::new(DeliveryOutcomeStatus::Sent))),
+                None => Ok(Some(self.answers.clone().unwrap_or_else(|| {
+                    DeliveryOutcome::new(DeliveryOutcomeStatus::Sent)
+                }))),
             }
         })
     }
@@ -187,6 +190,25 @@ async fn after_deliver_reports_a_strategy_that_raised() {
     let seen = seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].metadata["error"], "bad");
+    kit.close().await.unwrap();
+}
+
+// Python: delivery/worker.py's fire_delivery_hooks: an unsuccessful outcome
+// with neither error nor reason reports a null error.
+#[tokio::test]
+async fn after_deliver_reports_no_error_an_outcome_does_not_name() {
+    let kit = kit_with_room(RoomKitOptions::default()).await;
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let seen = delivery_hooks(&kit, &order);
+    let strategy = Arc::new(Recording {
+        answers: Some(DeliveryOutcome::new(DeliveryOutcomeStatus::Failed)),
+        ..Recording::default()
+    });
+    let mut item = DeliveryItem::new(room(), "hello");
+    execute_delivery(&kit, &mut item, with(&strategy)).await;
+    idle(&kit).await;
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen[0].metadata["error"], serde_json::Value::Null);
     kit.close().await.unwrap();
 }
 
@@ -477,6 +499,56 @@ async fn the_kit_s_worker_dead_letters_a_target_it_never_reaches() {
     kit.close().await.unwrap();
     // The kit's close closed its backend: nothing is claimed any more.
     assert_eq!(backend.in_flight(), 0);
+}
+
+// Python: delivery/memory.py's close() re-enqueues with put_nowait, which
+// wakes a get() waiting: a dequeue waiting on another worker is given the
+// items the close queues again, not left to its poll timeout.
+#[tokio::test(start_paused = true)]
+async fn a_dequeue_waiting_reads_the_items_a_close_queues_again() {
+    let backend = InMemoryDeliveryBackend::default();
+    enqueue(&backend, DeliveryItem::new(room(), "hello")).await;
+    let options = DequeueOptions {
+        batch_size: 1,
+        timeout: Duration::from_secs(5),
+    };
+    let claimed = DeliveryBackend::<InMemoryStore>::dequeue(&backend, "w1", options)
+        .await
+        .unwrap();
+    assert_eq!(claimed.len(), 1);
+    let waiting = backend.clone();
+    let other = tokio::spawn(async move {
+        DeliveryBackend::<InMemoryStore>::dequeue(&waiting, "w2", options)
+            .await
+            .unwrap()
+    });
+    tokio::task::yield_now().await;
+    DeliveryBackend::<InMemoryStore>::close(&backend)
+        .await
+        .unwrap();
+    let read = other.await.unwrap();
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].id, claimed[0].id);
+}
+
+// Rust alone: a kit's worker ends once its kit is gone; a kit sharing the
+// backend then starts a worker of its own.
+#[tokio::test(start_paused = true)]
+async fn a_kit_sharing_a_backend_whose_kit_is_gone_starts_its_worker() {
+    let backend = InMemoryDeliveryBackend::default();
+    let options = || RoomKitOptions {
+        delivery_backend: Some(Arc::new(backend.clone())),
+        ..RoomKitOptions::default()
+    };
+    let gone: Kit = RoomKit::new(options());
+    gone.start().await.unwrap();
+    drop(gone);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let kit = kit_with_room(options()).await;
+    kit.start().await.unwrap();
+    enqueue(&backend, DeliveryItem::new(room(), "result")).await;
+    until(async || published(&kit).await == 1).await;
+    kit.close().await.unwrap();
 }
 
 // Rust alone: the kit holds its backend, whose worker holds the kit weakly,

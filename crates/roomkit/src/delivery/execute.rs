@@ -305,7 +305,7 @@ fn text_of(content: &EventContent) -> Option<String> {
 
 /// The status an `AFTER_DELIVER` event reports for `outcome`, and its
 /// error: the outcome's error message, else its reason, for an
-/// unsuccessful one.
+/// unsuccessful one; `None` for one with neither, as Python writes null.
 fn reported(outcome: Option<&DeliveryOutcome>) -> (EventStatus, Option<String>) {
     let Some(outcome) = outcome else {
         return (EventStatus::Delivered, None);
@@ -316,14 +316,16 @@ fn reported(outcome: Option<&DeliveryOutcome>) -> (EventStatus, Option<String>) 
         DeliveryOutcomeStatus::Unavailable | DeliveryOutcomeStatus::Failed => EventStatus::Failed,
         DeliveryOutcomeStatus::Queued | DeliveryOutcomeStatus::Unknown => EventStatus::Pending,
     };
-    let error = outcome.unsuccessful().then(|| {
-        outcome
-            .error
-            .as_ref()
-            .map(|error| error.message.clone())
-            .or_else(|| outcome.reason.clone())
-            .unwrap_or_default()
-    });
+    let error = outcome
+        .unsuccessful()
+        .then(|| {
+            outcome
+                .error
+                .as_ref()
+                .map(|error| error.message.clone())
+                .or_else(|| outcome.reason.clone())
+        })
+        .flatten();
     (status, error)
 }
 
