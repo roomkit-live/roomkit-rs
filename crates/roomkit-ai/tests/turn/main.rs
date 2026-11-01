@@ -357,6 +357,74 @@ fn refuse_call(kit: &RoomKit, refused: &'static str, reason: &'static str) {
     .unwrap();
 }
 
+/// RFC §21.1, RMK-1042: a call carrying an argument its tool's closed
+/// schema (`additionalProperties: false`) does not declare is refused
+/// before its hooks and its handler, the model told the arguments the tool
+/// accepts, as Python's `validate_tool_arguments` refuses it
+/// (`tasks/probes/RMK-1042/py_closed_schema.out`).
+#[tokio::test]
+async fn an_argument_a_closed_schema_does_not_declare_is_refused() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("c1", "shell", r#"{"command": "ls", "extra": 1}"#)]),
+        ScriptedRound::answering("Done."),
+    ]);
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let running = Arc::clone(&ran);
+    let shell = AiTool {
+        parameters: json!({
+            "type": "object",
+            "properties": { "command": { "type": "string" }, "cwd": { "type": "string" } },
+            "required": ["command"],
+            "additionalProperties": false,
+        }),
+        ..AiTool::new("shell", "Run a command").unwrap()
+    };
+    let handler = roomkit_ai::ToolHandler::new(move |name, _arguments| {
+        running.lock().unwrap().push(name);
+        async { Ok(ToolResult::from("ran")) }
+    });
+    let room = Room::equipped(model, Tools::new(), |options| AiChannelOptions {
+        tools: vec![shell.into()],
+        tool_handler: Some(handler),
+        ..options
+    })
+    .await;
+    let hooked = Arc::new(Mutex::new(0));
+    let counting = Arc::clone(&hooked);
+    room.kit
+        .hook(
+            HookTrigger::BeforeToolUse,
+            move |event: ToolCallEvent, _context| {
+                *counting.lock().unwrap() += 1;
+                async move { Ok(HookResult::modify(event, ModifyOptions::default())) }
+            },
+            HookOptions {
+                name: "seen".to_owned(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    room.says("List the files.").await;
+    let timeline = room.timeline().await;
+    let end = end_row(&timeline, "c1");
+    assert_eq!(
+        (
+            end.outcome,
+            end.result.clone(),
+            ran.lock().unwrap().len(),
+            *hooked.lock().unwrap()
+        ),
+        (
+            Some(ToolCallOutcome::Refused),
+            json!(
+                r#"{"error": "Invalid arguments for 'shell': unknown argument 'extra' (this tool accepts: command, cwd)"}"#
+            ),
+            0,
+            0
+        )
+    );
+}
+
 /// RFC §21.1: the call runs with the arguments `BEFORE_TOOL_USE` left, and
 /// arguments it left that do not fit the schema are refused as rewritten.
 #[tokio::test]

@@ -1,14 +1,18 @@
 //! A call's arguments checked against its tool's parameters (RFC §21.1,
-//! step 4 decision 7): the names `required` lists, and the type of each
-//! argument whose top-level property declares a primitive one. Nothing
-//! deeper is checked.
+//! step 4 decision 7), as the reference implementation's
+//! `validate_tool_arguments` checks them: the names `required` lists, the
+//! type of each argument whose top-level property declares a primitive
+//! one, and, on a schema that closes itself (`additionalProperties:
+//! false`), no argument it does not declare. Nothing deeper is checked.
 
 use roomkit::model::Metadata;
 use serde_json::Value;
 
 /// Why `arguments` do not fit `parameters`, a JSON Schema object, if they
-/// do not: the first required argument missing, or the first argument of
-/// another type than its property declares.
+/// do not: the first required argument missing, then the first argument
+/// a closed schema does not declare, named with the ones it does, so that
+/// the model can correct its call, or of another type than its property
+/// declares.
 pub(crate) fn mismatch(parameters: &Value, arguments: &Metadata) -> Option<String> {
     let required = parameters
         .get("required")
@@ -22,11 +26,28 @@ pub(crate) fn mismatch(parameters: &Value, arguments: &Metadata) -> Option<Strin
         }
     }
     let properties = parameters.get("properties").and_then(Value::as_object)?;
+    let closed = parameters.get("additionalProperties") == Some(&Value::Bool(false));
     arguments.iter().find_map(|(name, value)| {
-        let declared = properties.get(name)?.get("type")?.as_str()?;
+        let Some(property) = properties.get(name).filter(|property| property.is_object()) else {
+            return closed.then(|| undeclared(name, properties));
+        };
+        let declared = property.get("type")?.as_str()?;
         (!has_type(value, declared))
             .then(|| format!("argument '{name}' must be of type {declared}"))
     })
+}
+
+/// What the model reads of the argument `name` its closed schema, of
+/// `properties`, does not declare: the names it accepts, in order.
+fn undeclared(name: &str, properties: &serde_json::Map<String, Value>) -> String {
+    let mut accepted: Vec<&str> = properties.keys().map(String::as_str).collect();
+    accepted.sort_unstable();
+    let accepted = if accepted.is_empty() {
+        "none".to_owned()
+    } else {
+        accepted.join(", ")
+    };
+    format!("unknown argument '{name}' (this tool accepts: {accepted})")
 }
 
 /// Whether `value` is of the JSON Schema primitive type `declared`; a type
@@ -82,9 +103,33 @@ mod tests {
         );
     }
 
+    /// Python's `validate_tool_arguments`: an argument the schema does not
+    /// declare passes an open schema, and a closed one with no properties;
+    /// a closed one refuses it, naming the ones it accepts
+    /// (`tasks/probes/RMK-1042/py_closed_schema.out`).
     #[test]
-    fn an_argument_the_schema_does_not_declare_passes() {
-        let parameters = json!({ "properties": { "city": { "type": "string" } } });
-        assert_eq!(mismatch(&parameters, &arguments(&json!({ "x": 1 }))), None);
+    fn an_argument_the_schema_does_not_declare_passes_only_an_open_schema() {
+        let properties = json!({ "command": { "type": "string" }, "cwd": { "type": "string" } });
+        let schema = |additional: Value| json!({ "properties": properties, "required": ["command"], "additionalProperties": additional });
+        let given = arguments(&json!({ "command": "ls", "extra": 1 }));
+        assert_eq!(
+            [
+                mismatch(&schema(json!(true)), &given),
+                mismatch(&json!({ "properties": properties }), &given),
+                mismatch(&json!({ "additionalProperties": false }), &given),
+                mismatch(&schema(json!(false)), &given),
+                mismatch(
+                    &json!({ "properties": {}, "additionalProperties": false }),
+                    &given
+                ),
+            ],
+            [
+                None,
+                None,
+                None,
+                Some("unknown argument 'extra' (this tool accepts: command, cwd)".to_owned()),
+                Some("unknown argument 'command' (this tool accepts: none)".to_owned()),
+            ]
+        );
     }
 }

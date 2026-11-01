@@ -750,6 +750,16 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 - `roomkit-ai` and `roomkit::transcript`: provider metadata on `Done` and `Message`
   carries a tool round's replay state without adding it to room history.
 
+### Fixed
+
+- **A call carrying an argument its tool's closed schema does not declare
+  is refused** (RMK-1042), as Python's `validate_tool_arguments`: on a
+  schema with `additionalProperties: false`, an unknown argument fails the
+  call's gate before its hooks and its handler, the model reading
+  `Invalid arguments for '<tool>': unknown argument '<name>' (this tool
+  accepts: <the declared names>)`, where the handler was called with it.
+  An open schema, or a closed one with no `properties`, still passes it.
+
 ## [0.1.0] — 2026-10-27
 
 The first release: Level 0 of the RoomKit RFC with nothing left out, on a

@@ -87,7 +87,9 @@ async fn intents(room: &Room) -> Vec<Option<String>> {
 }
 
 /// Off, nothing is taken: the schema is the tool's, the reserved key is an
-/// argument like any other, and no row carries an intent.
+/// argument like any other, which the tool's closed schema refuses, as
+/// Python's (RMK-1042, `tasks/probes/RMK-1040/python-today.txt`), and no row
+/// carries an intent.
 #[tokio::test]
 async fn off_nothing_is_taken_from_a_call() {
     let call = json!({ "command": "ls", "_roomkit_intent": INTENT });
@@ -108,7 +110,7 @@ async fn off_nothing_is_taken_from_a_call() {
             received.lock().unwrap().clone(),
             intents,
         ),
-        (closed(), vec![call], vec![None, None])
+        (closed(), Vec::new(), vec![None, None])
     );
 }
 
