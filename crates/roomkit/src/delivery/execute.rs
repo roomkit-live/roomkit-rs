@@ -16,40 +16,51 @@ use roomkit_core::rules::hook_registry::{HookSpec, HookTrigger};
 use roomkit_core::rules::{idempotency, publications};
 use serde_json::Value;
 
+use super::item::DeliveryItem;
 use super::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
-use super::targets::{Prepared, Request};
+use super::serialization::deserialize_strategy;
+use super::strategy::{DeliveryContext, DeliveryStrategy};
 use crate::driver;
 use crate::error::RoomKitError;
 use crate::hooks::{self, Kept};
-use crate::kit::{Inner, RoomKit};
-use crate::store::ConversationStore;
+use crate::kit::{HookEngine, Inner, RoomKit};
+use crate::store::{ConversationStore, InMemoryStore};
 use crate::tasks::Kind;
 
-/// The name of the one strategy this implementation runs: Python's
-/// `Immediate`, serialized `immediate`.
-const IMMEDIATE: &str = "immediate";
-
-/// One delivery as it is executed: Python's `DeliveryItem`, its request,
-/// its id, its strategy's name and the outcome it came to.
-#[derive(Clone, Debug)]
-pub(crate) struct Item {
-    pub(crate) id: String,
-    pub(crate) request: Request,
-    pub(crate) strategy: String,
-    pub(crate) outcome: Option<DeliveryOutcome>,
+/// What [`execute_delivery`] takes beside the kit and the item: Python's
+/// `execute_delivery(kit, item, *, strategy=None, hook_engine=None)`.
+pub struct ExecuteDeliveryOptions<S = InMemoryStore> {
+    /// Python `strategy=None`: the strategy that delivers the item; `None`
+    /// rebuilds the one the item keeps, serialized.
+    pub strategy: Option<Arc<dyn DeliveryStrategy<S>>>,
+    /// Python `hook_engine=None`: the engine whose `BEFORE_DELIVER` and
+    /// `AFTER_DELIVER` hooks run; `None` takes the kit's.
+    pub hook_engine: Option<HookEngine<S>>,
 }
 
-impl Item {
-    /// `request`, executed with the immediate strategy, under a fresh id.
-    pub(crate) fn new(request: Request) -> Self {
+impl<S> Default for ExecuteDeliveryOptions<S> {
+    fn default() -> Self {
         Self {
-            id: uuid::Uuid::new_v4().simple().to_string(),
-            request,
-            strategy: IMMEDIATE.to_owned(),
-            outcome: None,
+            strategy: None,
+            hook_engine: None,
         }
     }
+}
 
+impl<S> std::fmt::Debug for ExecuteDeliveryOptions<S> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExecuteDeliveryOptions")
+            .field(
+                "strategy",
+                &self.strategy.as_ref().map(|_| "DeliveryStrategy"),
+            )
+            .field("hook_engine", &self.hook_engine)
+            .finish()
+    }
+}
+
+impl DeliveryItem {
     /// `outcome`, the item's.
     fn owned(&self, outcome: DeliveryOutcome) -> DeliveryOutcome {
         DeliveryOutcome {
@@ -59,51 +70,64 @@ impl Item {
     }
 }
 
-/// Executes `item` once and reports its actual outcome, a hook's refusal
-/// included (RFC §22.1, §22.3): Python's `execute_delivery`.
-pub(crate) async fn execute<S: ConversationStore>(
+/// Executes `item` once through `kit` and reports its actual outcome, a
+/// hook's refusal included (RFC §22.1, §22.3): Python's `execute_delivery`.
+/// A request its form refuses is reported blocked; `BEFORE_DELIVER` may
+/// block it or rewrite its content; the strategy, `options`' or the one
+/// the item keeps, delivers it; `AFTER_DELIVER` observes the outcome,
+/// written on the item. A strategy that reports no outcome leaves it
+/// unknown; one that raises fails it.
+pub async fn execute_delivery<S: ConversationStore>(
     kit: &RoomKit<S>,
-    item: &mut Item,
+    item: &mut DeliveryItem,
+    options: ExecuteDeliveryOptions<S>,
 ) -> DeliveryOutcome {
+    let hooks = options
+        .hook_engine
+        .as_ref()
+        .map_or_else(|| kit.clone(), |engine| engine.kit().clone());
     item.outcome = None;
-    if let Some(refusal) = reject_invalid(kit, item).await {
+    if let Some(refusal) = reject_invalid(&hooks, item).await {
         return refusal;
     }
-    let content = before_deliver(kit, item).await;
+    let content = before_deliver(&hooks, item).await;
     let mut effective = item.clone();
     if let Some(content) = content {
-        let request = Request {
+        let strategy = options
+            .strategy
+            .unwrap_or_else(|| deserialize_strategy(&item.strategy));
+        let context = DeliveryContext {
             content: content.clone(),
-            ..item.request.clone()
+            channel_id: item.channel_id.clone(),
+            metadata: item.metadata.clone(),
+            addressed_to: item.addressed_to.clone(),
+            idempotency_key: item.idempotency_key.clone(),
+            session_id: item.session_id.clone(),
+            chain_depth: item.chain_depth,
+            instruction: item.instruction,
+            ..DeliveryContext::new(kit.clone(), item.room_id.clone(), String::new())
         };
-        let outcome = immediate(kit, &request)
-            .await
-            .unwrap_or_else(|error| strategy_failed(&error));
+        let outcome = match strategy.deliver(context).await {
+            Ok(Some(outcome)) => outcome,
+            Ok(None) => DeliveryOutcome {
+                reason: Some("strategy_outcome_unknown".to_owned()),
+                ..DeliveryOutcome::new(DeliveryOutcomeStatus::Unknown)
+            },
+            Err(error) => strategy_failed(&error),
+        };
         item.outcome = Some(item.owned(outcome));
-        effective.request.content = content;
+        effective.content = content;
     }
     effective.outcome.clone_from(&item.outcome);
-    after_deliver(kit, &effective).await;
+    after_deliver(&hooks, &effective).await;
     item.outcome
         .clone()
         .unwrap_or_else(|| item.owned(DeliveryOutcome::new(DeliveryOutcomeStatus::Unknown)))
 }
 
-/// Delivers `request` now (RFC §22.2 `Immediate`): its channel resolved and
-/// checked, then its publication.
-async fn immediate<S: ConversationStore>(
-    kit: &RoomKit<S>,
-    request: &Request,
-) -> Result<DeliveryOutcome, RoomKitError> {
-    match kit.prepare_delivery(request, None).await? {
-        Prepared::Channel(channel_id) => kit.deliver_to_channel(request, channel_id).await,
-        Prepared::Done(outcome) => Ok(*outcome),
-    }
-}
-
 /// A strategy that raised `error`: its execution failed, its class and
 /// message reported.
-fn strategy_failed(error: &RoomKitError) -> DeliveryOutcome {
+pub(crate) fn strategy_failed(error: &RoomKitError) -> DeliveryOutcome {
     let error = DeliveryError::new(error.class_name(), error.to_string());
     DeliveryOutcome::failed("strategy_failed", error)
 }
@@ -114,9 +138,9 @@ fn strategy_failed(error: &RoomKitError) -> DeliveryOutcome {
 /// publication (RFC §22.1, §13.4).
 pub(crate) async fn reject_invalid<S: ConversationStore>(
     kit: &RoomKit<S>,
-    item: &mut Item,
+    item: &mut DeliveryItem,
 ) -> Option<DeliveryOutcome> {
-    let request = &item.request;
+    let request = &*item;
     let reason = if request.session_id.is_some()
         && (request.channel_id.is_none() || request.addressed_to.is_some())
     {
@@ -140,15 +164,18 @@ pub(crate) async fn reject_invalid<S: ConversationStore>(
 /// The trigger fails open: a hook that raises, times out or returns
 /// nothing lets the delivery through unless it declared `fail_closed`, and
 /// hooks that cannot run deliver it as it is.
-async fn before_deliver<S: ConversationStore>(kit: &RoomKit<S>, item: &mut Item) -> Option<String> {
+async fn before_deliver<S: ConversationStore>(
+    kit: &RoomKit<S>,
+    item: &mut DeliveryItem,
+) -> Option<String> {
     let trigger = HookTrigger::BeforeDeliver;
     let inner = &kit.inner;
     if !inner.config().hooks.has_hooks(Some(trigger)) {
-        return Some(item.request.content.clone());
+        return Some(item.content.clone());
     }
     let event = hook_event(inner, item, trigger);
     let Some(context) = hook_context(inner, item, trigger).await else {
-        return Some(item.request.content.clone());
+        return Some(item.content.clone());
     };
     let ended = run_chain(inner, event, &context).await;
     if let Some((reason, blocked_by)) = ended.blocked {
@@ -160,12 +187,12 @@ async fn before_deliver<S: ConversationStore>(kit: &RoomKit<S>, item: &mut Item)
     }
     start_observers(inner, trigger, &ended.event, &context);
     // A rewrite to a content other than a text leaves the delivery's own.
-    Some(text_of(&ended.event.content).unwrap_or_else(|| item.request.content.clone()))
+    Some(text_of(&ended.event.content).unwrap_or_else(|| item.content.clone()))
 }
 
 /// Starts `AFTER_DELIVER`'s hooks on `item`'s outcome (RFC §22.3), in the
 /// background: what they do never changes the outcome.
-async fn after_deliver<S: ConversationStore>(kit: &RoomKit<S>, item: &Item) {
+async fn after_deliver<S: ConversationStore>(kit: &RoomKit<S>, item: &DeliveryItem) {
     let trigger = HookTrigger::AfterDeliver;
     let inner = &kit.inner;
     if !inner.config().hooks.has_hooks(Some(trigger)) {
@@ -181,10 +208,10 @@ async fn after_deliver<S: ConversationStore>(kit: &RoomKit<S>, item: &Item) {
 /// be read.
 async fn hook_context<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
-    item: &Item,
+    item: &DeliveryItem,
     trigger: HookTrigger,
 ) -> Option<RoomContext> {
-    let room_id = &item.request.room_id;
+    let room_id = &item.room_id;
     let recent = inner.config().recent_events();
     match driver::load_context(&*inner.store, room_id, recent).await {
         Ok(Some(context)) => Some(context),
@@ -207,8 +234,8 @@ async fn hook_context<S: ConversationStore>(
 /// outcome's (`PENDING` before it); its metadata the delivery's, with its
 /// item's id, its session, its channel, its strategy and, after it, its
 /// outcome and its error.
-fn hook_event<S>(inner: &Arc<Inner<S>>, item: &Item, trigger: HookTrigger) -> RoomEvent {
-    let request = &item.request;
+fn hook_event<S>(inner: &Arc<Inner<S>>, item: &DeliveryItem, trigger: HookTrigger) -> RoomEvent {
+    let request = &*item;
     let after = trigger == HookTrigger::AfterDeliver;
     let published = item
         .outcome
@@ -234,7 +261,7 @@ fn hook_event<S>(inner: &Arc<Inner<S>>, item: &Item, trigger: HookTrigger) -> Ro
     }
     let channel_id = request.channel_id.as_ref().map(ToString::to_string);
     metadata.insert("channel_id".to_owned(), Value::from(channel_id));
-    metadata.insert("strategy".to_owned(), Value::from(item.strategy.clone()));
+    metadata.insert("strategy".to_owned(), Value::from(item.strategy_name()));
     let content = published
         .and_then(|event| text_of(&event.content))
         .unwrap_or_else(|| request.content.clone());

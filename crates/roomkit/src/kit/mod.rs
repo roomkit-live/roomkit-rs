@@ -201,6 +201,10 @@ pub(crate) struct Inner<S> {
     /// The tasks the turns' hosts delegated, kept for their `wait_task`
     /// (RFC §10.6.5).
     pub(crate) host_tasks: crate::tasks::HostTasks,
+    /// The strategy a delivery naming none takes (RFC §22.2).
+    pub(crate) delivery_strategy: Option<Arc<dyn crate::DeliveryStrategy<S>>>,
+    /// The persistent queue deliveries are enqueued in (RFC §22.2).
+    pub(crate) delivery_backend: Option<Arc<dyn crate::DeliveryBackend<S>>>,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -233,6 +237,8 @@ impl<S: ConversationStore> RoomKit<S> {
             identity_channel_types,
             identity_timeout,
             task_runner,
+            delivery_strategy,
+            delivery_backend,
         } = options;
         let mut config = KitConfig::new();
         config.max_chain_depth = max_chain_depth;
@@ -270,6 +276,8 @@ impl<S: ConversationStore> RoomKit<S> {
             task_runner: task_runner
                 .unwrap_or_else(|| Arc::new(crate::tasks::InMemoryTaskRunner::new())),
             host_tasks: crate::tasks::HostTasks::default(),
+            delivery_strategy,
+            delivery_backend,
         });
         inner.subscribe_status_bus();
         Self { inner }

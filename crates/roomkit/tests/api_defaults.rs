@@ -982,9 +982,11 @@ fn list_tasks_options_defaults_as_python() {
 
 #[test]
 fn deliver_options_defaults_as_python() {
-    let defaults = roomkit::DeliverOptions::default();
+    let defaults: roomkit::DeliverOptions = roomkit::DeliverOptions::default();
     // roomkit.RoomKit.deliver(channel_id) = None
     assert!(defaults.channel_id.is_none());
+    // roomkit.RoomKit.deliver(strategy) = None
+    assert!(defaults.strategy.is_none());
     // roomkit.RoomKit.deliver(metadata) = None
     assert!(defaults.metadata.is_empty());
     // roomkit.RoomKit.deliver(addressed_to) = None
@@ -999,4 +1001,64 @@ fn deliver_options_defaults_as_python() {
     assert!(!defaults.instruction);
     // roomkit.RoomKit.deliver(organization_id) = None
     assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn delivery_strategy_options_defaults_as_python() {
+    let idle = roomkit::WaitForIdleOptions::default();
+    // roomkit.WaitForIdle.__init__(buffer) = 1.0
+    assert_eq!(idle.buffer, Duration::from_secs(1));
+    // roomkit.WaitForIdle.__init__(playback_timeout) = 15.0
+    assert_eq!(idle.playback_timeout, Duration::from_secs(15));
+    let queued = roomkit::QueuedOptions::default();
+    // roomkit.Queued.__init__(buffer) = 1.0
+    assert_eq!(queued.buffer, Duration::from_secs(1));
+    // roomkit.Queued.__init__(playback_timeout) = 15.0
+    assert_eq!(queued.playback_timeout, Duration::from_secs(15));
+    // roomkit.Queued.__init__(separator) = '\n\n'
+    assert_eq!(queued.separator, "\n\n");
+}
+
+#[test]
+fn delivery_backend_options_defaults_as_python() {
+    let backend = roomkit::InMemoryDeliveryBackendOptions::default();
+    // roomkit.InMemoryDeliveryBackend.__init__(max_queue_size) = 1000
+    assert_eq!(backend.max_queue_size, 1000);
+    // roomkit.InMemoryDeliveryBackend.__init__(max_dead_letter_size) = 1000
+    assert_eq!(backend.max_dead_letter_size, 1000);
+    // roomkit.InMemoryDeliveryBackend.__init__(retry_delay) = 1.0
+    assert_eq!(backend.retry_delay, Duration::from_secs(1));
+    // roomkit.InMemoryDeliveryBackend.__init__(max_retry_delay) = 60.0
+    assert_eq!(backend.max_retry_delay, Duration::from_secs(60));
+    let dequeue = roomkit::DequeueOptions::default();
+    // roomkit.DeliveryBackend.dequeue(batch_size) = 1
+    // roomkit.InMemoryDeliveryBackend.dequeue(batch_size) = 1
+    assert_eq!(dequeue.batch_size, 1);
+    // roomkit.DeliveryBackend.dequeue(timeout) = 5.0
+    // roomkit.InMemoryDeliveryBackend.dequeue(timeout) = 5.0
+    assert_eq!(dequeue.timeout, Duration::from_secs(5));
+    let nack = roomkit::NackOptions::default();
+    // roomkit.DeliveryBackend.nack(error) = None
+    // roomkit.InMemoryDeliveryBackend.nack(error) = None
+    assert!(nack.error.is_none());
+    let dead = roomkit::GetDeadLetterItemsOptions::default();
+    // roomkit.DeliveryBackend.get_dead_letter_items(limit) = 50
+    // roomkit.InMemoryDeliveryBackend.get_dead_letter_items(limit) = 50
+    assert_eq!(dead.limit, 50);
+    let worker = roomkit::delivery::RunWorkerLoopOptions::default();
+    // roomkit.delivery.run_worker_loop(batch_size) = 1
+    assert_eq!(worker.batch_size, 1);
+    // roomkit.delivery.run_worker_loop(poll_timeout) = 5.0
+    assert_eq!(worker.poll_timeout, Duration::from_secs(5));
+    let execute: roomkit::delivery::ExecuteDeliveryOptions =
+        roomkit::delivery::ExecuteDeliveryOptions::default();
+    // roomkit.delivery.execute_delivery(strategy) = None
+    assert!(execute.strategy.is_none());
+    // roomkit.delivery.execute_delivery(hook_engine) = None
+    assert!(execute.hook_engine.is_none());
+    let kit = RoomKitOptions::default();
+    // roomkit.RoomKit.__init__(delivery_strategy) = None
+    assert!(kit.delivery_strategy.is_none());
+    // roomkit.RoomKit.__init__(delivery_backend) = None
+    assert!(kit.delivery_backend.is_none());
 }

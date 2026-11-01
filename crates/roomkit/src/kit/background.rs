@@ -131,6 +131,14 @@ impl<S: ConversationStore> RoomKit<S> {
         // The running work's one grace, the cut turns storing what they
         // said included, the one a close's own call runs in among them.
         let grace = Instant::now() + CLOSE_GRACE;
+        // The kit's own work stops within the grace too: its delivery
+        // backend's worker, its items kept (RFC §22.2), as the Python
+        // implementation's close stops it while the channels are open.
+        if let Some(backend) = &self.inner.delivery_backend
+            && let Ok(Err(error)) = tokio::time::timeout_at(grace, backend.close()).await
+        {
+            tracing::warn!(target: "roomkit::kit", %error, "the delivery backend's close failed");
+        }
         let readers_done = || turns.reads_none();
         let waited = tasks.unspared_idle(readers_done, turns.reads_changed());
         drop(tokio::time::timeout_at(grace, waited).await);

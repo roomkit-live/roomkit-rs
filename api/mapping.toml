@@ -48,6 +48,7 @@ roomkit_mcp = ["roomkit.tools"]
 roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::realtime" = ["roomkit.realtime"]
 "roomkit::providers::sms" = ["roomkit.providers.sms"]
+"roomkit::delivery" = ["roomkit.delivery", "roomkit"]
 "roomkit::orchestration" = ["roomkit.orchestration"]
 "roomkit::identity" = ["roomkit.identity"]
 "roomkit::tasks" = ["roomkit.tasks"]
@@ -63,6 +64,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::ChannelError" = { python = "Exception" }
 "roomkit::RouterError" = { python = "Exception" }
 "roomkit::identity::IdentityError" = { python = "Exception" }
+"roomkit::DeliveryBackendError" = { python = "Exception" }
 "roomkit::model::RoomId" = { python = "str", members = ["new", "as_str"] }
 "roomkit::model::EventId" = { python = "str", members = ["new", "as_str"] }
 "roomkit::model::ChannelId" = { python = "str", members = ["new", "as_str"] }
@@ -601,15 +603,13 @@ reason = "not in 0.x: a channel's per-room verbs, through the turn backend (RFC 
 
 [[missing]]
 python = "roomkit.RoomKit"
-members = [
-    "cancel_delivery", "delivery_backend",
-]
-reason = "not in 0.x: the delivery backend and delivery cancellation (parity stream F, RMK-1133)"
+members = ["cancel_delivery"]
+reason = "not in 0.x: delivery cancellation by key (parity stream F's lot 5, RMK-1133)"
 
 [[missing]]
-python = "roomkit.RoomKit.deliver"
-params = ["strategy"]
-reason = "not in 0.x: the delivery strategies but Immediate, which deliver runs (parity stream F's lot 4, RMK-1133)"
+python = "roomkit.DeliveryContext.__init__"
+params = ["_voice_sessions", "_voice_channel", "_wait_for_turn"]
+reason = "the delivery path's own fields, held private: no channel of 0.x plays voice or hosts a realtime model, and whether the call waits for its turn is Queued's to set"
 
 [[missing]]
 python = "roomkit.RoomKit"
@@ -633,7 +633,7 @@ python = "roomkit.RoomKit.__init__"
 params = [
     "lock_manager",
     "stt", "tts", "voice",
-    "delivery_strategy", "delivery_backend", "telemetry",
+    "telemetry",
     "inbound_rate_limit", "orchestration", "persistence_policy",
     "delivery_gap_timeout", "delivery_claim_lock_manager",
     "verification_policy", "media_resolver", "attached_media", "turn_backend",
@@ -931,3 +931,8 @@ reason = "not in 0.x: a call's arguments streamed in fragments, and response sch
 rust = "roomkit_ai::ToolError"
 approved = "2026-11-01"
 reason = "what a tool handler raises, one enum for a handler's Result: Python's ToolRefusedError (Refused), ToolFailedError (Failed) and UnservedToolCallError (UnservedToolCall), each a RoomKitError of its own with no family base, and any other exception (Raised, its class named by kind) (step 5 plan, ToolError's variants; architecture: Errors)"
+
+[[exception]]
+rust = "roomkit::RoomKit::start"
+approved = "2026-11-01"
+reason = "Python's `async with RoomKit(...)` entering the kit, which starts its delivery backend: Rust has no async context manager (architecture: the kit's start, decided by the maintainer on 2026-11-01, RMK-1133)"

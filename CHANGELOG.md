@@ -36,6 +36,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `RoomKitError::Value`, no longer a `RemoteTurn` named `PermissionError`.
 - `RoomKit::list_tasks`, a room's tasks of the status it names, for the
   organization it names (RFC §5.10, §17.2).
+- The delivery strategies and the delivery queue, as Python's (RMK-1133,
+  RFC §22.2): `DeliverOptions::strategy` and
+  `RoomKitOptions::delivery_strategy` take `Immediate`, `WaitForIdle` or
+  `Queued`, which batches compatible requests and tells each caller its own
+  outcome; `RoomKitOptions::delivery_backend` makes `deliver` enqueue its
+  request (`queued`) in a `DeliveryBackend`, the `InMemoryDeliveryBackend`
+  by default, whose worker `RoomKit::start` starts and the kit's close
+  stops: it retries a retryable failure after its delay and dead-letters a
+  refusal. `roomkit::delivery` holds `execute_delivery`,
+  `run_worker_loop`, `serialize_strategy` and `deserialize_strategy`.
 - The status bus, Python's `roomkit.orchestration` (RFC §19.8):
   `StatusBus`, `StatusEntry`, `StatusLevel`, `InMemoryStatusBackend` and
   the `backend::StatusBackend` trait; `RoomKitOptions::status_bus` and

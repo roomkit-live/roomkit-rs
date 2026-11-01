@@ -354,6 +354,15 @@ impl ExecutionContext {
             .cloned()
     }
 
+    /// Whether this context holds a live lease on any room's lock, a call
+    /// of it running under that lock, as the Python implementation's
+    /// `_holds_a_room_lock` reads its lock manager.
+    pub(crate) fn holds_a_room_lock(&self) -> bool {
+        self.frames
+            .iter()
+            .any(|frame| frame.runs() && frame.lease.as_ref().is_some_and(Lease::is_live))
+    }
+
     /// Whether a frame of this context stands in `room_id`'s admission
     /// order (RFC §9.5.1): its run holds the room's ticket, or takes one
     /// once the frame's call is over, so a turn behind it is never waited

@@ -27,7 +27,7 @@ fn kit_over(file: &TempFile) -> RoomKit<SqliteStore> {
     kit
 }
 
-fn keyed(key: &str) -> DeliverOptions {
+fn keyed(key: &str) -> DeliverOptions<SqliteStore> {
     DeliverOptions {
         idempotency_key: Some(key.to_owned()),
         ..DeliverOptions::default()

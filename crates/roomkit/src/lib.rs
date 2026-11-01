@@ -50,7 +50,7 @@
 mod channel;
 mod context;
 mod cursors;
-mod delivery;
+pub mod delivery;
 mod driver;
 mod environment;
 mod error;
@@ -136,6 +136,12 @@ pub use roomkit_core::rules::instructions::turn_context;
 
 pub use self::channel::{Channel, ChannelDeclaration, ChannelError, default_inbound_event};
 pub use self::context::keep_context;
+pub use self::delivery::{
+    DeliveryBackend, DeliveryBackendError, DeliveryContext, DeliveryItem, DeliveryItemStatus,
+    DeliveryStrategy, DequeueOptions, GetDeadLetterItemsOptions, Immediate,
+    InMemoryDeliveryBackend, InMemoryDeliveryBackendOptions, NackOptions, Queued, QueuedOptions,
+    WaitForIdle, WaitForIdleOptions,
+};
 pub use self::error::RoomKitError;
 pub use self::events::FrameworkEvent;
 pub use self::hooks::{

@@ -11,27 +11,33 @@ use roomkit_core::rules::hook_registry::{HookExecution, HookSubject, HookTrigger
 
 use super::options::{GetRoomOptions, ProcessInboundOptions};
 use super::{Inner, RoomKit, read};
-use crate::delivery::DeliveryOutcome;
-use crate::delivery::execute::{Item, execute};
+use crate::delivery::execute::reject_invalid;
 use crate::delivery::status::room_of_status;
-use crate::delivery::targets::Request;
+use crate::delivery::{
+    DeliveryBackend, DeliveryItem, DeliveryOutcome, DeliveryOutcomeStatus, DeliveryStrategy,
+    ExecuteDeliveryOptions, Immediate, execute_delivery, serialize_strategy,
+};
 use crate::driver;
 use crate::error::RoomKitError;
 use crate::hooks::{self, HookOptions, Kept};
 use crate::providers::sms::WebhookMeta;
-use crate::store::ConversationStore;
+use crate::store::{ConversationStore, InMemoryStore};
 use crate::tasks::Kind;
 
 /// What [`RoomKit::deliver`] takes beside the room and the content:
 /// Python's `deliver(room_id, content, *, channel_id=None, strategy=None,
 /// metadata=None, addressed_to=None, idempotency_key=None, session_id=None,
 /// chain_depth=0, instruction=False, organization_id=None)`.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct DeliverOptions {
+pub struct DeliverOptions<S = InMemoryStore> {
     /// Python `channel_id=None`: the transport that carries the content;
     /// `None` takes the room's, a voice one first. An intelligence channel
     /// named here is carried by the room's transport.
     pub channel_id: Option<ChannelId>,
+    /// Python `strategy=None`: when it goes out (RFC §22.2); `None` takes
+    /// the kit's, [`RoomKitOptions::delivery_strategy`](crate::RoomKitOptions::delivery_strategy),
+    /// else [`Immediate`]. Python's shorthand names (`"queued"`) are the
+    /// strategies' values here (`Queued::default()`).
+    pub strategy: Option<Arc<dyn DeliveryStrategy<S>>>,
     /// Python `metadata=None`: the metadata of the event it publishes.
     pub metadata: Metadata,
     /// Python `addressed_to=None`: the intelligence channels asked to act
@@ -56,6 +62,57 @@ pub struct DeliverOptions {
     /// Python `organization_id=None`: the organization the caller acts for
     /// (RFC §17.2): the room is read with it before any hook runs.
     pub organization_id: Option<String>,
+}
+
+impl<S> Default for DeliverOptions<S> {
+    fn default() -> Self {
+        Self {
+            channel_id: None,
+            strategy: None,
+            metadata: Metadata::new(),
+            addressed_to: None,
+            idempotency_key: None,
+            session_id: None,
+            chain_depth: 0,
+            instruction: false,
+            organization_id: None,
+        }
+    }
+}
+
+impl<S> Clone for DeliverOptions<S> {
+    fn clone(&self) -> Self {
+        Self {
+            channel_id: self.channel_id.clone(),
+            strategy: self.strategy.clone(),
+            metadata: self.metadata.clone(),
+            addressed_to: self.addressed_to.clone(),
+            idempotency_key: self.idempotency_key.clone(),
+            session_id: self.session_id.clone(),
+            chain_depth: self.chain_depth,
+            instruction: self.instruction,
+            organization_id: self.organization_id.clone(),
+        }
+    }
+}
+
+impl<S> std::fmt::Debug for DeliverOptions<S> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeliverOptions")
+            .field("channel_id", &self.channel_id)
+            .field(
+                "strategy",
+                &self.strategy.as_ref().map(|_| "DeliveryStrategy"),
+            )
+            .field("addressed_to", &self.addressed_to)
+            .field("idempotency_key", &self.idempotency_key)
+            .field("session_id", &self.session_id)
+            .field("chain_depth", &self.chain_depth)
+            .field("instruction", &self.instruction)
+            .field("organization_id", &self.organization_id)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What [`RoomKit::process_delivery_status`] takes beside the status:
@@ -111,10 +168,11 @@ impl<S: ConversationStore> RoomKit<S> {
         &self,
         room_id: &RoomId,
         content: impl Into<String>,
-        options: DeliverOptions,
+        options: DeliverOptions<S>,
     ) -> Result<DeliveryOutcome, RoomKitError> {
         let DeliverOptions {
             channel_id,
+            strategy,
             metadata,
             addressed_to,
             idempotency_key,
@@ -127,9 +185,10 @@ impl<S: ConversationStore> RoomKit<S> {
             self.get_room(room_id, GetRoomOptions { organization_id })
                 .await?;
         }
-        let request = Request {
-            room_id: room_id.clone(),
-            content: content.into(),
+        let strategy = strategy
+            .or_else(|| self.inner.delivery_strategy.clone())
+            .unwrap_or_else(|| Arc::new(Immediate));
+        let mut item = DeliveryItem {
             channel_id,
             metadata,
             addressed_to,
@@ -137,10 +196,75 @@ impl<S: ConversationStore> RoomKit<S> {
             session_id,
             chain_depth,
             instruction,
-            wait_for_turn: true,
+            strategy: serialize_strategy(Some(&*strategy)),
+            ..DeliveryItem::new(room_id.clone(), content)
         };
-        let mut item = Item::new(request);
-        Ok(execute(self, &mut item).await)
+        let Some(backend) = self.inner.delivery_backend.clone() else {
+            let options = ExecuteDeliveryOptions {
+                strategy: Some(strategy),
+                hook_engine: None,
+            };
+            return Ok(execute_delivery(self, &mut item, options).await);
+        };
+        Ok(self.enqueue(&*backend, item).await)
+    }
+
+    /// Enqueues `item` in `backend`, its form checked first: the outcome
+    /// `queued` naming the item, a refusal of its form, or the enqueue's
+    /// failure.
+    async fn enqueue(
+        &self,
+        backend: &dyn DeliveryBackend<S>,
+        mut item: DeliveryItem,
+    ) -> DeliveryOutcome {
+        if let Some(refusal) = reject_invalid(self, &mut item).await {
+            return refusal;
+        }
+        let id = item.id.clone();
+        match backend.enqueue(item).await {
+            Ok(()) => DeliveryOutcome {
+                delivery_item_id: Some(id),
+                ..DeliveryOutcome::new(DeliveryOutcomeStatus::Queued)
+            },
+            Err(error) => {
+                let error = roomkit_core::model::DeliveryError::new(
+                    "DeliveryBackendError",
+                    error.to_string(),
+                );
+                DeliveryOutcome {
+                    delivery_item_id: Some(id),
+                    ..DeliveryOutcome::failed("enqueue_failed", error)
+                }
+            }
+        }
+    }
+
+    /// The kit's delivery backend, if it was built with one: Python's
+    /// `RoomKit.delivery_backend`.
+    pub fn delivery_backend(&self) -> Option<Arc<dyn DeliveryBackend<S>>> {
+        self.inner.delivery_backend.clone()
+    }
+
+    /// Starts the kit's own work that runs once it is entered: its delivery
+    /// backend's worker (RFC §22.2), Python's `async with RoomKit(...) as
+    /// kit` entering the kit; [`close`](Self::close) stops it. Rust has no
+    /// async context manager, so the kit is started by this call. Starting
+    /// it again starts nothing more.
+    ///
+    /// # Errors
+    ///
+    /// [`RoomKitError::KitClosed`] once the kit's close started, as Python's
+    /// `async with` on a closed kit raises; [`RoomKitError::Value`] for the
+    /// backend's failure to start.
+    pub async fn start(&self) -> Result<(), RoomKitError> {
+        self.inner.open()?;
+        if let Some(backend) = self.inner.delivery_backend.clone() {
+            backend
+                .start(self.clone())
+                .await
+                .map_err(|error| RoomKitError::Value(error.to_string()))?;
+        }
+        Ok(())
     }
 
     /// Publishes `message`, the delivery path's, into the room `room_id`,

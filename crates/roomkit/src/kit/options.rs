@@ -95,6 +95,16 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// §23.1), an [`InMemoryTaskRunner`](crate::tasks::InMemoryTaskRunner)
     /// by default.
     pub task_runner: Option<Arc<dyn crate::tasks::TaskRunner<S>>>,
+    /// Python `delivery_strategy=None`: when [`RoomKit::deliver`](crate::RoomKit::deliver)
+    /// delivers a request that names no strategy (RFC §22.2); `None`,
+    /// [`Immediate`](crate::Immediate). Shared, a [`Queued`](crate::Queued)
+    /// batches the kit's requests.
+    pub delivery_strategy: Option<Arc<dyn crate::DeliveryStrategy<S>>>,
+    /// Python `delivery_backend=None`: the persistent queue `deliver`
+    /// enqueues its requests in, which its worker executes (RFC §22.2),
+    /// started by [`RoomKit::start`](crate::RoomKit::start) and closed by
+    /// the kit's close; `None` executes each request in the call.
+    pub delivery_backend: Option<Arc<dyn crate::DeliveryBackend<S>>>,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -121,6 +131,8 @@ impl<S> RoomKitOptions<S> {
             identity_channel_types: None,
             identity_timeout: IDENTITY_TIMEOUT,
             task_runner: None,
+            delivery_strategy: None,
+            delivery_backend: None,
         }
     }
 }

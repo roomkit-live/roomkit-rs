@@ -121,6 +121,24 @@ fn status_level_serializes_to_python_s_values() {
     );
 }
 
+/// `roomkit.DeliveryItemStatus`'s members.
+#[test]
+fn delivery_item_status_serializes_to_python_s_values() {
+    use roomkit::DeliveryItemStatus;
+    serializes_to(
+        "roomkit.DeliveryItemStatus",
+        &[
+            ("PENDING", DeliveryItemStatus::Pending),
+            ("IN_PROGRESS", DeliveryItemStatus::InProgress),
+            ("DELIVERED", DeliveryItemStatus::Delivered),
+            ("FAILED", DeliveryItemStatus::Failed),
+            ("DEAD_LETTER", DeliveryItemStatus::DeadLetter),
+            ("BLOCKED", DeliveryItemStatus::Blocked),
+            ("UNKNOWN", DeliveryItemStatus::Unknown),
+        ],
+    );
+}
+
 /// `roomkit.Access`'s members.
 #[test]
 fn access_serializes_to_python_s_values() {

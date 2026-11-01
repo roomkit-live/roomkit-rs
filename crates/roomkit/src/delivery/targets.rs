@@ -7,11 +7,12 @@
 
 use roomkit_core::model::{
     ChannelCategory, ChannelId, ChannelType, DeliveryError, DeliveryResultStatus, EventStatus,
-    EventType, InboundMessage, Metadata, RoomId, TextContent,
+    EventType, InboundMessage, RoomId, TextContent,
 };
 use roomkit_core::rules::publications;
 
 use super::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
+use super::strategy::DeliveryContext;
 use crate::error::RoomKitError;
 use crate::inbound::{DeliveryHandle, InboundResult};
 use crate::kit::RoomKit;
@@ -21,25 +22,7 @@ use crate::store::ConversationStore;
 /// speaking, never a correspondent of the room's channel (RFC §10.4).
 pub(crate) const SYSTEM_SENDER_ID: &str = "system";
 
-/// One delivery request, its destination as resolved so far: Python's
-/// `DeliveryContext` without its kit and its voice sessions.
-#[derive(Clone, Debug)]
-pub(crate) struct Request {
-    pub(crate) room_id: RoomId,
-    pub(crate) content: String,
-    pub(crate) channel_id: Option<ChannelId>,
-    pub(crate) metadata: Metadata,
-    pub(crate) addressed_to: Option<Vec<ChannelId>>,
-    pub(crate) idempotency_key: Option<String>,
-    pub(crate) session_id: Option<String>,
-    pub(crate) chain_depth: u32,
-    pub(crate) instruction: bool,
-    /// Whether the call waits for the turn its publication asks for; a
-    /// batch a strategy delivers for others does not.
-    pub(crate) wait_for_turn: bool,
-}
-
-impl Request {
+impl<S> DeliveryContext<S> {
     /// Whether it is a keyed publication whose key names one publication in
     /// its room (RFC §22.1): a key, no explicit realtime session, and no
     /// instruction, which takes no key.
@@ -105,7 +88,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// duplicate.
     async fn replay_publication(
         &self,
-        request: &Request,
+        request: &DeliveryContext<S>,
     ) -> Result<Option<DeliveryOutcome>, RoomKitError> {
         let Some(key) = request
             .idempotency_key
@@ -153,7 +136,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// first, before any transport is resolved (RFC §22.1).
     pub(crate) async fn prepare_delivery(
         &self,
-        request: &Request,
+        request: &DeliveryContext<S>,
         channel_id: Option<ChannelId>,
     ) -> Result<Prepared, RoomKitError> {
         if channel_id.is_none()
@@ -211,7 +194,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// says not to; dropped meanwhile, it cancels that turn.
     pub(crate) async fn deliver_to_channel(
         &self,
-        request: &Request,
+        request: &DeliveryContext<S>,
         channel_id: ChannelId,
     ) -> Result<DeliveryOutcome, RoomKitError> {
         if let Some(published) = self.replay_publication(request).await? {
@@ -225,11 +208,21 @@ impl<S: ConversationStore> RoomKit<S> {
         let result = self
             .publish_delivery(message, &request.room_id, publishing)
             .await?;
-        let result = match result.delivery.clone() {
-            Some(delivery) if request.wait_for_turn => CancelOnDrop(Some(delivery)).wait().await?,
-            Some(_) | None => result,
+        let (result, waited) = match result.delivery.clone() {
+            Some(delivery) if request.wait_for_turn => {
+                (CancelOnDrop(Some(delivery)).wait().await?, true)
+            }
+            Some(_) | None => (result, false),
         };
-        Ok(text_outcome(result))
+        let outcome = text_outcome(result);
+        // A turn the call did not wait for is not complete at its
+        // decision, as the Python implementation reads `done` then, with
+        // nothing run in between; here the detached turn may have ended
+        // meanwhile.
+        Ok(DeliveryOutcome {
+            turn_complete: waited && outcome.turn_complete,
+            ..outcome
+        })
     }
 }
 
@@ -266,7 +259,10 @@ fn done(outcome: DeliveryOutcome) -> Prepared {
 /// publication namespace; and that stored key, which the pipeline admits
 /// on it alone. An instruction keeps its key as given, which the pipeline
 /// refuses (RFC §10.1.1).
-fn publication(request: &Request, channel_id: ChannelId) -> (InboundMessage, Option<String>) {
+fn publication<S>(
+    request: &DeliveryContext<S>,
+    channel_id: ChannelId,
+) -> (InboundMessage, Option<String>) {
     let stored = match &request.idempotency_key {
         Some(key) if !request.instruction => Some(publications::publication_key(key)),
         key => key.clone(),
@@ -391,5 +387,56 @@ fn with_inbound(outcome: DeliveryOutcome, result: InboundResult) -> DeliveryOutc
     DeliveryOutcome {
         inbound: Some(result),
         ..outcome
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use roomkit_core::model::{ChannelType, RoomId};
+
+    use super::*;
+    use crate::testing::{RecordingTransport, RecordingTransportOptions};
+    use crate::{AttachChannelOptions, CreateRoomOptions, DeliverOptions, RoomKitOptions};
+
+    // Python: tests/test_proactive_delivery.py::TestAKeyNamesOnePublicationInItsRoom::test_a_room_lock_held_past_process_timeout_refuses_the_publication
+    #[tokio::test]
+    async fn a_room_lock_held_past_process_timeout_refuses_the_publication() {
+        let kit = RoomKit::new(RoomKitOptions {
+            process_timeout: Duration::from_millis(50),
+            ..RoomKitOptions::default()
+        });
+        let (room, text) = (RoomId::new("r1").unwrap(), ChannelId::new("text").unwrap());
+        let transport = RecordingTransport::new(
+            text.clone(),
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        );
+        kit.register_channel(transport).unwrap();
+        let create = CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..CreateRoomOptions::default()
+        };
+        kit.create_room(create).await.unwrap();
+        kit.attach_channel(&room, &text, AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let held = kit.inner.locks.lock(&room).await;
+        let keyed = DeliverOptions {
+            idempotency_key: Some("k".to_owned()),
+            ..DeliverOptions::default()
+        };
+        let outcome = kit.deliver(&room, "done", keyed).await.unwrap();
+        drop(held);
+        assert_eq!(outcome.status, DeliveryOutcomeStatus::Blocked);
+        assert_eq!(outcome.reason.as_deref(), Some("process_timeout"));
+        let options = crate::store::ListEventsOptions::default();
+        let stored = kit.store().list_events(&room, options).await.unwrap();
+        let published = stored
+            .iter()
+            .filter(|event| event.source.participant_id.is_some());
+        assert_eq!(published.count(), 0);
+        kit.close().await.unwrap();
     }
 }

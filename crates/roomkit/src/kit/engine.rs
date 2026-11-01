@@ -208,6 +208,11 @@ impl<S: ConversationStore> HookEngine<S> {
         })
     }
 
+    /// The kit whose registry the engine reads.
+    pub(crate) fn kit(&self) -> &RoomKit<S> {
+        &self.kit
+    }
+
     /// Whether the engine takes and reads the hooks of `trigger`: every
     /// trigger's on the kit's side, a turn's on its executor's.
     fn sees(&self, trigger: HookTrigger) -> bool {
