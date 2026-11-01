@@ -36,6 +36,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as Python's does (RMK-1102).
 - A turn's link failure reads as Python's `TurnLinkError` says it, its
   reason no longer heading the message (RMK-1106).
+- Under the lock, a routed sender's record reads the room's whole timeline
+  for another sender on the channel, as Python's `_heard_from_other` does
+  (RMK-1071): a room that heard someone else there, however long ago, is
+  no longer the sender's.
+- An agent whose turn fails with its provider's explicit refusal reports
+  the refusal's code and `retryable` across the turn backend, as Python's
+  does (RMK-1085): a refusal declared not retryable reads so.
 
 - A store that keeps no private state of its own, the trait's provided
   `get_private_state` and `set_private_state` keeping it in the room's
