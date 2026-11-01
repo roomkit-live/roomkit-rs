@@ -19,7 +19,14 @@ const TOP: &[&str] = &[
     "steps",
     "expect",
 ];
-const SETUP: &[&str] = &["kit", "channels", "rooms", "hooks", "identity_hooks"];
+const SETUP: &[&str] = &[
+    "kit",
+    "channels",
+    "rooms",
+    "hooks",
+    "identity_hooks",
+    "identities",
+];
 const KIT: &[&str] = &[
     "max_chain_depth",
     "process_timeout_ms",
@@ -249,7 +256,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         ],
         other => {
             return crate::task_calls::arguments(other)
-                .or_else(|| crate::store_calls::arguments(other));
+                .or_else(|| crate::store_calls::arguments(other))
+                .or_else(|| crate::member_calls::arguments(other));
         }
     })
 }

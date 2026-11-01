@@ -186,6 +186,9 @@ pub(crate) async fn call(
         task if crate::task_calls::handles(task) => {
             crate::task_calls::call(run, task, spec).await?
         }
+        member if crate::member_calls::handles(member) => {
+            crate::member_calls::call(run, member, spec).await?
+        }
         _ => (lifecycle_call(run, name, spec).await?, None),
     })
 }

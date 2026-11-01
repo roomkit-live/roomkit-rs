@@ -21,6 +21,7 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         RoomKitError::ChannelNotRegistered(_) => named("channel_not_registered"),
         RoomKitError::ChannelNotFound { .. } => named("channel_not_bound"),
         RoomKitError::ParticipantNotFound { .. } => named("participant_not_found"),
+        RoomKitError::IdentityNotFound(_) => named("identity_not_found"),
         RoomKitError::RoomClosed { .. } => named("room_closed"),
         RoomKitError::ProcessTimeout { .. } => named("process_timeout"),
         RoomKitError::ReentryLoopCap(_) => named("reentry_loop_cap"),

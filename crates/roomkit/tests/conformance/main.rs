@@ -23,6 +23,7 @@ mod errors;
 mod harness;
 mod identity;
 mod matching;
+mod member_calls;
 mod normalize;
 mod run;
 mod scenarios;
