@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use roomkit::model::{ChannelId, EventId, RoomEvent, RoomId};
+use roomkit::model::{ChannelId, EventId, RoomContext, RoomEvent, RoomId};
 use roomkit::testing::EventTap;
 use roomkit::{ConversationStore, FrameworkEvent};
 use roomkit_ai::testing::ScriptedProvider;
@@ -139,6 +139,28 @@ impl Run {
 
     pub(crate) fn problem(&self, problem: String) {
         lock(&self.problems).push(problem);
+    }
+
+    /// The context a scripted channel's `deliver` or `on_event` (`call`)
+    /// was handed: the ids of its events, lifecycle records left out.
+    pub(crate) fn record_context(&self, call: &str, context: &RoomContext, channel_id: &ChannelId) {
+        if !self.recording.load(Ordering::SeqCst) {
+            return;
+        }
+        let recent: Vec<Value> = context
+            .recent_events
+            .iter()
+            .map(|event| serde_json::to_value(event).unwrap_or_default())
+            .filter(|event| !is_lifecycle_record(event))
+            .map(|event| event["id"].clone())
+            .collect();
+        lock(&self.observed)
+            .contexts
+            .entry(context.room.id.to_string())
+            .or_default()
+            .entry(channel_id.to_string())
+            .or_default()
+            .push(json!({ "call": call, "recent_events": recent }));
     }
 
     pub(crate) fn record(&self, kind: &str, event: &RoomEvent, channel_id: &ChannelId) {

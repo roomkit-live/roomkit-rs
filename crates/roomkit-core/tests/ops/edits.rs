@@ -228,16 +228,21 @@ mod an_accepted_edit {
         );
     }
 
-    /// The delivery reads the target as the commit left it.
+    /// The delivery reads the target as the commit left it, and the edit
+    /// itself as the newest event, as Python's broadcast context holds it.
     #[test]
     fn hands_its_readers_the_target_as_edited() {
         let mut sim = room();
         sim.echo_agent("ai", "Noted");
         sim.send(edit()).unwrap();
-        assert_eq!(sim.history_seen_by("ai"), ["I need 50000$"]);
+        assert_eq!(
+            sim.history_seen_by("ai"),
+            ["I need 50000$", "Correction: I need 50000$"]
+        );
     }
 
-    /// A later turn reads the corrected message and the correction.
+    /// A later turn reads the corrected message and the correction, then
+    /// its own message.
     #[test]
     fn leaves_a_later_turn_its_correction() {
         let mut sim = room();
@@ -246,7 +251,7 @@ mod an_accepted_edit {
         sim.send(Sim::message("wa", "Is it fine?")).unwrap();
         assert_eq!(
             sim.history_seen_by("ai"),
-            ["I need 50000$", "Correction: I need 50000$"]
+            ["I need 50000$", "Correction: I need 50000$", "Is it fine?"]
         );
     }
 
@@ -316,7 +321,7 @@ mod an_accepted_delete {
         let mut sim = room();
         sim.agent("ai", Box::new(|_, _| Ok(ChannelOutput::default())));
         sim.send(delete()).unwrap();
-        assert_eq!(sim.history_seen_by("ai"), [""]);
+        assert_eq!(sim.history_seen_by("ai"), ["", "[Message deleted]"]);
     }
 
     /// Gap G-062: a later turn reads the delete, never the deleted text.
@@ -326,7 +331,10 @@ mod an_accepted_delete {
         sim.agent("ai", Box::new(|_, _| Ok(ChannelOutput::default())));
         sim.send(delete()).unwrap();
         sim.send(Sim::message("wa", "Is it gone?")).unwrap();
-        assert_eq!(sim.history_seen_by("ai"), ["", "[Message deleted]"]);
+        assert_eq!(
+            sim.history_seen_by("ai"),
+            ["", "[Message deleted]", "Is it gone?"]
+        );
     }
 
     /// Gap G-062: the correction of a deleted message is withheld too.
@@ -339,7 +347,7 @@ mod an_accepted_delete {
         sim.send(Sim::message("wa", "Is it gone?")).unwrap();
         assert_eq!(
             sim.history_seen_by("ai"),
-            ["", "Correction: ", "[Message deleted]"]
+            ["", "Correction: ", "[Message deleted]", "Is it gone?"]
         );
     }
 
@@ -365,7 +373,7 @@ mod an_accepted_delete {
         let context = sim.async_contexts().last().copied().unwrap();
         assert_eq!(
             texts(&context.recent_events),
-            ["I need 5000$", "[Message deleted]"]
+            ["I need 5000$", "[Message deleted]", "Is it gone?"]
         );
     }
 

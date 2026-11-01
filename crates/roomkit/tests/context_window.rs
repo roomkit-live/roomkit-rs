@@ -3,9 +3,8 @@
 //! kit loads them (`_resolve_recent_events_limit`, probed in
 //! `tasks/probes/step5-lot5/py_context_window.py` on roomkit 38ef0625): the
 //! largest window a channel bound to the room declares, at least 50 while a
-//! hook is registered. Python's broadcast context holds the event it is
-//! about besides, which roomkit-rs's does not (`docs/rfc-gaps.md`, "Found
-//! in step 5, lot 5"): a reader counts one fewer here.
+//! hook is registered. A reader's broadcast context holds the event it is
+//! about besides, as Python's does (RMK-1070); a hook reads the window.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
@@ -157,17 +156,18 @@ async fn last_contexts(window: Option<usize>, hook: bool) -> (Option<usize>, Opt
 }
 
 /// RFC §10.1 step 3: the context holds the largest window a bound channel
-/// declares, at least 50 while a hook is registered.
+/// declares, at least 50 while a hook is registered, and a delivery's its
+/// event besides. Python: `tasks/probes/step5-lot5/py_context_window.out`.
 #[tokio::test]
 async fn a_room_s_context_holds_the_window_its_channels_declare() {
     // The reader's window, whether a hook is registered; what the reader
-    // and the hook read (Python's reader: one more, its event).
+    // and the hook read, Python's counts.
     let cases = [
-        (Some(3), false, (Some(3), None)),
-        (Some(3), true, (Some(50), Some(50))),
-        (Some(80), false, (Some(80), None)),
-        (Some(80), true, (Some(80), Some(80))),
-        (Some(0), true, (Some(50), Some(50))),
+        (Some(3), false, (Some(4), None)),
+        (Some(3), true, (Some(51), Some(50))),
+        (Some(80), false, (Some(81), None)),
+        (Some(80), true, (Some(81), Some(80))),
+        (Some(0), true, (Some(51), Some(50))),
         (None, true, (None, Some(50))),
     ];
     for (window, hook, expected) in cases {

@@ -143,13 +143,24 @@ impl PassResult {
     /// planned one, in the result and in the context the commit left: the
     /// index the store gave it is the event's (RFC §8.1), as the Python
     /// implementation's pipeline goes on with the event `commit_event`
-    /// returns.
+    /// returns. A delivered event joins its delivery set's context as its
+    /// newest event, after the window read before its commit, as Python's
+    /// broadcast context holds it.
     pub(super) fn adopt(&mut self, stored: RoomEvent) {
         match self {
-            Self::Delivered { event, changed, .. } => {
+            Self::Delivered {
+                event,
+                changed,
+                context,
+                ..
+            } => {
                 if let Some(changed) = changed {
                     super::commit::adopt(&mut changed.context, &stored);
                 }
+                context
+                    .recent_events
+                    .retain(|recent| recent.id != stored.id);
+                context.recent_events.push(stored.clone());
                 **event = stored;
             }
             Self::Blocked { event, .. } => **event = stored,

@@ -204,6 +204,8 @@ pub(crate) struct ScriptedChannel {
     addresses: Option<Value>,
     /// The rooms it streams in: every room when `None`.
     streams_in: Option<Vec<String>>,
+    /// How many of the room's latest events it declares it reads.
+    recent_events_window: usize,
 }
 
 impl ScriptedChannel {
@@ -254,6 +256,11 @@ impl ScriptedChannel {
                 .map(|rooms| serde_json::from_value(rooms.clone()))
                 .transpose()
                 .map_err(|e| e.to_string())?,
+            recent_events_window: spec
+                .get("recent_events_window")
+                .and_then(Value::as_u64)
+                .and_then(|window| usize::try_from(window).ok())
+                .unwrap_or(0),
         })
     }
 
@@ -360,6 +367,10 @@ impl Channel for ScriptedChannel {
         self.declaration.supports_streaming_delivery
     }
 
+    fn recent_events_window(&self) -> usize {
+        self.recent_events_window
+    }
+
     fn supports_streaming_delivery_for(&self, room_id: &RoomId) -> bool {
         match &self.streams_in {
             Some(rooms) => {
@@ -446,12 +457,13 @@ impl Channel for ScriptedChannel {
         &self,
         event: RoomEvent,
         _binding: ChannelBinding,
-        _context: RoomContext,
+        context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
         if self.declaration.category == ChannelCategory::Intelligence
             && let Some(run) = self.run.upgrade()
         {
             run.record("turns", &event, &self.declaration.channel_id);
+            run.record_context("on_event", &context, &self.declaration.channel_id);
         }
         self.react(&self.on_event, &event, true).await
     }
@@ -460,10 +472,11 @@ impl Channel for ScriptedChannel {
         &self,
         event: RoomEvent,
         _binding: ChannelBinding,
-        _context: RoomContext,
+        context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
         if let Some(run) = self.run.upgrade() {
             run.record("deliveries", &event, &self.declaration.channel_id);
+            run.record_context("deliver", &context, &self.declaration.channel_id);
         }
         self.react(&self.deliver, &event, false).await
     }

@@ -39,6 +39,7 @@ const CHANNEL: &[&str] = &[
     "max_tool_rounds",
     "addresses",
     "streams_in",
+    "recent_events_window",
 ];
 const ADDRESSES: &[&str] = &["normalizes", "conversation_key"];
 const MODEL: &[&str] = &["rounds"];
@@ -128,6 +129,7 @@ const EXPECT: &[&str] = &[
     "hooks",
     "hook_order",
     "deliveries",
+    "contexts",
     "turns",
     "observations",
     "tasks",

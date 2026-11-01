@@ -41,6 +41,9 @@ pub(crate) struct Observed {
     pub(crate) hooks: BTreeMap<String, Vec<Value>>,
     pub(crate) hook_order: Vec<String>,
     pub(crate) deliveries: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
+    /// Per room and scripted channel, the contexts its deliveries and its
+    /// turns were handed.
+    pub(crate) contexts: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     /// Per room and streaming channel, the items its `deliver_stream` read.
     pub(crate) streamed: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     pub(crate) turns: BTreeMap<String, BTreeMap<String, Vec<Value>>>,

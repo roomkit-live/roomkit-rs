@@ -155,6 +155,7 @@ impl Comparison<'_> {
         let expect = self.expect;
         for (kind, recorded) in [
             ("deliveries", &self.observed.deliveries),
+            ("contexts", &self.observed.contexts),
             ("streamed", &self.observed.streamed),
             ("turns", &self.observed.turns),
         ] {
