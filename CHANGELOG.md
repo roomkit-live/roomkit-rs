@@ -45,6 +45,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   while they run; `on_delivery_status` registers a handler of the status
   alone; `process_webhook` takes a `WebhookMeta` (`roomkit::providers::sms`)
   as a message received or a delivery status.
+- Identity resolution at step 5 of the inbound pipeline, as Python's
+  (RMK-1134): `RoomKitOptions::identity_resolver`, `identity_channel_types`
+  and `identity_timeout`, the `IdentityResolver` trait and
+  `MockIdentityResolver` (`roomkit::identity`), `kit.identity_hook` on
+  `ON_IDENTITY_AMBIGUOUS` and `ON_IDENTITY_UNKNOWN`, `IdentityResult`,
+  `IdentityHookResult`, `identity_enabled_for`, `identity_resolver`,
+  `identity_timeout`, `Channel::sender_is_participant`, the
+  `identity_resolved` and `identity_timeout` framework events, and the
+  sender's record written identified or pending under the room lock;
+  a resolver that fails fails the message, `RoomKitError::Identity`.
 - The inbound pipeline keeps what a channel's `handle_inbound` parsed, as
   Python's does (RMK-1083): the message's type, visibility, address,
   thread, idempotency key, depth, response scope and instant fill only the
