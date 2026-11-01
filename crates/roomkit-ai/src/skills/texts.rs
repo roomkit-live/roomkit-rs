@@ -29,6 +29,10 @@ pub(crate) const ACTIVATE_SKILL: &str = "activate_skill";
 /// The reference tool's name.
 pub(crate) const READ_SKILL_REFERENCE: &str = "read_skill_reference";
 
+/// The script tool's name: Python's, which roomkit-rs does not serve, yet
+/// reserves (RFC §24).
+pub(crate) const RUN_SKILL_SCRIPT: &str = "run_skill_script";
+
 /// What the model is told of `activate_skill`.
 pub(crate) const ACTIVATE_DESCRIPTION: &str = "Activate a skill to get its full instructions, \
 available scripts, and reference files. This is THE way to load a skill for use — do not fetch \

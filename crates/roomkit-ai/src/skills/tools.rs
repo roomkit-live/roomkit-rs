@@ -13,7 +13,7 @@ use super::files;
 use super::registry::SkillRegistry;
 use super::texts::{
     self, ACTIVATE_DESCRIPTION, ACTIVATE_SKILL, ACTIVE_HEADING, ALREADY_ACTIVE, PREAMBLE,
-    READ_DESCRIPTION, READ_SKILL_REFERENCE, quoted_name,
+    READ_DESCRIPTION, READ_SKILL_REFERENCE, RUN_SKILL_SCRIPT, quoted_name,
 };
 use crate::tools::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolResult};
 
@@ -59,6 +59,12 @@ impl SkillTools {
     pub(crate) fn active_names(&self, room: &RoomId) -> Vec<String> {
         self.lock().active(room)
     }
+
+    /// The names a channel given skills keeps for its own tools, as
+    /// Python's does: the two it serves and `run_skill_script`, which
+    /// Python serves with a script executor.
+    pub(crate) const RESERVED_NAMES: [&str; 3] =
+        [ACTIVATE_SKILL, READ_SKILL_REFERENCE, RUN_SKILL_SCRIPT];
 
     /// The two tools, as the reference implementation declares them.
     pub(crate) fn definitions() -> Vec<AiTool> {

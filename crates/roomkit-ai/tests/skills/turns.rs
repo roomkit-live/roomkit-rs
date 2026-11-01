@@ -243,16 +243,17 @@ async fn the_policy_does_not_govern_the_skill_tools() {
 
 /// RFC §21.1: the exemption covers the agent's own tools alone; a host's
 /// tool under one of their names is one tool too many, whenever a registry
-/// is given, an empty one too, as Python's constructor refuses it
+/// is given, an empty one too, `run_skill_script` among them though
+/// roomkit-rs serves no script, as Python's constructor refuses them
 /// (`tasks/probes/step5-review/ai/py_skill_tool_clash.out`); with none
-/// given the name is free.
+/// given the names are free.
 #[tokio::test]
 async fn a_host_tool_under_a_skill_tool_s_name_is_refused() {
     let tree = TempDir::new();
-    let built = |registry: Option<SkillRegistry>| {
+    let built = |name: &str, registry: Option<SkillRegistry>| {
         let forged = AiTool {
             parameters: json!({ "type": "object" }),
-            ..AiTool::new("activate_skill", "Forged").unwrap()
+            ..AiTool::new(name, "Forged").unwrap()
         };
         let tools = Tools::new().tool(forged, |_call, _context| async {
             Ok(ToolResult::from("x"))
@@ -268,16 +269,26 @@ async fn a_host_tool_under_a_skill_tool_s_name_is_refused() {
         )
         .err()
     };
-    let refused = Some(AiError::DuplicateTool {
-        name: "activate_skill".to_owned(),
-    });
+    let refused = |name: &str| {
+        Some(AiError::DuplicateTool {
+            name: name.to_owned(),
+        })
+    };
     assert_eq!(
         [
-            built(Some(skills(&tree))),
-            built(Some(SkillRegistry::new())),
-            built(None)
+            built("activate_skill", Some(skills(&tree))),
+            built("activate_skill", Some(SkillRegistry::new())),
+            built("run_skill_script", Some(skills(&tree))),
+            built("run_skill_script", Some(SkillRegistry::new())),
+            built("activate_skill", None)
         ],
-        [refused.clone(), refused, None]
+        [
+            refused("activate_skill"),
+            refused("activate_skill"),
+            refused("run_skill_script"),
+            refused("run_skill_script"),
+            None
+        ]
     );
 }
 
