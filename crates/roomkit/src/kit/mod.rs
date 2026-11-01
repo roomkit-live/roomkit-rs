@@ -21,6 +21,7 @@
 mod background;
 mod bindings;
 mod engine;
+mod ephemeral;
 mod events;
 mod inject;
 mod options;
@@ -50,6 +51,10 @@ use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookSubject, HookTrigger};
 
 pub use self::engine::{HasHooksOptions, HookEngine};
+pub use self::ephemeral::{
+    PublishPresenceOptions, PublishReactionOptions, PublishReadReceiptOptions,
+    PublishToolCallOptions, PublishTypingOptions, SubscribeRoomOptions,
+};
 use self::inject::Entered;
 pub use self::options::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
@@ -162,6 +167,8 @@ pub(crate) struct Inner<S> {
     /// Set once the kit's close released its store: a read the store then
     /// fails answers that the kit is closed.
     store_released: AtomicBool,
+    /// The backend of the kit's ephemeral events (RFC §8.4).
+    pub(crate) realtime: Arc<dyn crate::realtime::RealtimeBackend>,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -188,6 +195,7 @@ impl<S: ConversationStore> RoomKit<S> {
             max_chain_depth,
             agent_response_policy,
             process_timeout,
+            realtime,
         } = options;
         let mut config = KitConfig::new();
         config.max_chain_depth = max_chain_depth;
@@ -212,6 +220,8 @@ impl<S: ConversationStore> RoomKit<S> {
             channels_closed: tokio::sync::OnceCell::new(),
             shutdown: shutdown::Shutdown::default(),
             store_released: AtomicBool::new(false),
+            realtime: realtime
+                .unwrap_or_else(|| Arc::new(crate::realtime::InMemoryRealtime::default())),
         });
         Self { inner }
     }

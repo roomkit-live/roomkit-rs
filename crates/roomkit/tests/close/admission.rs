@@ -20,9 +20,9 @@ use roomkit::{
     GetTimelineOptions, HookExecution, HookFuture, HookHandler, HookOptions, HookTrigger,
     InMemoryStore, ListBindingsOptions, ListMembersOptions, ListReadMarkersOptions,
     MarkAllReadOptions, MarkReadOptions, MuteOptions, PauseRoomOptions, PostOptions,
-    ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitError,
-    SendEventOptions, SetAccessOptions, SetVisibilityOptions, ToolCallEvent, UnmuteOptions,
-    UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
+    ProcessInboundOptions, PublishTypingOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit,
+    RoomKitError, SendEventOptions, SetAccessOptions, SetVisibilityOptions, SubscribeRoomOptions,
+    ToolCallEvent, UnmuteOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
 use roomkit_core::ops::ChannelConfig;
 use tokio::sync::Notify;
@@ -131,6 +131,20 @@ async fn the_kit_s_read_markers<S: ConversationStore>(
                     MarkReadOptions::default(),
                 )
                 .await,
+            ),
+        ),
+        (
+            "publish_typing",
+            refused(
+                kit.publish_typing(&r, "u1", PublishTypingOptions::default())
+                    .await,
+            ),
+        ),
+        (
+            "subscribe_room",
+            refused(
+                kit.subscribe_room(&r, |_| async {}, SubscribeRoomOptions::default())
+                    .await,
             ),
         ),
         (
@@ -805,4 +819,26 @@ async fn a_send_meeting_the_close_s_refusal_reads_its_code() {
             Some(("kit_closed".to_owned(), true))
         ))
     );
+}
+
+/// RFC §12.10.4: `unsubscribe_room`, a teardown call, returns `false`
+/// doing nothing once the close started, the close ending every
+/// subscription (Python's `_TEARDOWN`, `unsubscribe_room` answering
+/// `False`).
+#[tokio::test(start_paused = true)]
+async fn an_unsubscribe_once_the_close_started_returns_false() {
+    let held = Holding::new("ws", [("held", Hold::UntilReleased)]);
+    let kit = kit_of(InMemoryStore::default(), &[&held], &["r"]).await;
+    let id = kit
+        .subscribe_room(&room("r"), |_| async {}, SubscribeRoomOptions::default())
+        .await
+        .unwrap();
+    a_send_held(&kit, &held, "r").await;
+    let close = closing(&kit).await;
+
+    let during = kit.unsubscribe_room(&id).await;
+    held.release.notify_one();
+    closed(close).await;
+
+    assert_eq!((during, kit.unsubscribe_room(&id).await), (false, false));
 }

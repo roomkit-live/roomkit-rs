@@ -31,6 +31,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `hook_timeout` framework event, SYNC and ASYNC, in the agent's room and
   channel, as Python does (RFC §8.2, RMK-1086); it was only logged.
 
+- Ephemeral events as Python's (RFC §8.4, RMK-1113): `roomkit::realtime`
+  with `EphemeralEvent`, `EphemeralEventType`, the `RealtimeBackend` trait
+  and `InMemoryRealtime`, a queue of at most `max_queue_size` events per
+  subscription, the oldest dropped past it; `RoomKitOptions::realtime`,
+  `RoomKit::realtime`, `publish_typing`, `publish_presence`,
+  `publish_read_receipt`, `publish_reaction`, `publish_tool_call`,
+  `subscribe_room` and `unsubscribe_room`, each for the organization a call
+  names. The kit's close ends its subscriptions.
+
 - The store's writes and tasks as Python's (RMK-1113):
   `ConversationStore::update_room_if`, the compare-and-set of a timer
   transition, `record_delivery_results`, the one write of an event's

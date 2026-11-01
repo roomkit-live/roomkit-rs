@@ -46,6 +46,7 @@ roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skill
 roomkit_openai = ["roomkit.providers.openai"]
 roomkit_mcp = ["roomkit.tools"]
 roomkit_sqlite = ["roomkit", "roomkit.store"]
+"roomkit::realtime" = ["roomkit.realtime"]
 
 # The Rust types a Python builtin stands for (decision 4; the architecture
 # table's "Types and values" and "Errors"), by path: the strong ids, values
@@ -370,6 +371,11 @@ approved = "2026-10-27"
 reason = "RoomKit(store=SomeStore()): the store is the kit's type parameter, which a struct update cannot change"
 
 [[exception]]
+rust = "roomkit::realtime::RealtimeFuture"
+approved = "2026-11-01"
+reason = "the kit holds its realtime backend as a trait object, as its router: RealtimeBackend's methods return a boxed future (architecture: the Python names table)"
+
+[[exception]]
 rust = "roomkit::RouterFuture"
 approved = "2026-10-27"
 reason = "the kit holds its router as a trait object: InboundRoomRouter::route returns a boxed future"
@@ -536,15 +542,6 @@ reason = "not in 0.x: identity resolution and verification"
 [[missing]]
 python = "roomkit.RoomKit"
 members = [
-    "publish_presence", "publish_reaction", "publish_read_receipt",
-    "publish_tool_call", "publish_typing", "realtime", "subscribe_room",
-    "unsubscribe_room",
-]
-reason = "not in 0.x: ephemeral events"
-
-[[missing]]
-python = "roomkit.RoomKit"
-members = [
     "add_room_recording_track", "room_recordings", "start_room_recording",
     "stop_room_recording",
 ]
@@ -594,7 +591,7 @@ reason = "not in 0.x: voice and video"
 [[missing]]
 python = "roomkit.RoomKit.__init__"
 params = [
-    "identity_resolver", "identity_channel_types", "lock_manager", "realtime",
+    "identity_resolver", "identity_channel_types", "lock_manager",
     "identity_timeout", "stt", "tts", "voice", "task_runner",
     "delivery_strategy", "delivery_backend", "status_bus", "telemetry",
     "inbound_rate_limit", "orchestration", "persistence_policy",

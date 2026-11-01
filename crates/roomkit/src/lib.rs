@@ -61,6 +61,7 @@ mod inbound;
 mod kit;
 mod locks;
 mod queues;
+pub mod realtime;
 mod registered;
 mod router;
 mod sends;
@@ -142,6 +143,10 @@ pub use self::kit::{
     UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
 pub use self::kit::{ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions};
+pub use self::kit::{
+    PublishPresenceOptions, PublishReactionOptions, PublishReadReceiptOptions,
+    PublishToolCallOptions, PublishTypingOptions, SubscribeRoomOptions,
+};
 pub use self::registered::RegisteredChannel;
 pub use self::router::{
     ChannelOf, DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, InboundRoomRouter,

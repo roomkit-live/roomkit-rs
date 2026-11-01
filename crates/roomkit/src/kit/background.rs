@@ -142,6 +142,9 @@ impl<S: ConversationStore> RoomKit<S> {
         turns.close();
         self.unwind_turns().await;
         let failures = self.inner.close_channels().await;
+        // Its subscriptions end with the channels, as the Python
+        // implementation's close releases its realtime backend.
+        self.inner.realtime.close().await;
         // What the channels' closes started is cut, its grace over.
         tasks.cut();
         self.unwind().await;

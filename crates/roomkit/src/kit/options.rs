@@ -65,6 +65,10 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// count against it, the wait for the event's turn in the room's
     /// delivery lane, after the commit, does not (gap G-068).
     pub process_timeout: Duration,
+    /// Python `realtime=None`: the backend of the kit's ephemeral events
+    /// (RFC §8.4), an [`InMemoryRealtime`](crate::realtime::InMemoryRealtime)
+    /// by default; the kit's close closes it.
+    pub realtime: Option<Arc<dyn crate::realtime::RealtimeBackend>>,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -85,6 +89,7 @@ impl<S> RoomKitOptions<S> {
             max_chain_depth: MAX_CHAIN_DEPTH,
             agent_response_policy: AgentResponsePolicy::AgentChain,
             process_timeout: PROCESS_TIMEOUT,
+            realtime: None,
         }
     }
 }
@@ -97,6 +102,7 @@ impl<S> fmt::Debug for RoomKitOptions<S> {
             .field("max_chain_depth", &self.max_chain_depth)
             .field("agent_response_policy", &self.agent_response_policy)
             .field("process_timeout", &self.process_timeout)
+            .field("realtime", &self.realtime.is_some())
             .finish_non_exhaustive()
     }
 }

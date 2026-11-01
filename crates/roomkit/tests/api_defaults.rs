@@ -172,6 +172,55 @@ fn get_room_options_defaults_as_python() {
 }
 
 #[test]
+fn ephemeral_options_default_as_python() {
+    let typing = roomkit::PublishTypingOptions::default();
+    // roomkit.RoomKit.publish_typing(is_typing) = True
+    assert!(typing.is_typing);
+    // roomkit.RoomKit.publish_typing(data) = None
+    assert!(typing.data.is_none());
+    // roomkit.RoomKit.publish_typing(organization_id) = None
+    assert!(typing.organization_id.is_none());
+    // roomkit.RoomKit.publish_presence(organization_id) = None
+    assert!(
+        roomkit::PublishPresenceOptions::default()
+            .organization_id
+            .is_none()
+    );
+    // roomkit.RoomKit.publish_read_receipt(organization_id) = None
+    assert!(
+        roomkit::PublishReadReceiptOptions::default()
+            .organization_id
+            .is_none()
+    );
+    let reaction = roomkit::PublishReactionOptions::default();
+    // roomkit.RoomKit.publish_reaction(action) = 'add'
+    assert_eq!(reaction.action, "add");
+    // roomkit.RoomKit.publish_reaction(organization_id) = None
+    assert!(reaction.organization_id.is_none());
+    let tool_call = roomkit::PublishToolCallOptions::default();
+    // roomkit.RoomKit.publish_tool_call(event_type) = <EphemeralEventType.TOOL_CALL_START: 'tool_call_start'>
+    assert_eq!(
+        tool_call.event_type,
+        roomkit::realtime::EphemeralEventType::ToolCallStart
+    );
+    // roomkit.RoomKit.publish_tool_call(duration_ms) = None
+    assert!(tool_call.duration_ms.is_none());
+    // roomkit.RoomKit.publish_tool_call(organization_id) = None
+    assert!(tool_call.organization_id.is_none());
+    // roomkit.RoomKit.subscribe_room(organization_id) = None
+    assert!(
+        roomkit::SubscribeRoomOptions::default()
+            .organization_id
+            .is_none()
+    );
+    // roomkit.realtime.InMemoryRealtime.__init__(max_queue_size) = 100
+    assert_eq!(
+        roomkit::realtime::InMemoryRealtimeOptions::default().max_queue_size,
+        100
+    );
+}
+
+#[test]
 fn read_marker_options_default_as_python() {
     // roomkit.RoomKit.mark_read(organization_id) = None
     assert!(
@@ -362,6 +411,8 @@ fn room_kit_options_defaults_as_python() {
     assert_eq!(defaults.max_chain_depth, 5);
     // roomkit.RoomKit.__init__(process_timeout) = 30.0
     assert_eq!(defaults.process_timeout, Duration::from_secs(30));
+    // roomkit.RoomKit.__init__(realtime) = None
+    assert!(defaults.realtime.is_none());
     // roomkit.RoomKit.__init__(store) = None
     let store: Arc<InMemoryStore> = defaults.store;
     assert_eq!(Arc::strong_count(&store), 1);
