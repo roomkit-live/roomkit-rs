@@ -27,8 +27,7 @@
 //! ```no_run
 //! use roomkit::RoomKit;
 //! use roomkit::model::ChannelId;
-//! use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-//! use roomkit_ai::{AiChannel, AiChannelOptions, ToolEntry};
+//! use roomkit_ai::{AiChannel, AiChannelOptions, MockAiProvider, MockAiProviderOptions, ToolEntry};
 //! use roomkit_mcp::{AsToolHandlerOptions, FromCommandOptions, McpToolProvider};
 //!
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -41,7 +40,7 @@
 //! };
 //! let files = McpToolProvider::from_command("npx", options)?;
 //! files.connect().await?;
-//! let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
+//! let model = MockAiProvider::new(MockAiProviderOptions::default());
 //! let options = AiChannelOptions {
 //!     tools: files.get_tools()?.into_iter().map(ToolEntry::from).collect(),
 //!     tool_handler: Some(files.as_tool_handler(AsToolHandlerOptions::default())?),

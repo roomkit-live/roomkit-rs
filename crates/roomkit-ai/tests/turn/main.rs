@@ -7,6 +7,7 @@
 mod bounds;
 mod history;
 mod intents;
+mod mock;
 mod servers;
 mod support;
 use std::sync::{Arc, Mutex};

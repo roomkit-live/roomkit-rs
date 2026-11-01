@@ -686,6 +686,13 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Added
 
+- **`MockAiProvider`, Python's `MockAIProvider`** (`roomkit_ai`):
+  `MockAiProvider::new(MockAiProviderOptions { responses, vision,
+  ai_responses, streaming })` answers its texts round-robin (`Hello from
+  AI` without any), or its whole responses in their place, keeps each
+  context it is asked (`calls()`), and names itself `MockAIProvider`, its
+  model `mock`. The scripted provider (`roomkit_ai::testing`) is hidden, a
+  seam of roomkit-rs's own tests.
 - **The tool loop's bounds of Appendix A.9**, as Python's `AIChannel`:
   `AiChannelOptions::tool_loop_timeout` (300 s by default; `None` or zero
   sets none) is read between rounds, the loop ending `timeout` before the

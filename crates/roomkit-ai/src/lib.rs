@@ -9,7 +9,7 @@
 //!   [`AiContext`] in, an [`AiResponse`] out, or its structured stream of
 //!   [`StreamEvent`]s (text, calls, the end), which the tool loop reads.
 //!   `roomkit-openai` implements it for OpenAI-compatible endpoints;
-//!   [`testing::ScriptedProvider`] answers from a script.
+//!   [`MockAiProvider`], Python's `MockAIProvider`, answers from a list.
 //! - [`AiTool`], [`ToolHandler`], [`Tool`] and [`ToolEntry`]: the tools a
 //!   channel declares, the handler serving them by name, and the tools that
 //!   serve themselves; an MCP server gives its tools and its handler
@@ -30,8 +30,10 @@
 //! ```
 //! use roomkit::RoomKit;
 //! use roomkit::model::ChannelId;
-//! use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-//! use roomkit_ai::{AiChannel, AiChannelOptions, AiTool, ToolHandler, ToolPolicy, ToolResult};
+//! use roomkit_ai::{
+//!     AiChannel, AiChannelOptions, AiTool, MockAiProvider, MockAiProviderOptions, ToolHandler,
+//!     ToolPolicy, ToolResult,
+//! };
 //! use serde_json::json;
 //!
 //! let lookup = AiTool {
@@ -41,7 +43,10 @@
 //! let handler = ToolHandler::new(|_name, _arguments| async {
 //!     Ok(ToolResult::Json(json!({ "status": "shipped" })))
 //! });
-//! let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
+//! let model = MockAiProvider::new(MockAiProviderOptions {
+//!     responses: vec!["Hello.".into()],
+//!     ..MockAiProviderOptions::default()
+//! });
 //! let options = AiChannelOptions {
 //!     system_prompt: Some("You answer a shop's customers.".into()),
 //!     tools: vec![lookup.into()],
@@ -61,12 +66,14 @@
 mod channel;
 mod error;
 mod images;
+mod mock;
 mod provider;
 pub use images::ImageResolver;
 mod rows;
 mod server_instructions;
 mod skills;
 mod stream;
+#[doc(hidden)]
 pub mod testing;
 mod texts;
 mod tool_loop;
@@ -74,6 +81,7 @@ mod tools;
 
 pub use self::channel::{AiChannel, AiChannelOptions};
 pub use self::error::AiError;
+pub use self::mock::{MockAiProvider, MockAiProviderOptions};
 #[doc(hidden)]
 pub use self::provider::read_tool_calls;
 pub use self::provider::{

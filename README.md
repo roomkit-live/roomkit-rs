@@ -132,7 +132,7 @@ A service depends on `roomkit` and on the crates it needs beside it:
 - `roomkit-ai`: `AiChannel`, Python's `AIChannel`, the AI channel over any
   `AiProvider`: the tool loop, `AiTool`, `ToolHandler`, `Tool` and
   `ToolPolicy`, streamed answers, skills from the host's directories, an
-  MCP server's instructions, and a scripted provider for tests.
+  MCP server's instructions, and `MockAiProvider`, Python's mock, for tests.
 - `roomkit-openai`: `OpenAiAiProvider`, Python's `OpenAIAIProvider`, the
   provider of an OpenAI-compatible Chat Completions endpoint, or stateless
   Responses with `OpenAiConfig { api: OpenAiApi::Responses, .. }` on `main`

@@ -17,11 +17,11 @@ pub use self::context::{
     AiToolCallPart, AiToolResultPart,
 };
 pub use self::error::{ProviderError, ProviderErrorOptions};
-pub(crate) use self::response::ran_out_of_room;
 pub use self::response::{
     AiResponse, AiToolCall, StreamDone, StreamEvent, StreamTextDelta, StreamToolCall,
     read_tool_calls, tool_arguments,
 };
+pub(crate) use self::response::{ran_out_of_room, response_events};
 use crate::stream::{Yielder, items, next};
 
 /// The events of one generation, as a structured stream reads them: text
@@ -118,7 +118,7 @@ pub trait AiProvider: Send + Sync + 'static {
             move |out: Yielder<Result<StreamEvent, ProviderError>>| async move {
                 match response.await {
                     Ok(response) => {
-                        for event in response::response_events(response) {
+                        for event in response_events(response) {
                             out.give(Ok(event)).await;
                         }
                     }
