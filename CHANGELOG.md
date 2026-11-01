@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `TurnTimeouts::silent_intervals` rounds a half to the even neighbour, as
+  Python's `round` (RMK-1093): a 5 s heartbeat timeout over a 2 s interval
+  is 2 silent intervals, no longer 3; the accept bound counts alike.
+- `current_turn_host()` is `None` for a host that can no longer reach its
+  owner, a host whose kit is gone, as Python's (RMK-1094).
 - The inbound pipeline keeps what a channel's `handle_inbound` parsed, as
   Python's does (RMK-1083): the message's type, visibility, address,
   thread, idempotency key, depth, response scope and instant fill only the
