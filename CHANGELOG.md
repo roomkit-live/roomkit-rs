@@ -20,6 +20,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   told; calls at once cancel it once; an ended task, an inline one, and one
   of another organization's room are left as they stand. A submit the
   runner refuses ends its task failed.
+- `AiChannel` reads a round as Python's (RFC §6.4, §21.1): a call's
+  arguments are repaired before their schema check, a hub tool's hoisted
+  keys folded into `params` and a quoted primitive read as its declared
+  type (RMK-1084); each tool result says whether its call failed
+  (`is_error`, in its turn and replayed, RMK-1075); a call with no id gets
+  `call_<name>_<hex>` (RMK-1074); a stream that ends without its done event
+  completes its round (RMK-1092); a refusal's words escape what is past
+  ASCII, as `json.dumps` writes them.
 - `TurnHost::delegate`, `wait_task` and `room_tasks`, Python's (RFC
   §10.6.5, RMK-1145): a background delegation from the turn's room, its
   result continuing the turn's chain, the tasks the room's hosts delegated
