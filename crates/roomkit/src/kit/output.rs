@@ -1,6 +1,9 @@
 //! A channel's speech output in a room (RFC §5.7 `output_muted`): muted, a
 //! speech-to-speech provider's audio is not forwarded and injected text is
-//! not spoken, while the channel still receives every event.
+//! not spoken, while the channel still receives every event. roomkit-rs
+//! has no speech channel yet, and a channel is not told of the change
+//! (Python's `Channel.update_binding` is not in 0.x): the binding holds the
+//! flag for whoever reads it.
 
 use roomkit_core::model::{BindingUpdate, ChannelBinding, ChannelId, RoomId};
 
@@ -38,8 +41,9 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::RoomNotFound`] when the room does not exist
-    /// or is not of the organization `options` names, and
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4); [`RoomKitError::RoomNotFound`] when the room does not
+    /// exist or is not of the organization `options` names; and
     /// [`RoomKitError::ChannelNotFound`] when the room does not bind the
     /// channel.
     pub async fn mute_output(

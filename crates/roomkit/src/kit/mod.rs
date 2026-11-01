@@ -48,7 +48,7 @@ use roomkit_core::ops::{
     Entry, Environment, FrameworkEvent as CoreEvent, Inbound, InboundTarget, KitConfig,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
-use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookSubject, HookTrigger};
+use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookSubject, HookTrigger, Removed};
 
 pub use self::engine::{HasHooksOptions, HookEngine};
 pub use self::ephemeral::{
@@ -138,6 +138,9 @@ pub(crate) struct Inner<S> {
     channel_order: RwLock<Vec<ChannelId>>,
     /// The handlers of the hooks, by the payload their trigger hands them.
     pub(crate) hooks: RwLock<HashMap<HookId, Kept>>,
+    /// The hooks removed whose handler an operation that read the registry
+    /// before the removal may still ask for (`engine`).
+    retired_hooks: RwLock<Vec<Removed>>,
     /// The routing strategy (RFC §10.4), fixed at the kit's construction.
     router: Arc<dyn InboundRoomRouter>,
     pub(crate) store: Arc<S>,
@@ -206,6 +209,7 @@ impl<S: ConversationStore> RoomKit<S> {
             channels: RwLock::new(HashMap::new()),
             channel_order: RwLock::new(Vec::new()),
             hooks: RwLock::new(HashMap::new()),
+            retired_hooks: RwLock::new(Vec::new()),
             router: inbound_router.unwrap_or_else(|| default_router(&store, kit)),
             store,
             locks: RoomMutexes::default(),
@@ -522,7 +526,8 @@ impl<S> Inner<S> {
 
     /// The handler of `hook`, whatever its payload, and its registration.
     pub(crate) fn hook_with_spec(&self, hook: HookId) -> Option<(Kept, HookSpec)> {
-        let spec = read(&self.config).hooks.get(hook).cloned()?;
+        let held = read(&self.config).hooks.get(hook).cloned();
+        let spec = held.or_else(|| self.retired_spec(hook))?;
         Some((self.kept_hook(hook)?, spec))
     }
 

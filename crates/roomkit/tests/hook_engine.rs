@@ -7,7 +7,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use pretty_assertions::assert_eq;
-use roomkit::model::hook::BlockOptions;
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{
     ChannelId, ChannelType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
@@ -321,5 +321,81 @@ async fn the_turn_executor_s_engine_reads_the_turn_s_hooks_alone() {
             true,
             true
         )
+    );
+}
+
+/// A hook removed while an operation that read it runs: the operation runs
+/// the hook it read, as Python's chain runs the list it took, and reports
+/// no failure of it (the review of stream B, finding 1).
+#[tokio::test]
+async fn a_hook_removed_while_its_chain_runs_runs_as_it_was_read() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use roomkit::AddRoomHookOptions;
+    use tokio::sync::{Notify, oneshot};
+
+    let kit = kit_with_room().await;
+    let (entered, held) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (entered_by, held_by) = (Arc::clone(&entered), Arc::clone(&held));
+    let slow = AddRoomHookOptions {
+        name: "slow".to_owned(),
+        ..Default::default()
+    };
+    kit.add_room_hook(
+        &room("r1"),
+        HookTrigger::BeforeBroadcast,
+        HookExecution::Sync,
+        move |_event: RoomEvent, _context: RoomContext| {
+            let (entered, held) = (Arc::clone(&entered_by), Arc::clone(&held_by));
+            async move {
+                entered.notify_one();
+                held.notified().await;
+            }
+        },
+        slow,
+    )
+    .await
+    .unwrap();
+    let ran = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&ran);
+    let guard = AddRoomHookOptions {
+        name: "guard".to_owned(),
+        priority: 1,
+        fail_closed: true,
+        ..Default::default()
+    };
+    kit.add_room_hook(
+        &room("r1"),
+        HookTrigger::BeforeBroadcast,
+        HookExecution::Sync,
+        move |_event: RoomEvent, _context: RoomContext| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            async { HookResult::allow(AllowOptions::default()) }
+        },
+        guard,
+    )
+    .await
+    .unwrap();
+    let (sent, blocked) = oneshot::channel();
+    let sender = kit.clone();
+    tokio::spawn(async move {
+        sent.send(send(&sender, "hello").await).ok();
+    });
+    entered.notified().await;
+    let removed = kit
+        .remove_room_hook(
+            &room("r1"),
+            "guard",
+            roomkit::RemoveRoomHookOptions::default(),
+        )
+        .await
+        .unwrap();
+    held.notify_one();
+    let blocked = blocked.await.unwrap();
+    kit.close().await.unwrap();
+    assert_eq!(
+        (removed, blocked, ran.load(Ordering::SeqCst)),
+        (true, false, 1)
     );
 }

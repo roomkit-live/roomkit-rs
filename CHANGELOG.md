@@ -26,6 +26,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   says whether the room held one. A room's hooks run for its events and its
   turns' tool calls alone, beside the kit's, by priority, the kit's first at
   equal priority; a name is unique within the room and may be the kit's.
+  A hook removed or replaced while an operation that read it still runs is
+  run by that operation, as Python's chain runs the hooks it took.
 
 - A `BEFORE_TOOL_USE` or `ON_TOOL_CALL` hook past its timeout emits the
   `hook_timeout` framework event, SYNC and ASYNC, in the agent's room and

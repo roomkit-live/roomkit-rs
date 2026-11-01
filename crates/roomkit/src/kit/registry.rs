@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use roomkit_core::model::{ChannelId, RoomContext};
 use roomkit_core::ops::FrameworkEvent as CoreEvent;
-use roomkit_core::rules::hook_registry::{HookTrigger, RegistrationError};
+use roomkit_core::rules::hook_registry::HookTrigger;
 
 use super::{RoomKit, read, write};
 use crate::channel::{Channel, DynChannel, config_of};
@@ -191,25 +191,8 @@ impl<S: ConversationStore> RoomKit<S> {
         options: HookOptions,
     ) -> Result<(), RoomKitError> {
         self.inner.open()?;
-        let spec = options.spec(trigger);
-        if !P::accepts(trigger) {
-            return Err(RegistrationError::PayloadMismatch {
-                hook: spec.name,
-                trigger,
-            }
-            .into());
-        }
         let handler: Arc<dyn HookHandler<P>> = Arc::new(handler);
-        let kept = P::kept(handler);
-        self.inner.try_change_config(|config| {
-            let id = if trigger.is_tool_trigger() {
-                config.hooks.register_tool_hook(spec)?
-            } else {
-                config.hooks.register(spec)?
-            };
-            // The handler is in place before an operation can see the hook.
-            write(&self.inner.hooks).insert(id, kept);
-            Ok::<(), RoomKitError>(())
-        })
+        let hook = options.registration(trigger, P::kept(handler));
+        self.hook_engine().register(hook).map(drop)
     }
 }

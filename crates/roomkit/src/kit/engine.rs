@@ -5,10 +5,10 @@
 
 use roomkit_core::model::RoomId;
 use roomkit_core::rules::hook_registry::{
-    HookId, HookRegistry, HookSpec, HookTrigger, RegistrationError,
+    HookId, HookRegistry, HookSpec, HookTrigger, RegistrationError, Removed,
 };
 
-use super::{RoomKit, read, write};
+use super::{Inner, RoomKit, read, write};
 use crate::error::RoomKitError;
 use crate::hooks::HookRegistration;
 use crate::store::{ConversationStore, InMemoryStore};
@@ -25,7 +25,10 @@ use crate::store::{ConversationStore, InMemoryStore};
 ///   executor's engine does.
 ///
 /// Its calls read no room and are taken during the kit's close and after
-/// it, as Python's engine takes them. Cloning it is cheap.
+/// it, as Python's engine takes them. Cloning it is cheap. It holds the
+/// kit: a hook that registers hooks keeps a
+/// [`WeakRoomKit`](crate::WeakRoomKit) and takes the engine from it, or the
+/// kit and its hooks hold each other (decision 18).
 pub struct HookEngine<S = InMemoryStore> {
     kit: RoomKit<S>,
     /// Whether it is the turn executor's side: the triggers a turn fires.
@@ -235,7 +238,7 @@ impl<S: ConversationStore> HookEngine<S> {
         register: impl FnOnce(
             &mut HookRegistry,
             HookSpec,
-        ) -> Result<(HookId, Option<HookId>), RegistrationError>,
+        ) -> Result<(HookId, Option<Removed>), RegistrationError>,
     ) -> Result<HookRegistration, RoomKitError> {
         let spec = hook.spec();
         if !hook.takes_its_payload() {
@@ -247,31 +250,56 @@ impl<S: ConversationStore> HookEngine<S> {
         }
         let kept = hook.r#fn;
         let inner = &self.kit.inner;
-        let held = inner.try_change_config(|config| {
+        let (held, replaced) = inner.try_change_config(|config| {
             let (id, replaced) = register(&mut config.hooks, spec.clone())?;
             // The handler is in place before an operation can see the hook.
-            let mut handlers = write(&inner.hooks);
-            if let Some(replaced) = replaced {
-                handlers.remove(&replaced);
-            }
-            handlers.insert(id, kept.clone());
-            Ok::<Option<HookSpec>, RoomKitError>(config.hooks.get(id).cloned())
+            write(&inner.hooks).insert(id, kept.clone());
+            let held = config.hooks.get(id).cloned();
+            Ok::<_, RoomKitError>((held, replaced))
         })?;
+        inner.retire(replaced);
         Ok(HookRegistration::held(held.unwrap_or(spec), kept))
     }
 
-    /// Removes the hook `remove` takes out of the registry, and its
-    /// handler; whether there was one.
-    fn removed(&self, remove: impl FnOnce(&mut HookRegistry) -> Option<HookId>) -> bool {
+    /// Removes the hook `remove` takes out of the registry; whether there
+    /// was one. Its handler is retired: an operation that read the
+    /// registry before may still run it.
+    fn removed(&self, remove: impl FnOnce(&mut HookRegistry) -> Option<Removed>) -> bool {
         let inner = &self.kit.inner;
         let Ok(removed) = inner.try_change_config(|config| {
             Ok::<_, std::convert::Infallible>(remove(&mut config.hooks))
         });
-        let Some(id) = removed else {
-            return false;
-        };
-        write(&inner.hooks).remove(&id);
-        true
+        let was_held = removed.is_some();
+        inner.retire(removed);
+        was_held
+    }
+}
+
+impl<S> Inner<S> {
+    /// Keeps the handler of `removed`, and its registration, for the
+    /// operations that read the registry before its removal: each runs the
+    /// hooks it read, as the Python implementation's chain runs the list it
+    /// took. Lets go of each retired hook no copy of the registry holds any
+    /// more, which no operation can ask for.
+    fn retire(&self, removed: Option<Removed>) {
+        let mut retired = write(&self.retired_hooks);
+        retired.extend(removed);
+        let mut handlers = write(&self.hooks);
+        retired.retain(|hook| {
+            let held = hook.held.strong_count() > 0;
+            if !held {
+                handlers.remove(&hook.id);
+            }
+            held
+        });
+    }
+
+    /// The registration of the retired hook `hook`.
+    pub(super) fn retired_spec(&self, hook: HookId) -> Option<HookSpec> {
+        read(&self.retired_hooks)
+            .iter()
+            .find(|retired| retired.id == hook)
+            .map(|retired| retired.spec.clone())
     }
 }
 

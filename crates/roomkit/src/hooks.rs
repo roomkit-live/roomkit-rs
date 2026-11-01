@@ -161,20 +161,20 @@ impl Default for HookOptions {
 }
 
 impl HookOptions {
-    /// The registration on `trigger` these options make.
-    pub(crate) fn spec(self, trigger: HookTrigger) -> HookSpec {
-        let mut spec = HookSpec::new(self.name, trigger, self.execution);
-        spec.priority = self.priority;
-        spec.timeout = self.timeout;
-        spec.fail_closed = self.fail_closed;
-        spec.needs_lock = self.needs_lock;
-        let mut filter = HookFilter::default();
-        filter.channel_types = self.channel_types;
-        filter.channel_ids = self.channel_ids;
-        filter.directions = self.directions;
-        filter.event_types = self.event_types;
-        spec.filter = filter;
-        spec
+    /// The registration of `r#fn` on `trigger` these options make.
+    pub(crate) fn registration(self, trigger: HookTrigger, r#fn: Kept) -> HookRegistration {
+        HookRegistration {
+            priority: self.priority,
+            name: self.name,
+            timeout: self.timeout,
+            channel_types: self.channel_types,
+            channel_ids: self.channel_ids,
+            directions: self.directions,
+            event_types: self.event_types,
+            fail_closed: self.fail_closed,
+            needs_lock: self.needs_lock,
+            ..HookRegistration::of(trigger, self.execution, r#fn)
+        }
     }
 }
 

@@ -6,7 +6,8 @@
 //! back. A registration's scope is the kit or one room (RFC §9.1): a room's
 //! hooks fire for that room's payloads alone, beside the kit's.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -404,6 +405,34 @@ struct Registered {
     /// The room it was added for; `None` for the kit's.
     room: Option<RoomId>,
     spec: HookSpec,
+    /// Shared by every copy of the registry that holds the registration:
+    /// once none does, no operation can ask for the hook any more.
+    held: Arc<()>,
+}
+
+/// A registration taken out of the registry, as a removal hands it back.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct Removed {
+    /// The id its handler is kept under.
+    pub id: HookId,
+    /// The registration, which an operation that read the registry before
+    /// the removal may still run.
+    pub spec: HookSpec,
+    /// Upgrades while a copy of the registry that holds the registration
+    /// lives: an operation that started before the removal may still ask
+    /// for the hook until it is dead.
+    pub held: Weak<()>,
+}
+
+impl Removed {
+    fn of(hook: Registered) -> Self {
+        Self {
+            id: hook.id,
+            held: Arc::downgrade(&hook.held),
+            spec: hook.spec,
+        }
+    }
 }
 
 impl Registered {
@@ -489,8 +518,17 @@ impl HookRegistry {
             return Err(RegistrationError::DuplicateName { name: spec.name });
         }
         let id = HookId(self.next);
-        self.hooks.push(Registered { id, room, spec });
-        if let Err(error) = self.check_lock_ordering() {
+        self.hooks.push(Registered {
+            id,
+            room,
+            spec,
+            held: Arc::new(()),
+        });
+        let checked = self
+            .hooks
+            .last()
+            .map_or(Ok(()), |added| self.check_lock_ordering(added));
+        if let Err(error) = checked {
             self.hooks.pop();
             return Err(error);
         }
@@ -499,7 +537,7 @@ impl HookRegistry {
     }
 
     /// Adds `spec` for the room `room_id` in place of the room's hook of the
-    /// same name, returning its id and the replaced hook's: Python's
+    /// same name, returning its id and the replaced registration: Python's
     /// `HookEngine.replace_room_hook`, a strategy installed again in its
     /// room replacing what it set up there. A registration refused leaves
     /// the hook it would replace in place.
@@ -512,7 +550,7 @@ impl HookRegistry {
         &mut self,
         room_id: RoomId,
         spec: HookSpec,
-    ) -> Result<(HookId, Option<HookId>), RegistrationError> {
+    ) -> Result<(HookId, Option<Removed>), RegistrationError> {
         let position = self.hooks.iter().position(|hook| {
             !spec.name.is_empty()
                 && hook.room.as_ref() == Some(&room_id)
@@ -520,7 +558,7 @@ impl HookRegistry {
         });
         let replaced = position.map(|position| self.hooks.remove(position));
         match self.add(Some(room_id), spec) {
-            Ok(id) => Ok((id, replaced.map(|hook| hook.id))),
+            Ok(id) => Ok((id, replaced.map(Removed::of))),
             Err(error) => {
                 if let (Some(position), Some(hook)) = (position, replaced) {
                     self.hooks.insert(position, hook);
@@ -557,25 +595,26 @@ impl HookRegistry {
             .map(|hook| &hook.spec)
     }
 
-    /// Removes the kit's hook named `name`, returning its id; `None` when
-    /// the kit has no hook of that name. A room's hook of that name stays.
-    pub fn remove_global_hook(&mut self, name: &str) -> Option<HookId> {
+    /// Removes the kit's hook named `name`, returning the registration;
+    /// `None` when the kit has no hook of that name. A room's hook of that
+    /// name stays.
+    pub fn remove_global_hook(&mut self, name: &str) -> Option<Removed> {
         self.remove_where(None, name)
     }
 
     /// Removes the hook named `name` the room `room_id` was given,
-    /// returning its id; `None` when the room has no hook of that name. The
-    /// kit's hook of that name stays (RFC §9.1).
-    pub fn remove_room_hook(&mut self, room_id: &RoomId, name: &str) -> Option<HookId> {
+    /// returning the registration; `None` when the room has no hook of that
+    /// name. The kit's hook of that name stays (RFC §9.1).
+    pub fn remove_room_hook(&mut self, room_id: &RoomId, name: &str) -> Option<Removed> {
         self.remove_where(Some(room_id), name)
     }
 
-    fn remove_where(&mut self, room: Option<&RoomId>, name: &str) -> Option<HookId> {
+    fn remove_where(&mut self, room: Option<&RoomId>, name: &str) -> Option<Removed> {
         let position = self
             .hooks
             .iter()
             .position(|hook| hook.room.as_ref() == room && hook.spec.name == name)?;
-        Some(self.hooks.remove(position).id)
+        Some(Removed::of(self.hooks.remove(position)))
     }
 
     /// The names of the hooks the room `room_id` was given, in their
@@ -696,7 +735,9 @@ impl HookRegistry {
             .matching(trigger, subject.into())
             .filter(|hook| observes_all || hook.spec.execution == HookExecution::Async)
             .collect();
-        observers.sort_by_key(|hook| (hook.room.is_some(), hook.id));
+        // As the Python implementation starts them: by priority, the kit's
+        // before a room's at equal priority, then in registration order.
+        observers.sort_by_key(|hook| (hook.spec.priority, hook.room.is_some(), hook.id));
         observers.into_iter().map(|hook| hook.id).collect()
     }
 
@@ -717,21 +758,39 @@ impl HookRegistry {
     }
 
     /// No SYNC `BEFORE_BROADCAST` hook that needs the lock may have a lower
-    /// priority than one that does not (RFC §9.1), in any chain the hooks
-    /// form: the kit's alone, and each room's with the kit's. At equal
-    /// priority the off-lock hook runs first.
-    fn check_lock_ordering(&self) -> Result<(), RegistrationError> {
-        let rooms: BTreeSet<&RoomId> = self
-            .hooks
-            .iter()
-            .filter_map(|hook| hook.room.as_ref())
-            .collect();
-        check_chain_order(self.hooks.iter().filter(|hook| hook.room.is_none()))?;
-        for room in rooms {
-            check_chain_order(self.hooks.iter().filter(|hook| hook.reaches(Some(room))))?;
+    /// priority than one that does not (RFC §9.1), in each chain the hook
+    /// `added` joins, as the Python implementation checks it: a room's hook
+    /// joins its room's, the kit's with the room's; the kit's joins the
+    /// kit's alone and every room's. At equal priority the off-lock hook
+    /// runs first. A hook of any other trigger or execution joins none.
+    fn check_lock_ordering(&self, added: &Registered) -> Result<(), RegistrationError> {
+        if !is_check(&added.spec) {
+            return Ok(());
+        }
+        let mut kit = Vec::new();
+        let mut rooms: BTreeMap<&RoomId, Vec<&Registered>> = BTreeMap::new();
+        for hook in self.hooks.iter().filter(|hook| is_check(&hook.spec)) {
+            match &hook.room {
+                None => kit.push(hook),
+                Some(room) => rooms.entry(room).or_default().push(hook),
+            }
+        }
+        if let Some(room) = &added.room {
+            let own = rooms.get(room).map_or(&[][..], Vec::as_slice);
+            return check_chain_order(kit.iter().chain(own).copied());
+        }
+        check_chain_order(kit.iter().copied())?;
+        for own in rooms.values() {
+            check_chain_order(kit.iter().chain(own).copied())?;
         }
         Ok(())
     }
+}
+
+/// Whether `spec` is a SYNC `BEFORE_BROADCAST` hook, one of the chain the
+/// lock ordering rule reads (RFC §9.1).
+fn is_check(spec: &HookSpec) -> bool {
+    spec.trigger == HookTrigger::BeforeBroadcast && spec.execution == HookExecution::Sync
 }
 
 /// Where a SYNC hook runs in its chain (RFC §9.3): by priority, lower
@@ -751,12 +810,7 @@ fn chain_rank(hook: &Registered) -> (i32, bool, bool, HookId) {
 fn check_chain_order<'registry>(
     hooks: impl Iterator<Item = &'registry Registered>,
 ) -> Result<(), RegistrationError> {
-    let mut chain: Vec<&Registered> = hooks
-        .filter(|hook| {
-            hook.spec.trigger == HookTrigger::BeforeBroadcast
-                && hook.spec.execution == HookExecution::Sync
-        })
-        .collect();
+    let mut chain: Vec<&Registered> = hooks.filter(|hook| is_check(&hook.spec)).collect();
     chain.sort_by_key(|hook| chain_rank(hook));
     let mut first_locked: Option<&HookSpec> = None;
     for spec in chain.into_iter().map(|hook| &hook.spec) {
@@ -1229,11 +1283,16 @@ mod tests {
             let id = registry
                 .add_room_hook(room("r1"), sync_hook("my_hook", 0))
                 .unwrap();
+            let removed = |registry: &mut HookRegistry, name| {
+                registry
+                    .remove_room_hook(&room("r1"), name)
+                    .map(|removed| removed.id)
+            };
             assert_eq!(
                 (
-                    registry.remove_room_hook(&room("r1"), "my_hook"),
-                    registry.remove_room_hook(&room("r1"), "missing"),
-                    registry.remove_room_hook(&room("r1"), "my_hook"),
+                    removed(&mut registry, "my_hook"),
+                    removed(&mut registry, "missing"),
+                    removed(&mut registry, "my_hook"),
                 ),
                 (Some(id), None, None)
             );
@@ -1247,15 +1306,17 @@ mod tests {
             let in_room = registry
                 .add_room_hook(room("room"), sync_hook("dup", 0))
                 .unwrap();
+            let room_s = registry.remove_room_hook(&room("room"), "dup");
+            let names = registry.room_hook_names(&room("room"));
+            let kit_s = registry.remove_global_hook("dup");
             assert_eq!(
-                registry.remove_room_hook(&room("room"), "dup"),
-                Some(in_room)
+                (
+                    room_s.map(|removed| removed.id),
+                    names,
+                    kit_s.map(|removed| removed.id)
+                ),
+                (Some(in_room), Vec::<String>::new(), Some(kit))
             );
-            assert_eq!(
-                registry.room_hook_names(&room("room")),
-                Vec::<String>::new()
-            );
-            assert_eq!(registry.remove_global_hook("dup"), Some(kit));
         }
 
         // Python: tests/test_hook_rules.py::TestHookNames::test_a_room_hook_may_reuse_a_kit_hook_s_name
@@ -1301,7 +1362,10 @@ mod tests {
                 .replace_room_hook(room("r1"), sync_hook("router", 3))
                 .unwrap();
             let chain = registry.chain(HookTrigger::BeforeBroadcast, &event_in("r1"));
-            assert_eq!((replaced, chain), (Some(first), vec![second]));
+            assert_eq!(
+                (replaced.map(|removed| removed.id), chain),
+                (Some(first), vec![second])
+            );
         }
 
         #[test]
@@ -1336,6 +1400,70 @@ mod tests {
                 ),
                 (false, true, true, false)
             );
+        }
+
+        // Python: tests/test_hooks.py::TestTriggerIndex::test_has_hooks_after_remove_global,
+        // test_has_hooks_after_remove_room and test_trigger_index_survives_partial_removal
+        #[test]
+        fn has_hooks_follows_each_removal() {
+            let mut registry = HookRegistry::new();
+            let on = Some;
+            registry.register(sync_hook("kept", 0)).unwrap();
+            registry.register(sync_hook("removeme", 0)).unwrap();
+            let observer = HookSpec::new(
+                "removeme",
+                HookTrigger::AfterBroadcast,
+                HookExecution::Async,
+            );
+            registry.add_room_hook(room("room1"), observer).unwrap();
+            registry.remove_global_hook("removeme");
+            let partial = registry.has_hooks(on(HookTrigger::BeforeBroadcast));
+            registry.remove_global_hook("kept");
+            let emptied = registry.has_hooks(on(HookTrigger::BeforeBroadcast));
+            let room_before = registry.has_hooks(on(HookTrigger::AfterBroadcast));
+            registry.remove_room_hook(&room("room1"), "removeme");
+            assert_eq!(
+                (
+                    partial,
+                    emptied,
+                    room_before,
+                    registry.has_hooks(on(HookTrigger::AfterBroadcast))
+                ),
+                (true, false, true, false)
+            );
+        }
+
+        #[test]
+        fn observers_start_by_priority_the_kit_s_first_at_equal_priority() {
+            let mut registry = HookRegistry::new();
+            let observer = |name: &str, priority| HookSpec {
+                priority,
+                ..HookSpec::new(name, HookTrigger::AfterBroadcast, HookExecution::Async)
+            };
+            registry.register(observer("kit-late", 5)).unwrap();
+            registry.register(observer("kit-early", 0)).unwrap();
+            registry
+                .add_room_hook(room("r1"), observer("room-first", -1))
+                .unwrap();
+            registry
+                .add_room_hook(room("r1"), observer("room-tie", 0))
+                .unwrap();
+            let observers = registry.observers(HookTrigger::AfterBroadcast, &event_in("r1"));
+            assert_eq!(
+                names(&registry, &observers),
+                ["room-first", "kit-early", "room-tie", "kit-late"]
+            );
+        }
+
+        #[test]
+        fn a_removed_registration_is_held_while_a_copy_of_the_registry_holds_it() {
+            let mut registry = HookRegistry::new();
+            registry.register(sync_hook("guard", 0)).unwrap();
+            let read_before = registry.clone();
+            let removed = registry.remove_global_hook("guard").unwrap();
+            let held = removed.held.upgrade().is_some();
+            drop(read_before);
+            assert_eq!((held, removed.held.upgrade().is_some()), (true, false));
         }
 
         #[test]
