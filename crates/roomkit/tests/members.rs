@@ -175,3 +175,30 @@ async fn rejoin_flips_left_back_to_active() {
         (false, ParticipantStatus::Active, true, true)
     );
 }
+
+// Python: tests/test_participant_membership.py::TestChannelReuse::test_the_shared_id_scenario_leaves_a_readable_trail
+#[tokio::test]
+async fn the_shared_id_scenario_leaves_a_readable_trail() {
+    let (kit, room) = kit_with_u1().await;
+    kit.ensure_participant(
+        &room,
+        &channel("conference:r1"),
+        &u1(),
+        EnsureParticipantOptions::default(),
+    )
+    .await
+    .unwrap();
+    let left = kit
+        .remove_member(&room, &u1(), RemoveMemberOptions::default())
+        .await
+        .unwrap();
+    kit.close().await.unwrap();
+    assert_eq!(
+        (left.status, left.channel_id, left.connected_via),
+        (
+            ParticipantStatus::Left,
+            channel("ws:u1:r1"),
+            vec![channel("ws:u1:r1"), channel("conference:r1")]
+        )
+    );
+}
