@@ -61,6 +61,8 @@ pub struct ScriptedRound {
     /// The failure the generation ends on, once its text is written, before
     /// its calls and its done event: the provider's stream fails.
     pub fails: Option<String>,
+    /// Whether its stream ends after its calls without its done event.
+    pub without_done: bool,
 }
 
 impl ScriptedRound {
@@ -75,6 +77,7 @@ impl ScriptedRound {
                 ..StreamDone::default()
             },
             fails: None,
+            without_done: false,
         }
     }
 
@@ -106,6 +109,7 @@ impl ScriptedRound {
                 ..StreamDone::default()
             },
             fails: None,
+            without_done: false,
         }
     }
 
@@ -123,6 +127,14 @@ impl ScriptedRound {
     #[must_use]
     pub fn failing(mut self, message: impl Into<String>) -> Self {
         self.fails = Some(message.into());
+        self
+    }
+
+    /// The same round, its stream ending after its calls without its done
+    /// event, as a provider's that drops it.
+    #[must_use]
+    pub fn without_done(mut self) -> Self {
+        self.without_done = true;
         self
     }
 
@@ -183,7 +195,8 @@ impl AiProvider for ScriptedProvider {
         std::future::ready(self.whole(context))
     }
     /// The next round, as a stream: its text in its pieces, then its calls
-    /// and its end, or its failure once its text is written.
+    /// and its end (none for a round [`ScriptedRound::without_done`]), or
+    /// its failure once its text is written.
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
         let round = self.next_round(context);
         Box::pin(items(
@@ -203,7 +216,9 @@ impl AiProvider for ScriptedProvider {
                 for call in read_tool_calls(round.calls, finish_reason) {
                     out.give(Ok(StreamEvent::ToolCall(call.into()))).await;
                 }
-                out.give(Ok(StreamEvent::Done(round.done))).await;
+                if !round.without_done {
+                    out.give(Ok(StreamEvent::Done(round.done))).await;
+                }
             },
         ))
     }

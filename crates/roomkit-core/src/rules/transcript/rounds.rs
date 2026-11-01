@@ -27,7 +27,7 @@ use serde_json::Value;
 use super::Message;
 use crate::model::{
     ChannelId, EventContent, EventDirection, EventType, RoomEvent, ToolCall, ToolCallContent,
-    ToolCallOutcome,
+    ToolCallOutcome, ToolCallStatus,
 };
 use crate::rules::edits::is_deleted;
 
@@ -259,7 +259,12 @@ fn replayed_round(round: usize, calls: &[Call<'_>], chosen: &Chosen<'_>) -> Opti
         let result = call
             .end
             .map_or(Cow::Borrowed(""), |end| result_text(&end.result));
-        Message::tool_result(*id, shown_result(&result, *whole))
+        let mut message = Message::tool_result(*id, shown_result(&result, *whole));
+        // A failed call reads as one, as its round read it (RFC §6.4).
+        message.is_error = call
+            .end
+            .is_some_and(|end| end.status == ToolCallStatus::Failed);
+        message
     }));
     Some(ToolRound { index, messages })
 }

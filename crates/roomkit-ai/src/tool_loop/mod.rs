@@ -132,18 +132,17 @@ impl<P: AiProvider> Loop<P> {
                 tools: declared.clone(),
                 metadata: Metadata::new(),
             };
-            let mut generation =
-                match Generation::read(&*self.provider, &context, round, &out).await {
-                    Ok(generation) => generation,
-                    Err(error) => {
-                        let end = LoopEndMarker {
-                            usage: spent.usage,
-                            usage_complete: Some(false),
-                            ..self.end_of(LoopEndReason::Error, tool_rounds, limits.timeout)
-                        };
-                        return failed(had_tool_round, end, error, &out).await;
-                    }
-                };
+            let mut generation = match Generation::read(&*self.provider, &context, &out).await {
+                Ok(generation) => generation,
+                Err(error) => {
+                    let end = LoopEndMarker {
+                        usage: spent.usage,
+                        usage_complete: Some(false),
+                        ..self.end_of(LoopEndReason::Error, tool_rounds, limits.timeout)
+                    };
+                    return failed(had_tool_round, end, error, &out).await;
+                }
+            };
             self.take_intents(&mut generation.calls);
             spent.count(&generation.done.usage);
             if generation.calls.is_empty() {
@@ -247,10 +246,11 @@ impl<P: AiProvider> Loop<P> {
             self.toolbox.settled(&end.call, end.outcome, &self.context);
         }
         for end in ends {
-            read.push(Message::tool_result(
-                end.call.id.clone(),
-                end.result.clone(),
-            ));
+            let mut result = Message::tool_result(end.call.id.clone(), end.result.clone());
+            // The model reads every outcome but served as a failure (RFC §9.3,
+            // Python's `ToolOutcome.as_part`).
+            result.is_error = end.outcome != ToolCallOutcome::Served;
+            read.push(result);
             out.give(Ok(TurnItem::ToolEnd(end))).await;
         }
         read

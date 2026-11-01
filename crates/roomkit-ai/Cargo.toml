@@ -22,6 +22,9 @@ thiserror.workspace = true
 # The bound on each tool call (RFC §21.6).
 tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
+# The id minted for a call its provider gave none, as Python's
+# `minted_call_id` (`uuid4().hex[:12]`).
+uuid.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

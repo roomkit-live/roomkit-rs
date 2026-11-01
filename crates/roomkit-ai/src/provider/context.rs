@@ -329,7 +329,7 @@ fn content(message: &Message, tools: &HashMap<&str, &str>) -> AiMessageContent {
             tool_call_id: call_id.clone(),
             name: name.to_owned(),
             result: message.text.clone(),
-            is_error: false,
+            is_error: message.is_error,
         })]);
     }
     if message.images.is_empty() && message.tool_calls.is_empty() {

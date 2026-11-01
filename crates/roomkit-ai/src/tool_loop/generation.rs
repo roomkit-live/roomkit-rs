@@ -43,17 +43,17 @@ pub(super) enum Partial {
 }
 
 impl Generation {
-    /// Reads `provider`'s answer to `context`, the `round`-th generation of
-    /// the turn, handing its text to `out` as it comes.
+    /// Reads `provider`'s answer to `context`, handing its text to `out` as
+    /// it comes. A stream that ends without its done event is read whole
+    /// all the same, its calls kept, with no finish reason and no usage, as
+    /// Python's stream round reads it.
     ///
     /// # Errors
     ///
-    /// Returns the provider's error, or one saying its stream ended without
-    /// a done event.
+    /// Returns the provider's error.
     pub(super) async fn read<P: AiProvider>(
         provider: &P,
         context: &AiContext,
-        round: u32,
         out: &Yielder<Result<TurnItem, ProviderError>>,
     ) -> Result<Self, ProviderError> {
         let mut stream = provider.generate_structured_stream(context);
@@ -67,34 +67,38 @@ impl Generation {
                 }
                 StreamEvent::ToolCall(call) => calls.push(call),
                 StreamEvent::Done(done) => {
-                    let calls = read_calls(calls, round);
+                    let calls = read_calls(calls);
                     return Ok(Self { text, calls, done });
                 }
             }
         }
-        Err("the provider's response ended before its done event".into())
+        let calls = read_calls(calls);
+        Ok(Self {
+            text,
+            calls,
+            done: StreamDone::default(),
+        })
     }
 }
 
 /// The calls of a response, as the loop reads them: the first
-/// [`MAX_CALLS_PER_ROUND`], each with an id no other carries
-/// (`call_<round>_<n>`, made free, for one the provider gave empty or
-/// twice), and, for
-/// one its provider marked `partial`, why it never runs. The calls past the
-/// bound are dropped before the round's assistant message is written, so
-/// that no call reaches the model without its result, and logged.
-fn read_calls(calls: Vec<StreamToolCall>, round: u32) -> Vec<Called> {
+/// [`MAX_CALLS_PER_ROUND`], each with an id no other carries (one minted
+/// for a call the provider gave none, or another's, as Python's `CallIds`
+/// hands them), and, for one its provider marked `partial`, why it never
+/// runs. The calls past the bound are dropped before the round's assistant
+/// message is written, so that no call reaches the model without its
+/// result, and logged.
+fn read_calls(calls: Vec<StreamToolCall>) -> Vec<Called> {
     log_dropped(&calls);
     let mut ids = HashSet::new();
     calls
         .into_iter()
         .take(MAX_CALLS_PER_ROUND)
-        .enumerate()
-        .map(|(position, given)| {
+        .map(|given| {
             let id = if !given.id.is_empty() && ids.insert(given.id.clone()) {
                 given.id
             } else {
-                free_id(&mut ids, round, position)
+                minted_id(&mut ids, &given.name)
             };
             let partial = match (given.partial, given.garbled) {
                 (false, _) => None,
@@ -108,14 +112,18 @@ fn read_calls(calls: Vec<StreamToolCall>, round: u32) -> Vec<Called> {
         .collect()
 }
 
-/// `call_<round>_<position>`, with `_` after it until no call of the round
-/// carries it, taken among `ids`.
-fn free_id(ids: &mut HashSet<String>, round: u32, position: usize) -> String {
-    let mut id = format!("call_{round}_{position}");
-    while !ids.insert(id.clone()) {
-        id.push('_');
+/// An id for a call to `name` its provider gave none, unique across turns:
+/// Python's `minted_call_id`, `call_<name>_<12 hex digits>`, taken among
+/// `ids`.
+fn minted_id(ids: &mut HashSet<String>, name: &str) -> String {
+    loop {
+        // The 48 high bits of a v4 UUID are random: uuid4().hex[:12].
+        let random = uuid::Uuid::new_v4().as_u128() >> 80;
+        let id = format!("call_{name}_{random:012x}");
+        if ids.insert(id.clone()) {
+            return id;
+        }
     }
-    id
 }
 
 /// Logs the calls of a round past [`MAX_CALLS_PER_ROUND`], which never run:
@@ -145,32 +153,28 @@ mod tests {
     use super::*;
     use crate::provider::AiToolCall;
 
-    /// An id given empty or twice is replaced by one no other call of the
-    /// round carries, a given one included: `call_1_1` given then minted
-    /// was carried twice, and `call_1_0` minted then given.
+    // Python: tests/test_providers/test_tool_call_handoff.py::TestCallIds::test_every_call_of_a_response_gets_its_own_id
     #[test]
-    fn a_call_with_no_id_or_another_s_gets_one_of_its_own() {
-        let ids = |given: &[&str]| -> Vec<String> {
-            let calls = given
-                .iter()
-                .map(|id| AiToolCall::new(*id, "lookup").into())
-                .collect();
-            read_calls(calls, 1)
-                .into_iter()
-                .map(|called| called.call.id)
-                .collect()
-        };
+    fn every_call_of_a_response_gets_its_own_id() {
+        let calls = ["c1", "", "", "c1"]
+            .iter()
+            .map(|id| AiToolCall::new(*id, "now").into())
+            .collect();
+        let handed: Vec<String> = read_calls(calls)
+            .into_iter()
+            .map(|called| called.call.id)
+            .collect();
+        let distinct: HashSet<&String> = handed.iter().collect();
+        let minted = handed.get(1..).unwrap_or_default();
         assert_eq!(
-            [
-                ids(&["", "x", "x"]),
-                ids(&["call_1_1", ""]),
-                ids(&["", "call_1_0"])
-            ],
-            [
-                vec!["call_1_0", "x", "call_1_2"],
-                vec!["call_1_1", "call_1_1_"],
-                vec!["call_1_0", "call_1_1"]
-            ]
+            (handed.first().map(String::as_str), distinct.len()),
+            (Some("c1"), 4)
+        );
+        assert!(
+            minted.iter().all(|id| id.starts_with("call_now_")
+                && id.len() == "call_now_".len() + 12
+                && id.bytes().skip(9).all(|byte| byte.is_ascii_hexdigit())),
+            "{handed:?}"
         );
     }
 }

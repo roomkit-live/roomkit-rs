@@ -127,7 +127,8 @@ fn check(requests: &[AiContext]) {
             tool_call_id: "c2".to_owned(),
             name: "fail".to_owned(),
             result: r#"{"error": "Tool 'fail' failed (RuntimeError)"}"#.to_owned(),
-            is_error: false,
+            // A failed call reads as one, in its turn and replayed (RMK-1075).
+            is_error: true,
         })
     );
 }
