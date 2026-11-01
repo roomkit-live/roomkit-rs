@@ -14,7 +14,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::Stream;
-use roomkit_ai::{AiRequest, ProviderError, ProviderEvent, ProviderStream};
+use roomkit_ai::{AiResponse, ProviderError, ProviderStream, StreamEvent, TextStream};
+
+use crate::request::{Request, push_end, push_text};
 
 use crate::agent::{ANSWER_LIMIT, OpenAiProvider, read_body};
 use crate::config::OpenAiApi;
@@ -26,13 +28,10 @@ mod folding;
 use folding::Folding;
 
 /// What a generation hands the loop next.
-type Item = Result<ProviderEvent, ProviderError>;
+type Item = Result<StreamEvent, ProviderError>;
 
 /// The generation answering `request`, through `provider`, as a stream.
-pub(crate) fn answer<'a>(
-    provider: &'a OpenAiProvider,
-    request: &'a AiRequest,
-) -> ProviderStream<'a> {
+pub(crate) fn answer(provider: &OpenAiProvider, request: Request) -> ProviderStream<'_> {
     let reading = Reading {
         provider,
         request,
@@ -79,10 +78,10 @@ impl Stream for Answer<'_> {
 /// Where a generation's read stands.
 struct Reading<'a> {
     provider: &'a OpenAiProvider,
-    request: &'a AiRequest,
+    request: Request,
     phase: Phase,
     /// The events read and not handed yet, in order.
-    ready: VecDeque<ProviderEvent>,
+    ready: VecDeque<StreamEvent>,
     /// Credential used for this response, independent of concurrent refreshes.
     secret: String,
 }
@@ -128,7 +127,7 @@ impl<'a> Reading<'a> {
     /// Sends the request: a streamed answer is read as it arrives, a whole
     /// completion read whole.
     async fn ask(&mut self) -> Result<(), OpenAiError> {
-        let (response, secret) = self.provider.ask(self.request).await?;
+        let (response, secret) = self.provider.ask(&self.request).await?;
         self.secret = secret;
         if !is_json(&response) {
             self.phase = Phase::Streaming(Box::new(Streamed {
@@ -145,12 +144,8 @@ impl<'a> Reading<'a> {
                 crate::responses::body(&body, &self.secret, self.provider.namespace())?
             }
         };
-        if !whole.text.is_empty() {
-            self.ready.push_back(ProviderEvent::Text(whole.text));
-        }
-        self.ready
-            .extend(whole.calls.into_iter().map(ProviderEvent::ToolCall));
-        self.ready.push_back(ProviderEvent::Done(whole.done));
+        push_text(&mut self.ready, whole.text);
+        push_end(&mut self.ready, whole.calls, whole.done);
         Ok(())
     }
 
@@ -196,4 +191,56 @@ fn is_json(response: &reqwest::Response) -> bool {
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.trim_start().starts_with("application/json"))
+}
+
+/// The whole answer `events` give: their text, their calls, how it ended.
+pub(crate) async fn whole(mut events: ProviderStream<'_>) -> Result<AiResponse, ProviderError> {
+    let mut response = AiResponse::new("");
+    while let Some(event) = roomkit_next(&mut events).await {
+        match event? {
+            StreamEvent::TextDelta(delta) => response.content.push_str(&delta.text),
+            StreamEvent::ToolCall(call) => response.tool_calls.push(call.into()),
+            StreamEvent::Done(done) => {
+                response.finish_reason = done.finish_reason;
+                response.usage = done.usage;
+                response.metadata = done.metadata;
+                return Ok(response);
+            }
+        }
+    }
+    Err("the provider's response ended before its done event".into())
+}
+
+/// The text `events` give, as it comes.
+pub(crate) fn text(events: ProviderStream<'_>) -> TextStream<'_> {
+    Box::pin(Texts { events })
+}
+
+/// The text events of a structured stream.
+struct Texts<'a> {
+    events: ProviderStream<'a>,
+}
+
+impl Stream for Texts<'_> {
+    type Item = Result<String, ProviderError>;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        loop {
+            match this.events.as_mut().poll_next(context) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(Some(Err(error))) => return Poll::Ready(Some(Err(error))),
+                Poll::Ready(Some(Ok(StreamEvent::TextDelta(delta)))) => {
+                    return Poll::Ready(Some(Ok(delta.text)));
+                }
+                Poll::Ready(Some(Ok(StreamEvent::ToolCall(_) | StreamEvent::Done(_)))) => {}
+            }
+        }
+    }
+}
+
+/// The next item of `stream`.
+async fn roomkit_next(stream: &mut ProviderStream<'_>) -> Option<Item> {
+    std::future::poll_fn(|context| stream.as_mut().poll_next(context)).await
 }

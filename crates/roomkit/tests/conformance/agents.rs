@@ -15,14 +15,13 @@ use roomkit::model::{ChannelId, HookAction, HookResult, Metadata, RoomContext, T
 use roomkit::{HookError, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiAgent, AiProvider, AiRequest, ProviderError, ProviderEvent, ProviderStream, ToolContext,
-    ToolDefinition, ToolError, ToolOutput, ToolPolicy, Tools,
+    AiAgent, AiContext, AiProvider, AiResponse, AiRole, AiTool, ProviderError, ProviderStream,
+    StreamEvent, ToolContext, ToolError, ToolOutput, ToolPolicy, Tools,
 };
 use serde_json::{Value, json};
 
 use crate::run::{Run, Scope};
 use crate::scripted::{Reactions, perform};
-use roomkit_core::rules::transcript::Role;
 
 /// A scenario's scripted model: `ScriptedProvider`'s script, the model
 /// waiting between two of a round's deltas, so that a reader is handed
@@ -31,9 +30,17 @@ use roomkit_core::rules::transcript::Role;
 pub(crate) struct Paced(ScriptedProvider);
 
 impl AiProvider for Paced {
-    fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a> {
+    fn model_name(&self) -> &str {
+        self.0.model_name()
+    }
+
+    async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
+        self.0.generate(context).await
+    }
+
+    fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
         Box::pin(PacedStream {
-            inner: self.0.generate(request),
+            inner: self.0.generate_structured_stream(context),
             held: None,
             after_text: false,
         })
@@ -44,12 +51,12 @@ impl AiProvider for Paced {
 /// held for one poll.
 struct PacedStream<'a> {
     inner: ProviderStream<'a>,
-    held: Option<Result<ProviderEvent, ProviderError>>,
+    held: Option<Result<StreamEvent, ProviderError>>,
     after_text: bool,
 }
 
 impl Stream for PacedStream<'_> {
-    type Item = Result<ProviderEvent, ProviderError>;
+    type Item = Result<StreamEvent, ProviderError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
@@ -57,7 +64,7 @@ impl Stream for PacedStream<'_> {
             return Poll::Ready(Some(held));
         }
         let next = ready!(this.inner.as_mut().poll_next(cx));
-        let text = matches!(next, Some(Ok(ProviderEvent::Text(_))));
+        let text = matches!(next, Some(Ok(StreamEvent::TextDelta(_))));
         if text && this.after_text {
             // The model waits before this delta: it goes on the next poll.
             this.held = next;
@@ -144,7 +151,7 @@ fn tools(spec: &Value) -> Tools {
         .into_iter()
         .flatten()
         .fold(Tools::new(), |tools, tool| {
-            let definition = ToolDefinition::new(
+            let definition = AiTool::new(
                 tool["name"].as_str().unwrap_or_default(),
                 tool["description"].as_str().unwrap_or_default(),
                 tool.get("parameters")
@@ -203,12 +210,17 @@ pub(crate) fn requests(model: &ScriptedProvider) -> Vec<Value> {
     model.requests().iter().map(request).collect()
 }
 
-fn request(request: &AiRequest) -> Value {
+fn request(request: &AiContext) -> Value {
     let results: Vec<Value> = request
         .messages
         .iter()
-        .filter(|message| message.role == Role::Tool)
-        .map(|message| json!({ "tool_call_id": message.tool_call_id, "content": message.text }))
+        .filter(|message| message.role == AiRole::Tool)
+        .map(|message| {
+            let call = message
+                .tool_result()
+                .map(|result| result.tool_call_id.clone());
+            json!({ "tool_call_id": call, "content": message.text() })
+        })
         .collect();
     json!({ "tool_results": results })
 }

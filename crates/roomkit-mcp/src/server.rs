@@ -9,7 +9,7 @@ use rmcp::service::{Peer, RoleClient, RunningService};
 use rmcp::transport::async_rw::AsyncRwTransport;
 use rmcp::{ClientCacheConfig, ServiceExt};
 use roomkit::model::ToolCall;
-use roomkit_ai::{ToolContext, ToolDefinition, ToolError, ToolOutput, Toolset};
+use roomkit_ai::{AiTool, ToolContext, ToolError, ToolOutput, Toolset};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Mutex, OnceCell};
 
@@ -80,7 +80,7 @@ pub struct McpServer {
 struct Inner {
     program: String,
     peer: Peer<RoleClient>,
-    tools: Vec<ToolDefinition>,
+    tools: Vec<AiTool>,
     instructions: Option<String>,
     pid: Option<u32>,
     close_grace: std::time::Duration,
@@ -160,7 +160,7 @@ impl McpServer {
     #[cfg(feature = "http")]
     pub(crate) fn from_http(
         service: RunningService<RoleClient, ()>,
-        tools: Vec<ToolDefinition>,
+        tools: Vec<AiTool>,
         finished: tokio::sync::oneshot::Receiver<()>,
     ) -> Self {
         let instructions = service
@@ -324,7 +324,7 @@ async fn handshake<R, W>(
     output: R,
     input: W,
     program: &str,
-) -> Result<(RunningService<RoleClient, ()>, Vec<ToolDefinition>), McpError>
+) -> Result<(RunningService<RoleClient, ()>, Vec<AiTool>), McpError>
 where
     R: AsyncRead + Send + Unpin + 'static,
     W: AsyncWrite + Send + Unpin + 'static,
@@ -354,7 +354,7 @@ where
 }
 
 impl Toolset for McpServer {
-    fn tools(&self) -> Vec<ToolDefinition> {
+    fn tools(&self) -> Vec<AiTool> {
         self.inner
             .tools
             .iter()

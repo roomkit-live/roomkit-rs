@@ -27,7 +27,7 @@ use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookOptions,
     HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
-use roomkit_ai::{AiError, ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiError, AiTool, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -230,7 +230,7 @@ async fn a_turn_posts_the_system_prompt_and_the_conversation_to_chat_completions
 /// in the next completion, after the assistant's message that made it.
 #[tokio::test]
 async fn a_call_s_result_goes_back_in_the_next_completion() {
-    let lookup = ToolDefinition::new(
+    let lookup = AiTool::new(
         "lookup_order",
         "Find an order",
         json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
@@ -601,7 +601,7 @@ async fn a_streamed_call_s_fragments_fold_into_the_call_that_runs() {
     first.extend(ending("tool_calls", 20, 5));
     let mut second = vec![chunk(&json!({ "content": "Shipped." }))];
     second.extend(ending("stop", 40, 2));
-    let lookup = ToolDefinition::new(
+    let lookup = AiTool::new(
         "lookup_order",
         "Find an order",
         json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
@@ -672,7 +672,7 @@ async fn a_stream_whose_event_never_ends_is_cut_at_the_event_s_bound() {
 fn a_tool_name_openai_refuses_is_refused_when_the_agent_takes_it() {
     let tools = |name: &str| {
         Tools::new().tool(
-            ToolDefinition::new(name, "Reads a file", json!({ "type": "object" })),
+            AiTool::new(name, "Reads a file", json!({ "type": "object" })),
             |_call, _context| async { Ok(ToolOutput::from("read")) },
         )
     };

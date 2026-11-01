@@ -33,7 +33,7 @@ use roomkit::{
     AttachChannelOptions, CreateRoomOptions, HookOptions, HookTrigger, ProcessInboundOptions,
     ToolCallEvent,
 };
-use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiTool, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::{Value, json};
 
@@ -60,7 +60,7 @@ fn shell(received: &Log<Value>) -> Tools {
         "additionalProperties": false,
     });
     Tools::new().tool(
-        ToolDefinition::new("shell", "Run a shell command in the project.", parameters),
+        AiTool::new("shell", "Run a shell command in the project.", parameters),
         move |call, _context| {
             received.push(Value::Object(call.arguments.clone()));
             async { Ok(ToolOutput::Json(json!("notes.txt\ndocs/todo.txt"))) }

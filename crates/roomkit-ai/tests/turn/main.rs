@@ -24,7 +24,7 @@ use roomkit::{
     SendEventOptions, ToolCallEvent, current_turn_host,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiAgent, ToolDefinition, ToolError, ToolOutput, Tools};
+use roomkit_ai::{AiAgent, AiTool, ToolError, ToolOutput, Tools};
 use serde_json::{Value, json};
 use tokio::sync::Barrier;
 
@@ -53,8 +53,8 @@ fn tool_results(model: &ScriptedProvider) -> Vec<Vec<String>> {
             request
                 .messages
                 .iter()
-                .filter(|message| message.tool_call_id.is_some())
-                .map(|message| message.text.clone())
+                .filter(|message| message.tool_result().is_some())
+                .map(roomkit_ai::AiMessage::text)
                 .collect()
         })
         .collect()
@@ -413,7 +413,7 @@ async fn a_call_past_its_bound_fails_as_a_timeout() {
         ScriptedRound::answering("Sorry."),
     ]);
     let hangs = Tools::new().tool(
-        ToolDefinition::new("wait", "Never answers", json!({ "type": "object" })),
+        AiTool::new("wait", "Never answers", json!({ "type": "object" })),
         |_call, _context| std::future::pending(),
     );
     let room = Room::equipped(model, hangs, |agent| {
@@ -448,7 +448,7 @@ async fn a_round_s_calls_run_together() {
     ]);
     let barrier = Arc::new(Barrier::new(2));
     let meets = Tools::new().tool(
-        ToolDefinition::new("meet", "Waits for the other", json!({ "type": "object" })),
+        AiTool::new("meet", "Waits for the other", json!({ "type": "object" })),
         move |_call, _context| {
             let barrier = Arc::clone(&barrier);
             async move {
@@ -509,8 +509,8 @@ async fn a_round_runs_its_first_thirty_two_calls_only() {
             request
                 .messages
                 .iter()
-                .find(|message| !message.tool_calls.is_empty())
-                .map(|message| message.tool_calls.len())
+                .find(|message| !message.tool_calls().is_empty())
+                .map(|message| message.tool_calls().len())
         })
         .unwrap();
     assert_eq!(
@@ -577,7 +577,7 @@ async fn a_tool_writes_to_its_room_at_the_turn_s_depth() {
         ScriptedRound::answering("Notified."),
     ]);
     let notifies = Tools::new().tool(
-        ToolDefinition::new("notify", "Tells the room", json!({ "type": "object" })),
+        AiTool::new("notify", "Tells the room", json!({ "type": "object" })),
         |_call, context| async move {
             let turn = context.turn().cloned().or_else(current_turn_host).unwrap();
             let notice = TextContent::new("Order on its way");
@@ -636,7 +636,7 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
         }
         let weak = kit.downgrade();
         let changes = Tools::new().tool(
-            ToolDefinition::new(tool, "Changes the room", json!({ "type": "object" })),
+            AiTool::new(tool, "Changes the room", json!({ "type": "object" })),
             move |_call, _context| {
                 let kit = weak.upgrade().unwrap();
                 async move {

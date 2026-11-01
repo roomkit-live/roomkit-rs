@@ -13,7 +13,7 @@ use roomkit::{
     RoomKit, SendEventOptions, TurnTimeouts, keep_context,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiTool, ToolOutput, Tools};
 use serde_json::json;
 use tokio::sync::Notify;
 
@@ -134,7 +134,7 @@ impl Drop for ToolNote {
 async fn closing_agent(kit: &RoomKit, how: How, steps: &Arc<Mutex<Vec<String>>>) {
     let (weak, steps) = (kit.downgrade(), Arc::clone(steps));
     let tools = Tools::new().tool(
-        ToolDefinition::new("shut_down", "Shut down.", json!({ "type": "object" })),
+        AiTool::new("shut_down", "Shut down.", json!({ "type": "object" })),
         move |_call, _context| {
             let (weak, steps) = (weak.clone(), Arc::clone(&steps));
             async move {
@@ -256,7 +256,7 @@ async fn a_tool_awaiting_the_close_runs_on_and_logs_nothing_after_it() {
         Arc::clone(&release),
     );
     let tools = Tools::new().tool(
-        ToolDefinition::new("quit", "Quit.", json!({ "type": "object" })),
+        AiTool::new("quit", "Quit.", json!({ "type": "object" })),
         move |_call, _context| {
             let (weak, telling, waiting) =
                 (weak.clone(), Arc::clone(&telling), Arc::clone(&waiting));
@@ -328,7 +328,7 @@ async fn sibling_agent(kit: &RoomKit, notes: &Arc<Mutex<Vec<String>>>) {
     let (weak, noting_a, noting_b) = (kit.downgrade(), Arc::clone(notes), Arc::clone(notes));
     let tools = Tools::new()
         .tool(
-            ToolDefinition::new("a_close", "Close.", json!({ "type": "object" })),
+            AiTool::new("a_close", "Close.", json!({ "type": "object" })),
             move |_call, _context| {
                 let (weak, waiting, noting) =
                     (weak.clone(), Arc::clone(&entered), Arc::clone(&noting_a));
@@ -343,7 +343,7 @@ async fn sibling_agent(kit: &RoomKit, notes: &Arc<Mutex<Vec<String>>>) {
             },
         )
         .tool(
-            ToolDefinition::new("b_send", "Send.", json!({ "type": "object" })),
+            AiTool::new("b_send", "Send.", json!({ "type": "object" })),
             move |_call, context| {
                 let noting = Arc::clone(&noting_b);
                 async move {

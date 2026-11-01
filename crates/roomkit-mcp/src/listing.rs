@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use rmcp::model::{PaginatedRequestParams, Tool};
 use rmcp::service::{Peer, RoleClient};
-use roomkit_ai::ToolDefinition;
+use roomkit_ai::AiTool;
 use serde_json::Value;
 
 use crate::error::McpError;
@@ -40,10 +40,7 @@ pub(crate) const SCHEMA_LIMIT: usize = 32 * 1024;
 /// # Errors
 ///
 /// Returns [`McpError::Listing`] when a page's request fails.
-pub(crate) async fn tools(
-    peer: &Peer<RoleClient>,
-    program: &str,
-) -> Result<Vec<ToolDefinition>, McpError> {
+pub(crate) async fn tools(peer: &Peer<RoleClient>, program: &str) -> Result<Vec<AiTool>, McpError> {
     let mut kept = Catalogue::new(program);
     let mut seen: HashSet<String> = HashSet::new();
     let mut params: Option<PaginatedRequestParams> = None;
@@ -81,7 +78,7 @@ pub(crate) async fn tools(
 /// The tools kept so far, and their names.
 struct Catalogue<'a> {
     program: &'a str,
-    tools: Vec<ToolDefinition>,
+    tools: Vec<AiTool>,
     names: HashSet<String>,
 }
 
@@ -120,7 +117,7 @@ impl<'a> Catalogue<'a> {
     /// (RFC §21.1 "One tool per name"), or a schema larger than
     /// [`SCHEMA_LIMIT`]. Its description is cut at [`DESCRIPTION_LIMIT`]
     /// characters.
-    fn definition(&self, tool: &Tool) -> Option<ToolDefinition> {
+    fn definition(&self, tool: &Tool) -> Option<AiTool> {
         let name = tool.name.as_ref();
         let skip = |why: &str| {
             tracing::warn!(
@@ -152,7 +149,7 @@ impl<'a> Catalogue<'a> {
                 "an MCP tool's description is cut"
             );
         }
-        Some(ToolDefinition::new(
+        Some(AiTool::new(
             name,
             bounded_text(description, DESCRIPTION_LIMIT),
             parameters,

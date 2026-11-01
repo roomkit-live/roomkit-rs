@@ -46,7 +46,7 @@ use roomkit::{
     AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DeliveryStream,
     ProcessInboundOptions, RoomKit, StreamItem,
 };
-use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiTool, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::{Value, json};
 
@@ -200,7 +200,7 @@ async fn bakery(
     shelves: &Arc<AtomicUsize>,
 ) -> Result<(RoomKit, Screen, RecordingTransport, RoomId), Box<dyn Error>> {
     let counted = Arc::clone(shelves);
-    let check = ToolDefinition::new(
+    let check = AiTool::new(
         "check_shelves",
         "How many loaves of a bread are left",
         json!({ "type": "object", "properties": { "bread": { "type": "string" } } }),

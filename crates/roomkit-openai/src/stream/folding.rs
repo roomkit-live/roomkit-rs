@@ -1,7 +1,9 @@
 //! The two protocols share transport bounds, but have distinct end markers.
 
 use crate::{OpenAiApi, OpenAiError, responses, wire};
-use roomkit_ai::ProviderEvent;
+use roomkit_ai::StreamEvent;
+
+use crate::request::{push_end, push_text};
 use std::collections::VecDeque;
 
 pub(super) enum Folding {
@@ -25,7 +27,7 @@ impl Folding {
         &mut self,
         data: &str,
         secret: &str,
-        ready: &mut VecDeque<ProviderEvent>,
+        ready: &mut VecDeque<StreamEvent>,
     ) -> Result<bool, OpenAiError> {
         match self {
             Self::Chat(folding) => {
@@ -34,7 +36,7 @@ impl Folding {
                     return Ok(true);
                 }
                 if let Some(text) = folding.take(data, secret)? {
-                    ready.push_back(ProviderEvent::Text(text));
+                    push_text(ready, text);
                 }
                 Ok(false)
             }
@@ -42,7 +44,7 @@ impl Folding {
         }
     }
 
-    pub(super) fn eof(self, ready: &mut VecDeque<ProviderEvent>) -> Result<(), OpenAiError> {
+    pub(super) fn eof(self, ready: &mut VecDeque<StreamEvent>) -> Result<(), OpenAiError> {
         match self {
             Self::Chat(folding) => {
                 finish_chat(folding, ready);
@@ -55,8 +57,7 @@ impl Folding {
     }
 }
 
-fn finish_chat(folding: wire::Folding, ready: &mut VecDeque<ProviderEvent>) {
+fn finish_chat(folding: wire::Folding, ready: &mut VecDeque<StreamEvent>) {
     let (calls, done) = folding.finish();
-    ready.extend(calls.into_iter().map(ProviderEvent::ToolCall));
-    ready.push_back(ProviderEvent::Done(done));
+    push_end(ready, calls, done);
 }

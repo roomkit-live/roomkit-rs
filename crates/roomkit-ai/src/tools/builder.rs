@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use roomkit::model::ToolCall;
 
-use super::{BoxFuture, ToolContext, ToolDefinition, ToolError, ToolOutput, Toolset};
+use super::{AiTool, BoxFuture, ToolContext, ToolError, ToolOutput, Toolset};
 use crate::texts::error_envelope;
 
 /// A tool's handler, boxed.
@@ -17,7 +17,7 @@ type Handler = dyn Fn(ToolCall, ToolContext) -> BoxFuture<'static, Result<ToolOu
 /// [`Toolset`] built one tool at a time. Cloning it shares its closures.
 ///
 /// ```
-/// use roomkit_ai::{ToolDefinition, ToolError, ToolOutput, Tools};
+/// use roomkit_ai::{AiTool, ToolError, ToolOutput, Tools};
 /// use serde::Deserialize;
 /// use serde_json::json;
 ///
@@ -26,7 +26,7 @@ type Handler = dyn Fn(ToolCall, ToolContext) -> BoxFuture<'static, Result<ToolOu
 ///     order: String,
 /// }
 ///
-/// let lookup = ToolDefinition::new(
+/// let lookup = AiTool::new(
 ///     "lookup_order",
 ///     "Find an order by its number",
 ///     json!({
@@ -46,7 +46,7 @@ type Handler = dyn Fn(ToolCall, ToolContext) -> BoxFuture<'static, Result<ToolOu
 /// ```
 #[derive(Clone, Default)]
 pub struct Tools {
-    tools: Vec<(ToolDefinition, Arc<Handler>)>,
+    tools: Vec<(AiTool, Arc<Handler>)>,
 }
 
 impl Tools {
@@ -59,7 +59,7 @@ impl Tools {
     /// twice is refused when the agent takes the toolset (RFC §21.1 "One
     /// tool per name").
     #[must_use]
-    pub fn tool<F, Fut>(mut self, definition: ToolDefinition, handler: F) -> Self
+    pub fn tool<F, Fut>(mut self, definition: AiTool, handler: F) -> Self
     where
         F: Fn(ToolCall, ToolContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<ToolOutput, ToolError>> + Send + 'static,
@@ -85,7 +85,7 @@ impl std::fmt::Debug for Tools {
 }
 
 impl Toolset for Tools {
-    fn tools(&self) -> Vec<ToolDefinition> {
+    fn tools(&self) -> Vec<AiTool> {
         self.tools
             .iter()
             .map(|(definition, _)| definition.clone())

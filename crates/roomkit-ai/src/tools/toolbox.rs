@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use roomkit::model::{ToolCall, ToolCallOutcome};
 
-use super::{DynToolset, ToolContext, ToolDefinition, ToolPolicy, Toolset};
+use super::{AiTool, DynToolset, ToolContext, ToolPolicy, Toolset};
 use crate::error::AiError;
 
 /// The toolsets an agent took, and the tools they declare, in the order
@@ -14,7 +14,7 @@ use crate::error::AiError;
 #[derive(Clone, Default)]
 pub(crate) struct Toolbox {
     toolsets: Vec<Arc<dyn DynToolset>>,
-    tools: Vec<(ToolDefinition, usize)>,
+    tools: Vec<(AiTool, usize)>,
     served: HashMap<String, usize>,
     /// The tools the agent serves itself that only read or unlock, which
     /// the policy does not govern (RFC §21.1 "Tools the channel provides").
@@ -57,7 +57,7 @@ impl Toolbox {
     pub(crate) fn add_own(
         &mut self,
         toolset: Arc<dyn DynToolset>,
-        declared: Vec<ToolDefinition>,
+        declared: Vec<AiTool>,
     ) -> Result<(), AiError> {
         self.insert(toolset, declared, true)
     }
@@ -65,7 +65,7 @@ impl Toolbox {
     fn insert(
         &mut self,
         toolset: Arc<dyn DynToolset>,
-        declared: Vec<ToolDefinition>,
+        declared: Vec<AiTool>,
         exempt: bool,
     ) -> Result<(), AiError> {
         let mut names: Vec<&str> = Vec::with_capacity(declared.len());
@@ -106,7 +106,7 @@ impl Toolbox {
 
     /// The tools `policy` lets the model call, in order: what each round
     /// declares (RFC §21.1).
-    pub(crate) fn declared(&self, policy: &ToolPolicy) -> Vec<ToolDefinition> {
+    pub(crate) fn declared(&self, policy: &ToolPolicy) -> Vec<AiTool> {
         self.tools
             .iter()
             .filter(|(tool, _)| self.permits(policy, &tool.name))
@@ -115,7 +115,7 @@ impl Toolbox {
     }
 
     /// The tool `name`, and the toolset serving it.
-    pub(crate) fn find(&self, name: &str) -> Option<(&ToolDefinition, Arc<dyn DynToolset>)> {
+    pub(crate) fn find(&self, name: &str) -> Option<(&AiTool, Arc<dyn DynToolset>)> {
         let position = *self.served.get(name)?;
         let tool = self
             .tools

@@ -1,11 +1,12 @@
 //! A room with an SMS transport and an AI agent on a scripted model.
+use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ChannelType, HookResult, InboundMessage, Metadata,
-    RoomContext, RoomEvent, RoomId, TextContent,
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, HookResult, InboundMessage, RoomContext,
+    RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
@@ -15,11 +16,10 @@ use roomkit::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiAgent, AiProvider, AiRequest, Done, ProviderResponse, ProviderStream, ProviderToolCall,
-    ToolDefinition, ToolOutput, Tools,
+    AiAgent, AiContext, AiProvider, AiResponse, AiRole, AiTool, AiToolCall, ProviderError,
+    ToolOutput, Tools, tool_arguments,
 };
 use roomkit_core::ops::ChannelConfig;
-use roomkit_core::rules::transcript::Role;
 use serde_json::json;
 use tokio::sync::watch;
 
@@ -32,8 +32,8 @@ pub(crate) fn room_id() -> RoomId {
 }
 
 /// `lookup_order`, which takes an order's number.
-pub(crate) fn lookup() -> ToolDefinition {
-    ToolDefinition::new(
+pub(crate) fn lookup() -> AiTool {
+    AiTool::new(
         "lookup_order",
         "Find an order by its number",
         json!({
@@ -362,35 +362,51 @@ impl Endless {
     }
 }
 
-impl AiProvider for Endless {
-    fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a> {
+impl Endless {
+    /// The answer to `context`: a round of a text and a call until the turn
+    /// made its rounds, then an answer; silence past the most turns.
+    fn answer(&self, context: &AiContext) -> AiResponse {
         // The rounds of calls the turn made so far: its trailing assistant
         // calls and their results.
-        let done = request
+        let done = context
             .messages
             .iter()
             .rev()
             .take_while(|message| {
-                message.role == Role::Tool
-                    || (message.role == Role::Assistant && !message.tool_calls.is_empty())
+                message.role == AiRole::Tool
+                    || (message.role == AiRole::Assistant && !message.tool_calls().is_empty())
             })
-            .filter(|message| message.role == Role::Assistant)
+            .filter(|message| message.role == AiRole::Assistant)
             .count();
-        if done == 0 && self.turns.fetch_add(1, Ordering::SeqCst) >= MOST_TURNS {
-            let finish = Done::new(Some("stop".to_owned()), Metadata::new());
-            let silence = ProviderResponse::new("", Vec::new(), finish);
-            return ProviderResponse::into_stream(async move { Ok(silence) });
-        }
-        let response = if done < self.rounds {
-            let call =
-                ProviderToolCall::new(format!("c{done}"), "lookup_order", r#"{"order": "1"}"#);
-            let finish = Done::new(Some("tool_calls".to_owned()), Metadata::new());
-            ProviderResponse::new(format!("Round {done}."), vec![call], finish)
-        } else {
-            let finish = Done::new(Some("stop".to_owned()), Metadata::new());
-            ProviderResponse::new("Answer.", Vec::new(), finish)
+        let ended = |content: String, finish_reason: &str| AiResponse {
+            finish_reason: Some(finish_reason.to_owned()),
+            ..AiResponse::new(content)
         };
-        ProviderResponse::into_stream(async move { Ok(response) })
+        if done == 0 && self.turns.fetch_add(1, Ordering::SeqCst) >= MOST_TURNS {
+            return ended(String::new(), "stop");
+        }
+        if done < self.rounds {
+            let mut call = AiToolCall::new(format!("c{done}"), "lookup_order");
+            call.arguments = tool_arguments(r#"{"order": "1"}"#);
+            return AiResponse {
+                tool_calls: vec![call],
+                ..ended(format!("Round {done}."), "tool_calls")
+            };
+        }
+        ended("Answer.".to_owned(), "stop")
+    }
+}
+
+impl AiProvider for Endless {
+    fn model_name(&self) -> &'static str {
+        "endless"
+    }
+
+    fn generate<'a>(
+        &'a self,
+        context: &'a AiContext,
+    ) -> impl Future<Output = Result<AiResponse, ProviderError>> + Send + 'a {
+        std::future::ready(Ok(self.answer(context)))
     }
 }
 

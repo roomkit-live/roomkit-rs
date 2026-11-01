@@ -11,7 +11,7 @@ use roomkit::{
     DetachChannelOptions, HookOptions, HookTrigger, MuteOptions, RoomKit, SetVisibilityOptions,
 };
 use roomkit_ai::testing::ScriptedRound;
-use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiTool, ToolOutput, Tools};
 use serde_json::json;
 
 use super::{Read, Room, Stop, Streaming, channel, lookup, room_id};
@@ -105,7 +105,7 @@ enum Change {
 /// `change`, a tool that makes `change` to the room through `kit`.
 fn changing(kit: &RoomKit, change: Change) -> Tools {
     let weak = kit.downgrade();
-    let definition = ToolDefinition::new("change", "Changes the room", json!({ "type": "object" }));
+    let definition = AiTool::new("change", "Changes the room", json!({ "type": "object" }));
     Tools::new().tool(definition, move |_call, _context| {
         let kit = weak.upgrade().unwrap();
         async move {

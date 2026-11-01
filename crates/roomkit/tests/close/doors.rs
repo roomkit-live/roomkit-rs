@@ -14,7 +14,7 @@ use roomkit::{
     HookTrigger, RoomKit, ToolCallEvent,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiTool, ToolOutput, Tools};
 use roomkit_core::ops::ChannelConfig;
 use serde_json::json;
 use tokio::sync::Barrier;
@@ -430,11 +430,11 @@ async fn a_close_from_a_tool_s_observer_cuts_its_turn() {
     let ended_slow = Arc::clone(&slow_ended);
     let tools = Tools::new()
         .tool(
-            ToolDefinition::new("quick", "Quick.", json!({ "type": "object" })),
+            AiTool::new("quick", "Quick.", json!({ "type": "object" })),
             |_call, _context| async { Ok(ToolOutput::Text("quick".to_owned())) },
         )
         .tool(
-            ToolDefinition::new("slow", "Slow.", json!({ "type": "object" })),
+            AiTool::new("slow", "Slow.", json!({ "type": "object" })),
             move |_call, _context| {
                 let ended_slow = Arc::clone(&ended_slow);
                 async move {

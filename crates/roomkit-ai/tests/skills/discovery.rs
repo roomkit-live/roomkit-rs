@@ -487,7 +487,7 @@ fn a_copy_limits_availability_without_rereading_or_mutating_the_source() {
     assert_eq!(copy.tool_definitions().len(), 2);
     assert_eq!(
         source.copy(Some(&[])).tool_definitions(),
-        Vec::<roomkit_ai::ToolDefinition>::new()
+        Vec::<roomkit_ai::AiTool>::new()
     );
 }
 

@@ -11,7 +11,7 @@ use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{EventContent, EventType, ToolCallContent, ToolCallOutcome};
 use roomkit::{HookExecution, HookOptions, HookTrigger, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiTool, ToolOutput, Tools};
 use serde_json::{Value, json};
 
 use super::support::Room;
@@ -23,7 +23,7 @@ const INTENT: &str = "Je recherche les fichiers texte du projet.";
 fn shell(received: &Arc<Mutex<Vec<Value>>>, parameters: Value) -> Tools {
     let received = Arc::clone(received);
     Tools::new().tool(
-        ToolDefinition::new("shell", "Run a command", parameters),
+        AiTool::new("shell", "Run a command", parameters),
         move |call, _context| {
             assert_eq!(call.intent, None, "the tool never receives the intent");
             received
@@ -178,7 +178,7 @@ async fn a_call_s_intent_rides_apart_from_its_arguments() {
     let replayed = &model.requests()[1].messages;
     let written: Vec<Value> = replayed
         .iter()
-        .flat_map(|message| &message.tool_calls)
+        .flat_map(|message| message.tool_calls())
         .map(|call| Value::Object(call.arguments.clone()))
         .collect();
     assert_eq!(
@@ -222,7 +222,7 @@ async fn a_later_turn_reads_the_call_with_its_intent() {
         model.requests()[request]
             .messages
             .iter()
-            .flat_map(|message| &message.tool_calls)
+            .flat_map(|message| message.tool_calls())
             .map(|call| Value::Object(call.arguments.clone()))
             .collect()
     };
@@ -342,7 +342,7 @@ async fn a_refused_or_failed_call_is_reported_with_its_intent() {
     ]);
     let received = Arc::default();
     let tools = shell(&received, closed()).tool(
-        ToolDefinition::new("fail", "Fails", json!({ "type": "object" })),
+        AiTool::new("fail", "Fails", json!({ "type": "object" })),
         |_call, _context| async { Err(roomkit_ai::ToolError::raised_as("RuntimeError", "broken")) },
     );
     let room = Room::equipped(model, tools, |agent| agent.with_tool_call_intents(true)).await;

@@ -27,8 +27,8 @@ use roomkit::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiAgent, AiProvider, AiRequest, ProviderEvent, ProviderStream, ToolDefinition, ToolOutput,
-    Tools,
+    AiAgent, AiContext, AiProvider, AiResponse, AiTool, ProviderStream, StreamEvent,
+    StreamTextDelta, ToolOutput, Tools,
 };
 use roomkit_core::ops::ChannelConfig;
 use serde_json::json;
@@ -264,7 +264,7 @@ impl Pieces {
 /// A generation's events, read one at a time, a wait before each text
 /// piece that follows another.
 struct Events {
-    queue: VecDeque<Result<ProviderEvent, String>>,
+    queue: VecDeque<Result<StreamEvent, String>>,
     dropped: Arc<AtomicUsize>,
     /// Whether the last event read was a text piece.
     after_text: bool,
@@ -279,14 +279,14 @@ impl Drop for Events {
 }
 
 impl Stream for Events {
-    type Item = Result<ProviderEvent, roomkit_ai::ProviderError>;
+    type Item = Result<StreamEvent, roomkit_ai::ProviderError>;
 
     fn poll_next(
         self: Pin<&mut Self>,
         context: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        let text_next = matches!(this.queue.front(), Some(Ok(ProviderEvent::Text(_))));
+        let text_next = matches!(this.queue.front(), Some(Ok(StreamEvent::TextDelta(_))));
         if text_next && this.after_text && !this.waited {
             this.waited = true;
             context.waker().wake_by_ref();
@@ -294,13 +294,25 @@ impl Stream for Events {
         }
         this.waited = false;
         let next = this.queue.pop_front();
-        this.after_text = matches!(next, Some(Ok(ProviderEvent::Text(_))));
+        this.after_text = matches!(next, Some(Ok(StreamEvent::TextDelta(_))));
         std::task::Poll::Ready(next.map(|event| event.map_err(Into::into)))
     }
 }
 
 impl AiProvider for Pieces {
-    fn generate<'a>(&'a self, _request: &'a AiRequest) -> ProviderStream<'a> {
+    fn model_name(&self) -> &'static str {
+        "scripted"
+    }
+
+    fn generate<'a>(
+        &'a self,
+        _context: &'a AiContext,
+    ) -> impl std::future::Future<Output = Result<AiResponse, roomkit_ai::ProviderError>> + Send + 'a
+    {
+        std::future::ready(Err("this test's model only streams".into()))
+    }
+
+    fn generate_structured_stream<'a>(&'a self, _request: &'a AiContext) -> ProviderStream<'a> {
         self.requests.fetch_add(1, Ordering::SeqCst);
         let round = self.rounds.lock().unwrap().pop_front();
         let mut events = VecDeque::new();
@@ -315,14 +327,14 @@ impl AiProvider for Pieces {
                 events.extend(
                     pieces
                         .into_iter()
-                        .map(|piece| Ok(ProviderEvent::Text(piece))),
+                        .map(|piece| Ok(StreamEvent::TextDelta(StreamTextDelta { text: piece }))),
                 );
                 if let Some(failure) = round.fails {
                     events.push_back(Err(failure));
                 } else {
-                    let calls = round.calls.into_iter();
-                    events.extend(calls.map(|call| Ok(ProviderEvent::ToolCall(call))));
-                    events.push_back(Ok(ProviderEvent::Done(round.done)));
+                    let calls = round.tool_calls().into_iter();
+                    events.extend(calls.map(|call| Ok(StreamEvent::ToolCall(call.into()))));
+                    events.push_back(Ok(StreamEvent::Done(round.done)));
                 }
             }
         }
@@ -338,7 +350,7 @@ impl AiProvider for Pieces {
 /// `lookup_order`, counting its runs, signalling `running` while it runs
 /// when given one.
 fn lookup(runs: Arc<AtomicUsize>, running: Option<Arc<Notify>>) -> Tools {
-    let definition = ToolDefinition::new(
+    let definition = AiTool::new(
         "lookup_order",
         "Find an order",
         json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
@@ -885,7 +897,7 @@ async fn a_turn_ending_on_no_text_writes_its_record_on_its_last_message() {
 /// stored the rows when the turn returned, the tool's event first.)
 #[tokio::test]
 async fn an_event_a_tool_sends_is_stored_after_the_round_s_text_and_start() {
-    let definition = ToolDefinition::new("notify", "Notify", json!({ "type": "object" }));
+    let definition = AiTool::new("notify", "Notify", json!({ "type": "object" }));
     let tools = Tools::new().tool(definition, |_call, context| {
         let turn = context.turn().cloned();
         let room = context.room_id.clone();
@@ -941,13 +953,13 @@ async fn an_event_a_tool_sends_is_stored_after_the_round_s_text_and_start() {
 /// sends them.
 #[derive(Clone, Default)]
 struct Controlled {
-    events: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<ProviderEvent>>>>,
+    events: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<StreamEvent>>>>,
     dropped: Arc<AtomicUsize>,
 }
 
 /// The events a test hands a [`Controlled`] generation.
 struct Fed {
-    events: tokio::sync::mpsc::UnboundedReceiver<ProviderEvent>,
+    events: tokio::sync::mpsc::UnboundedReceiver<StreamEvent>,
     dropped: Arc<AtomicUsize>,
 }
 
@@ -958,7 +970,7 @@ impl Drop for Fed {
 }
 
 impl Stream for Fed {
-    type Item = Result<ProviderEvent, roomkit_ai::ProviderError>;
+    type Item = Result<StreamEvent, roomkit_ai::ProviderError>;
 
     fn poll_next(
         self: Pin<&mut Self>,
@@ -972,7 +984,19 @@ impl Stream for Fed {
 }
 
 impl AiProvider for Controlled {
-    fn generate<'a>(&'a self, _request: &'a AiRequest) -> ProviderStream<'a> {
+    fn model_name(&self) -> &'static str {
+        "scripted"
+    }
+
+    fn generate<'a>(
+        &'a self,
+        _context: &'a AiContext,
+    ) -> impl std::future::Future<Output = Result<AiResponse, roomkit_ai::ProviderError>> + Send + 'a
+    {
+        std::future::ready(Err("this test's model only streams".into()))
+    }
+
+    fn generate_structured_stream<'a>(&'a self, _request: &'a AiContext) -> ProviderStream<'a> {
         let events = self.events.lock().unwrap().take();
         let (_spare, empty) = tokio::sync::mpsc::unbounded_channel();
         Box::pin(Fed {
@@ -1032,7 +1056,9 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
     // Each piece once the reader read the one before: pieces fed together
     // would cross as one (RFC §10.6.4).
     for (before, piece) in ["The ", "answer "].into_iter().enumerate() {
-        feed.send(ProviderEvent::Text(piece.to_owned())).unwrap();
+        let text = piece.to_owned();
+        feed.send(StreamEvent::TextDelta(StreamTextDelta { text }))
+            .unwrap();
         let read = async {
             while ws.read().len() <= before {
                 tokio::task::yield_now().await;
@@ -1084,7 +1110,7 @@ async fn the_default_deliver_stream_delivers_one_buffered_event() {
         ScriptedRound::calling("", [("call_1", "lookup", "{}")]).in_pieces(["Let me ", "check."]),
         ScriptedRound::writing(["Done."]),
     ]);
-    let lookup = ToolDefinition::new(
+    let lookup = AiTool::new(
         "lookup",
         "Looks up",
         serde_json::json!({ "type": "object" }),

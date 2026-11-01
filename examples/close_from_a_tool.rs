@@ -33,7 +33,7 @@ use roomkit::{
     AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, ProcessInboundOptions, RoomKit,
     RoomKitError,
 };
-use roomkit_ai::{ToolDefinition, ToolError, ToolOutput, Tools};
+use roomkit_ai::{AiTool, ToolError, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::json;
 use tokio::time::Instant;
@@ -201,7 +201,7 @@ async fn service_room(
 /// the agent, and notes what its close took.
 fn shut_down(kit: &RoomKit, pager: &Pager, closed: &Log<Closed>) -> Tools {
     let (kit, pager, closed) = (kit.downgrade(), pager.clone(), closed.clone());
-    let definition = ToolDefinition::new(
+    let definition = AiTool::new(
         "shut_down",
         "Shut the service down",
         json!({ "type": "object" }),

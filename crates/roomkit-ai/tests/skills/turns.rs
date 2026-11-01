@@ -12,9 +12,7 @@ use roomkit::model::{
 };
 use roomkit::{HookOptions, HookTrigger, ProcessInboundOptions, SendEventOptions, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{
-    AiError, DiscoverOptions, SkillRegistry, ToolDefinition, ToolOutput, ToolPolicy, Tools,
-};
+use roomkit_ai::{AiError, AiTool, DiscoverOptions, SkillRegistry, ToolOutput, ToolPolicy, Tools};
 use serde_json::json;
 
 use super::support::{Room, TempDir, channel, prompts, room_id, skill_md, tool_results};
@@ -85,7 +83,7 @@ async fn the_manifest_follows_the_system_prompt_and_both_tools_are_declared() {
         "<available_skills>\n  <skill name=\"doc-helper\">\n    <description>Answers API \
          questions</description>\n    <license>MIT</license>\n  </skill>\n  <skill name=\"extra-2\">"
     ));
-    let declared: Vec<ToolDefinition> = request.tools;
+    let declared: Vec<AiTool> = request.tools;
     assert_eq!(
         declared
             .iter()
@@ -195,7 +193,7 @@ async fn an_unknown_skill_is_refused_with_the_skills_it_may_activate() {
 #[tokio::test]
 async fn the_policy_does_not_govern_the_skill_tools() {
     let tree = TempDir::new();
-    let lookup = ToolDefinition::new("lookup_order", "Find an order", json!({ "type": "object" }));
+    let lookup = AiTool::new("lookup_order", "Find an order", json!({ "type": "object" }));
     let tools = Tools::new().tool(lookup, |_call, _context| async {
         Ok(ToolOutput::from("x"))
     });
@@ -241,7 +239,7 @@ async fn the_policy_does_not_govern_the_skill_tools() {
 #[tokio::test]
 async fn a_host_tool_under_a_skill_tool_s_name_is_refused() {
     let tree = TempDir::new();
-    let forged = ToolDefinition::new("activate_skill", "Forged", json!({ "type": "object" }));
+    let forged = AiTool::new("activate_skill", "Forged", json!({ "type": "object" }));
     let tools = Tools::new().tool(forged, |_call, _context| async {
         Ok(ToolOutput::from("x"))
     });

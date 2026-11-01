@@ -2,7 +2,9 @@
 
 use super::wire;
 use crate::error::OpenAiError;
-use roomkit_ai::ProviderEvent;
+use roomkit_ai::StreamEvent;
+
+use crate::request::{push_end, push_text};
 use serde_json::Value;
 use std::collections::VecDeque;
 
@@ -18,7 +20,7 @@ impl Folding {
         &mut self,
         data: &str,
         secret: &str,
-        ready: &mut VecDeque<ProviderEvent>,
+        ready: &mut VecDeque<StreamEvent>,
     ) -> Result<bool, OpenAiError> {
         if data == "[DONE]" {
             return Err(wire::malformed(
@@ -36,7 +38,7 @@ impl Folding {
                     .and_then(Value::as_str)
                     .ok_or_else(|| wire::malformed("Responses text delta is not text"))?;
                 self.text.push_str(delta);
-                ready.push_back(ProviderEvent::Text(delta.to_owned()));
+                push_text(ready, delta.to_owned());
             }
             Some("response.completed" | "response.incomplete") => {
                 let mut response = value
@@ -59,10 +61,9 @@ impl Folding {
                     wire::malformed("Responses terminal text differs from its streamed text")
                 })?;
                 if !suffix.is_empty() {
-                    ready.push_back(ProviderEvent::Text(suffix.to_owned()));
+                    push_text(ready, suffix.to_owned());
                 }
-                ready.extend(whole.calls.into_iter().map(ProviderEvent::ToolCall));
-                ready.push_back(ProviderEvent::Done(whole.done));
+                push_end(ready, whole.calls, whole.done);
                 return Ok(true);
             }
             Some("response.failed" | "response.cancelled") => {

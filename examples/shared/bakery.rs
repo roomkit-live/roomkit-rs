@@ -1,7 +1,7 @@
 //! The bakery's agent, which the server examples serve: its prompt and its
 //! tool, `lookup_order`.
 
-use roomkit_ai::{ToolDefinition, ToolError, ToolOutput, Tools};
+use roomkit_ai::{AiTool, ToolError, ToolOutput, Tools};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -20,7 +20,7 @@ pub fn orders() -> Tools {
     struct Lookup {
         order: String,
     }
-    let lookup = ToolDefinition::new(
+    let lookup = AiTool::new(
         "lookup_order",
         "Find a customer's order by its number: what it holds, its status and its pickup time.",
         json!({

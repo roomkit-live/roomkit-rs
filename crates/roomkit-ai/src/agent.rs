@@ -392,7 +392,7 @@ impl<P: AiProvider> Channel for AiAgent<P> {
     }
 
     fn provider_name(&self) -> Option<String> {
-        self.provider.name().map(str::to_owned)
+        Some(self.provider.name().to_owned())
     }
 
     /// An AI agent takes no inbound message, as the reference

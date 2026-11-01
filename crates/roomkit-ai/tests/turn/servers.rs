@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use pretty_assertions::assert_eq;
 use roomkit::model::ToolCall;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiAgent, AiError, ToolContext, ToolDefinition, ToolError, ToolOutput, Toolset};
+use roomkit_ai::{AiAgent, AiError, AiTool, ToolContext, ToolError, ToolOutput, Toolset};
 use serde_json::json;
 
 use super::support::{Room, channel, served};
@@ -130,8 +130,8 @@ struct Closing {
 }
 
 impl Toolset for Closing {
-    fn tools(&self) -> Vec<ToolDefinition> {
-        vec![ToolDefinition::new(
+    fn tools(&self) -> Vec<AiTool> {
+        vec![AiTool::new(
             "remote",
             "A tool of a server",
             json!({ "type": "object" }),

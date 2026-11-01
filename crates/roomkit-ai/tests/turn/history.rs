@@ -3,32 +3,32 @@
 //! reads at its place, as the assistant's calls then their results, the
 //! way the turn itself sent it.
 use std::collections::VecDeque;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, ModifyOptions};
-use roomkit::model::{EventContent, EventType, HookResult, Metadata, RoomEvent};
+use roomkit::model::{EventContent, EventType, HookResult, RoomEvent};
 use roomkit::{HookOptions, HookTrigger, ToolCallEvent, UpdateEventOptions};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiAgent, AiProvider, AiRequest, Done, ProviderResponse, ProviderStream, ProviderToolCall,
-    ToolDefinition, ToolError, Tools,
+    AiAgent, AiContext, AiMessage, AiProvider, AiResponse, AiRole, AiTool, AiToolResultPart,
+    ProviderError, ToolError, Tools, read_tool_calls,
 };
 use serde_json::json;
 
 use super::support::{Room, channel, room_id, served};
-use roomkit_core::rules::transcript::{Message, Role};
 
 /// A model that does not stream: each generation hands its whole
 /// response at once (RFC §6.4 "One loop, streamed or not").
 #[derive(Clone, Default)]
 struct Whole {
-    script: Arc<Mutex<VecDeque<ProviderResponse>>>,
-    requests: Arc<Mutex<Vec<AiRequest>>>,
+    script: Arc<Mutex<VecDeque<AiResponse>>>,
+    requests: Arc<Mutex<Vec<AiContext>>>,
 }
 
 impl Whole {
-    fn new(responses: impl IntoIterator<Item = ProviderResponse>) -> Self {
+    fn new(responses: impl IntoIterator<Item = AiResponse>) -> Self {
         Self {
             script: Arc::new(Mutex::new(responses.into_iter().collect())),
             requests: Arc::default(),
@@ -37,10 +37,17 @@ impl Whole {
 }
 
 impl AiProvider for Whole {
-    fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a> {
-        self.requests.lock().unwrap().push(request.clone());
+    fn model_name(&self) -> &'static str {
+        "whole"
+    }
+
+    fn generate<'a>(
+        &'a self,
+        context: &'a AiContext,
+    ) -> impl Future<Output = Result<AiResponse, ProviderError>> + Send + 'a {
+        self.requests.lock().unwrap().push(context.clone());
         let next = self.script.lock().unwrap().pop_front();
-        ProviderResponse::into_stream(async move { next.ok_or_else(|| "no response left".into()) })
+        std::future::ready(next.ok_or_else(|| "no response left".into()))
     }
 }
 
@@ -48,7 +55,7 @@ impl AiProvider for Whole {
 fn tools() -> Tools {
     let nothing = json!({ "type": "object", "properties": {} });
     served().tool(
-        ToolDefinition::new("fail", "Fails", nothing),
+        AiTool::new("fail", "Fails", nothing),
         |_call, _context| async { Err(ToolError::raised_as("RuntimeError", "broken")) },
     )
 }
@@ -75,25 +82,25 @@ async fn two_turns<P: AiProvider>(agent: AiAgent<P>) {
 /// The checks on what the model read: the second turn reads the first
 /// turn's rounds between its question and its answer, word for word as the
 /// first turn sent them to its last round.
-fn check(requests: &[AiRequest]) {
+fn check(requests: &[AiContext]) {
     assert_eq!(requests.len(), 4);
     let first_turn_last_round = &requests.get(2).unwrap().messages;
     let second_turn = &requests.get(3).unwrap().messages;
-    let roles: Vec<(Role, usize)> = second_turn
+    let roles: Vec<(AiRole, usize)> = second_turn
         .iter()
-        .map(|message| (message.role, message.tool_calls.len()))
+        .map(|message| (message.role, message.tool_calls().len()))
         .collect();
     assert_eq!(
         roles,
         [
-            (Role::User, 0),
-            (Role::Assistant, 2),
-            (Role::Tool, 0),
-            (Role::Tool, 0),
-            (Role::Assistant, 1),
-            (Role::Tool, 0),
-            (Role::Assistant, 0),
-            (Role::User, 0),
+            (AiRole::User, 0),
+            (AiRole::Assistant, 2),
+            (AiRole::Tool, 0),
+            (AiRole::Tool, 0),
+            (AiRole::Assistant, 1),
+            (AiRole::Tool, 0),
+            (AiRole::Assistant, 0),
+            (AiRole::User, 0),
         ]
     );
     assert_eq!(second_turn.get(..6), first_turn_last_round.get(..6));
@@ -101,17 +108,19 @@ fn check(requests: &[AiRequest]) {
         second_turn.get(6..),
         Some(
             &[
-                Message::new(Role::Assistant, "Answer one."),
-                Message::new(Role::User, "second question")
+                AiMessage::new(AiRole::Assistant, "Answer one."),
+                AiMessage::new(AiRole::User, "second question")
             ][..]
         )
     );
     assert_eq!(
-        second_turn.get(3),
-        Some(&Message::tool_result(
-            "c2",
-            r#"{"error": "Tool 'fail' failed (RuntimeError)"}"#
-        ))
+        second_turn.get(3).and_then(AiMessage::tool_result),
+        Some(&AiToolResultPart {
+            tool_call_id: "c2".to_owned(),
+            name: "fail".to_owned(),
+            result: r#"{"error": "Tool 'fail' failed (RuntimeError)"}"#.to_owned(),
+            is_error: false,
+        })
     );
 }
 
@@ -135,14 +144,24 @@ async fn an_earlier_round_reads_as_its_calls_then_their_results_whole() {
     let calling = |calls: &[(&str, &str, &str)]| {
         let calls = calls
             .iter()
-            .map(|(id, name, arguments)| ProviderToolCall::new(*id, *name, *arguments))
+            .map(|(id, name, arguments)| {
+                (
+                    (*id).to_owned(),
+                    (*name).to_owned(),
+                    (*arguments).to_owned(),
+                )
+            })
             .collect();
-        let done = Done::new(Some("tool_calls".to_owned()), Metadata::new());
-        ProviderResponse::new("", calls, done)
+        let finish_reason = Some("tool_calls".to_owned());
+        AiResponse {
+            tool_calls: read_tool_calls(calls, finish_reason.as_deref()),
+            finish_reason,
+            ..AiResponse::new("")
+        }
     };
-    let answering = |text: &str| {
-        let done = Done::new(Some("stop".to_owned()), Metadata::new());
-        ProviderResponse::new(text, Vec::new(), done)
+    let answering = |text: &str| AiResponse {
+        finish_reason: Some("stop".to_owned()),
+        ..AiResponse::new(text)
     };
     let model = Whole::new([
         calling(ROUNDS[0]),
@@ -191,8 +210,8 @@ async fn a_hook_s_rewrite_is_what_is_replayed() {
             request
                 .messages
                 .iter()
-                .filter(|message| message.role == Role::Tool)
-                .map(|message| message.text.clone())
+                .filter(|message| message.role == AiRole::Tool)
+                .map(AiMessage::text)
                 .collect()
         })
         .collect();
@@ -207,26 +226,29 @@ async fn a_hook_s_rewrite_is_what_is_replayed() {
 
 /// Each message of `request`, on one line: its role and text, the ids it
 /// calls, or the call its result answers.
-fn shape(request: &AiRequest) -> Vec<String> {
+fn shape(request: &AiContext) -> Vec<String> {
     request
         .messages
         .iter()
         .map(|message| match message.role {
-            Role::Assistant if !message.tool_calls.is_empty() => {
+            AiRole::Assistant if !message.tool_calls().is_empty() => {
                 let ids: Vec<&str> = message
-                    .tool_calls
-                    .iter()
+                    .tool_calls()
+                    .into_iter()
                     .map(|call| call.id.as_str())
                     .collect();
                 format!("calls {}", ids.join(" "))
             }
-            Role::Tool => format!(
+            AiRole::Tool => format!(
                 "result {} {}",
-                message.tool_call_id.as_deref().unwrap_or_default(),
-                message.text
+                message
+                    .tool_result()
+                    .map(|result| result.tool_call_id.as_str())
+                    .unwrap_or_default(),
+                message.text()
             ),
-            Role::User => format!("user {}", message.text),
-            Role::Assistant | _ => format!("assistant {}", message.text),
+            AiRole::User => format!("user {}", message.text()),
+            AiRole::Assistant | AiRole::System => format!("assistant {}", message.text()),
         })
         .collect()
 }

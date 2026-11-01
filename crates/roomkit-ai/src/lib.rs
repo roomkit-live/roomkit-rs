@@ -4,9 +4,10 @@
 //! - [`AiAgent`]: an intelligence channel whose turn runs one tool loop,
 //!   the same for every provider (step 4, decision 6): generate, run the
 //!   tools the model calls, hand back their results, generate again.
-//! - [`AiProvider`]: a model, reached with one call, a request in and the
-//!   generation's events out (text, calls, a done event). `roomkit-openai`
-//!   implements it for OpenAI-compatible endpoints;
+//! - [`AiProvider`]: a model, Python's provider contract: an
+//!   [`AiContext`] in, an [`AiResponse`] out, or its structured stream of
+//!   [`StreamEvent`]s (text, calls, the end), which the tool loop reads.
+//!   `roomkit-openai` implements it for OpenAI-compatible endpoints;
 //!   [`testing::ScriptedProvider`] answers from a script.
 //! - [`Toolset`] and [`Tools`]: the tools an agent serves, many behind one
 //!   handler (step 4, decision 7), and the host's closures.
@@ -28,10 +29,10 @@
 //! use roomkit::RoomKit;
 //! use roomkit::model::ChannelId;
 //! use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-//! use roomkit_ai::{AiAgent, ToolDefinition, ToolOutput, ToolPolicy, Tools};
+//! use roomkit_ai::{AiAgent, AiTool, ToolOutput, ToolPolicy, Tools};
 //! use serde_json::json;
 //!
-//! let lookup = ToolDefinition::new(
+//! let lookup = AiTool::new(
 //!     "lookup_order",
 //!     "Find an order by its number",
 //!     json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
@@ -68,11 +69,15 @@ mod tools;
 
 pub use self::agent::AiAgent;
 pub use self::error::AiError;
+#[doc(hidden)]
+pub use self::provider::read_tool_calls;
 pub use self::provider::{
-    AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderResponse, ProviderStream,
-    ProviderToolCall,
+    AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse,
+    AiRole, AiTextPart, AiToolCall, AiToolCallPart, AiToolResultPart, ProviderError,
+    ProviderErrorOptions, ProviderStream, StreamDone, StreamEvent, StreamTextDelta, StreamToolCall,
+    TextStream, tool_arguments,
 };
 pub use self::skills::{DiscoverOptions, Skill, SkillError, SkillMetadata, SkillRegistry};
 pub use self::tools::{
-    ToolContext, ToolDefinition, ToolError, ToolOutput, ToolPolicy, Tools, Toolset, arguments,
+    AiTool, ToolContext, ToolError, ToolOutput, ToolPolicy, Tools, Toolset, arguments,
 };

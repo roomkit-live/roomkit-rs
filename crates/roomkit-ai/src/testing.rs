@@ -2,12 +2,14 @@
 //! script and keeps what it was asked.
 
 use std::collections::VecDeque;
+use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit::model::Metadata;
 
 use crate::provider::{
-    AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderStream, ProviderToolCall,
+    AiContext, AiProvider, AiResponse, ProviderError, ProviderStream, StreamDone, StreamEvent,
+    StreamTextDelta, read_tool_calls,
 };
 use crate::stream::{Yielder, items};
 
@@ -37,7 +39,7 @@ pub struct ScriptedProvider {
 #[derive(Debug, Default)]
 struct Script {
     rounds: VecDeque<ScriptedRound>,
-    requests: Vec<AiRequest>,
+    requests: Vec<AiContext>,
 }
 
 /// One generation's answer: its text, its calls, why it stopped and what it
@@ -50,10 +52,11 @@ pub struct ScriptedRound {
     /// The pieces it writes its text in, one text event each; none writes
     /// the text in one.
     pub deltas: Vec<String>,
-    /// The calls it makes, each with its argument text.
-    pub calls: Vec<ProviderToolCall>,
+    /// The calls it makes, each an id, a tool's name and its argument
+    /// text, which the provider reads as a provider reads its wire.
+    calls: Vec<(String, String, String)>,
     /// How the generation ends.
-    pub done: Done,
+    pub done: StreamDone,
     /// The failure the generation ends on, once its text is written, before
     /// its calls and its done event: the provider's stream fails.
     pub fails: Option<String>,
@@ -66,7 +69,10 @@ impl ScriptedRound {
             text: text.into(),
             deltas: Vec::new(),
             calls: Vec::new(),
-            done: Done::new(Some("stop".to_owned()), Metadata::new()),
+            done: StreamDone {
+                finish_reason: Some("stop".to_owned()),
+                ..StreamDone::default()
+            },
             fails: None,
         }
     }
@@ -92,9 +98,12 @@ impl ScriptedRound {
             deltas: Vec::new(),
             calls: calls
                 .into_iter()
-                .map(|(id, name, arguments)| ProviderToolCall::new(id, name, arguments))
+                .map(|(id, name, arguments)| (id.to_owned(), name.to_owned(), arguments.to_owned()))
                 .collect(),
-            done: Done::new(Some("tool_calls".to_owned()), Metadata::new()),
+            done: StreamDone {
+                finish_reason: Some("tool_calls".to_owned()),
+                ..StreamDone::default()
+            },
             fails: None,
         }
     }
@@ -142,8 +151,8 @@ impl ScriptedProvider {
         }
     }
 
-    /// The requests it was asked, in order.
-    pub fn requests(&self) -> Vec<AiRequest> {
+    /// The contexts it was asked, in order.
+    pub fn requests(&self) -> Vec<AiContext> {
         self.lock().requests.clone()
     }
 
@@ -153,39 +162,88 @@ impl ScriptedProvider {
 }
 
 impl AiProvider for ScriptedProvider {
-    fn name(&self) -> Option<&str> {
-        Some("scripted")
+    fn name(&self) -> &'static str {
+        "scripted"
     }
 
-    fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a> {
-        let round = {
-            let mut script = self.lock();
-            script.requests.push(request.clone());
-            script.rounds.pop_front()
-        };
+    fn model_name(&self) -> &'static str {
+        "scripted"
+    }
+
+    fn supports_structured_streaming(&self) -> bool {
+        true
+    }
+
+    /// The next round, whole: its text, its calls, how it ended.
+    fn generate<'a>(
+        &'a self,
+        context: &'a AiContext,
+    ) -> impl Future<Output = Result<AiResponse, ProviderError>> + Send + 'a {
+        std::future::ready(self.whole(context))
+    }
+    /// The next round, as a stream: its text in its pieces, then its calls
+    /// and its end, or its failure once its text is written.
+    fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
+        let round = self.next_round(context);
         Box::pin(items(
-            move |out: Yielder<Result<ProviderEvent, ProviderError>>| async move {
-                let Some(round) = round else {
-                    return out
-                        .give(Err("the scripted model has no round left".into()))
-                        .await;
+            move |out: Yielder<Result<StreamEvent, ProviderError>>| async move {
+                let round = match round {
+                    Ok(round) => round,
+                    Err(error) => return out.give(Err(error)).await,
                 };
-                for delta in round.pieces() {
-                    out.give(Ok(ProviderEvent::Text(delta))).await;
+                for text in round.pieces() {
+                    out.give(Ok(StreamEvent::TextDelta(StreamTextDelta { text })))
+                        .await;
                 }
                 if let Some(failure) = round.fails {
                     return out.give(Err(failure.into())).await;
                 }
-                for call in round.calls {
-                    out.give(Ok(ProviderEvent::ToolCall(call))).await;
+                let finish_reason = round.done.finish_reason.as_deref();
+                for call in read_tool_calls(round.calls, finish_reason) {
+                    out.give(Ok(StreamEvent::ToolCall(call.into()))).await;
                 }
-                out.give(Ok(ProviderEvent::Done(round.done))).await;
+                out.give(Ok(StreamEvent::Done(round.done))).await;
             },
         ))
     }
 }
 
+impl ScriptedProvider {
+    /// The next round, whole: its text, its calls, how it ended.
+    fn whole(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
+        let round = self.next_round(context)?;
+        if let Some(failure) = round.fails {
+            return Err(failure.into());
+        }
+        let calls = read_tool_calls(round.calls, round.done.finish_reason.as_deref());
+        Ok(AiResponse {
+            finish_reason: round.done.finish_reason,
+            usage: round.done.usage,
+            metadata: round.done.metadata,
+            tool_calls: calls,
+            ..AiResponse::new(round.text)
+        })
+    }
+
+    /// Keeps `context` and takes the script's next round.
+    fn next_round(&self, context: &AiContext) -> Result<ScriptedRound, ProviderError> {
+        let mut script = self.lock();
+        script.requests.push(context.clone());
+        script
+            .rounds
+            .pop_front()
+            .ok_or_else(|| "the scripted model has no round left".into())
+    }
+}
+
 impl ScriptedRound {
+    /// The calls the round makes, read as its provider reads them for the
+    /// round's ending. For a test's own provider.
+    #[doc(hidden)]
+    pub fn tool_calls(&self) -> Vec<crate::AiToolCall> {
+        read_tool_calls(self.calls.clone(), self.done.finish_reason.as_deref())
+    }
+
     /// The pieces the round writes its text in.
     fn pieces(&self) -> Vec<String> {
         if !self.deltas.is_empty() {

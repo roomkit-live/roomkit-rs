@@ -15,7 +15,7 @@ use roomkit::{
     RoomKitOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiAgent, ToolContext, ToolDefinition, ToolError, ToolOutput, Tools};
+use roomkit_ai::{AiAgent, AiTool, ToolContext, ToolError, ToolOutput, Tools};
 use serde_json::json;
 
 pub(crate) fn channel(id: &str) -> ChannelId {
@@ -27,8 +27,8 @@ pub(crate) fn room() -> RoomId {
 }
 
 /// `lookup`, which takes a query.
-pub(crate) fn lookup() -> ToolDefinition {
-    ToolDefinition::new(
+pub(crate) fn lookup() -> AiTool {
+    AiTool::new(
         "lookup",
         "Look it up.",
         json!({ "type": "object", "properties": { "q": { "type": "string" } } }),

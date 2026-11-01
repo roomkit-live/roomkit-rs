@@ -1,8 +1,8 @@
 //! Provider replay is a layout, not an alternative source of tool calls or
 //! instructions (RFC §6.4, §6.7).
 
+use crate::request::Request;
 use roomkit::model::{Metadata, ToolCall};
-use roomkit_ai::AiRequest;
 use serde_json::{Value, json};
 
 use super::{replay::OUTPUT, wire};
@@ -11,7 +11,14 @@ use roomkit_core::rules::transcript::{Message, Role};
 
 fn request(message: Message) -> Result<Value, crate::OpenAiError> {
     let config = OpenAiConfig::new("https://example.com/v1", "", "fake");
-    wire::request(&config, &AiRequest::new(None, vec![message], vec![]))
+    wire::request(
+        &config,
+        &Request {
+            system_prompt: None,
+            messages: vec![message],
+            tools: vec![],
+        },
+    )
 }
 
 fn with_output(mut message: Message, output: Value) -> Message {

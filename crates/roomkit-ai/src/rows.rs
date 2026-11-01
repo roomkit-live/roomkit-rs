@@ -152,7 +152,7 @@ impl Stream for Responding {
             Poll::Ready(item) => item,
             Poll::Pending => return Poll::Pending,
         };
-        Poll::Ready(item.map(|item| item.map(response_item)))
+        Poll::Ready(item.map(|item| item.map(response_item).map_err(Into::into)))
     }
 }
 

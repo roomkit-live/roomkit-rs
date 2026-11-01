@@ -19,7 +19,7 @@ use roomkit::{
     RoomKitError, RoomKitOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiAgent, AiProvider, ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiAgent, AiProvider, AiTool, ToolOutput, Tools};
 use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
 use serde_json::json;
@@ -504,7 +504,7 @@ pub(crate) async fn open(door: Door, witness: &Witness, gated: bool) -> (RoomKit
 async fn closing_agent(kit: &RoomKit, closer: &Closer) {
     let work = closer.clone();
     let tools = Tools::new().tool(
-        ToolDefinition::new("shut_down", "Shut down.", json!({ "type": "object" })),
+        AiTool::new("shut_down", "Shut down.", json!({ "type": "object" })),
         move |_call, _context| {
             let work = work.clone();
             async move {

@@ -19,7 +19,10 @@ use roomkit::{
     AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
     InboundResult, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
 };
-use roomkit_ai::{AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderStream};
+use roomkit_ai::{
+    AiContext, AiProvider, AiResponse, ProviderError, ProviderStream, StreamDone, StreamEvent,
+    StreamTextDelta,
+};
 use roomkit_core::ops::ChannelConfig;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -274,23 +277,36 @@ struct PausingStream {
 }
 
 impl Stream for PausingStream {
-    type Item = Result<ProviderEvent, ProviderError>;
+    type Item = Result<StreamEvent, ProviderError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(text) = self.first.take() {
-            return Poll::Ready(Some(Ok(ProviderEvent::Text(text.to_owned()))));
+            return Poll::Ready(Some(Ok(StreamEvent::TextDelta(StreamTextDelta {
+                text: text.to_owned(),
+            }))));
         }
         if self.over {
             return Poll::Ready(None);
         }
         ready!(self.pause.as_mut().poll(cx));
         self.over = true;
-        Poll::Ready(Some(Ok(ProviderEvent::Done(Done::default()))))
+        Poll::Ready(Some(Ok(StreamEvent::Done(StreamDone::default()))))
     }
 }
 
 impl AiProvider for Pausing {
-    fn generate<'a>(&'a self, _request: &'a AiRequest) -> ProviderStream<'a> {
+    fn model_name(&self) -> &'static str {
+        "pausing"
+    }
+
+    fn generate<'a>(
+        &'a self,
+        _context: &'a AiContext,
+    ) -> impl std::future::Future<Output = Result<AiResponse, ProviderError>> + Send + 'a {
+        std::future::ready(Err("this model only streams".into()))
+    }
+
+    fn generate_structured_stream<'a>(&'a self, _context: &'a AiContext) -> ProviderStream<'a> {
         Box::pin(PausingStream {
             first: Some(self.first),
             pause: Box::pin(tokio::time::sleep(Duration::from_secs(30))),

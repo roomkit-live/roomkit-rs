@@ -3,7 +3,7 @@
 //! vendor refuses fails the agent's construction, naming the tool and the
 //! rule, rather than every turn's request.
 
-use roomkit_ai::{AiError, ToolDefinition};
+use roomkit_ai::{AiError, AiTool};
 
 /// The vendor the rule is OpenAI's.
 const VENDOR: &str = "openai";
@@ -26,7 +26,7 @@ const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 /// # Errors
 ///
 /// Returns [`AiError::ToolName`] for that tool.
-pub(crate) fn check(base_url: &str, tools: &[ToolDefinition]) -> Result<(), AiError> {
+pub(crate) fn check(base_url: &str, tools: &[AiTool]) -> Result<(), AiError> {
     if !is_openai_endpoint(base_url) {
         return Ok(());
     }

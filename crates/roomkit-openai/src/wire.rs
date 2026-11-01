@@ -1,9 +1,10 @@
 //! The Chat Completions wire: the request a turn sends, and what it reads
 //! of the answer.
 
+use crate::request::{RawCall, Request, Whole, done as finished};
 use reqwest::StatusCode;
 use roomkit::model::Metadata;
-use roomkit_ai::{AiRequest, Done, ProviderResponse, ProviderToolCall};
+use roomkit_ai::StreamDone;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -82,7 +83,7 @@ struct WireToolFunction<'a> {
 impl<'a> CompletionRequest<'a> {
     /// The request asking `model` to answer `request`: its system prompt
     /// when it has one, its conversation, its tools.
-    pub(crate) fn new(model: &'a str, request: &'a AiRequest) -> Self {
+    pub(crate) fn new(model: &'a str, request: &'a Request) -> Self {
         let system = request
             .system_prompt
             .as_deref()
@@ -255,7 +256,7 @@ where
 ///
 /// Returns [`OpenAiError::Malformed`] when `body` is no chat completion,
 /// saying why without `secret`, the API key.
-pub(crate) fn response(body: &[u8], secret: &str) -> Result<ProviderResponse, OpenAiError> {
+pub(crate) fn response(body: &[u8], secret: &str) -> Result<Whole, OpenAiError> {
     let malformed = |reason: String| OpenAiError::Malformed {
         reason: cleaned(&reason, secret, MESSAGE_LIMIT),
     };
@@ -285,13 +286,13 @@ pub(crate) fn response(body: &[u8], secret: &str) -> Result<ProviderResponse, Op
                     other.to_string()
                 }
             };
-            ProviderToolCall::new(call.id, call.function.name, arguments)
+            RawCall::new(call.id, call.function.name, arguments)
         })
         .collect();
-    Ok(ProviderResponse::new(
+    Ok(Whole::new(
         text,
         calls,
-        Done::new(choice.finish_reason, usage),
+        finished(choice.finish_reason, usage),
     ))
 }
 
@@ -430,13 +431,13 @@ impl Folding {
     /// The completion once its stream is over: its calls in their index's
     /// order, each with its argument text, which the loop reads, and how it
     /// ended.
-    pub(crate) fn finish(self) -> (Vec<ProviderToolCall>, Done) {
+    pub(crate) fn finish(self) -> (Vec<RawCall>, StreamDone) {
         let calls = self
             .calls
             .into_values()
-            .map(|call| ProviderToolCall::new(call.id, call.name, call.arguments))
+            .map(|call| RawCall::new(call.id, call.name, call.arguments))
             .collect();
-        (calls, Done::new(self.finish_reason, self.usage))
+        (calls, finished(self.finish_reason, self.usage))
     }
 }
 
@@ -564,11 +565,7 @@ mod tests {
                 Value::Object(read.done.usage)
             ),
             (
-                vec![ProviderToolCall::new(
-                    "call_1",
-                    "lookup",
-                    r#"{"order": "42"}"#
-                )],
+                vec![RawCall::new("call_1", "lookup", r#"{"order": "42"}"#)],
                 Some("tool_calls".to_owned()),
                 serde_json::json!({
                     "input_tokens": 60,
@@ -594,7 +591,7 @@ mod tests {
         assert_eq!(
             (read.calls, Value::Object(read.done.usage)),
             (
-                vec![ProviderToolCall::new("", "lookup", "")],
+                vec![RawCall::new("", "lookup", "")],
                 serde_json::json!({ "output_tokens": 7 })
             )
         );
@@ -635,8 +632,8 @@ mod tests {
         assert_eq!(
             calls,
             [
-                ProviderToolCall::new("call_a", "lookup", r#"{"order": "42"}"#),
-                ProviderToolCall::new("call_b", "notify", ""),
+                RawCall::new("call_a", "lookup", r#"{"order": "42"}"#),
+                RawCall::new("call_b", "notify", ""),
             ]
         );
         assert_eq!(
@@ -691,7 +688,11 @@ mod image_tests {
             )
             .unwrap(),
         );
-        let request = AiRequest::new(None, vec![message], vec![]);
+        let request = Request {
+            system_prompt: None,
+            messages: vec![message],
+            tools: vec![],
+        };
         let chat =
             serde_json::to_value(CompletionRequest::new("vision-fixture", &request)).unwrap();
         assert_eq!(

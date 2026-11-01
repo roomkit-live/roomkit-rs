@@ -25,7 +25,7 @@ use roomkit_core::rules::transcript::Message;
 use serde_json::Value;
 
 use self::generation::Generation;
-use crate::provider::{AiProvider, AiRequest, ProviderError};
+use crate::provider::{AiContext, AiProvider, ProviderError, ai_messages, ran_out_of_room};
 use crate::stream::{Items, Yielder, items, join_all};
 use crate::tools::ToolContext;
 use crate::tools::ToolPolicy;
@@ -107,13 +107,14 @@ impl<P: AiProvider> Loop<P> {
         let mut usage_complete = true;
         let mut had_tool_round = false;
         for round in 0..=self.bounds.max_rounds {
-            let request = AiRequest::new(
-                self.system_prompt.clone(),
-                self.shown_messages(&messages),
-                declared.clone(),
-            );
+            let context = AiContext {
+                messages: ai_messages(&self.shown_messages(&messages)),
+                system_prompt: self.system_prompt.clone(),
+                tools: declared.clone(),
+                ..AiContext::default()
+            };
             let mut generation =
-                match Generation::read(&*self.provider, &request, round, &out).await {
+                match Generation::read(&*self.provider, &context, round, &out).await {
                     Ok(generation) => generation,
                     Err(error) => {
                         let end = LoopEndMarker {
@@ -160,8 +161,8 @@ impl<P: AiProvider> Loop<P> {
         LoopEndMarker {
             rounds,
             max_rounds: Some(self.bounds.max_rounds),
-            model: self.provider.model().map(str::to_owned),
-            provider: self.provider.name().map(str::to_owned),
+            model: Some(self.provider.model_name().to_owned()),
+            provider: Some(self.provider.name().to_owned()),
             ..LoopEndMarker::new(reason)
         }
     }
@@ -230,7 +231,7 @@ fn final_reason(generation: &Generation, had_tool_round: bool) -> LoopEndReason 
     if !generation.text.trim().is_empty() || !had_tool_round {
         return LoopEndReason::Completed;
     }
-    if generation::ran_out_of_room(generation.done.finish_reason.as_deref()) {
+    if ran_out_of_room(generation.done.finish_reason.as_deref()) {
         LoopEndReason::Truncated
     } else {
         LoopEndReason::EmptyResponse

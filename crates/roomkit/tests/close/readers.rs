@@ -20,8 +20,8 @@ use roomkit::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderStream, ToolDefinition,
-    ToolOutput, Tools,
+    AiContext, AiProvider, AiResponse, AiTool, ProviderError, ProviderStream, StreamDone,
+    StreamEvent, StreamTextDelta, ToolOutput, Tools,
 };
 use roomkit_core::ops::ChannelConfig;
 use serde_json::json;
@@ -46,23 +46,36 @@ struct PausingStream {
 }
 
 impl Stream for PausingStream {
-    type Item = Result<ProviderEvent, ProviderError>;
+    type Item = Result<StreamEvent, ProviderError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(text) = self.first.take() {
-            return Poll::Ready(Some(Ok(ProviderEvent::Text(text.to_owned()))));
+            return Poll::Ready(Some(Ok(StreamEvent::TextDelta(StreamTextDelta {
+                text: text.to_owned(),
+            }))));
         }
         if self.over {
             return Poll::Ready(None);
         }
         ready!(self.pause.as_mut().poll(cx));
         self.over = true;
-        Poll::Ready(Some(Ok(ProviderEvent::Done(Done::default()))))
+        Poll::Ready(Some(Ok(StreamEvent::Done(StreamDone::default()))))
     }
 }
 
 impl AiProvider for Pausing {
-    fn generate<'a>(&'a self, _request: &'a AiRequest) -> ProviderStream<'a> {
+    fn model_name(&self) -> &'static str {
+        "pausing"
+    }
+
+    fn generate<'a>(
+        &'a self,
+        _context: &'a AiContext,
+    ) -> impl std::future::Future<Output = Result<AiResponse, ProviderError>> + Send + 'a {
+        std::future::ready(Err("this model only streams".into()))
+    }
+
+    fn generate_structured_stream<'a>(&'a self, _context: &'a AiContext) -> ProviderStream<'a> {
         Box::pin(PausingStream {
             first: self.first,
             pause: Box::pin(tokio::time::sleep(Duration::from_secs(30))),
@@ -106,7 +119,7 @@ async fn attach_scripted<S: ConversationStore>(kit: &RoomKit<S>, left: Left) {
         }
         Left::Tool => {
             let tools = Tools::new().tool(
-                ToolDefinition::new("slow", "Slow.", json!({ "type": "object" })),
+                AiTool::new("slow", "Slow.", json!({ "type": "object" })),
                 |_call, _context| async {
                     tokio::time::sleep(Duration::from_secs(30)).await;
                     Ok(ToolOutput::Text("slow".to_owned()))

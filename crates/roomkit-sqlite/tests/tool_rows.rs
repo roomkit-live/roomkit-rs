@@ -18,7 +18,7 @@ use roomkit::{
     RoomKitOptions, store::CommitEventOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiAgent, AiRequest, ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiAgent, AiContext, AiRole, AiTool, ToolOutput, Tools};
 use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 use serde_json::json;
 
@@ -150,7 +150,7 @@ async fn overlapping_turns_read_back_from_the_file_pair_by_their_correlation_id(
 /// `lookup_order`, finding every order shipped.
 fn lookup() -> Tools {
     let order = json!({ "type": "object", "properties": { "order": { "type": "string" } } });
-    let definition = ToolDefinition::new("lookup_order", "Find an order", order);
+    let definition = AiTool::new("lookup_order", "Find an order", order);
     Tools::new().tool(definition, |call, _context| async move {
         let order = call.arguments.get("order").cloned().unwrap_or_default();
         Ok(ToolOutput::Json(
@@ -203,20 +203,22 @@ async fn says(kit: &RoomKit<SqliteStore>, text: &str) {
 
 /// The lines of `request`'s messages: each role and text, a round's calls,
 /// a result and the call it answers.
-fn lines(request: &AiRequest) -> Vec<String> {
+fn lines(request: &AiContext) -> Vec<String> {
     request
         .messages
         .iter()
         .map(|message| {
             let calls: Vec<&str> = message
-                .tool_calls
-                .iter()
+                .tool_calls()
+                .into_iter()
                 .map(|call| call.id.as_str())
                 .collect();
-            match (message.role, &message.tool_call_id) {
-                (Role::Tool, Some(answers)) => format!("result {answers} {}", message.text),
+            match (message.role, message.tool_result()) {
+                (AiRole::Tool, Some(answers)) => {
+                    format!("result {} {}", answers.tool_call_id, message.text())
+                }
                 _ if !calls.is_empty() => format!("calls {}", calls.join(" ")),
-                (role, _) => format!("{role:?} {}", message.text),
+                (role, _) => format!("{role:?} {}", message.text()),
             }
         })
         .collect()

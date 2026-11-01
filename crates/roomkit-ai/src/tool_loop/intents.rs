@@ -12,14 +12,14 @@ use roomkit_core::rules::transcript::Message;
 
 use super::Loop;
 use super::generation::Called;
-use crate::tools::ToolDefinition;
+use crate::tools::AiTool;
 
 impl<P> Loop<P> {
     /// `declared` as the requests show it: each tool's schema with the
     /// reserved intent property, one that cannot take it as it is. The
     /// toolbox keeps the tools' own schemas, which calls are checked
     /// against.
-    pub(super) fn shown_tools(&self, declared: Vec<ToolDefinition>) -> Vec<ToolDefinition> {
+    pub(super) fn shown_tools(&self, declared: Vec<AiTool>) -> Vec<AiTool> {
         if !self.intents {
             return declared;
         }

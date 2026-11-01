@@ -21,6 +21,7 @@
 #![expect(clippy::unwrap_used, reason = "a measurement fails on a broken setup")]
 #![expect(clippy::print_stdout, reason = "a measurement prints its numbers")]
 
+use std::future::Future;
 use std::time::Duration;
 
 use tokio::time::Instant;
@@ -32,10 +33,9 @@ use roomkit::{
     current_turn_host,
 };
 use roomkit_ai::{
-    AiAgent, AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderResponse,
-    ProviderStream, ProviderToolCall, ToolDefinition, ToolOutput, Tools,
+    AiAgent, AiContext, AiProvider, AiResponse, AiRole, AiTool, AiToolCall, ProviderError,
+    ProviderStream, StreamDone, StreamEvent, StreamTextDelta, ToolOutput, Tools, tool_arguments,
 };
-use roomkit_core::rules::transcript::Role;
 use serde_json::json;
 
 /// A model that answers at once: with a call to `lookup` when `calls` and
@@ -46,36 +46,62 @@ struct Immediate {
     deltas: usize,
 }
 
-impl AiProvider for Immediate {
-    fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a> {
-        let after_tool = request
+impl Immediate {
+    /// The whole answer to `context`.
+    fn answer(&self, context: &AiContext) -> AiResponse {
+        let after_tool = context
             .messages
             .last()
-            .is_some_and(|message| message.role == Role::Tool);
-        let response = if self.calls && !after_tool {
-            ProviderResponse::new(
-                "Let me check.",
-                vec![ProviderToolCall::new("call-1", "lookup", r#"{"q":"x"}"#)],
-                Done::default(),
-            )
-        } else if self.deltas > 1 {
-            let pieces: Vec<Result<ProviderEvent, ProviderError>> = (0..self.deltas)
-                .map(|_| Ok(ProviderEvent::Text("word ".to_owned())))
-                .chain([Ok(ProviderEvent::Done(Done::default()))])
-                .collect();
-            return Box::pin(Pieces(pieces.into_iter()));
+            .is_some_and(|message| message.role == AiRole::Tool);
+        if self.calls && !after_tool {
+            let mut call = AiToolCall::new("call-1", "lookup");
+            call.arguments = tool_arguments(r#"{"q":"x"}"#);
+            return AiResponse {
+                tool_calls: vec![call],
+                ..AiResponse::new("Let me check.")
+            };
+        }
+        AiResponse::new("It is 42.")
+    }
+}
+
+impl AiProvider for Immediate {
+    fn model_name(&self) -> &'static str {
+        "immediate"
+    }
+
+    fn generate<'a>(
+        &'a self,
+        context: &'a AiContext,
+    ) -> impl Future<Output = Result<AiResponse, ProviderError>> + Send + 'a {
+        std::future::ready(Ok(self.answer(context)))
+    }
+
+    fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
+        let text = |text: String| Ok(StreamEvent::TextDelta(StreamTextDelta { text }));
+        let events: Vec<Result<StreamEvent, ProviderError>> = if self.calls || self.deltas <= 1 {
+            let response = self.answer(context);
+            let calls = response.tool_calls.into_iter();
+            [text(response.content)]
+                .into_iter()
+                .chain(calls.map(|call| Ok(StreamEvent::ToolCall(call.into()))))
+                .chain([Ok(StreamEvent::Done(StreamDone::default()))])
+                .collect()
         } else {
-            ProviderResponse::new("It is 42.", Vec::new(), Done::default())
+            (0..self.deltas)
+                .map(|_| text("word ".to_owned()))
+                .chain([Ok(StreamEvent::Done(StreamDone::default()))])
+                .collect()
         };
-        ProviderResponse::into_stream(async move { Ok(response) })
+        Box::pin(Pieces(events.into_iter()))
     }
 }
 
 /// A generation's events, each ready at once.
-struct Pieces(std::vec::IntoIter<Result<ProviderEvent, ProviderError>>);
+struct Pieces(std::vec::IntoIter<Result<StreamEvent, ProviderError>>);
 
 impl futures_core::Stream for Pieces {
-    type Item = Result<ProviderEvent, ProviderError>;
+    type Item = Result<StreamEvent, ProviderError>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
@@ -104,7 +130,7 @@ fn kit_writing(calls: bool, deltas: usize, writes: bool) -> RoomKit {
         RecordingTransportOptions::default(),
     ))
     .unwrap();
-    let lookup = ToolDefinition::new(
+    let lookup = AiTool::new(
         "lookup",
         "Look it up.",
         json!({ "type": "object", "properties": { "q": { "type": "string" } } }),

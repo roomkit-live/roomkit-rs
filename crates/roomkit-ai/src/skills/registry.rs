@@ -184,7 +184,7 @@ impl SkillRegistry {
 
     /// The tools [`crate::AiAgent::with_skills`] registers for this registry.
     /// An empty registry registers no tools (RFC §24.3).
-    pub fn tool_definitions(&self) -> Vec<crate::ToolDefinition> {
+    pub fn tool_definitions(&self) -> Vec<crate::AiTool> {
         if self.has_entries() {
             super::tools::SkillTools::definitions()
         } else {

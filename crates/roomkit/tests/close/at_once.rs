@@ -17,7 +17,7 @@ use roomkit::{
     HookOptions, HookTrigger, InMemoryStore, ListBindingsOptions, RoomKit, SendEventOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiTool, ToolOutput, Tools};
 use serde_json::json;
 use tokio::sync::Notify;
 
@@ -300,7 +300,7 @@ async fn a_running_tool_call_is_cut_at_once_its_end_row_stored() {
     let (entered, ran) = (Arc::new(Notify::new()), Arc::new(Mutex::new(Vec::new())));
     let (entering, noting) = (Arc::clone(&entered), Arc::clone(&ran));
     let tools = Tools::new().tool(
-        ToolDefinition::new("lookup", "Look up.", json!({ "type": "object" })),
+        AiTool::new("lookup", "Look up.", json!({ "type": "object" })),
         move |_call, _context| {
             let (entering, note) = (Arc::clone(&entering), ToolNote(Arc::clone(&noting)));
             async move {

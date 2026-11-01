@@ -48,7 +48,10 @@ use roomkit::{
     HookOptions, HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitError,
     SendEventOptions,
 };
-use roomkit_ai::{AiAgent, AiProvider, AiRequest, Done, ProviderEvent, ProviderStream};
+use roomkit_ai::{
+    AiAgent, AiContext, AiProvider, AiResponse, ProviderError, ProviderStream, StreamDone,
+    StreamEvent, StreamTextDelta,
+};
 use serde_json::json;
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -100,20 +103,32 @@ struct LongAnswer {
 }
 
 impl AiProvider for LongAnswer {
-    fn generate<'a>(&'a self, _request: &'a AiRequest) -> ProviderStream<'a> {
+    fn model_name(&self) -> &'static str {
+        "long-answer"
+    }
+
+    fn generate<'a>(
+        &'a self,
+        _context: &'a AiContext,
+    ) -> impl std::future::Future<Output = Result<AiResponse, ProviderError>> + Send + 'a {
+        std::future::ready(Err("this model only streams".into()))
+    }
+
+    fn generate_structured_stream<'a>(&'a self, _context: &'a AiContext) -> ProviderStream<'a> {
         let words = ["a", "long", "answer", "that", "goes", "on"].repeat(100);
         let started = Arc::clone(&self.started);
         let said = stream::unfold(0_usize, move |at| {
             let (words, started) = (words.clone(), Arc::clone(&started));
             async move {
+                let text = |text: String| StreamEvent::TextDelta(StreamTextDelta { text });
                 let event = match at {
-                    0 => ProviderEvent::Text("Here is ".to_owned()),
+                    0 => text("Here is ".to_owned()),
                     at if at <= words.len() => {
                         tokio::time::sleep(Duration::from_millis(50)).await;
                         started.notify_one();
-                        ProviderEvent::Text(format!("{} ", words.get(at - 1)?))
+                        text(format!("{} ", words.get(at - 1)?))
                     }
-                    at if at == words.len() + 1 => ProviderEvent::Done(Done::default()),
+                    at if at == words.len() + 1 => StreamEvent::Done(StreamDone::default()),
                     _ => return None,
                 };
                 Some((Ok(event), at + 1))

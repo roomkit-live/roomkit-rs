@@ -58,6 +58,7 @@ mod config;
 mod credentials;
 mod error;
 mod names;
+mod request;
 mod responses;
 mod sse;
 mod stream;

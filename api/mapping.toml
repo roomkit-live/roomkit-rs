@@ -84,6 +84,10 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::ResponseStream" = { python = "AsyncIterator" }
 "roomkit::StreamItem" = { python = "str" }
 "roomkit::ResponseItem" = { python = "str" }
+# A provider's `generate_stream`, an `AsyncIterator[str]`, and a message's
+# content, `str | list[part]`, which Rust tells apart as its two variants.
+"roomkit_ai::TextStream" = { python = "AsyncIterator" }
+"roomkit_ai::AiMessageContent" = { python = "str" }
 
 # The Rust enums a Python `Literal` stands for, by path: the field it types
 # (decision 4; a nameless literal takes its field's name) and the Literal's
@@ -94,6 +98,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::model::DeliveryResultStatus" = { field = "roomkit.DeliveryResult.__init__(status)", values = ["sent", "queued", "failed"] }
 "roomkit::model::RichFormat" = { field = "roomkit.models.RichContent.__init__(format)", values = ["html", "markdown"] }
 "roomkit::model::ToolCallStatus" = { field = "roomkit.ToolCallContent.__init__(status)", values = ["pending", "completed", "failed"] }
+"roomkit_ai::AiRole" = { field = "roomkit.providers.ai.AIMessage.__init__(role)", values = ["system", "user", "assistant", "tool"] }
 "roomkit::model::LoopEndReason" = { field = "roomkit.models.LoopEndMarker.__init__(reason)", values = ["completed", "max_rounds", "timeout", "budget_exceeded", "truncated", "empty_response", "unfinished", "force_stopped", "cancelled", "error"] }
 
 # The Python exception classes each error enum's variants stand for, by the
@@ -319,6 +324,17 @@ reason = "a defect of the crate, where Python asserts: the driver broke the core
 rust = "roomkit::model::ErrorRecord"
 approved = "2026-10-27"
 reason = "a serialized model holds no live error"
+
+[[exception]]
+rust = "roomkit_ai::AiContentPart"
+approved = "2026-10-31"
+reason = "a message's content parts, Python's AITextPart | AIImagePart | AIToolCallPart | AIToolResultPart, which no Python name exports: an enum of the four (language)"
+
+[[exception]]
+rust = "roomkit_ai::ProviderError"
+members = ["with_source"]
+approved = "2026-10-31"
+reason = "language: Python's `raise ProviderError(...) from error` keeps the cause in __cause__; Rust keeps it as the error's source"
 
 [[exception]]
 rust = "roomkit_ai::ProviderStream"
@@ -648,6 +664,69 @@ params = ["input_hold_timeout"]
 reason = "not in 0.x: human input"
 
 [[missing]]
+python = "roomkit.providers.ai.AIContext.__init__"
+params = [
+    "thinking_budget", "enable_thinking", "reasoning_effort", "response_schema",
+    "room", "target_capabilities", "target_media_types", "response_metadata",
+]
+reason = "not in 0.x: thinking, response schemas, the context's room and its targets' capabilities; the reasoning effort is the OpenAI provider's configuration"
+
+[[missing]]
+python = "roomkit.providers.ai.AIContext"
+members = ["model_copy"]
+reason = "language: AiContext is Clone and built by struct update, Python's model_copy(update=...)"
+
+[[missing]]
+python = "roomkit.providers.ai.AIResponse.__init__"
+params = ["thinking", "thinking_signature", "thinking_parts", "tasks", "observations"]
+reason = "not in 0.x: thinking, and a response's tasks and observations"
+
+[[missing]]
+python = "roomkit.providers.ai.AIToolCall.__init__"
+params = ["served"]
+reason = "not in 0.x: owner-served tools"
+
+[[missing]]
+python = "roomkit.providers.ai.StreamToolCall.__init__"
+params = ["served"]
+reason = "not in 0.x: owner-served tools"
+
+[[missing]]
+python = "roomkit.providers.ai.AIToolResultPart.__init__"
+params = ["structured_content", "outcome", "references"]
+reason = "not in 0.x: MCP structured results, a call's outcome and result references"
+
+[[missing]]
+python = "roomkit.providers.ai.AIToolResultPart"
+members = ["as_text", "split_for_message"]
+reason = "not in 0.x: MCP structured results, a call's outcome and result references"
+
+[[missing]]
+python = "roomkit.providers.ai.AITool.__init__"
+params = ["tags", "defer_loading"]
+reason = "not in 0.x: tool search"
+
+[[missing]]
+python = "roomkit.providers.ai.AITextPart.__init__"
+params = ["type"]
+reason = "language: a part's `type` tag is the AiContentPart variant that holds it, a union no Python name exports"
+
+[[missing]]
+python = "roomkit.providers.ai.AIImagePart.__init__"
+params = ["type"]
+reason = "language: a part's `type` tag is the AiContentPart variant that holds it, a union no Python name exports"
+
+[[missing]]
+python = "roomkit.providers.ai.AIToolCallPart.__init__"
+params = ["type"]
+reason = "language: a part's `type` tag is the AiContentPart variant that holds it, a union no Python name exports"
+
+[[missing]]
+python = "roomkit.providers.ai.AIToolResultPart.__init__"
+params = ["type"]
+reason = "language: a part's `type` tag is the AiContentPart variant that holds it, a union no Python name exports"
+
+[[missing]]
 python = "roomkit.providers.ai.AIProvider"
 members = [
     "available_models", "catalog_entry", "context_window", "list_models",
@@ -675,18 +754,8 @@ reason = "not in 0.x: Rust has no provider contract; without one, deliver return
 
 [[pending]]
 lot = 5
-python = "roomkit.providers.ai.AIProvider"
-members = [
-    "close", "generate_stream", "generate_structured_stream", "model_name",
-    "supports_streaming", "supports_structured_streaming",
-]
-reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
-
-[[pending]]
-lot = 5
-python = "roomkit.providers.ai.AIProvider.generate"
-params = ["context"]
-reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
+rust = "roomkit_ai::AiTool"
+reason = "lot 5f: AiTool::new(name, description) refuses a name no vendor accepts (RFC §6.7), its parameters a field; not #[non_exhaustive]"
 
 [[pending]]
 lot = 5
@@ -710,49 +779,8 @@ reason = "lot 5: ToolError, AiError and SkillError keep their variants under the
 
 [[pending]]
 lot = 5
-rust = "roomkit_ai::AiProvider::generate"
-params = ["request"]
-reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
-
-[[pending]]
-lot = 5
-rust = "roomkit_ai::AiRequest"
-reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
-
-[[pending]]
-lot = 5
-rust = "roomkit_ai::Done"
-reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
-
-[[pending]]
-lot = 5
-rust = "roomkit_ai::ProviderError"
-reason = "decision 11: ProviderError takes Python's class"
-
-[[pending]]
-lot = 5
-rust = "roomkit_ai::ProviderEvent"
-reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
-
-[[pending]]
-lot = 5
-rust = "roomkit_ai::ProviderResponse"
-reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
-
-[[pending]]
-lot = 5
-rust = "roomkit_ai::ProviderToolCall"
-reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
-
-[[pending]]
-lot = 5
 rust = "roomkit_ai::ToolContext"
 reason = "decision 11: ToolCallContext, read through current_tool_call() from a task-local"
-
-[[pending]]
-lot = 5
-rust = "roomkit_ai::ToolDefinition"
-reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
 
 [[pending]]
 lot = 5
@@ -852,12 +880,6 @@ reason = "Skill availability marks are not implemented in the Rust registry yet"
 rust = "roomkit_ai::ImageResolver"
 approved = "2026-10-30"
 reason = "Async host-owned room-scoped image resolution (architecture: Author images)"
-
-[[exception]]
-rust = "roomkit_ai::AiProvider"
-members = ["model"]
-approved = "2026-10-30"
-reason = "Optional current model identity supplied with native author image support"
 
 [[exception]]
 rust = "roomkit_openai::OpenAiConfig"

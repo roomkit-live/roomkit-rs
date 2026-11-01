@@ -15,7 +15,7 @@ use super::texts::{
     self, ACTIVATE_DESCRIPTION, ACTIVATE_SKILL, ACTIVE_HEADING, ALREADY_ACTIVE, PREAMBLE,
     READ_DESCRIPTION, READ_SKILL_REFERENCE, quoted_name,
 };
-use crate::tools::{BoxFuture, DynToolset, ToolContext, ToolDefinition, ToolError, ToolOutput};
+use crate::tools::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolOutput};
 
 /// The skills an agent serves: the registry, read only, and which skills
 /// are active in each room.
@@ -50,9 +50,9 @@ impl SkillTools {
     }
 
     /// The two tools, as the reference implementation declares them.
-    pub(crate) fn definitions() -> Vec<ToolDefinition> {
+    pub(crate) fn definitions() -> Vec<AiTool> {
         vec![
-            ToolDefinition::new(
+            AiTool::new(
                 ACTIVATE_SKILL,
                 ACTIVATE_DESCRIPTION,
                 json!({
@@ -63,7 +63,7 @@ impl SkillTools {
                     "required": ["name"],
                 }),
             ),
-            ToolDefinition::new(
+            AiTool::new(
                 READ_SKILL_REFERENCE,
                 READ_DESCRIPTION,
                 json!({

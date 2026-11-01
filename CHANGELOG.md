@@ -67,7 +67,7 @@ The public API in the Python implementation's terms (step 5, lot 1: the
 kit, its construction and its calls; lot 2: the model and the errors;
 lot 3: the hooks, the framework events and the turn's host; lot 4: the
 channels, the addresses, the routing and the store; lot 5: the skills,
-the tool policy, the SQLite store).
+the tool policy, the SQLite store, the provider contract).
 
 ### Changed
 
@@ -589,6 +589,22 @@ the tool policy, the SQLite store).
   `allow` and `deny` fields are public, built by struct update, and
   `is_allowed(tool_name)` reads it; `new()`, `allow(pattern)`,
   `deny(pattern)` and `permits(name)` go.
+- **`AiProvider` is Python's provider contract** (`roomkit.providers.ai`):
+  `model_name()` and `generate(&AiContext) -> AiResponse` are required;
+  `name()`, `supports_streaming()`, `supports_structured_streaming()`,
+  `generate_stream`, `generate_structured_stream` and `close` are provided,
+  as Python provides them, and the tool loop reads the structured stream,
+  which wraps `generate` for a provider that does not stream. `AiRequest`,
+  `ProviderEvent`, `ProviderToolCall`, `Done` and `ProviderResponse` give
+  way to Python's `AiContext`, `AiMessage` and its parts, `AiResponse`,
+  `AiToolCall`, `StreamEvent` (`StreamTextDelta`, `StreamToolCall`,
+  `StreamDone`) and `tool_arguments`; a provider reads a call's arguments
+  and marks it `partial` or `garbled`, as Python's do. `ProviderError` is
+  Python's class (`message`, `retryable`, `provider`, `status_code`,
+  `context_overflow`), its cause its source. `ToolDefinition` is `AiTool`.
+  The OpenAI provider names itself `OpenAIAIProvider`, Python's class
+  name, in a turn's `ai_provider` and its channel's provider name, where it
+  said `openai`.
 - **`SqliteStore` is Python's `SQLiteStore(path='roomkit.db')`**:
   `SqliteStore::new(SqliteStoreOptions { path })` does no I/O, the file
   opening at the store's first operation, which fails

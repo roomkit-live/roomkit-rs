@@ -1,5 +1,5 @@
+use crate::request::{RawCall, Request, Whole, done as finished};
 use roomkit::model::Metadata;
-use roomkit_ai::{AiRequest, Done, ProviderResponse, ProviderToolCall};
 use serde_json::{Value, json};
 
 use crate::config::OpenAiConfig;
@@ -16,7 +16,7 @@ pub(super) fn malformed(reason: &str) -> OpenAiError {
 
 /// Translate the public transcript; replay metadata preserves reasoning and
 /// output layout without introducing instructions or additional tool calls.
-pub(crate) fn request(config: &OpenAiConfig, request: &AiRequest) -> Result<Value, OpenAiError> {
+pub(crate) fn request(config: &OpenAiConfig, request: &Request) -> Result<Value, OpenAiError> {
     let mut input = Vec::new();
     for message in &request.messages {
         append_message(&mut input, message)?;
@@ -101,14 +101,14 @@ pub(crate) fn body(
     body: &[u8],
     secret: &str,
     namespace: Option<&str>,
-) -> Result<ProviderResponse, OpenAiError> {
+) -> Result<Whole, OpenAiError> {
     let value = serde_json::from_slice(body).map_err(|_| malformed("invalid Responses JSON"))?;
     validate_namespace(&value, namespace)?;
     response(&value, secret)
 }
 
 /// Only a terminal response can release tool calls to the engine.
-pub(super) fn response(value: &Value, secret: &str) -> Result<ProviderResponse, OpenAiError> {
+pub(super) fn response(value: &Value, secret: &str) -> Result<Whole, OpenAiError> {
     let status = value
         .get("status")
         .and_then(Value::as_str)
@@ -143,7 +143,7 @@ pub(super) fn response(value: &Value, secret: &str) -> Result<ProviderResponse, 
                     None | Some(Value::Null) => String::new(),
                     Some(value) => value.to_string(),
                 };
-                calls.push(ProviderToolCall::new(id, name, arguments));
+                calls.push(RawCall::new(id, name, arguments));
             }
             Some("reasoning") => {
                 // A cut reasoning item is not replayable. A complete item needs
@@ -173,12 +173,12 @@ pub(super) fn response(value: &Value, secret: &str) -> Result<ProviderResponse, 
     } else {
         "tool_calls"
     };
-    let mut done = Done::new(Some(finish_reason.to_owned()), usage(value.get("usage")));
+    let mut done = finished(Some(finish_reason.to_owned()), usage(value.get("usage")));
     if let Some(model) = value.get("model").and_then(Value::as_str) {
         done.metadata.insert("model".into(), model.into());
     }
     done.metadata.insert(OUTPUT.into(), replay.into());
-    Ok(ProviderResponse::new(text, calls, done))
+    Ok(Whole::new(text, calls, done))
 }
 
 pub(super) fn message_text(message: &Value, text: &mut String) -> Result<(), OpenAiError> {

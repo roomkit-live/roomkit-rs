@@ -125,3 +125,15 @@ fn with_causes(error: &dyn Error) -> String {
     }
     message
 }
+
+impl From<OpenAiError> for roomkit_ai::ProviderError {
+    /// The failure as the loop reads a provider's: its message, the error
+    /// itself its source.
+    fn from(error: OpenAiError) -> Self {
+        let options = roomkit_ai::ProviderErrorOptions {
+            provider: "OpenAIAIProvider".to_owned(),
+            ..roomkit_ai::ProviderErrorOptions::default()
+        };
+        Self::new(error.to_string(), options).with_source(error)
+    }
+}

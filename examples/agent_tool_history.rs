@@ -22,7 +22,7 @@ use std::process::ExitCode;
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, RoomKit};
-use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiTool, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::{Value, json};
 
@@ -184,7 +184,7 @@ fn booking() -> Tools {
         },
         "required": ["room", "date", "start", "minutes"],
     });
-    let book = ToolDefinition::new("book_meeting_room", "Book a meeting room", parameters);
+    let book = AiTool::new("book_meeting_room", "Book a meeting room", parameters);
     Tools::new().tool(book, |call, _context| async move {
         let mut booked = json!({ "booked": true, "booking_id": BOOKING, "end": "15:30" });
         if let Value::Object(fields) = &mut booked {

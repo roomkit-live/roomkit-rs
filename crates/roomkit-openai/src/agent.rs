@@ -11,12 +11,14 @@ use roomkit::model::{
 };
 use roomkit::{Channel, ChannelError};
 use roomkit_ai::{
-    AiAgent, AiError, AiProvider, AiRequest, ProviderStream, SkillRegistry, ToolPolicy, Toolset,
+    AiAgent, AiContext, AiError, AiProvider, AiResponse, ProviderError, ProviderStream,
+    SkillRegistry, TextStream, ToolPolicy, Toolset,
 };
 
 use crate::config::{OpenAiApi, OpenAiConfig};
 use crate::error::OpenAiError;
 use crate::names;
+use crate::request::Request;
 use crate::stream;
 use crate::wire::{self, CompletionRequest};
 
@@ -294,7 +296,7 @@ impl OpenAiProvider {
     /// answer's body is read, bounded, into its error.
     pub(crate) async fn ask(
         &self,
-        request: &AiRequest,
+        request: &Request,
     ) -> Result<(reqwest::Response, String), OpenAiError> {
         let secret = match &self.config.token_source {
             Some(source) => source.token().await?,
@@ -331,19 +333,40 @@ impl OpenAiProvider {
 }
 
 impl AiProvider for OpenAiProvider {
+    /// Python's class name, `OpenAIAIProvider`, as Python's provider
+    /// names itself.
+    fn name(&self) -> &'static str {
+        "OpenAIAIProvider"
+    }
+
+    fn model_name(&self) -> &str {
+        &self.config.model
+    }
+
     fn supports_vision(&self) -> bool {
         self.config.vision
     }
-    fn name(&self) -> Option<&str> {
-        Some("openai")
+
+    fn supports_streaming(&self) -> bool {
+        true
     }
 
-    fn model(&self) -> Option<&str> {
-        Some(&self.config.model)
+    fn supports_structured_streaming(&self) -> bool {
+        true
     }
 
-    fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a> {
-        stream::answer(self, request)
+    /// The whole answer to `context`: its streamed events read to their
+    /// end.
+    async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
+        stream::whole(self.generate_structured_stream(context)).await
+    }
+
+    fn generate_stream<'a>(&'a self, context: &'a AiContext) -> TextStream<'a> {
+        stream::text(self.generate_structured_stream(context))
+    }
+
+    fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
+        stream::answer(self, Request::of(context))
     }
 }
 

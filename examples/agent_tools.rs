@@ -44,7 +44,7 @@ use roomkit::{
     AttachChannelOptions, CreateRoomOptions, HookExecution, HookOptions, HookTrigger,
     ProcessInboundOptions, ToolCallEvent,
 };
-use roomkit_ai::{ToolDefinition, ToolError, ToolOutput, ToolPolicy, Tools};
+use roomkit_ai::{AiTool, ToolError, ToolOutput, ToolPolicy, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::{Value, json};
 
@@ -352,7 +352,7 @@ fn shop() -> Tools {
     };
     Tools::new()
         .tool(
-            ToolDefinition::new("lookup_order", "Find an order by its number", order()),
+            AiTool::new("lookup_order", "Find an order by its number", order()),
             |_call, _context| async {
                 Ok(ToolOutput::Json(
                     json!({ "order": "42", "status": "shipped", "shipped": "Monday" }),
@@ -360,7 +360,7 @@ fn shop() -> Tools {
             },
         )
         .tool(
-            ToolDefinition::new(
+            AiTool::new(
                 "delete_customer",
                 "Delete a customer's account",
                 json!({ "type": "object", "properties": { "customer": { "type": "string" } } }),
@@ -368,15 +368,15 @@ fn shop() -> Tools {
             |_call, _context| async { Ok(ToolOutput::from("deleted")) },
         )
         .tool(
-            ToolDefinition::new("cancel_order", "Cancel an order", order()),
+            AiTool::new("cancel_order", "Cancel an order", order()),
             |_call, _context| async { Ok(ToolOutput::from("cancelled")) },
         )
         .tool(
-            ToolDefinition::new("refund_order", "Refund an order", order()),
+            AiTool::new("refund_order", "Refund an order", order()),
             |_call, _context| async { Err(ToolError::raised(&DatabaseError)) },
         )
         .tool(
-            ToolDefinition::new("track_parcel", "Track an order's parcel", order()),
+            AiTool::new("track_parcel", "Track an order's parcel", order()),
             |_call, _context| std::future::pending(),
         )
 }

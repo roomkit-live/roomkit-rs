@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use pretty_assertions::assert_eq;
 use roomkit::model::{InboundMessage, RoomId, TextContent};
 use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions};
-use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiTool, ToolOutput, Tools};
 use roomkit_openai::OpenAiApi;
 use serde_json::{Value, json};
 
@@ -61,7 +61,7 @@ async fn configured(replies: Vec<Reply>, tools: Tools) -> Room {
 
 fn lookup(count: &Arc<AtomicUsize>) -> Tools {
     let count = Arc::clone(count);
-    let tool = ToolDefinition::new(
+    let tool = AiTool::new(
         "lookup",
         "Find an order",
         json!({"type":"object",

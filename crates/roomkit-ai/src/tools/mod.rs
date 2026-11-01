@@ -32,7 +32,7 @@ use crate::texts::error_envelope;
 /// does, and its parameters as a JSON Schema object.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct ToolDefinition {
+pub struct AiTool {
     /// The tool's name, one per agent (RFC §21.1 "One tool per name").
     pub name: String,
     /// What it does, for the model.
@@ -41,7 +41,7 @@ pub struct ToolDefinition {
     pub parameters: Value,
 }
 
-impl ToolDefinition {
+impl AiTool {
     /// The tool `name`, doing `description`, taking `parameters`.
     pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: Value) -> Self {
         Self {
@@ -246,7 +246,7 @@ impl ToolContext {
 /// per call (RFC §21.6).
 pub trait Toolset: Send + Sync + 'static {
     /// The tools it serves, in the order they are declared to the model.
-    fn tools(&self) -> Vec<ToolDefinition>;
+    fn tools(&self) -> Vec<AiTool>;
 
     /// Serves `call`.
     fn call(
