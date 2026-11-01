@@ -31,7 +31,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   address, and the event is sent under it (RFC §11.2, RMK-1138): a sender
   naming itself after an identity no longer takes that identity's record.
   The address still names the record on its channel, for routing and for
-  the identification an advisor gives it.
+  the identification an advisor gives it; a pending member the host added
+  keeps their record. Records an earlier release left pending under an id
+  their channel gave keep it: a room's participant whose id is an
+  identity's may be such a squat, PENDING, or IDENTIFIED once that identity
+  was resolved on another channel, the squatting channel then still in its
+  `connected_via`.
 - A resolver's `IdentificationStatus::Rejected` holds the message when no
   identity hook answers (RFC §11.2, RMK-1151): blocked with the resolver's
   `message`, else `identity_rejected`, nothing stored, as Python's.
