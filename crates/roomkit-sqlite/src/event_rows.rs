@@ -135,13 +135,21 @@ pub(crate) fn write_row(
     Ok(())
 }
 
+/// Deletes an event's text from the full-text index. The text's row shares
+/// its event row's rowid, the one key FTS5 indexes: by `event_id`, every
+/// rewrite scanned the whole index (RMK-1031).
+pub(crate) const DELETE_TEXT: &str =
+    "DELETE FROM events_fts WHERE rowid = (SELECT rowid FROM events WHERE id = ?)";
+
+/// Writes an event's text in the full-text index, under its event row's
+/// rowid.
+pub(crate) const INSERT_TEXT: &str = "INSERT INTO events_fts(rowid, text, event_id, room_id) \
+     VALUES((SELECT rowid FROM events WHERE id = ?1), ?2, ?1, ?3)";
+
 /// Puts `event`'s text in the full-text index, in place of what it held for
 /// it; a deleted message's text is in it no more (RFC §10.3).
 fn index_text(connection: &Connection, event: &RoomEvent) -> Result<(), Failure> {
-    connection.execute(
-        "DELETE FROM events_fts WHERE event_id = ?",
-        [event.id.as_str()],
-    )?;
+    connection.execute(DELETE_TEXT, [event.id.as_str()])?;
     let text = if edits::is_deleted(event) {
         String::new()
     } else {
@@ -149,8 +157,8 @@ fn index_text(connection: &Connection, event: &RoomEvent) -> Result<(), Failure>
     };
     if !text.is_empty() {
         connection.execute(
-            "INSERT INTO events_fts(text, event_id, room_id) VALUES(?, ?, ?)",
-            [text.as_str(), event.id.as_str(), event.room_id.as_str()],
+            INSERT_TEXT,
+            [event.id.as_str(), text.as_str(), event.room_id.as_str()],
         )?;
     }
     Ok(())
@@ -168,11 +176,9 @@ pub(crate) fn remove_row(connection: &Connection, event: &RoomEvent) -> Result<(
             ],
         )?;
     }
+    // The text first: it is found by the row's rowid.
+    connection.execute(DELETE_TEXT, [event.id.as_str()])?;
     connection.execute("DELETE FROM events WHERE id = ?", [event.id.as_str()])?;
-    connection.execute(
-        "DELETE FROM events_fts WHERE event_id = ?",
-        [event.id.as_str()],
-    )?;
     Ok(())
 }
 
@@ -192,4 +198,46 @@ pub(crate) fn mark_edits_deleted(
         [room_id.as_str(), target.as_str()],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    use super::{DELETE_TEXT, INSERT_TEXT};
+    use crate::rooms::DELETE_ROOM_TEXTS;
+
+    /// RMK-1031: the full-text index is written by its rows' rowids, the one
+    /// key FTS5 indexes. A full scan of the virtual table reads `INDEX n:`
+    /// with no constraint after it; by `event_id` or `room_id`, each commit,
+    /// delete and room delete read that way.
+    #[test]
+    fn the_full_text_rows_are_written_by_rowid() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!("schema.sql"))
+            .unwrap();
+        let plans: Vec<String> = [DELETE_TEXT, INSERT_TEXT, DELETE_ROOM_TEXTS]
+            .iter()
+            .flat_map(|sql| {
+                let mut statement = connection
+                    .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                    .unwrap();
+                // EXPLAIN needs every parameter bound, any value.
+                let nulls = vec![rusqlite::types::Null; statement.parameter_count()];
+                statement
+                    .query_map(rusqlite::params_from_iter(nulls), |row| {
+                        row.get::<_, String>(3)
+                    })
+                    .unwrap()
+                    .map(Result::unwrap)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let scans: Vec<&String> = plans
+            .iter()
+            .filter(|plan| plan.starts_with("SCAN events_fts VIRTUAL TABLE") && plan.ends_with(':'))
+            .collect();
+        assert!(!plans.is_empty() && scans.is_empty(), "{plans:?}");
+    }
 }

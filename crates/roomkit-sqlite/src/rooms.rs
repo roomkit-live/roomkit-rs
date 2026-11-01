@@ -152,10 +152,17 @@ pub(crate) fn patch_metadata(
     Ok(Some(room))
 }
 
+/// Deletes a room's texts from the full-text index, by their events' rowids:
+/// FTS5 indexes no `room_id` (RMK-1031).
+pub(crate) const DELETE_ROOM_TEXTS: &str =
+    "DELETE FROM events_fts WHERE rowid IN (SELECT rowid FROM events WHERE room_id = ?)";
+
 /// Deletes the room and every row it holds, whether the store held it, as
 /// Python's store deletes them.
 pub(crate) fn delete(connection: &Connection, room_id: &RoomId) -> Result<bool, Failure> {
     let existed = connection.execute("DELETE FROM rooms WHERE id = ?", [room_id.as_str()])? > 0;
+    // By the rows' rowids, before the events they share them with.
+    connection.execute(DELETE_ROOM_TEXTS, [room_id.as_str()])?;
     for table in [
         "events",
         "bindings",
@@ -166,7 +173,6 @@ pub(crate) fn delete(connection: &Connection, room_id: &RoomId) -> Result<bool, 
         "idempotency",
         "voice_deliveries",
         "event_sequences",
-        "events_fts",
         "private_state",
     ] {
         connection.execute(

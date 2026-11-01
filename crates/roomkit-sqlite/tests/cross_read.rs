@@ -3,7 +3,7 @@
 //! [`SqliteStore`] with nothing lost, and what Python reads beside the
 //! records is kept right.
 //!
-//! The file is `tests/fixtures/python-v12.db`, written by
+//! The file is `tests/fixtures/python-v13.db`, written by
 //! `tests/fixtures/make_fixture.py` (`make sqlite-fixture`), at the roomkit
 //! commit `tests/fixtures/ROOMKIT_COMMIT` names. Each test opens a copy.
 //! The other direction, Python reading a file this crate wrote, is for
@@ -40,7 +40,7 @@ fn fixtures() -> PathBuf {
 }
 
 fn fixture() -> PathBuf {
-    fixtures().join("python-v12.db")
+    fixtures().join("python-v13.db")
 }
 
 /// A copy of the fixture, which a test may write.
@@ -583,7 +583,7 @@ fn schema(path: &Path) -> (Vec<Entry>, i64) {
 }
 
 /// A new file holds the schema Python creates, statement for statement, at
-/// version 12.
+/// version 13.
 #[tokio::test]
 async fn a_new_file_is_created_as_python_creates_it() {
     let file = TempFile::new("created");
@@ -612,7 +612,7 @@ async fn opening_failure(store: &SqliteStore) -> Option<StoreError> {
 #[tokio::test]
 async fn a_file_of_another_schema_version_is_refused() {
     let mut refused = Vec::new();
-    for version in [13, 11] {
+    for version in [14, 11] {
         let file = copy();
         Connection::open(file.path())
             .unwrap()
@@ -634,7 +634,7 @@ async fn a_file_of_another_schema_version_is_refused() {
         [
             (
                 Some(
-                    "SQLite schema version 13 is newer than supported version 12; upgrade \
+                    "SQLite schema version 14 is newer than supported version 13; upgrade \
                      RoomKit before opening this file"
                         .to_owned()
                 ),
@@ -642,13 +642,79 @@ async fn a_file_of_another_schema_version_is_refused() {
             ),
             (
                 Some(
-                    "SQLite schema version 11 is older than supported version 12: open it \
+                    "SQLite schema version 11 is older than supported version 13: open it \
                      once with the Python implementation's SQLiteStore, which migrates it"
                         .to_owned()
                 ),
                 true
             ),
         ]
+    );
+}
+
+/// A version 12 file, whose full-text rows Python wrote under rowids of their
+/// own, is migrated on open as Python's `_migrate_v12_to_v13` migrates it
+/// (RMK-1031): each row takes its event row's rowid, so an edit replaces the
+/// old text, and a row naming no event is dropped. Before the migration, the
+/// file was refused.
+#[tokio::test]
+async fn a_version_12_file_is_migrated_as_python_migrates_it() {
+    let file = copy();
+    {
+        let connection = Connection::open(file.path()).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TEMP TABLE old AS SELECT text, event_id, room_id FROM events_fts;
+                 DELETE FROM events_fts;
+                 INSERT INTO events_fts(rowid, text, event_id, room_id)
+                     SELECT 1000 + rowid, text, event_id, room_id FROM old;
+                 INSERT INTO events_fts(rowid, text, event_id, room_id)
+                     VALUES (900, 'orphan', 'gone', 'room-full');
+                 PRAGMA user_version = 12;",
+            )
+            .unwrap();
+    }
+    let store = store_of(file.path());
+    let search = |query: &'static str| {
+        let store = &store;
+        async move {
+            store
+                .search_events(query, SearchEventsOptions::default())
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|event| event.id.as_str().to_owned())
+                .collect::<Vec<_>>()
+        }
+    };
+    let found = search("invoice march").await;
+    let invoice = roomkit::model::EventId::new(found.first().unwrap()).unwrap();
+    let mut edited = store.get_event(&invoice).await.unwrap().unwrap();
+    edited.content = EventContent::Text(TextContent::new("paid in april"));
+    store.update_event(edited).await.unwrap();
+    let (stale, fresh) = (search("invoice march").await, search("april").await);
+    store.close().await;
+    let connection = Connection::open(file.path()).unwrap();
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    let untied: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM events_fts f
+             WHERE NOT EXISTS (SELECT 1 FROM events e WHERE e.rowid = f.rowid AND e.id = f.event_id)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        (found.len(), stale, fresh, version, untied),
+        (
+            1,
+            Vec::<String>::new(),
+            vec![invoice.as_str().to_owned()],
+            13,
+            0
+        )
     );
 }
 
@@ -823,7 +889,7 @@ async fn a_search_finds_what_python_s_search_finds_in_the_file_python_wrote() {
                 .collect::<Vec<_>>(),
         );
     }
-    let invoice = vec!["8546b0610f5a49a488b99d94f69594da".to_owned()];
+    let invoice = vec!["9d8e82f7674847b7b334fa11c8193f94".to_owned()];
     assert_eq!(
         found,
         [
@@ -832,8 +898,8 @@ async fn a_search_finds_what_python_s_search_finds_in_the_file_python_wrote() {
             vec![],
             vec![],
             vec![
-                "1ea87032edfc437fb222c0d452d9f7f5".to_owned(),
-                "28e5a7ae05254274a8931ddebfc7549f".to_owned()
+                "87250e36c69845f8be3f8480bfc26bdb".to_owned(),
+                "ada2c0cae00441e3a2f3e59c0b1cc63f".to_owned()
             ],
             vec![],
             vec![],

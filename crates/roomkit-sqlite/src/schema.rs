@@ -1,5 +1,5 @@
-//! The Python implementation's schema, version 12, which a file is created
-//! at or checked against when it is opened.
+//! The Python implementation's schema, version 13, which a file is created
+//! at or checked against when it is opened; a version 12 file is migrated.
 
 use std::time::Duration;
 
@@ -10,8 +10,22 @@ use roomkit::StoreError;
 use crate::error::{OpenFailure, SqliteSchemaError};
 
 /// The schema version this crate reads and writes: the Python
-/// implementation's `SQLiteStore` at its version 12.
-pub(crate) const SCHEMA_VERSION: i64 = 12;
+/// implementation's `SQLiteStore` at its version 13.
+pub(crate) const SCHEMA_VERSION: i64 = 13;
+
+/// Gives each full-text row its event row's rowid, the one key FTS5 indexes,
+/// and drops a row naming no stored event: Python's `_migrate_v12_to_v13`
+/// (RMK-1031).
+const MIGRATE_12_TO_13: &str = "
+CREATE TEMP TABLE fts_by_event AS
+    SELECT e.rowid AS event_rowid, f.text, f.event_id, f.room_id
+    FROM events_fts f JOIN events e ON e.id = f.event_id
+    GROUP BY e.rowid;
+DELETE FROM events_fts;
+INSERT INTO events_fts(rowid, text, event_id, room_id)
+    SELECT event_rowid, text, event_id, room_id FROM fts_by_event;
+DROP TABLE fts_by_event;
+";
 
 /// The tables and indexes, as the Python implementation writes them
 /// (roomkit `store/sqlite.py`, `_SCHEMA`), byte for byte: SQLite keeps each
@@ -66,6 +80,7 @@ pub(crate) fn prepare(connection: &mut Connection) -> Result<(), StoreError> {
     match version {
         0 => create(connection).map_err(OpenFailure::Database)?,
         SCHEMA_VERSION => repair(connection).map_err(OpenFailure::Database)?,
+        12 => migrate_12_to_13(connection).map_err(OpenFailure::Database)?,
         newer if newer > SCHEMA_VERSION => {
             return Err(SqliteSchemaError::newer(newer, SCHEMA_VERSION).into());
         }
@@ -88,6 +103,20 @@ fn create(connection: &mut Connection) -> rusqlite::Result<()> {
     transaction.execute_batch(RESPONDS_TO_INDEX)?;
     transaction.execute_batch(POPULATE_SEQUENCES)?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Migrates a version 12 file to version 13, in one transaction, as Python
+/// does on open; a file another connection migrated meanwhile is left as it
+/// is.
+fn migrate_12_to_13(connection: &mut Connection) -> rusqlite::Result<()> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version < SCHEMA_VERSION {
+        transaction.execute_batch(MIGRATE_12_TO_13)?;
+        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    }
     transaction.commit()?;
     Ok(())
 }

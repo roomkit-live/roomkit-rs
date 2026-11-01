@@ -798,6 +798,12 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **A SQLite commit no longer scans the whole search index** (RMK-1031),
+  as Python's store since dac48987: an event's full-text row takes its
+  event row's rowid, the one key FTS5 indexes, where each commit, edit and
+  delete found it by `event_id` (12 ms a commit at 60,000 events). The
+  schema moves to version 13, Python's; a version 12 file is migrated on
+  open, as Python migrates it, where it was refused.
 - **A `SkillRegistry` given, an empty one too, reserves the skill tools'
   names, `run_skill_script` among them**, as Python's constructor refuses
   a host's tool named `activate_skill`, `read_skill_reference` or

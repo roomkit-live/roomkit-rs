@@ -13,7 +13,8 @@
 //!   does are kept right: the idempotency keys, the full-text index, which
 //!   a deleted message leaves (RFC §10.3), and the index sequences;
 //! - a file with a newer schema is refused rather than written, and a new
-//!   file is created at version 12, exactly as Python creates it.
+//!   file is created at version 13, exactly as Python creates it; a version 12
+//!   file is migrated on open, as Python migrates it.
 //!
 //! One condition holds for Python to read a file this crate wrote: every
 //! channel type in it is one Python's enumeration lists (`sms`, `teams`,
