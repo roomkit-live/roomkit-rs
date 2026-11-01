@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `TurnHost::delegate`, `wait_task` and `room_tasks`, Python's (RFC
+  §10.6.5, RMK-1145): a background delegation from the turn's room, its
+  result continuing the turn's chain, the tasks the room's hosts delegated
+  kept for `wait_task`, and the room's tasks as the status bus lists them.
+  After the turn, a verb that needs it is refused before it is sent, a
+  `RuntimeError` as Python's.
 - A resolver's `IdentificationStatus::Rejected` holds the message when no
   identity hook answers (RFC §11.2, RMK-1151): blocked with the resolver's
   `message`, else `identity_rejected`, nothing stored, as Python's.
