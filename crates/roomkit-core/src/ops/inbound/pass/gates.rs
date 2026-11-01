@@ -14,7 +14,7 @@ use crate::ops::lifecycle::record;
 use crate::ops::protocol::{KeyHeld, Outcome, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Abort, Cx};
-use crate::rules::permissions;
+use crate::rules::{permissions, publications};
 
 impl CommitPass {
     pub(super) fn on_locked(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
@@ -134,7 +134,12 @@ impl CommitPass {
                     cx,
                     StoreRequest::GetEventByIdempotencyKey {
                         room_id: self.event.room_id.clone(),
-                        channel_id: Some(self.event.source.channel_id.clone()),
+                        // A publication's key within the room, whatever
+                        // channel committed it (RFC §22.1).
+                        channel_id: publications::lookup_channel(
+                            &key,
+                            &self.event.source.channel_id,
+                        ),
                         key,
                     },
                 ),

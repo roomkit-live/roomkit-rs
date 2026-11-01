@@ -32,6 +32,11 @@ pub struct MessageAnswers {
     /// message's event takes at least, whatever depth its parse set: 0
     /// outside a turn.
     pub chain_floor: u32,
+    /// The key the delivery path publishes the message under, in the
+    /// framework's publication namespace (RFC §22.1): the one such key the
+    /// pipeline admits on it, a key in that namespace being dropped from
+    /// any other message; `None` for every message but a publication.
+    pub publication: Option<String>,
 }
 
 impl MessageAnswers {
@@ -55,6 +60,7 @@ impl MessageAnswers {
             conversation: address.unwrap_or_default(),
             reply_metadata,
             chain_floor: 0,
+            publication: None,
         }
     }
 

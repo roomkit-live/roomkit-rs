@@ -41,7 +41,7 @@ use crate::ops::{ChannelConfig, Cx, KitConfig, Progress};
 use crate::rules::chain_depth::Draw;
 use crate::rules::instructions::InstructionRefusal;
 use crate::rules::routing::{RouteQuery, Sender};
-use crate::rules::{addresses, idempotency, permissions};
+use crate::rules::{addresses, idempotency, permissions, publications};
 
 /// How many times a message is routed before it gets a new room: once, then
 /// once more when the room it was routed to is no longer its own by the
@@ -171,6 +171,9 @@ pub(super) struct Arrival {
     chain_floor: u32,
     /// What step 5 decided of the sender, once the message arrived.
     identified: Option<Identified>,
+    /// The key the delivery path publishes the message under, the one key
+    /// of the publication namespace its event may keep (RFC §22.1).
+    publication: Option<String>,
     state: State,
 }
 
@@ -224,6 +227,7 @@ impl Arrival {
             charge: DeliveryCharge::new(None),
             chain_floor: 0,
             identified: None,
+            publication: None,
             state: State::Start,
         }
     }
@@ -234,6 +238,7 @@ impl Arrival {
     pub(super) fn answered(mut self, answers: Option<MessageAnswers>) -> Self {
         if let Some(answers) = answers {
             self.chain_floor = answers.chain_floor;
+            self.publication.clone_from(&answers.publication);
             self.sender = answers.sender(&self.message);
         }
         self
@@ -581,6 +586,11 @@ impl Arrival {
         })?;
         let mut event = stamp::stamp_trigger(*parsed, &self.message, id);
         event.room_id.clone_from(&context.room.id);
+        // A key in the framework's publication namespace is the delivery
+        // path's alone (RFC §22.1): dropped from any other message, whoever
+        // wrote it, the parse or its caller.
+        let key = event.idempotency_key.take();
+        event.idempotency_key = publications::admitted(key, self.publication.as_deref());
         // At least as deep as the turn the call runs within, whatever depth
         // the parse set (RFC §8.3), as Python's `_at_least_as_deep`.
         event.chain_depth = event.chain_depth.max(self.chain_floor);

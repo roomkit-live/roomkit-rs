@@ -94,6 +94,12 @@ pub enum HookTrigger {
     /// 5, §11.2): its identity hooks decide, registered apart; a hook
     /// registered here observes.
     OnIdentityUnknown,
+    /// Before a proactive delivery's strategy runs (RFC §22.3): can block
+    /// it or rewrite its content. It fails open.
+    BeforeDeliver,
+    /// Once a proactive delivery has an outcome, whatever it is (RFC
+    /// §22.3).
+    AfterDeliver,
 }
 
 impl HookTrigger {
@@ -106,7 +112,8 @@ impl HookTrigger {
             | Self::OnTranscription
             | Self::BeforeTts
             | Self::BeforeToolUse
-            | Self::OnToolCall => HookExecution::Sync,
+            | Self::OnToolCall
+            | Self::BeforeDeliver => HookExecution::Sync,
             Self::AfterBroadcast
             | Self::OnEventUpdated
             | Self::OnEventDeleted
@@ -124,7 +131,8 @@ impl HookTrigger {
             | Self::OnStatusPosted
             | Self::OnFeedback
             | Self::OnIdentityAmbiguous
-            | Self::OnIdentityUnknown => HookExecution::Async,
+            | Self::OnIdentityUnknown
+            | Self::AfterDeliver => HookExecution::Async,
         }
     }
 
@@ -153,7 +161,9 @@ impl HookTrigger {
             | Self::OnStatusPosted
             | Self::OnFeedback
             | Self::OnIdentityAmbiguous
-            | Self::OnIdentityUnknown => false,
+            | Self::OnIdentityUnknown
+            | Self::BeforeDeliver
+            | Self::AfterDeliver => false,
         }
     }
 
@@ -185,7 +195,9 @@ impl HookTrigger {
             | Self::OnStatusPosted
             | Self::OnFeedback
             | Self::OnIdentityAmbiguous
-            | Self::OnIdentityUnknown => false,
+            | Self::OnIdentityUnknown
+            | Self::BeforeDeliver
+            | Self::AfterDeliver => false,
         }
     }
 

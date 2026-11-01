@@ -52,6 +52,7 @@ pub mod lifecycle;
 mod lookalike;
 pub mod organizations;
 pub(crate) mod permissions;
+pub mod publications;
 pub(crate) mod records;
 pub mod routing;
 pub(crate) mod threads;
