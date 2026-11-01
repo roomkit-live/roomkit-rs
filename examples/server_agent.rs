@@ -111,7 +111,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use roomkit::model::{EventContent, EventType, RoomEvent, RoomId, TextContent};
 use roomkit::{ConversationStore, HookExecution, HookOptions, HookTrigger, PostOptions};
-use roomkit_sqlite::SqliteStore;
+use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
@@ -1002,7 +1002,9 @@ async fn timeline_in(
     database: &Path,
     conversation: &str,
 ) -> Result<Vec<RoomEvent>, Box<dyn Error>> {
-    let store = SqliteStore::open(database).await?;
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: database.into(),
+    });
     Ok(store
         .list_events(&RoomId::new(conversation)?, every_row())
         .await?)

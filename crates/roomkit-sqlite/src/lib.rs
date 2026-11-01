@@ -30,9 +30,11 @@
 //! ```no_run
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! use roomkit::{RoomKit, RoomKitOptions};
-//! use roomkit_sqlite::SqliteStore;
+//! use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 //!
-//! let store = SqliteStore::open("rooms.db").await?;
+//! let store = SqliteStore::new(SqliteStoreOptions {
+//!     path: "rooms.db".into(),
+//! });
 //! let kit = RoomKit::new(RoomKitOptions::with_store(store));
 //! # Ok(())
 //! # }
@@ -45,12 +47,15 @@ mod events;
 mod identities;
 mod lookups;
 mod members;
+mod options;
 mod records;
 mod rooms;
 mod schema;
+mod search;
 mod side_effects;
 mod store;
 mod timeline;
 
-pub use self::error::OpenError;
+pub use self::error::SqliteSchemaError;
+pub use self::options::{SearchEventsOptions, SqliteStoreOptions};
 pub use self::store::SqliteStore;

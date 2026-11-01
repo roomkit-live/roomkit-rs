@@ -73,8 +73,9 @@ authenticate,
 `CARGO_NET_GIT_FETCH_WITH_CLI=true`, or `net.git-fetch-with-cli = true` in
 `.cargo/config.toml`, has it run the `git` command with your configuration.
 
-`server_agent` shows what the service writes: the store opened with
-`SqliteStore::open(path)` and handed to `RoomKitOptions::with_store`, an
+`server_agent` shows what the service writes: the store made with
+`SqliteStore::new(SqliteStoreOptions { path })` and handed to
+`RoomKitOptions::with_store`, an
 `OpenAiAgent` registered on the kit with its `OpenAiConfig`, and a
 transport channel of its own whose messages it runs into their rooms. The
 documentation of each crate shows its own setup, compiled as a doctest.

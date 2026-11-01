@@ -11,7 +11,7 @@ mod support;
 
 use std::ops::Deref;
 
-use roomkit_sqlite::SqliteStore;
+use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 
 use crate::support::TempFile;
 
@@ -30,10 +30,16 @@ impl Deref for Store {
 }
 
 /// An empty store, on a new file.
+#[expect(
+    clippy::unused_async,
+    reason = "the shared suite awaits its store, which another store may open at once"
+)]
 pub(crate) async fn store() -> Store {
     let file = TempFile::new("store");
     Store {
-        store: SqliteStore::open(file.path()).await.unwrap(),
+        store: SqliteStore::new(SqliteStoreOptions {
+            path: file.path().into(),
+        }),
         _file: file,
     }
 }

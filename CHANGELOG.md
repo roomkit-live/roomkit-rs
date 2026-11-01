@@ -67,7 +67,7 @@ The public API in the Python implementation's terms (step 5, lot 1: the
 kit, its construction and its calls; lot 2: the model and the errors;
 lot 3: the hooks, the framework events and the turn's host; lot 4: the
 channels, the addresses, the routing and the store; lot 5: the skills,
-the tool policy).
+the tool policy, the SQLite store).
 
 ### Changed
 
@@ -589,6 +589,14 @@ the tool policy).
   `allow` and `deny` fields are public, built by struct update, and
   `is_allowed(tool_name)` reads it; `new()`, `allow(pattern)`,
   `deny(pattern)` and `permits(name)` go.
+- **`SqliteStore` is Python's `SQLiteStore(path='roomkit.db')`**:
+  `SqliteStore::new(SqliteStoreOptions { path })` does no I/O, the file
+  opening at the store's first operation, which fails
+  `StoreError::Unavailable` when it cannot be opened (the next one tries
+  again); a leading `~` reads as the home directory. `SqliteStore::open`
+  and `OpenError` go: a file of another schema version is refused with a
+  `SqliteSchemaError` as the failure's cause, Python's
+  `SQLiteSchemaError`, in its words for a newer version.
 
 ### Added
 
@@ -606,6 +614,11 @@ the tool policy).
   extra_metadata }`, Python's `SkillMetadata`, what a skill's frontmatter
   declares: its other keys, each read as the fields are, as texts; one the
   line reading cannot read whole is left out, the skill read all the same.
+- `SqliteStore::close()`, Python's `close()`: every later operation, of the
+  store or its clones, fails (`SQLiteStore is closed`).
+- `SqliteStore::search_events(query, SearchEventsOptions { room_id, limit
+  })`, Python's full-text `search_events`: the events whose text holds
+  every word of the query, the most relevant first, never a refused row.
 - `DiscoverOptions { strict }`, Python's `discover(strict=False)`: discovery
   logs and skips each directory it cannot scan and each skill it cannot
   load, and registers the rest; the manifest's bound still fails it.

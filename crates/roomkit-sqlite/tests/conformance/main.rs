@@ -39,7 +39,7 @@ mod templates;
 use std::time::Duration;
 
 use roomkit::{RoomKit, RoomKitOptions};
-use roomkit_sqlite::SqliteStore;
+use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 
 use crate::support::TempFile;
 
@@ -56,11 +56,17 @@ pub(crate) type Kit = RoomKit<SqliteStore>;
 
 /// A kit over a store on a new file, built with what `configure` makes of
 /// the defaults, and the file, removed once the run is over.
+#[expect(
+    clippy::unused_async,
+    reason = "the shared scenarios await their kit, which another store may open at once"
+)]
 pub(crate) async fn new_kit(
     configure: impl FnOnce(RoomKitOptions<SqliteStore>) -> RoomKitOptions<SqliteStore>,
 ) -> (Kit, TempFile) {
     let file = TempFile::new("conformance");
-    let store = SqliteStore::open(file.path()).await.unwrap();
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
     (
         RoomKit::new(configure(RoomKitOptions::with_store(store))),
         file,

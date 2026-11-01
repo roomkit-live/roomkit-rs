@@ -19,7 +19,7 @@ use roomkit::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiAgent, AiRequest, ToolDefinition, ToolOutput, Tools};
-use roomkit_sqlite::SqliteStore;
+use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 use serde_json::json;
 
 use crate::support::TempFile;
@@ -86,7 +86,9 @@ fn row(index: u64, turn: &str, result: Option<&str>) -> RoomEvent {
 #[tokio::test]
 async fn overlapping_turns_read_back_from_the_file_pair_by_their_correlation_id() {
     let file = TempFile::new("tool-rows-overlap");
-    let store = SqliteStore::open(file.path()).await.unwrap();
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
     store.create_room(Room::new(room_id())).await.unwrap();
     let events = [
         event(0, "sms", TextContent::new("Order 42?").into(), None),
@@ -108,7 +110,9 @@ async fn overlapping_turns_read_back_from_the_file_pair_by_their_correlation_id(
             .unwrap();
     }
     drop(store);
-    let store = SqliteStore::open(file.path()).await.unwrap();
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
     let query = roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         ..roomkit::store::ListEventsOptions::default()
@@ -158,7 +162,9 @@ fn lookup() -> Tools {
 /// A kit on `file`, with an SMS transport and an agent on `model`; the room
 /// created and bound when `fresh`.
 async fn kit_on(file: &TempFile, model: ScriptedProvider, fresh: bool) -> RoomKit<SqliteStore> {
-    let store = SqliteStore::open(file.path()).await.unwrap();
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
     let kit = RoomKit::new(RoomKitOptions::with_store(store));
     kit.register_channel(RecordingTransport::new(
         id("sms"),

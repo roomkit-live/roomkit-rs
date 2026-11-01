@@ -675,9 +675,9 @@ reason = "not in 0.x: Rust has no provider contract; without one, deliver return
 
 [[pending]]
 lot = 5
-python = "roomkit.SQLiteStore"
-members = ["__init__"]
-reason = "lot 5: SqliteStore::new(SqliteStoreOptions) opens lazily, close(); OpenError gives way to SqliteSchemaError"
+rust = "roomkit_sqlite::SqliteStore"
+members = ["close"]
+reason = "lot 5, question 10 to the maintainer: Python's close is ConversationStore's, which kit.close() calls; Rust's store trait has none in 0.x (lot 4)"
 
 [[pending]]
 lot = 5
@@ -831,23 +831,6 @@ reason = "lot 5, point 8: OpenAiAiProvider and Python's OpenAIConfig; OpenAiAgen
 lot = 5
 rust = "roomkit_openai::OpenAiError"
 reason = "lot 5, point 8: OpenAiAiProvider and Python's OpenAIConfig; OpenAiAgent and OpenAiError leave the public API"
-
-[[pending]]
-lot = 5
-rust = "roomkit_sqlite::OpenError"
-reason = "lot 5: SqliteStore::new(SqliteStoreOptions) opens lazily, close(); OpenError gives way to SqliteSchemaError"
-
-[[pending]]
-lot = 5
-rust = "roomkit_sqlite::SqliteStore"
-members = ["open"]
-reason = "lot 5: SqliteStore::new(SqliteStoreOptions) opens lazily, close(); OpenError gives way to SqliteSchemaError"
-
-[[pending]]
-lot = 5
-python = "roomkit.SQLiteStore"
-members = ["search_events"]
-reason = "lot 5 decides: mirror SQLiteStore.search_events, or list it [[missing]] with its reason"
 
 [[exception]]
 rust = "roomkit::DeliveryHandle::request_cancel"

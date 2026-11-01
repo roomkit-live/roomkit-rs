@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use rusqlite::{Connection, TransactionBehavior};
 
-use crate::error::OpenError;
+use roomkit::StoreError;
+
+use crate::error::{OpenFailure, SqliteSchemaError};
 
 /// The schema version this crate reads and writes: the Python
 /// implementation's `SQLiteStore` at its version 12.
@@ -49,30 +51,28 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// what a file at this version may lack, as the Python implementation does on
 /// every open, and refuses a file of another version. Then sets the
 /// write-ahead log's mode.
-pub(crate) fn prepare(connection: &mut Connection) -> Result<(), OpenError> {
+///
+/// # Errors
+///
+/// Fails [`StoreError::Unavailable`], its cause a [`SqliteSchemaError`] for
+/// a file of another version, which is left as it is, or SQLite's error.
+pub(crate) fn prepare(connection: &mut Connection) -> Result<(), StoreError> {
     connection
         .busy_timeout(BUSY_TIMEOUT)
-        .map_err(OpenError::database)?;
+        .map_err(OpenFailure::Database)?;
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(OpenError::database)?;
+        .map_err(OpenFailure::Database)?;
     match version {
-        0 => create(connection).map_err(OpenError::database)?,
-        SCHEMA_VERSION => repair(connection).map_err(OpenError::database)?,
+        0 => create(connection).map_err(OpenFailure::Database)?,
+        SCHEMA_VERSION => repair(connection).map_err(OpenFailure::Database)?,
         newer if newer > SCHEMA_VERSION => {
-            return Err(OpenError::NewerSchema {
-                found: newer,
-                supported: SCHEMA_VERSION,
-            });
+            return Err(SqliteSchemaError::newer(newer, SCHEMA_VERSION).into());
         }
-        older => {
-            return Err(OpenError::OlderSchema {
-                found: older,
-                supported: SCHEMA_VERSION,
-            });
-        }
+        older => return Err(SqliteSchemaError::older(older, SCHEMA_VERSION).into()),
     }
-    write_ahead(connection).map_err(OpenError::database)
+    write_ahead(connection).map_err(OpenFailure::Database)?;
+    Ok(())
 }
 
 /// Sets the write-ahead log's mode, with the synchronous level it allows.

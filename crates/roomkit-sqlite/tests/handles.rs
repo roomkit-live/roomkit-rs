@@ -18,7 +18,7 @@ use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookOptions,
     HookTrigger, RoomKit, RoomKitOptions,
 };
-use roomkit_sqlite::SqliteStore;
+use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 
 use crate::support::TempFile;
 
@@ -45,9 +45,11 @@ enum Held {
 /// left on the kit's file once the kit was shut down and dropped.
 async fn left_after_drop(held: Held) -> (bool, usize) {
     let file = TempFile::new("handles");
-    let kit = RoomKit::new(RoomKitOptions::with_store(
-        SqliteStore::open(file.path()).await.unwrap(),
-    ));
+    let kit = RoomKit::new(RoomKitOptions::with_store(SqliteStore::new(
+        SqliteStoreOptions {
+            path: file.path().into(),
+        },
+    )));
     let websocket = ChannelId::new("websocket").unwrap();
     kit.register_channel(RecordingTransport::new(
         websocket.clone(),

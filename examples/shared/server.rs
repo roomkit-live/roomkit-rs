@@ -24,7 +24,7 @@ use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, RoomKit, RoomKitOptions,
 };
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
-use roomkit_sqlite::SqliteStore;
+use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, watch};
 use tokio::task::JoinHandle;
@@ -180,9 +180,11 @@ impl AgentServer {
         patience: Patience,
         site: Site,
     ) -> Result<Self, Box<dyn Error>> {
-        let kit = RoomKit::new(RoomKitOptions::with_store(
-            SqliteStore::open(database).await?,
-        ));
+        let kit = RoomKit::new(RoomKitOptions::with_store(SqliteStore::new(
+            SqliteStoreOptions {
+                path: database.into(),
+            },
+        )));
         let websocket = WebSocketChannel::new(ChannelId::new("websocket")?);
         let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
             .with_system_prompt(SYSTEM_PROMPT)

@@ -6,34 +6,53 @@ use std::sync::{Arc, Mutex, PoisonError};
 use roomkit::StoreError;
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 
-use crate::error::{Failure, OpenError};
+use crate::error::{Failure, OpenFailure};
 use crate::schema;
+
+/// What an operation on a closed store fails with, in Python's words.
+pub(crate) const CLOSED: &str = "SQLiteStore is closed";
 
 /// A file's connection, one call at a time: SQLite writes one transaction
 /// at a time anyway, and a single connection never waits on another of the
-/// same process.
+/// same process. Closed, it holds none.
 #[derive(Debug, Clone)]
 pub(crate) struct Database {
-    connection: Arc<Mutex<Connection>>,
+    connection: Arc<Mutex<Option<Connection>>>,
 }
 
 impl Database {
     /// Opens the file at `path`, creating it, and its directory, at the
     /// schema version this crate knows when it holds none, and refusing one
     /// of another version.
-    pub(crate) async fn open(path: PathBuf) -> Result<Self, OpenError> {
+    pub(crate) async fn open(path: PathBuf) -> Result<Self, StoreError> {
         let connection = tokio::task::spawn_blocking(move || {
             if let Some(directory) = path.parent() {
-                std::fs::create_dir_all(directory).map_err(OpenError::Directory)?;
+                std::fs::create_dir_all(directory).map_err(OpenFailure::Directory)?;
             }
-            let mut connection = Connection::open(path).map_err(OpenError::database)?;
+            let mut connection = Connection::open(path).map_err(OpenFailure::Database)?;
             schema::prepare(&mut connection)?;
-            Ok::<_, OpenError>(connection)
+            Ok::<_, StoreError>(connection)
         })
-        .await??;
+        .await
+        .map_err(OpenFailure::Stopped)??;
         Ok(Self {
-            connection: Arc::new(Mutex::new(connection)),
+            connection: Arc::new(Mutex::new(Some(connection))),
         })
+    }
+
+    /// Closes the connection, once the operation holding it is done: every
+    /// later one fails.
+    pub(crate) async fn close(&self) {
+        let connection = Arc::clone(&self.connection);
+        // A connection closed on a thread that stopped is closed all the
+        // same, when its last handle drops.
+        let _closed = tokio::task::spawn_blocking(move || {
+            connection
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+        })
+        .await;
     }
 
     /// Runs `work` on the connection, on a blocking thread.
@@ -46,8 +65,11 @@ impl Database {
         let outcome = tokio::task::spawn_blocking(move || {
             // A panic while the connection was held rolled its transaction
             // back as it unwound, so the connection keeps serving.
-            let mut connection = connection.lock().unwrap_or_else(PoisonError::into_inner);
-            work(&mut connection)
+            let mut held = connection.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(connection) = held.as_mut() else {
+                return Err(Failure::Refused(StoreError::unavailable(CLOSED)));
+            };
+            work(connection)
         })
         .await
         .map_err(StoreError::unavailable)?;

@@ -17,16 +17,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use pretty_assertions::assert_eq;
+use roomkit::StoreError;
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, DeleteContent, EventContent, EventType, IdentityId,
     InboundMessage, Room, RoomEvent, RoomId, TextContent, Timestamp,
 };
+use roomkit::store::ListRoomsOptions;
 use roomkit::store::{DeleteEventOptions, LinkAddressOptions, ResolveIdentityOptions};
 use roomkit::testing::{
     RecordingTransport, RecordingTransportOptions, SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{ConversationStore, ProcessInboundOptions, RoomKit, RoomKitOptions};
-use roomkit_sqlite::{OpenError, SqliteStore};
+use roomkit_sqlite::{SearchEventsOptions, SqliteSchemaError, SqliteStore, SqliteStoreOptions};
 use rusqlite::Connection;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -68,7 +70,9 @@ fn hex(bytes: &[u8]) -> String {
 /// fixture's `room-full` was written: its timers, armed when Python wrote
 /// it, never fall due under a test, whenever the test runs (RFC §5.1).
 async fn fixture_kit(file: &TempFile) -> RoomKit<SqliteStore> {
-    let store = SqliteStore::open(file.path()).await.unwrap();
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
     let room = store.get_room(&room("room-full")).await.unwrap().unwrap();
     let written = room
         .timers
@@ -250,11 +254,7 @@ fn resolved_in_org_1() -> ResolveIdentityOptions {
 /// it.
 async fn rewrite_everything(store: &SqliteStore) {
     let full = room("room-full");
-    for room in store
-        .list_rooms(roomkit::store::ListRoomsOptions::default())
-        .await
-        .unwrap()
-    {
+    for room in store.list_rooms(ListRoomsOptions::default()).await.unwrap() {
         store.update_room(room).await.unwrap();
     }
     for binding in store.list_bindings(&full).await.unwrap() {
@@ -302,7 +302,9 @@ async fn rewrite_everything(store: &SqliteStore) {
 async fn a_rewrite_keeps_everything_python_wrote() {
     let file = copy();
     let before = rows(file.path());
-    let store = SqliteStore::open(file.path()).await.unwrap();
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
     rewrite_everything(&store).await;
     let after = rows(file.path());
     let (mut lost, mut added) = (Vec::new(), BTreeSet::new());
@@ -347,10 +349,12 @@ async fn a_rewrite_keeps_everything_python_wrote() {
 #[tokio::test]
 async fn every_record_python_wrote_reads() {
     let file = copy();
-    let store = SqliteStore::open(file.path()).await.unwrap();
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
     let full = room("room-full");
     let rooms: Vec<String> = store
-        .list_rooms(roomkit::store::ListRoomsOptions::default())
+        .list_rooms(ListRoomsOptions::default())
         .await
         .unwrap()
         .into_iter()
@@ -538,7 +542,9 @@ async fn the_delivery_cursor_is_its_column_s() {
             [],
         )
         .unwrap();
-    let store = SqliteStore::open(file.path()).await.unwrap();
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
     let full = room("room-full");
     assert_eq!(
         (
@@ -581,12 +587,28 @@ fn schema(path: &Path) -> (Vec<Entry>, i64) {
 #[tokio::test]
 async fn a_new_file_is_created_as_python_creates_it() {
     let file = TempFile::new("created");
-    drop(SqliteStore::open(file.path()).await.unwrap());
+    let store = store_of(file.path());
+    store.list_rooms(ListRoomsOptions::default()).await.unwrap();
+    store.close().await;
     assert_eq!(schema(file.path()), schema(&fixture()));
 }
 
+/// The store of `path`, which opens it at its first operation.
+fn store_of(path: &Path) -> SqliteStore {
+    SqliteStore::new(SqliteStoreOptions { path: path.into() })
+}
+
+/// What the first operation on `store` fails with, when the file cannot be
+/// opened: [`StoreError::Unavailable`] and its cause.
+async fn opening_failure(store: &SqliteStore) -> Option<StoreError> {
+    store.list_rooms(ListRoomsOptions::default()).await.err()
+}
+
 /// A file of a newer schema is refused and left as it is; one of an older
-/// schema is refused too, for Python to migrate.
+/// schema is refused too, for Python to migrate (point 12 of step 5): the
+/// first operation fails with a `SqliteSchemaError` as its cause, in
+/// Python's words for the newer one
+/// (`tasks/probes/step5-lot5/py_sqlite_search.out`).
 #[tokio::test]
 async fn a_file_of_another_schema_version_is_refused() {
     let mut refused = Vec::new();
@@ -597,23 +619,37 @@ async fn a_file_of_another_schema_version_is_refused() {
             .pragma_update(None, "user_version", version)
             .unwrap();
         let written = std::fs::read(file.path()).unwrap();
-        let opened = SqliteStore::open(file.path()).await.map(drop);
+        let failed = opening_failure(&store_of(file.path())).await;
         let left = std::fs::read(file.path()).unwrap() == written;
-        refused.push((
-            matches!(
-                opened,
-                Err(OpenError::NewerSchema {
-                    found: 13,
-                    supported: 12
-                } | OpenError::OlderSchema {
-                    found: 11,
-                    supported: 12
-                })
-            ),
-            left,
-        ));
+        let cause = match &failed {
+            Some(StoreError::Unavailable(cause)) => cause
+                .downcast_ref::<SqliteSchemaError>()
+                .map(ToString::to_string),
+            _ => None,
+        };
+        refused.push((cause, left));
     }
-    assert_eq!(refused, [(true, true), (true, true)]);
+    assert_eq!(
+        refused,
+        [
+            (
+                Some(
+                    "SQLite schema version 13 is newer than supported version 12; upgrade \
+                     RoomKit before opening this file"
+                        .to_owned()
+                ),
+                true
+            ),
+            (
+                Some(
+                    "SQLite schema version 11 is older than supported version 12: open it \
+                     once with the Python implementation's SQLiteStore, which migrates it"
+                        .to_owned()
+                ),
+                true
+            ),
+        ]
+    );
 }
 
 /// A file that is no database fails with SQLite's error as the cause, read
@@ -623,9 +659,10 @@ async fn a_file_of_another_schema_version_is_refused() {
 async fn a_file_that_is_no_database_fails_with_sqlite_s_error_as_its_cause() {
     let file = TempFile::new("not-a-database");
     std::fs::write(file.path(), [b'x'; 4096]).unwrap();
-    let opened = SqliteStore::open(file.path()).await.map(drop);
-    let cause = match &opened {
-        Err(error @ OpenError::Database(_)) => std::error::Error::source(error)
+    let failed = opening_failure(&store_of(file.path())).await;
+    let cause = match &failed {
+        Some(StoreError::Unavailable(cause)) => cause
+            .source()
             .and_then(|cause| cause.downcast_ref::<rusqlite::Error>())
             .and_then(rusqlite::Error::sqlite_error_code),
         _ => None,
@@ -694,16 +731,115 @@ async fn a_delete_marks_its_target_s_edits_as_python_reads_them() {
     );
 }
 
-/// A file in a directory that does not exist yet is created with the
-/// directory, as the Python implementation creates it.
+/// The file opens at the store's first operation, as Python's lazy store
+/// opens it: `new` does no I/O. A file in a directory that does not exist
+/// yet is created then, with the directory, as the Python implementation
+/// creates it.
 #[tokio::test]
-async fn a_file_s_missing_directory_is_created() {
+async fn the_file_and_its_missing_directory_are_created_at_the_first_operation() {
     let directory = TempFile::new("missing");
     let path = directory.path().with_extension("").join("nested/rooms.db");
-    let opened = SqliteStore::open(&path).await.map(drop);
+    let store = store_of(&path);
+    let before = path.exists();
+    let opened = store
+        .list_rooms(ListRoomsOptions::default())
+        .await
+        .map(drop);
     let created = path.exists();
     std::fs::remove_dir_all(directory.path().with_extension("")).ok();
-    assert_eq!((opened.is_ok(), created), (true, true));
+    assert_eq!((before, opened.is_ok(), created), (false, true, true));
+}
+
+/// Once closed, the store and its clones fail every operation, in Python's
+/// words; a second close does nothing.
+#[tokio::test]
+async fn a_closed_store_fails_every_later_operation() {
+    let file = copy();
+    let store = store_of(file.path());
+    let clone = store.clone();
+    let cause = |error: StoreError| {
+        if let StoreError::Unavailable(cause) = &error {
+            cause.to_string()
+        } else {
+            error.to_string()
+        }
+    };
+    let before = store
+        .get_room(&room("room-full"))
+        .await
+        .map(|found| found.is_some());
+    store.close().await;
+    store.close().await;
+    let after = clone.get_room(&room("room-full")).await.map_err(cause);
+    let unopened = store_of(file.path());
+    unopened.close().await;
+    let never_opened = opening_failure(&unopened).await.map(cause);
+    assert_eq!(
+        (before, after, never_opened),
+        (
+            Ok(true),
+            Err("SQLiteStore is closed".to_owned()),
+            Some("SQLiteStore is closed".to_owned())
+        )
+    );
+}
+
+/// `search_events` reads a query as its words, all of them required, the
+/// most relevant first, never a refused row: what Python's search answers
+/// on the file Python wrote (`tasks/probes/step5-lot5/py_sqlite_search.out`).
+#[tokio::test]
+async fn a_search_finds_what_python_s_search_finds_in_the_file_python_wrote() {
+    let file = copy();
+    let store = store_of(file.path());
+    let searches = [
+        ("invoice march", SearchEventsOptions::default()),
+        ("Invoice, MARCH!", SearchEventsOptions::default()),
+        ("blocked", SearchEventsOptions::default()),
+        ("text", SearchEventsOptions::default()),
+        (
+            "channel",
+            SearchEventsOptions {
+                limit: 2,
+                ..SearchEventsOptions::default()
+            },
+        ),
+        (
+            "channel",
+            SearchEventsOptions {
+                room_id: Some(room("elsewhere")),
+                ..SearchEventsOptions::default()
+            },
+        ),
+        ("*", SearchEventsOptions::default()),
+        ("\"part\" OR one", SearchEventsOptions::default()),
+    ];
+    let mut found = Vec::new();
+    for (query, options) in searches {
+        let events = store.search_events(query, options).await.unwrap();
+        found.push(
+            events
+                .iter()
+                .map(|event| event.id.as_str().to_owned())
+                .collect::<Vec<_>>(),
+        );
+    }
+    let invoice = vec!["8546b0610f5a49a488b99d94f69594da".to_owned()];
+    assert_eq!(
+        found,
+        [
+            invoice.clone(),
+            invoice,
+            vec![],
+            vec![],
+            vec![
+                "1ea87032edfc437fb222c0d452d9f7f5".to_owned(),
+                "28e5a7ae05254274a8931ddebfc7549f".to_owned()
+            ],
+            vec![],
+            vec![],
+            vec![],
+        ]
+    );
 }
 
 /// The Python implementation takes any key in an identity's addresses; a
@@ -713,7 +849,9 @@ async fn a_file_s_missing_directory_is_created() {
 #[tokio::test]
 async fn an_identity_with_a_key_rust_does_not_read_resolves_and_keeps_it() {
     let file = copy();
-    let store = SqliteStore::open(file.path()).await.unwrap();
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
     let lena = IdentityId::new("id-lena").unwrap();
     let resolved = store
         .resolve_identity(&ChannelType::SMS, "+15559876543", resolved_in_org_1())
@@ -766,7 +904,9 @@ async fn a_binding_row_its_model_refuses_fails_its_read_as_python_s_does() {
     let file = TempFile::new("refused_binding");
     let room_id = RoomId::new("r").unwrap();
     {
-        let store = SqliteStore::open(file.path()).await.unwrap();
+        let store = SqliteStore::new(SqliteStoreOptions {
+            path: file.path().into(),
+        });
         store.create_room(Room::new(room_id.clone())).await.unwrap();
         let binding = ChannelBinding::new(
             ChannelId::new("ws").unwrap(),
@@ -799,7 +939,9 @@ async fn a_binding_row_its_model_refuses_fails_its_read_as_python_s_does() {
                 [record.to_string()],
             )
             .unwrap();
-        let store = SqliteStore::open(file.path()).await.unwrap();
+        let store = SqliteStore::new(SqliteStoreOptions {
+            path: file.path().into(),
+        });
         read.push((
             store
                 .get_room(&room_id)

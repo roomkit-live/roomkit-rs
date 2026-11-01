@@ -41,7 +41,7 @@ use roomkit::{
 };
 use roomkit_ai::{DiscoverOptions, SkillRegistry, ToolPolicy};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
-use roomkit_sqlite::SqliteStore;
+use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 use serde_json::Value;
 
 use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Reply, TempDatabase};
@@ -173,9 +173,11 @@ impl Shop {
                 deny: vec!["*".into()],
                 ..ToolPolicy::default()
             });
-        let kit = RoomKit::new(RoomKitOptions::with_store(
-            SqliteStore::open(database).await?,
-        ));
+        let kit = RoomKit::new(RoomKitOptions::with_store(SqliteStore::new(
+            SqliteStoreOptions {
+                path: database.into(),
+            },
+        )));
         let sms = RecordingTransport::new(
             ChannelId::new("sms")?,
             ChannelType::SMS,
