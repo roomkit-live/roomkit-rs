@@ -10,7 +10,8 @@ use roomkit::model::{EventType, RoomEvent};
 use roomkit::testing::TurnTap;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContext, AiMessage, AiProvider, AiResponse, ProviderError,
+    AiChannel, AiChannelOptions, AiContext, AiError, AiMessage, AiProvider, AiResponse,
+    ProviderError,
 };
 use serde_json::{Value, json};
 
@@ -259,4 +260,27 @@ async fn the_deadline_ends_the_loop_between_rounds() {
         );
         room.kit.close().await.unwrap();
     }
+}
+
+/// RFC §21.6: a tool's call bound by zero is refused when the channel is
+/// built, as Python's constructor raises `ValueError` for
+/// `tool_timeout_seconds=0` (`tasks/probes/step5-review/ai/py_ctor_bounds.out`);
+/// none bounds nothing. It was taken, every call then timing out at once.
+#[test]
+fn a_zero_tool_timeout_is_refused() {
+    let built = |tool_timeout| {
+        AiChannel::new(
+            channel("assistant"),
+            ScriptedProvider::new([]),
+            AiChannelOptions {
+                tool_timeout,
+                ..AiChannelOptions::default()
+            },
+        )
+        .err()
+    };
+    assert_eq!(
+        [built(Some(Duration::ZERO)), built(None)],
+        [Some(AiError::ToolTimeout), None]
+    );
 }

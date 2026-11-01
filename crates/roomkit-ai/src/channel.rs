@@ -61,8 +61,8 @@ pub struct AiChannelOptions {
     /// run: an empty answer after a round of calls, or a call the provider
     /// could not hand over (RFC §6.4).
     pub max_empty_retries: u32,
-    /// The longest a tool's call may take (RFC §21.6); `None` bounds
-    /// nothing.
+    /// The longest a tool's call may take (RFC §21.6), more than zero;
+    /// `None` bounds nothing.
     pub tool_timeout: Option<Duration>,
     /// The skills the channel serves (RFC §24).
     pub skills: Option<SkillRegistry>,
@@ -218,7 +218,9 @@ impl<P: AiProvider> AiChannel<P> {
     /// name no vendor accepts (RFC §6.7); [`AiError::ToolPattern`] for a
     /// policy pattern holding a bracket (RFC §21.1); [`AiError::ServerLabel`]
     /// for a server label that is no identifier and
-    /// [`AiError::DuplicateServer`] for one given twice.
+    /// [`AiError::DuplicateServer`] for one given twice;
+    /// [`AiError::ToolTimeout`] for a tool's call bounded by zero (RFC
+    /// §21.6).
     pub fn new(
         channel_id: ChannelId,
         provider: P,
@@ -244,6 +246,9 @@ impl<P: AiProvider> AiChannel<P> {
             tool_call_intents_required,
             image_resolver,
         } = options;
+        if tool_timeout.is_some_and(|bound| bound.is_zero()) {
+            return Err(AiError::ToolTimeout);
+        }
         let policy = tool_policy.unwrap_or_default();
         refuse_bracketed(&policy)?;
         let mut instructions = ServerInstructions::default();

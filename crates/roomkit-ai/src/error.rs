@@ -43,6 +43,10 @@ pub enum AiError {
         /// The pattern.
         pattern: String,
     },
+    /// A tool's call is bounded by zero (RFC §21.6): Python's
+    /// `ValueError`, a bound being positive or none.
+    #[error("tool timeout for 'tool_timeout' must be positive or None, got 0")]
+    ToolTimeout,
     /// Fewer than two handlers were given to compose. Python's
     /// `ValueError`.
     #[error("compose_tool_handlers requires at least 2 handlers, {given} given")]

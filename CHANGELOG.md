@@ -756,6 +756,9 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **`AiChannel::new` refuses a zero `tool_timeout`** with
+  `AiError::ToolTimeout`, as Python's constructor raises `ValueError`:
+  every call of such a channel timed out at once.
 - **A turn whose stream is cancelled after it wrote reads
   `The turn ended in the middle of its stream`**, as Python's turn backend
   reports it, where it read `The turn ended before its output`.
