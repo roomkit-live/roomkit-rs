@@ -251,6 +251,33 @@ impl Run {
         observed.hook_order.push(name.to_owned());
     }
 
+    /// Records a call of the hook `name` on `ON_DELIVERY_STATUS`, whose
+    /// payload is the delivery status `status` (README, "Expectations").
+    pub(crate) fn record_status_hook(
+        &self,
+        name: &str,
+        trigger: &str,
+        room_id: &str,
+        status: &Value,
+    ) {
+        if !self.recording.load(Ordering::SeqCst) {
+            return;
+        }
+        let call = json!({
+            "trigger": trigger,
+            "room_id": room_id,
+            "event": null,
+            "delivery_status": status,
+        });
+        let mut observed = lock(&self.observed);
+        observed
+            .hooks
+            .entry(name.to_owned())
+            .or_default()
+            .push(call);
+        observed.hook_order.push(name.to_owned());
+    }
+
     /// Reads the framework events emitted since the last read.
     fn drain_events(&self) {
         let mut read = lock(&self.events_read);

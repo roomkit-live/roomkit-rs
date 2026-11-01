@@ -9,7 +9,8 @@ use std::time::Duration;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    ChannelOutput, ChannelType, DeliveryStatus, HookResult, InboundMessage, RoomContext, RoomEvent,
+    RoomId,
 };
 use roomkit::{
     Channel, ChannelError, DeliveryStream, HookError, SessionStartedEvent, StreamItem,
@@ -579,6 +580,39 @@ pub(crate) fn session_hook_handler(
             };
             let room_id = context.room.id.to_string();
             run.record_hook(&name, &trigger, &room_id, None);
+            if let Some(reaction) = reactions.pick(&json!({ "room_id": room_id })) {
+                perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
+            }
+            Ok(allow)
+        })
+    }
+}
+
+/// What a scripted delivery status hook gives.
+type StatusHookFuture =
+    std::pin::Pin<Box<dyn Future<Output = Result<HookResult<DeliveryStatus>, HookError>> + Send>>;
+
+/// The handler of the scripted hook `spec` on `ON_DELIVERY_STATUS`: it
+/// records its call, its payload the status, then reacts.
+pub(crate) fn status_hook_handler(
+    spec: &Value,
+    run: &Arc<Run>,
+) -> impl Fn(DeliveryStatus, RoomContext) -> StatusHookFuture + Send + Sync + 'static {
+    let reactions = Arc::new(Reactions::new(spec.get("reactions")));
+    let name = spec["name"].as_str().unwrap_or_default().to_owned();
+    let trigger = spec["trigger"].as_str().unwrap_or_default().to_owned();
+    let run = Arc::downgrade(run);
+    move |payload: DeliveryStatus, context: RoomContext| {
+        let reactions = Arc::clone(&reactions);
+        let (name, trigger, run) = (name.clone(), trigger.clone(), Weak::clone(&run));
+        Box::pin(async move {
+            let allow = HookResult::allow(AllowOptions::default());
+            let Some(run) = run.upgrade() else {
+                return Ok(allow);
+            };
+            let room_id = context.room.id.to_string();
+            let status = serde_json::to_value(&payload).unwrap_or_default();
+            run.record_status_hook(&name, &trigger, &room_id, &status);
             if let Some(reaction) = reactions.pick(&json!({ "room_id": room_id })) {
                 perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
             }

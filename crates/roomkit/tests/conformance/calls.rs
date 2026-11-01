@@ -9,17 +9,18 @@ use std::future::Future;
 use std::time::Duration;
 
 use roomkit::model::{
-    Access, ChannelCategory, ChannelId, ChannelType, EventContent, EventDirection, EventId,
-    EventSource, EventType, InboundMessage, Metadata, Participant, ParticipantId, RoomEvent,
-    RoomId, RoomTimers, Visibility,
+    Access, ChannelCategory, ChannelId, ChannelType, DeliveryStatus, EventContent, EventDirection,
+    EventId, EventSource, EventType, InboundMessage, Metadata, Participant, ParticipantId,
+    RoomEvent, RoomId, RoomTimers, Visibility,
 };
+use roomkit::providers::sms::WebhookMeta;
 use roomkit::{
     AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
     CloseRoomOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
     DetachChannelOptions, HookOptions, HookTrigger, HostChannel, InboundResult, MuteOptions,
-    MuteOutputOptions, PostOptions, ProcessInboundOptions, RemoveRoomHookOptions, RoomKitError,
-    SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions,
-    UpdateEventOptions,
+    MuteOutputOptions, PostOptions, ProcessDeliveryStatusOptions, ProcessInboundOptions,
+    ProcessWebhookOptions, RemoveRoomHookOptions, RoomKitError, SendEventOptions, SetAccessOptions,
+    SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions, UpdateEventOptions,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -27,7 +28,7 @@ use serde_json::{Value, json};
 use crate::agents;
 use crate::errors::{error_of, named};
 use crate::run::Run;
-use crate::scripted::{ScriptedChannel, hook_handler, session_hook_handler};
+use crate::scripted::{ScriptedChannel, hook_handler, session_hook_handler, status_hook_handler};
 use crate::templates::{complete_event, complete_participant, system_source};
 
 /// Why a call could not even be made: a scenario the runner cannot read.
@@ -267,6 +268,7 @@ async fn lifecycle_call(
         }),
         "add_room_hook" | "remove_room_hook" => room_hook_call(run, name, spec).await?,
         "mute_output" | "unmute_output" => output_call(run, name, spec).await?,
+        "process_delivery_status" | "process_webhook" => status_call(run, name, spec).await?,
         other => return Err(format!("no call {other}")),
     })
 }
@@ -459,6 +461,27 @@ async fn output_call(
     Ok(finish(run, name, outcome, dump))
 }
 
+/// A provider's report the scenario names: a delivery status, or a
+/// webhook read into its metadata.
+async fn status_call(
+    run: &std::sync::Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<Called, Unreadable> {
+    let organization_id = organization_id(spec);
+    let kit = run.kit();
+    let outcome = if name == "process_delivery_status" {
+        let status = field::<DeliveryStatus>(spec, "status")?;
+        let options = ProcessDeliveryStatusOptions { organization_id };
+        kit.process_delivery_status(status, options).await
+    } else {
+        let (meta, channel) = (field::<WebhookMeta>(spec, "meta")?, channel_id(spec)?);
+        let options = ProcessWebhookOptions { organization_id };
+        kit.process_webhook(meta, &channel, options).await
+    };
+    Ok(finish(run, name, outcome, |()| Value::Null))
+}
+
 /// A room hook's call the scenario names: its addition or its removal.
 async fn room_hook_call(
     run: &std::sync::Arc<Run>,
@@ -543,6 +566,8 @@ pub(crate) fn register_hook(
         kit.hook(trigger, agents::tool_hook_handler(hook, run), options)
     } else if trigger == HookTrigger::OnSessionStarted {
         kit.hook(trigger, session_hook_handler(hook, run), options)
+    } else if trigger == HookTrigger::OnDeliveryStatus {
+        kit.hook(trigger, status_hook_handler(hook, run), options)
     } else {
         kit.hook(trigger, hook_handler(hook, run), options)
     };

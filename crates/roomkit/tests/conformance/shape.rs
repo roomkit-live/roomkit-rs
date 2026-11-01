@@ -203,6 +203,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "register_hook" => &["hook"],
         "add_room_hook" => &["room_id", "hook"],
         "remove_room_hook" => &["room_id", "name"],
+        "process_delivery_status" => &["status"],
+        "process_webhook" => &["meta", "channel_id"],
         store => return crate::store_calls::arguments(store),
     })
 }
