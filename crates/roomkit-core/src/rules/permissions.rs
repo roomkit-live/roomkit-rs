@@ -136,11 +136,16 @@ pub fn visible_events(context: &RoomContext, channel_id: &ChannelId) -> Vec<Room
     else {
         return Vec::new();
     };
-    let deleted = deleted_events(&context.recent_events);
-    context
+    // The deleted marks are read from the received events alone, as
+    // Python's `withheld(received_events(...))` reads them (RMK-1102).
+    let received: Vec<&RoomEvent> = context
         .recent_events
         .iter()
         .filter(|event| event.status != EventStatus::Blocked)
+        .collect();
+    let deleted = deleted_events(received.iter().copied());
+    received
+        .into_iter()
         .filter(|event| {
             &event.source.channel_id == channel_id || visibility_allows(&event.visibility, reader)
         })
@@ -154,9 +159,11 @@ pub fn visible_events(context: &RoomContext, channel_id: &ChannelId) -> Vec<Room
 /// which a host's direct update may have removed since. A DELETE row proves
 /// nothing by itself: one committed without step 8a (a host's
 /// `commit_event`) was never checked.
-fn deleted_events(timeline: &[RoomEvent]) -> BTreeSet<&EventId> {
+fn deleted_events<'timeline>(
+    timeline: impl IntoIterator<Item = &'timeline RoomEvent>,
+) -> BTreeSet<&'timeline EventId> {
     timeline
-        .iter()
+        .into_iter()
         .filter(|event| edits::is_deleted(event))
         .map(|event| &event.id)
         .collect()
@@ -831,7 +838,7 @@ mod tests {
     /// its `recent_events` among them.
     mod visible_events {
         use super::*;
-        use crate::model::Room;
+        use crate::model::{EditContent, EditSource, Room};
         use pretty_assertions::assert_eq;
         use serde_json::json;
 
@@ -903,6 +910,30 @@ mod tests {
             assert_eq!(
                 known(transport("ws"), &[transport("sms"), agent("ai")], page()),
                 ["own", "to all", "to ws", ""]
+            );
+        }
+
+        /// RMK-1102: a refused row marked deleted marks nothing, its edit
+        /// handed whole, as Python's `visible_events` reads the marks of
+        /// the received events alone (`received_events` first).
+        #[test]
+        fn a_refused_row_marked_deleted_withholds_no_edit_of_it() {
+            let sms = transport("sms");
+            let mut refused = said("evt_1", &sms, "refused", Visibility::All);
+            refused.status = EventStatus::Blocked;
+            refused
+                .metadata
+                .insert(edits::DELETED.to_owned(), json!(true));
+            let mut edit = said("evt_2", &sms, "", Visibility::All);
+            edit.r#type = EventType::Edit;
+            edit.content = EventContent::Edit(EditContent {
+                target_event_id: EventId::new("evt_1").unwrap(),
+                new_content: Box::new(TextContent::new("corrected").into()),
+                edit_source: Some(EditSource::Sender),
+            });
+            assert_eq!(
+                known(transport("ws"), &[sms], vec![refused, edit]),
+                ["Correction: corrected"]
             );
         }
 
