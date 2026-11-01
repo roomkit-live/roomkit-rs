@@ -755,7 +755,10 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 - **An MCP call that fails with no words fails with none**, as Python's
   `ToolFailedError(error_text(result))`, where it read `Tool '<name>' failed
   with no message`; and **an HTTP MCP server's connection is unbounded**,
-  as Python bounds only a server it starts, where it was cut at 60 seconds.
+  as Python bounds only a server it starts, where it was cut at 60 seconds:
+  the TCP connection is still cut at 10 seconds, but a server that takes it
+  and never answers holds `connect()` until a host's own bound
+  (`tokio::time::timeout`) ends it.
 - **A circuit breaker's probe that never ended lets another through** a
   recovery later: a send the kit's close cut while it probed left the
   channel's sends skipped for good (RMK-1048's review; Python's own,

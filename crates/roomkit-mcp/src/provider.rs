@@ -208,6 +208,12 @@ impl McpToolProvider {
     /// The server at `url`, over Streamable HTTP: Python's
     /// `MCPToolProvider.from_url`.
     ///
+    /// Its connection is unbounded, as Python bounds only a server it
+    /// starts: the TCP connection is cut at 10 seconds, but a server that
+    /// takes it and never answers holds [`connect`](Self::connect) until it
+    /// does. A host bounds it itself:
+    /// `tokio::time::timeout(Duration::from_secs(60), provider.connect())`.
+    ///
     /// # Errors
     ///
     /// Returns [`McpError::Configuration`] for a label that cannot name the
