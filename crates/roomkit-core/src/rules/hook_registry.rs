@@ -80,6 +80,12 @@ pub enum HookTrigger {
     /// `DeliveryStatus`, no event, and every hook on it fires in the room,
     /// its filter unread.
     OnDeliveryStatus,
+    /// An entry was posted on the kit's status bus naming the room in its
+    /// metadata's `room_id` (RFC §19.8); its payload is the entry.
+    OnStatusPosted,
+    /// `submit_feedback` recorded a rating as an observation of the room
+    /// (RFC §15.9); its payload is the observation.
+    OnFeedback,
 }
 
 impl HookTrigger {
@@ -106,7 +112,9 @@ impl HookTrigger {
             | Self::OnSessionStarted
             | Self::OnError
             | Self::OnTaskCreated
-            | Self::OnDeliveryStatus => HookExecution::Async,
+            | Self::OnDeliveryStatus
+            | Self::OnStatusPosted
+            | Self::OnFeedback => HookExecution::Async,
         }
     }
 
@@ -131,7 +139,9 @@ impl HookTrigger {
             | Self::OnSessionStarted
             | Self::OnError
             | Self::OnTaskCreated
-            | Self::OnDeliveryStatus => false,
+            | Self::OnDeliveryStatus
+            | Self::OnStatusPosted
+            | Self::OnFeedback => false,
         }
     }
 
@@ -159,8 +169,24 @@ impl HookTrigger {
             | Self::OnTaskCreated
             | Self::OnTranscription
             | Self::BeforeTts
-            | Self::OnDeliveryStatus => false,
+            | Self::OnDeliveryStatus
+            | Self::OnStatusPosted
+            | Self::OnFeedback => false,
         }
+    }
+
+    /// Whether the trigger's hooks fire whatever their filter, as the Python
+    /// implementation fires them (`skip_event_filter`): a session's start, a
+    /// delivery status, a status posted, a feedback, whose payload is no
+    /// event.
+    fn skips_filter(self) -> bool {
+        matches!(
+            self,
+            Self::OnSessionStarted
+                | Self::OnDeliveryStatus
+                | Self::OnStatusPosted
+                | Self::OnFeedback
+        )
     }
 
     /// Whether the trigger's payload is a tool call rather than an event
@@ -740,9 +766,9 @@ impl HookRegistry {
     }
 
     /// The hooks of `trigger` whose filter admits `subject`, the kit's and
-    /// those of the subject's room; a session's start's hooks and a
-    /// delivery status's read no filter, as the Python implementation fires
-    /// them (`skip_event_filter`).
+    /// those of the subject's room; the hooks of a session's start, a
+    /// delivery status, a status posted and a feedback read no filter, as
+    /// the Python implementation fires them (`skip_event_filter`).
     fn matching<'registry>(
         &'registry self,
         trigger: HookTrigger,
@@ -751,10 +777,7 @@ impl HookRegistry {
         self.hooks.iter().filter(move |hook| {
             hook.spec.trigger == trigger
                 && hook.reaches(subject.room_id)
-                && (matches!(
-                    trigger,
-                    HookTrigger::OnSessionStarted | HookTrigger::OnDeliveryStatus
-                ) || hook.spec.filter.admits(subject))
+                && (trigger.skips_filter() || hook.spec.filter.admits(subject))
         })
     }
 

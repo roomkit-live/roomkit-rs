@@ -53,6 +53,13 @@ pub(crate) trait SectionWork: Debug {
         false
     }
 
+    /// Whether the room's due timer transitions are applied before the
+    /// work begins: every work's but a change the Python implementation
+    /// makes under the lock without them (`update_room_metadata`).
+    fn applies_timers(&self) -> bool {
+        true
+    }
+
     /// What the work gives for `room_id`, a room the store does not hold.
     ///
     /// # Errors
@@ -292,6 +299,10 @@ impl<W: SectionWork> Section<W> {
         };
         if let Some(refused) = self.work.refuses(&context.room) {
             return self.release(cx, refused);
+        }
+        if !self.work.applies_timers() {
+            let begun = self.work.begin(cx, context);
+            return self.working(cx, begun);
         }
         match gate::open(cx, context) {
             Gate::Clear(context) => {

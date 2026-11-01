@@ -212,6 +212,10 @@ impl<C: SectionChange> SectionWork for Changing<C> {
         self.change.reads_history()
     }
 
+    fn applies_timers(&self) -> bool {
+        self.change.applies_timers()
+    }
+
     fn failure(failure: Failure) -> Self::Error {
         match failure {
             Failure::Store(error) => SectionError::Store(error),

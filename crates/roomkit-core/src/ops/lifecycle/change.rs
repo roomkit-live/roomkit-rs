@@ -51,6 +51,12 @@ pub(crate) trait SectionChange: Debug {
         false
     }
 
+    /// Whether the room's due timer transitions are applied before the
+    /// change is decided: every change's but a metadata update's.
+    fn applies_timers(&self) -> bool {
+        true
+    }
+
     /// Whether the change reads the room's whole timeline under the lock
     /// before it decides on `context`, the room as its section read it: no
     /// change does by default.

@@ -65,7 +65,7 @@ pub use inbound::{
 pub use lifecycle::{
     ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom, DetachChannel, LifecycleChange,
     LifecycleError, LifecyclePayload, PauseRoom, ReopenRoom, ResumeRoom, TimersChecked,
-    UpdateBinding,
+    UpdateBinding, UpdateRoomMetadata,
 };
 pub use protocol::{
     AfterDelivery, AnswerOf, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Decided,
