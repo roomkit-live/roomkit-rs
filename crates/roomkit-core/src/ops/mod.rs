@@ -40,6 +40,7 @@
 //! "Reentrancy").
 
 mod config;
+mod delegation;
 mod environment;
 mod events;
 mod framework_events;
@@ -54,6 +55,7 @@ pub use config::{
     ChannelConfig, ConfigError, IdentityConfig, KitConfig, RECENT_EVENTS_FLOOR,
     RECENT_EVENTS_LIMIT, RecentEvents,
 };
+pub use delegation::{DelegatedAnswer, DelegatedTurn, DelegationError};
 #[cfg(feature = "system-environment")]
 #[doc(hidden)]
 pub use environment::SystemEnvironment;

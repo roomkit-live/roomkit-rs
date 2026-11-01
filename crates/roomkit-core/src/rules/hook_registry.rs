@@ -100,6 +100,13 @@ pub enum HookTrigger {
     /// Once a proactive delivery has an outcome, whatever it is (RFC
     /// §22.3).
     AfterDeliver,
+    /// A task was delegated to an agent in a child room (RFC §23.5): its
+    /// payload is a `task_delegated` event of the parent room, never
+    /// stored.
+    OnTaskDelegated,
+    /// A delegated task ended (RFC §23.5): its payload is a
+    /// `task_completed` event of the parent room, never stored.
+    OnTaskCompleted,
 }
 
 impl HookTrigger {
@@ -132,7 +139,9 @@ impl HookTrigger {
             | Self::OnFeedback
             | Self::OnIdentityAmbiguous
             | Self::OnIdentityUnknown
-            | Self::AfterDeliver => HookExecution::Async,
+            | Self::AfterDeliver
+            | Self::OnTaskDelegated
+            | Self::OnTaskCompleted => HookExecution::Async,
         }
     }
 
@@ -163,7 +172,9 @@ impl HookTrigger {
             | Self::OnIdentityAmbiguous
             | Self::OnIdentityUnknown
             | Self::BeforeDeliver
-            | Self::AfterDeliver => false,
+            | Self::AfterDeliver
+            | Self::OnTaskDelegated
+            | Self::OnTaskCompleted => false,
         }
     }
 
@@ -197,7 +208,9 @@ impl HookTrigger {
             | Self::OnIdentityAmbiguous
             | Self::OnIdentityUnknown
             | Self::BeforeDeliver
-            | Self::AfterDeliver => false,
+            | Self::AfterDeliver
+            | Self::OnTaskDelegated
+            | Self::OnTaskCompleted => false,
         }
     }
 
