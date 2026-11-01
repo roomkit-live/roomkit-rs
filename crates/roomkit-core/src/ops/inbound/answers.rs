@@ -15,7 +15,8 @@ use crate::rules::routing::{self, Sender};
 /// enters (RFC §5.7, §10.4): the core routes the message by its
 /// conversation and records the sender with its reply metadata (RFC §10.1
 /// step 2). A message entered without them is answered by its channel's
-/// declaration ([`MessageAnswers::declared`]).
+/// declaration: its chat under its chat key, else its sender on a channel
+/// that replies to its senders, under its recipient key.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MessageAnswers {
     /// The address naming the message's conversation, Python's
