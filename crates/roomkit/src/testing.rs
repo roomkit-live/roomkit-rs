@@ -357,10 +357,14 @@ impl EventTap {
         let tap = Self::default();
         for event_type in types {
             let record = Arc::clone(&tap.events);
-            kit.on(*event_type, move |event| {
+            // A closed kit refuses the tap, and emits nothing it could note.
+            let tapped = kit.on(*event_type, move |event| {
                 record.send_modify(|events| events.push(event));
                 ready(())
             });
+            if tapped.is_err() {
+                break;
+            }
         }
         tap
     }

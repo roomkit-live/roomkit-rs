@@ -74,6 +74,10 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Changed
 
+- `RoomKit::on` returns a `Result`, refusing a handler with
+  `RoomKitError::KitClosed` once the kit's close started, as Python's
+  `on()` raises `KitClosedError` and as `RoomKit::hook` already refused:
+  a caller adds `?` or handles the refusal.
 - The kit's calls fail with `RoomKitError`, the Python implementation's
   base class, for `KitError`: its variants are flat, each named after one
   of Python's exception classes (`RoomNotFound`, `RoomAlreadyExists`,

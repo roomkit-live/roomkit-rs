@@ -102,7 +102,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
             ..Default::default()
         },
     )?;
-    let events = shared::framework_events(&kit, &["room_created"]);
+    let events = shared::framework_events(&kit, &["room_created"])?;
 
     let jeans = customer_says(&kit, &sms, JEAN, "Bonjour").await?;
     let maries = customer_says(&kit, &sms, MARIE, "Hello").await?;

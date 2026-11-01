@@ -89,7 +89,7 @@ impl Conversation {
         kit.on("room_channel_attached", move |event| {
             noted.push(event);
             std::future::ready(())
-        });
+        })?;
         let room = RoomId::new("room_1")?;
         kit.create_room(CreateRoomOptions {
             room_id: Some(room.clone()),

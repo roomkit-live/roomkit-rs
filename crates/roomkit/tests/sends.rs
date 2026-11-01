@@ -161,7 +161,8 @@ async fn sent(
                 .unwrap()
                 .push((event.r#type.clone(), event.data.clone()));
             async {}
-        });
+        })
+        .unwrap();
     }
     let sms = RecordingTransport::new(
         channel("sms"),

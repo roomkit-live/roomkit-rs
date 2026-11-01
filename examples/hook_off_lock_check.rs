@@ -152,7 +152,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
 
     println!("A message the scanner never answers, with a {PROCESS_TIMEOUT:?} process_timeout.");
-    let events = shared::framework_events(&kit, &["process_timeout"]);
+    let events = shared::framework_events(&kit, &["process_timeout"])?;
     let hung = chat.clone().says("hang").await?;
     let reported = events.entries();
     let written = shared::timeline(&kit, &room).await?.len();

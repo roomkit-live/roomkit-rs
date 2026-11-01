@@ -470,7 +470,8 @@ async fn event_processed_follows_the_after_broadcast_hooks() {
     kit.on("event_processed", move |_| {
         noted.lock().unwrap().push("event_processed");
         ready(())
-    });
+    })
+    .unwrap();
     kit.process_inbound(
         message(&sms, "Hello"),
         ProcessInboundOptions {

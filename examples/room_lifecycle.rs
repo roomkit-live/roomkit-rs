@@ -231,7 +231,7 @@ async fn by_timers(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn E
     };
     desk.open(&room, Some(timers)).await?;
     desk.alice_says(&room, "Hello").await?;
-    let events = shared::framework_events(kit, &["room_paused", "room_closed"]);
+    let events = shared::framework_events(kit, &["room_paused", "room_closed"])?;
 
     desk.clock.advance(Duration::from_secs(90));
     let paused = kit

@@ -21,7 +21,7 @@ use shared::Checks;
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let events = shared::framework_events(&kit, &["chain_depth_exceeded"]);
+    let events = shared::framework_events(&kit, &["chain_depth_exceeded"])?;
 
     let human = RecordingTransport::new(
         ChannelId::new("ws")?,

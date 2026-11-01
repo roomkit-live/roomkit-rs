@@ -226,15 +226,17 @@ async fn tool_calls_emit_before_tool_use_and_tool_call() {
     let emitted = Arc::new(Mutex::new(Vec::new()));
     for event_type in ["before_tool_use", "tool_call"] {
         let noted = Arc::clone(&emitted);
-        room.kit.on(event_type, move |event| {
-            noted.lock().unwrap().push((
-                event.r#type,
-                event.room_id,
-                event.channel_id,
-                Value::Object(event.data),
-            ));
-            std::future::ready(())
-        });
+        room.kit
+            .on(event_type, move |event| {
+                noted.lock().unwrap().push((
+                    event.r#type,
+                    event.room_id,
+                    event.channel_id,
+                    Value::Object(event.data),
+                ));
+                std::future::ready(())
+            })
+            .unwrap();
     }
     room.says("Orders 1 and 2?").await;
     roomkit::testing::idle(&room.kit).await;
@@ -317,10 +319,12 @@ async fn before_tool_use_observers_see_the_call_the_chain_let_through() {
         .unwrap();
     let reasons = Arc::new(Mutex::new(Vec::new()));
     let noted = Arc::clone(&reasons);
-    room.kit.on("before_tool_use", move |event| {
-        noted.lock().unwrap().push(event.data["reason"].clone());
-        std::future::ready(())
-    });
+    room.kit
+        .on("before_tool_use", move |event| {
+            noted.lock().unwrap().push(event.data["reason"].clone());
+            std::future::ready(())
+        })
+        .unwrap();
     room.says("Orders 1 and 2?").await;
     roomkit::testing::idle(&room.kit).await;
     assert_eq!(

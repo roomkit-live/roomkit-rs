@@ -372,7 +372,8 @@ async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
     kit.on("session_started", move |_| {
         started_notice.notify_one();
         ready(())
-    });
+    })
+    .unwrap();
     let room = room_id();
     let call = kit.process_inbound(
         message(&sms, "Bonjour"),

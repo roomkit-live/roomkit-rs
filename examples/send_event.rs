@@ -229,7 +229,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
 
     println!("The customer asks; the agent's turn posts a note, then answers.");
-    let events = shared::framework_events(&kit, &["event_processed"]);
+    let events = shared::framework_events(&kit, &["event_processed"])?;
     let question = InboundMessage::new(
         customer.channel_id().clone(),
         "+15551234567",

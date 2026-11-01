@@ -8,8 +8,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use pretty_assertions::assert_eq;
 use roomkit::model::RoomId;
-use roomkit::{CreateRoomOptions, RoomKit, RoomKitOptions};
+use roomkit::{CreateRoomOptions, RoomKit, RoomKitError, RoomKitOptions};
 
 #[path = "support/warnings.rs"]
 mod warnings;
@@ -44,7 +45,8 @@ async fn a_handler_finishes_before_its_call_returns() {
                 event.data.keys().cloned().collect(),
             ));
         }
-    });
+    })
+    .unwrap();
 
     kit.create_room(room_r1()).await.unwrap();
 
@@ -64,13 +66,15 @@ async fn a_handler_finishes_before_its_call_returns() {
 async fn a_failing_handler_is_logged() {
     let (warnings, _capturing) = Warnings::capture();
     let kit = RoomKit::new(RoomKitOptions::default());
-    kit.on("room_created", |_| async { panic!("handler failed") });
+    kit.on("room_created", |_| async { panic!("handler failed") })
+        .unwrap();
     let ran = Arc::new(Mutex::new(false));
     let runs = Arc::clone(&ran);
     kit.on("room_created", move |_| {
         *runs.lock().unwrap() = true;
         std::future::ready(())
-    });
+    })
+    .unwrap();
 
     let created = kit.create_room(room_r1()).await;
 
@@ -115,7 +119,8 @@ async fn a_handler_may_call_the_kit_and_two_calls_handlers_run_together() {
             tokio::time::sleep(Duration::from_millis(if room == "a" { 10 } else { 20 })).await;
             noting.lock().unwrap().push(format!("end {room}"));
         }
-    });
+    })
+    .unwrap();
     let nested = tokio::time::timeout(Duration::from_secs(5), kit.create_room(room_r1())).await;
     let after_nesting = seen.lock().unwrap().drain(..).collect::<Vec<_>>();
     let room = |id: &str| CreateRoomOptions {
@@ -145,4 +150,17 @@ async fn a_handler_may_call_the_kit_and_two_calls_handlers_run_together() {
         )
     );
     drop(tokio::time::timeout(Duration::from_secs(5), kit.close()).await);
+}
+
+/// RFC §12.10.4: a kit whose close started refuses a handler, as Python's
+/// `on()` raises `KitClosedError`
+/// (`tasks/probes/step5-review/lot3/py_hook_after_close.out`); it took one.
+#[tokio::test]
+async fn a_closed_kit_refuses_a_handler() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.close().await.unwrap();
+    assert_eq!(
+        kit.on("room_created", |_| async {}),
+        Err(RoomKitError::KitClosed)
+    );
 }

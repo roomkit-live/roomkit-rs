@@ -232,15 +232,23 @@ impl<S: ConversationStore> RoomKit<S> {
     /// let kit = RoomKit::new(Default::default());
     /// kit.on("room_created", |event| async move {
     ///     println!("room {:?} created", event.room_id);
-    /// });
+    /// })?;
+    /// # Ok::<(), roomkit::RoomKitError>(())
     /// ```
-    pub fn on<F, Fut>(&self, event_type: impl Into<String>, handler: F)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4), as Python's `on()` raises `KitClosedError`.
+    pub fn on<F, Fut>(&self, event_type: impl Into<String>, handler: F) -> Result<(), RoomKitError>
     where
         F: Fn(FrameworkEvent) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
+        self.inner.open()?;
         let handler: Handler = Arc::new(move |event| Box::pin(handler(event)));
         self.inner.events.add(event_type.into(), handler);
+        Ok(())
     }
 
     /// Runs `message` through the inbound pipeline (RFC §10.1), and the

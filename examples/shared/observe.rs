@@ -3,7 +3,7 @@
 //! the background, an observer hook or a call that went on detached, is
 //! waited for with `RoomKit::idle` before it is read.
 
-use roomkit::{ConversationStore, FrameworkEvent, RoomKit};
+use roomkit::{ConversationStore, FrameworkEvent, RoomKit, RoomKitError};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -77,17 +77,21 @@ impl<T: Clone> Default for Log<T> {
 /// call that emits an event waits for its handlers: those of a call the
 /// example makes are there once the call returned, and those of the work it
 /// runs in the background once that work is over.
+///
+/// # Errors
+///
+/// Returns [`RoomKitError::KitClosed`] once the kit's close started.
 pub fn framework_events<S: ConversationStore>(
     kit: &RoomKit<S>,
     types: &[&str],
-) -> Log<FrameworkEvent> {
+) -> Result<Log<FrameworkEvent>, RoomKitError> {
     let log = Log::new();
     for event_type in types {
         let noted = log.clone();
         kit.on(*event_type, move |event| {
             noted.push(event);
             std::future::ready(())
-        });
+        })?;
     }
-    log
+    Ok(log)
 }
