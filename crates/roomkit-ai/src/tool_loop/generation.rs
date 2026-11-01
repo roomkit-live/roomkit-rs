@@ -78,7 +78,8 @@ impl Generation {
 
 /// The calls of a response, as the loop reads them: the first
 /// [`MAX_CALLS_PER_ROUND`], each with an id no other carries
-/// (`call_<round>_<n>` for one the provider gave empty or twice), and, for
+/// (`call_<round>_<n>`, made free, for one the provider gave empty or
+/// twice), and, for
 /// one its provider marked `partial`, why it never runs. The calls past the
 /// bound are dropped before the round's assistant message is written, so
 /// that no call reaches the model without its result, and logged.
@@ -90,10 +91,10 @@ fn read_calls(calls: Vec<StreamToolCall>, round: u32) -> Vec<Called> {
         .take(MAX_CALLS_PER_ROUND)
         .enumerate()
         .map(|(position, given)| {
-            let id = if given.id.is_empty() || !ids.insert(given.id.clone()) {
-                format!("call_{round}_{position}")
-            } else {
+            let id = if !given.id.is_empty() && ids.insert(given.id.clone()) {
                 given.id
+            } else {
+                free_id(&mut ids, round, position)
             };
             let partial = match (given.partial, given.garbled) {
                 (false, _) => None,
@@ -105,6 +106,16 @@ fn read_calls(calls: Vec<StreamToolCall>, round: u32) -> Vec<Called> {
             Called { call, partial }
         })
         .collect()
+}
+
+/// `call_<round>_<position>`, with `_` after it until no call of the round
+/// carries it, taken among `ids`.
+fn free_id(ids: &mut HashSet<String>, round: u32, position: usize) -> String {
+    let mut id = format!("call_{round}_{position}");
+    while !ids.insert(id.clone()) {
+        id.push('_');
+    }
+    id
 }
 
 /// Logs the calls of a round past [`MAX_CALLS_PER_ROUND`], which never run:
@@ -134,16 +145,32 @@ mod tests {
     use super::*;
     use crate::provider::AiToolCall;
 
+    /// An id given empty or twice is replaced by one no other call of the
+    /// round carries, a given one included: `call_1_1` given then minted
+    /// was carried twice, and `call_1_0` minted then given.
     #[test]
     fn a_call_with_no_id_or_another_s_gets_one_of_its_own() {
-        let calls = ["", "x", "x"]
-            .into_iter()
-            .map(|id| AiToolCall::new(id, "lookup").into())
-            .collect();
-        let ids: Vec<String> = read_calls(calls, 1)
-            .into_iter()
-            .map(|called| called.call.id)
-            .collect();
-        assert_eq!(ids, ["call_1_0", "x", "call_1_2"]);
+        let ids = |given: &[&str]| -> Vec<String> {
+            let calls = given
+                .iter()
+                .map(|id| AiToolCall::new(*id, "lookup").into())
+                .collect();
+            read_calls(calls, 1)
+                .into_iter()
+                .map(|called| called.call.id)
+                .collect()
+        };
+        assert_eq!(
+            [
+                ids(&["", "x", "x"]),
+                ids(&["call_1_1", ""]),
+                ids(&["", "call_1_0"])
+            ],
+            [
+                vec!["call_1_0", "x", "call_1_2"],
+                vec!["call_1_1", "call_1_1_"],
+                vec!["call_1_0", "call_1_1"]
+            ]
+        );
     }
 }

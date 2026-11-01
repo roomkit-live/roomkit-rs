@@ -756,6 +756,9 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **A call id the loop makes for an empty or repeated one is free in its
+  round**: `call_<round>_<n>` could be one the provider gave another call
+  of the round, before or after it, and two calls then carried one id.
 - **`AiChannel::new` refuses a zero `tool_timeout`** with
   `AiError::ToolTimeout`, as Python's constructor raises `ValueError`:
   every call of such a channel timed out at once.
