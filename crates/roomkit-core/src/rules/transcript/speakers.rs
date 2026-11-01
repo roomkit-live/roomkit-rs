@@ -282,7 +282,7 @@ fn is_blank(line: &str) -> bool {
 /// `line` as a JSON string a model does not read as ending early: `"` and
 /// backslashes escaped, every other double quote mark made a single one
 /// and the marks that reorder text dropped (RFC §6.4).
-fn json_text_line(line: &str) -> String {
+pub(super) fn json_text_line(line: &str) -> String {
     let kept: String = line
         .chars()
         .filter(|c| !BIDI_CONTROLS.contains(c))

@@ -390,3 +390,26 @@ fn rendered(turns: Vec<Turn>, labelled: bool) -> Vec<Message> {
     }
     messages
 }
+
+/// The label each of `events` opens with where a model reads it (RFC §6.4),
+/// in their order: its author's name, ranked when an earlier source's name
+/// reads like it, or its channel (`@sms`) when its author has none; `None`
+/// for the runtime's system events. Python's `turn_labels`, which a
+/// delegation's conversation block labels its lines with (RFC §23.3 step
+/// 4).
+pub fn turn_labels<'a>(
+    events: impl IntoIterator<Item = &'a RoomEvent>,
+    context: &RoomContext,
+) -> Vec<Option<String>> {
+    let mut authors = Authors::new(context);
+    events
+        .into_iter()
+        .map(|event| speaker(event, &mut authors).map(|speaker| speaker.label))
+        .collect()
+}
+
+/// `line` as a JSON string a model does not read as ending early (RFC
+/// §6.4): Python's `json_text_line`.
+pub fn json_text_line(line: &str) -> String {
+    speakers::json_text_line(line)
+}
