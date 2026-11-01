@@ -6,6 +6,7 @@
 use roomkit_mcp::AsToolHandlerOptions;
 use roomkit_mcp::CallToolOptions;
 use roomkit_mcp::FromCommandOptions;
+#[cfg(feature = "http")]
 use roomkit_mcp::FromUrlOptions;
 use std::time::Duration;
 
@@ -40,6 +41,7 @@ fn from_command_options_defaults_as_python() {
     assert!(defaults.tool_filter.is_none());
 }
 
+#[cfg(feature = "http")]
 #[test]
 fn from_url_options_defaults_as_python() {
     let defaults = FromUrlOptions::default();
