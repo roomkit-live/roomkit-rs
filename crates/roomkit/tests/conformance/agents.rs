@@ -143,6 +143,9 @@ fn round(spec: &Value) -> Result<ScriptedRound, String> {
     if let Some(failure) = spec.get("fails") {
         round = round.failing(failure.as_str().ok_or("fails: not a text")?);
     }
+    if spec.get("done") == Some(&Value::Bool(false)) {
+        round = round.without_done();
+    }
     Ok(round)
 }
 
@@ -211,7 +214,8 @@ fn tool_policy(spec: &Value) -> ToolPolicy {
 }
 
 /// Each request `model` received, as the scenario reads it: the tool
-/// results it carries (README, `models`).
+/// results it carries, and whether the model reads each call as failed
+/// (README, `models`).
 pub(crate) fn requests(model: &ScriptedProvider) -> Vec<Value> {
     model.requests().iter().map(request).collect()
 }
@@ -222,10 +226,12 @@ fn request(request: &AiContext) -> Value {
         .iter()
         .filter(|message| message.role == AiRole::Tool)
         .map(|message| {
-            let call = message
-                .tool_result()
-                .map(|result| result.tool_call_id.clone());
-            json!({ "tool_call_id": call, "content": message.text() })
+            let result = message.tool_result();
+            json!({
+                "tool_call_id": result.map(|result| result.tool_call_id.clone()),
+                "content": message.text(),
+                "is_error": result.map(|result| result.is_error),
+            })
         })
         .collect();
     json!({ "tool_results": results })

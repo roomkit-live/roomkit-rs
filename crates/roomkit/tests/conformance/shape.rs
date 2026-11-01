@@ -77,7 +77,15 @@ const CHANNEL: &[&str] = &[
 ];
 const ADDRESSES: &[&str] = &["normalizes", "conversation_key"];
 const MODEL: &[&str] = &["rounds"];
-const MODEL_ROUND: &[&str] = &["text", "deltas", "calls", "finish_reason", "usage", "fails"];
+const MODEL_ROUND: &[&str] = &[
+    "text",
+    "deltas",
+    "calls",
+    "finish_reason",
+    "usage",
+    "fails",
+    "done",
+];
 const MODEL_CALL: &[&str] = &["id", "name", "arguments", "cut"];
 const TOOL: &[&str] = &[
     "name",
