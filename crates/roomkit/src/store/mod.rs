@@ -707,6 +707,44 @@ pub trait ConversationStore: Send + Sync + 'static {
         async { Ok(None) }
     }
 
+    /// Stores `event` as it is, its index the caller's: the room's counters
+    /// stay as they are, which only [`commit_event`](Self::commit_event)
+    /// moves, and the room's next index is kept past it. Python's
+    /// `add_event`, a write below the pipeline's commit.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::RoomNotFound`] for a room the store lacks, nothing
+    /// written (decided 2026-10-31, RMK-1058);
+    /// [`StoreError::IdempotencyKeyTaken`] for a key its channel holds in
+    /// the room for another event; [`StoreError::Value`] for a content its
+    /// model refuses.
+    fn add_event(
+        &self,
+        event: RoomEvent,
+    ) -> impl Future<Output = Result<RoomEvent, StoreError>> + Send;
+
+    /// Stores `event` at the room's next index, and returns it so: the room's
+    /// counters stay as they are. Provided as Python provides it, a count
+    /// then [`add_event`](Self::add_event), which is not atomic and reuses
+    /// a deleted index: a store overrides it with one write that reserves
+    /// the index, as the Python implementation's stores do.
+    ///
+    /// # Errors
+    ///
+    /// As [`add_event`](Self::add_event).
+    fn add_event_auto_index(
+        &self,
+        room_id: &RoomId,
+        mut event: RoomEvent,
+    ) -> impl Future<Output = Result<RoomEvent, StoreError>> + Send {
+        async move {
+            let every_row = GetEventCountOptions { event_filter: None };
+            event.index = self.get_event_count(room_id, every_row).await?;
+            self.add_event(event).await
+        }
+    }
+
     /// Commits `event` to `room_id` as one atomic write (RFC §10.1 step 12,
     /// §14.3): its index the room's event count, the room's counters
     /// bumped, the change's `target` written whole as it leaves it, keeping
@@ -823,6 +861,43 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         room_id: &RoomId,
     ) -> impl Future<Output = Result<Vec<Observation>, StoreError>> + Send;
+
+    /// Marks the room's event `event_id` read on `channel_id`: the
+    /// channel's marker, a high-water mark on the events' index, moves to
+    /// the event's when that is higher, never back. An event that is not
+    /// the room's, another room's or none, marks nothing.
+    fn mark_read(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+        event_id: &EventId,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Marks every event of the room read on `channel_id`: its marker moves
+    /// to the room's highest index, never back. A room with no event gets
+    /// no marker, so its first event, index 0, arrives unread.
+    fn mark_all_read(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// How many of the room's events `channel_id` has not read: those whose
+    /// index is above its marker, every one when it has none.
+    fn get_unread_count(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send;
+
+    /// Every channel's read marker in the room, the highest index it read;
+    /// a channel with none is absent. With one channel per member, what a
+    /// "seen by" receipt is made of. None for a room the store lacks, whose
+    /// markers went with it.
+    fn list_read_markers(
+        &self,
+        room_id: &RoomId,
+    ) -> impl Future<Output = Result<BTreeMap<ChannelId, u64>, StoreError>> + Send;
 
     /// Releases what the store holds, a file or a pool: Python's
     /// `close()`, which the kit's [`close`](crate::RoomKit::close) calls

@@ -24,6 +24,7 @@ mod events;
 mod inject;
 mod options;
 mod post;
+mod read_markers;
 mod registry;
 mod room_hooks;
 mod rooms;
@@ -56,6 +57,7 @@ pub use self::options::{
     SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateBindingMetadataOptions,
     UpdateEventOptions,
 };
+pub use self::read_markers::{ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions};
 pub use self::room_hooks::{AddRoomHookOptions, RemoveRoomHookOptions};
 pub use self::weak::WeakRoomKit;
 use crate::channel::DynChannel;

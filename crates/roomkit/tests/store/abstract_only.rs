@@ -220,6 +220,42 @@ impl ConversationStore for AbstractOnly {
         self.store.list_observations(room_id).await
     }
 
+    async fn add_event(&self, event: RoomEvent) -> Result<RoomEvent, StoreError> {
+        self.store.add_event(event).await
+    }
+
+    async fn mark_read(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+        event_id: &EventId,
+    ) -> Result<(), StoreError> {
+        self.store.mark_read(room_id, channel_id, event_id).await
+    }
+
+    async fn mark_all_read(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<(), StoreError> {
+        self.store.mark_all_read(room_id, channel_id).await
+    }
+
+    async fn get_unread_count(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<u64, StoreError> {
+        self.store.get_unread_count(room_id, channel_id).await
+    }
+
+    async fn list_read_markers(
+        &self,
+        room_id: &RoomId,
+    ) -> Result<std::collections::BTreeMap<ChannelId, u64>, StoreError> {
+        self.store.list_read_markers(room_id).await
+    }
+
     async fn find_latest_room(
         &self,
         participant_id: &ParticipantId,
@@ -457,4 +493,35 @@ async fn the_provided_reads_answer_through_the_abstract_ones() {
     let held = store.store.get_timeline(&room_id(), read).await.unwrap();
     kit.close().await.unwrap();
     assert_eq!((exists, timeline), ((true, false, true, false), held));
+}
+
+/// Python's base class: a store that does not override
+/// `add_event_auto_index` gives the event the room's count of rows as its
+/// index, through `get_event_count` and `add_event`.
+#[tokio::test]
+async fn the_provided_auto_index_takes_the_room_s_count() {
+    let (kit, _sms) = sms_and_agent().await;
+    kit.process_inbound(
+        keyed("Bonjour", "SM1"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let store = kit.store();
+    let count = store
+        .get_event_count(&room_id(), store::GetEventCountOptions::default())
+        .await
+        .unwrap();
+    let mut event = RoomEvent::new(
+        room_id(),
+        roomkit::model::EventSource::new(channel("sms"), ChannelType::SMS),
+        TextContent::new("added"),
+    );
+    event.index = 99;
+    let added = store.add_event_auto_index(&room_id(), event).await.unwrap();
+    kit.close().await.unwrap();
+    assert_eq!(added.index, count);
 }

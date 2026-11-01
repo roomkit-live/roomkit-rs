@@ -141,6 +141,7 @@ pub use self::kit::{
     SetVisibilityOptions, UnmuteOptions, UpdateBindingMetadataOptions, UpdateEventOptions,
     WeakRoomKit,
 };
+pub use self::kit::{ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions};
 pub use self::registered::RegisteredChannel;
 pub use self::router::{
     ChannelOf, DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, InboundRoomRouter,

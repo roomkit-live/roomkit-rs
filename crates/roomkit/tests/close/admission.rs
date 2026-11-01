@@ -18,10 +18,11 @@ use roomkit::{
     CheckRoomTimersOptions, CloseRoomOptions, CommitEventOptions, ConversationStore,
     CreateRoomOptions, DeleteEventOptions, DetachChannelOptions, GetBindingOptions, GetRoomOptions,
     GetTimelineOptions, HookExecution, HookFuture, HookHandler, HookOptions, HookTrigger,
-    InMemoryStore, ListBindingsOptions, ListMembersOptions, MuteOptions, PauseRoomOptions,
-    PostOptions, ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit,
-    RoomKitError, SendEventOptions, SetAccessOptions, SetVisibilityOptions, ToolCallEvent,
-    UnmuteOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
+    InMemoryStore, ListBindingsOptions, ListMembersOptions, ListReadMarkersOptions,
+    MarkAllReadOptions, MarkReadOptions, MuteOptions, PauseRoomOptions, PostOptions,
+    ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitError,
+    SendEventOptions, SetAccessOptions, SetVisibilityOptions, ToolCallEvent, UnmuteOptions,
+    UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
 use roomkit_core::ops::ChannelConfig;
 use tokio::sync::Notify;
@@ -70,6 +71,11 @@ async fn reads<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<String> {
                 .map(|channel| channel.channel_id().clone())
         ),
         format!("{:?}", kit.store().get_room(&room_id).await),
+        format!(
+            "{:?}",
+            kit.list_read_markers(&room_id, ListReadMarkersOptions::default())
+                .await
+        ),
     ]
 }
 
@@ -103,7 +109,38 @@ fn refused<T>(result: Result<T, RoomKitError>) -> bool {
 async fn the_kit_s_operations<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<(&'static str, bool)> {
     let mut calls = the_kit_s_events(kit).await;
     calls.extend(the_kit_s_rooms(kit).await);
+    calls.extend(the_kit_s_read_markers(kit).await);
     calls
+}
+
+/// The kit's calls that mark a room read, each made once: whether it was
+/// refused.
+async fn the_kit_s_read_markers<S: ConversationStore>(
+    kit: &RoomKit<S>,
+) -> Vec<(&'static str, bool)> {
+    let r = room("r");
+    let sms = channel("sms");
+    vec![
+        (
+            "mark_read",
+            refused(
+                kit.mark_read(
+                    &r,
+                    &sms,
+                    &"event_1".parse().unwrap(),
+                    MarkReadOptions::default(),
+                )
+                .await,
+            ),
+        ),
+        (
+            "mark_all_read",
+            refused(
+                kit.mark_all_read(&r, &sms, MarkAllReadOptions::default())
+                    .await,
+            ),
+        ),
+    ]
 }
 
 /// The kit's calls that write events, each made once: whether it was

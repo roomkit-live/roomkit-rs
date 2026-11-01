@@ -1,4 +1,5 @@
-//! The store's calls a scenario names, made on the kit's store: a call
+//! The store's calls a scenario names, made on the kit's store, and the
+//! kit's calls on a room's read markers: a call
 //! `store.<operation>` is the operation of the store's own interface (RFC
 //! §14.1; roomkit-specs `conformance/README.md`, "Calls on the store"), its
 //! arguments by the operation's names, a record a template completed as the
@@ -11,9 +12,13 @@ use roomkit::model::{
     RoomEvent, RoomId, RoomStatus, Timestamp, Visibility,
 };
 use roomkit::store::{
-    CommitEventOptions, FindLatestRoomOptions, FindRoomIdByChannelOptions, GetTimelineOptions,
+    CommitEventOptions, DeleteEventOptions, FindLatestRoomOptions, FindRoomIdByChannelOptions,
+    GetTimelineOptions,
 };
-use roomkit::{ConversationStore, EventFilter, RoomKitError, StoreError};
+use roomkit::{
+    ConversationStore, EventFilter, ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions,
+    RoomKitError, StoreError,
+};
 use serde_json::Value;
 
 use crate::calls::{Called, Unreadable, dump, field, finish, optional};
@@ -24,7 +29,10 @@ use crate::templates::{complete_event, complete_participant, now, system_source}
 pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
     Some(match call {
         "store.create_room" => &["room"],
-        "store.delete_room" | "store.room_exists" => &["room_id"],
+        "store.delete_room"
+        | "store.room_exists"
+        | "store.list_read_markers"
+        | "list_read_markers" => &["room_id"],
         "store.add_binding" | "store.update_binding" => &["binding"],
         "store.remove_binding" | "store.binding_exists" => &["room_id", "channel_id"],
         "store.add_participant" => &["participant"],
@@ -39,8 +47,22 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "newest_first",
         ],
         "store.get_thread_summaries" => &["room_id", "root_event_ids"],
+        "store.add_event" => &["event"],
+        "store.add_event_auto_index" => &["room_id", "event"],
+        "store.delete_event" => &["room_id", "event_id", "cascade_replies"],
+        "store.mark_read" | "mark_read" => &["room_id", "channel_id", "event_id"],
+        "store.mark_all_read" | "store.get_unread_count" | "mark_all_read" => {
+            &["room_id", "channel_id"]
+        }
         _ => return None,
     })
+}
+
+/// Whether the runner makes `call` here: a store call, or one of the kit's
+/// calls on a room's read markers.
+pub(crate) fn handles(call: &str) -> bool {
+    call.starts_with("store.")
+        || matches!(call, "mark_read" | "mark_all_read" | "list_read_markers")
 }
 
 /// The members an `event_filter` argument may hold, Python's `EventFilter`.
@@ -76,9 +98,14 @@ fn stamped<T: serde::de::DeserializeOwned>(
     serde_json::from_value(record).map_err(|error| format!("{what}: {error}"))
 }
 
-/// An event from the template `spec[key]`, in the call's room.
+/// An event from the template `spec[key]`, in the call's room, or the
+/// template's when the call names none.
 fn event(spec: &Value, key: &str) -> Result<RoomEvent, Unreadable> {
-    let room_id = spec["room_id"].as_str().unwrap_or_default();
+    let room_id = spec
+        .get("room_id")
+        .or_else(|| spec[key].get("room_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     serde_json::from_value(complete_event(&spec[key], room_id, &system_source()))
         .map_err(|error| format!("{key}: {error}"))
 }
@@ -119,8 +146,19 @@ fn stored<T: serde::Serialize>(run: &Run, call: &str, outcome: Result<T, StoreEr
     finish(run, call, outcome.map_err(RoomKitError::from), dump)
 }
 
-/// Makes the store call `spec` names, its references already resolved;
-/// returns its outcome and, for one that returns an event, the event's id.
+/// A store call's outcome that is an event, and the event's id, which the
+/// call's label names.
+fn stored_event(
+    run: &Run,
+    call: &str,
+    outcome: Result<RoomEvent, StoreError>,
+) -> (Called, Option<String>) {
+    let id = outcome.as_ref().ok().map(|event| event.id.to_string());
+    (stored(run, call, outcome), id)
+}
+
+/// Makes the call `spec` names, its references already resolved; returns
+/// its outcome and, for one that returns an event, the event's id.
 pub(crate) async fn call(
     run: &Arc<Run>,
     name: &str,
@@ -128,6 +166,14 @@ pub(crate) async fn call(
 ) -> Result<(Called, Option<String>), Unreadable> {
     let store = run.kit().store();
     Ok(match name {
+        "store.add_event" => stored_event(run, name, store.add_event(event(spec, "event")?).await),
+        "store.add_event_auto_index" => {
+            let room: RoomId = field(spec, "room_id")?;
+            let outcome = store
+                .add_event_auto_index(&room, event(spec, "event")?)
+                .await;
+            stored_event(run, name, outcome)
+        }
         "store.commit_event" => {
             let room: RoomId = field(spec, "room_id")?;
             let target = match spec.get("target") {
@@ -141,8 +187,10 @@ pub(crate) async fn call(
             let outcome = store
                 .commit_event(&room, event(spec, "event")?, options)
                 .await;
-            let id = outcome.as_ref().ok().map(|event| event.id.to_string());
-            (stored(run, name, outcome), id)
+            stored_event(run, name, outcome)
+        }
+        "mark_read" | "mark_all_read" | "list_read_markers" => {
+            (read_markers(run, name, spec).await?, None)
         }
         _ => (read_or_write(run, name, spec).await?, None),
     })
@@ -228,6 +276,81 @@ async fn lookup(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unre
             let roots: Vec<EventId> = field(spec, "root_event_ids")?;
             stored(run, name, store.get_thread_summaries(&room, &roots).await)
         }
+        _ => events_and_markers(run, name, spec).await?,
+    })
+}
+
+/// The store's hard delete and its read markers.
+async fn events_and_markers(
+    run: &Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<Called, Unreadable> {
+    let store = run.kit().store();
+    let (room, channel) = (
+        || field::<RoomId>(spec, "room_id"),
+        || field::<ChannelId>(spec, "channel_id"),
+    );
+    Ok(match name {
+        "store.delete_event" => {
+            let event: EventId = field(spec, "event_id")?;
+            let options = DeleteEventOptions {
+                cascade_replies: optional(spec, "cascade_replies")?.unwrap_or(true),
+            };
+            stored(
+                run,
+                name,
+                store.delete_event(&room()?, &event, options).await,
+            )
+        }
+        "store.mark_read" => {
+            let event: EventId = field(spec, "event_id")?;
+            let outcome = store.mark_read(&room()?, &channel()?, &event).await;
+            stored(run, name, outcome)
+        }
+        "store.mark_all_read" => {
+            stored(run, name, store.mark_all_read(&room()?, &channel()?).await)
+        }
+        "store.get_unread_count" => {
+            let outcome = store.get_unread_count(&room()?, &channel()?).await;
+            stored(run, name, outcome)
+        }
+        "store.list_read_markers" => stored(run, name, store.list_read_markers(&room()?).await),
         other => return Err(format!("no call {other}")),
+    })
+}
+
+/// The kit's calls on a room's read markers, for the organization the call
+/// names.
+async fn read_markers(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+    let kit = run.kit();
+    let room: RoomId = field(spec, "room_id")?;
+    let organization_id = optional::<String>(spec, "organization_id")?;
+    Ok(match name {
+        "mark_read" => {
+            let (channel, event): (ChannelId, EventId) =
+                (field(spec, "channel_id")?, field(spec, "event_id")?);
+            let options = MarkReadOptions { organization_id };
+            finish(
+                run,
+                name,
+                kit.mark_read(&room, &channel, &event, options).await,
+                dump,
+            )
+        }
+        "mark_all_read" => {
+            let channel: ChannelId = field(spec, "channel_id")?;
+            let options = MarkAllReadOptions { organization_id };
+            finish(
+                run,
+                name,
+                kit.mark_all_read(&room, &channel, options).await,
+                dump,
+            )
+        }
+        _ => {
+            let options = ListReadMarkersOptions { organization_id };
+            finish(run, name, kit.list_read_markers(&room, options).await, dump)
+        }
     })
 }

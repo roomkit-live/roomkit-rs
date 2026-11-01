@@ -161,7 +161,9 @@ pub(crate) async fn call(
             let id = called.as_ref().ok().and_then(event_of);
             (called, id)
         }
-        store if store.starts_with("store.") => crate::store_calls::call(run, store, spec).await?,
+        store if crate::store_calls::handles(store) => {
+            crate::store_calls::call(run, store, spec).await?
+        }
         _ => (lifecycle_call(run, name, spec).await?, None),
     })
 }

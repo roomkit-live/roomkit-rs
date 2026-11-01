@@ -46,6 +46,12 @@ struct Record {
     observations: Vec<Observation>,
     /// The room's private state, by key (RFC §14.1).
     private: BTreeMap<String, Metadata>,
+    /// The index the room gives out next, past every index it gave out, a
+    /// deleted event's or one an added event carried (Python's
+    /// `_next_event_index`).
+    next_index: u64,
+    /// Each channel's read marker, the highest index it read.
+    read_markers: BTreeMap<ChannelId, u64>,
 }
 
 impl Record {
@@ -59,7 +65,29 @@ impl Record {
             tasks: Vec::new(),
             observations: Vec::new(),
             private: BTreeMap::new(),
+            next_index: 0,
+            read_markers: BTreeMap::new(),
         }
+    }
+
+    /// The room's next index, given out (Python's `_reserve_event_index`).
+    fn reserve_index(&mut self) -> u64 {
+        let index = self.next_index;
+        self.next_index = index.saturating_add(1);
+        index
+    }
+
+    /// Stores `event` at the index it carries, the room's next index kept
+    /// past it.
+    fn append(&mut self, event: RoomEvent) {
+        self.next_index = self.next_index.max(event.index.saturating_add(1));
+        self.events.push(event);
+    }
+
+    /// Moves `channel_id`'s read marker to `index` when that is higher.
+    fn raise_marker(&mut self, channel_id: &ChannelId, index: u64) {
+        let marker = self.read_markers.entry(channel_id.clone()).or_insert(index);
+        *marker = (*marker).max(index);
     }
 
     /// The room's binding of `channel_id`.
@@ -761,16 +789,49 @@ impl ConversationStore for InMemoryStore {
             if let Some(target) = target {
                 write_target(&mut record.events, &event, target)?;
             }
-            // The room's count is the next index: a hard-deleted index is
-            // never given again (gap G-064).
-            event.index = record.room.event_count;
+            // The room's next index: a hard-deleted index is never given
+            // again (gap G-064), nor one an added event carried.
+            event.index = record.reserve_index();
             let room = &mut record.room;
             room.event_count = room.event_count.saturating_add(1);
             room.latest_index = Some(event.index);
             if let Some(now) = now {
                 lifecycle::commit_activity(room, now);
             }
-            record.events.push(event.clone());
+            record.append(event.clone());
+            Ok(event)
+        })
+    }
+
+    async fn add_event(&self, mut event: RoomEvent) -> Result<RoomEvent, StoreError> {
+        super::written::event(&mut event)?;
+        // A blank key is no key: the event is stored with none (RFC §13.4).
+        event.idempotency_key = idempotency::key(event.idempotency_key);
+        let room_id = event.room_id.clone();
+        self.write(&room_id, |record| {
+            if let Some(taken) = taken_key(&record.events, &event) {
+                return Err(taken);
+            }
+            record.append(event.clone());
+            Ok(event)
+        })
+    }
+
+    /// One write under the store's lock: the index is reserved as the
+    /// event is stored.
+    async fn add_event_auto_index(
+        &self,
+        room_id: &RoomId,
+        mut event: RoomEvent,
+    ) -> Result<RoomEvent, StoreError> {
+        super::written::event(&mut event)?;
+        event.idempotency_key = idempotency::key(event.idempotency_key);
+        self.write(room_id, |record| {
+            if let Some(taken) = taken_key(&record.events, &event) {
+                return Err(taken);
+            }
+            event.index = record.reserve_index();
+            record.append(event.clone());
             Ok(event)
         })
     }
@@ -860,6 +921,60 @@ impl ConversationStore for InMemoryStore {
             .read(room_id, |record| {
                 events::thread_summaries(&record.events, root_event_ids)
             })
+            .unwrap_or_default())
+    }
+
+    async fn mark_read(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+        event_id: &EventId,
+    ) -> Result<(), StoreError> {
+        if let Some(record) = self.rooms().get_mut(room_id) {
+            let read = record.events.iter().find(|event| &event.id == event_id);
+            if let Some(index) = read.map(|event| event.index) {
+                record.raise_marker(channel_id, index);
+            }
+        }
+        Ok(())
+    }
+
+    async fn mark_all_read(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<(), StoreError> {
+        if let Some(record) = self.rooms().get_mut(room_id) {
+            let highest = record.events.iter().map(|event| event.index).max();
+            if let Some(index) = highest {
+                record.raise_marker(channel_id, index);
+            }
+        }
+        Ok(())
+    }
+
+    async fn get_unread_count(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<u64, StoreError> {
+        let unread = self.read(room_id, |record| {
+            let marker = record.read_markers.get(channel_id).copied();
+            record
+                .events
+                .iter()
+                .filter(|event| marker.is_none_or(|read| event.index > read))
+                .count()
+        });
+        Ok(u64::try_from(unread.unwrap_or_default()).unwrap_or(u64::MAX))
+    }
+
+    async fn list_read_markers(
+        &self,
+        room_id: &RoomId,
+    ) -> Result<BTreeMap<ChannelId, u64>, StoreError> {
+        Ok(self
+            .read(room_id, |record| record.read_markers.clone())
             .unwrap_or_default())
     }
 

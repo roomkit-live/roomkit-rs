@@ -23,7 +23,7 @@ use tokio::sync::OnceCell;
 
 use crate::connection::{CLOSED, Database};
 use crate::options::{SearchEventsOptions, SqliteStoreOptions};
-use crate::{events, identities, lookups, members, rooms, search, side_effects, timeline};
+use crate::{events, identities, lookups, markers, members, rooms, search, side_effects, timeline};
 
 /// A conversation store in a SQLite file, on the Python implementation's
 /// schema (see the [crate] documentation): Python's `SQLiteStore`.
@@ -582,6 +582,27 @@ impl ConversationStore for SqliteStore {
             .await
     }
 
+    async fn add_event(&self, mut event: RoomEvent) -> Result<RoomEvent, StoreError> {
+        written::event(&mut event)?;
+        self.database()
+            .await?
+            .write(move |connection| events::add(connection, event))
+            .await
+    }
+
+    async fn add_event_auto_index(
+        &self,
+        room_id: &RoomId,
+        mut event: RoomEvent,
+    ) -> Result<RoomEvent, StoreError> {
+        written::event(&mut event)?;
+        let room_id = room_id.clone();
+        self.database()
+            .await?
+            .write(move |connection| events::add_auto_indexed(connection, &room_id, event))
+            .await
+    }
+
     async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
         let event_id = event_id.clone();
         self.database()
@@ -651,6 +672,55 @@ impl ConversationStore for SqliteStore {
         self.database()
             .await?
             .read(move |connection| timeline::thread_summaries(connection, &room_id, &roots))
+            .await
+    }
+
+    async fn mark_read(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+        event_id: &EventId,
+    ) -> Result<(), StoreError> {
+        let (room_id, channel_id, event_id) =
+            (room_id.clone(), channel_id.clone(), event_id.clone());
+        self.database()
+            .await?
+            .write(move |connection| markers::mark(connection, &room_id, &channel_id, &event_id))
+            .await
+    }
+
+    async fn mark_all_read(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<(), StoreError> {
+        let (room_id, channel_id) = (room_id.clone(), channel_id.clone());
+        self.database()
+            .await?
+            .write(move |connection| markers::mark_all(connection, &room_id, &channel_id))
+            .await
+    }
+
+    async fn get_unread_count(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<u64, StoreError> {
+        let (room_id, channel_id) = (room_id.clone(), channel_id.clone());
+        self.database()
+            .await?
+            .read(move |connection| markers::unread(connection, &room_id, &channel_id))
+            .await
+    }
+
+    async fn list_read_markers(
+        &self,
+        room_id: &RoomId,
+    ) -> Result<BTreeMap<ChannelId, u64>, StoreError> {
+        let room_id = room_id.clone();
+        self.database()
+            .await?
+            .read(move |connection| markers::list(connection, &room_id))
             .await
     }
 

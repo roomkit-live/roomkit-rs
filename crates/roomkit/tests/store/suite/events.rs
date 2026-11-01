@@ -212,6 +212,33 @@ async fn a_commit_to_a_missing_room_is_refused() {
     );
 }
 
+/// RFC §14.3: an event added, at its index or the room's next, into a
+/// room the store lacks is refused, nothing written, as a commit is
+/// (decided 2026-10-31, RMK-1058: Python's stores keep it as an orphan and
+/// align).
+#[tokio::test]
+async fn an_event_added_to_a_missing_room_is_refused() {
+    let store = crate::store().await;
+    let refused = (
+        store.add_event(event(0)).await,
+        store.add_event_auto_index(&room_id(), event(1)).await,
+    );
+    let written = (
+        store.get_event(&event(0).id).await,
+        store.get_event(&event(1).id).await,
+    );
+    assert_eq!(
+        (refused, written),
+        (
+            (
+                Err(StoreError::RoomNotFound(room_id())),
+                Err(StoreError::RoomNotFound(room_id()))
+            ),
+            (Ok(None), Ok(None))
+        )
+    );
+}
+
 /// Python's `get_conversation`: the room's latest messages, a refused one
 /// included, a change left out, in index order.
 #[tokio::test]

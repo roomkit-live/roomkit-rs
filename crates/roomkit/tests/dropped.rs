@@ -355,6 +355,42 @@ impl ConversationStore for GatedStore {
         self.store.list_observations(room_id).await
     }
 
+    async fn add_event(&self, event: RoomEvent) -> Result<RoomEvent, StoreError> {
+        self.store.add_event(event).await
+    }
+
+    async fn mark_read(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+        event_id: &EventId,
+    ) -> Result<(), StoreError> {
+        self.store.mark_read(room_id, channel_id, event_id).await
+    }
+
+    async fn mark_all_read(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<(), StoreError> {
+        self.store.mark_all_read(room_id, channel_id).await
+    }
+
+    async fn get_unread_count(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<u64, StoreError> {
+        self.store.get_unread_count(room_id, channel_id).await
+    }
+
+    async fn list_read_markers(
+        &self,
+        room_id: &RoomId,
+    ) -> Result<std::collections::BTreeMap<ChannelId, u64>, StoreError> {
+        self.store.list_read_markers(room_id).await
+    }
+
     async fn find_latest_room(
         &self,
         participant_id: &ParticipantId,

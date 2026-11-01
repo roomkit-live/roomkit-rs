@@ -169,6 +169,28 @@ fn get_room_options_defaults_as_python() {
 }
 
 #[test]
+fn read_marker_options_default_as_python() {
+    // roomkit.RoomKit.mark_read(organization_id) = None
+    assert!(
+        roomkit::MarkReadOptions::default()
+            .organization_id
+            .is_none()
+    );
+    // roomkit.RoomKit.mark_all_read(organization_id) = None
+    assert!(
+        roomkit::MarkAllReadOptions::default()
+            .organization_id
+            .is_none()
+    );
+    // roomkit.RoomKit.list_read_markers(organization_id) = None
+    assert!(
+        roomkit::ListReadMarkersOptions::default()
+            .organization_id
+            .is_none()
+    );
+}
+
+#[test]
 fn get_timeline_options_defaults_as_python() {
     let defaults = GetTimelineOptions::default();
     // roomkit.RoomKit.get_timeline(after_index) = None

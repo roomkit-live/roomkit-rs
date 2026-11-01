@@ -90,6 +90,33 @@ pub(crate) fn commit(
     Ok(event)
 }
 
+/// Stores `event` as it is, its index the caller's, the room's counters
+/// unmoved and its next index kept past it, as Python's `add_event`: a room
+/// the file lacks is refused, nothing written (RMK-1058).
+pub(crate) fn add(connection: &Connection, mut event: RoomEvent) -> Result<RoomEvent, Failure> {
+    // A blank key is no key: the event is stored with none (RFC §13.4).
+    event.idempotency_key = idempotency::key(event.idempotency_key);
+    rooms::check(connection, &event.room_id)?;
+    check_key(connection, &event)?;
+    write_row(connection, &event, None)?;
+    Ok(event)
+}
+
+/// Stores `event` at `room_id`'s next index, which the file reserves, the
+/// room's counters unmoved, as Python's `add_event_auto_index`.
+pub(crate) fn add_auto_indexed(
+    connection: &Connection,
+    room_id: &RoomId,
+    mut event: RoomEvent,
+) -> Result<RoomEvent, Failure> {
+    event.idempotency_key = idempotency::key(event.idempotency_key);
+    rooms::check(connection, room_id)?;
+    check_key(connection, &event)?;
+    event.index = reserve_index(connection, room_id)?;
+    write_row(connection, &event, None)?;
+    Ok(event)
+}
+
 /// Reserves the room's next index, in the caller's transaction, as
 /// Python's `_reserve_event_index`: a hard-deleted index is never given
 /// again (gap G-064), nor one another writer of the file reserved.

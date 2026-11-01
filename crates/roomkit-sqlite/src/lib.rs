@@ -46,6 +46,7 @@ mod event_rows;
 mod events;
 mod identities;
 mod lookups;
+mod markers;
 mod members;
 mod options;
 mod records;

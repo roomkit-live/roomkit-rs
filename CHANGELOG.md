@@ -17,6 +17,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `hook_timeout` framework event, SYNC and ASYNC, in the agent's room and
   channel, as Python does (RFC §8.2, RMK-1086); it was only logged.
 
+- Read markers and added events as Python's (RMK-1113):
+  `ConversationStore::add_event`, `add_event_auto_index`, `mark_read`,
+  `mark_all_read`, `get_unread_count` and `list_read_markers`, and the kit's
+  `mark_read`, `mark_all_read` and `list_read_markers` for an organization.
+  A channel's marker is the highest index it read, never moved back. The
+  in-memory store gives out a room's indexes from a sequence of its own, as
+  Python's, kept past an added event's index.
+
 - `ConversationStore` reads as Python's (RMK-1113): `room_exists`,
   `binding_exists`, `find_latest_room`, `find_room_id_by_channel`,
   `get_timeline` and `get_thread_summaries`, with `ThreadSummary`; the

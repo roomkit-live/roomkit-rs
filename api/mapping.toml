@@ -436,13 +436,12 @@ reason = "not in 0.x: agent identity, the thinker, owner-served tools and serial
 [[missing]]
 python = "roomkit.ConversationStore"
 members = [
-    "add_event", "add_event_auto_index", "claim_voice_delivery",
-    "complete_voice_delivery", "connection", "create_verification_request",
-    "get_task", "get_unread_count", "get_verification",
-    "get_verification_request", "get_voice_delivery", "list_read_markers",
-    "list_verifications_in_force", "mark_all_read", "mark_read",
-    "put_verification", "record_delivery_results", "update_room_if",
-    "update_task", "update_verification_request", "write_change_target",
+    "claim_voice_delivery", "complete_voice_delivery", "connection",
+    "create_verification_request", "get_task", "get_verification",
+    "get_verification_request", "get_voice_delivery",
+    "list_verifications_in_force", "put_verification",
+    "record_delivery_results", "update_room_if", "update_task",
+    "update_verification_request", "write_change_target",
 ]
 reason = "not in 0.x: lot 4's list (event writes other than commit_event, conditional updates, threads, read markers, task updates, verification, voice deliveries, the connection)"
 
@@ -531,11 +530,11 @@ reason = "not in 0.x: identity resolution and verification"
 [[missing]]
 python = "roomkit.RoomKit"
 members = [
-    "list_read_markers", "mark_all_read", "mark_read", "publish_presence",
-    "publish_reaction", "publish_read_receipt", "publish_tool_call",
-    "publish_typing", "realtime", "subscribe_room", "unsubscribe_room",
+    "publish_presence", "publish_reaction", "publish_read_receipt",
+    "publish_tool_call", "publish_typing", "realtime", "subscribe_room",
+    "unsubscribe_room",
 ]
-reason = "not in 0.x: read markers and ephemeral events"
+reason = "not in 0.x: ephemeral events"
 
 [[missing]]
 python = "roomkit.RoomKit"
