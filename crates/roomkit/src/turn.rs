@@ -1008,6 +1008,9 @@ pub(crate) trait TurnKit: Send + Sync {
         &self,
         observation: Observation,
     ) -> BoxFuture<'static, Result<(), RoomKitError>>;
+
+    /// `room_id` as the store holds it, `None` for a room it does not hold.
+    fn room(&self, room_id: RoomId) -> BoxFuture<'static, Result<Option<Room>, RoomKitError>>;
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
@@ -1101,6 +1104,14 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
             kit.inner.open()?;
             kit.store().add_observation(observation).await?;
             Ok(())
+        })
+    }
+
+    fn room(&self, room_id: RoomId) -> BoxFuture<'static, Result<Option<Room>, RoomKitError>> {
+        let kit = self.upgrade().map(|inner| RoomKit { inner });
+        Box::pin(async move {
+            let kit = kit.ok_or(RoomKitError::KitClosed)?;
+            Ok(kit.store().get_room(&room_id).await?)
         })
     }
 

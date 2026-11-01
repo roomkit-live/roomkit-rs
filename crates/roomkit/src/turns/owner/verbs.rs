@@ -11,7 +11,8 @@
 //! delivery the turn's reader runs, as the owner's own code would. After
 //! it, the verb is work the turn began, accepted only from the executor of
 //! the room's last turn of the channel, for that very turn, and a new
-//! arrival at the depth its arguments name.
+//! arrival at the depth its arguments name, in the room's organization as
+//! the store holds it (Python's `call_between_turns`).
 
 use std::sync::Arc;
 
@@ -280,24 +281,12 @@ pub(crate) async fn answer_room_call(
                 format!("{verb:?} needs a turn: it is not served between turns"),
             ));
         }
-        if verb == SEND_EVENT {
-            let (named, organization_id, event) =
-                decode_send_event(arguments).map_err(|why| refusal(VALUE_ERROR, why))?;
-            if named != room_id || organization_id.is_some() {
-                return Err(refusal(
-                    PERMISSION_ERROR,
-                    format!(
-                        "work of a turn in room {room_id} writes to its room only, for its room's organization"
-                    ),
-                ));
-            }
-            return send(kit, room_id, event).await;
-        }
+        let organization_id = room_organization(kit, &room_id).await?;
         // Work its turn began, which starts fresh once the turn is over
         // (RFC §8.3): no depth of the turn floors what it does.
         let scope = Scope {
             room_id: &room_id,
-            organization_id: None,
+            organization_id: organization_id.as_deref(),
             floor: None,
         };
         run_verb(kit, &scope, &verb, arguments).await
@@ -314,6 +303,22 @@ pub(crate) async fn answer_room_call(
         call_id,
         result,
         error,
+    }
+}
+
+/// The organization of `room_id`, which a verb after its turn acts in:
+/// a room the store does not hold refuses it, as Python's owner refuses it.
+async fn room_organization(
+    kit: &Arc<dyn TurnKit>,
+    room_id: &RoomId,
+) -> Result<Option<String>, Box<WireError>> {
+    match kit.room(room_id.clone()).await {
+        Ok(Some(room)) => Ok(room.organization_id),
+        Ok(None) => Err(refusal(
+            VALUE_ERROR,
+            format!("No room {:?}", room_id.as_str()),
+        )),
+        Err(error) => Err(Box::new(kit_error(&error))),
     }
 }
 
