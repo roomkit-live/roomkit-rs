@@ -128,7 +128,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// change's trigger, a [`ToolCallEvent`](crate::ToolCallEvent) for
     /// `BEFORE_TOOL_USE` and `ON_TOOL_CALL`, a
     /// [`SessionStartedEvent`](crate::SessionStartedEvent) for
-    /// `ON_SESSION_STARTED`. It returns a `HookResult`, one or what it
+    /// `ON_SESSION_STARTED`, a
+    /// [`StatusEntry`](crate::orchestration::StatusEntry) for
+    /// `ON_STATUS_POSTED`, an [`Observation`](crate::model::Observation)
+    /// for `ON_FEEDBACK`. It returns a `HookResult`, one or what it
     /// raised, or `()`, Python's `None`; what an ASYNC hook returns is
     /// discarded.
     ///

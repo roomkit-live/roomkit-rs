@@ -115,3 +115,43 @@ async fn a_status_posted_without_waiting_is_a_framework_event_too() {
     }
     assert_eq!(heard.lock().unwrap().clone(), ["voice"]);
 }
+
+// Python: tests/test_hook_observers.py (ON_FEEDBACK observes
+// submit_feedback("r1", 0.9)), whose observation names no channel: its
+// channel_id is empty (RFC §15.9).
+#[tokio::test]
+async fn a_feedback_naming_no_channel_is_an_observation_of_no_channel() {
+    use roomkit::model::RoomId;
+    use roomkit::{CreateRoomOptions, ListObservationsOptions, SubmitFeedbackOptions};
+
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let room = RoomId::new("r1").unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.submit_feedback(&room, 0.9, SubmitFeedbackOptions::default())
+        .await
+        .unwrap();
+    let observations = kit
+        .list_observations(&room, ListObservationsOptions::default())
+        .await
+        .unwrap();
+    let written = serde_json::to_value(&observations).unwrap();
+    assert_eq!(
+        (
+            observations
+                .first()
+                .map(|observation| observation.channel_id.clone()),
+            written[0]["channel_id"].clone(),
+            written[0]["content"].clone(),
+        ),
+        (
+            Some(None),
+            serde_json::json!(""),
+            serde_json::json!("[overall] 0.90")
+        )
+    );
+}

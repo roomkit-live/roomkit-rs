@@ -150,18 +150,14 @@ impl<S: ConversationStore> RoomKit<S> {
     /// and the comment, its metadata `type = "feedback"`, `dimension`,
     /// `rating`, `comment` and `event_id` beside `options.metadata`. Once it
     /// is stored, `ON_FEEDBACK` fires with it, and `feedback` is emitted once
-    /// those hooks ended, the call not waiting for them.
-    ///
-    /// roomkit-rs records a feedback that names a channel only: an
-    /// observation's channel is an id, never empty, where Python writes an
-    /// empty one.
+    /// those hooks ended, the call not waiting for them. A feedback naming no
+    /// channel is an observation of no channel, written empty.
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::Value`] for a feedback naming no channel;
-    /// [`RoomKitError::RoomNotFound`] for a room the organization `options`
-    /// names does not reach, nothing stored or fired; the store's error
-    /// when it fails.
+    /// Returns [`RoomKitError::RoomNotFound`] for a room the organization
+    /// `options` names does not reach, nothing stored or fired; the store's
+    /// error when it fails.
     pub async fn submit_feedback(
         &self,
         room_id: &RoomId,
@@ -170,12 +166,7 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Result<(), RoomKitError> {
         self.reached(room_id, options.organization_id.as_deref())
             .await?;
-        let Some(channel_id) = options.channel_id.clone() else {
-            return Err(RoomKitError::Value(
-                "submit_feedback needs the channel rated: an observation's channel is never empty"
-                    .to_owned(),
-            ));
-        };
+        let channel_id = options.channel_id.clone();
         let observation = feedback(
             &self.inner.environment(),
             room_id,
@@ -207,7 +198,7 @@ impl<S: ConversationStore> RoomKit<S> {
 fn feedback(
     environment: &Arc<dyn Environment + Send + Sync>,
     room_id: &RoomId,
-    channel_id: ChannelId,
+    channel_id: Option<ChannelId>,
     rating: f64,
     options: &SubmitFeedbackOptions,
 ) -> Observation {
