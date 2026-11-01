@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `DelegateOptions::conversation` and `RoomKit::start_task(room_id,
+  agent_id, task, StartTaskOptions { hand_back, organization_id })`,
+  Python's (RFC §23.3 step 4, §23.4, RMK-1144, RMK-1158): a worker reads
+  its brief, then the parent room's last messages the notified channel may
+  read, labelled and quoted as data; `start_task` starts an agent's
+  background task on the agent, told how to work and where its findings
+  go, handed the room's last 12 messages. `TurnHost::delegate` carries the
+  conversation too.
 - `RoomKit::cancel_task(task_id, CancelTaskOptions { organization_id })`,
   Python's (RFC §23.3, RMK-1144): a background task its runner holds ends
   `cancelled`, `ON_TASK_COMPLETED`, the status bus and the notified channel
