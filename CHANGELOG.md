@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `RoomKit::cancel_task(task_id, CancelTaskOptions { organization_id })`,
+  Python's (RFC §23.3, RMK-1144): a background task its runner holds ends
+  `cancelled`, `ON_TASK_COMPLETED`, the status bus and the notified channel
+  told; calls at once cancel it once; an ended task, an inline one, and one
+  of another organization's room are left as they stand. A submit the
+  runner refuses ends its task failed.
 - `TurnHost::delegate`, `wait_task` and `room_tasks`, Python's (RFC
   §10.6.5, RMK-1145): a background delegation from the turn's room, its
   result continuing the turn's chain, the tasks the room's hosts delegated
