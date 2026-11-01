@@ -468,7 +468,9 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
   `before_broadcast`, `observe`, `before_tool_use`, `on_tool_call`,
   `observe_tool_calls`, `HookSpec`, `HookFilter`, `HookId`,
   `ToolHookSpec`, `ToolUse` and `ToolVerdict` go. A hook given no name is
-  named `hook`, then `hook#2`, as Python names a `<lambda>`; `event_types`
+  named `hook`, then `hook#2`, as Python names a callable without
+  `__name__`: a closure has no name, where Python names a function by its
+  own (`audit`, `<lambda>`); `event_types`
   filters an event's type. A refused registration reads as Python's
   `ValueError`, word for word.
 - **The tool hooks run as Python's.** `ToolCallEvent` is Python's: `name`,
