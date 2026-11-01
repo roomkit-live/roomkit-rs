@@ -14,7 +14,8 @@ use futures_core::Stream;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput, ChannelType, EventContent,
-    InboundMessage, Metadata, RoomContext, RoomEvent, TextContent, ToolCallContent, ToolCallStatus,
+    InboundMessage, LoopEndMarker, LoopEndReason, RoomContext, RoomEvent, TextContent,
+    ToolCallContent, ToolCallStatus,
 };
 use roomkit::testing::TurnTap;
 use roomkit::{
@@ -439,16 +440,14 @@ impl Channel for Writing {
             let mut end = start.clone();
             end.status = ToolCallStatus::Completed;
             end.result = json!("ok");
-            let mut record = Metadata::new();
-            record.insert("loop_end_reason".to_owned(), json!("completed"));
             let items = VecDeque::from([
                 ResponseItem::Text("a ".to_owned()),
-                ResponseItem::ToolStart(start),
+                ResponseItem::ToolCallStart(start),
                 ResponseItem::Text("b ".to_owned()),
                 ResponseItem::Text("c ".to_owned()),
-                ResponseItem::ToolEnd(end),
+                ResponseItem::ToolCallEnd(end),
                 ResponseItem::Text("d ".to_owned()),
-                ResponseItem::End(record),
+                ResponseItem::LoopEnd(LoopEndMarker::new(LoopEndReason::Completed)),
             ]);
             Ok(current_turn_host()
                 .unwrap()
@@ -690,7 +689,6 @@ async fn text_written_inside_a_call_crosses_in_order() {
                 "text \"b c \" 2",
                 "tool_end",
                 "text \"d \" null",
-                "record",
                 "loop_end",
                 "stream_end",
                 "end"

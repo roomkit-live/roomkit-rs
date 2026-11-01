@@ -12,7 +12,7 @@ use super::{Canceller, Main, OwnerState, cancel};
 use crate::channel::ChannelError;
 use crate::context::ExecutionContext;
 use crate::stream::ResponseItem;
-use crate::turns::codec::{decode_end, decode_loop_end, decode_output, decode_start};
+use crate::turns::codec::{WireLoopEnd, decode_end, decode_loop_end, decode_output, decode_start};
 use crate::turns::error::{RemoteError, TurnError, to_record};
 use crate::turns::lock;
 use crate::turns::pulls::PullWindow;
@@ -213,7 +213,7 @@ impl OwnerTurn {
                 self.window.read_other();
                 self.open.push((seq, tool_id.clone()));
                 let start = decode_start(tool_name, tool_id, arguments, intent);
-                Read::Item(RemoteItem::Item(ResponseItem::ToolStart(start)))
+                Read::Item(RemoteItem::Item(ResponseItem::ToolCallStart(start)))
             }
             Item::ToolEnd {
                 start,
@@ -244,19 +244,33 @@ impl OwnerTurn {
                     refused_but_ran,
                     intent,
                 });
-                Read::Item(RemoteItem::Item(ResponseItem::ToolEnd(end)))
+                Read::Item(RemoteItem::Item(ResponseItem::ToolCallEnd(end)))
             }
             Item::SegmentBreak => {
                 self.window.read_other();
                 Read::Item(RemoteItem::SegmentBreak)
             }
-            Item::LoopEnd { reason, usage, .. } => {
+            Item::LoopEnd {
+                reason,
+                rounds,
+                usage,
+                max_rounds,
+                timeout_seconds,
+                budget_tokens,
+                budget_usd,
+            } => {
                 self.window.read_other();
-                let end = match self.record.take() {
-                    Some(record) => ResponseItem::End(record),
-                    None => decode_loop_end(reason, usage),
+                let end = WireLoopEnd {
+                    reason,
+                    rounds,
+                    usage,
+                    max_rounds,
+                    timeout_seconds,
+                    budget_tokens,
+                    budget_usd,
                 };
-                Read::Item(RemoteItem::Item(end))
+                let record = self.record.take();
+                Read::Item(RemoteItem::Item(decode_loop_end(end, record.as_ref())))
             }
             Item::StreamEnd => Read::Ended,
         }

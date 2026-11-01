@@ -9,7 +9,7 @@ use std::task::{Context, Poll};
 
 use futures_core::Stream;
 use roomkit::model::{
-    ChannelOutput, ErrorRecord, EventContent, EventSource, EventType, Metadata, RoomEvent,
+    ChannelOutput, ErrorRecord, EventContent, EventSource, EventType, LoopEndMarker, RoomEvent,
     TextContent, ToolCall, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use roomkit::{ChannelError, ResponseItem, ResponseStream};
@@ -17,12 +17,7 @@ use serde_json::Value;
 
 use crate::provider::ProviderError;
 use crate::stream::next;
-use crate::tool_loop::{LoopEnd, ToolEnd, TurnItem, TurnItems};
-
-/// The record's keys on the turn's last MESSAGE (RFC §6.4 "The turn's
-/// record").
-const LOOP_END_REASON: &str = "loop_end_reason";
-const AI_USAGE: &str = "ai_usage";
+use crate::tool_loop::{ToolEnd, TurnItem, TurnItems};
 
 /// The rows of one turn, built as its items come.
 struct Rows<'a> {
@@ -97,14 +92,14 @@ impl Rows<'_> {
 
     /// The turn's record on its last MESSAGE: its final text's, or the last
     /// one the turn wrote; with none, nothing records it.
-    fn record(&mut self, end: &LoopEnd) {
+    fn record(&mut self, end: &LoopEndMarker) {
         let Some(message) = self
             .last_message
             .and_then(|position| self.events.get_mut(position))
         else {
             return;
         };
-        message.metadata.extend(record_of(end));
+        message.metadata.extend(end.record());
     }
 
     fn push(&mut self, event_type: EventType, content: EventContent) {
@@ -165,33 +160,10 @@ impl Stream for Responding {
 fn response_item(item: TurnItem) -> ResponseItem {
     match item {
         TurnItem::Text(delta) => ResponseItem::Text(delta),
-        TurnItem::ToolStart(call) => ResponseItem::ToolStart(start_row(&call)),
-        TurnItem::ToolEnd(end) => ResponseItem::ToolEnd(end_row(end)),
-        TurnItem::End(end) => ResponseItem::End(record_of(&end)),
+        TurnItem::ToolStart(call) => ResponseItem::ToolCallStart(start_row(&call)),
+        TurnItem::ToolEnd(end) => ResponseItem::ToolCallEnd(end_row(end)),
+        TurnItem::End(end) => ResponseItem::LoopEnd(end),
     }
-}
-
-/// The turn's record (RFC §6.4 "The turn's record"): how it ended and what
-/// its rounds used.
-fn record_of(end: &LoopEnd) -> Metadata {
-    let mut record = Metadata::new();
-    record.insert(LOOP_END_REASON.to_owned(), Value::from(end.reason.as_str()));
-    record.insert(AI_USAGE.to_owned(), Value::Object(end.usage.clone()));
-    record.insert(
-        "ai_last_usage".to_owned(),
-        end.last_usage.clone().map_or(Value::Null, Value::Object),
-    );
-    record.insert(
-        "ai_usage_complete".to_owned(),
-        Value::Bool(end.usage_complete),
-    );
-    if let Some(model) = &end.model {
-        record.insert("ai_model".to_owned(), Value::String(model.clone()));
-    }
-    if let Some(provider) = &end.provider {
-        record.insert("ai_provider".to_owned(), Value::String(provider.clone()));
-    }
-    record
 }
 
 /// A call's start row: its tool, its id and the model's arguments, pending.

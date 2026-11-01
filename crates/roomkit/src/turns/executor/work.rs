@@ -101,8 +101,6 @@ pub(super) async fn work(
             sender: &sender,
             host: &host,
             flow: &flow,
-            rounds: 0,
-            starting: false,
         };
         Box::pin(pump.serve(stream)).await;
     }
@@ -117,10 +115,6 @@ struct Pump<'a> {
     sender: &'a FrameSender,
     host: &'a TurnHost,
     flow: &'a Flow,
-    /// The runs of call starts read: the loop's end counts them as its
-    /// rounds.
-    rounds: u64,
-    starting: bool,
 }
 
 impl Pump<'_> {
@@ -204,7 +198,7 @@ impl Pump<'_> {
     /// reaches the owner, the call closed with its own outcome; any other
     /// is dropped.
     fn closed_on(&self, read: Read) {
-        if let Some(Ok(ResponseItem::ToolEnd(end))) = read {
+        if let Some(Ok(ResponseItem::ToolCallEnd(end))) = read {
             self.sender.send_ended(end);
         }
     }
@@ -214,25 +208,16 @@ impl Pump<'_> {
     fn send(&mut self, read: Read) -> bool {
         let sent = match read {
             Some(Ok(ResponseItem::Text(text))) => {
-                self.starting = false;
                 self.sender.add_text(text);
                 return true;
             }
-            Some(Ok(ResponseItem::ToolStart(start))) => {
-                if !self.starting {
-                    self.rounds = self.rounds.saturating_add(1);
-                    self.starting = true;
-                }
-                self.sender.send_start(start)
-            }
-            Some(Ok(ResponseItem::ToolEnd(end))) => {
-                self.starting = false;
+            Some(Ok(ResponseItem::ToolCallStart(start))) => self.sender.send_start(start),
+            Some(Ok(ResponseItem::ToolCallEnd(end))) => {
                 self.host.forget_ran_with(&end.tool_id);
                 self.sender.send_end(end)
             }
-            Some(Ok(ResponseItem::End(record))) => {
-                self.starting = false;
-                let (whole, item) = encode_loop_end(&record, self.rounds);
+            Some(Ok(ResponseItem::LoopEnd(marker))) => {
+                let (whole, item) = encode_loop_end(&marker);
                 let recorded = match whole {
                     Some(record) => self.sender.send(&Frame::Record { record }).map(drop),
                     None => Ok(()),

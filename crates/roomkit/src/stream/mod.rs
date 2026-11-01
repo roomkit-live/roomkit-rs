@@ -26,6 +26,7 @@
 //! reaches the stored row and the other targets, never the deltas already
 //! shown (RFC §6.4: a streamed segment, once delivered, is not taken back).
 
+mod loop_end;
 mod reader;
 mod segments;
 
@@ -34,9 +35,11 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::Stream;
-use roomkit_core::model::{Metadata, RoomEvent, ToolCallContent};
+use roomkit_core::model::{RoomEvent, ToolCallContent};
 use tokio::sync::{mpsc, oneshot};
 
+pub(crate) use self::loop_end::read_record;
+pub use self::loop_end::{LoopEndMarker, LoopEndReason};
 pub(crate) use self::reader::{KeptStream, Stops, read};
 use crate::channel::ChannelError;
 
@@ -47,14 +50,19 @@ use crate::channel::ChannelError;
 pub enum ResponseItem {
     /// Text, as it is written.
     Text(String),
+    /// The turn's loop reached its end (RFC §6.4 "The turn's record"):
+    /// Python's `LoopEndMarker`, whose record the kit writes on the turn's
+    /// last message.
+    LoopEnd(LoopEndMarker),
     /// A tool call starts: its row, its arguments as the model wrote them,
-    /// pending. It ends the text before it, a segment of its own.
-    ToolStart(ToolCallContent),
+    /// pending. It ends the text before it, a segment of its own. Python's
+    /// private `ToolCallStartMarker`, which roomkit-ai writes.
+    #[doc(hidden)]
+    ToolCallStart(ToolCallContent),
     /// A tool call ended: its row, how it ended and what the model read.
-    ToolEnd(ToolCallContent),
-    /// The turn reached its end: its record (RFC §6.4 "The turn's record"),
-    /// written on its last message: `loop_end_reason`, `ai_usage`.
-    End(Metadata),
+    /// Python's private `ToolCallEndMarker`, which roomkit-ai writes.
+    #[doc(hidden)]
+    ToolCallEnd(ToolCallContent),
 }
 
 /// A turn's response as its channel writes it: a stream ended by its last

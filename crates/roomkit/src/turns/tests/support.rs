@@ -9,15 +9,14 @@ use std::time::Duration;
 use futures_core::Stream;
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventDirection, EventSource, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId,
-    TextContent,
+    EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit_core::ops::ChannelConfig;
 use serde_json::Value;
 use tokio::time::Instant;
 
 use crate::InboundResult;
-use crate::stream::{DeliveryStream, ResponseItem};
+use crate::stream::{DeliveryStream, LoopEndMarker, LoopEndReason, ResponseItem};
 use crate::testing::{RecordingTransport, RecordingTransportOptions};
 use crate::turns::observe::{Carried, Fate};
 use crate::{
@@ -302,19 +301,17 @@ impl Channel for Waiting {
 pub(super) struct Streaming {
     declaration: ChannelConfig,
     deltas: usize,
-    end: Metadata,
+    end: LoopEndMarker,
     pub(super) produced: Arc<AtomicUsize>,
 }
 
 impl Streaming {
     pub(super) fn new(deltas: usize) -> Self {
-        let mut end = Metadata::new();
-        end.insert("loop_end_reason".to_owned(), Value::from("completed"));
-        Self::ending(deltas, end)
+        Self::ending(deltas, LoopEndMarker::new(LoopEndReason::Completed))
     }
 
-    /// The agent, its stream ending on the record `end`.
-    pub(super) fn ending(deltas: usize, end: Metadata) -> Self {
+    /// The agent, its stream ending on `end`.
+    pub(super) fn ending(deltas: usize, end: LoopEndMarker) -> Self {
         Self {
             declaration: ChannelConfig::new(
                 channel("ai"),
@@ -333,7 +330,7 @@ impl Streaming {
 struct Deltas {
     left: usize,
     produced: Arc<AtomicUsize>,
-    end: Option<Metadata>,
+    end: Option<LoopEndMarker>,
 }
 
 impl Stream for Deltas {
@@ -349,7 +346,7 @@ impl Stream for Deltas {
             this.produced.fetch_add(1, Ordering::SeqCst);
             return std::task::Poll::Ready(Some(Ok(ResponseItem::Text("word ".to_owned()))));
         }
-        std::task::Poll::Ready(this.end.take().map(|end| Ok(ResponseItem::End(end))))
+        std::task::Poll::Ready(this.end.take().map(|end| Ok(ResponseItem::LoopEnd(end))))
     }
 }
 

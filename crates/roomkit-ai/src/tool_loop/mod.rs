@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit::TurnHost;
-use roomkit::model::{Metadata, ToolCall, ToolCallOutcome};
+use roomkit::model::{LoopEndMarker, LoopEndReason, Metadata, ToolCall, ToolCallOutcome};
 use roomkit_core::rules::transcript::Message;
 use serde_json::Value;
 
@@ -40,8 +40,9 @@ pub(crate) enum TurnItem {
     ToolStart(ToolCall),
     /// A call ended: its end row, in the round's call order.
     ToolEnd(ToolEnd),
-    /// The loop ended.
-    End(LoopEnd),
+    /// The loop ended: why, after how many rounds, what they used (RFC
+    /// §6.4 "The turn's record").
+    End(LoopEndMarker),
 }
 
 /// How a call ended.
@@ -56,46 +57,6 @@ pub(crate) struct ToolEnd {
     pub(crate) result: String,
     /// How long it took, its gate included.
     pub(crate) duration: Duration,
-}
-
-/// Why a loop ended, and what its rounds used: the turn's record (RFC §6.4
-/// "The turn's record").
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct LoopEnd {
-    pub(crate) reason: LoopEndReason,
-    pub(crate) usage: Metadata,
-    pub(crate) last_usage: Option<Metadata>,
-    pub(crate) usage_complete: bool,
-    pub(crate) model: Option<String>,
-    pub(crate) provider: Option<String>,
-}
-
-/// Why a loop ended (RFC §6.4, Appendix A.9).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LoopEndReason {
-    /// The model answered.
-    Completed,
-    /// The model still called past the round bound.
-    MaxRounds,
-    /// After a round of calls, the model ran out of room before any answer.
-    Truncated,
-    /// After a round of calls, the model answered nothing.
-    EmptyResponse,
-    /// The provider failed after a round.
-    Error,
-}
-
-impl LoopEndReason {
-    /// The reason as the record writes it.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-            Self::MaxRounds => "max_rounds",
-            Self::Truncated => "truncated",
-            Self::EmptyResponse => "empty_response",
-            Self::Error => "error",
-        }
-    }
 }
 
 /// The items of a turn's loop, or the provider's error that ended it.
@@ -155,13 +116,10 @@ impl<P: AiProvider> Loop<P> {
                 match Generation::read(&*self.provider, &request, round, &out).await {
                     Ok(generation) => generation,
                     Err(error) => {
-                        let end = LoopEnd {
-                            reason: LoopEndReason::Error,
+                        let end = LoopEndMarker {
                             usage,
-                            last_usage: None,
-                            usage_complete: false,
-                            model: self.provider.model().map(str::to_owned),
-                            provider: self.provider.name().map(str::to_owned),
+                            usage_complete: Some(false),
+                            ..self.end_of(LoopEndReason::Error, round)
                         };
                         return failed(round, end, error, &out).await;
                     }
@@ -176,13 +134,11 @@ impl<P: AiProvider> Loop<P> {
                     .and_then(Value::as_u64)
                     .is_some()
             });
-            let end = |reason, usage| LoopEnd {
-                reason,
+            let end = |reason, usage| LoopEndMarker {
                 usage,
                 last_usage: Some(generation.done.usage.clone()),
-                usage_complete,
-                model: self.provider.model().map(str::to_owned),
-                provider: self.provider.name().map(str::to_owned),
+                usage_complete: Some(usage_complete),
+                ..self.end_of(reason, round)
             };
             if generation.calls.is_empty() {
                 let reason = final_reason(&generation, had_tool_round);
@@ -195,6 +151,18 @@ impl<P: AiProvider> Loop<P> {
             }
             had_tool_round = true;
             messages.extend(self.round_of_calls(generation, &out).await);
+        }
+    }
+
+    /// The end of the loop for `reason` after `rounds` rounds of calls, the
+    /// round bound it ran under, its model and provider; no usage yet.
+    fn end_of(&self, reason: LoopEndReason, rounds: u32) -> LoopEndMarker {
+        LoopEndMarker {
+            rounds,
+            max_rounds: Some(self.bounds.max_rounds),
+            model: self.provider.model().map(str::to_owned),
+            provider: self.provider.name().map(str::to_owned),
+            ..LoopEndMarker::new(reason)
         }
     }
 
@@ -245,7 +213,7 @@ impl<P: AiProvider> Loop<P> {
 /// its rounds kept (RFC §6.4 "A turn cut short"); then the error.
 async fn failed(
     round: u32,
-    end: LoopEnd,
+    end: LoopEndMarker,
     error: ProviderError,
     out: &Yielder<Result<TurnItem, ProviderError>>,
 ) {

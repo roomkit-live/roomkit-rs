@@ -371,16 +371,16 @@ impl Producer {
                     self.segments.text(&delta);
                 }
             },
-            Some(Ok(RemoteItem::Item(ResponseItem::ToolStart(start)))) => {
+            Some(Ok(RemoteItem::Item(ResponseItem::ToolCallStart(start)))) => {
                 let rows = self.segments.start(start);
                 self.commit_all(rows).await;
             }
-            Some(Ok(RemoteItem::Item(ResponseItem::ToolEnd(end)))) => {
+            Some(Ok(RemoteItem::Item(ResponseItem::ToolCallEnd(end)))) => {
                 let rows = self.segments.end(end);
                 self.commit_all(rows).await;
             }
-            Some(Ok(RemoteItem::Item(ResponseItem::End(record)))) => {
-                self.segments.end_turn(record);
+            Some(Ok(RemoteItem::Item(ResponseItem::LoopEnd(marker)))) => {
+                self.segments.end_turn(marker.record());
             }
             // The loop goes on after a round without a call: its text is a
             // segment of its own (RFC §6.4).
@@ -496,7 +496,7 @@ impl Producer {
         let mut read = self.in_flight.take();
         loop {
             match read {
-                Some(Some(Ok(RemoteItem::Item(ResponseItem::ToolEnd(end))))) => {
+                Some(Some(Ok(RemoteItem::Item(ResponseItem::ToolCallEnd(end))))) => {
                     // The stream no longer carries rows: to every target,
                     // the streaming one included (RFC §12.2 step 13s).
                     for row in self.segments.end(end) {
@@ -508,7 +508,7 @@ impl Producer {
                     read = Some(self.pull_turn().await);
                 }
                 // A start: the round had not begun to run.
-                Some(Some(Ok(RemoteItem::Item(ResponseItem::ToolStart(start))))) => {
+                Some(Some(Ok(RemoteItem::Item(ResponseItem::ToolCallStart(start))))) => {
                     self.segments.opened_unwritten(start);
                     return CANCELLED;
                 }
@@ -523,7 +523,7 @@ impl Producer {
                 }
                 Some(
                     Some(Ok(
-                        RemoteItem::Item(ResponseItem::Text(_) | ResponseItem::End(_))
+                        RemoteItem::Item(ResponseItem::Text(_) | ResponseItem::LoopEnd(_))
                         | RemoteItem::SegmentBreak,
                     ))
                     | None,

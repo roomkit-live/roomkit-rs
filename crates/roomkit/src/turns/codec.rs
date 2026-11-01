@@ -9,13 +9,7 @@ use serde_json::Value;
 use super::error::{from_record, to_record};
 use super::pipe::Uncarried;
 use super::wire::{Item, SendEvent, ToolEnd, WireOutput, WireResult};
-use crate::stream::ResponseItem;
-
-/// The record's key that says how a turn ended (RFC §6.4).
-const LOOP_END_REASON: &str = "loop_end_reason";
-
-/// The record's key of what a turn's rounds used (RFC §6.4).
-const AI_USAGE: &str = "ai_usage";
+use crate::stream::{LoopEndMarker, LoopEndReason, ResponseItem, read_record};
 
 /// A channel's output without its stream; its provider's answer, a
 /// transport's delivery alone carries, does not cross.
@@ -124,36 +118,64 @@ pub(crate) fn decode_end(end: ToolEnd) -> ToolCallContent {
     row
 }
 
-/// A turn's record (RFC §6.4 "The turn's record") as the loop's end
-/// carries it, after `rounds` rounds of calls: its reason and its usage;
-/// and the record itself when the loop's end cannot carry it whole (a key
-/// of its own, no reason, a usage that is no object), to cross before it
-/// in a `record` frame. A record without a reason ends with an empty one.
-pub(crate) fn encode_loop_end(record: &Metadata, rounds: u64) -> (Option<Metadata>, Item) {
-    let reason = record.get(LOOP_END_REASON).and_then(Value::as_str);
-    let usage = match record.get(AI_USAGE) {
-        Some(Value::Object(usage)) => Some(usage),
-        _ => None,
-    };
-    let whole = reason.is_some() && usage.is_some() && record.len() == 2;
+/// A loop's end as the wire carries it (RFC §10.6.3): `marker`'s fields,
+/// as Python's `dataclasses.asdict` writes its `LoopEndMarker`; and the
+/// turn's record when it holds more than Python's two keys, roomkit-rs's
+/// own (RMK-1029), to cross before it in a `record` frame.
+pub(crate) fn encode_loop_end(marker: &LoopEndMarker) -> (Option<Metadata>, Item) {
+    let record = marker.record();
     let item = Item::LoopEnd {
-        reason: reason.unwrap_or_default().to_owned(),
-        rounds,
-        usage: usage.cloned().unwrap_or_default(),
-        max_rounds: None,
-        timeout_seconds: None,
-        budget_tokens: None,
-        budget_usd: None,
+        reason: marker.reason.to_string(),
+        rounds: u64::from(marker.rounds),
+        usage: marker.usage.clone(),
+        max_rounds: marker.max_rounds.map(u64::from),
+        timeout_seconds: marker.timeout.map(|timeout| timeout.as_secs_f64()),
+        budget_tokens: marker.budget_tokens,
+        budget_usd: marker.budget_usd,
     };
-    ((!whole).then(|| record.clone()), item)
+    ((record.len() > 2).then_some(record), item)
 }
 
-/// A turn's record from its loop's end: its reason and its usage.
-pub(crate) fn decode_loop_end(reason: String, usage: Metadata) -> ResponseItem {
-    let mut record = Metadata::new();
-    record.insert(LOOP_END_REASON.to_owned(), Value::String(reason));
-    record.insert(AI_USAGE.to_owned(), Value::Object(usage));
-    ResponseItem::End(record)
+/// What a loop's end crosses the wire with: Python's `LoopEndMarker`
+/// fields.
+pub(crate) struct WireLoopEnd {
+    pub(crate) reason: String,
+    pub(crate) rounds: u64,
+    pub(crate) usage: Metadata,
+    pub(crate) max_rounds: Option<u64>,
+    pub(crate) timeout_seconds: Option<f64>,
+    pub(crate) budget_tokens: Option<u64>,
+    pub(crate) budget_usd: Option<f64>,
+}
+
+/// A loop's end from the wire, roomkit-rs's own fields read from `record`,
+/// the turn's record a `record` frame carried before it. A reason this
+/// implementation does not know, a newer peer's, reads `error`, logged; a
+/// limit out of range is none.
+pub(crate) fn decode_loop_end(end: WireLoopEnd, record: Option<&Metadata>) -> ResponseItem {
+    let reason = LoopEndReason::of(&end.reason).unwrap_or_else(|| {
+        tracing::warn!(
+            target: "roomkit::turns",
+            reason = %end.reason,
+            "a turn's loop ended for a reason this implementation does not know: read as error"
+        );
+        LoopEndReason::Error
+    });
+    let mut marker = LoopEndMarker {
+        rounds: u32::try_from(end.rounds).unwrap_or(u32::MAX),
+        usage: end.usage,
+        max_rounds: end.max_rounds.and_then(|rounds| u32::try_from(rounds).ok()),
+        timeout: end
+            .timeout_seconds
+            .and_then(|seconds| std::time::Duration::try_from_secs_f64(seconds).ok()),
+        budget_tokens: end.budget_tokens,
+        budget_usd: end.budget_usd,
+        ..LoopEndMarker::new(reason)
+    };
+    if let Some(record) = record {
+        read_record(&mut marker, record);
+    }
+    ResponseItem::LoopEnd(marker)
 }
 
 /// `event`, injected into `room_id` at least `floor` deep, as `send_event`'s

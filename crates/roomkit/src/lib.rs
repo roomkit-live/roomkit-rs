@@ -91,6 +91,8 @@ pub mod model {
         Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus, VerificationStatus,
         VideoContent, Visibility,
     };
+
+    pub use crate::stream::{LoopEndMarker, LoopEndReason};
     /// What a hook returns: [`HookResult`]'s constructors and their options,
     /// Python's keywords of `HookResult.allow`, `block` and `modify`.
     pub mod hook {

@@ -76,11 +76,14 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 # Python's streams (decision 12, the architecture table's "Channels"):
 # `deliver_stream`'s `text_stream`, an `AsyncIterator[str]` whose items are
 # the text and the response's rows, which its annotation does not name, and
-# `ChannelOutput.response_stream`, an `AsyncIterator` of text and markers.
-# Rust names the stream types and their items; `next()` is `__anext__`.
+# `ChannelOutput.response_stream`, an `AsyncIterator` of text and markers,
+# `ResponseItem`'s `Text` and `LoopEnd(LoopEndMarker)`, Python's private
+# tool markers hidden. Rust names the stream types and their items;
+# `next()` is `__anext__`.
 "roomkit::DeliveryStream" = { python = "AsyncIterator", members = ["next"] }
 "roomkit::ResponseStream" = { python = "AsyncIterator" }
 "roomkit::StreamItem" = { python = "str" }
+"roomkit::ResponseItem" = { python = "str" }
 
 # The Rust enums a Python `Literal` stands for, by path: the field it types
 # (decision 4; a nameless literal takes its field's name) and the Literal's
@@ -91,6 +94,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::model::DeliveryResultStatus" = { field = "roomkit.DeliveryResult.__init__(status)", values = ["sent", "queued", "failed"] }
 "roomkit::model::RichFormat" = { field = "roomkit.models.RichContent.__init__(format)", values = ["html", "markdown"] }
 "roomkit::model::ToolCallStatus" = { field = "roomkit.ToolCallContent.__init__(status)", values = ["pending", "completed", "failed"] }
+"roomkit::model::LoopEndReason" = { field = "roomkit.models.LoopEndMarker.__init__(reason)", values = ["completed", "max_rounds", "timeout", "budget_exceeded", "truncated", "empty_response", "unfinished", "force_stopped", "cancelled", "error"] }
 
 # The Python exception classes each error enum's variants stand for, by the
 # enum's path, read from the Python source (the snapshot holds no class's
@@ -387,6 +391,12 @@ members = ["channel_type", "category", "direction"]
 approved = "2026-10-27"
 reason = "decision 12: Python's class attributes channel_type, category and direction (channels/base.py:163-165), which the snapshot does not list, are the trait's methods: a trait holds no data"
 
+[[exception]]
+rust = "roomkit::model::LoopEndMarker"
+members = ["last_usage", "usage_complete", "model", "provider"]
+approved = "2026-10-31"
+reason = "RMK-1029, a feature roomkit-rs has first: the turn's record keeps the last generation's usage, whether every generation reported it, and the model and provider; Python adopts them through its own card"
+
 [[missing]]
 python = "roomkit.Channel"
 members = [
@@ -656,11 +666,6 @@ reason = "not in 0.x: Rust has no provider contract; without one, deliver return
 
 # Known differences, by the lot of step 5 that removes them; lot 6 requires
 # none left. "?": the plan names no lot.
-
-[[pending]]
-lot = 4
-rust = "roomkit::ResponseItem"
-reason = "lot 4: ResponseItem::{Text, LoopEnd}, the tool markers hidden; End(Metadata) goes"
 
 [[pending]]
 lot = 5
