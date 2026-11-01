@@ -38,10 +38,20 @@ const SNAPSHOT: &str = include_str!("../../../api/python/public_api_signatures.j
 fn serializes_to<T: Serialize>(class: &str, cases: &[(&str, T)]) {
     let snapshot: Value = serde_json::from_str(SNAPSHOT).unwrap();
     for (member, rust) in cases {
-        let spec = &snapshot[class][*member];
-        let python = spec[1].as_str().unwrap().trim_matches('\'');
+        let spec = snapshot
+            .get(class)
+            .and_then(|members| members.get(*member))
+            .unwrap();
+        let python = spec
+            .get(1)
+            .and_then(Value::as_str)
+            .unwrap()
+            .trim_matches('\'');
         assert_eq!(
-            (spec[0].as_str(), serde_json::to_value(rust).unwrap()),
+            (
+                spec.get(0).and_then(Value::as_str),
+                serde_json::to_value(rust).unwrap()
+            ),
             (Some("member"), Value::String(python.to_owned())),
             "{class}.{member}"
         );
