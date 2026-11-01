@@ -35,6 +35,11 @@ pub(crate) struct StuckStore {
     pub(crate) rooms_hang: Arc<AtomicBool>,
     /// The writes dropped before they ended, cut: "commit", "room".
     pub(crate) cut: Arc<Mutex<Vec<&'static str>>>,
+    /// Its closes, each saying whether the channel `closed_before` says
+    /// closed was by then.
+    pub(crate) closes: Arc<Mutex<Vec<bool>>>,
+    /// Whether a channel was closed, which each close of the store reads.
+    pub(crate) closed_before: Arc<AtomicBool>,
 }
 
 /// Notes a write dropped before it ended.
@@ -75,6 +80,15 @@ impl StuckStore {
         }
     }
 
+    /// The same store, whose closes read whether the channel `closed`
+    /// says closed was by then.
+    pub(crate) fn closing_after(self, closed: &Arc<AtomicBool>) -> Self {
+        Self {
+            closed_before: Arc::clone(closed),
+            ..self
+        }
+    }
+
     /// Whether a write of `what` that never ends was cut.
     pub(crate) fn was_cut(&self, what: &str) -> bool {
         self.cut.lock().unwrap().contains(&what)
@@ -95,6 +109,11 @@ impl StuckStore {
 impl ConversationStore for StuckStore {
     async fn create_room(&self, room: Room) -> Result<Room, StoreError> {
         self.store.create_room(room).await
+    }
+
+    async fn close(&self) {
+        let channel_closed = self.closed_before.load(Ordering::SeqCst);
+        self.closes.lock().unwrap().push(channel_closed);
     }
 
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {

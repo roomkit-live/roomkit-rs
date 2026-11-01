@@ -6,11 +6,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit::{Channel, RoomKit, RoomKitError, RoomKitOptions};
+use roomkit::model::RoomId;
+use roomkit::{Channel, CreateRoomOptions, GetRoomOptions, RoomKit, RoomKitError, RoomKitOptions};
 use roomkit_core::ops::ChannelConfig;
 use tokio::sync::Notify;
 
-use crate::support::{BOUND, channel, transport};
+use crate::store::StuckStore;
+use crate::support::{BOUND, Witness, channel, transport};
 
 /// A channel whose close waits until released, counting its closes; given
 /// a kit, it closes that kit from its own close.
@@ -521,4 +523,28 @@ fn a_close_after_its_shutdown_was_cut_says_so() {
         .unwrap();
     let later = second.block_on(async { tokio::time::timeout(BOUND, kit.close()).await });
     assert_eq!(later.unwrap(), Err(RoomKitError::ShutdownCancelled));
+}
+
+/// RFC §12.10.4: the kit's close closes its store once, after its
+/// channels, as Python's close releases its store (decided 2026-10-31); a
+/// store with nothing to release, as the in-memory one, still serves a
+/// read after it, as Python's (`tasks/probes/step5-lot5/py_kit_closes_store.out`).
+#[tokio::test]
+async fn the_close_closes_the_store_once_after_the_channels() {
+    let witness = Witness::new();
+    let store = StuckStore::default().closing_after(&witness.closed);
+    let kit = RoomKit::new(RoomKitOptions::with_store(store));
+    kit.register_channel(witness.clone()).unwrap();
+    let room = RoomId::new("room-1").unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.close().await.unwrap();
+    kit.close().await.unwrap();
+    let read = kit.get_room(&room, GetRoomOptions::default()).await;
+    let closes = kit.store().closes.lock().unwrap().clone();
+    assert_eq!((closes, read.map(|room| room.id)), (vec![true], Ok(room)));
 }

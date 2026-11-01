@@ -64,19 +64,6 @@ impl SqliteStore {
         }
     }
 
-    /// Closes the file, once the operation under way is done: every later
-    /// operation, of this store or its clones, fails
-    /// [`StoreError::Unavailable`] (`SQLiteStore is closed`). A second
-    /// close does nothing.
-    pub async fn close(&self) {
-        if self.file.closed.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        if let Some(database) = self.file.database.get() {
-            database.close().await;
-        }
-    }
-
     /// The events whose text holds every word of `query`, the most
     /// relevant first (SQLite's full-text index): Python's
     /// `search_events(query, *, room_id=None, limit=20)`, an extra of this
@@ -648,6 +635,19 @@ impl ConversationStore for SqliteStore {
             .await?
             .read(move |connection| side_effects::observations(connection, &room_id))
             .await
+    }
+
+    /// Closes the file, once the operation under way is done: Python's
+    /// `close()`, which the kit's close calls. Every later operation, of
+    /// this store or its clones, fails [`StoreError::Unavailable`]
+    /// (`SQLiteStore is closed`). A second close does nothing.
+    async fn close(&self) {
+        if self.file.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if let Some(database) = self.file.database.get() {
+            database.close().await;
+        }
     }
 }
 

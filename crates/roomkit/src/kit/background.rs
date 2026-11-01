@@ -3,6 +3,7 @@
 //! has not started, gives the running work one grace, then cuts it, in the
 //! kit's one shutdown (`shutdown`).
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use tokio::sync::Notify;
@@ -63,8 +64,12 @@ impl<S: ConversationStore> RoomKit<S> {
     /// ([`Channel::close`](crate::Channel::close)), one after the other,
     /// once, a channel whose close panics noted and the next one closed
     /// all the same; what their closes started is cut and given a second,
-    /// and the kit is sealed. The close takes the grace, plus the turn
-    /// backend's second for its turns, plus the channels' closes, plus at
+    /// and the kit is sealed; last, its store is closed
+    /// ([`ConversationStore::close`]), as Python's close releases it, and a
+    /// read of the kit the store then fails answers
+    /// [`RoomKitError::KitClosed`]. The close takes the grace, plus the turn
+    /// backend's second for its turns, plus the channels' closes, plus the
+    /// store's close, plus at
     /// most a second twice, which only work that ignores its cut spends, a
     /// task blocked in synchronous code, which an abort reaches once it
     /// yields; such work still running then is named in one warning.
@@ -149,6 +154,11 @@ impl<S: ConversationStore> RoomKit<S> {
             );
         }
         tasks.seal();
+        // The store goes last, once no work can reach it, as the Python
+        // implementation's close releases it after its channels (RFC
+        // §12.10.4).
+        self.inner.store_released.store(true, Ordering::Release);
+        self.inner.store.close().await;
         failures
     }
 

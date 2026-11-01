@@ -35,6 +35,7 @@ mod weak;
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, PoisonError, RwLock, Weak};
 
 use roomkit_core::model::{ChannelId, ChannelType, InboundMessage, RoomEvent, RoomId};
@@ -145,6 +146,9 @@ pub(crate) struct Inner<S> {
     channels_closed: tokio::sync::OnceCell<shutdown::Ended>,
     /// The kit's one shutdown, which every close joins (RFC §12.10.4).
     shutdown: shutdown::Shutdown,
+    /// Set once the kit's close released its store: a read the store then
+    /// fails answers that the kit is closed.
+    store_released: AtomicBool,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -192,6 +196,7 @@ impl<S: ConversationStore> RoomKit<S> {
             turns: Arc::default(),
             channels_closed: tokio::sync::OnceCell::new(),
             shutdown: shutdown::Shutdown::default(),
+            store_released: AtomicBool::new(false),
         });
         Self { inner }
     }

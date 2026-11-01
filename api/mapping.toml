@@ -412,7 +412,7 @@ reason = "not in 0.x: agent identity, the thinker, owner-served tools and serial
 python = "roomkit.ConversationStore"
 members = [
     "add_event", "add_event_auto_index", "binding_exists",
-    "claim_voice_delivery", "close", "complete_voice_delivery", "connection",
+    "claim_voice_delivery", "complete_voice_delivery", "connection",
     "create_verification_request", "find_latest_room",
     "find_room_id_by_channel", "get_task", "get_thread_summaries",
     "get_timeline", "get_unread_count", "get_verification",
@@ -672,12 +672,6 @@ reason = "not in 0.x: Rust has no provider contract; without one, deliver return
 
 # Known differences, by the lot of step 5 that removes them; lot 6 requires
 # none left. "?": the plan names no lot.
-
-[[pending]]
-lot = 5
-rust = "roomkit_sqlite::SqliteStore"
-members = ["close"]
-reason = "lot 5, question 10 to the maintainer: Python's close is ConversationStore's, which kit.close() calls; Rust's store trait has none in 0.x (lot 4)"
 
 [[pending]]
 lot = 5

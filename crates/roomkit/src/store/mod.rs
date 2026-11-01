@@ -741,4 +741,12 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         room_id: &RoomId,
     ) -> impl Future<Output = Result<Vec<Observation>, StoreError>> + Send;
+
+    /// Releases what the store holds, a file or a pool: Python's
+    /// `close()`, which the kit's [`close`](crate::RoomKit::close) calls
+    /// once no work can reach the store any more (RFC §12.10.4). An
+    /// operation after it may fail. Nothing to release by default.
+    fn close(&self) -> impl Future<Output = ()> + Send {
+        async {}
+    }
 }

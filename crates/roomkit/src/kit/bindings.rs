@@ -288,7 +288,10 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Result<Vec<ChannelBinding>, RoomKitError> {
         self.reached(room_id, options.organization_id.as_deref())
             .await?;
-        Ok(self.store().list_bindings(room_id).await?)
+        self.store()
+            .list_bindings(room_id)
+            .await
+            .map_err(|error| self.read_failed(error))
     }
 
     /// The room's members, ACTIVE ones only unless `options` include those
@@ -306,7 +309,11 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Result<Vec<Participant>, RoomKitError> {
         self.reached(room_id, options.organization_id.as_deref())
             .await?;
-        let mut members = self.store().list_participants(room_id).await?;
+        let mut members = self
+            .store()
+            .list_participants(room_id)
+            .await
+            .map_err(|error| self.read_failed(error))?;
         if !options.include_left {
             members.retain(|member| member.status == ParticipantStatus::Active);
         }

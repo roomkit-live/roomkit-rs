@@ -36,6 +36,9 @@ impl<S: ConversationStore> RoomKit<S> {
             organization_id: options.organization_id.clone(),
         };
         self.get_room(room_id, room).await?;
-        Ok(self.store().list_events(room_id, options.query()).await?)
+        self.store()
+            .list_events(room_id, options.query())
+            .await
+            .map_err(|error| self.read_failed(error))
     }
 }

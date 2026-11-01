@@ -614,8 +614,13 @@ the tool policy, the SQLite store).
   extra_metadata }`, Python's `SkillMetadata`, what a skill's frontmatter
   declares: its other keys, each read as the fields are, as texts; one the
   line reading cannot read whole is left out, the skill read all the same.
-- `SqliteStore::close()`, Python's `close()`: every later operation, of the
-  store or its clones, fails (`SQLiteStore is closed`).
+- `ConversationStore::close()`, Python's `close()`, provided with nothing
+  to release: the kit's `close` calls it last, once no work can reach the
+  store, as Python's releases its store (decided 2026-10-31), and a kit
+  read the store then fails (`get_room`, `get_timeline`, `get_binding`,
+  `list_bindings`, `list_members`) answers `RoomKitError::KitClosed`.
+  `SqliteStore`'s closes its file: every later operation, of the store or
+  its clones, fails (`SQLiteStore is closed`).
 - `SqliteStore::search_events(query, SearchEventsOptions { room_id, limit
   })`, Python's full-text `search_events`: the events whose text holds
   every word of the query, the most relevant first, never a refused row.

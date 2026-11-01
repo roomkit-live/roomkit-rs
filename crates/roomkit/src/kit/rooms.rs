@@ -2,6 +2,8 @@
 //! its read and its transitions, each for the organization its options
 //! name (RFC §17.2).
 
+use std::sync::atomic::Ordering;
+
 use roomkit_core::model::{Room, RoomId};
 use roomkit_core::ops::{ArchiveRoom, CloseRoom, CreateRoom, PauseRoom, ReopenRoom, ResumeRoom};
 use roomkit_core::rules::organizations;
@@ -71,9 +73,25 @@ impl<S: ConversationStore> RoomKit<S> {
         room_id: &RoomId,
         options: GetRoomOptions,
     ) -> Result<Room, RoomKitError> {
-        let room = self.store().get_room(room_id).await?;
+        let room = self
+            .store()
+            .get_room(room_id)
+            .await
+            .map_err(|error| self.read_failed(error))?;
         room.filter(|room| organizations::admits(options.organization_id.as_deref(), room))
             .ok_or_else(|| StoreError::RoomNotFound(room_id.clone()).into())
+    }
+
+    /// What a read the store failed answers: [`RoomKitError::KitClosed`]
+    /// once the kit's close released its store, as the Python
+    /// implementation's kit answers a read against the store it closed
+    /// (RFC §12.10.4); the store's error otherwise.
+    pub(super) fn read_failed(&self, error: StoreError) -> RoomKitError {
+        let released = self.inner.store_released.load(Ordering::Acquire);
+        if released && matches!(error, StoreError::Unavailable(_)) {
+            return RoomKitError::KitClosed;
+        }
+        error.into()
     }
 
     /// Checks that the organization `organization_id` reaches the room
