@@ -177,12 +177,14 @@ enum Transition {
 
 /// A channel's circuit breaker (roomkit's `CircuitBreaker`): closed, open
 /// once its failures in a row reach the threshold, half-open, one probe let
-/// through, once the recovery passed.
+/// through, once the recovery passed. A probe that never ended, its send
+/// cut by the kit's close, lets another through once the recovery passed
+/// again since it went, where Python's breaker would stay open for good.
 #[derive(Debug, Default)]
 struct Breaker {
     failures: u32,
     opened_at: Option<Instant>,
-    probe_sent: bool,
+    probe_at: Option<Instant>,
 }
 
 impl Breaker {
@@ -191,8 +193,9 @@ impl Breaker {
         let Some(opened_at) = self.opened_at else {
             return true;
         };
-        if now.duration_since(opened_at) >= RECOVERY && !self.probe_sent {
-            self.probe_sent = true;
+        let recovered = |since: Instant| now.duration_since(since) >= RECOVERY;
+        if recovered(opened_at) && self.probe_at.is_none_or(recovered) {
+            self.probe_at = Some(now);
             return true;
         }
         false
@@ -215,7 +218,7 @@ impl Breaker {
         }
         let was_open = self.opened_at.is_some();
         self.opened_at = Some(now);
-        self.probe_sent = false;
+        self.probe_at = None;
         (!was_open).then_some(Transition::Opened)
     }
 }
@@ -324,4 +327,42 @@ fn retryable(error: &ChannelError, policy: &RetryPolicy) -> bool {
     classes
         .iter()
         .any(|listed| names.contains(&listed.as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    /// The breaker's states (roomkit's `CircuitBreaker`): open at the fifth
+    /// failure in a row, one probe through once the recovery passed; a
+    /// probe that never ended lets another through a recovery later, so a
+    /// send the kit's close cut cannot leave the channel closed for good.
+    #[test]
+    fn an_open_breaker_lets_one_probe_through_per_recovery() {
+        let start = Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let mut breaker = Breaker::default();
+        let opened: Vec<Option<Transition>> = (0..5).map(|_| breaker.failed(at(0))).collect();
+        let allowed = [
+            breaker.allows(at(59)),
+            breaker.allows(at(60)),
+            breaker.allows(at(61)),
+            breaker.allows(at(119)),
+            breaker.allows(at(120)),
+        ];
+        assert_eq!(
+            (
+                opened.last().copied().flatten(),
+                allowed,
+                breaker.succeeded()
+            ),
+            (
+                Some(Transition::Opened),
+                [false, true, false, false, true],
+                Some(Transition::Closed)
+            )
+        );
+    }
 }
