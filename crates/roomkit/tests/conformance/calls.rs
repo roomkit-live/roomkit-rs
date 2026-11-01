@@ -18,10 +18,11 @@ use roomkit::providers::sms::WebhookMeta;
 use roomkit::{
     AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
     CloseRoomOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
-    DetachChannelOptions, HookOptions, HookTrigger, HostChannel, InboundResult, MuteOptions,
-    MuteOutputOptions, PostOptions, ProcessDeliveryStatusOptions, ProcessInboundOptions,
-    ProcessWebhookOptions, RemoveRoomHookOptions, RoomKitError, SendEventOptions, SetAccessOptions,
-    SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions, UpdateEventOptions,
+    DeliverOptions, DetachChannelOptions, HookOptions, HookTrigger, HostChannel, InboundResult,
+    MuteOptions, MuteOutputOptions, PostOptions, ProcessDeliveryStatusOptions,
+    ProcessInboundOptions, ProcessWebhookOptions, RemoveRoomHookOptions, RoomKitError,
+    SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions,
+    UpdateEventOptions,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -163,6 +164,20 @@ pub(crate) async fn call(
             let outcome = run.kit().commit_event(&room, record, options).await;
             let called = finish(run, name, outcome, dump);
             let id = called.as_ref().ok().and_then(event_of);
+            (called, id)
+        }
+        "deliver" => {
+            let room = room_id(spec)?;
+            let content = field::<String>(spec, "content")?;
+            let options = deliver_options(spec)?;
+            let outcome = run.kit().deliver(&room, content, options).await;
+            let called = finish(run, name, outcome, dump);
+            let id = called
+                .as_ref()
+                .ok()
+                .and_then(|value| value.get("event_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             (called, id)
         }
         store if crate::store_calls::handles(store) => {
@@ -330,6 +345,24 @@ pub(crate) fn send_event_options(spec: &Value) -> Result<SendEventOptions, Unrea
     options.standalone = optional(spec, "standalone")?.unwrap_or_default();
     options.organization_id = organization_id(spec);
     Ok(options)
+}
+
+fn deliver_options(spec: &Value) -> Result<DeliverOptions, Unreadable> {
+    if let Some(strategy) = optional::<String>(spec, "strategy")?
+        && strategy != "immediate"
+    {
+        return Err(format!("strategy {strategy}: not run by this runner yet"));
+    }
+    Ok(DeliverOptions {
+        channel_id: optional(spec, "channel_id")?,
+        metadata: optional(spec, "metadata")?.unwrap_or_default(),
+        addressed_to: optional(spec, "addressed_to")?,
+        idempotency_key: optional(spec, "idempotency_key")?,
+        session_id: optional(spec, "session_id")?,
+        chain_depth: optional(spec, "chain_depth")?.unwrap_or_default(),
+        instruction: optional(spec, "instruction")?.unwrap_or_default(),
+        organization_id: organization_id(spec),
+    })
 }
 
 fn post_options(spec: &Value) -> Result<PostOptions, Unreadable> {
