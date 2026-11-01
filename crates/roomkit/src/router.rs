@@ -17,7 +17,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use roomkit_core::model::{
-    ChannelId, ChannelType, Identity, Metadata, ParticipantId, RoomContext, RoomId, RoomStatus,
+    ChannelId, ChannelType, Identity, Metadata, ParticipantId, RoomContext, RoomEvent, RoomId,
+    RoomStatus,
 };
 use roomkit_core::rules::addresses::{AddressForm, Addressing};
 use roomkit_core::rules::routing::{self, Candidate, Refusal, RouteQuery, Sender};
@@ -394,41 +395,129 @@ async fn candidate<S: ConversationStore>(
     let Some(room) = room else {
         return Ok(None);
     };
+    // A `group` binding admits whoever writes: its history is not read, as
+    // Python's `admits_sender` returns before it scans.
+    let group = bindings
+        .iter()
+        .any(|binding| binding.channel_id == query.channel_id && binding.group);
+    let heard = if group {
+        Vec::new()
+    } else {
+        let other = |author: &ParticipantId| {
+            !query.sender.named_by(
+                author.as_str(),
+                &query.form,
+                &query.channel_id,
+                &participants,
+            )
+        };
+        let page = |offset| store.list_events(room_id, history_page(&query.channel_id, offset));
+        heard_until_another(page, &query.channel_id, other).await?
+    };
     let mut candidate = Candidate::new(RoomContext {
         bindings,
         participants,
         ..RoomContext::new(room)
     });
-    candidate.heard = heard_on(store, room_id, &query.channel_id).await?;
+    candidate.heard = heard;
     Ok(Some(candidate))
 }
 
-/// Who the room heard on `channel_id`: the participants its received
-/// events of the channel name, read a page at a time, as Python's
-/// `_heard_from_other` reads them.
-async fn heard_on<S: ConversationStore>(
-    store: &S,
-    room_id: &RoomId,
+/// The page of the room's received events of `channel_id` at `offset`.
+fn history_page(channel_id: &ChannelId, offset: u64) -> ListEventsOptions {
+    ListEventsOptions {
+        offset,
+        limit: HISTORY_PAGE,
+        event_filter: Some(EventFilter {
+            source_channel_id: Some(channel_id.clone()),
+            ..EventFilter::default()
+        }),
+        ..ListEventsOptions::default()
+    }
+}
+
+/// Who the room heard on `channel_id`, its received events read a page at
+/// a time from the oldest (`page`, by offset), up to the first participant
+/// who is `other` than the sender, then no further, as Python's
+/// `_heard_from_other` reads them (RMK-1100): the rule reads that one
+/// other author as it reads them all.
+async fn heard_until_another<P, Page>(
+    mut page: P,
     channel_id: &ChannelId,
-) -> Result<Vec<ParticipantId>, StoreError> {
+    other: impl Fn(&ParticipantId) -> bool,
+) -> Result<Vec<ParticipantId>, StoreError>
+where
+    P: FnMut(u64) -> Page,
+    Page: Future<Output = Result<Vec<RoomEvent>, StoreError>>,
+{
     let mut heard = Vec::new();
     let mut offset = 0;
     loop {
-        let options = ListEventsOptions {
-            offset,
-            limit: HISTORY_PAGE,
-            event_filter: Some(EventFilter {
-                source_channel_id: Some(channel_id.clone()),
-                ..EventFilter::default()
-            }),
-            ..ListEventsOptions::default()
-        };
-        let page = store.list_events(room_id, options).await?;
-        heard.extend(routing::heard(&page, channel_id));
-        let read = u64::try_from(page.len()).unwrap_or(u64::MAX);
+        let events = page(offset).await?;
+        for author in routing::heard(&events, channel_id) {
+            let another = other(&author);
+            heard.push(author);
+            if another {
+                return Ok(heard);
+            }
+        }
+        let read = u64::try_from(events.len()).unwrap_or(u64::MAX);
         if read < HISTORY_PAGE {
             return Ok(heard);
         }
         offset += read;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::future::ready;
+
+    use pretty_assertions::assert_eq;
+    use roomkit_core::model::{EventSource, TextContent};
+
+    use super::*;
+
+    fn channel(id: &str) -> ChannelId {
+        ChannelId::new(id).unwrap()
+    }
+
+    /// `count` messages on `sms` from `author`.
+    fn from(author: &str, count: usize) -> Vec<RoomEvent> {
+        let mut source = EventSource::new(channel("sms"), ChannelType::SMS);
+        source.participant_id = ParticipantId::new(author).ok();
+        let room = RoomId::new("r1").unwrap();
+        (0..count)
+            .map(|_| RoomEvent::new(room.clone(), source.clone(), TextContent::new("hi")))
+            .collect()
+    }
+
+    /// RMK-1100, as Python's `_heard_from_other`: a page holding another
+    /// author ends the scan, the later pages unread.
+    #[tokio::test]
+    async fn the_history_scan_stops_at_the_first_other_author() {
+        let pages = [
+            [from("alice", 150), from("bob", 1), from("alice", 49)].concat(),
+            from("alice", 200),
+            from("alice", 10),
+        ];
+        let reads = Cell::new(0_usize);
+        let page = |offset: u64| {
+            reads.set(reads.get() + 1);
+            let index = usize::try_from(offset / HISTORY_PAGE).unwrap();
+            ready(Ok(pages[index].clone()))
+        };
+        let sms = channel("sms");
+        let heard = heard_until_another(page, &sms, |author| author.as_str() != "alice");
+        let heard = heard.await.unwrap();
+        assert_eq!(
+            (
+                reads.get(),
+                heard.len(),
+                heard.last().map(ParticipantId::as_str)
+            ),
+            (1, 151, Some("bob"))
+        );
     }
 }
