@@ -64,6 +64,8 @@ use roomkit_core::rules::routing::RouteQuery;
 use roomkit_core::rules::transcoding::text_of;
 use roomkit_core::rules::{attachment, edits, lifecycle};
 
+/// The history a simulated agent reads, as an AI channel's by default.
+const AGENT_WINDOW: usize = 50;
 /// What a channel answers to `on_event()`.
 pub(crate) type OnEvent =
     Box<dyn FnMut(&RoomEvent, &RoomContext) -> Result<ChannelOutput, ErrorRecord>>;
@@ -453,6 +455,7 @@ impl Sim {
             ChannelDirection::Bidirectional,
         );
         declaration.capabilities = text_only();
+        declaration.recent_events_window = AGENT_WINDOW;
         self.register(declaration, echo(id, reply));
     }
 
@@ -494,6 +497,10 @@ impl Sim {
             ChannelDirection::Bidirectional,
         );
         declaration.capabilities = text_only();
+        // An agent reads the room's history, as an AI channel's 50 events.
+        if category == ChannelCategory::Intelligence {
+            declaration.recent_events_window = AGENT_WINDOW;
+        }
         self.register(declaration, on_event);
         self.attach(id)
     }
@@ -1565,7 +1572,8 @@ impl Sim {
                 {
                     self.seed(event);
                 }
-                Outcome::Store(StoreOutcome::Context(Box::new(self.context(recent_events))))
+                let limit = recent_events.limit(&self.bindings);
+                Outcome::Store(StoreOutcome::Context(Box::new(self.context(limit))))
             }
             StoreRequest::GetEventByIdempotencyKey {
                 room_id,

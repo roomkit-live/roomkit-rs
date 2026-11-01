@@ -354,6 +354,11 @@ impl HookRegistry {
         Self::default()
     }
 
+    /// Whether no hook is registered.
+    pub fn is_empty(&self) -> bool {
+        self.hooks.is_empty()
+    }
+
     /// Registers `spec`, returning the id the driver keeps its handler
     /// under.
     ///

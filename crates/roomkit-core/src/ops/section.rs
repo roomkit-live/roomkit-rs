@@ -47,6 +47,12 @@ pub(crate) trait SectionWork: Debug {
     /// The frame's `failure`, as the work reports it.
     fn failure(failure: Failure) -> Self::Error;
 
+    /// Whether the work reads the room's latest events itself, so that its
+    /// context holds at least the floor of them: no work does by default.
+    fn reads_history(&self) -> bool {
+        false
+    }
+
     /// What the work gives for `room_id`, a room the store does not hold.
     ///
     /// # Errors
@@ -220,10 +226,16 @@ impl<W: SectionWork> Section<W> {
             State::Locking(_) => match outcome.into_locked() {
                 // The work's hooks receive the room's recent events, as every
                 // hook does (gap G-027).
-                Ok(()) => State::Loading(cx.io.issue(StoreRequest::LoadContext {
-                    room_id: self.room_id.clone(),
-                    recent_events: cx.config.context_window,
-                })),
+                Ok(()) => {
+                    let mut recent_events = cx.config.recent_events();
+                    if self.work.reads_history() {
+                        recent_events = recent_events.read_by_the_caller();
+                    }
+                    State::Loading(cx.io.issue(StoreRequest::LoadContext {
+                        room_id: self.room_id.clone(),
+                        recent_events,
+                    }))
+                }
                 Err(error) => {
                     return Progress::Done(Ended {
                         result: Err(W::failure(Failure::Lock(error))),

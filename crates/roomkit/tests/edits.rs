@@ -123,6 +123,11 @@ impl Channel for Reader {
         self.config().capabilities.clone()
     }
 
+    /// The history an AI channel reads by default.
+    fn recent_events_window(&self) -> usize {
+        50
+    }
+
     fn provider_name(&self) -> Option<String> {
         self.config().provider_name.clone()
     }

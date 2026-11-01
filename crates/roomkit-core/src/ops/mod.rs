@@ -50,7 +50,9 @@ mod protocol;
 mod rooting;
 mod section;
 
-pub use config::{ChannelConfig, ConfigError, KitConfig};
+pub use config::{
+    ChannelConfig, ConfigError, KitConfig, RECENT_EVENTS_FLOOR, RECENT_EVENTS_LIMIT, RecentEvents,
+};
 #[cfg(feature = "system-environment")]
 #[doc(hidden)]
 pub use environment::SystemEnvironment;

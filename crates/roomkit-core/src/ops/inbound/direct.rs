@@ -101,7 +101,7 @@ impl DirectRead {
     pub(super) fn start(&mut self, cx: &mut Cx<'_>, bound: Bound) {
         let request = StoreRequest::LoadContext {
             room_id: self.event.room_id.clone(),
-            recent_events: cx.config.context_window,
+            recent_events: cx.config.recent_events(),
         };
         self.effect = Some(cx.io.issue_within(request, bound));
     }

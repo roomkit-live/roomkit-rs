@@ -19,7 +19,7 @@ use crate::rules::records::Record;
 
 /// The commit of `record` as the next event of the room `context` holds,
 /// which then reflects it: its counters, and the record the newest event of
-/// its history, the oldest dropped past the kit's context window. `None`
+/// its history, the oldest dropped past the room's context window. `None`
 /// when the room's status refuses it.
 pub(crate) fn commit(
     cx: &Cx<'_>,
@@ -46,7 +46,9 @@ pub(crate) fn commit(
     room.latest_index = Some(event.index);
     let history = &mut context.recent_events;
     history.push(event.clone());
-    let excess = history.len().saturating_sub(cx.config.context_window);
+    let excess = history
+        .len()
+        .saturating_sub(cx.config.recent_events_limit(&context.bindings));
     history.drain(..excess);
     Some(StoreRequest::Commit {
         event: Box::new(event),

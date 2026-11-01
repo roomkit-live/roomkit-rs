@@ -155,7 +155,6 @@ fn an_identical_copy_the_metadata_holds_leaves_it() {
 fn a_room_with_no_register_has_it_rebuilt_from_its_whole_timeline() {
     let mut sim = Sim::new();
     sim.transport("sms");
-    sim.config.context_window = 1;
     for (id, sender, name) in [
         ("old_1", "+15550009", "Alice"),
         ("old_2", "+15550009", "Alice"),

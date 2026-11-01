@@ -110,6 +110,12 @@ impl Channel for ScriptedAgent {
         self.capabilities.clone()
     }
 
+    /// The history an AI channel reads by default (Python's
+    /// `AI_CHANNEL_CONTEXT_EVENTS`).
+    fn recent_events_window(&self) -> usize {
+        50
+    }
+
     fn provider_name(&self) -> Option<String> {
         Some("ScriptedAgent".to_owned())
     }

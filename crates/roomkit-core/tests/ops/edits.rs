@@ -344,10 +344,11 @@ mod an_accepted_delete {
     }
 
     /// Gap G-062: the channel the next message arrives on parses it without
-    /// the deleted text.
+    /// the deleted text, in a room an agent reads the history of.
     #[test]
     fn leaves_the_next_message_s_parser_without_the_deleted_text() {
         let mut sim = room();
+        sim.agent("ai", Box::new(|_, _| Ok(ChannelOutput::default())));
         sim.send(delete()).unwrap();
         sim.send(Sim::message("wa", "Is it gone?")).unwrap();
         let parsed = sim.parse_contexts.last().unwrap();

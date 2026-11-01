@@ -24,7 +24,7 @@ impl CommitPass {
     pub(super) fn load_context(&self, cx: &mut Cx<'_>) -> crate::ops::protocol::EffectId {
         let request = StoreRequest::LoadContext {
             room_id: self.event.room_id.clone(),
-            recent_events: cx.config.context_window,
+            recent_events: cx.config.recent_events(),
         };
         self.issue(cx, request)
     }

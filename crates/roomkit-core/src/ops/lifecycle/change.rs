@@ -43,6 +43,13 @@ pub(crate) trait SectionChange: Debug {
     /// What `done` reports once the lock is released, and the context its
     /// hooks receive (gap G-027); `None` for a change that reports nothing.
     fn reported(done: &Self::Done) -> Option<(Reported<'_>, &RoomContext)>;
+
+    /// Whether the change reads the room's latest events itself, so that
+    /// its context holds at least the floor of them, as roomkit's
+    /// `reads_history`: no change does by default.
+    fn reads_history(&self) -> bool {
+        false
+    }
 }
 
 /// The writes a change makes, in order, and what it did once they are

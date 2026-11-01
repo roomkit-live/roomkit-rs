@@ -3,10 +3,13 @@
 //! the store as the turn starts, as the Python implementation's AI channel
 //! reads them (its context's `get_conversation`, its `tool_rows`).
 //!
-//! The context the pipeline hands every reader holds the room's latest 50
-//! events of every kind, which hooks and transports keep. A turn reads its
-//! conversation instead: the latest 50 messages, a blocked one included as
-//! the store keeps it, and the channel's latest 60 rows of calls, a start
+//! The context the pipeline hands every reader holds the room's latest
+//! events of every kind, as many as the room's window (the largest its
+//! channels declare, at least 50 while a hook is registered), which hooks
+//! and transports keep. A turn reads its conversation instead: as many of
+//! the latest messages, and the event the turn is about besides, as
+//! Python's context holds it, a blocked one included as the store keeps it,
+//! and the channel's latest 60 rows of calls, a start
 //! and an end for each of its 30 latest calls, so that a turn of many calls
 //! leaves its question in the next turn's history and its rounds after it
 //! (RFC §6.4 "The tools of earlier turns"). The two are merged in timeline
@@ -19,10 +22,6 @@ use roomkit_core::rules::visible_events;
 
 use crate::store::{ConversationStore, EventFilter, ListEventsOptions, StoreError};
 
-/// How many of the room's latest messages a turn reads: the Python
-/// implementation's window for an AI channel (`AI_CHANNEL_CONTEXT_EVENTS`).
-const MESSAGES: u64 = 50;
-
 /// How many of the channel's latest tool-call rows a turn reads: a start
 /// and an end for each of the 30 calls the Python implementation reads
 /// (`TOOL_MEMORY_CALLS`).
@@ -30,7 +29,7 @@ const TOOL_ROWS: u64 = 60;
 
 /// `context`, the one the pipeline hands `binding`'s channel for its turn
 /// on `event`, with its history read from `store`: the room's latest
-/// messages up to `event`, `event` itself the newest, as stored, when it is
+/// `window` messages before `event`, then `event` itself, as stored, when it is
 /// an event of another type (an edit, a delete), and the channel's own
 /// latest tool-call rows. A store that cannot be read leaves the history as the
 /// pipeline handed it, with a warning: the turn goes on.
@@ -39,8 +38,9 @@ pub(crate) async fn turn_context<S: ConversationStore>(
     binding: &ChannelBinding,
     event: &RoomEvent,
     context: RoomContext,
+    window: usize,
 ) -> RoomContext {
-    match read(store, binding, event).await {
+    match read(store, binding, event, window).await {
         Ok(history) => {
             let whole = RoomContext {
                 recent_events: history,
@@ -74,6 +74,7 @@ async fn read<S: ConversationStore>(
     store: &S,
     binding: &ChannelBinding,
     event: &RoomEvent,
+    window: usize,
 ) -> Result<Vec<RoomEvent>, StoreError> {
     let messages = EventFilter {
         event_types: Some(vec![EventType::Message]),
@@ -86,7 +87,7 @@ async fn read<S: ConversationStore>(
         ..EventFilter::default()
     };
     let mut history = store
-        .list_events(&event.room_id, messages_up_to(event, messages))
+        .list_events(&event.room_id, messages_up_to(event, messages, window))
         .await?;
     if !matches!(event.r#type, EventType::Message | EventType::Instruction) {
         history.push(stored(store, event).await);
@@ -127,14 +128,15 @@ async fn stored<S: ConversationStore>(store: &S, event: &RoomEvent) -> RoomEvent
 /// those up to `event`, which came before its turn. An instruction, never
 /// stored, holds the index the room's next event takes; an event the store
 /// never numbered bounds nothing.
-fn messages_up_to(event: &RoomEvent, filter: EventFilter) -> ListEventsOptions {
+fn messages_up_to(event: &RoomEvent, filter: EventFilter, window: usize) -> ListEventsOptions {
     let bound = if event.r#type == EventType::Instruction {
         event.index
     } else {
         event.index.saturating_add(1)
     };
     ListEventsOptions {
-        limit: MESSAGES,
+        // The window before the event, and the event itself.
+        limit: u64::try_from(window).unwrap_or(u64::MAX).saturating_add(1),
         event_filter: Some(filter),
         before_index: (event.index > 0).then_some(bound),
         newest_first: true,
@@ -212,7 +214,7 @@ mod tests {
         let agent = binding("agent", ChannelType::AI);
         let mut context = RoomContext::new(Room::new(room_id()));
         context.bindings = vec![binding("sms", ChannelType::SMS), agent.clone()];
-        let read = turn_context(store, &agent, trigger, context).await;
+        let read = turn_context(store, &agent, trigger, context, 50).await;
         let indexes = read.recent_events.iter().map(|event| event.index).collect();
         let messages = read
             .recent_events
@@ -222,7 +224,8 @@ mod tests {
         (indexes, messages)
     }
 
-    /// The room's latest 50 messages up to the turn's own event, two
+    /// The room's latest 50 messages before the turn's own event, and the
+    /// event, as Python's context holds them, two
     /// blocked ones among them, which take their place in the window and
     /// reach no reader; and the agent's latest 60 tool rows, another
     /// channel's left out, whatever came after: 55 messages, then 70 rows
@@ -239,10 +242,10 @@ mod tests {
         let trigger = events[54].clone();
         let store = store(events).await;
         let (indexes, messages) = read_by(&store, &trigger).await;
-        let mut expected: Vec<u64> = (5..52).collect();
+        let mut expected: Vec<u64> = (4..52).collect();
         expected.push(54);
         expected.extend(65..125);
-        assert_eq!((indexes, messages), (expected, 48));
+        assert_eq!((indexes, messages), (expected, 49));
     }
 
     /// A stored trigger that is no message, a delete here, is the history's
@@ -270,11 +273,11 @@ mod tests {
         let agent = binding("agent", ChannelType::AI);
         let mut context = RoomContext::new(Room::new(room_id()));
         context.bindings = vec![binding("sms", ChannelType::SMS), agent.clone()];
-        let read = turn_context(&store, &agent, &copy, context.clone()).await;
+        let read = turn_context(&store, &agent, &copy, context.clone(), 50).await;
         assert_eq!(read.recent_events.last(), Some(&delete));
         let mut unknown = copy.clone();
         unknown.id = EventId::new("evt_unknown").unwrap();
-        let read = turn_context(&store, &agent, &unknown, context).await;
+        let read = turn_context(&store, &agent, &unknown, context, 50).await;
         assert_eq!(read.recent_events.last(), Some(&unknown));
     }
 

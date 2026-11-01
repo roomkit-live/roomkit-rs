@@ -148,7 +148,7 @@ fn after_release<C: EventChange>(
         Ok(given) if change.reported().is_some() => {
             let effect = cx.io.issue(StoreRequest::LoadContext {
                 room_id: room_id.clone(),
-                recent_events: cx.config.context_window,
+                recent_events: cx.config.recent_events(),
             });
             Released::Reading(effect, given)
         }

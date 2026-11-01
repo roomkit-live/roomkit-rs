@@ -9,6 +9,7 @@ use crate::model::{
     Identity, InboundMessage, Metadata, Observation, ProviderResult, Room, RoomContext, RoomEvent,
     RoomId, RoomUpdates, Task, Timestamp,
 };
+use crate::ops::RecentEvents;
 use crate::rules::hook_chain::HookOutcome;
 use crate::rules::hook_registry::{HookId, HookTrigger};
 use crate::rules::routing::RouteQuery;
@@ -150,8 +151,9 @@ pub enum StoreRequest {
     LoadContext {
         /// The room.
         room_id: RoomId,
-        /// How many of the latest events to read.
-        recent_events: usize,
+        /// How many of the latest events to read, which the room's
+        /// bindings, read with it, settle.
+        recent_events: RecentEvents,
     },
     /// Read whether the room holds an idempotency key, then the event it
     /// committed with it, a `BLOCKED` one included (RFC §14.1

@@ -68,7 +68,12 @@ pub(super) fn delivered(
             let target = Box::new(changed.clone());
             let changed = Changed {
                 target: changed,
-                context: committed(&context, &event, now, cx.config.context_window),
+                context: committed(
+                    &context,
+                    &event,
+                    now,
+                    cx.config.recent_events_limit(&context.bindings),
+                ),
             };
             (Some(target), Some(Box::new(changed)))
         }

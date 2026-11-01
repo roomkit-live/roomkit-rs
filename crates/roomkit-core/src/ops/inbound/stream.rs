@@ -147,7 +147,7 @@ impl StreamRead {
     pub(super) fn start(cx: &mut Cx<'_>, job: StreamJob) -> Self {
         let request = StoreRequest::LoadContext {
             room_id: job.answers.room_id.clone(),
-            recent_events: cx.config.context_window,
+            recent_events: cx.config.recent_events(),
         };
         Self {
             state: Reading::Loading(cx.io.issue(request)),

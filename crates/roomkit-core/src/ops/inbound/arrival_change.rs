@@ -76,6 +76,12 @@ impl SectionChange for ArrivalChange {
     type Done = Recorded;
     type Refusal = Infallible;
 
+    /// The sender's record reads what the room heard on the channel from
+    /// its latest events (`still_admitted`).
+    fn reads_history(&self) -> bool {
+        true
+    }
+
     fn decide(
         &self,
         context: Box<RoomContext>,
@@ -197,7 +203,7 @@ fn not_a_recipient(binding: &ChannelBinding, form: &AddressForm, kind: &str) {
 /// or a member may have joined through it.
 ///
 /// What the room has heard is read from the events the locked section
-/// reads, the room's latest `context_window` (50 by default), refused ones
+/// reads, the room's latest events, at least 50, refused ones
 /// set aside. That window holds every event committed since the router's
 /// read unless as many were committed in the room in between; the events
 /// before the read are the router's (the default router reads the whole

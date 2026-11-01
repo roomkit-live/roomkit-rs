@@ -22,6 +22,7 @@ use super::InboundError;
 use super::deadline::Stopped;
 use super::direct::DirectCall;
 use crate::model::{ChannelBinding, RoomContext, RoomEvent, RoomId};
+use crate::ops::RecentEvents;
 use crate::ops::io::Bound;
 use crate::ops::lifecycle::change::{self, Attached, Decision, SectionChange};
 use crate::ops::lifecycle::locked::{LockedSection, SectionError, SectionResult};
@@ -139,7 +140,7 @@ impl HostPost {
     ) -> Self {
         let request = StoreRequest::LoadContext {
             room_id: event.room_id.clone(),
-            recent_events: 0,
+            recent_events: RecentEvents::default(),
         };
         let effect = cx.io.issue_within(request, bound);
         Self {

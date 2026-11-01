@@ -383,6 +383,11 @@ fn default_router<S: ConversationStore>(
 }
 
 impl<S> Inner<S> {
+    /// The kit's configuration as it stands.
+    pub(crate) fn config(&self) -> Arc<KitConfig> {
+        Arc::clone(&read(&self.config))
+    }
+
     /// Refuses a call once the kit's close started, whoever makes it, as
     /// the Python implementation's kit refuses every call but a read (RFC
     /// §12.10.4).

@@ -225,7 +225,7 @@ impl NamedRoom {
     fn read(&self, cx: &mut Cx<'_>) -> EffectId {
         let request = StoreRequest::LoadContext {
             room_id: self.room_id.clone(),
-            recent_events: cx.config.context_window,
+            recent_events: cx.config.recent_events(),
         };
         cx.io.issue_within(request, self.bound)
     }

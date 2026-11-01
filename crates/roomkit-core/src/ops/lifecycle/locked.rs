@@ -192,6 +192,10 @@ impl<C: SectionChange> SectionWork for Changing<C> {
     type Output = C::Done;
     type Error = SectionError<C::Refusal>;
 
+    fn reads_history(&self) -> bool {
+        self.change.reads_history()
+    }
+
     fn failure(failure: Failure) -> Self::Error {
         match failure {
             Failure::Store(error) => SectionError::Store(error),

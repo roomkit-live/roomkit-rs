@@ -616,6 +616,17 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
   and `OpenError` go: a file of another schema version is refused with a
   `SqliteSchemaError` as the failure's cause, Python's
   `SQLiteSchemaError`, in its words for a newer version.
+- **A room's context holds the window its channels declare**, as
+  Python's kit loads it (RFC §6.1 `recent_events_window`, §10.1 step 3):
+  the largest window a channel bound to the room declares (an
+  `AiChannel`'s `max_context_events`, a transport's none), at least 50
+  while a hook is registered, at most 2,000, where every room held its
+  latest 50 events. A room whose channels read no history and with no hook
+  reads none, and an intelligence turn's history reads that many messages
+  before its event, where it read 50: an `AiChannel` with
+  `max_context_events: 80` now reads 80. A channel of your own that reads
+  the room declares it with `Channel::recent_events_window`, none by
+  default, as Python's.
 - **`AiChannel` is Python's `AIChannel`** (`roomkit_ai`):
   `AiChannel::new(channel_id, provider, AiChannelOptions { .. })` takes
   Python's keywords and defaults (`system_prompt`, `temperature` 0.7,

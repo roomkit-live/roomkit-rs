@@ -518,6 +518,7 @@ pub(crate) fn config_of<C: Channel>(channel: &C) -> ChannelConfig {
     config.provider_name = channel.provider_name();
     config.recipient_key = channel.recipient_key();
     config.supports_streaming_delivery = channel.supports_streaming_delivery();
+    config.recent_events_window = channel.recent_events_window();
     let (addressing, country_code) = channel.address_config();
     config.addressing = addressing.addressing;
     config.chat_key = addressing.chat_key;

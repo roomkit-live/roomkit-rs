@@ -14,8 +14,13 @@ use crate::rules::chain_depth::DEFAULT_MAX_CHAIN_DEPTH;
 use crate::rules::hook_registry::HookRegistry;
 use crate::rules::host;
 
-/// How many of a room's latest events a context holds by default.
-const DEFAULT_CONTEXT_WINDOW: usize = 50;
+/// The most of a room's latest events a context holds, whatever its
+/// channels declare (roomkit's `_RECENT_EVENTS_LIMIT`).
+pub const RECENT_EVENTS_LIMIT: usize = 2_000;
+
+/// The least of a room's latest events a context holds while a hook may
+/// read them (roomkit's `_RECENT_EVENTS_FLOOR`).
+pub const RECENT_EVENTS_FLOOR: usize = 50;
 
 /// A registered channel, as the core knows it: its declaration, never the
 /// object behind it (RFC §10.6.2).
@@ -64,6 +69,10 @@ pub struct ChannelConfig {
     /// holds it, and is not delivered those rows again (RFC §12.2 steps 13s
     /// and 14s). `false` by default.
     pub supports_streaming_delivery: bool,
+    /// How many of a room's latest events its turns read (RFC §6.1
+    /// `recent_events_window`): what a context of a room it is bound to
+    /// holds at least. None by default: a transport reads no history.
+    pub recent_events_window: usize,
 }
 
 impl ChannelConfig {
@@ -88,6 +97,7 @@ impl ChannelConfig {
             recipient_key: addresses::recipient_key(&channel_type).map(str::to_owned),
             chat_key: addresses::chat_key(&channel_type).map(str::to_owned),
             supports_streaming_delivery: false,
+            recent_events_window: 0,
             channel_type,
             category,
             direction,
@@ -174,8 +184,6 @@ pub struct KitConfig {
     pub hooks: HookRegistry,
     /// The chain-depth limit (RFC §8.3), 5 by default.
     pub max_chain_depth: u32,
-    /// How many of a room's latest events a context holds.
-    pub context_window: usize,
     /// How long a call may take from its start to its decision (RFC
     /// §13.6): past it the call is refused `process_timeout`, with nothing
     /// of its event written. `None`, the default, bounds nothing.
@@ -193,7 +201,6 @@ impl KitConfig {
             channels: BTreeMap::new(),
             hooks: HookRegistry::new(),
             max_chain_depth: DEFAULT_MAX_CHAIN_DEPTH,
-            context_window: DEFAULT_CONTEXT_WINDOW,
             process_timeout: None,
             agent_response_policy: AgentResponsePolicy::default(),
         }
@@ -237,10 +244,133 @@ impl KitConfig {
     pub fn channel(&self, id: &ChannelId) -> Option<&ChannelConfig> {
         self.channels.get(id)
     }
+
+    /// What a context's read of a room's latest events asks (RFC §10.1
+    /// step 3): the window each registered channel declares, and the floor
+    /// while a hook is registered, which the room's bindings, read with it,
+    /// turn into a count ([`RecentEvents::limit`]).
+    pub fn recent_events(&self) -> RecentEvents {
+        let windows = self
+            .channels
+            .values()
+            .filter(|channel| channel.recent_events_window > 0)
+            .map(|channel| (channel.channel_id.clone(), channel.recent_events_window))
+            .collect();
+        let floor = if self.hooks.is_empty() {
+            0
+        } else {
+            RECENT_EVENTS_FLOOR
+        };
+        RecentEvents { windows, floor }
+    }
+
+    /// How many of its latest events a context of a room bound to
+    /// `bindings` holds: [`recent_events`](Self::recent_events) for them.
+    pub fn recent_events_limit(&self, bindings: &[ChannelBinding]) -> usize {
+        self.recent_events().limit(bindings)
+    }
+}
+
+/// How many of a room's latest events its context holds (roomkit's
+/// `_resolve_recent_events_limit`): the largest window a channel bound to
+/// the room declares, at least the floor while a hook may read them, at most
+/// [`RECENT_EVENTS_LIMIT`]; none on a room whose channels read no history
+/// and with no hook to read it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RecentEvents {
+    windows: BTreeMap<ChannelId, usize>,
+    floor: usize,
+}
+
+impl RecentEvents {
+    /// The same read for a caller that reads the events itself: at least
+    /// the floor, whether or not a hook is registered (roomkit's
+    /// `reads_history`).
+    #[must_use]
+    pub fn read_by_the_caller(mut self) -> Self {
+        self.floor = RECENT_EVENTS_FLOOR;
+        self
+    }
+
+    /// The count for a room bound to `bindings`; a channel not registered
+    /// declares none.
+    pub fn limit(&self, bindings: &[ChannelBinding]) -> usize {
+        let largest = bindings
+            .iter()
+            .filter_map(|binding| self.windows.get(&binding.channel_id))
+            .copied()
+            .max()
+            .unwrap_or(0);
+        RECENT_EVENTS_LIMIT.min(largest.max(self.floor))
+    }
 }
 
 impl Default for KitConfig {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+    use crate::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
+
+    fn binding(id: &str) -> ChannelBinding {
+        let config = ChannelConfig::new(
+            ChannelId::new(id).unwrap(),
+            ChannelType::SMS,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+        );
+        config.binding(RoomId::new("r1").unwrap(), Timestamp::UNIX_EPOCH)
+    }
+
+    fn reader(id: &str, window: usize) -> ChannelConfig {
+        let mut config = ChannelConfig::new(
+            ChannelId::new(id).unwrap(),
+            ChannelType::AI,
+            ChannelCategory::Intelligence,
+            ChannelDirection::Bidirectional,
+        );
+        config.recent_events_window = window;
+        config
+    }
+
+    /// Roomkit's `_resolve_recent_events_limit`: the largest window a bound
+    /// channel declares, the floor while a hook is registered, the limit
+    /// above all; a channel not registered, or not bound, counts for none.
+    #[test]
+    fn a_room_s_limit_is_its_largest_bound_window_floored_and_capped() {
+        let mut config = KitConfig::new();
+        config.register_channel(reader("small", 3)).unwrap();
+        config.register_channel(reader("huge", 5_000)).unwrap();
+        let limit = |config: &KitConfig, ids: &[&str]| {
+            let bindings: Vec<ChannelBinding> = ids.iter().map(|id| binding(id)).collect();
+            config.recent_events_limit(&bindings)
+        };
+        let without_hooks = [
+            limit(&config, &[]),
+            limit(&config, &["sms"]),
+            limit(&config, &["sms", "small"]),
+            limit(&config, &["small", "huge"]),
+        ];
+        let spec = HookSpec::new("audit", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+        config.hooks.register(spec).unwrap();
+        let with_a_hook = [limit(&config, &["sms"]), limit(&config, &["small"])];
+        assert_eq!(
+            (without_hooks, with_a_hook),
+            (
+                [0, 0, 3, RECENT_EVENTS_LIMIT],
+                [RECENT_EVENTS_FLOOR, RECENT_EVENTS_FLOOR]
+            )
+        );
+        let read_by_the_caller = config.recent_events().read_by_the_caller();
+        assert_eq!(
+            read_by_the_caller.limit(&[binding("sms")]),
+            RECENT_EVENTS_FLOOR
+        );
     }
 }

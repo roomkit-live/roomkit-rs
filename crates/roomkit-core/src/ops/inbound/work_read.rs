@@ -62,7 +62,7 @@ impl WorkRead {
     pub(super) fn start(cx: &mut Cx<'_>, event: RoomEvent, call: DirectCall, bound: Bound) -> Self {
         let request = StoreRequest::LoadContext {
             room_id: event.room_id.clone(),
-            recent_events: cx.config.context_window,
+            recent_events: cx.config.recent_events(),
         };
         let reading = Reading::Room(cx.io.issue_within(request, bound));
         Self {

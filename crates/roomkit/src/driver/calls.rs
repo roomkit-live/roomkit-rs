@@ -14,7 +14,7 @@ use roomkit_core::model::{
 use roomkit_core::ops::{
     AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, Environment,
     FrameworkEvent as CoreEvent, HookAnswer, HookRequest, KIT_CLOSED, Notice, Outcome,
-    StoreOutcome, StoreRequest,
+    RecentEvents, StoreOutcome, StoreRequest,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookTrigger};
@@ -135,23 +135,30 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
 
 /// The room's context (RFC §10.1 step 3), as the Python implementation's
 /// kit builds it: the room, its bindings and participants, its latest
-/// `recent_events` messages, a blocked one included (`get_conversation`),
+/// messages, as many as `recent_events` settles for its bindings, a blocked
+/// one included (`get_conversation`),
 /// and its register of authors, its private state (gap G-089); `None` for
 /// a room the store lacks.
 async fn load_context<S: ConversationStore>(
     store: &S,
     room_id: &RoomId,
-    recent_events: usize,
+    recent_events: RecentEvents,
 ) -> Result<Option<RoomContext>, StoreError> {
     let (room, bindings, participants) = store.load_room_context(room_id).await?;
     let Some(room) = room else {
         return Ok(None);
     };
-    let options = GetConversationOptions {
-        limit: u64::try_from(recent_events).unwrap_or(u64::MAX),
-        after_index: None,
+    // Nothing bound reads history and no hook is registered: no read.
+    let limit = recent_events.limit(&bindings);
+    let recent_events = if limit == 0 {
+        Vec::new()
+    } else {
+        let options = GetConversationOptions {
+            limit: u64::try_from(limit).unwrap_or(u64::MAX),
+            after_index: None,
+        };
+        store.get_conversation(room_id, options).await?
     };
-    let recent_events = store.get_conversation(room_id, options).await?;
     let author_register = store.get_private_state(room_id, AUTHOR_REGISTER).await?;
     Ok(Some(RoomContext {
         room,
@@ -355,7 +362,9 @@ pub(super) async fn channel<S: ConversationStore>(
             }
             // A turn: it runs through the turn backend (RFC §10.6), on the
             // room's conversation and its channel's tool rows (RFC §6.4).
-            let context = crate::history::turn_context(&*inner.store, &binding, &event, *context);
+            let window = inner.config().recent_events_limit(&context.bindings);
+            let context =
+                crate::history::turn_context(&*inner.store, &binding, &event, *context, window);
             let context = context.await;
             let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
             let cut = |turn| shared.turn_submitted(effect, turn);
