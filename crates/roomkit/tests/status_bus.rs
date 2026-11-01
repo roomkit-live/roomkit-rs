@@ -75,7 +75,8 @@ async fn the_kit_s_bus_is_the_one_its_options_name() {
 #[tokio::test]
 async fn the_kit_s_close_closes_its_bus() {
     let backend = Arc::new(Closing::default());
-    let held: Arc<dyn StatusBackend> = Arc::clone(&backend);
+    let held: Arc<Closing> = Arc::clone(&backend);
+    let held: Arc<dyn StatusBackend> = held;
     let bus = StatusBus::new(StatusBusOptions {
         backend: Some(held),
         ..StatusBusOptions::default()
@@ -93,13 +94,13 @@ async fn the_kit_s_close_closes_its_bus() {
 async fn a_status_posted_without_waiting_is_a_framework_event_too() {
     let kit = RoomKit::new(RoomKitOptions::default());
     let heard: Arc<Mutex<Vec<String>>> = Arc::default();
-    let hears = Arc::clone(&heard);
+    let notes = Arc::clone(&heard);
     kit.on("status_posted", move |event| {
         let agent = event.data["agent_id"]
             .as_str()
             .unwrap_or_default()
             .to_owned();
-        hears.lock().unwrap().push(agent);
+        notes.lock().unwrap().push(agent);
         async {}
     })
     .unwrap();
