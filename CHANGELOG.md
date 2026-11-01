@@ -65,7 +65,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 The public API in the Python implementation's terms (step 5, lot 1: the
 kit, its construction and its calls; lot 2: the model and the errors;
-lot 3: the hooks, the framework events and the turn's host).
+lot 3: the hooks, the framework events and the turn's host; lot 4: the
+channels, the addresses, the routing and the store).
 
 ### Changed
 
@@ -506,9 +507,87 @@ lot 3: the hooks, the framework events and the turn's host).
   `CHANNEL_NOT_REGISTERED`, `DirectEvent` and `HookTrigger::execution`,
   `fails_closed` and `is_tool_trigger`. `fence` is
   `roomkit::tools::fence`, Python's `roomkit.tools.fence`.
+- **A channel is Python's `Channel`**: what a Python channel tells by its
+  constructor, class attributes, properties and overridable methods, a
+  Rust channel tells by trait methods of the same names with Python's
+  defaults (`channel_id`, `channel_type`, `category`, `direction`,
+  `capabilities`, `provider_name`, `info`, `normalize_address`,
+  `recipient_key`, `recipient_address`, `recipient_metadata`,
+  `conversation_address`, `reply_metadata`, `recent_events_window`,
+  `supports_streaming_delivery`, `declaration`, `extract_text`).
+  `handle_inbound(message, context)` and `deliver` are required, as
+  Python's abstract methods are; `EventDraft` goes, and
+  `default_inbound_event(message, context)` builds the event a channel
+  keeping no data parses. `deliver_stream(text_stream, event, binding,
+  context)` takes the empty event the response renders under, and its
+  default is Python's: one `deliver` of the joined text, where each of the
+  response's rows was delivered. `ChannelDeclaration` is Python's model;
+  the core's own declaration is `ChannelConfig`, no longer re-exported.
+  Every transport is handed an agent's tool-call rows, as Python hands
+  them: `receives_tool_calls` goes. `HostChannel::new(HostChannelOptions {
+  channel_id })`, `"host"` by default, names no provider.
+- **The store is Python's `ConversationStore`**, its methods' keyword
+  arguments the options structs of `roomkit::store`, Python's
+  `roomkit.store`: `create_room -> Room`, `update_room(room)` written
+  whole but for the counters the store manages, `patch_room_metadata`,
+  `delete_room`, `list_rooms` and `find_rooms` paged,
+  `find_room_ids_by_channel`, `find_room_id_by_binding` (a binding naming
+  its recipient under the channel's recipient key) and
+  `find_room_id_by_participant`, `add_binding`, `update_binding`,
+  `get_binding`, `remove_binding -> bool`, `load_room_context`,
+  `get_conversation`, `add_participant`, `check_idempotency`,
+  `commit_event(room_id, event, CommitEventOptions { target, activity })
+  -> RoomEvent`, `update_event(event)`, `add_task`, `add_observation`,
+  `list_tasks(status)`. A store implements what Python's ABC makes
+  abstract; the rest is provided as Python provides it, so a store of the
+  abstract methods alone serves the kit. `RoomFilter` is Python's
+  (`statuses`, `organization_id`, `admits`); `EventQuery` is
+  `ListEventsOptions`; `RoomCounters`, `TargetUpdate`, `RoomUpdates` and
+  `EventUpdates` go.
+- **The store gives an event its index**, the room's count of the indices
+  it gave out, as Python's `commit_event` does: a stale index lands at
+  the next one, and the kit goes on with the event the store returns.
+  `StoreError::IndexTaken` and `IdentityExists` go. A commit that is the
+  room's activity moves its `last_activity_at` and resumes a paused room,
+  at the store's clock, the kit's while the kit writes.
+- **The store answers as Python's**: a participant added under an id the
+  room holds is refused `ParticipantExists`, and one updated that the
+  room lacks `ParticipantNotFound`, with Python's messages; an identity
+  created under a taken id replaces the stored one; a read of a room the
+  store does not hold is empty (so `kit.get_binding` there fails
+  `ChannelNotFound`, as Python's); `remove_binding` reports `false`;
+  `set_private_state` on an unknown room writes nothing. A room's context
+  holds its latest messages (`get_conversation`), as Python's kit reads
+  it. A key the store holds but whose event it cannot read back makes a
+  redelivery a blocked duplicate (`duplicate`), never processed again,
+  and a direct injection returns the event it injected.
+- **The default router reads the store as Python's does**: step 1 through
+  `find_room_id_by_binding` then `find_room_id_by_participant`, step 3
+  through `find_room_ids_by_channel`, never every room of the
+  organization.
+- **A channel's history reads deletions from the marks only**
+  (`metadata.deleted`), as Python's: a DELETE row, which a host's
+  `commit_event` stores unchecked, no longer withholds an edit of an event
+  before the window.
+- **A streamed response ends on Python's `LoopEndMarker`**: `ResponseItem`
+  is `Text` and `LoopEnd(LoopEndMarker)`, the tool markers hidden;
+  `End(Metadata)` goes. The marker is Python's (`reason`, `rounds`,
+  `usage`, `max_rounds`, `timeout`, `budget_tokens`, `budget_usd`), with
+  RMK-1029's `last_usage`, `usage_complete`, `model` and `provider`; the
+  kit writes the turn's record from it.
 
 ### Added
 
+- `TransportChannel::new(channel_id, channel_type, TransportChannelOptions {
+  capabilities, addressing, country_code, defaults, requires_recipient })`,
+  Python's `TransportChannel`: its addresses by its addressing declaration,
+  the message's provider data, metadata and idempotency key on its event, an
+  SMS with media sourced MMS. With no provider in 0.x it delivers nothing.
+- `ChannelAddressing`, `ChannelAddressingOptions`, `NormalizeOptions` and
+  `addressing_of(channel_type)`, Python's addressing declarations and their
+  table by channel type.
+- `model::LoopEndMarker` and `model::LoopEndReason`, Python's
+  `roomkit.models.LoopEndMarker` and its reasons.
 - `ToolError::Unserved`, Python's `UnservedToolCallError`: a tool declines a
   call that is not its to serve, and a SYNC `ON_TOOL_CALL` hook may serve
   it; the model reads `{"error": "No handler for tool x"}` when none does.
