@@ -6,6 +6,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A resolver's `IdentificationStatus::Rejected` holds the message when no
+  identity hook answers (RFC §11.2, RMK-1151): blocked with the resolver's
+  `message`, else `identity_rejected`, nothing stored, as Python's.
 - Python's `AIChannel(tool_call_intents_required=...)` (roomkit 121ea967) is
   `AiChannelOptions::tool_call_intents_required` (RMK-1067): no longer a
   Rust-only exception.
