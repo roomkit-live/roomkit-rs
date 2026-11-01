@@ -245,7 +245,7 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::Store`] with `RoomNotFound` when the room is not
+    /// Returns [`RoomKitError::RoomNotFound`] when the room is not
     /// of the organization `options` names, or does not exist and the call
     /// names one, and [`RoomKitError::ChannelNotFound`] when the room does
     /// not bind the channel.
@@ -278,7 +278,7 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::Store`] with `RoomNotFound` when the room is not
+    /// Returns [`RoomKitError::RoomNotFound`] when the room is not
     /// of the organization `options` names, or does not exist and the call
     /// names one, and when the store fails the read.
     pub async fn list_bindings(
