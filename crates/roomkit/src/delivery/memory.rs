@@ -66,7 +66,9 @@ struct Shared {
     queued: Notify,
     /// Told when the queue has room again.
     room: Notify,
-    worker: Mutex<Option<Worker>>,
+    /// Held across a worker's replacement, so a concurrent start waits
+    /// for it.
+    worker: tokio::sync::Mutex<Option<Worker>>,
     worker_id: String,
 }
 
@@ -126,7 +128,7 @@ impl InMemoryDeliveryBackend {
                 state: Mutex::new(State::default()),
                 queued: Notify::new(),
                 room: Notify::new(),
-                worker: Mutex::new(None),
+                worker: tokio::sync::Mutex::new(None),
                 worker_id: worker_id.chars().take(12).collect(),
             }),
         }
@@ -183,13 +185,6 @@ impl InMemoryDeliveryBackend {
         while state.dead_letter.len() > self.shared.options.max_dead_letter_size {
             state.dead_letter.pop_front();
         }
-    }
-
-    fn worker(&self) -> MutexGuard<'_, Option<Worker>> {
-        self.shared
-            .worker
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Queues `items` again, unclaimed, their retries not counted, as
@@ -389,23 +384,16 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
 
     fn start(&self, kit: RoomKit<S>) -> Answer<'_, ()> {
         Box::pin(async move {
-            let stale = {
-                let mut worker = self.worker();
-                if worker.as_ref().is_some_and(Worker::works) {
-                    return Ok(());
-                }
-                worker.take()
-            };
-            if let Some(stale) = stale {
+            let mut worker = self.shared.worker.lock().await;
+            if worker.as_ref().is_some_and(Worker::works) {
+                return Ok(());
+            }
+            if let Some(stale) = worker.take() {
                 // Its kit gone: stopped, and the items it claimed queued
                 // again, as a close queues them.
                 stale.task.abort();
                 drop(stale.task.await);
                 self.queue_held_again();
-            }
-            let mut worker = self.worker();
-            if worker.is_some() {
-                return Ok(());
             }
             let backend: Arc<dyn DeliveryBackend<S>> = Arc::new(self.clone());
             let worker_id = self.shared.worker_id.clone();
@@ -428,7 +416,7 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
 
     fn close(&self) -> Answer<'_, ()> {
         Box::pin(async move {
-            let worker = self.worker().take();
+            let worker = self.shared.worker.lock().await.take();
             if let Some(worker) = worker {
                 worker.task.abort();
                 drop(worker.task.await);
