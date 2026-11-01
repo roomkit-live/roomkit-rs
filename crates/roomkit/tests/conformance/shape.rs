@@ -19,8 +19,27 @@ const TOP: &[&str] = &[
     "steps",
     "expect",
 ];
-const SETUP: &[&str] = &["kit", "channels", "rooms", "hooks"];
-const KIT: &[&str] = &["max_chain_depth", "process_timeout_ms", "router"];
+const SETUP: &[&str] = &["kit", "channels", "rooms", "hooks", "identity_hooks"];
+const KIT: &[&str] = &[
+    "max_chain_depth",
+    "process_timeout_ms",
+    "router",
+    "identity_resolver",
+    "identity_channel_types",
+    "identity_timeout_ms",
+];
+const RESOLVER: &[&str] = &["answers"];
+const RESOLVER_ANSWER: &[&str] = &["when", "repeat", "gate", "fail", "result"];
+const RESOLVER_WHEN: &[&str] = &["sender_id", "channel_id", "room_id", "text"];
+const IDENTITY_HOOK: &[&str] = &[
+    "name",
+    "trigger",
+    "channel_types",
+    "channel_ids",
+    "directions",
+    "reactions",
+];
+const IDENTITY_REACTION: &[&str] = &["when", "repeat", "gate", "fail", "result"];
 const CHANNEL: &[&str] = &[
     "id",
     "type",
@@ -40,6 +59,7 @@ const CHANNEL: &[&str] = &[
     "addresses",
     "streams_in",
     "recent_events_window",
+    "sender_is_participant",
 ];
 const ADDRESSES: &[&str] = &["normalizes", "conversation_key"];
 const MODEL: &[&str] = &["rounds"];
@@ -139,6 +159,8 @@ const EXPECT: &[&str] = &[
     "lifecycle",
     "models",
     "streamed",
+    "participants",
+    "resolver",
 ];
 const NEW_ROOM: &[&str] = &["id", "organization_id", "metadata", "timers"];
 const STEPS: &[(&str, &[&str])] = &[
@@ -219,6 +241,7 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
     let setup = &scenario["setup"];
     optional(setup, SETUP, "setup", &mut found);
     optional(&setup["kit"], KIT, "setup.kit", &mut found);
+    identity(setup, &mut found);
     for (position, channel) in items(&setup["channels"]) {
         self::channel(channel, &format!("setup.channels[{position}]"), &mut found);
     }
@@ -253,6 +276,29 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
         }
     }
     found
+}
+
+/// The members of the scripted resolver and the identity hooks (RFC §11).
+fn identity(setup: &Value, found: &mut Vec<String>) {
+    let resolver = &setup["kit"]["identity_resolver"];
+    if !resolver.is_null() {
+        let path = "setup.kit.identity_resolver";
+        members(resolver, RESOLVER, path, found);
+        for (index, answer) in items(&resolver["answers"]) {
+            let at = format!("{path}.answers[{index}]");
+            members(answer, RESOLVER_ANSWER, &at, found);
+            optional(&answer["when"], RESOLVER_WHEN, &format!("{at}.when"), found);
+        }
+    }
+    for (position, hook) in items(&setup["identity_hooks"]) {
+        let path = format!("setup.identity_hooks[{position}]");
+        members(hook, IDENTITY_HOOK, &path, found);
+        for (index, reaction) in items(&hook["reactions"]) {
+            let at = format!("{path}.reactions[{index}]");
+            members(reaction, IDENTITY_REACTION, &at, found);
+            optional(&reaction["when"], WHEN, &format!("{at}.when"), found);
+        }
+    }
 }
 
 fn items(value: &Value) -> impl Iterator<Item = (usize, &Value)> {

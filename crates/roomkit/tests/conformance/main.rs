@@ -21,6 +21,7 @@ mod calls;
 mod compare;
 mod errors;
 mod harness;
+mod identity;
 mod matching;
 mod normalize;
 mod run;

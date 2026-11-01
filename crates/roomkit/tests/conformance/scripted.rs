@@ -226,6 +226,8 @@ pub(crate) struct ScriptedChannel {
     streams_in: Option<Vec<String>>,
     /// How many of the room's latest events it declares it reads.
     recent_events_window: usize,
+    /// Whether it names its own senders (RFC §11.6).
+    sender_is_participant: bool,
 }
 
 impl ScriptedChannel {
@@ -281,6 +283,7 @@ impl ScriptedChannel {
                 .and_then(Value::as_u64)
                 .and_then(|window| usize::try_from(window).ok())
                 .unwrap_or(0),
+            sender_is_participant: spec.get("sender_is_participant") == Some(&Value::Bool(true)),
         })
     }
 
@@ -392,6 +395,10 @@ impl Channel for ScriptedChannel {
 
     fn recent_events_window(&self) -> usize {
         self.recent_events_window
+    }
+
+    fn sender_is_participant(&self) -> bool {
+        self.sender_is_participant
     }
 
     fn supports_streaming_delivery_for(&self, room_id: &RoomId) -> bool {

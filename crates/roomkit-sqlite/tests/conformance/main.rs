@@ -19,6 +19,8 @@ mod compare;
 mod errors;
 #[path = "../../../roomkit/tests/conformance/harness.rs"]
 mod harness;
+#[path = "../../../roomkit/tests/conformance/identity.rs"]
+mod identity;
 #[path = "../../../roomkit/tests/conformance/matching.rs"]
 mod matching;
 #[path = "../../../roomkit/tests/conformance/normalize.rs"]

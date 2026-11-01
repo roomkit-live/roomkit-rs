@@ -175,6 +175,10 @@ impl Comparison<'_> {
 
     fn models(&mut self) {
         let expect = self.expect;
+        if let Some(expected) = expect.get("resolver") {
+            let calls = Value::Array(self.observed.resolver.clone());
+            self.check(expected, Some(&calls), "resolver");
+        }
         for (channel, expected) in expect["models"].as_object().into_iter().flatten() {
             let requests = self
                 .observed
@@ -195,6 +199,7 @@ impl Comparison<'_> {
         for (kind, recorded) in [
             ("observations", &self.observed.observations),
             ("tasks", &self.observed.tasks),
+            ("participants", &self.observed.participants),
         ] {
             for (alias, expected) in expect[kind].as_object().into_iter().flatten() {
                 let items = recorded

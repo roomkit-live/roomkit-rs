@@ -19,6 +19,7 @@ use tokio::task::JoinHandle;
 
 use crate::calls;
 use crate::compare::compare;
+use crate::identity::{self, RunSlot};
 use crate::normalize::Observed;
 use crate::run::{Check, Run, Scope, lock};
 
@@ -60,8 +61,13 @@ fn kit_options<S>(mut options: RoomKitOptions<S>, kit: &Value) -> RoomKitOptions
 pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     // The store's file, when it has one, goes once the run is over.
     let setup = scenario.get("setup").cloned().unwrap_or_default();
-    let (kit, _store_file) = crate::new_kit(|options| kit_options(options, &setup["kit"])).await;
+    let slot = RunSlot::default();
+    let (kit, _store_file) = crate::new_kit(|options| {
+        identity::kit_options(kit_options(options, &setup["kit"]), &setup["kit"], &slot)
+    })
+    .await;
     let run = Arc::new(Run::new(kit, scenario));
+    slot.set(&run);
     if let Err(problem) = set_up(&run, &setup).await {
         return vec![format!("setup: {problem}")];
     }
@@ -115,6 +121,10 @@ async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
     }
     for hook in setup["hooks"].as_array().into_iter().flatten() {
         calls::register_hook(run, hook)?.map_err(|error| format!("register {hook}: {error}"))?;
+    }
+    for hook in setup["identity_hooks"].as_array().into_iter().flatten() {
+        identity::register_identity_hook(run, hook)
+            .map_err(|error| format!("register {hook}: {error}"))?;
     }
     run.idle().await;
     Ok(())
@@ -217,6 +227,14 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
             observations
                 .iter()
                 .map(|o| serde_json::to_value(o).unwrap_or_default())
+                .collect(),
+        );
+        let participants = store.list_participants(&room.id).await.unwrap_or_default();
+        observed.participants.insert(
+            room_key.clone(),
+            participants
+                .iter()
+                .map(|p| serde_json::to_value(p).unwrap_or_default())
                 .collect(),
         );
         let tasks = store

@@ -27,7 +27,7 @@ const CALL_BOUND: Duration = Duration::from_secs(10);
 
 /// The framework events of the RFC §26.1 table, and Processing timeout's
 /// (RFC §8.2).
-const LEVEL_0_EVENTS: [&str; 19] = [
+const LEVEL_0_EVENTS: [&str; 21] = [
     "room_created",
     "room_paused",
     "room_closed",
@@ -47,6 +47,9 @@ const LEVEL_0_EVENTS: [&str; 19] = [
     "hook_timeout",
     "session_started",
     "process_timeout",
+    // Identity resolution's (Level 1, RFC §8.2).
+    "identity_resolved",
+    "identity_timeout",
 ];
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;

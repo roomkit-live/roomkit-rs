@@ -52,6 +52,10 @@ pub(crate) struct Observed {
     pub(crate) steps: Vec<Value>,
     pub(crate) actions: BTreeMap<String, Vec<Value>>,
     pub(crate) models: BTreeMap<String, Vec<Value>>,
+    /// Per room, the participants the store holds.
+    pub(crate) participants: BTreeMap<String, Vec<Value>>,
+    /// The scripted resolver's calls, in order.
+    pub(crate) resolver: Vec<Value>,
 }
 
 impl Observed {
@@ -187,6 +191,10 @@ impl Normalizer {
     }
 
     fn object(&mut self, object: &Map<String, Value>) -> Value {
+        // A participant's or an identity's id is the scenario's own (RFC
+        // §5.5, §5.6), never an event's: kept as written.
+        let own_id =
+            object.contains_key("identification") || object.contains_key("channel_addresses");
         let mut result = Map::new();
         for (key, item) in object {
             let index = item
@@ -194,6 +202,7 @@ impl Normalizer {
                 .and_then(|raw| self.index_member(object, key, raw));
             let normalized = match index {
                 Some(index) => index,
+                None if own_id && key == "id" => item.clone(),
                 None => self.value_under(item, Some(key)),
             };
             result.insert(self.key(key), normalized);
@@ -259,6 +268,7 @@ fn observed_values(observed: &Observed) -> Value {
     all.extend(observed.bindings.values().map(|b| Value::Object(b.clone())));
     all.extend(observed.observations.values().flatten().cloned());
     all.extend(observed.tasks.values().flatten().cloned());
+    all.extend(observed.participants.values().flatten().cloned());
     Value::Array(all)
 }
 
