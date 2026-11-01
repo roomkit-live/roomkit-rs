@@ -2132,6 +2132,7 @@ mod a_failure_after_the_commit {
         );
     }
 
+    /// The partial failure first, as Python's order (RMK-1095).
     #[test]
     fn a_failed_delivery_emits_delivery_failed_and_a_partial_failure() {
         let mut sim = room();
@@ -2144,8 +2145,8 @@ mod a_failure_after_the_commit {
         assert_eq!(
             names,
             [
-                "delivery_failed",
                 "broadcast_partial_failure",
+                "delivery_failed",
                 "event_processed"
             ]
         );

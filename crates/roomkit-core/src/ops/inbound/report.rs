@@ -12,12 +12,25 @@ use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_chain::{HookIncident, HookProblem};
 use crate::rules::hook_registry::HookTrigger;
 
-/// Reports the deliveries of the inbound event itself: each success and
-/// failure, and a partial failure when any target failed (RFC §8.2); its
-/// end follows its `AFTER_BROADCAST` hooks ([`after_broadcast`]). A
-/// response's deliveries are not reported.
+/// Reports the deliveries of the inbound event itself, in the Python
+/// implementation's order (RMK-1095): a partial failure first when any
+/// target failed, then each success, then each failure (RFC §8.2); its end
+/// follows its `AFTER_BROADCAST` hooks ([`after_broadcast`]). A response's
+/// deliveries are not reported.
 pub(super) fn root_deliveries(cx: &mut Cx<'_>, event: &RoomEvent, outcome: &SetOutcome) {
     let room_id = &event.room_id;
+    if !outcome.failures.is_empty() {
+        notify(
+            cx,
+            FrameworkEvent::BroadcastPartialFailure {
+                room_id: room_id.clone(),
+                event_id: event.id.clone(),
+                failed: outcome.failures.len(),
+                total: outcome.targets,
+                errors: outcome.failures.clone(),
+            },
+        );
+    }
     for channel_id in &outcome.delivered {
         notify(
             cx,
@@ -36,18 +49,6 @@ pub(super) fn root_deliveries(cx: &mut Cx<'_>, event: &RoomEvent, outcome: &SetO
                 event_id: event.id.clone(),
                 channel_id: channel_id.clone(),
                 error: error.clone(),
-            },
-        );
-    }
-    if !outcome.failures.is_empty() {
-        notify(
-            cx,
-            FrameworkEvent::BroadcastPartialFailure {
-                room_id: room_id.clone(),
-                event_id: event.id.clone(),
-                failed: outcome.failures.len(),
-                total: outcome.targets,
-                errors: outcome.failures.clone(),
             },
         );
     }

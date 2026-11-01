@@ -703,8 +703,9 @@ mod a_recipient {
     fn missing_is_reported_as_a_failed_delivery() {
         let mut sim = sms_without_recipient();
         sim.send(Sim::message("ws", "Hello")).unwrap();
+        // After the partial failure, as Python's order (RMK-1095).
         assert_eq!(
-            sim.framework_events()[0],
+            sim.framework_events()[1],
             &FrameworkEvent::delivery_failed(
                 room_id(),
                 "evt_1".parse().unwrap(),
