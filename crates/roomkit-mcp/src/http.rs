@@ -26,10 +26,15 @@ use std::{collections::HashMap, fmt, future::Future, time::Duration};
 pub(crate) struct McpHttp {
     url: Url,
     headers: HashMap<HeaderName, HeaderValue>,
-    /// A test's bound on the connection; none by default, as Python bounds
-    /// only a server it starts.
+    /// The bound on the handshake and the discovery: 60 seconds unless a
+    /// test sets another, as a command's (RMK-1108).
     timeout: Option<Duration>,
 }
+
+/// How long an HTTP server's handshake and discovery may take, as a started
+/// server's: Rust only until Python bounds it too (decided 2026-11-01;
+/// RMK-1108).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 /// `connecting`, within `bound` when there is one.
 async fn bounded<T>(
     bound: Option<Duration>,
@@ -47,8 +52,8 @@ async fn bounded<T>(
 }
 
 impl McpHttp {
-    /// Configures an endpoint without connecting, its connection unbounded,
-    /// as Python's: only a server the host starts is bounded.
+    /// Configures an endpoint without connecting, its connection bounded at
+    /// 60 seconds, as a command's.
     ///
     /// # Errors
     /// Refuses non-HTTP(S) URLs, user information, fragments and missing hosts.
@@ -67,7 +72,7 @@ impl McpHttp {
         Ok(Self {
             url,
             headers: HashMap::new(),
-            timeout: None,
+            timeout: Some(CONNECT_TIMEOUT),
         })
     }
     /// Adds a header to every request, including session cleanup. For bearer
@@ -183,20 +188,22 @@ impl fmt::Debug for McpHttp {
 mod tests {
     use super::*;
 
-    /// Python bounds the connection of a server it starts alone: an HTTP
-    /// endpoint's waits as long as it takes, unless a bound is set.
-    #[tokio::test]
-    async fn an_http_connection_is_unbounded_unless_a_bound_is_set() {
-        let slow = || async {
-            tokio::time::sleep(Duration::from_millis(30)).await;
+    /// An HTTP endpoint's connection is bounded at 60 seconds, as a started
+    /// server's (RMK-1108): a slow one within the bound connects, one past
+    /// it times out. `discovery_deadline_drains_the_connection` (tests/http.rs)
+    /// proves the session's cleanup when a bound ends it.
+    #[tokio::test(start_paused = true)]
+    async fn an_http_connection_is_bounded_at_sixty_seconds() {
+        let taking = |seconds| async move {
+            tokio::time::sleep(Duration::from_secs(seconds)).await;
             Ok::<_, McpError>("connected")
         };
         let endpoint = McpHttp::new("http://localhost/mcp").unwrap();
-        let unbounded = bounded(endpoint.timeout, slow()).await;
-        let bounded_short = bounded(Some(Duration::from_millis(5)), slow()).await;
+        let within = bounded(endpoint.timeout, taking(59)).await;
+        let past = bounded(endpoint.timeout, taking(61)).await;
         assert!(
             matches!(
-                (unbounded, bounded_short),
+                (within, past),
                 (
                     Ok("connected"),
                     Err(McpError::Http {

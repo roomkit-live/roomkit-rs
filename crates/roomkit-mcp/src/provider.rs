@@ -210,11 +210,11 @@ impl McpToolProvider {
     /// The server at `url`, over Streamable HTTP: Python's
     /// `MCPToolProvider.from_url`.
     ///
-    /// Its connection is unbounded, as Python bounds only a server it
-    /// starts: the TCP connection is cut at 10 seconds, but a server that
-    /// takes it and never answers holds [`connect`](Self::connect) until it
-    /// does. A host bounds it itself:
-    /// `tokio::time::timeout(Duration::from_secs(60), provider.connect())`.
+    /// Its handshake and tool discovery are bounded at 60 seconds, as a
+    /// command's: past them, [`connect`](Self::connect) fails, the HTTP
+    /// worker drained and the negotiated session deleted. Python leaves
+    /// this connection unbounded: Rust only until Python bounds it too
+    /// (decided 2026-11-01; RMK-1108).
     ///
     /// # Errors
     ///
@@ -402,8 +402,8 @@ impl McpToolProvider {
     }
 
     /// The same provider, its connection bounded by `bound`, where a
-    /// command's takes 60 seconds and an HTTP server's is unbounded, as
-    /// Python's: for a test. Before it is connected only.
+    /// command's and an HTTP server's take 60 seconds: for a test. Before it
+    /// is connected only.
     #[doc(hidden)]
     #[must_use]
     pub fn with_connect_timeout(self, bound: Duration) -> Self {

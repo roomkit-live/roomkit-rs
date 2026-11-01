@@ -42,7 +42,7 @@ axum.workspace = true
 # still ask for uncompressed responses.
 reqwest = { workspace = true, features = ["gzip"] }
 pretty_assertions.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "test-util"] }
 
 # A stand-in MCP server the tests start over stdio, one misbehaviour per
 # mode (fixtures/fake_server.rs). A dependent never builds it.
