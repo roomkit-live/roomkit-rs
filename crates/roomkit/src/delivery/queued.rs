@@ -99,12 +99,13 @@ impl<S> Waiting<S> {
     }
 
     /// Whether `other` may be delivered in one batch with it: neither keyed,
-    /// the same room, transport, address, depth, intent, session and
+    /// the same kit, room, transport, address, depth, intent, session and
     /// metadata (RFC §22.2).
     fn compatible(&self, other: &Self) -> bool {
         let (left, right) = (&self.context, &other.context);
         left.idempotency_key.is_none()
             && right.idempotency_key.is_none()
+            && Arc::ptr_eq(&left.kit.inner, &right.kit.inner)
             && left.room_id == right.room_id
             && self.channel_id == other.channel_id
             && left.channel_id == right.channel_id
@@ -170,25 +171,33 @@ impl<S: ConversationStore> Queued<S> {
             Prepared::Channel(channel_id) => channel_id,
             Prepared::Done(refusal) => return Ok(*refusal),
         };
-        if self.lock().delivering && ExecutionContext::current().holds_a_room_lock() {
-            return ctx.kit.deliver_to_channel(&ctx, channel_id).await;
-        }
+        let holds_a_lock = ExecutionContext::current().holds_a_room_lock();
         let (result, outcome) = oneshot::channel();
         let (turn, my_turn) = oneshot::channel();
-        let (mine, drains) = {
+        // Decided in the section that queues it: a caller holding a room lock
+        // never queues behind a drain begun meanwhile.
+        let queued = {
             let mut state = self.lock();
-            let id = state.next_id;
-            state.next_id += 1;
-            state.queue.push(Waiting {
-                id,
-                context: ctx,
-                channel_id,
-                result,
-                turn: Some(turn),
-            });
-            let drains = !state.delivering;
-            state.delivering = true;
-            (id, drains)
+            if state.delivering && holds_a_lock {
+                Err((ctx, channel_id))
+            } else {
+                let id = state.next_id;
+                state.next_id += 1;
+                state.queue.push(Waiting {
+                    id,
+                    context: ctx,
+                    channel_id,
+                    result,
+                    turn: Some(turn),
+                });
+                let drains = !state.delivering;
+                state.delivering = true;
+                Ok((id, drains))
+            }
+        };
+        let (mine, drains) = match queued {
+            Ok(queued) => queued,
+            Err((ctx, channel_id)) => return ctx.kit.deliver_to_channel(&ctx, channel_id).await,
         };
         let mut waiter = Waiter {
             state: Arc::clone(&self.state),
@@ -328,12 +337,14 @@ impl<S> Waiter<S> {
 
 impl<S> Drop for Waiter<S> {
     fn drop(&mut self) {
-        let handed = self
-            .my_turn
-            .as_mut()
-            .is_some_and(|my_turn| my_turn.try_recv().is_ok());
-        if handed {
-            self.outcome.close();
+        self.outcome.close();
+        let Some(my_turn) = self.my_turn.as_mut() else {
+            return;
+        };
+        // Closed first, so a drain handed on from now on skips it, and one
+        // handed before is read here and handed on.
+        my_turn.close();
+        if my_turn.try_recv().is_ok() {
             pass_on(&self.state);
         }
     }
@@ -571,6 +582,34 @@ mod tests {
         assert_ne!(keyed.event_id, plain.event_id);
         assert_eq!(texts(&kit).await, ["first", "keyed", "plain"]);
         kit.close().await.unwrap();
+    }
+
+    // Python: delivery.py's _QueuedRequest.compatible, `left.kit is right.kit`:
+    // one strategy shared by two kits batches neither kit's request into the
+    // other's room, though their rooms and channels have the same ids.
+    #[tokio::test]
+    async fn two_kits_sharing_a_strategy_keep_their_requests_apart() {
+        let (reached, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let kit = held_kit(&reached, &release).await;
+        let other = held_kit(&Arc::new(Notify::new()), &Arc::new(Notify::new())).await;
+        let strategy = separated();
+        let first = start(&kit, &strategy, "first", None);
+        reached.notified().await;
+        let second = start(&kit, &strategy, "second", None);
+        until_queued(&strategy, 1).await;
+        let elsewhere = start(&other, &strategy, "elsewhere", None);
+        until_queued(&strategy, 2).await;
+        release.notify_one();
+        first.await.unwrap();
+        let (second, elsewhere) = (second.await.unwrap(), elsewhere.await.unwrap());
+        assert_eq!(texts(&kit).await, ["first", "second"]);
+        assert_eq!(texts(&other).await, ["elsewhere"]);
+        assert_eq!(
+            (second.status, elsewhere.status),
+            (DeliveryOutcomeStatus::Sent, DeliveryOutcomeStatus::Sent)
+        );
+        kit.close().await.unwrap();
+        other.close().await.unwrap();
     }
 
     // Python: tests/delivery/test_targeted.py::test_a_drain_cut_short_hands_the_queue_on:
