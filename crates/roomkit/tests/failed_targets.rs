@@ -55,7 +55,9 @@ impl Failing {
     /// The configuration the kit keeps of the channel.
     fn config(&self) -> ChannelConfig {
         let (channel_type, category) = match self.id {
-            "raising" | "erring" => (ChannelType::AI, ChannelCategory::Intelligence),
+            "raising" | "erring" | "agent_value" | "agent_cancelled" => {
+                (ChannelType::AI, ChannelCategory::Intelligence)
+            }
             "sms_refused" | "sms_no_recipient" => (ChannelType::SMS, ChannelCategory::Transport),
             _ => (ChannelType::WEBSOCKET, ChannelCategory::Transport),
         };
@@ -137,6 +139,8 @@ impl Channel for Failing {
             } else {
                 "socket gone".into()
             }),
+            "agent_value" => Err(RoomKitError::Value("v".to_owned()).into()),
+            "agent_cancelled" => Err(RoomKitError::Cancelled.into()),
             "erring" => Ok(ChannelOutput {
                 error: Some(ErrorRecord::new("RuntimeError", "output error")),
                 ..ChannelOutput::empty()
@@ -178,7 +182,7 @@ impl Channel for Failing {
 }
 
 /// The targets of the probe's room, each named for how it fails.
-const TARGETS: [&str; 11] = [
+const TARGETS: [&str; 13] = [
     "on_event_refused",
     "on_event_plain",
     "deliver_refused",
@@ -190,6 +194,8 @@ const TARGETS: [&str; 11] = [
     "sms_no_recipient",
     "raising",
     "erring",
+    "agent_value",
+    "agent_cancelled",
 ];
 
 /// What `delivery_results` holds of each of [`TARGETS`] once a message
@@ -229,7 +235,12 @@ async fn reported() -> (Vec<Option<DeliveryResult>>, Option<Vec<ChannelId>>) {
             .unwrap();
     }
     let mut message = InboundMessage::new(channel("ws"), "u1", TextContent::new("hi"));
-    message.addressed_to = Some(vec![channel("raising"), channel("erring")]);
+    message.addressed_to = Some(vec![
+        channel("raising"),
+        channel("erring"),
+        channel("agent_value"),
+        channel("agent_cancelled"),
+    ]);
     let routed = ProcessInboundOptions {
         room_id: Some(room_id()),
         ..Default::default()
@@ -276,7 +287,10 @@ fn failed(
 /// decision Q2, 2026-10-30), a defect Python's assertion,
 /// `AssertionError`; on d192534 `RoomNotFoundError` and
 /// `ShutdownCancelledError` read `ChannelError`, and on b626fbb a defect
-/// did.
+/// did. An agent's kit error reads as a transport's, and a cancelled
+/// agent's turn as Python's `TurnLinkError` (RMK-1047,
+/// `tasks/probes/rmk1041/py_cancelled_target_38ef0625.out`); on 4a2e822
+/// both read `ChannelError`.
 #[tokio::test]
 async fn each_failed_target_is_reported_as_python_reports_it() {
     let (reported, unavailable) = reported().await;
@@ -359,6 +373,13 @@ async fn each_failed_target_is_reported_as_python_reports_it() {
         ),
         failed("raising", ("ChannelError", "turn failed", true), None, None),
         failed("erring", ("RuntimeError", "output error", true), None, None),
+        failed("agent_value", ("ValueError", "v", true), None, None),
+        failed(
+            "agent_cancelled",
+            ("TurnLinkError", "The turn ended before its output", true),
+            None,
+            None,
+        ),
     ];
     assert_eq!(
         (reported, unavailable),

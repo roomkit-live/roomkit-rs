@@ -16,7 +16,7 @@ use crate::channel::DynChannel;
 use crate::stream::{ResponseItem, ResponseStream};
 use crate::turn::TurnHost;
 use crate::turns::codec::{encode_loop_end, encode_output};
-use crate::turns::error::{CHANNEL_ERROR, channel_error, one};
+use crate::turns::error::{CHANNEL_ERROR, one, turn_failure};
 use crate::turns::pipe::Uncarried;
 use crate::turns::pulls::PullGate;
 use crate::turns::wire::{Frame, Item, TurnRequest};
@@ -83,7 +83,7 @@ pub(super) async fn work(
     let output = match answered {
         Ok(output) => output,
         Err(error) => {
-            let error = channel_error(&*error);
+            let error = turn_failure(&*error);
             return refuse_or_send(&sender, &Frame::Error { error });
         }
     };
@@ -225,7 +225,7 @@ impl Pump<'_> {
                 recorded.and_then(|()| self.sender.send(&Frame::Item { item }).map(drop))
             }
             Some(Err(error)) => {
-                let error = channel_error(&*error);
+                let error = turn_failure(&*error);
                 refuse_or_send(self.sender, &Frame::Error { error });
                 return false;
             }

@@ -135,6 +135,27 @@ pub(crate) fn channel_error(error: &(dyn Error + 'static)) -> WireError {
     record
 }
 
+/// What a turn whose work ended cancelled reads, as Python's turn backend
+/// reports it.
+const ENDED_BEFORE_ITS_OUTPUT: &str = "The turn ended before its output";
+
+/// `error`, an agent's `on_event()` or its response failing, as it
+/// crosses, as Python's turn backend reports an agent's raised error
+/// (RMK-1047): a kit error under its code or its Python class's name, as a
+/// transport's failure reads (`RoomKitError::Value` as `ValueError`); a
+/// cancel as the turn ending before its output, Python's `TurnLinkError`;
+/// any other as a channel's.
+pub(crate) fn turn_failure(error: &(dyn Error + Send + Sync + 'static)) -> WireError {
+    match error.downcast_ref::<RoomKitError>() {
+        Some(RoomKitError::Cancelled) => one(TURN_LINK_ERROR, ENDED_BEFORE_ITS_OUTPUT.to_owned()),
+        Some(kit_error) => one(
+            kit_error.code().unwrap_or_else(|| kit_error.class_name()),
+            error.to_string(),
+        ),
+        None => channel_error(error),
+    }
+}
+
 /// A core error record as it crosses.
 pub(crate) fn from_record(record: &ErrorRecord) -> WireError {
     one(record.error_type.clone(), record.message.clone())

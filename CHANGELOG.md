@@ -752,6 +752,13 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **An agent's raised error reads its Python class** (RMK-1047): an
+  intelligence channel whose turn raises a `RoomKitError` fails its
+  delivery under the class Python names, as a transport's does
+  (`RoomKitError::Value` as `ValueError`), and a turn raising `Cancelled`
+  fails `TurnLinkError`, `The turn ended before its output`, retryable, as
+  Python's turn backend reports a turn whose work ended cancelled; both
+  read `ChannelError`. A plain boxed error still does.
 - **A call carrying an argument its tool's closed schema does not declare
   is refused** (RMK-1042), as Python's `validate_tool_arguments`: on a
   schema with `additionalProperties: false`, an unknown argument fails the
