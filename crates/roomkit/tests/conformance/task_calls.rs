@@ -17,8 +17,8 @@ use roomkit::model::{
 };
 use roomkit::orchestration::{PostAsyncOptions, RecentOptions, StatusLevel};
 use roomkit::{
-    HookError, ListObservationsOptions, PostStatusOptions, SubmitFeedbackOptions, TurnHost,
-    UpdateRoomMetadataOptions, current_turn_host,
+    HookError, ListObservationsOptions, ListTasksOptions, PostStatusOptions, SubmitFeedbackOptions,
+    TurnHost, UpdateRoomMetadataOptions, current_turn_host,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -51,6 +51,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "metadata",
         ],
         "list_observations" => &["room_id"],
+        "list_tasks" => &["room_id", "status"],
         "host.send_event" => &[
             "room_id",
             "channel_id",
@@ -139,6 +140,14 @@ pub(crate) async fn call(
                 organization_id: organization_id(spec),
             };
             let outcome = kit.list_observations(&room()?, options).await;
+            (finish(run, name, outcome, dump), None)
+        }
+        "list_tasks" => {
+            let options = ListTasksOptions {
+                status: optional(spec, "status")?,
+                organization_id: organization_id(spec),
+            };
+            let outcome = kit.list_tasks(&room()?, options).await;
             (finish(run, name, outcome, dump), None)
         }
         verb => host_call(run, verb, spec).await?,
