@@ -125,8 +125,9 @@ pub struct IdentityResult {
     /// The kind of challenge a resolver put to the sender.
     #[serde(default)]
     pub challenge_type: Option<String>,
-    /// The resolver's words: a challenge's are the reason the message is
-    /// blocked with (RFC §10.1 step 5).
+    /// The resolver's words: a challenge's, or a rejection's no identity
+    /// hook answers for, are the reason the message is held with (RFC §10.1
+    /// step 5, §11.2).
     #[serde(default)]
     pub message: Option<String>,
 }

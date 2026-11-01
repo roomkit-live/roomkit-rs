@@ -13,7 +13,8 @@
 //! - `AMBIGUOUS` or `PENDING`: the identity hooks of `ON_IDENTITY_AMBIGUOUS`
 //!   decide, then the hooks registered on it observe; unnamed, the sender
 //!   is pending, with the resolver's candidates;
-//! - `UNKNOWN` or `REJECTED`: those of `ON_IDENTITY_UNKNOWN` do;
+//! - `UNKNOWN` or `REJECTED`: those of `ON_IDENTITY_UNKNOWN` do; a
+//!   rejection none of them answers for holds the message (RFC §11.2);
 //! - `CHALLENGE_SENT`: the resolver put the question itself, and the
 //!   message is held.
 //!
@@ -334,8 +335,8 @@ impl Identification {
 
     /// `ON_IDENTITY_UNKNOWN`'s answer: a rejection or a challenge holds the
     /// message, an identity names the sender, a pending answer leaves them
-    /// pending with its candidates, else the resolver's; anything else lets
-    /// the message through, its sender unresolved.
+    /// pending with its candidates, else the resolver's; anything else is
+    /// [`unanswered`](Self::unanswered).
     fn on_unknown(
         &mut self,
         cx: &mut Cx<'_>,
@@ -343,7 +344,7 @@ impl Identification {
         mut result: IdentityResult,
     ) -> Progress<Result<Resolved, Stopped>> {
         let Some(answer) = answer else {
-            return self.proceed(None);
+            return self.unanswered(result);
         };
         match (answer.status, answer.identity) {
             (IdentificationStatus::Rejected, _) => {
@@ -363,8 +364,22 @@ impl Identification {
                 }
                 self.pending(result)
             }
-            _ => self.proceed(None),
+            _ => self.unanswered(result),
         }
+    }
+
+    /// No identity hook decided about a sender the resolver did not name: a
+    /// rejection, the resolver's refusal, holds the message with its message,
+    /// else `identity_rejected`; an unknown sender's message goes on, its
+    /// sender unresolved (RFC §11.2).
+    fn unanswered(&mut self, result: IdentityResult) -> Progress<Result<Resolved, Stopped>> {
+        if result.status == IdentificationStatus::Rejected {
+            let reason = result
+                .message
+                .unwrap_or_else(|| "identity_rejected".to_owned());
+            return self.hold(reason, None);
+        }
+        self.proceed(None)
     }
 
     /// The sender is `identity`: the event is stamped with it, and its

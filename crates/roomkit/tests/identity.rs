@@ -1,22 +1,25 @@
 //! Identity resolution on the tokio runtime (RFC §10.1 step 5, §11): what a
 //! scenario cannot say. The conformance scenarios `identity/*` pin what each
 //! resolution outcome comes to; this pins the kit's own reads of its
-//! settings, a channel's declaration, and a resolver that fails.
+//! settings, a channel's declaration, a resolver that fails, and the Python
+//! tests a scenario stands for until the copy is synced.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::identity::{IdentityFuture, IdentityResolver, MockIdentityResolver};
 use roomkit::model::{
-    ChannelId, ChannelType, EventType, InboundMessage, RoomContext, RoomId, TextContent,
+    ChannelId, ChannelType, EventType, IdentificationStatus, IdentityResult, InboundMessage,
+    RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::store::ListEventsOptions;
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ConversationStore, CreateRoomOptions, ProcessInboundOptions,
-    RoomKit, RoomKitError, RoomKitOptions,
+    AttachChannelOptions, Channel, ConversationStore, CreateRoomOptions, HookExecution,
+    HookOptions, HookTrigger, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
 };
 
 fn resolving(channel_types: Option<BTreeSet<ChannelType>>) -> RoomKit {
@@ -162,5 +165,83 @@ async fn a_resolver_that_raises_fails_the_message_with_nothing_stored() {
             messages,
         ),
         (true, 0)
+    );
+}
+
+/// A resolver that refuses every sender, as Python's `UnknownResolver` of
+/// `tests/test_identity_hooks.py`.
+struct Rejecting;
+
+impl IdentityResolver for Rejecting {
+    fn resolve<'a>(
+        &'a self,
+        _message: &'a InboundMessage,
+        _context: &'a RoomContext,
+    ) -> IdentityFuture<'a> {
+        Box::pin(async {
+            Ok(IdentityResult {
+                message: Some("Unknown sender".to_owned()),
+                ..IdentityResult::new(IdentificationStatus::Rejected)
+            })
+        })
+    }
+}
+
+// Python: tests/test_identity_hooks.py::TestIdentityUnknownHook::test_unknown_hook_fires
+#[tokio::test]
+async fn unknown_hook_fires() {
+    let kit = RoomKit::new(RoomKitOptions {
+        identity_resolver: Some(Arc::new(Rejecting)),
+        ..RoomKitOptions::default()
+    });
+    let fired = Arc::new(AtomicBool::new(false));
+    let observed = Arc::clone(&fired);
+    kit.hook(
+        HookTrigger::OnIdentityUnknown,
+        move |_: RoomEvent, _| {
+            let observed = Arc::clone(&observed);
+            async move { observed.store(true, Ordering::SeqCst) }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "test_unknown".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    let sms = ChannelId::new("sms1").unwrap();
+    kit.register_channel(RecordingTransport::new(
+        sms.clone(),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    let room = RoomId::new("r1").unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..CreateRoomOptions::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room, &sms, AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let message = InboundMessage::new(sms, "stranger", TextContent::new("hello"));
+    let options = ProcessInboundOptions {
+        room_id: Some(room),
+        ..ProcessInboundOptions::default()
+    };
+    let result = kit.process_inbound(message, options).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), roomkit::testing::idle(&kit))
+        .await
+        .unwrap();
+    kit.close().await.unwrap();
+    assert_eq!(
+        (
+            result.blocked,
+            result.reason.as_deref(),
+            fired.load(Ordering::SeqCst)
+        ),
+        (true, Some("Unknown sender"), true)
     );
 }
