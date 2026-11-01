@@ -6,6 +6,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The status bus, Python's `roomkit.orchestration` (RFC §19.8):
+  `StatusBus`, `StatusEntry`, `StatusLevel`, `InMemoryStatusBackend` and
+  the `backend::StatusBackend` trait; `RoomKitOptions::status_bus` and
+  `RoomKit::status_bus()`. An entry is the `status_posted` framework event,
+  and one naming a room fires its `ON_STATUS_POSTED` hooks.
+- `RoomKit::update_room_metadata`, `list_observations` and
+  `submit_feedback` (RFC §5.1, §15.9), the last firing `ON_FEEDBACK` and
+  emitting `feedback`; a feedback naming no channel is refused for now.
+- `TurnHost::post_status`, `update_room_metadata` and `add_observation`,
+  run on the room's owner during the turn and after it (RFC §10.6.5).
+- A turn host's verb for another room or organization raises
+  `RoomKitError::Value`, Python's `ValueError`, no longer a
+  `RemoteTurn` named `PermissionError`.
 - `TurnTimeouts::silent_intervals` rounds a half to the even neighbour, as
   Python's `round` (RMK-1093): a 5 s heartbeat timeout over a 2 s interval
   is 2 silent intervals, no longer 3; the accept bound counts alike.
