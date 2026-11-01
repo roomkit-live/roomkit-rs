@@ -418,7 +418,7 @@ fn executor_id() -> String {
 /// kit closes: the turn link's `backend_closed`, naming the backend's
 /// close (RFC §10.6.8).
 pub(crate) fn closed() -> ErrorRecord {
-    TurnError::new("backend_closed", "the turn backend closed").to_record()
+    TurnError::link_reason("backend_closed").to_record()
 }
 
 /// A request that cannot cross.

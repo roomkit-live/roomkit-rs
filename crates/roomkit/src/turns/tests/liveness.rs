@@ -17,17 +17,11 @@ const UNSENT: Fate = Fate {
     duplicated: false,
 };
 
-/// The error type and the reason heading the message of `result`'s turn
-/// error.
+/// The error type and the message of `result`'s turn error, in Python's
+/// `TurnLinkError` words (RMK-1106).
 fn failure(result: &crate::InboundResult) -> Option<(String, String)> {
     let error = result.error.as_ref()?;
-    let reason = error
-        .message
-        .split(':')
-        .next()
-        .unwrap_or_default()
-        .to_owned();
-    Some((error.error_type.clone(), reason))
+    Some((error.error_type.clone(), error.message.clone()))
 }
 
 /// A turn busy for 30 seconds, three times `heartbeat_timeout`, still
@@ -68,7 +62,10 @@ async fn dropped_executor_heartbeats_fail_the_turn_executor_lost() {
             agent.ends()
         ),
         (
-            Some(("TurnLinkError".to_owned(), "executor_lost".to_owned())),
+            Some((
+                "TurnLinkError".to_owned(),
+                "The turn ended without its executor: executor_lost".to_owned()
+            )),
             true,
             vec!["dropped"]
         )
@@ -96,7 +93,7 @@ async fn dropped_owner_heartbeats_cut_the_turn_owner_lost() {
             agent.ends()
         ),
         (
-            Some(("TurnLinkError".to_owned(), "executor_lost".to_owned())),
+            Some(("TurnLinkError".to_owned(), "The turn ended without its executor: executor_lost".to_owned())),
             true,
             true,
             vec!["dropped"]
@@ -164,7 +161,10 @@ async fn a_lost_frame_fails_the_turn_frame_lost_and_a_duplicate_is_dropped() {
         (failure(&doubled), failure(&gapped)),
         (
             None,
-            Some(("TurnLinkError".to_owned(), "frame_lost".to_owned()))
+            Some((
+                "TurnLinkError".to_owned(),
+                "Message 2 of the turn was lost".to_owned()
+            ))
         )
     );
 }
@@ -223,7 +223,10 @@ async fn a_turn_never_accepted_fails_at_the_accept_timeout() {
             (Duration::from_secs(4)..Duration::from_secs(7)).contains(&failed_after)
         ),
         (
-            Some(("TurnLinkError".to_owned(), "executor_lost".to_owned())),
+            Some((
+                "TurnLinkError".to_owned(),
+                "The turn ended without its executor: executor_lost".to_owned()
+            )),
             true
         )
     );
@@ -240,7 +243,10 @@ async fn a_turn_on_a_closed_backend_fails_backend_closed() {
     assert_eq!(
         (failure(&result), agent.ends()),
         (
-            Some(("TurnLinkError".to_owned(), "backend_closed".to_owned())),
+            Some((
+                "TurnLinkError".to_owned(),
+                "The turn ended: its turn backend closed".to_owned()
+            )),
             Vec::new()
         )
     );

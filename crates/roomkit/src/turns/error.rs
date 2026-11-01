@@ -76,12 +76,24 @@ impl TurnError {
         }
     }
 
+    /// The failure of a link for `reason`, in the words Python's
+    /// `TurnLinkError(reason)` writes when given none (RMK-1106): its turn
+    /// backend closed, or the turn ended without its executor.
+    pub(crate) fn link_reason(reason: &str) -> Self {
+        let message = if reason == "backend_closed" {
+            "The turn ended: its turn backend closed".to_owned()
+        } else {
+            format!("The turn ended without its executor: {reason}")
+        };
+        Self::new(reason, message)
+    }
+
     /// The error a turn's failure is recorded as on the owner: a link's
-    /// under [`TURN_LINK_ERROR`], its reason heading its message; another
-    /// under its kind.
+    /// under [`TURN_LINK_ERROR`], its message as Python's `TurnLinkError`
+    /// says it (RMK-1106); another under its kind.
     pub(crate) fn to_record(&self) -> ErrorRecord {
         if is_link_reason(&self.kind) {
-            return ErrorRecord::new(TURN_LINK_ERROR, format!("{}: {}", self.kind, self.message));
+            return ErrorRecord::new(TURN_LINK_ERROR, self.message.clone());
         }
         ErrorRecord::new(self.kind.clone(), self.message.clone())
     }
@@ -302,6 +314,42 @@ mod tests {
     #[derive(Debug, Error)]
     #[error("the provider failed")]
     struct Outer(#[source] std::io::Error);
+
+    /// RMK-1106: a link's failure is recorded under `TurnLinkError` in the
+    /// words Python's `TurnLinkError` writes for its reason, no reason
+    /// heading them (roomkit `src/roomkit/core/exceptions.py`,
+    /// `turns/base.py`, `turns/_owner_turn.py`).
+    #[test]
+    fn a_link_failure_is_recorded_in_python_s_words() {
+        use crate::turns::pipe::LinkFailure;
+        let records: Vec<(String, String)> = [
+            TurnError::link_reason("backend_closed"),
+            TurnError::link_reason("cancelled"),
+            TurnError::link(&LinkFailure::Closed),
+            TurnError::link(&LinkFailure::Lost {
+                expected: 4,
+                got: 6,
+            }),
+            TurnError::link(&LinkFailure::Invalid("no kind".to_owned())),
+        ]
+        .iter()
+        .map(|error| {
+            let record = error.to_record();
+            (record.error_type, record.message)
+        })
+        .collect();
+        let link = |message: &str| (TURN_LINK_ERROR.to_owned(), message.to_owned());
+        assert_eq!(
+            records,
+            [
+                link("The turn ended: its turn backend closed"),
+                link("The turn ended without its executor: cancelled"),
+                link("The turn ended: its turn backend closed"),
+                link("Message 4 of the turn was lost"),
+                link("The turn's frames could not be read: no kind"),
+            ]
+        );
+    }
 
     /// RFC §10.6.8: an error crosses with its causes, in order.
     #[test]

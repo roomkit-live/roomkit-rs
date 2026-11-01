@@ -102,24 +102,18 @@ impl OwnerTurn {
                 }
                 Some(Main::Error(error)) => Err(to_record(&error)),
                 Some(Main::Failed(error)) => Err(error.to_record()),
-                Some(Main::End) if cutting => Err(TurnError::new(
-                    "cancelled",
-                    "the turn was cut before its output",
-                )
-                .to_record()),
+                Some(Main::End) if cutting => Err(TurnError::link_reason("cancelled").to_record()),
                 Some(Main::End) => Err(TurnError::new(
                     "executor_lost",
-                    "the turn ended before its output",
+                    "The turn ended before its output",
                 )
                 .to_record()),
                 Some(Main::Item(..) | Main::Record(_)) => Err(TurnError::new(
                     "frame_invalid",
-                    "an item of the turn came before its output",
+                    "A frame of the turn could not be read: an item came before its output",
                 )
                 .to_record()),
-                None => {
-                    Err(TurnError::new("backend_closed", "the turn backend closed").to_record())
-                }
+                None => Err(TurnError::link_reason("backend_closed").to_record()),
             };
         }
     }
@@ -146,16 +140,13 @@ impl OwnerTurn {
                 Some(Main::Failed(error)) => Read::Failed(Box::new(error)),
                 Some(Main::End) => Read::Failed(Box::new(TurnError::new(
                     "executor_lost",
-                    "the turn ended in the middle of its stream",
+                    "The turn ended in the middle of its stream",
                 ))),
                 Some(Main::Output(..)) => Read::Failed(Box::new(TurnError::new(
                     "frame_invalid",
-                    "a second output of the turn came",
+                    "A frame of the turn could not be read: a second output came",
                 ))),
-                None => Read::Failed(Box::new(TurnError::new(
-                    "backend_closed",
-                    "the turn backend closed",
-                ))),
+                None => Read::Failed(Box::new(TurnError::link_reason("backend_closed"))),
             };
             match read {
                 Read::Item(item) => return Some(Ok(item)),

@@ -291,7 +291,7 @@ impl Pump {
         drop(self.state.turn.controls.put(&Control::Cancel {
             reason: reason.to_owned(),
         }));
-        Ending::Failed(TurnError::new(reason, "the turn's executor fell silent"))
+        Ending::Failed(TurnError::link_reason(reason))
     }
 
     fn hand(&self, main: Main) {

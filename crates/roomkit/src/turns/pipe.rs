@@ -50,11 +50,10 @@ impl LinkFailure {
     /// What the failure says.
     pub(crate) fn message(&self) -> String {
         match self {
-            Self::Closed => "the turn backend closed".to_owned(),
-            Self::Lost { expected, got } => {
-                format!("message {expected} of the turn was lost: message {got} came")
-            }
-            Self::Invalid(why) => format!("a message of the turn could not be read: {why}"),
+            // Python's `TurnLinkError` words (RMK-1106).
+            Self::Closed => "The turn ended: its turn backend closed".to_owned(),
+            Self::Lost { expected, .. } => format!("Message {expected} of the turn was lost"),
+            Self::Invalid(why) => format!("The turn's frames could not be read: {why}"),
         }
     }
 }
