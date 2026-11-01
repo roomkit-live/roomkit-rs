@@ -270,6 +270,7 @@ impl TurnHost {
                 |_| None,
             )
             .await;
+            self.report_timeout(spec, &ran);
             chain.ended = chain.read(spec, ran);
             if chain.ended.is_some() {
                 break;
@@ -298,6 +299,27 @@ impl TurnHost {
             None,
         );
         self.shared.kit.emit(event_type.to_owned(), ids, data);
+    }
+
+    /// Emits the `hook_timeout` framework event of the tool hook `spec` when
+    /// it ran past its timeout, SYNC or ASYNC (RFC §8.2, §9.1), as the
+    /// Python implementation's engine emits it: about the turn's room and
+    /// agent.
+    fn report_timeout(&self, spec: &HookSpec, ran: &HookOutcome<ToolCallEvent>) {
+        if !matches!(ran, HookOutcome::TimedOut) {
+            return;
+        }
+        let mut data = Metadata::new();
+        data.insert("hook_name".to_owned(), Value::from(spec.name.as_str()));
+        data.insert(
+            "trigger".to_owned(),
+            serde_json::to_value(spec.trigger).unwrap_or_default(),
+        );
+        data.insert(
+            "timeout".to_owned(),
+            Value::from(spec.timeout.as_secs_f64()),
+        );
+        self.emit("hook_timeout", data);
     }
 
     /// The gate let `call` run with `arguments`: they cross before what
@@ -371,6 +393,7 @@ impl TurnHost {
                 |_| None,
             )
             .await;
+            self.report_timeout(spec, &ran);
             if let Some(reason) = chain.read(spec, ran) {
                 return withheld(report, &reason);
             }
@@ -467,14 +490,16 @@ impl TurnHost {
                 spec.timeout,
                 |_| None,
             );
-            let name = spec.name.clone();
+            let (host, spec) = (self.clone(), spec.clone());
             let bounded = async move {
-                match observing.await {
+                let observed = observing.await;
+                host.report_timeout(&spec, &observed);
+                match observed {
                     HookOutcome::TimedOut => {
-                        tracing::warn!(target: "roomkit::hooks", hook = %name, "a tool call's observer timed out");
+                        tracing::warn!(target: "roomkit::hooks", hook = %spec.name, "a tool call's observer timed out");
                     }
                     HookOutcome::Raised(error) => {
-                        tracing::warn!(target: "roomkit::hooks", hook = %name, error = %error.message, "a tool call's observer raised");
+                        tracing::warn!(target: "roomkit::hooks", hook = %spec.name, error = %error.message, "a tool call's observer raised");
                     }
                     HookOutcome::Returned(_) | HookOutcome::Invalid { .. } => {}
                 }

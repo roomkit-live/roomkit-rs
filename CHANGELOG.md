@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A `BEFORE_TOOL_USE` or `ON_TOOL_CALL` hook past its timeout emits the
+  `hook_timeout` framework event, SYNC and ASYNC, in the agent's room and
+  channel, as Python does (RFC §8.2, RMK-1086); it was only logged.
+
 - Update reqwest to 0.13 and sha2 to 0.11, the versions roomkit-tools uses,
   so a host that links both compiles one copy of each. The OpenAI agent and
   MCP over HTTP keep rustls with the ring provider and the webpki roots, now
