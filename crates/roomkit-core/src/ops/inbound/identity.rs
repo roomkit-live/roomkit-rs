@@ -128,6 +128,12 @@ pub(super) fn wanted(
         && !authors::sender_identified(event, &context.participants)
 }
 
+/// `text` unless it is empty: an empty reason or message is none, as the
+/// Python implementation's `or` reads it.
+fn given(text: Option<String>) -> Option<String> {
+    text.filter(|text| !text.is_empty())
+}
+
 /// `event` sent under the sender's own record when that is the record
 /// their address names on the channel and the room identified it, as a
 /// pending sender's events are sent, so every reader finds the record an
@@ -242,7 +248,7 @@ impl Identification {
                 self.ask_hooks(cx, HookTrigger::OnIdentityAmbiguous, result)
             }
             IdentificationStatus::ChallengeSent => {
-                let reason = result.message.unwrap_or_else(|| CHALLENGE_SENT.to_owned());
+                let reason = given(result.message).unwrap_or_else(|| CHALLENGE_SENT.to_owned());
                 self.hold(reason, None)
             }
             IdentificationStatus::Unknown | IdentificationStatus::Rejected => {
@@ -344,9 +350,7 @@ impl Identification {
                 self.hold(CHALLENGE_SENT.to_owned(), answer.inject.map(Box::new))
             }
             (IdentificationStatus::Rejected, _) => {
-                let reason = answer
-                    .reason
-                    .unwrap_or_else(|| "identity_rejected".to_owned());
+                let reason = given(answer.reason).unwrap_or_else(|| "identity_rejected".to_owned());
                 self.hold(reason, None)
             }
             _ => self.pending(result),
@@ -368,7 +372,7 @@ impl Identification {
         };
         match (answer.status, answer.identity) {
             (IdentificationStatus::Rejected, _) => {
-                let reason = answer.reason.unwrap_or_else(|| "unknown_sender".to_owned());
+                let reason = given(answer.reason).unwrap_or_else(|| "unknown_sender".to_owned());
                 self.hold(reason, None)
             }
             (IdentificationStatus::Identified, Some(identity)) => {
@@ -394,9 +398,7 @@ impl Identification {
     /// sender unresolved (RFC §11.2).
     fn unanswered(&mut self, result: IdentityResult) -> Progress<Result<Resolved, Stopped>> {
         if result.status == IdentificationStatus::Rejected {
-            let reason = result
-                .message
-                .unwrap_or_else(|| "identity_rejected".to_owned());
+            let reason = given(result.message).unwrap_or_else(|| "identity_rejected".to_owned());
             return self.hold(reason, None);
         }
         self.proceed(None)
@@ -419,13 +421,18 @@ impl Identification {
     }
 
     /// The sender is left pending with `result`, the event sent under the
-    /// sender's own record ([`authors::own_record_id`]), never the id the
-    /// channel gave (RFC §11.2, RMK-1138): on a channel whose senders choose
-    /// it, that id may be an identity's or another participant's, and a
-    /// pending record under an identity's id would be completed when the
-    /// identity is resolved elsewhere, its impostor then passing for an
-    /// identified sender (RFC §11.6).
+    /// sender's own record ([`authors::own_record_id`]), or under the room's
+    /// record of the id the channel gave when one was reached through the
+    /// channel (a member the host added). The pipeline never creates a
+    /// record under the id the channel gave (RFC §11.2, RMK-1138): on a
+    /// channel whose senders choose it, that id may be an identity's or
+    /// another participant's, and a pending record under an identity's id
+    /// would be completed when the identity is resolved elsewhere, its
+    /// impostor then passing for an identified sender (RFC §11.6).
     fn pending(&mut self, result: IdentityResult) -> Progress<Result<Resolved, Stopped>> {
+        if authors::names_its_own_id(&self.event, &self.context.participants) {
+            return self.proceed(Some(Participation::Pending(Box::new(result))));
+        }
         let source = &mut self.event.source;
         if let Some(sender) = &source.participant_id {
             let own = authors::own_record_id(source.channel_id.as_str(), sender.as_str());
@@ -497,8 +504,8 @@ fn identified_writes(
         if existing.identification != IdentificationStatus::Identified {
             existing.identification = IdentificationStatus::Identified;
             existing.identity_id = Some(identity.id.clone());
-            if identity.display_name.is_some() {
-                existing.display_name.clone_from(&identity.display_name);
+            if let Some(name) = given(identity.display_name.clone()) {
+                existing.display_name = Some(name);
             }
             changed = true;
         }

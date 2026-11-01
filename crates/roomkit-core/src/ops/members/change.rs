@@ -140,6 +140,8 @@ impl SectionChange for MemberChange {
                 resolved_by,
                 organization_id,
             } => {
+                // The participant first, then the identity, as Python's.
+                members.found(participant_id)?;
                 let identity = identity
                     .as_deref()
                     .filter(|identity| reaches(organization_id.as_deref(), identity))
@@ -196,6 +198,32 @@ impl SectionChange for MemberChange {
 fn reaches(organization_id: Option<&str>, identity: &Identity) -> bool {
     organization_id
         .is_none_or(|organization| identity.organization_id.as_deref() == Some(organization))
+}
+
+/// What `add_member` joins a participant with.
+struct Joining<'a> {
+    channel_id: &'a ChannelId,
+    identity_id: Option<&'a IdentityId>,
+    display_name: Option<&'a String>,
+    role: ParticipantRole,
+}
+
+impl Joining<'_> {
+    /// IDENTIFIED with an identity, PENDING without one, as Python's
+    /// `add_member` sets it on every join.
+    fn identification(&self) -> IdentificationStatus {
+        if self.identity_id.is_some() {
+            IdentificationStatus::Identified
+        } else {
+            IdentificationStatus::Pending
+        }
+    }
+}
+
+/// `name` unless it is empty: an empty display name is none, as the Python
+/// implementation's `or` reads it.
+fn named(name: Option<&String>) -> Option<&String> {
+    name.filter(|name| !name.is_empty())
 }
 
 /// The room's participants under the lock, and the writes the change makes.
@@ -294,8 +322,8 @@ impl Members<'_> {
         participant.resolved_at = Some(cx.env.now());
         participant.resolved_by = Some(resolved_by.to_owned());
         participant.candidates = None;
-        if identity.display_name.is_some() {
-            participant.display_name.clone_from(&identity.display_name);
+        if let Some(name) = named(identity.display_name.as_ref()) {
+            participant.display_name = Some(name.clone());
         }
         self.update(&participant);
         self.name_on_binding(&participant, &identity.id);
@@ -350,7 +378,7 @@ impl Members<'_> {
         let existing = self.find(participant_id);
         if let Some(mut active) = existing
             .clone()
-            .filter(|p| p.status == ParticipantStatus::Active)
+            .filter(|participant| participant.status == ParticipantStatus::Active)
         {
             super::warn_cross_channel(&active, channel_id, false);
             if let Some(channels) = super::channels_reached(&active, channel_id) {
@@ -359,43 +387,15 @@ impl Members<'_> {
             }
             return (active, None);
         }
-        let identification = if identity_id.is_some() {
-            IdentificationStatus::Identified
-        } else {
-            IdentificationStatus::Pending
+        let joining = Joining {
+            channel_id,
+            identity_id,
+            display_name,
+            role,
         };
-        let participant = if let Some(mut rejoined) = existing {
-            super::warn_cross_channel(&rejoined, channel_id, true);
-            let reached = super::channels_reached(&rejoined, channel_id)
-                .unwrap_or_else(|| rejoined.connected_via.clone());
-            let mut channels = vec![channel_id.clone()];
-            channels.extend(reached.into_iter().filter(|reached| reached != channel_id));
-            rejoined.status = ParticipantStatus::Active;
-            rejoined.channel_id = channel_id.clone();
-            rejoined.connected_via = channels;
-            rejoined.role = role;
-            if let Some(identity_id) = identity_id {
-                rejoined.identity_id = Some(identity_id.clone());
-            }
-            rejoined.identification = identification;
-            if let Some(display_name) = display_name {
-                rejoined.display_name = Some(display_name.clone());
-            }
-            self.update(&rejoined);
-            rejoined
-        } else {
-            let mut joined = Participant::at(
-                participant_id.clone(),
-                self.context.room.id.clone(),
-                channel_id.clone(),
-                cx.env.now(),
-            );
-            joined.display_name = display_name.cloned();
-            joined.role = role;
-            joined.identification = identification;
-            joined.identity_id = identity_id.cloned();
-            self.add_record(&joined);
-            joined
+        let participant = match existing {
+            Some(rejoined) => self.rejoin(rejoined, &joining),
+            None => self.join(cx, participant_id, &joining),
         };
         self.record(
             cx,
@@ -412,6 +412,52 @@ impl Members<'_> {
             data: json!({ "participant_id": participant_id, "identity_id": identity_id }),
         };
         (participant, Some(report))
+    }
+
+    /// A participant who is not ACTIVE joins again through `joining`'s
+    /// channel, which becomes their primary one, the one it replaces kept
+    /// (RFC §5.5); `joined_at` is kept.
+    fn rejoin(&mut self, mut rejoined: Participant, joining: &Joining<'_>) -> Participant {
+        let channel_id = joining.channel_id;
+        super::warn_cross_channel(&rejoined, channel_id, true);
+        let reached = super::channels_reached(&rejoined, channel_id)
+            .unwrap_or_else(|| rejoined.connected_via.clone());
+        let mut channels = vec![channel_id.clone()];
+        channels.extend(reached.into_iter().filter(|reached| reached != channel_id));
+        rejoined.status = ParticipantStatus::Active;
+        rejoined.channel_id = channel_id.clone();
+        rejoined.connected_via = channels;
+        rejoined.role = joining.role;
+        if let Some(identity_id) = joining.identity_id {
+            rejoined.identity_id = Some(identity_id.clone());
+        }
+        rejoined.identification = joining.identification();
+        if let Some(name) = named(joining.display_name) {
+            rejoined.display_name = Some(name.clone());
+        }
+        self.update(&rejoined);
+        rejoined
+    }
+
+    /// A participant new to the room joins through `joining`'s channel.
+    fn join(
+        &mut self,
+        cx: &Cx<'_>,
+        participant_id: &ParticipantId,
+        joining: &Joining<'_>,
+    ) -> Participant {
+        let mut joined = Participant::at(
+            participant_id.clone(),
+            self.context.room.id.clone(),
+            joining.channel_id.clone(),
+            cx.env.now(),
+        );
+        joined.display_name = joining.display_name.cloned();
+        joined.role = joining.role;
+        joined.identification = joining.identification();
+        joined.identity_id = joining.identity_id.cloned();
+        self.add_record(&joined);
+        joined
     }
 
     fn remove(

@@ -146,6 +146,18 @@ pub(crate) fn sender_identified(event: &RoomEvent, participants: &[Participant])
         .is_some_and(|record| record.identification == IdentificationStatus::Identified)
 }
 
+/// Whether `event`'s id names, on its channel, the room's record of that
+/// very id (RFC §5.5): a member the host added, whom the identity step
+/// leaves pending on that record rather than create one of their own.
+pub(crate) fn names_its_own_id(event: &RoomEvent, participants: &[Participant]) -> bool {
+    let Some(sender) = &event.source.participant_id else {
+        return false;
+    };
+    People::new(participants)
+        .named(event)
+        .is_some_and(|record| record.id == *sender)
+}
+
 /// The sender's own record ([`own_record_id`]) when it is the record
 /// `event`'s id names on its channel and the room identified it (RFC §11.2,
 /// §11.6 case 2): the record the event is then sent under, as a pending
