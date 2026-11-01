@@ -63,6 +63,7 @@ mod locks;
 mod queues;
 mod registered;
 mod router;
+mod sends;
 pub mod store;
 mod stream;
 mod tasks;

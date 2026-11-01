@@ -752,6 +752,17 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **A binding's `retry_policy` and `rate_limit` guard its sends, with a
+  circuit breaker** (RMK-1048), as Python's `EventRouter` applies them
+  (RFC §10.2 step 3d, §13.1, §13.2), where they were checked at attach and
+  never read. A failed send is tried again as the policy says (the error's
+  `retryable` first, then `retryable_errors`, the delay growing from
+  `base_delay_seconds` by `exponential_base` up to `max_delay_seconds`); a
+  send waits for its token under the rate limit; five failed sends in a
+  row open the channel's breaker, whose skipped sends fail
+  `DeliveryFailed`, `circuit_breaker_open`, until a probe 60 seconds later
+  succeeds. The framework events `circuit_breaker_opened` and
+  `circuit_breaker_closed` report its transitions.
 - **An agent's raised error reads its Python class** (RMK-1047): an
   intelligence channel whose turn raises a `RoomKitError` fails its
   delivery under the class Python names, as a transport's does

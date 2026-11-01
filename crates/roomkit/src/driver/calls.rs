@@ -29,6 +29,7 @@ use crate::events::Handled;
 use crate::hooks;
 use crate::kit::Inner;
 use crate::router;
+use crate::sends::CIRCUIT_OPEN;
 use crate::store::{
     CommitEventOptions, ConversationStore, DeleteEventOptions, GetConversationOptions,
     PatchRoomMetadataOptions, ResolveIdentityOptions, StoreError, written,
@@ -391,7 +392,18 @@ pub(super) async fn channel<S: ConversationStore>(
             let Some(channel) = inner.channel(&binding.channel_id) else {
                 return unregistered_channel(&binding.channel_id);
             };
-            channel_output(channel.deliver(event, binding, *context).await)
+            // A breaker's transition is published without waiting for its
+            // handlers, as Python schedules it: a slow one cannot stall the
+            // send that tripped it.
+            let emit = |notice| drop(inner.emit(notice));
+            let sent = inner
+                .sends
+                .deliver(&*channel, binding, event, *context, emit);
+            if let Ok(answered) = sent.await {
+                return channel_output(answered);
+            }
+            let (code, message) = CIRCUIT_OPEN;
+            Outcome::Failed(ErrorRecord::new(code, message))
         }
         ChannelRequest::ReadStream {
             turn,

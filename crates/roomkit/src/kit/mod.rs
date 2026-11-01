@@ -141,6 +141,9 @@ pub(crate) struct Inner<S> {
     pub(crate) events: Handlers,
     /// The turn backend every intelligence turn runs through (RFC §10.6).
     pub(crate) turns: Arc<Turns>,
+    /// The breakers and the rate limits of the transports' sends (RFC
+    /// §13.1, §13.2).
+    pub(crate) sends: crate::sends::Sends,
     /// Set once the channels were closed at the kit's close, with those
     /// whose close failed: they are closed once.
     channels_closed: tokio::sync::OnceCell<shutdown::Ended>,
@@ -194,6 +197,7 @@ impl<S: ConversationStore> RoomKit<S> {
             environment,
             events: Handlers::default(),
             turns: Arc::default(),
+            sends: crate::sends::Sends::default(),
             channels_closed: tokio::sync::OnceCell::new(),
             shutdown: shutdown::Shutdown::default(),
             store_released: AtomicBool::new(false),

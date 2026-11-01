@@ -162,6 +162,20 @@ pub enum FrameworkEvent {
         /// What failed.
         error: String,
     },
+    /// A transport channel's circuit breaker opened (RFC §13.1): its sends
+    /// are skipped until it lets a probe through.
+    #[non_exhaustive]
+    CircuitBreakerOpened {
+        /// The channel.
+        channel_id: ChannelId,
+    },
+    /// A transport channel's circuit breaker closed again: a send
+    /// succeeded once it had opened (RFC §13.1).
+    #[non_exhaustive]
+    CircuitBreakerClosed {
+        /// The channel.
+        channel_id: ChannelId,
+    },
     /// At least one target of an event failed; the event stays delivered.
     #[non_exhaustive]
     BroadcastPartialFailure {
@@ -366,6 +380,18 @@ impl FrameworkEvent {
             channel_id,
             error,
         }
+    }
+
+    /// A [`CircuitBreakerOpened`](Self::CircuitBreakerOpened) event,
+    /// `circuit_breaker_opened` (RFC §13.1).
+    pub fn circuit_breaker_opened(channel_id: ChannelId) -> Self {
+        Self::CircuitBreakerOpened { channel_id }
+    }
+
+    /// A [`CircuitBreakerClosed`](Self::CircuitBreakerClosed) event,
+    /// `circuit_breaker_closed` (RFC §13.1).
+    pub fn circuit_breaker_closed(channel_id: ChannelId) -> Self {
+        Self::CircuitBreakerClosed { channel_id }
     }
 
     /// A [`BroadcastPartialFailure`](Self::BroadcastPartialFailure) event, `broadcast_partial_failure` (RFC §8.2).

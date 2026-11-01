@@ -109,6 +109,14 @@ impl FrameworkEvent {
                     "max_chain_depth": depths.max_chain_depth,
                 }));
             }
+            // The channel and the breaker's state are its data too
+            // (`event_router.py`).
+            Notice::CircuitBreakerOpened { channel_id, .. } => {
+                event.data = data(json!({ "channel_id": channel_id, "state": "open" }));
+            }
+            Notice::CircuitBreakerClosed { channel_id, .. } => {
+                event.data = data(json!({ "channel_id": channel_id, "state": "closed" }));
+            }
             // The rest Python places as their serialized form does.
             Notice::RoomPaused { .. }
             | Notice::RoomClosed { .. }
