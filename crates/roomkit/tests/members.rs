@@ -202,3 +202,45 @@ async fn the_shared_id_scenario_leaves_a_readable_trail() {
         )
     );
 }
+
+/// RFC §5.5, as the conformance scenario
+/// `members/a-rejoin-without-an-identity-keeps-the-identification` says
+/// it: a member added again without an identity keeps the identification
+/// and the identity their record had.
+#[tokio::test]
+async fn a_rejoin_without_an_identity_keeps_the_identification() {
+    let (kit, room) = kit_with_u1().await;
+    kit.remove_member(&room, &u1(), RemoveMemberOptions::default())
+        .await
+        .unwrap();
+    let rejoined = kit
+        .add_member(
+            &room,
+            &channel("ws:u1:r1"),
+            &u1(),
+            AddMemberOptions::default(),
+        )
+        .await
+        .unwrap();
+    let member = kit
+        .is_member(
+            &room,
+            &IdentityId::new("u1").unwrap(),
+            IsMemberOptions::default(),
+        )
+        .await
+        .unwrap();
+    kit.close().await.unwrap();
+    assert_eq!(
+        (
+            rejoined.identification,
+            rejoined.identity_id.map(|id| id.to_string()),
+            member
+        ),
+        (
+            roomkit::model::IdentificationStatus::Identified,
+            Some("u1".to_owned()),
+            true
+        )
+    );
+}

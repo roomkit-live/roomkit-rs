@@ -210,7 +210,7 @@ struct Joining<'a> {
 
 impl Joining<'_> {
     /// IDENTIFIED with an identity, PENDING without one, as Python's
-    /// `add_member` sets it on every join.
+    /// `add_member` sets it on a new member.
     fn identification(&self) -> IdentificationStatus {
         if self.identity_id.is_some() {
             IdentificationStatus::Identified
@@ -416,7 +416,8 @@ impl Members<'_> {
 
     /// A participant who is not ACTIVE joins again through `joining`'s
     /// channel, which becomes their primary one, the one it replaces kept
-    /// (RFC §5.5); `joined_at` is kept.
+    /// (RFC §5.5); `joined_at` is kept, and so are the identification and
+    /// the identity of a re-join that names none.
     fn rejoin(&mut self, mut rejoined: Participant, joining: &Joining<'_>) -> Participant {
         let channel_id = joining.channel_id;
         super::warn_cross_channel(&rejoined, channel_id, true);
@@ -428,10 +429,12 @@ impl Members<'_> {
         rejoined.channel_id = channel_id.clone();
         rejoined.connected_via = channels;
         rejoined.role = joining.role;
+        // A re-join without an identity keeps the identification the record
+        // had, which follows the identity it keeps.
         if let Some(identity_id) = joining.identity_id {
             rejoined.identity_id = Some(identity_id.clone());
+            rejoined.identification = IdentificationStatus::Identified;
         }
-        rejoined.identification = joining.identification();
         if let Some(name) = named(joining.display_name) {
             rejoined.display_name = Some(name.clone());
         }
