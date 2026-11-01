@@ -756,6 +756,9 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **`FromCommandOptions`'s `Debug` shows how many arguments, never
+  them**, as `McpCommand`'s: an argument may hold a secret
+  (`--token ...`).
 - **A stream's error message names a transient failure as Python reads
   it**: `rate_limit_exceeded`, `overloaded_error` or `error_503` name
   none, `_` being a letter of a word to Python's `\b`, and `rate  limit`

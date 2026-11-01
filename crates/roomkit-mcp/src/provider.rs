@@ -60,9 +60,11 @@ impl Default for FromCommandOptions {
 }
 
 impl fmt::Debug for FromCommandOptions {
+    /// The names of the variables given and how many arguments, never the
+    /// arguments nor the values, which may hold secrets.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FromCommandOptions")
-            .field("args", &self.args)
+            .field("args", &self.args.len())
             .field("env", &self.env.keys().collect::<Vec<_>>())
             .field("cwd", &self.cwd)
             .field("label", &self.label)
@@ -558,4 +560,25 @@ impl fmt::Debug for McpToolProvider {
 #[expect(clippy::panic, reason = "a hidden test hook, misused only by a test")]
 fn unreachable_clone() -> ! {
     panic!("a test hook changes the provider before it is cloned")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A command's arguments and its variables' values may hold secrets:
+    /// the options' Debug shows neither.
+    #[test]
+    fn the_command_options_debug_shows_no_secret() {
+        let options = FromCommandOptions {
+            args: vec!["--token".into(), "s3cret".into()],
+            env: [("API_KEY".into(), "k3y".into())].into(),
+            ..FromCommandOptions::default()
+        };
+        let shown = format!("{options:?}");
+        assert!(
+            !shown.contains("s3cret") && !shown.contains("k3y"),
+            "{shown}"
+        );
+    }
 }
