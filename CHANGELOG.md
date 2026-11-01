@@ -36,10 +36,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as Python's does (RMK-1102).
 - A turn's link failure reads as Python's `TurnLinkError` says it, its
   reason no longer heading the message (RMK-1106).
-- Under the lock, a routed sender's record reads the room's whole timeline
-  for another sender on the channel, as Python's `_heard_from_other` does
+- Under the lock, a routed sender's record reads what the room heard on the
+  channel over its whole timeline, as Python's `_heard_from_other` reads it
   (RMK-1071): a room that heard someone else there, however long ago, is
   no longer the sender's.
+- From the review of the inbound fidelity fixes: an instruction whose parse
+  sets an idempotency key is refused `instruction_not_idempotent`, a blank
+  key a parse sets is none, and a message a turn sends is at least as deep
+  as the turn's answer whatever depth its parse set (RMK-1083); the
+  framework's own message is no other sender for routing (RMK-1100); a
+  partial failure's `total` counts the deliveries alone, not an agent's
+  turn (RMK-1095); a turn whose frames end or repeat before its output or
+  in its stream reads as a lost executor, as Python's (RMK-1106).
 - An agent whose turn fails with its provider's explicit refusal reports
   the refusal's code and `retryable` across the turn backend, as Python's
   does (RMK-1085): a refusal declared not retryable reads so.
