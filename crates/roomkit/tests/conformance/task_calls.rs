@@ -66,7 +66,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "conversation",
             "hand_back",
         ],
-        "task.wait" => &["task_id"],
+        "task.wait" | "host.wait_task" => &["task_id"],
         "host.send_event" => &[
             "room_id",
             "channel_id",
@@ -83,6 +83,19 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "standalone",
         ],
         "host.add_observation" => &["observation"],
+        "host.delegate" => &[
+            "room_id",
+            "agent_id",
+            "task",
+            "context",
+            "share_channels",
+            "notify",
+            "post_status",
+            "brief",
+            "conversation",
+            "hand_back",
+        ],
+        "host.room_tasks" => &[],
         _ => return None,
     })
 }
@@ -277,6 +290,46 @@ async fn host_call(
                     .map_err(|error| format!("observation: {error}"))?;
             let outcome = host.add_observation(observation).await;
             (finish(run, name, outcome, |()| Value::Null), None)
+        }
+        "host.delegate" => {
+            let defaults = DelegateOptions::default();
+            if optional::<u64>(spec, "conversation")?.unwrap_or(0) != 0 {
+                return Err("conversation is not in 0.x".to_owned());
+            }
+            let options = DelegateOptions {
+                context: optional(spec, "context")?,
+                share_channels: optional(spec, "share_channels")?,
+                notify: optional(spec, "notify")?,
+                post_status: optional(spec, "post_status")?.unwrap_or(defaults.post_status),
+                brief: optional(spec, "brief")?,
+                hand_back: optional(spec, "hand_back")?.unwrap_or(defaults.hand_back),
+                ..DelegateOptions::default()
+            };
+            let (agent, task): (ChannelId, String) =
+                (field(spec, "agent_id")?, field(spec, "task")?);
+            let outcome = host.delegate(&room()?, &agent, task, options).await;
+            let id = outcome.as_ref().ok().cloned();
+            (
+                finish(run, name, outcome, |id| Value::from(id.as_str())),
+                id,
+            )
+        }
+        "host.wait_task" => {
+            let task_id: String = field(spec, "task_id")?;
+            let outcome = host
+                .wait_task(&task_id, roomkit::WaitTaskOptions::default())
+                .await;
+            let waited = |result: &Option<roomkit::tasks::DelegatedTaskResult>| {
+                result.as_ref().map_or(
+                    Value::Null,
+                    |result| json!({ "result": result, "exception": null }),
+                )
+            };
+            (finish(run, name, outcome, waited), None)
+        }
+        "host.room_tasks" => {
+            let outcome = host.room_tasks().await;
+            (finish(run, name, outcome, dump), None)
         }
         other => return Err(format!("no call {other}")),
     })
