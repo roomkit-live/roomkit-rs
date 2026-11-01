@@ -125,8 +125,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 A service depends on `roomkit` and on the crates it needs beside it:
 
 - `roomkit`: the runtime on tokio: `RoomKit`, the `Channel`,
-  `ConversationStore` and `InboundRoomRouter` traits, the hooks and the
-  typed tool hooks, streamed delivery, the in-memory turn backend, the
+  `ConversationStore` and `InboundRoomRouter` traits, the hooks
+  (`kit.hook`, on events, tool calls and session starts), streamed
+  delivery, the in-memory turn backend, the
   in-memory store, and the test channels of `roomkit::testing`. It
   re-exports the core's model as `roomkit::model`.
 - `roomkit-ai`: `AiChannel`, Python's `AIChannel`, the AI channel over any
