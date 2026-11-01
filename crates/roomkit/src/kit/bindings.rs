@@ -323,7 +323,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Changes the channel's binding to a room the organization reaches:
     /// what `update` names changes, everything else is kept (RFC §7.5 rule
     /// 6).
-    async fn update_binding(
+    pub(super) async fn update_binding(
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,

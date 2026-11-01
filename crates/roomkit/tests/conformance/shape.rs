@@ -184,7 +184,9 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "metadata",
             "participant_id",
         ],
-        "detach_channel" | "mute" | "unmute" => &["room_id", "channel_id"],
+        "detach_channel" | "mute" | "unmute" | "mute_output" | "unmute_output" => {
+            &["room_id", "channel_id"]
+        }
         "set_access" => &["room_id", "channel_id", "access"],
         "set_visibility" => &["room_id", "channel_id", "visibility"],
         "close_room" | "archive_room" | "check_timers" => &["room_id"],

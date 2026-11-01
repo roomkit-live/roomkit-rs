@@ -183,6 +183,9 @@ pub struct BindingUpdate {
     pub visibility: Option<Visibility>,
     /// Metadata keys to write, each replacing the key's value.
     pub metadata: Metadata,
+    /// Whether the channel's speech output is muted (RFC §5.7): it fires
+    /// no trigger and writes no record.
+    pub output_muted: Option<bool>,
 }
 
 impl BindingUpdate {
@@ -203,6 +206,22 @@ impl BindingUpdate {
     pub fn unmute() -> Self {
         Self {
             muted: Some(false),
+            ..Self::default()
+        }
+    }
+
+    /// An update that mutes the channel's speech output (RFC §5.7).
+    pub fn mute_output() -> Self {
+        Self {
+            output_muted: Some(true),
+            ..Self::default()
+        }
+    }
+
+    /// An update that unmutes the channel's speech output (RFC §5.7).
+    pub fn unmute_output() -> Self {
+        Self {
+            output_muted: Some(false),
             ..Self::default()
         }
     }
@@ -230,6 +249,9 @@ impl BindingUpdate {
         }
         if let Some(visibility) = &self.visibility {
             updated.visibility = visibility.clone();
+        }
+        if let Some(output_muted) = self.output_muted {
+            updated.output_muted = output_muted;
         }
         updated.metadata.extend(
             self.metadata

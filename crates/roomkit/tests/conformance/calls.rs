@@ -17,8 +17,9 @@ use roomkit::{
     AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
     CloseRoomOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
     DetachChannelOptions, HookOptions, HookTrigger, HostChannel, InboundResult, MuteOptions,
-    PostOptions, ProcessInboundOptions, RemoveRoomHookOptions, RoomKitError, SendEventOptions,
-    SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateEventOptions,
+    MuteOutputOptions, PostOptions, ProcessInboundOptions, RemoveRoomHookOptions, RoomKitError,
+    SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions,
+    UpdateEventOptions,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -265,6 +266,7 @@ async fn lifecycle_call(
             Value::Null
         }),
         "add_room_hook" | "remove_room_hook" => room_hook_call(run, name, spec).await?,
+        "mute_output" | "unmute_output" => output_call(run, name, spec).await?,
         other => return Err(format!("no call {other}")),
     })
 }
@@ -435,6 +437,26 @@ pub(crate) fn register_channel(
     Ok(finish(run, "register_channel", registered, |()| {
         Value::Null
     }))
+}
+
+/// A change of a channel's speech output the scenario names: its mute or
+/// its unmute.
+async fn output_call(
+    run: &std::sync::Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<Called, Unreadable> {
+    let (room, channel) = (room_id(spec)?, channel_id(spec)?);
+    let organization_id = organization_id(spec);
+    let kit = run.kit();
+    let outcome = if name == "mute_output" {
+        let options = MuteOutputOptions { organization_id };
+        kit.mute_output(&room, &channel, options).await
+    } else {
+        let options = UnmuteOutputOptions { organization_id };
+        kit.unmute_output(&room, &channel, options).await
+    };
+    Ok(finish(run, name, outcome, dump))
 }
 
 /// A room hook's call the scenario names: its addition or its removal.

@@ -1,5 +1,6 @@
 //! Registering and unregistering a kit's channels and hooks.
 
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::future::Future;
 use std::sync::Arc;
@@ -8,7 +9,7 @@ use roomkit_core::model::{ChannelId, RoomContext};
 use roomkit_core::ops::FrameworkEvent as CoreEvent;
 use roomkit_core::rules::hook_registry::{HookTrigger, RegistrationError};
 
-use super::{RoomKit, write};
+use super::{RoomKit, read, write};
 use crate::channel::{Channel, DynChannel, config_of};
 use crate::error::RoomKitError;
 use crate::hooks::{Closure, HookHandler, HookOptions, HookPayload, IntoHookReturn};
@@ -41,6 +42,7 @@ impl<S: ConversationStore> RoomKit<S> {
             config.register_channel(declaration)?;
             // The channel is in place before an operation can see its
             // declaration.
+            write(&self.inner.channel_order).push(channel_id.clone());
             write(&self.inner.channels).insert(channel_id, channel);
             Ok::<(), RoomKitError>(())
         })?;
@@ -75,6 +77,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 return Ok::<_, Infallible>(None);
             };
             // No operation can see the declaration once the channel goes.
+            write(&self.inner.channel_order).retain(|id| id != channel_id);
             let channel = write(&self.inner.channels).remove(channel_id);
             Ok(channel.map(|channel| Registered {
                 declaration,
@@ -89,6 +92,31 @@ impl<S: ConversationStore> RoomKit<S> {
             unregistered.declaration.channel_type.clone(),
         )));
         Ok(Some(Arc::new(unregistered)))
+    }
+
+    /// The channels registered, in their registration order: Python's
+    /// `RoomKit.list_channels()`. It answers during the kit's close and
+    /// after it.
+    ///
+    /// ```
+    /// let kit = roomkit::RoomKit::new(roomkit::RoomKitOptions::default());
+    /// assert!(kit.list_channels().is_empty());
+    /// ```
+    pub fn list_channels(&self) -> Vec<Arc<dyn RegisteredChannel>> {
+        let order = read(&self.inner.channel_order).clone();
+        order
+            .iter()
+            .filter_map(|channel_id| self.inner.registered(channel_id))
+            .collect()
+    }
+
+    /// The channels registered, by their id: Python's `RoomKit.channels`.
+    /// It answers during the kit's close and after it.
+    pub fn channels(&self) -> BTreeMap<ChannelId, Arc<dyn RegisteredChannel>> {
+        self.list_channels()
+            .into_iter()
+            .map(|channel| (channel.channel_id().clone(), channel))
+            .collect()
     }
 
     /// Registers a hook on `trigger` (RFC §9.1): Python's

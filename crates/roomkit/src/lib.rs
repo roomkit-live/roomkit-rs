@@ -135,11 +135,11 @@ pub use self::kit::{
     AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
     CheckRoomTimersOptions, CloseRoomOptions, CommitEventOptions, CreateRoomOptions,
     DeleteEventOptions, DetachChannelOptions, GetBindingOptions, GetRoomOptions,
-    GetTimelineOptions, ListBindingsOptions, ListMembersOptions, MuteOptions, PauseRoomOptions,
-    PostOptions, ProcessInboundOptions, RemoveRoomHookOptions, ReopenRoomOptions,
-    ResumeRoomOptions, RoomKit, RoomKitOptions, SendEventOptions, SetAccessOptions,
-    SetVisibilityOptions, UnmuteOptions, UpdateBindingMetadataOptions, UpdateEventOptions,
-    WeakRoomKit,
+    GetTimelineOptions, HasHooksOptions, HookEngine, ListBindingsOptions, ListMembersOptions,
+    MuteOptions, MuteOutputOptions, PauseRoomOptions, PostOptions, ProcessInboundOptions,
+    RemoveRoomHookOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitOptions,
+    SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions,
+    UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
 pub use self::kit::{ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions};
 pub use self::registered::RegisteredChannel;

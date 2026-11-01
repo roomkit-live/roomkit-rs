@@ -2,14 +2,13 @@
 //! or one room, whose hooks fire for its payloads alone, beside the kit's.
 
 use std::future::Future;
-use std::sync::Arc;
 
 use roomkit_core::model::{RoomContext, RoomId};
-use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger, RegistrationError};
+use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
 
-use super::{RoomKit, write};
+use super::RoomKit;
 use crate::error::RoomKitError;
-use crate::hooks::{Closure, HookHandler, HookPayload, HookRegistration, IntoHookReturn};
+use crate::hooks::{HookPayload, HookRegistration, IntoHookReturn};
 use crate::store::ConversationStore;
 
 /// What [`RoomKit::add_room_hook`] takes beside the room, the trigger, the
@@ -123,29 +122,14 @@ impl<S: ConversationStore> RoomKit<S> {
         self.inner.open()?;
         self.reached(room_id, options.organization_id.as_deref())
             .await?;
-        let mut spec = HookSpec::new(options.name, trigger, execution);
-        spec.priority = options.priority;
-        spec.fail_closed = options.fail_closed;
-        spec.needs_lock = options.needs_lock;
-        if !P::accepts(trigger) {
-            return Err(RegistrationError::PayloadMismatch {
-                hook: spec.name,
-                trigger,
-            }
-            .into());
-        }
-        let handler: Arc<dyn HookHandler<P>> = Arc::new(Closure(r#fn));
-        let kept = P::kept(handler);
-        let held = self.inner.try_change_config(|config| {
-            let id = config.hooks.add_room_hook(room_id.clone(), spec)?;
-            // The handler is in place before an operation can see the hook.
-            write(&self.inner.hooks).insert(id, kept.clone());
-            Ok::<Option<HookSpec>, RoomKitError>(config.hooks.get(id).cloned())
-        })?;
-        // The registry holds what it just registered, under the name it
-        // gave it.
-        let spec = held.unwrap_or_else(|| HookSpec::new("", trigger, execution));
-        Ok(HookRegistration::held(spec, kept))
+        let hook = HookRegistration {
+            priority: options.priority,
+            name: options.name,
+            fail_closed: options.fail_closed,
+            needs_lock: options.needs_lock,
+            ..HookRegistration::new(trigger, execution, r#fn)
+        };
+        self.hook_engine().add_room_hook(room_id, hook)
     }
 
     /// Removes the hook named `name` added for the room `room_id`: whether
@@ -168,13 +152,6 @@ impl<S: ConversationStore> RoomKit<S> {
         self.inner.open()?;
         self.reached(room_id, options.organization_id.as_deref())
             .await?;
-        let Ok(removed) = self.inner.try_change_config(|config| {
-            Ok::<_, std::convert::Infallible>(config.hooks.remove_room_hook(room_id, name))
-        });
-        let Some(id) = removed else {
-            return Ok(false);
-        };
-        write(&self.inner.hooks).remove(&id);
-        Ok(true)
+        Ok(self.hook_engine().remove_room_hook(room_id, name))
     }
 }

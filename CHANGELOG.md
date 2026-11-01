@@ -6,6 +6,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The kit's hook engine, as Python's: `RoomKit::hook_engine()` and
+  `hooks_for(trigger)` give a `HookEngine` that registers a
+  `HookRegistration` for every room or one (`register`, `add_room_hook`,
+  `replace_room_hook`), removes one by name (`remove_global_hook`,
+  `remove_room_hook`) and reads them (`room_hook_names`, `has_hooks`);
+  `hooks_for` a trigger a turn fires gives the turn executor's side, which
+  refuses another trigger and a room's hook. `HookRegistration::new` takes
+  the hook's closure.
+- The kit's channel registry reads, as Python's: `list_channels()` in
+  registration order and `channels()` by id, answered after the close too.
+- `mute_output` and `unmute_output` set a binding's `output_muted` (RFC
+  §5.7): no trigger fires and no record is written, the channel still
+  receives every event.
+
 - Hooks per room (RFC §9.1), as Python's: `RoomKit::add_room_hook(room_id,
   trigger, execution, fn, AddRoomHookOptions)` returns the `HookRegistration`
   the kit holds, and `remove_room_hook(room_id, name, RemoveRoomHookOptions)`

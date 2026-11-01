@@ -17,6 +17,7 @@ use roomkit::DetachChannelOptions;
 use roomkit::GetBindingOptions;
 use roomkit::GetRoomOptions;
 use roomkit::GetTimelineOptions;
+use roomkit::HasHooksOptions;
 use roomkit::HookExecution;
 use roomkit::HookOptions;
 use roomkit::HostChannelOptions;
@@ -24,6 +25,7 @@ use roomkit::InMemoryStore;
 use roomkit::ListBindingsOptions;
 use roomkit::ListMembersOptions;
 use roomkit::MuteOptions;
+use roomkit::MuteOutputOptions;
 use roomkit::NormalizeOptions;
 use roomkit::PauseRoomOptions;
 use roomkit::PostOptions;
@@ -38,6 +40,7 @@ use roomkit::SetAccessOptions;
 use roomkit::SetVisibilityOptions;
 use roomkit::TransportChannelOptions;
 use roomkit::UnmuteOptions;
+use roomkit::UnmuteOutputOptions;
 use roomkit::UpdateBindingMetadataOptions;
 use roomkit::UpdateEventOptions;
 use roomkit::model::Access;
@@ -212,6 +215,13 @@ fn get_timeline_options_defaults_as_python() {
 }
 
 #[test]
+fn has_hooks_options_defaults_as_python() {
+    let defaults = HasHooksOptions::default();
+    // roomkit.HookEngine.has_hooks(trigger) = None
+    assert!(defaults.trigger.is_none());
+}
+
+#[test]
 fn hook_options_defaults_as_python() {
     let defaults = HookOptions::default();
     // roomkit.RoomKit.hook(channel_ids) = None
@@ -263,6 +273,13 @@ fn list_members_options_defaults_as_python() {
 fn mute_options_defaults_as_python() {
     let defaults = MuteOptions::default();
     // roomkit.RoomKit.mute(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn mute_output_options_defaults_as_python() {
+    let defaults = MuteOutputOptions::default();
+    // roomkit.RoomKit.mute_output(organization_id) = None
     assert!(defaults.organization_id.is_none());
 }
 
@@ -427,6 +444,13 @@ fn transport_channel_options_defaults_as_python() {
 fn unmute_options_defaults_as_python() {
     let defaults = UnmuteOptions::default();
     // roomkit.RoomKit.unmute(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn unmute_output_options_defaults_as_python() {
+    let defaults = UnmuteOutputOptions::default();
+    // roomkit.RoomKit.unmute_output(organization_id) = None
     assert!(defaults.organization_id.is_none());
 }
 

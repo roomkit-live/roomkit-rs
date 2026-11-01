@@ -20,9 +20,11 @@
 
 mod background;
 mod bindings;
+mod engine;
 mod events;
 mod inject;
 mod options;
+mod output;
 mod post;
 mod read_markers;
 mod registry;
@@ -47,6 +49,7 @@ use roomkit_core::ops::{
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookSubject, HookTrigger};
 
+pub use self::engine::{HasHooksOptions, HookEngine};
 use self::inject::Entered;
 pub use self::options::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
@@ -57,6 +60,7 @@ pub use self::options::{
     SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateBindingMetadataOptions,
     UpdateEventOptions,
 };
+pub use self::output::{MuteOutputOptions, UnmuteOutputOptions};
 pub use self::read_markers::{ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions};
 pub use self::room_hooks::{AddRoomHookOptions, RemoveRoomHookOptions};
 pub use self::weak::WeakRoomKit;
@@ -125,6 +129,8 @@ impl<S> Clone for RoomKit<S> {
 pub(crate) struct Inner<S> {
     config: RwLock<Arc<KitConfig>>,
     channels: RwLock<HashMap<ChannelId, Arc<dyn DynChannel>>>,
+    /// The ids of the channels registered, in their registration order.
+    channel_order: RwLock<Vec<ChannelId>>,
     /// The handlers of the hooks, by the payload their trigger hands them.
     pub(crate) hooks: RwLock<HashMap<HookId, Kept>>,
     /// The routing strategy (RFC §10.4), fixed at the kit's construction.
@@ -190,6 +196,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let inner = Arc::new_cyclic(|kit: &Weak<Inner<S>>| Inner {
             config: RwLock::new(Arc::new(config)),
             channels: RwLock::new(HashMap::new()),
+            channel_order: RwLock::new(Vec::new()),
             hooks: RwLock::new(HashMap::new()),
             router: inbound_router.unwrap_or_else(|| default_router(&store, kit)),
             store,

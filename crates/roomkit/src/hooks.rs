@@ -217,9 +217,39 @@ pub struct HookRegistration {
 }
 
 impl HookRegistration {
+    /// The registration of the closure `r#fn` on `trigger`, run as
+    /// `execution`, with Python's defaults for the rest; its payload, the
+    /// type written on its argument, is its trigger's or the registration
+    /// is refused (RFC §9.2), as [`RoomKit::hook`](crate::RoomKit::hook)'s.
+    ///
+    /// ```
+    /// use roomkit::model::{RoomContext, RoomEvent};
+    /// use roomkit::{HookExecution, HookRegistration, HookTrigger};
+    ///
+    /// let audit = HookRegistration {
+    ///     name: "audit".to_owned(),
+    ///     ..HookRegistration::new(
+    ///         HookTrigger::AfterBroadcast,
+    ///         HookExecution::Async,
+    ///         |_event: RoomEvent, _context: RoomContext| async {},
+    ///     )
+    /// };
+    /// assert_eq!(audit.priority, 0);
+    /// ```
+    pub fn new<P, F, Fut, R>(trigger: HookTrigger, execution: HookExecution, r#fn: F) -> Self
+    where
+        P: HookPayload,
+        F: Fn(P, RoomContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = R> + Send + 'static,
+        R: IntoHookReturn<P>,
+    {
+        let handler: Arc<dyn HookHandler<P>> = Arc::new(Closure(r#fn));
+        Self::of(trigger, execution, P::kept(handler))
+    }
+
     /// The registration of `r#fn` on `trigger`, run as `execution`, with
     /// Python's defaults for the rest.
-    pub fn new(trigger: HookTrigger, execution: HookExecution, r#fn: Kept) -> Self {
+    fn of(trigger: HookTrigger, execution: HookExecution, r#fn: Kept) -> Self {
         let defaults = HookSpec::new("", trigger, execution);
         Self {
             trigger,
@@ -234,6 +264,31 @@ impl HookRegistration {
             event_types: None,
             fail_closed: defaults.fail_closed,
             needs_lock: defaults.needs_lock,
+        }
+    }
+
+    /// What the kit's registry holds of the registration.
+    pub(crate) fn spec(&self) -> HookSpec {
+        let mut spec = HookSpec::new(self.name.clone(), self.trigger, self.execution);
+        spec.priority = self.priority;
+        spec.timeout = self.timeout;
+        spec.fail_closed = self.fail_closed;
+        spec.needs_lock = self.needs_lock;
+        let mut filter = HookFilter::default();
+        filter.channel_types.clone_from(&self.channel_types);
+        filter.channel_ids.clone_from(&self.channel_ids);
+        filter.directions.clone_from(&self.directions);
+        filter.event_types.clone_from(&self.event_types);
+        spec.filter = filter;
+        spec
+    }
+
+    /// Whether its handler takes the payload its trigger hands (RFC §9.2).
+    pub(crate) fn takes_its_payload(&self) -> bool {
+        match self.r#fn {
+            Kept::Event(_) => RoomEvent::accepts(self.trigger),
+            Kept::ToolCall(_) => ToolCallEvent::accepts(self.trigger),
+            Kept::Session(_) => SessionStartedEvent::accepts(self.trigger),
         }
     }
 

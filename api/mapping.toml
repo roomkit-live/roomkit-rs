@@ -512,8 +512,20 @@ reason = "not in 0.x: delegation, tasks, orchestration strategies, human input a
 
 [[missing]]
 python = "roomkit.RoomKit"
-members = ["disable_room_hook", "enable_room_hook", "hook_engine", "hooks_for"]
-reason = "not in 0.x: the room hooks the turn executors define by name, and the hook engine"
+members = ["disable_room_hook", "enable_room_hook"]
+reason = "not in 0.x: the room hooks the turn executors define by name (TurnExecutor.room_hook)"
+
+[[missing]]
+python = "roomkit.HookEngine"
+members = [
+    "FAIL_CLOSED_TRIGGERS", "__init__", "add_owner_room_hook",
+    "define_room_hook", "defined_room_hooks", "defines_room_hooks",
+    "drain_observers", "fail_closed_hook", "has_hooks_for",
+    "has_off_lock_hooks", "has_router_hook", "has_sync_hooks", "holds",
+    "remove_hook", "run_async_hooks", "run_observers", "run_sync_hooks",
+    "running_observers", "undefine_room_hook", "use_room_hooks",
+]
+reason = "not in 0.x: the engine is the kit's, built with it; its chains run in the core's operations; the room hooks the turn executors define by name; its fail-closed triggers are fixed (RFC 9.3)"
 
 [[missing]]
 python = "roomkit.RoomKit"
@@ -555,8 +567,8 @@ reason = "not in 0.x: sources, and the WebSocket and webhook helpers"
 
 [[missing]]
 python = "roomkit.RoomKit"
-members = ["channel_call", "channels", "list_channels", "mute_output", "unmute_output"]
-reason = "not in 0.x: the channel registry's reads, output mute and channel calls"
+members = ["channel_call"]
+reason = "not in 0.x: a channel's per-room verbs, through the turn backend (RFC 10.6.3)"
 
 [[missing]]
 python = "roomkit.RoomKit"

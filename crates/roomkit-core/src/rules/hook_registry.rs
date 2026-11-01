@@ -127,6 +127,33 @@ impl HookTrigger {
         }
     }
 
+    /// Whether a turn fires the trigger, on the turn executor hosting the
+    /// channel, rather than the room owner (RFC §10.6.6), as the Python
+    /// implementation's `TURN_TRIGGERS` lists them: `BEFORE_TOOL_USE` and
+    /// `ON_TOOL_CALL` among the triggers this list holds.
+    #[doc(hidden)]
+    pub fn is_turn_trigger(self) -> bool {
+        match self {
+            Self::BeforeToolUse | Self::OnToolCall => true,
+            Self::BeforeBroadcast
+            | Self::AfterBroadcast
+            | Self::OnEventUpdated
+            | Self::OnEventDeleted
+            | Self::OnRoomCreated
+            | Self::OnRoomPaused
+            | Self::OnRoomClosed
+            | Self::OnChannelAttached
+            | Self::OnChannelDetached
+            | Self::OnChannelMuted
+            | Self::OnChannelUnmuted
+            | Self::OnSessionStarted
+            | Self::OnError
+            | Self::OnTaskCreated
+            | Self::OnTranscription
+            | Self::BeforeTts => false,
+        }
+    }
+
     /// Whether the trigger's payload is a tool call rather than an event
     /// (RFC §9.3): `BEFORE_TOOL_USE` and `ON_TOOL_CALL`.
     #[doc(hidden)]
@@ -469,6 +496,65 @@ impl HookRegistry {
         }
         self.next += 1;
         Ok(id)
+    }
+
+    /// Adds `spec` for the room `room_id` in place of the room's hook of the
+    /// same name, returning its id and the replaced hook's: Python's
+    /// `HookEngine.replace_room_hook`, a strategy installed again in its
+    /// room replacing what it set up there. A registration refused leaves
+    /// the hook it would replace in place.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistrationError`] when the registration breaks a rule of
+    /// RFC §9.1; nothing is changed then.
+    pub fn replace_room_hook(
+        &mut self,
+        room_id: RoomId,
+        spec: HookSpec,
+    ) -> Result<(HookId, Option<HookId>), RegistrationError> {
+        let position = self.hooks.iter().position(|hook| {
+            !spec.name.is_empty()
+                && hook.room.as_ref() == Some(&room_id)
+                && hook.spec.name == spec.name
+        });
+        let replaced = position.map(|position| self.hooks.remove(position));
+        match self.add(Some(room_id), spec) {
+            Ok(id) => Ok((id, replaced.map(|hook| hook.id))),
+            Err(error) => {
+                if let (Some(position), Some(hook)) = (position, replaced) {
+                    self.hooks.insert(position, hook);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Whether a hook is registered, the kit's or a room's: on `trigger`,
+    /// or on any trigger for `None`. Python's `HookEngine.has_hooks`.
+    pub fn has_hooks(&self, trigger: Option<HookTrigger>) -> bool {
+        self.has_hooks_where(|spec| trigger.is_none_or(|trigger| spec.trigger == trigger))
+    }
+
+    /// Whether a hook is registered, the kit's or a room's, whose
+    /// registration `keep` admits.
+    pub fn has_hooks_where(&self, keep: impl Fn(&HookSpec) -> bool) -> bool {
+        self.hooks.iter().any(|hook| keep(&hook.spec))
+    }
+
+    /// The kit's hook named `name`.
+    pub fn global_hook(&self, name: &str) -> Option<&HookSpec> {
+        self.in_scope(None)
+            .find(|hook| hook.spec.name == name)
+            .map(|hook| &hook.spec)
+    }
+
+    /// The hook named `name` the room `room_id` was given.
+    pub fn room_hook(&self, room_id: &RoomId, name: &str) -> Option<&HookSpec> {
+        self.hooks
+            .iter()
+            .find(|hook| hook.room.as_ref() == Some(room_id) && hook.spec.name == name)
+            .map(|hook| &hook.spec)
     }
 
     /// Removes the kit's hook named `name`, returning its id; `None` when
@@ -1202,6 +1288,54 @@ mod tests {
                     .unwrap();
             }
             assert_eq!(registry.room_hook_names(&room("r1")), ["hook", "hook#2"]);
+        }
+
+        // Python: tests/test_hook_rules.py::TestReplacingARoomHook::test_replaces_the_room_s_hook_of_the_same_name
+        #[test]
+        fn a_replacement_takes_the_place_of_the_room_s_hook_of_its_name() {
+            let mut registry = HookRegistry::new();
+            let first = registry
+                .add_room_hook(room("r1"), sync_hook("router", 0))
+                .unwrap();
+            let (second, replaced) = registry
+                .replace_room_hook(room("r1"), sync_hook("router", 3))
+                .unwrap();
+            let chain = registry.chain(HookTrigger::BeforeBroadcast, &event_in("r1"));
+            assert_eq!((replaced, chain), (Some(first), vec![second]));
+        }
+
+        #[test]
+        fn a_refused_replacement_leaves_the_hook_it_would_replace() {
+            let mut registry = HookRegistry::new();
+            registry
+                .add_room_hook(room("r1"), sync_hook("audit", 0))
+                .unwrap();
+            let kept = registry
+                .add_room_hook(room("r1"), off_lock_hook("scan", 0))
+                .unwrap();
+            assert!(matches!(
+                registry.replace_room_hook(room("r1"), off_lock_hook("scan", 5)),
+                Err(RegistrationError::LockOrdering { .. })
+            ));
+            assert_eq!(registry.off_lock_checks(&event_in("r1")), [kept]);
+        }
+
+        // Python: tests/test_turn_hooks.py::test_the_kit_s_engine_reads_the_turn_hooks_registered_through_it
+        #[test]
+        fn has_hooks_reads_the_kit_s_and_each_room_s() {
+            let mut registry = HookRegistry::new();
+            let empty = registry.has_hooks(None);
+            let gate = HookSpec::new("gate", HookTrigger::BeforeToolUse, HookExecution::Sync);
+            registry.add_room_hook(room("r1"), gate).unwrap();
+            assert_eq!(
+                (
+                    empty,
+                    registry.has_hooks(None),
+                    registry.has_hooks(Some(HookTrigger::BeforeToolUse)),
+                    registry.has_hooks(Some(HookTrigger::OnToolCall)),
+                ),
+                (false, true, true, false)
+            );
         }
 
         #[test]
