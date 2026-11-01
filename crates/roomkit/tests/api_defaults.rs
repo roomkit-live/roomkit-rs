@@ -410,6 +410,12 @@ fn resume_room_options_defaults_as_python() {
 }
 
 #[test]
+fn wait_task_options_defaults_as_python() {
+    // roomkit.TurnHost.wait_task(timeout) = None
+    assert!(roomkit::WaitTaskOptions::default().timeout.is_none());
+}
+
+#[test]
 fn submit_options_defaults_as_python() {
     let defaults = roomkit::tasks::SubmitOptions::default();
     // roomkit.tasks.TaskRunner.submit(context) = None

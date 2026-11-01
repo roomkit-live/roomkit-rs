@@ -28,13 +28,14 @@ use crate::orchestration::{StatusEntry, StatusLevel};
 use crate::store::ConversationStore;
 use crate::stream::ResponseStream;
 use crate::tasks::Kind;
+use crate::tasks::{DelegatedTask, DelegatedTaskResult};
 use crate::tool_calls::{ToolCallEvent, ToolCallReport, error_envelope};
 use crate::turns::wire::{
-    ADD_OBSERVATION, AddObservation, POST_STATUS, PostStatus, UPDATE_ROOM_METADATA,
-    UpdateRoomMetadata,
+    ADD_OBSERVATION, AddObservation, BETWEEN_TURNS, DELEGATE, Delegate, POST_STATUS, PostStatus,
+    ROOM_TASKS, RoomTasks, UPDATE_ROOM_METADATA, UpdateRoomMetadata, WAIT_TASK, WaitTask,
 };
 use crate::turns::{HostLink, TurnError, send_event_arguments};
-use crate::{RoomKit, SendEventOptions, UpdateRoomMetadataOptions};
+use crate::{DelegateOptions, RoomKit, SendEventOptions, UpdateRoomMetadataOptions};
 
 tokio::task_local! {
     static TURN: TurnHost;
@@ -293,13 +294,103 @@ impl TurnHost {
         self.verb(ADD_OBSERVATION, &arguments).await.map(drop)
     }
 
+    /// Delegates `task` to `agent_id` from `room_id` in the background, as
+    /// [`RoomKit::delegate`] does on the room's owner: the task's id, which
+    /// [`wait_task`](Self::wait_task) waits for. Python's
+    /// `TurnHost.delegate(room_id, agent_id, task, **options)`, its options
+    /// those of a background delegation that are data: `wait`,
+    /// `on_complete` and `organization_id` are refused.
+    ///
+    /// # Errors
+    ///
+    /// [`RoomKitError::Value`] for another room than the turn's, or an
+    /// option the verb does not carry; the delegation's refusal otherwise;
+    /// after the turn, the verb needs it: a `RuntimeError`.
+    pub async fn delegate(
+        &self,
+        room_id: &RoomId,
+        agent_id: &ChannelId,
+        task: impl Into<String>,
+        options: DelegateOptions,
+    ) -> Result<String, RoomKitError> {
+        if options.wait || options.on_complete.is_some() || options.organization_id.is_some() {
+            return Err(RoomKitError::Value(
+                "The arguments of verb \"delegate\" are not valid: a turn's host delegates in \
+                 the background, with data only"
+                    .to_owned(),
+            ));
+        }
+        let arguments = Delegate {
+            room_id: room_id.clone(),
+            agent_id: agent_id.clone(),
+            task: task.into(),
+            context: options.context,
+            share_channels: options.share_channels,
+            notify: options.notify,
+            post_status: options.post_status,
+            brief: options.brief,
+            conversation: 0,
+            hand_back: options.hand_back,
+        };
+        let task_id = self.verb(DELEGATE, &arguments).await?;
+        decoded(task_id)
+    }
+
+    /// The result of a task a host of this room delegated, once it ends:
+    /// Python's `TurnHost.wait_task(task_id, timeout=None)`; `None` when
+    /// the timeout passes first, or for a task the room's hosts did not
+    /// delegate.
+    ///
+    /// # Errors
+    ///
+    /// A link's failure as [`send_event`](Self::send_event)'s; after the
+    /// turn, the verb needs it: a `RuntimeError`.
+    pub async fn wait_task(
+        &self,
+        task_id: &str,
+        options: WaitTaskOptions,
+    ) -> Result<Option<DelegatedTaskResult>, RoomKitError> {
+        let arguments = WaitTask {
+            task_id: task_id.to_owned(),
+            timeout: options.timeout.map(|timeout| timeout.as_secs_f64()),
+        };
+        let waited = self.verb(WAIT_TASK, &arguments).await?;
+        if waited.is_null() {
+            return Ok(None);
+        }
+        decoded(waited.get("result").cloned().unwrap_or(Value::Null)).map(Some)
+    }
+
+    /// The turn's room's tasks, as `task_status` reads them on the room's
+    /// owner (RFC §23.4): Python's `TurnHost.room_tasks()`.
+    ///
+    /// # Errors
+    ///
+    /// A link's failure as [`send_event`](Self::send_event)'s; after the
+    /// turn, the verb needs it: a `RuntimeError`.
+    pub async fn room_tasks(&self) -> Result<Vec<Metadata>, RoomKitError> {
+        let lines = self.verb(ROOM_TASKS, &RoomTasks::default()).await?;
+        decoded(lines)
+    }
+
     /// Sends `verb` with `arguments` to the room's owner, at least as deep
-    /// as the current work: its result as data.
+    /// as the current work: its result as data. After the turn, a verb
+    /// that needs it is refused before it is sent, as Python's host refuses
+    /// it (`RuntimeError`).
     async fn verb<T: serde::Serialize>(
         &self,
         verb: &str,
         arguments: &T,
     ) -> Result<Value, RoomKitError> {
+        if !self.open() && !BETWEEN_TURNS.contains(&verb) {
+            let mut sent = BETWEEN_TURNS.to_vec();
+            sent.sort_unstable();
+            let message = format!(
+                "{verb} needs a turn: after its turn ended, a host sends {} only (RFC §10.6.5)",
+                sent.join(", ")
+            );
+            return Err(TurnError::new("RuntimeError", message).into_kit_error());
+        }
         let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
         let Ok(Value::Object(arguments)) = serde_json::to_value(arguments) else {
             return Err(TurnError::new(
@@ -1011,6 +1102,27 @@ pub(crate) trait TurnKit: Send + Sync {
 
     /// `room_id` as the store holds it, `None` for a room it does not hold.
     fn room(&self, room_id: RoomId) -> BoxFuture<'static, Result<Option<Room>, RoomKitError>>;
+
+    /// Delegates `options.task` in the background for a turn whose
+    /// response is `floor` deep, keeping the task for `wait_task`: its id.
+    fn delegate(
+        &self,
+        arguments: Delegate,
+        floor: u32,
+    ) -> BoxFuture<'static, Result<String, RoomKitError>>;
+
+    /// The task `task_id` a host of `room_id` delegated, once it ends or
+    /// `timeout` passes; `None` for a task the hosts did not delegate or a
+    /// wait that timed out.
+    fn wait_task(
+        &self,
+        room_id: RoomId,
+        task_id: String,
+        timeout: Option<std::time::Duration>,
+    ) -> BoxFuture<'static, Option<DelegatedTaskResult>>;
+
+    /// The tasks of `room_id`, as its status bus lists them (RFC §23.4).
+    fn room_tasks(&self, room_id: RoomId) -> BoxFuture<'static, Vec<Metadata>>;
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
@@ -1115,6 +1227,82 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         })
     }
 
+    fn delegate(
+        &self,
+        arguments: Delegate,
+        floor: u32,
+    ) -> BoxFuture<'static, Result<String, RoomKitError>> {
+        let kit = self.upgrade().map(|inner| RoomKit { inner });
+        Box::pin(async move {
+            let kit = kit.ok_or(RoomKitError::KitClosed)?;
+            if arguments.conversation != 0 {
+                return Err(RoomKitError::Value(
+                    "delegate(conversation) is not in 0.x".to_owned(),
+                ));
+            }
+            let Delegate {
+                room_id,
+                agent_id,
+                task,
+                context,
+                share_channels,
+                notify,
+                post_status,
+                brief,
+                hand_back,
+                ..
+            } = arguments;
+            let options = DelegateOptions {
+                context,
+                share_channels,
+                notify,
+                post_status,
+                brief,
+                hand_back,
+                ..DelegateOptions::default()
+            };
+            // Read where the turn's call was made: its result continues the
+            // turn's chain (RFC §23.3).
+            let delegating = kit.delegate(&room_id, &agent_id, task, options);
+            let task: DelegatedTask = ExecutionContext::current()
+                .at_least(floor)
+                .scope(Box::pin(delegating))
+                .await?;
+            kit.inner.host_tasks.keep(task.clone());
+            Ok(task.id)
+        })
+    }
+
+    fn wait_task(
+        &self,
+        room_id: RoomId,
+        task_id: String,
+        timeout: Option<std::time::Duration>,
+    ) -> BoxFuture<'static, Option<DelegatedTaskResult>> {
+        let task = self
+            .upgrade()
+            .and_then(|inner| inner.host_tasks.of_room(&task_id, room_id.as_str()));
+        Box::pin(async move {
+            let options = crate::tasks::WaitOptions { timeout };
+            task?.wait(options).await.ok()
+        })
+    }
+
+    fn room_tasks(&self, room_id: RoomId) -> BoxFuture<'static, Vec<Metadata>> {
+        let bus = self.upgrade().map(|inner| inner.status_bus.clone());
+        Box::pin(async move {
+            let Some(bus) = bus else {
+                return Vec::new();
+            };
+            crate::tasks::lines::room_task_lines(
+                &bus,
+                room_id.as_str(),
+                crate::tasks::lines::ROOM_TASKS_WINDOW,
+            )
+            .await
+        })
+    }
+
     fn emit(
         &self,
         event_type: String,
@@ -1145,6 +1333,15 @@ fn decoded<T: serde::de::DeserializeOwned>(result: Value) -> Result<T, RoomKitEr
         )
         .into_kit_error()
     })
+}
+
+/// What [`TurnHost::wait_task`] takes beside the task: Python's
+/// `wait_task(task_id, timeout=None)`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WaitTaskOptions {
+    /// Python `timeout=None`: how long to wait at most; `None` waits for
+    /// the task's end.
+    pub timeout: Option<std::time::Duration>,
 }
 
 /// What [`TurnHost::post_status`] takes beside the agent, its action and

@@ -198,6 +198,9 @@ pub(crate) struct Inner<S> {
     pub(crate) identity_hooks: RwLock<Vec<identity::IdentityHook>>,
     /// Where background delegations run (RFC §23.1).
     pub(crate) task_runner: Arc<dyn crate::tasks::TaskRunner<S>>,
+    /// The tasks the turns' hosts delegated, kept for their `wait_task`
+    /// (RFC §10.6.5).
+    pub(crate) host_tasks: crate::tasks::HostTasks,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -266,6 +269,7 @@ impl<S: ConversationStore> RoomKit<S> {
             identity_hooks: RwLock::new(Vec::new()),
             task_runner: task_runner
                 .unwrap_or_else(|| Arc::new(crate::tasks::InMemoryTaskRunner::new())),
+            host_tasks: crate::tasks::HostTasks::default(),
         });
         inner.subscribe_status_bus();
         Self { inner }

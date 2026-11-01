@@ -291,3 +291,49 @@ async fn work_a_turn_began_writes_its_room_in_its_organization_after_the_turn() 
         )
     );
 }
+
+/// RFC §10.6.5: after its turn ended, a host sends the verbs that write
+/// its room only; one that needs the turn, `delegate`, is refused before
+/// it is sent, with Python's `RuntimeError`.
+// Python: tests/test_turns_between.py::test_a_verb_that_needs_its_turn_is_refused_after_it
+#[tokio::test(start_paused = true)]
+async fn a_verb_that_needs_its_turn_is_refused_after_it() {
+    let (go, went) = tokio::sync::oneshot::channel::<()>();
+    let went = Arc::new(Mutex::new(Some(went)));
+    let (done, refused) = tokio::sync::oneshot::channel::<String>();
+    let done = Arc::new(Mutex::new(Some(done)));
+    let kit = kit(move |_call, _context| {
+        let went = went.lock().unwrap().take();
+        let done = done.lock().unwrap().take();
+        async move {
+            if let (Some(went), Some(done)) = (went, done) {
+                let turn = current_turn_host().unwrap();
+                tokio::spawn(roomkit::keep_context(async move {
+                    drop(went.await);
+                    let delegated = turn
+                        .delegate(
+                            &room(),
+                            &channel("ai"),
+                            "More.",
+                            roomkit::DelegateOptions::default(),
+                        )
+                        .await;
+                    drop(done.send(match delegated {
+                        Err(RoomKitError::RemoteTurn { kind, message, .. }) => {
+                            format!("{kind}: {}", message.contains("needs a turn"))
+                        }
+                        other => format!("{other:?}"),
+                    }));
+                }));
+            }
+            Ok(ToolResult::Text("42".to_owned()))
+        }
+    })
+    .await;
+
+    asks(&kit, "What is it?").await;
+    roomkit::testing::idle(&kit).await;
+    go.send(()).unwrap();
+
+    assert_eq!(refused.await.unwrap(), "RuntimeError: true");
+}

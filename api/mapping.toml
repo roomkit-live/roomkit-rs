@@ -186,6 +186,13 @@ params = { event_type = "options", chain_depth = "options", participant_id = "op
 py_spec = "sha256:cda3ae00394890976927968001a8e134439858737b8bf28a59bc11d358f20dc9"
 reason = "Python's **options, which go to RoomKit.send_event's keywords"
 
+[[map]]
+rust = "roomkit::TurnHost::delegate"
+python = "roomkit.TurnHost.delegate"
+params = { wait = "options", context = "options", share_channels = "options", notify = "options", on_complete = "options", post_status = "options", brief = "options", hand_back = "options", organization_id = "options" }
+py_spec = "sha256:14f2907b54caa8ca753c2d83932b8d1cb74e95d37398e70b14b4b9542a26ae8a"
+reason = "Python's **options, which go to RoomKit.delegate's keywords that are data: wait, on_complete and organization_id are refused, as Python's Delegate record refuses them"
+
 # The architecture table's exceptions, approved with the plan on 2026-10-27.
 
 [[exception]]
@@ -690,8 +697,8 @@ reason = "not in 0.x: Rust has no roles"
 
 [[missing]]
 python = "roomkit.TurnHost"
-members = ["delegate", "room_tasks", "room_vision", "wait_task"]
-reason = "not in 0.x: delegation and vision"
+members = ["room_vision"]
+reason = "not in 0.x: vision"
 
 [[missing]]
 python = "roomkit.orchestration.StatusBus"

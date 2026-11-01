@@ -27,9 +27,9 @@ use crate::turns::codec::decode_send_event;
 use crate::turns::error::{kit_error, one};
 use crate::turns::records::RoomRecords;
 use crate::turns::wire::{
-    ADD_OBSERVATION, AddObservation, BETWEEN_TURNS, CallContext, OwnerMessage, POST_STATUS,
-    PostStatus, RoomCallResult, SEND_EVENT, UPDATE_ROOM_METADATA, UpdateRoomMetadata, WireError,
-    host_result_kind,
+    ADD_OBSERVATION, AddObservation, BETWEEN_TURNS, CallContext, DELEGATE, Delegate, OwnerMessage,
+    POST_STATUS, PostStatus, ROOM_TASKS, RoomCallResult, SEND_EVENT, UPDATE_ROOM_METADATA,
+    UpdateRoomMetadata, WAIT_TASK, WaitTask, WireError, host_result_kind,
 };
 
 /// The refusal of a verb the host may not ask.
@@ -117,6 +117,33 @@ async fn run_verb(
                 .await
                 .map_err(|error| Box::new(kit_error(&error)))?;
             Ok(Value::Null)
+        }
+        DELEGATE => {
+            let args: Delegate = decoded(verb, arguments)?;
+            within_its_room(scope, &args.room_id, None)?;
+            let floor = scope.floor.unwrap_or(0);
+            let task_id = kit
+                .delegate(args, floor)
+                .await
+                .map_err(|error| Box::new(kit_error(&error)))?;
+            Ok(Value::from(task_id))
+        }
+        WAIT_TASK => {
+            let args: WaitTask = decoded(verb, arguments)?;
+            let timeout = args
+                .timeout
+                .and_then(|seconds| std::time::Duration::try_from_secs_f64(seconds).ok());
+            let waited = kit
+                .wait_task(scope.room_id.clone(), args.task_id, timeout)
+                .await;
+            Ok(waited.map_or(
+                Value::Null,
+                |result| serde_json::json!({ "result": result, "exception": Value::Null }),
+            ))
+        }
+        ROOM_TASKS => {
+            let _: crate::turns::wire::RoomTasks = decoded(verb, arguments)?;
+            to_data(&kit.room_tasks(scope.room_id.clone()).await)
         }
         _ => Err(refusal(
             VALUE_ERROR,

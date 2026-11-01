@@ -474,6 +474,15 @@ pub(crate) const UPDATE_ROOM_METADATA: &str = "update_room_metadata";
 /// The verb `add_observation` (RFC §10.6.5, §5.11).
 pub(crate) const ADD_OBSERVATION: &str = "add_observation";
 
+/// The verb `delegate` (RFC §10.6.5, §23.3).
+pub(crate) const DELEGATE: &str = "delegate";
+
+/// The verb `wait_task` (RFC §10.6.5).
+pub(crate) const WAIT_TASK: &str = "wait_task";
+
+/// The verb `room_tasks` (RFC §10.6.5, §23.4).
+pub(crate) const ROOM_TASKS: &str = "room_tasks";
+
 /// The verbs a host still sends after its turn ended (RFC §10.6.5), for
 /// the turn's room: Python's `BETWEEN_TURNS`.
 pub(crate) const BETWEEN_TURNS: [&str; 4] = [
@@ -507,6 +516,54 @@ pub(crate) struct UpdateRoomMetadata {
     #[serde(default)]
     pub(crate) organization_id: Option<String>,
 }
+
+/// `delegate`'s arguments, as the Python implementation's `Delegate`
+/// record names them: the keywords of a background delegation that are
+/// data.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Delegate {
+    pub(crate) room_id: RoomId,
+    pub(crate) agent_id: ChannelId,
+    pub(crate) task: String,
+    #[serde(default)]
+    pub(crate) context: Option<Metadata>,
+    #[serde(default)]
+    pub(crate) share_channels: Option<Vec<ChannelId>>,
+    #[serde(default)]
+    pub(crate) notify: Option<ChannelId>,
+    #[serde(default = "yes")]
+    pub(crate) post_status: bool,
+    #[serde(default)]
+    pub(crate) brief: Option<String>,
+    #[serde(default)]
+    pub(crate) conversation: u64,
+    #[serde(default = "relay")]
+    pub(crate) hand_back: String,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn relay() -> String {
+    "relay".to_owned()
+}
+
+/// `wait_task`'s arguments: a task a host of the room delegated, and how
+/// long to wait, in seconds.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WaitTask {
+    pub(crate) task_id: String,
+    #[serde(default)]
+    pub(crate) timeout: Option<f64>,
+}
+
+/// `room_tasks`'s arguments: none.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RoomTasks {}
 
 /// `add_observation`'s arguments, as the Python implementation's
 /// `AddObservation` record names them.

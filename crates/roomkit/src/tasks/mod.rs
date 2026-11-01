@@ -22,11 +22,14 @@
 // not started; its grace ends, cutting what is left; it seals the kit.
 
 mod delegated;
+mod hosted;
+pub(crate) mod lines;
 mod marks;
 mod runner;
 pub(crate) mod text;
 
 pub use self::delegated::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, WaitOptions};
+pub(crate) use self::hosted::HostTasks;
 pub use self::runner::{InMemoryTaskRunner, OnCompleteCallback, SubmitOptions, TaskRunner};
 
 use std::collections::{HashMap, HashSet};

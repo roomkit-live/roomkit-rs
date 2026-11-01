@@ -182,7 +182,7 @@ pub use self::tool_calls::ToolCallEvent;
 #[doc(hidden)]
 pub use self::tool_calls::ToolCallReport;
 pub use self::transport::{TransportChannel, TransportChannelOptions};
-pub use self::turn::{PostStatusOptions, ToolGate, TurnHost, current_turn_host};
+pub use self::turn::{PostStatusOptions, ToolGate, TurnHost, WaitTaskOptions, current_turn_host};
 pub use self::turns::TurnTimeouts;
 
 /// Python's `roomkit.tools` helpers this crate has.
