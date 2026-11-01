@@ -48,10 +48,11 @@ pub fn default_inbound_event(
 
 /// Writes the pipeline's fields on the event a channel parsed from
 /// `message` (RFC §10.1 step 4): the id the pipeline gives it (RFC §8.1),
-/// the receiving channel as its inbound source, and the message's fields
-/// the parse left unset ([`fill_from_message`]). What the channel read off
-/// its own wire stands, as Python's `_apply_message_fields` keeps it: an
-/// SMS with media sourced `MMS`, a provider's key, thread or instant. An
+/// the receiving channel as its source, and the message's fields the parse
+/// left unset ([`fill_from_message`]). What the channel read off its own
+/// wire stands, as Python's `_apply_message_fields` keeps it: an SMS with
+/// media sourced `MMS`, the direction of a channel's echo of its own output
+/// (RFC §10.3 Validation rule 3), a provider's key, thread or instant. An
 /// instruction is the caller's decision ([`trigger_type`]): it is visible
 /// to intelligence channels only, addressed as the caller addressed it, and
 /// carries the caller's metadata and its `standalone` word (RFC §10.1.1
@@ -67,7 +68,6 @@ pub(crate) fn stamp_trigger(
     fill_from_message(&mut event, message);
     event.responds_to = None;
     event.source.channel_id = message.channel_id.clone();
-    event.source.direction = EventDirection::Inbound;
     if message.event_type == EventType::Instruction {
         event.addressed_to.clone_from(&message.addressed_to);
         instructions::stamp(&mut event, &message.metadata, message.standalone);

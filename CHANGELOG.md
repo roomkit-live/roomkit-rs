@@ -11,6 +11,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is 2 silent intervals, no longer 3; the accept bound counts alike.
 - `current_turn_host()` is `None` for a host that can no longer reach its
   owner, a host whose kit is gone, as Python's (RMK-1094).
+- A parsed event keeps the direction its parse wrote, as Python's does
+  (RMK-1123): a channel's echo of its own output stays outbound, the
+  channel's own words, and authors none of the messages of the participant
+  it names (RFC §10.3 Validation rule 3).
 - The inbound pipeline keeps what a channel's `handle_inbound` parsed, as
   Python's does (RMK-1083): the message's type, visibility, address,
   thread, idempotency key, depth, response scope and instant fill only the
