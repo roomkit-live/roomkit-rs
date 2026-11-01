@@ -756,6 +756,11 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **`OpenAiConfig::extra_body` wins over RoomKit's own members, and an
+  `Authorization` in `default_headers` replaces the key's bearer**, as
+  Python's client sends them: a member RoomKit wrote (`temperature`,
+  `max_completion_tokens`, ...) was kept over the host's, and a proxy's
+  `Authorization` went out beside `Bearer <api_key>`.
 - **An observer hook that returns nothing logs no warning**: what an
   `ASYNC` hook returns is discarded, as Python discards it, where each run
   of one returning `()` warned `an observer hook returned an unusable

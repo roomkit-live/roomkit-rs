@@ -323,6 +323,45 @@ async fn a_call_s_result_goes_back_in_the_next_completion() {
     );
 }
 
+/// Python's `extra_body` wins over RoomKit's own members, and an
+/// `Authorization` among `default_headers` replaces the key's bearer
+/// (`tasks/probes/step5-review/mcp-openai/py_openai_wire.out`).
+#[tokio::test]
+async fn extra_body_and_default_headers_win_as_python_s() {
+    let room = Room::configured(vec![Reply::completion("Yes.")], API_KEY, |config| {
+        OpenAiConfig {
+            use_max_completion_tokens: true,
+            extra_body: Some(
+                serde_json::from_value(
+                    json!({ "temperature": 0.1, "max_completion_tokens": 7, "top_k": 3 }),
+                )
+                .unwrap(),
+            ),
+            default_headers: Some(
+                [("Authorization", "Basic dXNlcjpwYXNz"), ("X-Proxy", "1")]
+                    .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                    .into(),
+            ),
+            ..config
+        }
+    })
+    .await;
+    room.says(&room.sms, "+15550001", "Alice", "Are you open on Sunday?")
+        .await;
+    let request = &room.fake.requests()[0];
+    assert_eq!(
+        (
+            ["temperature", "max_completion_tokens", "top_k"]
+                .map(|name| request.body[name].clone()),
+            request.authorizations.clone()
+        ),
+        (
+            [json!(0.1), json!(7), json!(3)],
+            vec!["Basic dXNlcjpwYXNz".to_owned()]
+        )
+    );
+}
+
 #[tokio::test]
 async fn a_request_asks_for_an_uncompressed_answer_even_with_gzip_enabled() {
     let room = Room::new(vec![Reply::completion("Yes.")], "sk-test").await;

@@ -182,6 +182,8 @@ pub(crate) struct Request {
     pub(crate) authorization: Option<String>,
     /// Its `Accept-Encoding` header, if any.
     pub(crate) accept_encoding: Option<String>,
+    /// Each of its `Authorization` headers, in order.
+    pub(crate) authorizations: Vec<String>,
     /// Its body, as JSON.
     pub(crate) body: Value,
 }
@@ -283,6 +285,11 @@ async fn exchange(mut stream: TcpStream, reply: &Reply) -> Request {
         path,
         authorization: header("authorization"),
         accept_encoding: header("accept-encoding"),
+        authorizations: headers
+            .iter()
+            .filter(|(key, _)| key == "authorization")
+            .map(|(_, value)| value.clone())
+            .collect(),
         body,
     }
 }

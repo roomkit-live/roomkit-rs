@@ -102,10 +102,14 @@ impl OpenAiAiProvider {
         };
         let body = with_extra_body(body, self.config.extra_body.as_ref());
         let mut call = self.client.post(self.endpoint.clone()).json(&body);
+        let mut authorized = false;
         for (name, value) in self.config.default_headers.iter().flatten() {
+            authorized |= name.eq_ignore_ascii_case("authorization");
             call = call.header(name, value);
         }
-        if !secret.is_empty() {
+        // An `Authorization` the host's headers carry replaces the key's
+        // bearer, as Python's client lets `default_headers` override it.
+        if !secret.is_empty() && !authorized {
             call = call.bearer_auth(&secret);
         }
         let response = call.send().await.map_err(OpenAiError::request)?;
@@ -118,15 +122,18 @@ impl OpenAiAiProvider {
     }
 }
 
-/// `body` with the members of `extra` too, a member of RoomKit's own kept.
+/// `body` with the members of `extra` too, which win over RoomKit's own,
+/// as Python's client merges `extra_body` last.
 fn with_extra_body(
     mut body: serde_json::Value,
     extra: Option<&roomkit::model::Metadata>,
 ) -> serde_json::Value {
     if let (Some(fields), Some(extra)) = (body.as_object_mut(), extra) {
-        for (name, value) in extra {
-            fields.entry(name.clone()).or_insert_with(|| value.clone());
-        }
+        fields.extend(
+            extra
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone())),
+        );
     }
     body
 }

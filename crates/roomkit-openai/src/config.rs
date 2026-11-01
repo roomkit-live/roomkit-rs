@@ -82,9 +82,11 @@ pub struct OpenAiConfig {
     pub supports_custom_temperature: bool,
     /// How hard a reasoning model thinks (`reasoning_effort`), when set.
     pub reasoning_effort: Option<String>,
-    /// Headers every request carries.
+    /// Headers every request carries; an `Authorization` among them
+    /// replaces the key's bearer, as Python's client sends it.
     pub default_headers: Option<BTreeMap<String, String>>,
-    /// Members every request's body carries, beside RoomKit's.
+    /// Members every request's body carries, which win over RoomKit's own,
+    /// as Python's client merges them last.
     pub extra_body: Option<Metadata>,
     /// Where the bearer token comes from before each generation, in place
     /// of `api_key`: a renewable credential.
