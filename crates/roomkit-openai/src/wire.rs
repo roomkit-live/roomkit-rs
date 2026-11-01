@@ -124,7 +124,7 @@ impl<'a> CompletionRequest<'a> {
             })
             .collect();
         let bound = request.max_tokens.unwrap_or(config.max_tokens);
-        let (max_tokens, max_completion_tokens) = if config.use_max_completion_tokens {
+        let (max_tokens, max_completion_tokens) = if config.takes_max_completion_tokens() {
             (None, Some(bound))
         } else {
             (Some(bound), None)
@@ -137,9 +137,7 @@ impl<'a> CompletionRequest<'a> {
             stream_options: config.include_stream_usage.then_some(StreamOptions {
                 include_usage: true,
             }),
-            temperature: request
-                .temperature
-                .filter(|_| config.supports_custom_temperature),
+            temperature: request.temperature.filter(|_| config.takes_temperature()),
             max_tokens,
             max_completion_tokens,
         }
@@ -541,6 +539,48 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    /// Python's `OpenAIConfig.model_post_init`: on OpenAI's own endpoint a
+    /// modern model takes `max_completion_tokens`, and the reasoning ones no
+    /// temperature; behind another `base_url` the switches alone say
+    /// (`tasks/probes/step5-review/mcp-openai/py_openai_wire.out`).
+    #[test]
+    fn a_modern_model_on_openai_s_endpoint_takes_python_s_profile() {
+        let request = Request {
+            system_prompt: None,
+            messages: Vec::new(),
+            tools: Vec::new(),
+            temperature: Some(0.7),
+            max_tokens: None,
+        };
+        let shape = |base_url: Option<&str>, model: &str| {
+            let config = OpenAiConfig {
+                base_url: base_url.map(str::to_owned),
+                ..OpenAiConfig::new("sk-1", model)
+            };
+            let body = serde_json::to_value(CompletionRequest::new(&config, &request)).unwrap();
+            (
+                body.get("max_completion_tokens").is_some(),
+                body.get("temperature").is_some(),
+            )
+        };
+        assert_eq!(
+            [
+                shape(None, "gpt-6-luna"),
+                shape(Some("https://API.openai.com:443/v1/"), "o3-mini"),
+                shape(None, "gpt-4.1-mini"),
+                shape(None, "gpt-4o"),
+                shape(Some("http://localhost:8000/v1"), "gpt-6-luna"),
+            ],
+            [
+                (true, false),
+                (true, false),
+                (true, true),
+                (false, true),
+                (false, true)
+            ]
+        );
+    }
 
     #[test]
     fn an_error_answer_gives_the_provider_s_type_code_and_message() {

@@ -55,7 +55,7 @@ fn accepted(name: &str) -> bool {
 /// implementation compares them: its scheme, host and path, case aside, the
 /// scheme's default port written out or not, a trailing slash or not; a URL
 /// carrying credentials is another endpoint.
-fn is_openai_endpoint(base_url: &str) -> bool {
+pub(crate) fn is_openai_endpoint(base_url: &str) -> bool {
     let (Ok(url), Ok(openai)) = (
         reqwest::Url::parse(base_url.trim()),
         reqwest::Url::parse(OPENAI_BASE_URL),

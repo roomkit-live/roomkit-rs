@@ -11,6 +11,14 @@ use roomkit::model::Metadata;
 /// OpenAI's own endpoint, which a configuration with no base URL calls.
 pub(crate) const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
+/// The models that take their token bound as `max_completion_tokens` on
+/// OpenAI's own endpoint (Python's `_MAX_COMPLETION_TOKEN_MODEL_PREFIXES`).
+const MAX_COMPLETION_TOKEN_MODELS: [&str; 6] = ["gpt-4.1", "gpt-5", "gpt-6", "o1", "o3", "o4"];
+
+/// The models that take no temperature on OpenAI's own endpoint (Python's
+/// `_FIXED_TEMPERATURE_MODEL_PREFIXES`).
+const FIXED_TEMPERATURE_MODELS: [&str; 5] = ["gpt-5", "gpt-6", "o1", "o3", "o4"];
+
 /// The HTTP API spoken by the provider. Selection is explicit; no fallback
 /// changes protocols or repeats a failed generation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -64,10 +72,13 @@ pub struct OpenAiConfig {
     /// (`stream_options.include_usage`).
     pub include_stream_usage: bool,
     /// Whether the token bound is sent as `max_completion_tokens`, as
-    /// OpenAI's reasoning models take it, rather than `max_tokens`.
+    /// OpenAI's reasoning models take it, rather than `max_tokens`. On
+    /// OpenAI's own endpoint, a model Python's profile names (`gpt-4.1`,
+    /// `gpt-5`, `gpt-6`, `o1`, `o3`, `o4`) takes it whatever this says.
     pub use_max_completion_tokens: bool,
     /// Whether the model takes a temperature: one that refuses it is sent
-    /// none.
+    /// none. On OpenAI's own endpoint, a model Python's profile names
+    /// (`gpt-5`, `gpt-6`, `o1`, `o3`, `o4`) is sent none whatever this says.
     pub supports_custom_temperature: bool,
     /// How hard a reasoning model thinks (`reasoning_effort`), when set.
     pub reasoning_effort: Option<String>,
@@ -114,6 +125,26 @@ impl OpenAiConfig {
     /// The base URL the configuration calls.
     pub(crate) fn base_url(&self) -> &str {
         self.base_url.as_deref().unwrap_or(OPENAI_BASE_URL)
+    }
+
+    /// Whether the token bound goes as `max_completion_tokens`: the switch,
+    /// or Python's profile of a modern model on OpenAI's own endpoint
+    /// (`OpenAIConfig.model_post_init`).
+    pub(crate) fn takes_max_completion_tokens(&self) -> bool {
+        self.use_max_completion_tokens || self.profiled(&MAX_COMPLETION_TOKEN_MODELS)
+    }
+
+    /// Whether a temperature is sent: the switch, unless Python's profile
+    /// fixes the model's temperature on OpenAI's own endpoint.
+    pub(crate) fn takes_temperature(&self) -> bool {
+        self.supports_custom_temperature && !self.profiled(&FIXED_TEMPERATURE_MODELS)
+    }
+
+    /// Whether the model starts with one of `prefixes` on OpenAI's own
+    /// endpoint.
+    fn profiled(&self, prefixes: &[&str]) -> bool {
+        crate::names::is_openai_endpoint(self.base_url())
+            && prefixes.iter().any(|prefix| self.model.starts_with(prefix))
     }
 }
 

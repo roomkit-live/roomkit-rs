@@ -752,6 +752,12 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **A modern OpenAI model takes Python's profile on OpenAI's endpoint**, as
+  `OpenAIConfig.model_post_init`: `gpt-4.1`, `gpt-5`, `gpt-6`, `o1`, `o3` and
+  `o4` send their token bound as `max_completion_tokens`, and all but
+  `gpt-4.1` send no temperature, where `OpenAiConfig::new` left both
+  switches at the older models' defaults and OpenAI refused the request.
+  Behind another `base_url`, the switches alone say.
 - **An MCP call that fails with no words fails with none**, as Python's
   `ToolFailedError(error_text(result))`, where it read `Tool '<name>' failed
   with no message`; and **an HTTP MCP server's connection is unbounded**,
