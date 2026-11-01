@@ -242,31 +242,42 @@ async fn the_policy_does_not_govern_the_skill_tools() {
 }
 
 /// RFC §21.1: the exemption covers the agent's own tools alone; a host's
-/// tool under one of their names is one tool too many.
+/// tool under one of their names is one tool too many, whenever a registry
+/// is given, an empty one too, as Python's constructor refuses it
+/// (`tasks/probes/step5-review/ai/py_skill_tool_clash.out`); with none
+/// given the name is free.
 #[tokio::test]
 async fn a_host_tool_under_a_skill_tool_s_name_is_refused() {
     let tree = TempDir::new();
-    let forged = AiTool {
-        parameters: json!({ "type": "object" }),
-        ..AiTool::new("activate_skill", "Forged").unwrap()
+    let built = |registry: Option<SkillRegistry>| {
+        let forged = AiTool {
+            parameters: json!({ "type": "object" }),
+            ..AiTool::new("activate_skill", "Forged").unwrap()
+        };
+        let tools = Tools::new().tool(forged, |_call, _context| async {
+            Ok(ToolResult::from("x"))
+        });
+        roomkit_ai::AiChannel::new(
+            channel("assistant"),
+            ScriptedProvider::default(),
+            AiChannelOptions {
+                tools: tools.into(),
+                skills: registry,
+                ..AiChannelOptions::default()
+            },
+        )
+        .err()
     };
-    let tools = Tools::new().tool(forged, |_call, _context| async {
-        Ok(ToolResult::from("x"))
+    let refused = Some(AiError::DuplicateTool {
+        name: "activate_skill".to_owned(),
     });
-    let agent = roomkit_ai::AiChannel::new(
-        channel("assistant"),
-        ScriptedProvider::default(),
-        AiChannelOptions {
-            tools: tools.into(),
-            skills: Some(skills(&tree)),
-            ..AiChannelOptions::default()
-        },
-    );
     assert_eq!(
-        agent.err(),
-        Some(AiError::DuplicateTool {
-            name: "activate_skill".to_owned()
-        })
+        [
+            built(Some(skills(&tree))),
+            built(Some(SkillRegistry::new())),
+            built(None)
+        ],
+        [refused.clone(), refused, None]
     );
 }
 

@@ -259,12 +259,18 @@ impl<P: AiProvider> AiChannel<P> {
         if let Some(served) = served_by(tool_handler.clone(), tools)? {
             toolbox.add_dyn(served.0, served.1)?;
         }
-        let skills = match skills.filter(SkillRegistry::has_entries) {
-            Some(skills) => {
+        let skills = match skills {
+            Some(skills) if skills.has_entries() => {
                 let skill_tools = Arc::new(SkillTools::new(skills, skills_in_prompt));
                 let own: Arc<dyn DynToolset> = Arc::<SkillTools>::clone(&skill_tools);
                 toolbox.add_own(own, SkillTools::definitions())?;
                 Some(skill_tools)
+            }
+            // An empty registry serves no skill tool, yet reserves their
+            // names, as Python's constructor does.
+            Some(_) => {
+                reserve_skill_names(&toolbox)?;
+                None
             }
             None => None,
         };
@@ -380,6 +386,17 @@ fn capabilities<P: AiProvider>(provider: &P) -> ChannelCapabilities {
         capabilities.supports_media = true;
     }
     capabilities
+}
+
+/// Refuses a tool `toolbox` serves under one of the skill tools' names.
+fn reserve_skill_names(toolbox: &Toolbox) -> Result<(), AiError> {
+    match SkillTools::definitions()
+        .into_iter()
+        .find(|tool| toolbox.find(&tool.name).is_some())
+    {
+        Some(tool) => Err(AiError::DuplicateTool { name: tool.name }),
+        None => Ok(()),
+    }
 }
 
 /// Refuses a pattern of `policy` holding a bracket, which a pattern reads

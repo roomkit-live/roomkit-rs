@@ -756,6 +756,10 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **An empty `SkillRegistry` reserves the skill tools' names**, as
+  Python's constructor refuses a host's tool named `activate_skill` once
+  `skills` is given: `AiError::DuplicateTool`, where an empty registry let
+  it through.
 - **A call id the loop makes for an empty or repeated one is free in its
   round**: `call_<round>_<n>` could be one the provider gave another call
   of the round, before or after it, and two calls then carried one id.
