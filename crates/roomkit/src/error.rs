@@ -9,7 +9,8 @@ use roomkit_core::model::{
     ParticipantId, ProviderResult, RoomId, RoomStatus,
 };
 use roomkit_core::ops::{
-    ConfigError, InboundError, KIT_CLOSED, LifecycleError, MutationError, ProtocolError,
+    ConfigError, InboundError, KIT_CLOSED, LifecycleError, MemberError, MutationError,
+    ProtocolError,
 };
 use roomkit_core::rules::hook_registry::RegistrationError;
 use roomkit_core::rules::lifecycle::Transition;
@@ -111,31 +112,24 @@ pub enum RoomKitError {
         repr(.0.as_str())
     )]
     ChannelAlreadyRegistered(ChannelId),
-    /// Python's `ParticipantNotFoundError`, of a post's speaker: the id
-    /// names no participant of the room the host channel reaches, by their
-    /// id or their identity's (RFC §10.5, §5.5). Nothing was written.
+    /// Python's `ParticipantNotFoundError`: a member call names no
+    /// participant of the room (RFC §5.5), `channel_id` `None`; or a
+    /// post's speaker names no participant of the room the host channel
+    /// `channel_id` reaches, by their id or their identity's (RFC §10.5,
+    /// §5.5). Nothing was written.
     #[error(
-        "post() speaks as a participant of room {room_id} the host channel {} reaches, and \
-         {} {}. The host's own speakers are members added on that channel: \
-         kit.add_member(room_id, {}, speaker_id)",
-        repr(.channel_id.as_str()),
-        repr(.participant_id.as_str()),
-        if *.reached_elsewhere {
-            "names a participant reached through other channels only"
-        } else {
-            "names nobody of the room"
-        },
-        repr(.channel_id.as_str())
+        "{}",
+        participant_not_found(room_id, participant_id, channel_id.as_ref(), *reached_elsewhere)
     )]
     ParticipantNotFound {
         /// The room.
         room_id: RoomId,
-        /// The speaker the post names.
+        /// The participant named: a post's speaker, a member call's.
         participant_id: ParticipantId,
-        /// The host channel the post speaks from.
-        channel_id: ChannelId,
-        /// Whether the id names a participant of the room reached through
-        /// other channels only, or nobody of the room.
+        /// The host channel a post speaks from; `None` for a member call.
+        channel_id: Option<ChannelId>,
+        /// Whether a post's id names a participant of the room reached
+        /// through other channels only, or nobody of the room.
         reached_elsewhere: bool,
     },
     /// Python's `IdentityNotFoundError`.
@@ -484,7 +478,7 @@ impl From<InboundError> for RoomKitError {
             } => Self::ParticipantNotFound {
                 room_id,
                 participant_id,
-                channel_id,
+                channel_id: Some(channel_id),
                 reached_elsewhere,
             },
             InboundError::Routing(error) => Self::Router(error),
@@ -523,6 +517,31 @@ fn internal_visibility() -> RoomKitError {
     )
 }
 
+/// Python's `ParticipantNotFoundError` message: a member call's, or, for
+/// a post from the host channel `channel_id`, what the host does instead.
+fn participant_not_found(
+    room_id: &RoomId,
+    participant_id: &ParticipantId,
+    channel_id: Option<&ChannelId>,
+    reached_elsewhere: bool,
+) -> String {
+    let Some(channel_id) = channel_id else {
+        return format!("Participant {participant_id} not found in room {room_id}");
+    };
+    let channel = repr(channel_id.as_str());
+    let named = if reached_elsewhere {
+        "names a participant reached through other channels only"
+    } else {
+        "names nobody of the room"
+    };
+    format!(
+        "post() speaks as a participant of room {room_id} the host channel {channel} reaches, \
+         and {} {named}. The host's own speakers are members added on that channel: \
+         kit.add_member(room_id, {channel}, speaker_id)",
+        repr(participant_id.as_str()),
+    )
+}
+
 /// `text` as Python's `repr` of a `str` writes it, which the Python
 /// implementation's messages quote their names with (`{name!r}`): in single
 /// quotes, double ones when it holds a single quote and no double one, its
@@ -554,6 +573,28 @@ fn repr(text: &str) -> String {
     }
     written.push(quote);
     written
+}
+
+#[doc(hidden)]
+impl From<MemberError> for RoomKitError {
+    fn from(error: MemberError) -> Self {
+        match error {
+            MemberError::RoomNotFound(room_id) => Self::RoomNotFound(room_id),
+            MemberError::ParticipantNotFound {
+                room_id,
+                participant_id,
+            } => Self::ParticipantNotFound {
+                room_id,
+                participant_id,
+                channel_id: None,
+                reached_elsewhere: false,
+            },
+            MemberError::IdentityNotFound(identity_id) => Self::IdentityNotFound(identity_id),
+            MemberError::Store(error) => store_failure(error),
+            MemberError::Lock(error) => Self::Lock(error),
+            other => Self::Internal(other.to_string()),
+        }
+    }
 }
 
 #[doc(hidden)]

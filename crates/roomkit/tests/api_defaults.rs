@@ -1069,3 +1069,57 @@ fn delivery_backend_options_defaults_as_python() {
     // roomkit.RoomKit.__init__(delivery_backend) = None
     assert!(kit.delivery_backend.is_none());
 }
+
+#[test]
+fn ensure_participant_options_defaults_as_python() {
+    let defaults = roomkit::EnsureParticipantOptions::default();
+    // roomkit.RoomKit.ensure_participant(display_name) = None
+    assert!(defaults.display_name.is_none());
+    // roomkit.RoomKit.ensure_participant(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn resolve_participant_options_defaults_as_python() {
+    let defaults = roomkit::ResolveParticipantOptions::default();
+    // roomkit.RoomKit.resolve_participant(resolved_by) = 'manual'
+    assert_eq!(defaults.resolved_by, "manual");
+    // roomkit.RoomKit.resolve_participant(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn add_member_options_defaults_as_python() {
+    let defaults = roomkit::AddMemberOptions::default();
+    // roomkit.RoomKit.add_member(identity_id) = None
+    assert!(defaults.identity_id.is_none());
+    // roomkit.RoomKit.add_member(display_name) = None
+    assert!(defaults.display_name.is_none());
+    // roomkit.RoomKit.add_member(role) = ParticipantRole.MEMBER
+    assert_eq!(defaults.role, roomkit::model::ParticipantRole::Member);
+    // roomkit.RoomKit.add_member(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn remove_member_options_defaults_as_python() {
+    let defaults = roomkit::RemoveMemberOptions::default();
+    // roomkit.RoomKit.remove_member(status) = ParticipantStatus.LEFT
+    assert_eq!(defaults.status, roomkit::model::ParticipantStatus::Left);
+    // roomkit.RoomKit.remove_member(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn rename_member_options_defaults_as_python() {
+    let defaults = roomkit::RenameMemberOptions::default();
+    // roomkit.RoomKit.rename_member(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn is_member_options_defaults_as_python() {
+    let defaults = roomkit::IsMemberOptions::default();
+    // roomkit.RoomKit.is_member(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}

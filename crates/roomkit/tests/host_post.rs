@@ -824,7 +824,7 @@ fn refusals() -> Vec<(&'static str, Setup, Arguments, RoomKitError)> {
     let unreached = |speaker: &str, reached_elsewhere| RoomKitError::ParticipantNotFound {
         room_id: room_id(),
         participant_id: ParticipantId::new(speaker).unwrap(),
-        channel_id: channel("host"),
+        channel_id: Some(channel("host")),
         reached_elsewhere,
     };
     let not_a_host = |id: &str| {

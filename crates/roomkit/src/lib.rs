@@ -155,6 +155,10 @@ pub use self::host::{HostChannel, HostChannelOptions};
 pub use self::inbound::{DeliveryHandle, InboundResult};
 pub use self::kit::CancelTaskOptions;
 pub use self::kit::{
+    AddMemberOptions, EnsureParticipantOptions, IsMemberOptions, RemoveMemberOptions,
+    RenameMemberOptions, ResolveParticipantOptions,
+};
+pub use self::kit::{
     AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
     CheckRoomTimersOptions, CloseRoomOptions, CommitEventOptions, CreateRoomOptions,
     DeleteEventOptions, DetachChannelOptions, GetBindingOptions, GetRoomOptions,
