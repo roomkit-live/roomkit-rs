@@ -9,6 +9,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A resolver's `IdentificationStatus::Rejected` holds the message when no
   identity hook answers (RFC §11.2, RMK-1151): blocked with the resolver's
   `message`, else `identity_rejected`, nothing stored, as Python's.
+- `RoomKit::delegate`, Python's task delegation to a child room (RFC §23.3,
+  RMK-1143): the child room in the parent's organization, its agent and
+  the shared channels with their parent bindings' permissions, the task
+  told as a system message only intelligence reads and the agent's answer
+  kept as the room's trace, streamed or not; inline (`wait`) or on the
+  kit's task runner (`RoomKitOptions::task_runner`, `RoomKit::task_runner`,
+  `roomkit::tasks::{TaskRunner, InMemoryTaskRunner}`), its result handed
+  back to the notified channel (`relay`) or posted as its message
+  (`post`). `ON_TASK_DELEGATED` and `ON_TASK_COMPLETED` fire in the parent
+  room and the status bus follows the task. `DelegatedTask`,
+  `DelegatedTaskResult`; `RoomKitError::Timeout`, Python's `TimeoutError`
+  of `DelegatedTask::wait`.
 - Python's `AIChannel(tool_call_intents_required=...)` (roomkit 121ea967) is
   `AiChannelOptions::tool_call_intents_required` (RMK-1067): no longer a
   Rust-only exception.
