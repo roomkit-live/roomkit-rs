@@ -842,13 +842,6 @@ members = ["connect", "close"]
 approved = "2026-11-01"
 reason = "Python's `async with` (`__aenter__`, `__aexit__`): Rust has no async context manager (architecture: MCP)"
 
-[[exception]]
-rust = "roomkit_ai::AiChannelOptions"
-members = ["tool_call_intents_required"]
-approved = "2026-11-01"
-until = "roomkit.AIChannel.__init__(tool_call_intents_required)"
-reason = "a Rust-only opt-in (dd6ab1b, 2026-10-30) the maintainer keeps until Python adds it, RMK-1067 (architecture: the Python names table)"
-
 [[missing]]
 python = "roomkit.AIChannel.__init__"
 params = [

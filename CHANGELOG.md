@@ -6,6 +6,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Python's `AIChannel(tool_call_intents_required=...)` (roomkit 121ea967) is
+  `AiChannelOptions::tool_call_intents_required` (RMK-1067): no longer a
+  Rust-only exception.
 - `RoomKit::list_tasks`, a room's tasks of the status it names, for the
   organization it names (RFC §5.10, §17.2).
 - The status bus, Python's `roomkit.orchestration` (RFC §19.8):

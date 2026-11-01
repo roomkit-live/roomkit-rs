@@ -31,6 +31,8 @@ fn ai_channel_options_defaults_as_python() {
     assert_eq!(defaults.temperature, Some(0.7));
     // roomkit.AIChannel.__init__(tool_call_intents) = False
     assert!(!defaults.tool_call_intents);
+    // roomkit.AIChannel.__init__(tool_call_intents_required) = False
+    assert!(!defaults.tool_call_intents_required);
     // roomkit.AIChannel.__init__(tool_handler) = None
     assert!(defaults.tool_handler.is_none());
     // roomkit.AIChannel.__init__(tool_loop_timeout_seconds) = 300.0
