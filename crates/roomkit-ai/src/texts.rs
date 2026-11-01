@@ -74,9 +74,10 @@ fn envelope_with_hint(error: &str, name: &str, hint: &str) -> String {
     )
 }
 
-/// `text` as a JSON string.
+/// `text` as a JSON string, as Python's `json.dumps` writes it: every
+/// character past ASCII escaped.
 fn quoted(text: &str) -> String {
-    serde_json::Value::String(text.to_owned()).to_string()
+    crate::skills::dumps(&serde_json::Value::String(text.to_owned()))
 }
 
 #[cfg(test)]
@@ -100,6 +101,16 @@ mod tests {
                 r#"{"error": "Invalid arguments for 'lookup': missing required argument 'order'"}"#,
                 r#"{"error": "Tool 'lookup' failed (RuntimeError)"}"#,
             ]
+        );
+    }
+
+    /// Python's `json.dumps` escapes every character past ASCII in the
+    /// words the model reads, a tool's name included.
+    #[test]
+    fn a_refusal_escapes_what_is_past_ascii() {
+        assert_eq!(
+            not_declared("réserver"),
+            r#"{"error": "Tool 'r\u00e9server' is not declared."}"#
         );
     }
 
