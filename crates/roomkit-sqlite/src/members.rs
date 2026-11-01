@@ -64,7 +64,6 @@ pub(crate) fn remove_binding(
     Ok(removed > 0)
 }
 
-/// The room's binding of `channel_id`, if it has one.
 /// Whether the room `room_id` binds `channel_id`, its row unread.
 pub(crate) fn binding_exists(
     connection: &Connection,
@@ -81,6 +80,7 @@ pub(crate) fn binding_exists(
     Ok(held.is_some())
 }
 
+/// The room's binding of `channel_id`, if it has one.
 pub(crate) fn binding(
     connection: &Connection,
     room_id: &RoomId,

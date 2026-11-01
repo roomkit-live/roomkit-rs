@@ -332,6 +332,60 @@ async fn a_key_its_channel_holds_refuses_another_event() {
     );
 }
 
+/// Python: `tests/test_store_binding_contract.py::test_a_key_its_channel_holds_refuses_another_event`,
+/// its inserts: an event added, at its index or the room's next, whose key
+/// its channel holds in the room is refused, nothing written, the stored
+/// one kept and the room's counters unmoved.
+#[tokio::test]
+async fn an_added_event_whose_key_its_channel_holds_is_refused() {
+    let store = with_thread().await;
+    commit(&store, keyed(2, "sms", "SM1"), None).await.unwrap();
+    let before = store.get_room(&room_id()).await.unwrap().unwrap();
+    let refused = (
+        store.add_event(keyed(7, "sms", "SM1")).await,
+        store
+            .add_event_auto_index(&room_id(), keyed(8, "sms", "SM1"))
+            .await,
+    );
+    let after = store.get_room(&room_id()).await.unwrap().unwrap();
+    let written = (
+        store.get_event(&event_id("evt_k7")).await,
+        store.get_event(&event_id("evt_k8")).await,
+    );
+    let holder = store
+        .get_event_by_idempotency_key(&room_id(), "SM1", Some(&channel("sms")))
+        .await
+        .unwrap()
+        .map(|event| event.id);
+    let taken = || StoreError::IdempotencyKeyTaken {
+        room_id: room_id(),
+        channel_id: channel("sms"),
+        key: "SM1".to_owned(),
+    };
+    assert_eq!(
+        (refused, written, holder, after.event_count),
+        (
+            (Err(taken()), Err(taken())),
+            (Ok(None), Ok(None)),
+            Some(event_id("evt_k2")),
+            before.event_count
+        )
+    );
+}
+
+/// Python: `tests/test_store_memory.py::TestEventOperations::test_event_count`:
+/// an added event is counted, though the room's counters do not move.
+#[tokio::test]
+async fn an_added_event_is_counted() {
+    let store = with_room().await;
+    let every_row = roomkit::store::GetEventCountOptions::default();
+    let before = store.get_event_count(&room_id(), every_row.clone()).await;
+    store.add_event(event(0)).await.unwrap();
+    let after = store.get_event_count(&room_id(), every_row).await;
+    let room = store.get_room(&room_id()).await.unwrap().unwrap();
+    assert_eq!((before, after, room.event_count), (Ok(0), Ok(1), 0));
+}
+
 /// RFC §13.4: a blank key is no key: an event committed with one is
 /// stored with none, and a lookup of one finds nothing.
 #[tokio::test]

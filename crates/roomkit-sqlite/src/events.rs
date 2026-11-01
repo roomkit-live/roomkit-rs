@@ -310,3 +310,33 @@ pub(crate) fn by_key(
     )?;
     Ok(found.into_iter().next())
 }
+
+#[cfg(test)]
+mod tests {
+    use roomkit::model::{
+        ChannelId, ChannelType, EventSource, Room, RoomEvent, RoomId, TextContent,
+    };
+
+    use super::*;
+
+    /// Python: `tests/test_store_sqlite.py::TestPersistence::test_duplicate_index_is_rejected_by_database`:
+    /// an event added at an index the room holds is refused by the file's
+    /// `UNIQUE(room_id, idx)` index, nothing written.
+    #[test]
+    fn duplicate_index_is_rejected_by_database() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        crate::schema::prepare(&mut connection).unwrap();
+        let room_id = RoomId::new("r1").unwrap();
+        rooms::create(&connection, &Room::new(room_id.clone())).unwrap();
+        let source = EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS);
+        let first = RoomEvent::new(room_id.clone(), source.clone(), TextContent::new("one"));
+        let mut second = RoomEvent::new(room_id, source, TextContent::new("two"));
+        second.index = first.index;
+
+        add(&connection, first.clone()).unwrap();
+        let refused = add(&connection, second.clone());
+
+        assert!(matches!(refused, Err(Failure::Database(_))), "{refused:?}");
+        assert!(get(&connection, &second.id).unwrap().is_none());
+    }
+}

@@ -41,6 +41,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `get_private_state` and `set_private_state` keeping it in the room's
   metadata, says so once with a warning, as Python's (RMK-1101).
 
+- The in-memory realtime backend keeps one queued event per id, as
+  Python's: an event published twice before its callback runs reaches it
+  once (RMK-1113). A closed backend starts no subscription, and one dropped
+  unclosed stops its tasks.
+
 ## [0.1.0] — 2026-11-01
 
 The first release of roomkit-rs, the Rust implementation of RoomKit: Level 0

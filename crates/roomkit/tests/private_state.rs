@@ -43,7 +43,9 @@ async fn a_store_without_its_methods_keeps_it_in_the_metadata() {
     let room = store.get_room(&room_id).await.unwrap().unwrap();
     assert_eq!(
         (
-            warnings.containing("get_private_state()").len(),
+            warnings
+                .containing("AbstractOnly keeps each room's private state")
+                .len(),
             read,
             room.metadata.get("author_register").cloned()
         ),

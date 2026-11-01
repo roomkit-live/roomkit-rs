@@ -73,7 +73,9 @@ impl Queue {
         self.events.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Queues `event`, dropping the oldest past the bound.
+    /// Queues `event`, dropping the oldest past the bound, as Python's
+    /// queue keyed by the events' ids: an event of an id the queue holds
+    /// takes its place there, so its callback runs once.
     fn enqueue(&self, event: EphemeralEvent) {
         if self.stopped.load(Ordering::Acquire) {
             return;
@@ -83,7 +85,10 @@ impl Queue {
             while events.len() >= self.max.max(1) {
                 events.pop_front();
             }
-            events.push_back(event);
+            match events.iter_mut().find(|held| held.id == event.id) {
+                Some(held) => *held = event,
+                None => events.push_back(event),
+            }
         }
         self.ready.notify_one();
     }
@@ -114,6 +119,17 @@ async fn drain(subscription_id: String, queue: Arc<Queue>, callback: EphemeralCa
                 panic = %message(&*panic),
                 "Error in realtime callback for subscription {subscription_id}"
             );
+        }
+    }
+}
+
+impl Drop for InMemoryRealtime {
+    /// A backend dropped unclosed stops its subscriptions' tasks.
+    fn drop(&mut self) {
+        let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
+        for subscription in state.subscriptions.values() {
+            subscription.queue.stopped.store(true, Ordering::Release);
+            subscription.task.abort();
         }
     }
 }
@@ -189,8 +205,13 @@ impl RealtimeBackend for InMemoryRealtime {
                 stopped: AtomicBool::new(false),
                 max: self.max_queue_size,
             });
-            let task = tokio::spawn(drain(id.clone(), Arc::clone(&queue), callback));
             let mut state = self.state();
+            if self.closed.load(Ordering::Acquire) {
+                // A closed backend runs no subscription: nothing publishes
+                // to it any more.
+                return id;
+            }
+            let task = tokio::spawn(drain(id.clone(), Arc::clone(&queue), callback));
             state
                 .channels
                 .entry(channel.to_owned())

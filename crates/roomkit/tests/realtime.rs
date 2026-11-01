@@ -180,6 +180,25 @@ async fn queue_overflow_drops_oldest() {
     assert_eq!(users, ["user-1", "user-2"]);
 }
 
+/// Python's `_Subscription`, its queue keyed by the events' ids: an event
+/// published twice before its callback drains it reaches the callback once.
+#[tokio::test]
+async fn an_event_published_twice_before_its_callback_runs_reaches_it_once() {
+    let backend = InMemoryRealtime::default();
+    let (callback, mut received) = recording();
+    backend.subscribe("ch", callback).await;
+    let twice = event(EphemeralEventType::TypingStart, "user-1");
+    let after = event(EphemeralEventType::TypingStop, "user-1");
+
+    backend.publish("ch", twice.clone()).await;
+    backend.publish("ch", twice.clone()).await;
+    backend.publish("ch", after.clone()).await;
+
+    let ids = [next(&mut received).await.id, next(&mut received).await.id];
+    backend.close().await;
+    assert_eq!(ids, [twice.id, after.id]);
+}
+
 /// Python: `tests/test_realtime.py::TestInMemoryRealtime::test_subscription_count`
 /// and `test_close_stops_all_subscriptions`: a publish after the close
 /// does nothing.

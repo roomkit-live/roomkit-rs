@@ -8,8 +8,8 @@
 //!
 //! - a record's members roomkit-rs does not model (an identity's `email`, a
 //!   capability Python adds) are kept when it rewrites the record;
-//! - the tables it does not use (verifications, read markers, voice
-//!   deliveries) are left alone, and those it does not read but Python
+//! - the tables it does not use (verifications, voice deliveries) are left
+//!   alone, and those it does not read but Python
 //!   does are kept right: the idempotency keys, the full-text index, which
 //!   a deleted message leaves (RFC §10.3), and the index sequences;
 //! - a file with a newer schema is refused rather than written, and a new

@@ -128,6 +128,15 @@ pub(crate) async fn whole_timeline<S: ConversationStore>(
     }
 }
 
+/// The name of the store type `S`, as Python's `type(store).__name__`
+/// reads it: its path and its generic arguments left out
+/// (`Wrapper<roomkit::InMemoryStore>` is `Wrapper`).
+fn store_name<S: ?Sized>() -> &'static str {
+    let full = std::any::type_name::<S>();
+    let bare = full.split('<').next().unwrap_or(full);
+    bare.rsplit("::").next().unwrap_or(bare)
+}
+
 /// Says once per store type that `S` keeps each room's private state in
 /// its metadata, as Python's `_warn_private_state_in_metadata` says it once
 /// per store: a trait's provided method holds no state of the store's own,
@@ -142,7 +151,7 @@ fn warn_private_state_in_metadata<S: ?Sized>() {
     if !first {
         return;
     }
-    let name = store.rsplit("::").next().unwrap_or(store);
+    let name = store_name::<S>();
     tracing::warn!(
         target: "roomkit::store",
         "{name} keeps each room's private state, the register of authors among it, in \
@@ -792,8 +801,7 @@ pub trait ConversationStore: Send + Sync + 'static {
         _options: UnlinkAddressOptions,
     ) -> impl Future<Output = Result<(), StoreError>> + Send {
         async {
-            let store = std::any::type_name::<Self>();
-            let name = store.rsplit("::").next().unwrap_or(store);
+            let name = store_name::<Self>();
             Err(StoreError::Value(format!(
                 "{name} does not unlink identity addresses (RFC §14.1)"
             )))
@@ -936,8 +944,7 @@ pub trait ConversationStore: Send + Sync + 'static {
             if written.is_some_and(|written| written.delivery_results == results) {
                 return Ok(());
             }
-            let store = std::any::type_name::<Self>();
-            let name = store.rsplit("::").next().unwrap_or(store);
+            let name = store_name::<Self>();
             Err(StoreError::Value(format!(
                 "{name} keeps delivery_results on update_event: override record_delivery_results to write them"
             )))
@@ -1115,5 +1122,25 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// operation after it may fail. Nothing to release by default.
     fn close(&self) -> impl Future<Output = ()> + Send {
         async {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InMemoryStore, store_name};
+
+    struct Wrapper<T>(T);
+
+    /// A store is named as Python's `type(store).__name__`, a generic one
+    /// by its bare type.
+    #[test]
+    fn a_store_is_named_by_its_bare_type() {
+        assert_eq!(
+            (
+                store_name::<InMemoryStore>(),
+                store_name::<Wrapper<InMemoryStore>>()
+            ),
+            ("InMemoryStore", "Wrapper")
+        );
     }
 }

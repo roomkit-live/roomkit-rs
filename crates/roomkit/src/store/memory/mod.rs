@@ -199,6 +199,15 @@ fn taken_key(events: &[RoomEvent], event: &RoomEvent) -> Option<StoreError> {
     })
 }
 
+/// Writes `room` whole over the record's, keeping the counters the store
+/// manages: a caller's stale copy never rewinds them (RFC §14.3).
+fn write_room(record: &mut Record, room: &mut Room) {
+    room.event_count = record.room.event_count;
+    room.latest_index = record.room.latest_index;
+    room.delivered_index = record.room.delivered_index;
+    record.room.clone_from(room);
+}
+
 /// Moves the delivery `cursor` to `index` from `index - 1`, or from any
 /// lower value when `force` (RFC §13.5); whether it moved.
 fn advance(cursor: &mut i64, index: u64, force: bool) -> bool {
@@ -345,12 +354,7 @@ impl ConversationStore for InMemoryStore {
     async fn update_room(&self, mut room: Room) -> Result<Room, StoreError> {
         let room_id = room.id.clone();
         self.write(&room_id, |record| {
-            // The counters are the store's: a caller's stale copy never
-            // rewinds them (RFC §14.3).
-            room.event_count = record.room.event_count;
-            room.latest_index = record.room.latest_index;
-            room.delivered_index = record.room.delivered_index;
-            record.room.clone_from(&room);
+            write_room(record, &mut room);
             Ok(room)
         })
     }
@@ -371,10 +375,7 @@ impl ConversationStore for InMemoryStore {
         if !super::room_holds(&record.room, status, paused_at, last_activity_at) {
             return Ok(None);
         }
-        room.event_count = record.room.event_count;
-        room.latest_index = record.room.latest_index;
-        room.delivered_index = record.room.delivered_index;
-        record.room.clone_from(&room);
+        write_room(record, &mut room);
         Ok(Some(room))
     }
 

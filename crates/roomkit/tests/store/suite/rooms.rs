@@ -213,6 +213,40 @@ async fn a_room_s_deletion_takes_what_it_holds() {
     );
 }
 
+/// Python: `tests/test_store_memory.py::TestDeleteRoomCleanup::test_tasks_cleaned_on_delete`
+/// and `test_observations_cleaned_on_delete`: a room's deletion takes its
+/// tasks and observations, a task read by its id included.
+#[tokio::test]
+async fn a_room_s_deletion_takes_its_tasks_and_observations() {
+    let store = with_room().await;
+    let task = roomkit::model::Task::new("t1".parse().unwrap(), room_id(), "Follow up");
+    let observation = roomkit::model::Observation::new(
+        "o1".parse().unwrap(),
+        room_id(),
+        super::channel("ai"),
+        "noted",
+    );
+    store.add_task(task).await.unwrap();
+    store.add_observation(observation).await.unwrap();
+
+    store.delete_room(&room_id()).await.unwrap();
+
+    assert_eq!(
+        (
+            store.get_task(&"t1".parse().unwrap()).await,
+            store
+                .list_tasks(&room_id(), roomkit::store::ListTasksOptions::default())
+                .await
+                .map(|tasks| tasks.len()),
+            store
+                .list_observations(&room_id())
+                .await
+                .map(|observations| observations.len()),
+        ),
+        (Ok(None), Ok(0), Ok(0))
+    );
+}
+
 /// RFC §14.1: the store keeps a room's private state apart from its
 /// metadata, a write removing the metadata's copy under the key, a `None`
 /// removing the key, and nothing written for a room it does not hold.

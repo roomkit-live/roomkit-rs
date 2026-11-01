@@ -52,7 +52,6 @@ pub(crate) fn held(connection: &Connection, room_id: &RoomId) -> Result<Stored, 
     get(connection, room_id)?.ok_or_else(|| StoreError::RoomNotFound(room_id.clone()).into())
 }
 
-/// Refuses [`StoreError::RoomNotFound`] for a room the store does not hold.
 /// Whether the file holds the room `room_id`, its row unread.
 pub(crate) fn exists(connection: &Connection, room_id: &RoomId) -> Result<bool, Failure> {
     let held = connection
@@ -65,15 +64,12 @@ pub(crate) fn exists(connection: &Connection, room_id: &RoomId) -> Result<bool, 
     Ok(held.is_some())
 }
 
+/// Refuses [`StoreError::RoomNotFound`] for a room the store does not hold.
 pub(crate) fn check(connection: &Connection, room_id: &RoomId) -> Result<(), Failure> {
-    let held = connection
-        .query_row(
-            "SELECT 1 FROM rooms WHERE id = ?",
-            [room_id.as_str()],
-            |_| Ok(()),
-        )
-        .optional()?;
-    held.ok_or_else(|| StoreError::RoomNotFound(room_id.clone()).into())
+    if exists(connection, room_id)? {
+        return Ok(());
+    }
+    Err(StoreError::RoomNotFound(room_id.clone()).into())
 }
 
 /// Stores a new room, its index sequence at 0; refused
@@ -117,9 +113,6 @@ pub(crate) fn write(connection: &Connection, room: &Room, stored: &str) -> Resul
     Ok(())
 }
 
-/// Writes `room` whole over its row and returns it as stored: the
-/// counters the store manages keep their stored values, as Python's store
-/// keeps them, so that a stale copy never rewinds them (RFC §14.3).
 /// Writes `room` as [`update`] does, only if the stored room is still in
 /// `status`, with `paused_at` and its timers' `last_activity_at`, in the
 /// caller's transaction; `None` with nothing written otherwise.
@@ -142,6 +135,9 @@ pub(crate) fn update_if(
     update(connection, room).map(Some)
 }
 
+/// Writes `room` whole over its row and returns it as stored: the
+/// counters the store manages keep their stored values, as Python's store
+/// keeps them, so that a stale copy never rewinds them (RFC §14.3).
 pub(crate) fn update(connection: &Connection, mut room: Room) -> Result<Room, Failure> {
     let Stored { room: held, data } = held(connection, &room.id)?;
     room.event_count = held.event_count;
