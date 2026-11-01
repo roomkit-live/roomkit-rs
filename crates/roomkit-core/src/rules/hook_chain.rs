@@ -5,6 +5,8 @@
 //! chain, a modify that replaces the payload, and an unusable outcome that
 //! allows or blocks depending on the hook and the trigger.
 
+use std::time::Duration;
+
 use crate::model::{ErrorRecord, HookAction, HookResult, InjectedEvent, Observation, Task};
 use crate::rules::hook_registry::{HookSpec, HookTrigger};
 
@@ -73,6 +75,9 @@ pub(crate) struct HookIncident {
     /// Whether the problem blocked the payload (the hook or its trigger fails
     /// closed) rather than letting it through.
     pub blocked: bool,
+    /// The hook's own timeout, which a `hook_timeout` reports (RFC §8.2):
+    /// a room's hook may share a name with the kit's.
+    pub timeout: Duration,
 }
 
 /// What the chain decided on its payload.
@@ -238,6 +243,7 @@ impl<P> HookChain<P> {
             hook: hook.name.clone(),
             problem,
             blocked: blocks,
+            timeout: hook.timeout,
         });
     }
 }
@@ -262,6 +268,7 @@ mod tests {
         ChannelId, ChannelType, EventDirection, EventId, EventSource, EventType, RoomEvent, RoomId,
         TaskId, TextContent, Timestamp,
     };
+    use crate::rules::hook_registry::DEFAULT_HOOK_TIMEOUT;
     use crate::rules::hook_registry::HookExecution;
 
     fn hook(name: &str) -> HookSpec {
@@ -416,6 +423,7 @@ mod tests {
                 hook: "broken_logger".to_owned(),
                 problem: HookProblem::Raised(error),
                 blocked: false,
+                timeout: DEFAULT_HOOK_TIMEOUT,
             }]
         );
     }
@@ -463,6 +471,7 @@ mod tests {
                             "action='block' requires 'reason' to be set"
                         )),
                         blocked: false,
+                        timeout: DEFAULT_HOOK_TIMEOUT,
                     },
                     HookIncident {
                         hook: "no_event".to_owned(),
@@ -471,6 +480,7 @@ mod tests {
                             "action='modify' requires 'event' to be set"
                         )),
                         blocked: false,
+                        timeout: DEFAULT_HOOK_TIMEOUT,
                     },
                 ]
             )

@@ -399,3 +399,45 @@ async fn a_hook_removed_while_its_chain_runs_runs_as_it_was_read() {
         (true, false, 1)
     );
 }
+
+/// A room hook sharing a kit hook's name reports its own timeout in its
+/// `hook_timeout` (RFC §8.2), as Python reports the registration that ran
+/// past it (the review of stream B, finding 2).
+#[tokio::test]
+async fn a_room_hook_past_its_timeout_reports_its_own_timeout() {
+    use std::collections::BTreeSet;
+    use std::time::Duration;
+
+    let kit = kit_with_room().await;
+    let elsewhere = HookOptions {
+        name: "x".to_owned(),
+        timeout: Duration::from_secs(5),
+        channel_ids: Some(BTreeSet::from([channel("ws")])),
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |_event: RoomEvent, _context: RoomContext| async {},
+        elsewhere,
+    )
+    .unwrap();
+    let slow = HookRegistration {
+        name: "x".to_owned(),
+        timeout: Duration::from_millis(50),
+        ..HookRegistration::new(
+            HookTrigger::BeforeBroadcast,
+            HookExecution::Sync,
+            |_event: RoomEvent, _context: RoomContext| std::future::pending::<()>(),
+        )
+    };
+    kit.hook_engine().add_room_hook(&room("r1"), slow).unwrap();
+    let tap = roomkit::testing::EventTap::on(&kit, &["hook_timeout"]);
+    send(&kit, "hello").await;
+    kit.close().await.unwrap();
+    let reported: Vec<_> = tap
+        .events()
+        .iter()
+        .map(|event| event.data.get("timeout").cloned())
+        .collect();
+    assert_eq!(reported, [Some(serde_json::json!(0.05))]);
+}

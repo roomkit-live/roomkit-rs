@@ -208,11 +208,7 @@ pub(super) fn hook_incidents(cx: &mut Cx<'_>, event: &RoomEvent, incidents: &[Ho
         let room_id = event.room_id.clone();
         let error = match &incident.problem {
             HookProblem::TimedOut => {
-                let timeout = cx
-                    .config
-                    .hooks
-                    .find(&incident.hook)
-                    .map_or(0.0, |spec| spec.timeout.as_secs_f64());
+                let timeout = incident.timeout.as_secs_f64();
                 notify(
                     cx,
                     FrameworkEvent::HookTimeout {

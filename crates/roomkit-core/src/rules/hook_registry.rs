@@ -654,16 +654,6 @@ impl HookRegistry {
         name
     }
 
-    /// The registration named `name`: the kit's, else the first room's
-    /// that holds one.
-    pub fn find(&self, name: &str) -> Option<&HookSpec> {
-        let named = |hook: &&Registered| hook.spec.name == name;
-        self.in_scope(None)
-            .find(named)
-            .or_else(|| self.hooks.iter().find(named))
-            .map(|hook| &hook.spec)
-    }
-
     /// The registration of `id`.
     pub fn get(&self, id: HookId) -> Option<&HookSpec> {
         self.hooks
