@@ -89,8 +89,8 @@ pub mod model {
         Participant, ParticipantId, ParticipantRole, ParticipantStatus, ProviderResult, RateLimit,
         RetryPolicy, RichContent, RichFormat, Room, RoomContext, RoomEvent, RoomId, RoomStatus,
         RoomTimers, SystemContent, Task, TaskId, TaskStatus, TemplateContent, TextContent,
-        Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus, VerificationStatus,
-        VideoContent, Visibility,
+        ThreadSummary, Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+        VerificationStatus, VideoContent, Visibility,
     };
 
     pub use crate::stream::{LoopEndMarker, LoopEndReason};

@@ -49,7 +49,7 @@ pub use context::RoomContext;
 pub use delivery::{DeliveryError, DeliveryResult, DeliveryResultStatus, ProviderResult};
 pub use direct::DirectEvent;
 pub use error::ModelError;
-pub use event::{EventDirection, EventSource, EventStatus, EventType, RoomEvent};
+pub use event::{EventDirection, EventSource, EventStatus, EventType, RoomEvent, ThreadSummary};
 pub use hook::{HookAction, HookResult, InjectedEvent};
 pub use identity::Identity;
 pub use ids::{

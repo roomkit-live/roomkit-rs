@@ -17,6 +17,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `hook_timeout` framework event, SYNC and ASYNC, in the agent's room and
   channel, as Python does (RFC §8.2, RMK-1086); it was only logged.
 
+- `ConversationStore` reads as Python's (RMK-1113): `room_exists`,
+  `binding_exists`, `find_latest_room`, `find_room_id_by_channel`,
+  `get_timeline` and `get_thread_summaries`, with `ThreadSummary`; the
+  in-memory and SQLite stores answer each with their own query. A store
+  implements `find_latest_room`, `find_room_id_by_channel` and
+  `get_thread_summaries`, which Python's base class makes abstract.
+
 - Update reqwest to 0.13 and sha2 to 0.11, the versions roomkit-tools uses,
   so a host that links both compiles one copy of each. The OpenAI agent and
   MCP over HTTP keep rustls with the ring provider and the webpki roots, now

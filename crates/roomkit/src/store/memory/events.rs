@@ -1,10 +1,11 @@
 //! The in-memory store's hard delete (RFC §14.1 `delete_event`, §10.3):
-//! the event, its replies, and the edits and deletes of what it removes.
+//! the event, its replies, and the edits and deletes of what it removes;
+//! and its threads' summaries.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 
-use roomkit_core::model::{EventContent, EventId, RoomEvent};
+use roomkit_core::model::{EventContent, EventId, EventStatus, RoomEvent, ThreadSummary};
 use roomkit_core::rules::edits::{self, DELETED, Mutation};
 
 /// Removes `event_id` from `events`, with what goes with it (RFC §10.3,
@@ -83,4 +84,37 @@ pub(super) fn mark_edits_deleted(events: &mut [RoomEvent], target: &EventId) {
             event.metadata.insert(DELETED.to_owned(), true.into());
         }
     }
+}
+
+/// The summary of each root of `roots` that `events` holds replies to, the
+/// replies the room received alone: a refused one is not counted, as a
+/// default timeline read does not serve it (RFC §14.1).
+pub(super) fn thread_summaries(
+    events: &[RoomEvent],
+    roots: &[EventId],
+) -> BTreeMap<EventId, ThreadSummary> {
+    let mut summaries: BTreeMap<EventId, ThreadSummary> = BTreeMap::new();
+    let received = events
+        .iter()
+        .filter(|event| event.status != EventStatus::Blocked);
+    for event in received {
+        let Some(root) = event
+            .parent_event_id
+            .as_ref()
+            .filter(|root| roots.contains(root))
+        else {
+            continue;
+        };
+        let summary = summaries
+            .entry(root.clone())
+            .or_insert_with(|| ThreadSummary::new(root.clone()));
+        summary.reply_count = summary.reply_count.saturating_add(1);
+        if summary
+            .last_reply_at
+            .is_none_or(|last| event.created_at > last)
+        {
+            summary.last_reply_at = Some(event.created_at);
+        }
+    }
+    summaries
 }

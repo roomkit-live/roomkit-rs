@@ -297,6 +297,34 @@ impl RoomEvent {
     }
 }
 
+/// A thread's summary, keyed by its root event (RFC §14.1): how many
+/// replies the root received and the instant of the last, what a "N
+/// replies · last reply at" affordance shows without reading the replies.
+/// A store's `get_thread_summaries` returns it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadSummary {
+    /// The thread's root.
+    pub root_event_id: EventId,
+    /// How many replies the root received.
+    #[serde(default)]
+    pub reply_count: u64,
+    /// When the last of them was created.
+    #[serde(default)]
+    pub last_reply_at: Option<Timestamp>,
+}
+
+impl ThreadSummary {
+    /// The summary of a root with no reply yet. A caller sets the other
+    /// fields by struct update.
+    pub fn new(root_event_id: EventId) -> Self {
+        Self {
+            root_event_id,
+            reply_count: 0,
+            last_reply_at: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;

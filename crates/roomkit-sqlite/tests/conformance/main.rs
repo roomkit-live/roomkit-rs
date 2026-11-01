@@ -31,6 +31,8 @@ mod scenarios;
 mod scripted;
 #[path = "../../../roomkit/tests/conformance/shape.rs"]
 mod shape;
+#[path = "../../../roomkit/tests/conformance/store_calls.rs"]
+mod store_calls;
 #[path = "../support/mod.rs"]
 mod support;
 #[path = "../../../roomkit/tests/conformance/templates.rs"]

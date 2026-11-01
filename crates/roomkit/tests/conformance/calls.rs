@@ -36,12 +36,15 @@ pub(crate) type Unreadable = String;
 /// named, `{"name": ..., "reason": ...}`.
 pub(crate) type Called = Result<Value, Value>;
 
-fn field<T: DeserializeOwned>(spec: &Value, key: &str) -> Result<T, Unreadable> {
+pub(crate) fn field<T: DeserializeOwned>(spec: &Value, key: &str) -> Result<T, Unreadable> {
     serde_json::from_value(spec.get(key).cloned().unwrap_or(Value::Null))
         .map_err(|error| format!("{key}: {error}"))
 }
 
-fn optional<T: DeserializeOwned>(spec: &Value, key: &str) -> Result<Option<T>, Unreadable> {
+pub(crate) fn optional<T: DeserializeOwned>(
+    spec: &Value,
+    key: &str,
+) -> Result<Option<T>, Unreadable> {
     match spec.get(key) {
         None => Ok(None),
         Some(value) => serde_json::from_value(value.clone())
@@ -64,7 +67,7 @@ fn organization_id(spec: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn dump<T: serde::Serialize>(value: &T) -> Value {
+pub(crate) fn dump<T: serde::Serialize>(value: &T) -> Value {
     serde_json::to_value(value).unwrap_or(Value::Null)
 }
 
@@ -81,7 +84,7 @@ fn inbound_result(result: &InboundResult) -> Value {
 }
 
 /// Turns a kit call's outcome into what the suite reads of it.
-fn finish<T>(
+pub(crate) fn finish<T>(
     run: &Run,
     call: &str,
     outcome: Result<T, RoomKitError>,
@@ -158,6 +161,7 @@ pub(crate) async fn call(
             let id = called.as_ref().ok().and_then(event_of);
             (called, id)
         }
+        store if store.starts_with("store.") => crate::store_calls::call(run, store, spec).await?,
         _ => (lifecycle_call(run, name, spec).await?, None),
     })
 }

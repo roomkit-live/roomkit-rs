@@ -15,22 +15,23 @@ mod options;
 pub(crate) mod query;
 pub(crate) mod rooms;
 
+use std::collections::BTreeMap;
 use std::future::Future;
 
 use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, EventType, Identity, IdentityId, Metadata,
-    Observation, Participant, ParticipantId, Room, RoomEvent, RoomId, Task,
+    Observation, Participant, ParticipantId, Room, RoomEvent, RoomId, Task, ThreadSummary,
 };
 use roomkit_core::rules::addresses::written_recipient;
 use roomkit_core::rules::routing;
 
 pub use self::memory::InMemoryStore;
 pub use self::options::{
-    AdvanceDeliveredIndexOptions, CommitEventOptions, DeleteEventOptions,
-    FindRoomIdByBindingOptions, FindRoomIdByParticipantOptions, FindRoomIdsByChannelOptions,
-    FindRoomsOptions, GetConversationOptions, GetEventCountOptions, LinkAddressOptions,
-    ListRoomsOptions, ListTasksOptions, PatchRoomMetadataOptions, ResolveIdentityOptions,
-    UnlinkAddressOptions,
+    AdvanceDeliveredIndexOptions, CommitEventOptions, DeleteEventOptions, FindLatestRoomOptions,
+    FindRoomIdByBindingOptions, FindRoomIdByChannelOptions, FindRoomIdByParticipantOptions,
+    FindRoomIdsByChannelOptions, FindRoomsOptions, GetConversationOptions, GetEventCountOptions,
+    GetTimelineOptions, LinkAddressOptions, ListRoomsOptions, ListTasksOptions,
+    PatchRoomMetadataOptions, ResolveIdentityOptions, UnlinkAddressOptions,
 };
 pub use self::query::ListEventsOptions;
 
@@ -179,6 +180,17 @@ pub trait ConversationStore: Send + Sync + 'static {
         room_id: &RoomId,
     ) -> impl Future<Output = Result<Option<Room>, StoreError>> + Send;
 
+    /// Whether the store holds the room `room_id`, read without the room:
+    /// the yes or no inbound routing asks on every message. Provided as
+    /// Python provides it, over [`get_room`](Self::get_room); a store
+    /// overrides it with an existence query.
+    fn room_exists(
+        &self,
+        room_id: &RoomId,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send {
+        async move { Ok(self.get_room(room_id).await?.is_some()) }
+    }
+
     /// Writes `room` whole, keyed by its id, and returns it as stored. The
     /// counters the store manages, `event_count`, `latest_index` and
     /// `delivered_index`, keep their stored values, as Python's stores keep
@@ -237,6 +249,27 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         options: FindRoomsOptions,
     ) -> impl Future<Output = Result<Vec<Room>, StoreError>> + Send;
+
+    /// The newest room of the participant `participant_id`, the last
+    /// created, the greatest id by code point breaking a tie, in the status
+    /// `options` names: a room holding their participant record, on any
+    /// channel, or binding a channel to them, of the channel type `options`
+    /// names; `None` when none.
+    fn find_latest_room(
+        &self,
+        participant_id: &ParticipantId,
+        options: FindLatestRoomOptions,
+    ) -> impl Future<Output = Result<Option<Room>, StoreError>> + Send;
+
+    /// A room binding `channel_id`, in the status `options` names: the
+    /// oldest, as [`find_room_ids_by_channel`](Self::find_room_ids_by_channel)
+    /// orders them, as the Python implementation's stores answer; `None`
+    /// when none.
+    fn find_room_id_by_channel(
+        &self,
+        channel_id: &ChannelId,
+        options: FindRoomIdByChannelOptions,
+    ) -> impl Future<Output = Result<Option<RoomId>, StoreError>> + Send;
 
     /// The rooms binding `channel_id` among those `room_filter` admits, the
     /// oldest first, at most `limit`, of a `group` binding or not when
@@ -433,6 +466,18 @@ pub trait ConversationStore: Send + Sync + 'static {
         channel_id: &ChannelId,
     ) -> impl Future<Output = Result<Option<ChannelBinding>, StoreError>> + Send;
 
+    /// Whether the room `room_id` binds `channel_id`, read without the
+    /// binding: routing's yes or no (RFC §10.1 step 2). Provided as Python
+    /// provides it, over [`get_binding`](Self::get_binding); a store
+    /// overrides it with an existence query.
+    fn binding_exists(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send {
+        async move { Ok(self.get_binding(room_id, channel_id).await?.is_some()) }
+    }
+
     /// Writes `binding`, keyed by its room and channel, and returns it.
     ///
     /// # Errors
@@ -500,6 +545,32 @@ pub trait ConversationStore: Send + Sync + 'static {
                 after_index: options.after_index,
                 event_filter: Some(messages),
                 newest_first: options.after_index.is_none(),
+                ..ListEventsOptions::default()
+            };
+            self.list_events(room_id, read).await
+        }
+    }
+
+    /// The room's whole activity: the events it received, of every type,
+    /// a refused one only when `options.event_filter` asks for it, the
+    /// oldest `limit` in index order, the newest with `newest_first`, or
+    /// with `after_index` the first `limit` after it. Provided as Python
+    /// provides it, over [`list_events`](Self::list_events).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Value`] for a filter its model refuses.
+    fn get_timeline(
+        &self,
+        room_id: &RoomId,
+        options: GetTimelineOptions,
+    ) -> impl Future<Output = Result<Vec<RoomEvent>, StoreError>> + Send {
+        async move {
+            let read = ListEventsOptions {
+                limit: options.limit,
+                after_index: options.after_index,
+                event_filter: options.event_filter,
+                newest_first: options.newest_first,
                 ..ListEventsOptions::default()
             };
             self.list_events(room_id, read).await
@@ -718,6 +789,17 @@ pub trait ConversationStore: Send + Sync + 'static {
         room_id: &RoomId,
         options: ListEventsOptions,
     ) -> impl Future<Output = Result<Vec<RoomEvent>, StoreError>> + Send;
+
+    /// The summary of each thread of `root_event_ids` that has replies in
+    /// the room, by its root: how many replies it received and the instant
+    /// of the last, what a "N replies" affordance shows. A root with no
+    /// reply has none, and a reply the room refused is not counted, as a
+    /// default timeline read of the thread does not serve it (RFC §14.1).
+    fn get_thread_summaries(
+        &self,
+        room_id: &RoomId,
+        root_event_ids: &[EventId],
+    ) -> impl Future<Output = Result<BTreeMap<EventId, ThreadSummary>, StoreError>> + Send;
 
     /// Stores `task` and returns it (RFC §10.1 step 15).
     fn add_task(&self, task: Task) -> impl Future<Output = Result<Task, StoreError>> + Send;

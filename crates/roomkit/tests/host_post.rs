@@ -1654,6 +1654,35 @@ impl ConversationStore for GatedStore {
     async fn list_observations(&self, room_id: &RoomId) -> Result<Vec<Observation>, StoreError> {
         self.store.list_observations(room_id).await
     }
+
+    async fn find_latest_room(
+        &self,
+        participant_id: &ParticipantId,
+        options: store::FindLatestRoomOptions,
+    ) -> Result<Option<Room>, StoreError> {
+        self.store.find_latest_room(participant_id, options).await
+    }
+
+    async fn find_room_id_by_channel(
+        &self,
+        channel_id: &ChannelId,
+        options: store::FindRoomIdByChannelOptions,
+    ) -> Result<Option<RoomId>, StoreError> {
+        self.store
+            .find_room_id_by_channel(channel_id, options)
+            .await
+    }
+
+    async fn get_thread_summaries(
+        &self,
+        room_id: &RoomId,
+        root_event_ids: &[EventId],
+    ) -> Result<std::collections::BTreeMap<EventId, roomkit::model::ThreadSummary>, StoreError>
+    {
+        self.store
+            .get_thread_summaries(room_id, root_event_ids)
+            .await
+    }
 }
 
 /// A kit on a gated store, with room `r` and its SMS, its calls bounded by

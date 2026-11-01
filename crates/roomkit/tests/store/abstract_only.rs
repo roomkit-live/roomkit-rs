@@ -219,6 +219,35 @@ impl ConversationStore for AbstractOnly {
     async fn list_observations(&self, room_id: &RoomId) -> Result<Vec<Observation>, StoreError> {
         self.store.list_observations(room_id).await
     }
+
+    async fn find_latest_room(
+        &self,
+        participant_id: &ParticipantId,
+        options: store::FindLatestRoomOptions,
+    ) -> Result<Option<Room>, StoreError> {
+        self.store.find_latest_room(participant_id, options).await
+    }
+
+    async fn find_room_id_by_channel(
+        &self,
+        channel_id: &ChannelId,
+        options: store::FindRoomIdByChannelOptions,
+    ) -> Result<Option<RoomId>, StoreError> {
+        self.store
+            .find_room_id_by_channel(channel_id, options)
+            .await
+    }
+
+    async fn get_thread_summaries(
+        &self,
+        room_id: &RoomId,
+        root_event_ids: &[EventId],
+    ) -> Result<std::collections::BTreeMap<EventId, roomkit::model::ThreadSummary>, StoreError>
+    {
+        self.store
+            .get_thread_summaries(room_id, root_event_ids)
+            .await
+    }
 }
 
 fn channel(id: &str) -> ChannelId {
@@ -387,4 +416,45 @@ async fn a_store_of_the_abstract_methods_alone_serves_a_conversation() {
         ),
         (Some(room_id()), vec!["You said: Bonjour".to_owned()], true)
     );
+}
+
+/// RFC §14.1, Python's base class: a store that overrides neither
+/// `room_exists`, `binding_exists` nor `get_timeline` answers them through
+/// `get_room`, `get_binding` and `list_events`, as the in-memory store
+/// answers them.
+#[tokio::test]
+async fn the_provided_reads_answer_through_the_abstract_ones() {
+    let (kit, _sms) = sms_and_agent().await;
+    kit.process_inbound(
+        keyed("Bonjour", "SM1"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let store = kit.store();
+    let other = RoomId::new("room_2").unwrap();
+    let exists = (
+        store.room_exists(&room_id()).await.unwrap(),
+        store.room_exists(&other).await.unwrap(),
+        store
+            .binding_exists(&room_id(), &channel("sms"))
+            .await
+            .unwrap(),
+        store
+            .binding_exists(&room_id(), &channel("email"))
+            .await
+            .unwrap(),
+    );
+    let read = store::GetTimelineOptions {
+        newest_first: true,
+        limit: 1,
+        ..Default::default()
+    };
+    let timeline = store.get_timeline(&room_id(), read.clone()).await.unwrap();
+    let held = store.store.get_timeline(&room_id(), read).await.unwrap();
+    kit.close().await.unwrap();
+    assert_eq!((exists, timeline), ((true, false, true, false), held));
 }

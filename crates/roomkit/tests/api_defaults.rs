@@ -508,6 +508,22 @@ fn store_find_room_ids_by_channel_options_defaults_as_python() {
 }
 
 #[test]
+fn store_find_latest_room_options_defaults_as_python() {
+    let defaults = store::FindLatestRoomOptions::default();
+    // roomkit.ConversationStore.find_latest_room(channel_type) = None
+    assert!(defaults.channel_type.is_none());
+    // roomkit.ConversationStore.find_latest_room(status) = None
+    assert!(defaults.status.is_none());
+}
+
+#[test]
+fn store_find_room_id_by_channel_options_defaults_as_python() {
+    let defaults = store::FindRoomIdByChannelOptions::default();
+    // roomkit.ConversationStore.find_room_id_by_channel(status) = None
+    assert!(defaults.status.is_none());
+}
+
+#[test]
 fn store_find_rooms_options_defaults_as_python() {
     let defaults = store::FindRoomsOptions::default();
     // roomkit.ConversationStore.find_rooms(limit) = 100
@@ -536,6 +552,19 @@ fn store_get_event_count_options_defaults_as_python() {
     let defaults = store::GetEventCountOptions::default();
     // roomkit.ConversationStore.get_event_count(event_filter) = None
     assert!(defaults.event_filter.is_none());
+}
+
+#[test]
+fn store_get_timeline_options_defaults_as_python() {
+    let defaults = store::GetTimelineOptions::default();
+    // roomkit.ConversationStore.get_timeline(after_index) = None
+    assert!(defaults.after_index.is_none());
+    // roomkit.ConversationStore.get_timeline(event_filter) = None
+    assert!(defaults.event_filter.is_none());
+    // roomkit.ConversationStore.get_timeline(limit) = 50
+    assert_eq!(defaults.limit, 50);
+    // roomkit.ConversationStore.get_timeline(newest_first) = False
+    assert!(!defaults.newest_first);
 }
 
 #[test]

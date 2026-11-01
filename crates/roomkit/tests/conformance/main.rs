@@ -27,6 +27,7 @@ mod run;
 mod scenarios;
 mod scripted;
 mod shape;
+mod store_calls;
 mod templates;
 
 use std::time::Duration;

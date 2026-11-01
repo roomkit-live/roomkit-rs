@@ -10,17 +10,18 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Metadata, Observation,
-    Participant, ParticipantId, Room, RoomEvent, RoomId, Task,
+    Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task, ThreadSummary,
 };
 use roomkit_core::rules::{idempotency, lifecycle, routing};
 
 use self::identities::Identities;
 use super::{
     AdvanceDeliveredIndexOptions, CommitEventOptions, ConversationStore, DeleteEventOptions,
-    FindRoomIdByBindingOptions, FindRoomIdByParticipantOptions, FindRoomIdsByChannelOptions,
-    FindRoomsOptions, GetEventCountOptions, LinkAddressOptions, ListEventsOptions,
-    ListRoomsOptions, ListTasksOptions, PatchRoomMetadataOptions, ResolveIdentityOptions,
-    RoomFilter, StoreError, UnlinkAddressOptions, names_by_recipient, names_sender,
+    FindLatestRoomOptions, FindRoomIdByBindingOptions, FindRoomIdByChannelOptions,
+    FindRoomIdByParticipantOptions, FindRoomIdsByChannelOptions, FindRoomsOptions,
+    GetEventCountOptions, LinkAddressOptions, ListEventsOptions, ListRoomsOptions,
+    ListTasksOptions, PatchRoomMetadataOptions, ResolveIdentityOptions, RoomFilter, StoreError,
+    UnlinkAddressOptions, names_by_recipient, names_sender,
 };
 
 /// A store that keeps everything in memory, for one process: Python's
@@ -66,6 +67,19 @@ impl Record {
         self.bindings
             .iter()
             .find(|binding| &binding.channel_id == channel_id)
+    }
+
+    /// Whether the room is `participant_id`'s, as `find_latest_room` reads
+    /// it: their participant record, on any channel, or a binding naming
+    /// them, of `channel_type` when it names one.
+    fn holds(&self, participant_id: &ParticipantId, channel_type: Option<&ChannelType>) -> bool {
+        self.participants
+            .iter()
+            .any(|participant| &participant.id == participant_id)
+            || self.bindings.iter().any(|binding| {
+                binding.participant_id.as_ref() == Some(participant_id)
+                    && channel_type.is_none_or(|kind| &binding.channel_type == kind)
+            })
     }
 
     /// Whether the room holds a participant reached through `channel_id`
@@ -295,6 +309,10 @@ impl ConversationStore for InMemoryStore {
         Ok(self.read(room_id, |record| record.room.clone()))
     }
 
+    async fn room_exists(&self, room_id: &RoomId) -> Result<bool, StoreError> {
+        Ok(self.rooms().contains_key(room_id))
+    }
+
     async fn update_room(&self, mut room: Room) -> Result<Room, StoreError> {
         let room_id = room.id.clone();
         self.write(&room_id, |record| {
@@ -357,6 +375,43 @@ impl ConversationStore for InMemoryStore {
                 })
         });
         Ok(window(rooms, offset, limit))
+    }
+
+    async fn find_latest_room(
+        &self,
+        participant_id: &ParticipantId,
+        options: FindLatestRoomOptions,
+    ) -> Result<Option<Room>, StoreError> {
+        let FindLatestRoomOptions {
+            channel_type,
+            status,
+        } = options;
+        let statuses = status.map(|status| vec![status]);
+        let filter = RoomFilter {
+            statuses,
+            organization_id: None,
+        };
+        let room_id = self.newest(&filter, |record| {
+            record.holds(participant_id, channel_type.as_ref())
+        });
+        Ok(room_id.and_then(|room_id| self.read(&room_id, |record| record.room.clone())))
+    }
+
+    async fn find_room_id_by_channel(
+        &self,
+        channel_id: &ChannelId,
+        options: FindRoomIdByChannelOptions,
+    ) -> Result<Option<RoomId>, StoreError> {
+        let ids = FindRoomIdsByChannelOptions {
+            room_filter: Some(RoomFilter {
+                statuses: options.status.map(|status: RoomStatus| vec![status]),
+                organization_id: None,
+            }),
+            limit: 1,
+            group: None,
+        };
+        let found = self.find_room_ids_by_channel(channel_id, ids).await?;
+        Ok(found.into_iter().next())
     }
 
     async fn find_room_ids_by_channel(
@@ -480,6 +535,16 @@ impl ConversationStore for InMemoryStore {
         Ok(self
             .read(room_id, |record| record.binding(channel_id).cloned())
             .flatten())
+    }
+
+    async fn binding_exists(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<bool, StoreError> {
+        Ok(self
+            .read(room_id, |record| record.binding(channel_id).is_some())
+            .unwrap_or(false))
     }
 
     async fn update_binding(&self, binding: ChannelBinding) -> Result<ChannelBinding, StoreError> {
@@ -783,6 +848,18 @@ impl ConversationStore for InMemoryStore {
         options.validate()?;
         Ok(self
             .read(room_id, |record| page(&record.events, &options))
+            .unwrap_or_default())
+    }
+
+    async fn get_thread_summaries(
+        &self,
+        room_id: &RoomId,
+        root_event_ids: &[EventId],
+    ) -> Result<BTreeMap<EventId, ThreadSummary>, StoreError> {
+        Ok(self
+            .read(room_id, |record| {
+                events::thread_summaries(&record.events, root_event_ids)
+            })
             .unwrap_or_default())
     }
 

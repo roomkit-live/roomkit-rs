@@ -1,7 +1,7 @@
 //! What the store's methods take beside their positional arguments:
 //! Python's keyword arguments, with its defaults.
 
-use roomkit_core::model::{IdentityId, Metadata, RoomEvent, RoomStatus, TaskStatus};
+use roomkit_core::model::{ChannelType, IdentityId, Metadata, RoomEvent, RoomStatus, TaskStatus};
 
 use super::{EventFilter, RoomFilter};
 
@@ -51,6 +51,25 @@ impl Default for FindRoomsOptions {
             offset: 0,
         }
     }
+}
+
+/// What [`find_latest_room`](super::ConversationStore::find_latest_room)
+/// takes: Python's `channel_type=None, status=None`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FindLatestRoomOptions {
+    /// Only a binding of this channel type names the participant; their
+    /// participant record names them on any.
+    pub channel_type: Option<ChannelType>,
+    /// Only the rooms in this status.
+    pub status: Option<RoomStatus>,
+}
+
+/// What [`find_room_id_by_channel`](super::ConversationStore::find_room_id_by_channel)
+/// takes: Python's `status=None`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FindRoomIdByChannelOptions {
+    /// Only the rooms in this status.
+    pub status: Option<RoomStatus>,
 }
 
 /// What [`find_room_ids_by_channel`](super::ConversationStore::find_room_ids_by_channel)
@@ -130,6 +149,33 @@ impl Default for GetConversationOptions {
         Self {
             limit: 50,
             after_index: None,
+        }
+    }
+}
+
+/// What [`get_timeline`](super::ConversationStore::get_timeline) takes:
+/// Python's `*, event_filter=None, limit=50, after_index=None,
+/// newest_first=False`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GetTimelineOptions {
+    /// Which events the page may hold; `None` for every one the room
+    /// received.
+    pub event_filter: Option<EventFilter>,
+    /// How many events at most.
+    pub limit: u64,
+    /// The first events after this index.
+    pub after_index: Option<u64>,
+    /// Without a cursor, the newest `limit` events rather than the oldest.
+    pub newest_first: bool,
+}
+
+impl Default for GetTimelineOptions {
+    fn default() -> Self {
+        Self {
+            event_filter: None,
+            limit: 50,
+            after_index: None,
+            newest_first: false,
         }
     }
 }

@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
     clippy::disallowed_methods,
     reason = "a template's instant is the wall clock's, as the Python runner's is"
 )]
-fn now() -> Value {
+pub(crate) fn now() -> Value {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();

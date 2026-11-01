@@ -152,6 +152,17 @@ pub(crate) fn seconds(instant: Timestamp) -> f64 {
     }
 }
 
+/// The instant `seconds` after the Unix epoch, a `created_ts` column read
+/// back, at the model's millisecond precision.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a created_ts holds an instant the model wrote, well inside i64 milliseconds"
+)]
+pub(crate) fn instant(seconds: f64) -> Result<Timestamp, Failure> {
+    let millis = (seconds * 1000.0).round() as i64;
+    Timestamp::from_unix_millis(millis).map_err(|_| Failure::OutOfRange("an instant"))
+}
+
 /// A count or an index as SQLite's integer.
 pub(crate) fn integer(value: u64) -> Result<i64, Failure> {
     i64::try_from(value).map_err(|_| Failure::OutOfRange("an index"))

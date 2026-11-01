@@ -53,6 +53,18 @@ pub(crate) fn held(connection: &Connection, room_id: &RoomId) -> Result<Stored, 
 }
 
 /// Refuses [`StoreError::RoomNotFound`] for a room the store does not hold.
+/// Whether the file holds the room `room_id`, its row unread.
+pub(crate) fn exists(connection: &Connection, room_id: &RoomId) -> Result<bool, Failure> {
+    let held = connection
+        .query_row(
+            "SELECT 1 FROM rooms WHERE id = ?",
+            [room_id.as_str()],
+            |_| Ok(()),
+        )
+        .optional()?;
+    Ok(held.is_some())
+}
+
 pub(crate) fn check(connection: &Connection, room_id: &RoomId) -> Result<(), Failure> {
     let held = connection
         .query_row(

@@ -1,14 +1,14 @@
 //! The rooms a store pages, and the routing lookups (RFC §10.4 step 1,
-//! §14.1 `list_rooms`, `find_rooms`, `find_room_ids_by_channel`,
+//! §14.1 `list_rooms`, `find_rooms`, `find_latest_room`, `find_room_ids_by_channel`,
 //! `find_room_id_by_binding`, `find_room_id_by_participant`, gap G-058),
 //! read with the Python implementation's SQL over the `rooms`, `bindings`
 //! and `participants` tables.
 
 use roomkit::RoomFilter;
-use roomkit::model::{ChannelId, IdentityId, Room, RoomId};
+use roomkit::model::{ChannelId, IdentityId, ParticipantId, Room, RoomId};
 use roomkit::store::{
-    FindRoomIdByBindingOptions, FindRoomIdByParticipantOptions, FindRoomIdsByChannelOptions,
-    FindRoomsOptions,
+    FindLatestRoomOptions, FindRoomIdByBindingOptions, FindRoomIdByParticipantOptions,
+    FindRoomIdsByChannelOptions, FindRoomsOptions,
 };
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension, params_from_iter};
@@ -118,6 +118,45 @@ pub(crate) fn find(
         .skip(offset)
         .take(limit)
         .collect())
+}
+
+/// The newest room of `participant_id`, in the status `options` names: one
+/// holding their participant record, or binding them on a channel of the
+/// type `options` names, with the Python implementation's SQL
+/// (`find_latest_room`).
+pub(crate) fn find_latest(
+    connection: &Connection,
+    participant_id: &ParticipantId,
+    options: &FindLatestRoomOptions,
+) -> Result<Option<Room>, Failure> {
+    let participant = Sql::Text(participant_id.as_str().to_owned());
+    let channel_type = match &options.channel_type {
+        Some(kind) => Sql::Text(kind.as_str().to_owned()),
+        None => Sql::Null,
+    };
+    let mut conditions = vec![
+        "(EXISTS(SELECT 1 FROM participants p WHERE p.room_id = r.id AND p.id = ?)
+          OR EXISTS(SELECT 1 FROM bindings b WHERE b.room_id = r.id
+                    AND b.participant_id = ?
+                    AND (? IS NULL OR b.channel_type = ?)))"
+            .to_owned(),
+    ];
+    let mut params = vec![
+        participant.clone(),
+        participant,
+        channel_type.clone(),
+        channel_type,
+    ];
+    if let Some(status) = options.status {
+        conditions.push("r.status = ?".to_owned());
+        params.push(Sql::Text(records::name(&status)?));
+    }
+    let sql = format!(
+        "SELECT r.data, r.delivered_index FROM rooms r WHERE {}
+         ORDER BY r.created_ts DESC, r.id DESC LIMIT 1",
+        conditions.join(" AND ")
+    );
+    Ok(rooms_of(connection, &sql, params)?.into_iter().next())
 }
 
 /// The rooms binding `channel_id` among those `options` admit, the oldest

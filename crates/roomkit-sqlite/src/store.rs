@@ -4,16 +4,19 @@ use std::path::{Component, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use std::collections::BTreeMap;
+
+use roomkit::RoomFilter;
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Metadata, Observation,
-    Participant, ParticipantId, Room, RoomEvent, RoomId, Task,
+    Participant, ParticipantId, Room, RoomEvent, RoomId, Task, ThreadSummary,
 };
 use roomkit::store::{
-    AdvanceDeliveredIndexOptions, CommitEventOptions, DeleteEventOptions,
-    FindRoomIdByBindingOptions, FindRoomIdByParticipantOptions, FindRoomIdsByChannelOptions,
-    FindRoomsOptions, GetEventCountOptions, LinkAddressOptions, ListEventsOptions,
-    ListRoomsOptions, ListTasksOptions, PatchRoomMetadataOptions, ResolveIdentityOptions,
-    UnlinkAddressOptions,
+    AdvanceDeliveredIndexOptions, CommitEventOptions, DeleteEventOptions, FindLatestRoomOptions,
+    FindRoomIdByBindingOptions, FindRoomIdByChannelOptions, FindRoomIdByParticipantOptions,
+    FindRoomIdsByChannelOptions, FindRoomsOptions, GetEventCountOptions, LinkAddressOptions,
+    ListEventsOptions, ListRoomsOptions, ListTasksOptions, PatchRoomMetadataOptions,
+    ResolveIdentityOptions, UnlinkAddressOptions,
 };
 use roomkit::{ConversationStore, StoreError, written};
 use tokio::sync::OnceCell;
@@ -147,6 +150,14 @@ impl ConversationStore for SqliteStore {
             .await
     }
 
+    async fn room_exists(&self, room_id: &RoomId) -> Result<bool, StoreError> {
+        let room_id = room_id.clone();
+        self.database()
+            .await?
+            .read(move |connection| rooms::exists(connection, &room_id))
+            .await
+    }
+
     async fn update_room(&self, room: Room) -> Result<Room, StoreError> {
         self.database()
             .await?
@@ -192,6 +203,35 @@ impl ConversationStore for SqliteStore {
             .await?
             .read(move |connection| lookups::find(connection, options))
             .await
+    }
+
+    async fn find_latest_room(
+        &self,
+        participant_id: &ParticipantId,
+        options: FindLatestRoomOptions,
+    ) -> Result<Option<Room>, StoreError> {
+        let participant_id = participant_id.clone();
+        self.database()
+            .await?
+            .read(move |connection| lookups::find_latest(connection, &participant_id, &options))
+            .await
+    }
+
+    async fn find_room_id_by_channel(
+        &self,
+        channel_id: &ChannelId,
+        options: FindRoomIdByChannelOptions,
+    ) -> Result<Option<RoomId>, StoreError> {
+        let ids = FindRoomIdsByChannelOptions {
+            room_filter: Some(RoomFilter {
+                statuses: options.status.map(|status| vec![status]),
+                organization_id: None,
+            }),
+            limit: 1,
+            group: None,
+        };
+        let found = self.find_room_ids_by_channel(channel_id, ids).await?;
+        Ok(found.into_iter().next())
     }
 
     async fn find_room_ids_by_channel(
@@ -297,6 +337,18 @@ impl ConversationStore for SqliteStore {
         self.database()
             .await?
             .read(move |connection| members::binding(connection, &room_id, &channel_id))
+            .await
+    }
+
+    async fn binding_exists(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<bool, StoreError> {
+        let (room_id, channel_id) = (room_id.clone(), channel_id.clone());
+        self.database()
+            .await?
+            .read(move |connection| members::binding_exists(connection, &room_id, &channel_id))
             .await
     }
 
@@ -587,6 +639,18 @@ impl ConversationStore for SqliteStore {
         self.database()
             .await?
             .read(move |connection| timeline::page(connection, &room_id, &options))
+            .await
+    }
+
+    async fn get_thread_summaries(
+        &self,
+        room_id: &RoomId,
+        root_event_ids: &[EventId],
+    ) -> Result<BTreeMap<EventId, ThreadSummary>, StoreError> {
+        let (room_id, roots) = (room_id.clone(), root_event_ids.to_vec());
+        self.database()
+            .await?
+            .read(move |connection| timeline::thread_summaries(connection, &room_id, &roots))
             .await
     }
 

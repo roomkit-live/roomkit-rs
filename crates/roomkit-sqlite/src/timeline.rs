@@ -1,11 +1,14 @@
-//! A page of a room's timeline, and a count of its rows (RFC §14.1,
-//! "Reading a timeline"), selected as the Python implementation's
-//! `list_events` and `get_event_count` select them: the filter's criteria
+//! A page of a room's timeline, a count of its rows (RFC §14.1, "Reading a
+//! timeline") and its threads' summaries, selected as the Python
+//! implementation's `list_events`, `get_event_count` and
+//! `get_thread_summaries` select them: the filter's criteria
 //! on the row's columns, applied before the page is cut, and the window
 //! read from the index on `(room_id, idx)`.
 
+use std::collections::BTreeMap;
+
 use roomkit::EventFilter;
-use roomkit::model::{EventStatus, RoomEvent, RoomId, Visibility};
+use roomkit::model::{EventId, EventStatus, RoomEvent, RoomId, ThreadSummary, Visibility};
 use roomkit::store::ListEventsOptions;
 use rusqlite::types::Value;
 use rusqlite::{Connection, params_from_iter};
@@ -203,6 +206,54 @@ pub(crate) fn count(
     let counted: i64 =
         connection.query_row(&sql, params_from_iter(criteria.values), |row| row.get(0))?;
     u64::try_from(counted).map_err(|_| Failure::OutOfRange("an event count"))
+}
+
+/// The summary of each root of `roots` with replies in `room_id`, the
+/// replies the room received alone, with the Python implementation's SQL
+/// (`get_thread_summaries`).
+pub(crate) fn thread_summaries(
+    connection: &Connection,
+    room_id: &RoomId,
+    roots: &[EventId],
+) -> Result<BTreeMap<EventId, ThreadSummary>, Failure> {
+    if roots.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let marks = vec!["?"; roots.len()].join(", ");
+    // The placeholders are this function's own, never a caller's.
+    let sql = format!(
+        "SELECT parent_event_id, COUNT(*), MAX(created_ts) FROM events
+         WHERE room_id = ? AND parent_event_id IN ({marks})
+           AND json_extract(data, '$.status') IS NOT ?
+         GROUP BY parent_event_id"
+    );
+    let mut values = vec![Value::Text(room_id.as_str().to_owned())];
+    values.extend(
+        roots
+            .iter()
+            .map(|root| Value::Text(root.as_str().to_owned())),
+    );
+    values.push(Value::Text(records::name(&EventStatus::Blocked)?));
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, f64>(2)?,
+        ))
+    })?;
+    let mut summaries = BTreeMap::new();
+    for row in rows {
+        let (root, replies, last) = row?;
+        let root: EventId = serde_json::from_value(serde_json::Value::String(root))?;
+        let summary = ThreadSummary {
+            reply_count: u64::try_from(replies).map_err(|_| Failure::OutOfRange("a count"))?,
+            last_reply_at: Some(records::instant(last)?),
+            ..ThreadSummary::new(root.clone())
+        };
+        summaries.insert(root, summary);
+    }
+    Ok(summaries)
 }
 
 #[cfg(test)]

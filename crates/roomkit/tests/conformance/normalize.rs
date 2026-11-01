@@ -193,9 +193,17 @@ impl Normalizer {
                 Some(index) => index,
                 None => self.value_under(item, Some(key)),
             };
-            result.insert(key.clone(), normalized);
+            result.insert(self.key(key), normalized);
         }
         Value::Object(result)
+    }
+
+    /// An object's key, an event of a timeline's id named as its event.
+    fn key(&self, key: &str) -> String {
+        self.events
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| key.to_owned())
     }
 
     fn string(&mut self, text: &str, key: Option<&str>) -> String {
