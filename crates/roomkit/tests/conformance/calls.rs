@@ -5,6 +5,7 @@
 //! `docs/rfc-gaps.md` G-085.
 
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::time::Duration;
 
 use roomkit::model::{
@@ -13,11 +14,11 @@ use roomkit::model::{
     RoomId, RoomTimers, Visibility,
 };
 use roomkit::{
-    ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CloseRoomOptions,
-    CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
+    AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
+    CloseRoomOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
     DetachChannelOptions, HookOptions, HookTrigger, HostChannel, InboundResult, MuteOptions,
-    PostOptions, ProcessInboundOptions, RoomKitError, SendEventOptions, SetAccessOptions,
-    SetVisibilityOptions, UnmuteOptions, UpdateEventOptions,
+    PostOptions, ProcessInboundOptions, RemoveRoomHookOptions, RoomKitError, SendEventOptions,
+    SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateEventOptions,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -257,6 +258,7 @@ async fn lifecycle_call(
         "register_hook" => finish(run, name, register_hook(run, &spec["hook"])?, |()| {
             Value::Null
         }),
+        "add_room_hook" | "remove_room_hook" => room_hook_call(run, name, spec).await?,
         other => return Err(format!("no call {other}")),
     })
 }
@@ -427,6 +429,65 @@ pub(crate) fn register_channel(
     Ok(finish(run, "register_channel", registered, |()| {
         Value::Null
     }))
+}
+
+/// A room hook's call the scenario names: its addition or its removal.
+async fn room_hook_call(
+    run: &std::sync::Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<Called, Unreadable> {
+    let room = room_id(spec)?;
+    if name == "add_room_hook" {
+        let added = add_room_hook(run, &room, spec)?.await;
+        return Ok(finish(run, name, added, |()| Value::Null));
+    }
+    let hook = field::<String>(spec, "name")?;
+    let options = RemoveRoomHookOptions {
+        organization_id: organization_id(spec),
+    };
+    let removed = run.kit().remove_room_hook(&room, &hook, options).await;
+    Ok(finish(run, name, removed, |removed| Value::Bool(*removed)))
+}
+
+/// Adds the hook `spec` describes for the room `room` alone: a room's hook
+/// declares no filter and keeps the default timeout.
+fn add_room_hook(
+    run: &std::sync::Arc<Run>,
+    room: &RoomId,
+    spec: &Value,
+) -> Result<impl Future<Output = Result<(), RoomKitError>>, Unreadable> {
+    let hook = &spec["hook"];
+    let trigger: HookTrigger = field(hook, "trigger")?;
+    let defaults = AddRoomHookOptions::default();
+    let execution = optional(hook, "execution")?.unwrap_or(HookOptions::default().execution);
+    let options = AddRoomHookOptions {
+        priority: optional(hook, "priority")?.unwrap_or(defaults.priority),
+        name: hook["name"].as_str().unwrap_or_default().to_owned(),
+        fail_closed: optional(hook, "fail_closed")?.unwrap_or(defaults.fail_closed),
+        needs_lock: optional(hook, "needs_lock")?.unwrap_or(defaults.needs_lock),
+        organization_id: organization_id(spec),
+    };
+    let (kit, room) = (run.kit().clone(), room.clone());
+    let (tool, event) = (
+        trigger
+            .is_tool_trigger()
+            .then(|| agents::tool_hook_handler(hook, run)),
+        hook_handler(hook, run),
+    );
+    Ok(async move {
+        let added = match tool {
+            Some(tool) => {
+                kit.add_room_hook(&room, trigger, execution, tool, options)
+                    .await
+            }
+            None => {
+                kit.add_room_hook(&room, trigger, execution, event, options)
+                    .await
+            }
+        };
+        added.map(drop)
+    })
 }
 
 /// Registers the hook a scenario describes.

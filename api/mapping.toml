@@ -510,11 +510,8 @@ reason = "not in 0.x: delegation, tasks, orchestration strategies, human input a
 
 [[missing]]
 python = "roomkit.RoomKit"
-members = [
-    "add_room_hook", "disable_room_hook", "enable_room_hook", "hook_engine",
-    "hooks_for", "remove_room_hook",
-]
-reason = "not in 0.x: hooks per room"
+members = ["disable_room_hook", "enable_room_hook", "hook_engine", "hooks_for"]
+reason = "not in 0.x: the room hooks the turn executors define by name, and the hook engine"
 
 [[missing]]
 python = "roomkit.RoomKit"

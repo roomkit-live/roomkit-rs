@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Hooks per room (RFC §9.1), as Python's: `RoomKit::add_room_hook(room_id,
+  trigger, execution, fn, AddRoomHookOptions)` returns the `HookRegistration`
+  the kit holds, and `remove_room_hook(room_id, name, RemoveRoomHookOptions)`
+  says whether the room held one. A room's hooks run for its events and its
+  turns' tool calls alone, beside the kit's, by priority, the kit's first at
+  equal priority; a name is unique within the room and may be the kit's.
+
 - A `BEFORE_TOOL_USE` or `ON_TOOL_CALL` hook past its timeout emits the
   `hook_timeout` framework event, SYNC and ASYNC, in the agent's room and
   channel, as Python does (RFC §8.2, RMK-1086); it was only logged.

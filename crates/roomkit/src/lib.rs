@@ -126,19 +126,20 @@ pub use self::context::keep_context;
 pub use self::error::RoomKitError;
 pub use self::events::FrameworkEvent;
 pub use self::hooks::{
-    HookError, HookFuture, HookHandler, HookOptions, HookPayload, HookReturn, IntoHookReturn,
-    SessionStartedEvent,
+    HookError, HookFuture, HookHandler, HookOptions, HookPayload, HookRegistration, HookReturn,
+    IntoHookReturn, SessionStartedEvent,
 };
 pub use self::host::{HostChannel, HostChannelOptions};
 pub use self::inbound::{DeliveryHandle, InboundResult};
 pub use self::kit::{
-    ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
-    CloseRoomOptions, CommitEventOptions, CreateRoomOptions, DeleteEventOptions,
-    DetachChannelOptions, GetBindingOptions, GetRoomOptions, GetTimelineOptions,
-    ListBindingsOptions, ListMembersOptions, MuteOptions, PauseRoomOptions, PostOptions,
-    ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitOptions,
-    SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
-    UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
+    AddRoomHookOptions, ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions,
+    CheckRoomTimersOptions, CloseRoomOptions, CommitEventOptions, CreateRoomOptions,
+    DeleteEventOptions, DetachChannelOptions, GetBindingOptions, GetRoomOptions,
+    GetTimelineOptions, ListBindingsOptions, ListMembersOptions, MuteOptions, PauseRoomOptions,
+    PostOptions, ProcessInboundOptions, RemoveRoomHookOptions, ReopenRoomOptions,
+    ResumeRoomOptions, RoomKit, RoomKitOptions, SendEventOptions, SetAccessOptions,
+    SetVisibilityOptions, UnmuteOptions, UpdateBindingMetadataOptions, UpdateEventOptions,
+    WeakRoomKit,
 };
 pub use self::registered::RegisteredChannel;
 pub use self::router::{

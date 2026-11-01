@@ -25,6 +25,7 @@ mod inject;
 mod options;
 mod post;
 mod registry;
+mod room_hooks;
 mod rooms;
 mod shutdown;
 #[cfg(test)]
@@ -55,6 +56,7 @@ pub use self::options::{
     SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateBindingMetadataOptions,
     UpdateEventOptions,
 };
+pub use self::room_hooks::{AddRoomHookOptions, RemoveRoomHookOptions};
 pub use self::weak::WeakRoomKit;
 use crate::channel::DynChannel;
 use crate::context;
@@ -473,18 +475,19 @@ impl<S> Inner<S> {
     }
 
     /// The tool hooks of `trigger` that fire for the calls of the agent
-    /// `channel_id` of `channel_type`: its SYNC chain in chain order, then
-    /// its observers (RFC §9.2, §9.3).
+    /// `channel_id` of `channel_type` in the room `room_id`, the kit's and
+    /// the room's: its SYNC chain in chain order, then its observers (RFC
+    /// §9.1, §9.2, §9.3).
     pub(crate) fn tool_hooks(
         &self,
         trigger: HookTrigger,
-        channel_id: &ChannelId,
+        (room_id, channel_id): (&RoomId, &ChannelId),
         channel_type: &ChannelType,
     ) -> Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)> {
         let config = Arc::clone(&read(&self.config));
         let handlers = read(&self.hooks);
         let registry = &config.hooks;
-        let subject = HookSubject::of_channel(channel_id, channel_type);
+        let subject = HookSubject::of_channel(channel_id, channel_type).in_room(room_id);
         registry
             .chain(trigger, subject)
             .into_iter()

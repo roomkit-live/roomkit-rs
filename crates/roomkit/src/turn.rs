@@ -547,12 +547,13 @@ impl TurnHost {
         TURN.scope(self, future).await
     }
 
-    /// The kit's hooks on `trigger` for this agent's calls, its SYNC chain
-    /// in chain order, then its observers.
+    /// The hooks on `trigger` for this agent's calls, the kit's and its
+    /// room's, its SYNC chain in chain order, then its observers.
     fn hooks(&self, trigger: HookTrigger) -> Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)> {
+        let agent = (&self.shared.room_id, &self.shared.channel_id);
         self.shared
             .kit
-            .tool_hooks(trigger, &self.shared.channel_id, &self.shared.channel_type)
+            .tool_hooks(trigger, agent, &self.shared.channel_type)
     }
 
     /// `report` as its hooks read it, now.
@@ -848,12 +849,12 @@ pub(crate) trait TurnKit: Send + Sync {
     ) -> BoxFuture<'static, Result<RoomEvent, RoomKitError>>;
 
     /// The tool hooks of `trigger` that fire for calls of the agent
-    /// `channel_id` of `channel_type`: its SYNC chain in chain order, then
-    /// its observers.
+    /// `channel_id` of `channel_type` in the room `room_id`, the kit's and
+    /// the room's: its SYNC chain in chain order, then its observers.
     fn tool_hooks(
         &self,
         trigger: HookTrigger,
-        channel_id: &ChannelId,
+        agent: (&RoomId, &ChannelId),
         channel_type: &ChannelType,
     ) -> Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)>;
 
@@ -909,11 +910,11 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
     fn tool_hooks(
         &self,
         trigger: HookTrigger,
-        channel_id: &ChannelId,
+        agent: (&RoomId, &ChannelId),
         channel_type: &ChannelType,
     ) -> Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)> {
         self.upgrade()
-            .map(|inner| inner.tool_hooks(trigger, channel_id, channel_type))
+            .map(|inner| inner.tool_hooks(trigger, agent, channel_type))
             .unwrap_or_default()
     }
 

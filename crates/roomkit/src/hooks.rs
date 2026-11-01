@@ -178,6 +178,84 @@ impl HookOptions {
     }
 }
 
+/// A hook as the kit holds it (RFC §9.1): Python's
+/// `HookRegistration(trigger, execution, fn, priority=0, name="",
+/// timeout=30.0, channel_types=None, channel_ids=None, directions=None,
+/// event_types=None, fail_closed=False, needs_lock=True)`, which
+/// [`RoomKit::add_room_hook`](crate::RoomKit::add_room_hook) returns under
+/// the name the kit gave it.
+#[derive(Clone, Debug)]
+pub struct HookRegistration {
+    /// When it fires.
+    pub trigger: HookTrigger,
+    /// SYNC decides in its trigger's chain, ASYNC observes.
+    pub execution: HookExecution,
+    /// Its handler, by the payload its trigger hands it.
+    pub r#fn: Kept,
+    /// Python `priority=0`: its place in its chain, lower first.
+    pub priority: i32,
+    /// Python `name=""`: unique within its scope, the kit's hooks or one
+    /// room's; a hook given none takes `hook`, then `hook#2`, ...
+    pub name: String,
+    /// Python `timeout=30.0`: the longest it may run.
+    pub timeout: Duration,
+    /// Python `channel_types=None`: only payloads from these channel types.
+    pub channel_types: Option<BTreeSet<ChannelType>>,
+    /// Python `channel_ids=None`: only payloads from these channels.
+    pub channel_ids: Option<BTreeSet<ChannelId>>,
+    /// Python `directions=None`: only events that travelled in these
+    /// directions.
+    pub directions: Option<BTreeSet<EventDirection>>,
+    /// Python `event_types=None`: only events of these types.
+    pub event_types: Option<BTreeSet<EventType>>,
+    /// Python `fail_closed=False`: a SYNC hook whose outcome is unusable
+    /// blocks instead of allowing (RFC §9.3).
+    pub fail_closed: bool,
+    /// Python `needs_lock=True`: `false` runs a SYNC `BEFORE_BROADCAST`
+    /// hook off the room lock (RFC §9.5.1).
+    pub needs_lock: bool,
+}
+
+impl HookRegistration {
+    /// The registration of `r#fn` on `trigger`, run as `execution`, with
+    /// Python's defaults for the rest.
+    pub fn new(trigger: HookTrigger, execution: HookExecution, r#fn: Kept) -> Self {
+        let defaults = HookSpec::new("", trigger, execution);
+        Self {
+            trigger,
+            execution,
+            r#fn,
+            priority: defaults.priority,
+            name: String::new(),
+            timeout: defaults.timeout,
+            channel_types: None,
+            channel_ids: None,
+            directions: None,
+            event_types: None,
+            fail_closed: defaults.fail_closed,
+            needs_lock: defaults.needs_lock,
+        }
+    }
+
+    /// The registration the kit holds as `spec`, of `r#fn`.
+    pub(crate) fn held(spec: HookSpec, r#fn: Kept) -> Self {
+        Self {
+            trigger: spec.trigger,
+            execution: spec.execution,
+            r#fn,
+            priority: spec.priority,
+            name: spec.name,
+            timeout: spec.timeout,
+            channel_types: spec.filter.channel_types,
+            channel_ids: spec.filter.channel_ids,
+            directions: spec.filter.directions,
+            event_types: spec.filter.event_types,
+            fail_closed: spec.fail_closed,
+            needs_lock: spec.needs_lock,
+        }
+    }
+}
+
 /// `ON_SESSION_STARTED`'s payload, Python's `SessionStartedEvent(room_id,
 /// channel_id, channel_type, participant_id, session=None,
 /// timestamp=<factory>)`: the inbound pipeline created a room for a first

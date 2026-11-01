@@ -191,6 +191,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "register_channel" => &["channel"],
         "unregister_channel" => &["channel_id"],
         "register_hook" => &["hook"],
+        "add_room_hook" => &["room_id", "hook"],
+        "remove_room_hook" => &["room_id", "name"],
         _ => return None,
     })
 }
@@ -303,7 +305,23 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
 }
 
 fn hook(hook: &Value, path: &str, found: &mut Vec<String>) {
-    members(hook, HOOK, path, found);
+    hook_of(hook, HOOK, path, found);
+}
+
+/// A hook added for one room: it declares no filter and no timeout.
+fn room_hook(hook: &Value, path: &str, found: &mut Vec<String>) {
+    let known: Vec<&str> = HOOK
+        .iter()
+        .copied()
+        .filter(|member| {
+            !["timeout_ms", "channel_types", "channel_ids", "directions"].contains(member)
+        })
+        .collect();
+    hook_of(hook, &known, path, found);
+}
+
+fn hook_of(hook: &Value, known: &[&str], path: &str, found: &mut Vec<String>) {
+    members(hook, known, path, found);
     for (index, reaction) in items(&hook["reactions"]) {
         self::reaction(reaction, &format!("{path}.reactions[{index}]"), found);
     }
@@ -391,6 +409,7 @@ fn call(call: &Value, extra: &[&str], path: &str, found: &mut Vec<String>) {
         "create_room" => members(&call["room"], NEW_ROOM, &format!("{path}.room"), found),
         "register_channel" => channel(&call["channel"], &format!("{path}.channel"), found),
         "register_hook" => hook(&call["hook"], &format!("{path}.hook"), found),
+        "add_room_hook" => room_hook(&call["hook"], &format!("{path}.hook"), found),
         _ => {}
     }
 }

@@ -3,7 +3,8 @@
 //!
 //! The core holds hooks by their registration only. The handler behind a
 //! registration is the driver's, found by the [`HookId`] the registry hands
-//! back.
+//! back. A registration's scope is the kit or one room (RFC §9.1): a room's
+//! hooks fire for that room's payloads alone, beside the kit's.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -11,7 +12,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::model::{ChannelId, ChannelType, EventDirection, EventSource, EventType, RoomEvent};
+use crate::model::{
+    ChannelId, ChannelType, EventDirection, EventSource, EventType, RoomEvent, RoomId,
+};
 use crate::rules::chain_depth::{CHAIN_DEPTH_LIMIT, REENTRY_LOOP_CAP};
 use crate::rules::permissions::WriteRefusal;
 
@@ -173,6 +176,9 @@ pub struct HookSubject<'payload> {
     channel_type: &'payload ChannelType,
     direction: Option<EventDirection>,
     event_type: Option<&'payload EventType>,
+    /// The room the payload is of, whose hooks fire beside the kit's; `None`
+    /// fires the kit's alone.
+    room_id: Option<&'payload RoomId>,
 }
 
 impl<'payload> HookSubject<'payload> {
@@ -187,6 +193,17 @@ impl<'payload> HookSubject<'payload> {
             channel_type,
             direction: None,
             event_type: None,
+            room_id: None,
+        }
+    }
+
+    /// The subject as a payload of the room `room_id`, whose hooks fire for
+    /// it beside the kit's (RFC §9.1): a tool call of a turn in that room.
+    #[must_use]
+    pub fn in_room(self, room_id: &'payload RoomId) -> Self {
+        Self {
+            room_id: Some(room_id),
+            ..self
         }
     }
 }
@@ -198,6 +215,7 @@ impl<'payload> From<&'payload RoomEvent> for HookSubject<'payload> {
             channel_type: &event.source.channel_type,
             direction: Some(event.source.direction),
             event_type: Some(&event.r#type),
+            room_id: Some(&event.room_id),
         }
     }
 }
@@ -210,6 +228,7 @@ impl<'payload> From<&'payload EventSource> for HookSubject<'payload> {
             channel_type: &source.channel_type,
             direction: Some(source.direction),
             event_type: None,
+            room_id: None,
         }
     }
 }
@@ -342,10 +361,30 @@ pub enum RegistrationError {
     },
 }
 
-/// The hooks of a kit (RFC §9.1).
+/// The hooks of a kit, its own and each room's (RFC §9.1).
 #[derive(Clone, Debug, Default)]
 pub struct HookRegistry {
-    hooks: Vec<(HookId, HookSpec)>,
+    hooks: Vec<Registered>,
+    /// The id the next registration takes: ids are never given out twice,
+    /// a removed hook's included.
+    next: usize,
+}
+
+/// One registration and its scope.
+#[derive(Clone, Debug)]
+struct Registered {
+    id: HookId,
+    /// The room it was added for; `None` for the kit's.
+    room: Option<RoomId>,
+    spec: HookSpec,
+}
+
+impl Registered {
+    /// Whether it fires for a payload of `room`: the kit's hooks fire for
+    /// every room's, a room's for its own alone.
+    fn reaches(&self, room: Option<&RoomId>) -> bool {
+        self.room.is_none() || self.room.as_ref() == room
+    }
 }
 
 impl HookRegistry {
@@ -370,7 +409,7 @@ impl HookRegistry {
         if spec.trigger.is_tool_trigger() {
             return Err(payload_mismatch(spec));
         }
-        self.add(spec)
+        self.add(None, spec)
     }
 
     /// Registers `spec`, a hook on a tool trigger, whose payload is a tool
@@ -385,32 +424,102 @@ impl HookRegistry {
         if !spec.trigger.is_tool_trigger() {
             return Err(payload_mismatch(spec));
         }
-        self.add(spec)
+        self.add(None, spec)
     }
 
-    fn add(&mut self, mut spec: HookSpec) -> Result<HookId, RegistrationError> {
+    /// Adds `spec` for the room `room_id` alone (RFC §9.1), whatever its
+    /// trigger's payload, returning the id the driver keeps its handler
+    /// under: Python's `HookEngine.add_room_hook`. Its name is unique among
+    /// the room's hooks, and may be one of the kit's; it is checked against
+    /// the kit's hooks and the room's, a room that does not exist yet
+    /// included, whose hooks wait for it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistrationError`] when the registration breaks a rule of
+    /// RFC §9.1; nothing is registered then.
+    pub fn add_room_hook(
+        &mut self,
+        room_id: RoomId,
+        spec: HookSpec,
+    ) -> Result<HookId, RegistrationError> {
+        self.add(Some(room_id), spec)
+    }
+
+    fn add(
+        &mut self,
+        room: Option<RoomId>,
+        mut spec: HookSpec,
+    ) -> Result<HookId, RegistrationError> {
         if spec.name.is_empty() {
-            spec.name = self.default_name();
+            spec.name = self.default_name(room.as_ref());
         }
         check_alone(&spec)?;
-        if self.hooks.iter().any(|(_, hook)| hook.name == spec.name) {
+        if self
+            .in_scope(room.as_ref())
+            .any(|hook| hook.spec.name == spec.name)
+        {
             return Err(RegistrationError::DuplicateName { name: spec.name });
         }
-        let id = HookId(self.hooks.len());
-        self.hooks.push((id, spec));
+        let id = HookId(self.next);
+        self.hooks.push(Registered { id, room, spec });
         if let Err(error) = self.check_lock_ordering() {
             self.hooks.pop();
             return Err(error);
         }
+        self.next += 1;
         Ok(id)
     }
 
-    /// The name a hook registered without one takes, unique in the
-    /// registry: `hook`, then `hook#2`, `hook#3`..., skipping a reserved
-    /// name, as the Python implementation names a hook from the base it
-    /// takes when its function has no name (`_named`, RFC §9.1).
-    fn default_name(&self) -> String {
-        let taken = |name: &str| is_reserved(name) || self.find(name).is_some();
+    /// Removes the kit's hook named `name`, returning its id; `None` when
+    /// the kit has no hook of that name. A room's hook of that name stays.
+    pub fn remove_global_hook(&mut self, name: &str) -> Option<HookId> {
+        self.remove_where(None, name)
+    }
+
+    /// Removes the hook named `name` the room `room_id` was given,
+    /// returning its id; `None` when the room has no hook of that name. The
+    /// kit's hook of that name stays (RFC §9.1).
+    pub fn remove_room_hook(&mut self, room_id: &RoomId, name: &str) -> Option<HookId> {
+        self.remove_where(Some(room_id), name)
+    }
+
+    fn remove_where(&mut self, room: Option<&RoomId>, name: &str) -> Option<HookId> {
+        let position = self
+            .hooks
+            .iter()
+            .position(|hook| hook.room.as_ref() == room && hook.spec.name == name)?;
+        Some(self.hooks.remove(position).id)
+    }
+
+    /// The names of the hooks the room `room_id` was given, in their
+    /// registration order: Python's `HookEngine.room_hook_names`.
+    pub fn room_hook_names(&self, room_id: &RoomId) -> Vec<String> {
+        self.in_scope(Some(room_id))
+            .map(|hook| hook.spec.name.clone())
+            .collect()
+    }
+
+    /// The registrations of one scope: the kit's for `None`, else the
+    /// room's.
+    fn in_scope<'registry>(
+        &'registry self,
+        room: Option<&'registry RoomId>,
+    ) -> impl Iterator<Item = &'registry Registered> {
+        self.hooks
+            .iter()
+            .filter(move |hook| hook.room.as_ref() == room)
+    }
+
+    /// The name a hook registered without one takes, unique in its scope,
+    /// the kit's hooks or one room's: `hook`, then `hook#2`, `hook#3`...,
+    /// skipping a reserved name, as the Python implementation names a hook
+    /// from the base it takes when its function has no name (`_named`, RFC
+    /// §9.1).
+    fn default_name(&self, room: Option<&RoomId>) -> String {
+        let taken = |name: &str| {
+            is_reserved(name) || self.in_scope(room).any(|hook| hook.spec.name == name)
+        };
         let mut name = "hook".to_owned();
         let mut rank = 2;
         while taken(&name) {
@@ -420,20 +529,22 @@ impl HookRegistry {
         name
     }
 
-    /// The registration named `name`.
+    /// The registration named `name`: the kit's, else the first room's
+    /// that holds one.
     pub fn find(&self, name: &str) -> Option<&HookSpec> {
-        self.hooks
-            .iter()
-            .find(|(_, spec)| spec.name == name)
-            .map(|(_, spec)| spec)
+        let named = |hook: &&Registered| hook.spec.name == name;
+        self.in_scope(None)
+            .find(named)
+            .or_else(|| self.hooks.iter().find(named))
+            .map(|hook| &hook.spec)
     }
 
     /// The registration of `id`.
     pub fn get(&self, id: HookId) -> Option<&HookSpec> {
         self.hooks
             .iter()
-            .find(|(hook_id, _)| *hook_id == id)
-            .map(|(_, spec)| spec)
+            .find(|hook| hook.id == id)
+            .map(|hook| &hook.spec)
     }
 
     /// The SYNC hooks `trigger` runs as a chain for an event from `source`,
@@ -446,13 +557,12 @@ impl HookRegistry {
         if trigger.execution() == HookExecution::Async {
             return Vec::new();
         }
-        let mut chain: Vec<(&HookId, &HookSpec)> = self
+        let mut chain: Vec<&Registered> = self
             .matching(trigger, subject.into())
-            .filter(|(_, spec)| spec.execution == HookExecution::Sync)
+            .filter(|hook| hook.spec.execution == HookExecution::Sync)
             .collect();
-        // At equal priority an off-lock hook runs first (RFC §9.3).
-        chain.sort_by_key(|(id, spec)| (spec.priority, spec.needs_lock, **id));
-        chain.into_iter().map(|(id, _)| *id).collect()
+        chain.sort_by_key(|hook| chain_rank(hook));
+        chain.into_iter().map(|hook| hook.id).collect()
     }
 
     /// The off-lock checks of an event from `source`: the SYNC
@@ -496,59 +606,88 @@ impl HookRegistry {
         subject: impl Into<HookSubject<'payload>>,
     ) -> Vec<HookId> {
         let observes_all = trigger.execution() == HookExecution::Async;
-        self.matching(trigger, subject.into())
-            .filter(|(_, spec)| observes_all || spec.execution == HookExecution::Async)
-            .map(|(id, _)| *id)
-            .collect()
+        let mut observers: Vec<&Registered> = self
+            .matching(trigger, subject.into())
+            .filter(|hook| observes_all || hook.spec.execution == HookExecution::Async)
+            .collect();
+        observers.sort_by_key(|hook| (hook.room.is_some(), hook.id));
+        observers.into_iter().map(|hook| hook.id).collect()
     }
 
-    /// The hooks of `trigger` whose filter admits `subject`; a session's
-    /// start's hooks read no filter, as the Python implementation fires them
+    /// The hooks of `trigger` whose filter admits `subject`, the kit's and
+    /// those of the subject's room; a session's start's hooks read no
+    /// filter, as the Python implementation fires them
     /// (`skip_event_filter`).
     fn matching<'registry>(
         &'registry self,
         trigger: HookTrigger,
         subject: HookSubject<'registry>,
-    ) -> impl Iterator<Item = (&'registry HookId, &'registry HookSpec)> {
-        self.hooks
-            .iter()
-            .filter(move |(_, spec)| {
-                spec.trigger == trigger
-                    && (trigger == HookTrigger::OnSessionStarted || spec.filter.admits(subject))
-            })
-            .map(|(id, spec)| (id, spec))
+    ) -> impl Iterator<Item = &'registry Registered> {
+        self.hooks.iter().filter(move |hook| {
+            hook.spec.trigger == trigger
+                && hook.reaches(subject.room_id)
+                && (trigger == HookTrigger::OnSessionStarted || hook.spec.filter.admits(subject))
+        })
     }
 
     /// No SYNC `BEFORE_BROADCAST` hook that needs the lock may have a lower
-    /// priority than one that does not (RFC §9.1); at equal priority the
-    /// off-lock hook runs first.
+    /// priority than one that does not (RFC §9.1), in any chain the hooks
+    /// form: the kit's alone, and each room's with the kit's. At equal
+    /// priority the off-lock hook runs first.
     fn check_lock_ordering(&self) -> Result<(), RegistrationError> {
-        let mut chain: Vec<&(HookId, HookSpec)> = self
+        let rooms: BTreeSet<&RoomId> = self
             .hooks
             .iter()
-            .filter(|(_, spec)| {
-                spec.trigger == HookTrigger::BeforeBroadcast
-                    && spec.execution == HookExecution::Sync
-            })
+            .filter_map(|hook| hook.room.as_ref())
             .collect();
-        chain.sort_by_key(|(id, spec)| (spec.priority, spec.needs_lock, *id));
-        let mut first_locked: Option<&HookSpec> = None;
-        for (_, spec) in chain {
-            match (spec.needs_lock, first_locked) {
-                (true, None) => first_locked = Some(spec),
-                (false, Some(locked)) => {
-                    return Err(RegistrationError::LockOrdering {
-                        locked: locked.name.clone(),
-                        locked_priority: locked.priority,
-                        off_lock: spec.name.clone(),
-                        off_lock_priority: spec.priority,
-                    });
-                }
-                (true, Some(_)) | (false, None) => {}
-            }
+        check_chain_order(self.hooks.iter().filter(|hook| hook.room.is_none()))?;
+        for room in rooms {
+            check_chain_order(self.hooks.iter().filter(|hook| hook.reaches(Some(room))))?;
         }
         Ok(())
     }
+}
+
+/// Where a SYNC hook runs in its chain (RFC §9.3): by priority, lower
+/// first; at equal priority an off-lock hook first, then the kit's hooks
+/// before a room's, as the Python implementation merges them, then in
+/// registration order (gap G-018).
+fn chain_rank(hook: &Registered) -> (i32, bool, bool, HookId) {
+    (
+        hook.spec.priority,
+        hook.spec.needs_lock,
+        hook.room.is_some(),
+        hook.id,
+    )
+}
+
+/// The lock ordering rule (RFC §9.1) on one chain of `hooks`.
+fn check_chain_order<'registry>(
+    hooks: impl Iterator<Item = &'registry Registered>,
+) -> Result<(), RegistrationError> {
+    let mut chain: Vec<&Registered> = hooks
+        .filter(|hook| {
+            hook.spec.trigger == HookTrigger::BeforeBroadcast
+                && hook.spec.execution == HookExecution::Sync
+        })
+        .collect();
+    chain.sort_by_key(|hook| chain_rank(hook));
+    let mut first_locked: Option<&HookSpec> = None;
+    for spec in chain.into_iter().map(|hook| &hook.spec) {
+        match (spec.needs_lock, first_locked) {
+            (true, None) => first_locked = Some(spec),
+            (false, Some(locked)) => {
+                return Err(RegistrationError::LockOrdering {
+                    locked: locked.name.clone(),
+                    locked_priority: locked.priority,
+                    off_lock: spec.name.clone(),
+                    off_lock_priority: spec.priority,
+                });
+            }
+            (true, Some(_)) | (false, None) => {}
+        }
+    }
+    Ok(())
 }
 
 /// The refusal of `spec`, registered with the payload its trigger does not
@@ -822,7 +961,7 @@ mod tests {
         let event = |r#type: EventType, direction: EventDirection| {
             RoomEvent::at(
                 crate::model::EventId::new("e1").unwrap(),
-                crate::model::RoomId::new("r1").unwrap(),
+                RoomId::new("r1").unwrap(),
                 r#type,
                 EventSource {
                     direction,
@@ -943,6 +1082,173 @@ mod tests {
             scan.filter.channel_ids = Some([ChannelId::new("email").unwrap()].into());
             registry.register(scan).unwrap();
             assert_eq!(registry.off_lock_checks(&sms_source()), []);
+        }
+    }
+
+    /// RFC §9.1: a registration's scope is the kit or one room.
+    mod room_hooks {
+        use pretty_assertions::assert_eq;
+
+        use super::*;
+
+        fn room(id: &str) -> RoomId {
+            RoomId::new(id).unwrap()
+        }
+
+        fn event_in(room_id: &str) -> RoomEvent {
+            RoomEvent::at(
+                crate::model::EventId::new("e1").unwrap(),
+                room(room_id),
+                EventType::Message,
+                sms_source(),
+                crate::model::TextContent::new("hi"),
+                crate::model::Timestamp::UNIX_EPOCH,
+            )
+        }
+
+        // Python: tests/test_hooks.py::TestSyncHooks::test_room_hooks_merged
+        #[test]
+        fn a_room_s_hooks_join_the_kit_s_in_its_room_alone() {
+            let mut registry = HookRegistry::new();
+            registry.register(sync_hook("global", 0)).unwrap();
+            registry
+                .add_room_hook(room("r1"), sync_hook("room", 1))
+                .unwrap();
+            let in_r1 = registry.chain(HookTrigger::BeforeBroadcast, &event_in("r1"));
+            let in_r2 = registry.chain(HookTrigger::BeforeBroadcast, &event_in("r2"));
+            assert_eq!(
+                (names(&registry, &in_r1), names(&registry, &in_r2)),
+                (
+                    vec!["global".to_owned(), "room".to_owned()],
+                    vec!["global".to_owned()]
+                )
+            );
+        }
+
+        #[test]
+        fn at_equal_priority_the_kit_s_hooks_run_before_the_room_s() {
+            let mut registry = HookRegistry::new();
+            registry
+                .add_room_hook(room("r1"), sync_hook("room", 0))
+                .unwrap();
+            registry.register(sync_hook("kit", 0)).unwrap();
+            let chain = registry.chain(HookTrigger::BeforeBroadcast, &event_in("r1"));
+            assert_eq!(names(&registry, &chain), ["kit", "room"]);
+        }
+
+        // Python: tests/test_hooks.py::TestRoomHookManagement::test_remove_room_hook
+        #[test]
+        fn a_room_hook_is_removed_by_its_name_once() {
+            let mut registry = HookRegistry::new();
+            let id = registry
+                .add_room_hook(room("r1"), sync_hook("my_hook", 0))
+                .unwrap();
+            assert_eq!(
+                (
+                    registry.remove_room_hook(&room("r1"), "my_hook"),
+                    registry.remove_room_hook(&room("r1"), "missing"),
+                    registry.remove_room_hook(&room("r1"), "my_hook"),
+                ),
+                (Some(id), None, None)
+            );
+        }
+
+        // Python: tests/test_turn_hooks.py::test_a_removal_takes_the_registration_of_its_own_scope
+        #[test]
+        fn a_removal_takes_the_registration_of_its_own_scope() {
+            let mut registry = HookRegistry::new();
+            let kit = registry.register(sync_hook("dup", 0)).unwrap();
+            let in_room = registry
+                .add_room_hook(room("room"), sync_hook("dup", 0))
+                .unwrap();
+            assert_eq!(
+                registry.remove_room_hook(&room("room"), "dup"),
+                Some(in_room)
+            );
+            assert_eq!(
+                registry.room_hook_names(&room("room")),
+                Vec::<String>::new()
+            );
+            assert_eq!(registry.remove_global_hook("dup"), Some(kit));
+        }
+
+        // Python: tests/test_hook_rules.py::TestHookNames::test_a_room_hook_may_reuse_a_kit_hook_s_name
+        // and TestReplacingARoomHook::test_a_duplicate_within_one_room_is_refused
+        #[test]
+        fn a_name_is_unique_within_its_room_and_may_be_the_kit_s() {
+            let mut registry = HookRegistry::new();
+            registry.register(sync_hook("audit", 0)).unwrap();
+            registry
+                .add_room_hook(room("r1"), sync_hook("audit", 0))
+                .unwrap();
+            registry
+                .add_room_hook(room("r2"), sync_hook("audit", 0))
+                .unwrap();
+            assert_eq!(
+                registry.add_room_hook(room("r1"), sync_hook("audit", 0)),
+                Err(RegistrationError::DuplicateName {
+                    name: "audit".to_owned()
+                })
+            );
+        }
+
+        #[test]
+        fn an_unnamed_room_hook_takes_the_first_name_free_in_its_room() {
+            let mut registry = HookRegistry::new();
+            registry.register(sync_hook("", 0)).unwrap();
+            for _ in 0..2 {
+                registry
+                    .add_room_hook(room("r1"), sync_hook("", 0))
+                    .unwrap();
+            }
+            assert_eq!(registry.room_hook_names(&room("r1")), ["hook", "hook#2"]);
+        }
+
+        #[test]
+        fn a_removed_hook_s_id_is_never_given_again() {
+            let mut registry = HookRegistry::new();
+            let first = registry.register(sync_hook("first", 0)).unwrap();
+            registry.remove_global_hook("first");
+            let second = registry.register(sync_hook("second", 0)).unwrap();
+            assert_ne!(first, second);
+        }
+
+        #[test]
+        fn the_lock_ordering_holds_in_each_room_s_chain_alone() {
+            let mut registry = HookRegistry::new();
+            registry
+                .add_room_hook(room("r1"), sync_hook("audit", 0))
+                .unwrap();
+            assert!(matches!(
+                registry.add_room_hook(room("r1"), off_lock_hook("scan", 1)),
+                Err(RegistrationError::LockOrdering { .. })
+            ));
+            assert!(matches!(
+                registry.register(off_lock_hook("early", 1)),
+                Err(RegistrationError::LockOrdering { .. })
+            ));
+            assert!(
+                registry
+                    .add_room_hook(room("r2"), off_lock_hook("scan", 1))
+                    .is_ok()
+            );
+        }
+
+        #[test]
+        fn a_tool_call_of_a_room_s_turn_fires_that_room_s_tool_hooks() {
+            let mut registry = HookRegistry::new();
+            let gate = HookSpec::new("approve", HookTrigger::BeforeToolUse, HookExecution::Sync);
+            let id = registry.add_room_hook(room("r1"), gate).unwrap();
+            let (sms, kind) = (ChannelId::new("sms").unwrap(), ChannelType::SMS);
+            let subject = HookSubject::of_channel(&sms, &kind);
+            let (r1, r2) = (room("r1"), room("r2"));
+            assert_eq!(
+                (
+                    registry.chain(HookTrigger::BeforeToolUse, subject.in_room(&r1)),
+                    registry.chain(HookTrigger::BeforeToolUse, subject.in_room(&r2)),
+                ),
+                (vec![id], vec![])
+            );
         }
     }
 

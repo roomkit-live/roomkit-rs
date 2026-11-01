@@ -3,6 +3,7 @@
 //! comment names, which `make api-parity` checks every defaulted parameter
 //! in scope has.
 
+use roomkit::AddRoomHookOptions;
 use roomkit::ArchiveRoomOptions;
 use roomkit::AttachChannelOptions;
 use roomkit::CheckAllTimersOptions;
@@ -27,6 +28,7 @@ use roomkit::NormalizeOptions;
 use roomkit::PauseRoomOptions;
 use roomkit::PostOptions;
 use roomkit::ProcessInboundOptions;
+use roomkit::RemoveRoomHookOptions;
 use roomkit::ReopenRoomOptions;
 use roomkit::ResumeRoomOptions;
 use roomkit::RoomKitOptions;
@@ -50,6 +52,21 @@ use roomkit::testing::EchoAgentOptions;
 use roomkit::testing::RecordingTransportOptions;
 use std::sync::Arc;
 use std::time::Duration;
+
+#[test]
+fn add_room_hook_options_defaults_as_python() {
+    let defaults = AddRoomHookOptions::default();
+    // roomkit.RoomKit.add_room_hook(priority) = 0
+    assert_eq!(defaults.priority, 0);
+    // roomkit.RoomKit.add_room_hook(name) = ''
+    assert_eq!(defaults.name, "");
+    // roomkit.RoomKit.add_room_hook(fail_closed) = False
+    assert!(!defaults.fail_closed);
+    // roomkit.RoomKit.add_room_hook(needs_lock) = True
+    assert!(defaults.needs_lock);
+    // roomkit.RoomKit.add_room_hook(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
 
 #[test]
 fn archive_room_options_defaults_as_python() {
@@ -269,6 +286,13 @@ fn process_inbound_options_defaults_as_python() {
     assert!(defaults.organization_id.is_none());
     // roomkit.RoomKit.process_inbound(room_id) = None
     assert!(defaults.room_id.is_none());
+}
+
+#[test]
+fn remove_room_hook_options_defaults_as_python() {
+    let defaults = RemoveRoomHookOptions::default();
+    // roomkit.RoomKit.remove_room_hook(organization_id) = None
+    assert!(defaults.organization_id.is_none());
 }
 
 #[test]
