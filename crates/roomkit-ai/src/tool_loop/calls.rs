@@ -12,7 +12,7 @@ use super::generation::{Called, Partial};
 use super::{Loop, ToolEnd};
 use crate::provider::AiProvider;
 use crate::texts;
-use crate::tools::{ToolError, ToolResult, schema};
+use crate::tools::{ToolError, ToolResult, repair, schema};
 
 /// The kind a call past its bound reads as (RFC §21.6).
 const TIMED_OUT: &str = "ToolTimeoutError";
@@ -60,34 +60,36 @@ impl<P: AiProvider> Loop<P> {
     /// The call `called` may run as, or its refusal, in the order of RFC
     /// §21.1 "One refusal per cause": a call that never runs, one the turn
     /// does not carry, one the policy denies, arguments that do not fit the
-    /// tool's schema, then the kit's `BEFORE_TOOL_USE` hooks, whose
-    /// arguments are checked again.
+    /// tool's schema once repaired, then the kit's `BEFORE_TOOL_USE` hooks,
+    /// whose arguments are checked again, unrepaired.
     async fn gate(&self, called: &Called) -> Gated {
-        let call = &called.call;
-        let refuse =
-            |text: String| Gated::Refused(ended(call.clone(), ToolCallOutcome::Refused, text));
+        let model_call = &called.call;
+        let refuse = |text: String| {
+            Gated::Refused(ended(model_call.clone(), ToolCallOutcome::Refused, text))
+        };
         if let Some(partial) = called.partial {
             return refuse(match partial {
-                Partial::Cut => texts::cut(&call.name),
-                Partial::Unreadable => texts::unreadable(&call.name),
+                Partial::Cut => texts::cut(&model_call.name),
+                Partial::Unreadable => texts::unreadable(&model_call.name),
             });
         }
-        let Some((tool, _)) = self.toolbox.find(&call.name) else {
-            return refuse(texts::not_declared(&call.name));
+        let Some((tool, _)) = self.toolbox.find(&model_call.name) else {
+            return refuse(texts::not_declared(&model_call.name));
         };
-        if !self.toolbox.permits(&self.policy, &call.name) {
-            return refuse(texts::not_permitted(&call.name));
+        if !self.toolbox.permits(&self.policy, &model_call.name) {
+            return refuse(texts::not_permitted(&model_call.name));
         }
-        if let Some(why) = schema::mismatch(&tool.parameters, &call.arguments) {
-            return refuse(texts::invalid_arguments(&call.name, &why));
-        }
+        let call = match self.repaired(model_call, &tool.parameters) {
+            Ok(call) => call,
+            Err(refused) => return Gated::Refused(*refused),
+        };
         let Some(turn) = &self.turn else {
-            return Gated::Runs(call.clone());
+            return Gated::Runs(call);
         };
-        let arguments = match turn.before_tool_use(call).await {
+        let arguments = match turn.before_tool_use(&call).await {
             ToolGate::Allowed(arguments) => arguments,
             ToolGate::Refused { text, error_detail } => {
-                let refused = ended(call.clone(), ToolCallOutcome::Refused, text);
+                let refused = ended(call, ToolCallOutcome::Refused, text);
                 return Gated::Refused(match error_detail {
                     Some(detail) => refused.with_error_detail(detail),
                     None => refused,
@@ -105,6 +107,42 @@ impl<P: AiProvider> Loop<P> {
             }
         }
         Gated::Runs(gated)
+    }
+
+    /// The model's `call` with its arguments repaired for the tool's
+    /// `parameters` (RFC §21.1, Python's `repair_tool_arguments`), or its
+    /// refusal: both hub forms at once, the model's arguments as they came,
+    /// or repaired arguments that still do not fit the schema.
+    fn repaired(
+        &self,
+        call: &ToolCall,
+        parameters: &Value,
+    ) -> Result<ToolCall, Box<ToolCallReport>> {
+        let repair = repair::repair(parameters, &call.arguments);
+        if let Some(why) = repair.error {
+            tracing::warn!(target: "roomkit::ai", tool = %call.name, %why, "a tool call's arguments are ambiguous");
+            let text = texts::invalid_arguments(&call.name, &why);
+            return Err(Box::new(ended(
+                call.clone(),
+                ToolCallOutcome::Refused,
+                text,
+            )));
+        }
+        let model = self.provider.model_name();
+        if !repair.folded.is_empty() {
+            tracing::info!(target: "roomkit::ai", tool = %call.name, folded = ?repair.folded, model, "folded a call's hoisted arguments into its container");
+        }
+        if !repair.unquoted.is_empty() {
+            tracing::info!(target: "roomkit::ai", tool = %call.name, unquoted = ?repair.unquoted, model, "read a call's quoted arguments as their declared types");
+        }
+        let mut repaired = call.clone();
+        repaired.arguments = repair.arguments;
+        if let Some(why) = schema::mismatch(parameters, &repaired.arguments) {
+            tracing::warn!(target: "roomkit::ai", tool = %call.name, %why, "a tool call's arguments were refused");
+            let text = texts::invalid_arguments(&call.name, &why);
+            return Err(Box::new(ended(repaired, ToolCallOutcome::Refused, text)));
+        }
+        Ok(repaired)
     }
 
     /// Runs `call` on the tool serving it, within the agent's bound per

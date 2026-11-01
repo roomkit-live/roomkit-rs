@@ -16,6 +16,7 @@
 mod builder;
 mod handler;
 mod policy;
+pub(crate) mod repair;
 pub(crate) mod schema;
 pub(crate) mod toolbox;
 
