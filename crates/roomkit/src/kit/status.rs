@@ -12,8 +12,8 @@ use std::sync::{Arc, Weak};
 use std::task::{Context, Waker};
 
 use roomkit_core::model::{
-    ChannelId, ChannelType, Confidence, EventId, Metadata, Observation, Room, RoomContext, RoomId,
-    Task, TaskStatus,
+    ChannelId, ChannelType, Confidence, EventId, Metadata, Observation, Room, RoomContext,
+    RoomEvent, RoomId, Task, TaskStatus,
 };
 use roomkit_core::ops::{Environment, UpdateRoomMetadata};
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -323,6 +323,19 @@ impl ObservedPayload for StatusEntry {
     }
 }
 
+impl ObservedPayload for RoomEvent {
+    fn handler(kept: &Kept) -> Option<Arc<dyn HookHandler<Self>>> {
+        match kept {
+            Kept::Event(handler) => Some(Arc::clone(handler)),
+            Kept::Observation(_)
+            | Kept::ToolCall(_)
+            | Kept::Session(_)
+            | Kept::Status(_)
+            | Kept::StatusEntry(_) => None,
+        }
+    }
+}
+
 impl ObservedPayload for Observation {
     fn handler(kept: &Kept) -> Option<Arc<dyn HookHandler<Self>>> {
         match kept {
@@ -402,6 +415,32 @@ impl<S: ConversationStore> Inner<S> {
         };
         let observers = self.observers(HookTrigger::OnStatusPosted, &room_id);
         self.observe(observers, entry, context, async {});
+    }
+
+    /// Fires `trigger`'s hooks on `event`, an event of its room no one
+    /// stores (a delegation's `ON_TASK_DELEGATED`, `ON_TASK_COMPLETED`),
+    /// as observers in the background, their filters read on its source
+    /// (RFC §23.5).
+    pub(super) async fn observe_event(self: &Arc<Self>, trigger: HookTrigger, event: RoomEvent) {
+        let room_id = event.room_id.clone();
+        let observers: Observers = {
+            let config = self.config();
+            let handlers = read(&self.hooks);
+            let subject = HookSubject::from(&event).in_room(&room_id);
+            config
+                .hooks
+                .observers(trigger, subject)
+                .into_iter()
+                .filter_map(|id| Some((config.hooks.get(id)?.clone(), handlers.get(&id)?.clone())))
+                .collect()
+        };
+        if observers.is_empty() {
+            return;
+        }
+        let Some(context) = self.observed_context(&room_id).await else {
+            return;
+        };
+        self.observe(observers, event, context, async {});
     }
 
     /// Emits `event` to the kit's handlers and waits for them.

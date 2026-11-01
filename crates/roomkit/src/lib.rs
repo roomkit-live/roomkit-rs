@@ -71,7 +71,7 @@ mod router;
 mod sends;
 pub mod store;
 mod stream;
-mod tasks;
+pub mod tasks;
 pub mod testing;
 mod tool_calls;
 mod transport;
@@ -154,7 +154,9 @@ pub use self::kit::{
     RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
     UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
-pub use self::kit::{DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions};
+pub use self::kit::{
+    DelegateOptions, DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions,
+};
 pub use self::kit::{
     ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,
 };

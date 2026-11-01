@@ -91,6 +91,10 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// which the sender reads as UNKNOWN and `identity_timeout` is emitted
     /// (RFC §11.5).
     pub identity_timeout: Duration,
+    /// Python `task_runner=None`: where background delegations run (RFC
+    /// §23.1), an [`InMemoryTaskRunner`](crate::tasks::InMemoryTaskRunner)
+    /// by default.
+    pub task_runner: Option<Arc<dyn crate::tasks::TaskRunner<S>>>,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -116,6 +120,7 @@ impl<S> RoomKitOptions<S> {
             identity_resolver: None,
             identity_channel_types: None,
             identity_timeout: IDENTITY_TIMEOUT,
+            task_runner: None,
         }
     }
 }
@@ -133,6 +138,7 @@ impl<S> fmt::Debug for RoomKitOptions<S> {
             .field("identity_resolver", &self.identity_resolver.is_some())
             .field("identity_channel_types", &self.identity_channel_types)
             .field("identity_timeout", &self.identity_timeout)
+            .field("task_runner", &self.task_runner.is_some())
             .finish_non_exhaustive()
     }
 }

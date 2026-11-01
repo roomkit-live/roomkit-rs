@@ -38,6 +38,7 @@ mod room_hooks;
 mod rooms;
 mod shutdown;
 mod status;
+mod tasks;
 #[cfg(test)]
 mod tests;
 mod timeline;
@@ -81,6 +82,8 @@ pub use self::room_hooks::{AddRoomHookOptions, RemoveRoomHookOptions};
 pub use self::status::{
     ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,
 };
+pub use self::tasks::DelegateOptions;
+pub(crate) use self::tasks::TaskEnd;
 pub use self::weak::WeakRoomKit;
 use crate::channel::DynChannel;
 use crate::context;
@@ -193,6 +196,8 @@ pub(crate) struct Inner<S> {
     pub(crate) identity_resolver: Option<Arc<dyn IdentityResolver>>,
     /// The identity hooks (RFC §11.2), in their registration order.
     pub(crate) identity_hooks: RwLock<Vec<identity::IdentityHook>>,
+    /// Where background delegations run (RFC §23.1).
+    pub(crate) task_runner: Arc<dyn crate::tasks::TaskRunner<S>>,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -224,6 +229,7 @@ impl<S: ConversationStore> RoomKit<S> {
             identity_resolver,
             identity_channel_types,
             identity_timeout,
+            task_runner,
         } = options;
         let mut config = KitConfig::new();
         config.max_chain_depth = max_chain_depth;
@@ -258,6 +264,8 @@ impl<S: ConversationStore> RoomKit<S> {
             status_bus: status_bus.unwrap_or_default(),
             identity_resolver,
             identity_hooks: RwLock::new(Vec::new()),
+            task_runner: task_runner
+                .unwrap_or_else(|| Arc::new(crate::tasks::InMemoryTaskRunner::new())),
         });
         inner.subscribe_status_bus();
         Self { inner }

@@ -370,6 +370,7 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::ProviderDelivery { .. } => "ProviderDelivery",
         RoomKitError::Value(_) => "Value",
         RoomKitError::Cancelled => "Cancelled",
+        RoomKitError::Timeout => "Timeout",
         RoomKitError::ExceptionGroup { .. } => "ExceptionGroup",
         RoomKitError::KitClosed => "KitClosed",
         RoomKitError::ShutdownCancelled => "ShutdownCancelled",

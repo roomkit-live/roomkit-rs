@@ -269,6 +269,10 @@ pub enum RoomKitError {
     /// refusal.
     #[error("internal error: {0}")]
     Internal(String),
+    /// Python's builtin `TimeoutError`: a wait whose bound passed first, a
+    /// delegated task's [`wait`](crate::tasks::DelegatedTask::wait).
+    #[error("the wait timed out")]
+    Timeout,
 }
 
 impl RoomKitError {
@@ -320,6 +324,7 @@ impl RoomKitError {
             | Self::Channel { error: record, .. } => record.error_type.clone(),
             Self::RemoteTurn { kind, .. } => remote_class_name(kind),
             Self::Internal(_) => "AssertionError".to_owned(),
+            Self::Timeout => "TimeoutError".to_owned(),
             Self::Store(_) => turns::CHANNEL_ERROR.to_owned(),
             Self::RoomNotFound(_)
             | Self::RoomAlreadyExists(_)

@@ -1,24 +1,33 @@
-//! The tasks a kit runs in the background, tracked so that the kit's close
-//! can wait for them and cut them (decision 3 of step 2b, RFC §12.10.4):
-//! the inbound runs (RFC §10.1), whose caller waits for them or went on,
-//! with the tasks their turns run; the observer hooks that run after the
-//! fact (RFC §9.3); the store's writes; and the direct calls, a lifecycle
-//! change, a direct change of a stored event, `commit_event`, each run on
-//! a task of its own as an inbound call is.
-//!
-//! A task is tracked from its spawn until its future is dropped: at its end,
-//! aborted, or with the runtime. A task that spawns another one spawns it
-//! before it ends, so the kit is never seen idle between the two.
-//!
-//! Each task runs in a unit of the kit's work (`marks`). The units a
-//! `close()` is called from inside are spared (RFC §12.10.4): the close's
-//! waits pass over their tasks, and it cuts none of them.
-//!
-//! The close goes through phases, which [`Tasks::phases`] tells each run as
-//! they change: it starts, refusing every new call and cutting what has
-//! not started; its grace ends, cutting what is left; it seals the kit.
+//! Task delegation (RFC §23): a delegated task's handle and its result,
+//! and the runner its background work runs on, Python's `roomkit.tasks`.
 
+// The tasks a kit runs in the background, tracked so that the kit's close
+// can wait for them and cut them (decision 3 of step 2b, RFC §12.10.4):
+// the inbound runs (RFC §10.1), whose caller waits for them or went on,
+// with the tasks their turns run; the observer hooks that run after the
+// fact (RFC §9.3); the store's writes; and the direct calls, a lifecycle
+// change, a direct change of a stored event, `commit_event`, each run on
+// a task of its own as an inbound call is.
+//
+// A task is tracked from its spawn until its future is dropped: at its end,
+// aborted, or with the runtime. A task that spawns another one spawns it
+// before it ends, so the kit is never seen idle between the two.
+//
+// Each task runs in a unit of the kit's work (`marks`). The units a
+// `close()` is called from inside are spared (RFC §12.10.4): the close's
+// waits pass over their tasks, and it cuts none of them.
+//
+// The close goes through phases, which `Tasks::phases` tells each run as
+// they change: it starts, refusing every new call and cutting what has
+// not started; its grace ends, cutting what is left; it seals the kit.
+
+mod delegated;
 mod marks;
+mod runner;
+pub(crate) mod text;
+
+pub use self::delegated::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, WaitOptions};
+pub use self::runner::{InMemoryTaskRunner, OnCompleteCallback, SubmitOptions, TaskRunner};
 
 use std::collections::{HashMap, HashSet};
 use std::pin::pin;

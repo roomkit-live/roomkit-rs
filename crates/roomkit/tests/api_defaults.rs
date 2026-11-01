@@ -410,6 +410,72 @@ fn resume_room_options_defaults_as_python() {
 }
 
 #[test]
+fn submit_options_defaults_as_python() {
+    let defaults = roomkit::tasks::SubmitOptions::default();
+    // roomkit.tasks.TaskRunner.submit(context) = None
+    assert!(defaults.context.is_none());
+    // roomkit.tasks.TaskRunner.submit(on_complete) = None
+    assert!(defaults.on_complete.is_none());
+}
+
+#[test]
+fn delegated_task_options_defaults_as_python() {
+    let defaults = roomkit::tasks::DelegatedTaskOptions::default();
+    // roomkit.tasks.DelegatedTask.__init__(brief) = None
+    assert!(defaults.brief.is_none());
+    // roomkit.tasks.DelegatedTask.__init__(description) = None
+    assert!(defaults.description.is_none());
+    // roomkit.tasks.DelegatedTask.__init__(hand_back) = 'relay'
+    assert_eq!(defaults.hand_back, "relay");
+}
+
+#[test]
+fn delegated_task_wait_options_defaults_as_python() {
+    // roomkit.tasks.DelegatedTask.wait(timeout) = None
+    assert!(roomkit::tasks::WaitOptions::default().timeout.is_none());
+}
+
+#[test]
+fn delegated_task_result_defaults_as_python() {
+    let room = roomkit::model::RoomId::new("r").unwrap();
+    let agent = roomkit::model::ChannelId::new("a").unwrap();
+    let result = roomkit::tasks::DelegatedTaskResult::new("t", room.clone(), room, agent);
+    // roomkit.tasks.DelegatedTaskResult.__init__(status) = <TaskStatus.COMPLETED: 'completed'>
+    assert_eq!(result.status, roomkit::model::TaskStatus::Completed);
+    // roomkit.tasks.DelegatedTaskResult.__init__(output) = None
+    assert!(result.output.is_none());
+    // roomkit.tasks.DelegatedTaskResult.__init__(error) = None
+    assert!(result.error.is_none());
+    // roomkit.tasks.DelegatedTaskResult.__init__(duration_ms) = 0.0
+    assert!(result.duration_ms.abs() < f64::EPSILON);
+    // roomkit.tasks.DelegatedTaskResult.__init__(metadata) = <factory>
+    assert!(result.metadata.is_empty());
+}
+
+#[test]
+fn delegate_options_defaults_as_python() {
+    let defaults = roomkit::DelegateOptions::default();
+    // roomkit.RoomKit.delegate(wait) = False
+    assert!(!defaults.wait);
+    // roomkit.RoomKit.delegate(context) = None
+    assert!(defaults.context.is_none());
+    // roomkit.RoomKit.delegate(share_channels) = None
+    assert!(defaults.share_channels.is_none());
+    // roomkit.RoomKit.delegate(notify) = None
+    assert!(defaults.notify.is_none());
+    // roomkit.RoomKit.delegate(on_complete) = None
+    assert!(defaults.on_complete.is_none());
+    // roomkit.RoomKit.delegate(post_status) = True
+    assert!(defaults.post_status);
+    // roomkit.RoomKit.delegate(brief) = None
+    assert!(defaults.brief.is_none());
+    // roomkit.RoomKit.delegate(hand_back) = 'relay'
+    assert_eq!(defaults.hand_back, "relay");
+    // roomkit.RoomKit.delegate(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
 fn room_kit_options_defaults_as_python() {
     let defaults = RoomKitOptions::default();
     // roomkit.RoomKit.__init__(agent_response_policy) = <AgentResponsePolicy.AGENT_CHAIN: 'agent_chain'>
@@ -433,6 +499,8 @@ fn room_kit_options_defaults_as_python() {
     assert!(defaults.identity_channel_types.is_none());
     // roomkit.RoomKit.__init__(identity_timeout) = 10.0
     assert_eq!(defaults.identity_timeout, Duration::from_secs(10));
+    // roomkit.RoomKit.__init__(task_runner) = None
+    assert!(defaults.task_runner.is_none());
     // roomkit.RoomKit.__init__(store) = None
     let store: Arc<InMemoryStore> = defaults.store;
     assert_eq!(Arc::strong_count(&store), 1);
