@@ -9,6 +9,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Python's `AIChannel(tool_call_intents_required=...)` (roomkit 121ea967) is
   `AiChannelOptions::tool_call_intents_required` (RMK-1067): no longer a
   Rust-only exception.
+- A turn host's verb after its turn acts in its room's organization, as
+  Python's (RMK-1149): one naming that organization is served, and a
+  `send_event` for another room or organization raises
+  `RoomKitError::Value`, no longer a `RemoteTurn` named `PermissionError`.
 - `RoomKit::list_tasks`, a room's tasks of the status it names, for the
   organization it names (RFC §5.10, §17.2).
 - The status bus, Python's `roomkit.orchestration` (RFC §19.8):
