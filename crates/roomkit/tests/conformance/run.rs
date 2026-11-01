@@ -337,7 +337,7 @@ impl Run {
         })
     }
 
-    fn resolve<'a>(&'a self, value: Value, scope: &'a Scope) -> BoxFuture<'a, Value> {
+    pub(crate) fn resolve<'a>(&'a self, value: Value, scope: &'a Scope) -> BoxFuture<'a, Value> {
         Box::pin(async move {
             match value {
                 Value::Object(object) => {

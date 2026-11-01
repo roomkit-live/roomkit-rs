@@ -282,7 +282,7 @@ impl Channel for Waiting {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        std::future::ready(Ok(crate::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(crate::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(
@@ -427,7 +427,7 @@ impl Channel for Streaming {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        std::future::ready(Ok(crate::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(crate::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(
@@ -529,7 +529,7 @@ impl Channel for Stuck {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        std::future::ready(Ok(crate::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(crate::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(
@@ -626,7 +626,7 @@ impl Channel for Panicking {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        std::future::ready(Ok(crate::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(crate::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(
@@ -748,7 +748,7 @@ impl Channel for Eager {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        std::future::ready(Ok(crate::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(crate::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(

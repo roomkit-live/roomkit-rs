@@ -43,45 +43,87 @@ pub fn default_inbound_event(
         now,
     );
     event.metadata.clone_from(&message.metadata);
-    stamp_trigger(event, message, channel, id)
+    stamp_trigger(event, message, id)
 }
 
 /// Writes the pipeline's fields on the event a channel parsed from
-/// `message`: the id the pipeline gives it (RFC §8.1), the type, depth,
-/// visibility, address, response scope (gap G-073), thread and idempotency
-/// key the message asked for, and the receiving channel as its inbound
-/// source. An instruction is visible to intelligence channels only, and
+/// `message` (RFC §10.1 step 4): the id the pipeline gives it (RFC §8.1),
+/// the receiving channel as its inbound source, and the message's fields
+/// the parse left unset ([`fill_from_message`]). What the channel read off
+/// its own wire stands, as Python's `_apply_message_fields` keeps it: an
+/// SMS with media sourced `MMS`, a provider's key, thread or instant. An
+/// instruction is the caller's decision ([`trigger_type`]): it is visible
+/// to intelligence channels only, addressed as the caller addressed it, and
 /// carries the caller's metadata and its `standalone` word (RFC §10.1.1
 /// rules 3 and 4). No trigger carries the key a response to an instruction
 /// records, whoever wrote it (gap G-065).
 pub(crate) fn stamp_trigger(
     mut event: RoomEvent,
     message: &InboundMessage,
-    channel: &ChannelConfig,
     id: EventId,
 ) -> RoomEvent {
     event.id = id;
-    event.r#type = message.event_type;
-    event.chain_depth = message.chain_depth;
-    event.visibility = message.visibility.clone();
-    event.addressed_to.clone_from(&message.addressed_to);
-    event
-        .response_visibility
-        .clone_from(&message.response_visibility);
-    event.parent_event_id.clone_from(&message.parent_event_id);
-    event.idempotency_key.clone_from(&message.idempotency_key);
+    trigger_type(&mut event, message);
+    fill_from_message(&mut event, message);
     event.responds_to = None;
     event.source.channel_id = message.channel_id.clone();
-    event.source.channel_type = channel.channel_type.clone();
     event.source.direction = EventDirection::Inbound;
-    if event.source.provider.is_none() {
-        event.source.provider.clone_from(&channel.provider_name);
-    }
     if message.event_type == EventType::Instruction {
+        event.addressed_to.clone_from(&message.addressed_to);
         instructions::stamp(&mut event, &message.metadata, message.standalone);
     }
     instructions::clear_fingerprint(&mut event);
     reset_commit_fields(event)
+}
+
+/// The type of the event a channel parsed from `message` (RFC §10.1.1): an
+/// instruction is the caller's decision, never the wire's. A message the
+/// caller sent as an instruction is one, whatever its channel parsed; one
+/// its channel parsed as an instruction stays what the caller sent, its
+/// parser's `standalone` word dropped with the type. Any other type the
+/// channel parsed stands, a reaction or an edit it read off its wire.
+fn trigger_type(event: &mut RoomEvent, message: &InboundMessage) {
+    if message.event_type == EventType::Instruction {
+        event.r#type = EventType::Instruction;
+    } else if event.r#type == EventType::Instruction {
+        tracing::warn!(
+            target: "roomkit::core::inbound",
+            channel_id = %message.channel_id,
+            "a channel parsed a message as an instruction: only the caller issues one, \
+             it stays what the caller sent"
+        );
+        event.r#type = message.event_type;
+        event.metadata.remove(instructions::STANDALONE);
+    }
+}
+
+/// Fills on the event a channel parsed the fields of `message` the parse
+/// left at their default (RFC §10.1 step 4), each by Python's rule: a
+/// visibility other than `all` over `all`, and an address (gap G-073's
+/// response scope too), a thread, an idempotency key and a non-zero depth
+/// where the parse set none. A field the channel resolved itself keeps
+/// its value.
+fn fill_from_message(event: &mut RoomEvent, message: &InboundMessage) {
+    if message.visibility != Visibility::All && event.visibility == Visibility::All {
+        event.visibility = message.visibility.clone();
+    }
+    if event.parent_event_id.is_none() {
+        event.parent_event_id.clone_from(&message.parent_event_id);
+    }
+    if event.addressed_to.is_none() {
+        event.addressed_to.clone_from(&message.addressed_to);
+    }
+    if event.idempotency_key.is_none() {
+        event.idempotency_key.clone_from(&message.idempotency_key);
+    }
+    if event.chain_depth == 0 {
+        event.chain_depth = message.chain_depth;
+    }
+    if event.response_visibility.is_none() {
+        event
+            .response_visibility
+            .clone_from(&message.response_visibility);
+    }
 }
 
 /// The event the integrator injects directly as `direct` into `room_id`
@@ -493,7 +535,7 @@ mod tests {
     fn a_parsed_event_is_sourced_from_the_receiving_channel() {
         let mut parsed = trigger();
         parsed.source.channel_id = ChannelId::new("other").unwrap();
-        let stamped = stamp_trigger(parsed, &message(), &sms(), fresh());
+        let stamped = stamp_trigger(parsed, &message(), fresh());
         assert_eq!(stamped.source.channel_id.as_str(), "sms");
     }
 
@@ -501,7 +543,7 @@ mod tests {
     fn a_parsed_event_takes_the_id_the_pipeline_gives_it() {
         let mut parsed = trigger();
         parsed.id = EventId::new("SM1").unwrap();
-        let stamped = stamp_trigger(parsed, &message(), &sms(), fresh());
+        let stamped = stamp_trigger(parsed, &message(), fresh());
         assert_eq!(stamped.id, fresh());
     }
 
@@ -519,10 +561,10 @@ mod tests {
             metadata: Metadata::new(),
             ..trigger()
         };
-        let stamped = stamp_trigger(parsed, &instruction, &sms(), fresh());
+        let stamped = stamp_trigger(parsed, &instruction, fresh());
         assert_eq!(
             serde_json::Value::Object(stamped.metadata),
-            serde_json::json!({ "task_id": "t_7", "standalone": false })
+            serde_json::json!({ "task_id": "t_7" })
         );
     }
 
@@ -538,7 +580,7 @@ mod tests {
     #[test]
     fn a_parsed_event_loses_the_instruction_key_its_parser_wrote() {
         let parsed = writing_the_instruction_key(trigger());
-        let stamped = stamp_trigger(parsed, &message(), &sms(), fresh());
+        let stamped = stamp_trigger(parsed, &message(), fresh());
         assert_eq!(stamped.metadata.get(instructions::INSTRUCTION), None);
     }
 
@@ -551,7 +593,7 @@ mod tests {
             instructions::INSTRUCTION.to_owned(),
             "Offer a refund.".into(),
         );
-        let stamped = stamp_trigger(trigger(), &instruction, &sms(), fresh());
+        let stamped = stamp_trigger(trigger(), &instruction, fresh());
         assert_eq!(stamped.metadata.get(instructions::INSTRUCTION), None);
     }
 

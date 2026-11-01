@@ -140,7 +140,7 @@ impl Channel for Provider {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 }
 

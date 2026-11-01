@@ -484,7 +484,7 @@ fn notice(text: &str, now: Timestamp) -> RoomEvent {
 
 /// What B.2 leaves: the timeline, what each side received, the
 /// observations, and the call's result.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 struct B2 {
     timeline: Vec<RoomEvent>,
     customer: Vec<String>,
@@ -590,16 +590,52 @@ async fn block_and_inject(needs_lock: bool) -> B2 {
         .await
         .unwrap();
     B2 {
+        customer: customer.texts(),
+        advisor: advisor.texts(),
+        blocked: result.blocked,
+        reason: result.reason,
+        ..stored_at(&kit, now).await
+    }
+}
+
+/// What the store holds of B.2's room, the transport's message and the
+/// scanner's observation written at `now` ([`at_the_kit_s_instant`]).
+async fn stored_at(kit: &RoomKit, now: Timestamp) -> B2 {
+    B2 {
         timeline: kit
             .store()
             .list_events(&room_id(), every_row())
             .await
-            .unwrap(),
-        customer: customer.texts(),
-        advisor: advisor.texts(),
-        observations: kit.store().list_observations(&room_id()).await.unwrap(),
-        blocked: result.blocked,
-        reason: result.reason,
+            .unwrap()
+            .into_iter()
+            .map(|event| at_the_kit_s_instant(event, now))
+            .collect(),
+        observations: kit
+            .store()
+            .list_observations(&room_id())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|observation| Observation {
+                created_at: now,
+                ..observation
+            })
+            .collect(),
+        ..B2::default()
+    }
+}
+
+/// `event` at `now`, the kit's instant, when its transport parsed it: a
+/// parse's instant is the channel's (RFC §10.1 step 4), the system clock's
+/// for a recording transport, which the kit's environment does not set.
+/// The observation the scanner makes takes the message's.
+fn at_the_kit_s_instant(event: RoomEvent, now: Timestamp) -> RoomEvent {
+    if event.source.channel_id.as_str() != "sms_customer" {
+        return event;
+    }
+    RoomEvent {
+        created_at: now,
+        ..event
     }
 }
 

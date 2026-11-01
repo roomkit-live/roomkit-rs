@@ -277,7 +277,7 @@ impl Channel for Unregistering {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        ready(Ok(default_inbound_event(&message, &context)))
+        ready(Ok(default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(
@@ -797,7 +797,7 @@ impl Channel for Panicking {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        ready(Ok(default_inbound_event(&message, &context)))
+        ready(Ok(default_inbound_event(self, &message, &context)))
     }
 }
 
@@ -855,7 +855,7 @@ impl Channel for ProviderIds {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        let event = default_inbound_event(&message, &context);
+        let event = default_inbound_event(self, &message, &context);
         ready(Ok(event))
     }
 
@@ -1266,7 +1266,7 @@ impl Channel for ShoutingGate {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        let mut event = default_inbound_event(&message, &context);
+        let mut event = default_inbound_event(self, &message, &context);
         if text_of(&event.content) == "shout" {
             event.content = shouting_media();
         }
@@ -1370,7 +1370,7 @@ impl Channel for ShoutingAgent {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        ready(Ok(default_inbound_event(&message, &context)))
+        ready(Ok(default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(
@@ -1599,7 +1599,7 @@ impl Channel for AnsweringJavascript {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        let mut event = default_inbound_event(&message, &context);
+        let mut event = default_inbound_event(self, &message, &context);
         event.content = javascript_media();
         ready(Ok(event))
     }

@@ -594,7 +594,7 @@ impl Channel for SaysByeAsItCloses {
         message: roomkit::model::InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, roomkit::ChannelError>> + Send {
-        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(
@@ -771,7 +771,7 @@ impl Channel for Relaying {
         message: roomkit::model::InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, roomkit::ChannelError>> + Send {
-        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 }
 

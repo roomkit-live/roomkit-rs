@@ -96,7 +96,7 @@ impl Channel for GatedClose {
         context: roomkit::model::RoomContext,
     ) -> impl std::future::Future<Output = Result<roomkit::model::RoomEvent, roomkit::ChannelError>> + Send
     {
-        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(
@@ -256,7 +256,7 @@ impl Channel for Closing {
         context: roomkit::model::RoomContext,
     ) -> impl std::future::Future<Output = Result<roomkit::model::RoomEvent, roomkit::ChannelError>> + Send
     {
-        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(
@@ -363,7 +363,7 @@ impl Channel for EagerPanic {
         context: roomkit::model::RoomContext,
     ) -> impl std::future::Future<Output = Result<roomkit::model::RoomEvent, roomkit::ChannelError>> + Send
     {
-        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(
@@ -480,7 +480,7 @@ impl Channel for HangingClose {
         context: roomkit::model::RoomContext,
     ) -> impl std::future::Future<Output = Result<roomkit::model::RoomEvent, roomkit::ChannelError>> + Send
     {
-        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(

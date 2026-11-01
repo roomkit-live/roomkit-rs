@@ -277,7 +277,7 @@ impl Channel for Paused {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        std::future::ready(Ok(crate::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(crate::default_inbound_event(self, &message, &context)))
     }
 }
 

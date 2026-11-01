@@ -183,7 +183,7 @@ impl Channel for Gated {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 }
 
@@ -617,7 +617,7 @@ impl Channel for Closing {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(

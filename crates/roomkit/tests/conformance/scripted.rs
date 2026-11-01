@@ -175,6 +175,23 @@ pub(crate) async fn perform(
     }
 }
 
+/// `event` with a parse reaction's `parsed` patch: its members replace the
+/// event's, those of its `source` the event's source's.
+fn parsed_event(event: RoomEvent, patch: &Value) -> Result<RoomEvent, ScriptedFailure> {
+    let mut data = serde_json::to_value(event).map_err(|e| ScriptedFailure(e.to_string()))?;
+    for (key, value) in patch.as_object().into_iter().flatten() {
+        match (key.as_str(), value) {
+            ("source", Value::Object(source)) => {
+                for (member, item) in source {
+                    data["source"][member] = item.clone();
+                }
+            }
+            _ => data[key] = value.clone(),
+        }
+    }
+    serde_json::from_value(data).map_err(|e| ScriptedFailure(format!("a parsed patch: {e}")))
+}
+
 /// A channel whose parse, turn and delivery follow the scenario's reactions.
 pub(crate) struct ScriptedChannel {
     declaration: ChannelConfig,
@@ -343,13 +360,20 @@ impl Channel for ScriptedChannel {
         context: RoomContext,
     ) -> Result<RoomEvent, ChannelError> {
         let room_id = context.room.id.to_string();
-        if let (Some(run), Some(reaction)) = (
+        let event = default_inbound_event(self, &message, &context);
+        let (Some(run), Some(reaction)) = (
             self.run.upgrade(),
             self.parse.pick(&message_subject(&message, &room_id)),
-        ) {
-            perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
-        }
-        Ok(default_inbound_event(&message, &context))
+        ) else {
+            return Ok(event);
+        };
+        let scope = Scope::in_room(&room_id);
+        perform(&run, &reaction, &scope).await?;
+        let Some(patch) = reaction.get("parsed") else {
+            return Ok(event);
+        };
+        let patch = run.resolve(patch.clone(), &scope).await;
+        Ok(parsed_event(event, &patch)?)
     }
 
     async fn on_event(

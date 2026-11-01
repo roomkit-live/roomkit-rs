@@ -121,7 +121,7 @@ pub(crate) fn ai_channel_capabilities() -> ChannelCapabilities {
 ///         message: InboundMessage,
 ///         context: RoomContext,
 ///     ) -> Result<RoomEvent, ChannelError> {
-///         Ok(default_inbound_event(&message, &context))
+///         Ok(default_inbound_event(self, &message, &context))
 ///     }
 ///
 ///     async fn deliver(
@@ -273,10 +273,12 @@ pub trait Channel: Send + Sync + 'static {
     }
 
     /// Converts a message the channel received into a room event (RFC
-    /// §6.1). The pipeline then writes the fields it owns: the event's id
-    /// (RFC §8.1), and the type, depth, visibility, address and source the
-    /// message decides. [`default_inbound_event`] builds the event a
-    /// channel that keeps no data of its own parses.
+    /// §6.1). The pipeline then gives it its id (RFC §8.1) and its source's
+    /// channel, and fills the message's fields the channel left unset: a
+    /// field the channel read off its wire stands, its type (but an
+    /// instruction's), visibility, address, thread, idempotency key, depth
+    /// and instant (RFC §10.1 step 4). [`default_inbound_event`] builds the
+    /// event a channel that keeps no data of its own parses.
     ///
     /// A channel that receives no message refuses it here with an error,
     /// before anything enters the room: an AI agent does
@@ -362,20 +364,21 @@ pub trait Channel: Send + Sync + 'static {
     }
 }
 
-/// The event a channel that keeps no data of its own parses from `message`
-/// in `context`'s room: its content, its metadata, its provider data, and
-/// its sender, named on the source as its `participant_id`; the pipeline
-/// writes its id, its type and its source's channel over what it holds.
-/// Python's `super().handle_inbound(message, context)` on a transport.
-pub fn default_inbound_event(message: &InboundMessage, context: &RoomContext) -> RoomEvent {
-    let channel_type = context
-        .bindings
-        .iter()
-        .find(|binding| binding.channel_id == message.channel_id)
-        .map_or(ChannelType::WEBSOCKET, |binding| {
-            binding.channel_type.clone()
-        });
-    let mut source = EventSource::new(message.channel_id.clone(), channel_type);
+/// The event `channel`, keeping no data of its own, parses from `message`
+/// in `context`'s room, as Python's `super().handle_inbound(message,
+/// context)` on a transport builds it: sourced from `channel`, its type and
+/// its provider, its sender named on the source as its `participant_id`,
+/// with the message's type, content, provider data, idempotency key and
+/// metadata. The pipeline gives it its id and fills the message's other
+/// fields it leaves unset; what a channel writes over it stands (RFC §10.1
+/// step 4).
+pub fn default_inbound_event(
+    channel: &(impl Channel + ?Sized),
+    message: &InboundMessage,
+    context: &RoomContext,
+) -> RoomEvent {
+    let mut source = EventSource::new(channel.channel_id(), channel.channel_type());
+    source.provider = channel.provider_name();
     source.participant_id = ParticipantId::new(message.sender_id.clone()).ok();
     source.external_id.clone_from(&message.external_id);
     source.raw_payload.clone_from(&message.raw_payload);
@@ -384,6 +387,7 @@ pub fn default_inbound_event(message: &InboundMessage, context: &RoomContext) ->
         .clone_from(&message.provider_message_id);
     let mut event = RoomEvent::new(context.room.id.clone(), source, message.content.clone());
     event.r#type = message.event_type;
+    event.idempotency_key.clone_from(&message.idempotency_key);
     event.metadata.clone_from(&message.metadata);
     event
 }

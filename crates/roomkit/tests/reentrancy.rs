@@ -190,7 +190,7 @@ impl Channel for Scripted {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        let event = default_inbound_event(&message, &context);
+        let event = default_inbound_event(self, &message, &context);
         let parse = self.parse.clone();
         async move {
             if let Some(parse) = parse {
@@ -869,7 +869,7 @@ impl Channel for UnregisteringAi {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        ready(Ok(default_inbound_event(&message, &context)))
+        ready(Ok(default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(

@@ -225,7 +225,7 @@ impl Channel for Leaving {
         message: roomkit::model::InboundMessage,
         context: RoomContext,
     ) -> impl Future<Output = Result<roomkit::model::RoomEvent, ChannelError>> + Send {
-        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(

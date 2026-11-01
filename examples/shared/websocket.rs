@@ -214,7 +214,7 @@ impl Channel for WebSocketChannel {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        ready(Ok(default_inbound_event(&message, &context)))
+        ready(Ok(default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(

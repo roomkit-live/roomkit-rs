@@ -516,7 +516,7 @@ impl Arrival {
                 error,
             })
         })?;
-        let mut event = stamp::stamp_trigger(*parsed, &self.message, &self.channel, id);
+        let mut event = stamp::stamp_trigger(*parsed, &self.message, id);
         event.room_id.clone_from(&context.room.id);
         Ok(Arrived { event, context })
     }

@@ -820,10 +820,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 calls::store(&*inner.store, request).await
             }),
             Request::Channel(request) => {
-                let environment = Arc::clone(&self.environment);
                 let shared = Arc::clone(&self.shared);
                 self.spawn(id, work, deadline, async move {
-                    Box::pin(calls::channel(&inner, &*environment, &shared, id, request)).await
+                    Box::pin(calls::channel(&inner, &shared, id, request)).await
                 });
             }
             Request::Hook(request) => self.spawn(id, work, deadline, async move {

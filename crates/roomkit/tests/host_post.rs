@@ -143,7 +143,7 @@ impl Channel for Sms {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 }
 
@@ -263,7 +263,7 @@ impl Channel for Agent {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(
@@ -362,7 +362,7 @@ impl Channel for CountingHost {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 }
 
@@ -1118,7 +1118,7 @@ impl Channel for Claiming {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(

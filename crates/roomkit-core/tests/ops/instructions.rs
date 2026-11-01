@@ -398,8 +398,8 @@ mod an_accepted_instruction {
         );
     }
 
-    /// Rule 4: its hooks run on it, with the caller's metadata and the
-    /// `standalone` word.
+    /// Rule 4: its hooks run on it, with the caller's metadata, and no
+    /// `standalone` word when it does not stand alone, as Python writes it.
     #[test]
     fn is_handed_to_its_hooks_with_the_caller_s_metadata() {
         let mut sim = with_agent();
@@ -412,10 +412,7 @@ mod an_accepted_instruction {
         let handed = seen.borrow()[0].clone();
         assert_eq!(
             (handed.r#type, serde_json::Value::Object(handed.metadata)),
-            (
-                EventType::Instruction,
-                json!({ "task_id": "t_7", "standalone": false })
-            )
+            (EventType::Instruction, json!({ "task_id": "t_7" }))
         );
     }
 

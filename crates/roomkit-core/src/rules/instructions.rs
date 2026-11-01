@@ -77,14 +77,18 @@ pub(crate) fn may_stand_alone(event_type: EventType) -> bool {
 /// The metadata of an instruction its channel parsed with `parsed`: the
 /// parser's keys keep their values, the caller's `caller` metadata fills
 /// the others, and `standalone` is the typed field's word whatever either
-/// wrote (RFC §10.1.1 rule 4).
+/// wrote, written only when it stands alone, as Python writes it (RFC
+/// §10.1.1 rules 4 and 7).
 pub(crate) fn metadata(mut parsed: Metadata, caller: &Metadata, standalone: bool) -> Metadata {
     for (key, value) in caller {
         if !parsed.contains_key(key) {
             parsed.insert(key.clone(), value.clone());
         }
     }
-    parsed.insert(STANDALONE.to_owned(), Value::Bool(standalone));
+    parsed.remove(STANDALONE);
+    if standalone {
+        parsed.insert(STANDALONE.to_owned(), Value::Bool(true));
+    }
     parsed
 }
 
@@ -364,7 +368,7 @@ mod tests {
             let caller = metadata_of(json!({ "task_id": "t_1" }));
             assert_eq!(
                 Value::Object(metadata(Metadata::new(), &caller, false)),
-                json!({ "task_id": "t_1", "standalone": false })
+                json!({ "task_id": "t_1" })
             );
         }
 
@@ -378,13 +382,19 @@ mod tests {
             );
         }
 
+        /// Python writes the word only when the instruction stands alone
+        /// (roomkit `tests/test_instruction_fingerprint.py`: "standalone"
+        /// not in an instruction's metadata).
         #[test]
         fn standalone_is_the_typed_field_s_word() {
             let parsed = metadata_of(json!({ "standalone": true }));
             let caller = metadata_of(json!({ "standalone": true }));
             assert_eq!(
-                metadata(parsed, &caller, false).get(STANDALONE),
-                Some(&json!(false))
+                (
+                    metadata(parsed.clone(), &caller, false).get(STANDALONE),
+                    metadata(Metadata::new(), &Metadata::new(), true).get(STANDALONE)
+                ),
+                (None, Some(&json!(true)))
             );
         }
     }

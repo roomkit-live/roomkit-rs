@@ -275,7 +275,7 @@ impl Channel for Panicking {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 }
 
@@ -415,7 +415,7 @@ impl Channel for Gated {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 }
 
@@ -624,7 +624,7 @@ impl Channel for SlowAgent {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        ready(Ok(roomkit::default_inbound_event(&message, &context)))
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 
     fn deliver(

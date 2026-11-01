@@ -12,7 +12,7 @@ use roomkit_core::model::{
     Timestamp,
 };
 use roomkit_core::ops::{
-    AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, Environment,
+    AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId,
     FrameworkEvent as CoreEvent, HookAnswer, HookRequest, KIT_CLOSED, Notice, Outcome,
     RecentEvents, StoreOutcome, StoreRequest,
 };
@@ -308,15 +308,13 @@ async fn persist_side_effects<S: ConversationStore>(
 }
 
 /// Calls a channel (RFC §6.1): a parse, a turn, a delivery or the read of
-/// a turn's stream; a parse drafts its event at `environment`'s instant,
-/// the run's. A turn that answers with a stream leaves it with its run,
+/// a turn's stream. A turn that answers with a stream leaves it with its run,
 /// `shared`, by its effect, `effect`, until it is read. Work a close spared
 /// calls no channel once the kit is sealed, its channels closed, the call
 /// refused (RFC §12.10.4): a turn with its link's `backend_closed` (RFC
 /// §10.6.8), any other call `kit_closed`, as a write is.
 pub(super) async fn channel<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
-    environment: &(dyn Environment + Send + Sync),
     shared: &RunShared,
     effect: EffectId,
     request: ChannelRequest,
@@ -339,10 +337,10 @@ pub(super) async fn channel<S: ConversationStore>(
                 Ok(mut event) => match event.check() {
                     Ok(()) => {
                         // The pipeline's own (RFC §8.1, §10.1 step 4): the id
-                        // the core gives, the room, the instant.
+                        // the core gives and the room. The instant is the
+                        // parse's, as a channel may read it off its wire.
                         event.id = id;
                         event.room_id = room_id;
-                        event.created_at = environment.now();
                         ChannelOutcome::Parsed(Box::new(event)).into()
                     }
                     Err(refusal) => refused_content(&refusal),

@@ -115,6 +115,27 @@ fn turn_messages(tap: &TurnTap) -> Vec<(String, Value)> {
         .collect()
 }
 
+/// The instant the support's kit starts at, which its environment gives.
+const KIT_INSTANT: &str = "2026-10-26T12:00:00Z";
+
+/// The instant the stored message reading `text` was parsed at, as its
+/// record writes it.
+async fn parsed_instant(kit: &roomkit::RoomKit, text: &str) -> String {
+    let event = kit
+        .store()
+        .list_events(&room(), received())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|event| roomkit_core::rules::transcoding::text_of(&event.content) == text)
+        .unwrap();
+    serde_json::to_value(event.created_at)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
 /// The messages written as the fixture's lines, the ids the run drew at
 /// random (the turn's, the executor's, each call's) named in order.
 fn fixture_lines(messages: &[(String, Value)]) -> String {
@@ -221,7 +242,11 @@ async fn the_probe_s_turn_carries_python_s_messages() {
             (EventType::Message, "It is 42.".to_owned(), 1),
         ]
     );
-    let written = fixture_lines(&messages);
+    // The transport parses the question at the system clock's instant,
+    // which the kit's environment does not set (RFC §10.1 step 4: a
+    // parse's instant stands): the fixture writes it as the kit's.
+    let parsed_at = parsed_instant(&kit, "What is it?").await;
+    let written = fixture_lines(&messages).replace(&parsed_at, KIT_INSTANT);
     let path = fixtures().join("rust-case1.jsonl");
     if std::env::var_os("ROOMKIT_WRITE_TURNS_FIXTURE").is_some() {
         std::fs::write(&path, &written).unwrap();

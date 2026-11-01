@@ -95,6 +95,7 @@ const REACTION: &[&str] = &[
     "output",
     "result",
     "stop_after",
+    "parsed",
 ];
 const WHEN: &[&str] = &[
     "room_id",
