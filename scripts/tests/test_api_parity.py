@@ -1207,9 +1207,11 @@ class TheGate(unittest.TestCase):
             (
                 parity.unwritten(mapping, "no table"),
                 parity.unwritten(mapping, "Prose names `WeakRoomKit` and `RoomId`, no row."),
+                parity.unwritten(mapping, "| a weak handle | `WeakRoomKitRef` |\n| ids | `RoomIds` |"),
                 parity.unwritten(mapping, "| a hook holding the kit | `WeakRoomKit` |\n| `str` ids | `RoomId` |"),
             ),
             (
+                ["roomkit::WeakRoomKit", "roomkit::model::RoomId"],
                 ["roomkit::WeakRoomKit", "roomkit::model::RoomId"],
                 ["roomkit::WeakRoomKit", "roomkit::model::RoomId"],
                 [],

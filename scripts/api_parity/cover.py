@@ -3,6 +3,7 @@ moved Python specs."""
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from api_parity.compare import NON_EXHAUSTIVE, RULES_FINDING, Comparison, Finding, ItemResult
@@ -59,12 +60,12 @@ def unwritten(mapping: Mapping, architecture: str) -> list[str]:
     of (lot 6, rule 3): an `[[exception]]` whose Rust item, Python class,
     member or parameter no row names, and a `builtins`, `literals` or
     `error_families` rule whose Rust type none does. A name counts written
-    after a backtick, `::` or `.`, on a table's row, a line starting `|`:
-    prose names no difference."""
+    after a backtick, `::` or `.`, whole, on a table's row, a line starting
+    `|`: prose names no difference, and `Tool` is not `ToolCall`."""
     rows = "\n".join(line for line in architecture.splitlines() if line.lstrip().startswith("|"))
 
     def written(name: str) -> bool:
-        return any(f"{mark}{name}" in rows for mark in ("`", "::", "."))
+        return re.search(rf"(?:`|::|\.){re.escape(name)}(?![A-Za-z0-9_])", rows) is not None
 
     missing = []
     for entry in mapping.of("exception"):
