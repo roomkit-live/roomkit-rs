@@ -27,7 +27,7 @@ allowed=(
     # tracing.
     tracing tracing-core pin-project-lite once_cell
     # sha2: an instruction's fingerprint (RFC §10.1.1 rule 6).
-    sha2 digest block-buffer crypto-common generic-array typenum cfg-if cpufeatures
+    sha2 digest block-buffer crypto-common hybrid-array typenum cfg-if cpufeatures
     # cpufeatures' CPU detection on aarch64 (Linux, Android, Apple) and
     # loongarch64 Linux, which reads the system's feature flags.
     libc

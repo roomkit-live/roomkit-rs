@@ -260,6 +260,13 @@ async fn a_call_s_result_goes_back_in_the_next_completion() {
 }
 
 #[tokio::test]
+async fn a_request_asks_for_an_uncompressed_answer_even_with_gzip_enabled() {
+    let room = Room::new(vec![Reply::completion("Yes.")], "sk-test").await;
+    room.says(&room.sms, "+15550001", "Alice", "Hi").await;
+    assert_eq!(room.fake.requests()[0].accept_encoding, None);
+}
+
+#[tokio::test]
 async fn an_empty_api_key_sends_no_authorization() {
     let room = Room::new(vec![Reply::completion("Yes.")], "").await;
     room.says(&room.sms, "+15550001", "Alice", "Hi").await;

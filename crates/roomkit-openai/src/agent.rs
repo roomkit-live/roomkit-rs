@@ -239,6 +239,10 @@ impl OpenAiProvider {
         // An API endpoint has no use for a redirect, which could carry the
         // key to another scheme of the same host.
         let client = reqwest::Client::builder()
+            .tls_backend_preconfigured(tls_config()?)
+            // Answers come uncompressed, as the bounds on their declared
+            // length expect, whatever reqwest features the host enables.
+            .no_gzip()
             .timeout(config.timeout)
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -316,6 +320,26 @@ impl AiProvider for OpenAiProvider {
     fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a> {
         stream::answer(self, request)
     }
+}
+
+/// TLS with rustls's ring provider and the webpki roots (step 4, decision 4):
+/// the same trust on every host, and no system TLS library. HTTP/1.1 is
+/// offered by ALPN, as reqwest's own rustls configuration does.
+fn tls_config() -> Result<rustls::ClientConfig, OpenAiError> {
+    let roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|error| OpenAiError::Client {
+        reason: error.to_string(),
+    })?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(config)
 }
 
 /// The body of `response`, refused past [`ANSWER_LIMIT`]: as its head

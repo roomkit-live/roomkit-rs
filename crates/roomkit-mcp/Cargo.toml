@@ -9,10 +9,12 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
-http = ["dep:reqwest", "dep:futures-util", "dep:sse-stream", "rmcp/transport-streamable-http-client"]
+http = ["dep:reqwest", "dep:rustls", "dep:webpki-roots", "dep:futures-util", "dep:sse-stream", "rmcp/transport-streamable-http-client"]
 
 [dependencies]
 reqwest = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+webpki-roots = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
 sse-stream = { workspace = true, optional = true }
 roomkit.workspace = true
@@ -36,6 +38,9 @@ nix.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+# gzip, as a host that also links roomkit-tools enables it: the requests must
+# still ask for uncompressed responses.
+reqwest = { workspace = true, features = ["gzip"] }
 pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
 

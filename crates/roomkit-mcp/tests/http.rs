@@ -22,6 +22,7 @@ use std::{
 struct Seen {
     posts: Vec<String>,
     authorized: bool,
+    compressed: bool,
     session: bool,
     deleted: usize,
     redirected: usize,
@@ -73,6 +74,20 @@ async fn redirected(State(shared): State<Arc<Shared>>) -> StatusCode {
     shared.seen.lock().unwrap().redirected += 1;
     StatusCode::OK
 }
+/// What one POST `name` showed: its credentials, encoding and session.
+fn record(shared: &Shared, name: &str, headers: &HeaderMap) {
+    let mut seen = shared.seen.lock().unwrap();
+    seen.posts.push(name.into());
+    seen.authorized = headers.get("authorization").unwrap() == "Bearer fixture-private-value"
+        && headers.get("x-api-key").unwrap() == "fixture-key";
+    seen.compressed |= headers.contains_key("accept-encoding");
+    if name == "tools/list" {
+        seen.session = headers
+            .get("mcp-session-id")
+            .is_some_and(|v| v == "fixture-session");
+    }
+}
+
 async fn handle(
     State(shared): State<Arc<Shared>>,
     method: Method,
@@ -98,17 +113,7 @@ async fn handle(
     }
     let request: Value = serde_json::from_slice(&body).unwrap();
     let name = request.get("method").unwrap().as_str().unwrap_or("");
-    {
-        let mut seen = shared.seen.lock().unwrap();
-        seen.posts.push(name.into());
-        seen.authorized = headers.get("authorization").unwrap() == "Bearer fixture-private-value"
-            && headers.get("x-api-key").unwrap() == "fixture-key";
-        if name == "tools/list" {
-            seen.session = headers
-                .get("mcp-session-id")
-                .is_some_and(|v| v == "fixture-session");
-        }
-    }
+    record(&shared, name, &headers);
     if name.starts_with("notifications/") {
         return StatusCode::ACCEPTED.into_response();
     }
@@ -209,6 +214,8 @@ async fn roundtrip(mode: &'static str) {
     assert!(!server.is_connected());
     let seen = fixture.shared.seen.lock().unwrap();
     assert!(seen.authorized);
+    // Uncompressed even though the test build enables reqwest's gzip.
+    assert!(!seen.compressed);
     assert_eq!(seen.session, mode != "stateless");
     assert_eq!(seen.deleted, usize::from(mode != "stateless"));
 }

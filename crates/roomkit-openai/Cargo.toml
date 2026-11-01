@@ -15,12 +15,17 @@ roomkit-ai.workspace = true
 # The `Stream` a streamed completion is read as (step 4, decision 11).
 futures-core.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+# gzip, as a host that also links roomkit-tools enables it: the requests must
+# still ask for uncompressed answers.
+reqwest = { workspace = true, features = ["gzip"] }
 serde_json.workspace = true
 # The fake of the OpenAI wire the tests run against: a local HTTP server.
 tokio = { workspace = true, features = ["net", "io-util"] }

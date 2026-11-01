@@ -53,6 +53,25 @@ pub(super) struct Client {
     lease: Arc<Lease>,
     failure: Failure,
 }
+
+/// TLS with rustls's ring provider and the webpki roots, as the OpenAI
+/// agent's client: the same trust on every host, and no system TLS library.
+/// HTTP/1.1 is offered by ALPN, as reqwest's own rustls configuration does.
+fn tls_config() -> Option<rustls::ClientConfig> {
+    let roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .ok()?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Some(config)
+}
+
 struct Lease {
     client: reqwest::Client,
     // Closing the last worker/stream drops the sender, joining all HTTP owners.
@@ -60,14 +79,19 @@ struct Lease {
 }
 impl Client {
     pub(super) fn new() -> Result<(Self, tokio::sync::oneshot::Receiver<()>, Failure), McpError> {
+        let failed = || McpError::Http {
+            status: None,
+            reason: "HTTP client setup failed",
+        };
         let client = reqwest::Client::builder()
+            .tls_backend_preconfigured(tls_config().ok_or_else(failed)?)
+            // Responses come uncompressed, as the bounds on their declared
+            // length expect, whatever reqwest features the host enables.
+            .no_gzip()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .build()
-            .map_err(|_| McpError::Http {
-                status: None,
-                reason: "HTTP client setup failed",
-            })?;
+            .map_err(|_| failed())?;
         let (done, finished) = tokio::sync::oneshot::channel();
         let failure = Failure::default();
         Ok((

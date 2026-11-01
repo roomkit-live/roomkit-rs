@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Update reqwest to 0.13 and sha2 to 0.11, the versions roomkit-tools uses,
+  so a host that links both compiles one copy of each. The OpenAI agent and
+  MCP over HTTP keep rustls with the ring provider and the webpki roots, now
+  given to reqwest as a rustls configuration: 0.13 has no ring-backed
+  feature, and its default provider, aws-lc, is not compiled. Both clients
+  offer HTTP/1.1 by ALPN and ask for uncompressed answers, as before, even
+  in a host that enables reqwest's gzip feature.
+
 - Hosts can opt into required intent fields with
   `with_tool_call_intents(true).with_tool_call_intents_required(true)` on AI
   and OpenAI agents. The requirement applies to model-facing schemas only;
