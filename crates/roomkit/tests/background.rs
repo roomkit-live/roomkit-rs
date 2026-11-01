@@ -5,6 +5,9 @@
 //! as the Python implementation's `close` does.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+#[path = "support/warnings.rs"]
+mod warnings;
+
 use std::future::{Future, pending};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -26,6 +29,7 @@ use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+use warnings::Warnings;
 
 /// How long a call that should not wait may take before the test fails it.
 const BOUND: Duration = Duration::from_secs(5);
@@ -227,6 +231,52 @@ async fn idle_waits_for_an_observer_hook_running_after_its_call() {
         .await
         .unwrap();
     assert_eq!((busy, observed.load(Ordering::SeqCst)), (true, true));
+}
+
+/// RFC §9.3: what an observer returns is discarded, as Python discards an
+/// async hook's: one that returns nothing logs no warning, one that fails
+/// is logged.
+#[tokio::test]
+async fn an_observer_returning_nothing_logs_no_warning() {
+    let (warnings, _capturing) = Warnings::capture();
+    let kit = room().await;
+    let observer = |name: &str| HookOptions {
+        execution: HookExecution::Async,
+        name: name.to_owned(),
+        ..Default::default()
+    };
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        |_: RoomEvent, _| async {},
+        observer("quiet"),
+    )
+    .unwrap();
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        |_: RoomEvent, _| async { Err::<HookResult, _>("audit failed".into()) },
+        observer("failing"),
+    )
+    .unwrap();
+    kit.process_inbound(
+        message("Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(BOUND, roomkit::testing::idle(&kit))
+        .await
+        .unwrap();
+    kit.close().await.unwrap();
+    assert_eq!(
+        (
+            warnings.containing("hook=quiet").len(),
+            warnings.containing("hook=failing").len()
+        ),
+        (0, 1)
+    );
 }
 
 /// RFC §13.6, decision 1 of step 2b: a call its caller stopped waiting for

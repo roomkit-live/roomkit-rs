@@ -518,18 +518,14 @@ impl<S> Inner<S> {
         outcome: &HookOutcome<RoomEvent>,
     ) {
         match outcome {
-            HookOutcome::Returned(_) => {}
+            // What an observer returns is discarded, as Python discards an
+            // async hook's: one that returned nothing is no fault.
+            HookOutcome::Returned(_) | HookOutcome::Invalid { .. } => {}
             HookOutcome::Raised(error) => tracing::warn!(
                 target: "roomkit::hooks",
                 hook = %spec.name,
                 error = %error.message,
                 "an observer hook raised"
-            ),
-            HookOutcome::Invalid { what, .. } => tracing::warn!(
-                target: "roomkit::hooks",
-                hook = %spec.name,
-                %what,
-                "an observer hook returned an unusable result"
             ),
             HookOutcome::TimedOut => {
                 tracing::warn!(target: "roomkit::hooks", hook = %spec.name, "an observer hook timed out");

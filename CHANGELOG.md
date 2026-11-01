@@ -752,6 +752,10 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **An observer hook that returns nothing logs no warning**: what an
+  `ASYNC` hook returns is discarded, as Python discards it, where each run
+  of one returning `()` warned `an observer hook returned an unusable
+  result`. One that fails is still logged.
 - **A tool handler answering `{"error": "Unknown tool..."}` declines the
   call, a channel's sole handler as a composition's**, as Python's
   `declined_answer` reads every answer (RFC §21.4): the model reads
