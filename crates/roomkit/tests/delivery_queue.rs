@@ -531,24 +531,62 @@ async fn a_dequeue_waiting_reads_the_items_a_close_queues_again() {
     assert_eq!(read[0].id, claimed[0].id);
 }
 
-// Rust alone: a kit's worker ends once its kit is gone; a kit sharing the
-// backend then starts a worker of its own.
-#[tokio::test(start_paused = true)]
-async fn a_kit_sharing_a_backend_whose_kit_is_gone_starts_its_worker() {
+/// A kit started on a backend whose first kit went while its worker waited
+/// for an item; the item, on its last attempt, enqueued before the kit
+/// starts when `claimed_as_it_went`, so the gone kit's worker claims it, or
+/// after. Whether the kit published it.
+async fn a_kit_sharing_the_backend_of_a_gone_kit(claimed_as_it_went: bool) -> bool {
     let backend = InMemoryDeliveryBackend::default();
     let options = || RoomKitOptions {
         delivery_backend: Some(Arc::new(backend.clone())),
         ..RoomKitOptions::default()
     };
+    let item = DeliveryItem {
+        max_retries: 0,
+        ..DeliveryItem::new(room(), "result")
+    };
     let gone: Kit = RoomKit::new(options());
     gone.start().await.unwrap();
+    // Its worker waits for an item when the kit goes.
+    tokio::task::yield_now().await;
     drop(gone);
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    let item = if claimed_as_it_went {
+        enqueue(&backend, item).await;
+        tokio::task::yield_now().await;
+        assert_eq!(backend.in_flight(), 1, "the gone kit's worker claimed it");
+        None
+    } else {
+        Some(item)
+    };
     let kit = kit_with_room(options()).await;
     kit.start().await.unwrap();
-    enqueue(&backend, DeliveryItem::new(room(), "result")).await;
-    until(async || published(&kit).await == 1).await;
+    if let Some(item) = item {
+        enqueue(&backend, item).await;
+    }
+    let published = tokio::time::timeout(Duration::from_secs(60), async {
+        while published(&kit).await == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .is_ok();
     kit.close().await.unwrap();
+    published
+}
+
+// Rust alone: a kit sharing a backend whose kit is gone starts a worker of
+// its own at once, the gone kit's worker still waiting for an item.
+#[tokio::test(start_paused = true)]
+async fn a_kit_sharing_a_backend_whose_kit_is_gone_starts_its_worker() {
+    assert!(a_kit_sharing_the_backend_of_a_gone_kit(false).await);
+}
+
+// Rust alone: an item the gone kit's worker claimed as the kit went is
+// queued again uncounted, as Python's close queues an item held, and the
+// new worker publishes it on its last attempt.
+#[tokio::test(start_paused = true)]
+async fn an_item_claimed_as_the_kit_went_is_queued_again_uncounted() {
+    assert!(a_kit_sharing_the_backend_of_a_gone_kit(true).await);
 }
 
 // Rust alone: the kit holds its backend, whose worker holds the kit weakly,

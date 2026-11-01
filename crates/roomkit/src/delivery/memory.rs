@@ -66,8 +66,21 @@ struct Shared {
     queued: Notify,
     /// Told when the queue has room again.
     room: Notify,
-    worker: Mutex<Option<JoinHandle<()>>>,
+    worker: Mutex<Option<Worker>>,
     worker_id: String,
+}
+
+/// The worker `start` runs, and whether the kit it works for still lives.
+struct Worker {
+    task: JoinHandle<()>,
+    kit_alive: Box<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl Worker {
+    /// Whether it still works: running, for a kit that still lives.
+    fn works(&self) -> bool {
+        !self.task.is_finished() && (self.kit_alive)()
+    }
 }
 
 #[derive(Default)]
@@ -170,6 +183,51 @@ impl InMemoryDeliveryBackend {
         while state.dead_letter.len() > self.shared.options.max_dead_letter_size {
             state.dead_letter.pop_front();
         }
+    }
+
+    fn worker(&self) -> MutexGuard<'_, Option<Worker>> {
+        self.shared
+            .worker
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Queues `items` again, unclaimed, their retries not counted, as
+    /// Python's close queues them; one the full queue has no room for is
+    /// dead-lettered.
+    fn queue_again(&self, state: &mut State, items: impl IntoIterator<Item = DeliveryItem>) {
+        for mut item in items {
+            item.status = DeliveryItemStatus::Pending;
+            item.worker_id = None;
+            if state.queue.len() < self.shared.options.max_queue_size {
+                state.queue.push_back(item);
+            } else {
+                item.status = DeliveryItemStatus::DeadLetter;
+                item.error = Some("queue full at shutdown".to_owned());
+                tracing::warn!(target: "roomkit::delivery", item = %item.id, "dead-lettered at shutdown: the queue is full");
+                self.bury(state, item);
+            }
+        }
+    }
+
+    /// Queues again the items this backend's own worker claimed, once it
+    /// stopped.
+    fn queue_held_again(&self) {
+        let mut state = self.state();
+        let own = Some(self.shared.worker_id.as_str());
+        let held: Vec<String> = state
+            .in_flight
+            .iter()
+            .filter(|(_, item)| item.worker_id.as_deref() == own)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let items: Vec<_> = held
+            .iter()
+            .filter_map(|id| state.in_flight.remove(id))
+            .collect();
+        self.queue_again(&mut state, items);
+        drop(state);
+        self.shared.queued.notify_waiters();
     }
 
     /// Claims `item` for `worker_id`.
@@ -331,13 +389,22 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
 
     fn start(&self, kit: RoomKit<S>) -> Answer<'_, ()> {
         Box::pin(async move {
-            let mut worker = self
-                .shared
-                .worker
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            // A worker that ended, its kit gone, is none.
-            if worker.as_ref().is_some_and(|worker| !worker.is_finished()) {
+            let stale = {
+                let mut worker = self.worker();
+                if worker.as_ref().is_some_and(Worker::works) {
+                    return Ok(());
+                }
+                worker.take()
+            };
+            if let Some(stale) = stale {
+                // Its kit gone: stopped, and the items it claimed queued
+                // again, as a close queues them.
+                stale.task.abort();
+                drop(stale.task.await);
+                self.queue_held_again();
+            }
+            let mut worker = self.worker();
+            if worker.is_some() {
                 return Ok(());
             }
             let backend: Arc<dyn DeliveryBackend<S>> = Arc::new(self.clone());
@@ -347,9 +414,13 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
                 poll_timeout: Duration::from_secs(2),
             };
             let kit = kit.downgrade();
-            *worker = Some(tokio::spawn(async move {
-                run_for(backend, kit, &worker_id, options).await;
-            }));
+            let watched = kit.clone();
+            *worker = Some(Worker {
+                task: tokio::spawn(async move {
+                    run_for(backend, kit, &worker_id, options).await;
+                }),
+                kit_alive: Box::new(move || watched.alive()),
+            });
             tracing::info!(target: "roomkit::delivery", worker = %self.shared.worker_id, "in-memory delivery worker started");
             Ok(())
         })
@@ -357,15 +428,10 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
 
     fn close(&self) -> Answer<'_, ()> {
         Box::pin(async move {
-            let worker = self
-                .shared
-                .worker
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take();
+            let worker = self.worker().take();
             if let Some(worker) = worker {
-                worker.abort();
-                drop(worker.await);
+                worker.task.abort();
+                drop(worker.task.await);
             }
             let mut state = self.state();
             let delayed: Vec<_> = state.delayed.drain().map(|(_, entry)| entry).collect();
@@ -374,18 +440,7 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
                 timer.abort();
                 item
             });
-            for mut item in in_flight.into_iter().chain(waiting) {
-                item.status = DeliveryItemStatus::Pending;
-                item.worker_id = None;
-                if state.queue.len() < self.shared.options.max_queue_size {
-                    state.queue.push_back(item);
-                } else {
-                    item.status = DeliveryItemStatus::DeadLetter;
-                    item.error = Some("queue full at shutdown".to_owned());
-                    tracing::warn!(target: "roomkit::delivery", item = %item.id, "dead-lettered at shutdown: the queue is full");
-                    self.bury(&mut state, item);
-                }
-            }
+            self.queue_again(&mut state, in_flight.into_iter().chain(waiting));
             drop(state);
             // A dequeue waiting on another worker reads them now.
             self.shared.queued.notify_waiters();

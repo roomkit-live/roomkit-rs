@@ -88,4 +88,9 @@ impl<S> WeakRoomKit<S> {
     pub fn upgrade(&self) -> Option<RoomKit<S>> {
         self.inner.upgrade().map(|inner| RoomKit { inner })
     }
+
+    /// Whether any [`RoomKit`] clone of it lives, read without holding it.
+    pub(crate) fn alive(&self) -> bool {
+        self.inner.strong_count() > 0
+    }
 }

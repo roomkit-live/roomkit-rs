@@ -53,8 +53,8 @@ pub struct DeliverOptions<S = InMemoryStore> {
     /// delivery naming one is refused.
     pub session_id: Option<String>,
     /// Python `chain_depth=0`: the chain the content continues (RFC §8.3);
-    /// made within a turn or an ASYNC hook's body, at least that work's,
-    /// queued as executed at once.
+    /// made within a turn, a tool call or an ASYNC hook's body, at least
+    /// that work's, queued as executed at once.
     pub chain_depth: u32,
     /// Python `instruction=False`: the content is the application's
     /// direction to the agents it addresses, an `INSTRUCTION` never stored
@@ -194,9 +194,9 @@ impl<S: ConversationStore> RoomKit<S> {
         let strategy = strategy
             .or_else(|| self.inner.delivery_strategy.clone())
             .unwrap_or_else(|| Arc::new(Immediate));
-        // Made within a turn or an ASYNC hook's body, the content continues
-        // at least that work's chain (RFC §8.3), when it runs here as when a
-        // worker runs it later, outside the work.
+        // Made within a turn, a tool call or an ASYNC hook's body, the content
+        // continues at least that work's chain (RFC §8.3), when it runs here
+        // as when a worker runs it later, outside the work.
         let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
         let chain_depth = chain_depth.max(floor);
         let mut item = DeliveryItem {
