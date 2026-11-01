@@ -483,6 +483,7 @@ impl Sim {
                 room_id,
                 organization_id,
                 message,
+                ..
             } => Inbound::new(
                 config,
                 InboundTarget::Room(room_id),

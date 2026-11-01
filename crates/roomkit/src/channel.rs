@@ -173,6 +173,8 @@ pub trait Channel: Send + Sync + 'static {
     }
 
     /// `address` in the channel's form (RFC §5.7), as written by default.
+    /// The kit reads every inbound sender through it before routing (RFC
+    /// §10.1 step 1), and the correspondent an attach names.
     fn normalize_address(&self, address: &str) -> String {
         address.to_owned()
     }
@@ -191,7 +193,7 @@ pub trait Channel: Send + Sync + 'static {
     }
 
     /// The binding metadata naming `address` as the channel's recipient:
-    /// none by default.
+    /// none by default. An attach writes a binding's recipient by it.
     fn recipient_metadata(&self, _address: &str) -> BTreeMap<String, String> {
         BTreeMap::new()
     }
@@ -203,6 +205,8 @@ pub trait Channel: Send + Sync + 'static {
     }
 
     /// The binding metadata a reply to `message` goes by: none by default.
+    /// The kit records it on the binding of a routed sender, where the
+    /// binding holds no value (RFC §10.1 step 2).
     fn reply_metadata(&self, _message: &InboundMessage) -> BTreeMap<String, String> {
         BTreeMap::new()
     }
@@ -222,7 +226,8 @@ pub trait Channel: Send + Sync + 'static {
 
     /// Whether it takes one in `room_id`: as
     /// [`supports_streaming_delivery`](Channel::supports_streaming_delivery)
-    /// says by default.
+    /// says by default. The kit asks it, for a channel that streams, as a
+    /// response streams in the room.
     fn supports_streaming_delivery_for(&self, _room_id: &RoomId) -> bool {
         self.supports_streaming_delivery()
     }
@@ -422,6 +427,14 @@ pub(crate) trait DynChannel: Send + Sync {
 
     fn recipient_address(&self, binding: &ChannelBinding) -> Option<String>;
 
+    fn recipient_metadata(&self, address: &str) -> BTreeMap<String, String>;
+
+    fn conversation_address(&self, message: &InboundMessage) -> String;
+
+    fn reply_metadata(&self, message: &InboundMessage) -> BTreeMap<String, String>;
+
+    fn supports_streaming_delivery_for(&self, room_id: &RoomId) -> bool;
+
     fn handle_inbound(
         &self,
         message: InboundMessage,
@@ -460,6 +473,22 @@ impl<C: Channel> DynChannel for C {
 
     fn recipient_address(&self, binding: &ChannelBinding) -> Option<String> {
         Channel::recipient_address(self, binding)
+    }
+
+    fn recipient_metadata(&self, address: &str) -> BTreeMap<String, String> {
+        Channel::recipient_metadata(self, address)
+    }
+
+    fn conversation_address(&self, message: &InboundMessage) -> String {
+        Channel::conversation_address(self, message)
+    }
+
+    fn reply_metadata(&self, message: &InboundMessage) -> BTreeMap<String, String> {
+        Channel::reply_metadata(self, message)
+    }
+
+    fn supports_streaming_delivery_for(&self, room_id: &RoomId) -> bool {
+        Channel::supports_streaming_delivery_for(self, room_id)
     }
 
     fn handle_inbound(

@@ -4,7 +4,7 @@
 
 use super::arrival::{self, Admitted, Arrival};
 use super::deadline::{self, Stopped};
-use super::{Call, InboundTarget, Machine, Stage, result};
+use super::{Call, InboundTarget, Machine, MessageAnswers, Stage, result};
 use crate::model::InboundMessage;
 use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, Outcome};
@@ -23,7 +23,8 @@ impl Machine {
                 target,
                 organization_id,
                 message,
-            } => self.begin_message(cx, target, organization_id, *message),
+                answers,
+            } => self.begin_message(cx, target, organization_id, *message, answers.map(|a| *a)),
             Call::Direct {
                 room_id,
                 organization_id,
@@ -48,6 +49,7 @@ impl Machine {
         target: InboundTarget,
         organization_id: Option<String>,
         message: InboundMessage,
+        answers: Option<MessageAnswers>,
     ) {
         self.call.channel_id = Some(message.channel_id.clone());
         let draw = self.cascade.drawn_on();
@@ -59,6 +61,7 @@ impl Machine {
         let charge = self.cascade.take_from_delivery();
         let mut arrival = Box::new(
             Arrival::new(target, organization_id, channel, message, self.call.bound)
+                .answered(answers)
                 .charging(charge),
         );
         arrival.start(cx);

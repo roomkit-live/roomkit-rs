@@ -18,6 +18,7 @@
 //! - `shutdown`: the kit's one shutdown, which every close joins;
 //! - `weak`: the kit held without keeping it alive.
 
+mod addresses;
 mod background;
 mod bindings;
 mod engine;
@@ -371,6 +372,7 @@ impl<S: ConversationStore> RoomKit<S> {
         // before anything is read, as Python's model refuses it when built,
         // and one kept is written as its constructor writes it.
         message.content.check()?;
+        let answers = self.inner.answer(&mut message);
         let ProcessInboundOptions {
             room_id,
             defer_delivery,
@@ -381,16 +383,18 @@ impl<S: ConversationStore> RoomKit<S> {
                 room_id,
                 organization_id,
                 message: Box::new(message),
+                answers: answers.map(Box::new),
             };
             self.enter(entry, PROCESS_INBOUND, defer_delivery).await?
         } else {
             context::as_deep_as_its_turn(&mut message.chain_depth);
-            let routed = Inbound::new(
-                self.config(),
-                InboundTarget::Routed,
-                organization_id,
-                message,
-            );
+            let target = InboundTarget::Routed;
+            let routed = match answers {
+                Some(answers) => {
+                    Inbound::answered(self.config(), target, organization_id, message, answers)
+                }
+                None => Inbound::new(self.config(), target, organization_id, message),
+            };
             let ran =
                 driver::run_inbound(&self.inner, PROCESS_INBOUND, None, routed, defer_delivery)
                     .await;

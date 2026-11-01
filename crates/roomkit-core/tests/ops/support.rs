@@ -1103,6 +1103,9 @@ impl Sim {
             Request::Channel(ChannelRequest::ReadStream {
                 responder, answers, ..
             }) => format!("read_stream {} <- {}", responder.channel_id, answers.id),
+            Request::Channel(ChannelRequest::StreamsIn { room_id, .. }) => {
+                format!("streams_in {room_id}")
+            }
             Request::Hook(HookRequest::RunHook { hook, .. }) => {
                 format!("hook {}", self.config.hooks.get(*hook).unwrap().name)
             }
@@ -1159,6 +1162,10 @@ impl Sim {
             // No scripted channel streams: a stream read hands back no row.
             Request::Channel(ChannelRequest::ReadStream { .. }) => {
                 Outcome::Channel(ChannelOutcome::Output(Box::default()))
+            }
+            // A channel that declares it streams streams in every room.
+            Request::Channel(ChannelRequest::StreamsIn { channel_ids, .. }) => {
+                Outcome::Channel(ChannelOutcome::StreamsIn(channel_ids))
             }
             Request::Hook(HookRequest::RunHook {
                 hook,

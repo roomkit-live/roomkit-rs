@@ -7,7 +7,7 @@ use super::{
     Outcome, ProtocolError, Request, StoreOutcome, StoreRequest,
 };
 use crate::model::{
-    ChannelOutput, DeliveryError, ErrorRecord, Identity, RoomContext, RoomEvent, RoomId,
+    ChannelId, ChannelOutput, DeliveryError, ErrorRecord, Identity, RoomContext, RoomEvent, RoomId,
 };
 use crate::rules::hook_chain::HookOutcome;
 
@@ -37,6 +37,7 @@ pub(crate) enum RequestKind {
     HandleInbound,
     /// A turn or a delivery: `on_event()` or `deliver()`.
     ChannelCall,
+    StreamsIn,
     RunHook,
     RunObservers,
     Route,
@@ -53,6 +54,7 @@ impl Request {
                 | ChannelRequest::Deliver { .. }
                 | ChannelRequest::ReadStream { .. },
             ) => RequestKind::ChannelCall,
+            Self::Channel(ChannelRequest::StreamsIn { .. }) => RequestKind::StreamsIn,
             Self::Hook(HookRequest::RunHook { .. }) => RequestKind::RunHook,
             Self::Hook(HookRequest::RunObservers { .. }) => RequestKind::RunObservers,
             Self::Route { .. } => RequestKind::Route,
@@ -131,6 +133,7 @@ impl RequestKind {
             Self::ResolveIdentity => "Resolved",
             Self::HandleInbound => "Parsed",
             Self::ChannelCall => "Output",
+            Self::StreamsIn => "StreamsIn",
             Self::RunHook => "Ran",
             Self::RunObservers => "Observed",
             Self::Route => "Routed",
@@ -180,6 +183,7 @@ impl RequestKind {
                         | ChannelOutcome::ProviderDelivery(_)
                 )
             ),
+            Self::StreamsIn => matches!(outcome, Outcome::Channel(ChannelOutcome::StreamsIn(_))),
             Self::RunHook => matches!(outcome, Outcome::Hook(HookAnswer::Ran(_))),
             Self::RunObservers => matches!(outcome, Outcome::Hook(HookAnswer::Observed)),
             Self::Route => matches!(outcome, Outcome::Routed(_)),
@@ -371,6 +375,14 @@ impl Outcome {
         }
     }
 
+    /// The channels that take a streamed response in the room asked.
+    pub(crate) fn into_streams_in(self) -> Result<Vec<ChannelId>, ErrorRecord> {
+        match self {
+            Self::Channel(ChannelOutcome::StreamsIn(channel_ids)) => Ok(channel_ids),
+            other => Err(other.into_failure()),
+        }
+    }
+
     /// The identity an address resolved to, if any.
     pub(crate) fn into_resolved(self) -> Result<Option<Identity>, ErrorRecord> {
         match self {
@@ -449,6 +461,7 @@ impl Outcome {
             Self::Channel(ChannelOutcome::Output(_)) => "Output",
             Self::Channel(ChannelOutcome::Streamed(_)) => "Streamed",
             Self::Channel(ChannelOutcome::ProviderDelivery(_)) => "ProviderDelivery",
+            Self::Channel(ChannelOutcome::StreamsIn(_)) => "StreamsIn",
             Self::Hook(HookAnswer::Ran(_)) => "Ran",
             Self::Hook(HookAnswer::Observed) => "Observed",
             Self::Routed(_) => "Routed",

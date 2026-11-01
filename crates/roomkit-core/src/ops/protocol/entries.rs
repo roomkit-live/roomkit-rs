@@ -14,6 +14,7 @@
 
 use super::{InboundError, InboundResult};
 use crate::model::{DirectEvent, InboundMessage, Post, RoomEvent, RoomId};
+use crate::ops::inbound::MessageAnswers;
 
 /// Identifies an adopted entry within its operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -42,6 +43,9 @@ pub enum Entry {
         organization_id: Option<String>,
         /// The message.
         message: Box<InboundMessage>,
+        /// What its channel answered of it as it entered (RFC §5.7,
+        /// §10.4); its channel's declaration answers when `None`.
+        answers: Option<Box<MessageAnswers>>,
     },
     /// `send_event(room_id, ...)` (RFC §10.5), for a caller acting for
     /// `organization_id` (RFC §17.2, gap G-069).

@@ -1,7 +1,7 @@
 //! The scripted parts of a scenario: gates, reactions, channels and hooks
 //! (roomkit-specs `conformance/README.md`, "Scripted channels", "Scripted
 //! hooks"), built on the tokio runtime.
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
@@ -9,7 +9,7 @@ use std::time::Duration;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, HookResult, InboundMessage, RoomContext, RoomEvent,
+    ChannelOutput, ChannelType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
 };
 use roomkit::{
     Channel, ChannelError, DeliveryStream, HookError, SessionStartedEvent, StreamItem,
@@ -200,6 +200,10 @@ pub(crate) struct ScriptedChannel {
     on_event: Reactions,
     deliver: Reactions,
     deliver_stream: Reactions,
+    /// What its own address methods answer: the defaults when `None`.
+    addresses: Option<Value>,
+    /// The rooms it streams in: every room when `None`.
+    streams_in: Option<Vec<String>>,
 }
 
 impl ScriptedChannel {
@@ -244,7 +248,20 @@ impl ScriptedChannel {
             on_event: Reactions::new(spec.get("on_event")),
             deliver: Reactions::new(spec.get("deliver")),
             deliver_stream: Reactions::new(spec.get("deliver_stream")),
+            addresses: spec.get("addresses").cloned(),
+            streams_in: spec
+                .get("streams_in")
+                .map(|rooms| serde_json::from_value(rooms.clone()))
+                .transpose()
+                .map_err(|e| e.to_string())?,
         })
+    }
+
+    /// The recipient key its own reply and recipient methods write under,
+    /// when the scenario gives its address methods.
+    fn reply_key(&self) -> Option<&str> {
+        self.addresses.as_ref()?;
+        self.declaration.recipient_key.as_deref()
     }
 
     fn source(&self) -> Value {
@@ -341,6 +358,55 @@ impl Channel for ScriptedChannel {
 
     fn supports_streaming_delivery(&self) -> bool {
         self.declaration.supports_streaming_delivery
+    }
+
+    fn supports_streaming_delivery_for(&self, room_id: &RoomId) -> bool {
+        match &self.streams_in {
+            Some(rooms) => {
+                self.declaration.supports_streaming_delivery
+                    && rooms.iter().any(|room| room == room_id.as_str())
+            }
+            None => self.declaration.supports_streaming_delivery,
+        }
+    }
+
+    fn normalize_address(&self, address: &str) -> String {
+        self.addresses
+            .as_ref()
+            .and_then(|addresses| addresses["normalizes"].get(address))
+            .and_then(Value::as_str)
+            .unwrap_or(address)
+            .to_owned()
+    }
+
+    fn conversation_address(&self, message: &InboundMessage) -> String {
+        let key = self
+            .addresses
+            .as_ref()
+            .and_then(|addresses| addresses["conversation_key"].as_str());
+        key.and_then(|key| message.metadata.get(key))
+            .and_then(Value::as_str)
+            .filter(|chat| !chat.trim().is_empty())
+            .map_or_else(|| message.sender_id.clone(), str::to_owned)
+    }
+
+    fn reply_metadata(&self, message: &InboundMessage) -> BTreeMap<String, String> {
+        self.reply_key()
+            .map(|key| (key.to_owned(), self.conversation_address(message)))
+            .into_iter()
+            .collect()
+    }
+
+    fn recipient_metadata(&self, address: &str) -> BTreeMap<String, String> {
+        self.reply_key()
+            .map(|key| (key.to_owned(), address.to_owned()))
+            .into_iter()
+            .collect()
+    }
+
+    fn recipient_address(&self, binding: &ChannelBinding) -> Option<String> {
+        let held = binding.metadata.get(self.reply_key()?)?.as_str()?;
+        (!held.trim().is_empty()).then(|| self.normalize_address(held))
     }
 
     fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {

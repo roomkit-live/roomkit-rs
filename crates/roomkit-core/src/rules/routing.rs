@@ -34,6 +34,7 @@
 //! `paused_room_takes`, the tests of the strategy's steps 1 and 3.
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
 use serde_json::Value;
 
@@ -56,6 +57,10 @@ pub struct Sender {
     /// The identity the store resolves the address to (RFC §14.1
     /// `resolve_identity`), in the caller's organization.
     pub identity_id: Option<IdentityId>,
+    /// The binding metadata that makes a room reply where the message came
+    /// from, which the record of the sender writes where the binding holds
+    /// no value (RFC §5.7, §10.1 step 2): the channel's `reply_metadata`.
+    pub reply_metadata: BTreeMap<String, String>,
 }
 
 impl Sender {
@@ -653,9 +658,9 @@ pub(crate) fn correspondent(binding: &ChannelBinding, form: &AddressForm) -> Opt
 /// names someone else, [`Recording::NotARecipient`] when it names no
 /// participant and holds a value under its recipient key that is not a
 /// recipient; otherwise the sender's address as its correspondent where it
-/// names none, and on a transport as its recipient where it holds no value
-/// under the key, a value that is not a recipient kept, on a binding
-/// naming the sender too. The framework's own sender, and a message with
+/// names none, and on a transport the sender's reply metadata (the
+/// channel's `reply_metadata`) under each key it holds no value under, a
+/// value that is not a recipient kept, on a binding naming the sender too. The framework's own sender, and a message with
 /// no address, record no one. A binding naming a participant who is the
 /// sender names them.
 pub(crate) fn recording(
@@ -682,13 +687,16 @@ pub(crate) fn recording(
     if binding.participant_id.is_none() {
         update.participant_id = Some(ParticipantId::new(address.clone()).ok());
     }
-    // Only where the binding holds no value: a value that is not a
-    // recipient is kept, as a recipient is (RFC §5.7).
+    // On a transport, where a reply goes, under each key the binding holds
+    // no value under: a value that is not a recipient is kept, as a
+    // recipient is (RFC §5.7).
     let addressed = binding.category == ChannelCategory::Transport;
-    if let (true, Some(key), Held::Nothing) = (addressed, &form.recipient_key, form.held(binding)) {
-        update
-            .metadata
-            .insert(key.clone(), Value::String(address.clone()));
+    for (key, value) in sender.reply_metadata.iter().filter(|_| addressed) {
+        if matches!(addresses::held(binding.metadata.get(key)), Held::Nothing) {
+            update
+                .metadata
+                .insert(key.clone(), Value::String(value.clone()));
+        }
     }
     if update.is_empty() {
         Recording::Kept
@@ -746,6 +754,21 @@ mod tests {
         }
     }
 
+    /// `sender` on an SMS channel, which replies to its senders under its
+    /// recipient key, as its declaration answers (`MessageAnswers`).
+    fn sms_sender(sender: &str) -> Sender {
+        let address = routing_address(Addressing::PhoneNumber, sender, &Metadata::new(), None);
+        let reply_metadata = address
+            .iter()
+            .map(|address| (PHONE_NUMBER.to_owned(), address.clone()))
+            .collect();
+        Sender {
+            address,
+            identity_id: None,
+            reply_metadata,
+        }
+    }
+
     /// A message from `sender` on the SMS channel `sms`, for a caller naming
     /// no organization.
     fn query(sender: &str) -> RouteQuery {
@@ -759,10 +782,7 @@ mod tests {
             sender_id: sender.to_owned(),
             metadata: Metadata::new(),
             organization_id: None,
-            sender: Sender {
-                address: routing_address(Addressing::PhoneNumber, sender, &Metadata::new(), None),
-                identity_id: None,
-            },
+            sender: sms_sender(sender),
             form: sms_form(),
             identity: None,
         }

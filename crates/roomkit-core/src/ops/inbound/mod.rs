@@ -61,6 +61,7 @@
 //! `deadline`).
 
 mod adoption;
+mod answers;
 mod arrival;
 mod arrival_change;
 mod cascade;
@@ -93,6 +94,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use self::adoption::Adoptions;
+pub use self::answers::MessageAnswers;
 pub use self::arrival::InboundTarget;
 use self::cascade::Trigger;
 use self::persist::SideEffects;
@@ -149,6 +151,27 @@ impl Inbound {
             target,
             organization_id,
             message: Box::new(message),
+            answers: None,
+        };
+        Self::calling(config, call)
+    }
+
+    /// [`new`](Self::new) for a message whose channel answered `answers`
+    /// of it as it entered (RFC §5.7, §10.4): the message is routed by
+    /// their conversation, and its sender recorded where its replies go by
+    /// them, where [`new`](Self::new) reads its channel's declaration.
+    pub fn answered(
+        config: Arc<KitConfig>,
+        target: InboundTarget,
+        organization_id: Option<String>,
+        message: InboundMessage,
+        answers: MessageAnswers,
+    ) -> Self {
+        let call = Call::Message {
+            target,
+            organization_id,
+            message: Box::new(message),
+            answers: Some(Box::new(answers)),
         };
         Self::calling(config, call)
     }
@@ -325,6 +348,7 @@ enum Call {
         target: InboundTarget,
         organization_id: Option<String>,
         message: Box<InboundMessage>,
+        answers: Option<Box<MessageAnswers>>,
     },
     Direct {
         room_id: RoomId,

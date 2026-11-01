@@ -37,7 +37,10 @@ const CHANNEL: &[&str] = &[
     "tools",
     "tool_policy",
     "max_tool_rounds",
+    "addresses",
+    "streams_in",
 ];
+const ADDRESSES: &[&str] = &["normalizes", "conversation_key"];
 const MODEL: &[&str] = &["rounds"];
 const MODEL_ROUND: &[&str] = &["text", "deltas", "calls", "finish_reason", "usage", "fails"];
 const MODEL_CALL: &[&str] = &["id", "name", "arguments", "cut"];
@@ -303,6 +306,12 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
         &channel["tool_policy"],
         POLICY,
         &format!("{path}.tool_policy"),
+        found,
+    );
+    optional(
+        &channel["addresses"],
+        ADDRESSES,
+        &format!("{path}.addresses"),
         found,
     );
 }

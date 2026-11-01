@@ -356,6 +356,17 @@ pub enum ChannelRequest {
         /// one per response.
         target: Option<StreamTarget>,
     },
+    /// Ask which of `channel_ids`, transports that declare they stream,
+    /// take a streamed response in `room_id` (RFC §6.1
+    /// `supports_streaming_delivery_for`): a channel may hold streaming
+    /// clients for one room and none for another. Answer
+    /// [`ChannelOutcome::StreamsIn`] with those that do.
+    StreamsIn {
+        /// The room the response is delivered in.
+        room_id: RoomId,
+        /// The channels asked, in the order the response's rows reach them.
+        channel_ids: Vec<ChannelId>,
+    },
 }
 
 /// The channel that reads a turn's response as it is written (RFC §6.1
@@ -526,6 +537,9 @@ pub enum ChannelOutcome {
     /// (RFC §5.13). An answer of [`ChannelRequest::OnEvent`] and
     /// [`ChannelRequest::Deliver`].
     ProviderDelivery(Box<ProviderResult>),
+    /// The channels of a [`ChannelRequest::StreamsIn`] that take a
+    /// streamed response in its room.
+    StreamsIn(Vec<ChannelId>),
 }
 
 /// The driver's answer to a [`HookRequest`].

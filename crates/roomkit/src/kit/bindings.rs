@@ -8,6 +8,7 @@ use roomkit_core::model::{
 use roomkit_core::ops::{AttachChannel, DetachChannel, LifecycleError, UpdateBinding};
 
 use super::RoomKit;
+use super::addresses::named_correspondent;
 use super::events::room_work;
 use super::options::{
     AttachChannelOptions, DetachChannelOptions, GetBindingOptions, GetRoomOptions,
@@ -70,6 +71,10 @@ impl<S: ConversationStore> RoomKit<S> {
         let environment = self.inner.environment();
         let organization_id = options.organization_id.clone();
         let binding = options.apply(declaration.binding(room_id.clone(), environment.now()));
+        let binding = match self.inner.channel(channel_id) {
+            Some(channel) => named_correspondent(binding, &*channel),
+            None => binding,
+        };
         let attach = AttachChannel::new(config, binding, organization_id);
         let attach = match room_work(room_id) {
             Some((draw, floor)) => attach.made_in(draw, floor),

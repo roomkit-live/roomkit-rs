@@ -52,7 +52,7 @@ use super::host_post::HostPost;
 use super::pass::{CommitPass, PassOrigin, PassReport, PassResult};
 use super::record::{RecordPass, RecordReport};
 use super::work_read::{Read, WorkRead};
-use super::{InboundError, InboundResult, Machine, result};
+use super::{InboundError, InboundResult, Machine, MessageAnswers, result};
 use crate::model::{InboundMessage, Post, RoomEvent, RoomId};
 use crate::ops::io::{Bound, Io};
 use crate::ops::protocol::{EffectId, Entry, EntryId, Outcome};
@@ -337,7 +337,11 @@ impl Machine {
                 room_id,
                 organization_id,
                 message,
-            } => self.arrive(cx, adopted, room_id, organization_id, *message),
+                answers,
+            } => {
+                let answers = answers.map(|answers| *answers);
+                self.arrive(cx, adopted, room_id, organization_id, *message, answers);
+            }
             Entry::Post {
                 room_id,
                 organization_id,
@@ -399,6 +403,7 @@ impl Machine {
         room_id: RoomId,
         organization_id: Option<String>,
         message: InboundMessage,
+        answers: Option<MessageAnswers>,
     ) {
         let pass = Draw::Pass(self.cascade.budget.clone());
         let (channel, message) = match arrival::admit(cx.config, message, Some(&pass)) {
@@ -408,7 +413,9 @@ impl Machine {
             }
             Err(error) => return self.settle_entry(cx, &adopted, Err(error)),
         };
-        let mut arrival = Box::new(Arrival::adopted(room_id, organization_id, channel, message));
+        let mut arrival = Box::new(
+            Arrival::adopted(room_id, organization_id, channel, message).answered(answers),
+        );
         within(cx, &adopted, |cx| arrival.start(cx));
         self.adopted.running.push(AdoptedRun {
             entry: adopted,

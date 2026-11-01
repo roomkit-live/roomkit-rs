@@ -323,6 +323,10 @@ pub(super) async fn channel<S: ConversationStore>(
         return Outcome::Failed(refused_once_sealed(&request));
     }
     match request {
+        ChannelRequest::StreamsIn {
+            room_id,
+            channel_ids,
+        } => streams_in(inner, &room_id, channel_ids),
         ChannelRequest::HandleInbound {
             channel_id,
             message,
@@ -476,6 +480,18 @@ pub(super) async fn route<S: ConversationStore>(
     }
 }
 
+/// Those of `channel_ids` whose channel takes a streamed response in
+/// `room_id`, as each says (RFC §6.1 `supports_streaming_delivery_for`);
+/// a channel no longer registered takes none.
+fn streams_in<S>(inner: &Inner<S>, room_id: &RoomId, channel_ids: Vec<ChannelId>) -> Outcome {
+    let streams = |channel_id: &ChannelId| {
+        inner
+            .channel(channel_id)
+            .is_some_and(|channel| channel.supports_streaming_delivery_for(room_id))
+    };
+    ChannelOutcome::StreamsIn(channel_ids.into_iter().filter(streams).collect()).into()
+}
+
 /// The refusal of `request`, a channel's call work a close spared made
 /// once the kit was sealed: a turn's, its submission or the read of its
 /// stream, its link's `backend_closed`, the turn still open as its owner
@@ -491,7 +507,8 @@ fn refused_once_sealed(request: &ChannelRequest) -> ErrorRecord {
         ChannelRequest::ReadStream { .. } => turns::closed(),
         ChannelRequest::HandleInbound { .. }
         | ChannelRequest::OnEvent { .. }
-        | ChannelRequest::Deliver { .. } => cut_by_close(),
+        | ChannelRequest::Deliver { .. }
+        | ChannelRequest::StreamsIn { .. } => cut_by_close(),
     }
 }
 

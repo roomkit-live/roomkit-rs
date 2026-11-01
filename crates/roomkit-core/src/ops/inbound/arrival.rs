@@ -25,6 +25,7 @@
 
 use std::mem;
 
+use super::answers::MessageAnswers;
 use super::charge::DeliveryCharge;
 use super::deadline::Stopped;
 use super::instructions::{self, Admission};
@@ -37,7 +38,7 @@ use crate::ops::io::Bound;
 use crate::ops::protocol::{ChannelRequest, EffectId, Outcome, Request, StoreRequest};
 use crate::ops::{ChannelConfig, Cx, KitConfig, Progress};
 use crate::rules::chain_depth::Draw;
-use crate::rules::routing::{self, RouteQuery, Sender};
+use crate::rules::routing::{RouteQuery, Sender};
 use crate::rules::{addresses, idempotency, permissions};
 
 /// How many times a message is routed before it gets a new room: once, then
@@ -200,28 +201,30 @@ impl Arrival {
         message: InboundMessage,
         bound: Bound,
     ) -> Self {
-        let address = routing::routing_address(
-            channel.addressing,
-            &message.sender_id,
-            &message.metadata,
-            channel.chat_key.as_deref(),
-        );
+        let sender = MessageAnswers::declared(&channel, &message).sender(&message);
         Self {
             target,
             bound,
             organization_id,
             message: Box::new(message),
             channel: Box::new(channel),
-            sender: Sender {
-                address,
-                identity_id: None,
-            },
+            sender,
             identity: None,
             routes: 0,
             room: None,
             charge: DeliveryCharge::new(None),
             state: State::Start,
         }
+    }
+
+    /// The same arrival, its sender named by what the message's channel
+    /// answered of it as it entered, when it did: its conversation and
+    /// where its replies go (RFC §5.7, §10.4).
+    pub(super) fn answered(mut self, answers: Option<MessageAnswers>) -> Self {
+        if let Some(answers) = answers {
+            self.sender = answers.sender(&self.message);
+        }
+        self
     }
 
     /// The same arrival, for a message the code of a delivery set in

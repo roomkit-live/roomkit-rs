@@ -218,6 +218,7 @@ impl<S: ConversationStore> DefaultInboundRoomRouter<S> {
             sender: Sender {
                 address,
                 identity_id,
+                ..Sender::default()
             },
             form,
             identity: options.identity,

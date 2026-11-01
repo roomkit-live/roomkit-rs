@@ -7,6 +7,7 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+use std::collections::BTreeMap;
 use std::future::{Future, ready};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -63,6 +64,28 @@ impl Provider {
         }
     }
 
+    /// A transport of its id, type and declared addressing, which answers
+    /// its address methods as Python's `TransportChannel` does: a chat
+    /// channel replies to its chat only, any other to its senders.
+    fn as_transport(&self) -> roomkit::TransportChannel {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: config.addressing != Addressing::Chat,
+        };
+        roomkit::TransportChannel::new(
+            config.channel_id.clone(),
+            config.channel_type.clone(),
+            roomkit::TransportChannelOptions {
+                addressing: Some(addressing),
+                country_code: config.country_code.clone(),
+                ..roomkit::TransportChannelOptions::default()
+            },
+        )
+    }
+
     /// Where it sent what, in order.
     fn sent(&self) -> Vec<(String, String)> {
         self.sent
@@ -105,15 +128,30 @@ impl Channel for Provider {
         self.declaration.supports_streaming_delivery
     }
 
+    // Its addresses as a transport of its declaration writes them, Python's
+    // `TransportChannel` (an `SMSChannel` is one).
+    fn normalize_address(&self, address: &str) -> String {
+        self.as_transport().normalize_address(address)
+    }
+
+    fn recipient_address(&self, binding: &ChannelBinding) -> Option<String> {
+        self.as_transport().recipient_address(binding)
+    }
+
+    fn recipient_metadata(&self, address: &str) -> BTreeMap<String, String> {
+        self.as_transport().recipient_metadata(address)
+    }
+
+    fn conversation_address(&self, message: &InboundMessage) -> String {
+        self.as_transport().conversation_address(message)
+    }
+
+    fn reply_metadata(&self, message: &InboundMessage) -> BTreeMap<String, String> {
+        self.as_transport().reply_metadata(message)
+    }
+
     fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
-        let config = &self.declaration;
-        let addressing = roomkit::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
+        self.as_transport().address_config()
     }
 
     fn deliver(

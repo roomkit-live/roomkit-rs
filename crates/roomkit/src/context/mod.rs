@@ -212,7 +212,9 @@ impl Work {
                 Some(answers.room_id.clone()),
                 Some(chain_depth::response_depth(answers)),
             ),
-            Request::Channel(ChannelRequest::HandleInbound { .. })
+            Request::Channel(
+                ChannelRequest::HandleInbound { .. } | ChannelRequest::StreamsIn { .. },
+            )
             | Request::Hold(_)
             | Request::Store(_)
             | Request::Hook(_)

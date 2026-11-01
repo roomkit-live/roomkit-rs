@@ -6,6 +6,7 @@
 //! caller's organization, and the participants the host stores.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+use std::collections::BTreeMap;
 use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -474,15 +475,30 @@ impl Channel for Sms {
         self.declaration.supports_streaming_delivery
     }
 
+    // Its addresses as a transport of its type writes them, Python's
+    // `TransportChannel` (an `SMSChannel` is one).
+    fn normalize_address(&self, address: &str) -> String {
+        as_transport(self).normalize_address(address)
+    }
+
+    fn recipient_address(&self, binding: &ChannelBinding) -> Option<String> {
+        as_transport(self).recipient_address(binding)
+    }
+
+    fn recipient_metadata(&self, address: &str) -> BTreeMap<String, String> {
+        as_transport(self).recipient_metadata(address)
+    }
+
+    fn conversation_address(&self, message: &InboundMessage) -> String {
+        as_transport(self).conversation_address(message)
+    }
+
+    fn reply_metadata(&self, message: &InboundMessage) -> BTreeMap<String, String> {
+        as_transport(self).reply_metadata(message)
+    }
+
     fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
-        let config = &self.declaration;
-        let addressing = roomkit::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
+        as_transport(self).address_config()
     }
 
     fn deliver(
@@ -647,4 +663,14 @@ fn every_row() -> roomkit::store::ListEventsOptions {
         }),
         ..roomkit::store::ListEventsOptions::default()
     }
+}
+
+/// A transport of `channel`'s id and type, which answers its address
+/// methods as Python's `TransportChannel` does.
+fn as_transport(channel: &impl Channel) -> roomkit::TransportChannel {
+    roomkit::TransportChannel::new(
+        channel.channel_id(),
+        channel.channel_type(),
+        roomkit::TransportChannelOptions::default(),
+    )
 }

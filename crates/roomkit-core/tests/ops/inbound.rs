@@ -1715,6 +1715,7 @@ mod a_response_visibility {
                         room_id: room_id(),
                         organization_id: None,
                         message: Box::new(answered_within("Follow-up", "ws_advisor")),
+                        answers: None,
                     })
                 }),
                 answer: Answer::Awaits(Box::new(|_| {

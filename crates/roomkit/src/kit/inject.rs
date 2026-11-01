@@ -250,12 +250,20 @@ impl<S: ConversationStore> RoomKit<S> {
                 room_id,
                 organization_id,
                 message,
-            } => Inbound::new(
-                self.config(),
-                InboundTarget::Room(room_id),
-                organization_id,
-                *message,
-            ),
+                answers,
+            } => {
+                let target = InboundTarget::Room(room_id);
+                match answers {
+                    Some(answers) => Inbound::answered(
+                        self.config(),
+                        target,
+                        organization_id,
+                        *message,
+                        *answers,
+                    ),
+                    None => Inbound::new(self.config(), target, organization_id, *message),
+                }
+            }
             Entry::Direct {
                 room_id,
                 organization_id,

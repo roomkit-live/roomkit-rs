@@ -1693,6 +1693,7 @@ mod an_arrival_from_a_delivery {
                         room_id: room_id(),
                         organization_id: None,
                         message: Box::new(Sim::message("sms", "follow-up")),
+                        answers: None,
                     })
                 }),
                 answer: Answer::Awaits(Box::new(move |called| {
@@ -1814,6 +1815,7 @@ mod a_ticket_held_for_an_adopted_entry {
                         room_id: room_id(),
                         organization_id: None,
                         message: Box::new(Sim::message("sms", "follow-up")),
+                        answers: None,
                     })
                 }),
                 answer: Answer::AtOnce(Box::new(|| {
@@ -2273,6 +2275,7 @@ mod a_call_no_operation_adopts {
                             room_id: RoomId::new("room_2").unwrap(),
                             organization_id: None,
                             message: Box::new(Sim::message("sms", "Relayed")),
+                            answers: None,
                         }
                     })
                 }),

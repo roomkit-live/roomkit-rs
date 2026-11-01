@@ -107,9 +107,13 @@ impl StreamJob {
 
 /// Where a stream's read stands.
 #[derive(Debug)]
-enum Reading {
+enum ReadStage {
     /// The room is read for the stream's target.
     Loading(EffectId),
+    /// The transports the rows reach that declare they stream are asked
+    /// whether they stream in the room (RFC §6.1
+    /// `supports_streaming_delivery_for`), the room as the read found it.
+    Asking(EffectId),
     /// The stream is read, its rows committed as they come.
     Reading(EffectId),
 }
@@ -118,7 +122,7 @@ enum Reading {
 #[derive(Debug)]
 pub(super) struct StreamRead {
     job: StreamJob,
-    state: Reading,
+    state: ReadStage,
     /// The room as the read found it.
     context: Option<Box<RoomContext>>,
     /// The streaming target's channel, when one reads the stream.
@@ -150,7 +154,7 @@ impl StreamRead {
             recent_events: cx.config.recent_events(),
         };
         Self {
-            state: Reading::Loading(cx.io.issue(request)),
+            state: ReadStage::Loading(cx.io.issue(request)),
             job,
             context: None,
             target: None,
@@ -160,13 +164,15 @@ impl StreamRead {
     /// Whether the read waits for `effect`.
     pub(super) fn awaits(&self, effect: EffectId) -> bool {
         match self.state {
-            Reading::Loading(awaited) | Reading::Reading(awaited) => awaited == effect,
+            ReadStage::Loading(awaited)
+            | ReadStage::Asking(awaited)
+            | ReadStage::Reading(awaited) => awaited == effect,
         }
     }
 
     /// Whether `effect` is the read of the stream, whose rows it takes.
     pub(super) fn reads(&self, effect: EffectId) -> bool {
-        matches!(self.state, Reading::Reading(reading) if reading == effect)
+        matches!(self.state, ReadStage::Reading(reading) if reading == effect)
     }
 
     /// Whose cascade the stream belongs to.
@@ -177,8 +183,8 @@ impl StreamRead {
     /// The effect reading the stream, once it is read.
     pub(super) fn reading(&self) -> Option<EffectId> {
         match self.state {
-            Reading::Reading(effect) => Some(effect),
-            Reading::Loading(_) => None,
+            ReadStage::Reading(effect) => Some(effect),
+            ReadStage::Loading(_) | ReadStage::Asking(_) => None,
         }
     }
 
@@ -192,16 +198,37 @@ impl StreamRead {
         cut: bool,
     ) -> Read {
         match self.state {
-            Reading::Loading(_) if cut => self.unread("its cascade's turns are cut"),
-            Reading::Loading(_) => match outcome.into_context() {
+            ReadStage::Loading(_) | ReadStage::Asking(_) if cut => {
+                self.unread("its cascade's turns are cut")
+            }
+            ReadStage::Loading(_) => match outcome.into_context() {
                 Ok(Some(context)) => {
-                    self.read(cx, budget, context);
+                    self.ask(cx, budget, context);
                     Read::Reading(Box::new(self))
                 }
                 Ok(None) => self.unread("the room is gone"),
                 Err(error) => self.unread(&error.message),
             },
-            Reading::Reading(_) => {
+            ReadStage::Asking(_) => {
+                let streaming = outcome.into_streams_in().unwrap_or_else(|error| {
+                    tracing::warn!(
+                        target: "roomkit::core::delivery",
+                        room_id = %self.job.answers.room_id,
+                        error = %error.message,
+                        "the channels could not say whether they stream in the room: \
+                         none reads the stream"
+                    );
+                    Vec::new()
+                });
+                match self.context.take() {
+                    Some(context) => {
+                        self.read(cx, budget, context, &streaming);
+                        Read::Reading(Box::new(self))
+                    }
+                    None => self.unread("the room is gone"),
+                }
+            }
+            ReadStage::Reading(_) => {
                 let output = match outcome.into_output() {
                     Ok(output) => Some(*output),
                     // A read its cascade cut reports nothing.
@@ -220,11 +247,35 @@ impl StreamRead {
         }
     }
 
-    /// Asks the driver to read the stream, with its target, the room as
-    /// `context` holds it; the calls the turn makes into a room draw on
-    /// `budget`, the cascade's, as its delivery set's do (gap G-070).
-    fn read(&mut self, cx: &mut Cx<'_>, budget: &ReentryBudget, context: Box<RoomContext>) {
-        let target = target(cx, &self.job, &context);
+    /// Asks the transports the response's rows reach that declare they
+    /// stream whether they stream in the room as `context` holds it (RFC
+    /// §6.1 `supports_streaming_delivery_for`); with none, reads the stream
+    /// at once, with no target.
+    fn ask(&mut self, cx: &mut Cx<'_>, budget: &ReentryBudget, context: Box<RoomContext>) {
+        let channel_ids = candidates(cx, &self.job, &context);
+        if channel_ids.is_empty() {
+            return self.read(cx, budget, context, &[]);
+        }
+        let request = ChannelRequest::StreamsIn {
+            room_id: self.job.answers.room_id.clone(),
+            channel_ids,
+        };
+        self.state = ReadStage::Asking(cx.io.issue(request));
+        self.context = Some(context);
+    }
+
+    /// Asks the driver to read the stream, with its target among the
+    /// `streaming` channels, the room as `context` holds it; the calls the
+    /// turn makes into a room draw on `budget`, the cascade's, as its
+    /// delivery set's do (gap G-070).
+    fn read(
+        &mut self,
+        cx: &mut Cx<'_>,
+        budget: &ReentryBudget,
+        context: Box<RoomContext>,
+        streaming: &[ChannelId],
+    ) {
+        let target = target(cx, &self.job, &context, streaming);
         self.target = target
             .as_ref()
             .map(|target| target.binding.channel_id.clone());
@@ -234,7 +285,7 @@ impl StreamRead {
             answers: Box::new(self.job.answers.clone()),
             target,
         };
-        self.state = Reading::Reading(cx.io.issue_drawing_on(request, budget));
+        self.state = ReadStage::Reading(cx.io.issue_drawing_on(request, budget));
         self.context = Some(context);
     }
 
@@ -322,18 +373,46 @@ impl StreamRead {
     }
 }
 
+/// The transports `job`'s response's rows reach in the room as `context`
+/// holds it, as a text answer from the agent plans (RFC §10.2 steps 2 and
+/// 3d), whose channels declare they stream, in plan order; none when the
+/// agent cannot write (RFC §7.5 rule 2) or is no longer bound.
+fn candidates(cx: &Cx<'_>, job: &StreamJob, context: &RoomContext) -> Vec<ChannelId> {
+    let Some(plan) = answer_plan(cx, job, context) else {
+        return Vec::new();
+    };
+    plan.transports
+        .into_iter()
+        .filter(|transport| {
+            transport.delivers
+                && cx
+                    .config
+                    .channel(&transport.binding.channel_id)
+                    .is_some_and(|declaration| declaration.supports_streaming_delivery)
+        })
+        .map(|transport| transport.binding.channel_id)
+        .collect()
+}
+
 /// The streaming target of `job`'s response in the room as `context` holds
 /// it (RFC §6.1, §12.2 step 11s): the first transport its rows reach, as a
-/// text answer from the agent plans (RFC §10.2 steps 2 and 3d), that
-/// streams; none when the agent cannot write (RFC §7.5 rule 2), when it is
-/// no longer bound, or when no such transport is bound.
-fn target(cx: &Cx<'_>, job: &StreamJob, context: &RoomContext) -> Option<StreamTarget> {
+/// text answer from the agent plans (RFC §10.2 steps 2 and 3d), among the
+/// `streaming` channels, those that stream in the room; none when the agent
+/// cannot write (RFC §7.5 rule 2), when it is no longer bound, or when no
+/// such transport is bound.
+fn target(
+    cx: &Cx<'_>,
+    job: &StreamJob,
+    context: &RoomContext,
+    streaming: &[ChannelId],
+) -> Option<StreamTarget> {
     let plan = answer_plan(cx, job, context)?;
     plan.transports.into_iter().find_map(|transport| {
-        let declaration = cx.config.channel(&transport.binding.channel_id)?;
-        (transport.delivers && declaration.supports_streaming_delivery).then(|| StreamTarget {
-            context: Box::new(permissions::context_for(&transport.binding, context)),
-            binding: transport.binding,
+        (transport.delivers && streaming.contains(&transport.binding.channel_id)).then(|| {
+            StreamTarget {
+                context: Box::new(permissions::context_for(&transport.binding, context)),
+                binding: transport.binding,
+            }
         })
     })
 }
