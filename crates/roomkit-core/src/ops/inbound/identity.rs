@@ -127,6 +127,25 @@ pub(super) fn wanted(
         && !authors::sender_identified(event, &context.participants)
 }
 
+/// `event` sent under the sender's own record when that is the record
+/// their address names on the channel and the room identified it, as a
+/// pending sender's events are sent, so every reader finds the record an
+/// advisor identified (RFC §11.2, §11.6 case 2); left as the channel named
+/// it otherwise. Step 5 skipped, the kit resolving the channel's senders.
+pub(super) fn as_the_record_named(
+    config: &KitConfig,
+    channel: &ChannelConfig,
+    event: &mut RoomEvent,
+    context: &RoomContext,
+) {
+    if !config.identity_enabled_for(&channel.channel_type) || channel.sender_is_participant {
+        return;
+    }
+    if let Some(own) = authors::own_record_identified(event, &context.participants) {
+        event.source.participant_id = Some(own);
+    }
+}
+
 impl Identification {
     /// Asks the kit's resolver who sent `message`, which its channel parsed
     /// to `event` in the room `context` holds, within the call's `bound`.
@@ -398,18 +417,17 @@ impl Identification {
         self.proceed(Some(Participation::Identified(Box::new(identity))))
     }
 
-    /// The sender is left pending with `result`: an id that is a
-    /// participant's reached through other channels only sends the event
-    /// under the sender's own record (RFC §5.5).
+    /// The sender is left pending with `result`, the event sent under the
+    /// sender's own record ([`authors::own_record_id`]), never the id the
+    /// channel gave (RFC §11.2, RMK-1138): on a channel whose senders choose
+    /// it, that id may be an identity's or another participant's, and a
+    /// pending record under an identity's id would be completed when the
+    /// identity is resolved elsewhere, its impostor then passing for an
+    /// identified sender (RFC §11.6).
     fn pending(&mut self, result: IdentityResult) -> Progress<Result<Resolved, Stopped>> {
-        if authors::names_another(&self.event, &self.context.participants) {
-            let source = &mut self.event.source;
-            let sender = source
-                .participant_id
-                .as_ref()
-                .map(ParticipantId::to_string)
-                .unwrap_or_default();
-            let own = authors::own_record_id(source.channel_id.as_str(), &sender);
+        let source = &mut self.event.source;
+        if let Some(sender) = &source.participant_id {
+            let own = authors::own_record_id(source.channel_id.as_str(), sender.as_str());
             if let Ok(own) = ParticipantId::new(own) {
                 source.participant_id = Some(own);
             }

@@ -552,11 +552,17 @@ impl Arrival {
         context: Box<RoomContext>,
         outcome: Outcome,
     ) -> Arriving {
-        let arrived = match self.on_parsed(id, context, outcome) {
+        let mut arrived = match self.on_parsed(id, context, outcome) {
             Ok(arrived) => arrived,
             Err(stopped) => return Progress::Done(Err(stopped)),
         };
         if !identity::wanted(cx.config, &self.channel, &arrived.event, &arrived.context) {
+            identity::as_the_record_named(
+                cx.config,
+                &self.channel,
+                &mut arrived.event,
+                &arrived.context,
+            );
             return Progress::Done(Ok(arrived));
         }
         let step = Identification::start(

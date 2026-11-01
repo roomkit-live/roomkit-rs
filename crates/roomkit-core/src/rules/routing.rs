@@ -46,6 +46,15 @@ use crate::model::{
     RoomStatus,
 };
 
+/// The id of the record the identity step gives a sender it leaves pending
+/// on `channel_id` (RFC §11.2): `pending-` and 16 hexadecimal digits of the
+/// SHA-256 of the channel id, U+001F and the sender id, the Python
+/// implementation's `own_record_id`. The sender's address names it on that
+/// channel, so routing finds their room by it (RFC §10.4 step 1).
+pub fn own_record_id(channel_id: &str, sender_id: &str) -> String {
+    super::authors::own_record_id(channel_id, sender_id)
+}
+
 /// Who a routed message is from, as routing names them (RFC §10.4).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Sender {
@@ -89,6 +98,23 @@ impl Sender {
         resolved || self.is(participant.id.as_str(), form)
     }
 
+    /// Whether `participant`, reached through `channel_id`, is this sender
+    /// ([`is_participant`](Self::is_participant)), or is the record of their
+    /// own the identity step left them pending under there
+    /// ([`own_record_id`], RFC §11.2), which their address names on that
+    /// channel.
+    pub(crate) fn is_participant_on(
+        &self,
+        participant: &Participant,
+        form: &AddressForm,
+        channel_id: &ChannelId,
+    ) -> bool {
+        self.is_participant(participant, form)
+            || self.address.as_deref().is_some_and(|address| {
+                participant.id.as_str() == own_record_id(channel_id.as_str(), address)
+            })
+    }
+
     /// Whether `id`, which a binding or an event of `channel_id` names in a
     /// room holding `participants`, names this sender: it is their address
     /// or their identity's id, or the id of a participant reached through
@@ -105,7 +131,7 @@ impl Sender {
             || participants.iter().any(|participant| {
                 reached_through(participant, channel_id)
                     && form.normalize(participant.id.as_str()) == form.normalize(id)
-                    && self.is_participant(participant, form)
+                    && self.is_participant_on(participant, form, channel_id)
             })
     }
 }
@@ -590,7 +616,8 @@ fn admission(
         Held::Recipient(_) | Held::Nothing => {}
     }
     let member = participants.iter().any(|participant| {
-        reached_through(participant, channel_id) && !sender.is_participant(participant, form)
+        reached_through(participant, channel_id)
+            && !sender.is_participant_on(participant, form, channel_id)
     });
     if member {
         return Err(Refusal::MemberJoined);
@@ -717,7 +744,8 @@ fn joined(
     participants: &[Participant],
 ) -> bool {
     participants.iter().any(|participant| {
-        reached_through(participant, channel_id) && sender.is_participant(participant, form)
+        reached_through(participant, channel_id)
+            && sender.is_participant_on(participant, form, channel_id)
     })
 }
 

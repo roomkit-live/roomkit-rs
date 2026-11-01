@@ -4,16 +4,18 @@
 //! settings, a channel's declaration, a resolver that fails, and the Python
 //! tests a scenario stands for until the copy is synced.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit::identity::{IdentityFuture, IdentityResolver, MockIdentityResolver};
+use roomkit::identity::{
+    IdentityFuture, IdentityResolver, MockIdentityResolver, MockIdentityResolverOptions,
+};
 use roomkit::model::{
-    ChannelId, ChannelType, EventType, IdentificationStatus, IdentityResult, InboundMessage,
-    RoomContext, RoomEvent, RoomId, TextContent,
+    ChannelId, ChannelType, EventType, IdentificationStatus, Identity, IdentityId, IdentityResult,
+    InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::store::ListEventsOptions;
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
@@ -243,5 +245,80 @@ async fn unknown_hook_fires() {
             fired.load(Ordering::SeqCst)
         ),
         (true, Some("Unknown sender"), true)
+    );
+}
+
+/// RFC §11.2, RMK-1138, as the conformance scenario
+/// `identity/a-pending-sender-cannot-take-an-identity-s-record` says it: a
+/// WebSocket sender writing as Alice's identity id is left pending under a
+/// record of its own, so Alice identified on SMS gets hers, and the
+/// impostor's next message is resolved again and never passes for her.
+#[tokio::test]
+async fn a_pending_sender_cannot_take_an_identity_s_record() {
+    let mut alice = Identity::new(IdentityId::new("alice-id").unwrap());
+    alice.display_name = Some("Alice".to_owned());
+    let resolver = MockIdentityResolver::new(MockIdentityResolverOptions {
+        mapping: BTreeMap::from([("+15551234567".to_owned(), alice.clone())]),
+        ambiguous: BTreeMap::from([("alice-id".to_owned(), vec![alice])]),
+        ..MockIdentityResolverOptions::default()
+    });
+    let kit = RoomKit::new(RoomKitOptions {
+        identity_resolver: Some(Arc::new(resolver)),
+        ..RoomKitOptions::default()
+    });
+    let room = RoomId::new("room-1").unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..CreateRoomOptions::default()
+    })
+    .await
+    .unwrap();
+    for (id, channel_type) in [("sms", ChannelType::SMS), ("ws", ChannelType::WEBSOCKET)] {
+        let channel = ChannelId::new(id).unwrap();
+        kit.register_channel(RecordingTransport::new(
+            channel.clone(),
+            channel_type,
+            RecordingTransportOptions::default(),
+        ))
+        .unwrap();
+        kit.attach_channel(&room, &channel, AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let mut senders = Vec::new();
+    for (channel, sender, body) in [
+        ("ws", "alice-id", "squat"),
+        ("sms", "+15551234567", "real alice"),
+        ("ws", "alice-id", "spoof"),
+    ] {
+        let message = InboundMessage::new(
+            ChannelId::new(channel).unwrap(),
+            sender,
+            TextContent::new(body),
+        );
+        let options = ProcessInboundOptions {
+            room_id: Some(room.clone()),
+            ..ProcessInboundOptions::default()
+        };
+        let event = kit
+            .process_inbound(message, options)
+            .await
+            .unwrap()
+            .event
+            .unwrap();
+        senders.push((
+            event.source.participant_id.map(|id| id.to_string()),
+            event.metadata.contains_key("author"),
+        ));
+    }
+    kit.close().await.unwrap();
+    let own = Some("pending-143a1e4cb409990c".to_owned());
+    assert_eq!(
+        senders,
+        vec![
+            (own.clone(), false),
+            (Some("alice-id".to_owned()), true),
+            (own, false),
+        ]
     );
 }

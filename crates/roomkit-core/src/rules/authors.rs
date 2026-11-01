@@ -22,7 +22,8 @@ use sha2::{Digest, Sha256};
 
 use super::lookalike::{person_name, skeletons};
 use crate::model::{
-    ChannelType, EventStatus, IdentificationStatus, Metadata, Participant, RoomContext, RoomEvent,
+    ChannelType, EventStatus, IdentificationStatus, Metadata, Participant, ParticipantId,
+    RoomContext, RoomEvent,
 };
 
 /// The event metadata key holding the record of its author, fixed when the
@@ -88,7 +89,7 @@ impl<'a> People<'a> {
                 .source
                 .participant_id
                 .as_ref()
-                .map(crate::model::ParticipantId::as_str),
+                .map(ParticipantId::as_str),
             event.source.channel_id.as_str(),
         )?;
         Some(self.standing_for(record))
@@ -96,9 +97,23 @@ impl<'a> People<'a> {
 
     /// The record `id` names on `channel`: the record of that id when its
     /// participant is reached through the channel, else one of the
-    /// identity's records reached through it.
+    /// identity's records reached through it, else the sender's own record
+    /// on the channel ([`own_record_id`], RFC §11.2), which their address
+    /// names there.
     fn named_on(&self, id: Option<&str>, channel: &str) -> Option<&'a Participant> {
         let id = id.filter(|id| !id.is_empty())?;
+        if let Some(record) = self.named_directly(id, channel) {
+            return Some(record);
+        }
+        self.by_id
+            .get(own_record_id(channel, id).as_str())
+            .filter(|record| reached(record, channel))
+            .copied()
+    }
+
+    /// The record of id `id`, else of identity `id`, reached through
+    /// `channel`.
+    fn named_directly(&self, id: &str, channel: &str) -> Option<&'a Participant> {
         if let Some(record) = self.by_id.get(id).filter(|record| reached(record, channel)) {
             return Some(*record);
         }
@@ -131,22 +146,30 @@ pub(crate) fn sender_identified(event: &RoomEvent, participants: &[Participant])
         .is_some_and(|record| record.identification == IdentificationStatus::Identified)
 }
 
-/// Whether `event`'s id is a participant's the room reached through other
-/// channels only (RFC §5.5): it names nobody on the event's channel, and
-/// read back on its own it would name them.
-pub(crate) fn names_another(event: &RoomEvent, participants: &[Participant]) -> bool {
-    let people = People::new(participants);
-    event
-        .source
-        .participant_id
-        .as_ref()
-        .is_some_and(|id| people.by_id.contains_key(id.as_str()) && people.named(event).is_none())
+/// The sender's own record ([`own_record_id`]) when it is the record
+/// `event`'s id names on its channel and the room identified it (RFC §11.2,
+/// §11.6 case 2): the record the event is then sent under, as a pending
+/// sender's events are. `None` for any other sender.
+pub(crate) fn own_record_identified(
+    event: &RoomEvent,
+    participants: &[Participant],
+) -> Option<ParticipantId> {
+    let sender = event.source.participant_id.as_ref()?;
+    let own = own_record_id(event.source.channel_id.as_str(), sender.as_str());
+    People::new(participants)
+        .named(event)
+        .filter(|record| record.id.as_str() == own && record.id != *sender)
+        .filter(|record| record.identification == IdentificationStatus::Identified)
+        .map(|record| record.id.clone())
 }
 
-/// The id of the record a pending sender gets of their own when their id is
-/// a participant's reached through other channels only (RFC §5.5): one per
-/// sender and channel, so their next message finds it again. The Python
-/// implementation's `own_record_id`.
+/// The id of the record the identity step gives a sender it leaves pending
+/// (RFC §11.2): `pending-` and 16 hexadecimal digits of the SHA-256 of the
+/// channel id, U+001F and the sender id. One per sender and channel, so
+/// their next message finds it again, and never the id their channel gave,
+/// which may be an identity's or a participant's reached through other
+/// channels (RFC §5.5); the sender's address names it on that channel. The
+/// Python implementation's `own_record_id`.
 pub(crate) fn own_record_id(channel_id: &str, sender_id: &str) -> String {
     format!("pending-{}", digest(channel_id, &[sender_id.to_owned()]))
 }
@@ -160,7 +183,7 @@ impl<'a> People<'a> {
                 .source
                 .participant_id
                 .as_ref()
-                .map(crate::model::ParticipantId::as_str),
+                .map(ParticipantId::as_str),
             event.source.channel_id.as_str(),
         )
     }

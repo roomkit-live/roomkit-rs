@@ -288,7 +288,16 @@ pub(crate) fn find_by_participant(
     participant_id: &str,
     options: &FindRoomIdByParticipantOptions,
 ) -> Result<Option<RoomId>, Failure> {
-    let names = sender_names(participant_id, options.identity_id.as_ref());
+    // The sender's own record too, the one the identity step left them
+    // pending under on the channel (RFC §11.2), as Python's
+    // `participant_names`.
+    let mut names = sender_names(participant_id, options.identity_id.as_ref());
+    names.push(roomkit_core::rules::routing::own_record_id(
+        channel_id.as_str(),
+        participant_id,
+    ));
+    names.sort();
+    names.dedup();
     let mut params = Vec::new();
     let mut branches = Vec::new();
     for named in ["p.id", "json_extract(p.data, '$.identity_id')"] {

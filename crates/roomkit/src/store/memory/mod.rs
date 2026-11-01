@@ -112,17 +112,20 @@ impl Record {
     }
 
     /// Whether the room holds a participant reached through `channel_id`
-    /// who is the sender, by `participant_id` or `identity_id`, as Python's
-    /// `reached_as` reads them.
+    /// who is the sender, by `participant_id`, `identity_id` or the record
+    /// of their own the identity step left them pending under there (RFC
+    /// §11.2), as Python's `reached_as` reads `participant_names`.
     fn reached(
         &self,
         channel_id: &ChannelId,
         participant_id: &str,
         identity_id: Option<&IdentityId>,
     ) -> bool {
+        let own = routing::own_record_id(channel_id.as_str(), participant_id);
         self.participants.iter().any(|participant| {
             participant.connected_via.contains(channel_id)
                 && (names_sender(participant.id.as_str(), participant_id, identity_id)
+                    || participant.id.as_str() == own
                     || participant.identity_id.as_ref().is_some_and(|identity| {
                         names_sender(identity.as_str(), participant_id, identity_id)
                     }))
