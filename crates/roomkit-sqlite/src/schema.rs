@@ -59,7 +59,7 @@ INSERT INTO event_sequences(room_id, next_index)
 
 /// How long a write waits for another connection's, as the Python
 /// implementation's connections do.
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Readies `connection`'s file: creates the schema in an empty file, repairs
 /// what a file at this version may lack, as the Python implementation does on

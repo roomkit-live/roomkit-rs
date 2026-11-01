@@ -23,8 +23,11 @@
 //! other, makes the bindings and events of its room unreadable to the
 //! Python implementation until it opens its type (RoomKit's RMK-986).
 //!
-//! One process uses a file at a time: the store holds one connection,
-//! called on tokio's blocking threads, in the write-ahead log's mode. Other
+//! One process uses a file at a time: the store holds one writer and a few
+//! read-only connections beside it, in the write-ahead log's mode, called on
+//! tokio's blocking threads; a call waits for its connection without holding
+//! a thread (RMK-1033). Python's `SQLiteStore` keeps one connection, which
+//! its GIL makes the faster shape there; what a read sees is the same. Other
 //! processes on the same file, and the distributed lock they would need
 //! (RFC §13.5), are out of scope.
 //!

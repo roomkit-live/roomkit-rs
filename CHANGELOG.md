@@ -820,6 +820,13 @@ options, `McpCommand` and `McpServer` read `McpToolProvider`.
 
 ### Fixed
 
+- **`SqliteStore` reads beside its writer** (RMK-1033): reads run on four
+  read-only connections next to the one writer, as SQLite's write-ahead log
+  allows, and a call waits for its connection asynchronously, holding no
+  thread. Under load the single connection was busy 98.6% of the time and a
+  call waited 87 ms for 0.58 ms of work, up to 179 blocking threads queued
+  on it. A read still sees every write awaited before it. Python's
+  `SQLiteStore` keeps its single connection, measured faster under its GIL.
 - **A SQLite commit no longer scans the whole search index** (RMK-1031),
   as Python's store since dac48987: an event's full-text row takes its
   event row's rowid, the one key FTS5 indexes, where each commit, edit and
