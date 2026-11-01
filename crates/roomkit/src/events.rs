@@ -5,12 +5,13 @@
 //! The core reports each event as a typed notice; the kit turns it into
 //! Python's `FrameworkEvent`, its ids at the top and the rest in `data`
 //! (`_emit_framework_event`, `helpers.py`), and runs the handlers
-//! registered for its type, in registration order. Each event's handlers
-//! run once the previous event's have ended, so they see the events in the
-//! order they were emitted; the call that emitted an event waits for its
-//! handlers before it goes on, as Python's awaits them.
+//! registered for its type, in registration order. The call that emitted an
+//! event waits for its handlers before it goes on, as Python's awaits them:
+//! a call's events reach them in its order, and a handler may call the kit,
+//! whose events it then waits for in turn; two calls' handlers run side by
+//! side, as Python's do.
 
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
 use roomkit_core::model::{ChannelId, EventId, Metadata, RoomId, Timestamp};
 use roomkit_core::ops::{Environment, FrameworkEvent as Notice, SystemEnvironment};
@@ -177,12 +178,10 @@ fn data(value: Value) -> Metadata {
 /// A handler [`RoomKit::on`](crate::RoomKit::on) registered.
 pub(crate) type Handler = Arc<dyn Fn(FrameworkEvent) -> BoxFuture<'static, ()> + Send + Sync>;
 
-/// The handlers registered for framework events, by type, and the
-/// emission whose handlers the next waits for.
+/// The handlers registered for framework events, by type.
 #[derive(Default)]
 pub(crate) struct Handlers {
     registered: RwLock<Vec<(String, Handler)>>,
-    last: Mutex<Option<watch::Receiver<bool>>>,
 }
 
 impl std::fmt::Debug for Handlers {
@@ -215,7 +214,7 @@ impl Handlers {
     }
 
     /// Runs the handlers registered for `event`'s type on a task of the
-    /// kit's, once the previous event's have ended: the end to wait for,
+    /// kit's: the end to wait for,
     /// `None` when no handler is registered for it or no task could run
     /// them (no runtime, or the kit shut down). A handler that panics is
     /// logged, and the next one runs.
@@ -241,15 +240,7 @@ impl Handlers {
             return None;
         }
         let (ended, end) = watch::channel(false);
-        let previous = self
-            .last
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .replace(end.clone());
         let running = async move {
-            if let Some(mut previous) = previous {
-                drop(previous.wait_for(|ended| *ended).await);
-            }
             for handler in handlers {
                 if let Err(panic) = unwinding(handler(event.clone())).await {
                     tracing::error!(
