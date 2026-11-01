@@ -50,6 +50,20 @@ def compare(surface: Surface, python: Python, mapping: Mapping) -> Report:
     return Report(surface, python, mapping, items, findings, uncovered, dead, moved, pending, due)
 
 
+def blocking(report: Report) -> list[str]:
+    """What fails the gate before the tag (step 5, lot 6): a finding no
+    entry covers (a Rust item, member or parameter without a mapping, a
+    Python one without its Rust side), a dead entry, a pending entry. None
+    for a report the gate passes."""
+    pending = sum(len(entries) for entries in report.pending.values())
+    counts = [
+        (len(report.uncovered), "finding no entry covers", "findings no entry covers"),
+        (len(report.dead), "dead entry", "dead entries"),
+        (pending, "pending entry", "pending entries"),
+    ]
+    return [f"{count} {one if count == 1 else many}" for count, one, many in counts if count]
+
+
 def _settle(items: dict[str, ItemResult], comparison: Comparison, mapping: Mapping) -> None:
     """Each item's status. An options struct a compared method takes stands
     for Python's parameters: it is no unmapped item."""

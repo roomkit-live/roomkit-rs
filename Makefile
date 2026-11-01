@@ -9,7 +9,7 @@ EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
 .PHONY: all fmt fmt-check clippy test test-core doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture api-sync api-check-pin api-test api-parity
 
-all: conformance-check api-check-pin api-test fmt-check clippy test test-core doc deny check-core-deps examples
+all: conformance-check api-check-pin api-test fmt-check clippy test test-core doc api-parity deny check-core-deps examples
 
 fmt:
 	$(CARGO) fmt --all
@@ -250,12 +250,14 @@ api-test:
 	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m unittest discover -s scripts/tests
 
 # The parity report (docs/steps/step-05.md, lot 0): the public surface read
-# from rustdoc's HTML, against the pinned snapshot and api/mapping.toml. It
-# exits 0 whatever it finds, and fails on an input it cannot read whole.
-# The report, the surface and the findings as JSON stay in target/api-parity.
+# from rustdoc's HTML, against the pinned snapshot and api/mapping.toml, and
+# the gate before the tag (lot 6): it fails on a finding no entry covers, a
+# dead entry or a pending entry, the report printed first, and on an input
+# it cannot read whole. The report, the surface and the findings as JSON
+# stay in target/api-parity.
 api-parity: doc
 	@mkdir -p $(API_REPORT)
 	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) scripts/rs-surface.py --doc target/doc > $(API_REPORT)/rs-surface.json
-	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) scripts/api-parity.py $(API_REPORT)/rs-surface.json \
-		--json $(API_REPORT)/report.json > $(API_REPORT)/report.txt
-	@cat $(API_REPORT)/report.txt
+	@status=0; PYTHONDONTWRITEBYTECODE=1 $(PYTHON) scripts/api-parity.py $(API_REPORT)/rs-surface.json \
+		--json $(API_REPORT)/report.json --gate > $(API_REPORT)/report.txt || status=$$?; \
+	cat $(API_REPORT)/report.txt; exit $$status

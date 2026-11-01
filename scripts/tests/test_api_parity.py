@@ -1171,6 +1171,32 @@ class Entries(unittest.TestCase):
                     parity.Mapping.from_table({"rules": RULES, **entries})
 
 
+class TheGate(unittest.TestCase):
+    """The gate before the tag (step 5, lot 6): each blocking rule fails a
+    report that breaks it, and a clean report passes."""
+
+    ITEMS = [struct("roomkit::RoomKit", methods=["pub async fn attach_channel(&self, room_id: &RoomId)"])]
+    SIGNATURES = {"roomkit.RoomKit": {"attach_channel": ["async def", "room_id"]}}
+
+    def test_a_clean_report_passes(self) -> None:
+        self.assertEqual(parity.blocking(run(self.ITEMS, self.SIGNATURES)), [])
+
+    def test_each_blocking_rule_fails_the_gate(self) -> None:
+        unmapped = struct("roomkit::Extra", methods=["pub fn new() -> Self"])
+        one_sided = {"roomkit.RoomKit": {"attach_channel": ["async def", "room_id", "category=None"]}}
+        dead = {"missing": [{"python": "roomkit.RoomKit", "members": ["gone"], "reason": "x"}]}
+        pending = {"pending": [{"python": "roomkit.RoomKit.attach_channel", "params": ["category"], "lot": 6, "reason": "x"}]}
+        cases = {
+            "an unmapped item": (run([*self.ITEMS, unmapped], self.SIGNATURES), "1 finding no entry covers"),
+            "a one-sided parameter": (run(self.ITEMS, one_sided), "1 finding no entry covers"),
+            "a dead entry": (run(self.ITEMS, self.SIGNATURES, entries=dead), "1 dead entry"),
+            "a pending entry": (run(self.ITEMS, one_sided, entries=pending), "1 pending entry"),
+        }
+        for label, (report, reason) in cases.items():
+            with self.subTest(label):
+                self.assertEqual(parity.blocking(report), [reason])
+
+
 class ThePin(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()

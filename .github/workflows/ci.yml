@@ -66,11 +66,10 @@ jobs:
       - run: make api-test
 
   api-parity:
-    name: Public API parity report
+    name: Public API parity gate
     runs-on: ubuntu-latest
-    # A report while step 5's lots remove its pending entries; lot 6 makes it
-    # a gate (docs/steps/step-05.md).
-    continue-on-error: true
+    # The gate before the tag (docs/steps/step-05.md, lot 6): a finding no
+    # entry covers, a dead entry or a pending entry fails it.
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1

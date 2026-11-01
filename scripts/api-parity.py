@@ -99,11 +99,13 @@ covers that item's own finding alone, so it goes dead once the item maps; an
 exception's `until` names the Python name whose arrival ends it, and the
 report lists it as due once the snapshot holds that name.
 
-The report exits 0 whatever it finds (step 5, lot 0); an input it cannot
-read whole (the surface, the snapshot, its fingerprint, the mapping) exits 2.
+The report exits 0 whatever it finds (step 5, lot 0), but with `--gate`,
+the gate before the tag (lot 6): it exits 1 on a finding no entry covers, a
+dead entry or a pending entry. An input it cannot read whole (the surface,
+the snapshot, its fingerprint, the mapping) exits 2.
 
 Usage: python3 scripts/api-parity.py SURFACE [--python DIR] [--mapping FILE]
-                                     [--rules-only] [--json OUT]
+                                     [--rules-only] [--json OUT] [--gate]
        python3 scripts/api-parity.py --spec NAME [--python DIR]
 """
 
@@ -119,7 +121,7 @@ from typing import TextIO
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from api_parity import ParityError  # noqa: E402
-from api_parity.cover import Report, compare  # noqa: E402
+from api_parity.cover import Report, blocking, compare  # noqa: E402
 from api_parity.mapping import Mapping, Rules, load_mapping, variant_name  # noqa: E402
 from api_parity.report import as_json, render  # noqa: E402
 from api_parity.sides import Python, Surface, fingerprint, load_python, load_surface, spec_hash  # noqa: E402
@@ -131,6 +133,7 @@ __all__ = [
     "Report",
     "Rules",
     "Surface",
+    "blocking",
     "compare",
     "fingerprint",
     "load_python",
@@ -147,6 +150,7 @@ def main(argv: list[str] | None = None, out: TextIO = sys.stdout, log: TextIO = 
     parser.add_argument("--rules-only", action="store_true", help="apply the rules, none of the entries")
     parser.add_argument("--json", type=Path, help="also write the findings as JSON there")
     parser.add_argument("--spec", metavar="NAME", help="print the py_spec of a Python name, for a [[map]] entry")
+    parser.add_argument("--gate", action="store_true", help="exit 1 on what fails the gate before the tag")
     args = parser.parse_args(argv)
     try:
         python = load_python(args.python)
@@ -164,6 +168,10 @@ def main(argv: list[str] | None = None, out: TextIO = sys.stdout, log: TextIO = 
     out.write(render(report, args.rules_only))
     if args.json:
         args.json.write_text(json.dumps(as_json(report), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    failing = blocking(report) if args.gate else []
+    if failing:
+        print(f"api-parity: the gate fails: {'; '.join(failing)}", file=log)
+        return 1
     return 0
 
 
