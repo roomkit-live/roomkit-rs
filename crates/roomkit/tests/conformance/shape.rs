@@ -20,7 +20,7 @@ const TOP: &[&str] = &[
     "expect",
 ];
 const SETUP: &[&str] = &["kit", "channels", "rooms", "hooks"];
-const KIT: &[&str] = &["max_chain_depth", "process_timeout_ms"];
+const KIT: &[&str] = &["max_chain_depth", "process_timeout_ms", "router"];
 const CHANNEL: &[&str] = &[
     "id",
     "type",
@@ -100,7 +100,9 @@ const REACTION: &[&str] = &[
     "result",
     "stop_after",
     "parsed",
+    "refuse",
 ];
+const REFUSE: &[&str] = &["error", "code", "retryable", "provider_message_id"];
 const WHEN: &[&str] = &[
     "room_id",
     "text",
@@ -344,6 +346,12 @@ fn hook_of(hook: &Value, known: &[&str], path: &str, found: &mut Vec<String>) {
 fn reaction(reaction: &Value, path: &str, found: &mut Vec<String>) {
     members(reaction, REACTION, path, found);
     optional(&reaction["when"], WHEN, &format!("{path}.when"), found);
+    optional(
+        &reaction["refuse"],
+        REFUSE,
+        &format!("{path}.refuse"),
+        found,
+    );
     optional(
         &reaction["output"],
         OUTPUT,

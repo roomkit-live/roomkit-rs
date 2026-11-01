@@ -50,8 +50,8 @@ use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
 pub(crate) use self::codec::send_event_arguments;
-pub(crate) use self::error::TurnError;
 pub(crate) use self::error::{CHANNEL_ERROR, TURN_LINK_ERROR, record_of, variant_name};
+pub(crate) use self::error::{TurnError, TurnFailure};
 pub(crate) use self::executor::HostLink;
 use self::memory::Request;
 pub(crate) use self::memory::{CarriedRequest, MemoryTurn};
@@ -226,7 +226,7 @@ impl Turns {
         event: RoomEvent,
         context: RoomContext,
         submitted: impl FnOnce(Canceller),
-    ) -> Result<Answer, ErrorRecord> {
+    ) -> Result<Answer, TurnFailure> {
         // The turn's tasks run in a unit of their own, within the call's
         // run's: a close from the turn's work spares them all (RFC
         // §12.10.4).

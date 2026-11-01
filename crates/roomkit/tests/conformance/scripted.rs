@@ -175,6 +175,25 @@ pub(crate) async fn perform(
     }
 }
 
+/// The provider's explicit refusal a reaction's `refuse` names, Python's
+/// `ProviderDeliveryError` of its `ProviderResult`.
+fn refusal(reaction: &Value) -> Option<roomkit::RoomKitError> {
+    let refuse = reaction.get("refuse")?;
+    let mut metadata = roomkit::model::Metadata::new();
+    for key in ["code", "retryable"] {
+        if let Some(value) = refuse.get(key) {
+            metadata.insert(key.to_owned(), value.clone());
+        }
+    }
+    let result = roomkit::model::ProviderResult {
+        success: false,
+        provider_message_id: refuse["provider_message_id"].as_str().map(str::to_owned),
+        error: refuse["error"].as_str().map(str::to_owned),
+        metadata,
+    };
+    Some(roomkit::RoomKitError::ProviderDelivery { result })
+}
+
 /// `event` with a parse reaction's `parsed` patch: its members replace the
 /// event's, those of its `source` the event's source's.
 fn parsed_event(event: RoomEvent, patch: &Value) -> Result<RoomEvent, ScriptedFailure> {
@@ -294,6 +313,9 @@ impl ScriptedChannel {
         };
         let scope = Scope::with_event(&room_id, event.id.as_ref());
         perform(&run, &reaction, &scope).await?;
+        if let Some(refusal) = refusal(&reaction) {
+            return Err(Box::new(refusal));
+        }
         let output = reaction.get("output").cloned().unwrap_or_default();
         let channel_id = self.declaration.channel_id.to_string();
         let responses: Vec<Value> = if respond {

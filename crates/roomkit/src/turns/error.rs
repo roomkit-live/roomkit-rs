@@ -4,7 +4,8 @@
 
 use std::error::Error;
 
-use roomkit_core::model::{ChannelId, ErrorRecord, Metadata};
+use roomkit_core::model::{ChannelId, DeliveryError, ErrorRecord, Metadata};
+use roomkit_core::ops::{ChannelOutcome, Outcome, Raised};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -170,16 +171,92 @@ pub(crate) fn stream_failure(error: &(dyn Error + Send + Sync + 'static)) -> Wir
 
 /// `error` as it crosses: a kit error under its code or its Python class's
 /// name, as a transport's failure reads (`RoomKitError::Value` as
-/// `ValueError`); a cancel as Python's `TurnLinkError`, saying `cancelled`;
+/// `ValueError`), the `code` and `retryable` it declares among its
+/// attributes, as Python's error crosses with its JSON attributes
+/// (RMK-1085); a cancel as Python's `TurnLinkError`, saying `cancelled`;
 /// any other as a channel's.
 fn failure(error: &(dyn Error + Send + Sync + 'static), cancelled: &str) -> WireError {
     match error.downcast_ref::<RoomKitError>() {
         Some(RoomKitError::Cancelled) => one(TURN_LINK_ERROR, cancelled.to_owned()),
-        Some(kit_error) => one(
-            kit_error.code().unwrap_or_else(|| kit_error.class_name()),
-            error.to_string(),
-        ),
+        Some(kit_error) => {
+            let mut crossed = one(
+                kit_error.code().unwrap_or_else(|| kit_error.class_name()),
+                error.to_string(),
+            );
+            if let (Some(code), Some(retryable)) = (kit_error.code(), kit_error.retryable()) {
+                crossed
+                    .attributes
+                    .insert(CODE.to_owned(), Value::from(code));
+                crossed
+                    .attributes
+                    .insert(RETRYABLE.to_owned(), Value::Bool(retryable));
+            }
+            crossed
+        }
         None => channel_error(error),
+    }
+}
+
+/// The attribute naming the code an error declares.
+const CODE: &str = "code";
+
+/// The attribute saying whether a retry of what an error failed may
+/// succeed.
+const RETRYABLE: &str = "retryable";
+
+/// A turn's failure as its owner reads it: its record, and, for an error
+/// that crossed declaring its code and retryability, the delivery error it
+/// declares (RMK-1085).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TurnFailure {
+    pub(crate) record: ErrorRecord,
+    pub(crate) declared: Option<DeliveryError>,
+}
+
+impl From<ErrorRecord> for TurnFailure {
+    fn from(record: ErrorRecord) -> Self {
+        Self {
+            record,
+            declared: None,
+        }
+    }
+}
+
+impl TurnFailure {
+    /// The failure of `error`, an error that crossed: what it declares
+    /// read from its `code` and `retryable`, as Python's `DeliveryResult`
+    /// reads them off the error its turn backend rebuilds.
+    pub(crate) fn crossed(error: &WireError) -> Self {
+        let declared = error
+            .attributes
+            .get(RETRYABLE)
+            .and_then(Value::as_bool)
+            .map(|retryable| DeliveryError {
+                code: error
+                    .attributes
+                    .get(CODE)
+                    .and_then(Value::as_str)
+                    .map_or_else(|| error.kind.clone(), str::to_owned),
+                message: error.message.clone(),
+                retryable,
+            });
+        Self {
+            record: to_record(error),
+            declared,
+        }
+    }
+
+    /// The core's outcome of the turn: an error declaring its delivery
+    /// error as [`ChannelOutcome::Raised`], any other as failed.
+    pub(crate) fn into_outcome(self) -> Outcome {
+        match self.declared {
+            Some(delivery) => ChannelOutcome::Raised(Box::new(Raised {
+                error: self.record,
+                delivery,
+            }))
+            .into(),
+            None => Outcome::Failed(self.record),
+        }
     }
 }
 

@@ -29,7 +29,7 @@ use crate::model::{
 };
 use crate::ops::protocol::{
     CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, EntryId, HoldOutcome,
-    HoldRequest, KIT_CLOSED, Outcome, TURN_CUT,
+    HoldRequest, KIT_CLOSED, Outcome, Raised, TURN_CUT,
 };
 use crate::ops::{Cx, Progress};
 use crate::rules::chain_depth::ReentryBudget;
@@ -363,6 +363,9 @@ impl DeliverySet {
             (Call::OnEvent, Outcome::Channel(ChannelOutcome::ProviderDelivery(result))) => {
                 self.on_event_refused(cx, index, *result);
             }
+            (Call::OnEvent, Outcome::Channel(ChannelOutcome::Raised(raised))) => {
+                self.on_event_raised(cx, index, *raised);
+            }
             (Call::Deliver, Outcome::Channel(ChannelOutcome::ProviderDelivery(result))) => {
                 self.on_delivery_refused(index, *result);
             }
@@ -547,6 +550,29 @@ impl DeliverySet {
             let message = failed.error.as_ref().map(|error| error.message.clone());
             let error = ErrorRecord::new("ProviderDeliveryError", message.unwrap_or_default());
             self.turn_failed(cx, index, &error, failed);
+        } else {
+            self.report_failure(index, failed);
+        }
+    }
+
+    /// A target's `on_event()` raised an error declaring its delivery
+    /// error, its code and retryability (RMK-1085): a failure as any
+    /// raised, its delivery result reading what the error declares, with no
+    /// provider message id or answer, as Python reads an agent's error
+    /// rebuilt across its turn backend.
+    fn on_event_raised(&mut self, cx: &mut Cx<'_>, index: usize, raised: Raised) {
+        let Some(target) = self.targets.get(index) else {
+            return;
+        };
+        if self.kind == SetKind::Injected {
+            return;
+        }
+        let failed = DeliveryResult {
+            error: Some(raised.delivery),
+            ..DeliveryResult::raised(target.binding.channel_id.clone(), &raised.error)
+        };
+        if target.role == Role::Agent {
+            self.turn_failed(cx, index, &raised.error, failed);
         } else {
             self.report_failure(index, failed);
         }

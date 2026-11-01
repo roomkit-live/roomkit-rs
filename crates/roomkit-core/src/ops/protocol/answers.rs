@@ -181,6 +181,7 @@ impl RequestKind {
                     ChannelOutcome::Output(_)
                         | ChannelOutcome::Streamed(_)
                         | ChannelOutcome::ProviderDelivery(_)
+                        | ChannelOutcome::Raised(_)
                 )
             ),
             Self::StreamsIn => matches!(outcome, Outcome::Channel(ChannelOutcome::StreamsIn(_))),
@@ -416,6 +417,7 @@ impl Outcome {
                 "ProviderDeliveryError",
                 DeliveryError::of_provider(&result).message,
             ),
+            Self::Channel(ChannelOutcome::Raised(raised)) => raised.error,
             other => {
                 debug_assert!(
                     false,
@@ -462,6 +464,7 @@ impl Outcome {
             Self::Channel(ChannelOutcome::Streamed(_)) => "Streamed",
             Self::Channel(ChannelOutcome::ProviderDelivery(_)) => "ProviderDelivery",
             Self::Channel(ChannelOutcome::StreamsIn(_)) => "StreamsIn",
+            Self::Channel(ChannelOutcome::Raised(_)) => "Raised",
             Self::Hook(HookAnswer::Ran(_)) => "Ran",
             Self::Hook(HookAnswer::Observed) => "Observed",
             Self::Routed(_) => "Routed",

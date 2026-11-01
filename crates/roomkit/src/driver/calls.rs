@@ -378,7 +378,7 @@ pub(super) async fn channel<S: ConversationStore>(
                     shared.keep_stream(effect, KeptStream { turn });
                     ChannelOutcome::Streamed(output).into()
                 }
-                Err(error) => Outcome::Failed(error),
+                Err(failure) => failure.into_outcome(),
             };
             // Its stream kept first, the turn stops being one the call
             // awaits: an abort between the two reads the stream kept, never

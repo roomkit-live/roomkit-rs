@@ -71,7 +71,7 @@ pub use protocol::{
     AfterDelivery, AnswerOf, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Decided,
     Delivered, Effect, EffectId, Entry, EntryId, HoldOutcome, HoldRequest, HookAnswer, HookRequest,
     KIT_CLOSED, LANE_CANCELLED, Next, Notice, Operation, Outcome, ProtocolError, ROW_HIDDEN,
-    ROW_WITHHELD, Request, Settled, Step, StoreOutcome, StoreRequest, StreamTarget,
+    ROW_WITHHELD, Raised, Request, Settled, Step, StoreOutcome, StoreRequest, StreamTarget,
 };
 
 use crate::model::{ErrorRecord, EventId, RoomContext, RoomEvent, RoomId};

@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use roomkit_core::model::{ChannelOutput, ErrorRecord, Metadata};
+use roomkit_core::model::{ChannelOutput, Metadata};
 use tokio::sync::{mpsc, watch};
 
 use super::{Canceller, Main, OwnerState, cancel};
@@ -13,7 +13,7 @@ use crate::channel::ChannelError;
 use crate::context::ExecutionContext;
 use crate::stream::ResponseItem;
 use crate::turns::codec::{WireLoopEnd, decode_end, decode_loop_end, decode_output, decode_start};
-use crate::turns::error::{RemoteError, TurnError, to_record};
+use crate::turns::error::{RemoteError, TurnError, TurnFailure};
 use crate::turns::lock;
 use crate::turns::pulls::PullWindow;
 use crate::turns::wire::{Control, Item};
@@ -75,7 +75,7 @@ impl OwnerTurn {
     pub(crate) async fn output(
         &mut self,
         mut cut: watch::Receiver<bool>,
-    ) -> Result<(ChannelOutput, bool), ErrorRecord> {
+    ) -> Result<(ChannelOutput, bool), TurnFailure> {
         self.wait_here();
         let mut cutting = false;
         loop {
@@ -93,14 +93,14 @@ impl OwnerTurn {
                 continue;
             }
             self.stage = Stage::Done;
-            return match next {
+            let failed = match next {
                 Some(Main::Output(output, streams)) => {
                     if streams {
                         self.stage = Stage::Stream;
                     }
-                    Ok((decode_output(output), streams))
+                    return Ok((decode_output(output), streams));
                 }
-                Some(Main::Error(error)) => Err(to_record(&error)),
+                Some(Main::Error(error)) => return Err(TurnFailure::crossed(&error)),
                 Some(Main::Failed(error)) => Err(error.to_record()),
                 Some(Main::End) if cutting => Err(TurnError::link_reason("cancelled").to_record()),
                 Some(Main::End) => Err(TurnError::new(
@@ -115,6 +115,7 @@ impl OwnerTurn {
                 .to_record()),
                 None => Err(TurnError::link_reason("backend_closed").to_record()),
             };
+            return failed.map_err(TurnFailure::from);
         }
     }
 

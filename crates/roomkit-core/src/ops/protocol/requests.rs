@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use super::EffectId;
 use crate::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ChannelType, ErrorRecord, EventId, EventUpdates,
-    Identity, InboundMessage, Metadata, Observation, ProviderResult, Room, RoomContext, RoomEvent,
-    RoomId, RoomUpdates, Task, Timestamp,
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, DeliveryError, ErrorRecord, EventId,
+    EventUpdates, Identity, InboundMessage, Metadata, Observation, ProviderResult, Room,
+    RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp,
 };
 use crate::ops::RecentEvents;
 use crate::rules::hook_chain::HookOutcome;
@@ -540,6 +540,23 @@ pub enum ChannelOutcome {
     /// The channels of a [`ChannelRequest::StreamsIn`] that take a
     /// streamed response in its room.
     StreamsIn(Vec<ChannelId>),
+    /// The call raised an error that declares how its delivery failed: its
+    /// code and whether a retry may succeed, as Python's `DeliveryResult`
+    /// reads an exception's `code` and `retryable` (RFC §5.13), an agent's
+    /// error rebuilt across the turn backend. An answer of
+    /// [`ChannelRequest::OnEvent`].
+    Raised(Box<Raised>),
+}
+
+/// An error a call raised that declares its delivery error
+/// ([`ChannelOutcome::Raised`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Raised {
+    /// The error, as the hooks and the framework events report it.
+    pub error: ErrorRecord,
+    /// The failed delivery it declares: its code, its words, whether a
+    /// retry may succeed.
+    pub delivery: DeliveryError,
 }
 
 /// The driver's answer to a [`HookRequest`].
