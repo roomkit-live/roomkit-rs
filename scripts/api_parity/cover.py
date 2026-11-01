@@ -59,10 +59,12 @@ def unwritten(mapping: Mapping, architecture: str) -> list[str]:
     of (lot 6, rule 3): an `[[exception]]` whose Rust item, Python class,
     member or parameter no row names, and a `builtins`, `literals` or
     `error_families` rule whose Rust type none does. A name counts written
-    after a backtick, `::` or `.`."""
+    after a backtick, `::` or `.`, on a table's row, a line starting `|`:
+    prose names no difference."""
+    rows = "\n".join(line for line in architecture.splitlines() if line.lstrip().startswith("|"))
 
     def written(name: str) -> bool:
-        return any(f"{mark}{name}" in architecture for mark in ("`", "::", "."))
+        return any(f"{mark}{name}" in rows for mark in ("`", "::", "."))
 
     missing = []
     for entry in mapping.of("exception"):

@@ -1206,9 +1206,14 @@ class TheGate(unittest.TestCase):
         self.assertEqual(
             (
                 parity.unwritten(mapping, "no table"),
+                parity.unwritten(mapping, "Prose names `WeakRoomKit` and `RoomId`, no row."),
                 parity.unwritten(mapping, "| a hook holding the kit | `WeakRoomKit` |\n| `str` ids | `RoomId` |"),
             ),
-            (["roomkit::WeakRoomKit", "roomkit::model::RoomId"], []),
+            (
+                ["roomkit::WeakRoomKit", "roomkit::model::RoomId"],
+                ["roomkit::WeakRoomKit", "roomkit::model::RoomId"],
+                [],
+            ),
         )
 
     def test_a_default_no_test_asserts_is_found(self) -> None:
