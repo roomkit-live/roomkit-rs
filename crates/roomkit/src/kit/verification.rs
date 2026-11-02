@@ -229,7 +229,7 @@ impl<S: ConversationStore> RoomKit<S> {
             .await?;
         let key = lock_key(&request.identity_id, request.organization_id.as_deref());
         let attempt = {
-            let _held = self.inner.verification.lock(&key).await;
+            let _held = self.lock_identity(&key).await?;
             self.attempt(request_id, secret, method).await?
         };
         let (outcome, request, state) = attempt;
@@ -273,7 +273,7 @@ impl<S: ConversationStore> RoomKit<S> {
             .await?;
         let key = lock_key(&request.identity_id, request.organization_id.as_deref());
         let (outcome, request, state) = {
-            let _held = self.inner.verification.lock(&key).await;
+            let _held = self.lock_identity(&key).await?;
             let (outcome, request, state) = self.open_request_read(request_id).await?;
             if let Some(outcome) = outcome {
                 (outcome, request, state)

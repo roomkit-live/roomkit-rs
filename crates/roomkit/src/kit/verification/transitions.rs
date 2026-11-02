@@ -3,7 +3,7 @@
 //! written, the announcements left to the calls once the lock is released.
 
 use roomkit_core::model::{
-    IdentityId, Timestamp, Verification, VerificationRequest, VerificationRequestStatus,
+    IdentityId, RoomId, Timestamp, Verification, VerificationRequest, VerificationRequestStatus,
     VerificationStatus,
 };
 use roomkit_core::rules::hook_registry::HookTrigger;
@@ -16,6 +16,7 @@ use super::state::{
 use super::{later, refused};
 use crate::error::RoomKitError;
 use crate::kit::RoomKit;
+use crate::locks::RoomGuard;
 use crate::store::{ConversationStore, GetVerificationOptions};
 
 /// An attempt's outcome, the request as it left it, and the identity's
@@ -41,7 +42,7 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Result<Option<VerificationRequest>, RoomKitError> {
         let organization = request.organization_id.as_deref();
         let key = lock_key(&request.identity_id, organization);
-        let _held = self.inner.verification.lock(&key).await;
+        let _held = self.lock_identity(&key).await?;
         let current = self
             .stored_verification(&request.identity_id, organization)
             .await?;
@@ -255,10 +256,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Result<Revoked, RoomKitError> {
         let now = self.inner.environment().now();
         let _held = self
-            .inner
-            .verification
-            .lock(&lock_key(identity_id, organization_id))
-            .await;
+            .lock_identity(&lock_key(identity_id, organization_id))
+            .await?;
         let current = self
             .stored_verification(identity_id, organization_id)
             .await?;
@@ -296,10 +295,8 @@ impl<S: ConversationStore> RoomKit<S> {
         let organization = verification.organization_id.as_deref();
         let (ended, completing) = {
             let _held = self
-                .inner
-                .verification
-                .lock(&lock_key(identity_id, organization))
-                .await;
+                .lock_identity(&lock_key(identity_id, organization))
+                .await?;
             let current = self.stored_verification(identity_id, organization).await?;
             let still_it = current.status == VerificationStatus::Verified
                 && current.expires_at == verification.expires_at;
@@ -366,6 +363,16 @@ impl<S: ConversationStore> RoomKit<S> {
             .get_verification_request(request_id)
             .await
             .map_err(|error| self.read_failed(error))
+    }
+
+    /// Waits for the lock of `key`, one identity's, from the kit's lock
+    /// manager, which serializes its rooms (RFC §13.5): an identity's
+    /// transitions are serialized wherever its rooms' are, as Python's
+    /// `self._lock_manager.locked(_lock_key(...))` (its default per process,
+    /// a lock manager shared by processes across them).
+    pub(super) async fn lock_identity(&self, key: &str) -> Result<RoomGuard<'_>, RoomKitError> {
+        let key = RoomId::new(key)?;
+        Ok(self.inner.locks.lock(&key).await)
     }
 
     /// The identity's stored verification, UNVERIFIED when it has none.

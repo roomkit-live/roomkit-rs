@@ -96,8 +96,10 @@ impl<S: ConversationStore> RoomKit<S> {
     async fn end_request_when_due(&self, request: &VerificationRequest) {
         let key = lock_key(&request.identity_id, request.organization_id.as_deref());
         let read = {
-            let _held = self.inner.verification.lock(&key).await;
-            self.open_request_read(&request.id).await
+            match self.lock_identity(&key).await {
+                Ok(_held) => self.open_request_read(&request.id).await,
+                Err(error) => Err(error),
+            }
         };
         match read {
             Ok((Some(outcome), ended, before)) => {
