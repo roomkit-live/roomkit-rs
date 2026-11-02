@@ -28,12 +28,42 @@ impl Request {
     pub(crate) fn of(context: &AiContext) -> Self {
         Self {
             system_prompt: context.system_prompt.clone(),
-            messages: context.messages.iter().map(message).collect(),
+            messages: context.messages.iter().flat_map(messages).collect(),
             tools: context.tools.clone(),
             temperature: Some(context.temperature),
             max_tokens: context.max_tokens,
         }
     }
+}
+
+/// The transcript messages `message` is: a round's tool message is one per
+/// result, each answering its call (Python's `chat_request._rendered`);
+/// any other is one.
+fn messages(message: &AiMessage) -> Vec<Message> {
+    let results: Vec<_> = match &message.content {
+        AiMessageContent::Parts(parts) => parts
+            .iter()
+            .filter_map(|part| match part {
+                AiContentPart::ToolResult(result) => Some(result),
+                AiContentPart::Text(_) | AiContentPart::Image(_) | AiContentPart::ToolCall(_) => {
+                    None
+                }
+            })
+            .collect(),
+        AiMessageContent::Text(_) => Vec::new(),
+    };
+    if results.len() < 2 {
+        return vec![self::message(message)];
+    }
+    results
+        .into_iter()
+        .map(|result| {
+            let mut written = Message::tool_result(&result.tool_call_id, &result.result);
+            written.role = Role::Tool;
+            written.metadata.clone_from(&message.metadata);
+            written
+        })
+        .collect()
 }
 
 /// `message` as the transcript writes it: its text, its images, its calls,
@@ -158,4 +188,40 @@ pub(crate) fn push_end(ready: &mut VecDeque<StreamEvent>, calls: Vec<RawCall>, d
             .map(|call| StreamEvent::ToolCall(call.into())),
     );
     ready.push_back(StreamEvent::Done(done));
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use roomkit_ai::AiToolResultPart;
+
+    use super::*;
+
+    // Python: tests/test_providers/test_chat_request.py::test_an_image_result_rides_a_user_message_after_the_tool_messages
+    // (its tool messages: one per result of the round's one message)
+    #[test]
+    fn a_round_s_results_are_a_tool_message_each() {
+        let result = |id: &str, text: &str| {
+            AiContentPart::ToolResult(AiToolResultPart::new(id, "lookup", text))
+        };
+        let context = AiContext {
+            messages: vec![AiMessage::new(
+                AiRole::Tool,
+                vec![result("c1", "found"), result("c2", "missing")],
+            )],
+            ..AiContext::default()
+        };
+        let written: Vec<(Role, Option<String>, String)> = Request::of(&context)
+            .messages
+            .into_iter()
+            .map(|message| (message.role, message.tool_call_id, message.text))
+            .collect();
+        assert_eq!(
+            written,
+            [
+                (Role::Tool, Some("c1".to_owned()), "found".to_owned()),
+                (Role::Tool, Some("c2".to_owned()), "missing".to_owned()),
+            ]
+        );
+    }
 }

@@ -216,19 +216,24 @@ fn lines(request: &AiContext) -> Vec<String> {
     request
         .messages
         .iter()
-        .map(|message| {
+        .flat_map(|message| {
             let calls: Vec<&str> = message
                 .tool_calls()
                 .into_iter()
                 .map(|call| call.id.as_str())
                 .collect();
-            match (message.role, message.tool_result()) {
-                (AiRole::Tool, Some(answers)) => {
-                    format!("result {} {}", answers.tool_call_id, message.text())
-                }
-                _ if !calls.is_empty() => format!("calls {}", calls.join(" ")),
-                (role, _) => format!("{role:?} {}", message.text()),
+            // A round's results are one message: a line each.
+            if message.role == AiRole::Tool {
+                return message
+                    .tool_results()
+                    .into_iter()
+                    .map(|answers| format!("result {} {}", answers.tool_call_id, answers.result))
+                    .collect::<Vec<_>>();
             }
+            if !calls.is_empty() {
+                return vec![format!("calls {}", calls.join(" "))];
+            }
+            vec![format!("{:?} {}", message.role, message.text())]
         })
         .collect()
 }

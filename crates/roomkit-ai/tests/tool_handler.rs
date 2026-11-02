@@ -50,7 +50,13 @@ fn results(model: &ScriptedProvider) -> Vec<String> {
         .requests()
         .iter()
         .flat_map(|request| request.messages.clone())
-        .filter_map(|message| message.tool_result().map(|result| result.result.clone()))
+        .flat_map(|message| {
+            message
+                .tool_results()
+                .into_iter()
+                .map(|result| result.result.clone())
+                .collect::<Vec<_>>()
+        })
         .collect()
 }
 

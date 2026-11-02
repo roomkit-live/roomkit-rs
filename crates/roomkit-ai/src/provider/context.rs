@@ -67,10 +67,14 @@ impl AiMessage {
     /// joined. For a test.
     #[doc(hidden)]
     pub fn text(&self) -> String {
-        match self.tool_result() {
-            Some(result) => result.result.clone(),
-            None => self.content.text(),
+        let results = self.tool_results();
+        if results.is_empty() {
+            return self.content.text();
         }
+        results
+            .iter()
+            .map(|result| result.result.as_str())
+            .collect()
     }
 
     /// The calls the message makes, in order. For a test.
@@ -86,13 +90,25 @@ impl AiMessage {
             .collect()
     }
 
-    /// The result the message carries, when it is a tool's. For a test.
+    /// The result the message carries, when it is a tool's: the first of a
+    /// round's. For a test.
     #[doc(hidden)]
     pub fn tool_result(&self) -> Option<&AiToolResultPart> {
-        self.parts().find_map(|part| match part {
-            AiContentPart::ToolResult(result) => Some(result),
-            AiContentPart::Text(_) | AiContentPart::Image(_) | AiContentPart::ToolCall(_) => None,
-        })
+        self.tool_results().into_iter().next()
+    }
+
+    /// The results the message carries, a round's in call order, when it
+    /// is a tool's. For a test.
+    #[doc(hidden)]
+    pub fn tool_results(&self) -> Vec<&AiToolResultPart> {
+        self.parts()
+            .filter_map(|part| match part {
+                AiContentPart::ToolResult(result) => Some(result),
+                AiContentPart::Text(_) | AiContentPart::Image(_) | AiContentPart::ToolCall(_) => {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// The message's parts; none for a text alone.
@@ -294,22 +310,34 @@ impl AiToolResultPart {
 
 /// `messages`, the conversation a turn reads, as its provider is handed
 /// it: a text alone, or, for a message with images, calls or a call's
-/// result, its parts; a result's tool is the one its call named.
+/// result, its parts; a result's tool is the one its call named. A round's
+/// results, one transcript message each, are one tool message holding
+/// them all, as Python's `_execute_round_tools` and `_tool_history._round`
+/// build it.
 pub(crate) fn ai_messages(messages: &[Message]) -> Vec<AiMessage> {
     let mut tools: HashMap<&str, &str> = HashMap::new();
-    messages
-        .iter()
-        .map(|message| {
-            for call in &message.tool_calls {
-                tools.insert(&call.id, &call.name);
-            }
-            AiMessage {
-                role: role(message.role),
-                content: content(message, &tools),
-                metadata: message.metadata.clone(),
-            }
-        })
-        .collect()
+    let mut read: Vec<AiMessage> = Vec::with_capacity(messages.len());
+    for message in messages {
+        for call in &message.tool_calls {
+            tools.insert(&call.id, &call.name);
+        }
+        let content = content(message, &tools);
+        if message.tool_call_id.is_some()
+            && let Some(results) = read.last_mut().filter(|last| last.role == AiRole::Tool)
+            && let (AiMessageContent::Parts(parts), AiMessageContent::Parts(more)) =
+                (&mut results.content, &content)
+        {
+            parts.extend(more.iter().cloned());
+            results.metadata.extend(message.metadata.clone());
+            continue;
+        }
+        read.push(AiMessage {
+            role: role(message.role),
+            content,
+            metadata: message.metadata.clone(),
+        });
+    }
+    read
 }
 
 fn role(role: Role) -> AiRole {

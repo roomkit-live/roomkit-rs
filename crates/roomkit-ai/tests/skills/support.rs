@@ -199,8 +199,8 @@ pub(crate) fn tool_results(model: &ScriptedProvider) -> Vec<Vec<String>> {
             request
                 .messages
                 .iter()
-                .filter(|message| message.tool_result().is_some())
-                .map(roomkit_ai::AiMessage::text)
+                .flat_map(roomkit_ai::AiMessage::tool_results)
+                .map(|result| result.result.clone())
                 .collect()
         })
         .collect()

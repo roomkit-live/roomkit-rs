@@ -98,12 +98,12 @@ fn check(requests: &[AiContext]) {
         .iter()
         .map(|message| (message.role, message.tool_calls().len()))
         .collect();
+    // A round's results are one tool message, as Python sends them.
     assert_eq!(
         roles,
         [
             (AiRole::User, 0),
             (AiRole::Assistant, 2),
-            (AiRole::Tool, 0),
             (AiRole::Tool, 0),
             (AiRole::Assistant, 1),
             (AiRole::Tool, 0),
@@ -111,9 +111,9 @@ fn check(requests: &[AiContext]) {
             (AiRole::User, 0),
         ]
     );
-    assert_eq!(second_turn.get(..6), first_turn_last_round.get(..6));
+    assert_eq!(second_turn.get(..5), first_turn_last_round.get(..5));
     assert_eq!(
-        second_turn.get(6..),
+        second_turn.get(5..),
         Some(
             &[
                 AiMessage::new(AiRole::Assistant, "Answer one."),
@@ -122,7 +122,9 @@ fn check(requests: &[AiContext]) {
         )
     );
     assert_eq!(
-        second_turn.get(3).and_then(AiMessage::tool_result),
+        second_turn
+            .get(2)
+            .and_then(|results| results.tool_results().get(1).copied()),
         Some(&AiToolResultPart {
             tool_call_id: "c2".to_owned(),
             name: "fail".to_owned(),
@@ -239,25 +241,23 @@ fn shape(request: &AiContext) -> Vec<String> {
     request
         .messages
         .iter()
-        .map(|message| match message.role {
+        .flat_map(|message| match message.role {
             AiRole::Assistant if !message.tool_calls().is_empty() => {
                 let ids: Vec<&str> = message
                     .tool_calls()
                     .into_iter()
                     .map(|call| call.id.as_str())
                     .collect();
-                format!("calls {}", ids.join(" "))
+                vec![format!("calls {}", ids.join(" "))]
             }
-            AiRole::Tool => format!(
-                "result {} {}",
-                message
-                    .tool_result()
-                    .map(|result| result.tool_call_id.as_str())
-                    .unwrap_or_default(),
-                message.text()
-            ),
-            AiRole::User => format!("user {}", message.text()),
-            AiRole::Assistant | AiRole::System => format!("assistant {}", message.text()),
+            // A round's results are one message: a line each.
+            AiRole::Tool => message
+                .tool_results()
+                .into_iter()
+                .map(|result| format!("result {} {}", result.tool_call_id, result.result))
+                .collect(),
+            AiRole::User => vec![format!("user {}", message.text())],
+            AiRole::Assistant | AiRole::System => vec![format!("assistant {}", message.text())],
         })
         .collect()
 }

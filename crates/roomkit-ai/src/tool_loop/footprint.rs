@@ -18,9 +18,6 @@ const CUT_NOTE: &str = "[Cut answers, from the runtime: when the person cuts you
      an answer followed by such a mark was cut; every answer of yours without one was heard to \
      its end.]";
 
-/// What a message costs beyond its parts.
-const MESSAGE_OVERHEAD: usize = 4;
-
 impl<P: AiProvider> Loop<P> {
     /// The turn's footprint: its system prompt, the tools its first round
     /// declares, room for the notes the channel may add to its input (the
@@ -38,17 +35,12 @@ impl<P: AiProvider> Loop<P> {
         TurnFootprint::new(prompt + tools + notes + replayed, reply)
     }
 
-    /// What a replayed round costs, as Python's two messages: its calls,
+    /// What a replayed round costs, as the provider reads it: its calls,
     /// then its results together in one message.
     fn round_tokens(&self, round: &[Message]) -> usize {
-        let messages = ai_messages(&self.shown_messages(round));
-        let (calls, results) = messages.split_first().map_or((0, 0), |(calls, results)| {
-            let results: usize = results
-                .iter()
-                .map(|result| estimate_message_tokens(result).saturating_sub(MESSAGE_OVERHEAD))
-                .sum();
-            (estimate_message_tokens(calls), results)
-        });
-        calls + MESSAGE_OVERHEAD + results
+        ai_messages(&self.shown_messages(round))
+            .iter()
+            .map(estimate_message_tokens)
+            .sum()
     }
 }
