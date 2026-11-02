@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use roomkit::model::{ChannelId, EventId, RoomContext, RoomEvent, RoomId};
+use roomkit::model::{ChannelBinding, ChannelId, EventId, RoomContext, RoomEvent, RoomId};
 use roomkit::testing::EventTap;
 use roomkit::{ConversationStore, FrameworkEvent};
 use roomkit_ai::testing::ScriptedProvider;
@@ -246,6 +246,33 @@ impl Run {
             .entry(channel_id.to_string())
             .or_default()
             .push(serde_json::to_value(event).unwrap_or_default());
+    }
+
+    /// One room callback a scripted channel was called with (RFC §6.1),
+    /// also named in the hooks' order as `<channel_id>.<call>`.
+    pub(crate) fn record_room_callback(
+        &self,
+        room_id: &str,
+        channel_id: &ChannelId,
+        call: &str,
+        binding: Option<&ChannelBinding>,
+    ) {
+        if !self.recording.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut item = serde_json::json!({ "call": call });
+        if let Some(binding) = binding {
+            item["binding"] = serde_json::to_value(binding).unwrap_or_default();
+        }
+        let mut observed = lock(&self.observed);
+        observed
+            .room_callbacks
+            .entry(room_id.to_owned())
+            .or_default()
+            .entry(channel_id.to_string())
+            .or_default()
+            .push(item);
+        observed.hook_order.push(format!("{channel_id}.{call}"));
     }
 
     /// One item a streaming channel's `deliver_stream` read, as the scenario

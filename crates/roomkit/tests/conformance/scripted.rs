@@ -229,6 +229,8 @@ pub(crate) struct ScriptedChannel {
     on_event: Reactions,
     deliver: Reactions,
     deliver_stream: Reactions,
+    on_room_attached: Reactions,
+    on_room_detached: Reactions,
     /// What its own address methods answer: the defaults when `None`.
     addresses: Option<Value>,
     /// The rooms it streams in: every room when `None`.
@@ -281,6 +283,8 @@ impl ScriptedChannel {
             on_event: Reactions::new(spec.get("on_event")),
             deliver: Reactions::new(spec.get("deliver")),
             deliver_stream: Reactions::new(spec.get("deliver_stream")),
+            on_room_attached: Reactions::new(spec.get("on_room_attached")),
+            on_room_detached: Reactions::new(spec.get("on_room_detached")),
             addresses: spec.get("addresses").cloned(),
             streams_in: spec
                 .get("streams_in")
@@ -309,6 +313,27 @@ impl ScriptedChannel {
             "channel_type": self.declaration.channel_type,
             "direction": "outbound",
         })
+    }
+
+    /// A room callback (RFC §6.1): recorded, then its reaction's gate, its
+    /// actions and its failure.
+    async fn room_callback(
+        &self,
+        reactions: &Reactions,
+        room_id: &RoomId,
+        call: &str,
+        binding: Option<&ChannelBinding>,
+    ) -> Result<(), ChannelError> {
+        let Some(run) = self.run.upgrade() else {
+            return Ok(());
+        };
+        let room_id = room_id.to_string();
+        run.record_room_callback(&room_id, &self.declaration.channel_id, call, binding);
+        let Some(reaction) = reactions.pick(&serde_json::json!({ "room_id": room_id })) else {
+            return Ok(());
+        };
+        perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
+        Ok(())
     }
 
     async fn react(
@@ -515,6 +540,22 @@ impl Channel for ScriptedChannel {
             run.record_context("on_event", &context, &self.declaration.channel_id);
         }
         self.react(&self.on_event, &event, true).await
+    }
+
+    async fn on_room_attached(
+        &self,
+        room_id: RoomId,
+        binding: ChannelBinding,
+    ) -> Result<(), ChannelError> {
+        let reactions = &self.on_room_attached;
+        self.room_callback(reactions, &room_id, "on_room_attached", Some(&binding))
+            .await
+    }
+
+    async fn on_room_detached(&self, room_id: RoomId) -> Result<(), ChannelError> {
+        let reactions = &self.on_room_detached;
+        self.room_callback(reactions, &room_id, "on_room_detached", None)
+            .await
     }
 
     async fn deliver(

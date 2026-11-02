@@ -72,6 +72,8 @@ const CHANNEL: &[&str] = &[
     "deliver",
     "streams",
     "deliver_stream",
+    "on_room_attached",
+    "on_room_detached",
     "model",
     "tools",
     "tool_policy",
@@ -244,6 +246,7 @@ const EXPECT: &[&str] = &[
     "lifecycle",
     "models",
     "streamed",
+    "room_callbacks",
     "participants",
     "resolver",
     "media_resolver",
@@ -463,7 +466,14 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
             found,
         );
     }
-    for kind in ["parse", "on_event", "deliver", "deliver_stream"] {
+    for kind in [
+        "parse",
+        "on_event",
+        "deliver",
+        "deliver_stream",
+        "on_room_attached",
+        "on_room_detached",
+    ] {
         for (index, reaction) in items(&channel[kind]) {
             self::reaction(reaction, &format!("{path}.{kind}[{index}]"), found);
         }

@@ -163,6 +163,7 @@ impl Comparison<'_> {
             ("deliveries", &self.observed.deliveries),
             ("contexts", &self.observed.contexts),
             ("streamed", &self.observed.streamed),
+            ("room_callbacks", &self.observed.room_callbacks),
             ("turns", &self.observed.turns),
         ] {
             for (alias, channels) in expect[kind].as_object().into_iter().flatten() {

@@ -48,6 +48,8 @@ pub(crate) struct Observed {
     pub(crate) contexts: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     /// Per room and streaming channel, the items its `deliver_stream` read.
     pub(crate) streamed: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
+    /// Per room and scripted channel, its room callbacks (RFC §6.1).
+    pub(crate) room_callbacks: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     pub(crate) turns: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     pub(crate) observations: BTreeMap<String, Vec<Value>>,
     pub(crate) tasks: BTreeMap<String, Vec<Value>>,
@@ -277,6 +279,7 @@ fn observed_values(observed: &Observed) -> Value {
         .values()
         .chain(observed.deliveries.values())
         .chain(observed.streamed.values())
+        .chain(observed.room_callbacks.values())
     {
         all.extend(per_room.values().flatten().cloned());
     }
