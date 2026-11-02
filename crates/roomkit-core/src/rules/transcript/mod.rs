@@ -9,8 +9,9 @@
 //!   turn opens with its author's label (their name, ranked when it reads
 //!   like another's, or `@channel` for a sender with no name, the second
 //!   such sender of a channel `@channel (2)`), then what they typed on it
-//!   as a JSON string; the turn's notes then say how speakers are named. A
-//!   one-to-one conversation reads as it was written.
+//!   as a JSON string; the turn's notes then say how speakers are named,
+//!   and, when two people or more take part, name them, silent ones
+//!   included. A one-to-one conversation reads as it was written.
 //! - An instruction is the turn's input, marked as the application's and
 //!   never attributed to a speaker; one that stands alone reads nothing of
 //!   the room (rule 7).
@@ -33,11 +34,11 @@
 //!   runtime's own in the turn's notes, and the labels its messages name
 //!   participants by, which count toward labelling the turns.
 //!
-//! Only what §6.4 requires of every AI channel is built: no note of who
-//! takes part, no tool notes, no cut answers. What each event says is the
-//! channel's to read ([`TurnContent`]): an AI channel reads an author's
-//! media itself, as an image for a model that sees or a mention in its
-//! place (RFC §6.4); [`conversation`] reads each event's text form.
+//! Only what §6.4 requires of every AI channel is built: no tool notes, no
+//! cut answers. What each event says is the channel's to read
+//! ([`TurnContent`]): an AI channel reads an author's media itself, as an
+//! image for a model that sees or a mention in its place (RFC §6.4);
+//! [`conversation`] reads each event's text form.
 //!
 //! Within a turn, the tool loop extends the conversation with its rounds
 //! (RFC §6.4, Appendix A.9 `ai_message_parts`): the assistant's message that
@@ -67,9 +68,8 @@ use self::marks::{
 };
 pub use self::quote::quoted;
 use self::rounds::{ToolRound, tool_rounds};
-use self::speakers::{
-    Speaker, labelled_lines, labels_turns, people_taking_part, speaker, tell_apart,
-};
+use self::speakers::{Speaker, labelled_lines, labels_turns, speaker, tell_apart};
+pub use self::speakers::{people_note, people_taking_part};
 use super::authors::Authors;
 use super::edits::is_deleted;
 use super::instructions::is_standalone;
@@ -298,13 +298,18 @@ pub fn conversation_with_memory(
     // An instruction that stands alone reads nothing of the room, its roster
     // included (RFC §10.1.1 rule 7).
     let people = if is_standalone(event) {
-        0
+        Vec::new()
     } else {
-        people_taking_part(context, channel_id, &authors)
+        people_taking_part(context, channel_id)
     };
-    let labelled = labels_turns(sources, people);
+    let labelled = labels_turns(sources, people.len());
     let turns = cleaned(turns, labelled);
-    rendered(turns, labelled, &memory.notes)
+    let notes = Notes {
+        labelled,
+        people: &people,
+        remembered: &memory.notes,
+    };
+    rendered(turns, &notes)
 }
 
 /// A turn of the conversation before it is rendered: its role, what its
@@ -528,22 +533,42 @@ pub fn replayed_rounds(
         .collect()
 }
 
+/// What a turn's notes say (RFC §6.4): how speakers are named when the
+/// turns are `labelled`, who takes part when two `people` or more do, then
+/// what the memory retrieved for the turn (`remembered`).
+struct Notes<'a> {
+    labelled: bool,
+    people: &'a [String],
+    remembered: &'a [String],
+}
+
+impl Notes<'_> {
+    /// The notes' blocks, in order: the runtime's own, then the memory's,
+    /// each copy of a runtime mark in them replaced.
+    fn blocks(&self) -> Vec<String> {
+        let speaker_note = self.labelled.then(|| SPEAKER_NOTE.to_owned());
+        speaker_note
+            .into_iter()
+            .chain(people_note(self.people))
+            .chain(cleaned_notes(self.remembered))
+            .collect()
+    }
+}
+
 /// The conversation's messages: each turn in its role, a participant's
 /// turn labelled when the conversation labels them, the instruction marked
 /// as the application's, the rounds read after a turn following it, then
-/// the turn's notes (the speaker note when the turns are labelled, then the
-/// `remembered` notes the memory retrieved) after the last message when it
-/// is a user's, the input or not, else as a user message of their own
-/// (Python's `with_turn_notes`): some chat formats refuse two user messages
-/// in a row.
-fn rendered(turns: Vec<Turn>, labelled: bool, remembered: &[String]) -> Vec<Message> {
+/// the turn's `notes` after the last message when it is a user's, the
+/// input or not, else as a user message of their own (Python's
+/// `with_turn_notes`): some chat formats refuse two user messages in a row.
+fn rendered(turns: Vec<Turn>, notes: &Notes<'_>) -> Vec<Message> {
     let mut messages: Vec<Message> = Vec::with_capacity(turns.len());
     for turn in turns {
         let content = match (&turn.speaker, turn.content) {
             (_, TurnContent::Text(text)) if turn.instruction => {
                 TurnContent::Text(format!("{INSTRUCTION_MARK}\n{text}"))
             }
-            (Some(speaker), content) if labelled && turn.role == Role::User => {
+            (Some(speaker), content) if notes.labelled && turn.role == Role::User => {
                 content.labelled(&speaker.label)
             }
             (_, content) => content,
@@ -551,12 +576,7 @@ fn rendered(turns: Vec<Turn>, labelled: bool, remembered: &[String]) -> Vec<Mess
         messages.push(Message::of_content(turn.role, content));
         messages.extend(turn.rounds.into_iter().flat_map(|round| round.messages));
     }
-    let speaker_note = labelled.then(|| SPEAKER_NOTE.to_owned());
-    let blocks: Vec<String> = speaker_note
-        .into_iter()
-        .chain(cleaned_notes(remembered))
-        .collect();
-    if let Some(notes) = joined_notes(&blocks) {
+    if let Some(notes) = joined_notes(&notes.blocks()) {
         match messages.pop() {
             Some(last) if last.role == Role::User => messages.push(with_notes(last, &notes)),
             Some(other) => messages.extend([other, Message::new(Role::User, notes)]),
@@ -632,7 +652,7 @@ pub fn steered_text(
         .collect();
     let distinct: std::collections::BTreeSet<&str> =
         labels.iter().flatten().map(String::as_str).collect();
-    let several = people_taking_part(context, channel_id, &authors) >= 2 || distinct.len() >= 2;
+    let several = people_taking_part(context, channel_id).len() >= 2 || distinct.len() >= 2;
     match labels.last().cloned().flatten() {
         Some(label) if several => Some(labelled_lines(&text, &label)),
         Some(_) | None => Some(text),
@@ -646,7 +666,7 @@ pub fn steered_text(
 /// `len(people_taking_part(context, channel_id))`, which a summary's lines
 /// count toward labelling.
 pub fn people_count(context: &RoomContext, channel_id: &ChannelId) -> usize {
-    people_taking_part(context, channel_id, &Authors::new(context))
+    people_taking_part(context, channel_id).len()
 }
 
 /// `text` with each copy of a runtime mark it holds replaced (RFC §6.4):

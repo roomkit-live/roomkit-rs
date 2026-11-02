@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex};
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelId, ChannelType, EventContent, EventSource,
-    InboundMessage, Room as RoomRecord, RoomContext, RoomEvent, RoomId, TextContent,
+    InboundMessage, Participant, ParticipantId, Room as RoomRecord, RoomContext, RoomEvent, RoomId,
+    TextContent,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
@@ -84,6 +85,21 @@ impl MemoryProvider for MeasuredWindow {
 
 fn tool(name: &str) -> AiTool {
     AiTool::new(name, "looks things up ".repeat(30)).unwrap()
+}
+
+/// A context of room `r1`, where the agent and the member's channel are
+/// bound and `people` take part on the member's channel.
+fn context_of(people: Vec<Participant>) -> RoomContext {
+    let mut context = RoomContext::new(RoomRecord::new(room_id()));
+    context.bindings = vec![
+        ChannelBinding::new(channel("member"), room_id(), ChannelType::WEBSOCKET),
+        ChannelBinding {
+            category: ChannelCategory::Intelligence,
+            ..ChannelBinding::new(channel("agent"), room_id(), ChannelType::AI)
+        },
+    ];
+    context.participants = people;
+    context
 }
 
 // Python: tests/test_turn_footprint.py::test_the_footprint_is_the_turn_as_round_0_sends_it
@@ -210,4 +226,48 @@ async fn a_later_turn_is_measured_again_with_the_rounds_it_replays() {
         calls + 4 + results
     );
     assert_eq!(seen_in_handler.lock().unwrap().clone(), vec![None]);
+}
+
+// Python: tests/test_people_taking_part.py::TestTheAgentKnowsWhoIsThere::test_the_turn_s_measure_counts_the_note
+#[tokio::test]
+async fn the_turn_s_measure_counts_the_people_note() {
+    let person = |id: &str, name: &str| Participant {
+        display_name: Some(name.to_owned()),
+        ..Participant::at(
+            ParticipantId::new(id).unwrap(),
+            room_id(),
+            channel("member"),
+            roomkit::model::Timestamp::UNIX_EPOCH,
+        )
+    };
+    let mut sizes = Vec::new();
+    for people in [
+        vec![person("u-alice", "Alice")],
+        vec![person("u-alice", "Alice"), person("u-bob", "Bob")],
+    ] {
+        let model = ScriptedProvider::new([ScriptedRound::answering("ok")]);
+        let memory = Measured::default();
+        let options = AiChannelOptions {
+            memory: Some(Arc::new(memory.clone())),
+            ..AiChannelOptions::default()
+        };
+        let agent = AiChannel::new(channel("agent"), model, options).unwrap();
+        let mut event = RoomEvent::new(
+            room_id(),
+            EventSource::new(channel("member"), ChannelType::WEBSOCKET),
+            EventContent::Text(TextContent::new("hello")),
+        );
+        event.source.participant_id = Some(ParticipantId::new("u-alice").unwrap());
+        let binding = ChannelBinding {
+            category: ChannelCategory::Intelligence,
+            ..ChannelBinding::new(channel("agent"), room_id(), ChannelType::AI)
+        };
+        agent
+            .on_event(event, binding, context_of(people))
+            .await
+            .unwrap();
+        sizes.push(memory.0.lock().unwrap()[0].unwrap().input_tokens);
+    }
+    assert_eq!(sizes[0], estimate_tokens("") + NOTES_ROOM);
+    assert!(sizes[1] > sizes[0], "{sizes:?}");
 }

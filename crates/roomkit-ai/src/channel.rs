@@ -15,7 +15,7 @@ use roomkit::model::{
 };
 use roomkit::{Channel, ChannelDeclaration, ChannelError, current_turn_host};
 use roomkit_core::rules::transcript::{
-    Message, TurnMemory, conversation_with_memory, replayed_rounds,
+    Message, TurnMemory, conversation_with_memory, people_taking_part, replayed_rounds,
 };
 use serde_json::Value;
 
@@ -635,6 +635,17 @@ impl<P: AiProvider> AiChannel<P> {
         })
     }
 
+    /// Who takes part besides the agent in `context`'s room, by their
+    /// labels (RFC §6.4); no one for an instruction that stands alone,
+    /// which reads none of the room (RFC §10.1.1 rule 7). Python's
+    /// `AIChannel._people`.
+    fn people(&self, context: &RoomContext, stands_alone: bool) -> Vec<String> {
+        if stands_alone {
+            return Vec::new();
+        }
+        people_taking_part(context, &self.channel_id)
+    }
+
     /// The channel's earlier rounds of tool calls in `context`, which the
     /// turn's history replays (RFC §6.4); none for an instruction that
     /// stands alone, which reads none of the room (RFC §10.1.1 rule 7).
@@ -910,7 +921,8 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         };
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).
-        let footprint = looped.footprint(&self.replayed(&context, stands_alone));
+        let people = self.people(&context, stands_alone);
+        let footprint = looped.footprint(&self.replayed(&context, stands_alone), &people);
         let recalled = self
             .recalled(&event, &context, stands_alone, footprint)
             .await?;

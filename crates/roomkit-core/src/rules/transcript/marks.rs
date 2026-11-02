@@ -42,6 +42,10 @@ pub const SPEAKER_NOTE: &str = "[Speaker labels from the runtime: several people
      included. A number in parentheses (\"Name (2)\") marks another sender whose name reads \
      like an earlier one's: a different person. Never prefix your own replies with a name.]";
 
+/// Opens the note that names who takes part (RFC §6.4): Python's
+/// `PEOPLE_NOTE_OPENING`, one of the runtime's marks.
+pub(super) const PEOPLE_NOTE_OPENING: &str = "[People taking part besides you";
+
 /// Opens the message a memory's summary stands in, in place of the events
 /// it summarized (RFC §6.4, §20.3): Python's `SUMMARY_HEADER`.
 pub const SUMMARY_HEADER: &str = "[Conversation summary — earlier messages compacted]";
@@ -109,6 +113,11 @@ const PHRASES: &[Phrase] = &[
         text: "[Notes kept by the assistant's runtime",
         bracketed: true,
         replacement: COPIED_HEADER_MARK,
+    },
+    Phrase {
+        text: PEOPLE_NOTE_OPENING,
+        bracketed: true,
+        replacement: COPIED_MARK,
     },
 ];
 

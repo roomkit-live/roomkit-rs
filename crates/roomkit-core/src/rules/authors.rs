@@ -699,6 +699,23 @@ impl<'a> Authors<'a> {
         &self.people.persons
     }
 
+    /// `person` as a reader names them whether or not they have spoken
+    /// (RFC §6.4): their name and its rank, or `None` when they have no
+    /// name. Python's `_Unrecorded.person`.
+    pub(crate) fn person(&mut self, person: &Participant) -> Option<Author> {
+        let name = person_name(person.display_name.as_deref().unwrap_or_default());
+        if name.is_empty() {
+            return None;
+        }
+        let source = digest(
+            self.salt,
+            &["participant".to_owned(), person.id.to_string()],
+        );
+        let names = name_keys(self.salt, &name);
+        let rank = self.register().rank(&source, &names);
+        Some(Author { name, rank })
+    }
+
     /// The copy of the room's register the turns that hold no record are
     /// ranked against.
     fn register(&mut self) -> &mut AuthorRegister {

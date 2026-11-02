@@ -2,7 +2,7 @@
 //! as its first round will send it, before the memory reads the room (RFC
 //! §20): Python's `AIChannel._measure_turn`.
 
-use roomkit_core::rules::transcript::{Message, SPEAKER_ATTRIBUTION_NOTE, turn_notes};
+use roomkit_core::rules::transcript::{Message, SPEAKER_ATTRIBUTION_NOTE, people_note, turn_notes};
 
 use super::Loop;
 use crate::memory::{
@@ -20,15 +20,20 @@ const CUT_NOTE: &str = "[Cut answers, from the runtime: when the person cuts you
 
 impl<P: AiProvider> Loop<P> {
     /// The turn's footprint: its system prompt, the tools its first round
-    /// declares, room for the notes the channel may add to its input (the
-    /// speaker attribution, a cut answer's note), and the earlier `rounds`
+    /// declares, the notes the channel adds to its input (room for the
+    /// speaker attribution and a cut answer's note, and the note naming the
+    /// `people` taking part when two or more do), and the earlier `rounds`
     /// of tool calls its history replays, all of them (the window may drop
     /// some, never add one); its reply budget apart.
-    pub(crate) fn footprint(&self, rounds: &[Vec<Message>]) -> TurnFootprint {
+    pub(crate) fn footprint(&self, rounds: &[Vec<Message>], people: &[String]) -> TurnFootprint {
         let prompt = estimate_tokens(self.system_prompt.as_deref().unwrap_or(""));
         let declared = self.shown_tools(self.toolbox.declared(&self.policy));
         let tools: usize = declared.iter().map(estimate_tool_tokens).sum();
-        let room = [SPEAKER_ATTRIBUTION_NOTE.to_owned(), CUT_NOTE.to_owned()];
+        let room: Vec<String> = [SPEAKER_ATTRIBUTION_NOTE.to_owned()]
+            .into_iter()
+            .chain(people_note(people))
+            .chain([CUT_NOTE.to_owned()])
+            .collect();
         let notes = estimate_tokens(&turn_notes(&room).unwrap_or_default());
         let replayed: usize = rounds.iter().map(|round| self.round_tokens(round)).sum();
         let reply = self.max_tokens.map_or(0, |tokens| tokens as usize);

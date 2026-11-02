@@ -14,6 +14,8 @@ use serde_json::Value;
 
 use super::super::authors::{Author, Authors};
 use super::super::unicode;
+use super::marks::PEOPLE_NOTE_OPENING;
+use super::quote::quoted;
 use crate::model::{
     ChannelBinding, ChannelId, ChannelType, Participant, ParticipantRole, ParticipantStatus,
     RoomContext, RoomEvent,
@@ -24,6 +26,10 @@ const IDENTIFIER_EXTRA: &str = "_.@+-";
 
 /// The longest identifier the runtime gives, in characters.
 const IDENTIFIER_LIMIT: usize = 64;
+
+/// Characters of a person's label the people note quotes at most: a
+/// name's 64, its rank and `(a participant)`. Python's `_PERSON_LIMIT`.
+const PERSON_LIMIT: usize = 96;
 
 /// Every double quote mark but `"` itself, which a JSON string escapes:
 /// made a single quote in a labelled line, so that none reads as the
@@ -161,30 +167,58 @@ pub(super) fn identifier(value: &str, fallback: &str) -> String {
     }
 }
 
-/// How many people take part besides the agent of `channel_id` (RFC
-/// §6.4): the room's active participants, one per person, who are neither
-/// bots nor observers, nor on the agent's own channel, and whose messages
-/// reach the agent (a channel they are reached through is bound in the
-/// room with a visibility that admits the agent, RFC §7.5), silent ones
-/// included. No one for an agent the room does not bind.
-pub(super) fn people_taking_part(
-    context: &RoomContext,
-    channel_id: &ChannelId,
-    authors: &Authors<'_>,
-) -> usize {
+/// Who takes part besides the agent of `channel_id` (RFC §6.4), each by
+/// the label their turns open with: the room's active participants, one
+/// per person in the order they joined, who are neither bots nor
+/// observers, nor on the agent's own channel, and whose messages reach the
+/// agent (a channel they are reached through is bound in the room with a
+/// visibility that admits the agent, RFC §7.5), silent ones included. No
+/// one for an agent the room does not bind. Python's `people_taking_part`,
+/// ranked against its own copy of the room's register.
+pub fn people_taking_part(context: &RoomContext, channel_id: &ChannelId) -> Vec<String> {
     let Some(reader) = context.get_binding(channel_id) else {
-        return 0;
+        return Vec::new();
     };
-    authors
+    let mut authors = Authors::new(context);
+    let people: Vec<&Participant> = authors
         .persons()
         .iter()
+        .copied()
         .filter(|person| {
             person.status == ParticipantStatus::Active
                 && takes_part(person.role)
                 && &person.channel_id != channel_id
                 && reaches(person, context, reader)
         })
-        .count()
+        .collect();
+    people
+        .into_iter()
+        .map(|person| match authors.person(person) {
+            Some(Author { name, rank: 1 }) => name,
+            Some(Author { name, rank }) => format!("{name} ({rank})"),
+            None => channel_label(&person.channel_id),
+        })
+        .collect()
+}
+
+/// The note that names who takes part ([`people_taking_part`]) when two
+/// people or more do, those who have not spoken yet included, so that the
+/// agent knows who is there before each has spoken (RFC §6.4); `None`
+/// otherwise. Each name is quoted: a participant may choose theirs, and it
+/// must not read as the runtime's words. Python's `people_note`.
+pub fn people_note(people: &[String]) -> Option<String> {
+    if people.len() < 2 {
+        return None;
+    }
+    let names: Vec<String> = people
+        .iter()
+        .map(|person| quoted(person, PERSON_LIMIT))
+        .collect();
+    Some(format!(
+        "{PEOPLE_NOTE_OPENING}, from the runtime: {}. Each is present whether or not they have \
+         spoken yet.]",
+        names.join(", ")
+    ))
 }
 
 /// Whether a participant of `role` takes part in the conversation: a bot
