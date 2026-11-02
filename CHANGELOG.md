@@ -10,6 +10,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   answers another agent's answer with is read by the room's reader, as
   Python's (RFC §23.3 step 5, RMK-1185): it was lost, the driver told a
   read of a turn it did not hold.
+- A tool a `BEFORE_AI_GENERATION` hook adds or redefines stays as the hook
+  left it for the whole turn, as Python's (RFC §6.4, RMK-1180): declared
+  at every round, an added one served by the tool handler, a redefined one
+  checked against the schema the hook left; a tool the channel serves
+  itself keeps its definition.
+- A round whose text opens by replaying the text of the round of calls
+  before it (a model repeating `Let me look.` after a call) is handed to
+  the room from where it goes on, and `ON_AI_RESPONSE`'s segments say what
+  the room saw, as Python's (RFC §6.4, RMK-1180); the model still reads its
+  own text whole.
 - Of what a transport returns, the room keeps, as Python's, its
   `on_event()`'s tasks, observations and metadata updates, its
   `deliver()`'s metadata updates alone, and nothing of a streaming
