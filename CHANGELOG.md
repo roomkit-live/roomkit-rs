@@ -32,6 +32,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its answer waits in the lane emits `room_refused_event` with no status
   (`FrameworkEvent::RoomRefusedEvent::status` is now an `Option`), and a
   failed read of the room there runs no agent.
+- A keyed delivery runs its key's lookup, its transport's check and its
+  commit in one section under the room lock, as Python's (RFC §22.1,
+  RMK-1157): a transport detached while it waited for the lock makes it
+  `unavailable`/`channel_unavailable` with nothing written, where it
+  stored a `BLOCKED` `source_unbound` record every retry replayed; past
+  `process_timeout` waiting for the lock it is refused `process_timeout`.
+- The delivery queue reads as Python's (RFC §22.2, RMK-1157): a
+  `DeliveryItem` read without `id` or `created_at` takes a fresh id and
+  now; `deserialize_strategy` returns a `Result`, a `TypeError`
+  (`RoomKitError::Type`) for params the strategy takes no such argument
+  for or of the wrong kind, which the worker reports `strategy_failed`; a
+  `kit.close()` from a hook of an item the in-memory worker executes
+  returns, the worker neither cut nor waited for.
 - `OpenAiAiProvider` sends a user's message of parts as its text and
   image blocks in order, as Python's (RFC §6.4, RMK-1191): a caption, its
   image, then the next text, where it sent the texts joined, then every
