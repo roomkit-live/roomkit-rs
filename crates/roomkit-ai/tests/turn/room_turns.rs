@@ -9,10 +9,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{EventContent, InboundMessage, RoomContext, RoomEvent, TextContent, ToolCall};
+use roomkit::model::{
+    ChannelType, EventContent, InboundMessage, RoomContext, RoomEvent, TextContent, ToolCall,
+};
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     ConversationStore, DeleteEventOptions, HookOptions, HookTrigger, InboundResult,
-    ProcessInboundOptions, RoomKit, current_turn_host,
+    ProcessInboundOptions, RoomKit, RoomKitOptions, current_turn_host,
 };
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiTool, ProviderError,
@@ -501,6 +504,41 @@ fn an_agent_that_steers_its_room_turns_declares_them_serialized() {
         (declared.serializes_room_turns, declared.steers_room_turns),
         (false, false)
     );
+}
+
+/// RFC §6.4: a host holding the kit reads how a registered channel takes a
+/// room's turns, as Python's `kit.get_channel(id).steers_room_turns`: an
+/// agent that steers them serializes them, an agent without the option does
+/// neither, nor does a transport.
+#[tokio::test]
+async fn a_registered_channel_says_whether_it_steers_its_room_turns() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    for (id, steer_room_turns) in [("steering", true), ("plain", false)] {
+        let options = AiChannelOptions {
+            steer_room_turns,
+            ..AiChannelOptions::default()
+        };
+        let agent = AiChannel::new(channel(id), Gated::default(), options).unwrap();
+        kit.register_channel(agent).unwrap();
+    }
+    let sms = RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let read = |id: &str| {
+        let registered = kit.get_channel(&channel(id)).unwrap();
+        (
+            registered.serializes_room_turns(),
+            registered.steers_room_turns(),
+        )
+    };
+    assert_eq!(
+        [read("steering"), read("plain"), read("sms")],
+        [(true, true), (false, false), (false, false)]
+    );
+    kit.close().await.unwrap();
 }
 
 // Python: tests/test_room_turns_in_order.py::test_an_agent_asked_again_in_the_same_delivery_is_not_held_by_its_first_turn

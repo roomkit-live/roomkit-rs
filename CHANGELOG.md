@@ -15,6 +15,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `_routed_to` and `_always_process`, and the broadcast asks the agent
   stamped and the supervisor alone, where it asked every agent
   (RMK-1233).
+- A registered channel says how it takes a room's turns,
+  `RegisteredChannel::steers_room_turns` and `serializes_room_turns`, as
+  a host reads Python's `kit.get_channel(id).steers_room_turns` (RFC §6.4,
+  RMK-1253): a channel that steers them serializes them.
 - A whole copy of a runtime mark that no closing bracket follows takes
   only the mark's own punctuation with it, as Python's: `x context
   compacted - earlier conversation summary.` reads `x [A copy of a runtime

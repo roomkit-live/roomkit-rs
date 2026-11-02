@@ -43,6 +43,19 @@ pub trait RegisteredChannel: sealed::Sealed + Debug + Send + Sync {
     /// under the recipient key, when it is one.
     fn recipient_address(&self, binding: &ChannelBinding) -> Option<String>;
 
+    /// Whether the room's owner runs the channel's turns in a room one after
+    /// the other, in the order they were asked (RFC §6.4): what
+    /// [`Channel::serializes_room_turns`](crate::Channel::serializes_room_turns)
+    /// says, or `true` for a channel that steers its room turns, as the kit
+    /// takes them.
+    fn serializes_room_turns(&self) -> bool;
+
+    /// Whether a message for a room where the channel's turn runs is handed
+    /// to that turn, which reads it at its next stop, rather than a turn of
+    /// its own (RFC §6.4, §21.3):
+    /// [`Channel::steers_room_turns`](crate::Channel::steers_room_turns).
+    fn steers_room_turns(&self) -> bool;
+
     /// Releases what the channel holds ([`Channel::close`](crate::Channel::close),
     /// RFC §6.1): the caller's to call once
     /// [`unregister_channel`](crate::RoomKit::unregister_channel) handed the
@@ -95,6 +108,14 @@ impl RegisteredChannel for Registered {
 
     fn recipient_address(&self, binding: &ChannelBinding) -> Option<String> {
         self.channel.recipient_address(binding)
+    }
+
+    fn serializes_room_turns(&self) -> bool {
+        self.channel.serializes_room_turns()
+    }
+
+    fn steers_room_turns(&self) -> bool {
+        self.channel.steers_room_turns()
     }
 
     fn close(&self) -> BoxFuture<'_, ()> {
