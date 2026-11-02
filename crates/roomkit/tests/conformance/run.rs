@@ -137,6 +137,7 @@ impl Run {
             .chain(&crate::task_calls::LEVEL_2_EVENTS)
             .chain(&crate::input_calls::INPUT_EVENTS)
             .chain(&crate::verification_calls::VERIFICATION_EVENTS)
+            .chain(&crate::ai_hooks::AI_EVENTS)
             .copied()
             .collect();
         let events = EventTap::on(&kit, &tapped);
@@ -407,7 +408,11 @@ impl Run {
                 flat.insert(name.to_owned(), Value::String(id.to_owned()));
             }
         }
-        observed.framework_events.push(Value::Object(flat));
+        if crate::ai_hooks::AI_EVENTS.contains(&event.r#type.as_str()) {
+            observed.ai_events.push(Value::Object(flat));
+        } else {
+            observed.framework_events.push(Value::Object(flat));
+        }
     }
 
     /// Starts the work a turn leaves for after it: a task holding the

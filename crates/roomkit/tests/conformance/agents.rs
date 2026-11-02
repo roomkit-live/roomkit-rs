@@ -374,7 +374,18 @@ fn request(request: &AiContext) -> Value {
             })
         })
         .collect();
-    json!({ "messages": messages, "tool_results": results })
+    let tools: serde_json::Map<String, Value> = request
+        .tools
+        .iter()
+        .enumerate()
+        .map(|(position, tool)| (tool.name.clone(), Value::from(position)))
+        .collect();
+    json!({
+        "messages": messages,
+        "tool_results": results,
+        "system_prompt": request.system_prompt,
+        "tools": tools,
+    })
 }
 
 /// The handler of the scripted hook `spec` on a tool trigger: it records

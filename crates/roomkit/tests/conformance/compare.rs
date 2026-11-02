@@ -118,8 +118,14 @@ impl Comparison<'_> {
         }
         let events = framework_events(
             &mut self.normalizer,
-            self.observed,
-            &expect["framework_events"],
+            &self.observed.framework_events,
+            (&expect["framework_events"], "framework_events"),
+        );
+        self.found.extend(events);
+        let events = framework_events(
+            &mut self.normalizer,
+            &self.observed.ai_events,
+            (&expect["ai_events"], "ai_events"),
         );
         self.found.extend(events);
     }
@@ -273,11 +279,11 @@ fn outcomes_of(
 
 fn framework_events(
     normalizer: &mut Normalizer,
-    observed: &Observed,
-    expected: &Value,
+    recorded: &[Value],
+    (expected, member): (&Value, &str),
 ) -> Vec<String> {
     let mut grouped: HashMap<String, Vec<Value>> = HashMap::new();
-    let events = normalizer.value(&Value::Array(observed.framework_events.clone()));
+    let events = normalizer.value(&Value::Array(recorded.to_vec()));
     for event in events.as_array().into_iter().flatten() {
         let room = event["room_id"].as_str().unwrap_or("*").to_owned();
         grouped.entry(room).or_default().push(event.clone());
@@ -289,7 +295,7 @@ fn framework_events(
         found.extend(framework_mismatches(
             &events,
             &actual,
-            &format!("framework_events.{alias}"),
+            &format!("{member}.{alias}"),
         ));
     }
     found

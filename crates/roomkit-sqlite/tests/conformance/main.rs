@@ -11,6 +11,8 @@
 
 #[path = "../../../roomkit/tests/conformance/agents.rs"]
 mod agents;
+#[path = "../../../roomkit/tests/conformance/ai_hooks.rs"]
+mod ai_hooks;
 #[path = "../../../roomkit/tests/conformance/calls.rs"]
 mod calls;
 #[path = "../../../roomkit/tests/conformance/compare.rs"]

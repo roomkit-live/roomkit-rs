@@ -38,6 +38,8 @@ pub(crate) struct Observed {
     pub(crate) rooms: BTreeMap<String, Value>,
     pub(crate) bindings: BTreeMap<String, Map<String, Value>>,
     pub(crate) framework_events: Vec<Value>,
+    /// The framework events of an agent's turn, apart (README, `ai_events`).
+    pub(crate) ai_events: Vec<Value>,
     pub(crate) hooks: BTreeMap<String, Vec<Value>>,
     pub(crate) hook_order: Vec<String>,
     pub(crate) deliveries: BTreeMap<String, BTreeMap<String, Vec<Value>>>,

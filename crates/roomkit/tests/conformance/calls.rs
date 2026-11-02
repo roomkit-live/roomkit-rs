@@ -24,10 +24,12 @@ use roomkit::{
     RemoveRoomHookOptions, RoomKitError, SendEventOptions, SetAccessOptions, SetVisibilityOptions,
     UnmuteOptions, UnmuteOutputOptions, UpdateEventOptions, WaitForIdle,
 };
+use roomkit_ai::{AiGenerationEvent, AiResponseEvent, ToolRoundEvent};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::agents;
+use crate::ai_hooks::turn_hook_handler;
 use crate::errors::{error_of, named};
 use crate::run::Run;
 use crate::scripted::{ScriptedChannel, hook_handler, session_hook_handler, status_hook_handler};
@@ -580,6 +582,9 @@ fn add_room_hook(
     let status = payload_hook_handler::<StatusEntry>(hook, run, "status_entry");
     let feedback = payload_hook_handler::<Observation>(hook, run, "observation");
     let input = crate::input_calls::input_hook_handler(hook, run);
+    let generation = turn_hook_handler::<AiGenerationEvent>(hook, run);
+    let tool_round = turn_hook_handler::<ToolRoundEvent>(hook, run);
+    let response = turn_hook_handler::<AiResponseEvent>(hook, run);
     Ok(async move {
         let added = match (tool, trigger) {
             (Some(tool), _) => {
@@ -596,6 +601,18 @@ fn add_room_hook(
             }
             (None, HookTrigger::OnUserInputRequired) => {
                 kit.add_room_hook(&room, trigger, execution, input, options)
+                    .await
+            }
+            (None, HookTrigger::BeforeAiGeneration) => {
+                kit.add_room_hook(&room, trigger, execution, generation, options)
+                    .await
+            }
+            (None, HookTrigger::AfterToolRound) => {
+                kit.add_room_hook(&room, trigger, execution, tool_round, options)
+                    .await
+            }
+            (None, HookTrigger::OnAiResponse) => {
+                kit.add_room_hook(&room, trigger, execution, response, options)
                     .await
             }
             (None, _) => {
@@ -642,6 +659,15 @@ pub(crate) fn register_hook(
         kit.hook(trigger, handler, options)
     } else if trigger == HookTrigger::OnUserInputRequired {
         let handler = crate::input_calls::input_hook_handler(hook, run);
+        kit.hook(trigger, handler, options)
+    } else if trigger == HookTrigger::BeforeAiGeneration {
+        let handler = turn_hook_handler::<AiGenerationEvent>(hook, run);
+        kit.hook(trigger, handler, options)
+    } else if trigger == HookTrigger::AfterToolRound {
+        let handler = turn_hook_handler::<ToolRoundEvent>(hook, run);
+        kit.hook(trigger, handler, options)
+    } else if trigger == HookTrigger::OnAiResponse {
+        let handler = turn_hook_handler::<AiResponseEvent>(hook, run);
         kit.hook(trigger, handler, options)
     } else {
         kit.hook(trigger, hook_handler(hook, run), options)
