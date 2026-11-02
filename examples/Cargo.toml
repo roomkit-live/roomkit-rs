@@ -62,6 +62,10 @@ name = "block_and_inject"
 path = "block_and_inject.rs"
 
 [[example]]
+name = "agent_steered_turn"
+path = "agent_steered_turn.rs"
+
+[[example]]
 name = "agent_chain"
 path = "agent_chain.rs"
 
