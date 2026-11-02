@@ -26,11 +26,12 @@ pub(crate) type Strategy = Arc<dyn Orchestration<crate::Store>>;
 /// The members of a scripted strategy, and of its install and uninstall.
 pub(crate) const STRATEGY: &[&str] = &["id", "agents", "install", "uninstall"];
 pub(crate) const STRATEGY_STEP: &[&str] = &["gate", "do", "refuse"];
+pub(crate) const STRATEGY_UNINSTALL: &[&str] = &["gate", "do"];
 
 /// A scripted strategy: it attaches its agents by id, then does what its
 /// install says, as a reaction does, in the room it is installed in.
 struct ScriptedStrategy {
-    agents: Vec<String>,
+    agents: Vec<ChannelId>,
     install: Value,
     uninstall: Value,
     run: RunSlot,
@@ -40,7 +41,7 @@ impl Orchestration<crate::Store> for ScriptedStrategy {
     fn agents(&self) -> Vec<StrategyAgent> {
         self.agents
             .iter()
-            .filter_map(|id| ChannelId::new(id.as_str()).ok())
+            .cloned()
             .map(StrategyAgent::from)
             .collect()
     }
@@ -84,28 +85,35 @@ async fn step(slot: &RunSlot, step: &Value, room_id: &RoomId) {
 }
 
 /// The scripted strategies of a scenario's setup, by id, each acting for
-/// the run `slot` holds once it is set.
-pub(crate) fn strategies(setup: &Value, slot: &RunSlot) -> HashMap<String, Strategy> {
-    setup["strategies"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|spec| {
-            let id = spec["id"].as_str()?.to_owned();
-            let strategy: Strategy = Arc::new(ScriptedStrategy {
-                agents: spec["agents"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|agent| agent.as_str().map(str::to_owned))
-                    .collect(),
-                install: spec["install"].clone(),
-                uninstall: spec["uninstall"].clone(),
-                run: slot.clone(),
-            });
-            Some((id, strategy))
-        })
-        .collect()
+/// the run `slot` holds once it is set, and the one `setup.kit.orchestration`
+/// names; a strategy the runner cannot read is a problem of the setup.
+pub(crate) fn strategies(
+    setup: &Value,
+    slot: &RunSlot,
+) -> Result<(HashMap<String, Strategy>, Option<Strategy>), Unreadable> {
+    let mut strategies = HashMap::new();
+    for spec in setup["strategies"].as_array().into_iter().flatten() {
+        let id = field::<String>(spec, "id")?;
+        let agents = crate::calls::optional::<Vec<ChannelId>>(spec, "agents")?.unwrap_or_default();
+        let strategy: Strategy = Arc::new(ScriptedStrategy {
+            agents,
+            install: spec["install"].clone(),
+            uninstall: spec["uninstall"].clone(),
+            run: slot.clone(),
+        });
+        strategies.insert(id, strategy);
+    }
+    let default = match setup["kit"].get("orchestration") {
+        None => None,
+        Some(name) => {
+            let name = name
+                .as_str()
+                .ok_or("setup.kit.orchestration names no strategy")?;
+            let named = strategies.get(name).cloned();
+            Some(named.ok_or_else(|| format!("no scripted strategy {name:?}"))?)
+        }
+    };
+    Ok((strategies, default))
 }
 
 /// The strategy `name` names among the run's.

@@ -98,10 +98,10 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     let slot = RunSlot::default();
     let backend = delivery_backend(&setup["kit"]);
     let queue = backend.clone();
-    let strategies = crate::strategy_calls::strategies(&setup, &slot);
-    let default = setup["kit"]["orchestration"]
-        .as_str()
-        .and_then(|id| strategies.get(id).cloned());
+    let (strategies, default) = match crate::strategy_calls::strategies(&setup, &slot) {
+        Ok(read) => read,
+        Err(problem) => return vec![format!("setup: {problem}")],
+    };
     let (kit, _store_file) = crate::new_kit(|options| {
         let options = identity::kit_options(
             kit_options(options, &setup["kit"], &slot),
