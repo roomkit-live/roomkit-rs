@@ -114,9 +114,9 @@ impl<'a> Params<'a> {
             .flat_map(serde_json::Map::keys)
             .find(|name| !names.contains(&name.as_str()));
         match unknown {
-            Some(_) if names.is_empty() => Err(RoomKitError::Type(format!(
-                "{class}() takes no arguments"
-            ))),
+            Some(_) if names.is_empty() => {
+                Err(RoomKitError::Type(format!("{class}() takes no arguments")))
+            }
             Some(name) => Err(RoomKitError::Type(format!(
                 "{class}.__init__() got an unexpected keyword argument '{name}'"
             ))),

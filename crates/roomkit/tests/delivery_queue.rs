@@ -211,9 +211,7 @@ async fn an_item_whose_strategy_cannot_be_read_fails_its_execution() {
     assert_eq!(outcome.error.unwrap().code, "TypeError");
     let options = roomkit::store::ListEventsOptions::default();
     let events = kit.store().list_events(&room(), options).await.unwrap();
-    let published = |event: &RoomEvent| {
-        matches!(&event.content, EventContent::Text(text) if text.body == "hello")
-    };
+    let published = |event: &RoomEvent| matches!(&event.content, EventContent::Text(text) if text.body == "hello");
     assert!(!events.iter().any(published));
     kit.close().await.unwrap();
 }

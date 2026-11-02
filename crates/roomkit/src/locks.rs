@@ -187,7 +187,11 @@ mod tests {
             mutexes.rooms().mutexes.is_empty(),
             "the cancelled waiter removes the mutex"
         );
-        assert_eq!(mutexes.waiting(&room_id()), 0, "a cancelled waiter waits no more");
+        assert_eq!(
+            mutexes.waiting(&room_id()),
+            0,
+            "a cancelled waiter waits no more"
+        );
     }
 
     #[tokio::test]

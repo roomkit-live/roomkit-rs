@@ -255,7 +255,7 @@ async fn wait_for_lock(run: &Arc<Run>, room_id: &str, waiters: usize) -> bool {
     };
     let kit = run.kit();
     let waited = async {
-        while roomkit::testing::room_lock_waiters(&kit, &room_id) < waiters {
+        while roomkit::testing::room_lock_waiters(kit, &room_id) < waiters {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
     };

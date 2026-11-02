@@ -343,7 +343,9 @@ impl ExecutionContext {
     /// the run holds it from now on.
     pub(crate) fn take_handed(&self, room_id: &RoomId) -> Option<RoomGuard<'static>> {
         let hand = self.hand.as_ref()?;
-        let mut held = hand.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut held = hand
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if held.as_ref().is_some_and(|(room, _)| room == room_id) {
             return held.take().map(|(_, guard)| guard);
         }
