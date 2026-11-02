@@ -106,6 +106,7 @@ struct Added {
 }
 
 /// What a room holds that a strategy's install may add to.
+#[derive(Clone)]
 struct Snapshot {
     hooks: BTreeSet<String>,
     bindings: BTreeSet<ChannelId>,
@@ -255,29 +256,94 @@ impl<S: ConversationStore> RoomKit<S> {
         organization_id: Option<String>,
     ) -> Result<(), RoomKitError> {
         self.claim_install(room_id, &strategy, organization_id)?;
+        // An install cut short is taken back as a failed one is (Python's
+        // `except BaseException`), once its future is dropped.
+        let mut guard = InstallGuard {
+            kit: self.clone(),
+            room_id: room_id.clone(),
+            strategy: Arc::clone(&strategy),
+            before: None,
+            armed: true,
+        };
         let before = match self.snapshot(room_id).await {
             Ok(before) => before,
             Err(error) => {
+                guard.armed = false;
                 self.drop_record(room_id, &strategy);
                 return Err(error);
             }
         };
+        guard.before = Some(before.clone());
         let installed = match self.attach_agents(room_id, strategy.as_ref()).await {
             Ok(()) => strategy.install(self, room_id).await,
             Err(error) => Err(error),
         };
-        let after = self.snapshot(room_id).await;
-        let added = match &after {
-            Ok(after) => before.added(after),
-            Err(_) => Added::default(),
+        let (added, unread) = self.added_since(room_id, &before).await;
+        let outcome = match (installed, unread) {
+            (Err(error), unread) => {
+                self.undo_install(room_id, &strategy, added, unread.is_none())
+                    .await;
+                Err(error)
+            }
+            (Ok(()), Some(error)) => {
+                // What the read missed stays the strategy's: the room stays
+                // claimed, for uninstall_strategy to take back.
+                self.record(room_id, &strategy, added);
+                Err(error)
+            }
+            (Ok(()), None) => {
+                self.record(room_id, &strategy, added);
+                Ok(())
+            }
         };
-        if let Err(error) = installed {
-            self.undo_install(room_id, &strategy, added).await;
-            return Err(error);
+        guard.armed = false;
+        outcome
+    }
+
+    /// What an install added to `room_id` since `before`; with the read's
+    /// error when the room could not be read, its room hooks alone then.
+    async fn added_since(
+        &self,
+        room_id: &RoomId,
+        before: &Snapshot,
+    ) -> (Added, Option<RoomKitError>) {
+        match self.snapshot(room_id).await {
+            Ok(after) => (before.added(&after), None),
+            Err(error) => {
+                tracing::error!(
+                    target: "roomkit::orchestration",
+                    room_id = %room_id,
+                    error = %error,
+                    "what an install added could not be read whole"
+                );
+                let hooks = self.hook_engine().room_hook_names(room_id);
+                let added = Added {
+                    hooks: hooks
+                        .into_iter()
+                        .filter(|name| !before.hooks.contains(name))
+                        .collect(),
+                    ..Added::default()
+                };
+                (added, Some(error))
+            }
         }
-        after?;
-        self.record(room_id, &strategy, added);
-        Ok(())
+    }
+
+    /// Takes back an install cut short: what it added since `before`, or
+    /// nothing when it was cut before the room was read.
+    async fn undo_cancelled(
+        &self,
+        room_id: &RoomId,
+        strategy: &Arc<dyn Orchestration<S>>,
+        before: Option<Snapshot>,
+    ) {
+        let Some(before) = before else {
+            self.drop_record(room_id, strategy);
+            return;
+        };
+        let (added, unread) = self.added_since(room_id, &before).await;
+        self.undo_install(room_id, strategy, added, unread.is_none())
+            .await;
     }
 
     /// Takes back the strategy recorded for `room_id` when the store has
@@ -288,6 +354,15 @@ impl<S: ConversationStore> RoomKit<S> {
         let Some(strategy) = self.recorded_strategy(room_id) else {
             return Ok(());
         };
+        let held = self
+            .store()
+            .get_room(room_id)
+            .await
+            .map_err(|error| self.read_failed(error))?;
+        if held.is_some() {
+            // The room lives: its creation is refused, its strategy stays.
+            return Ok(());
+        }
         strategy.uninstall(self, room_id).await?;
         let Added { hooks, .. } = self.recorded_added(room_id, &strategy);
         let added = Added {
@@ -416,19 +491,28 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// Takes back what a failed install added; the room stays claimed for
     /// what could not be, so `uninstall_strategy` can finish it.
+    /// Takes back what a failed install added, `added`, read whole when
+    /// `complete`; the room stays claimed for what could not be, so
+    /// `uninstall_strategy` can finish it. The record holds `added` first,
+    /// and loses what is taken back.
     async fn undo_install(
         &self,
         room_id: &RoomId,
         strategy: &Arc<dyn Orchestration<S>>,
         added: Added,
+        complete: bool,
     ) {
+        self.update_record(room_id, strategy, |record| *record = added);
+        let added = self.recorded_added(room_id, strategy);
         match self.take_back(room_id, added, strategy).await {
-            Ok(stayed) if stayed.is_empty() => self.drop_record(room_id, strategy),
-            Ok(_) | Err(_) => {
+            Ok(stayed) if stayed.is_empty() && complete => self.drop_record(room_id, strategy),
+            outcome => {
+                let error = outcome.err().map(|error| error.to_string());
                 tracing::error!(
                     target: "roomkit::orchestration",
                     room_id = %room_id,
-                    "a failed install was not taken back whole"
+                    error = ?error,
+                    "a failed install was not taken back whole: the room stays its strategy's"
                 );
                 self.settle(room_id, strategy);
             }
@@ -451,7 +535,7 @@ impl<S: ConversationStore> RoomKit<S> {
         self.update_record(room_id, strategy, |record| record.hooks.clear());
         let stayed = self.detach_agents(room_id, &added.attached).await;
         self.update_record(room_id, strategy, |record| {
-            record.attached.clone_from(&stayed)
+            record.attached.clone_from(&stayed);
         });
         if !added.keys.is_empty() {
             let patch: Metadata = added
@@ -512,17 +596,18 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Records what the install of `strategy` added to `room_id`: the room
     /// is its from now on.
     fn record(&self, room_id: &RoomId, strategy: &Arc<dyn Orchestration<S>>, added: Added) {
-        self.update_record(room_id, strategy, |record| *record = added);
         let mut rooms = self.inner.room_strategies.rooms();
         if let Some(installed) = rooms
             .get_mut(room_id)
             .filter(|installed| Arc::ptr_eq(&installed.strategy, strategy))
         {
+            installed.added = added;
             installed.installing = false;
         }
     }
 
-    /// Keeps a failed install's record, for what it could not take back.
+    /// Ends the install of the record of `strategy` in `room_id`, keeping
+    /// what it holds: a failed install's, for what could not be taken back.
     fn settle(&self, room_id: &RoomId, strategy: &Arc<dyn Orchestration<S>>) {
         let mut rooms = self.inner.room_strategies.rooms();
         if let Some(installed) = rooms
@@ -556,6 +641,33 @@ impl<S: ConversationStore> RoomKit<S> {
             .is_some_and(|installed| Arc::ptr_eq(&installed.strategy, strategy))
         {
             rooms.remove(room_id);
+        }
+    }
+}
+
+/// An install under way: dropped before its end, it takes the install
+/// back in a task of its own, as a failed install is.
+struct InstallGuard<S: ConversationStore> {
+    kit: RoomKit<S>,
+    room_id: RoomId,
+    strategy: Arc<dyn Orchestration<S>>,
+    /// The room before the install, once read.
+    before: Option<Snapshot>,
+    armed: bool,
+}
+
+impl<S: ConversationStore> Drop for InstallGuard<S> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let (kit, room_id) = (self.kit.clone(), self.room_id.clone());
+        let (strategy, before) = (Arc::clone(&self.strategy), self.before.take());
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => drop(runtime.spawn(async move {
+                kit.undo_cancelled(&room_id, &strategy, before).await;
+            })),
+            Err(_) => kit.drop_record(&room_id, &strategy),
         }
     }
 }

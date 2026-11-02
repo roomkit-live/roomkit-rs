@@ -36,14 +36,21 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// Returns [`RoomKitError::RoomAlreadyExists`] when the room exists
     /// already, nothing written, as Python raises `RoomAlreadyExistsError`.
+    /// With a strategy (`options.orchestration`, or the kit's), the room is
+    /// created and announced first, then installed: an install that fails
+    /// returns what [`install_strategy`](Self::install_strategy) returns,
+    /// the room kept, holding no strategy.
     pub async fn create_room(&self, options: CreateRoomOptions<S>) -> Result<Room, RoomKitError> {
         let orchestration = options
             .orchestration
             .clone()
             .unwrap_or_else(|| self.inner.default_orchestration.clone());
+        if let Some(room_id) = &options.room_id {
+            // A strategy recorded for this id belonged to a room that is
+            // gone: taken back before the new room is announced.
+            self.forget_strategy(room_id).await?;
+        }
         let room = self.create_room_record(options).await?;
-        // A strategy recorded for this id belonged to a room that is gone.
-        self.forget_strategy(&room.id).await?;
         if let Some(strategy) = orchestration {
             // The path install_strategy() takes: claimed, recorded (RFC §19.7).
             self.install_on(&room.id, strategy, room.organization_id.clone())
