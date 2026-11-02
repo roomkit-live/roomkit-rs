@@ -4,7 +4,7 @@
 use super::wire::{malformed, message_text, validate_reasoning};
 use crate::error::OpenAiError;
 use roomkit::model::ToolCall;
-use roomkit_core::rules::transcript::{Message, Role};
+use roomkit_core::rules::transcript::{Message, Part, Role};
 use serde_json::{Value, json};
 
 pub(super) const OUTPUT: &str = "openai.responses.output";
@@ -30,7 +30,9 @@ pub(super) fn append_message(input: &mut Vec<Value>, message: &Message) -> Resul
         }
         // Future roles stay ordinary input, never promoted to instructions.
         Role::User | _ => {
-            let content = if message.images.is_empty() {
+            let content = if !message.parts.is_empty() {
+                Value::Array(message.parts.iter().filter_map(input_part).collect())
+            } else if message.images.is_empty() {
                 Value::String(message.text.clone())
             } else {
                 let mut parts = vec![json!({"type":"input_text","text":message.text})];
@@ -47,6 +49,19 @@ pub(super) fn append_message(input: &mut Vec<Value>, message: &Message) -> Resul
         }
     }
     Ok(())
+}
+
+/// A part of a user's message as the Responses input writes it, in its
+/// place: a text, or an image the provider can fetch.
+fn input_part(part: &Part) -> Option<Value> {
+    match part {
+        Part::Text(text) => Some(json!({"type": "input_text", "text": text})),
+        Part::Image(image) if image.is_resolved() => {
+            Some(json!({"type": "input_image", "image_url": image.url()}))
+        }
+        // An image not resolved, or a part the transcript adds later.
+        Part::Image(_) | _ => None,
+    }
 }
 
 /// Replayed items cannot introduce instructions or calls the engine dropped.

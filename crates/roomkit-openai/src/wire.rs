@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::OpenAiError;
-use roomkit_core::rules::transcript::{Message, Role};
+use roomkit_core::rules::transcript::{Message, Part, Role};
 
 /// The longest provider message an error keeps, in characters.
 const MESSAGE_LIMIT: usize = 500;
@@ -159,8 +159,13 @@ fn wire_message(message: &Message) -> WireMessage<'_> {
             },
         })
         .collect();
-    // An assistant's message that only calls has no text.
-    let content = if message.images.is_empty() || message.role != Role::User {
+    // An assistant's message that only calls has no text; a user's of
+    // parts sends them in order (Python's `chat_request._plain`).
+    let content = if message.role == Role::User && !message.parts.is_empty() {
+        Some(Value::Array(
+            message.parts.iter().filter_map(part_block).collect(),
+        ))
+    } else if message.images.is_empty() || message.role != Role::User {
         Some(message.text.as_str())
             .filter(|text| calls.is_empty() || !text.is_empty())
             .map(|text| Value::String(text.into()))
@@ -182,6 +187,20 @@ fn wire_message(message: &Message) -> WireMessage<'_> {
         content,
         tool_calls: calls,
         tool_call_id: message.tool_call_id.as_deref(),
+    }
+}
+
+/// A part of a user's message as the wire writes it: a text, or an
+/// image the provider can fetch; an image the host has not resolved, or a
+/// part the transcript adds later, is not sent.
+fn part_block(part: &Part) -> Option<Value> {
+    match part {
+        Part::Text(text) => Some(serde_json::json!({"type": "text", "text": text})),
+        Part::Image(image) if image.is_resolved() => {
+            Some(serde_json::json!({"type": "image_url", "image_url": {"url": image.url()}}))
+        }
+        // An image not resolved, or a part the transcript adds later.
+        Part::Image(_) | _ => None,
     }
 }
 
@@ -834,6 +853,54 @@ mod image_tests {
         assert_eq!(
             response.pointer("/input/0/content/1/image_url"),
             chat.pointer("/messages/0/content/1/image_url/url")
+        );
+    }
+
+    // Python: tests/test_providers/test_chat_request.py::test_a_plain_answer_keeps_its_reasoning_inline
+    // (a message of parts goes as its blocks in order: here a caption, its
+    // image, then the next text, RMK-1191)
+    #[test]
+    fn a_message_s_text_and_image_parts_keep_their_order() {
+        use roomkit_ai::{AiContentPart, AiContext, AiImagePart, AiMessage, AiRole, AiTextPart};
+
+        let image = AiImagePart {
+            mime_type: Some("image/png".to_owned()),
+            ..AiImagePart::new("data:image/png;base64,AQIDBA==")
+        };
+        let context = AiContext {
+            messages: vec![AiMessage::new(
+                AiRole::User,
+                vec![
+                    AiContentPart::Text(AiTextPart::new("my lamp")),
+                    AiContentPart::Image(image),
+                    AiContentPart::Text(AiTextPart::new("compare with mine")),
+                ],
+            )],
+            ..AiContext::default()
+        };
+        let request = Request::of(&context);
+        let config = OpenAiConfig {
+            base_url: Some("http://localhost/v1".into()),
+            vision: true,
+            ..OpenAiConfig::new("", "vision-fixture")
+        };
+        let chat = serde_json::to_value(CompletionRequest::new(&config, &request)).unwrap();
+        assert_eq!(
+            chat.pointer("/messages/0/content"),
+            Some(&serde_json::json!([
+                {"type": "text", "text": "my lamp"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AQIDBA=="}},
+                {"type": "text", "text": "compare with mine"},
+            ]))
+        );
+        let response = crate::responses::request(&config, &request).unwrap();
+        assert_eq!(
+            response.pointer("/input/0/content"),
+            Some(&serde_json::json!([
+                {"type": "input_text", "text": "my lamp"},
+                {"type": "input_image", "image_url": "data:image/png;base64,AQIDBA=="},
+                {"type": "input_text", "text": "compare with mine"},
+            ]))
         );
     }
 }

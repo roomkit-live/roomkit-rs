@@ -8,7 +8,7 @@ use roomkit_ai::{
     AiContentPart, AiContext, AiMessage, AiMessageContent, AiRole, AiTool, StreamDone, StreamEvent,
     StreamTextDelta, read_tool_calls,
 };
-use roomkit_core::rules::transcript::{Image, Message, Role};
+use roomkit_core::rules::transcript::{Image, Message, Part, Role};
 
 /// What one generation asks: the system prompt, the conversation as the
 /// transcript writes it, the tools.
@@ -67,7 +67,8 @@ fn messages(message: &AiMessage) -> Vec<Message> {
 }
 
 /// `message` as the transcript writes it: its text, its images, its calls,
-/// the call its result answers.
+/// the call its result answers; a message of text and images keeps its
+/// parts in order, each image at its place (Python's `chat_request._plain`).
 fn message(message: &AiMessage) -> Message {
     let parts: &[AiContentPart] = match &message.content {
         AiMessageContent::Text(text) => {
@@ -79,14 +80,21 @@ fn message(message: &AiMessage) -> Message {
     };
     let mut text = String::new();
     let mut images = Vec::new();
+    let mut ordered = Vec::new();
     let mut calls = Vec::new();
     let mut result = None;
     for part in parts {
         match part {
-            AiContentPart::Text(part) => text.push_str(&part.text),
+            AiContentPart::Text(part) => {
+                text.push_str(&part.text);
+                ordered.push(Part::Text(part.text.clone()));
+            }
             AiContentPart::Image(image) => {
                 let mime_type = image.mime_type.as_deref().unwrap_or_default();
-                images.extend(Image::new(&image.url, mime_type));
+                if let Some(image) = Image::new(&image.url, mime_type) {
+                    ordered.push(Part::Image(image.clone()));
+                    images.push(image);
+                }
             }
             AiContentPart::ToolCall(call) => {
                 calls.push(ToolCall::new(&call.id, &call.name, call.arguments.clone()));
@@ -94,10 +102,14 @@ fn message(message: &AiMessage) -> Message {
             AiContentPart::ToolResult(part) => result = Some(part),
         }
     }
+    let plain = calls.is_empty() && result.is_none();
     let mut written = match result {
         Some(result) => Message::tool_result(&result.tool_call_id, &result.result),
         None => Message::assistant_calls(text, calls),
     };
+    if plain {
+        written.parts = ordered;
+    }
     written.role = match result {
         Some(_) => Role::Tool,
         None => role(message.role),
