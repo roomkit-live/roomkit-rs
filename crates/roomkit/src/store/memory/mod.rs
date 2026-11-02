@@ -3,6 +3,7 @@
 
 mod events;
 mod identities;
+mod verifications;
 
 use std::collections::{BTreeMap, HashMap};
 use std::mem;
@@ -11,18 +12,19 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Metadata, Observation,
     Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task, TaskId, ThreadSummary,
-    Timestamp,
+    Timestamp, Verification, VerificationRequest,
 };
 use roomkit_core::rules::{edits, idempotency, lifecycle, routing};
 
 use self::identities::Identities;
+use self::verifications::Verifications;
 use super::{
     AdvanceDeliveredIndexOptions, CommitEventOptions, ConversationStore, DeleteEventOptions,
     FindLatestRoomOptions, FindRoomIdByBindingOptions, FindRoomIdByChannelOptions,
     FindRoomIdByParticipantOptions, FindRoomIdsByChannelOptions, FindRoomsOptions,
-    GetEventCountOptions, LinkAddressOptions, ListEventsOptions, ListRoomsOptions,
-    ListTasksOptions, PatchRoomMetadataOptions, ResolveIdentityOptions, RoomFilter, StoreError,
-    UnlinkAddressOptions, names_by_recipient, names_sender,
+    GetEventCountOptions, GetVerificationOptions, LinkAddressOptions, ListEventsOptions,
+    ListRoomsOptions, ListTasksOptions, PatchRoomMetadataOptions, ResolveIdentityOptions,
+    RoomFilter, StoreError, UnlinkAddressOptions, names_by_recipient, names_sender,
 };
 
 /// A store that keeps everything in memory, for one process: Python's
@@ -35,6 +37,7 @@ use super::{
 pub struct InMemoryStore {
     rooms: Mutex<HashMap<RoomId, Record>>,
     identities: Mutex<Identities>,
+    verifications: Mutex<Verifications>,
 }
 
 #[derive(Debug)]
@@ -265,6 +268,13 @@ impl InMemoryStore {
     /// The identities, held as the rooms are.
     fn identities(&self) -> MutexGuard<'_, Identities> {
         self.identities
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The verifications and their requests, held as the rooms are.
+    fn verifications(&self) -> MutexGuard<'_, Verifications> {
+        self.verifications
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
@@ -751,6 +761,51 @@ impl ConversationStore for InMemoryStore {
             address,
             options.organization_id.as_deref(),
         )
+    }
+
+    async fn get_verification(
+        &self,
+        identity_id: &IdentityId,
+        options: GetVerificationOptions,
+    ) -> Result<Option<Verification>, StoreError> {
+        Ok(self
+            .verifications()
+            .get(identity_id, options.organization_id.as_deref()))
+    }
+
+    async fn put_verification(
+        &self,
+        verification: Verification,
+    ) -> Result<Verification, StoreError> {
+        self.verifications().put(verification.clone());
+        Ok(verification)
+    }
+
+    async fn list_verifications_in_force(&self) -> Result<Vec<Verification>, StoreError> {
+        Ok(self.verifications().in_force())
+    }
+
+    async fn create_verification_request(
+        &self,
+        request: VerificationRequest,
+    ) -> Result<VerificationRequest, StoreError> {
+        self.verifications().save_request(request.clone());
+        Ok(request)
+    }
+
+    async fn get_verification_request(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<VerificationRequest>, StoreError> {
+        Ok(self.verifications().request(request_id))
+    }
+
+    async fn update_verification_request(
+        &self,
+        request: VerificationRequest,
+    ) -> Result<VerificationRequest, StoreError> {
+        self.verifications().save_request(request.clone());
+        Ok(request)
     }
 
     async fn check_idempotency(

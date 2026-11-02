@@ -22,7 +22,7 @@ use std::sync::{Mutex, PoisonError};
 use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelType, EventContent, EventId, EventType, Identity, IdentityId,
     Metadata, Observation, Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task,
-    TaskId, ThreadSummary, Timestamp,
+    TaskId, ThreadSummary, Timestamp, Verification, VerificationRequest,
 };
 use roomkit_core::rules::addresses::written_recipient;
 use roomkit_core::rules::edits;
@@ -33,8 +33,8 @@ pub use self::options::{
     AdvanceDeliveredIndexOptions, CommitEventOptions, DeleteEventOptions, FindLatestRoomOptions,
     FindRoomIdByBindingOptions, FindRoomIdByChannelOptions, FindRoomIdByParticipantOptions,
     FindRoomIdsByChannelOptions, FindRoomsOptions, GetConversationOptions, GetEventCountOptions,
-    GetTimelineOptions, LinkAddressOptions, ListRoomsOptions, ListTasksOptions,
-    PatchRoomMetadataOptions, ResolveIdentityOptions, UnlinkAddressOptions,
+    GetTimelineOptions, GetVerificationOptions, LinkAddressOptions, ListRoomsOptions,
+    ListTasksOptions, PatchRoomMetadataOptions, ResolveIdentityOptions, UnlinkAddressOptions,
 };
 pub use self::query::ListEventsOptions;
 
@@ -159,6 +159,16 @@ fn warn_private_state_in_metadata<S: ?Sized>() {
          room's senders to whoever tries every phone number or name. Implement \
          get_private_state() and set_private_state() to keep it apart."
     );
+}
+
+/// The refusal of a store that does not keep verifications (RFC §11.7,
+/// Level 2), named by its type as Python's `_verification_unsupported`
+/// names it.
+fn verification_unsupported<S: ?Sized>() -> StoreError {
+    let name = store_name::<S>();
+    StoreError::Value(format!(
+        "{name} does not store identity verifications (RFC §11.7)"
+    ))
 }
 
 /// Whether `named`, a stored id, names the sender known by
@@ -806,6 +816,89 @@ pub trait ConversationStore: Send + Sync + 'static {
                 "{name} does not unlink identity addresses (RFC §14.1)"
             )))
         }
+    }
+
+    /// The verification of the identity `identity_id` within the
+    /// organization `options` names, if it has one (RFC §11.7.1, §14.1).
+    /// Provided as Python provides it: refused by name, for a store that
+    /// does not keep verifications (Level 2).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Value`] by default.
+    fn get_verification(
+        &self,
+        _identity_id: &IdentityId,
+        _options: GetVerificationOptions,
+    ) -> impl Future<Output = Result<Option<Verification>, StoreError>> + Send {
+        async { Err(verification_unsupported::<Self>()) }
+    }
+
+    /// Stores `verification`, replacing the one its identity holds in its
+    /// organization, and returns it (RFC §11.7.1). Provided as Python
+    /// provides it: refused by name.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Value`] by default.
+    fn put_verification(
+        &self,
+        _verification: Verification,
+    ) -> impl Future<Output = Result<Verification, StoreError>> + Send {
+        async { Err(verification_unsupported::<Self>()) }
+    }
+
+    /// Every verification VERIFIED with an expiry, across organizations,
+    /// read when the framework starts to arm the timers that end them
+    /// (RFC §11.7.5). Provided as Python provides it: refused by name.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Value`] by default.
+    fn list_verifications_in_force(
+        &self,
+    ) -> impl Future<Output = Result<Vec<Verification>, StoreError>> + Send {
+        async { Err(verification_unsupported::<Self>()) }
+    }
+
+    /// Stores a new verification request and returns it (RFC §11.7.2).
+    /// Provided as Python provides it: refused by name.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Value`] by default.
+    fn create_verification_request(
+        &self,
+        _request: VerificationRequest,
+    ) -> impl Future<Output = Result<VerificationRequest, StoreError>> + Send {
+        async { Err(verification_unsupported::<Self>()) }
+    }
+
+    /// The verification request `request_id`, if any (RFC §11.7.2).
+    /// Provided as Python provides it: refused by name.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Value`] by default.
+    fn get_verification_request(
+        &self,
+        _request_id: &str,
+    ) -> impl Future<Output = Result<Option<VerificationRequest>, StoreError>> + Send {
+        async { Err(verification_unsupported::<Self>()) }
+    }
+
+    /// Replaces the stored verification request of `request`'s id, and
+    /// returns it (RFC §11.7.2). Provided as Python provides it: refused by
+    /// name.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Value`] by default.
+    fn update_verification_request(
+        &self,
+        _request: VerificationRequest,
+    ) -> impl Future<Output = Result<VerificationRequest, StoreError>> + Send {
+        async { Err(verification_unsupported::<Self>()) }
     }
 
     /// Whether the room holds an event committed with `key`, from

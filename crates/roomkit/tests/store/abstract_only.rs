@@ -7,7 +7,8 @@
 use crate::abstract_only_store::AbstractOnly;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, ChannelType, InboundMessage, ParticipantId, Room, RoomEvent, RoomId, TextContent,
+    ChannelId, ChannelType, IdentityId, InboundMessage, ParticipantId, Room, RoomEvent, RoomId,
+    TextContent, Timestamp, Verification, VerificationRequest,
 };
 use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
@@ -410,4 +411,50 @@ async fn the_default_conditional_room_write_holds_to_what_it_read() {
         (refused, written.map(|room| (room.status, room.event_count))),
         (None, Some((roomkit::model::RoomStatus::Closed, 1)))
     );
+}
+
+/// Python: `tests/test_identity_verification.py::test_a_store_without_verification_refuses_by_name`.
+/// A store that keeps no verifications refuses each of their operations,
+/// naming itself, as Python's `_verification_unsupported` (RFC §11.7,
+/// Level 2): a kit that reads them meets the refusal, never an empty answer.
+#[tokio::test]
+async fn a_store_without_verification_refuses_by_name() {
+    let store = AbstractOnly::default();
+    let alice = IdentityId::new("alice").unwrap();
+    let instant = Timestamp::UNIX_EPOCH;
+    let request = VerificationRequest::new(
+        "req-1",
+        alice.clone(),
+        room_id(),
+        channel("sms"),
+        "link",
+        "hash",
+        instant,
+        instant,
+        instant,
+        3,
+    );
+    let refusals = [
+        store
+            .put_verification(Verification::new(alice.clone()))
+            .await
+            .err(),
+        store
+            .get_verification(&alice, store::GetVerificationOptions::default())
+            .await
+            .err(),
+        store.list_verifications_in_force().await.err(),
+        store
+            .create_verification_request(request.clone())
+            .await
+            .err(),
+        store.get_verification_request("req-1").await.err(),
+        store.update_verification_request(request).await.err(),
+    ];
+    let refusal = || {
+        StoreError::Value(
+            "AbstractOnly does not store identity verifications (RFC §11.7)".to_owned(),
+        )
+    };
+    assert_eq!(refusals, [(); 6].map(|()| Some(refusal())));
 }

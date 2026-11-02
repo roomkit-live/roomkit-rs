@@ -796,6 +796,13 @@ fn store_get_timeline_options_defaults_as_python() {
 }
 
 #[test]
+fn store_get_verification_options_defaults_as_python() {
+    let defaults = store::GetVerificationOptions::default();
+    // roomkit.ConversationStore.get_verification(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
 fn store_link_address_options_defaults_as_python() {
     let defaults = store::LinkAddressOptions::default();
     // roomkit.ConversationStore.link_address(organization_id) = None

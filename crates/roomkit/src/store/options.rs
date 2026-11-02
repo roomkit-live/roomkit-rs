@@ -205,6 +205,15 @@ pub struct UnlinkAddressOptions {
     pub organization_id: Option<String>,
 }
 
+/// What [`get_verification`](super::ConversationStore::get_verification)
+/// takes: Python's `organization_id=None`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GetVerificationOptions {
+    /// The organization whose verification of the identity is read; none
+    /// for the verification of none (RFC §11.7.7).
+    pub organization_id: Option<String>,
+}
+
 /// What [`commit_event`](super::ConversationStore::commit_event) takes:
 /// Python's `*, target=None, activity=True`.
 #[derive(Clone, Debug, PartialEq)]
