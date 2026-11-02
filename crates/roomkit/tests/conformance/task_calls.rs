@@ -19,7 +19,7 @@ use roomkit::orchestration::{PostAsyncOptions, RecentOptions, StatusLevel};
 use roomkit::tasks::DelegatedTask;
 use roomkit::{
     CancelTaskOptions, DelegateOptions, HookError, ListObservationsOptions, ListTasksOptions,
-    PostStatusOptions, StartTaskOptions, SubmitFeedbackOptions, TurnHost,
+    PostStatusOptions, SetupBackgroundOptions, StartTaskOptions, SubmitFeedbackOptions, TurnHost,
     UpdateRoomMetadataOptions, current_turn_host,
 };
 use serde::Serialize;
@@ -69,6 +69,8 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
         ],
         "task.wait" | "host.wait_task" | "cancel_task" => &["task_id"],
         "start_task" => &["room_id", "agent_id", "task", "hand_back"],
+        "setup_background" => &["agent_id", "worker", "hand_back"],
+        "setup_task_tools" => &["agent_id"],
         "host.send_event" => &[
             "room_id",
             "channel_id",
@@ -182,6 +184,21 @@ pub(crate) async fn call(
         }
         "delegate" => delegate(run, spec).await?,
         "start_task" => start_task(run, spec).await?,
+        "setup_background" => {
+            let defaults = SetupBackgroundOptions::default();
+            let options = SetupBackgroundOptions {
+                worker: optional(spec, "worker")?,
+                hand_back: optional(spec, "hand_back")?.unwrap_or(defaults.hand_back),
+            };
+            let agent: ChannelId = field(spec, "agent_id")?;
+            let outcome = kit.setup_background(&agent, options);
+            (finish(run, name, outcome, |()| Value::Null), None)
+        }
+        "setup_task_tools" => {
+            let agent: ChannelId = field(spec, "agent_id")?;
+            let outcome = kit.setup_task_tools(&agent);
+            (finish(run, name, outcome, |()| Value::Null), None)
+        }
         "task.wait" => {
             let task_id: String = field(spec, "task_id")?;
             let task = lock(&run.tasks)
