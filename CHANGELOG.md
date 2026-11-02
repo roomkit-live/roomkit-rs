@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- An AI channel's turn reads as Python's (RFC §6.4, RMK-1193): a round's
+  results reach the model as one tool message, in the turn and replayed
+  (the OpenAI request still writes a tool message per result); a `Cancel`
+  while a round's calls are announced counts no round; with two people or
+  more taking part, the turn's notes name them; notes join the last user
+  message when the input reads as nothing; the turn's footprint measures
+  the tools on their own schemas and counts the people note.
 - A cancel waiting for a delegated task that ends as it stands goes on
   once that end is over however it stops, the close's cut included, as
   Python's (RFC §23.3, RMK-1186); a delegation announced as the kit's
