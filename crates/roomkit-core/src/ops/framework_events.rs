@@ -544,6 +544,9 @@ pub enum RefusedOperation {
     /// The framework's own re-injection of a response, or the pass of an
     /// event a hook injected (gap G-043).
     Reentry,
+    /// The room's agents run again on a stored event: a held message's
+    /// release (RFC §11.7.6).
+    Regenerate,
 }
 
 /// The depths of a `chain_depth_exceeded` event.

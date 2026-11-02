@@ -333,9 +333,16 @@ impl Machine {
                     .insert(entry, delivered(set, &outcome));
                 true
             }
+            SetKind::Rerun => {
+                self.settle_rerun(&outcome);
+                false
+            }
             SetKind::Response | SetKind::Injected => false,
         };
-        report::after_broadcast(cx, event, set.context(), &self.cascade.budget, processed);
+        // A rerun repeats nothing of its event's first pass (RFC §11.7.6).
+        if set.kind() != SetKind::Rerun {
+            report::after_broadcast(cx, event, set.context(), &self.cascade.budget, processed);
+        }
         self.side_effects.collect(
             outcome.tasks,
             outcome.observations,

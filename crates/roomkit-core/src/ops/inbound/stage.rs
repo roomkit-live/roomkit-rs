@@ -10,6 +10,8 @@
 //!   check (`Reading`), or its pass queued at once (`Cascade`);
 //! - arrived, the trigger's off-lock check runs (`Checking`, step 5a) when an
 //!   off-lock hook fires for it, then its pass is queued (`Cascade`);
+//! - a rerun takes the room's lock, reads its event and plans its agents'
+//!   set (`Rerunning`), then goes on with its cascade (`Cascade`);
 //! - the trigger's pass over, the call releases the admission ticket it
 //!   holds (`ReleasingTicket`) and goes back to its cascade, as it releases
 //!   it first when it ends holding it;
@@ -28,10 +30,12 @@ use super::direct::DirectRead;
 use super::holds::AfterTicket;
 use super::host_post::HostPost;
 use super::off_lock::OffLockCheck;
+use super::rerun::RerunWork;
 use super::work_read::WorkRead;
 use super::{Call, InboundError, InboundResult};
 use crate::model::Task;
 use crate::ops::protocol::EffectId;
+use crate::ops::section::Section;
 
 /// A stage of the call, with what it holds.
 #[derive(Debug)]
@@ -50,6 +54,9 @@ pub(super) enum Stage {
     /// Step 5a: the trigger's off-lock check, holding the room's ticket.
     Checking(Box<OffLockCheck>),
     Cascade,
+    /// A rerun's section: the room's lock, its event read again, its
+    /// agents' set planned and placed (RFC §11.7.6).
+    Rerunning(Box<Section<RerunWork>>),
     /// The ticket's release, before the call goes on.
     ReleasingTicket {
         effect: EffectId,
@@ -76,6 +83,7 @@ enum StageName {
     Reading,
     Checking,
     Cascade,
+    Rerunning,
     ReleasingTicket,
     Persisting,
     Ending,
@@ -92,6 +100,7 @@ impl Stage {
             Self::Reading(_) => StageName::Reading,
             Self::Checking(_) => StageName::Checking,
             Self::Cascade => StageName::Cascade,
+            Self::Rerunning(_) => StageName::Rerunning,
             Self::ReleasingTicket { .. } => StageName::ReleasingTicket,
             Self::Persisting { .. } => StageName::Persisting,
             Self::Ending(_) => StageName::Ending,
@@ -106,7 +115,7 @@ impl Stage {
 fn follows(from: StageName, to: StageName) -> bool {
     use StageName::{
         Arriving, Cascade, Checking, Done, Ending, Persisting, Posting, Reading, ReadingWork,
-        ReleasingTicket, Start,
+        ReleasingTicket, Rerunning, Start,
     };
     match from {
         // A message arrives; a direct injection from the room's work has
@@ -114,8 +123,10 @@ fn follows(from: StageName, to: StageName) -> bool {
         // once.
         Start => matches!(
             to,
-            Arriving | Posting | ReadingWork | Reading | Cascade | Ending | Done
+            Arriving | Posting | ReadingWork | Reading | Rerunning | Cascade | Ending | Done
         ),
+        // A rerun's section, then its cascade.
+        Rerunning => matches!(to, Rerunning | Cascade | Ending | Done),
         // A post's room read and its first attach, then its injection.
         Posting => matches!(
             to,

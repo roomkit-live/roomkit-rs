@@ -37,6 +37,11 @@ impl Machine {
                 post,
             } => self.begin_post(cx, room_id, organization_id, *post),
             Call::Responses { responses } => self.begin_answering(cx, *responses),
+            Call::Rerun {
+                room_id,
+                event_id,
+                floor,
+            } => self.begin_rerun(cx, room_id, event_id, floor),
         }
     }
 

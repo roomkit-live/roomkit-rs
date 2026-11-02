@@ -86,6 +86,7 @@ mod persist;
 mod queues;
 mod record;
 mod report;
+mod rerun;
 mod result;
 mod stage;
 mod stamp;
@@ -109,7 +110,7 @@ pub(crate) use self::stamp::error_event;
 use super::io::Io;
 use super::protocol::{Decided, EffectId, Entry, EntryId, Operation, Outcome, ProtocolError, Step};
 use super::{Cx, Environment, KitConfig};
-use crate::model::{ChannelId, DirectEvent, InboundMessage, Post, RoomId};
+use crate::model::{ChannelId, DirectEvent, EventId, InboundMessage, Post, RoomId};
 use crate::ops::io::Bound;
 pub use crate::ops::protocol::{InboundError, InboundResult};
 use crate::rules::chain_depth::{Draw, ReentryBudget};
@@ -264,6 +265,30 @@ impl Inbound {
         Self::calling(config, call)
     }
 
+    /// The room's agents run again on `event_id`, an event `room_id`
+    /// stores, as on a new message of its author (RFC §11.7.6, §10.1 step
+    /// 14): Python's `_rerun_agents_on`, which a held message's release
+    /// makes. The room's lock is waited for within `process_timeout`, past
+    /// which the call is refused `process_timeout`; a room whose status
+    /// refuses new events refuses it `room_closed` before any agent runs
+    /// (RFC §5.1). An event that is not in the room, is deleted or is a
+    /// change itself (RFC §10.3), or whose source binding is gone, is no
+    /// transport or cannot write, runs nothing: the result names no event.
+    /// Otherwise the event is handed to the room's agents alone, at least
+    /// `floor` deep (RFC §8.3), its place in the room's lane behind every
+    /// event committed; their answers are committed and delivered as a
+    /// message's, and the result names the event and holds them. Nothing of
+    /// the event's first pass runs again: no delivery report, no
+    /// `AFTER_BROADCAST`, no `event_processed`.
+    pub fn rerun(config: Arc<KitConfig>, room_id: RoomId, event_id: EventId, floor: u32) -> Self {
+        let call = Call::Rerun {
+            room_id,
+            event_id,
+            floor,
+        };
+        Self::calling(config, call)
+    }
+
     /// The same call, made by the code a delivery set runs, a turn or a
     /// transport's delivery, drawing on `budget`, the reentry budget of the
     /// cascade that delivers, rather than on one of its own (RFC §8.3, gap
@@ -304,7 +329,7 @@ impl Inbound {
     fn calling(config: Arc<KitConfig>, call: Call) -> Self {
         let budget = ReentryBudget::new(config.max_chain_depth);
         let entry = match call {
-            Call::Message { .. } => EntryKind::Message,
+            Call::Message { .. } | Call::Rerun { .. } => EntryKind::Message,
             Call::Direct { .. } | Call::Post { .. } => EntryKind::Direct,
             Call::Responses { .. } => EntryKind::Responses,
         };
@@ -391,6 +416,12 @@ enum Call {
     /// The answers of turns the caller asked on an event it committed
     /// (RFC §23.3 step 5).
     Responses { responses: Box<TurnResponses> },
+    /// The room's agents run again on a stored event (RFC §11.7.6).
+    Rerun {
+        room_id: RoomId,
+        event_id: EventId,
+        floor: u32,
+    },
 }
 
 /// The kind of the call's own entry.
@@ -545,6 +576,7 @@ impl Machine {
             Stage::Arriving(arrival) => self.on_arrival(cx, arrival, effect, outcome),
             Stage::ReadingWork(read) => self.on_work_read(cx, read, effect, outcome),
             Stage::Posting(post) => self.on_post(cx, post, effect, outcome),
+            Stage::Rerunning(section) => self.on_rerun(cx, section, effect, outcome),
             Stage::Reading(read) => self.on_read(cx, read, effect, outcome),
             Stage::Checking(check) => self.on_check(cx, check, effect, outcome),
             Stage::ReleasingTicket {

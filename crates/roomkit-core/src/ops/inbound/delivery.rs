@@ -54,6 +54,9 @@ pub(super) enum SetKind {
     /// targets' tasks and observations are collected, as at any delivery,
     /// and the events they return do not re-enter (gap G-033).
     Injected,
+    /// A stored event handed to the room's agents again (RFC §11.7.6): its
+    /// answers are the call's, its deliveries not reported again.
+    Rerun,
 }
 
 /// The responses one target returned.
