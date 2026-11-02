@@ -709,6 +709,9 @@ impl Sim {
     }
 
     fn give_turn(&mut self, run: RunId, room_id: RoomId, event_id: EventId) {
+        if let Some(status) = self.status_at_lane_turn.take() {
+            self.room.status = status;
+        }
         self.trace.push(format!("await lane {room_id} {event_id}"));
         self.state_mut(run).turns.insert((room_id, event_id));
     }

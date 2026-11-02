@@ -208,6 +208,9 @@ pub(crate) struct Sim {
     /// of every place the test's operation takes, until that operation
     /// publishes its decision (`hold_a_place_ahead`).
     place_ahead: Option<EventId>,
+    /// The status `room_1` takes just before a place's turn comes, as by a
+    /// close the room's work made while the set waited in its lane.
+    pub(crate) status_at_lane_turn: Option<RoomStatus>,
     /// The events whose place in the lane could not be taken, or whose turn
     /// could not be awaited, delivered out of it.
     placeless: BTreeSet<EventId>,
@@ -354,6 +357,7 @@ impl Sim {
             spawned: Vec::new(),
             holders: runs::Holders::default(),
             place_ahead: None,
+            status_at_lane_turn: None,
             placeless: BTreeSet::new(),
             durations: Vec::new(),
             nth_durations: Vec::new(),

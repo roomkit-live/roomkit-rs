@@ -22,16 +22,16 @@
 use std::collections::BTreeMap;
 
 use super::queues::Lineage;
-use super::stamp;
+use super::{report, stamp};
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, DeliveryError, DeliveryResult, DeliveryResultStatus,
     ErrorRecord, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task, Visibility,
 };
 use crate::ops::protocol::{
     CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, EntryId, HoldOutcome,
-    HoldRequest, KIT_CLOSED, Outcome, Raised, TURN_CUT,
+    HoldRequest, KIT_CLOSED, Outcome, Raised, StoreRequest, TURN_CUT,
 };
-use crate::ops::{Cx, Progress};
+use crate::ops::{Cx, Progress, RefusedOperation};
 use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions::{self, DeliveryPlan};
@@ -107,6 +107,9 @@ pub(super) struct SetOutcome {
     /// Why the set delivered nothing: [`KIT_CLOSED`] when the room's lane
     /// took no place for it, the kit closing.
     pub(super) cancelled: Option<&'static str>,
+    /// A rerun's set the room refused when its turn came, its status
+    /// refusing new events: it asked no agent (RFC §5.1, §11.7.6).
+    pub(super) refused: bool,
 }
 
 #[derive(Debug)]
@@ -144,6 +147,9 @@ enum Place {
     Awaiting(EffectId),
     /// Its turn came: it delivers, then leaves its place.
     Turn,
+    /// Its turn came, a rerun's set: it reads its room first, whose status
+    /// may have come to refuse new events while it waited (RFC §5.1).
+    Checking(EffectId),
     /// It leaves its place.
     Leaving(EffectId),
     /// It left its place.
@@ -257,12 +263,17 @@ impl DeliverySet {
     /// Whether the set waits for `effect`.
     pub(super) fn awaits(&self, effect: EffectId) -> bool {
         match self.place {
-            Place::Awaiting(awaited) | Place::Leaving(awaited) if awaited == effect => true,
+            Place::Awaiting(awaited) | Place::Leaving(awaited) | Place::Checking(awaited)
+                if awaited == effect =>
+            {
+                true
+            }
             Place::Taken
             | Place::Closed
             | Place::Missing
             | Place::Awaiting(_)
             | Place::Turn
+            | Place::Checking(_)
             | Place::Leaving(_)
             | Place::Left => self.calls.contains_key(&effect),
         }
@@ -300,7 +311,12 @@ impl DeliverySet {
                 self.outcome.cancelled = Some(KIT_CLOSED);
                 return Progress::Done(std::mem::take(&mut self.outcome));
             }
-            Place::Missing | Place::Awaiting(_) | Place::Turn | Place::Leaving(_) | Place::Left => {
+            Place::Missing
+            | Place::Awaiting(_)
+            | Place::Turn
+            | Place::Checking(_)
+            | Place::Leaving(_)
+            | Place::Left => {
                 return self.deliver(cx);
             }
         }
@@ -346,12 +362,14 @@ impl DeliverySet {
     ) -> Progress<SetOutcome> {
         match self.place {
             Place::Awaiting(awaited) if awaited == effect => return self.on_turn(cx, outcome),
+            Place::Checking(awaited) if awaited == effect => return self.on_checked(cx, outcome),
             Place::Leaving(awaited) if awaited == effect => return self.on_left(outcome),
             Place::Taken
             | Place::Closed
             | Place::Missing
             | Place::Awaiting(_)
             | Place::Turn
+            | Place::Checking(_)
             | Place::Leaving(_)
             | Place::Left => {}
         }
@@ -408,8 +426,52 @@ impl DeliverySet {
                  delivered all the same"
             );
         }
+        if self.kind == SetKind::Rerun {
+            return self.check_room(cx);
+        }
         self.place = Place::Turn;
         self.deliver(cx)
+    }
+
+    /// Reads the room of a rerun's set, its turn come: the room may have
+    /// closed while the set waited in its lane, which refuses the rerun as
+    /// at its start (RFC §5.1, §13.6).
+    fn check_room(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
+        let request = StoreRequest::LoadContext {
+            room_id: self.event.room_id.clone(),
+            recent_events: cx.config.recent_events(),
+        };
+        self.place = Place::Checking(cx.io.issue(request));
+        Progress::Waiting
+    }
+
+    /// The room of a rerun's set, read once its turn came: a status that
+    /// refuses new events, or a room gone, refuses it before any agent runs,
+    /// `room_refused_event` naming the `regenerate` operation; a read that
+    /// failed is logged, and the agents run as planned.
+    fn on_checked(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<SetOutcome> {
+        self.place = Place::Turn;
+        let status = match outcome.into_context() {
+            Ok(context) => context.map(|context| context.room.status),
+            Err(error) => {
+                tracing::warn!(
+                    target: "roomkit::core::delivery",
+                    room_id = %self.event.room_id,
+                    error_type = %error.error_type,
+                    message = %error.message,
+                    "reading the room of a rerun once its turn came failed; its agents run as planned"
+                );
+                return self.deliver(cx);
+            }
+        };
+        if status.is_some_and(crate::model::RoomStatus::accepts_events) {
+            return self.deliver(cx);
+        }
+        if let Some(status) = status {
+            report::room_refused_as(cx, &self.event, RefusedOperation::Regenerate, status);
+        }
+        self.outcome.refused = true;
+        self.progress(cx)
     }
 
     /// The set left its place; a place that could not be left changes

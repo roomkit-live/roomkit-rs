@@ -18,6 +18,7 @@ mod lifecycle;
 mod named_room;
 mod off_lock;
 mod post;
+mod rerun;
 mod routing;
 mod support;
 mod timeout;

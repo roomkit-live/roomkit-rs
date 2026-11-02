@@ -278,8 +278,9 @@ impl Machine {
     ) {
         if outcome == Outcome::DeadlinePassed {
             // Only the wait for the lock carries the deadline: no lock is
-            // held, nothing was written (RFC §13.6).
-            return self.expire(cx, None);
+            // held, nothing was written (RFC §13.6). Its `process_timeout`
+            // names the operation, as Python's `regenerate` does.
+            return self.expire_as(cx, None, Some(RefusedOperation::Regenerate));
         }
         let ended = match section.accept(cx, effect, outcome) {
             Progress::Waiting => return self.stage.enter(Stage::Rerunning(section)),
@@ -333,6 +334,12 @@ impl Machine {
     /// new message's (RFC §10.1 step 18), its deliveries never reported
     /// again.
     pub(super) fn settle_rerun(&mut self, outcome: &SetOutcome) {
+        // The room closed while the set waited in its lane: refused as at
+        // its start, before any agent ran (RFC §5.1).
+        if outcome.refused {
+            self.trigger.result = room_closed();
+            return;
+        }
         self.trigger
             .result
             .response_metadata

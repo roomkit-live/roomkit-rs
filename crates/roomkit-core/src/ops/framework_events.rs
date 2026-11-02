@@ -232,6 +232,11 @@ pub enum FrameworkEvent {
         event_id: Option<EventId>,
         /// The timeout, in seconds.
         timeout: f64,
+        /// The operation the timeout stopped when it is no inbound call: a
+        /// rerun of the room's agents still waiting for the room's lock,
+        /// `regenerate` (Python's `data.operation`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operation: Option<RefusedOperation>,
     },
     /// A hook ran past its timeout.
     #[non_exhaustive]
@@ -505,6 +510,7 @@ impl FrameworkEvent {
             channel_id,
             event_id,
             timeout,
+            operation: None,
         }
     }
 
@@ -597,6 +603,7 @@ mod tests {
             channel_id: Some(ChannelId::new("sms").unwrap()),
             event_id: None,
             timeout: 2.5,
+            operation: None,
         };
         assert_eq!(
             serde_json::to_value(event).unwrap(),

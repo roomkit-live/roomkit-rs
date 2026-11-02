@@ -23,7 +23,7 @@
 
 use super::{InboundError, InboundResult, Machine};
 use crate::model::{EventId, Timestamp};
-use crate::ops::{Cx, FrameworkEvent, KitConfig, Notice};
+use crate::ops::{Cx, FrameworkEvent, KitConfig, Notice, RefusedOperation};
 
 /// The reason a call past its deadline is refused with (RFC §13.6).
 pub(super) const PROCESS_TIMEOUT: &str = "process_timeout";
@@ -61,8 +61,20 @@ impl Machine {
     /// ticket is released, and the events it committed, an adopted entry's,
     /// are delivered. The pass that held the lock released it already.
     pub(super) fn expire(&mut self, cx: &mut Cx<'_>, locked_event: Option<EventId>) {
+        self.expire_as(cx, locked_event, None);
+    }
+
+    /// [`expire`](Self::expire), its `process_timeout` naming `operation`,
+    /// the call's when it is no inbound call: a rerun of the room's agents,
+    /// `regenerate` (RFC §8.2).
+    pub(super) fn expire_as(
+        &mut self,
+        cx: &mut Cx<'_>,
+        locked_event: Option<EventId>,
+        operation: Option<RefusedOperation>,
+    ) {
         let before_the_lock = locked_event.is_none();
-        self.report_expiry(cx, locked_event);
+        self.report_expiry(cx, locked_event, operation);
         // The result as the call left it, an error met already included.
         let refused = InboundResult {
             event: None,
@@ -78,7 +90,12 @@ impl Machine {
     /// channel before the room lock and `locked_event`, the event whose
     /// pass held the lock, under it (RFC §8.2); a caller that stopped
     /// waiting is logged only, no deadline having passed.
-    fn report_expiry(&self, cx: &mut Cx<'_>, locked_event: Option<EventId>) {
+    fn report_expiry(
+        &self,
+        cx: &mut Cx<'_>,
+        locked_event: Option<EventId>,
+        operation: Option<RefusedOperation>,
+    ) {
         if cx.io.is_expired() {
             tracing::info!(
                 target: "roomkit::core::inbound",
@@ -110,6 +127,7 @@ impl Machine {
                 channel_id,
                 event_id: locked_event,
                 timeout,
+                operation,
             }));
     }
 }
