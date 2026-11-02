@@ -1351,3 +1351,25 @@ fn room_strategy_options_defaults_as_python() {
     // roomkit.RoomKit.room_strategy(organization_id) = None
     assert!(defaults.organization_id.is_none());
 }
+
+#[test]
+fn conversation_router_options_defaults_as_python() {
+    let defaults = orchestration::ConversationRouterOptions::default();
+    // roomkit.ConversationRouter.__init__(rules) = None
+    assert!(defaults.rules.is_empty());
+    // roomkit.ConversationRouter.__init__(default_agent_id) = None
+    assert!(defaults.default_agent_id.is_none());
+    // roomkit.ConversationRouter.__init__(supervisor_id) = None
+    assert!(defaults.supervisor_id.is_none());
+}
+
+#[test]
+fn transition_options_defaults_as_python() {
+    let defaults = orchestration::TransitionOptions::default();
+    // roomkit.ConversationState.transition(to_agent) = None
+    assert!(defaults.to_agent.is_none());
+    // roomkit.ConversationState.transition(reason) = ''
+    assert_eq!(defaults.reason, "");
+    // roomkit.ConversationState.transition(metadata) = None
+    assert!(defaults.metadata.is_empty());
+}

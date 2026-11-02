@@ -6,6 +6,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A room's conversation state and the conversation router (RFC §19.2,
+  §19.4), as Python's: `ConversationState` with `transition`,
+  `ConversationPhase`, `PhaseTransition`, `get_conversation_state`,
+  `set_conversation_state` and `save_conversation_state`, stored under the
+  room metadata's `_conversation_state`; `ConversationRouter` with
+  `RoutingRule` and `RoutingConditions`, whose `as_hook()` stamps
+  `_routed_to` and `_always_process`, and the broadcast asks the agent
+  stamped and the supervisor alone, where it asked every agent
+  (RMK-1233).
 - A whole copy of a runtime mark that no closing bracket follows takes
   only the mark's own punctuation with it, as Python's: `x context
   compacted - earlier conversation summary.` reads `x [A copy of a runtime

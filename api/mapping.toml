@@ -511,6 +511,11 @@ python = "roomkit.Agent"
 members = ["extra_tools", "thinks_while_listening", "is_config_only"]
 reason = "not in 0.x: tools added at run time, the thinker, and the config-only agent, which serves the realtime voice channel (left out of the orchestration lots, HITL a9e5d1a3)"
 
+[[missing]]
+python = "roomkit.ConversationRouter"
+members = ["install"]
+reason = "not yet: the router's install wires the handoff, which comes with stream I's lot 6 (HandoffHandler, setup_handoff; RMK-1233)"
+
 
 [[missing]]
 python = "roomkit.ConversationStore"
