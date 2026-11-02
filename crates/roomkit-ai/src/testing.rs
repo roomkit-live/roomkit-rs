@@ -71,6 +71,8 @@ pub struct ScriptedRound {
     context_overflow: Option<bool>,
     /// Whether its stream ends after its calls without its done event.
     pub without_done: bool,
+    /// Whether its failure or refusal comes after its calls.
+    failure_after_calls: bool,
 }
 
 impl ScriptedRound {
@@ -88,6 +90,7 @@ impl ScriptedRound {
             refuses: None,
             context_overflow: None,
             without_done: false,
+            failure_after_calls: false,
         }
     }
 
@@ -122,6 +125,7 @@ impl ScriptedRound {
             refuses: None,
             context_overflow: None,
             without_done: false,
+            failure_after_calls: false,
         }
     }
 
@@ -173,6 +177,14 @@ impl ScriptedRound {
     #[must_use]
     pub fn failing(mut self, message: impl Into<String>) -> Self {
         self.fails = Some(message.into());
+        self
+    }
+
+    /// The same round, its failure or its refusal coming once its calls
+    /// are written, never its done event: the provider began its answer.
+    #[must_use]
+    pub fn failing_after_calls(mut self) -> Self {
+        self.failure_after_calls = true;
         self
     }
 
@@ -242,7 +254,8 @@ impl AiProvider for ScriptedProvider {
     }
     /// The next round, as a stream: its text in its pieces, then its calls
     /// and its end (none for a round [`ScriptedRound::without_done`]), or
-    /// its failure once its text is written.
+    /// its failure once its text is written, or once its calls are for a
+    /// round [`ScriptedRound::failing_after_calls`].
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
         let round = self.next_round(context);
         Box::pin(items(
@@ -255,12 +268,21 @@ impl AiProvider for ScriptedProvider {
                     out.give(Ok(StreamEvent::TextDelta(StreamTextDelta { text })))
                         .await;
                 }
-                if let Some(failure) = round.failure() {
+                let failure = round.failure();
+                let (before, after) = if round.failure_after_calls {
+                    (None, failure)
+                } else {
+                    (failure, None)
+                };
+                if let Some(failure) = before {
                     return out.give(Err(failure)).await;
                 }
                 let finish_reason = round.done.finish_reason.as_deref();
                 for call in read_tool_calls(round.calls, finish_reason) {
                     out.give(Ok(StreamEvent::ToolCall(call.into()))).await;
+                }
+                if let Some(failure) = after {
+                    return out.give(Err(failure)).await;
                 }
                 if !round.without_done {
                     out.give(Ok(StreamEvent::Done(round.done))).await;

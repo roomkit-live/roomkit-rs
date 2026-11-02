@@ -339,6 +339,9 @@ pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
     if spec.get("done") == Some(&Value::Bool(false)) {
         round = round.without_done();
     }
+    if spec.get("failure_after_calls") == Some(&Value::Bool(true)) {
+        round = round.failing_after_calls();
+    }
     Ok(round)
 }
 

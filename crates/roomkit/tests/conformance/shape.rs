@@ -106,6 +106,7 @@ const MODEL_ROUND: &[&str] = &[
     "done",
     "gate",
     "refuses",
+    "failure_after_calls",
 ];
 const MODEL_CALL: &[&str] = &["id", "name", "arguments", "cut"];
 const TOOL: &[&str] = &[
