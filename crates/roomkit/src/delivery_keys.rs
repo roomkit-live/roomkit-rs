@@ -30,7 +30,7 @@ use roomkit_core::rules::verification::HELD_KEY;
 use tokio::time::Instant;
 
 /// A request to cut a delivery's turns, with its reason: what a
-/// cancellation by key, or a handle's `request_cancel`, asks of the run that
+/// cancellation by key, or a handle's `cancel`, asks of the run that
 /// delivers (RFC §10.1 "Explicit delivery cancellation").
 #[derive(Debug, Default)]
 pub(crate) struct CancelRequest(Mutex<Requested>);

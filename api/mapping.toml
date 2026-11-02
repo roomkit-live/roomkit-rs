@@ -762,11 +762,6 @@ reason = "not in 0.x: Rust has no provider contract; without one, deliver return
 # none left. "?": the plan names no lot.
 
 [[exception]]
-rust = "roomkit::DeliveryHandle::request_cancel"
-approved = "2026-10-30"
-reason = "Explicit nonblocking request followed by wait for joined cleanup; RFC 10.1 permits scoped detached cancellation (architecture: Explicit cancellation of a detached call)"
-
-[[exception]]
 rust = "roomkit_ai::SkillRegistry"
 members = ["tool_definitions"]
 approved = "2026-10-30"

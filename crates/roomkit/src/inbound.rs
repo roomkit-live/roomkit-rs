@@ -247,31 +247,6 @@ impl DeliveryHandle {
             }
     }
 
-    /// Request cancellation of this detached call's turns (RFC §10.1).
-    ///
-    /// This is idempotent and never aborts committed event delivery or closes
-    /// the kit. It stops generation and tool handlers in this call's cascade;
-    /// completed external effects and application-detached tasks remain.
-    /// Returns false for an already finished call or an adopted call whose
-    /// delivery belongs to its parent operation. Dropping a handle or a waiter
-    /// still does not cancel anything.
-    ///
-    /// A true result only acknowledges the request. Await [`Self::wait`] from
-    /// outside the call's room work to observe joined cleanup and the terminal
-    /// `caller_cancelled` result; failures must still be inspected.
-    pub fn request_cancel(&self) -> bool {
-        if self.done() {
-            return false;
-        }
-        match &self.shared.following {
-            Following::Run { record, .. } => {
-                record.request_cancel(driver::CALLER_CANCELLED);
-                true
-            }
-            Following::Adopted(_) | Following::Nothing => false,
-        }
-    }
-
     /// Stops this call's turns and waits for them to be over (RFC §10.1
     /// "Explicit delivery cancellation"), then reports the call as
     /// [`wait`](Self::wait) does, `cancellation_reason` the reason given: a
@@ -309,6 +284,18 @@ impl DeliveryHandle {
         tokio::time::timeout(timeout, self.wait())
             .await
             .map_err(|_elapsed| RoomKitError::Timeout)?
+    }
+
+    /// What [`cancel`](Self::cancel) asks for `reason`, without waiting for
+    /// the turns it cuts: a caller dropped while it waited for the delivery
+    /// asks it so, as Python's `deliver_to_channel` cancels the handle on its
+    /// caller's cancellation. Nothing is asked of a delivery done, nor from
+    /// the room's own work, where `cancel` refuses.
+    pub(crate) fn cancel_unwaited(&self, reason: &str) {
+        if self.done() || self.shared.waits_for_itself() {
+            return;
+        }
+        self.shared.request_cancel(reason);
     }
 
     /// Waits until the delivery is over, then reports the call as one that

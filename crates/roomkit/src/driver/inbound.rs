@@ -52,7 +52,7 @@ use crate::turns::Canceller;
 use crate::turns::TURN_LINK_ERROR;
 
 /// Why a call's delivery is cancelled when its caller asks it without a
-/// reason: its handle's `request_cancel`, Python's default
+/// reason: its handle's `cancel` by default, Python's
 /// `reason="caller_cancelled"`.
 pub(crate) const CALLER_CANCELLED: &str = "caller_cancelled";
 

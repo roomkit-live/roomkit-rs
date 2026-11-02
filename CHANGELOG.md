@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `DeliveryHandle::request_cancel` is removed; `cancel` is the
+  handle's only cancel, as Python's (RMK-1204). Write
+  `handle.cancel(CancelOptions::default()).await?` for
+  `handle.request_cancel()` then `handle.wait().await?`: it asks the same
+  cut, `caller_cancelled` by default, and returns once the cut turns are
+  over; it also reaches a call the room's work adopted.
 - A message the room's work adopts in its admission order (an off-lock
   hook's or a parse's `process_inbound` into its room), named by its
   delivery key, is named as the run that adopted it settles it, under the

@@ -26,7 +26,7 @@ use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
 };
 use roomkit::{
-    AttachChannelOptions, CancelDeliveryOptions, Channel, ChannelError,
+    AttachChannelOptions, CancelDeliveryOptions, CancelOptions, Channel, ChannelError,
     CompleteVerificationOptions, ConversationStore, CreateRoomOptions, InMemoryStore,
     InboundResult, ProcessInboundOptions, RequestVerificationOptions, RoomKit, RoomKitOptions,
 };
@@ -150,6 +150,14 @@ async fn cancellation_recorded(kit: &RoomKit, event_id: &EventId) {
         .expect("the cancellation was never recorded on the held event");
 }
 
+/// A handle's cancel for `user_stopped`, as Python's tests give it.
+fn user_stopped() -> CancelOptions {
+    CancelOptions {
+        reason: "user_stopped".to_owned(),
+        ..CancelOptions::default()
+    }
+}
+
 fn stopped() -> CancelDeliveryOptions {
     CancelDeliveryOptions {
         reason: "user_stopped".to_owned(),
@@ -266,7 +274,7 @@ async fn the_handle_reaches_a_held_message_while_its_delivery_set_runs() {
     let held = send(&kit, message("Wire 500 to Bob", None), true).await;
     let delivery = held.delivery.as_ref().unwrap();
 
-    assert!(delivery.request_cancel());
+    delivery.cancel(user_stopped()).await.unwrap();
     go.send_replace(true);
     delivery.wait().await.unwrap();
     cancellation_recorded(&kit, &held.event.as_ref().unwrap().id).await;
@@ -285,7 +293,7 @@ async fn the_handle_does_not_reach_a_held_message_once_its_delivery_set_ran() {
     let delivery = held.delivery.as_ref().unwrap();
     delivery.wait().await.unwrap();
 
-    assert!(!delivery.request_cancel());
+    delivery.cancel(user_stopped()).await.unwrap();
     drop(go);
     verify(&kit, held.event.as_ref().unwrap()).await;
 

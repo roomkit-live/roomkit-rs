@@ -17,6 +17,7 @@ use roomkit_core::rules::publications;
 use super::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
 use super::strategy::DeliveryContext;
 use crate::context::ExecutionContext;
+use crate::driver;
 use crate::error::RoomKitError;
 use crate::inbound::{DeliveryHandle, InboundResult};
 use crate::kit::RoomKit;
@@ -329,7 +330,7 @@ impl CancelOnDrop {
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
         if let Some(delivery) = self.0.take() {
-            delivery.request_cancel();
+            delivery.cancel_unwaited(driver::CALLER_CANCELLED);
         }
     }
 }

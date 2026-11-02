@@ -11,9 +11,9 @@ use roomkit::model::{
 };
 use roomkit::testing::TurnTap;
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
-    DeliveryStream, HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomKit,
-    RoomKitOptions, ToolCallEvent,
+    AttachChannelOptions, CancelOptions, Channel, ChannelError, ConversationStore,
+    CreateRoomOptions, DeliveryStream, HookExecution, HookOptions, HookTrigger,
+    ProcessInboundOptions, RoomKit, RoomKitOptions, ToolCallEvent,
 };
 use roomkit_ai::ToolResult;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
@@ -345,20 +345,19 @@ async fn cancelling_a_detached_handle_joins_its_tool_and_keeps_the_kit_usable() 
     tokio::time::timeout(std::time::Duration::from_secs(5), running.notified())
         .await
         .unwrap();
-    assert!(handle.request_cancel());
-    let done = tokio::time::timeout(std::time::Duration::from_secs(5), handle.wait())
-        .await
-        .unwrap()
-        .unwrap();
+    let done = handle.cancel(CancelOptions::default()).await.unwrap();
     assert_eq!(
         done.cancellation_reason.as_deref(),
         Some("caller_cancelled")
     );
     assert!(done.error.is_none());
     assert_eq!(*log.lock().unwrap(), vec!["cut"]);
-    assert!(!handle.request_cancel());
+    let again = CancelOptions {
+        reason: "user_stopped".to_owned(),
+        ..CancelOptions::default()
+    };
     assert_eq!(
-        handle.wait().await.unwrap().cancellation_reason,
+        handle.cancel(again).await.unwrap().cancellation_reason,
         done.cancellation_reason
     );
     let next = asks(&kit, "Continue after cancellation.").await;
