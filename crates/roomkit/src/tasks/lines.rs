@@ -130,14 +130,13 @@ pub(crate) fn room_tasks<'a>(entries: impl Iterator<Item = &'a StatusEntry>) -> 
         }
         let by_agent = format!("agent:{}", entry.agent_id);
         if !task_id.is_empty() && !lines.contains_key(&task_id) && lines.contains_key(&by_agent) {
+            // Keyed again by its task, the run's line goes last, as
+            // Python's `tasks[task_id] = tasks.pop(by_agent)` moves it.
             if let Some(line) = lines.remove(&by_agent) {
                 lines.insert(task_id.clone(), line);
             }
-            for key in &mut order {
-                if *key == by_agent {
-                    key.clone_from(&task_id);
-                }
-            }
+            order.retain(|key| *key != by_agent);
+            order.push(task_id.clone());
         }
         let key = if task_id.is_empty() {
             by_agent
@@ -229,4 +228,73 @@ fn level_name(level: StatusLevel) -> String {
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::*;
+
+    fn entry(agent: &str, status: StatusLevel, detail: &str, task_id: Option<&str>) -> StatusEntry {
+        let mut entry = StatusEntry::new("2026-10-05T18:00:00+00:00", agent, TASK_ACTION, status);
+        entry.detail = detail.to_owned();
+        entry.metadata.insert("room_id".to_owned(), json!("r"));
+        if let Some(task_id) = task_id {
+            entry.metadata.insert("task_id".to_owned(), json!(task_id));
+        }
+        entry
+    }
+
+    fn read(lines: &[Line]) -> Vec<(Value, Value, Value)> {
+        lines
+            .iter()
+            .map(|line| {
+                let member = |key| line.get(key).cloned().unwrap_or(Value::Null);
+                (member("task_id"), member("agent"), member("status"))
+            })
+            .collect()
+    }
+
+    // Python: tests/test_task_status.py::test_a_running_task_reads_running_and_an_orchestration_run_reads_as_one_task
+    #[test]
+    fn a_running_task_reads_running_and_an_orchestration_run_reads_as_one_task() {
+        let entries = [
+            entry("worker", StatusLevel::Pending, "The weather?", Some("t1")),
+            // A worker run, no id yet.
+            entry("writer", StatusLevel::Pending, "Write it.", None),
+            entry("writer", StatusLevel::Completed, "The text.", Some("t2")),
+        ];
+        let lines = room_tasks(entries.iter());
+
+        assert_eq!(
+            read(&lines),
+            vec![
+                (json!("t1"), json!("worker"), json!("running")),
+                (json!("t2"), json!("writer"), json!("completed")),
+            ]
+        );
+        assert_eq!(lines[1].get("task"), Some(&json!("Write it.")));
+    }
+
+    /// The run's line, keyed again by its task once its terminal entry names
+    /// it, goes last, as Python's `tasks[task_id] = tasks.pop(by_agent)`
+    /// moves it in the dict's order.
+    #[test]
+    fn a_run_s_line_keyed_by_its_task_goes_last() {
+        let entries = [
+            entry("writer", StatusLevel::Pending, "Write it.", None),
+            entry("worker", StatusLevel::Pending, "The weather?", Some("t1")),
+            entry("writer", StatusLevel::Completed, "The text.", Some("t2")),
+        ];
+
+        assert_eq!(
+            read(&room_tasks(entries.iter())),
+            vec![
+                (json!("t1"), json!("worker"), json!("running")),
+                (json!("t2"), json!("writer"), json!("completed")),
+            ]
+        );
+    }
 }
