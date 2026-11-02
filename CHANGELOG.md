@@ -6,6 +6,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A room's turns one after the other, and a message for the running turn,
+  Python's (RFC §6.4, §21.3, RMK-1160): `AiChannelOptions::
+  serialize_room_turns` and `steer_room_turns`, `Channel::
+  serializes_room_turns` and `steers_room_turns`, `ChannelDeclaration`'s
+  two fields. A serialized agent's turn in a room takes its place as its
+  delivery set asks it and starts, outside the delivery lane, once the turns
+  before it stored what they said, on the room as it is then less the
+  messages committed after it was asked; a waiting turn whose delivery is
+  cut, or whose agent left the room, never starts; a muted agent takes no
+  place. With `steer_room_turns`, a message for a room whose line holds the
+  agent's one running turn is stored as any message and steered into that
+  turn, under its speaker's label when several people speak; no turn of its
+  own starts.
 - Steering, Python's (RFC §21.3, §10.6.8, RMK-1160): `InjectMessage`,
   `Cancel`, `UpdateSystemPrompt` and `SteeringDirective` in
   `roomkit::model`, in Python's wire form; `AiChannel::steer(directive,
