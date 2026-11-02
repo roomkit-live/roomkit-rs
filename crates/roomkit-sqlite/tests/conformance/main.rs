@@ -65,7 +65,11 @@ use crate::support::TempFile;
 
 /// Scenario id → the rule this implementation breaks on this store: the
 /// in-memory store's (crates/roomkit/tests/conformance), none beyond.
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[(
+    "orchestration/an-install-sends-into-the-room-it-holds",
+    "§19.7, §13.5: an install's send into its room, under the room's lock, is refused \
+     ReentrantCall where it is stored (RMK-1252)",
+)];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.
