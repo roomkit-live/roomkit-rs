@@ -26,7 +26,8 @@ use roomkit::model::{
     ChannelCategory, ChannelOutput, DeliveryOutcome, DeliveryOutcomeStatus, EventContent,
     EventType, RoomContext, TaskStatus, ToolCallContent,
 };
-use roomkit::tasks::{DelegatedTask, SubmitOptions, TaskRunner, WaitOptions};
+use roomkit::orchestration::RecentOptions;
+use roomkit::tasks::{DelegatedTask, DelegatedTaskResult, SubmitOptions, TaskRunner, WaitOptions};
 use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions, idle,
 };
@@ -64,7 +65,8 @@ macro_rules! forward {
 /// An in-memory store whose reads of a room fail once `down` is set, as a
 /// database gone does; once `held` is set, its read of the room `r`'s
 /// participants, which a context of it reads, tells `entered`, then waits
-/// for `go`.
+/// for `go`; while `contexts_down` is set, that read fails, the room
+/// itself still read.
 #[derive(Debug, Default)]
 struct RoomReadsFail {
     store: InMemoryStore,
@@ -72,6 +74,7 @@ struct RoomReadsFail {
     held: AtomicBool,
     entered: Notify,
     go: Notify,
+    contexts_down: AtomicBool,
 }
 
 impl ConversationStore for RoomReadsFail {
@@ -79,6 +82,11 @@ impl ConversationStore for RoomReadsFail {
         if *room_id == room() && self.held.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
             self.go.notified().await;
+        }
+        if *room_id == room() && self.contexts_down.load(Ordering::SeqCst) {
+            return Err(StoreError::Unavailable(StoreFailure::new(
+                "the store is down",
+            )));
         }
         self.store.list_participants(room_id).await
     }
@@ -208,6 +216,75 @@ async fn a_parent_room_the_store_fails_to_read_fails_the_delegation_with_its_err
         "{refusal:?}"
     );
     kit.close().await.unwrap();
+}
+
+// Python: tests/tasks/test_delegation_ends_failed.py::test_a_task_failing_before_it_is_announced_fires_no_completion[inline], [background]
+// RFC §23.3: the parent room's context, read to announce the task, fails
+// once the room itself was read: the delegation fails with the store's
+// error before ON_TASK_DELEGATED fires, and nothing reports the end of a
+// task never announced. Its span is not asserted: roomkit-rs has no
+// telemetry.
+#[tokio::test]
+#[ignore = "RMK-1208: the announce swallows its context read's failure and the task runs"]
+async fn a_task_failing_before_it_is_announced_fires_no_completion() {
+    for wait in [true, false] {
+        let kit = kit_with(RoomReadsFail::default()).await;
+        let heard: Arc<Mutex<Vec<&'static str>>> = Arc::default();
+        for (trigger, name) in [
+            (HookTrigger::OnTaskDelegated, "delegated"),
+            (HookTrigger::OnTaskCompleted, "completed"),
+        ] {
+            let noted = Arc::clone(&heard);
+            let observer = HookOptions {
+                execution: HookExecution::Async,
+                ..HookOptions::default()
+            };
+            let record = move |_event: RoomEvent, _| {
+                noted.lock().unwrap().push(name);
+                ready(())
+            };
+            kit.hook(trigger, record, observer).unwrap();
+        }
+        let ended: Arc<Mutex<Vec<TaskStatus>>> = Arc::default();
+        let noted = Arc::clone(&ended);
+        let options = DelegateOptions {
+            wait,
+            on_complete: Some(Arc::new(move |result: DelegatedTaskResult| {
+                noted.lock().unwrap().push(result.status);
+                Box::pin(async {})
+            })),
+            ..DelegateOptions::default()
+        };
+
+        kit.store().contexts_down.store(true, Ordering::SeqCst);
+        let refused = kit
+            .delegate(&room(), &channel("worker"), "Count.", options)
+            .await;
+        kit.store().contexts_down.store(false, Ordering::SeqCst);
+        idle(&kit).await;
+
+        let refusal = refused.err().map(|refusal| {
+            refusal.to_string().contains("the store is down")
+                || std::error::Error::source(&refusal)
+                    .is_some_and(|cause| cause.to_string().contains("the store is down"))
+        });
+        let recent = RecentOptions {
+            agent_id: Some("worker".to_owned()),
+            ..RecentOptions::default()
+        };
+        let lines = kit.status_bus().recent(recent).await.len();
+        assert_eq!(
+            (
+                wait,
+                refusal,
+                heard.lock().unwrap().clone(),
+                ended.lock().unwrap().clone(),
+                lines
+            ),
+            (wait, Some(true), Vec::new(), Vec::new(), 0)
+        );
+        kit.close().await.unwrap();
+    }
 }
 
 // Python: tests/tasks/test_delegation_brief_and_hand_back.py::test_an_unknown_hand_back_and_a_negative_conversation_are_refused

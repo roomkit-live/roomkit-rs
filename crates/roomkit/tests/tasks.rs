@@ -15,12 +15,13 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, InboundMessage,
     RoomContext, RoomEvent, RoomId, TaskStatus,
 };
-use roomkit::orchestration::StatusEntry;
+use roomkit::orchestration::{RecentOptions, StatusEntry};
+use roomkit::store::FindRoomsOptions;
 use roomkit::tasks::{
     DelegatedTask, DelegatedTaskResult, OnCompleteCallback, SubmitOptions, TaskRunner, WaitOptions,
 };
 use roomkit::testing::{
-    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions, idle,
 };
 use roomkit::{
     AttachChannelOptions, CancelTaskOptions, Channel, ChannelError, ConversationStore,
@@ -469,6 +470,109 @@ async fn a_delegation_cut_before_its_task_ran_ends_it() {
         );
         kit.close().await.unwrap();
     }
+}
+
+/// A runner refusing every task, as a full queue does.
+struct Refuses;
+
+impl TaskRunner for Refuses {
+    fn submit(
+        &self,
+        _kit: RoomKit,
+        _task: DelegatedTask,
+        _options: SubmitOptions,
+    ) -> Boxed<Result<(), RoomKitError>> {
+        let full = RoomKitError::Runtime("the task runner is full".to_owned());
+        Box::pin(ready(Err(full)))
+    }
+
+    fn cancel(&self, _task_id: &str) -> Boxed<bool> {
+        Box::pin(ready(false))
+    }
+
+    fn close(&self) -> Boxed<()> {
+        Box::pin(ready(()))
+    }
+}
+
+// Python: tests/tasks/test_delegation_ends_failed.py::test_a_task_its_runner_refuses_ends_failed
+// RFC §23.3: the delegation fails with the runner's error and its task
+// ends failed wherever its end is read: ON_TASK_COMPLETED, its callback,
+// its child room's status and its line on the status bus, which
+// CancelTaskTool reads; nothing is handed back. Its span is not asserted:
+// roomkit-rs has no telemetry.
+#[tokio::test]
+async fn a_task_its_runner_refuses_ends_failed() {
+    let options = RoomKitOptions {
+        task_runner: Some(Arc::new(Refuses)),
+        ..RoomKitOptions::default()
+    };
+    let (kit, completed, heard) = kit_with(Agent::new("worker", false), options).await;
+    let speaker = Agent::new("speaker", false);
+    kit.register_channel(speaker.clone()).unwrap();
+    let room = RoomId::new("p").unwrap();
+    let as_agent = AttachChannelOptions {
+        category: Some(ChannelCategory::Intelligence),
+        ..AttachChannelOptions::default()
+    };
+    kit.attach_channel(&room, &channel("speaker"), as_agent)
+        .await
+        .unwrap();
+    let ended: Arc<Mutex<Vec<TaskStatus>>> = Arc::default();
+    let options = DelegateOptions {
+        notify: Some(channel("speaker")),
+        on_complete: Some(recording(&ended)),
+        ..DelegateOptions::default()
+    };
+
+    let refused = kit
+        .delegate(&room, &channel("worker"), "Count.", options)
+        .await;
+    settled(&heard).await;
+    idle(&kit).await;
+
+    let rooms = kit
+        .store()
+        .find_rooms(FindRoomsOptions::default())
+        .await
+        .unwrap();
+    let child = rooms.iter().find(|child| child.id != room).unwrap();
+    let recent = RecentOptions {
+        agent_id: Some("worker".to_owned()),
+        ..RecentOptions::default()
+    };
+    let lines: Vec<String> = kit
+        .status_bus()
+        .recent(recent)
+        .await
+        .iter()
+        .map(|entry| entry.status.to_string())
+        .collect();
+    let statuses: Vec<String> = completed
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(status, _)| status.clone())
+        .collect();
+    assert_eq!(
+        (
+            refused.err().map(|error| error.to_string()),
+            statuses,
+            ended.lock().unwrap().clone(),
+            child.metadata.get("task_status").cloned(),
+            lines,
+            speaker.asked.lock().unwrap().len()
+        ),
+        (
+            Some("the task runner is full".to_owned()),
+            vec!["failed".to_owned()],
+            vec![TaskStatus::Failed],
+            Some(serde_json::json!("failed")),
+            vec!["pending".to_owned(), "failed".to_owned()],
+            0
+        )
+    );
+    kit.close().await.unwrap();
 }
 
 // Python: tests/tasks/test_task_turn_record.py::test_a_task_cut_mid_turn_carries_its_turn_cancelled[close-inline]

@@ -423,6 +423,20 @@ mod tests {
         );
     }
 
+    // Python: tests/tasks/test_structured_result.py::TestResultHelpers::test_normalize_coerces_bad_types
+    #[test]
+    fn a_result_s_data_and_deliverables_of_another_type_are_emptied() {
+        let mut arguments = Metadata::new();
+        arguments.insert("summary".to_owned(), json!("s"));
+        arguments.insert("data".to_owned(), json!("not-a-dict"));
+        arguments.insert("deliverables".to_owned(), json!("nope"));
+        assert_eq!(
+            dumps(&normalize(&arguments)),
+            "{\"status\": \"completed\", \"summary\": \"s\", \"data\": {}, \"deliverables\": [], \
+             \"reason\": \"\"}"
+        );
+    }
+
     fn end_row(channel: &str, tool: &str, outcome: ToolCallOutcome) -> RoomEvent {
         let mut call = ToolCallContent::new(tool, "c1");
         call.arguments.insert("summary".to_owned(), json!("mine"));
@@ -455,6 +469,7 @@ mod tests {
     }
 
     // Python: tests/tasks/test_structured_result.py::TestOnlyTheWorkersServedResultCounts::test_the_scan_takes_the_workers_served_call
+    // Python: tests/tasks/test_structured_result.py::TestResultHelpers::test_normalize_fills_defaults
     #[test]
     fn the_scan_takes_the_worker_s_served_call() {
         let worker = ChannelId::new("w1").unwrap();
@@ -491,6 +506,7 @@ mod tests {
     }
 
     // Python: tests/tasks/test_structured_result.py::test_captures_prefixed_gateway_call_from_trace
+    // Python: tests/tasks/test_structured_result.py::TestResultHelpers::test_is_submit_result_matches_bare_and_prefixed
     #[test]
     fn a_prefixed_gateway_call_is_the_result_tool() {
         assert_eq!(
@@ -498,8 +514,10 @@ mod tests {
                 matches_result_tool("submit_result"),
                 matches_result_tool("mcp__gateway__submit_result"),
                 matches_result_tool("submit_results"),
+                matches_result_tool("web_search"),
+                matches_result_tool("submit_result_extra"),
             ],
-            [true, true, false]
+            [true, true, false, false, false]
         );
     }
 }
