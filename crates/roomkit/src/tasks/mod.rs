@@ -35,6 +35,12 @@ pub use self::delegated::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResu
 pub(crate) use self::hosted::HostTasks;
 pub(crate) use self::record::{AGENT_REACH, RoomTaskRecord, TaskCancel, TaskCancels, TaskReach};
 pub use self::runner::{InMemoryTaskRunner, OnCompleteCallback, SubmitOptions, TaskRunner};
+// For roomkit-ai's `TaskStatusTool` and `CancelTaskTool` alone, which
+// serve the task tools the kit serves as an owner's tools.
+#[doc(hidden)]
+pub use crate::kit::background_tools::{
+    TaskToolWindow, cancel_task_definition, task_status_definition,
+};
 
 use std::collections::{HashMap, HashSet};
 use std::pin::pin;

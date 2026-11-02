@@ -76,6 +76,7 @@ pub mod knowledge;
 pub mod memory;
 mod mock;
 mod provider;
+pub mod tasks;
 pub use images::ImageResolver;
 mod rows;
 mod server_instructions;

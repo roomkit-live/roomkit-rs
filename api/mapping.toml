@@ -54,6 +54,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::orchestration" = ["roomkit.orchestration"]
 "roomkit::identity" = ["roomkit.identity"]
 "roomkit::tasks" = ["roomkit.tasks"]
+"roomkit_ai::tasks" = ["roomkit.tasks"]
 
 # The Rust types a Python builtin stands for (decision 4; the architecture
 # table's "Types and values" and "Errors"), by path: the strong ids, values

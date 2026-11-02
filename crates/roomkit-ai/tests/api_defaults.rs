@@ -180,3 +180,15 @@ fn ai_channel_room_turn_options_defaults_as_python() {
     // roomkit.AIChannel.__init__(steer_room_turns) = False
     assert!(!defaults.steer_room_turns);
 }
+
+#[test]
+fn task_tool_options_defaults_as_python() {
+    let status = roomkit_ai::tasks::TaskStatusToolOptions::default();
+    // roomkit.tasks.TaskStatusTool.__init__(window) = 500
+    assert_eq!(status.window, 500);
+    // roomkit.tasks.TaskStatusTool.__init__(limit) = 10
+    assert_eq!(status.limit, 10);
+    let cancel = roomkit_ai::tasks::CancelTaskToolOptions::default();
+    // roomkit.tasks.CancelTaskTool.__init__(window) = 500
+    assert_eq!(cancel.window, 500);
+}
