@@ -5,13 +5,15 @@
 //! - `BEFORE_AI_GENERATION` once, before the turn's first generation: a
 //!   block runs none, and what the hooks leave of the context is the
 //!   turn's: its messages, system prompt, sampling and provider data, and
-//!   its toolset, a tool they took out withdrawn for the turn;
+//!   its toolset, a tool they added or redefined declared as they left it,
+//!   one they took out withdrawn for the turn;
 //! - `AFTER_TOOL_ROUND` after each round that ran calls, before the next is
 //!   built: its tools withdrawn, its messages read after the results;
 //! - `ON_AI_RESPONSE` once the loop reached its end, observed, then
 //!   `ai_response`.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use roomkit::model::{LoopEndReason, Metadata, RoomEvent};
 use roomkit_core::rules::transcript::{Message, Role, without_mark_copies};
@@ -89,7 +91,9 @@ impl<P: AiProvider> Loop<P> {
     }
 
     /// Makes `left`, what the hooks left of the context `built` of a
-    /// conversation of `conversation` messages, the turn's.
+    /// conversation of `conversation` messages, the turn's: its toolset
+    /// too, a tool they added or redefined declared as they left it, one
+    /// they took out withdrawn (Python's `_adopt_hook_toolset`).
     fn adopt(&mut self, built: &AiContext, left: AiContext, conversation: usize) {
         if left.messages != built.messages {
             self.adopted.messages = Some((left.messages, conversation));
@@ -98,14 +102,8 @@ impl<P: AiProvider> Loop<P> {
         self.temperature = left.temperature;
         self.max_tokens = left.max_tokens;
         self.adopted.metadata = left.metadata;
-        for tool in &left.tools {
-            let own = built
-                .tools
-                .iter()
-                .find(|declared| declared.name == tool.name);
-            if own != Some(tool) {
-                tracing::warn!(target: "roomkit::ai", tool = %tool.name, "a generation hook added or edited a tool: the turn declares its own toolset");
-            }
+        if left.tools != built.tools {
+            self.toolbox = Arc::new(self.toolbox.as_left(&left.tools));
         }
         let kept: BTreeSet<&str> = left.tools.iter().map(|tool| tool.name.as_str()).collect();
         self.adopted.withdrawn.extend(

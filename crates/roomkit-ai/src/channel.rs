@@ -380,7 +380,7 @@ impl<P: AiProvider> AiChannel<P> {
         let tool_handler = Arc::new(RwLock::new(tool_handler));
         let serving = (host || !tools.is_empty()).then(|| host_handler(&tool_handler));
         if let Some(served) = served_by(serving, tools)? {
-            toolbox.add_dyn(served.0, served.1)?;
+            toolbox.add_handler(served.0, served.1)?;
         }
         // A registry given, an empty one too, reserves the skill tools'
         // names, as Python's constructor does.

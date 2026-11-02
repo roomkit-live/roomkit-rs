@@ -19,6 +19,10 @@ pub(crate) struct Toolbox {
     /// The tools the agent serves itself that only read or unlock, which
     /// the policy does not govern (RFC §21.1 "Tools the channel provides").
     exempt: HashSet<String>,
+    /// The toolset of the host's tool handler, with the tools serving
+    /// themselves behind it: what serves a tool a generation hook adds
+    /// (RFC §6.4).
+    handler: Option<usize>,
 }
 
 impl std::fmt::Debug for Toolbox {
@@ -49,6 +53,62 @@ impl Toolbox {
         declared: Vec<AiTool>,
     ) -> Result<(), AiError> {
         self.insert(toolset, declared, false)
+    }
+
+    /// Takes `toolset`, the host's tool handler's, whose tools join the
+    /// agent's, and which serves a tool a generation hook adds (RFC §6.4).
+    ///
+    /// # Errors
+    ///
+    /// As [`add_dyn`](Self::add_dyn).
+    pub(crate) fn add_handler(
+        &mut self,
+        toolset: Arc<dyn DynToolset>,
+        declared: Vec<AiTool>,
+    ) -> Result<(), AiError> {
+        let position = self.toolsets.len();
+        self.insert(toolset, declared, false)?;
+        self.handler = Some(position);
+        Ok(())
+    }
+
+    /// The toolbox as a turn's `BEFORE_AI_GENERATION` hooks left the tools
+    /// it declares (RFC §6.4, What the generation hooks see): a tool of the
+    /// host's they redefined is declared and checked as they left it, and
+    /// one they added is declared after the others, served by the host's
+    /// handler. A name the agent serves itself (its skills', a person's,
+    /// the owner's) keeps its definition, and no tool is added under it
+    /// (RFC §21.1). What they took out is the loop's to withdraw. Python's
+    /// `_adopt_hook_toolset`.
+    pub(crate) fn as_left(&self, left: &[AiTool]) -> Self {
+        let mut adopted = self.clone();
+        for tool in left {
+            let served = self.served.get(&tool.name).copied();
+            match (served, self.handler) {
+                (Some(at), Some(handler)) if at == handler => {
+                    for (own, _) in adopted
+                        .tools
+                        .iter_mut()
+                        .filter(|(own, _)| own.name == tool.name)
+                    {
+                        own.clone_from(tool);
+                    }
+                }
+                (Some(_), _) => {
+                    if self.find(&tool.name).is_some_and(|(own, _)| own != tool) {
+                        tracing::warn!(target: "roomkit::ai", tool = %tool.name, "a generation hook redefined a tool the channel serves: its definition stands");
+                    }
+                }
+                (None, Some(handler)) => {
+                    adopted.served.insert(tool.name.clone(), handler);
+                    adopted.tools.push((tool.clone(), handler));
+                }
+                (None, None) => {
+                    tracing::warn!(target: "roomkit::ai", tool = %tool.name, "a generation hook added a tool no handler of the channel serves");
+                }
+            }
+        }
+        adopted
     }
 
     pub(crate) fn add_own(
