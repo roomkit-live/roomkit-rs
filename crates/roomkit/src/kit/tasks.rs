@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use roomkit_core::model::{
-    ChannelCategory, ChannelId, ChannelType, EventSource, EventStatus, EventType, Metadata, Room,
-    RoomContext, RoomEvent, RoomId, TaskStatus, TextContent, Visibility,
+    ChannelCategory, ChannelId, ChannelType, ErrorRecord, EventSource, EventStatus, EventType,
+    Metadata, Room, RoomContext, RoomEvent, RoomId, TaskStatus, TextContent, Visibility,
 };
 use roomkit_core::ops::{DelegatedAnswer, DelegatedTurn};
 use roomkit_core::rules::transcript::fence;
@@ -26,7 +26,7 @@ use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::orchestration::{PostOptions, StatusLevel};
 use crate::store::ConversationStore;
-use crate::store::GetConversationOptions;
+use crate::store::{GetConversationOptions, PatchRoomMetadataOptions};
 use crate::tasks::brief::{conversation_block, worker_description};
 use crate::tasks::text::{bounded_text, identifier, one_line, quoted};
 use crate::tasks::{
@@ -35,7 +35,7 @@ use crate::tasks::{
 };
 use crate::{
     AttachChannelOptions, CreateRoomOptions, DeliverOptions, GetRoomOptions, SendEventOptions,
-    UpdateBindingMetadataOptions, UpdateRoomMetadataOptions, driver,
+    UpdateBindingMetadataOptions, driver,
 };
 
 /// The fewest of the parent room's latest messages a delegation's
@@ -65,6 +65,10 @@ const MAX_RESULT_CHARS: usize = 4_000;
 
 /// The key of each responder's turn entry in a task's metadata (RFC §6.4).
 const TURNS_KEY: &str = "turns";
+
+/// The class of the failure of a task whose worker's turn ended before its
+/// answer: Python's `TaskCutShortError`.
+const TASK_CUT_SHORT: &str = "TaskCutShortError";
 
 /// The record key of how a turn ended (RFC §6.4).
 const LOOP_END_REASON: &str = "loop_end_reason";
@@ -146,6 +150,7 @@ pub(crate) struct TaskEnd {
     status: TaskStatus,
     output: Option<String>,
     error: Option<String>,
+    exception: Option<ErrorRecord>,
     metadata: Metadata,
 }
 
@@ -157,6 +162,9 @@ struct Failure {
     message: String,
     reason: Option<String>,
     narration: Option<String>,
+    /// The failure itself, its type kept: what the worker's turn raised,
+    /// or the cut that ended it (Python's `exception`).
+    exception: ErrorRecord,
 }
 
 impl TaskEnd {
@@ -180,6 +188,9 @@ impl TaskEnd {
             output = output.or_else(|| failure.narration.clone());
             metadata.insert(LOOP_END_REASON.to_owned(), json!(reason));
         }
+        let (error, exception) = failure
+            .map(|failure| (failure.message, failure.exception))
+            .unzip();
         Self {
             status: if completed {
                 TaskStatus::Completed
@@ -187,7 +198,8 @@ impl TaskEnd {
                 TaskStatus::Failed
             },
             output,
-            error: failure.map(|failure| failure.message),
+            error,
+            exception,
             metadata,
         }
     }
@@ -204,6 +216,7 @@ impl TaskEnd {
             status: TaskStatus::Cancelled,
             output: None,
             error: Some("cancelled".to_owned()),
+            exception: None,
             metadata,
         }
     }
@@ -212,6 +225,7 @@ impl TaskEnd {
         DelegatedTaskResult {
             output: self.output,
             error: self.error,
+            exception: self.exception,
             duration_ms: task.elapsed_ms(),
             metadata: self.metadata,
             ..DelegatedTaskResult::of(task, self.status)
@@ -568,7 +582,7 @@ impl<S: ConversationStore> RoomKit<S> {
             .submit(self.clone(), task.clone(), submitted)
             .await;
         if let Err(error) = &outcome {
-            let ended = failed(error.to_string(), options.context.as_ref());
+            let ended = failed(kit_failure(error), options.context.as_ref());
             self.complete_inline(task, ended.into_result(task), options)
                 .await;
         }
@@ -635,15 +649,18 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> TaskEnd {
         let mut status = Metadata::new();
         status.insert("task_status".to_owned(), json!("in_progress"));
-        if let Err(error) = self
-            .update_room_metadata(
+        // Its key alone, as Python's runner patches it.
+        let patched = self
+            .store()
+            .patch_room_metadata(
                 &task.child_room_id,
                 status,
-                UpdateRoomMetadataOptions::default(),
+                PatchRoomMetadataOptions::default(),
             )
-            .await
-        {
-            tracing::warn!(target: "roomkit::tasks", task = %task.id, %error, "the child room of the task could not be read");
+            .await;
+        if !matches!(patched, Ok(Some(_))) {
+            tracing::warn!(target: "roomkit::tasks", task = %task.id, "the child room of the task could not be read");
+            // No worker ran: no error raised, only its text, as Python's.
             let mut ended = TaskEnd::finished(None, None, context, Metadata::new());
             ended.error = Some(format!("Child room {} not found", task.child_room_id));
             return ended;
@@ -685,8 +702,8 @@ impl<S: ConversationStore> RoomKit<S> {
         let operation = DelegatedTurn::new(self.config(), task.child_room_id.clone(), message);
         let answers = match Box::pin(driver::run(&self.inner, "delegate", operation)).await {
             Ok(Ok(answers)) => answers,
-            Ok(Err(error)) => return failed(error.to_string(), context),
-            Err(error) => return failed(error.to_string(), context),
+            Ok(Err(error)) => return failed(delegation_failure(&error), context),
+            Err(error) => return failed(kit_failure(&error), context),
         };
         let (response, failure, turns) = task_outcome(&answers, &task.agent_id);
         if let Some(failure) = &failure {
@@ -707,11 +724,14 @@ impl<S: ConversationStore> RoomKit<S> {
             Value::Null
         };
         metadata.insert("task_result".to_owned(), answer);
+        // Its keys alone, through the store, as Python's `record_task_end`:
+        // it is written during the kit's close too.
         if let Err(error) = self
-            .update_room_metadata(
+            .store()
+            .patch_room_metadata(
                 &result.child_room_id,
                 metadata,
-                UpdateRoomMetadataOptions::default(),
+                PatchRoomMetadataOptions::default(),
             )
             .await
         {
@@ -956,14 +976,35 @@ fn short_hex() -> String {
         .collect()
 }
 
-/// A task that could not run its turn: failed with `message`.
-fn failed(message: String, context: Option<&Metadata>) -> TaskEnd {
+/// A task that could not run its turn: failed with `exception`.
+fn failed(exception: ErrorRecord, context: Option<&Metadata>) -> TaskEnd {
     let failure = Failure {
-        message,
+        message: exception.message.clone(),
         reason: None,
         narration: None,
+        exception,
     };
     TaskEnd::finished(None, Some(failure), context, Metadata::new())
+}
+
+/// A kit error as the failure of a task, under its Python class.
+fn kit_failure(error: &RoomKitError) -> ErrorRecord {
+    ErrorRecord::new(error.class_name(), error.to_string())
+}
+
+/// A delegated turn that could not run, as the failure of its task: the
+/// store's failure as it was recorded, a child room gone as Python's
+/// `RoomNotFoundError`, a refused commit as the kit's error.
+fn delegation_failure(error: &roomkit_core::ops::DelegationError) -> ErrorRecord {
+    match error {
+        roomkit_core::ops::DelegationError::Store(record) => record.clone(),
+        roomkit_core::ops::DelegationError::RoomNotFound(_) => {
+            ErrorRecord::new("RoomNotFoundError", error.to_string())
+        }
+        roomkit_core::ops::DelegationError::Commit(_) => {
+            ErrorRecord::new("RoomKitError", error.to_string())
+        }
+    }
 }
 
 /// The task's identity a trigger's payload carries.
@@ -1095,12 +1136,15 @@ fn task_outcome(
             message: error.message.clone(),
             reason: (!completed).then(|| end.clone()).flatten(),
             narration: (!completed).then(|| text.clone()).flatten(),
+            exception: error.clone(),
         };
         return (None, Some(failure), turns);
     }
     if let Some(reason) = end.filter(|end| end != "completed") {
+        let message = format!("The worker's turn ended {reason} before its answer");
         let failure = Failure {
-            message: format!("The worker's turn ended {reason} before its answer"),
+            exception: ErrorRecord::new(TASK_CUT_SHORT, message.clone()),
+            message,
             reason: Some(reason),
             narration: text,
         };

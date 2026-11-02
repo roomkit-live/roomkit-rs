@@ -541,11 +541,6 @@ members = [
 reason = "not in 0.x: delegation, tasks, orchestration strategies, human input and regeneration"
 
 [[missing]]
-python = "roomkit.tasks.DelegatedTaskResult.__init__"
-params = ["exception"]
-reason = "not in 0.x: the failure itself, kept with its type, beside its text in error (RMK-1158)"
-
-[[missing]]
 python = "roomkit.RoomKit.delegate"
 params = ["require_structured_result", "max_result_retries", "result_tool"]
 reason = "not in 0.x: a delegation's result tool (RMK-1158)"

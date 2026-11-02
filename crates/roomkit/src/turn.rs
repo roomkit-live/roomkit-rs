@@ -33,6 +33,7 @@ use crate::tool_calls::{ToolCallEvent, ToolCallReport, error_envelope};
 use crate::turns::wire::{
     ADD_OBSERVATION, AddObservation, BETWEEN_TURNS, DELEGATE, Delegate, POST_STATUS, PostStatus,
     ROOM_TASKS, RoomTasks, UPDATE_ROOM_METADATA, UpdateRoomMetadata, WAIT_TASK, WaitTask,
+    WireError,
 };
 use crate::turns::{HostLink, TurnError, send_event_arguments};
 use crate::{DelegateOptions, RoomKit, SendEventOptions, UpdateRoomMetadataOptions};
@@ -358,7 +359,15 @@ impl TurnHost {
         if waited.is_null() {
             return Ok(None);
         }
-        decoded(waited.get("result").cloned().unwrap_or(Value::Null)).map(Some)
+        let mut result: DelegatedTaskResult =
+            decoded(waited.get("result").cloned().unwrap_or(Value::Null))?;
+        // The failure crossed beside the result, its record kept.
+        result.exception = waited
+            .get("exception")
+            .filter(|exception| !exception.is_null())
+            .and_then(|exception| serde_json::from_value::<WireError>(exception.clone()).ok())
+            .map(|crossed| crate::turns::to_record(&crossed));
+        Ok(Some(result))
     }
 
     /// The turn's room's tasks, as `task_status` reads them on the room's

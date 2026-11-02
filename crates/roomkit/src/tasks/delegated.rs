@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use roomkit_core::model::{ChannelId, Metadata, RoomId, TaskStatus};
+use roomkit_core::model::{ChannelId, ErrorRecord, Metadata, RoomId, TaskStatus};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -30,6 +30,12 @@ pub struct DelegatedTaskResult {
     pub output: Option<String>,
     /// What failed it, as the failure's text.
     pub error: Option<String>,
+    /// The failure itself, its type kept (what the worker's turn raised),
+    /// for a caller that hands it on: held in memory, never serialized, as
+    /// Python's `exception` (RFC §23.3 step 6), its record as an exception
+    /// a model holds is.
+    #[serde(skip)]
+    pub exception: Option<ErrorRecord>,
     /// How long it ran, in milliseconds.
     pub duration_ms: f64,
     /// The delegation's context, and the worker's turn's record under
@@ -56,6 +62,7 @@ impl DelegatedTaskResult {
             status: TaskStatus::Completed,
             output: None,
             error: None,
+            exception: None,
             duration_ms: 0.0,
             metadata: Metadata::new(),
         }

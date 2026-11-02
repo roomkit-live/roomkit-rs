@@ -51,7 +51,7 @@ use uuid::Uuid;
 
 pub(crate) use self::codec::send_event_arguments;
 pub(crate) use self::error::{CHANNEL_ERROR, TURN_LINK_ERROR, record_of, variant_name};
-pub(crate) use self::error::{TurnError, TurnFailure};
+pub(crate) use self::error::{TurnError, TurnFailure, to_record};
 pub(crate) use self::executor::HostLink;
 use self::memory::Request;
 pub(crate) use self::memory::{CarriedRequest, MemoryTurn};

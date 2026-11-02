@@ -139,6 +139,15 @@ impl<S: ConversationStore> RoomKit<S> {
         {
             tracing::warn!(target: "roomkit::kit", %error, "the delivery backend's close failed");
         }
+        // So do its delegated tasks: each one its runner holds ends
+        // cancelled, its observers told, nothing handed back (RFC §23.3), as
+        // the Python implementation's close closes its task runner.
+        if tokio::time::timeout_at(grace, self.inner.task_runner.close())
+            .await
+            .is_err()
+        {
+            tracing::warn!(target: "roomkit::kit", "the task runner's close outlasted the grace");
+        }
         let readers_done = || turns.reads_none();
         let waited = tasks.unspared_idle(readers_done, turns.reads_changed());
         drop(tokio::time::timeout_at(grace, waited).await);

@@ -24,7 +24,7 @@ use super::Facts;
 use crate::orchestration::StatusEntry;
 use crate::turn::TurnKit;
 use crate::turns::codec::decode_send_event;
-use crate::turns::error::{kit_error, one};
+use crate::turns::error::{from_record, kit_error, one};
 use crate::turns::records::RoomRecords;
 use crate::turns::wire::{
     ADD_OBSERVATION, AddObservation, BETWEEN_TURNS, CallContext, DELEGATE, Delegate, OwnerMessage,
@@ -136,10 +136,12 @@ async fn run_verb(
             let waited = kit
                 .wait_task(scope.room_id.clone(), args.task_id, timeout)
                 .await;
-            Ok(waited.map_or(
-                Value::Null,
-                |result| serde_json::json!({ "result": result, "exception": Value::Null }),
-            ))
+            // The failure crosses beside the result, which never carries
+            // it, as Python's `{result, exception}`.
+            Ok(waited.map_or(Value::Null, |result| {
+                let exception = result.exception.as_ref().map(from_record);
+                serde_json::json!({ "result": result, "exception": exception })
+            }))
         }
         ROOM_TASKS => {
             let _: crate::turns::wire::RoomTasks = decoded(verb, arguments)?;
