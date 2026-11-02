@@ -10,6 +10,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   once that end is over however it stops, the close's cut included, as
   Python's (RFC §23.3, RMK-1186); a delegation announced as the kit's
   close began ends on a run of its own, which a cut caller leaves to run.
+- A release's answer is refused as Python's (RFC §11.7.6, RMK-1189): a
+  room that closes while the answer waits in the room's lane refuses it
+  when the lane takes it, `room_refused_event` naming `regenerate`, and no
+  agent runs; past `process_timeout` waiting for the room's lock, its
+  `process_timeout` event carries `data.operation = "regenerate"`.
+- The kit's clock reads microseconds, as Python's (RMK-1169): a message
+  and a verification request opened right after it no longer read the
+  same instant, so the request's window no longer takes in the message.
 - A delegated turn's child room is a room for the chain's depth limit and
   its metadata, as Python's (RFC §8.3, §10.1 step 15, RMK-1188): an agent
   whose answer would reach `max_chain_depth` is not asked, its `BLOCKED`
