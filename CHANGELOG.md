@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A release made from a SYNC hook (`complete_verification` under the
+  room's lock) places its answer in the room's lane at the release, and the
+  answer leaves its place once the hook's section is over, as Python's
+  (RFC §11.7.6, RMK-1200): a
+  hook that then closes the room has no agent answer the released message
+  (`room_refused_event`, operation `regenerate`), where the agent answered
+  it while the section still ran.
 - A tool answers a text and its images, as Python's `ToolResult` (RFC
   §6.4, §21.4, RMK-1218): `ToolResult::Parts(vec![ToolResultPart::Text(..),
   ToolResultPart::Image(..)])`, or a JSON list of part-shaped mappings. A

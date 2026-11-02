@@ -63,10 +63,7 @@ use crate::support::TempFile;
 
 /// Scenario id → the rule this implementation breaks on this store: none
 /// beyond the in-memory store's (crates/roomkit/tests/conformance).
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[(
-    "verification/a-release-from-a-hook-that-closes-the-room-is-answered-by-no-agent",
-    "§11.7.6: a hook's release is answered once its section is over (G-092, RMK-1200)",
-)];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.

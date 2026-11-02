@@ -91,8 +91,7 @@ use roomkit_core::ops::{ChannelRequest, Effect, EffectId, Request};
 use roomkit_core::rules::chain_depth::{self, Draw, ReentryBudget};
 
 pub(crate) use self::adoption::{Adopting, Adoption, Completion, Reply, adopt, adopt_by_own_run};
-use self::run::Lease;
-pub(crate) use self::run::{RunShared, Written};
+pub(crate) use self::run::{Lease, RunShared, Written};
 use crate::locks::RoomGuard;
 use crate::tasks::Marks;
 

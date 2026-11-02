@@ -5,6 +5,8 @@
 //!
 //! A lease is live while the run that holds the lock keeps the tenure it
 //! was given under, so a context kept past the release grants nothing.
+//! Code may wait for a lease's end: the end of the section that holds the
+//! lock under its tenure.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,7 +14,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::RoomId;
 use roomkit_core::ops::{EffectId, Outcome};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 
 use super::adoption::Adoption;
 use crate::room_turns::Queued;
@@ -47,6 +49,9 @@ pub(crate) struct RunShared {
     holdings: Mutex<Holdings>,
     adoptions: mpsc::UnboundedSender<Adoption>,
     tenures: AtomicU64,
+    /// Told each time a tenure of the run ends or begins: what waits for a
+    /// lease's end reads it again then.
+    tenure_changes: Notify,
     /// The streams the run's turns answered with, by their turn's effect,
     /// until they are read (RFC §6.1 `response_stream`).
     streams: Mutex<HashMap<EffectId, KeptStream>>,
@@ -78,6 +83,7 @@ impl RunShared {
             holdings: Mutex::new(Holdings::default()),
             adoptions,
             tenures: AtomicU64::new(0),
+            tenure_changes: Notify::new(),
             streams: Mutex::new(HashMap::new()),
             stops: Mutex::new(HashMap::new()),
             turns: Mutex::new(HashMap::new()),
@@ -94,6 +100,7 @@ impl RunShared {
     pub(crate) fn locked(&self, room_id: RoomId) {
         let tenure = self.tenures.fetch_add(1, Ordering::Relaxed);
         self.holdings().locks.insert(room_id, Tenure::Own(tenure));
+        self.tenure_changes.notify_waiters();
     }
 
     /// Records that the run was granted `room_id`'s lock on `lease`.
@@ -107,6 +114,7 @@ impl RunShared {
     /// tenure dies with it.
     pub(crate) fn released(&self, room_id: &RoomId) {
         self.holdings().locks.remove(room_id);
+        self.tenure_changes.notify_waiters();
     }
 
     /// Records that the call for `effect` runs.
@@ -135,6 +143,7 @@ impl RunShared {
     /// dropped: nothing of it was generated.
     pub(crate) fn clear(&self) {
         *self.holdings() = Holdings::default();
+        self.tenure_changes.notify_waiters();
         self.streams
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -253,6 +262,22 @@ impl Lease {
     /// The room whose lock the lease is on.
     pub(crate) fn room_id(&self) -> &RoomId {
         &self.room_id
+    }
+
+    /// Waits until the lease is no longer live: the run that holds the
+    /// lock let its tenure go, releasing the lock or ending. A lease that
+    /// is not live any more is over at once.
+    pub(crate) async fn over(&self) {
+        loop {
+            let changed = self.holder.tenure_changes.notified();
+            let mut changed = std::pin::pin!(changed);
+            // Registered before the read: a change between the two wakes it.
+            changed.as_mut().enable();
+            if !self.is_live() {
+                return;
+            }
+            changed.await;
+        }
     }
 
     /// Whether the holder still holds the lock under the lease's tenure.

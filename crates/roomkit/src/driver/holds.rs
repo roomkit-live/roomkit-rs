@@ -13,6 +13,12 @@
 //! section, RFC §22.1) is the run's from its start, until the operation,
 //! nested under it, releases it.
 //!
+//! A place taken in a room's lane under a lock granted on a lease (a
+//! release's answer made from a SYNC hook, RFC §11.7.6) keeps its rank,
+//! ahead of what that section commits after it, but its turn comes once
+//! the section is over: the set never runs while the work that placed it
+//! still holds the room.
+//!
 //! The run reads the execution context of the task that runs it:
 //!
 //! - a lock the context holds a live lease on is granted at once to a
@@ -46,7 +52,7 @@ use roomkit_core::model::{ErrorRecord, EventId, RoomId};
 use roomkit_core::ops::{EffectId, HoldOutcome, HoldRequest, Outcome};
 use tokio::time::Instant;
 
-use crate::context::{ExecutionContext, RunShared};
+use crate::context::{ExecutionContext, Lease, RunShared};
 use crate::locks::{RoomGuard, RoomMutexes};
 use crate::queues::{Place, RoomLanes, RoomTickets, Ticket};
 
@@ -108,7 +114,7 @@ enum LockHold<'kit> {
         #[expect(dead_code, reason = "held for its drop, which releases the lock")] RoomGuard<'kit>,
     ),
     /// Granted on its context's lease.
-    Granted,
+    Granted(Lease),
 }
 
 /// The room locks, lane places and admission tickets a run holds, released
@@ -122,6 +128,9 @@ pub(super) struct Held<'kit> {
     /// sets run from their placement, which the kit's close does not drop
     /// (RFC §12.10.4), until they leave.
     running: HashSet<(RoomId, EventId)>,
+    /// The places taken under a lock granted on a lease, with that lease:
+    /// their turn waits for its end.
+    leased: HashMap<(RoomId, EventId), Lease>,
     tickets: HashMap<RoomId, Ticket<'kit>>,
 }
 
@@ -133,6 +142,7 @@ impl<'kit> Held<'kit> {
             locks: HashMap::new(),
             places: HashMap::new(),
             running: HashSet::new(),
+            leased: HashMap::new(),
             tickets: HashMap::new(),
         }
     }
@@ -180,6 +190,9 @@ impl<'kit> Held<'kit> {
                 if rooms.lanes.is_first(&place) {
                     self.running.insert(key.clone());
                 }
+                if let Some(LockHold::Granted(lease)) = self.locks.get(&key.0) {
+                    self.leased.insert(key.clone(), lease.clone());
+                }
                 self.places.insert(key, place);
                 Hold::Now(HoldOutcome::Entered.into())
             }
@@ -189,6 +202,7 @@ impl<'kit> Held<'kit> {
             HoldRequest::LeaveLane { room_id, event_id } => {
                 let key = (room_id, event_id);
                 self.running.remove(&key);
+                self.leased.remove(&key);
                 self.places.remove(&key);
                 Hold::Now(HoldOutcome::Left.into())
             }
@@ -226,8 +240,8 @@ impl<'kit> Held<'kit> {
             if self.leases == Leases::Refused {
                 return Hold::Refused(room_id);
             }
-            self.shared.granted(lease);
-            self.locks.insert(room_id, LockHold::Granted);
+            self.shared.granted(lease.clone());
+            self.locks.insert(room_id, LockHold::Granted(lease));
             return Hold::Now(HoldOutcome::Locked.into());
         }
         let wait = async move {
@@ -237,9 +251,10 @@ impl<'kit> Held<'kit> {
         Hold::Wait(Box::pin(wait))
     }
 
-    /// The turn of the run's place for `event_id`: never refused, since a
-    /// place is taken at its event's commit and waits for nothing the
-    /// commit needs.
+    /// The turn of the run's place for `event_id`, once the section whose
+    /// lease the place was taken on is over, if it was: never refused,
+    /// since a place is taken at its event's commit and waits for nothing
+    /// the commit needs.
     fn await_place(
         &mut self,
         rooms: Rooms<'kit>,
@@ -255,10 +270,15 @@ impl<'kit> Held<'kit> {
                 "the run holds no place for the event in the room's lane",
             )));
         };
+        let section = self.leased.remove(&key);
         let wait = async move {
-            let came = super::within(deadline, rooms.lanes.turn(&place))
-                .await
-                .is_some();
+            let turn = async {
+                if let Some(section) = section {
+                    section.over().await;
+                }
+                rooms.lanes.turn(&place).await;
+            };
+            let came = super::within(deadline, turn).await.is_some();
             (effect, Waited::Place(key, place, came))
         };
         Hold::Wait(Box::pin(wait))
