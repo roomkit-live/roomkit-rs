@@ -120,6 +120,35 @@ async fn an_image_reaches_the_model_as_an_image_part() {
     );
 }
 
+/// A result whose image reaches the model as an image part keeps its texts
+/// within the bound a text result is held to: the text past it cut with a
+/// note, the image kept. The reference implementation bounds none of them.
+#[tokio::test]
+async fn an_image_s_result_keeps_its_texts_within_the_bound() {
+    let arguments = json!({ "shown": true, "text_chars": 150_000 });
+    let Ok(ToolResult::Parts(parts)) = answer("content", &arguments).await else {
+        panic!("the call answered no parts");
+    };
+    let texts: Vec<&str> = parts
+        .iter()
+        .filter_map(|part| match part {
+            ToolResultPart::Text(text) => Some(text.text.as_str()),
+            ToolResultPart::Image(_) => None,
+        })
+        .collect();
+    let images = parts.len() - texts.len();
+    let total: usize = texts.iter().map(|text| text.chars().count()).sum();
+    assert_eq!(
+        (
+            images,
+            total <= 100_000,
+            texts[0].ends_with("[truncated: the result was 150000 characters]"),
+            texts.len()
+        ),
+        (1, true, true, 1)
+    );
+}
+
 /// A result past 100,000 characters is cut, with a note saying how long it
 /// was, within the bound.
 #[tokio::test]

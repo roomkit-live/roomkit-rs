@@ -24,7 +24,9 @@ const MODEL_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "i
 /// it, as the reference implementation's `handler_result`:
 /// - a result with an image the vendors accept (PNG, JPEG, GIF or WebP,
 ///   its base64 decoding), its parts in order, each image an image part
-///   the model sees, each other part its text or its note;
+///   the model sees, each other part its text or its note, its texts
+///   within [`RESULT_LIMIT`] characters in all (the reference
+///   implementation bounds none of them);
 /// - otherwise, within [`RESULT_LIMIT`] characters, each part's text, one part read as itself and several as a JSON array
 ///   of them written as Python's `json.dumps` writes it, as the reference
 ///   implementation's `text_body` reads them;
@@ -45,9 +47,47 @@ pub(crate) fn read(name: &str, result: &CallToolResult) -> Result<ToolResult, To
         .iter()
         .any(|part| matches!(part, ToolResultPart::Image(_)))
     {
-        return Ok(ToolResult::Parts(parts));
+        return Ok(ToolResult::Parts(bounded_parts(name, parts)));
     }
     Ok(ToolResult::Text(body(name, result)))
+}
+
+/// `parts` with their texts within [`RESULT_LIMIT`] characters in all, as
+/// a text result is: each text kept whole while it fits, the one past the
+/// bound cut with a note saying how long it was, the texts after it left
+/// out; the images kept.
+fn bounded_parts(name: &str, parts: Vec<ToolResultPart>) -> Vec<ToolResultPart> {
+    let mut left = RESULT_LIMIT;
+    let mut cut = false;
+    let kept: Vec<ToolResultPart> = parts
+        .into_iter()
+        .filter_map(|part| {
+            let ToolResultPart::Text(text) = &part else {
+                return Some(part);
+            };
+            let size = text.text.chars().count();
+            if size <= left {
+                left -= size;
+                return Some(part);
+            }
+            if left == 0 {
+                return None;
+            }
+            cut = true;
+            let kept = bounded_result(&text.text, left);
+            left = 0;
+            Some(ToolResultPart::Text(AiTextPart::new(kept)))
+        })
+        .collect();
+    if cut {
+        tracing::warn!(
+            target: "roomkit::mcp",
+            tool = name,
+            kept = RESULT_LIMIT,
+            "an MCP tool's result is cut"
+        );
+    }
+    kept
 }
 
 /// One part of a result as the model reads it: an image the vendors

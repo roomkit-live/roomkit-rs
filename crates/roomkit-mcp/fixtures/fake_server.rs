@@ -347,8 +347,12 @@ fn call(params: &Value) -> Option<Value> {
         }),
         // With `shown`, an image the vendors take; otherwise an SVG and a
         // PNG whose base64 does not decode, which they do not.
+        // With `text_chars`, its first text that long.
         "content" => json!({ "content": [
-            { "type": "text", "text": "first" },
+            { "type": "text", "text": match arguments["text_chars"].as_u64() {
+                Some(chars) => "x".repeat(usize::try_from(chars).unwrap_or(10)),
+                None => "first".to_owned(),
+            } },
             if arguments["shown"] == true {
                 json!({ "type": "image", "data": PNG, "mimeType": "image/png" })
             } else {
