@@ -18,6 +18,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   organization_id })` reaches the turns the kit started, through the turn
   backend's `steer` and `steer_result`; a channel without steering takes
   a `Cancel` as its turn's cancel.
+- The store's verification records (RFC §11.7, §14.1, RMK-1122), Python's:
+  `Verification`, `VerificationRequest` and `VerificationRequestStatus`;
+  `ConversationStore::put_verification`, `get_verification`,
+  `list_verifications_in_force`, `create_verification_request`,
+  `get_verification_request` and `update_verification_request`, which a
+  store that keeps none refuses by name, kept by `InMemoryStore` and
+  `SqliteStore` in Python's `verifications` and `verification_requests`
+  tables.
 - Breaking: `AiChannelOptions::temperature` and `AiContext::temperature`
   are an `f64`, 0.7 by default, as Python's `float` (RMK-1089, decided by
   the maintainer): a model that takes no temperature is the provider's to
