@@ -163,11 +163,9 @@ impl<P: AiProvider> Loop<P> {
         let mut handed = call.clone();
         handed.intent = None;
         let answer = toolset.call(handed, context);
-        // A person's answer is bounded by its handler's timeout alone.
-        let bound = self
-            .bounds
-            .tool_timeout
-            .filter(|_| !toolset.bounds_itself());
+        // A person's answer is bounded by its handler's timeout alone, unless
+        // the tool has its own bound.
+        let bound = self.bounds.for_call(&call.name, toolset.bounds_itself());
         let answered = match bound {
             Some(bound) => tokio::time::timeout(bound, answer)
                 .await

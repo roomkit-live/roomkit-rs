@@ -284,3 +284,33 @@ fn a_zero_tool_timeout_is_refused() {
         [Some(AiError::ToolTimeout), None]
     );
 }
+
+// Python: tests/test_tool_timeout.py::TestToolTimeouts::test_a_bound_that_is_not_positive_is_refused
+#[test]
+fn a_tool_s_own_bound_of_zero_is_refused() {
+    let built = |bound| {
+        AiChannel::new(
+            channel("assistant"),
+            ScriptedProvider::new([]),
+            AiChannelOptions {
+                tool_timeouts: [("slow".to_owned(), bound)].into(),
+                ..AiChannelOptions::default()
+            },
+        )
+        .err()
+    };
+    assert_eq!(
+        [
+            built(Some(Duration::ZERO)),
+            built(None),
+            built(Some(Duration::from_secs(1)))
+        ],
+        [
+            Some(AiError::ToolTimeoutOf {
+                name: "slow".to_owned()
+            }),
+            None,
+            None
+        ]
+    );
+}

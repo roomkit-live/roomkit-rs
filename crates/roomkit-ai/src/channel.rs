@@ -1,6 +1,7 @@
 //! The AI channel (RFC §6.4, Appendix A.9): Python's `AIChannel`, an
 //! intelligence channel whose turn runs the tool loop over a provider.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::{self, Future};
 use std::sync::{Arc, PoisonError, RwLock};
@@ -86,6 +87,10 @@ pub struct AiChannelOptions {
     /// The longest a tool's call may take (RFC §21.6), more than zero;
     /// `None` bounds nothing.
     pub tool_timeout: Option<Duration>,
+    /// A bound per tool name, above `tool_timeout` and above a tool's own
+    /// bound (a person's answer), more than zero; `None` leaves that tool
+    /// unbounded (RFC §21.6). Python's `tool_timeouts`.
+    pub tool_timeouts: BTreeMap<String, Option<Duration>>,
     /// The skills the channel serves (RFC §24).
     pub skills: Option<SkillRegistry>,
     /// Whether the system prompt lists the skills; without, the host lists
@@ -138,6 +143,7 @@ impl Default for AiChannelOptions {
             tool_loop_warn_after: 25,
             max_empty_retries: 1,
             tool_timeout: Some(Duration::from_secs(30)),
+            tool_timeouts: BTreeMap::new(),
             skills: None,
             skills_in_prompt: true,
             tool_policy: None,
@@ -309,6 +315,7 @@ impl<P: AiProvider> AiChannel<P> {
             tool_loop_warn_after,
             max_empty_retries,
             tool_timeout,
+            tool_timeouts,
             skills,
             skills_in_prompt,
             tool_policy,
@@ -322,6 +329,12 @@ impl<P: AiProvider> AiChannel<P> {
         } = options;
         if tool_timeout.is_some_and(|bound| bound.is_zero()) {
             return Err(AiError::ToolTimeout);
+        }
+        if let Some((name, _)) = tool_timeouts
+            .iter()
+            .find(|(_, bound)| bound.is_some_and(|bound| bound.is_zero()))
+        {
+            return Err(AiError::ToolTimeoutOf { name: name.clone() });
         }
         let policy = tool_policy.unwrap_or_default();
         refuse_bracketed(&policy)?;
@@ -369,6 +382,7 @@ impl<P: AiProvider> AiChannel<P> {
                 warn_after: tool_loop_warn_after,
                 max_empty_retries,
                 tool_timeout,
+                tool_timeouts,
             },
             system_prompt: Arc::new(RwLock::new(
                 system_prompt.filter(|prompt| !prompt.is_empty()),

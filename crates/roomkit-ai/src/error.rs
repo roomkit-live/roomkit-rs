@@ -74,6 +74,13 @@ pub enum AiError {
         /// The names served.
         tool_names: Vec<String>,
     },
+    /// A tool's own bound (`tool_timeouts`) is zero (RFC §21.6): Python's
+    /// `ValueError`, a bound being positive or none.
+    #[error("tool timeout for '{name}' must be positive or None, got 0")]
+    ToolTimeoutOf {
+        /// The tool's name.
+        name: String,
+    },
 }
 
 /// `names` as Python writes a set of strings' items.

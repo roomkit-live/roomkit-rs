@@ -26,6 +26,7 @@ mod hooks;
 mod intents;
 mod rules;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -101,6 +102,21 @@ pub(crate) struct Bounds {
     /// The longest a call's tool may take (RFC §21.6, 30 seconds by
     /// default); `None` bounds nothing.
     pub(crate) tool_timeout: Option<Duration>,
+    /// A bound per tool name, above `tool_timeout` and a tool's own.
+    pub(crate) tool_timeouts: BTreeMap<String, Option<Duration>>,
+}
+
+impl Bounds {
+    /// The bound of a call to `name` (RFC §21.6), Python's
+    /// `ToolTimeouts.for_call(name, waits=...)`: the tool's own bound when
+    /// `tool_timeouts` names it, else none for a tool that `waits` on a
+    /// person by design, else the channel's.
+    pub(crate) fn for_call(&self, name: &str, waits: bool) -> Option<Duration> {
+        if let Some(own) = self.tool_timeouts.get(name) {
+            return *own;
+        }
+        if waits { None } else { self.tool_timeout }
+    }
 }
 
 /// One turn's loop: what it calls and how, owned, so that the turn's
@@ -508,5 +524,60 @@ fn add_usage(total: &mut Metadata, round: &Metadata) {
             .unwrap_or(0)
             .saturating_add(used);
         total.insert(name.clone(), Value::from(sum));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    fn bounds(default: Option<u64>, own: &[(&str, Option<u64>)]) -> Bounds {
+        Bounds {
+            max_rounds: 50,
+            loop_timeout: None,
+            warn_after: 25,
+            max_empty_retries: 1,
+            tool_timeout: default.map(Duration::from_secs),
+            tool_timeouts: own
+                .iter()
+                .map(|(name, bound)| ((*name).to_owned(), bound.map(Duration::from_secs)))
+                .collect(),
+        }
+    }
+
+    // Python: tests/test_tool_timeout.py::TestToolTimeouts::test_a_call_takes_the_default
+    #[test]
+    fn a_call_takes_the_default() {
+        assert_eq!(
+            bounds(Some(10), &[]).for_call("lookup", false),
+            Some(Duration::from_secs(10))
+        );
+    }
+
+    // Python: tests/test_tool_timeout.py::TestToolTimeouts::test_a_tool_bound_overrides_the_default
+    #[test]
+    fn a_tool_bound_overrides_the_default() {
+        let bounds = bounds(Some(10), &[("report", Some(120)), ("export", None)]);
+        assert_eq!(
+            (
+                bounds.for_call("report", false),
+                bounds.for_call("export", false)
+            ),
+            (Some(Duration::from_secs(120)), None)
+        );
+    }
+
+    // Python: tests/test_tool_timeout.py::TestToolTimeouts::test_a_tool_that_waits_keeps_its_own_bound_unless_named
+    #[test]
+    fn a_tool_that_waits_keeps_its_own_bound_unless_named() {
+        assert_eq!(
+            (
+                bounds(Some(10), &[]).for_call("ask_user", true),
+                bounds(Some(10), &[("ask_user", Some(30))]).for_call("ask_user", true)
+            ),
+            (None, Some(Duration::from_secs(30)))
+        );
     }
 }
