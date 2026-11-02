@@ -725,12 +725,17 @@ impl<P: AiProvider> AiChannel<P> {
         self.media.tool_usage.turn_images(room)
     }
 
-    /// Drops what the channel keeps for `room`: the author images its
-    /// provider refused there and its tools' images (RFC §6.4). Python's
-    /// `_forget_room`, of what the channel keeps here.
+    /// Drops what the channel keeps for `room` (RFC §6.4, §10.6.3): the
+    /// author images its provider refused there, its tools' images, and
+    /// the skills active there, which its next turn reads again from the
+    /// store. Python's `_forget_room`: roomkit-rs has none of the thought,
+    /// speak policy or plan it also drops.
     fn forget_room(&self, room: &RoomId) {
         self.media.refused.forget(room);
         self.media.tool_usage.forget(room);
+        if let Some(skills) = &self.skills {
+            skills.forget(room);
+        }
     }
 
     /// What the images the turn's `history` and its input `event` carry
@@ -968,10 +973,10 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         future::ready(Ok(()))
     }
 
-    /// Everything the channel keeps for the room goes with the binding
-    /// (RFC §6.4, §10.6.3): the images its provider refused there, and the
-    /// images its tools returned there, which it replays no more. Python's
-    /// `on_room_detached`, its `_forget_room`.
+    /// What the channel keeps for the room goes with the binding (RFC
+    /// §6.4, §10.6.3): the images its provider refused there, the images
+    /// its tools returned there, which it replays no more, and the skills
+    /// active there. Python's `on_room_detached`, its `_forget_room`.
     fn on_room_detached(
         &self,
         room_id: RoomId,
@@ -1176,5 +1181,51 @@ impl<P> fmt::Debug for AiChannel<P> {
             .field("skills", &self.skills.is_some())
             .field("tool_call_intents", &self.tool_call_intents)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use pretty_assertions::assert_eq;
+    use roomkit::model::Metadata;
+
+    use super::*;
+    use crate::provider::AiImagePart;
+    use crate::testing::ScriptedProvider;
+    use crate::{ToolResult, ToolResultPart};
+
+    /// RFC §6.4, §10.6.3: a detach alone, as an executor discarding a stale
+    /// room calls it, drops the room's refused images and its tools'
+    /// images, and no other room's.
+    // Python: tests/test_speak_listening.py::test_the_channel_forgets_the_state_of_a_room_it_leaves_or_joins,
+    // of what roomkit-rs keeps.
+    #[tokio::test]
+    async fn a_detach_forgets_the_room_s_images_alone() {
+        let id = ChannelId::new("ai1").unwrap();
+        let agent =
+            AiChannel::new(id, ScriptedProvider::new([]), AiChannelOptions::default()).unwrap();
+        let (room, other) = (RoomId::new("r1").unwrap(), RoomId::new("r2").unwrap());
+        let image = ToolResult::Parts(vec![ToolResultPart::Image(AiImagePart {
+            url: "data:image/png;base64,AAAA".to_owned(),
+            mime_type: Some("image/png".to_owned()),
+        })]);
+        for at in [&room, &other] {
+            let refused = HashSet::from([("data:image/png;base64,AQID".to_owned(), 0)]);
+            agent.media.refused.add(at, &refused);
+            agent
+                .media
+                .tool_usage
+                .record(at, "draw", &Metadata::new(), &image);
+        }
+        Channel::on_room_detached(&agent, room.clone())
+            .await
+            .unwrap();
+        let kept = |at: &RoomId| {
+            let images = agent.media.tool_usage.turn_images(at);
+            (agent.media.refused.of(at).len(), images.is_empty())
+        };
+        assert_eq!((kept(&room), kept(&other)), ((0, true), (1, false)));
     }
 }

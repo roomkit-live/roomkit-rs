@@ -95,6 +95,12 @@ impl Activations {
         self.keep(held);
     }
 
+    /// Drops `room`'s record: its next turn reads its stored rows again
+    /// (RFC §10.6.3). Python's `SkillActivationMemory.forget()`.
+    pub(crate) fn forget(&mut self, room: &RoomId) {
+        self.take(room);
+    }
+
     fn find(&self, room: &RoomId) -> Option<&Room> {
         self.rooms.iter().find(|held| &held.id == room)
     }
@@ -192,6 +198,27 @@ mod tests {
                 EventContent::ToolCall(row),
             )
         }
+    }
+
+    /// RFC §10.6.3: a room forgotten is read again from its stored rows,
+    /// the other rooms kept.
+    // Python: channels/_skill_activation.py SkillActivationMemory.forget, as
+    // AIChannel._forget_room calls it.
+    #[test]
+    fn a_forgotten_room_is_read_again_from_its_rows() {
+        let (room, other) = (RoomId::new("r1").unwrap(), RoomId::new("r2").unwrap());
+        let mut activations = Activations::default();
+        activations.hydrate(&room, &["doc-helper".to_owned()]);
+        activations.hydrate(&other, &["doc-helper".to_owned()]);
+        activations.forget(&room);
+        assert_eq!(
+            (
+                activations.needs_hydration(&room),
+                activations.active(&room),
+                activations.active(&other)
+            ),
+            (true, Vec::<String>::new(), vec!["doc-helper".to_owned()])
+        );
     }
 
     /// RFC §24.4: only the agent's own rows count, which it writes

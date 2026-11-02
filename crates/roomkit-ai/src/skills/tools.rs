@@ -209,6 +209,12 @@ impl SkillTools {
         Ok(ToolResult::Text(answer))
     }
 
+    /// Forgets the skills active in `room`: its next turn reads them again
+    /// from its stored rows (RFC §10.6.3).
+    pub(crate) fn forget(&self, room: &RoomId) {
+        self.lock().forget(room);
+    }
+
     fn lock(&self) -> MutexGuard<'_, Activations> {
         self.activations
             .lock()

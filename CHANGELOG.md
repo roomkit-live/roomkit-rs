@@ -9,7 +9,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - An AI channel attached to a room, or detached from it, forgets what it
   kept for the room, as Python's `_forget_room` (RMK-1219, RMK-1240): an
   agent that leaves and joins again sends the author images its provider
-  refused there, and replays none of the images its tools returned there.
+  refused there, replays none of the images its tools returned there, and
+  reads the skills active there again from the store.
 - An AI turn takes the `temperature` and `max_tokens` its binding's
   metadata sets, over the channel's own, as Python's `_turn_settings`
   (RFC §6.4, Appendix A.9, RMK-1237), a `null` there not set. Unlike

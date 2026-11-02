@@ -349,7 +349,7 @@ impl RefusedImages {
 
     /// Records `keys` as refused in `room`, the oldest room dropped past
     /// [`MAX_ROOMS`].
-    fn add(&self, room: &RoomId, keys: &HashSet<ImageKey>) {
+    pub(crate) fn add(&self, room: &RoomId, keys: &HashSet<ImageKey>) {
         let mut by_room = self.by_room.lock().unwrap_or_else(PoisonError::into_inner);
         let mut refused = by_room
             .iter()
