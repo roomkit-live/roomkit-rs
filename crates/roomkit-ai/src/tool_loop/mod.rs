@@ -20,6 +20,7 @@
 //! yet run.
 
 mod calls;
+mod footprint;
 mod generation;
 mod intents;
 mod rules;
@@ -34,6 +35,7 @@ use serde_json::Value;
 
 use self::generation::Generation;
 use self::rules::{Limits, final_round_reason};
+use crate::memory::after_memory;
 use crate::provider::{AiContext, AiMessage, AiProvider, ProviderError, ai_messages};
 use crate::steering::{Loops, Steering};
 use crate::stream::{Items, Yielder, items, join_all};
@@ -158,8 +160,10 @@ impl<P: AiProvider> Loop<P> {
                     .end(LoopEndReason::Cancelled, tool_rounds, spent, ending)
                     .await;
             }
-            let mut asked = self.remembered.clone();
-            asked.extend(ai_messages(&self.shown_messages(&messages)));
+            let asked = after_memory(
+                &self.remembered,
+                ai_messages(&self.shown_messages(&messages)),
+            );
             let context = AiContext {
                 messages: asked,
                 system_prompt: system_prompt.clone(),

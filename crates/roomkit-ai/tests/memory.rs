@@ -63,6 +63,7 @@ impl MemoryProvider for Scripted {
         Box::pin(future::ready(Ok(MemoryResult {
             messages: self.messages.clone(),
             events: self.events.clone(),
+            ..MemoryResult::default()
         })))
     }
 

@@ -869,11 +869,6 @@ params = [
 reason = "not in 0.x: continuation, thinking, provider retry and fallback, scripts and sandbox, external and human tools, structured output, eviction, planning, tool search, budgets, per-tool bounds, speaking turns, the thinker and coalescing"
 
 [[missing]]
-python = "roomkit.MemoryResult.__init__"
-params = ["notes", "speakers"]
-reason = "not in 0.x: what a memory retrieved for the turn alone (RFC 20.2 notes) and the speakers a summary names, which the turn's notes would carry (RMK-1162)"
-
-[[missing]]
 python = "roomkit.AIChannel"
 members = ["extra_tools", "thinks_while_listening"]
 reason = "not in 0.x: tools added at run time and the thinker"

@@ -9,8 +9,18 @@
 //!   (RFC §20.2).
 //! - [`SlidingWindowMemory`]: the default, the room's latest events (RFC
 //!   §20.3).
+//! - [`BudgetAwareMemory`]: another memory's events trimmed to a window of
+//!   tokens, once the turn's footprint ([`current_turn_footprint`]) is paid
+//!   for (RFC §20.3); the estimates it counts with
+//!   ([`estimate_tokens`], [`history_budget`]...).
 
+mod budget_aware;
+mod footprint;
+#[cfg(test)]
+mod mock;
+mod repr;
 mod sliding_window;
+mod token_estimator;
 
 use std::any::type_name;
 use std::future::{self, Future};
@@ -19,8 +29,22 @@ use std::pin::Pin;
 use roomkit::ChannelError;
 use roomkit::model::{ChannelId, RoomContext, RoomEvent, RoomId};
 
+pub use self::budget_aware::{BudgetAwareMemory, BudgetAwareMemoryOptions};
+pub(crate) use self::footprint::measured;
+pub use self::footprint::{TurnFootprint, current_turn_footprint};
+#[cfg(test)]
+pub(crate) use self::mock::{MockMemoryProvider, MockMemoryProviderOptions};
 pub use self::sliding_window::{SlidingWindowMemory, SlidingWindowMemoryOptions};
-use crate::provider::AiMessage;
+pub(crate) use self::token_estimator::estimate_tool_tokens;
+pub use self::token_estimator::{
+    EstimateEventTokensOptions, HistoryBudgetOptions, estimate_context_tokens,
+    estimate_event_tokens, estimate_message_tokens, estimate_notes_tokens, estimate_tokens,
+    extract_event_text, history_budget,
+};
+use roomkit_core::rules::transcript::without_mark_copies;
+use serde_json::Value;
+
+use crate::provider::{AiContentPart, AiMessage, AiMessageContent, AiRole, AiTextPart};
 
 /// How many of the room's latest events a provider that does not trim by
 /// count reads (Python's `DEFAULT_RECENT_EVENTS_WINDOW`): the ceiling of
@@ -28,16 +52,95 @@ use crate::provider::AiMessage;
 const DEFAULT_RECENT_EVENTS_WINDOW: usize = 2_000;
 
 /// What a memory provider answers a turn (RFC §20.2): Python's
-/// `MemoryResult(messages=[], events=[])`. `messages` come first, then
-/// `events`, converted by the channel as it converts its history.
+/// `MemoryResult(messages=[], events=[], notes=[], speakers=[])`.
+/// `messages` come first, then `events`, converted by the channel as it
+/// converts its history.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MemoryResult {
     /// Messages the provider built (a summary, an instruction), read before
-    /// the events.
+    /// the events; a user text they end on joins the user message after
+    /// them.
     pub messages: Vec<AiMessage>,
     /// The room's events the channel converts, oldest first.
     pub events: Vec<RoomEvent>,
+    /// What the provider retrieved for this turn alone (knowledge
+    /// passages): it changes from turn to turn, so the channel carries it
+    /// with the turn's notes, after the input, never in the history a
+    /// provider caches. A provider that wraps another and rebuilds its
+    /// result carries the inner notes.
+    pub notes: Vec<String>,
+    /// The labels `messages` name participants by, as the runtime gives
+    /// them (a summary's lines, `Alice`, `@sms1`): the channel counts them
+    /// toward labelling the turns that follow (RFC §6.4).
+    pub speakers: Vec<String>,
 }
+
+/// `memory`, the messages a memory built, then `rest`, the conversation: a
+/// user text `memory` ends on joins the user message that opens `rest`, a
+/// blank line between, rather than forming a second user message in a
+/// row (RFC §20.2). Python's `_after_memory`.
+pub(crate) fn after_memory(memory: &[AiMessage], mut rest: Vec<AiMessage>) -> Vec<AiMessage> {
+    let mut messages = memory.to_vec();
+    let Some(AiMessage {
+        role: AiRole::User,
+        content: AiMessageContent::Text(leading),
+        ..
+    }) = messages.last().cloned()
+    else {
+        messages.extend(rest);
+        return messages;
+    };
+    match rest.first_mut() {
+        Some(first) if first.role == AiRole::User => {
+            messages.pop();
+            first.content =
+                match std::mem::replace(&mut first.content, AiMessageContent::Parts(Vec::new())) {
+                    AiMessageContent::Text(text) if text.is_empty() => {
+                        AiMessageContent::Text(leading)
+                    }
+                    AiMessageContent::Text(text) if leading.is_empty() => {
+                        AiMessageContent::Text(text)
+                    }
+                    AiMessageContent::Text(text) => {
+                        AiMessageContent::Text(format!("{leading}\n\n{text}"))
+                    }
+                    AiMessageContent::Parts(parts) => {
+                        let lead = AiContentPart::Text(AiTextPart::new(leading));
+                        AiMessageContent::Parts(std::iter::once(lead).chain(parts).collect())
+                    }
+                };
+        }
+        Some(_) | None => {}
+    }
+    messages.extend(rest);
+    messages
+}
+
+/// `message`, a message a memory built, with each copy of a runtime mark
+/// in its text replaced, unless a memory of the runtime built it (a
+/// summary), whose marks are its own (RFC §6.4): Python's
+/// `_runtime_or_cleaned`.
+pub(crate) fn runtime_or_cleaned(mut message: AiMessage) -> AiMessage {
+    let written_by_runtime = matches!(message.metadata.get(RUNTIME_RECORD), Some(Value::String(_)));
+    if written_by_runtime {
+        return message;
+    }
+    match &mut message.content {
+        AiMessageContent::Text(text) => *text = without_mark_copies(text),
+        AiMessageContent::Parts(parts) => {
+            for part in parts {
+                if let AiContentPart::Text(part) = part {
+                    part.text = without_mark_copies(&part.text);
+                }
+            }
+        }
+    }
+    message
+}
+
+/// The metadata key, on a message, naming what the runtime wrote (a
+/// summary): its marks are the runtime's (RFC §6.4).
+pub(crate) const RUNTIME_RECORD: &str = "runtime_record";
 
 /// What [`MemoryProvider::retrieve`] takes beside the room, the event and
 /// the context: Python's keyword-only `channel_id=None`.

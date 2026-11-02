@@ -6,7 +6,10 @@
 use roomkit_ai::AiChannelOptions;
 use roomkit_ai::DiscoverOptions;
 use roomkit_ai::MockAiProviderOptions;
-use roomkit_ai::memory::{IngestOptions, RetrieveOptions, SlidingWindowMemoryOptions};
+use roomkit_ai::memory::{
+    BudgetAwareMemoryOptions, EstimateEventTokensOptions, HistoryBudgetOptions, IngestOptions,
+    RetrieveOptions, SlidingWindowMemoryOptions,
+};
 use std::time::Duration;
 
 #[test]
@@ -58,6 +61,26 @@ fn memory_options_defaults_as_python() {
     assert!(RetrieveOptions::default().channel_id.is_none());
     // roomkit.MemoryProvider.ingest(channel_id) = None
     assert!(IngestOptions::default().channel_id.is_none());
+    let budget = BudgetAwareMemoryOptions::default();
+    // roomkit.memory.BudgetAwareMemory.__init__(safety_margin_ratio) = 0.15
+    assert!((budget.safety_margin_ratio - 0.15).abs() < f64::EPSILON);
+    // roomkit.memory.BudgetAwareMemory.__init__(min_events) = 3
+    assert_eq!(budget.min_events, 3);
+    // roomkit.memory.BudgetAwareMemory.__init__(reserved_tokens) = 0
+    assert_eq!(budget.reserved_tokens, 0);
+    // roomkit.memory.estimate_event_tokens(text_only) = False
+    assert!(!EstimateEventTokensOptions::default().text_only);
+    let history = HistoryBudgetOptions::default();
+    // roomkit.memory.history_budget(safety_margin_ratio) = 0.15
+    assert!((history.safety_margin_ratio - 0.15).abs() < f64::EPSILON);
+    // roomkit.memory.history_budget(reserved_tokens) = 0
+    assert_eq!(history.reserved_tokens, 0);
+    // roomkit.memory.history_budget(messages) = None
+    assert!(history.messages.is_none());
+    // roomkit.memory.history_budget(current_event) = None
+    assert!(history.current_event.is_none());
+    // roomkit.memory.history_budget(reply_tokens) = 0
+    assert_eq!(history.reply_tokens, 0);
 }
 
 #[test]

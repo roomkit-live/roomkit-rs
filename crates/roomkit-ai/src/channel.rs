@@ -12,14 +12,16 @@ use roomkit::model::{
     SteeringDirective,
 };
 use roomkit::{Channel, ChannelError, current_turn_host};
-use roomkit_core::rules::transcript::conversation;
+use roomkit_core::rules::transcript::{
+    Message, TurnMemory, conversation_with_memory, replayed_rounds,
+};
 use serde_json::Value;
 
 use crate::error::AiError;
 use crate::images::ImageResolver;
 use crate::memory::{
     IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions, SlidingWindowMemory,
-    SlidingWindowMemoryOptions,
+    SlidingWindowMemoryOptions, TurnFootprint, measured, runtime_or_cleaned,
 };
 use crate::provider::{AiMessage, AiProvider};
 use crate::rows;
@@ -213,6 +215,14 @@ pub struct AiChannel<P> {
     loops: Arc<Loops>,
     /// How it takes a room's turns (RFC §6.4).
     room_turns: RoomTurns,
+}
+
+/// What a turn read of the room through its memory (RFC §20.2): its
+/// history, the messages the memory built, and its notes and speakers.
+struct Recalled {
+    history: RoomContext,
+    messages: Vec<AiMessage>,
+    memory: TurnMemory,
 }
 
 /// How an AI channel takes a room's turns (RFC §6.4).
@@ -471,28 +481,35 @@ impl<P: AiProvider> AiChannel<P> {
         }
     }
 
-    /// What a turn on `event` reads of the room: `context` with its history
-    /// as the memory retrieved it from the channel's view (RFC §20.1), the
+    /// What a turn on `event` reads of the room (RFC §20.1): `context` with
+    /// its history as the memory retrieved it from the channel's view, the
     /// channel's own tool rows kept beside it for the rounds it replays
-    /// (RFC §6.4), and the messages the memory built; nothing of the
-    /// memory for an instruction that stands alone, which reads none of
-    /// the room (RFC §10.1.1 rule 7).
+    /// (RFC §6.4), and what else the memory answered; nothing of the memory
+    /// for an instruction that stands alone, which reads none of the room
+    /// (RFC §10.1.1 rule 7). The memory reads the room within the turn's
+    /// `footprint` ([`crate::memory::current_turn_footprint`]).
     ///
     /// The memory reads the room's messages and the turn's event, as
     /// Python's turn context holds them: the channel's earlier rounds are
     /// read apart, so that they take none of its window.
-    async fn history(
+    async fn recalled(
         &self,
         event: &RoomEvent,
         context: &RoomContext,
         stands_alone: bool,
-    ) -> Result<(RoomContext, Vec<AiMessage>), ChannelError> {
+        footprint: TurnFootprint,
+    ) -> Result<Recalled, ChannelError> {
         let (rows, viewed): (Vec<RoomEvent>, Vec<RoomEvent>) = context
             .recent_events
             .iter()
             .cloned()
             .partition(|past| self.is_own_tool_row(past));
-        let MemoryResult { messages, events } = if stands_alone {
+        let MemoryResult {
+            messages,
+            events,
+            notes,
+            speakers,
+        } = if stands_alone {
             MemoryResult::default()
         } else {
             let viewed = RoomContext {
@@ -502,17 +519,43 @@ impl<P: AiProvider> AiChannel<P> {
             let options = RetrieveOptions {
                 channel_id: Some(self.channel_id.clone()),
             };
-            self.memory
-                .retrieve(&event.room_id, event, &viewed, options)
-                .await?
+            // Called within the footprint's scope: a memory may read it
+            // before it returns its future.
+            let read = async {
+                self.memory
+                    .retrieve(&event.room_id, event, &viewed, options)
+                    .await
+            };
+            measured(footprint, read).await?
         };
         let mut recent_events = events;
         recent_events.extend(rows);
-        let history = RoomContext {
-            recent_events,
-            ..context.clone()
-        };
-        Ok((history, messages))
+        Ok(Recalled {
+            history: RoomContext {
+                recent_events,
+                ..context.clone()
+            },
+            messages: messages.into_iter().map(runtime_or_cleaned).collect(),
+            memory: TurnMemory { notes, speakers },
+        })
+    }
+
+    /// The channel's earlier rounds of tool calls in `context`, which the
+    /// turn's history replays (RFC §6.4); none for an instruction that
+    /// stands alone, which reads none of the room (RFC §10.1.1 rule 7).
+    fn replayed(&self, context: &RoomContext, stands_alone: bool) -> Vec<Vec<Message>> {
+        if stands_alone {
+            return Vec::new();
+        }
+        let rows: Vec<RoomEvent> = context
+            .recent_events
+            .iter()
+            .filter(|past| self.is_own_tool_row(past))
+            .cloned()
+            .collect();
+        replayed_rounds(&rows, &self.channel_id, |name| {
+            self.toolbox.in_tool_memory(name)
+        })
     }
 
     /// Whether `event` is one of the channel's tool-call rows.
@@ -637,17 +680,6 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             return Ok(ChannelOutput::default());
         }
         let stands_alone = stands_alone(&event);
-        let (history, remembered) = self.history(&event, &context, stands_alone).await?;
-        let mut messages = conversation(&self.channel_id, &event, &history, usize::MAX, |name| {
-            self.toolbox.in_tool_memory(name)
-        });
-        crate::images::resolve(
-            &mut messages,
-            self.provider.supports_vision(),
-            self.image_resolver.as_deref(),
-            &context.room.id,
-        )
-        .await;
         let turn = current_turn_host();
         let system_prompt = self.turn_system_prompt(&context, stands_alone);
         let tools = ToolContext::new(context.room.id.clone(), self.channel_id.clone())
@@ -656,7 +688,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         // The tools the room's owner serves this turn join the agent's own
         // (RFC §10.6.5).
         let toolbox = crate::tools::owner::with_owner_tools(&self.toolbox, turn.as_ref())?;
-        let looped = Loop {
+        let mut looped = Loop {
             provider: Arc::clone(&self.provider),
             toolbox,
             policy: self.policy.clone(),
@@ -668,9 +700,31 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             context: tools,
             intents: self.tool_call_intents,
             intents_required: self.tool_call_intents_required,
-            remembered,
+            remembered: Vec::new(),
             loops: Arc::clone(&self.loops),
         };
+        // Measured as the first round sends it, before the memory reads the
+        // room (RFC §20).
+        let footprint = looped.footprint(&self.replayed(&context, stands_alone));
+        let recalled = self
+            .recalled(&event, &context, stands_alone, footprint)
+            .await?;
+        looped.remembered = recalled.messages;
+        let mut messages = conversation_with_memory(
+            &self.channel_id,
+            &event,
+            &recalled.history,
+            usize::MAX,
+            |name| self.toolbox.in_tool_memory(name),
+            &recalled.memory,
+        );
+        crate::images::resolve(
+            &mut messages,
+            self.provider.supports_vision(),
+            self.image_resolver.as_deref(),
+            &context.room.id,
+        )
+        .await;
         let items = looped.run(messages);
         match turn {
             // Within the kit, the turn is one stream, read as it is written.

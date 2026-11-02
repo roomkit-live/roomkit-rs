@@ -6,6 +6,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A memory's notes and speakers, and the budget-aware memory, Python's
+  (RFC §20, RMK-1165): `MemoryResult::notes`, which ride the turn's
+  notes after its input, and `MemoryResult::speakers`, which count toward
+  labelling the turns; a user text a memory's messages end on joins the
+  user message after it. `BudgetAwareMemory`, which trims the oldest
+  events to what the window leaves once the turn's footprint is paid for
+  (`TurnFootprint`, `current_turn_footprint()`, measured before the memory
+  reads the room), and the estimates it counts with (`estimate_tokens`,
+  `estimate_message_tokens`, `estimate_event_tokens`,
+  `estimate_context_tokens`, `estimate_notes_tokens`, `extract_event_text`,
+  `history_budget`).
 - A room's turns one after the other, and a message for the running turn,
   Python's (RFC §6.4, §21.3, RMK-1160): `AiChannelOptions::
   serialize_room_turns` and `steer_room_turns`, `Channel::
