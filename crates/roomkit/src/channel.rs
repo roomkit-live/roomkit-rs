@@ -65,6 +65,51 @@ pub struct ChannelDeclaration {
     /// (RFC §6.4, §21.3): `false` by default. It implies
     /// `serializes_room_turns`.
     pub steers_room_turns: bool,
+    /// Who the agent is, for an agent that says so (Python's `Agent`):
+    /// `None` by default.
+    pub identity: Option<AgentIdentity>,
+}
+
+/// Who an agent is (Python's `roomkit.AgentIdentity`): what its
+/// declaration tells the kit and the strategies of the rooms it serves.
+/// Every field is unset by default, but `auto_greet`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentIdentity {
+    /// Its display name, distinct from its channel id and its role.
+    pub name: Option<String>,
+    /// What it does, in a line: the identity block's `Role:`.
+    pub role: Option<String>,
+    /// A short label of what it does: the block's `Description:`.
+    pub description: Option<String>,
+    /// What it answers and what it leaves: the block's `Scope:`.
+    pub scope: Option<String>,
+    /// What it says first, once a session with it is ready.
+    pub greeting: Option<String>,
+    /// The language it answers in: the block's `Language:`.
+    pub language: Option<String>,
+    /// Its own instructions in concise form, for an orchestrator to frame
+    /// its tasks with.
+    pub purpose: Option<String>,
+    /// The voice it speaks with.
+    pub voice: Option<String>,
+    /// Whether it greets a session once ready: `true` by default.
+    pub auto_greet: bool,
+}
+
+impl Default for AgentIdentity {
+    fn default() -> Self {
+        Self {
+            name: None,
+            role: None,
+            description: None,
+            scope: None,
+            greeting: None,
+            language: None,
+            purpose: None,
+            voice: None,
+            auto_greet: true,
+        }
+    }
 }
 
 impl ChannelDeclaration {
@@ -80,6 +125,7 @@ impl ChannelDeclaration {
             recent_events_window: 50,
             serializes_room_turns: false,
             steers_room_turns: false,
+            identity: None,
         }
     }
 }
@@ -333,6 +379,7 @@ pub trait Channel: Send + Sync + 'static {
             recent_events_window: self.recent_events_window(),
             serializes_room_turns: self.serializes_room_turns(),
             steers_room_turns: self.steers_room_turns(),
+            identity: None,
         }
     }
 

@@ -12,6 +12,7 @@ use roomkit_ai::memory::{
     HistoryBudgetOptions, IngestOptions, MockMemoryProviderOptions, RetrievalMemoryOptions,
     RetrieveOptions, SlidingWindowMemoryOptions, SummarizingMemoryOptions,
 };
+use roomkit_ai::{AgentOptions, BuildIdentityBlockOptions};
 use roomkit_ai::{FromToolOptions, ToolDeclarationOrigin};
 use std::time::Duration;
 
@@ -35,6 +36,33 @@ fn from_tool_options_defaults_as_python() {
         FromToolOptions::default().origin,
         ToolDeclarationOrigin::Always
     );
+}
+
+#[test]
+fn agent_options_defaults_as_python() {
+    let defaults = AgentOptions::default();
+    // roomkit.Agent.__init__(name) = None
+    assert!(defaults.name.is_none());
+    // roomkit.Agent.__init__(role) = None
+    assert!(defaults.role.is_none());
+    // roomkit.Agent.__init__(description) = None
+    assert!(defaults.description.is_none());
+    // roomkit.Agent.__init__(purpose) = None
+    assert!(defaults.purpose.is_none());
+    // roomkit.Agent.__init__(scope) = None
+    assert!(defaults.scope.is_none());
+    // roomkit.Agent.__init__(voice) = None
+    assert!(defaults.voice.is_none());
+    // roomkit.Agent.__init__(greeting) = None
+    assert!(defaults.greeting.is_none());
+    // roomkit.Agent.__init__(language) = None
+    assert!(defaults.language.is_none());
+    // roomkit.Agent.__init__(auto_greet) = True
+    assert!(defaults.auto_greet);
+    // roomkit.Agent.__init__(identity_in_prompt) = True
+    assert!(defaults.identity_in_prompt);
+    // roomkit.Agent.build_identity_block(language) = None
+    assert!(BuildIdentityBlockOptions::default().language.is_none());
 }
 
 #[test]
@@ -200,6 +228,12 @@ fn steer_options_defaults_as_python() {
     // roomkit.AIChannel.steer(room_id) = None
     assert!(defaults.room_id.is_none());
     // roomkit.AIChannel.steer(turn_id) = None
+    assert!(defaults.turn_id.is_none());
+    // roomkit.Agent.steer(loop_id) = None
+    assert!(defaults.loop_id.is_none());
+    // roomkit.Agent.steer(room_id) = None
+    assert!(defaults.room_id.is_none());
+    // roomkit.Agent.steer(turn_id) = None
     assert!(defaults.turn_id.is_none());
 }
 

@@ -27,6 +27,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   does not adopt runs nested under that lock, on the lease of the code
   that made it, as Python's call nests under the lock its caller holds
   (RFC §6.1, §9.5.1, RMK-1245).
+- `roomkit_ai::Agent`, an AI channel with an identity, and
+  `roomkit::AgentIdentity`, as Python's (RFC §19.7, RMK-1244): its role,
+  description, scope and language end its turns' system prompt as an
+  identity block, in the language the room's conversation state sets,
+  unless `identity_in_prompt` is off; its declaration carries the identity
+  (`ChannelDeclaration::identity`).
 - A strategy's install holds its room's lock while it runs, as Python's
   (RFC §19.7, §13.5, RMK-1247): another caller's attach waits for it and
   stays bound after the uninstall; `create_room` with a strategy runs its

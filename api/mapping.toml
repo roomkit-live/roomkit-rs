@@ -183,6 +183,13 @@ py_spec = "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff
 reason = "Python's stores raise RoomKitError's classes, which Rust's store error names by its variants (lot 2's rule, decision 14)"
 
 [[map]]
+rust = "roomkit_ai::Agent::new"
+python = "roomkit.Agent.__init__"
+params = { ai = "kwargs" }
+py_spec = "sha256:56667118afbb2b6319f2073f4921ae72de0afd29382663882356bb88a3a999d4"
+reason = "Python's **kwargs, which go to the AIChannel it is: AgentOptions::ai (HITL 2af87061 item 5)"
+
+[[map]]
 rust = "roomkit::RoomKit::attach_channel"
 python = "roomkit.RoomKit.attach_channel"
 params = { direction = "kwargs", muted = "kwargs", output_muted = "kwargs", participant_id = "kwargs", group = "kwargs", last_read_index = "kwargs", attached_at = "kwargs", rate_limit = "kwargs", retry_policy = "kwargs", metadata = "kwargs" }
@@ -409,6 +416,17 @@ approved = "2026-11-02"
 reason = "the kit holds a room's strategy as a trait object, as its router: Orchestration's install and uninstall return a boxed future (architecture: the Python names table; HITL 2af87061)"
 
 [[exception]]
+rust = "roomkit_ai::Agent::new"
+params = ["provider"]
+approved = "2026-11-02"
+reason = "the provider is the channel's generic parameter: Agent::new takes it, and Python's provider=None, a config-only agent, is Agent::config_only, not in 0.x: it serves the realtime voice channel, left out (HITL 2af87061 item 5, HITL a9e5d1a3)"
+
+[[exception]]
+rust = "roomkit_ai::Agent::channel"
+approved = "2026-11-02"
+reason = "Python's Agent is an AIChannel subclass: the Rust Agent holds its AiChannel, a Channel by handing each call to it, the channel itself given by channel() (architecture: the Python names table; HITL 2af87061 item 5)"
+
+[[exception]]
 rust = "roomkit::orchestration::StrategyAgent"
 approved = "2026-11-02"
 reason = "Python's Orchestration.agents() returns `AIChannel | ACPChannel | str` in one list: a Rust list of a union is a type of its own, an agent given live or named by its id, as ToolEntry (architecture: the Python names table; HITL 2af87061)"
@@ -485,8 +503,14 @@ reason = "not in 0.x: identity resolution, active turns, tracing, sessions, a ro
 
 [[missing]]
 python = "roomkit.ChannelDeclaration.__init__"
-params = ["identity", "thinks_while_listening"]
-reason = "not in 0.x: agent identity and the thinker"
+params = ["thinks_while_listening"]
+reason = "not in 0.x: the thinker"
+
+[[missing]]
+python = "roomkit.Agent"
+members = ["extra_tools", "thinks_while_listening", "is_config_only"]
+reason = "not in 0.x: tools added at run time, the thinker, and the config-only agent, which serves the realtime voice channel (left out of the orchestration lots, HITL a9e5d1a3)"
+
 
 [[missing]]
 python = "roomkit.ConversationStore"

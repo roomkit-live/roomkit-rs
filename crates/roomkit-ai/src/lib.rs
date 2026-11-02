@@ -68,6 +68,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+mod agent;
 mod author_images;
 mod channel;
 mod error;
@@ -93,6 +94,7 @@ mod tools;
 mod transcript_content;
 mod turn_settings;
 
+pub use self::agent::{Agent, AgentOptions, BuildIdentityBlockOptions};
 pub use self::channel::{AiChannel, AiChannelOptions};
 pub use self::error::AiError;
 pub use self::human_input::{AskOptions, HumanInputToolHandler, HumanInputToolHandlerOptions};

@@ -20,6 +20,7 @@ use roomkit_core::rules::transcript::{
 };
 use serde_json::Value;
 
+use crate::agent::{IdentityPrompt, room_language};
 use crate::author_images::{
     AuthorImages, DEFAULT_MAX_AUTHOR_IMAGES, ImageResolver, RefusedImages, Resolver, SentImages,
     author_images, unseen_images, with_attached_media,
@@ -271,6 +272,9 @@ pub struct AiChannel<P> {
     /// registration on their handler, taken when a kit registers it; 0
     /// before.
     human_input: Option<(HumanInputToolHandler, Arc<AtomicU64>)>,
+    /// The identity block an [`Agent`](crate::Agent) writes at the end of
+    /// its turns' system prompt.
+    identity: Option<IdentityPrompt>,
 }
 
 /// How an AI channel reads its authors' media and its tools' images (RFC
@@ -343,6 +347,7 @@ impl<P> Clone for AiChannel<P> {
             loops: Arc::clone(&self.loops),
             room_turns: self.room_turns,
             human_input: self.human_input.clone(),
+            identity: self.identity.clone(),
         }
     }
 }
@@ -398,10 +403,7 @@ impl<P: AiProvider> AiChannel<P> {
         refuse_zero_bounds(tool_timeout, &tool_timeouts, turn_budget_tokens)?;
         let policy = tool_policy.unwrap_or_default();
         refuse_bracketed(&policy)?;
-        let mut instructions = ServerInstructions::default();
-        for (label, published) in &server_instructions {
-            instructions.add(label, published.as_deref())?;
-        }
+        let instructions = instructions_of(&server_instructions)?;
         let mut toolbox = Toolbox::default();
         // The host's handler is read at each call, so that a handler set
         // later serves the next calls (Python's `tool_handler` setter).
@@ -472,7 +474,15 @@ impl<P: AiProvider> AiChannel<P> {
                 steered: steer_room_turns,
             },
             human_input,
+            identity: None,
         })
+    }
+
+    /// The same channel, its turns' system prompt ending with `identity`'s
+    /// block: an [`Agent`](crate::Agent)'s.
+    pub(crate) fn with_identity(mut self, identity: Option<IdentityPrompt>) -> Self {
+        self.identity = identity;
+        self
     }
 
     /// The channel's provider: Python's `provider`.
@@ -589,16 +599,33 @@ impl<P: AiProvider> AiChannel<P> {
             None => self.system_prompt(),
         };
         let prompt = self.server_instructions.after(own.as_deref());
-        let Some(skills) = &self.skills else {
+        let prompt = match &self.skills {
+            None => prompt,
+            Some(skills) => {
+                let turn = SkillTurn {
+                    room: &context.room.id,
+                    agent: &self.channel_id,
+                    history: &context.recent_events,
+                    stands_alone,
+                };
+                Some(skills.system_prompt(prompt.as_deref(), turn))
+            }
+        };
+        self.with_identity_block(prompt, context)
+    }
+
+    /// `prompt`, an [`Agent`](crate::Agent)'s identity block after it, in
+    /// the room's language when its conversation state sets one (Python's
+    /// `_prompt_identity`, written last).
+    fn with_identity_block(&self, prompt: Option<String>, context: &RoomContext) -> Option<String> {
+        let Some(block) = self
+            .identity
+            .as_ref()
+            .and_then(|identity| identity.block(room_language(&context.room)))
+        else {
             return prompt;
         };
-        let turn = SkillTurn {
-            room: &context.room.id,
-            agent: &self.channel_id,
-            history: &context.recent_events,
-            stands_alone,
-        };
-        Some(skills.system_prompt(prompt.as_deref(), turn))
+        Some(prompt.unwrap_or_default() + &block)
     }
 
     /// Hands `event` to the memory as it reaches the channel, whether the
@@ -872,6 +899,16 @@ fn reserve_skill_names(toolbox: &Toolbox) -> Result<(), AiError> {
     }
 }
 
+/// The MCP servers' instructions the channel's turns write after their
+/// prompt (RFC §21.2), each under its server's label.
+fn instructions_of(servers: &[(String, Option<String>)]) -> Result<ServerInstructions, AiError> {
+    let mut instructions = ServerInstructions::default();
+    for (label, published) in servers {
+        instructions.add(label, published.as_deref())?;
+    }
+    Ok(instructions)
+}
+
 /// Refuses a bound of zero: a call's (`tool_timeout`), a tool's own
 /// (`tool_timeouts`, RFC §21.6), a turn's budget of tokens (RFC §6.4), as
 /// Python's constructor raises `ValueError` for each.
@@ -1123,6 +1160,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             recent_events_window: self.recent_events_window(),
             serializes_room_turns: Channel::serializes_room_turns(self),
             steers_room_turns: Channel::steers_room_turns(self),
+            identity: None,
         }
     }
 

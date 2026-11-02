@@ -143,7 +143,9 @@ pub use roomkit_core::rules::tool_intent;
 #[doc(hidden)]
 pub use roomkit_core::rules::instructions::turn_context;
 
-pub use self::channel::{Channel, ChannelDeclaration, ChannelError, default_inbound_event};
+pub use self::channel::{
+    AgentIdentity, Channel, ChannelDeclaration, ChannelError, default_inbound_event,
+};
 // Outside the public API (RMK-1208): the agent's crate names its
 // provider errors' Python class with it, which the kit cannot see.
 #[doc(hidden)]
