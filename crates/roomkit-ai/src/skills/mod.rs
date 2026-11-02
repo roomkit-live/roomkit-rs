@@ -30,4 +30,5 @@ pub use self::model::{DiscoverOptions, Skill, SkillMetadata};
 pub use self::registry::SkillRegistry;
 #[doc(hidden)]
 pub use self::texts::dumps;
+pub(crate) use self::texts::dumps_unescaped;
 pub(crate) use self::texts::quoted_name;

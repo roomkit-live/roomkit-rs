@@ -48,16 +48,12 @@ skill's own instructions (activate_skill already loads them) and NOT for stored 
 /// it by default: `", "` between members, `": "` after a name, and every
 /// character past ASCII escaped.
 pub(crate) fn object(members: &[(&str, Value)]) -> String {
-    let mut written = String::from("{");
-    for (at, (name, value)) in members.iter().enumerate() {
-        if at > 0 {
-            written.push_str(", ");
-        }
-        string(&mut written, name);
-        written.push_str(": ");
-        json(&mut written, value);
-    }
-    written.push('}');
+    let mut written = String::new();
+    write_object(
+        &mut written,
+        members.iter().map(|(name, value)| (*name, value)),
+        true,
+    );
     written
 }
 
@@ -68,37 +64,63 @@ pub(crate) fn object(members: &[(&str, Value)]) -> String {
 #[doc(hidden)]
 pub fn dumps(value: &Value) -> String {
     let mut written = String::new();
-    json(&mut written, value);
+    json(&mut written, value, true);
     written
 }
 
-/// `value`, written as Python's `json.dumps` writes it.
-fn json(written: &mut String, value: &Value) {
+/// `value` as Python's `json.dumps(value, ensure_ascii=False)` writes it:
+/// `", "` and `": "` between members, every character as itself.
+pub(crate) fn dumps_unescaped(value: &Value) -> String {
+    let mut written = String::new();
+    json(&mut written, value, false);
+    written
+}
+
+/// `members` as a JSON object, in order, written as Python's `json.dumps`
+/// writes one, characters past ASCII escaped when `ascii`.
+fn write_object<'a>(
+    written: &mut String,
+    members: impl Iterator<Item = (&'a str, &'a Value)>,
+    ascii: bool,
+) {
+    written.push('{');
+    for (at, (name, value)) in members.enumerate() {
+        if at > 0 {
+            written.push_str(", ");
+        }
+        string(written, name, ascii);
+        written.push_str(": ");
+        json(written, value, ascii);
+    }
+    written.push('}');
+}
+
+/// `value`, written as Python's `json.dumps` writes it, characters past
+/// ASCII escaped when `ascii`.
+fn json(written: &mut String, value: &Value, ascii: bool) {
     match value {
-        Value::String(text) => string(written, text),
+        Value::String(text) => string(written, text, ascii),
         Value::Array(items) => {
             written.push('[');
             for (at, item) in items.iter().enumerate() {
                 if at > 0 {
                     written.push_str(", ");
                 }
-                json(written, item);
+                json(written, item, ascii);
             }
             written.push(']');
         }
         Value::Object(members) => {
-            let members: Vec<(&str, Value)> = members
-                .iter()
-                .map(|(name, value)| (name.as_str(), value.clone()))
-                .collect();
-            written.push_str(&object(&members));
+            let members = members.iter().map(|(name, value)| (name.as_str(), value));
+            write_object(written, members, ascii);
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => written.push_str(&value.to_string()),
     }
 }
 
-/// `text` as a JSON string, every character past ASCII as `\uXXXX`.
-fn string(written: &mut String, text: &str) {
+/// `text` as a JSON string, its control characters escaped, and every
+/// character past ASCII as `\uXXXX` when `ascii`.
+fn string(written: &mut String, text: &str, ascii: bool) {
     written.push('"');
     for character in text.chars() {
         match character {
@@ -109,7 +131,7 @@ fn string(written: &mut String, text: &str) {
             '\t' => written.push_str("\\t"),
             '\u{8}' => written.push_str("\\b"),
             '\u{c}' => written.push_str("\\f"),
-            c if u32::from(c) < 0x20 || !c.is_ascii() => {
+            c if u32::from(c) < 0x20 || (ascii && !c.is_ascii()) => {
                 let mut units = [0_u16; 2];
                 for unit in c.encode_utf16(&mut units) {
                     let _infallible = write!(written, "\\u{unit:04x}");

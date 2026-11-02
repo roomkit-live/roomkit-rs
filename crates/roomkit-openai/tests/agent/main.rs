@@ -317,7 +317,7 @@ async fn a_call_s_result_goes_back_in_the_next_completion() {
                         "function": { "name": "lookup_order", "arguments": r#"{"order":"42"}"# },
                     }],
                 }),
-                json!({ "role": "tool", "tool_call_id": "call_1", "content": r#"{"status":"shipped"}"# }),
+                json!({ "role": "tool", "tool_call_id": "call_1", "content": r#"{"status": "shipped"}"# }),
             ]
         )
     );
@@ -706,7 +706,7 @@ async fn a_streamed_call_s_fragments_fold_into_the_call_that_runs() {
         .collect();
     assert_eq!(
         results,
-        [json!({ "role": "tool", "content": "{\"order\":\"42\"}", "tool_call_id": "call_7" })]
+        [json!({ "role": "tool", "content": "{\"order\": \"42\"}", "tool_call_id": "call_7" })]
     );
 }
 

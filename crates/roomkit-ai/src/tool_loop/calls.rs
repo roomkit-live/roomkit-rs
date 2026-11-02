@@ -11,6 +11,7 @@ use tokio::time::Instant;
 use super::generation::{Called, Partial};
 use super::{Loop, ToolEnd};
 use crate::provider::AiProvider;
+use crate::skills::dumps_unescaped;
 use crate::texts;
 use crate::tools::{ToolError, ToolResult, repair, schema};
 
@@ -225,12 +226,13 @@ fn ended(call: ToolCall, outcome: ToolCallOutcome, text: String) -> ToolCallRepo
 }
 
 /// `result` as the model reads it: a text as it is, any other value as its
-/// JSON (RFC §21.4).
+/// JSON (RFC §21.4), written as Python's `as_tool_result` writes it,
+/// `json.dumps(value, ensure_ascii=False)`.
 fn model_text(result: &Value) -> String {
     match result {
         Value::String(text) => text.clone(),
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
-            result.to_string()
+            dumps_unescaped(result)
         }
     }
 }
@@ -249,4 +251,33 @@ fn log_failure(report: &ToolCallReport) {
         detail = report.error_detail.as_deref().unwrap_or_default(),
         "a tool call did not serve"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::model_text;
+
+    // Python: tests/test_tool_results.py::test_a_return_value_outside_the_contract_reaches_the_model_as_json
+    /// A handler's JSON value reaches the model as Python's `as_tool_result`
+    /// writes it, `json.dumps(value, ensure_ascii=False)`.
+    #[test]
+    fn a_return_value_outside_the_contract_reaches_the_model_as_json() {
+        let cases = [
+            (json!(["a", "b"]), r#"["a", "b"]"#),
+            (json!([{"id": 1}]), r#"[{"id": 1}]"#),
+            (
+                json!({"a": 1, "b": [true, null]}),
+                r#"{"a": 1, "b": [true, null]}"#,
+            ),
+            (json!(null), "null"),
+            (json!(42), "42"),
+            (json!({"city": "Montréal"}), r#"{"city": "Montréal"}"#),
+        ];
+        for (value, read) in cases {
+            assert_eq!(model_text(&value), read);
+        }
+    }
 }

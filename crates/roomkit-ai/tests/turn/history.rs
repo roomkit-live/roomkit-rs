@@ -267,7 +267,7 @@ fn round_of(ids: &[String]) -> Vec<String> {
     let mut lines = vec![format!("calls {}", ids.join(" "))];
     lines.extend(ids.iter().map(|id| {
         let order = id.trim_start_matches(['c', 't']);
-        format!(r#"result {id} {{"order":"{order}","status":"shipped"}}"#)
+        format!(r#"result {id} {{"order": "{order}", "status": "shipped"}}"#)
     }));
     lines
 }

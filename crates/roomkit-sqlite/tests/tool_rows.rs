@@ -273,11 +273,11 @@ async fn a_restarted_kit_replays_the_rounds_its_file_holds() {
         [
             "User first",
             "calls c1",
-            r#"result c1 {"order":"1","status":"shipped"}"#,
+            r#"result c1 {"order": "1", "status": "shipped"}"#,
             "Assistant One.",
             "User second",
             "calls c1_7",
-            r#"result c1_7 {"order":"2","status":"shipped"}"#,
+            r#"result c1_7 {"order": "2", "status": "shipped"}"#,
             "Assistant Two.",
             "User third",
         ]

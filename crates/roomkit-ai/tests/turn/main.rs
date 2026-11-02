@@ -168,14 +168,14 @@ async fn a_sync_on_tool_call_hook_replaces_then_withholds_a_result() {
         (
             (
                 Some(ToolCallOutcome::Served),
-                json!(r#"{"order":"1","status":"[redacted]"}"#)
+                json!(r#"{"order": "1", "status": "[redacted]"}"#)
             ),
             (
                 Some(ToolCallOutcome::Blocked),
                 json!(r#"{"error": "Withheld by policy"}"#)
             ),
             vec![
-                r#"{"order":"1","status":"[redacted]"}"#.to_owned(),
+                r#"{"order": "1", "status": "[redacted]"}"#.to_owned(),
                 r#"{"error": "Withheld by policy"}"#.to_owned()
             ],
             2
@@ -523,7 +523,7 @@ async fn a_rewritten_call_runs_with_its_new_arguments_unless_they_do_not_fit() {
         (
             (
                 json!({ "order": "7" }),
-                json!(r#"{"order":"7","status":"shipped"}"#)
+                json!(r#"{"order": "7", "status": "shipped"}"#)
             ),
             (
                 Some(ToolCallOutcome::Refused),

@@ -171,7 +171,7 @@ async fn multiple_tool_rounds_replay_order_phases_and_reasoning_without_persisti
     assert_eq!(input[3]["id"], "fc_a");
     assert_eq!(
         input[4],
-        json!({"type":"function_call_output","call_id":"a","output":r#"{"order":"42"}"#})
+        json!({"type":"function_call_output","call_id":"a","output":r#"{"order": "42"}"#})
     );
     assert_eq!(input[5], second[0]);
     assert_eq!(input[6], second[1]);
