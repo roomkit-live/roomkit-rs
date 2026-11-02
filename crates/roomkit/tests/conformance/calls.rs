@@ -192,6 +192,9 @@ pub(crate) async fn call(
         input if crate::input_calls::handles(input) => {
             crate::input_calls::call(run, input, spec).await?
         }
+        verification if crate::verification_calls::handles(verification) => {
+            crate::verification_calls::call(run, verification, spec).await?
+        }
         _ => (lifecycle_call(run, name, spec).await?, None),
     })
 }

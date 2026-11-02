@@ -35,6 +35,7 @@ const KIT: &[&str] = &[
     "identity_channel_types",
     "identity_timeout_ms",
     "delivery_backend",
+    "verification_policy",
 ];
 const RESOLVER: &[&str] = &["answers"];
 const RESOLVER_ANSWER: &[&str] = &["when", "repeat", "gate", "fail", "result"];
@@ -311,7 +312,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
             return crate::task_calls::arguments(other)
                 .or_else(|| crate::store_calls::arguments(other))
                 .or_else(|| crate::member_calls::arguments(other))
-                .or_else(|| crate::input_calls::arguments(other));
+                .or_else(|| crate::input_calls::arguments(other))
+                .or_else(|| crate::verification_calls::arguments(other));
         }
     })
 }

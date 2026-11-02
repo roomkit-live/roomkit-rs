@@ -82,8 +82,9 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     let backend = delivery_backend(&setup["kit"]);
     let queue = backend.clone();
     let (kit, _store_file) = crate::new_kit(|options| {
-        let mut options =
+        let options =
             identity::kit_options(kit_options(options, &setup["kit"]), &setup["kit"], &slot);
+        let mut options = crate::verification_calls::kit_options(options, &setup["kit"]);
         if let Some(backend) = queue {
             options.delivery_backend = Some(Arc::new(backend));
         }

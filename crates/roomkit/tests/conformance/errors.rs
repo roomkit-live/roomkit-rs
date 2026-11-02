@@ -34,6 +34,9 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         RoomKitError::Value(_)
         | RoomKitError::ChannelAlreadyRegistered(_)
         | RoomKitError::ToolNameCollision(_) => named("invalid_argument"),
+        RoomKitError::VerificationRefused { reason } => {
+            json!({ "name": "verification_refused", "reason": reason })
+        }
         _ => return None,
     })
 }

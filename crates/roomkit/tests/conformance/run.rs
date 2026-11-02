@@ -136,6 +136,7 @@ impl Run {
             .iter()
             .chain(&crate::task_calls::LEVEL_2_EVENTS)
             .chain(&crate::input_calls::INPUT_EVENTS)
+            .chain(&crate::verification_calls::VERIFICATION_EVENTS)
             .copied()
             .collect();
         let events = EventTap::on(&kit, &tapped);
@@ -167,6 +168,12 @@ impl Run {
 
     pub(crate) fn kit(&self) -> &crate::Kit {
         &self.kit
+    }
+
+    /// Labels `value` as `label`, beside the labels the calls' `as` name:
+    /// a verification request's secret.
+    pub(crate) fn label(&self, label: String, value: String) {
+        lock(&self.labels).insert(label, Some(value));
     }
 
     pub(crate) fn problem(&self, problem: String) {

@@ -34,6 +34,7 @@ mod shape;
 mod store_calls;
 mod task_calls;
 mod templates;
+mod verification_calls;
 
 use std::time::Duration;
 

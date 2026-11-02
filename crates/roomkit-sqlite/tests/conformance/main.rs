@@ -47,6 +47,8 @@ mod support;
 mod task_calls;
 #[path = "../../../roomkit/tests/conformance/templates.rs"]
 mod templates;
+#[path = "../../../roomkit/tests/conformance/verification_calls.rs"]
+mod verification_calls;
 
 use std::time::Duration;
 
