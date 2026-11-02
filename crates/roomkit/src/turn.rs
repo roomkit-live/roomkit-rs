@@ -41,6 +41,7 @@ use crate::{DelegateOptions, RoomKit, SendEventOptions, UpdateRoomMetadataOption
 
 mod inputs;
 mod loop_hooks;
+mod media;
 
 pub use self::loop_hooks::TurnChain;
 
@@ -1254,9 +1255,21 @@ pub(crate) trait TurnKit: Send + Sync {
 
     /// The tasks of `room_id`, as its status bus lists them (RFC §23.4).
     fn room_tasks(&self, room_id: RoomId) -> BoxFuture<'static, Vec<Metadata>>;
+
+    /// The application's readers of an author's media the kit was built
+    /// with, which its AI channels read (RFC §6.4).
+    fn media(&self) -> crate::media::KitMedia {
+        crate::media::KitMedia::default()
+    }
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
+    fn media(&self) -> crate::media::KitMedia {
+        self.upgrade()
+            .map(|inner| inner.media.clone())
+            .unwrap_or_default()
+    }
+
     fn owner_tools(
         &self,
         channel_id: &ChannelId,

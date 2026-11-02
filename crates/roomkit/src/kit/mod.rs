@@ -252,6 +252,9 @@ pub(crate) struct Inner<S> {
     pub(crate) background_setups: RwLock<HashMap<ChannelId, background_tools::BackgroundSetup>>,
     /// Identity verification's policy, locks and timers (RFC §11.7).
     pub(crate) verification: verification::Verifications,
+    /// The application's readers of an author's media, which the kit's AI
+    /// channels read (RFC §6.4).
+    pub(crate) media: crate::media::KitMedia,
     /// The deliveries a caller named by a key (RFC §10.1 "Explicit
     /// delivery cancellation").
     pub(crate) delivery_keys: Arc<crate::delivery_keys::DeliveryKeys>,
@@ -290,6 +293,8 @@ impl<S: ConversationStore> RoomKit<S> {
             delivery_strategy,
             delivery_backend,
             verification_policy,
+            media_resolver,
+            attached_media,
         } = options;
         let mut config = KitConfig::new();
         config.max_chain_depth = max_chain_depth;
@@ -338,6 +343,10 @@ impl<S: ConversationStore> RoomKit<S> {
             owner_tools: crate::turns::served::OwnerToolStore::default(),
             background_setups: RwLock::new(HashMap::new()),
             verification: verification::Verifications::new(verification_policy),
+            media: crate::media::KitMedia {
+                media_resolver,
+                attached_media,
+            },
             delivery_keys: Arc::default(),
         });
         inner.subscribe_status_bus();

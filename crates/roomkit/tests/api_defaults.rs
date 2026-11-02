@@ -517,6 +517,10 @@ fn room_kit_options_defaults_as_python() {
     assert!(defaults.task_runner.is_none());
     // roomkit.RoomKit.__init__(verification_policy) = None
     assert!(defaults.verification_policy.is_none());
+    // roomkit.RoomKit.__init__(media_resolver) = None
+    assert!(defaults.media_resolver.is_none());
+    // roomkit.RoomKit.__init__(attached_media) = None
+    assert!(defaults.attached_media.is_none());
     // roomkit.RoomKit.__init__(store) = None
     let store: Arc<InMemoryStore> = defaults.store;
     assert_eq!(Arc::strong_count(&store), 1);

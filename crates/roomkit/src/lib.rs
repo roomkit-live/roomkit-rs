@@ -64,6 +64,7 @@ pub mod identity;
 mod inbound;
 mod kit;
 mod locks;
+mod media;
 pub mod orchestration;
 pub mod providers;
 mod queues;
@@ -198,6 +199,7 @@ pub use self::kit::{
     PublishPresenceOptions, PublishReactionOptions, PublishReadReceiptOptions,
     PublishToolCallOptions, PublishTypingOptions, SubscribeRoomOptions,
 };
+pub use self::media::{AttachedMedia, MediaResolver};
 pub use self::registered::RegisteredChannel;
 pub use self::router::{
     ChannelOf, DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, InboundRoomRouter,

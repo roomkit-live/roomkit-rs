@@ -113,6 +113,16 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// `None` leaves the pipeline as it is, the kit's verification calls
     /// reading the defaults.
     pub verification_policy: Option<VerificationPolicy>,
+    /// Python `media_resolver=None`: the bytes of a media the application
+    /// holds, a reference in its content, which every AI channel
+    /// registered on the kit asks as it builds a turn (RFC §6.4); `None`,
+    /// a reference reads as an image unavailable.
+    pub media_resolver: Option<crate::MediaResolver>,
+    /// Python `attached_media=None`: the media an event carries outside
+    /// its content, which every AI channel registered on the kit reads
+    /// after the event's own content, then resolves as an author's media
+    /// (RFC §6.4). The store and the broadcasts keep the event as stored.
+    pub attached_media: Option<crate::AttachedMedia>,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -142,6 +152,8 @@ impl<S> RoomKitOptions<S> {
             delivery_strategy: None,
             delivery_backend: None,
             verification_policy: None,
+            media_resolver: None,
+            attached_media: None,
         }
     }
 }
