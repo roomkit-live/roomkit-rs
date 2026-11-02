@@ -142,6 +142,10 @@ pub(crate) fn scripted_agent(
     if let Some(bound) = spec.get("tool_timeout_ms") {
         options.tool_timeout = milliseconds(bound, "tool_timeout_ms")?;
     }
+    if let Some(budget) = spec.get("turn_budget_tokens") {
+        let budget = budget.as_u64().ok_or("turn_budget_tokens: not a count")?;
+        options.turn_budget_tokens = Some(budget);
+    }
     for (name, bound) in spec["tool_timeouts_ms"].as_object().into_iter().flatten() {
         let bound = milliseconds(bound, "tool_timeouts_ms")?;
         options.tool_timeouts.insert(name.clone(), bound);
