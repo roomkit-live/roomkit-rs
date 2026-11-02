@@ -12,47 +12,8 @@ use serde_json::Value;
 
 use roomkit::model::ToolCall;
 
-use super::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError};
+use super::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolResult};
 use crate::error::AiError;
-
-/// What a tool's call answers with (RFC §21.4): Python's `ToolResult`, a
-/// text, which the model reads as it is, or a JSON value, which it reads as
-/// its JSON, as Python dumps a mapping.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ToolResult {
-    /// Text.
-    Text(String),
-    /// A JSON value.
-    Json(Value),
-}
-
-impl ToolResult {
-    /// The result as its hooks read it: a text as a JSON string.
-    pub(crate) fn into_value(self) -> Value {
-        match self {
-            Self::Text(text) => Value::String(text),
-            Self::Json(value) => value,
-        }
-    }
-}
-
-impl From<String> for ToolResult {
-    fn from(text: String) -> Self {
-        Self::Text(text)
-    }
-}
-
-impl From<&str> for ToolResult {
-    fn from(text: &str) -> Self {
-        Self::Text(text.to_owned())
-    }
-}
-
-impl From<Value> for ToolResult {
-    fn from(value: Value) -> Self {
-        Self::Json(value)
-    }
-}
 
 /// What a tool handler's call is: a future of its answer.
 pub type ToolFuture = Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send>>;
@@ -201,6 +162,7 @@ fn is_unknown_tool_answer(answer: &ToolResult) -> bool {
         ToolResult::Text(text) => {
             serde_json::from_str::<Value>(text).is_ok_and(|value| unknown(&value))
         }
+        ToolResult::Parts(_) => false,
     }
 }
 

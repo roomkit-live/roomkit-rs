@@ -227,7 +227,7 @@ fn lines(request: &AiContext) -> Vec<String> {
                 return message
                     .tool_results()
                     .into_iter()
-                    .map(|answers| format!("result {} {}", answers.tool_call_id, answers.result))
+                    .map(|answers| format!("result {} {}", answers.tool_call_id, answers.as_text()))
                     .collect::<Vec<_>>();
             }
             if !calls.is_empty() {

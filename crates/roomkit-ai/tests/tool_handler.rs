@@ -54,7 +54,7 @@ fn results(model: &ScriptedProvider) -> Vec<String> {
             message
                 .tool_results()
                 .into_iter()
-                .map(|result| result.result.clone())
+                .map(roomkit_ai::AiToolResultPart::as_text)
                 .collect::<Vec<_>>()
         })
         .collect()

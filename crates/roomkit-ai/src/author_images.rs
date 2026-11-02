@@ -385,7 +385,7 @@ impl SentImages {
 /// or rate limit (RFC §6.4). Only the turn's first request, before
 /// anything streamed, can say so: a later round, or a stream under way,
 /// shows the content was taken. Python's `refuses_content`.
-fn refuses_content(error: &ProviderError) -> bool {
+pub(crate) fn refuses_content(error: &ProviderError) -> bool {
     !error.retryable
         && !error
             .status_code
@@ -429,7 +429,13 @@ fn media_of(content: &EventContent) -> Vec<(usize, &MediaContent)> {
 /// Whether `media` is an image of a type every vision provider takes.
 /// Python's `is_vision_image`.
 pub(crate) fn is_vision_image(media: &MediaContent) -> bool {
-    VISION_IMAGE_TYPES.contains(&vision_image_type(media).as_str())
+    is_vision_type(&vision_image_type(media))
+}
+
+/// Whether `kind`, a folded media type, is one every vision provider
+/// takes: Python's `kind in VISION_IMAGE_TYPES`.
+pub(crate) fn is_vision_type(kind: &str) -> bool {
+    VISION_IMAGE_TYPES.contains(&kind)
 }
 
 /// The type `media` is read and sent as: its `data:` URI's, else its own,

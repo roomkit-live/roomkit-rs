@@ -66,6 +66,17 @@ fn an_image_costs_a_flat_thousand() {
     );
 }
 
+// Python: TestEstimateMessageTokens::test_tool_result_images_count_like_bare_images
+#[test]
+fn a_tool_result_s_images_cost_as_bare_images() {
+    let image = crate::ToolResultPart::Image(AiImagePart::new("data:image/png;base64,AAAA"));
+    let caption = crate::ToolResultPart::Text(AiTextPart::new("page"));
+    let result = AiToolResultPart::new("tc1", "shot", vec![caption, image.clone(), image]);
+    let text = estimate_tokens(&result.as_text());
+    let message = parts(AiRole::Tool, vec![AiContentPart::ToolResult(result)]);
+    assert_eq!(estimate_message_tokens(&message), 4 + text + 2 * 1000);
+}
+
 // Python: TestEstimateMessageTokens::test_tool_call_part, test_tool_result_part
 // and test_mixed_content
 #[test]

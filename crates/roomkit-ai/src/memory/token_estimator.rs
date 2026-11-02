@@ -50,8 +50,8 @@ fn truthy(value: &Value) -> bool {
 }
 
 /// What `message` costs, its role's overhead included: a text part its
-/// text, a call its name and its arguments as JSON, a result its text, an
-/// image a flat thousand. Python's `estimate_message_tokens`.
+/// text, a call its name and its arguments as JSON, a result its text and
+/// its images, an image a flat thousand. Python's `estimate_message_tokens`.
 pub fn estimate_message_tokens(message: &AiMessage) -> usize {
     let parts = match &message.content {
         AiMessageContent::Text(text) => return MESSAGE_OVERHEAD + estimate_tokens(text),
@@ -68,7 +68,10 @@ fn part_tokens(part: &AiContentPart) -> usize {
             let arguments = Value::Object(call.arguments.clone().into_iter().collect());
             estimate_tokens(&call.name) + estimate_tokens(&dumps(&arguments))
         }
-        AiContentPart::ToolResult(result) => estimate_tokens(&result.result),
+        // An image a tool returned is billed as one a person sent.
+        AiContentPart::ToolResult(result) => {
+            estimate_tokens(&result.as_text()) + IMAGE_TOKENS * result.result.images().len()
+        }
         AiContentPart::Image(_) => IMAGE_TOKENS,
     }
 }

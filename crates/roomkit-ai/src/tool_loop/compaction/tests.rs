@@ -25,7 +25,7 @@ fn result(id: &str) -> AiMessage {
     let part = AiToolResultPart {
         tool_call_id: id.to_owned(),
         name: "echo".to_owned(),
-        result: "ok".to_owned(),
+        result: "ok".into(),
         is_error: false,
     };
     AiMessage::new(

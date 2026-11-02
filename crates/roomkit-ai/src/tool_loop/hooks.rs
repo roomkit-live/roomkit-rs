@@ -24,9 +24,7 @@ use crate::loop_events::{
     AiGenerationEvent, AiResponseEvent, DeclaredTool, FromToolOptions, ToolRoundEvent,
     response_transcript,
 };
-use crate::provider::{
-    AiContext, AiMessage, AiProvider, AiToolCall, AiToolResultPart, ai_messages,
-};
+use crate::provider::{AiContext, AiMessage, AiProvider, AiToolCall, AiToolResultPart};
 
 /// What `BEFORE_AI_GENERATION`'s hooks and `AFTER_TOOL_ROUND`'s left of the
 /// turn's context beside its prompt and sampling, which the loop holds
@@ -94,7 +92,7 @@ impl<P: AiProvider> Loop<P> {
             return false;
         }
         // Counted as the provider reads them: a round's results are one message.
-        let conversation = ai_messages(&self.shown_messages(messages)).len();
+        let conversation = self.shown(messages).len();
         self.adopt(&built, chain.payload.ai_context, conversation);
         true
     }

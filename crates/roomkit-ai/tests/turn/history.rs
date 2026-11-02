@@ -128,7 +128,7 @@ fn check(requests: &[AiContext]) {
         Some(&AiToolResultPart {
             tool_call_id: "c2".to_owned(),
             name: "fail".to_owned(),
-            result: r#"{"error": "Tool 'fail' failed (RuntimeError)"}"#.to_owned(),
+            result: r#"{"error": "Tool 'fail' failed (RuntimeError)"}"#.into(),
             // A failed call reads as one, in its turn and replayed (RMK-1075).
             is_error: true,
         })
@@ -254,7 +254,7 @@ fn shape(request: &AiContext) -> Vec<String> {
             AiRole::Tool => message
                 .tool_results()
                 .into_iter()
-                .map(|result| format!("result {} {}", result.tool_call_id, result.result))
+                .map(|result| format!("result {} {}", result.tool_call_id, result.as_text()))
                 .collect(),
             AiRole::User => vec![format!("user {}", message.text())],
             AiRole::Assistant | AiRole::System => vec![format!("assistant {}", message.text())],

@@ -43,6 +43,7 @@ use self::generation::{Failed, Generation};
 pub(crate) use self::hooks::Adopted;
 use self::hooks::Ran;
 use self::rules::{Limits, final_round_reason};
+use crate::author_images::refuses_content;
 use crate::loop_events::DeclaredTool;
 use crate::memory::after_memory;
 use crate::provider::{
@@ -50,8 +51,10 @@ use crate::provider::{
 };
 use crate::steering::{Loops, Steering};
 use crate::stream::{Items, Yielder, items, join_all};
+use crate::tool_usage::{ToolUsageMemory, TurnMedia, carries_turn_images};
 use crate::tools::ToolContext;
 use crate::tools::ToolPolicy;
+use crate::tools::ToolResult;
 use crate::tools::toolbox::Toolbox;
 
 /// One item of a turn's loop, in the order it happens.
@@ -79,8 +82,8 @@ pub(crate) struct ToolEnd {
     pub(crate) call: ToolCall,
     /// How it ended.
     pub(crate) outcome: ToolCallOutcome,
-    /// What the model reads of it.
-    pub(crate) result: String,
+    /// What the model reads of it: a text, or its parts.
+    pub(crate) result: ToolResult,
     /// How long it took, its gate included.
     pub(crate) duration: Duration,
 }
@@ -154,6 +157,12 @@ pub(crate) struct Loop<P> {
     /// The author images the turn's requests send, which a refusal of its
     /// first request marks refused in the room (RFC §6.4).
     pub(crate) sent_images: Option<crate::author_images::SentImages>,
+    /// The images the room's tool calls returned, which a call records and
+    /// a refusal of the turn's first request forgets (RFC §6.4).
+    pub(crate) tool_usage: Arc<ToolUsageMemory>,
+    /// The results of parts the turn's calls answered and the images its
+    /// input replays, which each request carries.
+    pub(crate) media: TurnMedia,
 }
 
 impl<P: AiProvider> Loop<P> {
@@ -201,7 +210,7 @@ impl<P: AiProvider> Loop<P> {
             let mut generation = match read {
                 Ok(generation) => generation,
                 Err(failure) => {
-                    self.refused(round == 0 && !failure.streamed, &failure.error);
+                    self.refused(round == 0 && !failure.streamed, &failure.error, &messages);
                     let ending = (&limits, &steering, &out);
                     let failed = (had_tool_round, tool_rounds, spent);
                     return self.failed(failed, failure, ending).await;
@@ -256,6 +265,7 @@ impl<P: AiProvider> Loop<P> {
             }
             let (read, ran) = self.round_of_calls(generation, &steering, &out).await;
             messages.extend(read);
+            self.media.keep_results(&ran.results);
             // A round counts once its calls ran (Python's `_run_announced_calls`).
             spent.calls += u32::try_from(ran.calls.len()).unwrap_or(u32::MAX);
             tool_rounds += u32::from(!ran.calls.is_empty());
@@ -296,12 +306,21 @@ impl<P: AiProvider> Loop<P> {
         self.report(reason, rounds, &spent);
     }
 
-    /// The provider failed with `error` on a request, the turn's `first`
-    /// before anything streamed: the only one that can say its content was
-    /// refused, the author images it sent then refused in the room (RFC
-    /// §6.4).
-    fn refused(&self, first: bool, error: &ProviderError) {
-        if let (true, Some(sent)) = (first, &self.sent_images) {
+    /// The provider failed with `error` on a request on `messages`, the
+    /// turn's `first` before anything streamed: the only one that can say
+    /// its content was refused, the author images it sent then refused in
+    /// the room, and the tool images it replayed replayed no more (RFC
+    /// §6.4, Python's `_forget_sent_images`).
+    fn refused(&self, first: bool, error: &ProviderError, messages: &[Message]) {
+        if !first {
+            return;
+        }
+        if refuses_content(error)
+            && carries_turn_images(&self.round_context(messages, None).messages)
+        {
+            self.tool_usage.forget_images(&self.context.room_id);
+        }
+        if let Some(sent) = &self.sent_images {
             sent.refused_by(error);
         }
     }
@@ -340,7 +359,7 @@ impl<P: AiProvider> Loop<P> {
     /// conversation, or what the turn's hooks gave in their place, then
     /// the rest (RFC §6.4, §20.2).
     fn round_context(&self, messages: &[Message], system_prompt: Option<String>) -> AiContext {
-        let shown = ai_messages(&self.shown_messages(messages));
+        let shown = self.shown(messages);
         let asked = match &self.adopted.messages {
             Some((given, replaced)) => given
                 .iter()
@@ -357,6 +376,22 @@ impl<P: AiProvider> Loop<P> {
             tools: Vec::new(),
             metadata: self.adopted.metadata.clone(),
         }
+    }
+
+    /// Places the images the turn replays at its input, the last of
+    /// `messages`, the conversation its first round reads (RFC §6.4).
+    pub(crate) fn place_turn_images(&mut self, messages: &[Message]) {
+        let shown = ai_messages(&self.shown_messages(messages));
+        self.media.place(&shown);
+    }
+
+    /// `messages` as a round shows them to the provider: each call's
+    /// intent as the model wrote it, a round's results one message, a
+    /// result of parts as its call answered it, the replayed images at the
+    /// turn's input (RFC §6.4).
+    pub(crate) fn shown(&self, messages: &[Message]) -> Vec<AiMessage> {
+        self.media
+            .applied(ai_messages(&self.shown_messages(messages)))
     }
 
     /// The end of the loop for `reason` after `rounds` rounds of calls, the
@@ -428,7 +463,7 @@ impl<P: AiProvider> Loop<P> {
             self.toolbox.settled(&end.call, end.outcome, &self.context);
         }
         for end in ends {
-            let mut result = Message::tool_result(end.call.id.clone(), end.result.clone());
+            let mut result = Message::tool_result(end.call.id.clone(), end.result.as_text());
             // The model reads every outcome but served as a failure (RFC §9.3,
             // Python's `ToolOutcome.as_part`).
             result.is_error = end.outcome != ToolCallOutcome::Served;
@@ -472,7 +507,7 @@ impl<P: AiProvider> Loop<P> {
         ToolEnd {
             call,
             outcome: ToolCallOutcome::Cancelled,
-            result: "cancelled".to_owned(),
+            result: ToolResult::Text("cancelled".to_owned()),
             duration: Duration::ZERO,
         }
     }

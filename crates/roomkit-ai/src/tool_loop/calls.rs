@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use roomkit::model::{ToolCall, ToolCallOutcome};
+use roomkit::model::{Metadata, ToolCall, ToolCallOutcome};
 use roomkit::{ToolCallReport, ToolGate};
 use serde_json::Value;
 use tokio::time::Instant;
@@ -11,17 +11,17 @@ use tokio::time::Instant;
 use super::generation::{Called, Partial};
 use super::{Loop, ToolEnd};
 use crate::provider::AiProvider;
-use crate::skills::dumps_unescaped;
 use crate::texts;
-use crate::tools::{ToolError, ToolResult, repair, schema};
+use crate::tools::{ToolError, ToolResult, read_tool_result, repair, schema};
 
 /// The kind a call past its bound reads as (RFC §21.6).
 const TIMED_OUT: &str = "ToolTimeoutError";
 
 /// What a call's gate decided.
 enum Gated {
-    /// It runs, as this call.
-    Runs(ToolCall),
+    /// It runs, as `call`; `asked` are the model's arguments, repaired,
+    /// before any hook rewrote them.
+    Runs { call: ToolCall, asked: Metadata },
     /// It was refused, and ends so.
     Refused(ToolCallReport),
 }
@@ -33,28 +33,65 @@ impl<P: AiProvider> Loop<P> {
     /// reads it.
     pub(super) async fn serve(&self, called: &Called) -> ToolEnd {
         let started = Instant::now();
-        let ended = match self.gate(called).await {
-            Gated::Runs(call) => self.execute(call).await,
-            Gated::Refused(refused) => refused,
+        let (ended, asked) = match self.gate(called).await {
+            Gated::Runs { call, asked } => (self.execute(call).await, Some(asked)),
+            Gated::Refused(refused) => (refused, None),
         };
         let ended = match &self.turn {
             Some(turn) => turn.on_tool_call(ended).await,
             None => ended,
         };
-        let result = model_text(&ended.result);
-        let reported = ended.clone().ended(
-            ended.outcome.unwrap_or(ToolCallOutcome::Failed),
-            Value::String(result.clone()),
-        );
+        let result = self.for_model(read_tool_result(&ended.result));
+        let outcome = ended.outcome.unwrap_or(ToolCallOutcome::Failed);
+        let reported = ended.ended(outcome, result.clone().into_value());
         log_failure(&reported);
         if let Some(turn) = &self.turn {
             turn.report_tool_call(&reported);
         }
+        if let Some(asked) = asked {
+            self.remember(&reported.call.name, &asked, outcome, &result);
+        }
         ToolEnd {
-            outcome: reported.outcome.unwrap_or(ToolCallOutcome::Failed),
+            outcome,
             call: reported.call,
             result,
             duration: started.elapsed(),
+        }
+    }
+
+    /// `result` as the model reads it: parts as they are for a model that
+    /// sees, else their text, an image an `[image]` mark, as a message's
+    /// (RFC §6.4): an image a model that does not see cannot take would
+    /// fail the request. Python's `_shape_for_model`.
+    fn for_model(&self, result: ToolResult) -> ToolResult {
+        match result {
+            ToolResult::Parts(_) if !self.provider.supports_vision() => {
+                ToolResult::Text(result.as_text())
+            }
+            ToolResult::Text(_) | ToolResult::Json(_) | ToolResult::Parts(_) => result,
+        }
+    }
+
+    /// Records a call that ran with the model's `asked` arguments and
+    /// ended `outcome` with `result`, in the room's tool memory: the images
+    /// it returned ride later turns (RFC §6.4). A refusal, a call nothing
+    /// served or one cancelled stands for no answer, and the channel's own
+    /// tools are not the agent's work: neither is kept. Python's
+    /// `_remember_call` and `kept_in_tool_memory`.
+    fn remember(
+        &self,
+        name: &str,
+        asked: &Metadata,
+        outcome: ToolCallOutcome,
+        result: &ToolResult,
+    ) {
+        let kept = matches!(
+            outcome,
+            ToolCallOutcome::Served | ToolCallOutcome::Failed | ToolCallOutcome::Blocked
+        );
+        if kept && self.toolbox.in_tool_memory(name) {
+            self.tool_usage
+                .record(&self.context.room_id, name, asked, result);
         }
     }
 
@@ -89,8 +126,9 @@ impl<P: AiProvider> Loop<P> {
             Ok(call) => call,
             Err(refused) => return Gated::Refused(*refused),
         };
+        let asked = call.arguments.clone();
         let Some(turn) = &self.turn else {
-            return Gated::Runs(call);
+            return Gated::Runs { call, asked };
         };
         let arguments = match turn.before_tool_use(&call).await {
             ToolGate::Allowed(arguments) => arguments,
@@ -112,7 +150,7 @@ impl<P: AiProvider> Loop<P> {
                 return Gated::Refused(ended(gated, ToolCallOutcome::Refused, text));
             }
         }
-        Gated::Runs(gated)
+        Gated::Runs { call: gated, asked }
     }
 
     /// The model's `call` with its arguments repaired for the tool's
@@ -174,14 +212,15 @@ impl<P: AiProvider> Loop<P> {
             None => Ok(answer.await),
         };
         match answered {
-            Ok(Ok(output)) => served(call, output),
+            Ok(Ok(output)) => served(call, self.for_model(output.with_parts_read())),
             Ok(Err(error)) => failure(call, error),
             Err(bound) => timed_out(call, bound),
         }
     }
 }
 
-/// `call`, served with `output`.
+/// `call`, served with `output`, a text, JSON or parts as its hooks read
+/// them.
 fn served(call: ToolCall, output: ToolResult) -> ToolCallReport {
     ToolCallReport::new(call).ended(ToolCallOutcome::Served, output.into_value())
 }
@@ -225,18 +264,6 @@ fn ended(call: ToolCall, outcome: ToolCallOutcome, text: String) -> ToolCallRepo
     ToolCallReport::new(call).ended(outcome, Value::String(text))
 }
 
-/// `result` as the model reads it: a text as it is, any other value as its
-/// JSON (RFC §21.4), written as Python's `as_tool_result` writes it,
-/// `json.dumps(value, ensure_ascii=False)`.
-fn model_text(result: &Value) -> String {
-    match result {
-        Value::String(text) => text.clone(),
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
-            dumps_unescaped(result)
-        }
-    }
-}
-
 /// Logs a call that did not serve, with what failed (RFC §9.3: the
 /// message goes to the log and the observers).
 fn log_failure(report: &ToolCallReport) {
@@ -258,7 +285,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
-    use super::model_text;
+    use crate::tools::{ToolResult, read_tool_result};
 
     // Python: tests/test_tool_results.py::test_a_return_value_outside_the_contract_reaches_the_model_as_json
     /// A handler's JSON value reaches the model as Python's `as_tool_result`
@@ -277,7 +304,7 @@ mod tests {
             (json!({"city": "Montréal"}), r#"{"city": "Montréal"}"#),
         ];
         for (value, read) in cases {
-            assert_eq!(model_text(&value), read);
+            assert_eq!(read_tool_result(&value), ToolResult::Text(read.to_owned()));
         }
     }
 }

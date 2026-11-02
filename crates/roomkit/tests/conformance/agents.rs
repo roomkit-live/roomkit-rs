@@ -19,10 +19,10 @@ use roomkit_ai::tasks::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContentPart, AiContext, AiMessageContent, AiProvider,
-    AiResponse, AiRole, AiTool, HumanInputToolHandler, HumanInputToolHandlerOptions, ProviderError,
-    ProviderStream, StreamEvent, Tool, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy,
-    ToolResult, Tools,
+    AiChannel, AiChannelOptions, AiContentPart, AiContext, AiImagePart, AiMessageContent,
+    AiProvider, AiResponse, AiRole, AiTextPart, AiTool, HumanInputToolHandler,
+    HumanInputToolHandlerOptions, ProviderError, ProviderStream, StreamEvent, Tool, ToolContext,
+    ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolResult, ToolResultPart, Tools,
 };
 use serde_json::{Value, json};
 
@@ -418,6 +418,9 @@ async fn answer(tool: &Value) -> Result<ToolResult, ToolError> {
     if let Some(value) = tool.get("returns_json") {
         return Ok(ToolResult::Json(value.clone()));
     }
+    if let Some(parts) = tool.get("returns_parts").and_then(Value::as_array) {
+        return Ok(ToolResult::Parts(parts.iter().map(returned_part).collect()));
+    }
     if let Some(raised) = tool.get("raises") {
         let field = |key: &str| raised[key].as_str().unwrap_or_default().to_owned();
         return Err(ToolError::raised_as(field("kind"), field("message")));
@@ -432,6 +435,58 @@ async fn answer(tool: &Value) -> Result<ToolResult, ToolError> {
         return Err(ToolError::unserved("the call is not this tool's"));
     }
     pending().await
+}
+
+/// A part a tool that `returns_parts` answers: `{text}` or `{image,
+/// mime_type}`.
+fn returned_part(part: &Value) -> ToolResultPart {
+    if let Some(text) = part["text"].as_str() {
+        return ToolResultPart::Text(AiTextPart::new(text));
+    }
+    ToolResultPart::Image(AiImagePart {
+        url: part["image"].as_str().unwrap_or_default().to_owned(),
+        mime_type: part["mime_type"].as_str().map(str::to_owned),
+    })
+}
+
+/// A result as the model reads it: its text, or its text and image parts
+/// in order, written as a message's `parts` are (README, `models`).
+pub(crate) fn result_content(result: &ToolResult) -> Value {
+    match result {
+        ToolResult::Text(text) => Value::String(text.clone()),
+        ToolResult::Json(value) => value.clone(),
+        ToolResult::Parts(parts) => parts
+            .iter()
+            .map(|part| match part {
+                ToolResultPart::Text(text) => json!({ "text": text.text }),
+                ToolResultPart::Image(image) => {
+                    json!({ "image": image.url, "mime_type": image.mime_type })
+                }
+            })
+            .collect(),
+    }
+}
+
+/// A tool hook's result as a scenario reads it: parts, each a mapping
+/// `{type, text}` or `{type, url, mime_type}` as the channel hands them,
+/// written as a message's `parts` are; any other value as it is.
+fn hook_result(result: &Value) -> Value {
+    let parts = result.as_array().filter(|parts| {
+        !parts.is_empty()
+            && parts
+                .iter()
+                .all(|part| matches!(part["type"].as_str(), Some("text" | "image")))
+    });
+    let Some(parts) = parts else {
+        return result.clone();
+    };
+    parts
+        .iter()
+        .map(|part| match part["type"].as_str() {
+            Some("text") => json!({ "text": part["text"] }),
+            _ => json!({ "image": part["url"], "mime_type": part["mime_type"] }),
+        })
+        .collect()
 }
 
 /// A bound in milliseconds, `null` bounding nothing (README, "Scripted
@@ -494,7 +549,7 @@ fn request(request: &AiContext) -> Value {
         .filter_map(|part| match part {
             AiContentPart::ToolResult(result) => Some(json!({
                 "tool_call_id": result.tool_call_id,
-                "content": result.result,
+                "content": result_content(&result.result),
                 "is_error": result.is_error,
             })),
             AiContentPart::Text(_) | AiContentPart::Image(_) | AiContentPart::ToolCall(_) => None,
@@ -639,7 +694,7 @@ fn tool_call_record(event: &ToolCallEvent) -> Value {
         "name": event.name,
         "tool_call_id": event.tool_call_id,
         "arguments": event.arguments,
-        "result": event.result,
+        "result": event.result.as_ref().map(hook_result),
         "is_error": event.is_error,
         "refused": event.refused,
         "cancelled": event.cancelled,

@@ -48,8 +48,9 @@ impl Request {
 }
 
 /// The transcript messages `message` is: a round's tool message is one per
-/// result, each answering its call (Python's `chat_request._rendered`);
-/// any other is one.
+/// result, each answering its call with its text, then the results' images
+/// on a user message: a tool message carries text only, an image part is a
+/// user's (Python's `chat_request._tool_messages`); any other is one.
 fn messages(message: &AiMessage) -> Result<Vec<Message>, OpenAiError> {
     let results: Vec<_> = match &message.content {
         AiMessageContent::Parts(parts) => parts
@@ -63,22 +64,33 @@ fn messages(message: &AiMessage) -> Result<Vec<Message>, OpenAiError> {
             .collect(),
         AiMessageContent::Text(_) => Vec::new(),
     };
-    if results.len() < 2 {
+    if results.is_empty() {
         return Ok(vec![self::message(message)?]);
     }
-    Ok(results
-        .into_iter()
-        .map(|result| {
-            let mut written = Message::tool_result(&result.tool_call_id, &result.result);
-            written.role = Role::Tool;
-            written.metadata.clone_from(&message.metadata);
-            written
-        })
-        .collect())
+    let mut written = Vec::with_capacity(results.len() + 1);
+    let mut images = Vec::new();
+    for result in results {
+        let (text, result_images) = result.split_for_message();
+        let mut answer = Message::tool_result(&result.tool_call_id, text);
+        answer.role = Role::Tool;
+        answer.metadata.clone_from(&message.metadata);
+        written.push(answer);
+        for image in result_images {
+            let mime_type = image.mime_type.as_deref().unwrap_or_default();
+            images.extend(read_image(&image.url, mime_type)?);
+        }
+    }
+    if !images.is_empty() {
+        let mut shown = Message::new(Role::User, "");
+        shown.parts = images.iter().cloned().map(Part::Image).collect();
+        shown.images = images;
+        written.push(shown);
+    }
+    Ok(written)
 }
 
-/// `message` as the transcript writes it: its text, its images, its calls,
-/// the call its result answers; a message of text and images keeps its
+/// `message`, which carries no tool result, as the transcript writes it:
+/// its text, its images, its calls; a message of text and images keeps its
 /// parts in order, each image at its place (Python's `chat_request._plain`).
 fn message(message: &AiMessage) -> Result<Message, OpenAiError> {
     let parts: &[AiContentPart] = match &message.content {
@@ -93,7 +105,6 @@ fn message(message: &AiMessage) -> Result<Message, OpenAiError> {
     let mut images = Vec::new();
     let mut ordered = Vec::new();
     let mut calls = Vec::new();
-    let mut result = None;
     for part in parts {
         match part {
             AiContentPart::Text(part) => {
@@ -110,21 +121,16 @@ fn message(message: &AiMessage) -> Result<Message, OpenAiError> {
             AiContentPart::ToolCall(call) => {
                 calls.push(ToolCall::new(&call.id, &call.name, call.arguments.clone()));
             }
-            AiContentPart::ToolResult(part) => result = Some(part),
+            // A message with a result is written by `messages`.
+            AiContentPart::ToolResult(_) => {}
         }
     }
-    let plain = calls.is_empty() && result.is_none();
-    let mut written = match result {
-        Some(result) => Message::tool_result(&result.tool_call_id, &result.result),
-        None => Message::assistant_calls(text, calls),
-    };
+    let plain = calls.is_empty();
+    let mut written = Message::assistant_calls(text, calls);
     if plain {
         written.parts = ordered;
     }
-    written.role = match result {
-        Some(_) => Role::Tool,
-        None => role(message.role),
-    };
+    written.role = role(message.role);
     written.images = images;
     written.metadata.clone_from(&message.metadata);
     Ok(written)
@@ -235,7 +241,7 @@ pub(crate) fn push_end(ready: &mut VecDeque<StreamEvent>, calls: Vec<RawCall>, d
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
-    use roomkit_ai::AiToolResultPart;
+    use roomkit_ai::{AiImagePart, AiTextPart, AiToolResultPart, ToolResultPart};
 
     use super::*;
 
@@ -259,6 +265,54 @@ mod tests {
                 Some("https://example.com/a.png".to_owned()),
             ]
         );
+    }
+
+    // Python: tests/test_providers/test_chat_request.py::test_an_image_result_rides_a_user_message_after_the_tool_messages
+    // and tests/test_providers/test_openai.py::test_tool_result_image_splits_to_user_message
+    #[test]
+    fn a_result_s_image_rides_a_user_message_after_the_tool_messages() {
+        let image = || {
+            ToolResultPart::Image(AiImagePart {
+                url: "data:image/png;base64,QUJD".to_owned(),
+                mime_type: Some("image/png".to_owned()),
+            })
+        };
+        let shot = vec![ToolResultPart::Text(AiTextPart::new("shot")), image()];
+        let context = AiContext {
+            messages: vec![AiMessage::new(
+                AiRole::Tool,
+                vec![
+                    AiContentPart::ToolResult(AiToolResultPart::new("c1", "screen", shot)),
+                    AiContentPart::ToolResult(AiToolResultPart::new("c2", "draw", vec![image()])),
+                    AiContentPart::ToolResult(AiToolResultPart::new("c3", "lookup", "found")),
+                ],
+            )],
+            ..AiContext::default()
+        };
+        let written = Request::of(&context).unwrap().messages;
+        let read: Vec<(Role, Option<&str>, &str, Vec<&str>)> = written
+            .iter()
+            .map(|message| {
+                let images = message.images.iter().map(Image::url).collect();
+                (
+                    message.role,
+                    message.tool_call_id.as_deref(),
+                    message.text.as_str(),
+                    images,
+                )
+            })
+            .collect();
+        let png = "data:image/png;base64,QUJD";
+        assert_eq!(
+            read,
+            [
+                (Role::Tool, Some("c1"), "shot", vec![]),
+                (Role::Tool, Some("c2"), "[see image below]", vec![]),
+                (Role::Tool, Some("c3"), "found", vec![]),
+                (Role::User, None, "", vec![png, png]),
+            ]
+        );
+        assert_eq!(written[3].parts.len(), 2);
     }
 
     // Python: tests/test_providers/test_chat_request.py::test_an_image_result_rides_a_user_message_after_the_tool_messages

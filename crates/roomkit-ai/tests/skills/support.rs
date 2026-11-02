@@ -200,7 +200,7 @@ pub(crate) fn tool_results(model: &ScriptedProvider) -> Vec<Vec<String>> {
                 .messages
                 .iter()
                 .flat_map(roomkit_ai::AiMessage::tool_results)
-                .map(|result| result.result.clone())
+                .map(roomkit_ai::AiToolResultPart::as_text)
                 .collect()
         })
         .collect()

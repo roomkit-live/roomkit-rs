@@ -29,13 +29,14 @@ use crate::memory::{
     IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions, SlidingWindowMemory,
     SlidingWindowMemoryOptions, TurnFootprint, measured, runtime_or_cleaned,
 };
-use crate::provider::{AiMessage, AiProvider};
+use crate::provider::{AiContentPart, AiMessage, AiProvider};
 use crate::rows;
 use crate::server_instructions::ServerInstructions;
 use crate::skills::SkillRegistry;
 use crate::skills::tools::{SkillTools, SkillTurn};
 use crate::steering::{Loops, SteerOptions};
 use crate::tool_loop::{Adopted, Bounds, Loop};
+use crate::tool_usage::{ToolUsageMemory, TurnMedia};
 use crate::tools::toolbox::Toolbox;
 use crate::tools::{
     DynToolset, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, served_by,
@@ -269,15 +270,16 @@ pub struct AiChannel<P> {
     human_input: Option<(HumanInputToolHandler, u64)>,
 }
 
-/// How an AI channel reads its authors' media (RFC §6.4): Python's
-/// `_media_resolver`, `_max_author_images`, `_describe_empty_event` and
-/// `_refused_images`.
+/// How an AI channel reads its authors' media and its tools' images (RFC
+/// §6.4): Python's `_media_resolver`, `_max_author_images`,
+/// `_describe_empty_event`, `_refused_images` and `_tool_usage`'s images.
 #[derive(Clone, Default)]
 struct MediaReading {
     resolver: Option<Arc<dyn ImageResolver>>,
     max_author_images: Option<usize>,
     describer: Option<Describer>,
     refused: Arc<RefusedImages>,
+    tool_usage: Arc<ToolUsageMemory>,
 }
 
 /// The kit's readers of an author's media a turn reads (RFC §6.4), none
@@ -456,7 +458,7 @@ impl<P: AiProvider> AiChannel<P> {
                 resolver: image_resolver,
                 max_author_images,
                 describer: describe_empty_event,
-                refused: Arc::default(),
+                ..MediaReading::default()
             },
             skills,
             tool_call_intents,
@@ -711,6 +713,16 @@ impl<P: AiProvider> AiChannel<P> {
         replayed_rounds(&rows, &self.channel_id, |name| {
             self.toolbox.in_tool_memory(name)
         })
+    }
+
+    /// The images this channel's tool calls in `room` returned that ride
+    /// the turn's input (RFC §6.4); none for a turn that `stands_alone` or
+    /// a model that does not see. Python's `_turn_images`.
+    fn turn_images(&self, room: &RoomId, stands_alone: bool) -> Vec<AiContentPart> {
+        if stands_alone || !self.provider.supports_vision() {
+            return Vec::new();
+        }
+        self.media.tool_usage.turn_images(room)
     }
 
     /// What the images the turn's `history` and its input `event` carry
@@ -976,6 +988,8 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             loops: Arc::clone(&self.loops),
             adopted: Adopted::default(),
             sent_images: None,
+            tool_usage: Arc::clone(&self.media.tool_usage),
+            media: TurnMedia::replaying(self.turn_images(&context.room.id, stands_alone)),
         };
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).
@@ -1015,6 +1029,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             &recalled.memory,
             |said| reader.read(said),
         );
+        looped.place_turn_images(&messages);
         // What the turn's generation hooks leave is its context; a block
         // runs no generation (RFC §6.4).
         if !looped.before_generation(&event, &messages).await {

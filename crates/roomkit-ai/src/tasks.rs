@@ -428,6 +428,7 @@ mod tests {
         match toolset.call(call, context).await.unwrap() {
             ToolResult::Text(text) => serde_json::from_str(&text).unwrap(),
             ToolResult::Json(value) => value,
+            ToolResult::Parts(parts) => panic!("a task tool answers no parts: {parts:?}"),
         }
     }
 

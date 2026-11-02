@@ -64,6 +64,8 @@ async fn call(composed: &ToolHandler, name: &str, arguments: Value) -> Value {
     match composed.call(name.to_owned(), arguments).await.unwrap() {
         ToolResult::Text(text) => serde_json::from_str(&text).unwrap_or(Value::String(text)),
         ToolResult::Json(value) => value,
+        // No handler here answers parts.
+        ToolResult::Parts(_) => Value::Null,
     }
 }
 

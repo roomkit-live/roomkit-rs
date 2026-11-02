@@ -19,7 +19,7 @@ use super::generation::{Failed, Generation};
 use super::{Loop, TurnItem};
 use crate::provider::{
     AiContentPart, AiContext, AiMessage, AiMessageContent, AiProvider, AiRole, AiTextPart,
-    ProviderError, ai_messages,
+    ProviderError,
 };
 use crate::steering::Steering;
 use crate::stream::Yielder;
@@ -82,7 +82,7 @@ impl<P: AiProvider> Loop<P> {
         let (compacted, turn_input) = compacted(&context.messages, self.adopted.turn_input)
             .map_err(Failed::before_streaming)?;
         // Counted as the provider reads them: a round's results are one message.
-        let shown = ai_messages(&self.shown_messages(messages)).len();
+        let shown = self.shown(messages).len();
         self.adopted.messages = Some((compacted.clone(), shown));
         self.adopted.turn_input = turn_input;
         context.messages = compacted;

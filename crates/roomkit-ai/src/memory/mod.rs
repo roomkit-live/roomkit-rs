@@ -23,7 +23,7 @@ mod budget_aware;
 mod compacting;
 mod footprint;
 mod mock;
-mod repr;
+pub(crate) mod repr;
 mod retrieval;
 mod sliding_window;
 mod summarizing;

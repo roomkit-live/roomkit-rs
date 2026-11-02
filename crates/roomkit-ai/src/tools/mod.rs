@@ -18,6 +18,7 @@ mod handler;
 pub(crate) mod owner;
 mod policy;
 pub(crate) mod repair;
+mod result;
 pub(crate) mod schema;
 pub(crate) mod toolbox;
 
@@ -34,12 +35,14 @@ use serde_json::Value;
 pub use self::builder::Tools;
 pub(crate) use self::handler::served_by;
 pub use self::handler::{
-    Tool, ToolCallContext, ToolEntry, ToolFuture, ToolHandler, ToolResult, compose_tool_handlers,
+    Tool, ToolCallContext, ToolEntry, ToolFuture, ToolHandler, compose_tool_handlers,
     current_tool_actor_id, current_tool_call,
 };
 pub use self::policy::ToolPolicy;
 #[doc(hidden)]
 pub use self::policy::{alias_server, served_tool_name};
+pub(crate) use self::result::read as read_tool_result;
+pub use self::result::{ToolResult, ToolResultPart};
 use crate::error::AiError;
 use crate::texts::error_envelope;
 

@@ -122,6 +122,7 @@ const TOOL: &[&str] = &[
     "gate",
     "declared",
     "returns_json",
+    "returns_parts",
 ];
 const RAISES: &[&str] = &["kind", "message"];
 const POLICY: &[&str] = &["allow", "deny"];

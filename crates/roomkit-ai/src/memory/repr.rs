@@ -131,7 +131,7 @@ fn model_repr(value: &Value) -> String {
 }
 
 /// `value` as Python's `repr` writes the value it reads as.
-fn repr(value: &Value) -> String {
+pub(crate) fn repr(value: &Value) -> String {
     match value {
         Value::Null => "None".to_owned(),
         Value::Bool(true) => "True".to_owned(),

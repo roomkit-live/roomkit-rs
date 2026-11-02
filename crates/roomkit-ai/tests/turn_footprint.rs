@@ -324,3 +324,60 @@ async fn the_turn_s_measure_counts_the_people_note() {
     assert_eq!(sizes[0], estimate_tokens("") + NOTES_ROOM);
     assert!(sizes[1] > sizes[0], "{sizes:?}");
 }
+
+// Python: tests/test_tool_result_images.py::test_the_replayed_images_count_in_the_turns_measure
+/// The window the history gets is what the turn leaves, the images its
+/// input replays included (RFC §20): an image is a thousand tokens and
+/// more.
+#[tokio::test]
+async fn the_replayed_images_count_in_the_turn_s_measure() {
+    let image = roomkit_ai::ToolResultPart::Image(roomkit_ai::AiImagePart {
+        url: "data:image/png;base64,iVBORw0KGgo=".to_owned(),
+        mime_type: Some("image/png".to_owned()),
+    });
+    let handler = ToolHandler::new(move |_name, _arguments| {
+        let image = image.clone();
+        async move { Ok(ToolResult::Parts(vec![image])) }
+    });
+    let call = roomkit_ai::AiToolCall::new("c1", "draw");
+    let rounds = vec![
+        roomkit_ai::AiResponse {
+            tool_calls: vec![call],
+            ..roomkit_ai::AiResponse::new("")
+        },
+        roomkit_ai::AiResponse::new("done"),
+        roomkit_ai::AiResponse::new("again"),
+    ];
+    let model = roomkit_ai::MockAiProvider::new(roomkit_ai::MockAiProviderOptions {
+        vision: true,
+        ai_responses: Some(rounds),
+        ..roomkit_ai::MockAiProviderOptions::default()
+    });
+    let memory = Measured::default();
+    let options = AiChannelOptions {
+        tools: vec![AiTool::new("draw", "Draws").unwrap().into()],
+        tool_handler: Some(handler),
+        memory: Some(Arc::new(memory.clone())),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(channel("agent"), model, options).unwrap();
+    let binding = ChannelBinding {
+        category: ChannelCategory::Intelligence,
+        ..ChannelBinding::new(channel("agent"), room_id(), ChannelType::AI)
+    };
+    for body in ["draw a red fox", "set my lights to its colours"] {
+        let event = RoomEvent::new(
+            room_id(),
+            EventSource::new(channel("member"), ChannelType::WEBSOCKET),
+            EventContent::Text(TextContent::new(body)),
+        );
+        let output = agent
+            .on_event(event, binding.clone(), context_of(Vec::new()))
+            .await
+            .unwrap();
+        drop(output);
+    }
+    let footprints = memory.0.lock().unwrap().clone();
+    let (first, second) = (footprints[0].unwrap(), footprints[1].unwrap());
+    assert!(second.input_tokens - first.input_tokens >= 1000);
+}

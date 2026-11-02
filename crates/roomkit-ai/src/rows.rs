@@ -13,7 +13,6 @@ use roomkit::model::{
     TextContent, ToolCall, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use roomkit::{ChannelError, ClassedError, ResponseItem, ResponseStream};
-use serde_json::Value;
 
 use crate::provider::ProviderError;
 use crate::stream::next;
@@ -213,8 +212,8 @@ fn end_row(end: ToolEnd) -> ToolCallContent {
         ToolCallStatus::Failed
     };
     row.outcome = Some(end.outcome);
-    row.error = (!served).then(|| end.result.clone());
-    row.result = Value::String(end.result);
+    row.error = (!served).then(|| end.result.as_text());
+    row.result = end.result.into_value();
     row.duration_ms = u64::try_from(end.duration.as_millis()).ok();
     row
 }

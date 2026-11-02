@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use roomkit::model::Metadata;
 use roomkit_core::rules::transcript::{Image, Message, Part, Role};
 
-use crate::tools::AiTool;
+use crate::tools::{AiTool, ToolResult};
 
 /// What one generation is asked (RFC §6.7): Python's `AIContext(*,
 /// messages=[], system_prompt=None, temperature=0.7, max_tokens=None,
@@ -71,10 +71,7 @@ impl AiMessage {
         if results.is_empty() {
             return self.content.text();
         }
-        results
-            .iter()
-            .map(|result| result.result.as_str())
-            .collect()
+        results.iter().map(|result| result.as_text()).collect()
     }
 
     /// The calls the message makes, in order. For a test.
@@ -285,8 +282,11 @@ pub struct AiToolResultPart {
     pub tool_call_id: String,
     /// The tool that answered.
     pub name: String,
-    /// What the model reads of the result.
-    pub result: String,
+    /// What the model reads of the result: a text, or its text and image
+    /// parts in order (RFC §6.4). The loop never hands a provider
+    /// [`ToolResult::Json`]; a context built elsewhere may, read as its
+    /// JSON.
+    pub result: ToolResult,
     /// Whether the call failed.
     pub is_error: bool,
 }
@@ -297,7 +297,7 @@ impl AiToolResultPart {
     pub fn new(
         tool_call_id: impl Into<String>,
         name: impl Into<String>,
-        result: impl Into<String>,
+        result: impl Into<ToolResult>,
     ) -> Self {
         Self {
             tool_call_id: tool_call_id.into(),
@@ -305,6 +305,23 @@ impl AiToolResultPart {
             result: result.into(),
             is_error: false,
         }
+    }
+
+    /// The result as a provider that takes no image in a tool's result
+    /// reads it: its texts and an `[image]` mark for each image, one per
+    /// line. Python's `as_text()`.
+    #[must_use]
+    pub fn as_text(&self) -> String {
+        self.result.as_text()
+    }
+
+    /// The text the tool message keeps and the images a provider sends
+    /// after it, on a user message: the texts joined, one per line, or
+    /// `[see image below]` for images alone. Python's
+    /// `split_for_message()`.
+    #[must_use]
+    pub fn split_for_message(&self) -> (String, Vec<AiImagePart>) {
+        self.result.split_for_message()
     }
 }
 
@@ -357,7 +374,7 @@ fn content(message: &Message, tools: &HashMap<&str, &str>) -> AiMessageContent {
         return AiMessageContent::Parts(vec![AiContentPart::ToolResult(AiToolResultPart {
             tool_call_id: call_id.clone(),
             name: name.to_owned(),
-            result: message.text.clone(),
+            result: ToolResult::Text(message.text.clone()),
             is_error: message.is_error,
         })]);
     }

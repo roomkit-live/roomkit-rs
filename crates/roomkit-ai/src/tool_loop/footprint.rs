@@ -8,7 +8,7 @@ use super::Loop;
 use crate::memory::{
     TurnFootprint, estimate_message_tokens, estimate_tokens, estimate_tool_tokens,
 };
-use crate::provider::{AiProvider, ai_messages};
+use crate::provider::{AiMessage, AiProvider, AiRole, ai_messages};
 
 /// The note Python's runtime gives a turn whose history holds an answer a
 /// barge-in cut: a turn's measure keeps room for it, whether its history
@@ -23,9 +23,10 @@ impl<P: AiProvider> Loop<P> {
     /// declares, measured on their own schemas (the intent property is the
     /// request's), the notes the channel adds to its input (room for the
     /// speaker attribution and a cut answer's note, and the note naming the
-    /// `people` taking part when two or more do), and the earlier `rounds`
-    /// of tool calls its history replays, all of them (the window may drop
-    /// some, never add one); its reply budget apart.
+    /// `people` taking part when two or more do), the earlier `rounds` of
+    /// tool calls its history replays, all of them (the window may drop
+    /// some, never add one), and the images its input replays; its reply
+    /// budget apart.
     pub(crate) fn footprint(&self, rounds: &[Vec<Message>], people: &[String]) -> TurnFootprint {
         let prompt = estimate_tokens(self.system_prompt.as_deref().unwrap_or(""));
         let tools: usize = self.declared().iter().map(estimate_tool_tokens).sum();
@@ -36,8 +37,19 @@ impl<P: AiProvider> Loop<P> {
             .collect();
         let notes = estimate_tokens(&turn_notes(&room).unwrap_or_default());
         let replayed: usize = rounds.iter().map(|round| self.round_tokens(round)).sum();
+        let images = self.turn_images_tokens();
         let reply = self.max_tokens.map_or(0, |tokens| tokens as usize);
-        TurnFootprint::new(prompt + tools + notes + replayed, reply)
+        TurnFootprint::new(prompt + tools + notes + replayed + images, reply)
+    }
+
+    /// What the images the turn's input replays cost, as a message of
+    /// their own: an image a thousand tokens (Python's `_measure_turn`).
+    fn turn_images_tokens(&self) -> usize {
+        let replayed = self.media.replayed();
+        if replayed.is_empty() {
+            return 0;
+        }
+        estimate_message_tokens(&AiMessage::new(AiRole::User, replayed.to_vec()))
     }
 
     /// What a replayed round costs, as the provider reads it: its calls,

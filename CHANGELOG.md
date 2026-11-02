@@ -6,6 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A tool answers a text and its images, as Python's `ToolResult` (RFC
+  §6.4, §21.4, RMK-1218): `ToolResult::Parts(vec![ToolResultPart::Text(..),
+  ToolResultPart::Image(..)])`, or a JSON list of part-shaped mappings. A
+  model that sees reads the parts in their round, roomkit-openai sending
+  the images on a user message after the tool messages; one that does not
+  reads their text, `[image]` for each image. The room's latest two inline
+  images of a vision type ride each later turn's input, after its words
+  and notes, each after the call that returned it, until a refusal of a
+  turn's first request forgets them. Breaking: `AiToolResultPart::result`
+  is a `ToolResult`, with Python's `as_text()` and `split_for_message()`.
 - An AI channel's turn takes its binding's metadata `system_prompt` over
   its own, as Python's `_turn_settings` (RFC Appendix A.9, RMK-1208): a
   hand-back to an agent whose binding holds a persona runs on it, where

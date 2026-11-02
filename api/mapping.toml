@@ -359,6 +359,11 @@ approved = "2026-10-31"
 reason = "a message's content parts, Python's AITextPart | AIImagePart | AIToolCallPart | AIToolResultPart, which no Python name exports: an enum of the four (language)"
 
 [[exception]]
+rust = "roomkit_ai::ToolResultPart"
+approved = "2026-11-02"
+reason = "a tool result's parts, Python's AITextPart | AIImagePart in ToolResult's list, which no Python name exports: an enum of the two (language, RMK-1218)"
+
+[[exception]]
 rust = "roomkit_ai::ProviderError"
 members = ["with_source"]
 approved = "2026-10-31"
@@ -706,11 +711,6 @@ params = ["structured_content", "outcome", "references"]
 reason = "not in 0.x: MCP structured results, a call's outcome and result references"
 
 [[missing]]
-python = "roomkit.providers.ai.AIToolResultPart"
-members = ["as_text", "split_for_message"]
-reason = "not in 0.x: MCP structured results, a call's outcome and result references"
-
-[[missing]]
 python = "roomkit.providers.ai.AITool.__init__"
 params = ["tags", "defer_loading"]
 reason = "not in 0.x: tool search"
@@ -802,7 +802,7 @@ reason = "Python's `tools` takes `AITool | Tool` in one list: a Rust list of a u
 [[exception]]
 rust = "roomkit_ai::ToolResult"
 approved = "2026-11-01"
-reason = "Python's `ToolResult` alias (`roomkit.channels.ai`, not exported) read by `as_tool_result`: a handler answers a text or any JSON value, and a Rust handler's return type names it (architecture: Tools)"
+reason = "Python's `ToolResult` alias (`roomkit.channels.ai`, not exported) read by `as_tool_result`: a handler answers a text, any JSON value or content parts, and a Rust handler's return type names it (architecture: Tools)"
 
 [[exception]]
 rust = "roomkit_ai::ToolFuture"

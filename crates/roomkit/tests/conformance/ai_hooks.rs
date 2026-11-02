@@ -114,7 +114,7 @@ impl Scripted for ToolRoundEvent {
             .map(|result| {
                 json!({
                     "tool_call_id": result.tool_call_id,
-                    "content": result.result,
+                    "content": crate::agents::result_content(&result.result),
                     "is_error": result.is_error,
                 })
             })
