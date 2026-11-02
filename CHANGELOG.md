@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- An `InjectMessage` of a role the transcript does not hold reads as the
+  user's, and `tool` as a tool's result, where it was dropped (RMK-1175).
 - The summarizing and compacting memories, Python's (RFC §20.3, §6.4,
   RMK-1165): `SummarizingMemory` truncates the older events' long bodies,
   then has a model summarize the older events, a prior summary carried

@@ -256,10 +256,8 @@ fn apply(
                 cancelled = true;
             }
             SteeringDirective::InjectMessage(injected) => {
-                if let Some(message) = injected_message(&injected) {
-                    tracing::info!(target: "roomkit::ai", role = %injected.role, "steering: injecting a message");
-                    messages.push(message);
-                }
+                tracing::info!(target: "roomkit::ai", role = %injected.role, "steering: injecting a message");
+                messages.push(injected_message(&injected));
             }
             SteeringDirective::UpdateSystemPrompt(update) => {
                 tracing::info!(target: "roomkit::ai", "steering: appending to the system prompt");
@@ -273,18 +271,17 @@ fn apply(
 }
 
 /// The message `injected` adds, its text cleaned of copies of the
-/// runtime's marks; none for a role no conversation holds.
-fn injected_message(injected: &InjectMessage) -> Option<Message> {
+/// runtime's marks: in its role, `tool` a tool's result, and a role no
+/// conversation holds the user's, as a provider reads a role it does not
+/// know (decided 2026-11-02, RMK-1175). Python carries the role as it is.
+fn injected_message(injected: &InjectMessage) -> Message {
     let role = match injected.role.as_str() {
-        "user" => Role::User,
         "assistant" => Role::Assistant,
         "system" => Role::System,
-        other => {
-            tracing::warn!(target: "roomkit::ai", role = other, "steering: a message of no known role is not injected");
-            return None;
-        }
+        "tool" => Role::Tool,
+        _ => Role::User,
     };
-    Some(Message::new(role, without_mark_copies(&injected.content)))
+    Message::new(role, without_mark_copies(&injected.content))
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -448,6 +445,32 @@ mod tests {
             .steer(&Cancel::default().into(), SteerOptions::default())
             .unwrap();
         assert_eq!(read(&started[0]), (vec![], Some("base".to_owned()), true));
+    }
+
+    /// A message of a role no conversation holds is read as the user's,
+    /// and `tool` as a tool's result, never dropped (RMK-1175).
+    #[test]
+    fn an_injected_message_of_an_unknown_role_reads_as_the_user_s() {
+        let (loops, started) = loops(&["r1"]);
+        for role in ["developer", "tool"] {
+            let directive = InjectMessage {
+                role: role.to_owned(),
+                ..InjectMessage::new(role)
+            };
+            assert_eq!(
+                loops
+                    .steer(&directive.into(), SteerOptions::default())
+                    .unwrap(),
+                1
+            );
+        }
+        assert_eq!(
+            read(&started[0]).0,
+            [
+                (Role::User, "developer".to_owned()),
+                (Role::Tool, "tool".to_owned())
+            ]
+        );
     }
 
     /// RFC §6.4: a message steered in reads as no mark of the runtime's.
