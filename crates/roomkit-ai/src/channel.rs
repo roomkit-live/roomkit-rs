@@ -605,7 +605,9 @@ impl<P: AiProvider> AiChannel<P> {
     /// channel's own tool rows kept beside it for the rounds it replays
     /// (RFC §6.4), and what else the memory answered; nothing of the memory
     /// for an instruction that stands alone, which reads none of the room
-    /// (RFC §10.1.1 rule 7). The memory reads the room within the turn's
+    /// (RFC §10.1.1 rule 7), the kit's `attached` reader asked of none of
+    /// its events (Python's `_visible_memory` returns before it reads them).
+    /// The memory reads the room within the turn's
     /// `footprint` ([`crate::memory::current_turn_footprint`]).
     ///
     /// The memory reads the room's messages and the turn's event, as
@@ -621,16 +623,9 @@ impl<P: AiProvider> AiChannel<P> {
         (stands_alone, footprint): (bool, TurnFootprint),
         attached: Option<&roomkit::AttachedMedia>,
     ) -> Result<Recalled, ChannelError> {
-        let (rows, viewed): (Vec<RoomEvent>, Vec<RoomEvent>) = context
+        let (rows, viewed): (Vec<&RoomEvent>, Vec<&RoomEvent>) = context
             .recent_events
             .iter()
-            .map(|past| {
-                if self.is_own_tool_row(past) {
-                    past.clone()
-                } else {
-                    with_attached_media(past, attached)
-                }
-            })
             .partition(|past| self.is_own_tool_row(past));
         let MemoryResult {
             messages,
@@ -641,7 +636,10 @@ impl<P: AiProvider> AiChannel<P> {
             MemoryResult::default()
         } else {
             let viewed = RoomContext {
-                recent_events: viewed,
+                recent_events: viewed
+                    .into_iter()
+                    .map(|past| with_attached_media(past, attached))
+                    .collect(),
                 ..context.clone()
             };
             let options = RetrieveOptions {
@@ -657,7 +655,7 @@ impl<P: AiProvider> AiChannel<P> {
             measured(footprint, read).await?
         };
         let mut recent_events = events;
-        recent_events.extend(rows);
+        recent_events.extend(rows.into_iter().cloned());
         Ok(Recalled {
             history: RoomContext {
                 recent_events,

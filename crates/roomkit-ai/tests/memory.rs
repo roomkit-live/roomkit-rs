@@ -6,6 +6,7 @@
 
 use std::future::{self, Future};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
@@ -15,8 +16,8 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, ProcessInboundOptions, RoomKit,
-    RoomKitOptions, SendEventOptions,
+    AttachChannelOptions, AttachedMedia, Channel, ChannelError, CreateRoomOptions,
+    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions,
 };
 use roomkit_ai::memory::{IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
@@ -97,6 +98,11 @@ struct Room {
 
 impl Room {
     async fn new(rounds: usize, memory: Option<Scripted>) -> Self {
+        Self::on_kit(rounds, memory, RoomKitOptions::default()).await
+    }
+
+    /// The room, on a kit built with `kit`.
+    async fn on_kit(rounds: usize, memory: Option<Scripted>, kit: RoomKitOptions) -> Self {
         let model = ScriptedProvider::new(
             (0..rounds).map(|n| ScriptedRound::answering(format!("Answer {n}."))),
         );
@@ -109,7 +115,7 @@ impl Room {
             ..AiChannelOptions::default()
         };
         let agent = AiChannel::new(channel("ai1"), model.clone(), options).unwrap();
-        let kit = RoomKit::new(RoomKitOptions::default());
+        let kit = RoomKit::new(kit);
         let sms = RecordingTransport::new(
             channel("sms1"),
             ChannelType::SMS,
@@ -272,12 +278,24 @@ async fn the_channel_s_close_closes_its_memory() {
 }
 
 // Python: tests/test_instruction_events.py::test_a_standalone_instruction_reads_nothing_of_the_room
-// (its memory: not asked, and an instruction never ingested)
+// (its memory: not asked, and an instruction never ingested), and
+// `_ai_context._visible_memory`, which returns before the kit's
+// attached-media reader reads the room for a standalone instruction
 #[tokio::test]
 async fn an_instruction_standing_alone_asks_no_memory_and_none_learns_it() {
     let memory = Scripted::default();
-    let room = Room::new(2, Some(memory.clone())).await;
+    let read = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&read);
+    let kit = RoomKitOptions {
+        attached_media: Some(AttachedMedia::new(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        })),
+        ..RoomKitOptions::default()
+    };
+    let room = Room::on_kit(2, Some(memory.clone()), kit).await;
     room.says("hello").await;
+    let read_before = read.load(Ordering::SeqCst);
     let alone = SendEventOptions {
         event_type: EventType::Instruction,
         standalone: true,
@@ -300,6 +318,11 @@ async fn an_instruction_standing_alone_asks_no_memory_and_none_learns_it() {
         (1, vec!["hello".to_owned()])
     );
     assert_eq!(room.model.requests().len(), 2);
+    assert_eq!(
+        read.load(Ordering::SeqCst) - read_before,
+        0,
+        "the attached-media reader read the room"
+    );
 }
 
 /// RFC §20.3: the default window of 50 reads the room's latest 50 events,
