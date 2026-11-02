@@ -356,7 +356,8 @@ impl ScriptedChannel {
 }
 
 /// The output a reaction's `output` gives, in the serialized form: its
-/// tasks, observations and room metadata updates, completed for `room_id`.
+/// tasks, observations and room metadata updates, completed for `room_id`,
+/// and the error the channel met, a `RuntimeError` of its message.
 fn side_effects(output: &Value, room_id: &str, channel_id: &str) -> Value {
     let list = |key: &str| {
         output
@@ -372,6 +373,9 @@ fn side_effects(output: &Value, room_id: &str, channel_id: &str) -> Value {
             .map(|o| complete_observation(o, room_id, channel_id))
             .collect::<Vec<_>>(),
         "metadata_updates": output.get("metadata_updates").cloned().unwrap_or_else(|| json!({})),
+        "error": output.get("error").and_then(Value::as_str).map(|message| {
+            json!({ "error_type": "RuntimeError", "message": message })
+        }),
     })
 }
 
