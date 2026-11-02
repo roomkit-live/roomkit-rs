@@ -1,12 +1,13 @@
 //! The room's agents run again on a stored event, a held message's release
 //! (RFC §11.7.6), effect by effect: what no scenario can order, the room
-//! closing while the rerun's set waits in its lane (RFC §5.1), and the
-//! room's lock held past `process_timeout` (RFC §13.6).
+//! closing while the rerun's set waits in its lane (RFC §5.1), the room's
+//! lock held past `process_timeout` (RFC §13.6), and a cancellation that
+//! lands before the set is planned (RFC §10.1).
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit_core::model::{EventStatus, RoomStatus};
-use roomkit_core::ops::{FrameworkEvent, Inbound, RefusedOperation};
+use roomkit_core::ops::{FrameworkEvent, Inbound, Operation, RefusedOperation};
 
 use crate::support::{Sim, notice_event, room_id};
 
@@ -153,4 +154,35 @@ fn a_rerun_past_its_timeout_names_its_operation() {
         *operation = Some(RefusedOperation::Regenerate);
     }
     assert_eq!(regenerating(&sim), [&expected]);
+}
+
+// Python: core/mixins/regenerate.py::_rerun_agents_on (RMK-1200): the
+// delivery's key names the regeneration from its start, before the lock
+// (`named.attach(cascade)`), so a cancellation by the key that lands
+// before its set is planned leaves the set asking no agent (RFC §10.1
+// "Explicit delivery cancellation", §11.7.6).
+#[test]
+fn a_rerun_cut_before_its_set_is_planned_asks_no_agent() {
+    let mut sim = room();
+    let mut operation = rerun(&sim);
+    let in_flight = operation.cancel_turns();
+
+    let result = sim.run(operation).unwrap();
+
+    assert_eq!(
+        (
+            in_flight,
+            result.blocked,
+            result.event.map(|event| event.id.to_string()),
+            sim.traced("on_event"),
+            sim.timeline.len(),
+        ),
+        (
+            Vec::new(),
+            false,
+            Some("evt_0".to_owned()),
+            Vec::<&str>::new(),
+            1
+        )
+    );
 }
