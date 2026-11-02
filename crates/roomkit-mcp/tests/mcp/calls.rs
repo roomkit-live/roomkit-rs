@@ -122,7 +122,8 @@ async fn an_image_reaches_the_model_as_an_image_part() {
 
 /// A result whose image reaches the model as an image part keeps its texts
 /// within the bound a text result is held to: the text past it cut with a
-/// note, the image kept. The reference implementation bounds none of them.
+/// note, the image kept.
+// Python: tests/test_mcp_tool_provider.py::test_an_image_s_result_keeps_its_texts_within_the_bound
 #[tokio::test]
 async fn an_image_s_result_keeps_its_texts_within_the_bound() {
     let arguments = json!({ "shown": true, "text_chars": 150_000 });

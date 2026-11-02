@@ -22,7 +22,7 @@ const MODEL_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "i
 
 /// How many images of one result the model is shown, as an agent's
 /// default `max_author_images`: the maintainer's bound (RMK-1242), which
-/// the reference implementation does not have.
+/// the reference implementation holds too (RMK-1249).
 const MODEL_IMAGES_MAX: usize = 4;
 
 /// How many bytes of data URL the images of one result the model is shown
@@ -36,8 +36,8 @@ const MODEL_IMAGE_BYTES_MAX: usize = 5 * 1024 * 1024;
 ///   the model sees, each other part its text or its note, its texts
 ///   within [`RESULT_LIMIT`] characters in all, at most
 ///   [`MODEL_IMAGES_MAX`] of its images within [`MODEL_IMAGE_BYTES_MAX`]
-///   in all, each image past either a note that counts as a text (the
-///   reference implementation bounds none of them);
+///   in all, each image past either a note that counts as a text, as the
+///   reference implementation's `_bounded_parts`;
 /// - otherwise, within [`RESULT_LIMIT`] characters, each part's text,
 ///   one part read as itself and several as a JSON array of them written
 ///   as Python's `json.dumps` writes it, as the reference implementation's
@@ -272,6 +272,7 @@ mod tests {
     /// The maintainer's bounds (RMK-1242): at most four of a result's
     /// images, within 5 MiB of data URL in all, reach the model; each image
     /// past either reads as its note.
+    // Python: tests/test_mcp_tool_provider.py::test_a_result_s_images_are_bounded_in_number_and_size
     #[test]
     fn a_result_s_images_are_bounded_in_number_and_size() {
         let tiny = || ContentBlock::image("iVBORw0KGgo", "image/png");
@@ -304,6 +305,7 @@ mod tests {
     /// The note of an image held back counts as a text: a result whose
     /// text fills the bound shows its first four images and no note past
     /// it.
+    // Python: tests/test_mcp_tool_provider.py::test_a_held_back_image_s_note_counts_within_the_texts_bound
     #[test]
     fn a_held_back_image_s_note_counts_within_the_texts_bound() {
         let mut content = vec![ContentBlock::text("x".repeat(RESULT_LIMIT))];
