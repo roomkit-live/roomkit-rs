@@ -777,9 +777,13 @@ async fn off_a_message_during_a_turn_starts_its_own() {
     room.kit.close().await.unwrap();
 }
 
-// Python: tests/test_steering_during_turn.py::test_a_steered_message_carries_its_speaker_when_the_room_has_several
-#[tokio::test]
-async fn a_steered_message_carries_its_speaker_when_the_room_has_several() {
+/// The model's requests once `second` (a sender and its name, if any)
+/// wrote [`STEERED`] by SMS while the turn on `first`'s "go" ran a tool,
+/// in a group room where both write through one channel.
+async fn steered_in_a_group(
+    first: (&str, Option<&str>),
+    second: (&str, Option<&str>),
+) -> Vec<AiContext> {
     let model = Gated::new([call(), ScriptedRound::answering("ok")], usize::MAX);
     let tool = Paused::new().holding();
     let options = AiChannelOptions {
@@ -818,22 +822,24 @@ async fn a_steered_message_carries_its_speaker_when_the_room_has_several() {
     )
     .await
     .unwrap();
-    let said = |sender: &str, name: &str, body: &str| {
+    let said = |(sender, name): (&str, Option<&str>), body: &str| {
         let mut message = roomkit::model::InboundMessage::new(
             channel("sms"),
             sender,
             roomkit::model::TextContent::new(body),
         );
-        message
-            .metadata
-            .insert("sender_name".to_owned(), name.into());
+        if let Some(name) = name {
+            message
+                .metadata
+                .insert("sender_name".to_owned(), name.into());
+        }
         let options = roomkit::ProcessInboundOptions {
             room_id: Some(room_id()),
             ..Default::default()
         };
         (message, options)
     };
-    let (first, options) = said("+15550001", "Alice", "go");
+    let (first, options) = said(first, "go");
     let turn = {
         let kit = kit.clone();
         tokio::spawn(async move {
@@ -842,20 +848,37 @@ async fn a_steered_message_carries_its_speaker_when_the_room_has_several() {
     };
     tool.started().await;
 
-    let (steered, options) = said("+15550002", "Bob", STEERED);
+    let (steered, options) = said(second, STEERED);
     kit.process_inbound(steered, options).await.unwrap();
     tool.release();
     turn.await.unwrap();
 
-    let requests = model.requests();
-    assert!(
-        read(&requests[1], &format!("Bob: \"{STEERED}\"")),
-        "{:?}",
-        requests[1]
-            .messages
-            .iter()
-            .map(roomkit_ai::AiMessage::text)
-            .collect::<Vec<_>>()
-    );
     kit.close().await.unwrap();
+    model.requests()
+}
+
+/// The texts of `request`'s messages, for an assertion's message.
+fn texts(request: &AiContext) -> Vec<String> {
+    request
+        .messages
+        .iter()
+        .map(roomkit_ai::AiMessage::text)
+        .collect()
+}
+
+// Python: tests/test_steering_during_turn.py::test_a_steered_message_carries_its_speaker_when_the_room_has_several
+#[tokio::test]
+async fn a_steered_message_carries_its_speaker_when_the_room_has_several() {
+    let requests =
+        steered_in_a_group(("+15550001", Some("Alice")), ("+15550002", Some("Bob"))).await;
+    let line = format!("Bob: \"{STEERED}\"");
+    assert!(read(&requests[1], &line), "{:?}", texts(&requests[1]));
+}
+
+// Python: tests/test_people_taking_part.py::TestEveryReaderCountsSources::test_two_senders_with_no_name_on_one_channel_are_labelled[steered message]
+#[tokio::test]
+async fn a_steered_message_from_a_second_nameless_sender_carries_its_rank() {
+    let requests = steered_in_a_group(("+15550001", None), ("+15550002", None)).await;
+    let line = format!("@sms (2): \"{STEERED}\"");
+    assert!(read(&requests[1], &line), "{:?}", texts(&requests[1]));
 }

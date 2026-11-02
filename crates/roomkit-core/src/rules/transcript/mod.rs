@@ -638,8 +638,9 @@ pub fn turn_labels<'a>(
 /// `None` for an event that reads as no text, which waits a turn of its
 /// own, and for an edit or a delete, no message a turn may answer (RFC
 /// §10.3), whose own turn the agent does not take. Python's
-/// `steered_message`, its speakers counted by label among the context's
-/// events and `event`.
+/// `steered_message`: its speakers are the context's events' and
+/// `event`'s, nameless ones told apart and counted by source, as the
+/// conversation counts them.
 pub fn steered_text(
     event: &RoomEvent,
     context: &RoomContext,
@@ -657,15 +658,15 @@ pub fn steered_text(
         .recent_events
         .iter()
         .filter(|recent| recent.id != event.id);
-    let labels: Vec<Option<String>> = others
+    let mut speakers: Vec<Option<Speaker>> = others
         .chain([event])
-        .map(|said| speaker(said, &mut authors).map(|speaker| speaker.label))
+        .map(|said| speaker(said, &mut authors))
         .collect();
-    let distinct: std::collections::BTreeSet<&str> =
-        labels.iter().flatten().map(String::as_str).collect();
-    let several = people_taking_part(context, channel_id).len() >= 2 || distinct.len() >= 2;
-    match labels.last().cloned().flatten() {
-        Some(label) if several => Some(labelled_lines(&text, &label)),
+    tell_apart(speakers.iter_mut().flatten());
+    let sources = speakers.iter().flatten().map(|said| said.source.as_str());
+    let several = labels_turns(sources, people_taking_part(context, channel_id).len());
+    match speakers.last().cloned().flatten() {
+        Some(said) if several => Some(labelled_lines(&text, &said.label)),
         Some(_) | None => Some(text),
     }
 }
