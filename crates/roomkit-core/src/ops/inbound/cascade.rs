@@ -224,7 +224,7 @@ impl Machine {
             budget,
             lineage,
         );
-        if self.cascade.turns_cut && lineage == Lineage::Call {
+        if self.cascade.is_cut(lineage) {
             set.cut();
         }
         self.cascade.queue_set(Delivery {
@@ -392,7 +392,7 @@ impl Machine {
     /// whose turns are cut reads none (RFC §10.1 "Explicit delivery
     /// cancellation").
     pub(super) fn queue_streams(&mut self, streams: Vec<StreamedTurn>, set: &DeliverySet) {
-        if self.cascade.turns_cut && set.lineage() == Lineage::Call {
+        if self.cascade.is_cut(set.lineage()) {
             return;
         }
         for StreamedTurn { responder, turn } in streams {
@@ -443,7 +443,7 @@ impl Machine {
     ) {
         // A cascade whose turns are cut takes no reentry (RFC §10.1
         // "Explicit delivery cancellation").
-        if self.cascade.turns_cut && set.lineage() == Lineage::Call {
+        if self.cascade.is_cut(set.lineage()) {
             return;
         }
         let Response { responder, events } = response;

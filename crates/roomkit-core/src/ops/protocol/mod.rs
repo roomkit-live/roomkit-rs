@@ -323,6 +323,21 @@ pub trait Operation {
     fn cancel_turns(&mut self) -> Vec<EffectId> {
         Vec::new()
     }
+
+    /// Cuts the turns of the cascade of `entry`, a call into the room the
+    /// operation adopted (RFC §9.5.1 Reentrance), whose delivery is
+    /// cancelled (RFC §10.1 "Explicit delivery cancellation"), as
+    /// [`cancel_turns`](Self::cancel_turns) cuts the call's own: a turn of
+    /// that cascade not started never starts, a running one is given up
+    /// on, and no response of it re-enters; the call's own cascade, and the
+    /// other entries', keep theirs.
+    ///
+    /// Returns the effects the operation gives up on, the turns in flight.
+    /// An operation that adopts nothing gives up on nothing.
+    fn cancel_entry_turns(&mut self, entry: EntryId) -> Vec<EffectId> {
+        let _ = entry;
+        Vec::new()
+    }
 }
 
 /// A driver broke the protocol.

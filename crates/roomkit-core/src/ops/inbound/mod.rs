@@ -103,7 +103,7 @@ pub use self::answers::MessageAnswers;
 pub use self::arrival::InboundTarget;
 use self::cascade::Trigger;
 use self::persist::SideEffects;
-use self::queues::Cascade;
+use self::queues::{Cascade, Lineage};
 use self::stage::{CallStage, Stage};
 pub use self::stamp::default_inbound_event;
 pub(crate) use self::stamp::error_event;
@@ -398,7 +398,16 @@ impl Operation for Inbound {
     /// Cuts the turns of the call's own cascade (RFC §10.1 "Explicit
     /// delivery cancellation"), the entries it adopted keeping theirs.
     fn cancel_turns(&mut self) -> Vec<EffectId> {
-        self.machine.cascade.cut_turns(&mut self.io)
+        self.machine.cascade.cut_turns(&mut self.io, Lineage::Call)
+    }
+
+    /// Cuts the turns of the cascade of `entry`, an entry the operation
+    /// adopted, whose delivery was cancelled (RFC §10.1 "Explicit delivery
+    /// cancellation"); the call's own cascade keeps its turns.
+    fn cancel_entry_turns(&mut self, entry: EntryId) -> Vec<EffectId> {
+        self.machine
+            .cascade
+            .cut_turns(&mut self.io, Lineage::Entry(entry))
     }
 }
 

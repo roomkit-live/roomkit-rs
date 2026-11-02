@@ -81,10 +81,12 @@ pub(super) struct Cascade {
     /// Whether the cascade stopped, failed or past its deadline: no pass
     /// runs any more, committed events are still delivered.
     stopping: bool,
-    /// Whether the call's own turns are cut, its caller gone once the call
-    /// was decided: no turn of its cascade starts, and no response of it
-    /// re-enters (RFC §10.1 "Explicit delivery cancellation").
-    pub(super) turns_cut: bool,
+    /// The cascades whose turns are cut: the call's own, its caller gone
+    /// once the call was decided or its delivery cancelled, and those of
+    /// the entries whose delivery was cancelled. No turn of such a cascade
+    /// starts, and no response of it re-enters (RFC §10.1 "Explicit
+    /// delivery cancellation").
+    cut: Vec<Lineage>,
     /// The reentry budget every cascade of the operation draws on, an
     /// adopted entry's on its caller's (RFC §8.3), and the calls its
     /// delivery sets' targets make into a room too (gap G-070).
@@ -116,7 +118,7 @@ impl Cascade {
             sets: VecDeque::new(),
             delivery: None,
             stopping: false,
-            turns_cut: false,
+            cut: Vec::new(),
             budget,
             drawn: None,
             from_delivery: None,
@@ -205,40 +207,48 @@ impl Cascade {
         }
     }
 
-    /// Cuts the call's own turns (RFC §10.1 "Explicit delivery
-    /// cancellation", gap G-076): the sets of its cascade queued ask no
-    /// agent, the turns its running set asked are given up on, answered
-    /// here, and the responses of its cascade queued do not re-enter. Its
-    /// events are still delivered to every other target, and the entries
-    /// the operation adopted keep their turns. Returns the turns given up
-    /// on, which the driver cuts and never answers.
-    pub(super) fn cut_turns(&mut self, io: &mut Io) -> Vec<EffectId> {
-        self.turns_cut = true;
+    /// Whether the turns of the cascade of `lineage` are cut.
+    pub(super) fn is_cut(&self, lineage: Lineage) -> bool {
+        self.cut.contains(&lineage)
+    }
+
+    /// Cuts the turns of the cascade of `lineage`, the call's own or an
+    /// adopted entry's (RFC §10.1 "Explicit delivery cancellation", gap
+    /// G-076): the sets of that cascade queued ask no agent, the turns its
+    /// running set asked are given up on, answered here, and the responses
+    /// of that cascade queued do not re-enter. Its events are still
+    /// delivered to every other target, and the other cascades keep their
+    /// turns. Returns the turns given up on, which the driver cuts and
+    /// never answers.
+    pub(super) fn cut_turns(&mut self, io: &mut Io, lineage: Lineage) -> Vec<EffectId> {
+        if !self.is_cut(lineage) {
+            self.cut.push(lineage);
+        }
         self.passes.retain(|job| match job {
-            Job::Pass(pass, _) => !(pass.is_response() && pass.lineage() == Lineage::Call),
+            Job::Pass(pass, _) => !(pass.is_response() && pass.lineage() == lineage),
             // The rows of the stream being read are what its reader was
             // handed: they are stored, as its text is (RFC §12.2 step 13s).
             Job::Record(..) | Job::Row(..) => true,
         });
         for delivery in &mut self.sets {
-            if delivery.set.lineage() == Lineage::Call {
+            if delivery.set.lineage() == lineage {
                 delivery.set.cut();
             }
         }
-        self.streams.retain(|job| job.lineage != Lineage::Call);
+        self.streams.retain(|job| job.lineage != lineage);
         // The stream being read is a turn of the cascade: its reader is
         // stopped, the text it was handed stored marked cancelled (RFC
         // §12.2 step 13s), and the read answered as any.
         if let Some(reading) = self
             .stream
             .as_ref()
-            .filter(|read| read.lineage() == Lineage::Call)
+            .filter(|read| read.lineage() == lineage)
             .and_then(StreamRead::reading)
         {
             io.notify(Notice::StopReading { effect: reading });
         }
         match self.delivery.as_mut() {
-            Some(delivery) if delivery.set.lineage() == Lineage::Call => {
+            Some(delivery) if delivery.set.lineage() == lineage => {
                 let turns = delivery.set.cut();
                 io.cut(&turns)
             }
@@ -516,7 +526,7 @@ impl Machine {
             );
             return;
         };
-        let cut = self.cascade.turns_cut && read.lineage() == Lineage::Call;
+        let cut = self.cascade.is_cut(read.lineage());
         match read.accept(cx, &self.cascade.budget, outcome, cut) {
             Read::Reading(read) => self.cascade.stream = Some(*read),
             Read::Over(end) => self.stream_over(cx, *end),
