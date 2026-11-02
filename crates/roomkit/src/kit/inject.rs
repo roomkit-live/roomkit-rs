@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 use super::RoomKit;
 use super::options::{CommitEventOptions, SendEventOptions};
 use crate::context::{self, Adopting, Completion, ExecutionContext};
-use crate::delivery_keys::NamedGuard;
+use crate::delivery_keys::{Named, NamedGuard};
 use crate::driver::{self, InboundOutput, Ran, Record, Stop};
 use crate::error::RoomKitError;
 use crate::inbound::DeliveryHandle;
@@ -219,7 +219,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let entry = match context::adopt(entry).await {
             Adopting::Settled(result, completion) => {
                 if let Some(named) = named.filter(|named| named.named().has_key()) {
-                    self.name_adopted(named, &completion);
+                    self.name_adopted(named, &result, &completion).await;
                 }
                 return Ok(Entered {
                     result: (*result).map_err(refused)?,
@@ -245,7 +245,22 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Names the delivery of a call the room's work adopted by `named`
     /// until its set ran, as `completion` tells: a cancellation by its key
     /// cuts the turns of the entry's cascade in the run that adopted it.
-    fn name_adopted(&self, mut named: NamedGuard, completion: &Completion) {
+    /// Decided as `result` tells, its delivery is located in its room's
+    /// organization, and holds its event held for verification until its
+    /// release, as any call's (RFC §10.1, §11.7.6); Python's adopted call
+    /// takes `_prepare_event_inner`'s `named.locate` and `_name_held`.
+    /// Called before the room's work that adopted it goes on, so under its
+    /// lock: no release reaches the event before.
+    async fn name_adopted(
+        &self,
+        mut named: NamedGuard,
+        result: &Result<InboundResult, InboundError>,
+        completion: &Completion,
+    ) {
+        if let Ok(result) = result {
+            self.locate_adopted(named.named(), result).await;
+            named.named().decided(result);
+        }
         named.attach(Arc::clone(&completion.cancel));
         let mut delivered = completion.delivered.clone();
         let over = async move {
@@ -254,6 +269,27 @@ impl<S: ConversationStore> RoomKit<S> {
             drop(named);
         };
         drop(self.inner.tasks.spawn_alone(Kind::Turn, over));
+    }
+
+    /// Locates `named`, the delivery of an adopted call that `result`
+    /// decided, in its room's organization, unless its call named its
+    /// organization: the room is read, as Python's adopted call reads it.
+    /// A room the read does not find, gone or not read, leaves it where it
+    /// is: a scoped cancellation then reaches it no more than before.
+    async fn locate_adopted(&self, named: &Named, result: &InboundResult) {
+        let Some(event) = result.event.as_ref().filter(|_| !named.is_located()) else {
+            return;
+        };
+        match self.store().get_room(&event.room_id).await {
+            Ok(Some(room)) => named.locate(room.organization_id.as_deref()),
+            Ok(None) => {}
+            Err(error) => tracing::debug!(
+                target: "roomkit::delivery",
+                room_id = %event.room_id,
+                %error,
+                "reading the room of an adopted call failed; its delivery stays unlocated"
+            ),
+        }
     }
 
     /// Checks that the organization `entry` names reaches its room when the

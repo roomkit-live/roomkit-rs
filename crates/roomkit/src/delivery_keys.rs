@@ -270,6 +270,12 @@ impl Named {
         locked(&self.state).cancelled()
     }
 
+    /// Whether its room is known: its call named its organization, or its
+    /// room was read.
+    pub(crate) fn is_located(&self) -> bool {
+        locked(&self.state).located
+    }
+
     /// Whether a key names it.
     pub(crate) fn has_key(&self) -> bool {
         self.key.is_some()
