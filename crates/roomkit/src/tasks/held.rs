@@ -50,18 +50,33 @@ pub(crate) struct Claim {
 }
 
 impl Claim {
-    /// Whether the work takes the task's end, which no cancel took first:
-    /// the work then ends the task as it ran, then says so with
-    /// [`ended`](Self::ended). Once the kit's close began, the work leaves
-    /// the end to the close, which cancels every task held, as Python's
-    /// close cancels the run before its turn could end: the close cut the
-    /// turn the work ran.
-    pub(crate) fn take(&self) -> bool {
-        self.held.take_end(&self.task_id).is_some()
+    /// The task's end, when the work takes it, no cancel having taken it
+    /// first: the work then ends the task as it ran, the end told as the
+    /// returned [`Ending`] drops. Once the kit's close began, the work
+    /// leaves the end to the close, which cancels every task held, as
+    /// Python's close cancels the run before its turn could end: the close
+    /// cut the turn the work ran.
+    pub(crate) fn take(&self) -> Option<Ending> {
+        // Its cancelled end is not run: the work ends the task as it ran.
+        drop(self.held.take_end(&self.task_id)?);
+        Some(Ending {
+            held: self.held.clone(),
+            task_id: self.task_id.clone(),
+        })
     }
+}
 
-    /// The task ended: whoever waits for its end goes on.
-    pub(crate) fn ended(&self) {
+/// A task's end, taken by the run that ends it: dropped, however that run
+/// stops, the close's cut among the ways, it tells the task's end, so that
+/// a cancel waiting for it goes on, as Python's waits until the task's runs
+/// are over.
+pub(crate) struct Ending {
+    held: HeldTasks,
+    task_id: String,
+}
+
+impl Drop for Ending {
+    fn drop(&mut self) {
         self.held.ended(&self.task_id);
     }
 }
@@ -225,13 +240,15 @@ impl HeldTasks {
         work: Option<JoinHandle<()>>,
         end: BoxFuture<'static, ()>,
     ) -> impl Future<Output = ()> + Send + 'static {
-        let held = self.clone();
-        let task_id = task_id.to_owned();
+        let ending = Ending {
+            held: self.clone(),
+            task_id: task_id.to_owned(),
+        };
         async move {
-            held.note_run(&task_id);
+            ending.held.note_run(&ending.task_id);
             stop(work).await;
             end.await;
-            held.ended(&task_id);
+            drop(ending);
         }
     }
 

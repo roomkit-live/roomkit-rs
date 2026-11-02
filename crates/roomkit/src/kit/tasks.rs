@@ -321,8 +321,7 @@ impl<S: ConversationStore> RoomKit<S> {
         if self.inner.tasks.is_closing() {
             // The close began while the task was set up: it ends as the
             // close ends a running one, on both doors.
-            unstarted.started();
-            self.cancelled_end(&handle, &options, false).await;
+            unstarted.end_now().await;
             return Ok(handle);
         }
         if options.wait {

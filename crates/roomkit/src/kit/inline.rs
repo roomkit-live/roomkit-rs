@@ -36,10 +36,10 @@ impl<S: ConversationStore> RoomKit<S> {
         let work = move |claim: Claim| async move {
             let ended = kit.inline_turn(&held_task, &held_options).await;
             // Unless a cut took its end first, it ends as it ran.
-            if claim.take() {
+            if let Some(ending) = claim.take() {
                 let result = ended.into_result(&held_task);
                 kit.complete_inline(&held_task, result, &held_options).await;
-                claim.ended();
+                drop(ending);
             }
         };
         let held = &self.inner.inline_tasks;
@@ -77,7 +77,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// How the task ends cut before its answer: `cancelled`, with no
     /// output, its worker's turn under `turns` once it `began`, its
     /// completion run to its end (Python's `_end_inline_cancelled`).
-    pub(super) fn cancelled_end(
+    fn cancelled_end(
         &self,
         task: &DelegatedTask,
         options: &DelegateOptions,
@@ -138,6 +138,22 @@ impl<S: ConversationStore> Unstarted<S> {
     /// to end.
     pub(super) fn started(mut self) {
         self.ending = None;
+    }
+
+    /// Ends the task cancelled now, before its run, on a run of its own
+    /// the kit tracks, which the caller waits for: a caller cut meanwhile
+    /// leaves the end to run on (Python's shielded `_end_inline_cancelled`).
+    pub(super) async fn end_now(mut self) {
+        let Some(ending) = self.ending.take() else {
+            return;
+        };
+        match self.kit.inner.tasks.spawn_alone(Kind::Turn, ending) {
+            // Its outcome is its end, or its abort by the close's cut.
+            Some(run) => drop(run.await),
+            None => {
+                tracing::debug!(target: "roomkit::tasks", "the kit is shut down: a delegation announced as it closed does not end");
+            }
+        }
     }
 }
 

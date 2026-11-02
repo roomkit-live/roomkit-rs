@@ -23,9 +23,9 @@ use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
 };
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
-    DelegateOptions, HookExecution, HookOptions, HookTrigger, RoomKit, RoomKitError,
-    RoomKitOptions,
+    AttachChannelOptions, CancelTaskOptions, Channel, ChannelError, ConversationStore,
+    CreateRoomOptions, DelegateOptions, HookExecution, HookOptions, HookTrigger, RoomKit,
+    RoomKitError, RoomKitOptions,
 };
 use tokio::sync::Notify;
 
@@ -628,4 +628,79 @@ async fn an_inline_caller_timing_out_while_the_task_ends_leaves_its_end_whole() 
         )
     );
     kit.close().await.unwrap();
+}
+
+// RMK-1186, the light review: a cancel waiting for a task ending as it
+// stands goes on once the task's runs are over, the close's cut among the
+// ways, as Python's waits until the runs are over (wait_for_unspared).
+// On c73c402 the cancel never returned: the cut run never told its end.
+#[tokio::test(start_paused = true)]
+async fn a_cancel_waiting_for_an_end_the_close_cuts_returns() {
+    let worker = EchoAgent::new(channel("worker"), "Done.", EchoAgentOptions::default());
+    let (kit, _, _) = kit_with(worker, RoomKitOptions::default()).await;
+    let ending = Ending::default();
+    let options = DelegateOptions {
+        on_complete: Some(ending.on_complete()),
+        ..DelegateOptions::default()
+    };
+    let room = RoomId::new("p").unwrap();
+    let task = kit
+        .delegate(&room, &channel("worker"), "go", options)
+        .await
+        .unwrap();
+    tokio::time::timeout(BOUND, ending.entered.notified())
+        .await
+        .unwrap();
+    let (runner, task_id) = (kit.task_runner(), task.id.clone());
+    let cancelling = tokio::spawn(async move { runner.cancel(&task_id).await });
+    tokio::task::yield_now().await;
+
+    kit.close().await.unwrap();
+    let answer = tokio::time::timeout(Duration::from_secs(120), cancelling).await;
+
+    assert_eq!(answer.map(Result::unwrap).ok(), Some(false));
+}
+
+/// A runner answering every cancel `true`, counting them.
+#[derive(Default)]
+struct Cancels {
+    asked: Mutex<usize>,
+}
+
+impl TaskRunner for Cancels {
+    fn submit(
+        &self,
+        _kit: RoomKit,
+        _task: DelegatedTask,
+        _options: SubmitOptions,
+    ) -> Boxed<Result<(), RoomKitError>> {
+        Box::pin(ready(Ok(())))
+    }
+
+    fn cancel(&self, _task_id: &str) -> Boxed<bool> {
+        *self.asked.lock().unwrap() += 1;
+        Box::pin(ready(true))
+    }
+
+    fn close(&self) -> Boxed<()> {
+        Box::pin(ready(()))
+    }
+}
+
+// Python: tests/test_kit_close.py::test_a_teardown_call_returns_doing_nothing_once_the_close_started[cancel_task]
+// On 1d8ce9e the kit asked its runner, which answered true.
+#[tokio::test]
+async fn cancel_task_does_nothing_once_the_close_started() {
+    let runner = Arc::new(Cancels::default());
+    let held: Arc<dyn TaskRunner> = Arc::<Cancels>::clone(&runner);
+    let options = RoomKitOptions {
+        task_runner: Some(held),
+        ..RoomKitOptions::default()
+    };
+    let kit = RoomKit::new(options);
+
+    kit.close().await.unwrap();
+    let answer = kit.cancel_task("task", CancelTaskOptions::default()).await;
+
+    assert_eq!((answer, *runner.asked.lock().unwrap()), (false, 0));
 }

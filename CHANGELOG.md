@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A cancel waiting for a delegated task that ends as it stands goes on
+  once that end is over however it stops, the close's cut included, as
+  Python's (RFC §23.3, RMK-1186); a delegation announced as the kit's
+  close began ends on a run of its own, which a cut caller leaves to run.
 - A delegated turn's child room is a room for the chain's depth limit and
   its metadata, as Python's (RFC §8.3, §10.1 step 15, RMK-1188): an agent
   whose answer would reach `max_chain_depth` is not asked, its `BLOCKED`

@@ -124,9 +124,9 @@ impl<S: ConversationStore> TaskRunner<S> for InMemoryTaskRunner {
                 task.set_status(TaskStatus::InProgress);
                 let ended = Box::pin(kit.run_task(&task, context.as_ref())).await;
                 // Unless a cancel took its end first, it ends as it ran.
-                if claim.take() {
+                if let Some(ending) = claim.take() {
                     kit.finish_task(&task, ended, on_complete.as_ref()).await;
-                    claim.ended();
+                    drop(ending);
                 }
             };
             match held.hold(&tracker, &task_id, end_cancelled, work) {
