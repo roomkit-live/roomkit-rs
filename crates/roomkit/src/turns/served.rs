@@ -31,7 +31,7 @@ pub(crate) struct OwnerToolEntry<S> {
 }
 
 impl<S> OwnerToolEntry<S> {
-    fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         self.definition
             .get("name")
             .and_then(Value::as_str)

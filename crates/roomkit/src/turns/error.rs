@@ -391,6 +391,7 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::Internal(_) => "Internal",
         RoomKitError::HumanInputRejected(_) => "HumanInputRejected",
         RoomKitError::Runtime(_) => "Runtime",
+        RoomKitError::ToolNameCollision(_) => "ToolNameCollision",
     };
     (variant, fields)
 }

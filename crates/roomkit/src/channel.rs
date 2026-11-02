@@ -288,6 +288,16 @@ pub trait Channel: Send + Sync + 'static {
         None
     }
 
+    /// The names of the tools the channel serves itself, which a tool the
+    /// kit sets up on it may not take (RFC §21.1): none by default.
+    ///
+    /// For the workspace's AI channel, as the Python implementation's
+    /// owner reads a channel's own tool registry: outside the public API.
+    #[doc(hidden)]
+    fn own_tool_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Whether the channel's turns in a room run one after the other, in
     /// the order they were asked, each reading the answers before it (RFC
     /// §6.4): `false` by default, a room's turns side by side.
@@ -492,6 +502,8 @@ pub(crate) trait DynChannel: Send + Sync {
 
     fn steer_turn(&self, directive: &SteeringDirective, turn_id: &str) -> Option<usize>;
 
+    fn own_tool_names(&self) -> Vec<String>;
+
     fn serializes_room_turns(&self) -> bool;
 
     fn steers_room_turns(&self) -> bool;
@@ -554,6 +566,10 @@ impl<C: Channel> DynChannel for C {
 
     fn steer_turn(&self, directive: &SteeringDirective, turn_id: &str) -> Option<usize> {
         Channel::steer_turn(self, directive, turn_id)
+    }
+
+    fn own_tool_names(&self) -> Vec<String> {
+        Channel::own_tool_names(self)
     }
 
     fn serializes_room_turns(&self) -> bool {

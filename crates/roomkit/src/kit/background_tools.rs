@@ -158,21 +158,33 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(())
     }
 
-    /// Sets up `entries` for `agent`, all or none.
+    /// Sets up `entries` for `agent`, all or none: a name one of the
+    /// agent's own tools takes, or one the owner serves it already, is
+    /// refused (RFC §21.1), as Python's registry's `register_all`.
     fn register_owner_tools(
         &self,
         agent: &ChannelId,
         entries: Vec<OwnerToolEntry<S>>,
     ) -> Result<(), RoomKitError> {
+        let own = self
+            .inner
+            .channel(agent)
+            .map(|channel| channel.own_tool_names())
+            .unwrap_or_default();
+        if let Some(entry) = entries
+            .iter()
+            .find(|entry| own.iter().any(|name| name == entry.name()))
+        {
+            return Err(collision(
+                entry.name(),
+                "one of the channel's own tools",
+                agent,
+            ));
+        }
         self.inner
             .owner_tools
             .register_all(agent, entries)
-            .map_err(|name| {
-                RoomKitError::Value(format!(
-                    "Tool {name:?} is already served for channel {:?}",
-                    agent.as_str()
-                ))
-            })
+            .map_err(|name| collision(&name, "served by the channel", agent))
     }
 
     /// How `agent`'s background tasks run: its setup, or the default.
@@ -185,6 +197,15 @@ impl<S: ConversationStore> RoomKit<S> {
             .cloned()
             .unwrap_or_default()
     }
+}
+
+/// The refusal of a tool under a name `clash` already takes on `agent`:
+/// Python's `ToolNameCollisionError`, in its words.
+fn collision(name: &str, clash: &str, agent: &ChannelId) -> RoomKitError {
+    RoomKitError::ToolNameCollision(format!(
+        "Tool '{name}' is already {clash} on channel '{}': rename one of them (RFC §21.1)",
+        agent.as_str()
+    ))
 }
 
 /// The refusal of a setup made twice on one agent: Python's
@@ -282,8 +303,89 @@ async fn task_status<S: ConversationStore>(
     kit: RoomKit<S>,
     call: OwnerCall,
 ) -> Result<String, RoomKitError> {
-    let lines = room_lines(kit.status_bus(), call.room_id.as_str(), ROOM_TASKS_WINDOW).await;
-    let wanted = wanted_task(&call.arguments);
+    let window = TaskToolWindow {
+        window: ROOM_TASKS_WINDOW,
+        limit: TASK_STATUS_LIMIT,
+    };
+    Ok(kit
+        .task_status_answer(&call.room_id, &call.arguments, window)
+        .await)
+}
+
+/// `cancel_task`'s answer to `call`: a task of the room of the call
+/// cancelled, or as it stands (RFC §23.4).
+async fn cancel_task<S: ConversationStore>(
+    kit: RoomKit<S>,
+    call: OwnerCall,
+) -> Result<String, RoomKitError> {
+    let window = TaskToolWindow {
+        window: ROOM_TASKS_WINDOW,
+        limit: TASK_STATUS_LIMIT,
+    };
+    Ok(kit
+        .cancel_task_answer(
+            &call.room_id,
+            Some(&call.channel_id),
+            &call.arguments,
+            window,
+        )
+        .await)
+}
+
+/// How far a task tool reads the bus: how many of its latest entries
+/// (Python's `window=500`), and how many tasks `task_status` lists at most
+/// (`limit=10`).
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TaskToolWindow {
+    /// How many of the bus's latest entries are read.
+    pub window: usize,
+    /// How many tasks, the latest, `task_status` lists at most.
+    pub limit: usize,
+}
+
+impl<S: ConversationStore> RoomKit<S> {
+    /// `task_status`'s answer in `room_id`, the room of the call: the
+    /// tasks the bus lists for it, the latest `window.limit`, or the one
+    /// the call's `task_id` names (RFC §23.4). What Python's
+    /// `TaskStatusTool.handler` answers once it read the room of the call;
+    /// for roomkit-ai's `TaskStatusTool`, outside the public API.
+    #[doc(hidden)]
+    pub async fn task_status_answer(
+        &self,
+        room_id: &RoomId,
+        arguments: &Metadata,
+        window: TaskToolWindow,
+    ) -> String {
+        task_status_lines(self, room_id, arguments, window).await
+    }
+
+    /// `cancel_task`'s answer in `room_id`, the room of the call, for
+    /// `channel_id`, the channel whose call it is, which a cancel does not
+    /// tell twice (RFC §23.4). What Python's `CancelTaskTool.handler`
+    /// answers once it read the call; for roomkit-ai's `CancelTaskTool`,
+    /// outside the public API.
+    #[doc(hidden)]
+    pub async fn cancel_task_answer(
+        &self,
+        room_id: &RoomId,
+        channel_id: Option<&ChannelId>,
+        arguments: &Metadata,
+        window: TaskToolWindow,
+    ) -> String {
+        cancel_task_lines(self, room_id, channel_id, arguments, window.window).await
+    }
+}
+
+/// The tasks of `room_id` as `task_status` lists them.
+async fn task_status_lines<S: ConversationStore>(
+    kit: &RoomKit<S>,
+    room_id: &RoomId,
+    arguments: &Metadata,
+    window: TaskToolWindow,
+) -> String {
+    let lines = room_lines(kit.status_bus(), room_id.as_str(), window.window).await;
+    let wanted = wanted_task(arguments);
     let mut tasks: Vec<&Line> = lines.iter().collect();
     if !wanted.is_empty() {
         tasks.retain(|line| line.get("task_id").and_then(Value::as_str) == Some(wanted.as_str()));
@@ -292,10 +394,10 @@ async fn task_status<S: ConversationStore>(
             let mut written = String::from("{\"tasks\": [], \"message\": ");
             write_json(&mut written, &message, true);
             written.push('}');
-            return Ok(written);
+            return written;
         }
     }
-    tasks.drain(..tasks.len().saturating_sub(TASK_STATUS_LIMIT));
+    tasks.drain(..tasks.len().saturating_sub(window.limit));
     let mut written = String::from("{\"tasks\": [");
     for (at, line) in tasks.iter().enumerate() {
         if at > 0 {
@@ -310,49 +412,48 @@ async fn task_status<S: ConversationStore>(
         );
     }
     written.push_str("]}");
-    Ok(written)
+    written
 }
 
-/// `cancel_task`'s answer to `call`: a task of the room of the call
-/// cancelled, or as it stands (RFC §23.4).
-async fn cancel_task<S: ConversationStore>(
-    kit: RoomKit<S>,
-    call: OwnerCall,
-) -> Result<String, RoomKitError> {
-    let task_id = wanted_task(&call.arguments);
+/// `cancel_task`'s answer in `room_id` for `channel_id`: a task of the
+/// room cancelled, or as it stands (RFC §23.4).
+async fn cancel_task_lines<S: ConversationStore>(
+    kit: &RoomKit<S>,
+    room_id: &RoomId,
+    channel_id: Option<&ChannelId>,
+    arguments: &Metadata,
+    window: usize,
+) -> String {
+    let task_id = wanted_task(arguments);
     if task_id.is_empty() {
-        return Ok(error_answer("task_id is required"));
+        return error_answer("task_id is required");
     }
-    let room_id = call.room_id.as_str();
-    let Some(line) = line_of(&kit, room_id, &task_id).await else {
-        return Ok(answer(
-            &task_id,
-            "unknown",
-            &format!("No task {task_id} here."),
-        ));
+    let Some(line) = line_of(kit, room_id.as_str(), &task_id, window).await else {
+        return answer(&task_id, "unknown", &format!("No task {task_id} here."));
     };
     if line.get("status").and_then(Value::as_str) == Some("running") {
-        return Ok(answer_running(&kit, &call, &task_id).await);
+        return answer_running(kit, room_id, channel_id, &task_id, window).await;
     }
     // Ended: nothing to act on, so as the bus lists it, as task_status does.
     let status = line.get("status").map_or_else(String::new, value_text);
-    Ok(answer(&task_id, &status, "The task had already ended."))
+    answer(&task_id, &status, "The task had already ended.")
 }
 
-/// The answer for a task the bus lists running for the room of `call`,
-/// from what the kit knows of it: cancelled when the room may cancel it,
-/// ended when it ended meanwhile or before, else still running and why,
-/// or no task of the room.
+/// The answer for a task the bus lists running for `room_id`, from what
+/// the kit knows of it: cancelled when the room may cancel it, ended when
+/// it ended meanwhile or before, else still running and why, or no task
+/// of the room.
 async fn answer_running<S: ConversationStore>(
     kit: &RoomKit<S>,
-    call: &OwnerCall,
+    room_id: &RoomId,
+    channel_id: Option<&ChannelId>,
     task_id: &str,
+    window: usize,
 ) -> String {
-    let room_id = call.room_id.as_str();
     let record = &kit.inner.room_tasks;
-    let reach = record.reach(task_id, room_id);
+    let reach = record.reach(task_id, room_id.as_str());
     if kit
-        .cancel_task_for(task_id, Some(&call.channel_id), room_id, AGENT_REACH)
+        .cancel_task_for(task_id, channel_id, room_id.as_str(), AGENT_REACH)
         .await
     {
         return answer(
@@ -361,8 +462,8 @@ async fn answer_running<S: ConversationStore>(
             "Cancelled: its result will not come back.",
         );
     }
-    if reach == Some(TaskReach::Tool) || record.ended_with(task_id, room_id).is_some() {
-        return answer_ended(kit, &call.room_id, task_id).await;
+    if reach == Some(TaskReach::Tool) || record.ended_with(task_id, room_id.as_str()).is_some() {
+        return answer_ended(kit, room_id, task_id, window).await;
     }
     out_of_reach(task_id, reach)
 }
@@ -373,12 +474,13 @@ async fn answer_ended<S: ConversationStore>(
     kit: &RoomKit<S>,
     room_id: &RoomId,
     task_id: &str,
+    window: usize,
 ) -> String {
     let recorded = kit.inner.room_tasks.ended_with(task_id, room_id.as_str());
     let status = if let Some(status) = recorded {
         status
     } else {
-        let line = line_of(kit, room_id.as_str(), task_id).await;
+        let line = line_of(kit, room_id.as_str(), task_id, window).await;
         line.and_then(|line| line.get("status").map(value_text))
             .filter(|status| status != "running")
             .unwrap_or_else(|| "ended".to_owned())
@@ -404,13 +506,15 @@ fn out_of_reach(task_id: &str, reach: Option<TaskReach>) -> String {
     )
 }
 
-/// The line the bus lists for `task_id` in `room_id`.
+/// The line the bus lists for `task_id` in `room_id`, read from its
+/// latest `window` entries.
 async fn line_of<S: ConversationStore>(
     kit: &RoomKit<S>,
     room_id: &str,
     task_id: &str,
+    window: usize,
 ) -> Option<Line> {
-    room_lines(kit.status_bus(), room_id, ROOM_TASKS_WINDOW)
+    room_lines(kit.status_bus(), room_id, window)
         .await
         .into_iter()
         .find(|line| line.get("task_id").and_then(Value::as_str) == Some(task_id))
@@ -479,7 +583,8 @@ fn background_definition() -> Value {
 }
 
 /// `task_status`'s definition: Python's `TaskStatusTool.definition`.
-fn task_status_definition() -> Value {
+#[doc(hidden)]
+pub fn task_status_definition() -> Value {
     json!({
         "name": TASK_STATUS_TOOL,
         "description": "List the background tasks of this conversation: those still running and \
@@ -499,7 +604,8 @@ fn task_status_definition() -> Value {
 }
 
 /// `cancel_task`'s definition: Python's `CancelTaskTool.definition`.
-fn cancel_task_definition() -> Value {
+#[doc(hidden)]
+pub fn cancel_task_definition() -> Value {
     json!({
         "name": CANCEL_TASK_TOOL,
         "description": "Cancel a background task of this conversation that is still running, \

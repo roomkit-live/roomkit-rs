@@ -280,6 +280,12 @@ pub enum RoomKitError {
     /// its handler gave up.
     #[error("{0}")]
     Runtime(String),
+    /// Python's `ToolNameCollisionError`, a `ValueError`: a tool given an
+    /// agent under a name it serves already where the tool would be
+    /// declared (RFC §21.1), its message naming the tool, what serves it
+    /// and the agent ([`setup_task_tools`](crate::RoomKit::setup_task_tools)).
+    #[error("{0}")]
+    ToolNameCollision(String),
 }
 
 impl RoomKitError {
@@ -354,7 +360,8 @@ impl RoomKitError {
             | Self::TurnLink { .. }
             | Self::KitClosed
             | Self::ShutdownCancelled
-            | Self::HumanInputRejected(_) => format!("{}Error", turns::variant_name(self)),
+            | Self::HumanInputRejected(_)
+            | Self::ToolNameCollision(_) => format!("{}Error", turns::variant_name(self)),
         }
     }
 

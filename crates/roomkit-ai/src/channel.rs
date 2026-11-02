@@ -850,6 +850,17 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         Some(self.loops.steer(directive, options).unwrap_or(0))
     }
 
+    /// The names of the tools the channel serves itself, which a tool its
+    /// kit sets up on it may not take (RFC §21.1), as Python's registry's
+    /// `own_names`.
+    fn own_tool_names(&self) -> Vec<String> {
+        self.toolbox
+            .declared(&ToolPolicy::default())
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect()
+    }
+
     /// Closes the channel's provider ([`AiProvider::close`]), then its
     /// memory, as Python's `close()`, and settles the requests its
     /// person's tools still have open: what serves its other tools is the
