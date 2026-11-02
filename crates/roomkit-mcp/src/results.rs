@@ -3,7 +3,8 @@
 //! failed, within a bound.
 
 use rmcp::model::{CallToolResult, ContentBlock, ResourceContents};
-use roomkit_ai::{ToolError, ToolResult, dumps};
+use roomkit_ai::{AiImagePart, AiTextPart, ToolError, ToolResult, ToolResultPart, dumps};
+use roomkit_core::rules::transcript::parse_data_uri;
 
 use crate::texts::bounded_result;
 
@@ -14,9 +15,17 @@ pub(crate) const RESULT_LIMIT: usize = 100_000;
 /// The longest media type a note names.
 const MEDIA_TYPE_LIMIT: usize = 64;
 
+/// The raster formats every vision vendor accepts: an image of another
+/// type (an SVG, a TIFF) would fail the whole request at the vendor, so it
+/// reaches the model as a note. Python's `_MODEL_IMAGE_TYPES`.
+const MODEL_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
 /// `result`, the server's answer to a call of `name`, as the model reads
-/// it, within [`RESULT_LIMIT`] characters:
-/// - each part's text, one part read as itself and several as a JSON array
+/// it, as the reference implementation's `handler_result`:
+/// - a result with an image the vendors accept (PNG, JPEG, GIF or WebP,
+///   its base64 decoding), its parts in order, each image an image part
+///   the model sees, each other part its text or its note;
+/// - otherwise, within [`RESULT_LIMIT`] characters, each part's text, one part read as itself and several as a JSON array
 ///   of them written as Python's `json.dumps` writes it, as the reference
 ///   implementation's `text_body` reads them;
 /// - what is not text (an image, audio, a binary resource, a link to a
@@ -31,7 +40,34 @@ pub(crate) fn read(name: &str, result: &CallToolResult) -> Result<ToolResult, To
     if result.is_error == Some(true) {
         return Err(ToolError::failed(bounded(name, &error_text(result))));
     }
+    let parts: Vec<ToolResultPart> = result.content.iter().map(model_part).collect();
+    if parts
+        .iter()
+        .any(|part| matches!(part, ToolResultPart::Image(_)))
+    {
+        return Ok(ToolResult::Parts(parts));
+    }
     Ok(ToolResult::Text(body(name, result)))
+}
+
+/// One part of a result as the model reads it: an image the vendors
+/// accept as an image part, any other part as its text or its note.
+/// Python's `_model_part`.
+fn model_part(part: &ContentBlock) -> ToolResultPart {
+    if let ContentBlock::Image(image) = part {
+        let mime = match image.mime_type.as_str() {
+            "" => "image/png",
+            mime => mime,
+        };
+        let url = format!("data:{mime};base64,{}", image.data);
+        if MODEL_IMAGE_TYPES.contains(&mime) && parse_data_uri(&url, None).is_ok() {
+            return ToolResultPart::Image(AiImagePart {
+                url,
+                mime_type: Some(mime.to_owned()),
+            });
+        }
+    }
+    ToolResultPart::Text(AiTextPart::new(text_of(part)))
 }
 
 /// `result` as Python's `call_tool` returns it: its text, as [`read`]

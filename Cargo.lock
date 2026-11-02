@@ -1409,6 +1409,7 @@ dependencies = [
  "rmcp",
  "roomkit",
  "roomkit-ai",
+ "roomkit-core",
  "rustls",
  "serde_json",
  "sse-stream",

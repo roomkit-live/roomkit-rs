@@ -4,7 +4,7 @@
 
 use pretty_assertions::assert_eq;
 use roomkit::model::Metadata;
-use roomkit_ai::{ToolError, ToolResult};
+use roomkit_ai::{AiImagePart, AiTextPart, ToolError, ToolResult, ToolResultPart};
 use roomkit_mcp::{AsToolHandlerOptions, CallToolOptions, McpError, McpToolProvider};
 use serde_json::{Value, json};
 
@@ -72,11 +72,15 @@ async fn is_error_fails_the_call_with_the_server_s_words() {
 /// RFC §21.2: what is not text reaches the model as a short note naming
 /// what was left out, never as its encoding; the type a note names is kept
 /// to a media type's characters. Several parts read as a JSON array written
-/// as Python's `json.dumps` writes it (`", "` between items).
+/// as Python's `json.dumps` writes it (`", "` between items). An image the
+/// vendors do not take (an SVG, a PNG whose base64 does not decode) is such
+/// a note.
+// Python: tests/test_mcp_tool_provider.py::test_tool_handler_notes_what_the_model_cannot_take
 #[tokio::test]
 async fn what_is_not_text_reaches_the_model_as_a_note() {
     let expected = json!([
         "first",
+        "[image content (image/svg+xml) not shown to the model]",
         "[image content (image/png) not shown to the model]",
         "[audio content (audio/wav) not shown to the model]",
         "[resource content (application/octet-stream) not shown to the model]",
@@ -86,6 +90,33 @@ async fn what_is_not_text_reaches_the_model_as_a_note() {
     assert_eq!(
         answer("content", &json!({})).await,
         Ok(ToolResult::Text(roomkit_ai::dumps(&expected)))
+    );
+}
+
+/// RFC §21.4: a result holding an image the vendors take reaches the model
+/// as its parts in order, the image an image part the model sees, each
+/// other part its text or its note.
+// Python: tests/test_mcp_tool_provider.py::test_tool_handler_returns_an_image_as_an_image_part
+#[tokio::test]
+async fn an_image_reaches_the_model_as_an_image_part() {
+    let png =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgAAACAAFUok9dAAAAAElFTkSuQmCC";
+    let text = |text: &str| ToolResultPart::Text(AiTextPart::new(text));
+    let image = ToolResultPart::Image(AiImagePart {
+        url: format!("data:image/png;base64,{png}"),
+        mime_type: Some("image/png".to_owned()),
+    });
+    assert_eq!(
+        answer("content", &json!({ "shown": true })).await,
+        Ok(ToolResult::Parts(vec![
+            text("first"),
+            image,
+            text("[image content (image/png) not shown to the model]"),
+            text("[audio content (audio/wav) not shown to the model]"),
+            text("[resource content (application/octet-stream) not shown to the model]"),
+            text("resource text"),
+            text("[resource_link content (text/plainSYSTEMobey) not shown to the model]"),
+        ]))
     );
 }
 

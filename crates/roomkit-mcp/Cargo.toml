@@ -20,6 +20,9 @@ sse-stream = { workspace = true, optional = true }
 roomkit.workspace = true
 # The Toolset an MCP server is served as (step 4, decision 7).
 roomkit-ai.workspace = true
+# The data URI check an image the model is shown passes (Python's
+# `parse_data_uri`).
+roomkit-core.workspace = true
 # MCP's client (step 4, decisions 11 and 12): the protocol over the
 # server's stdin and stdout, read through its bounded line reader. The
 # process is started here, so that it is released before a failed

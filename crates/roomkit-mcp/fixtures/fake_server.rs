@@ -345,9 +345,16 @@ fn call(params: &Value) -> Option<Value> {
             "content": [{ "type": "text", "text": "no order 7" }, { "type": "text", "text": "try 42" }],
             "isError": true,
         }),
+        // With `shown`, an image the vendors take; otherwise an SVG and a
+        // PNG whose base64 does not decode, which they do not.
         "content" => json!({ "content": [
             { "type": "text", "text": "first" },
-            { "type": "image", "data": PNG, "mimeType": "image/png" },
+            if arguments["shown"] == true {
+                json!({ "type": "image", "data": PNG, "mimeType": "image/png" })
+            } else {
+                json!({ "type": "image", "data": "PHN2Zz4=", "mimeType": "image/svg+xml" })
+            },
+            { "type": "image", "data": "not base64!", "mimeType": "image/png" },
             { "type": "audio", "data": "AAAA", "mimeType": "audio/wav" },
             { "type": "resource", "resource": { "uri": "file:///a.bin", "blob": "AAAA", "mimeType": "application/octet-stream" } },
             { "type": "resource", "resource": { "uri": "file:///a.txt", "text": "resource text" } },

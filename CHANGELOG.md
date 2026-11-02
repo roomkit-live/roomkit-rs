@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- An MCP tool's result holding a PNG, JPEG, GIF or WebP image whose base64
+  decodes reaches the model as its parts, the image an image part it
+  sees, as Python's MCP handler (RMK-1242); any other image is still a
+  note.
 - A tool's end row bounds what it keeps of a text result that is a data
   URI and of a JSON result's binary blocks (image or audio `data`, `url`
   or `source.data`, a resource's `blob`), within the 512 KiB its image
