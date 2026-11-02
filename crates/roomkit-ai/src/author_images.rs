@@ -442,7 +442,11 @@ fn vision_image_type(media: &MediaContent) -> String {
         .filter(|scheme| scheme.eq_ignore_ascii_case("data:"))
         .and_then(|_| media.url.get(5..))
         .map(|rest| rest.split(',').next().unwrap_or(rest));
-    media_type(declared.unwrap_or(&media.mime_type))
+    // A header that declares no type reads as the media's own.
+    declared
+        .map(media_type)
+        .filter(|kind| !kind.is_empty())
+        .unwrap_or_else(|| media_type(&media.mime_type))
 }
 
 /// Whether `url` names a media the application holds and resolves: neither

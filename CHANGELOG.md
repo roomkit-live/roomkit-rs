@@ -51,7 +51,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   RMK-1197): a data URI is read for its data's presence and its size
   alone, its scheme, type and parameters in lower case, its data as
   written (a parameter beside `base64`, unpadded, URL-safe or wrapped
-  base64 no longer read "[Image unavailable]"); a link goes as written,
+  base64 no longer read "[Image unavailable]"), a header that declares
+  no type read as the media's own type; a link goes as written,
   a `..` segment, a backslash or a control character included; 5 MiB of
   bytes a `MediaResolver` gives resolve, where their base64's length read
   a byte more.
