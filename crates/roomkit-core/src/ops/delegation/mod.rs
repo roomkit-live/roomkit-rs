@@ -30,8 +30,9 @@ use super::protocol::{
 };
 use super::{Environment, KitConfig};
 use crate::model::{
-    ChannelBinding, ChannelCategory, ChannelId, ErrorRecord, EventStatus, EventType, Metadata,
-    Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp, Visibility,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, EventStatus, EventType,
+    Metadata, Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp,
+    Visibility,
 };
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions;
@@ -657,11 +658,24 @@ impl Operation for DelegatedTurn {
             return Ok(());
         }
         if let Some((_, slot, correlation_id)) = self.reading.take_if(|(read, ..)| *read == id) {
-            let error = match outcome {
-                Outcome::Channel(ChannelOutcome::Output(output)) => output.error,
-                Outcome::Failed(error) => Some(error),
+            let (error, ended) = match outcome {
+                Outcome::Channel(ChannelOutcome::Output(output)) => {
+                    let ended = self
+                        .answers
+                        .get(slot)
+                        .and_then(|answer| stream_record(&output, &answer.channel_id));
+                    (output.error, ended)
+                }
+                Outcome::Failed(error) => (Some(error), None),
                 _ => return Err(unexpected(id, "a stream's end")),
             };
+            // How the turn ended, read off its stream, as Python's
+            // `_persist_child_stream` reads `stream_record` (RFC §6.4).
+            if let (Some(answer), Some(ended)) = (self.answers.get_mut(slot), ended)
+                && answer.record.is_empty()
+            {
+                answer.record = ended;
+            }
             if let (Some(failed), Some(answer)) = (&error, self.answers.get(slot))
                 && let Some(responder) = self.binding_of(&answer.channel_id)
             {
@@ -729,6 +743,17 @@ impl Operation for DelegatedTurn {
             other => Err(Box::new(other)),
         }
     }
+}
+
+/// The record of `channel_id`'s turn a stream's read reports under its
+/// caller's `turns`: how the turn ended and its usage (RFC §6.4).
+fn stream_record(output: &ChannelOutput, channel_id: &ChannelId) -> Option<Metadata> {
+    let entry = output
+        .response_metadata
+        .get("turns")?
+        .get(channel_id.as_str())?
+        .as_object()?;
+    Some(entry.clone())
 }
 
 /// The protocol error of `outcome`, which does not answer `effect`.

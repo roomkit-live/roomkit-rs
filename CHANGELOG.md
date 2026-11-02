@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A delegated task whose worker's streamed turn ended short of its answer
+  names that end, as Python's `_persist_child_stream` reads it off the
+  stream's record (RFC §6.4, §23.3 step 6, RMK-1208): a turn failed after
+  a round of calls keeps its last text as `output` and `loop_end_reason`
+  `error`; a turn cut at `max_rounds` before any text fails `The worker's
+  turn ended max_rounds before its answer`, `loop_end_reason`
+  `max_rounds`, where both read no end; inline or in the background, with
+  a transport shared or not, on `ON_TASK_COMPLETED` too.
 - A room turn whose response streams names how it ended under `turns` in
   the caller's `response_metadata`, keyed by its channel, as Python's
   `_add_turn` (RFC §6.4, §10.1 step 18, RMK-1208): `{"turns": {"agent":

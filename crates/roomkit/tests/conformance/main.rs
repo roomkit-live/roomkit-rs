@@ -78,16 +78,6 @@ pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
         "§6.4: a binding's metadata system_prompt is the agent's turn prompt (G-093, RMK-1208)",
     ),
     (
-        "tasks/a-delegated-turn-failing-after-a-tool-round-keeps-its-end",
-        "§23.3 step 6: a delegated turn that failed after it began keeps its end on the task \
-         (G-094, RMK-1208)",
-    ),
-    (
-        "tasks/a-task-cut-before-its-worker-wrote-any-text-fails-with-no-output",
-        "§23.3 step 6: a delegated turn cut before any text fails its task naming its end \
-         (G-096, RMK-1208)",
-    ),
-    (
         "tasks/a-failed-task-keeps-the-error-its-worker-s-turn-raised",
         "§23.3 step 6: a failed task keeps the failure its turn raised, its type unchanged \
          (G-097, RMK-1208)",

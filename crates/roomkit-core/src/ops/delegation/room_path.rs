@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+use serde_json::Value;
+
 use super::collected::{Buffered, Streamed};
 use super::nested::Nested;
 use super::{DelegatedAnswer, DelegatedTurn, DelegationError};
@@ -66,9 +68,14 @@ impl DelegatedTurn {
     }
 
     /// Each agent's rows, the answers the room kept of it, in the order
-    /// stored; the cascade's error, a stream's failure, the agent's whose
-    /// turn it ended, or logged when that cannot be told.
+    /// stored, and how a streamed turn ended, as the room's result names it
+    /// under `turns`; the cascade's error, a stream's failure, the agent's
+    /// whose turn it ended, or logged when that cannot be told.
     fn kept_by_the_room(&mut self, result: InboundResult) {
+        let turns = result
+            .response_metadata
+            .get("turns")
+            .and_then(Value::as_object);
         for answer in &mut self.answers {
             answer.rows = result
                 .response_events
@@ -76,6 +83,12 @@ impl DelegatedTurn {
                 .filter(|row| row.source.channel_id == answer.channel_id)
                 .cloned()
                 .collect();
+            let ended = turns
+                .and_then(|turns| turns.get(answer.channel_id.as_str()))
+                .and_then(Value::as_object);
+            if let (true, Some(ended)) = (answer.record.is_empty(), ended) {
+                answer.record = ended.clone();
+            }
         }
         let Some(error) = result.error else {
             return;
