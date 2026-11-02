@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Of what a transport returns, the room keeps, as Python's, its
+  `on_event()`'s tasks, observations and metadata updates, its
+  `deliver()`'s metadata updates alone, and nothing of a streaming
+  target's `deliver_stream()` but its failure (RFC §10.1 step 15,
+  RMK-1179). Breaking: a task or an observation a transport returned from
+  `deliver()` or `deliver_stream()` is no longer stored; return it from
+  `on_event()`.
 - `AiChannelOptions::turn_budget_tokens`, Python's (RFC §6.4, RMK-1166):
   past the billed tokens it allows (input, output and cache tokens), the
   loop ends `budget_exceeded` at its next round boundary, asks for no retry
