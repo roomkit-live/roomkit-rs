@@ -6,6 +6,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Human input, Python's (RFC §9.3, §10.6.5, RMK-1146):
+  `roomkit::human_input`'s `HumanInputHandler`, `PendingInput`,
+  `PendingInputEvent` and `PendingInputStatus`; `roomkit_ai::
+  HumanInputToolHandler`, which an `AiChannel` given it as
+  `AiChannelOptions::human_input_handler` serves before its tool handler,
+  under its own timeout; `HookTrigger::OnUserInputRequired`, whose block
+  rejects a request, and its `user_input_required` framework event;
+  `RoomKit::answer_input` and `reject_input`, which reach a turn's request
+  through the turn backend's `input_request`, `input_answer`,
+  `input_taken` and `input_closed`, an answer that comes first held for
+  `TurnTimeouts::input_hold_timeout` (60 s); `RoomKitError::
+  HumanInputRejected`. A request the handler gave up reads as Python's
+  `RuntimeError`.
 - A memory's notes and speakers, and the budget-aware memory, Python's
   (RFC §20, RMK-1165): `MemoryResult::notes`, which ride the turn's
   notes after its input, and `MemoryResult::speakers`, which count toward
