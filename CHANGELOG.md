@@ -17,9 +17,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   turn's first request that may be about its content forgets them (a
   401, 402, 403, 404 or 429 keeps them). The end row keeps 512 KiB of a
   result's images, a note in place of the rest. Breaking:
-  `AiToolResultPart::result` is a `ToolResult`, with Python's `as_text()`
-  and `split_for_message()`, and `ToolResult` has a third variant, `Parts`,
-  which an exhaustive match must name.
+  `AiToolResultPart::result` is a `ToolResult` (`AiToolResultPart` has
+  Python's `as_text()` and `split_for_message()`), and `ToolResult` has a
+  third variant, `Parts`, which an exhaustive match must name.
 - An AI channel's turn takes its binding's metadata `system_prompt` over
   its own, as Python's `_turn_settings` (RFC Appendix A.9, RMK-1208): a
   hand-back to an agent whose binding holds a persona runs on it, where
