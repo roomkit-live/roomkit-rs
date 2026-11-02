@@ -6,14 +6,20 @@
 //! Python's tests; the lifetimes are longer than theirs, a secret's hash
 //! taking its production cost here (Python's tests lower it).
 
+#![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+#![expect(
+    clippy::expect_used,
+    reason = "a test fails on a condition not met in time"
+)]
+
 use std::future::ready;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, IdentityId, RoomEvent, RoomId, VerificationPolicy, VerificationRequest,
-    VerificationStatus,
+    ChannelId, EventContent, IdentityId, RoomEvent, RoomId, VerificationPolicy,
+    VerificationRequest, VerificationStatus,
 };
 use roomkit::store::GetVerificationOptions;
 use roomkit::{
@@ -70,8 +76,11 @@ async fn kit_on(store: Arc<InMemoryStore>, policy: VerificationPolicy) -> (RoomK
         kit.hook(
             trigger,
             move |event: RoomEvent, _| {
-                let data = serde_json::to_value(&event.content).unwrap()["data"].clone();
-                let data = data.as_object().cloned().unwrap_or_default();
+                let data = if let EventContent::System(content) = event.content {
+                    content.data
+                } else {
+                    serde_json::Map::new()
+                };
                 heard.lock().unwrap().push((trigger, data));
                 ready(())
             },

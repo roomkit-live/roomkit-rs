@@ -1,6 +1,8 @@
 //! Identity verification on the SQLite store (RFC §11.7): what a kit
 //! does with a store that cannot answer as it starts.
 
+#![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+
 mod support;
 
 use roomkit::{ConversationStore, RoomKit, RoomKitOptions};
