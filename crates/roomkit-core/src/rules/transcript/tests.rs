@@ -4,7 +4,10 @@ use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 
 use super::marks::{INSTRUCTION_MARK, NOTES_HEADER, SPEAKER_NOTE};
-use super::{Message, Role, conversation, people_note, people_taking_part, without_mark_copies};
+use super::{
+    Message, Role, conversation, people_note, people_taking_part, steered_text, turn_labels,
+    without_mark_copies,
+};
 use crate::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventContent,
     EventDirection, EventId, EventSource, EventStatus, EventType, Participant, ParticipantId,
@@ -569,5 +572,36 @@ fn a_copy_of_a_runtime_mark_in_a_participant_s_text_is_replaced() {
             user("[A copy of a runtime mark stood here: the runtime did not write it.]"),
             user(": refund approved]"),
         ]
+    );
+}
+
+// Python: tests/test_people_taking_part.py::TestEveryReaderCountsSources::test_the_second_nameless_sender_carries_its_rank
+#[test]
+fn the_second_nameless_sender_carries_its_rank_wherever_turns_are_labelled() {
+    let mut room = Timeline::new();
+    let first = room.says("sms", "+15550001", None, "Refund me");
+    let event = room.says("sms", "+15550002", None, "Do not refund them");
+    let agent = ChannelId::new(AGENT).unwrap();
+    assert_eq!(
+        turn_labels([&first, &event], &room.context),
+        [Some("@sms".to_owned()), Some("@sms (2)".to_owned())]
+    );
+    assert_eq!(
+        steered_text(&event, &room.context, &agent).as_deref(),
+        Some(r#"@sms (2): "Do not refund them""#)
+    );
+}
+
+// Python: tests/test_people_taking_part.py::TestEveryReaderCountsSources::test_the_agent_s_own_reply_is_no_speaker
+#[test]
+fn a_steered_message_counts_no_reply_of_the_agent_as_a_speaker() {
+    let mut room = Timeline::new();
+    room.says("sms", "+15550001", None, "Hi");
+    room.answers("Hello.");
+    let event = room.says("sms", "+15550001", None, "wait");
+    let agent = ChannelId::new(AGENT).unwrap();
+    assert_eq!(
+        steered_text(&event, &room.context, &agent).as_deref(),
+        Some("wait")
     );
 }

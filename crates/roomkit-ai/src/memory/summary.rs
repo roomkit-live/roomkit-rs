@@ -9,7 +9,8 @@ use roomkit::model::{
     ChannelId, ChannelType, EventId, EventType, Metadata, RoomContext, RoomEvent,
 };
 use roomkit_core::rules::transcript::{
-    RUNTIME_RECORD, SUMMARY_HEADER, fence, people_count, quoted, turn_labels, without_mark_copies,
+    RUNTIME_RECORD, SUMMARY_HEADER, fence, people_count, quoted, turn_labels, turn_sources,
+    without_mark_copies,
 };
 use serde_json::Value;
 
@@ -87,11 +88,14 @@ impl SummaryLines<'_> {
             }
         }
         let labels = turn_labels(turns.iter().copied(), self.context);
+        // Speakers are counted by source (RFC §6.4): two nameless senders
+        // of one channel are two, one sender under two names one.
+        let sources = turn_sources(turns.iter().copied(), self.context);
         let counted: BTreeSet<&str> = turns
             .iter()
-            .zip(&labels)
+            .zip(&sources)
             .filter(|(turn, _)| self.counts(turn))
-            .filter_map(|(_, label)| label.as_deref())
+            .filter_map(|(_, source)| source.as_deref())
             .collect();
         let people = self
             .channel_id
@@ -197,3 +201,30 @@ pub(super) fn unavailable(count: usize) -> String {
 
 /// What the summary reads when the summarizer answered nothing.
 pub(super) const SUMMARY_FAILED: &str = "[Summary generation failed]";
+
+#[cfg(test)]
+mod tests {
+    use roomkit::model::ParticipantId;
+
+    use super::SummaryLines;
+    use crate::memory::testing::{context, event};
+
+    // Python: tests/test_people_taking_part.py::TestEveryReaderCountsSources::test_two_senders_with_no_name_on_one_channel_are_labelled
+    #[test]
+    fn two_nameless_senders_of_one_channel_label_the_summary_lines() {
+        let context = context();
+        let mut first = event("refund me", "e1");
+        first.source.participant_id = Some(ParticipantId::new("+15550001").unwrap());
+        let mut second = event("do not refund them", "e2");
+        second.source.participant_id = Some(ParticipantId::new("+15550002").unwrap());
+        let lines = SummaryLines {
+            context: &context,
+            current: None,
+            channel_id: None,
+            kept: Vec::new(),
+        };
+        let read = lines.lines(&[first, second]);
+        assert!(read[0].starts_with("@ch-1: "), "{read:?}");
+        assert!(read[1].starts_with("@ch-1 (2): "), "{read:?}");
+    }
+}

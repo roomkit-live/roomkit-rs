@@ -482,8 +482,9 @@ fn cleaned(mut turns: Vec<Turn>, labelled: bool) -> Vec<Turn> {
 }
 
 /// The speakers a memory's messages name that no turn's speaker is, each
-/// as a source of its own: Python counts speakers by label, and a label a
-/// turn already has is that turn's speaker (RFC §6.4).
+/// as a source of its own: a memory names its speakers by label, and a
+/// label a turn already has is that turn's speaker (RFC §6.4), as Python's
+/// `several_speakers` counts them.
 fn remembered_speakers(speakers: &[&Speaker], named: &[String]) -> Vec<String> {
     named
         .iter()
@@ -616,18 +617,39 @@ fn with_notes(input: Message, notes: &str) -> Message {
 
 /// The label each of `events` opens with where a model reads it (RFC §6.4),
 /// in their order: its author's name, ranked when an earlier source's name
-/// reads like it, or its channel (`@sms`) when its author has none; `None`
-/// for the runtime's system events. Python's `turn_labels`, which a
-/// delegation's conversation block labels its lines with (RFC §23.3 step
-/// 4).
+/// reads like it, or its channel (`@sms`) when its author has none, a
+/// second nameless source of a channel reading `@sms (2)` in the order
+/// they first speak in `events`; `None` for the runtime's system events.
+/// Python's `turn_labels`, which a delegation's conversation block labels
+/// its lines with (RFC §23.3 step 4).
 pub fn turn_labels<'a>(
+    events: impl IntoIterator<Item = &'a RoomEvent>,
+    context: &RoomContext,
+) -> Vec<Option<String>> {
+    let mut authors = Authors::new(context);
+    let mut speakers: Vec<Option<Speaker>> = events
+        .into_iter()
+        .map(|event| speaker(event, &mut authors))
+        .collect();
+    tell_apart(speakers.iter_mut().flatten());
+    speakers
+        .into_iter()
+        .map(|said| said.map(|said| said.label))
+        .collect()
+}
+
+/// Who each of `events` comes from (RFC §6.4), in their order: the source
+/// speakers are counted by, two turns of one speaker having the same one
+/// whatever their labels; `None` for the runtime's system events. Python's
+/// `TurnSpeaker.source`.
+pub fn turn_sources<'a>(
     events: impl IntoIterator<Item = &'a RoomEvent>,
     context: &RoomContext,
 ) -> Vec<Option<String>> {
     let mut authors = Authors::new(context);
     events
         .into_iter()
-        .map(|event| speaker(event, &mut authors).map(|speaker| speaker.label))
+        .map(|event| speaker(event, &mut authors).map(|said| said.source))
         .collect()
 }
 
@@ -654,10 +676,17 @@ pub fn steered_text(
         return None;
     }
     let mut authors = Authors::new(context);
-    let others = context
-        .recent_events
-        .iter()
-        .filter(|recent| recent.id != event.id);
+    // The turns the conversation counts: the agent's own and the
+    // application's instructions aside, and those that read as no text.
+    let others = context.recent_events.iter().filter(|recent| {
+        recent.id != event.id
+            && recent.source.channel_id != *channel_id
+            && !matches!(
+                recent.r#type,
+                EventType::Instruction | EventType::ToolCallStart | EventType::ToolCallEnd
+            )
+            && !text_of(&recent.content).trim().is_empty()
+    });
     let mut speakers: Vec<Option<Speaker>> = others
         .chain([event])
         .map(|said| speaker(said, &mut authors))
