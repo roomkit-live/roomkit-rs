@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A buffered reply's end and usage go under its caller's `turns`, by its
+  channel, read off its turn's record or else its last message, as
+  Python's `record_buffered_reply` (RFC §6.4, RMK-1235); the caller's
+  record keeps the rest of the reply's record, its `loop_end_reason` and
+  `ai_usage` no longer at its top level: `{x: 1, turns: {bot:
+  {loop_end_reason: completed}}}` where it read `{loop_end_reason:
+  completed, x: 1}`.
 - A failed task's exception and a turn's error record keep the error's
   attributes, as Python's `error_record` (RMK-1239): `ErrorRecord`'s
   `attributes`, a provider error's `retryable`, `provider`, `status_code`

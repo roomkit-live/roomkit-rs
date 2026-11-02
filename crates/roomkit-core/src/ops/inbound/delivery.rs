@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 
 use super::queues::Lineage;
-use super::{report, stamp};
+use super::{reply_record, report, stamp};
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, DeliveryError, DeliveryResult, DeliveryResultStatus,
     ErrorRecord, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task, Visibility,
@@ -535,9 +535,12 @@ impl DeliverySet {
         self.outcome.tasks.extend(output.tasks);
         self.outcome.observations.extend(output.observations);
         if is_agent {
-            self.outcome
-                .response_metadata
-                .extend(output.response_metadata);
+            reply_record::record_reply(
+                &mut self.outcome.response_metadata,
+                &responder.channel_id,
+                (&output.response_metadata, &output.response_events),
+                streamed.is_none(),
+            );
             if let Some(error) = &output.error {
                 let failed = DeliveryResult::raised(responder.channel_id.clone(), error);
                 self.turn_failed(cx, index, error, failed);

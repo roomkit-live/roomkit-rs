@@ -85,6 +85,7 @@ mod pass;
 mod persist;
 mod queues;
 mod record;
+mod reply_record;
 mod report;
 mod rerun;
 mod result;

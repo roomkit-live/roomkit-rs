@@ -216,7 +216,13 @@ const WHEN: &[&str] = &[
     "source_channel_id",
     "chain_depth",
 ];
-const OUTPUT: &[&str] = &["tasks", "observations", "metadata_updates", "error"];
+const OUTPUT: &[&str] = &[
+    "tasks",
+    "observations",
+    "metadata_updates",
+    "response_metadata",
+    "error",
+];
 const RESULT: &[&str] = &[
     "action",
     "event",
