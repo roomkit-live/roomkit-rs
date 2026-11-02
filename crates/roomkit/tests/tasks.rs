@@ -704,3 +704,55 @@ async fn cancel_task_does_nothing_once_the_close_started() {
 
     assert_eq!((answer, *runner.asked.lock().unwrap()), (false, 0));
 }
+
+// RMK-1186, the second light review: the kit's close starts every held
+// task's cancelled end at once, as Python's close cancels the runs it holds
+// together; an end outlasting the grace keeps no other task from ending.
+// On 41ccd46 the close ended the tasks one at a time under one grace: the
+// first's held end used it up, and the second never ended, its caller
+// waiting for ever.
+#[tokio::test(start_paused = true)]
+async fn the_close_starts_the_end_of_every_inline_task_at_once() {
+    let worker = Agent::new("worker", true);
+    let (kit, _, _) = kit_with(worker.clone(), RoomKitOptions::default()).await;
+    let endings = [Ending::default(), Ending::default()];
+    let callers: Vec<_> = endings
+        .iter()
+        .map(|ending| {
+            let (kit, options) = (
+                kit.clone(),
+                DelegateOptions {
+                    wait: true,
+                    on_complete: Some(ending.on_complete()),
+                    ..DelegateOptions::default()
+                },
+            );
+            tokio::spawn(async move {
+                let room = RoomId::new("p").unwrap();
+                kit.delegate(&room, &channel("worker"), "go", options).await
+            })
+        })
+        .collect();
+    for _ in &callers {
+        tokio::time::timeout(BOUND, worker.started.notified())
+            .await
+            .unwrap();
+    }
+
+    kit.close().await.unwrap();
+    let mut returned = 0;
+    for caller in callers {
+        if tokio::time::timeout(Duration::from_secs(120), caller)
+            .await
+            .is_ok()
+        {
+            returned += 1;
+        }
+    }
+
+    let entered = endings
+        .iter()
+        .map(|ending| ending.seen().len())
+        .collect::<Vec<_>>();
+    assert_eq!((returned, entered), (2, vec![1, 1]));
+}

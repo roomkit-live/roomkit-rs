@@ -34,7 +34,7 @@ mod runner;
 pub(crate) mod text;
 
 pub use self::delegated::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, WaitOptions};
-pub(crate) use self::held::{Claim, HeldTasks, until_ended};
+pub(crate) use self::held::{Claim, HeldTasks, spawn_apart, until_ended};
 pub(crate) use self::hosted::HostTasks;
 pub(crate) use self::record::{AGENT_REACH, RoomTaskRecord, TaskCancel, TaskCancels, TaskReach};
 pub(crate) use self::result_tool::ResultTool;

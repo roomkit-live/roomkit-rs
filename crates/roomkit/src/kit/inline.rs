@@ -15,7 +15,7 @@ use super::RoomKit;
 use super::tasks::{DelegateOptions, TaskEnd};
 use crate::channel::BoxFuture;
 use crate::store::ConversationStore;
-use crate::tasks::{Claim, DelegatedTask, HeldTasks, Kind, TaskReach, until_ended};
+use crate::tasks::{Claim, DelegatedTask, HeldTasks, Kind, TaskReach, spawn_apart, until_ended};
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Runs the task's turn inline and ends it, recorded for its room as
@@ -147,12 +147,11 @@ impl<S: ConversationStore> Unstarted<S> {
         let Some(ending) = self.ending.take() else {
             return;
         };
-        match self.kit.inner.tasks.spawn_alone(Kind::Turn, ending) {
+        match spawn_apart(&self.kit.inner.tasks, ending) {
             // Its outcome is its end, or its abort by the close's cut.
-            Some(run) => drop(run.await),
-            None => {
-                tracing::debug!(target: "roomkit::tasks", "the kit is shut down: a delegation announced as it closed does not end");
-            }
+            Ok(run) => drop(run.await),
+            // The kit spawns no more work: it ends here.
+            Err(here) => here.await,
         }
     }
 }

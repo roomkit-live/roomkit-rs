@@ -153,10 +153,7 @@ impl HeldTasks {
         match self.find(task_id) {
             None => false,
             Some(Found::Ending { ended, units }) => {
-                let current = Marks::current();
-                if !units.iter().any(|unit| current.contains(*unit)) {
-                    until_ended(ended).await;
-                }
+                wait_unless_within(ended, &units).await;
                 false
             }
             Some(Found::End {
@@ -165,7 +162,9 @@ impl HeldTasks {
                 end,
                 ended,
             }) => {
-                self.end_apart(task_id, &tasks, work, end).await;
+                if let Err(here) = spawn_apart(&tasks, self.ending(task_id, work, end)) {
+                    here.await;
+                }
                 until_ended(ended).await;
                 true
             }
@@ -182,54 +181,58 @@ impl HeldTasks {
         else {
             return;
         };
-        let ending = self.ending(task_id, work, end);
-        if tasks.spawn_alone(Kind::Turn, ending).is_none() {
+        if spawn_apart(&tasks, self.ending(task_id, work, end)).is_err() {
             tracing::debug!(target: "roomkit::tasks", task = %task_id, "the kit is shut down: a cancelled task does not end");
         }
     }
 
-    /// Cancels every task held, one at a time, each waited for, the tasks
-    /// their ends delegate among them.
+    /// Cancels every task held, the tasks their ends delegate among them:
+    /// each one's end started at once, then each waited for, so that no
+    /// end outlasting the close's grace keeps another from starting
+    /// (Python's close cancels the runs it holds together).
     pub(crate) async fn close(&self) {
         let mut asked = HashSet::new();
         loop {
-            let next = self.lock().keys().find(|id| !asked.contains(*id)).cloned();
-            let Some(task_id) = next else {
+            let next: Vec<String> = self
+                .lock()
+                .keys()
+                .filter(|id| !asked.contains(*id))
+                .cloned()
+                .collect();
+            if next.is_empty() {
                 return;
-            };
-            self.cancel(&task_id).await;
-            asked.insert(task_id);
+            }
+            let (mut here, mut waits) = (Vec::new(), Vec::new());
+            for task_id in next {
+                match self.find(&task_id) {
+                    None => {}
+                    Some(Found::End {
+                        tasks,
+                        work,
+                        end,
+                        ended,
+                    }) => {
+                        if let Err(ending) = spawn_apart(&tasks, self.ending(&task_id, work, end)) {
+                            here.push(ending);
+                        }
+                        waits.push((ended, Vec::new()));
+                    }
+                    Some(Found::Ending { ended, units }) => waits.push((ended, units)),
+                }
+                asked.insert(task_id);
+            }
+            for ending in here {
+                ending.await;
+            }
+            for (ended, units) in waits {
+                wait_unless_within(ended, &units).await;
+            }
         }
     }
 
     /// How many tasks are held.
     pub(crate) fn len(&self) -> usize {
         self.lock().len()
-    }
-
-    /// Runs `end`, `task_id`'s end a cancel took, once `work` is stopped,
-    /// as a run of its own the kit tracks; here, when the kit spawns no
-    /// more work.
-    async fn end_apart(
-        &self,
-        task_id: &str,
-        tasks: &Arc<Tasks>,
-        work: Option<JoinHandle<()>>,
-        end: BoxFuture<'static, ()>,
-    ) {
-        let ending: BoxFuture<'static, ()> = Box::pin(self.ending(task_id, work, end));
-        let slot = Arc::new(Mutex::new(Some(ending)));
-        let spawned = Arc::clone(&slot);
-        let run = async move {
-            if let Some(ending) = take(&spawned) {
-                ending.await;
-            }
-        };
-        if tasks.spawn_alone(Kind::Turn, run).is_none()
-            && let Some(ending) = take(&slot)
-        {
-            ending.await;
-        }
     }
 
     /// `task_id`'s end a cancel took: `work` stopped, then `end`, then
@@ -239,17 +242,17 @@ impl HeldTasks {
         task_id: &str,
         work: Option<JoinHandle<()>>,
         end: BoxFuture<'static, ()>,
-    ) -> impl Future<Output = ()> + Send + 'static {
+    ) -> BoxFuture<'static, ()> {
         let ending = Ending {
             held: self.clone(),
             task_id: task_id.to_owned(),
         };
-        async move {
+        Box::pin(async move {
             ending.held.note_run(&ending.task_id);
             stop(work).await;
             end.await;
             drop(ending);
-        }
+        })
     }
 
     /// What a cancel finds of `task_id`, its end taken when it is there.
@@ -308,6 +311,36 @@ async fn stop(work: Option<JoinHandle<()>>) {
         work.abort();
         // Its outcome is its abort, or its own end: either way it is over.
         drop(work.await);
+    }
+}
+
+/// Runs `work` as a run of its own the kit tracks, apart from its caller,
+/// which may stop waiting for it: its handle; `work` back when the kit
+/// spawns no more work, for the caller to run in place.
+pub(crate) fn spawn_apart(
+    tasks: &Arc<Tasks>,
+    work: BoxFuture<'static, ()>,
+) -> Result<JoinHandle<()>, BoxFuture<'static, ()>> {
+    let slot = Arc::new(Mutex::new(Some(work)));
+    let spawned = Arc::clone(&slot);
+    let run = async move {
+        if let Some(work) = take(&spawned) {
+            work.await;
+        }
+    };
+    match tasks.spawn_alone(Kind::Turn, run) {
+        Some(handle) => Ok(handle),
+        // Refused, the run was dropped unpolled: the work is still there.
+        None => Err(take(&slot).unwrap_or_else(|| Box::pin(async {}))),
+    }
+}
+
+/// Waits for the task `ended` tells of, unless the current code runs
+/// within one of its `units`, which would wait for itself.
+async fn wait_unless_within(ended: watch::Receiver<bool>, units: &[Unit]) {
+    let current = Marks::current();
+    if !units.iter().any(|unit| current.contains(*unit)) {
+        until_ended(ended).await;
     }
 }
 
