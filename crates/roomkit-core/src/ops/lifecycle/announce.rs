@@ -16,8 +16,9 @@ use crate::ops::{Cx, Environment, KitConfig};
 /// `ON_ROOM_CREATED` hooks run, awaited, and `room_created` is emitted once
 /// they are over, as [`CreateRoom`] announces its own. What a hook raises
 /// is the driver's to log, and a driver that cannot run them answers
-/// `Failed`, which is logged: the room is announced all the same. Its
-/// output is the read's refusal, if the room could not be read.
+/// `Failed`, which is logged: the room is announced all the same, and so is
+/// a room gone before it could be read, with no hook run. Its output is the
+/// read's failure, if the store failed it.
 ///
 /// [`CreateRoom`]: super::CreateRoom
 /// [`CreateRoom::unannounced`]: super::CreateRoom::unannounced
@@ -53,7 +54,14 @@ impl AnnounceRoomCreated {
     ) -> Option<Result<(), LifecycleError>> {
         let context = match outcome.into_context() {
             Ok(Some(context)) => context,
-            Ok(None) => return Some(Err(LifecycleError::RoomNotFound(self.room_id.clone()))),
+            Ok(None) => {
+                // Gone already: no hook runs, its creation is announced all
+                // the same, as Python's lifecycle hook skips a room it
+                // cannot read.
+                let room_id = self.room_id.clone();
+                report::announce(&mut self.cx(environment), Reported::RoomCreated, &room_id);
+                return Some(Ok(()));
+            }
             Err(error) => return Some(Err(LifecycleError::Store(error))),
         };
         let mut cx = self.cx(environment);

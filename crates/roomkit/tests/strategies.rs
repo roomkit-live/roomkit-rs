@@ -624,6 +624,44 @@ async fn an_uninstall_during_an_install_waits_for_it_then_takes_it_back() {
     kit.close().await.unwrap();
 }
 
+/// A strategy whose install deletes its room from the store.
+struct Deletes;
+
+impl Orchestration for Deletes {
+    fn agents(&self) -> Vec<StrategyAgent> {
+        Vec::new()
+    }
+
+    fn install<'call>(
+        &'call self,
+        kit: &'call RoomKit,
+        room_id: &'call RoomId,
+    ) -> StrategyFuture<'call> {
+        Box::pin(async move {
+            roomkit::ConversationStore::delete_room(kit.store(), room_id).await?;
+            Ok(())
+        })
+    }
+}
+
+// Python: core/mixins/helpers.py::_fire_lifecycle_hook, which runs no hook
+// for a room it cannot read, and create_room, which announces the room
+// and returns it all the same.
+#[tokio::test]
+async fn a_room_gone_before_its_announcement_is_created_all_the_same() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let deletes: Arc<dyn Orchestration> = Arc::new(Deletes);
+    let created = kit
+        .create_room(CreateRoomOptions {
+            room_id: Some(r1()),
+            orchestration: Some(Some(deletes)),
+            ..CreateRoomOptions::default()
+        })
+        .await;
+    assert_eq!(created.unwrap().id, r1());
+    kit.close().await.unwrap();
+}
+
 /// A transport channel: what a live agent's id must not name.
 struct Sms(&'static str);
 
