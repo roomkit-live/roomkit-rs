@@ -10,6 +10,7 @@ use roomkit_core::model::{
 };
 use roomkit_core::ops::{Environment, SystemEnvironment};
 use serde_json::Value;
+use std::fmt::Write as _;
 
 /// A tool call as its hooks read it (RFC §9.3), Python's
 /// `ToolCallEvent(channel_id, channel_type, tool_call_id, name, arguments,
@@ -179,10 +180,22 @@ impl ToolCallReport {
 }
 
 /// `reason` as the model reads a refusal or a withheld result: `{"error":
-/// "<reason>"}` (RFC §9.3).
+/// "<reason>"}` (RFC §9.3), written as Python's `json.dumps` writes it,
+/// every character past ASCII as `\uXXXX`.
 pub(crate) fn error_envelope(reason: &str) -> String {
     let quoted = serde_json::to_string(reason).unwrap_or_else(|_| "\"\"".to_owned());
-    format!("{{\"error\": {quoted}}}")
+    let mut escaped = String::with_capacity(quoted.len());
+    for character in quoted.chars() {
+        if character.is_ascii() {
+            escaped.push(character);
+            continue;
+        }
+        let mut units = [0_u16; 2];
+        for unit in character.encode_utf16(&mut units) {
+            let _infallible = write!(escaped, "\\u{unit:04x}");
+        }
+    }
+    format!("{{\"error\": {escaped}}}")
 }
 
 #[cfg(test)]
@@ -196,6 +209,11 @@ mod tests {
         assert_eq!(
             error_envelope("Needs a manager's \"approval\""),
             r#"{"error": "Needs a manager's \"approval\""}"#
+        );
+        // As Python's json.dumps: past ASCII escaped (RMK-1096).
+        assert_eq!(
+            error_envelope("Refusé — 🙅"),
+            r#"{"error": "Refus\u00e9 \u2014 \ud83d\ude45"}"#
         );
     }
 
