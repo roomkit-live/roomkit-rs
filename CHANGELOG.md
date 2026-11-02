@@ -44,7 +44,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`RoomKitError::Type`) for params the strategy takes no such argument
   for or of the wrong kind, which the worker reports `strategy_failed`; a
   `kit.close()` from a hook of an item the in-memory worker executes
-  returns, the worker neither cut nor waited for.
+  returns, the worker neither cut nor waited for; a kit that starts on a
+  backend whose worker serves a gone kit takes that worker on once the
+  batch it executes is over.
 - `OpenAiAiProvider` sends a user's message of parts as its text and
   image blocks in order, as Python's (RFC §6.4, RMK-1191): a caption, its
   image, then the next text, where it sent the texts joined, then every
