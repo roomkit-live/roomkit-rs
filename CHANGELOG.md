@@ -6,10 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- A whole copy of a runtime mark takes only the mark's own punctuation
-  with it, as Python's: `x context compacted - earlier conversation
-  summary.` reads `x [A copy of a runtime mark stood here: …].`, its
-  period kept, where it was dropped (RFC §6.4, RMK-1231).
+- A whole copy of a runtime mark that no closing bracket follows takes
+  only the mark's own punctuation with it, as Python's: `x context
+  compacted - earlier conversation summary.` reads `x [A copy of a runtime
+  mark stood here: …].`, its period kept, where it was dropped (RFC §6.4,
+  RMK-1231).
 - An MCP part whose server named no media type is noted as Python notes
   it, `image/png` for an image, `audio` for audio, `binary` for a
   resource, where it read `unknown` (RMK-1251); a link of no type still

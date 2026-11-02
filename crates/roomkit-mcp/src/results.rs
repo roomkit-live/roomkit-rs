@@ -362,6 +362,7 @@ mod tests {
             ContentBlock::image("not base64!", ""),
             ContentBlock::audio("UklGRg==", ""),
             ContentBlock::resource(blob),
+            ContentBlock::resource_link(rmcp::model::Resource::new("file:///a.txt", "a")),
         ];
         let notes: Vec<String> = parts.iter().map(text_of).collect();
         assert_eq!(
@@ -370,6 +371,7 @@ mod tests {
                 "[image content (image/png) not shown to the model]",
                 "[audio content (audio) not shown to the model]",
                 "[resource content (binary) not shown to the model]",
+                "[resource_link content (unknown) not shown to the model]",
             ]
         );
     }
