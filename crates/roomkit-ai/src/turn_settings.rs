@@ -211,13 +211,14 @@ fn lax_float(value: &Value) -> Result<f64, Refusal> {
     }
 }
 
-/// `text` as pydantic-core's `str_as_float` reads it: blanks around it
-/// dropped, then underscores between digits.
+/// `text` as pydantic-core's `str_as_float` reads it: with blanks around
+/// it dropped, else with underscores between digits dropped, its blanks
+/// then kept.
 fn text_float(text: &str) -> Option<f64> {
     text.trim()
         .parse()
         .ok()
-        .or_else(|| without_underscores(text)?.trim().parse().ok())
+        .or_else(|| without_underscores(text)?.parse().ok())
 }
 
 /// `value` as pydantic's lax mode reads an `int`: an integer, a boolean, a
@@ -339,16 +340,26 @@ fn within_u32(whole: i128, value: &Value) -> Result<u32, Refusal> {
     })
 }
 
-/// `written`, a value's `repr`, as pydantic shows an input: past 50
-/// characters, its first 25 and its last 24 around `...`.
+/// `written`, a value's `repr`, as pydantic shows an input: past 50 bytes,
+/// its first 25 and its last 24 around `...`, each cut at a character's
+/// edge inside them.
 fn truncated(written: &str) -> String {
-    let count = written.chars().count();
-    if count <= 50 {
+    if written.len() <= 50 {
         return written.to_owned();
     }
-    let head: String = written.chars().take(25).collect();
-    let tail: String = written.chars().skip(count - 24).collect();
-    format!("{head}...{tail}")
+    let mut head = 25;
+    while !written.is_char_boundary(head) {
+        head -= 1;
+    }
+    let mut tail = written.len() - 24;
+    while !written.is_char_boundary(tail) {
+        tail += 1;
+    }
+    let (start, end) = (
+        written.get(..head).unwrap_or_default(),
+        written.get(tail..).unwrap_or_default(),
+    );
+    format!("{start}...{end}")
 }
 
 /// The name of the Python type `value` reads as.
@@ -450,6 +461,9 @@ mod tests {
             (json!({"temperature": "0x10"}), "float_parsing"),
             (json!({"temperature": "1__0"}), "float_parsing"),
             (json!({"temperature": "_1"}), "float_parsing"),
+            (json!({"temperature": " 1_0 "}), "float_parsing"),
+            (json!({"temperature": " _1"}), "float_parsing"),
+            (json!({"temperature": "1_ "}), "float_parsing"),
             (json!({"temperature": "1e"}), "float_parsing"),
             (json!({"temperature": {"a": 1}}), "float_type"),
             (json!({"max_tokens": "1e2"}), "int_parsing"),
@@ -494,6 +508,15 @@ mod tests {
                     .to_owned()
             )
         );
+    }
+
+    // Python: pydantic-core's truncation of an input's repr, by its UTF-8
+    // bytes, measured on pydantic 2.13.5.
+    #[test]
+    fn a_long_input_is_cut_at_its_bytes() {
+        let failed = validated(json!({"temperature": "é".repeat(56)})).unwrap_err();
+        let shown = format!("input_value='{}...{}'", "é".repeat(12), "é".repeat(11));
+        assert!(failed.contains(&shown), "{failed}");
     }
 
     // Rust only (HITL f89861c3): Python's max_tokens is an int with no bound,
