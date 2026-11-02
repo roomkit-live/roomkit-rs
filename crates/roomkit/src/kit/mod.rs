@@ -222,6 +222,8 @@ pub(crate) struct Inner<S> {
     pub(crate) realtime: Arc<dyn crate::realtime::RealtimeBackend>,
     /// The kit's status bus (RFC §19.8), which the kit subscribes to.
     pub(crate) status_bus: crate::orchestration::StatusBus,
+    /// The kit's subscription to its bus, when it waits for a runtime.
+    pub(crate) status_subscription: status::PendingSubscription,
     /// Who sent an inbound message (RFC §11.1), fixed at the kit's
     /// construction.
     pub(crate) identity_resolver: Option<Arc<dyn IdentityResolver>>,
@@ -322,6 +324,7 @@ impl<S: ConversationStore> RoomKit<S> {
             realtime: realtime
                 .unwrap_or_else(|| Arc::new(crate::realtime::InMemoryRealtime::default())),
             status_bus: status_bus.unwrap_or_default(),
+            status_subscription: status::PendingSubscription::default(),
             identity_resolver,
             identity_hooks: RwLock::new(Vec::new()),
             task_runner: task_runner
@@ -580,6 +583,7 @@ impl<S> Inner<S> {
         if self.tasks.is_closing() {
             return Err(RoomKitError::KitClosed);
         }
+        self.status_subscription.start();
         Ok(())
     }
 

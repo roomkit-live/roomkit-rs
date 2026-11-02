@@ -155,3 +155,112 @@ async fn a_feedback_naming_no_channel_is_an_observation_of_no_channel() {
         )
     );
 }
+
+/// A backend whose subscription does not end at once, as one that reaches
+/// a server does: it is put off once, then subscribes, and says so.
+#[derive(Default)]
+struct Late {
+    kept: InMemoryStatusBackend,
+    subscribed: Arc<tokio::sync::Notify>,
+}
+
+impl StatusBackend for Late {
+    fn publish(&self, entry: StatusEntry) -> Future<'_, ()> {
+        self.kept.publish(entry)
+    }
+
+    fn recent(&self, n: usize, options: BackendRecentOptions) -> Future<'_, Vec<StatusEntry>> {
+        self.kept.recent(n, options)
+    }
+
+    fn subscribe(&self, callback: Callback) -> Future<'_, ()> {
+        Box::pin(async move {
+            let mut put_off = false;
+            std::future::poll_fn(|context| {
+                if put_off {
+                    return std::task::Poll::Ready(());
+                }
+                put_off = true;
+                context.waker().wake_by_ref();
+                std::task::Poll::Pending
+            })
+            .await;
+            self.kept.subscribe(callback).await;
+            self.subscribed.notify_one();
+        })
+    }
+
+    fn unsubscribe(&self, callback: Callback) -> Future<'_, ()> {
+        self.kept.unsubscribe(callback)
+    }
+}
+
+// Python: tests/test_status_posted_without_context_manager.py::test_a_status_posted_after_room_activity_reaches_the_rooms_hooks
+// A kit built outside a runtime, whose bus does not subscribe at once,
+// subscribes at its first call made in one.
+#[test]
+fn a_status_posted_after_room_activity_reaches_the_rooms_hooks() {
+    use roomkit::model::RoomId;
+    use roomkit::{CreateRoomOptions, HookExecution, HookOptions, HookTrigger};
+
+    let backend = Arc::new(Late::default());
+    let subscribed = Arc::clone(&backend.subscribed);
+    let held: Arc<dyn StatusBackend> = backend;
+    let bus = StatusBus::new(StatusBusOptions {
+        backend: Some(held),
+        ..StatusBusOptions::default()
+    });
+    let kit = RoomKit::new(RoomKitOptions {
+        status_bus: Some(bus.clone()),
+        ..RoomKitOptions::default()
+    });
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let heard = runtime.block_on(async {
+        let room = RoomId::new("r").unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..CreateRoomOptions::default()
+        })
+        .await
+        .unwrap();
+        let bound = std::time::Duration::from_secs(5);
+        let on_time = tokio::time::timeout(bound, subscribed.notified()).await;
+        let (heard, told) = (
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(tokio::sync::Notify::new()),
+        );
+        let (notes, telling) = (Arc::clone(&heard), Arc::clone(&told));
+        let options = HookOptions {
+            execution: HookExecution::Async,
+            ..HookOptions::default()
+        };
+        kit.hook(
+            HookTrigger::OnStatusPosted,
+            move |entry: StatusEntry, _| {
+                notes.lock().unwrap().push(entry.agent_id);
+                telling.notify_one();
+                std::future::ready(())
+            },
+            options,
+        )
+        .unwrap();
+        let mut metadata = roomkit::model::Metadata::new();
+        metadata.insert("room_id".to_owned(), serde_json::json!("r"));
+        let options = PostAsyncOptions {
+            metadata: Some(metadata),
+            ..PostAsyncOptions::default()
+        };
+        bus.post_async("agent-1", "working", StatusLevel::Pending, options)
+            .await;
+        if on_time.is_ok() {
+            drop(tokio::time::timeout(bound, told.notified()).await);
+        }
+        kit.close().await.unwrap();
+        let heard = heard.lock().unwrap().clone();
+        (on_time.is_ok(), heard)
+    });
+    assert_eq!(heard, (true, vec!["agent-1".to_owned()]));
+}
