@@ -22,7 +22,7 @@ use std::sync::Arc;
 use self::collected::{Buffered, Collected, Failure, Streamed};
 use self::nested::Nested;
 use super::events::{CommitRecord, MutationError};
-use super::inbound::{Inbound, InboundError, error_event};
+use super::inbound::{Inbound, InboundError, error_event, stamp_response};
 use super::protocol::{
     ChannelOutcome, ChannelRequest, Delivered, Effect, EffectId, Entry, EntryId, InboundResult,
     Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, Step, StoreOutcome,
@@ -272,7 +272,7 @@ impl DelegatedTurn {
         if room_path::shares_a_transport(&self.bindings) {
             self.take_the_room_path(collected.buffered, collected.streamed);
         } else {
-            self.keep_the_trace(collected.buffered, collected.streamed);
+            self.keep_the_trace(collected.buffered, collected.streamed, environment);
         }
     }
 
@@ -312,17 +312,50 @@ impl DelegatedTurn {
     }
 
     /// The answers kept as the trace: the buffered answers' rows to commit,
-    /// in the order the turns were asked, then the streams to read, one at
-    /// a time.
-    fn keep_the_trace(&mut self, buffered: Vec<Buffered>, streamed: Vec<Streamed>) {
-        for (slot, _, rows) in buffered {
-            for row in rows {
+    /// in the order the turns were asked, each written as the pipeline
+    /// writes a response, then the streams to read, one at a time.
+    fn keep_the_trace(
+        &mut self,
+        buffered: Vec<Buffered>,
+        streamed: Vec<Streamed>,
+        environment: &dyn Environment,
+    ) {
+        for (slot, responder, rows) in buffered {
+            for row in self.as_responses(rows, &responder, environment) {
                 self.rows.push_back((slot, row, None));
             }
         }
         for (turn, slot, _) in streamed {
             self.streams.push_back((turn, slot));
         }
+    }
+
+    /// A buffered turn's `rows` as the pipeline writes a response to the
+    /// description (RFC §8.5): `responder`'s, one deeper, answering it
+    /// unless they name what they answer, under a fresh id and no
+    /// idempotency key, a key in the framework's publication namespace
+    /// included (RFC §22.1); an instruction among them is dropped (gap
+    /// G-066). Python's `_answering`, which writes a buffered output's
+    /// response events back so that a delegated turn reads them so.
+    fn as_responses(
+        &self,
+        rows: Vec<RoomEvent>,
+        responder: &ChannelBinding,
+        environment: &dyn Environment,
+    ) -> Vec<RoomEvent> {
+        let Some(description) = &self.committed else {
+            return rows;
+        };
+        rows.into_iter()
+            .filter(|row| {
+                if row.r#type != EventType::Instruction {
+                    return true;
+                }
+                tracing::warn!(target: "roomkit::tasks", room_id = %self.room_id, responder = %responder.channel_id, "a delegated agent answered with an instruction; it is dropped (gap G-066)");
+                false
+            })
+            .map(|row| stamp_response(row, responder, description, environment.new_event_id()))
+            .collect()
     }
 
     /// A row of the trace as the child room stores it: delivered to nobody,

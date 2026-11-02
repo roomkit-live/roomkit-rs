@@ -107,6 +107,7 @@ use self::queues::{Cascade, Lineage};
 use self::stage::{CallStage, Stage};
 pub use self::stamp::default_inbound_event;
 pub(crate) use self::stamp::error_event;
+pub(crate) use self::stamp::stamp_response;
 use super::io::Io;
 use super::protocol::{Decided, EffectId, Entry, EntryId, Operation, Outcome, ProtocolError, Step};
 use super::{Cx, Environment, KitConfig};
