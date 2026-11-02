@@ -21,9 +21,10 @@ use super::protocol::{
 };
 use super::{Environment, KitConfig};
 use crate::model::{
-    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, EventStatus, Metadata,
-    Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, EventStatus, EventType,
+    Metadata, Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Visibility,
 };
+use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions;
 
 /// What one agent of the child room answered the task with (RFC §23.3
@@ -85,6 +86,13 @@ pub struct DelegatedTurn {
     reading: Option<(EffectId, usize)>,
     /// The side effects' writes outstanding.
     persisting: Vec<EffectId>,
+    /// The context the turns were asked with, which `ON_TASK_CREATED`'s
+    /// observers read.
+    asked_context: Option<Box<RoomContext>>,
+    /// The tasks the turns filed, by the write that stores them, and those
+    /// stored whose `ON_TASK_CREATED` has not fired yet.
+    filing: Option<(EffectId, Vec<Task>)>,
+    created: Vec<Task>,
     next_entry: EntryId,
     notices: Vec<Notice>,
     settled: Vec<Settled>,
@@ -113,6 +121,9 @@ impl DelegatedTurn {
             streams: VecDeque::new(),
             reading: None,
             persisting: Vec::new(),
+            asked_context: None,
+            filing: None,
+            created: Vec::new(),
             next_entry: EntryId::first(),
             notices: Vec::new(),
             settled: Vec::new(),
@@ -166,6 +177,7 @@ impl DelegatedTurn {
     /// turn, with what of the room it may read (RFC §7.5 rule 8).
     fn ask(&mut self, context: &RoomContext, effects: &mut Vec<Effect>) {
         self.bindings.clone_from(&context.bindings);
+        self.asked_context = Some(Box::new(context.clone()));
         let Some(message) = self.committed.clone() else {
             return;
         };
@@ -254,10 +266,13 @@ impl DelegatedTurn {
         if !tasks.is_empty() || !observations.is_empty() {
             let write = self.issue(StoreRequest::PersistSideEffects {
                 room_id: self.room_id.clone(),
-                tasks,
+                tasks: tasks.clone(),
                 observations,
             });
             self.persisting.push(write.id);
+            if !tasks.is_empty() {
+                self.filing = Some((write.id, tasks));
+            }
             effects.push(write);
         }
         if !metadata.is_empty() {
@@ -382,6 +397,51 @@ impl DelegatedTurn {
         effects.push(read);
     }
 
+    /// Fires `ON_TASK_CREATED`'s observers in the child room for each task
+    /// the turns filed and the room stored (RFC §9.2, §10.1 step 15), as a
+    /// room's own turn fires them: Python's `_persist_side_effects`, its
+    /// payload a `task_created` event carrying the description's source
+    /// and content, the task's id and title its metadata.
+    fn tasks_created(&mut self, environment: &dyn Environment) {
+        let created = std::mem::take(&mut self.created);
+        let (Some(description), Some(context)) = (&self.committed, &self.asked_context) else {
+            return;
+        };
+        for task in created {
+            let mut payload = RoomEvent::at(
+                environment.new_event_id(),
+                self.room_id.clone(),
+                EventType::TaskCreated,
+                description.source.clone(),
+                description.content.clone(),
+                environment.now(),
+            );
+            payload.status = EventStatus::Delivered;
+            payload.visibility = Visibility::Internal;
+            payload
+                .metadata
+                .insert("task_id".to_owned(), task.id.as_str().into());
+            payload
+                .metadata
+                .insert("task_title".to_owned(), task.title.clone().into());
+            let hooks = self
+                .config
+                .hooks
+                .observers(HookTrigger::OnTaskCreated, &payload);
+            if hooks.is_empty() {
+                continue;
+            }
+            self.notices.push(Notice::AsyncHooks {
+                trigger: HookTrigger::OnTaskCreated,
+                hooks,
+                event: Box::new(payload),
+                context: context.clone(),
+                after_delivery: None,
+                then: None,
+            });
+        }
+    }
+
     fn binding_of(&self, channel_id: &ChannelId) -> Option<ChannelBinding> {
         self.bindings
             .iter()
@@ -417,6 +477,7 @@ impl Operation for DelegatedTurn {
         }
         self.advance_rows(environment, &mut effects);
         self.advance_streams(&mut effects);
+        self.tasks_created(environment);
         let next = if !effects.is_empty() {
             Next::Effects(effects)
         } else if let Some(error) = self.failed.take() {
@@ -482,8 +543,11 @@ impl Operation for DelegatedTurn {
         }
         if let Some(position) = self.persisting.iter().position(|write| *write == id) {
             self.persisting.remove(position);
+            let filed = self.filing.take_if(|(write, _)| *write == id);
             if let Outcome::Failed(error) = outcome {
                 tracing::warn!(target: "roomkit::tasks", room_id = %self.room_id, error = %error.message, "a delegated turn's side effects were not stored");
+            } else if let Some((_, tasks)) = filed {
+                self.created.extend(tasks);
             }
             return Ok(());
         }
