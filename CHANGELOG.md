@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Python's delegation ends (RFC §23.3, RMK-1158): the tasks a delegated
+  turn files fire `ON_TASK_CREATED` in its child room;
+  `DelegatedTaskResult::exception`, the failure itself (a
+  `TaskCutShortError` for a worker cut short), which `TurnHost::wait_task`
+  reads beside the result; the kit's close ends each background task its
+  runner holds `cancelled`, its observers told, nothing handed back.
 - `DelegateOptions::conversation` and `RoomKit::start_task(room_id,
   agent_id, task, StartTaskOptions { hand_back, organization_id })`,
   Python's (RFC §23.3 step 4, §23.4, RMK-1144, RMK-1158): a worker reads
