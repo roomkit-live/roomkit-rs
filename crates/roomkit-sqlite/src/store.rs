@@ -10,21 +10,24 @@ use roomkit::RoomFilter;
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Metadata, Observation,
     Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task, TaskId, ThreadSummary,
-    Timestamp,
+    Timestamp, Verification, VerificationRequest,
 };
 use roomkit::store::{
     AdvanceDeliveredIndexOptions, CommitEventOptions, DeleteEventOptions, FindLatestRoomOptions,
     FindRoomIdByBindingOptions, FindRoomIdByChannelOptions, FindRoomIdByParticipantOptions,
-    FindRoomIdsByChannelOptions, FindRoomsOptions, GetEventCountOptions, LinkAddressOptions,
-    ListEventsOptions, ListRoomsOptions, ListTasksOptions, PatchRoomMetadataOptions,
-    ResolveIdentityOptions, UnlinkAddressOptions,
+    FindRoomIdsByChannelOptions, FindRoomsOptions, GetEventCountOptions, GetVerificationOptions,
+    LinkAddressOptions, ListEventsOptions, ListRoomsOptions, ListTasksOptions,
+    PatchRoomMetadataOptions, ResolveIdentityOptions, UnlinkAddressOptions,
 };
 use roomkit::{ConversationStore, StoreError, written};
 use tokio::sync::OnceCell;
 
 use crate::connection::{CLOSED, Database};
 use crate::options::{SearchEventsOptions, SqliteStoreOptions};
-use crate::{events, identities, lookups, markers, members, rooms, search, side_effects, timeline};
+use crate::{
+    events, identities, lookups, markers, members, rooms, search, side_effects, timeline,
+    verifications,
+};
 
 /// A conversation store in a SQLite file, on the Python implementation's
 /// schema (see the [crate] documentation): Python's `SQLiteStore`.
@@ -548,6 +551,77 @@ impl ConversationStore for SqliteStore {
                     &address,
                     options.organization_id.as_deref(),
                 )
+            })
+            .await
+    }
+
+    async fn get_verification(
+        &self,
+        identity_id: &IdentityId,
+        options: GetVerificationOptions,
+    ) -> Result<Option<Verification>, StoreError> {
+        let identity_id = identity_id.clone();
+        self.database()
+            .await?
+            .read(move |connection| {
+                verifications::get(connection, &identity_id, options.organization_id.as_deref())
+            })
+            .await
+    }
+
+    async fn put_verification(
+        &self,
+        verification: Verification,
+    ) -> Result<Verification, StoreError> {
+        self.database()
+            .await?
+            .write(move |connection| {
+                verifications::put(connection, &verification)?;
+                Ok(verification)
+            })
+            .await
+    }
+
+    async fn list_verifications_in_force(&self) -> Result<Vec<Verification>, StoreError> {
+        self.database()
+            .await?
+            .read(|connection| verifications::in_force(connection))
+            .await
+    }
+
+    async fn create_verification_request(
+        &self,
+        request: VerificationRequest,
+    ) -> Result<VerificationRequest, StoreError> {
+        self.database()
+            .await?
+            .write(move |connection| {
+                verifications::save_request(connection, &request, true)?;
+                Ok(request)
+            })
+            .await
+    }
+
+    async fn get_verification_request(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<VerificationRequest>, StoreError> {
+        let request_id = request_id.to_owned();
+        self.database()
+            .await?
+            .read(move |connection| verifications::request(connection, &request_id))
+            .await
+    }
+
+    async fn update_verification_request(
+        &self,
+        request: VerificationRequest,
+    ) -> Result<VerificationRequest, StoreError> {
+        self.database()
+            .await?
+            .write(move |connection| {
+                verifications::save_request(connection, &request, false)?;
+                Ok(request)
             })
             .await
     }

@@ -27,6 +27,8 @@ pub(crate) enum Kind {
     Identity,
     Task,
     Observation,
+    Verification,
+    VerificationRequest,
 }
 
 impl Kind {
@@ -38,7 +40,12 @@ impl Kind {
             Self::Room => &["", "/timers"],
             Self::Event => &["", "/source"],
             Self::Binding => &["", "/capabilities", "/rate_limit", "/retry_policy"],
-            Self::Participant | Self::Identity | Self::Task | Self::Observation => &[""],
+            Self::Participant
+            | Self::Identity
+            | Self::Task
+            | Self::Observation
+            | Self::Verification
+            | Self::VerificationRequest => &[""],
         }
     }
 }
@@ -91,7 +98,13 @@ pub(crate) fn written<T: Serialize>(
         match kind {
             Kind::Event => keep_unchanged_content(&stored, &mut value),
             Kind::Identity => keep_unread_addresses(&stored, &mut value),
-            Kind::Room | Kind::Binding | Kind::Participant | Kind::Task | Kind::Observation => {}
+            Kind::Room
+            | Kind::Binding
+            | Kind::Participant
+            | Kind::Task
+            | Kind::Observation
+            | Kind::Verification
+            | Kind::VerificationRequest => {}
         }
         for pointer in kind.structures() {
             if let (Some(Value::Object(kept)), Some(Value::Object(rewritten))) =
