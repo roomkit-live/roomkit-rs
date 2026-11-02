@@ -826,7 +826,10 @@ mod tests {
         assert_eq!(refused.of(&room(0)), keys, "a hundred rooms kept");
         refused.add(&room(0), &keys);
         refused.add(&room(100), &keys);
-        assert!(refused.of(&room(1)).is_empty(), "the 101st drops the oldest");
+        assert!(
+            refused.of(&room(1)).is_empty(),
+            "the 101st drops the oldest"
+        );
         assert_eq!(refused.of(&room(0)), keys, "refused in again, the newest");
         assert_eq!(refused.of(&room(2)), keys);
         assert_eq!(refused.of(&room(100)), keys);
@@ -854,7 +857,10 @@ mod tests {
         let resolver = Some(super::Resolver::Media(&resolver));
         let images = author_images(&refs, &room, resolver, None, &HashSet::new()).await;
         let took = started.elapsed();
-        assert!(took < Duration::from_millis(150), "resolved one after another: {took:?}");
+        assert!(
+            took < Duration::from_millis(150),
+            "resolved one after another: {took:?}"
+        );
         for (at, event) in (0u8..).zip(&events) {
             let url = to_data_uri(&[at], "image/png");
             let sent = Image::new(&url, "image/png").unwrap();

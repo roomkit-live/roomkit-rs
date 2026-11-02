@@ -29,7 +29,10 @@ pub(crate) fn kit_options<S>(
             .collect();
         let slot = slot.clone();
         options.media_resolver = Some(MediaResolver::new(move |media, room_id| {
-            if let Some(run) = slot.run().filter(|run| run.recording.load(Ordering::SeqCst)) {
+            if let Some(run) = slot
+                .run()
+                .filter(|run| run.recording.load(Ordering::SeqCst))
+            {
                 let call = json!({ "url": media.url, "room_id": room_id });
                 lock(&run.observed).media_resolver.push(call);
             }
