@@ -9,6 +9,8 @@
 //! message of its author (the core's `Inbound::rerun`): the earlier ones
 //! are its context. Nothing is copied, and nothing becomes an instruction.
 
+use std::sync::Arc;
+
 use roomkit_core::model::{RoomEvent, RoomId, VerificationRequest};
 use roomkit_core::ops::{Inbound, RestoreHeld, Restored};
 use roomkit_core::rules::verification::release::{held_window, window_scan};
@@ -20,6 +22,7 @@ use crate::error::RoomKitError;
 use crate::kit::RoomKit;
 use crate::kit::events::room_work;
 use crate::store::{ConversationStore, ListEventsOptions};
+use crate::tasks::Kind;
 
 /// The kit's call a release's runs are named by in the logs.
 const RELEASE: &str = "release_held";
@@ -104,11 +107,45 @@ impl<S: ConversationStore> RoomKit<S> {
         if cancelled || restored.cancelled.contains(&last.id) {
             return Ok(());
         }
-        let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
+        let context = ExecutionContext::current();
+        let floor = context.turn_depth().unwrap_or(0);
         let rerun = Inbound::rerun(self.config(), room_id.clone(), last.id.clone(), floor);
+        if context.lease(room_id).is_some() {
+            self.answer_after_the_section(room_id.clone(), rerun, named);
+            return Ok(());
+        }
         let ran = driver::run_rerun(&self.inner, RELEASE, room_id, rerun, named).await;
         ran.output??;
         Ok(())
+    }
+
+    /// Runs `rerun`, the answer of a release made under the room's lock (a
+    /// SYNC hook's), once the section holding that lock is over: it takes
+    /// the lock after it, so its set takes its place in the room's lane
+    /// behind that work's and runs once that work's delivery is over, the
+    /// room read as that work left it (RFC §11.7.6). Its caller does not
+    /// wait for it, which would wait for itself; what it fails with is
+    /// logged.
+    fn answer_after_the_section(&self, room_id: RoomId, rerun: Inbound, named: Option<NamedGuard>) {
+        let inner = Arc::clone(&self.inner);
+        let answer = async move {
+            let ran = driver::run_rerun(&inner, RELEASE, &room_id, rerun, named).await;
+            let failure = match ran.output {
+                Ok(Ok(_)) => return,
+                Ok(Err(error)) => RoomKitError::from(error),
+                Err(error) => error,
+            };
+            tracing::warn!(
+                target: "roomkit::verification",
+                room_id = %room_id,
+                error = %failure,
+                "the answer of a release made under the room's lock failed"
+            );
+        };
+        // Outside the section's context: its lease on the lock is not this
+        // run's.
+        let detached = ExecutionContext::default().scope(answer);
+        drop(self.inner.tasks.spawn_alone(Kind::Run, detached));
     }
 
     /// Stops holding the deliveries of `released`, Python's

@@ -312,7 +312,7 @@ impl Machine {
         } = planned;
         self.trigger.decided = true;
         self.trigger.result.event = Some(trigger);
-        let set = DeliverySet::new(
+        let mut set = DeliverySet::new(
             SetKind::Rerun,
             event,
             plan,
@@ -321,6 +321,11 @@ impl Machine {
             self.cascade.budget.clone(),
             Lineage::Call,
         );
+        // Its delivery cancelled before it was planned, the set asks no
+        // agent (RFC §10.1 "Explicit delivery cancellation").
+        if self.cascade.is_cut(Lineage::Call) {
+            set.cut();
+        }
         self.cascade.queue_set(Delivery {
             set: Box::new(set),
             then: Vec::new(),
