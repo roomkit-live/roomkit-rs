@@ -68,9 +68,49 @@ impl ProviderError {
 }
 
 impl fmt::Display for ProviderError {
+    /// The message, led by the provider and the status it answered:
+    /// `cerebras (402): Payment required`, as Python's `__str__`. A message
+    /// that already names its provider, as a word in any case, or a failure
+    /// with no provider, reads as given.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
+        if self.provider.is_empty() || names_word(&self.message, &self.provider) {
+            return formatter.write_str(&self.message);
+        }
+        formatter.write_str(&self.provider)?;
+        if let Some(status) = self.status_code {
+            write!(formatter, " ({status})")?;
+        }
+        write!(formatter, ": {}", self.message)
     }
+}
+
+/// Whether `text` holds `word` between word boundaries, case aside:
+/// Python's `re.search(rf"\b{re.escape(word)}\b", text, re.IGNORECASE)`,
+/// a word character a letter, a digit or `_`.
+fn names_word(text: &str, word: &str) -> bool {
+    let text: Vec<char> = text.chars().collect();
+    let word: Vec<char> = word.chars().collect();
+    if word.is_empty() {
+        return false;
+    }
+    let is_word = |at: Option<usize>| {
+        at.and_then(|at| text.get(at))
+            .is_some_and(|&c| c.is_alphanumeric() || c == '_')
+    };
+    text.windows(word.len()).enumerate().any(|(start, found)| {
+        let last = start + word.len() - 1;
+        found
+            .iter()
+            .zip(&word)
+            .all(|(&found, &wanted)| same_letter(found, wanted))
+            && is_word(start.checked_sub(1)) != is_word(Some(start))
+            && is_word(Some(last)) != is_word(Some(last + 1))
+    })
+}
+
+/// Whether two characters are the same but for their case.
+fn same_letter(found: char, wanted: char) -> bool {
+    found == wanted || found.to_lowercase().eq(wanted.to_lowercase())
 }
 
 impl Error for ProviderError {
@@ -233,6 +273,89 @@ mod tests {
         assert!(
             !refused("Request too large for gpt-4o on tokens per min (TPM)", None)
                 .is_context_overflow()
+        );
+    }
+
+    fn failed(message: &str, provider: &str, status_code: Option<u16>) -> ProviderError {
+        ProviderError::new(
+            message,
+            ProviderErrorOptions {
+                provider: provider.to_owned(),
+                status_code,
+                ..ProviderErrorOptions::default()
+            },
+        )
+    }
+
+    // Python: tests/test_provider_error_names_provider.py::test_the_message_leads_with_the_provider_and_its_status
+    #[test]
+    fn the_message_leads_with_the_provider_and_its_status() {
+        let error = failed(
+            "Error code: 402 - {'message': 'Payment required to access this resource.'}",
+            "cerebras",
+            Some(402),
+        );
+        assert_eq!(
+            error.to_string(),
+            "cerebras (402): Error code: 402 - {'message': 'Payment required to access this \
+             resource.'}"
+        );
+        // The provider's own text is untouched for whoever reads it.
+        assert!(error.message.starts_with("Error code: 402"));
+    }
+
+    // Python: tests/test_provider_error_names_provider.py::test_without_a_status_the_provider_still_leads
+    #[test]
+    fn without_a_status_the_provider_still_leads() {
+        assert_eq!(
+            failed("connection reset", "anthropic", None).to_string(),
+            "anthropic: connection reset"
+        );
+    }
+
+    // Python: tests/test_provider_error_names_provider.py::test_an_error_without_a_provider_reads_as_given
+    #[test]
+    fn an_error_without_a_provider_reads_as_given() {
+        assert_eq!(ProviderError::from("boom").to_string(), "boom");
+    }
+
+    // Python: tests/test_provider_error_names_provider.py::test_a_rewrapped_error_is_not_prefixed_twice
+    #[test]
+    fn a_rewrapped_error_is_not_prefixed_twice() {
+        let inner = failed("Payment required", "xai", Some(402));
+        let outer = failed(&inner.to_string(), "xai", None);
+        assert_eq!(outer.to_string(), "xai (402): Payment required");
+    }
+
+    // Python: tests/test_provider_error_names_provider.py::test_a_message_that_names_its_provider_is_left_as_it_is
+    // and Python's `\b...\b` under IGNORECASE: a word of the message, in
+    // any case, names the provider; a part of a longer word does not.
+    #[test]
+    fn a_message_that_names_its_provider_is_left_as_it_is() {
+        let messages = [
+            ("tool 'X': acme accepts tool names matching [a-z]+", "acme"),
+            ("ACME refused", "acme"),
+            ("see api.openai.com", "openai"),
+            ("acmecorp refused", "acme"),
+            ("acme_x refused", "acme"),
+            ("x-acme2 refused", "acme"),
+            ("Überlastet", "über"),
+            ("küber refused", "über"),
+            ("ÜBER refused", "über"),
+        ];
+        assert_eq!(
+            messages.map(|(message, provider)| failed(message, provider, None).to_string()),
+            [
+                "tool 'X': acme accepts tool names matching [a-z]+",
+                "ACME refused",
+                "see api.openai.com",
+                "acme: acmecorp refused",
+                "acme: acme_x refused",
+                "acme: x-acme2 refused",
+                "über: Überlastet",
+                "über: küber refused",
+                "ÜBER refused",
+            ]
         );
     }
 }

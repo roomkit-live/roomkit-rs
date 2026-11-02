@@ -466,8 +466,8 @@ async fn a_provider_error_fails_the_turn_and_fires_on_error() {
     .await;
     let mut reported = on_error(&room);
     let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
-    let message =
-        "the provider answered HTTP 401 (invalid_request_error): Incorrect API key provided.";
+    let message = "openai (401): the provider answered HTTP 401 (invalid_request_error): \
+                   Incorrect API key provided.";
     // Raised as Python's `ProviderError`, its class kept (RMK-1208).
     assert_eq!(
         result.error,
@@ -511,7 +511,7 @@ async fn an_image_its_provider_cannot_read_fails_one_turn_then_reads_as_refused(
     let first = room.kit.process_inbound(message, options).await.unwrap();
     assert_eq!(
         first.error.map(|error| error.message),
-        Some("invalid image part: data URI payload is not valid base64".to_owned())
+        Some("openai: invalid image part: data URI payload is not valid base64".to_owned())
     );
     assert!(room.fake.requests().is_empty(), "nothing is sent");
     room.says(&room.web, "alice", "Alice", "and now?").await;
@@ -534,7 +534,7 @@ async fn an_answer_that_is_no_chat_completion_fails_the_turn() {
     assert!(
         error
             .message
-            .starts_with("the provider's answer is malformed: "),
+            .starts_with("openai: the provider's answer is malformed: "),
         "{error:?}"
     );
     assert_eq!(room.sms.texts(), Vec::<String>::new());
@@ -588,7 +588,9 @@ async fn an_unreachable_endpoint_fails_the_turn_without_naming_its_url() {
         .unwrap();
     let error = result.error.unwrap();
     assert!(
-        error.message.starts_with("the completion request failed: "),
+        error
+            .message
+            .starts_with("openai: the completion request failed: "),
         "{error:?}"
     );
     assert!(
@@ -622,7 +624,7 @@ async fn an_answer_streaming_past_the_limit_fails_the_turn() {
     let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
     assert_eq!(
         result.error.unwrap().message,
-        "the provider's answer is longer than 4194304 bytes"
+        "openai: the provider's answer is longer than 4194304 bytes"
     );
 }
 
@@ -632,7 +634,7 @@ async fn an_answer_declaring_more_than_the_limit_fails_the_turn() {
     let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
     assert_eq!(
         result.error.unwrap().message,
-        "the provider's answer is longer than 4194304 bytes"
+        "openai: the provider's answer is longer than 4194304 bytes"
     );
 }
 
@@ -644,7 +646,7 @@ async fn a_redirect_is_refused_and_the_request_never_follows_it() {
     let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
     assert_eq!(
         result.error.unwrap().message,
-        "the provider answered HTTP 307: Temporary Redirect"
+        "openai (307): the provider answered HTTP 307: Temporary Redirect"
     );
     assert_eq!(target.requests().len(), 0, "nothing followed the redirect");
 }
@@ -662,7 +664,9 @@ async fn a_completion_past_the_timeout_fails_the_turn() {
         .expect("the turn ends at its timeout");
     let error = result.error.unwrap();
     assert!(
-        error.message.starts_with("the completion request failed: ")
+        error
+            .message
+            .starts_with("openai: the completion request failed: ")
             && error.message.contains("timed out"),
         "{error:?}"
     );
@@ -756,7 +760,7 @@ async fn a_stream_that_never_ends_a_line_is_cut_at_the_line_s_bound() {
     let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
     assert_eq!(
         result.error.unwrap().message,
-        "the provider's stream sent a line longer than 1048576 bytes"
+        "openai: the provider's stream sent a line longer than 1048576 bytes"
     );
 }
 
@@ -769,7 +773,7 @@ async fn a_stream_of_endless_events_is_cut_at_the_answer_s_bound() {
     let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
     assert_eq!(
         result.error.unwrap().message,
-        "the provider's answer is longer than 4194304 bytes"
+        "openai: the provider's answer is longer than 4194304 bytes"
     );
 }
 
@@ -782,7 +786,7 @@ async fn a_stream_whose_event_never_ends_is_cut_at_the_event_s_bound() {
     let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
     assert_eq!(
         result.error.unwrap().message,
-        "the provider's stream sent an event longer than 1048576 bytes"
+        "openai: the provider's stream sent an event longer than 1048576 bytes"
     );
 }
 

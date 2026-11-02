@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A `ProviderError` reads with its provider and the status it answered
+  first, as Python's (RMK-1238): `openai (401): the provider answered HTTP
+  401 ...`, `anthropic: connection reset`, so a turn's error record and
+  `ON_ERROR` say which provider failed. A message that already names its
+  provider as a word, in any case, and a failure with no provider read as
+  given; `message` keeps the provider's own text.
 - Breaking: `RoomKitError::ChannelNotRegistered` carries its message, as
   Python's `ChannelNotRegisteredError` does (RMK-1201):
   `ChannelNotRegistered { channel_id, message }`. Its text is the site's,
