@@ -77,6 +77,7 @@ const CHANNEL: &[&str] = &[
     "streams_in",
     "recent_events_window",
     "sender_is_participant",
+    "memory",
 ];
 const ADDRESSES: &[&str] = &["normalizes", "conversation_key"];
 const MODEL: &[&str] = &["rounds"];
@@ -105,6 +106,20 @@ const TOOL: &[&str] = &[
 ];
 const RAISES: &[&str] = &["kind", "message"];
 const POLICY: &[&str] = &["allow", "deny"];
+const MEMORY: &[&str] = &[
+    "max_events",
+    "messages",
+    "notes",
+    "speakers",
+    "budget_aware",
+];
+const MEMORY_MESSAGE: &[&str] = &["role", "text"];
+const BUDGET_AWARE: &[&str] = &[
+    "max_context_tokens",
+    "safety_margin_ratio",
+    "min_events",
+    "reserved_tokens",
+];
 const ROOM: &[&str] = &[
     "id",
     "organization_id",
@@ -414,6 +429,25 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
         &channel["addresses"],
         ADDRESSES,
         &format!("{path}.addresses"),
+        found,
+    );
+    memory(&channel["memory"], &format!("{path}.memory"), found);
+}
+
+fn memory(memory: &Value, path: &str, found: &mut Vec<String>) {
+    optional(memory, MEMORY, path, found);
+    for (index, message) in items(&memory["messages"]) {
+        members(
+            message,
+            MEMORY_MESSAGE,
+            &format!("{path}.messages[{index}]"),
+            found,
+        );
+    }
+    optional(
+        &memory["budget_aware"],
+        BUDGET_AWARE,
+        &format!("{path}.budget_aware"),
         found,
     );
 }

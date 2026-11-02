@@ -20,6 +20,7 @@ use roomkit_ai::{
 };
 use serde_json::{Value, json};
 
+use crate::memory::scripted_memory;
 use crate::run::{Run, Scope};
 use crate::scripted::{Reactions, perform};
 
@@ -128,6 +129,9 @@ pub(crate) fn scripted_agent(
     if let Some(window) = spec.get("max_context_events") {
         let window = window.as_u64().ok_or("max_context_events: not a count")?;
         options.max_context_events = usize::try_from(window).map_err(|e| e.to_string())?;
+    }
+    if let Some(memory) = spec.get("memory") {
+        options.memory = Some(scripted_memory(memory, options.max_context_events)?);
     }
     let paced = Paced {
         script: model.clone(),

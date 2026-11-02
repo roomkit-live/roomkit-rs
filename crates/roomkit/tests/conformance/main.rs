@@ -24,6 +24,7 @@ mod harness;
 mod identity;
 mod matching;
 mod member_calls;
+mod memory;
 mod normalize;
 mod run;
 mod scenarios;
