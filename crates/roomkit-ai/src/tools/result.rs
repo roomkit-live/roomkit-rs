@@ -26,7 +26,7 @@ const ROW_IMAGE_MAX_CHARS: usize = 512 * 1024;
 /// parts in order, a text and its images.
 ///
 /// ```
-/// use roomkit_ai::{AiImagePart, AiTextPart, ToolResult, ToolResultPart};
+/// use roomkit_ai::{AiImagePart, AiTextPart, AiToolResultPart, ToolResult, ToolResultPart};
 ///
 /// let screenshot = ToolResult::Parts(vec![
 ///     ToolResultPart::Text(AiTextPart::new("the page")),
@@ -35,7 +35,8 @@ const ROW_IMAGE_MAX_CHARS: usize = 512 * 1024;
 ///         mime_type: Some("image/png".into()),
 ///     }),
 /// ]);
-/// assert_eq!(screenshot.as_text(), "the page\n[image]");
+/// let result = AiToolResultPart::new("call-1", "screenshot", screenshot);
+/// assert_eq!(result.as_text(), "the page\n[image]");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolResult {
@@ -62,7 +63,7 @@ impl ToolResult {
     /// mark for each image, one per line. Python's
     /// `AIToolResultPart.as_text`.
     #[must_use]
-    pub fn as_text(&self) -> String {
+    pub(crate) fn as_text(&self) -> String {
         match self {
             Self::Text(text) => text.clone(),
             Self::Json(value) => match as_parts(value) {
@@ -85,7 +86,7 @@ impl ToolResult {
     /// alone. A text or a JSON value has no image. Python's
     /// `AIToolResultPart.split_for_message`.
     #[must_use]
-    pub fn split_for_message(&self) -> (String, Vec<AiImagePart>) {
+    pub(crate) fn split_for_message(&self) -> (String, Vec<AiImagePart>) {
         let parts = match self {
             Self::Parts(parts) => parts.clone(),
             Self::Json(value) => match as_parts(value) {
