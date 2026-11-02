@@ -427,18 +427,23 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use std::future::Future;
+    use std::sync::Mutex;
+
     use roomkit_core::model::hook::AllowOptions;
     use roomkit_core::model::{
-        ChannelType, EventContent, HookResult, RoomContext, RoomEvent, RoomId,
+        ChannelBinding, ChannelCategory, ChannelOutput, ChannelType, EventContent, HookResult,
+        InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
     };
+    use serde_json::{Value, json};
     use tokio::sync::Notify;
 
     use super::*;
     use crate::store::{ConversationStore, InMemoryStore, ListEventsOptions};
     use crate::testing::{RecordingTransport, RecordingTransportOptions};
     use crate::{
-        AttachChannelOptions, CreateRoomOptions, DeliverOptions, HookOptions, HookTrigger, RoomKit,
-        RoomKitOptions,
+        AttachChannelOptions, CreateRoomOptions, DeliverOptions, HookOptions, HookTrigger,
+        ProcessInboundOptions, RoomKit, RoomKitOptions,
     };
 
     /// A kit whose room `r1` binds the transport `text`, and whose
@@ -610,6 +615,447 @@ mod tests {
         );
         kit.close().await.unwrap();
         other.close().await.unwrap();
+    }
+
+    /// A transport whose parse holds the message `gated` until `release`
+    /// is told, telling `reached` once it holds it: a delivery of that
+    /// text waits there, before its room's lock, as Python's waits for
+    /// voice idle.
+    struct ParseGated {
+        id: ChannelId,
+        gated: &'static str,
+        reached: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    impl crate::Channel for ParseGated {
+        fn channel_id(&self) -> ChannelId {
+            self.id.clone()
+        }
+
+        fn channel_type(&self) -> ChannelType {
+            ChannelType::WEBSOCKET
+        }
+
+        async fn handle_inbound(
+            &self,
+            message: InboundMessage,
+            context: RoomContext,
+        ) -> Result<RoomEvent, crate::ChannelError> {
+            if matches!(&message.content, EventContent::Text(text) if text.body == self.gated) {
+                self.reached.notify_one();
+                self.release.notified().await;
+            }
+            Ok(crate::default_inbound_event(self, &message, &context))
+        }
+
+        fn deliver(
+            &self,
+            _event: RoomEvent,
+            _binding: ChannelBinding,
+            _context: RoomContext,
+        ) -> impl Future<Output = Result<ChannelOutput, crate::ChannelError>> + Send {
+            std::future::ready(Ok(ChannelOutput::empty()))
+        }
+    }
+
+    /// A kit, its `process_timeout` `timeout`, its rooms `rooms` binding
+    /// the transport `human`, which holds the delivery of `gated` in its
+    /// parse; and the gate's two sides, `reached` and `release`.
+    async fn gated_kit(
+        options: RoomKitOptions,
+        rooms: &[&str],
+        gated: &'static str,
+    ) -> (RoomKit, Arc<Notify>, Arc<Notify>) {
+        let kit = RoomKit::new(options);
+        let (reached, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let human = ChannelId::new("human").unwrap();
+        let transport = ParseGated {
+            id: human.clone(),
+            gated,
+            reached: Arc::clone(&reached),
+            release: Arc::clone(&release),
+        };
+        kit.register_channel(transport).unwrap();
+        for room in rooms {
+            let room = RoomId::new(*room).unwrap();
+            let create = CreateRoomOptions {
+                room_id: Some(room.clone()),
+                ..CreateRoomOptions::default()
+            };
+            kit.create_room(create).await.unwrap();
+            kit.attach_channel(&room, &human, AttachChannelOptions::default())
+                .await
+                .unwrap();
+        }
+        (kit, reached, release)
+    }
+
+    /// The options of a delivery addressed to no agent with `strategy`,
+    /// its metadata `metadata`.
+    fn unaddressed(strategy: Option<&Arc<Queued>>, metadata: Value) -> DeliverOptions {
+        let strategy = strategy.map(|strategy| {
+            let strategy: Arc<Queued> = Arc::clone(strategy);
+            let strategy: Arc<dyn DeliveryStrategy<InMemoryStore>> = strategy;
+            strategy
+        });
+        DeliverOptions {
+            strategy,
+            addressed_to: Some(Vec::new()),
+            metadata: serde_json::from_value(metadata).unwrap(),
+            ..DeliverOptions::default()
+        }
+    }
+
+    async fn texts_in(kit: &RoomKit, room: &str) -> Vec<(String, u32)> {
+        let room = RoomId::new(room).unwrap();
+        let events = kit
+            .store()
+            .list_events(&room, ListEventsOptions::default())
+            .await
+            .unwrap();
+        events
+            .into_iter()
+            .filter_map(|event| {
+                let EventContent::Text(text) = event.content else {
+                    return None;
+                };
+                Some((text.body, event.chain_depth))
+            })
+            .collect()
+    }
+
+    fn said(body: &str) -> InboundMessage {
+        InboundMessage::new(
+            ChannelId::new("human").unwrap(),
+            "u",
+            TextContent::new(body),
+        )
+    }
+
+    fn into(room: &str) -> ProcessInboundOptions {
+        ProcessInboundOptions {
+            room_id: Some(RoomId::new(room).unwrap()),
+            ..ProcessInboundOptions::default()
+        }
+    }
+
+    // Python: tests/delivery/test_targeted.py::test_a_queued_follower_is_delivered_at_its_own_depth:
+    // one caller drains a shared strategy for all; a follower's delivery
+    // runs as the follower made it, never inside the leader's work, 3 deep.
+    #[tokio::test]
+    async fn test_a_queued_follower_is_delivered_at_its_own_depth() {
+        let (kit, reached, release) = gated_kit(RoomKitOptions::default(), &["r1"], "leader").await;
+        let strategy = Arc::new(Queued::new(QueuedOptions::default()));
+        let leader = {
+            let (kit, options) = (kit.clone(), unaddressed(Some(&strategy), json!({})));
+            let leading = async move { kit.deliver(&room(), "leader", options).await };
+            tokio::spawn(ExecutionContext::default().at_least(3).scope(leading))
+        };
+        reached.notified().await;
+        let follower = {
+            let (kit, options) = (kit.clone(), unaddressed(Some(&strategy), json!({})));
+            tokio::spawn(async move { kit.deliver(&room(), "app", options).await })
+        };
+        until_queued(&strategy, 1).await;
+        release.notify_one();
+        let (leader, follower) = (leader.await.unwrap(), follower.await.unwrap());
+        assert_eq!(
+            (leader.unwrap().status, follower.unwrap().status),
+            (DeliveryOutcomeStatus::Sent, DeliveryOutcomeStatus::Sent)
+        );
+        let mut depths = texts_in(&kit, "r1").await;
+        depths.sort();
+        assert_eq!(depths, [("app".to_owned(), 0), ("leader".to_owned(), 3)]);
+        kit.close().await.unwrap();
+    }
+
+    // Python: tests/delivery/test_targeted.py::test_a_queue_drained_under_the_room_lock_lets_its_followers_deliver:
+    // a locked BEFORE_BROADCAST hook drains a shared strategy; an
+    // application's request its batch cannot take (another metadata) waits
+    // behind it, and delivers once the hook's section is over, never
+    // waiting on a lock the hook holds.
+    #[tokio::test]
+    async fn test_a_queue_drained_under_the_room_lock_lets_its_followers_deliver() {
+        let (kit, reached, release) = gated_kit(RoomKitOptions::default(), &["r1"], "hook").await;
+        let strategy = Arc::new(Queued::new(QueuedOptions::default()));
+        let got = Arc::new(Mutex::new(None));
+        let (lead_kit, lead_strategy, lead_got) =
+            (kit.clone(), Arc::clone(&strategy), Arc::clone(&got));
+        kit.hook(
+            HookTrigger::BeforeBroadcast,
+            move |event: RoomEvent, _context: RoomContext| {
+                let go = matches!(&event.content, EventContent::Text(text) if text.body == "go");
+                let (kit, options, got) = (
+                    lead_kit.clone(),
+                    unaddressed(Some(&lead_strategy), json!({})),
+                    Arc::clone(&lead_got),
+                );
+                async move {
+                    if go {
+                        let outcome = kit.deliver(&room(), "hook", options).await;
+                        *got.lock().unwrap() = Some(outcome.map(|outcome| outcome.status));
+                    }
+                    HookResult::allow(AllowOptions::default())
+                }
+            },
+            HookOptions::default(),
+        )
+        .unwrap();
+        let go = {
+            let kit = kit.clone();
+            tokio::spawn(async move { kit.process_inbound(said("go"), into("r1")).await })
+        };
+        reached.notified().await;
+        let app = {
+            let (kit, options) = (
+                kit.clone(),
+                unaddressed(Some(&strategy), json!({"from": "app"})),
+            );
+            tokio::spawn(async move { kit.deliver(&room(), "app", options).await })
+        };
+        until_queued(&strategy, 1).await;
+        release.notify_one();
+        let within = Duration::from_secs(2);
+        let inbound = tokio::time::timeout(within, go)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let delivered = tokio::time::timeout(within, app)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let hook = got.lock().unwrap().take().unwrap().unwrap();
+        assert_eq!(
+            (inbound.blocked, hook, delivered.status),
+            (
+                false,
+                DeliveryOutcomeStatus::Sent,
+                DeliveryOutcomeStatus::Sent
+            )
+        );
+        kit.close().await.unwrap();
+    }
+
+    // Python: tests/delivery/test_targeted.py::test_a_caller_holding_the_room_lock_delivers_past_a_drain_under_way,
+    // into its room and another room, drained by another caller or by the
+    // kit's strategy delivering the very message whose pass runs the hook:
+    // the hook, holding the room's lock, delivers at once, unbatched, and
+    // every delivery completes.
+    #[tokio::test]
+    async fn test_a_caller_holding_the_room_lock_delivers_past_a_drain_under_way() {
+        for target in ["r1", "r2"] {
+            for another_caller in [true, false] {
+                a_caller_holding_the_lock_delivers(target, another_caller).await;
+            }
+        }
+    }
+
+    async fn a_caller_holding_the_lock_delivers(target: &'static str, another_caller: bool) {
+        let options = RoomKitOptions {
+            process_timeout: Duration::from_millis(500),
+            delivery_strategy: Some(Arc::new(Queued::new(QueuedOptions::default()))),
+            ..RoomKitOptions::default()
+        };
+        let (kit, reached, release) = gated_kit(options, &["r1", "r2"], "app").await;
+        let strategy = another_caller.then(|| Arc::new(Queued::new(QueuedOptions::default())));
+        let (got, hooked) = (Arc::new(Mutex::new(None)), Arc::new(Notify::new()));
+        let (hook_kit, hook_strategy, hook_got, hook_told) = (
+            kit.clone(),
+            strategy.clone(),
+            Arc::clone(&got),
+            Arc::clone(&hooked),
+        );
+        kit.hook(
+            HookTrigger::BeforeBroadcast,
+            move |event: RoomEvent, _context: RoomContext| {
+                let go = matches!(&event.content, EventContent::Text(text) if text.body == "go");
+                let (kit, got, told) = (
+                    hook_kit.clone(),
+                    Arc::clone(&hook_got),
+                    Arc::clone(&hook_told),
+                );
+                let options = unaddressed(hook_strategy.as_ref(), json!({"h": 1}));
+                async move {
+                    if go {
+                        let target = RoomId::new(target).unwrap();
+                        let outcome = kit.deliver(&target, "from the hook", options).await;
+                        *got.lock().unwrap() = Some(outcome.map(|outcome| outcome.status));
+                        told.notify_one();
+                    }
+                    HookResult::allow(AllowOptions::default())
+                }
+            },
+            HookOptions::default(),
+        )
+        .unwrap();
+        let within = Duration::from_secs(2);
+        let mut expected = vec!["from the hook", "go"];
+        if another_caller {
+            let first = {
+                let (kit, options) = (kit.clone(), unaddressed(strategy.as_ref(), json!({})));
+                tokio::spawn(async move { kit.deliver(&room(), "app", options).await })
+            };
+            reached.notified().await;
+            let go = {
+                let kit = kit.clone();
+                tokio::spawn(async move { kit.process_inbound(said("go"), into("r1")).await })
+            };
+            // The app's drain still waits: the hook delivered past it.
+            tokio::time::timeout(Duration::from_secs(1), hooked.notified())
+                .await
+                .unwrap();
+            release.notify_one();
+            let first = tokio::time::timeout(within, first).await.unwrap().unwrap();
+            let go = tokio::time::timeout(within, go).await.unwrap().unwrap();
+            assert_eq!(first.unwrap().status, DeliveryOutcomeStatus::Sent);
+            assert!(!go.unwrap().blocked);
+            expected.push("app");
+        } else {
+            let room = room();
+            let first = kit.deliver(&room, "go", unaddressed(None, json!({})));
+            let first = tokio::time::timeout(within, first).await.unwrap();
+            assert_eq!(first.unwrap().status, DeliveryOutcomeStatus::Sent);
+        }
+        let hook = got.lock().unwrap().take().unwrap().unwrap();
+        let mut bodies: Vec<String> = Vec::new();
+        for room in ["r1", "r2"] {
+            bodies.extend(texts_in(&kit, room).await.into_iter().map(|(body, _)| body));
+        }
+        bodies.sort();
+        expected.sort_unstable();
+        assert_eq!(
+            (hook, bodies),
+            (
+                DeliveryOutcomeStatus::Sent,
+                expected.into_iter().map(str::to_owned).collect()
+            ),
+            "into {target}, drained by another caller: {another_caller}"
+        );
+        kit.close().await.unwrap();
+    }
+
+    /// An agent whose turn on `first` delivers `second` into its room with
+    /// `strategy`, before it answers nothing.
+    struct Following {
+        kit: Arc<Mutex<Option<crate::WeakRoomKit>>>,
+        strategy: Arc<Queued>,
+    }
+
+    impl crate::Channel for Following {
+        fn channel_id(&self) -> ChannelId {
+            ChannelId::new("a").unwrap()
+        }
+
+        fn channel_type(&self) -> ChannelType {
+            ChannelType::AI
+        }
+
+        fn category(&self) -> ChannelCategory {
+            ChannelCategory::Intelligence
+        }
+
+        fn handle_inbound(
+            &self,
+            message: InboundMessage,
+            context: RoomContext,
+        ) -> impl Future<Output = Result<RoomEvent, crate::ChannelError>> + Send {
+            std::future::ready(Ok(crate::default_inbound_event(self, &message, &context)))
+        }
+
+        async fn on_event(
+            &self,
+            event: RoomEvent,
+            _binding: ChannelBinding,
+            _context: RoomContext,
+        ) -> Result<ChannelOutput, crate::ChannelError> {
+            let first = matches!(&event.content, EventContent::Text(text) if text.body == "first");
+            let kit = self
+                .kit
+                .lock()
+                .unwrap()
+                .clone()
+                .and_then(|kit| kit.upgrade());
+            if let (true, Some(kit)) = (first, kit) {
+                let options = unaddressed(Some(&self.strategy), json!({}));
+                kit.deliver(&room(), "second", options).await.unwrap();
+            }
+            Ok(ChannelOutput::empty())
+        }
+
+        fn deliver(
+            &self,
+            _event: RoomEvent,
+            _binding: ChannelBinding,
+            _context: RoomContext,
+        ) -> impl Future<Output = Result<ChannelOutput, crate::ChannelError>> + Send {
+            std::future::ready(Ok(ChannelOutput::empty()))
+        }
+    }
+
+    // Python: tests/delivery/test_targeted.py::test_queued_accepts_reentrant_delivery_from_agent_without_deadlocking
+    #[tokio::test]
+    async fn test_queued_accepts_reentrant_delivery_from_agent_without_deadlocking() {
+        let (kit, _reached, _release) = gated_kit(RoomKitOptions::default(), &["r1"], "").await;
+        let strategy = Arc::new(Queued::new(QueuedOptions::default()));
+        let agent = Following {
+            kit: Arc::new(Mutex::new(Some(kit.downgrade()))),
+            strategy: Arc::clone(&strategy),
+        };
+        kit.register_channel(agent).unwrap();
+        let attach = AttachChannelOptions {
+            category: Some(ChannelCategory::Intelligence),
+            ..AttachChannelOptions::default()
+        };
+        kit.attach_channel(&room(), &ChannelId::new("a").unwrap(), attach)
+            .await
+            .unwrap();
+        let options = DeliverOptions {
+            addressed_to: Some(vec![ChannelId::new("a").unwrap()]),
+            ..unaddressed(Some(&strategy), json!({}))
+        };
+        let within = Duration::from_secs(2);
+        let result = tokio::time::timeout(within, kit.deliver(&room(), "first", options))
+            .await
+            .unwrap()
+            .unwrap();
+        let delivery = result.inbound.and_then(|inbound| inbound.delivery).unwrap();
+        tokio::time::timeout(within, delivery.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        let bodies: Vec<String> = texts_in(&kit, "r1")
+            .await
+            .into_iter()
+            .map(|(body, _)| body)
+            .collect();
+        assert_eq!(bodies, ["first", "second"]);
+        kit.close().await.unwrap();
+    }
+
+    // Python: tests/delivery/test_instruction_delivery.py::test_queued_never_merges_an_instruction_with_a_message
+    #[tokio::test]
+    async fn test_queued_never_merges_an_instruction_with_a_message() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let request = |instruction: bool| {
+            let context = DeliveryContext {
+                instruction,
+                ..DeliveryContext::new(kit.clone(), room(), "x".to_owned())
+            };
+            let (result, _outcome) = oneshot::channel();
+            Waiting {
+                id: 0,
+                context,
+                channel_id: ChannelId::new("phone").unwrap(),
+                result,
+                turn: None,
+            }
+        };
+        assert!(!request(true).compatible(&request(false)));
+        assert!(request(true).compatible(&request(true)));
+        kit.close().await.unwrap();
     }
 
     // Python: tests/delivery/test_targeted.py::test_a_drain_cut_short_hands_the_queue_on:
