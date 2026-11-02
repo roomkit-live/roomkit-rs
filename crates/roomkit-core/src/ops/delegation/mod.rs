@@ -785,13 +785,16 @@ mod tests {
 
         let written: Vec<_> = effects
             .iter()
-            .map(|effect| match &effect.request {
-                Request::Store(StoreRequest::UpdateRoom { room_id, updates }) => (
+            .map(|effect| {
+                let Request::Store(StoreRequest::UpdateRoom { room_id, updates }) = &effect.request
+                else {
+                    panic!("not a room's write: {:?}", effect.request);
+                };
+                (
                     room_id.clone(),
                     updates.updated_at,
                     updates.metadata.clone(),
-                ),
-                other => panic!("not a room's write: {other:?}"),
+                )
             })
             .collect();
         assert_eq!(written, vec![(room(), Some(now), metadata)]);

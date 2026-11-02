@@ -748,15 +748,15 @@ mod tests {
         assert_eq!(
             (
                 first.is_ok(),
-                again.map_err(|error| match error {
-                    RoomKitError::Runtime(message) => message,
-                    other => format!("not a RuntimeError: {other:?}"),
-                }),
+                again.map_err(|error| error.to_string()),
                 declared
             ),
             (
                 true,
-                Err("setup_background() already called for channel 'speaker'".to_owned()),
+                Err(RoomKitError::Runtime(
+                    "setup_background() already called for channel 'speaker'".to_owned()
+                )
+                .to_string()),
                 vec![json!(BACKGROUND_TOOL)]
             )
         );
