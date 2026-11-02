@@ -107,6 +107,13 @@ impl ToolUsageMemory {
         }
     }
 
+    /// Drops `room`'s record: its next turns replay none of the images its
+    /// results returned so far (RFC §10.6.3). Python's `forget()`.
+    pub(crate) fn forget(&self, room: &RoomId) {
+        let mut by_room = self.by_room.lock().unwrap_or_else(PoisonError::into_inner);
+        by_room.retain(|(at, _)| at != room);
+    }
+
     /// Replays none of the images `room`'s results returned so far: a
     /// turn's request carrying them was refused for what it may carry.
     /// Python's `forget_images()`.

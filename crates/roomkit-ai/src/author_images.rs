@@ -340,6 +340,13 @@ impl RefusedImages {
             .unwrap_or_default()
     }
 
+    /// Drops what `room`'s provider refused (RFC §10.6.3). Python's
+    /// `forget()`.
+    pub(crate) fn forget(&self, room: &RoomId) {
+        let mut by_room = self.by_room.lock().unwrap_or_else(PoisonError::into_inner);
+        by_room.retain(|(at, _)| at != room);
+    }
+
     /// Records `keys` as refused in `room`, the oldest room dropped past
     /// [`MAX_ROOMS`].
     fn add(&self, room: &RoomId, keys: &HashSet<ImageKey>) {

@@ -725,6 +725,14 @@ impl<P: AiProvider> AiChannel<P> {
         self.media.tool_usage.turn_images(room)
     }
 
+    /// Drops what the channel keeps for `room`: the author images its
+    /// provider refused there and its tools' images (RFC §6.4). Python's
+    /// `_forget_room`, of what the channel keeps here.
+    fn forget_room(&self, room: &RoomId) {
+        self.media.refused.forget(room);
+        self.media.tool_usage.forget(room);
+    }
+
     /// What the images the turn's `history` and its input `event` carry
     /// become (RFC §6.4); for a model that does not see, a mention that it
     /// does not see them. A reference resolves through the agent's own
@@ -946,6 +954,30 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         _context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
         future::ready(Err("AI channel does not accept inbound messages".into()))
+    }
+
+    /// A room the channel joins starts from nothing it kept for an earlier
+    /// room of the same id (RFC §6.4, §10.6.3): Python's
+    /// `on_room_attached`, its `_forget_room`.
+    fn on_room_attached(
+        &self,
+        room_id: RoomId,
+        _binding: ChannelBinding,
+    ) -> impl Future<Output = Result<(), ChannelError>> + Send {
+        self.forget_room(&room_id);
+        future::ready(Ok(()))
+    }
+
+    /// Everything the channel keeps for the room goes with the binding
+    /// (RFC §6.4, §10.6.3): the images its provider refused there, and the
+    /// images its tools returned there, which it replays no more. Python's
+    /// `on_room_detached`, its `_forget_room`.
+    fn on_room_detached(
+        &self,
+        room_id: RoomId,
+    ) -> impl Future<Output = Result<(), ChannelError>> + Send {
+        self.forget_room(&room_id);
+        future::ready(Ok(()))
     }
 
     /// An intelligence channel is not delivered to: its turn is its
