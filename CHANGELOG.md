@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `AiChannelOptions::turn_budget_tokens`, Python's (RFC §6.4, RMK-1166):
+  past the billed tokens it allows (input, output and cache tokens), the
+  loop ends `budget_exceeded` at its next round boundary, asks for no retry
+  of an empty answer, and its end marker states the budget; zero is
+  refused (`AiError::TurnBudgetTokens`).
 - `roomkit_ai::memory::MockMemoryProvider` and
   `roomkit_ai::knowledge::MockKnowledgeSource` are public, Python's
   (RMK-1178), with `MockMemoryProviderOptions` and
