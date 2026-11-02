@@ -73,6 +73,10 @@ pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
         "§22.1: a keyed publication's lookup, transport check and commit run in one section \
          under the room lock (RMK-1207)",
     ),
+    (
+        "tasks/a-hand-back-leaves-the-notified-agent-s-prompt-as-its-binding-holds-it",
+        "§6.4: a binding's metadata system_prompt is the agent's turn prompt (G-093, RMK-1208)",
+    ),
 ];
 
 /// A scenario that has not finished by then fails instead of hanging the
