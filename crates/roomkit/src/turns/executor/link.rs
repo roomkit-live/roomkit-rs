@@ -2,7 +2,9 @@
 //! order, a call's end naming its start's frame and a call's fixed
 //! arguments sent before what follows them (RFC §10.6.4); and the verbs of
 //! the turn's host, each a `host_call` answered once while the turn runs,
-//! a `room_call` after it (RFC §10.6.5).
+//! a `room_call` after it (RFC §10.6.5); and the calls of the tools the
+//! owner serves the turn, each a `tool_call` answered once while the turn
+//! runs.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,11 +16,13 @@ use tokio::sync::{Notify, oneshot};
 use uuid::Uuid;
 
 use crate::error::RoomKitError;
-use crate::turn::TurnKit;
+use crate::turn::{OwnerToolAnswer, TurnKit};
 use crate::turns::codec::{encode_end, encode_end_item, encode_start};
 use crate::turns::error::{TurnError, rebuild_kit_error};
 use crate::turns::pipe::Uncarried;
-use crate::turns::wire::{CallContext, Frame, Item, OwnerMessage, WireError};
+use crate::turns::wire::{
+    CallContext, Frame, Item, OwnerMessage, OwnerTool, ToolOutcome, WireError,
+};
 use crate::turns::{MemoryTurn, Turns, lock};
 
 /// The frames of one turn, sent in order, its text deltas by burst: the
@@ -203,8 +207,25 @@ pub(crate) struct TurnFacts {
     pub(crate) executor: String,
 }
 
-/// The answer a verb waits for.
-type Answer = oneshot::Sender<Result<Value, RoomKitError>>;
+/// What a call waits for: a verb's result, or the answer of a tool the
+/// owner serves.
+enum Answer {
+    Verb(oneshot::Sender<Result<Value, RoomKitError>>),
+    Tool(oneshot::Sender<OwnerToolAnswer>),
+}
+
+impl Answer {
+    /// Answers the call with `error`: the owner will not.
+    fn fail(self, error: &TurnError) {
+        match self {
+            Self::Verb(answer) => drop(answer.send(Err(error.clone().into_kit_error()))),
+            Self::Tool(answer) => drop(answer.send(OwnerToolAnswer::Failed {
+                kind: error.kind.clone(),
+                message: error.message.clone(),
+            })),
+        }
+    }
+}
 
 /// The way a turn's host reaches its owner (RFC §10.6.5).
 pub(crate) struct HostLink {
@@ -217,6 +238,8 @@ pub(crate) struct HostLink {
     settled: Notify,
     turns: Weak<Turns>,
     kit: Arc<dyn TurnKit>,
+    /// The tools the owner serves the turn, as its request lists them.
+    owner_tools: Vec<OwnerTool>,
 }
 
 impl std::fmt::Debug for HostLink {
@@ -235,6 +258,7 @@ impl HostLink {
         sender: Arc<FrameSender>,
         turns: &Arc<Turns>,
         kit: Arc<dyn TurnKit>,
+        owner_tools: Vec<OwnerTool>,
     ) -> Self {
         Self {
             facts,
@@ -244,12 +268,79 @@ impl HostLink {
             settled: Notify::new(),
             turns: Arc::downgrade(turns),
             kit,
+            owner_tools,
         }
     }
 
     /// The id of the turn it serves (RFC §10.6.3).
     pub(crate) fn turn_id(&self) -> &str {
         &self.facts.turn
+    }
+
+    /// The definitions of the tools the owner serves the turn.
+    pub(crate) fn owner_tools(&self) -> Vec<Value> {
+        self.owner_tools
+            .iter()
+            .map(|owned| owned.tool.clone())
+            .collect()
+    }
+
+    /// Runs the call `tool_call_id` of the owner's tool `name` with
+    /// `arguments` on the owner, the turn's work at least `floor` deep
+    /// (RFC §10.6.5): the handler's answer, or how it did not answer. A
+    /// call once the turn ended is not sent.
+    pub(crate) async fn call_tool(
+        &self,
+        name: &str,
+        arguments: Metadata,
+        tool_call_id: &str,
+        floor: u32,
+    ) -> OwnerToolAnswer {
+        let call_id = Uuid::new_v4().simple().to_string();
+        let (answer, answered) = oneshot::channel();
+        {
+            let mut pending = lock(&self.pending);
+            if !self.open.load(Ordering::Acquire) {
+                return OwnerToolAnswer::Failed {
+                    kind: "RuntimeError".to_owned(),
+                    message: format!(
+                        "The turn has ended: tool {name:?} is not sent to the room owner"
+                    ),
+                };
+            }
+            pending.insert(call_id.clone(), Answer::Tool(answer));
+        }
+        let frame = Frame::ToolCall {
+            call_id: call_id.clone(),
+            name: name.to_owned(),
+            arguments,
+            context: CallContext {
+                tool_call_id: tool_call_id.to_owned(),
+                room_id: self.facts.room.as_str().to_owned(),
+                channel_id: self.facts.channel.as_str().to_owned(),
+                chain_depth: floor,
+                ..CallContext::default()
+            },
+        };
+        if let Err(Uncarried(why)) = self.sender.send(&frame) {
+            self.withdraw(&call_id, false);
+            return OwnerToolAnswer::Failed {
+                kind: "TypeError".to_owned(),
+                message: format!(
+                    "the arguments of tool {name:?} cannot cross the turn backend: {why}"
+                ),
+            };
+        }
+        let withdrawn = Withdraw {
+            link: self,
+            call_id: Some(call_id),
+        };
+        let result = answered.await;
+        withdrawn.disarm();
+        result.unwrap_or_else(|_gone| OwnerToolAnswer::Failed {
+            kind: "owner_lost".to_owned(),
+            message: "the turn ended before the tool's call was answered".to_owned(),
+        })
     }
 
     /// Whether the turn it serves still runs.
@@ -288,7 +379,7 @@ impl HostLink {
                 drop(pending);
                 return self.between_turns(verb, arguments).await;
             }
-            pending.insert(call_id.clone(), answer);
+            pending.insert(call_id.clone(), Answer::Verb(answer));
         }
         let frame = Frame::HostCall {
             call_id: call_id.clone(),
@@ -341,16 +432,46 @@ impl HostLink {
         turns.room_call(Arc::clone(&self.kit), message).await
     }
 
-    /// The owner answered the call `call_id`.
+    /// The owner answered the verb `call_id`.
     pub(crate) fn resolve(&self, call_id: &str, result: Value, error: Option<&WireError>) {
         let Some(answer) = lock(&self.pending).remove(call_id) else {
             return;
         };
-        let answered = match error {
-            Some(error) => Err(rebuild_kit_error(error)),
-            None => Ok(result),
+        match answer {
+            Answer::Verb(answer) => {
+                let answered = match error {
+                    Some(error) => Err(rebuild_kit_error(error)),
+                    None => Ok(result),
+                };
+                drop(answer.send(answered));
+            }
+            Answer::Tool(answer) => drop(answer.send(OwnerToolAnswer::Failed {
+                kind: "RuntimeError".to_owned(),
+                message: "The room owner answered a tool call with a verb's result".to_owned(),
+            })),
+        }
+        self.settled.notify_waiters();
+    }
+
+    /// The owner answered the tool call `call_id` `outcome`, with the
+    /// handler's `result` when served, else `error`.
+    pub(crate) fn resolve_tool(
+        &self,
+        call_id: &str,
+        outcome: ToolOutcome,
+        result: Option<Value>,
+        error: Option<&WireError>,
+    ) {
+        let Some(answer) = lock(&self.pending).remove(call_id) else {
+            return;
         };
-        drop(answer.send(answered));
+        let answered = tool_answer(outcome, result, error);
+        match answer {
+            Answer::Tool(answer) => drop(answer.send(answered)),
+            Answer::Verb(answer) => drop(answer.send(Err(RoomKitError::Internal(
+                "The room owner answered a verb with a tool's result".to_owned(),
+            )))),
+        }
         self.settled.notify_waiters();
     }
 
@@ -361,7 +482,7 @@ impl HostLink {
             .map(|(_, answer)| answer)
             .collect();
         for answer in pending {
-            drop(answer.send(Err(error.clone().into_kit_error())));
+            answer.fail(error);
         }
         self.settled.notify_waiters();
     }
@@ -398,6 +519,34 @@ impl HostLink {
             }));
         }
         self.settled.notify_waiters();
+    }
+}
+
+/// The answer of an owner's tool as the model's call reads it: a served
+/// call's result, its `value` as the codec writes it; a refusal's, a
+/// failure's or an unserved call's error.
+fn tool_answer(
+    outcome: ToolOutcome,
+    result: Option<Value>,
+    error: Option<&WireError>,
+) -> OwnerToolAnswer {
+    let message = || error.map(|error| error.message.clone()).unwrap_or_default();
+    match (outcome, result) {
+        (ToolOutcome::Served, Some(result)) => {
+            OwnerToolAnswer::Served(result.get("value").cloned().unwrap_or(result))
+        }
+        (ToolOutcome::Refused, _) => OwnerToolAnswer::Refused(message()),
+        (ToolOutcome::Unserved, _) => OwnerToolAnswer::Unserved(message()),
+        (ToolOutcome::Served | ToolOutcome::Failed, _) => match error {
+            Some(error) => OwnerToolAnswer::Failed {
+                kind: error.kind.clone(),
+                message: error.message.clone(),
+            },
+            None => OwnerToolAnswer::Failed {
+                kind: "RuntimeError".to_owned(),
+                message: "The room owner answered a call without its result".to_owned(),
+            },
+        },
     }
 }
 

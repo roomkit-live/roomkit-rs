@@ -7,10 +7,9 @@
 //! channel control outside any turn; and `room_call`, a host verb made
 //! after its turn. A frame and a control message travel in an envelope that
 //! numbers them per direction ([`super::pipe`]). The messages of features
-//! 0.1 lacks are not modelled (owner-served `tool_call`, the human-input
-//! messages, `committed_event`, `channel_call`, `room_publication`), but
-//! `ephemeral`, which a Python executor sends, is read so that it can be
-//! dropped.
+//! 0.1 lacks are not modelled (the human-input messages, `committed_event`,
+//! `channel_call`, `room_publication`), but `ephemeral`, which a Python
+//! executor sends, is read so that it can be dropped.
 
 use std::collections::BTreeMap;
 
@@ -24,8 +23,8 @@ use serde_json::Value;
 
 use crate::steering::SteeringDirective;
 
-/// A tool the owner serves a turn (RFC §10.6.5): none in 0.1, read as its
-/// JSON.
+/// A tool the owner serves a turn (RFC §10.6.5): its definition as its
+/// JSON, and whether its call waits by design.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct OwnerTool {
     pub(crate) tool: Value,
@@ -292,6 +291,16 @@ pub(crate) enum Frame {
     CallCancel {
         call_id: String,
     },
+    /// A call to a tool the owner serves the turn (RFC §10.6.5): its
+    /// handler runs on the owner.
+    ToolCall {
+        call_id: String,
+        name: String,
+        #[serde(default)]
+        arguments: Metadata,
+        #[serde(default)]
+        context: CallContext,
+    },
     /// An ephemeral event a turn published, which no owner of 0.1 has a
     /// realtime backend to publish on.
     Ephemeral {
@@ -348,6 +357,32 @@ pub(crate) enum Control {
         steer_id: String,
         directive: SteeringDirective,
     },
+    /// The owner's answer to one `tool_call`: `served` with the handler's
+    /// answer as the model reads it, else its error.
+    ToolResult {
+        call_id: String,
+        outcome: ToolOutcome,
+        #[serde(default)]
+        result: Option<Value>,
+        #[serde(default)]
+        error: Option<WireError>,
+        #[serde(default)]
+        structured_content: Option<Value>,
+    },
+}
+
+/// How the owner's handler took a `tool_call` (RFC §10.6.5, §21.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ToolOutcome {
+    /// It answered.
+    Served,
+    /// It refused the call: nothing ran.
+    Refused,
+    /// It ran and failed.
+    Failed,
+    /// Nothing on the owner serves it.
+    Unserved,
 }
 
 fn one() -> u32 {

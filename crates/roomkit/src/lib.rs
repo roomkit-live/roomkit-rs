@@ -169,7 +169,7 @@ pub use self::kit::{
     RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
     UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
-pub use self::kit::{CancelTaskOptions, StartTaskOptions, SteerOptions};
+pub use self::kit::{CancelTaskOptions, SetupBackgroundOptions, StartTaskOptions, SteerOptions};
 pub use self::kit::{
     DelegateOptions, DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions,
 };
@@ -199,6 +199,9 @@ pub use self::tool_calls::ToolCallEvent;
 pub use self::tool_calls::ToolCallReport;
 pub use self::transport::{TransportChannel, TransportChannelOptions};
 pub use self::turn::{PostStatusOptions, ToolGate, TurnHost, WaitTaskOptions, current_turn_host};
+// For the AI channel's turn alone: the answer of a tool the owner serves.
+#[doc(hidden)]
+pub use self::turn::OwnerToolAnswer;
 pub use self::turns::TurnTimeouts;
 
 /// Python's `roomkit.tools` helpers this crate has.

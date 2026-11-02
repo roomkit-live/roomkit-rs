@@ -974,6 +974,15 @@ fn status_backend_options_defaults_as_python() {
 }
 
 #[test]
+fn setup_background_options_defaults_as_python() {
+    let defaults = roomkit::SetupBackgroundOptions::default();
+    // roomkit.RoomKit.setup_background(worker) = None
+    assert!(defaults.worker.is_none());
+    // roomkit.RoomKit.setup_background(hand_back) = 'relay'
+    assert_eq!(defaults.hand_back, "relay");
+}
+
+#[test]
 fn start_task_options_defaults_as_python() {
     let defaults = roomkit::StartTaskOptions::default();
     // roomkit.RoomKit.start_task(hand_back) = None

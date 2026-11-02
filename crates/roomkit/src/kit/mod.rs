@@ -22,6 +22,7 @@
 
 mod addresses;
 mod background;
+pub(crate) mod background_tools;
 mod bindings;
 mod delivery;
 mod engine;
@@ -62,6 +63,7 @@ use roomkit_core::ops::{
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookSubject, HookTrigger, Removed};
 
+pub use self::background_tools::SetupBackgroundOptions;
 pub use self::delivery::{DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions};
 pub use self::engine::{HasHooksOptions, HookEngine};
 pub use self::ephemeral::{
@@ -220,6 +222,11 @@ pub(crate) struct Inner<S> {
     pub(crate) room_tasks: crate::tasks::RoomTaskRecord,
     /// The cancels of a task under way, by task (RFC §23.4).
     pub(crate) task_cancels: crate::tasks::TaskCancels,
+    /// The tools the kit set up for its channels, which the owner serves
+    /// their turns (RFC §10.6.5).
+    pub(crate) owner_tools: crate::turns::served::OwnerToolStore<S>,
+    /// How each agent's background tasks run, by agent (RFC §23.4).
+    pub(crate) background_setups: RwLock<HashMap<ChannelId, background_tools::BackgroundSetup>>,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -295,6 +302,8 @@ impl<S: ConversationStore> RoomKit<S> {
             delivery_backend,
             room_tasks: crate::tasks::RoomTaskRecord::default(),
             task_cancels: crate::tasks::TaskCancels::default(),
+            owner_tools: crate::turns::served::OwnerToolStore::default(),
+            background_setups: RwLock::new(HashMap::new()),
         });
         inner.subscribe_status_bus();
         Self { inner }

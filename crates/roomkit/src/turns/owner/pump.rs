@@ -172,6 +172,12 @@ impl Pump {
                 arguments,
                 context,
             } => self.serve(call_id, verb, arguments, context),
+            Frame::ToolCall {
+                call_id,
+                name,
+                arguments,
+                context,
+            } => self.serve_tool(call_id, name, arguments, &context),
             Frame::CallCancel { call_id } => {
                 if let Some(call) = self.calls.remove(&call_id) {
                     call.abort();
@@ -247,6 +253,45 @@ impl Pump {
         } else {
             let refused = one("backend_closed", "the kit is shut down".to_owned());
             answer(&self.state, call_id, Err(Box::new(refused)));
+        }
+    }
+
+    /// Serves the call `call_id` of the owner's tool `name` with
+    /// `arguments` (RFC §10.6.5), in the turn's room for its channel, at
+    /// least as deep as the turn's response, its answer sent back as a
+    /// `tool_result`; cancelled, as a verb is, by its `call_cancel`.
+    fn serve_tool(
+        &mut self,
+        call_id: String,
+        name: String,
+        arguments: Metadata,
+        context: &CallContext,
+    ) {
+        let waiting = lock(&self.state.waiting).clone();
+        let state = Arc::clone(&self.state);
+        let kit = Arc::clone(&self.kit);
+        let floor = context.chain_depth.max(state.facts.response_depth);
+        let call = crate::turn::OwnerCall {
+            room_id: state.facts.room_id.clone(),
+            channel_id: state.facts.channel_id.clone(),
+            tool_call_id: context.tool_call_id.clone(),
+            arguments,
+        };
+        let answering = call_id.clone();
+        let task = async move {
+            let served = kit.serve_owner_tool(name, call);
+            let answered = waiting.at_least(floor).scope(served).await;
+            answer_tool(&state, answering, answered);
+        };
+        if let Some(running) = self.kit.spawn_tracked(Box::pin(task)) {
+            self.calls.retain(|_, call| !call.is_finished());
+            self.calls.insert(call_id, running);
+        } else {
+            let refused = crate::turn::OwnerToolAnswer::Failed {
+                kind: "backend_closed".to_owned(),
+                message: "the kit is shut down".to_owned(),
+            };
+            answer_tool(&self.state, call_id, refused);
         }
     }
 
@@ -372,6 +417,46 @@ fn answer(state: &OwnerState, call_id: String, answered: Result<Value, Box<WireE
             error: Some(refused),
         }));
     }
+}
+
+/// Answers the tool call `call_id` with what its handler made, while the
+/// turn is the owner's, as a `tool_result`: served, the answer under
+/// `value` as Python's codec writes it.
+fn answer_tool(state: &OwnerState, call_id: String, answered: crate::turn::OwnerToolAnswer) {
+    use crate::turn::OwnerToolAnswer;
+    use crate::turns::wire::ToolOutcome;
+    if *state.over.borrow() {
+        return;
+    }
+    let failure = |kind: &str, message: String| Some(one(kind, message));
+    let (outcome, result, error) = match answered {
+        OwnerToolAnswer::Served(value) => (
+            ToolOutcome::Served,
+            Some(serde_json::json!({ "value": value })),
+            None,
+        ),
+        OwnerToolAnswer::Refused(message) => (
+            ToolOutcome::Refused,
+            None,
+            failure("ToolRefusedError", message),
+        ),
+        OwnerToolAnswer::Unserved(message) => (
+            ToolOutcome::Unserved,
+            None,
+            failure("UnservedToolCallError", message),
+        ),
+        OwnerToolAnswer::Failed { kind, message } => {
+            (ToolOutcome::Failed, None, failure(&kind, message))
+        }
+    };
+    let control = Control::ToolResult {
+        call_id,
+        outcome,
+        result,
+        error,
+        structured_content: None,
+    };
+    drop(state.turn.controls.put(&control));
 }
 
 /// Returns at `deadline`, never without one.

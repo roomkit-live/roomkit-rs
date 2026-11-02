@@ -390,6 +390,36 @@ impl TurnHost {
         decoded(lines)
     }
 
+    /// The definitions of the tools the room's owner serves this turn (RFC
+    /// §10.6.5), each `{name, description, parameters}`: what an agent
+    /// declares beside its own. For an AI channel's turn, not a public
+    /// verb.
+    #[doc(hidden)]
+    pub fn owner_tools(&self) -> Vec<Value> {
+        self.shared.link.owner_tools()
+    }
+
+    /// Runs the call `tool_call_id` of the owner's tool `name` with
+    /// `arguments` on the room's owner, at least as deep as the turn's
+    /// response (RFC §10.6.5): the handler's answer, or how it did not
+    /// answer. For an AI channel's turn, not a public verb.
+    #[doc(hidden)]
+    pub async fn call_owner_tool(
+        &self,
+        name: &str,
+        arguments: Metadata,
+        tool_call_id: &str,
+    ) -> OwnerToolAnswer {
+        let floor = ExecutionContext::current()
+            .turn_depth()
+            .unwrap_or(0)
+            .max(self.shared.response_depth);
+        self.shared
+            .link
+            .call_tool(name, arguments, tool_call_id, floor)
+            .await
+    }
+
     /// Sends `verb` with `arguments` to the room's owner, at least as deep
     /// as the current work: its result as data. After the turn, a verb
     /// that needs it is refused before it is sent, as Python's host refuses
@@ -1045,7 +1075,50 @@ fn denied(name: &str) -> String {
 /// What the turn backend needs of its kit, whatever its store: the owner's
 /// one verb, the executor's tool hooks and channels, its background tasks,
 /// and the framework events a turn emits.
+/// How the room's owner answered a call of a tool it serves a turn (RFC
+/// §10.6.5): the handler's answer as the model reads it, or why it gave
+/// none. For an AI channel's turn.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq)]
+pub enum OwnerToolAnswer {
+    /// The handler's answer.
+    Served(Value),
+    /// The handler refused the call: nothing ran; the model reads these
+    /// words.
+    Refused(String),
+    /// The handler ran and raised an error of `kind`, saying `message`.
+    Failed {
+        /// The error's kind.
+        kind: String,
+        /// Its message.
+        message: String,
+    },
+    /// Nothing on the owner serves the tool.
+    Unserved(String),
+}
+
+/// A call of a tool the owner serves, as its handler reads it: the room of
+/// the call, the channel whose turn made it, and its arguments.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct OwnerCall {
+    pub(crate) room_id: RoomId,
+    pub(crate) channel_id: ChannelId,
+    pub(crate) tool_call_id: String,
+    pub(crate) arguments: Metadata,
+}
+
 pub(crate) trait TurnKit: Send + Sync {
+    /// The tools the owner serves the turns of `channel_id` (RFC §10.6.5),
+    /// as a turn's request lists them.
+    fn owner_tools(&self, channel_id: &ChannelId) -> Vec<crate::turns::wire::OwnerTool>;
+
+    /// Serves `call` of the owner's tool `name`: its handler's answer.
+    fn serve_owner_tool(
+        &self,
+        name: String,
+        call: OwnerCall,
+    ) -> BoxFuture<'static, OwnerToolAnswer>;
+
     /// Injects `event` into `room_id`.
     fn send_event(
         &self,
@@ -1143,6 +1216,34 @@ pub(crate) trait TurnKit: Send + Sync {
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
+    fn owner_tools(&self, channel_id: &ChannelId) -> Vec<crate::turns::wire::OwnerTool> {
+        self.upgrade()
+            .map(|inner| inner.owner_tools.declared(channel_id))
+            .unwrap_or_default()
+    }
+
+    fn serve_owner_tool(
+        &self,
+        name: String,
+        call: OwnerCall,
+    ) -> BoxFuture<'static, OwnerToolAnswer> {
+        let kit = self.upgrade().map(|inner| RoomKit { inner });
+        Box::pin(async move {
+            let Some(kit) = kit else {
+                return OwnerToolAnswer::Failed {
+                    kind: "KitClosedError".to_owned(),
+                    message: "the kit is closed".to_owned(),
+                };
+            };
+            let Some(serve) = kit.inner.owner_tools.lookup(&call.channel_id, &name) else {
+                return OwnerToolAnswer::Unserved(format!(
+                    "No tool {name:?} is served by the room owner"
+                ));
+            };
+            serve(kit, call).await
+        })
+    }
+
     fn send_event(
         &self,
         room_id: RoomId,

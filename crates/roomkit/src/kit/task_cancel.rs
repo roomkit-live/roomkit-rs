@@ -15,7 +15,7 @@ use roomkit_core::model::{ChannelId, TaskStatus};
 use super::RoomKit;
 use crate::GetRoomOptions;
 use crate::store::ConversationStore;
-use crate::tasks::{DelegatedTaskResult, TaskCancel, TaskCancels};
+use crate::tasks::{DelegatedTaskResult, TaskCancel, TaskCancels, TaskReach};
 
 /// What [`RoomKit::cancel_task`] takes beside the task: Python's
 /// `cancel_task(task_id, *, organization_id=None)`.
@@ -57,6 +57,46 @@ impl<S: ConversationStore> RoomKit<S> {
             organization_id: Some(organization_id.to_owned()),
         };
         self.get_room(&room_id, options).await.is_ok()
+    }
+
+    /// Cancels `task_id` for a call made in `room_id` that may cancel the
+    /// room's tasks of `reaches` (an agent's `cancel_task`); when
+    /// `channel_id`, the caller, is the one the result was going to, it is
+    /// not handed the cancellation back, the call's answer having told it.
+    /// A call asking as a cancel's end is being completed joins that cancel
+    /// (RFC §23.4): Python's `_cancel_task_for`.
+    pub(crate) async fn cancel_task_for(
+        &self,
+        task_id: &str,
+        channel_id: Option<&ChannelId>,
+        room_id: &str,
+        reaches: &[TaskReach],
+    ) -> bool {
+        let reach = self.inner.room_tasks.reach(task_id, room_id);
+        if reach.is_some_and(|reach| reaches.contains(&reach))
+            || self.cancel_ending(task_id, room_id, reaches)
+        {
+            return self
+                .cancel_joined(task_id, channel_id.map(ChannelId::as_str))
+                .await;
+        }
+        false
+    }
+
+    /// Whether `task_id`, a task of `room_id` of `reaches`, ended cancelled
+    /// while a cancel of it is still under way, its end not yet decided
+    /// whom it hands the cancellation back to: a call asking now is one of
+    /// that cancel's.
+    fn cancel_ending(&self, task_id: &str, room_id: &str, reaches: &[TaskReach]) -> bool {
+        let Some(cancel) = self.inner.task_cancels.get(task_id) else {
+            return false;
+        };
+        let record = &self.inner.room_tasks;
+        !cancel.sealed()
+            && record.ended_with(task_id, room_id).as_deref() == Some("cancelled")
+            && record
+                .ended_reach(task_id, room_id)
+                .is_some_and(|reach| reaches.contains(&reach))
     }
 
     /// Cancels `task_id` once, whichever doors ask at once, each answered

@@ -30,6 +30,10 @@ pub(crate) enum TaskReach {
     Turn,
 }
 
+/// The tasks of its room an agent's `cancel_task` may cancel: Python's
+/// `AGENT_REACH`.
+pub(crate) const AGENT_REACH: &[TaskReach] = &[TaskReach::Tool];
+
 /// A task the kit runs for a room, and how it can end.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RoomTask {
@@ -103,13 +107,6 @@ impl RoomTaskRecord {
 }
 
 /// What a room's `cancel_task` reads of its tasks (RFC §23.4).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "read by the agents' cancel_task, RMK-1144's task tools"
-    )
-)]
 impl RoomTaskRecord {
     /// How `task_id`, running for `room_id`, can end; `None` for any other
     /// task: another room's, one ended, one the kit never ran.
@@ -163,6 +160,11 @@ impl TaskCancel {
             cancelled: watch::Sender::new(None),
             sealed: Mutex::new(false),
         }
+    }
+
+    /// Whether the task's end has decided whom it hands its end back to.
+    pub(crate) fn sealed(&self) -> bool {
+        *lock(&self.sealed)
     }
 
     /// `channel_id` asked for this cancel too.

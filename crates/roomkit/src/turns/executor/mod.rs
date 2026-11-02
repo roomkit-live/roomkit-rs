@@ -121,6 +121,7 @@ impl Executor {
             Arc::clone(&self.sender),
             &self.turns,
             Arc::clone(&self.kit),
+            request.owner_tools.clone(),
         ));
         let host = turn::host(
             Arc::clone(&self.kit),
@@ -437,6 +438,16 @@ fn apply(control: Control, flow: &Flow, link: &HostLink, steering: &Steering) ->
             directive,
         } => {
             steering.apply(steer_id, &directive);
+            None
+        }
+        Control::ToolResult {
+            call_id,
+            outcome,
+            result,
+            error,
+            ..
+        } => {
+            link.resolve_tool(&call_id, outcome, result, error.as_ref());
             None
         }
     }

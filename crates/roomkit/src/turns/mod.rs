@@ -34,6 +34,7 @@ mod owner;
 mod pipe;
 mod pulls;
 mod records;
+pub(crate) mod served;
 mod started;
 #[cfg(test)]
 mod tests;
@@ -274,6 +275,7 @@ impl Turns {
         );
         let history = std::mem::take(&mut context.recent_events);
         let observers = self.observers();
+        let owner_tools = kit.owner_tools(&binding.channel_id);
         let request = Request {
             turn_id: &turn_id,
             binding,
@@ -281,6 +283,7 @@ impl Turns {
             context: &context,
             history: &history,
             previous: previous.as_ref(),
+            owner_tools: &owner_tools,
         };
         let rest = request.write(&observers).map_err(|why| uncarried(&why))?;
         let timeouts = self.timeouts();

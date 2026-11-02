@@ -116,6 +116,8 @@ pub(super) struct Request<'a> {
     pub(super) context: &'a RoomContext,
     pub(super) history: &'a [RoomEvent],
     pub(super) previous: Option<&'a PreviousTurn>,
+    /// The tools the owner serves the turn (RFC §10.6.5).
+    pub(super) owner_tools: &'a [OwnerTool],
 }
 
 impl Request<'_> {
@@ -164,7 +166,7 @@ impl Request<'_> {
             strategy_turn: false,
             notes: [],
             in_place: false,
-            owner_tools: [],
+            owner_tools: self.owner_tools,
             room_hooks: [],
             previous_turn: self.previous,
             trace: None,
@@ -183,7 +185,7 @@ struct RestOut<'a> {
     strategy_turn: bool,
     notes: [String; 0],
     in_place: bool,
-    owner_tools: [OwnerTool; 0],
+    owner_tools: &'a [OwnerTool],
     room_hooks: [String; 0],
     previous_turn: Option<&'a PreviousTurn>,
     trace: Option<()>,

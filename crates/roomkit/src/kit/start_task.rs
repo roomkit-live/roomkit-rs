@@ -36,7 +36,8 @@ impl<S: ConversationStore> RoomKit<S> {
     /// `start_task(room_id, agent_id, task, **options)`. It runs on the
     /// agent's worker, handed the room's last messages, its result relayed
     /// or posted back to the agent; an agent with no background set up
-    /// does the work itself and has its result relayed.
+    /// does the work itself and has its result relayed
+    /// ([`setup_background`](RoomKit::setup_background)).
     ///
     /// # Errors
     ///
@@ -67,7 +68,9 @@ impl<S: ConversationStore> RoomKit<S> {
             ));
         }
         self.check_agent_of(room_id, agent_id).await?;
-        let mode = hand_back.unwrap_or_else(|| "relay".to_owned());
+        let setup = self.background_setup(agent_id);
+        let mode = hand_back.unwrap_or(setup.hand_back);
+        let worker = setup.worker.unwrap_or_else(|| agent_id.clone());
         // The agent as the room addresses it: its channel id, a discussion's
         // handle once discussions come (RFC §19.7.5 rule 4).
         let brief = worker_brief(&task, agent_id.as_str(), &mode);
@@ -78,7 +81,7 @@ impl<S: ConversationStore> RoomKit<S> {
             hand_back: mode,
             ..DelegateOptions::default()
         };
-        self.delegate(room_id, agent_id, task, options).await
+        self.delegate(room_id, &worker, task, options).await
     }
 
     /// Refuses an `agent_id` that is no intelligence channel attached to

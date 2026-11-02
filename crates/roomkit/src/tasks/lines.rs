@@ -16,6 +16,48 @@ const RUN_ENTRY: &str = "task_run";
 /// How many of the bus's latest entries a room's tasks are read from.
 pub(crate) const ROOM_TASKS_WINDOW: usize = 500;
 
+/// One task's line, its members in the order Python's dict holds them: a
+/// member written again keeps its place, a new one goes last.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Line {
+    members: Vec<(String, Value)>,
+}
+
+impl Line {
+    fn insert(&mut self, key: &str, value: Value) {
+        match self.members.iter_mut().find(|(name, _)| name == key) {
+            Some((_, held)) => *held = value,
+            None => self.members.push((key.to_owned(), value)),
+        }
+    }
+
+    fn remove(&mut self, key: &str) {
+        self.members.retain(|(name, _)| name != key);
+    }
+
+    fn contains(&self, key: &str) -> bool {
+        self.members.iter().any(|(name, _)| name == key)
+    }
+
+    /// The member `key`, if the line holds it.
+    pub(crate) fn get(&self, key: &str) -> Option<&Value> {
+        self.members
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value)
+    }
+
+    /// The members, in their order.
+    pub(crate) fn members(&self) -> &[(String, Value)] {
+        &self.members
+    }
+
+    /// The line as a record.
+    pub(crate) fn to_metadata(&self) -> Metadata {
+        self.members.iter().cloned().collect()
+    }
+}
+
 /// The tasks `bus` lists for `room_id`, read from its latest `window`
 /// entries: a task's own, and a strategy run's terminal entry naming its
 /// task under the run's own action.
@@ -24,6 +66,15 @@ pub(crate) async fn room_task_lines(
     room_id: &str,
     window: usize,
 ) -> Vec<Metadata> {
+    room_lines(bus, room_id, window)
+        .await
+        .iter()
+        .map(Line::to_metadata)
+        .collect()
+}
+
+/// The lines of [`room_task_lines`], in Python's member order.
+pub(crate) async fn room_lines(bus: &StatusBus, room_id: &str, window: usize) -> Vec<Line> {
     let options = RecentOptions {
         n: window,
         ..RecentOptions::default()
@@ -61,9 +112,9 @@ fn truthy(value: &Value) -> bool {
 /// One line per task, from its entries in posting order: the task from
 /// its `pending` entry, its state and result from its latest terminal
 /// one, its progress from its latest `info` one, which never ends it.
-pub(crate) fn room_tasks<'a>(entries: impl Iterator<Item = &'a StatusEntry>) -> Vec<Metadata> {
+pub(crate) fn room_tasks<'a>(entries: impl Iterator<Item = &'a StatusEntry>) -> Vec<Line> {
     let mut order: Vec<String> = Vec::new();
-    let mut lines: std::collections::HashMap<String, Metadata> = std::collections::HashMap::new();
+    let mut lines: std::collections::HashMap<String, Line> = std::collections::HashMap::new();
     for entry in entries {
         let task_id = entry
             .metadata
@@ -97,14 +148,14 @@ pub(crate) fn room_tasks<'a>(entries: impl Iterator<Item = &'a StatusEntry>) -> 
             order.push(key.clone());
         }
         let line = lines.entry(key).or_insert_with(|| {
-            let mut line = Metadata::new();
-            line.insert("task_id".to_owned(), json!(task_id));
-            line.insert("agent".to_owned(), json!(entry.agent_id));
-            line.insert("task".to_owned(), json!(""));
+            let mut line = Line::default();
+            line.insert("task_id", json!(task_id));
+            line.insert("agent", json!(entry.agent_id));
+            line.insert("task", json!(""));
             line
         });
         if !task_id.is_empty() {
-            line.insert("task_id".to_owned(), json!(task_id));
+            line.insert("task_id", json!(task_id));
         }
         read_entry(line, entry);
     }
@@ -115,19 +166,21 @@ pub(crate) fn room_tasks<'a>(entries: impl Iterator<Item = &'a StatusEntry>) -> 
 }
 
 /// What a task's own entry says of its line.
-fn read_entry(line: &mut Metadata, entry: &StatusEntry) {
+fn read_entry(line: &mut Line, entry: &StatusEntry) {
     match entry.status {
         StatusLevel::Pending => {
-            line.insert("task".to_owned(), json!(entry.detail));
-            line.insert("status".to_owned(), json!("running"));
-            line.insert("since".to_owned(), json!(entry.ts));
+            line.insert("task", json!(entry.detail));
+            line.insert("status", json!("running"));
+            line.insert("since", json!(entry.ts));
             line.remove("result");
             line.remove("ended");
         }
         StatusLevel::Info => {
-            line.entry("status").or_insert_with(|| json!("running"));
-            line.insert("progress".to_owned(), json!(entry.detail));
-            line.insert("progress_at".to_owned(), json!(entry.ts));
+            if !line.contains("status") {
+                line.insert("status", json!("running"));
+            }
+            line.insert("progress", json!(entry.detail));
+            line.insert("progress_at", json!(entry.ts));
         }
         StatusLevel::Ok | StatusLevel::Completed | StatusLevel::Failed => {
             let status = entry
@@ -136,37 +189,37 @@ fn read_entry(line: &mut Metadata, entry: &StatusEntry) {
                 .filter(|status| truthy(status))
                 .and_then(Value::as_str)
                 .map_or_else(|| level_name(entry.status), str::to_owned);
-            line.insert("ended".to_owned(), json!(entry.ts));
+            line.insert("status", json!(status));
+            line.insert("ended", json!(entry.ts));
             if status == "completed" {
                 let result = entry
                     .metadata
                     .get("result")
                     .cloned()
                     .unwrap_or_else(|| json!(entry.detail));
-                line.insert("result".to_owned(), result);
+                line.insert("result", result);
             }
-            line.insert("status".to_owned(), json!(status));
         }
     }
 }
 
 /// Ends `line` with `entry`, the terminal entry its strategy's run posted
 /// under its own action: failed when the run says so, else completed.
-fn end_run_line(line: &mut Metadata, entry: &StatusEntry) {
+fn end_run_line(line: &mut Line, entry: &StatusEntry) {
     let status = if entry.status == StatusLevel::Failed {
         "failed"
     } else {
         "completed"
     };
-    line.insert("status".to_owned(), json!(status));
-    line.insert("ended".to_owned(), json!(entry.ts));
+    line.insert("status", json!(status));
+    line.insert("ended", json!(entry.ts));
     if status == "completed" {
         let result = entry
             .metadata
             .get("result")
             .cloned()
             .unwrap_or_else(|| json!(entry.detail));
-        line.insert("result".to_owned(), result);
+        line.insert("result", result);
     }
 }
 

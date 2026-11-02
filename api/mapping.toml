@@ -30,7 +30,7 @@ duration_suffix = "_seconds"
 # by the variant's path, the variant the builtin's name without `Error`;
 # `ExceptionGroup` the answer of a close whose channels failed (decided
 # 2026-10-29).
-builtin_errors = { "roomkit::RoomKitError::Value" = "ValueError", "roomkit::RoomKitError::Cancelled" = "asyncio.CancelledError", "roomkit::RoomKitError::ExceptionGroup" = "ExceptionGroup", "roomkit::RoomKitError::Timeout" = "TimeoutError", "roomkit::StoreError::Value" = "ValueError" }
+builtin_errors = { "roomkit::RoomKitError::Value" = "ValueError", "roomkit::RoomKitError::Cancelled" = "asyncio.CancelledError", "roomkit::RoomKitError::ExceptionGroup" = "ExceptionGroup", "roomkit::RoomKitError::Timeout" = "TimeoutError", "roomkit::RoomKitError::Runtime" = "RuntimeError", "roomkit::StoreError::Value" = "ValueError" }
 # The variants carrying a builtin that stand for Python's value of it, no
 # member: Python's visibility naming channels is a comma-joined `str`.
 builtin_payloads = ["roomkit::model::Visibility::Channels"]
@@ -536,8 +536,7 @@ members = [
     "answer_input", "claim_room_strategy",
     "install_strategy", "regenerate_response",
     "regenerate_target", "reject_input", "room_strategy",
-    "room_strategy_is_current", "setup_background", "setup_task_tools",
-    "turn_executor", "uninstall_strategy",
+    "room_strategy_is_current", "turn_executor", "uninstall_strategy",
 ]
 reason = "not in 0.x: delegation, tasks, orchestration strategies, human input and regeneration"
 
