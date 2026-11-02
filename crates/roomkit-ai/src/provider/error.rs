@@ -86,7 +86,9 @@ impl fmt::Display for ProviderError {
 
 /// Whether `text` holds `word` between word boundaries, case aside:
 /// Python's `re.search(rf"\b{re.escape(word)}\b", text, re.IGNORECASE)`,
-/// a word character a letter, a digit or `_`.
+/// a word character a letter, a digit or `_`. Two of Python's Unicode
+/// rules are not followed: its fold of `İ` to `i`, and its reading of a
+/// combining vowel sign (`ि`) as no word character.
 fn names_word(text: &str, word: &str) -> bool {
     let text: Vec<char> = text.chars().collect();
     let word: Vec<char> = word.chars().collect();
@@ -108,9 +110,12 @@ fn names_word(text: &str, word: &str) -> bool {
     })
 }
 
-/// Whether two characters are the same but for their case.
+/// Whether two characters are the same but for their case, by their
+/// lowercase or their uppercase (`ſ` is `s`, `ς` is `σ`).
 fn same_letter(found: char, wanted: char) -> bool {
-    found == wanted || found.to_lowercase().eq(wanted.to_lowercase())
+    found == wanted
+        || found.to_lowercase().eq(wanted.to_lowercase())
+        || found.to_uppercase().eq(wanted.to_uppercase())
 }
 
 impl Error for ProviderError {
@@ -342,6 +347,9 @@ mod tests {
             ("Überlastet", "über"),
             ("küber refused", "über"),
             ("ÜBER refused", "über"),
+            ("ſ refused", "s"),
+            ("σ refused", "ς"),
+            ("ς refused", "Σ"),
         ];
         assert_eq!(
             messages.map(|(message, provider)| failed(message, provider, None).to_string()),
@@ -355,6 +363,9 @@ mod tests {
                 "über: Überlastet",
                 "über: küber refused",
                 "ÜBER refused",
+                "ſ refused",
+                "σ refused",
+                "ς refused",
             ]
         );
     }
