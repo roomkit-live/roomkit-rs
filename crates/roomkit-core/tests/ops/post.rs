@@ -36,7 +36,7 @@ fn post(sim: &mut Sim, text: &str) -> Result<InboundResult, InboundError> {
 fn a_first_post_attaches_its_host_channel_under_the_lock_then_injects() {
     let mut sim = room();
     post(&mut sim, "Your order shipped.").unwrap();
-    let first: Vec<&str> = sim.trace.iter().map(String::as_str).take(9).collect();
+    let first: Vec<&str> = sim.trace.iter().map(String::as_str).take(10).collect();
     assert_eq!(
         first,
         [
@@ -44,6 +44,7 @@ fn a_first_post_attaches_its_host_channel_under_the_lock_then_injects() {
             "lock room_1",
             "load_context room_1",
             "store binding host",
+            "load_context room_1",
             "commit #0 system delivered \"Channel host attached (read_write, all)\"",
             "release room_1",
             "lock room_1",

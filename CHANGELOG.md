@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- An attach's `CHANNEL_ATTACHED` record is stamped once its channel's
+  `on_room_attached` answered, after what the channel wrote into the room,
+  and the hooks of an attach or a detach read the room as the channel left
+  it, as Python emits the record and reads the room then (RFC §5.1, §6.1,
+  RMK-1246): the record took an earlier instant than the events the
+  callback wrote, and the hooks a room without them.
 - A channel's room callback (`on_room_attached`, `on_room_detached`) that
   sends into its room stores its event, where it failed
   `RoomKitError::ReentrantCall`: a call the run holding the room's lock

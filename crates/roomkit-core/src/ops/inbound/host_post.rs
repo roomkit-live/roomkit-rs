@@ -32,7 +32,6 @@ use crate::ops::{Cx, Progress};
 use crate::rules::attachment;
 use crate::rules::host::{self, Speaker};
 use crate::rules::permissions::WriteRefusal;
-use crate::rules::records::Record;
 
 /// The first post's attach of its host channel, under the room's lock (RFC
 /// §10.5).
@@ -86,10 +85,7 @@ impl SectionChange for HostAttach {
         let writes = VecDeque::from([StoreRequest::StoreBinding {
             binding: binding.clone(),
         }]);
-        let mut then = VecDeque::new();
-        let record = Record::attached(&binding);
-        change::write_records(cx, &mut then, &mut context, &[record]);
-        let telling = change::told_of_attach(&binding, then, None);
+        let telling = change::told_of_attach(&binding, None);
         Ok(Decision {
             writes,
             done: HostAttached::Attached(Attached {
@@ -101,6 +97,13 @@ impl SectionChange for HostAttach {
     }
 
     /// An attach reports `ON_CHANNEL_ATTACHED` and `room_channel_attached`.
+    fn told_context(done: &mut HostAttached) -> Option<&mut Box<RoomContext>> {
+        match done {
+            HostAttached::Attached(attached) => Some(&mut attached.context),
+            HostAttached::Kept => None,
+        }
+    }
+
     fn reported(done: &HostAttached) -> Option<(Reported<'_>, &RoomContext)> {
         match done {
             HostAttached::Attached(attached) => Some(attached.reported()),

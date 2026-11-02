@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use super::LifecycleError;
-use super::change::{Decision, SectionChange, Telling};
+use super::change::{self, Decision, SectionChange, Telling};
 use super::{record, report};
 use crate::model::{ChannelId, ErrorRecord, Room, RoomContext, RoomId};
 use crate::ops::io::Io;
@@ -19,6 +19,7 @@ use crate::ops::section::{Failure, Section, SectionWork};
 use crate::ops::{Cx, Environment, KitConfig, Progress};
 use crate::rules::chain_depth::Draw;
 use crate::rules::organizations;
+use crate::rules::records::Record;
 use crate::rules::timers::DueTransition;
 
 /// Why a locked section failed: the room, the store or the lock failed it,
@@ -182,6 +183,9 @@ pub(crate) struct Changing<C: SectionChange> {
     work: Option<(Draw, u32)>,
     /// The channel's call outstanding, the change telling it.
     told: Option<Told<C::Done>>,
+    /// The room's read outstanding once the channel told answered, and
+    /// what follows it.
+    rereading: Option<Rereading<C::Done>>,
     /// What the channel the change told raised, and its id.
     raised: Option<(ChannelId, ErrorRecord)>,
     /// Whether the writes under way undo the change its channel refused.
@@ -194,8 +198,19 @@ struct Told<D> {
     effect: EffectId,
     decision: Box<Decision<D>>,
     channel_id: ChannelId,
-    then: VecDeque<StoreRequest>,
+    room_id: RoomId,
+    records: Vec<Record>,
     undo: Option<VecDeque<StoreRequest>>,
+}
+
+/// The room's read a change waits for once the channel it told answered,
+/// and the records it commits then.
+#[derive(Debug)]
+struct Rereading<D> {
+    effect: EffectId,
+    decision: Box<Decision<D>>,
+    room_id: RoomId,
+    records: Vec<Record>,
 }
 
 impl<C: SectionChange> Changing<C> {
@@ -207,6 +222,7 @@ impl<C: SectionChange> Changing<C> {
             reading: None,
             work: None,
             told: None,
+            rereading: None,
             raised: None,
             undoing: false,
         }
@@ -240,7 +256,7 @@ impl<C: SectionChange> Changing<C> {
             let effect = telling.issue(cx);
             let Telling {
                 binding,
-                then,
+                records,
                 undo,
                 ..
             } = telling;
@@ -248,7 +264,8 @@ impl<C: SectionChange> Changing<C> {
                 effect,
                 decision: Box::new(decision),
                 channel_id: binding.channel_id,
-                then,
+                room_id: binding.room_id,
+                records,
                 undo,
             });
             return Progress::Waiting;
@@ -289,8 +306,10 @@ impl<C: SectionChange> Changing<C> {
         self.ended(decision.done)
     }
 
-    /// Goes on once the channel answered `outcome`: with the writes that
-    /// follow, or, refused, with those that undo the change.
+    /// Goes on once the channel answered `outcome`: refused, with the
+    /// writes that undo the change; otherwise, the change standing, with
+    /// the room read again, the channel's code having maybe written into it
+    /// under the lock.
     fn on_told(
         &mut self,
         cx: &mut Cx<'_>,
@@ -300,19 +319,62 @@ impl<C: SectionChange> Changing<C> {
         let Told {
             mut decision,
             channel_id,
-            then,
+            room_id,
+            records,
             undo,
             ..
         } = told;
-        decision.writes = then;
         // The protocol lets `Told` alone answer it otherwise.
-        let Outcome::Failed(error) = outcome else {
-            return self.write_next(cx, *decision);
+        if let Outcome::Failed(error) = outcome {
+            self.raised = Some((channel_id, error));
+            if let Some(undo) = undo {
+                self.undoing = true;
+                decision.writes = undo;
+                return self.write_next(cx, *decision);
+            }
+        }
+        let mut recent_events = cx.config.recent_events();
+        if self.change.reads_history() {
+            recent_events = recent_events.read_by_the_caller();
+        }
+        let request = StoreRequest::LoadContext {
+            room_id: room_id.clone(),
+            recent_events,
         };
-        self.raised = Some((channel_id, error));
-        if let Some(undo) = undo {
-            self.undoing = true;
-            decision.writes = undo;
+        self.rereading = Some(Rereading {
+            effect: cx.io.issue(request),
+            decision,
+            room_id,
+            records,
+        });
+        Progress::Waiting
+    }
+
+    /// Goes on once the room is read again after its channel answered: the
+    /// change's records committed on it, stamped now, after what the
+    /// channel wrote, and the change reporting it, as the Python
+    /// implementation emits an attach's record after `on_room_attached`
+    /// and its hooks read the room then (RFC §5.1, §6.1).
+    fn on_reread(
+        &mut self,
+        cx: &mut Cx<'_>,
+        rereading: Rereading<C::Done>,
+        outcome: Outcome,
+    ) -> Progress<SectionResult<C>> {
+        let Rereading {
+            mut decision,
+            room_id,
+            records,
+            ..
+        } = rereading;
+        let mut context = match outcome.into_context() {
+            Ok(Some(context)) => context,
+            Ok(None) => return Progress::Done(Err(SectionError::RoomNotFound(room_id))),
+            Err(error) => return Progress::Done(Err(SectionError::Store(error))),
+        };
+        change::write_records(cx, &mut decision.writes, &mut context, &records);
+        if let Some(reported) = C::told_context(&mut decision.done) {
+            *reported = context;
         }
         self.write_next(cx, *decision)
     }
@@ -387,6 +449,13 @@ impl<C: SectionChange> SectionWork for Changing<C> {
             }
             return self.on_told(cx, told, outcome);
         }
+        if let Some(rereading) = self.rereading.take() {
+            if rereading.effect != effect {
+                self.rereading = Some(rereading);
+                return Progress::Waiting;
+            }
+            return self.on_reread(cx, rereading, outcome);
+        }
         let Some((_, decision)) = self.writing.take() else {
             return Progress::Waiting;
         };
@@ -410,6 +479,10 @@ impl<C: SectionChange> SectionWork for Changing<C> {
                 .as_ref()
                 .is_some_and(|(reading, _)| *reading == effect)
             || self.told.as_ref().is_some_and(|told| told.effect == effect)
+            || self
+                .rereading
+                .as_ref()
+                .is_some_and(|rereading| rereading.effect == effect)
     }
 
     /// A failed release changes nothing the change did; a lifecycle change

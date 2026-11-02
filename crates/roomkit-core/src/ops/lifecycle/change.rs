@@ -51,6 +51,15 @@ pub(crate) trait SectionChange: Debug {
         false
     }
 
+    /// The room `done` reports, for a change that tells a channel
+    /// ([`Decision::telling`]): read again once the channel answered, since
+    /// the channel's code may have written into the room under its lock, as
+    /// the Python implementation's hooks read the room then. `None` for a
+    /// change that reports no room.
+    fn told_context(_done: &mut Self::Done) -> Option<&mut Box<RoomContext>> {
+        None
+    }
+
     /// Whether the room's due timer transitions are applied before the
     /// change is decided: every change's but a metadata update's.
     fn applies_timers(&self) -> bool {
@@ -88,7 +97,8 @@ pub(crate) struct Decision<D> {
 
 /// A channel told of the change under the room's lock once the change's
 /// writes are stored, and what follows its answer (RFC §6.1
-/// `on_room_attached`, `on_room_detached`).
+/// `on_room_attached`, `on_room_detached`): the room read again, then its
+/// records committed on it.
 #[derive(Debug)]
 pub(crate) struct Telling {
     /// The binding the change stored or removed, which names the channel
@@ -96,8 +106,11 @@ pub(crate) struct Telling {
     pub(crate) binding: ChannelBinding,
     /// Whether the channel is told of its attach, else of its detach.
     pub(crate) attach: bool,
-    /// The writes made once the channel answered.
-    pub(crate) then: VecDeque<StoreRequest>,
+    /// The lifecycle records committed once the channel answered, on the
+    /// room as it left it: an attach's, stamped after what the channel
+    /// wrote into the room, as the Python implementation emits it after
+    /// `on_room_attached` (RFC §5.1).
+    pub(crate) records: Vec<Record>,
     /// What the channel's refusal does: undoes the change with these
     /// writes, which put back the binding the change replaced, or remove
     /// it, and fails it; `None`, the change stands, then fails once
@@ -247,9 +260,7 @@ impl SectionChange for AttachChange {
             .bindings
             .retain(|bound| bound.channel_id != binding.channel_id);
         context.bindings.push(ChannelBinding::clone(binding));
-        let mut then = VecDeque::new();
-        write_records(cx, &mut then, &mut context, &[Record::attached(binding)]);
-        let telling = told_of_attach(binding, then, replaced);
+        let telling = told_of_attach(binding, replaced);
         let done = Attached {
             binding: binding.clone(),
             context,
@@ -264,16 +275,19 @@ impl SectionChange for AttachChange {
     fn reported(done: &Attached) -> Option<(Reported<'_>, &RoomContext)> {
         Some(done.reported())
     }
+
+    fn told_context(done: &mut Attached) -> Option<&mut Box<RoomContext>> {
+        Some(&mut done.context)
+    }
 }
 
 /// The channel of `binding`, an attach's, told of it once the binding is
-/// stored, before `then`, the attach's record, is written (RFC §6.1
+/// stored, before the attach's record is stamped and written (RFC §6.1
 /// `on_room_attached`): its refusal puts back `replaced`, the binding the
 /// attach replaced, or removes the binding when there was none, as the
 /// Python implementation's `_undo_refused_binding`.
 pub(crate) fn told_of_attach(
     binding: &ChannelBinding,
-    then: VecDeque<StoreRequest>,
     replaced: Option<ChannelBinding>,
 ) -> Telling {
     let undo = match replaced {
@@ -286,7 +300,7 @@ pub(crate) fn told_of_attach(
     Telling {
         binding: binding.clone(),
         attach: true,
-        then,
+        records: vec![Record::attached(binding)],
         undo: Some(VecDeque::from([undo])),
     }
 }
@@ -325,7 +339,7 @@ impl SectionChange for DetachChange {
         let telling = Telling {
             binding: binding.clone(),
             attach: false,
-            then: VecDeque::new(),
+            records: Vec::new(),
             undo: None,
         };
         let done = Detached {
@@ -341,6 +355,10 @@ impl SectionChange for DetachChange {
 
     fn reported(done: &Detached) -> Option<(Reported<'_>, &RoomContext)> {
         Some((Reported::ChannelDetached(&done.binding), &done.context))
+    }
+
+    fn told_context(done: &mut Detached) -> Option<&mut Box<RoomContext>> {
+        Some(&mut done.context)
     }
 }
 

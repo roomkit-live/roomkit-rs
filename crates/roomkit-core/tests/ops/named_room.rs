@@ -69,6 +69,7 @@ mod a_missing_room {
                 "lock room_1",
                 "load_context room_1",
                 "store binding sms",
+                "load_context room_1",
                 "commit #0 system delivered \"Channel sms attached (read_write, all)\"",
                 "release room_1",
                 "emit room_channel_attached",
@@ -454,12 +455,13 @@ mod an_existing_room {
         let mut sim = with_unbound_sms();
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
-            sim.trace[..7],
+            sim.trace[..8],
             [
                 "load_context room_1",
                 "lock room_1",
                 "load_context room_1",
                 "store binding sms",
+                "load_context room_1",
                 "commit #0 system delivered \"Channel sms attached (read_write, all)\"",
                 "release room_1",
                 "handle_inbound sms",

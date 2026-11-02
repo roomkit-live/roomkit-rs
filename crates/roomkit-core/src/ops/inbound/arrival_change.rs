@@ -15,7 +15,6 @@ use crate::ops::lifecycle::report::Reported;
 use crate::ops::protocol::StoreRequest;
 use crate::rules::addresses::AddressForm;
 use crate::rules::attachment;
-use crate::rules::records::Record;
 use crate::rules::routing::{self, Recording, Sender};
 
 /// A change step 2 makes under the room's lock.
@@ -85,13 +84,13 @@ impl SectionChange for ArrivalChange {
     fn decide(
         &self,
         context: Box<RoomContext>,
-        cx: &Cx<'_>,
+        _cx: &Cx<'_>,
     ) -> Result<Decision<Recorded>, Infallible> {
         Ok(match self {
-            Self::AttachAutomatically(binding) => attach_automatically(cx, binding, context),
+            Self::AttachAutomatically(binding) => attach_automatically(binding, context),
             Self::RecordSender(record) => {
                 let heard = routing::heard(&context.recent_events, &record.binding.channel_id);
-                record_sender(cx, record, context, &heard)
+                record_sender(record, context, &heard)
             }
         })
     }
@@ -111,13 +110,13 @@ impl SectionChange for ArrivalChange {
         &self,
         context: Box<RoomContext>,
         timeline: &[RoomEvent],
-        cx: &Cx<'_>,
+        _cx: &Cx<'_>,
     ) -> Result<Decision<Recorded>, Infallible> {
         Ok(match self {
-            Self::AttachAutomatically(binding) => attach_automatically(cx, binding, context),
+            Self::AttachAutomatically(binding) => attach_automatically(binding, context),
             Self::RecordSender(record) => {
                 let heard = routing::heard(timeline, &record.binding.channel_id);
-                record_sender(cx, record, context, &heard)
+                record_sender(record, context, &heard)
             }
         })
     }
@@ -131,14 +130,22 @@ impl SectionChange for ArrivalChange {
             Recorded::Kept(_) | Recorded::Rerouted(_) => None,
         }
     }
+
+    /// An attach tells its channel; the message's pass goes on in the room
+    /// as the channel left it.
+    fn told_context(done: &mut Recorded) -> Option<&mut Box<RoomContext>> {
+        match done {
+            Recorded::Attached(attached) => Some(&mut attached.context),
+            Recorded::Updated(_) | Recorded::Kept(_) | Recorded::Rerouted(_) => None,
+        }
+    }
 }
 
-/// Stores the binding, then its lifecycle record (gap G-046), unless the
-/// room binds the channel, revoked it or refuses the message the attach is
-/// for (RFC §7.5 rule 7, gap G-053): the framework never replaces a binding,
-/// and never undoes a detach.
+/// Stores the binding, then, once its channel is told, its lifecycle record
+/// (gap G-046), unless the room binds the channel, revoked it or refuses
+/// the message the attach is for (RFC §7.5 rule 7, gap G-053): the
+/// framework never replaces a binding, and never undoes a detach.
 fn attach_automatically(
-    cx: &Cx<'_>,
     binding: &ChannelBinding,
     mut context: Box<RoomContext>,
 ) -> Decision<Recorded> {
@@ -149,15 +156,13 @@ fn attach_automatically(
     let writes = VecDeque::from([StoreRequest::StoreBinding {
         binding: binding.clone(),
     }]);
-    let mut then = VecDeque::new();
-    change::write_records(cx, &mut then, &mut context, &[Record::attached(binding)]);
     Decision {
         writes,
         done: Recorded::Attached(Attached {
             binding: Box::new(binding.clone()),
             context,
         }),
-        telling: Some(change::told_of_attach(binding, then, None)),
+        telling: Some(change::told_of_attach(binding, None)),
     }
 }
 
@@ -171,7 +176,6 @@ fn attach_automatically(
 /// has the sender recorded through rule 6, unless the binding is declared
 /// `group` or has them already.
 fn record_sender(
-    cx: &Cx<'_>,
     record: &SenderRecord,
     context: Box<RoomContext>,
     heard: &[ParticipantId],
@@ -189,7 +193,7 @@ fn record_sender(
         return Decision::unwritten(Recorded::Rerouted(context));
     }
     let Some(current) = current else {
-        return attach_automatically(cx, &record.binding, context);
+        return attach_automatically(&record.binding, context);
     };
     let recording = routing::recording(
         &current,

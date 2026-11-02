@@ -2312,6 +2312,7 @@ mod a_call_no_operation_adopts {
                     "lock room_2",
                     "load_context room_2",
                     "store binding sms",
+                    "load_context room_2",
                     "commit #0 system delivered \"Channel sms attached (read_write, all)\"",
                     "release room_2",
                     "handle_inbound sms",

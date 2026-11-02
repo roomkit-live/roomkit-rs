@@ -1488,3 +1488,170 @@ fn every_row() -> roomkit::store::ListEventsOptions {
         ..roomkit::store::ListEventsOptions::default()
     }
 }
+
+mod attaching {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use roomkit::SendEventOptions;
+    use std::sync::OnceLock;
+
+    /// An SMS channel whose attach, once told, takes a second, then sends
+    /// a message into the room from `ws`.
+    struct Settling {
+        kit: Arc<OnceLock<RoomKit>>,
+        clock: Clock,
+    }
+
+    impl Channel for Settling {
+        fn channel_id(&self) -> ChannelId {
+            channel("sms")
+        }
+
+        fn channel_type(&self) -> ChannelType {
+            ChannelType::SMS
+        }
+
+        fn category(&self) -> ChannelCategory {
+            ChannelCategory::Transport
+        }
+
+        fn recipient_key(&self) -> Option<String> {
+            None
+        }
+
+        fn on_event(
+            &self,
+            _event: RoomEvent,
+            _binding: ChannelBinding,
+            _context: RoomContext,
+        ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+            ready(Ok(ChannelOutput::empty()))
+        }
+
+        fn handle_inbound(
+            &self,
+            message: InboundMessage,
+            context: RoomContext,
+        ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+            ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
+        }
+
+        fn deliver(
+            &self,
+            _event: RoomEvent,
+            _binding: ChannelBinding,
+            _context: RoomContext,
+        ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+            ready(Ok(ChannelOutput::empty()))
+        }
+
+        async fn on_room_attached(
+            &self,
+            room_id: RoomId,
+            _binding: ChannelBinding,
+        ) -> Result<(), ChannelError> {
+            self.clock.advance(1);
+            let kit = self.kit.get().unwrap();
+            let content = TextContent::new("set up");
+            kit.send_event(
+                &room_id,
+                &channel("ws"),
+                content,
+                SendEventOptions::default(),
+            )
+            .await?;
+            Ok(())
+        }
+    }
+
+    fn text(event: &RoomEvent) -> Option<&str> {
+        let EventContent::Text(text) = &event.content else {
+            return None;
+        };
+        Some(text.body.as_str())
+    }
+
+    fn names_sms(event: &RoomEvent) -> bool {
+        matches!(&event.content, EventContent::System(system)
+            if system.data.get("channel_id") == Some(&json!("sms")))
+    }
+
+    /// RFC §5.1, §6.1 (RMK-1246): an attach's record is stamped once its
+    /// channel is told, after what the channel wrote into the room, and its
+    /// hooks read the room as the channel left it, as Python emits
+    /// `CHANNEL_ATTACHED` after `on_room_attached` and reads the room then.
+    // Python: tests/test_channel_attach_contract.py::TestAttachOrder::test_the_channel_is_told_before_anything_else_is
+    #[tokio::test]
+    async fn an_attach_s_record_follows_what_its_channel_wrote() {
+        let clock = Clock::new();
+        let kit = kit_with_environment(RoomKitOptions::default(), Arc::clone(&clock.0));
+        let ws = RecordingTransport::new(
+            channel("ws"),
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        );
+        kit.register_channel(ws.clone()).unwrap();
+        let handle = Arc::new(OnceLock::new());
+        kit.register_channel(Settling {
+            kit: Arc::clone(&handle),
+            clock: clock.clone(),
+        })
+        .unwrap();
+        assert!(handle.set(kit.clone()).is_ok());
+        let (seen, mut heard) = mpsc::unbounded_channel();
+        kit.hook(
+            HookTrigger::OnChannelAttached,
+            move |event: RoomEvent, context: RoomContext| {
+                if names_sms(&event) {
+                    let texts: Vec<String> = context
+                        .recent_events
+                        .iter()
+                        .filter_map(text)
+                        .map(str::to_owned)
+                        .collect();
+                    seen.send(texts).unwrap();
+                }
+                ready(())
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "observer".to_owned(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        kit.attach_channel(&room_id(), ws.channel_id(), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        kit.attach_channel(&room_id(), &channel("sms"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let rows = kit
+            .store()
+            .list_events(&room_id(), every_row())
+            .await
+            .unwrap();
+        let read = |event: &RoomEvent| (event.index, event.created_at);
+        let told = rows.iter().find(|event| text(event) == Some("set up"));
+        let record = rows
+            .iter()
+            .find(|event| event.r#type == EventType::ChannelAttached && names_sms(event));
+        let hooked = tokio::time::timeout(Duration::from_secs(1), heard.recv())
+            .await
+            .unwrap();
+        assert_eq!(
+            (told.map(read), record.map(read), hooked),
+            (
+                Some((1, after_start(1))),
+                Some((2, after_start(1))),
+                Some(vec!["set up".to_owned()])
+            )
+        );
+    }
+}

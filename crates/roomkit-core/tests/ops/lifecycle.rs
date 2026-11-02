@@ -151,6 +151,7 @@ mod attach_channel {
                 "lock room_1",
                 "load_context room_1",
                 "store binding sms",
+                "load_context room_1",
                 "commit #0 system delivered \"Channel sms attached (read_write, all)\"",
                 "release room_1",
             ]
@@ -344,6 +345,7 @@ mod attach_channel {
                     "load_context room_1".to_owned(),
                     "update room room_1 Active".to_owned(),
                     "store binding sms".to_owned(),
+                    "load_context room_1".to_owned(),
                     "commit #1 system delivered \"Channel sms attached (read_write, all)\""
                         .to_owned(),
                     "release room_1".to_owned(),
@@ -422,6 +424,7 @@ mod detach_channel {
                 "update room room_1 Active",
                 "delete binding sms",
                 "commit #0 system delivered \"Channel sms detached\"",
+                "load_context room_1",
                 "release room_1",
             ]
         );
@@ -1439,6 +1442,7 @@ mod the_status_gate {
                     "commit #0 system delivered \"Room room_1 closed by timer\"",
                     "update room room_1 Closed",
                     "delete binding sms",
+                    "load_context room_1",
                     "release room_1"
                 ]
                 .map(str::to_owned)
