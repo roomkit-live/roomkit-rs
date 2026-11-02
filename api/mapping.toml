@@ -559,13 +559,6 @@ reason = "not in 0.x: the engine is the kit's, built with it; its chains run in 
 [[missing]]
 python = "roomkit.RoomKit"
 members = [
-    "sender_verification",
-]
-reason = "not in 0.x: the verification step 5b of the inbound pipeline (RMK-1172)"
-
-[[missing]]
-python = "roomkit.RoomKit"
-members = [
     "add_room_recording_track", "room_recordings", "start_room_recording",
     "stop_room_recording",
 ]

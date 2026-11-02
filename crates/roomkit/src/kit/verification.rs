@@ -25,9 +25,11 @@ mod timers;
 mod transitions;
 
 use roomkit_core::model::{
-    ChannelId, IdentityId, RoomId, Timestamp, Verification, VerificationRequest, VerificationStatus,
+    ChannelId, IdentityId, RoomContext, RoomEvent, RoomId, Timestamp, Verification,
+    VerificationRequest, VerificationStatus,
 };
 use roomkit_core::rules::hook_registry::HookTrigger;
+use roomkit_core::rules::verification::participant_identity;
 use uuid::Uuid;
 
 use self::announce::{completion_data, end_data};
@@ -388,6 +390,40 @@ impl<S: ConversationStore> RoomKit<S> {
             });
         }
         Ok(current)
+    }
+
+    /// The verification of `event`'s sender in its room's organization, the
+    /// one `context` holds (RFC §11.7.3): Python's `sender_verification`.
+    /// What an `ON_VERIFICATION_REQUIRED` hook reads before opening a
+    /// request: whose verification it is (`identity_id`) and whether a
+    /// request is open already (`request_id`). `None` when the pipeline did
+    /// not label the event: its sender is not identified, or the kit has no
+    /// verification policy. The sender's participant may not be in
+    /// `context` yet on their first message; this reads it all the same.
+    ///
+    /// # Errors
+    ///
+    /// [`RoomKitError::Value`] for a sender id no identity can have;
+    /// [`RoomKitError::Store`] for the store's failure.
+    pub async fn sender_verification(
+        &self,
+        event: &RoomEvent,
+        context: &RoomContext,
+    ) -> Result<Option<Verification>, RoomKitError> {
+        if event.source.verification.is_none() {
+            return Ok(None);
+        }
+        let identity_id = match participant_identity(event, context) {
+            Some(identity_id) => identity_id,
+            None => match &event.source.participant_id {
+                Some(sender) => IdentityId::new(sender.as_str())?,
+                None => return Ok(None),
+            },
+        };
+        let options = VerificationOfOptions {
+            organization_id: context.room.organization_id.clone(),
+        };
+        self.verification_of(&identity_id, options).await.map(Some)
     }
 
     /// The request `request_id` a caller acting for `organization_id` sees.
