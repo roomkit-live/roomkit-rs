@@ -297,8 +297,8 @@ impl roomkit::Channel for Counted {
         ChannelType::AI
     }
 
-    fn category(&self) -> roomkit::model::ChannelCategory {
-        roomkit::model::ChannelCategory::Intelligence
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
     }
 
     fn handle_inbound(
@@ -405,17 +405,17 @@ impl TaskRunner<RoomReadsFail> for Keeps {
         _kit: RoomKit<RoomReadsFail>,
         task: DelegatedTask,
         _options: SubmitOptions,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), RoomKitError>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), RoomKitError>> + Send>> {
         *self.handed.lock().unwrap() = Some(task);
         self.submitted.notify_one();
         Box::pin(pending())
     }
 
-    fn cancel(&self, _task_id: &str) -> std::pin::Pin<Box<dyn Future<Output = bool> + Send>> {
+    fn cancel(&self, _task_id: &str) -> Pin<Box<dyn Future<Output = bool> + Send>> {
         Box::pin(ready(false))
     }
 
-    fn close(&self) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
+    fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send>> {
         Box::pin(ready(()))
     }
 }
@@ -675,10 +675,7 @@ struct Looking {
 impl Stream for Looking {
     type Item = Result<ResponseItem, roomkit::ChannelError>;
 
-    fn poll_next(
-        self: std::pin::Pin<&mut Self>,
-        _context: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Poll::Ready(self.get_mut().items.pop_front().map(Ok))
     }
 }
@@ -698,8 +695,8 @@ impl roomkit::Channel for Looker {
         ChannelType::AI
     }
 
-    fn category(&self) -> roomkit::model::ChannelCategory {
-        roomkit::model::ChannelCategory::Intelligence
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
     }
 
     fn handle_inbound(
