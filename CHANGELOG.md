@@ -6,6 +6,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Steering, Python's (RFC §21.3, §10.6.8, RMK-1160): `InjectMessage`,
+  `Cancel`, `UpdateSystemPrompt` and `SteeringDirective` in
+  `roomkit::model`, in Python's wire form; `AiChannel::steer(directive,
+  SteerOptions { loop_id, room_id, turn_id })`, which the turn's loop
+  reads at its start, after each round of calls, and once the model has
+  answered, a message steered in meanwhile asking it again in the same
+  turn, the answer then the message; a `Cancel` also stops a generation
+  at its next event and a round's calls not run yet. `RoomKit::steer(
+  directive, channel_id, SteerOptions { room_id, turn_id,
+  organization_id })` reaches the turns the kit started, through the turn
+  backend's `steer` and `steer_result`; a channel without steering takes
+  a `Cancel` as its turn's cancel.
 - Breaking: `AiChannelOptions::temperature` and `AiContext::temperature`
   are an `f64`, 0.7 by default, as Python's `float` (RMK-1089, decided by
   the maintainer): a model that takes no temperature is the provider's to
