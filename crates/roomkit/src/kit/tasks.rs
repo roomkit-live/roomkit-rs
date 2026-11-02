@@ -282,7 +282,8 @@ impl<S: ConversationStore> RoomKit<S> {
     /// # Errors
     ///
     /// [`RoomKitError::RoomNotFound`] for a parent room that is missing or
-    /// another organization's, the store's error when it fails to read it;
+    /// another organization's, the store's error when it fails to read it or the
+    /// context the task is announced with, the task then never announced;
     /// [`RoomKitError::ChannelNotRegistered`] for an
     /// agent the kit does not hold; [`RoomKitError::Value`] for a hand-back
     /// the delegation cannot keep: an unknown one, or `post` for an inline
@@ -326,7 +327,7 @@ impl<S: ConversationStore> RoomKit<S> {
             },
         );
         self.open_child_room(&handle, &parent, &options).await?;
-        self.announce_task(&handle, options.post_status).await;
+        self.announce_task(&handle, options.post_status).await?;
         // From here the task ends however this call ends: a caller cut
         // before its run started ends it cancelled (Python's `started`).
         let unstarted = Unstarted::new(self, &handle, &options);
@@ -521,8 +522,14 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Fires `ON_TASK_DELEGATED` in the parent room and posts the task
-    /// `pending` (RFC §23.3, §23.5).
-    async fn announce_task(&self, task: &DelegatedTask, post_status: bool) {
+    /// `pending` (RFC §23.3, §23.5): a parent room's context its store
+    /// fails to read fails the delegation, the task never announced, as
+    /// Python's `_announce_task` raises it.
+    async fn announce_task(
+        &self,
+        task: &DelegatedTask,
+        post_status: bool,
+    ) -> Result<(), RoomKitError> {
         let mut metadata = task_metadata(task);
         metadata.insert("task_input".to_owned(), json!(task.task));
         let body = format!("[Task delegated to {}] {}", task.agent_id, task.task);
@@ -534,15 +541,16 @@ impl<S: ConversationStore> RoomKit<S> {
             metadata,
         );
         self.inner
-            .observe_event(
+            .announce_event(
                 roomkit_core::rules::hook_registry::HookTrigger::OnTaskDelegated,
                 event,
             )
-            .await;
+            .await?;
         if post_status {
             let metadata = status_metadata(task);
             self.post_lifecycle(&task.agent_id, StatusLevel::Pending, &task.task, metadata);
         }
+        Ok(())
     }
 
     /// Ends a task the caller presents itself, inline or never submitted:

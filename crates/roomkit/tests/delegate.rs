@@ -225,7 +225,6 @@ async fn a_parent_room_the_store_fails_to_read_fails_the_delegation_with_its_err
 // task never announced. Its span is not asserted: roomkit-rs has no
 // telemetry.
 #[tokio::test]
-#[ignore = "RMK-1208: the announce swallows its context read's failure and the task runs"]
 async fn a_task_failing_before_it_is_announced_fires_no_completion() {
     for wait in [true, false] {
         let kit = kit_with(RoomReadsFail::default()).await;

@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A delegation whose parent room's context the store fails to read as
+  the task is announced fails with the store's error, as Python's
+  `_announce_task` raises it (RFC §23.3, RMK-1208): no `ON_TASK_DELEGATED`,
+  no `ON_TASK_COMPLETED`, no completion callback and no status line, where
+  the task ran and completed.
 - An author's image goes as Python's `_inline` sends it (RFC §6.4,
   RMK-1197): a data URI is read for its data's presence and its size
   alone, its scheme, type and parameters in lower case, its data as

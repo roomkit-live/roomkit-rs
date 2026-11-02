@@ -435,25 +435,48 @@ impl<S: ConversationStore> Inner<S> {
     /// as observers in the background, their filters read on its source
     /// (RFC §23.5).
     pub(super) async fn observe_event(self: &Arc<Self>, trigger: HookTrigger, event: RoomEvent) {
-        let room_id = event.room_id.clone();
-        let observers: Observers = {
-            let config = self.config();
-            let handlers = read(&self.hooks);
-            let subject = HookSubject::from(&event).in_room(&room_id);
-            config
-                .hooks
-                .observers(trigger, subject)
-                .into_iter()
-                .filter_map(|id| Some((config.hooks.get(id)?.clone(), handlers.get(&id)?.clone())))
-                .collect()
-        };
+        let observers = self.event_observers(trigger, &event);
         if observers.is_empty() {
             return;
         }
-        let Some(context) = self.observed_context(&room_id).await else {
+        let Some(context) = self.observed_context(&event.room_id).await else {
             return;
         };
         self.observe(observers, event, context, async {});
+    }
+
+    /// Fires `trigger`'s hooks on `event` as [`observe_event`] does, its
+    /// room's context read first whether a hook is registered or not, as
+    /// Python's `_announce_task` builds it: a read that fails is the
+    /// caller's error, no hook fired.
+    ///
+    /// [`observe_event`]: Self::observe_event
+    pub(super) async fn announce_event(
+        self: &Arc<Self>,
+        trigger: HookTrigger,
+        event: RoomEvent,
+    ) -> Result<(), RoomKitError> {
+        let recent_events = self.config().recent_events().read_by_the_caller();
+        let context = driver::load_context(&*self.store, &event.room_id, recent_events).await?;
+        let observers = self.event_observers(trigger, &event);
+        if let (false, Some(context)) = (observers.is_empty(), context) {
+            self.observe(observers, event, context, async {});
+        }
+        Ok(())
+    }
+
+    /// The hooks of `trigger` whose filters `event`, from its source,
+    /// passes, the kit's and its room's.
+    fn event_observers(&self, trigger: HookTrigger, event: &RoomEvent) -> Observers {
+        let config = self.config();
+        let handlers = read(&self.hooks);
+        let subject = HookSubject::from(event).in_room(&event.room_id);
+        config
+            .hooks
+            .observers(trigger, subject)
+            .into_iter()
+            .filter_map(|id| Some((config.hooks.get(id)?.clone(), handlers.get(&id)?.clone())))
+            .collect()
     }
 
     /// Emits `event` to the kit's handlers and waits for them.
