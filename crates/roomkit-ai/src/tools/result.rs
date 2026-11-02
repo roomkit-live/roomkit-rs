@@ -15,6 +15,10 @@ const IMAGE_MARK: &str = "[image]";
 /// after it: Python's `split_for_message`.
 const IMAGE_BELOW: &str = "[see image below]";
 
+/// The URL characters of images a call's end row keeps: Python's
+/// `TOOL_EVENT_IMAGE_MAX_CHARS`.
+const ROW_IMAGE_MAX_CHARS: usize = 512 * 1024;
+
 /// What a tool's call answers with (RFC §21.4): Python's `ToolResult`,
 /// `str | list[AITextPart | AIImagePart]`. A text the model reads as it
 /// is; a JSON value it reads as its JSON, as Python dumps a mapping, a
@@ -129,6 +133,33 @@ impl ToolResult {
         }
     }
 
+    /// The result as the room's end row keeps it: each image kept while
+    /// the images kept so far, its own included, stay within 512 KiB of
+    /// URL, else a note naming its type and size, a later, smaller one
+    /// still kept. Python's `tool_event_payload` on a result of parts.
+    pub(crate) fn into_row_value(self) -> Value {
+        let Self::Parts(parts) = self else {
+            return self.into_value();
+        };
+        let mut used = 0;
+        let kept = parts
+            .into_iter()
+            .map(|part| match part {
+                ToolResultPart::Image(image) => {
+                    let size = image.url.chars().count();
+                    if used + size <= ROW_IMAGE_MAX_CHARS {
+                        used += size;
+                        return ToolResultPart::Image(image);
+                    }
+                    let note = row_note(image.mime_type.as_deref(), size);
+                    ToolResultPart::Text(AiTextPart::new(note))
+                }
+                ToolResultPart::Text(_) => part,
+            })
+            .collect();
+        Self::Parts(kept).into_value()
+    }
+
     /// The images among the result's parts, in order.
     pub(crate) fn images(&self) -> Vec<&AiImagePart> {
         match self {
@@ -219,6 +250,17 @@ fn as_part(item: &Value) -> Option<ToolResultPart> {
     }
 }
 
+/// The note an end row keeps in place of an image of `mime` and `size` URL
+/// characters: Python's `_note`, its size decoded, in KB.
+fn row_note(mime: Option<&str>, size: usize) -> String {
+    let label = match mime {
+        Some(mime) if !mime.is_empty() => format!("image {mime}"),
+        _ => "image".to_owned(),
+    };
+    let decoded_kb = (size * 3 / 4 / 1024).max(1);
+    format!("[{label}, {decoded_kb} KB, not kept in the event]")
+}
+
 /// `part` as Python's model dumps it.
 fn part_value(part: ToolResultPart) -> Value {
     let mut fields = Map::new();
@@ -278,6 +320,33 @@ mod tests {
         ] {
             assert!(matches!(read(&value), ToolResult::Text(_)), "{value}");
         }
+    }
+
+    fn sized(kb: usize) -> ToolResultPart {
+        let header = "data:image/png;base64,";
+        ToolResultPart::Image(AiImagePart {
+            url: format!("{header}{}", "A".repeat(kb * 1024 - header.len())),
+            mime_type: Some("image/png".to_owned()),
+        })
+    }
+
+    // Python: tests/test_tool_event_result.py::TestToolEventResult::test_images_are_kept_while_they_fit_and_noted_past_the_bound
+    // and test_a_result_under_the_bound_is_unchanged.
+    #[test]
+    fn a_row_keeps_images_while_they_fit_and_notes_the_rest() {
+        let page = ToolResultPart::Text(AiTextPart::new("page"));
+        let parts = vec![page.clone(), sized(300), sized(300), sized(100)];
+        let kept = ToolResult::Parts(parts.clone()).into_row_value();
+        let note = "[image image/png, 225 KB, not kept in the event]";
+        let expected = ToolResult::Parts(vec![
+            page.clone(),
+            parts[1].clone(),
+            ToolResultPart::Text(AiTextPart::new(note)),
+            parts[3].clone(),
+        ]);
+        assert_eq!(kept, expected.into_value());
+        let under = ToolResult::Parts(vec![page, sized(200)]);
+        assert_eq!(under.clone().into_row_value(), under.into_value());
     }
 
     // Python: tests/test_providers/test_anthropic.py::test_as_text_flattens_parts

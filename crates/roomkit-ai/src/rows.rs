@@ -200,7 +200,8 @@ fn start_row(call: &ToolCall) -> ToolCallContent {
 }
 
 /// A call's end row: the arguments it ran with, how it ended, what the
-/// model read of it, and, when it did not serve, the same as its error.
+/// model read of it, its images within the row's bound, and, when it did
+/// not serve, the same as its error.
 fn end_row(end: ToolEnd) -> ToolCallContent {
     let mut row = ToolCallContent::new(end.call.name, end.call.id);
     row.arguments = end.call.arguments;
@@ -213,7 +214,7 @@ fn end_row(end: ToolEnd) -> ToolCallContent {
     };
     row.outcome = Some(end.outcome);
     row.error = (!served).then(|| end.result.as_text());
-    row.result = end.result.into_value();
+    row.result = end.result.into_row_value();
     row.duration_ms = u64::try_from(end.duration.as_millis()).ok();
     row
 }
