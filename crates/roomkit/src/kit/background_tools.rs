@@ -89,7 +89,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// [`RoomKitError::Value`] for an unknown hand-back;
+    /// [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4); [`RoomKitError::Value`] for an unknown hand-back;
     /// [`RoomKitError::ChannelNotRegistered`] for an agent the kit does not
     /// hold; [`RoomKitError::Runtime`] for a tool already set up on the
     /// agent.
@@ -98,6 +99,7 @@ impl<S: ConversationStore> RoomKit<S> {
         agent: &ChannelId,
         options: SetupBackgroundOptions,
     ) -> Result<(), RoomKitError> {
+        self.inner.open()?;
         let SetupBackgroundOptions { worker, hand_back } = options;
         if !["relay", "post"].contains(&hand_back.as_str()) {
             return Err(RoomKitError::Value(format!(
@@ -128,11 +130,14 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// [`RoomKitError::ChannelNotRegistered`] for an agent the kit does not
-    /// hold; [`RoomKitError::Runtime`] for tools already set up on the agent;
+    /// [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4); [`RoomKitError::ChannelNotRegistered`] for an agent the
+    /// kit does not hold; [`RoomKitError::Runtime`] for tools already set up
+    /// on the agent;
     /// [`RoomKitError::Value`] for a name the owner serves the agent
     /// already, neither set up.
     pub fn setup_task_tools(&self, agent: &ChannelId) -> Result<(), RoomKitError> {
+        self.inner.open()?;
         self.registered_agent(agent)?;
         if self.inner.owner_tools.serves(agent, TASK_STATUS_TOOL) {
             return Err(already_set_up("setup_task_tools", agent));
@@ -205,6 +210,20 @@ impl<S: ConversationStore> RoomKit<S> {
             .get(agent)
             .cloned()
             .unwrap_or_default()
+    }
+}
+
+impl<S: ConversationStore> super::Inner<S> {
+    /// Drops every tool set up for `channel_id`, and how its background
+    /// tasks run: the channel was unregistered, and one registered again
+    /// under its id gets its own setup (Python's `unregister_channel`,
+    /// `_owner_tools.forget`).
+    pub(super) fn forget_owner_tools(&self, channel_id: &ChannelId) {
+        self.owner_tools.forget(channel_id);
+        self.background_setups
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(channel_id);
     }
 }
 
@@ -731,6 +750,39 @@ mod tests {
                 declared
             ),
             (true, Err(true), vec![json!(BACKGROUND_TOOL)])
+        );
+    }
+
+    // Python: tests/test_declared_strategies.py::test_an_agent_registered_again_gets_its_own_tools_only
+    #[tokio::test]
+    async fn an_agent_registered_again_gets_its_own_tools_only() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let speaker = channel("speaker");
+        kit.register_channel(Speaker).unwrap();
+        let task_tools = kit.setup_task_tools(&speaker);
+        kit.setup_background(&speaker, SetupBackgroundOptions::default())
+            .unwrap();
+        kit.unregister_channel(&speaker).unwrap();
+        let declared = |kit: &RoomKit| -> Vec<Value> {
+            let room = RoomId::new("r").unwrap();
+            let owned = kit.inner.owner_tools.declared(&speaker, &room);
+            owned
+                .into_iter()
+                .map(|owned| owned.tool["name"].clone())
+                .collect()
+        };
+        let left = declared(&kit);
+        kit.register_channel(Speaker).unwrap();
+        let again = kit.setup_background(&speaker, SetupBackgroundOptions::default());
+
+        assert_eq!(
+            (task_tools.is_ok(), left, again.is_ok(), declared(&kit)),
+            (
+                true,
+                Vec::<Value>::new(),
+                true,
+                vec![json!(BACKGROUND_TOOL)]
+            )
         );
     }
 

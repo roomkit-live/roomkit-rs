@@ -38,8 +38,13 @@ impl<S: ConversationStore> RoomKit<S> {
     /// organization's room than `organization_id`. Calls cancelling it at
     /// once cancel it once.
     ///
-    /// Returns `true` when the task was running and is now cancelled.
+    /// Returns `true` when the task was running and is now cancelled. Once
+    /// the kit's close started it returns `false` doing nothing: the close
+    /// ends every task its runner holds (RFC §12.10.4).
     pub async fn cancel_task(&self, task_id: &str, options: CancelTaskOptions) -> bool {
+        if self.inner.open().is_err() {
+            return false;
+        }
         if let Some(organization_id) = options.organization_id.as_deref()
             && !self.task_in_scope(task_id, organization_id).await
         {

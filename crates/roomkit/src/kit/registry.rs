@@ -87,6 +87,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let Some(unregistered) = unregistered else {
             return Ok(None);
         };
+        self.inner.forget_owner_tools(channel_id);
         drop(self.inner.emit(CoreEvent::channel_unregistered(
             unregistered.declaration.channel_id.clone(),
             unregistered.declaration.channel_type.clone(),

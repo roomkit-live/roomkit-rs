@@ -41,6 +41,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
+    /// [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4), before the arguments are read;
     /// [`RoomKitError::RoomNotFound`] for a room of another organization
     /// than `organization_id`, nothing started; [`RoomKitError::Value`] for
     /// an `agent_id` that is no intelligence channel attached to the room,
@@ -53,6 +55,7 @@ impl<S: ConversationStore> RoomKit<S> {
         task: impl Into<String>,
         options: StartTaskOptions,
     ) -> Result<DelegatedTask, RoomKitError> {
+        self.inner.open()?;
         let StartTaskOptions {
             hand_back,
             organization_id,

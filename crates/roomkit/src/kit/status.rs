@@ -191,7 +191,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::RoomNotFound`] for a room the organization
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4); [`RoomKitError::RoomNotFound`] for a room the organization
     /// `options` names does not reach, nothing stored or fired; the store's
     /// error when it fails.
     pub async fn submit_feedback(
@@ -200,6 +201,7 @@ impl<S: ConversationStore> RoomKit<S> {
         rating: f64,
         options: SubmitFeedbackOptions,
     ) -> Result<(), RoomKitError> {
+        self.inner.open()?;
         self.reached(room_id, options.organization_id.as_deref())
             .await?;
         let channel_id = options.channel_id.clone();

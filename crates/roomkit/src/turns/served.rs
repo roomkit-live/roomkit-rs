@@ -143,6 +143,20 @@ impl<S> OwnerToolStore<S> {
         Ok(())
     }
 
+    /// Drops every tool set up for `channel_id`, in every room and in one:
+    /// the channel left the kit, and one registered again under its id
+    /// gets its own setup (Python's `OwnerToolStore.forget`).
+    pub(crate) fn forget(&self, channel_id: &ChannelId) {
+        self.by_channel
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(channel_id);
+        self.in_rooms
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(channel, _), _| channel != channel_id);
+    }
+
     /// Stops serving `channel_id` the tool `name` set up for `room_id`.
     pub(crate) fn unregister_in_room(&self, channel_id: &ChannelId, room_id: &RoomId, name: &str) {
         let mut in_rooms = self

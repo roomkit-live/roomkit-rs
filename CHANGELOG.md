@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `submit_feedback`, `start_task`, `setup_background` and
+  `setup_task_tools` are refused `KitClosed` once the kit's close started,
+  before their arguments are read, and `cancel_task` returns `false`
+  doing nothing, as Python's (RFC §12.10.4, RMK-1187).
+- A channel unregistered loses the tools the kit set up for it and its
+  background setup, as Python's: registered again under its id, it is set
+  up afresh (RMK-1187).
 - `ON_ERROR`'s payload is a message, as Python's (RFC §9.2, RMK-1183):
   its source the failed channel with the default direction, `inbound`, in
   the trigger's thread (`parent_event_id`), and a failed stream's carries

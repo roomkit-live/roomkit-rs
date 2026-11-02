@@ -23,7 +23,9 @@
 //! - `turn_doors`: a turn the close cuts, as its caller and the log read
 //!   it, and a tool closing the kit from its own turn;
 //! - `stuck`: what waits behind the work a close is called from is cut at
-//!   once, and a spared delivery's turns are cut.
+//!   once, and a spared delivery's turns are cut;
+//! - `tasks`: the task, delegation and feedback calls, refused but for
+//!   their reads and `cancel_task`.
 //!
 //! The kit's own work here is what roomkit-rs has of Python's doors: a
 //! SYNC hook's body, an ASYNC hook a delivery fires, a transport's
@@ -46,6 +48,7 @@ mod shutdown;
 mod store;
 mod stuck;
 mod support;
+mod tasks;
 mod turn_doors;
 #[path = "../support/warnings.rs"]
 mod warnings;
