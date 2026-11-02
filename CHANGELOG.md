@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `AiChannelOptions::tool_timeouts`, Python's (RFC §21.6, RMK-1166): a
+  bound per tool name, above `tool_timeout` and above a tool's own bound
+  (a person's answer), `None` leaving that tool unbounded; a bound of zero
+  is refused (`AiError::ToolTimeoutOf`).
 - `roomkit_ai::current_tool_actor_id`, Python's (RFC §10.6.5, RMK-1176):
   who woke the turn a tool's call runs in; a human-input request names
   them as its `actor_id`.
