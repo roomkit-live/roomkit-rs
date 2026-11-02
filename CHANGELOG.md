@@ -17,6 +17,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `MockKnowledgeSourceOptions`: what each was asked reads through
   `retrieve_calls()`, `ingest_calls()`, `clear_calls()`, `search_calls()`,
   `index_calls()` and `closed()`, Python's attributes.
+- A transport shared into a delegated room is told the agent's answers,
+  as Python's (RFC §23.3 step 5, RMK-1158): they are committed as a room's
+  responses, through `BEFORE_BROADCAST`, the agent's right to write and
+  the room's lane, a stream read by the room's reader, never the task nor
+  a re-prompt; the task's output is the answer the room kept
+  (`roomkit_core::ops::Inbound::answering`, `TurnResponses`).
+- A delegated turn that fails fires `ON_ERROR` in its child room, as
+  Python's (RFC §23.3 step 6): `generation` for a turn that raised or
+  returned an error, `streaming` for a stream that failed.
 - `AiChannelOptions::tool_timeouts`, Python's (RFC §21.6, RMK-1166): a
   bound per tool name, above `tool_timeout` and above a tool's own bound
   (a person's answer), `None` leaving that tool unbounded; a bound of zero
