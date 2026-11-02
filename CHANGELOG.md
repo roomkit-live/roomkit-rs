@@ -14,10 +14,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lane or under its lock, nothing cancelled.
 - Identity verification's release and a delivery key's reach match
   Python's (RFC §10.1, §11.7.6, RMK-1195): a message a SYNC hook sends
-  into its room is located in the room's organization and, held, stays
-  named by its key until its release; a release made from a SYNC hook is
-  answered once that hook's section is over, so a hook that then closes
-  the room has no agent answer it; a release whose room is deleted while
+  into its room is located in the room's organization before it is
+  committed and, held, stays named by its key until its release; a
+  release's answer cancelled before it is planned asks no agent; a
+  release whose room is deleted while
   its answer waits in the lane emits `room_refused_event` with no status
   (`FrameworkEvent::RoomRefusedEvent::status` is now an `Option`), and a
   failed read of the room there runs no agent.
