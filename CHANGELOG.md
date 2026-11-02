@@ -48,6 +48,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A quoted text cut short names the blocks it holds as Python's
   `named_blocks` (RFC §6.4, RMK-1147): an opening tag as written, a closing
   tag as a model reads one, the first end bracket after each.
+- Identity verification's lifecycle, Python's (RFC §11.7.1, §11.7.2,
+  §11.7.5, RMK-1171): `RoomKit::request_verification`, which returns the
+  request and its secret once, `complete_verification`,
+  `record_failed_attempt`, `revoke_verification`, `verification_of` and
+  `check_verifications`, each identity's transitions serialized;
+  `VerificationPolicy` and `RoomKitOptions::verification_policy`;
+  `RoomKitError::VerificationRefused`; the `verification_requested`,
+  `verification_completed` and `verification_ended` framework events and
+  `HookTrigger::OnVerificationCompleted` and `OnVerificationEnded`; the
+  timers that end a verification and an unanswered request at their
+  expiry, resumed by `RoomKit::start` and stopped by the close. A secret is
+  hashed as Python hashes it (scrypt, `N = 2^15`, salted with the request's
+  id, `scrypt$<hex>`), so one store serves both: new dependencies `scrypt`
+  and `getrandom`.
 - Human input, Python's (RFC §9.3, §10.6.5, RMK-1146):
   `roomkit::human_input`'s `HumanInputHandler`, `PendingInput`,
   `PendingInputEvent` and `PendingInputStatus`; `roomkit_ai::
