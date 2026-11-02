@@ -15,6 +15,16 @@ pub(super) type Buffered = (usize, ChannelBinding, Vec<RoomEvent>);
 /// A streamed turn: its `OnEvent` effect, its slot, and its responder.
 pub(super) type Streamed = (EffectId, usize, ChannelBinding);
 
+/// A turn's failure, to report once (RFC §9.2): its responder, its error,
+/// its category, and its stream's `correlation_id` for a stream's.
+#[derive(Debug)]
+pub(super) struct Failure {
+    pub(super) responder: ChannelBinding,
+    pub(super) error: ErrorRecord,
+    pub(super) category: &'static str,
+    pub(super) correlation_id: Option<String>,
+}
+
 /// What the turns returned once they all answered: their side effects,
 /// and their answers, buffered or streamed.
 #[derive(Default)]
@@ -25,7 +35,7 @@ pub(super) struct Collected {
     pub(super) buffered: Vec<Buffered>,
     pub(super) streamed: Vec<Streamed>,
     /// The turns that failed, to report under `generation`.
-    pub(super) failures: Vec<(ChannelBinding, ErrorRecord, &'static str)>,
+    pub(super) failures: Vec<Failure>,
 }
 
 impl Collected {
@@ -104,7 +114,12 @@ impl Collected {
 
     /// Keeps `binding`'s turn failure, to report under `generation`.
     fn failed(&mut self, binding: &ChannelBinding, error: ErrorRecord) {
-        self.failures.push((binding.clone(), error, "generation"));
+        self.failures.push(Failure {
+            responder: binding.clone(),
+            error,
+            category: "generation",
+            correlation_id: None,
+        });
     }
 }
 

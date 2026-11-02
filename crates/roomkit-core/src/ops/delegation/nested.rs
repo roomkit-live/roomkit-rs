@@ -186,6 +186,7 @@ mod tests {
             responder: agent(),
             answers: Box::new(task()),
             target: None,
+            correlation_id: "cor_1".to_owned(),
         }
         .into()
     }

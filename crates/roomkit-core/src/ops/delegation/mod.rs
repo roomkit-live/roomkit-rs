@@ -18,7 +18,7 @@ mod room_path;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use self::collected::{Buffered, Collected, Streamed};
+use self::collected::{Buffered, Collected, Failure, Streamed};
 use self::nested::Nested;
 use super::events::{CommitRecord, MutationError};
 use super::inbound::{Inbound, InboundError, error_event};
@@ -95,7 +95,9 @@ pub struct DelegatedTurn {
     committing: Option<(Nested<CommitRecord>, usize, Option<EntryId>)>,
     /// The streams to read, by the turn's effect and the answer's slot.
     streams: VecDeque<(EffectId, usize)>,
-    reading: Option<(EffectId, usize)>,
+    /// The stream being read: its read, the answer's slot, and the
+    /// response's correlation id.
+    reading: Option<(EffectId, usize, String)>,
     /// The side effects' writes outstanding.
     persisting: Vec<EffectId>,
     /// The context the turns were asked with, which `ON_TASK_CREATED`'s
@@ -110,7 +112,7 @@ pub struct DelegatedTurn {
     agent_id: Option<ChannelId>,
     /// The turns' failures not reported yet, each with its category: a
     /// turn's own (`generation`), a trace stream's (`streaming`).
-    failures: Vec<(ChannelBinding, ErrorRecord, &'static str)>,
+    failures: Vec<Failure>,
     /// The answers committed as a room's, in a child room a transport is
     /// shared into.
     room_path: Option<Nested<Inbound>>,
@@ -391,8 +393,9 @@ impl DelegatedTurn {
         }
     }
 
-    /// Starts reading the next stream once the buffered rows are stored.
-    fn advance_streams(&mut self, effects: &mut Vec<Effect>) {
+    /// Starts reading the next stream once the buffered rows are stored,
+    /// under a correlation id of its own (RFC §9.2).
+    fn advance_streams(&mut self, environment: &dyn Environment, effects: &mut Vec<Effect>) {
         if self.reading.is_some() || self.committing.is_some() || !self.rows.is_empty() {
             return;
         }
@@ -405,13 +408,15 @@ impl DelegatedTurn {
         let Some(responder) = self.binding_of(&answer.channel_id) else {
             return;
         };
+        let correlation_id = environment.new_event_id().to_string();
         let read = self.issue(ChannelRequest::ReadStream {
             turn,
             responder,
             answers: Box::new(message),
             target: None,
+            correlation_id: correlation_id.clone(),
         });
-        self.reading = Some((read.id, slot));
+        self.reading = Some((read.id, slot, correlation_id));
         effects.push(read);
     }
 
@@ -471,8 +476,14 @@ impl DelegatedTurn {
         let (Some(description), Some(context)) = (&self.committed, &self.asked_context) else {
             return;
         };
-        for (responder, error, category) in failures {
-            let payload = error_event(
+        for failure in failures {
+            let Failure {
+                responder,
+                error,
+                category,
+                correlation_id,
+            } = failure;
+            let mut payload = error_event(
                 environment.new_event_id(),
                 &responder,
                 description,
@@ -481,6 +492,7 @@ impl DelegatedTurn {
                 category,
                 environment.now(),
             );
+            payload.correlation_id = correlation_id;
             let hooks = self.config.hooks.observers(HookTrigger::OnError, &payload);
             if hooks.is_empty() {
                 continue;
@@ -531,7 +543,7 @@ impl Operation for DelegatedTurn {
             self.collect(&mut effects);
         }
         self.advance_rows(environment, &mut effects);
-        self.advance_streams(&mut effects);
+        self.advance_streams(environment, &mut effects);
         self.advance_room_path(environment, &mut effects);
         self.report_failures(environment);
         self.tasks_created(environment);
@@ -584,8 +596,7 @@ impl Operation for DelegatedTurn {
             *answered = Some(outcome);
             return Ok(());
         }
-        if let Some((_, slot)) = self.reading.filter(|(read, _)| *read == id) {
-            self.reading = None;
+        if let Some((_, slot, correlation_id)) = self.reading.take_if(|(read, ..)| *read == id) {
             let error = match outcome {
                 Outcome::Channel(ChannelOutcome::Output(output)) => output.error,
                 Outcome::Failed(error) => Some(error),
@@ -594,7 +605,12 @@ impl Operation for DelegatedTurn {
             if let (Some(failed), Some(answer)) = (&error, self.answers.get(slot))
                 && let Some(responder) = self.binding_of(&answer.channel_id)
             {
-                self.failures.push((responder, failed.clone(), "streaming"));
+                self.failures.push(Failure {
+                    responder,
+                    error: failed.clone(),
+                    category: "streaming",
+                    correlation_id: Some(correlation_id),
+                });
             }
             if let Some(answer) = self.answers.get_mut(slot)
                 && answer.error.is_none()
@@ -635,7 +651,12 @@ impl Operation for DelegatedTurn {
             },
             None => entry,
         };
-        let Some((_, slot)) = self.reading.filter(|(read, _)| *read == origin) else {
+        let Some(slot) = self
+            .reading
+            .as_ref()
+            .filter(|(read, ..)| *read == origin)
+            .map(|(_, slot, _)| *slot)
+        else {
             return Err(Box::new(entry));
         };
         match entry {

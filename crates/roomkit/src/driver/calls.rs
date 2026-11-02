@@ -15,7 +15,7 @@ use roomkit_core::model::{
 use roomkit_core::ops::{
     AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId,
     FrameworkEvent as CoreEvent, HookAnswer, HookRequest, IdentityAnswer, IdentityRequest,
-    KIT_CLOSED, Notice, Outcome, RecentEvents, StoreOutcome, StoreRequest, StreamTarget,
+    KIT_CLOSED, Notice, Outcome, RecentEvents, StoreOutcome, StoreRequest,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookTrigger};
@@ -468,16 +468,15 @@ pub(super) async fn channel<S: ConversationStore>(
             responder,
             answers,
             target,
+            correlation_id,
         } => {
-            Box::pin(read_stream(
-                inner,
-                shared,
-                (effect, turn),
+            let read = stream::StreamRead {
                 responder,
-                *answers,
+                answers: *answers,
                 target,
-            ))
-            .await
+                correlation_id,
+            };
+            Box::pin(read_stream(inner, shared, (effect, turn), read)).await
         }
     }
 }
@@ -489,9 +488,7 @@ async fn read_stream<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     shared: &RunShared,
     (effect, turn): (EffectId, EffectId),
-    responder: ChannelBinding,
-    answers: RoomEvent,
-    target: Option<StreamTarget>,
+    read: stream::StreamRead,
 ) -> Outcome {
     let mut stops = Stops {
         read: shared.stop_signal(effect),
@@ -507,7 +504,7 @@ async fn read_stream<S: ConversationStore>(
     // The kit's close waits, within its grace, for the read of a turn it
     // cut to store what the turn said.
     let _reading = kept.as_ref().map(|_| inner.turns.reading());
-    stream::read(inner, kept, stops, responder, answers, target).await
+    stream::read(inner, kept, stops, read).await
 }
 
 /// The turn of `binding`'s intelligence channel on `event`, for the call

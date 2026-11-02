@@ -405,11 +405,14 @@ fn edit_with(original: &EditContent, new_content: Box<EventContent>) -> EventCon
 }
 
 /// The payload of `ON_ERROR` for a turn of `channel` that failed on
-/// `trigger` (RFC §9.2): never stored, one hop deeper than the trigger, its
-/// text the error's message, and visible where the trigger's answers may
-/// go, `within`; to all when its message restricted nothing (gap G-073).
-/// Its `error_category` is `generation`, `streaming` for a response
-/// stream's failure, as the reference implementation writes them.
+/// `trigger` (RFC §9.2): never stored, a message from the channel, one hop
+/// deeper than the trigger, in its thread, its text the error's message,
+/// and visible where the trigger's answers may go, `within`; to all when
+/// its message restricted nothing (gap G-073). Its `error_category` is
+/// `generation`, `streaming` for a response stream's failure, whose reader
+/// sets the stream's `correlation_id`, as the reference implementation's
+/// `_fire_error_hook` writes them: a message whose source has the model's
+/// default direction.
 pub(crate) fn error_event(
     id: EventId,
     channel: &ChannelBinding,
@@ -419,20 +422,18 @@ pub(crate) fn error_event(
     category: &str,
     now: Timestamp,
 ) -> RoomEvent {
-    let source = EventSource {
-        direction: EventDirection::Outbound,
-        ..EventSource::new(channel.channel_id.clone(), channel.channel_type.clone())
-    };
+    let source = EventSource::new(channel.channel_id.clone(), channel.channel_type.clone());
     let mut event = RoomEvent::at(
         id,
         trigger.room_id.clone(),
-        EventType::System,
+        EventType::Message,
         source,
         TextContent::new(error.message.clone()),
         now,
     );
     event.chain_depth = chain_depth::response_depth(trigger);
     event.responds_to = Some(trigger.id.clone());
+    event.parent_event_id.clone_from(&trigger.parent_event_id);
     if let Some(within) = within {
         event.visibility = within.clone();
     }

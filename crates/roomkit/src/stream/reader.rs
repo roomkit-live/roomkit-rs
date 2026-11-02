@@ -101,18 +101,36 @@ enum Over {
     Failed(ErrorRecord),
 }
 
-/// Reads `kept`, the stream of `responder`'s turn on `answers`, to its end
-/// or until `target`, its streaming channel, stops reading it; the driver
-/// reads it with no target. Answers the operation's `ReadStream`: the
-/// target's output, its `error` the response's failure or the target's.
+/// What the operation's `ReadStream` asks of a stream's read.
+#[derive(Debug)]
+pub(crate) struct StreamRead {
+    /// The intelligence channel whose response it is.
+    pub(crate) responder: ChannelBinding,
+    /// The event the response answers.
+    pub(crate) answers: RoomEvent,
+    /// The channel that reads the stream as it is written, if one does.
+    pub(crate) target: Option<StreamTarget>,
+    /// The response's own id, which each of its rows carries.
+    pub(crate) correlation_id: String,
+}
+
+/// Reads `kept`, the stream of the read's responder's turn on its event,
+/// to its end or until its target, its streaming channel, stops reading
+/// it; the driver reads it with no target. Answers the operation's
+/// `ReadStream`: the target's output, its `error` the response's failure
+/// or the target's.
 pub(crate) async fn read<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     kept: Option<KeptStream>,
     stops: Stops,
-    responder: ChannelBinding,
-    answers: RoomEvent,
-    target: Option<StreamTarget>,
+    read: StreamRead,
 ) -> Outcome {
+    let StreamRead {
+        responder,
+        answers,
+        target,
+        correlation_id,
+    } = read;
     let Some(kept) = kept else {
         let error = ErrorRecord::new("ChannelError", "the turn's stream is gone");
         return Outcome::Failed(error);
@@ -128,7 +146,7 @@ pub(crate) async fn read<S: ConversationStore>(
     };
     let mut producer = Producer {
         room_id: answers.room_id.clone(),
-        segments: Segments::new(source, answers),
+        segments: Segments::new(source, answers, correlation_id),
         stream: Some(kept.turn),
         cut: None,
         unanswered: None,

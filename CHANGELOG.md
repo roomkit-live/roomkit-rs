@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `ON_ERROR`'s payload is a message, as Python's (RFC §9.2, RMK-1183):
+  its source the failed channel with the default direction, `inbound`, in
+  the trigger's thread (`parent_event_id`), and a failed stream's carries
+  that stream's `correlation_id`, the one its rows carry, now given by the
+  operation (`ChannelRequest::ReadStream::correlation_id`). It was a
+  `system` event, `outbound`, with neither.
 - In a delegated room a transport is shared into, the stream an agent
   answers another agent's answer with is read by the room's reader, as
   Python's (RFC §23.3 step 5, RMK-1185): it was lost, the driver told a

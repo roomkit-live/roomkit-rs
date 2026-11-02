@@ -9,8 +9,10 @@
 //! marked so; a call it opened and did not end gets its end, `failed`.
 //!
 //! Every row of the response carries the turn's own `correlation_id`, a
-//! fresh one per response, as the Python implementation stamps a streamed
-//! response (`uuid4().hex`), whatever the event it answers carries: what
+//! fresh one per response, which the operation gives its read and its
+//! failure's `ON_ERROR` payload carries too, as the Python implementation's
+//! reader stamps a streamed response (`uuid4().hex`), whatever the event it
+//! answers carries: what
 //! the response's rows have in common, which a later turn's history pairs
 //! a call's start and end by (RFC §6.4).
 
@@ -19,7 +21,6 @@ use roomkit_core::model::{
     ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use serde_json::Value;
-use uuid::Uuid;
 
 /// The record's key that says how the turn ended (RFC §6.4).
 const LOOP_END_REASON: &str = "loop_end_reason";
@@ -59,12 +60,13 @@ pub(super) struct Segments {
 }
 
 impl Segments {
-    /// The rows of `source`'s response to `answers`.
-    pub(super) fn new(source: EventSource, answers: RoomEvent) -> Self {
+    /// The rows of `source`'s response to `answers`, each carrying
+    /// `correlation_id`, the one the operation gave the response.
+    pub(super) fn new(source: EventSource, answers: RoomEvent, correlation_id: String) -> Self {
         Self {
             source,
             answers,
-            correlation_id: Uuid::new_v4().simple().to_string(),
+            correlation_id,
             text: String::new(),
             record: None,
             owed: false,
@@ -295,7 +297,11 @@ mod tests {
                 TextContent::new("Hi"),
             )
         };
-        Segments::new(source, answers)
+        Segments::new(
+            source,
+            answers,
+            "0123456789abcdef0123456789abcdef".to_owned(),
+        )
     }
 
     fn record(reason: &str) -> Metadata {

@@ -377,6 +377,10 @@ pub enum ChannelRequest {
         /// The channel that reads the stream as it is written, if one does:
         /// one per response.
         target: Option<StreamTarget>,
+        /// The response's own id, which each of its rows carries, as the
+        /// payload of `ON_ERROR` for its failure does (RFC §9.2): the
+        /// Python implementation's `correlation_id`, one per read.
+        correlation_id: String,
     },
     /// Ask which of `channel_ids`, transports that declare they stream,
     /// take a streamed response in `room_id` (RFC §6.1

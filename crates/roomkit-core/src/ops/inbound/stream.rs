@@ -58,6 +58,9 @@ pub(super) struct StreamJob {
     /// The room's bindings when its turn was asked, which a record stored
     /// in its place is scoped with.
     pub(super) bindings: Vec<ChannelBinding>,
+    /// The response's own id, which each of its rows and its failure's
+    /// `ON_ERROR` payload carry, once its read is asked (RFC §9.2).
+    pub(super) correlation_id: Option<String>,
 }
 
 impl StreamJob {
@@ -79,6 +82,7 @@ impl StreamJob {
             lineage,
             chained: kind == SetKind::Response,
             bindings,
+            correlation_id: None,
         }
     }
 
@@ -279,11 +283,15 @@ impl StreamRead {
         self.target = target
             .as_ref()
             .map(|target| target.binding.channel_id.clone());
+        // One id per read, from the environment as every id the core gives.
+        let correlation_id = cx.env.new_event_id().to_string();
+        self.job.correlation_id = Some(correlation_id.clone());
         let request = ChannelRequest::ReadStream {
             turn: self.job.turn,
             responder: self.job.responder.clone(),
             answers: Box::new(self.job.answers.clone()),
             target,
+            correlation_id,
         };
         self.state = ReadStage::Reading(cx.io.issue_drawing_on(request, budget));
         self.context = Some(context);
@@ -457,7 +465,7 @@ fn delivers_to(plan: &DeliveryPlan, channel_id: &ChannelId) -> bool {
 
 /// Fires `ON_ERROR` for the failure of `job`'s stream, `error` (RFC §9.2,
 /// §12.2 step 13s), its payload one hop deeper than the event the stream
-/// answers, as a failed turn's.
+/// answers, as a failed turn's, carrying the stream's `correlation_id`.
 pub(super) fn report_failure(
     cx: &mut Cx<'_>,
     job: &StreamJob,
@@ -467,7 +475,7 @@ pub(super) fn report_failure(
     let id = cx.env.new_event_id();
     let now = cx.env.now();
     let within = job.answers_within.as_ref();
-    let payload = stamp::error_event(
+    let mut payload = stamp::error_event(
         id,
         &job.responder,
         &job.answers,
@@ -476,6 +484,7 @@ pub(super) fn report_failure(
         "streaming",
         now,
     );
+    payload.correlation_id.clone_from(&job.correlation_id);
     let seen = permissions::context_for(&job.responder, context);
     cx.fire_observers(HookTrigger::OnError, &payload, &seen);
 }
