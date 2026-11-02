@@ -13,10 +13,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cut, `caller_cancelled` by default, and returns once the cut turns are
   over; it also reaches a call the room's work adopted. Unlike the old
   pair, it gives up after its `timeout` (5 s by default) with
-  `RoomKitError::Timeout`, and from the room's own work (a SYNC hook
-  under the lock, a turn or a delivery in the room) it fails with
+  `RoomKitError::Timeout`, the cut standing and `wait` joining it; and
+  from the room's own work (a SYNC hook under the lock, a turn or a
+  delivery in the room), its delivery not done, it fails with
   `RoomKitError::Runtime` and cancels nothing, as Python's: cancel there
-  by the message's key, `cancel_delivery`.
+  by the message's `delivery_key`, `cancel_delivery`.
 - A message the room's work adopts in its admission order (an off-lock
   hook's or a parse's `process_inbound` into its room), named by its
   delivery key, is named as the run that adopted it settles it, under the
@@ -29,7 +30,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   says (§11.7.6, the maintainer's choice, RMK-1200): a
   hook that then closes the room has no agent answer the released message
   (`room_refused_event`, operation `regenerate`), where the agent answered
-  it while the section still ran.
+  it while the section still ran. Python's lane runs it at the first await
+  that yields, the lock still held; whether Python aligns is RMK-1243.
 - A tool answers a text and its images, as Python's `ToolResult` (RFC
   §6.4, §21.4, RMK-1218): `ToolResult::Parts(vec![ToolResultPart::Text(..),
   ToolResultPart::Image(..)])`, or a JSON list of part-shaped mappings. A
