@@ -64,11 +64,7 @@ pub(crate) async fn new_kit(configure: impl FnOnce(RoomKitOptions) -> RoomKitOpt
 
 /// Scenario id → the rule this implementation breaks (roomkit-specs
 /// `conformance/README.md`, "Known failures").
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[(
-    "orchestration/an-install-sends-into-the-room-it-holds",
-    "§19.7, §13.5: an install's send into its room, under the room's lock, is refused \
-     ReentrantCall where it is stored (RMK-1252)",
-)];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.
