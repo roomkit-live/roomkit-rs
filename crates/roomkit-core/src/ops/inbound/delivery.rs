@@ -447,8 +447,10 @@ impl DeliverySet {
 
     /// The room of a rerun's set, read once its turn came: a status that
     /// refuses new events, or a room gone, refuses it before any agent runs,
-    /// `room_refused_event` naming the `regenerate` operation; a read that
-    /// failed is logged, and the agents run as planned.
+    /// `room_refused_event` naming the `regenerate` operation, with no
+    /// status for a room gone; a read that failed is recorded as the set's
+    /// error, and no agent runs, as Python's lane records a plan that
+    /// raised (`_refuse_closed_rerun`, `_execute`).
     fn on_checked(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<SetOutcome> {
         self.place = Place::Turn;
         let status = match outcome.into_context() {
@@ -459,17 +461,16 @@ impl DeliverySet {
                     room_id = %self.event.room_id,
                     error_type = %error.error_type,
                     message = %error.message,
-                    "reading the room of a rerun once its turn came failed; its agents run as planned"
+                    "reading the room of a rerun once its turn came failed; no agent runs"
                 );
-                return self.deliver(cx);
+                self.outcome.error.get_or_insert(error);
+                return self.progress(cx);
             }
         };
         if status.is_some_and(crate::model::RoomStatus::accepts_events) {
             return self.deliver(cx);
         }
-        if let Some(status) = status {
-            report::room_refused_as(cx, &self.event, RefusedOperation::Regenerate, status);
-        }
+        report::room_refused_as(cx, &self.event, RefusedOperation::Regenerate, status);
         self.outcome.refused = true;
         self.progress(cx)
     }

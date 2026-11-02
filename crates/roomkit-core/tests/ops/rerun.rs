@@ -81,6 +81,30 @@ fn a_rerun_whose_room_closed_while_it_waited_runs_no_agent() {
     );
 }
 
+// Python: core/lanes.py::_execute, core/mixins/lane_execution.py::
+// _refuse_closed_rerun (RMK-1195): the room's read failing when the lane
+// takes the regeneration, the failure is recorded on its cascade, the
+// call's error, and no agent runs.
+#[test]
+fn a_rerun_whose_room_read_fails_at_its_turn_runs_no_agent() {
+    let mut sim = room();
+    sim.failing_effect = Some("unlocked load_context room_1");
+    let operation = rerun(&sim);
+
+    let result = sim.run(operation).unwrap();
+
+    assert_eq!(
+        (
+            result.blocked,
+            result.error.as_ref().map(|error| error.error_type.as_str()),
+            sim.traced("on_event"),
+            sim.timeline.len(),
+            regenerating(&sim).len(),
+        ),
+        (false, Some("StoreUnavailable"), Vec::<&str>::new(), 1, 0)
+    );
+}
+
 // The same rerun, its room still open when the lane takes it: the agent
 // is handed the stored message, and its answer is committed and delivered.
 #[test]

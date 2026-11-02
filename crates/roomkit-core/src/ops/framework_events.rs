@@ -77,8 +77,9 @@ pub enum FrameworkEvent {
         room_id: RoomId,
         /// The refused event's id, which names nothing in the store.
         event_id: EventId,
-        /// The status that refused it.
-        status: RoomStatus,
+        /// The status that refused it; none for a room gone, which refuses
+        /// every event (RFC §5.1).
+        status: Option<RoomStatus>,
         /// The path that met the gate.
         operation: RefusedOperation,
         /// The refused event's type.
@@ -349,14 +350,14 @@ impl FrameworkEvent {
     pub fn room_refused_event(
         room_id: RoomId,
         event_id: EventId,
-        status: RoomStatus,
+        status: impl Into<Option<RoomStatus>>,
         operation: RefusedOperation,
         event_type: EventType,
     ) -> Self {
         Self::RoomRefusedEvent {
             room_id,
             event_id,
-            status,
+            status: status.into(),
             operation,
             event_type,
         }

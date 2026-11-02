@@ -199,19 +199,19 @@ pub(super) fn room_refused(
 }
 
 /// Reports `event` refused by its room's `status`, met on `operation`'s
-/// way (RFC §8.2 `room_refused_event`).
+/// way (RFC §8.2 `room_refused_event`); no status for a room gone.
 pub(super) fn room_refused_as(
     cx: &mut Cx<'_>,
     event: &RoomEvent,
     operation: RefusedOperation,
-    status: RoomStatus,
+    status: impl Into<Option<RoomStatus>>,
 ) {
     notify(
         cx,
         FrameworkEvent::RoomRefusedEvent {
             room_id: event.room_id.clone(),
             event_id: event.id.clone(),
-            status,
+            status: status.into(),
             operation,
             event_type: event.r#type,
         },
