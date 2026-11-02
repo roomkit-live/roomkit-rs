@@ -48,6 +48,7 @@
 //! core's.
 
 mod channel;
+mod classed;
 mod context;
 mod cursors;
 pub mod delivery;
@@ -143,6 +144,10 @@ pub use roomkit_core::rules::tool_intent;
 pub use roomkit_core::rules::instructions::turn_context;
 
 pub use self::channel::{Channel, ChannelDeclaration, ChannelError, default_inbound_event};
+// Outside the public API (G-097, RMK-1208): the agent's crate names its
+// provider errors' Python class with it, which the kit cannot see.
+#[doc(hidden)]
+pub use self::classed::ClassedError;
 pub use self::context::keep_context;
 pub use self::delivery::backend::{
     DeliveryBackend, DeliveryBackendError, DequeueOptions, GetDeadLetterItemsOptions, NackOptions,

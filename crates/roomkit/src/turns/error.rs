@@ -11,6 +11,7 @@ use thiserror::Error;
 
 use super::pipe::LinkFailure;
 use super::wire::WireError;
+use crate::classed::ClassedError;
 use crate::error::RoomKitError;
 
 /// At most this many causes cross with an error.
@@ -129,7 +130,8 @@ pub(crate) struct RemoteError(pub(crate) WireError);
 
 /// The core record of `error`, a channel's or one that crossed: one that
 /// crossed keeps its kind, a link's failure is recorded under
-/// [`TURN_LINK_ERROR`], any other is a channel's.
+/// [`TURN_LINK_ERROR`], any other is a channel's, under the class a
+/// [`ClassedError`] names.
 pub(crate) fn record_of(error: &(dyn Error + Send + Sync + 'static)) -> ErrorRecord {
     if let Some(turn) = error.downcast_ref::<TurnError>() {
         return turn.to_record();
@@ -137,12 +139,18 @@ pub(crate) fn record_of(error: &(dyn Error + Send + Sync + 'static)) -> ErrorRec
     if let Some(RemoteError(crossed)) = error.downcast_ref::<RemoteError>() {
         return to_record(crossed);
     }
-    ErrorRecord::new(CHANNEL_ERROR, error.to_string())
+    let kind = error
+        .downcast_ref::<ClassedError>()
+        .map_or(CHANNEL_ERROR, ClassedError::class);
+    ErrorRecord::new(kind, error.to_string())
 }
 
 /// `error`, a channel's, as it crosses, its causes after it.
 pub(crate) fn channel_error(error: &(dyn Error + 'static)) -> WireError {
-    let mut record = one(CHANNEL_ERROR, error.to_string());
+    let kind = error
+        .downcast_ref::<ClassedError>()
+        .map_or(CHANNEL_ERROR, ClassedError::class);
+    let mut record = one(kind, error.to_string());
     let mut cause = error.source();
     while let Some(next) = cause {
         if record.causes.len() >= CAUSES_KEPT {

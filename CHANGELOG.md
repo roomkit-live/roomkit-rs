@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A channel's error that names its Python class (the hidden
+  `ClassedError`, which roomkit-ai's provider errors are to use) keeps
+  that class wherever the kit records it, as Python keeps the exception's
+  type (RFC §23.3 step 6, RMK-1208): a failed task's `exception`, a turn's
+  error crossing the turn backend and a delivery's failure read
+  `roomkit.providers.ai.base:ProviderError`, not `ChannelError`.
 - A turn's host and its link quote the names their refusals give as
   Python's `!r` quotes them (RMK-1201): `A turn's host acts for its room
   'r1', not for 'r2'`, `No room 'r'`, `No verb 'x' is served by the room

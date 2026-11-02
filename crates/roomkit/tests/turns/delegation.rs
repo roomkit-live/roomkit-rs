@@ -646,3 +646,97 @@ async fn a_stream_s_end_fails_its_task_beside_what_its_output_said() {
         kit.close().await.unwrap();
     }
 }
+
+/// An agent `worker` whose streamed turn says `Looking.`, then fails with a
+/// provider's refusal raised as Python's `ProviderError`.
+struct RefusedMidStream;
+
+impl Channel for RefusedMidStream {
+    fn channel_id(&self) -> ChannelId {
+        channel("worker")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Err("an agent is sent no message".into()))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        if event.source.channel_id == self.channel_id() {
+            return ready(Ok(ChannelOutput::empty()));
+        }
+        let refusal = std::io::Error::other("upstream 503");
+        let raised: ChannelError = Box::new(roomkit::ClassedError::new(
+            "roomkit.providers.ai.base:ProviderError",
+            refusal,
+        ));
+        let items = Items(VecDeque::from([
+            Ok(ResponseItem::Text("Looking.".to_owned())),
+            Err(raised),
+        ]));
+        let output = current_turn_host()
+            .unwrap()
+            .respond_with_stream(Box::pin(items));
+        ready(Ok(output))
+    }
+}
+
+// Python: tests/tasks/test_task_turn_record.py, a failed task keeps the
+// error its worker's turn raised (tasks/models.py _as_raised), its class
+// the provider's, never a channel's: the scenario
+// tasks/a-failed-task-keeps-the-error-its-worker-s-turn-raised, which
+// roomkit-ai's provider errors pass once they name their class.
+#[tokio::test]
+async fn a_failed_task_keeps_the_class_its_worker_s_error_names() {
+    let kit = kit_of(RefusedMidStream).await;
+    let options = DelegateOptions {
+        wait: true,
+        ..DelegateOptions::default()
+    };
+
+    let task = kit
+        .delegate(&room(), &channel("worker"), "Find it.", options)
+        .await
+        .unwrap();
+
+    let result = task.result().unwrap();
+    let exception = result.exception.unwrap();
+    assert_eq!(
+        (
+            result.status,
+            exception.error_type.as_str(),
+            exception.message.as_str()
+        ),
+        (
+            TaskStatus::Failed,
+            "roomkit.providers.ai.base:ProviderError",
+            "upstream 503"
+        )
+    );
+    kit.close().await.unwrap();
+}

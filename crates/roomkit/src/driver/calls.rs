@@ -24,6 +24,7 @@ use tokio::sync::{oneshot, watch};
 use tokio::task::JoinSet;
 
 use crate::channel::{ChannelError, DynChannel};
+use crate::classed::ClassedError;
 use crate::context::{ExecutionContext, HookBody, RunShared};
 use crate::error::RoomKitError;
 use crate::events::Handled;
@@ -981,8 +982,9 @@ fn channel_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {
 /// `ProviderDelivery`, Python's `ProviderDeliveryError`; a kit's error, a
 /// failure of the code its class carries, `kit_closed`, or else of its
 /// Python class's name, as Python's delivery reads an error's `code` or
-/// its type's name (RFC §5.13); any other a failure of type
-/// `ChannelError`, a boxed error having no class name.
+/// its type's name (RFC §5.13); any other a failure of the class a
+/// [`ClassedError`] names, else of type `ChannelError`, a boxed error
+/// having no class name.
 fn channel_failed(error: &ChannelError) -> Outcome {
     let kit_error = error.downcast_ref::<RoomKitError>();
     let code = match kit_error {
@@ -990,7 +992,10 @@ fn channel_failed(error: &ChannelError) -> Outcome {
             return ChannelOutcome::ProviderDelivery(Box::new(result.clone())).into();
         }
         Some(kit_error) => kit_error.code().unwrap_or_else(|| kit_error.class_name()),
-        None => "ChannelError".to_owned(),
+        None => error
+            .downcast_ref::<ClassedError>()
+            .map_or("ChannelError", ClassedError::class)
+            .to_owned(),
     };
     Outcome::Failed(ErrorRecord::new(code, error.to_string()))
 }
