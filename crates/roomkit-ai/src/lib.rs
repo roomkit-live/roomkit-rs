@@ -105,7 +105,7 @@ pub use self::provider::{
     AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse,
     AiRole, AiTextPart, AiToolCall, AiToolCallPart, AiToolResultPart, ProviderError,
     ProviderErrorOptions, ProviderStream, StreamDone, StreamEvent, StreamTextDelta, StreamToolCall,
-    TextStream, tool_arguments,
+    TextStream, is_context_overflow_message, tool_arguments,
 };
 #[doc(hidden)]
 pub use self::skills::dumps;

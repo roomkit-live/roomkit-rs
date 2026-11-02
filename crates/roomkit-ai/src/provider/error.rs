@@ -112,3 +112,127 @@ impl From<&str> for ProviderError {
         Self::from(message.to_owned())
     }
 }
+
+impl ProviderError {
+    /// Whether the provider refused the request as past the model's
+    /// context window (RFC §6.4): its structural classification, believed
+    /// either way, else its message read by
+    /// [`is_context_overflow_message`]. Python's
+    /// `AIChannel._is_context_overflow`.
+    pub(crate) fn is_context_overflow(&self) -> bool {
+        self.context_overflow
+            .unwrap_or_else(|| is_context_overflow_message(&self.message))
+    }
+}
+
+/// The wordings observed across providers for a context-window refusal,
+/// lowercase: Python's `_CONTEXT_OVERFLOW_PHRASES`. "request too large" is
+/// left out: it is OpenAI's wording for a tokens-per-minute rate limit, a
+/// 429 worth retrying.
+const CONTEXT_OVERFLOW_PHRASES: &[&str] = &[
+    "context length",
+    "context_length",
+    "maximum context",
+    "context window",
+    "token limit",
+    "too many tokens",
+    "prompt is too long",
+    "exceeds the model",
+    "range of input length",
+    "exceeds the maximum number of tokens",
+];
+
+/// Whether a provider's error `text` describes a context-window overflow:
+/// Python's `roomkit.providers.ai.is_context_overflow_message`. The words
+/// are the fallback: an error classified structurally carries
+/// [`ProviderError::context_overflow`] instead.
+pub fn is_context_overflow_message(text: &str) -> bool {
+    let haystack = text.to_lowercase();
+    CONTEXT_OVERFLOW_PHRASES
+        .iter()
+        .any(|phrase| haystack.contains(phrase))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TPM_RATE_LIMIT: &str = "Request too large for gpt-4o in organization org-x on tokens \
+        per min (TPM): Limit 30000, Requested 31000.";
+
+    fn refused(message: &str, context_overflow: Option<bool>) -> ProviderError {
+        ProviderError::new(
+            message,
+            ProviderErrorOptions {
+                context_overflow,
+                ..ProviderErrorOptions::default()
+            },
+        )
+    }
+
+    // Python: tests/test_channels/test_ai_streaming_compaction.py::test_is_context_overflow_reads_the_typed_flag_first
+    #[test]
+    fn is_context_overflow_reads_the_typed_flag_first() {
+        let read = [
+            refused(
+                r#"{"code": "refused", "detail": "window blown"}"#,
+                Some(true),
+            ),
+            refused("prompt is too long: 210000 tokens > 200000 maximum", None),
+            refused("boom", None),
+            refused("maximum context length exceeded", Some(false)),
+        ]
+        .map(|error| error.is_context_overflow());
+        assert_eq!(read, [true, true, false, false]);
+    }
+
+    // Python: tests/test_channels/test_ai_streaming_compaction.py::test_the_shared_phrase_list_covers_both_packages_wordings
+    #[test]
+    fn the_shared_phrase_list_covers_both_packages_wordings() {
+        for text in [
+            "This model's maximum context length is 128000 tokens",
+            "error code: context_length_exceeded",
+            "input exceeds the model capacity",
+            "the request rode past the token limit",
+            "prompt is too long: 210000 tokens > 200000 maximum",
+            "Range of input length should be [1, 30720]",
+            "400 INVALID_ARGUMENT. {'error': {'code': 400, 'message': 'The input token count \
+             exceeds the maximum number of tokens allowed (8192).', 'status': 'INVALID_ARGUMENT'}}",
+            "The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).",
+        ] {
+            assert!(is_context_overflow_message(text), "{text}");
+        }
+        for text in [
+            "invalid api key",
+            "429 RESOURCE_EXHAUSTED. Quota exceeded for metric: \
+             generativelanguage.googleapis.com/generate_content_free_tier_input_token_count",
+            TPM_RATE_LIMIT,
+        ] {
+            assert!(!is_context_overflow_message(text), "{text}");
+        }
+    }
+
+    // Python: tests/test_channels/test_ai_tool_loop.py::TestContextOverflowRecovery::test_is_context_overflow_matches_known_patterns
+    #[test]
+    fn is_context_overflow_matches_known_patterns() {
+        for text in [
+            "context length exceeded",
+            "maximum context length is 200000",
+            "token limit reached",
+            "too many tokens in the request",
+            "prompt is too long for model",
+        ] {
+            assert!(refused(text, None).is_context_overflow(), "{text}");
+        }
+    }
+
+    // Python: tests/test_channels/test_ai_tool_loop.py::TestContextOverflowRecovery::test_is_context_overflow_rejects_unrelated_errors
+    #[test]
+    fn is_context_overflow_rejects_unrelated_errors() {
+        assert!(!refused("Invalid API key", None).is_context_overflow());
+        assert!(
+            !refused("Request too large for gpt-4o on tokens per min (TPM)", None)
+                .is_context_overflow()
+        );
+    }
+}

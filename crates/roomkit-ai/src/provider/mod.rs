@@ -16,7 +16,7 @@ pub use self::context::{
     AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiRole, AiTextPart,
     AiToolCallPart, AiToolResultPart,
 };
-pub use self::error::{ProviderError, ProviderErrorOptions};
+pub use self::error::{ProviderError, ProviderErrorOptions, is_context_overflow_message};
 pub use self::response::{
     AiResponse, AiToolCall, StreamDone, StreamEvent, StreamTextDelta, StreamToolCall,
     read_tool_calls, tool_arguments,
