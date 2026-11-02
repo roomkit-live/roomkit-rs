@@ -57,8 +57,10 @@ pub struct OpenAiConfig {
     pub base_url: Option<String>,
     /// The model asked.
     pub model: String,
-    /// The most tokens a generation writes, unless its context says.
-    pub max_tokens: u32,
+    /// The most tokens a generation writes, unless its context says;
+    /// `None` sends no bound, and the endpoint decides (Python's
+    /// `max_tokens=None`).
+    pub max_tokens: Option<u32>,
     /// How long a request waits for the endpoint between two reads, and
     /// for its writes (Python's `httpx.Timeout(timeout)`).
     pub timeout: Duration,
@@ -106,7 +108,7 @@ impl OpenAiConfig {
             api_key: api_key.into(),
             base_url: None,
             model: model.into(),
-            max_tokens: 1024,
+            max_tokens: Some(1024),
             timeout: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(5),
             include_stream_usage: true,

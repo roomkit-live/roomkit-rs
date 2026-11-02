@@ -123,11 +123,12 @@ impl<'a> CompletionRequest<'a> {
                 },
             })
             .collect();
-        let bound = request.max_tokens.unwrap_or(config.max_tokens);
+        // No bound from the turn nor the configuration sends none.
+        let bound = request.max_tokens.or(config.max_tokens);
         let (max_tokens, max_completion_tokens) = if config.takes_max_completion_tokens() {
-            (None, Some(bound))
+            (None, bound)
         } else {
-            (Some(bound), None)
+            (bound, None)
         };
         Self {
             model,
@@ -546,6 +547,47 @@ mod tests {
     /// `base_url` the switches alone say
     /// (`tasks/probes/step5-review/mcp-openai/py_openai_wire.out`,
     /// `fixes/py_openai_explicit_switch.out`).
+    /// Python: `tests/test_providers/test_openai.py::TestOpenAIAIProvider::test_no_cap_is_sent_when_none_is_set`.
+    /// `max_tokens: None` sends no bound under either name; a turn's own
+    /// bound still goes (RMK-1177).
+    #[test]
+    fn no_cap_is_sent_when_none_is_set() {
+        let sent = |completion_tokens: bool, turn: Option<u32>| {
+            let config = OpenAiConfig {
+                base_url: Some("http://localhost:8000/v1".to_owned()),
+                max_tokens: None,
+                use_max_completion_tokens: Some(completion_tokens),
+                ..OpenAiConfig::new("sk-1", "local")
+            };
+            let request = Request {
+                system_prompt: None,
+                messages: Vec::new(),
+                tools: Vec::new(),
+                temperature: None,
+                max_tokens: turn,
+            };
+            let body = serde_json::to_value(CompletionRequest::new(&config, &request)).unwrap();
+            (
+                body.get("max_tokens").cloned(),
+                body.get("max_completion_tokens").cloned(),
+            )
+        };
+        assert_eq!(
+            [
+                sent(false, None),
+                sent(false, Some(321)),
+                sent(true, None),
+                sent(true, Some(321))
+            ],
+            [
+                (None, None),
+                (Some(serde_json::json!(321)), None),
+                (None, None),
+                (None, Some(serde_json::json!(321))),
+            ]
+        );
+    }
+
     #[test]
     fn a_modern_model_on_openai_s_endpoint_takes_python_s_profile() {
         let request = Request {

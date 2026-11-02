@@ -11,7 +11,7 @@
 //! requires, declares the turn's tools, their names checked against
 //! OpenAI's rule on OpenAI's own endpoint, and Python's sampling keywords:
 //! the turn's temperature unless [`OpenAiConfig::supports_custom_temperature`]
-//! is off or Python's model profile leaves it out, the token bound ([`OpenAiConfig::max_tokens`], 1024). A failure
+//! is off or Python's model profile leaves it out, the token bound ([`OpenAiConfig::max_tokens`], 1024; none sent for `None`). A failure
 //! reaches the loop as a [`ProviderError`](roomkit_ai::ProviderError), by
 //! Python's rule of what a retry may get past. A stream is bounded: a line
 //! or an event over 1 MiB, or an answer over 4 MiB, fails the turn.

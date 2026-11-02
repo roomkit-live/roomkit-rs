@@ -10,6 +10,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bound per tool name, above `tool_timeout` and above a tool's own bound
   (a person's answer), `None` leaving that tool unbounded; a bound of zero
   is refused (`AiError::ToolTimeoutOf`).
+- `OpenAiConfig::max_tokens` is an `Option<u32>`, `Some(1024)` by default
+  as Python's `max_tokens=1024` (RMK-1177): `None` sends no output bound,
+  neither `max_tokens` nor `max_completion_tokens`, and the endpoint
+  decides; a turn's own bound still goes. Breaking: write
+  `max_tokens: Some(n)` where `max_tokens: n` was.
 - `roomkit_ai::current_tool_actor_id`, Python's (RFC §10.6.5, RMK-1176):
   who woke the turn a tool's call runs in; a human-input request names
   them as its `actor_id`.
