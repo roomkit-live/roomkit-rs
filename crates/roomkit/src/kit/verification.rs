@@ -11,6 +11,7 @@
 //! - `transitions`: the steps each call takes under the identity's lock;
 //! - `inbound`: what the inbound pipeline's step 5b asks the kit (RFC
 //!   §10.1 step 5b): a sender's verification, a code reply's attempt;
+//! - `release`: what a completed request releases (RFC §11.7.6);
 //! - `timers`: the ends that come when their time runs out (RFC §11.7.5);
 //! - `announce`: the framework events and the hooks;
 //! - `state`, `secret`, `runtime`: what a record reads as, the secrets, and
@@ -18,6 +19,7 @@
 
 mod announce;
 pub(crate) mod inbound;
+mod release;
 mod runtime;
 mod secret;
 mod state;
@@ -207,7 +209,11 @@ impl<S: ConversationStore> RoomKit<S> {
     /// returns the verification (RFC §11.7.2): Python's
     /// `complete_verification`. The identity is VERIFIED until the policy's
     /// `ttl` from now, `verification_completed` is emitted and
-    /// `ON_VERIFICATION_COMPLETED` fired in the request's room. A wrong secret
+    /// `ON_VERIFICATION_COMPLETED` fired in the request's room. With the
+    /// policy's `release_on_verify`, what the sender wrote while the request
+    /// was open is then released (RFC §11.7.6): each held message gets back
+    /// the scope it had, `ON_EVENT_UPDATED` fires for it, and the room's
+    /// agents answer the last one, the call returning once they did. A wrong secret
     /// counts as an attempt; the last one fails the request, which ends a
     /// verification in force with it (fail closed).
     ///
@@ -251,6 +257,9 @@ impl<S: ConversationStore> RoomKit<S> {
         let data = completion_data(state.method.as_deref(), state.expires_at);
         self.verification_hook(HookTrigger::OnVerificationCompleted, &request, data)
             .await;
+        if self.inner.verification.policy.release_on_verify {
+            self.release_held(&request).await?;
+        }
         Ok(state)
     }
 
