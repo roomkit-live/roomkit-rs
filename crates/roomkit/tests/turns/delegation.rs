@@ -596,34 +596,53 @@ impl Stream for Items {
 // Python: core/event_router.py stream_record, read by
 // core/mixins/_child_execution.py _persist_child_stream: the turn's record
 // lies over the stream's response metadata, so a stream's end at
-// `max_rounds` fails its task whatever else its output said.
+// `max_rounds` fails its task whatever else its output said, inline and
+// on the room path a shared transport opens.
 #[tokio::test]
 async fn a_stream_s_end_fails_its_task_beside_what_its_output_said() {
-    let mut metadata = roomkit::model::Metadata::new();
-    metadata.insert("model".to_owned(), serde_json::json!("m"));
-    let kit = kit_of(EndsAtMaxRounds { metadata }).await;
-    let options = DelegateOptions {
-        wait: true,
-        ..DelegateOptions::default()
-    };
-
-    let task = kit
-        .delegate(&room(), &channel("worker"), "go", options)
+    for shared in [false, true] {
+        let mut metadata = roomkit::model::Metadata::new();
+        metadata.insert("model".to_owned(), serde_json::json!("m"));
+        let kit = kit_of(EndsAtMaxRounds { metadata }).await;
+        let sms = roomkit::testing::RecordingTransport::new(
+            channel("sms"),
+            ChannelType::SMS,
+            roomkit::testing::RecordingTransportOptions::default(),
+        );
+        kit.register_channel(sms).unwrap();
+        kit.attach_channel(
+            &room(),
+            &channel("sms"),
+            roomkit::AttachChannelOptions::default(),
+        )
         .await
         .unwrap();
+        let options = DelegateOptions {
+            wait: true,
+            share_channels: shared.then(|| vec![channel("sms")]),
+            ..DelegateOptions::default()
+        };
 
-    let result = task.result().unwrap();
-    assert_eq!(
-        (
-            result.status,
-            result.error.as_deref(),
-            result.metadata.get("loop_end_reason").cloned()
-        ),
-        (
-            TaskStatus::Failed,
-            Some("The worker's turn ended max_rounds before its answer"),
-            Some(serde_json::json!("max_rounds"))
-        )
-    );
-    kit.close().await.unwrap();
+        let task = kit
+            .delegate(&room(), &channel("worker"), "go", options)
+            .await
+            .unwrap();
+
+        let result = task.result().unwrap();
+        assert_eq!(
+            (
+                shared,
+                result.status,
+                result.error.as_deref(),
+                result.metadata.get("loop_end_reason").cloned()
+            ),
+            (
+                shared,
+                TaskStatus::Failed,
+                Some("The worker's turn ended max_rounds before its answer"),
+                Some(serde_json::json!("max_rounds"))
+            )
+        );
+        kit.close().await.unwrap();
+    }
 }
