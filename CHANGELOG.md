@@ -19,10 +19,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `RegisteredChannel::steers_room_turns` and `serializes_room_turns`, as
   a host reads Python's `kit.get_channel(id).steers_room_turns` (RFC §6.4,
   RMK-1253): a channel that steers them serializes them.
-- `Channel::serializes_room_turns` defaults to `steers_room_turns`, as
-  Python's now does, so a channel that only steers its room turns declares
-  them serialized too (`declaration()`), where it read `false`; the kit
-  takes the channel's own answer, as Python's router does (RMK-1253).
 - A whole copy of a runtime mark that no closing bracket follows takes
   only the mark's own punctuation with it, as Python's: `x context
   compacted - earlier conversation summary.` reads `x [A copy of a runtime
@@ -666,10 +662,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Python's (RFC §6.4, §21.3, RMK-1160): `AiChannelOptions::
   serialize_room_turns` and `steer_room_turns`, `Channel::
   serializes_room_turns` and `steers_room_turns`, `ChannelDeclaration`'s
-  two fields. A serialized agent's turn in a room takes its place as its
-  delivery set asks it and starts, outside the delivery lane, once the turns
-  before it stored what they said, on the room as it is then less the
-  messages committed after it was asked; a waiting turn whose delivery is
+  two fields; a channel's `serializes_room_turns` defaults to its
+  `steers_room_turns`, so a channel that steers its room turns serializes
+  them and declares them serialized (RMK-1253). A serialized agent's turn
+  in a room takes its place as its delivery set asks it and starts,
+  outside the delivery lane, once the turns before it stored what they
+  said, on the room as it is then less the messages committed after it
+  was asked; a waiting turn whose delivery is
   cut, or whose agent left the room, never starts; a muted agent takes no
   place. With `steer_room_turns`, a message for a room whose line holds the
   agent's one running turn is stored as any message and steered into that
