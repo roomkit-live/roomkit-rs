@@ -2,7 +2,7 @@
 //! 6): the kit reads a boxed error of a type it does not know as a
 //! `ChannelError`, and a crate built on it, roomkit-ai's provider errors
 //! among them, names its class with this so that a task, a turn's record
-//! and `wait_task` keep it as Python's do (gap G-097, RMK-1208).
+//! and `wait_task` keep it as Python's do (RMK-1208).
 
 use std::error::Error;
 use std::fmt;
