@@ -250,8 +250,9 @@ impl<P: AiProvider> Loop<P> {
             }
             let (read, ran) = self.round_of_calls(generation, &steering, &out).await;
             messages.extend(read);
+            // A round counts once its calls ran (Python's `_run_announced_calls`).
             spent.calls += u32::try_from(ran.calls.len()).unwrap_or(u32::MAX);
-            tool_rounds += 1;
+            tool_rounds += u32::from(!ran.calls.is_empty());
             let withdrawn = self.adopted.withdrawn.len();
             messages.extend(self.after_tool_round(round, ran).await);
             if self.adopted.withdrawn.len() != withdrawn {
