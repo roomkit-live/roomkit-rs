@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `RoomKitError::Runtime`, Python's builtin `RuntimeError` (decided by the
+  maintainer, RMK-1168): a setup made twice, a verb a turn's host makes
+  after its turn that needs it, a human-input request its handler gave up;
+  a `RuntimeError` crossing the turn backend comes back as it.
 - A quoted text cut short names the blocks it holds as Python's
   `named_blocks` (RFC §6.4, RMK-1147): an opening tag as written, a closing
   tag as a model reads one, the first end bracket after each.
@@ -20,8 +24,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   through the turn backend's `input_request`, `input_answer`,
   `input_taken` and `input_closed`, an answer that comes first held for
   `TurnTimeouts::input_hold_timeout` (60 s); `RoomKitError::
-  HumanInputRejected`. A request the handler gave up reads as Python's
-  `RuntimeError`.
+  HumanInputRejected`.
 - A memory's notes and speakers, and the budget-aware memory, Python's
   (RFC §20, RMK-1165): `MemoryResult::notes`, which ride the turn's
   notes after its input, and `MemoryResult::speakers`, which count toward
