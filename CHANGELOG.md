@@ -6,6 +6,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A quoted text cut short names the blocks it holds as Python's
+  `named_blocks` (RFC §6.4, RMK-1147): an opening tag as written, a closing
+  tag as a model reads one, the first end bracket after each.
 - Human input, Python's (RFC §9.3, §10.6.5, RMK-1146):
   `roomkit::human_input`'s `HumanInputHandler`, `PendingInput`,
   `PendingInputEvent` and `PendingInputStatus`; `roomkit_ai::
