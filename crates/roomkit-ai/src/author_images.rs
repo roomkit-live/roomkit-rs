@@ -837,12 +837,14 @@ mod tests {
 
     // Python: channels/_author_images.py::author_images resolves the
     // references together (`asyncio.gather`): four slow ones take the
-    // slowest one's time, each event given its own image.
+    // slowest one's time, each event given its own image though they end
+    // in the order opposite to the one they are asked in (the newest
+    // first).
     #[tokio::test(start_paused = true)]
     async fn references_resolve_together() {
         let resolver = MediaResolver::new(|media, _room| async move {
             let at: u8 = media.url.trim_start_matches("app-media://").parse()?;
-            sleep(Duration::from_millis(100 - 10 * u64::from(at))).await;
+            sleep(Duration::from_millis(40 + 20 * u64::from(at))).await;
             Ok(Some(vec![at]))
         });
         let events: Vec<RoomEvent> = (0..4)
