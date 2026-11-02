@@ -29,6 +29,7 @@ mod media;
 mod member_calls;
 mod memory;
 mod normalize;
+mod routing_calls;
 mod run;
 mod scenarios;
 mod scripted;

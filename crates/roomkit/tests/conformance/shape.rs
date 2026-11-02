@@ -205,6 +205,7 @@ const HOOK: &[&str] = &[
     "fail_closed",
     "needs_lock",
     "reactions",
+    "router",
 ];
 const REACTION: &[&str] = &[
     "when",
@@ -357,7 +358,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
                 .or_else(|| crate::member_calls::arguments(other))
                 .or_else(|| crate::input_calls::arguments(other))
                 .or_else(|| crate::verification_calls::arguments(other))
-                .or_else(|| crate::strategy_calls::arguments(other));
+                .or_else(|| crate::strategy_calls::arguments(other))
+                .or_else(|| crate::routing_calls::arguments(other));
         }
     })
 }
@@ -644,6 +646,25 @@ fn hook_of(hook: &Value, known: &[&str], path: &str, found: &mut Vec<String>) {
     for (index, reaction) in items(&hook["reactions"]) {
         self::reaction(reaction, &format!("{path}.reactions[{index}]"), found);
     }
+    if let Some(router) = hook.get("router") {
+        self::router(router, &format!("{path}.router"), found);
+    }
+}
+
+/// A conversation router's members, its rules' and their conditions'.
+fn router(router: &Value, path: &str, found: &mut Vec<String>) {
+    use crate::routing_calls::{CONDITIONS, ROUTER, ROUTING_RULE};
+    members(router, ROUTER, path, found);
+    for (index, rule) in items(&router["rules"]) {
+        let path = format!("{path}.rules[{index}]");
+        members(rule, ROUTING_RULE, &path, found);
+        optional(
+            &rule["conditions"],
+            CONDITIONS,
+            &format!("{path}.conditions"),
+            found,
+        );
+    }
 }
 
 fn reaction(reaction: &Value, path: &str, found: &mut Vec<String>) {
@@ -737,6 +758,12 @@ fn call(call: &Value, extra: &[&str], path: &str, found: &mut Vec<String>) {
         "register_channel" => channel(&call["channel"], &format!("{path}.channel"), found),
         "register_hook" => hook(&call["hook"], &format!("{path}.hook"), found),
         "add_room_hook" => room_hook(&call["hook"], &format!("{path}.hook"), found),
+        "save_conversation_state" => {
+            for (index, transition) in items(&call["transitions"]) {
+                let path = format!("{path}.transitions[{index}]");
+                members(transition, crate::routing_calls::TRANSITION, &path, found);
+            }
+        }
         _ => {}
     }
 }

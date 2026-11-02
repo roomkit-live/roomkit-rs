@@ -203,6 +203,7 @@ pub(crate) async fn call(
         "install_strategy" | "uninstall_strategy" | "claim_room_strategy" | "room_strategy" => {
             (crate::strategy_calls::call(run, name, spec).await?, None)
         }
+        "save_conversation_state" => (crate::routing_calls::call(run, name, spec).await?, None),
         "delivery.cancel" | "delivery.wait" => (handle_call(run, name, spec).await?, None),
         _ => (lifecycle_call(run, name, spec).await?, None),
     })
@@ -661,6 +662,10 @@ fn add_room_hook(
         organization_id: organization_id(spec),
     };
     let (kit, room) = (run.kit().clone(), room.clone());
+    let router = hook
+        .get("router")
+        .map(crate::routing_calls::router)
+        .transpose()?;
     let (tool, event) = (
         trigger
             .is_tool_trigger()
@@ -674,6 +679,10 @@ fn add_room_hook(
     let tool_round = turn_hook_handler::<ToolRoundEvent>(hook, run);
     let response = turn_hook_handler::<AiResponseEvent>(hook, run);
     Ok(async move {
+        if let Some(router) = router {
+            let added = kit.add_room_hook(&room, trigger, execution, router.as_hook(), options);
+            return added.await.map(drop);
+        }
         let added = match (tool, trigger) {
             (Some(tool), _) => {
                 kit.add_room_hook(&room, trigger, execution, tool, options)
@@ -733,6 +742,10 @@ pub(crate) fn register_hook(
         ..defaults
     };
     let kit = run.kit();
+    if let Some(router) = hook.get("router") {
+        let router = crate::routing_calls::router(router)?;
+        return Ok(kit.hook(trigger, router.as_hook(), options).map(drop));
+    }
     let registered = if trigger.is_tool_trigger() {
         kit.hook(trigger, agents::tool_hook_handler(hook, run), options)
     } else if trigger == HookTrigger::OnSessionStarted {
