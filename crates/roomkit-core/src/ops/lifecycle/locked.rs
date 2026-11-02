@@ -268,6 +268,27 @@ impl<C: SectionChange> Changing<C> {
         }
     }
 
+    /// A write undoing a change its channel refused failed too: logged, the
+    /// refusal still the reason the change fails, as the Python
+    /// implementation's `_undo_refused_binding`.
+    fn undo_failed(
+        &self,
+        error: &ErrorRecord,
+        decision: Decision<C::Done>,
+    ) -> Progress<SectionResult<C>> {
+        if let Some((channel_id, _)) = &self.raised {
+            tracing::error!(
+                target: "roomkit::framework",
+                channel_id = %channel_id,
+                error = %error.message,
+                "Could not restore the binding of channel {channel_id} after it refused the \
+                 attachment; the room may keep a binding to a channel that is not attached, \
+                 or have lost the one it had"
+            );
+        }
+        self.ended(decision.done)
+    }
+
     /// Goes on once the channel answered `outcome`: with the writes that
     /// follow, or, refused, with those that undo the change.
     fn on_told(
@@ -370,12 +391,10 @@ impl<C: SectionChange> SectionWork for Changing<C> {
             return Progress::Waiting;
         };
         // A lifecycle record's commit is answered `Committed`, every other
-        // write `Stored`. A write undoing a refused change that fails too
-        // leaves the refusal the reason the change fails, as the Python
-        // implementation logs it and raises the channel's error.
+        // write `Stored`.
         match outcome.into_written() {
             Ok(()) => self.write_next(cx, *decision),
-            Err(_) if self.undoing => self.ended(decision.done),
+            Err(error) if self.undoing => self.undo_failed(&error, *decision),
             Err(error) => Progress::Done(Err(SectionError::Store(error))),
         }
     }

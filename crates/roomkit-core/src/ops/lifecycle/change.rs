@@ -99,8 +99,10 @@ pub(crate) struct Telling {
     /// The writes made once the channel answered.
     pub(crate) then: VecDeque<StoreRequest>,
     /// What the channel's refusal does: undoes the change with these
-    /// writes, which put the room back as the change found it, and fails
-    /// it; `None`, the change stands, then fails once reported.
+    /// writes, which put back the binding the change replaced, or remove
+    /// it, and fails it; `None`, the change stands, then fails once
+    /// reported. As the Python implementation's `_undo_refused_binding`,
+    /// an attach's undo leaves the channel's revocation cleared.
     pub(crate) undo: Option<VecDeque<StoreRequest>>,
 }
 

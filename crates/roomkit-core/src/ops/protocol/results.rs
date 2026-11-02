@@ -161,8 +161,9 @@ pub enum InboundError {
         /// Why.
         reason: String,
     },
-    /// The channel's `handle_inbound()` failed.
-    #[error("channel {channel_id} could not parse the message: {error:?}")]
+    /// The channel's `handle_inbound()` failed, or the channel refused the
+    /// attach the message made (RFC §6.1 `on_room_attached`).
+    #[error("channel {channel_id} failed on the message: {error:?}")]
     ChannelFailed {
         /// The channel.
         channel_id: ChannelId,

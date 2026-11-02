@@ -236,7 +236,6 @@ mod attach_channel {
         );
     }
 
-    /// RFC §7.5 rule 7: an explicit attach is the integrator's decision.
     /// RFC §6.1 `on_room_attached`: a channel that refuses its attach,
     /// once its binding is stored, has it removed under the lock, nothing
     /// recorded nor announced, and the attach fails with what it raised.
@@ -277,6 +276,31 @@ mod attach_channel {
         );
     }
 
+    /// RFC §6.1 `on_room_attached`: a refused attach whose undo fails as
+    /// well still fails with what the channel raised, the store's failure
+    /// logged, as Python's `_undo_refused_binding`.
+    // Python: tests/test_channel_attach_contract.py::TestRefusedAttach::test_a_failed_rollback_does_not_hide_why
+    #[test]
+    fn refused_by_its_channel_fails_with_the_refusal_when_its_undo_fails_too() {
+        let mut sim = Sim::new();
+        sim.failing_effect = Some("on_room_attached sms");
+        sim.also_failing = Some("delete binding sms");
+        let attached = sim.run(AttachChannel::new(sim.shared_config(), sms_binding(), None));
+        assert_eq!(
+            (
+                attached,
+                sim.trace.contains(&"delete binding sms failed".to_owned())
+            ),
+            (
+                Err(LifecycleError::ChannelFailed {
+                    channel_id: channel("sms"),
+                    error: ErrorRecord::new("ChannelError", "the outside world said no"),
+                }),
+                true
+            )
+        );
+    }
+
     /// RFC §6.1 `on_room_attached`: an attach over a live attachment its
     /// channel refuses puts back the binding it replaced.
     // Python: tests/test_channel_attach_contract.py::TestRefusedReattach::test_the_binding_it_replaced_is_put_back
@@ -294,6 +318,7 @@ mod attach_channel {
         );
     }
 
+    /// RFC §7.5 rule 7: an explicit attach is the integrator's decision.
     #[test]
     fn after_a_detach_clears_the_revocation_before_storing_the_binding() {
         let mut sim = Sim::new();

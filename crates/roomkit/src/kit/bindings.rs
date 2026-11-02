@@ -42,7 +42,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// the room does not exist or is not of the organization `options`
     /// names; then [`RoomKitError::ChannelNotRegistered`] for a channel not
     /// registered; then [`RoomKitError::Value`] for a host channel bound as
-    /// an intelligence channel (RFC §6.2, §10.5).
+    /// an intelligence channel (RFC §6.2, §10.5); then
+    /// [`RoomKitError::Channel`] for a transport that refused the attach in
+    /// its [`on_room_attached`](crate::Channel::on_room_attached), the
+    /// binding it replaced put back (RFC §6.1).
     pub async fn attach_channel(
         &self,
         room_id: &RoomId,
@@ -112,7 +115,9 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// Returns [`RoomKitError::RoomNotFound`] when the room is not of the
     /// organization `options` names, or does not exist and the call names
-    /// one.
+    /// one; [`RoomKitError::Channel`] when a transport's
+    /// [`on_room_detached`](crate::Channel::on_room_detached) failed, the
+    /// detach done and announced all the same (RFC §6.1).
     pub async fn detach_channel(
         &self,
         room_id: &RoomId,

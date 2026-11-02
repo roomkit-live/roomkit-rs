@@ -297,6 +297,9 @@ pub(crate) struct Sim {
     /// (`release ticket room_1`) fails too, and lets the ticket go all the
     /// same, as a lease that expires would.
     pub(crate) failing_effect: Option<&'static str>,
+    /// A second effect that fails beside `failing_effect`, which must be
+    /// set too: a refused attach whose undo fails as well.
+    pub(crate) also_failing: Option<&'static str>,
     /// An event another call commits to `room_1` just before the next read
     /// of it made holding no lock on it, as a direct call's once its lock
     /// is released.
@@ -387,6 +390,7 @@ impl Sim {
             settled: Vec::new(),
             decisions: Vec::new(),
             failing_effect: None,
+            also_failing: None,
             committed_before_unlocked_read: None,
             committed_after_unlocked_key_read: None,
         }
@@ -1464,7 +1468,10 @@ impl Sim {
             | Request::Channel(_)
             | Request::Hook(HookRequest::RunHook { .. }) => return None,
         };
-        if !target.starts_with(failing) {
+        let also = self
+            .also_failing
+            .is_some_and(|also| target.starts_with(also));
+        if !target.starts_with(failing) && !also {
             return None;
         }
         if let Request::Hold(
