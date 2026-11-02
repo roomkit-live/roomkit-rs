@@ -16,14 +16,19 @@ use roomkit::model::{
 };
 use roomkit::{
     AgentIdentity, Channel, ChannelAddressing, ChannelDeclaration, ChannelError, CountryCode,
-    DeliveryStream, get_conversation_state,
+    DeliveryStream,
 };
+use serde_json::Value;
 
 use crate::channel::{AiChannel, AiChannelOptions};
 use crate::error::AiError;
 use crate::provider::AiProvider;
 use crate::steering::SteerOptions;
 use crate::tools::ToolHandler;
+
+/// The room metadata key Python's conversation state is stored under
+/// (`roomkit.orchestration.state`).
+const CONVERSATION_STATE: &str = "_conversation_state";
 
 /// What [`Agent::new`] takes beside the channel's id and provider:
 /// Python's `Agent(channel_id, *, provider, name=None, role=None,
@@ -327,10 +332,16 @@ impl IdentityPrompt {
 }
 
 /// The language `room`'s conversation state sets for its agents, if any:
-/// its `context`'s `language` (Python's `handler.set_language()`).
-pub(crate) fn room_language(room: &Room) -> Option<String> {
-    let state = get_conversation_state(room).ok()?;
-    state.context.get("language")?.as_str().map(str::to_owned)
+/// its `context`'s `language` (Python's `handler.set_language()`), read
+/// from the stored state itself: Python's lax validation takes a state the
+/// typed read refuses (a count written as text, a naive instant), and the
+/// language comes through it.
+pub(crate) fn room_language(room: &Room) -> Option<&str> {
+    room.metadata
+        .get(CONVERSATION_STATE)?
+        .get("context")?
+        .get("language")
+        .and_then(Value::as_str)
 }
 
 impl<P: AiProvider> Channel for Agent<P> {
@@ -496,5 +507,33 @@ impl<P: AiProvider> Channel for Agent<P> {
 
     fn human_input_handler(&self) -> Option<roomkit::human_input::HumanInputHandler> {
         self.channel.human_input_handler()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+
+    use roomkit::model::{Room, RoomId};
+    use serde_json::json;
+
+    use super::room_language;
+
+    /// Python's `_prompt_identity` reads the room's language from a state
+    /// its lax validation takes (a count written as text, a naive instant):
+    /// the language comes through whatever the state's other fields hold.
+    #[test]
+    fn the_room_s_language_reads_through_a_state_python_takes() {
+        for other in [
+            json!({"handoff_count": "1"}),
+            json!({"phase_started_at": "2026-11-02T10:00:00"}),
+        ] {
+            let mut state = other.as_object().unwrap().clone();
+            state.insert("context".to_owned(), json!({"language": "fr"}));
+            let mut room = Room::new(RoomId::new("r1").unwrap());
+            room.metadata
+                .insert("_conversation_state".to_owned(), state.into());
+            assert_eq!(room_language(&room).as_deref(), Some("fr"));
+        }
     }
 }

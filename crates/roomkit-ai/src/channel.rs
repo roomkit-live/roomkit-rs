@@ -621,7 +621,7 @@ impl<P: AiProvider> AiChannel<P> {
         let Some(block) = self
             .identity
             .as_ref()
-            .and_then(|identity| identity.block(room_language(&context.room).as_deref()))
+            .and_then(|identity| identity.block(room_language(&context.room)))
         else {
             return prompt;
         };
