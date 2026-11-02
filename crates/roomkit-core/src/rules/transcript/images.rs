@@ -3,7 +3,7 @@
 //! opaque until the runtime asks its host. Which images a turn sends is the
 //! channel's to decide.
 
-use super::data_uri::to_data_uri;
+use super::data_uri::{is_space, to_data_uri};
 
 /// The most bytes an image holds: Anthropic's documented per-image limit,
 /// Python's `MAX_AUTHOR_IMAGE_BYTES`. An inline image's are read off its
@@ -158,7 +158,7 @@ fn canonical_data_uri(url: &str) -> String {
     let mut spelled = format!("data:{}", media_type(fields.next().unwrap_or_default()));
     for parameter in fields {
         spelled.push(';');
-        spelled.push_str(&parameter.trim().to_lowercase());
+        spelled.push_str(&parameter.trim_matches(is_space).to_lowercase());
     }
     if let Some(data) = data {
         spelled.push(',');
@@ -202,6 +202,7 @@ mod tests {
             "data:image/png;base64,AA==",
             "data:image/png;Name=Lamp.png; BASE64 ,AQ-_\nBA",
             "data:image/png,AQIDBA==",
+            "data:image/png;\u{1f}BASE64,AA==",
         ]
         .map(|url| Image::new(url, "image/png").map(|image| image.url().to_owned()));
         assert_eq!(
@@ -211,6 +212,7 @@ mod tests {
                 Some("data:image/png;base64,AA==".to_owned()),
                 Some("data:image/png;name=lamp.png;base64,AQ-_\nBA".to_owned()),
                 Some("data:image/png,AQIDBA==".to_owned()),
+                Some("data:image/png;base64,AA==".to_owned()),
             ]
         );
     }

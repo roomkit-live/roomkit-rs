@@ -75,7 +75,7 @@ pub fn parse_data_uri(
 ) -> Result<(String, Vec<u8>), DataUriError> {
     let rest = url.strip_prefix("data:").ok_or(DataUriError::NotADataUri)?;
     let (header, payload) = rest.split_once(',').ok_or(DataUriError::NoPayload)?;
-    let mut compact: String = payload.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut compact: String = payload.chars().filter(|c| !is_space(*c)).collect();
     if compact.is_empty() {
         return Err(DataUriError::NoPayload);
     }
@@ -90,6 +90,13 @@ pub fn parse_data_uri(
     }
     let data = decode(&compact).ok_or(DataUriError::NotBase64)?;
     Ok((kind.to_owned(), data))
+}
+
+/// Whether `c` is whitespace as Python's `str.split()` reads it: Unicode's,
+/// and the separators U+001C to U+001F, which Python counts and Rust's
+/// `char::is_whitespace` does not.
+pub(super) fn is_space(c: char) -> bool {
+    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }
 
 /// The bytes of `text`, standard base64 of a length a multiple of four,
@@ -148,7 +155,13 @@ mod tests {
     // Python: tests/test_providers/test_image.py::test_parse_data_uri_repairs_whitespace
     #[test]
     fn parse_data_uri_repairs_whitespace() {
-        for payload in ["QUJDMTIz", "QUJD\nMTIz", "QUJDMTIz\r\n", " QUJD MTIz "] {
+        for payload in [
+            "QUJDMTIz",
+            "QUJD\nMTIz",
+            "QUJDMTIz\r\n",
+            " QUJD MTIz ",
+            "QUJD\u{1f}MTIz",
+        ] {
             assert_eq!(
                 parse_data_uri(&format!("data:image/png;base64,{payload}"), None),
                 Ok(("image/png".to_owned(), b"ABC123".to_vec())),
