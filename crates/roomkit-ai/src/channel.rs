@@ -31,7 +31,7 @@ use crate::server_instructions::ServerInstructions;
 use crate::skills::SkillRegistry;
 use crate::skills::tools::{SkillTools, SkillTurn};
 use crate::steering::{Loops, SteerOptions};
-use crate::tool_loop::{Bounds, Loop};
+use crate::tool_loop::{Adopted, Bounds, Loop};
 use crate::tools::toolbox::Toolbox;
 use crate::tools::{
     DynToolset, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, served_by,
@@ -817,6 +817,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             intents_required: self.tool_call_intents_required,
             remembered: Vec::new(),
             loops: Arc::clone(&self.loops),
+            adopted: Adopted::default(),
         };
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).
@@ -840,6 +841,11 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             &context.room.id,
         )
         .await;
+        // What the turn's generation hooks leave is its context; a block
+        // runs no generation (RFC §6.4).
+        if !looped.before_generation(&event, &messages).await {
+            return Ok(ChannelOutput::empty());
+        }
         let items = looped.run(messages);
         match turn {
             // Within the kit, the turn is one stream, read as it is written.

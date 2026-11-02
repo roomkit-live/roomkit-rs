@@ -13,6 +13,12 @@ pub(crate) fn not_declared(name: &str) -> String {
     error_envelope(&format!("Tool '{name}' is not declared."))
 }
 
+/// A call to a tool withdrawn for the turn, by `BEFORE_AI_GENERATION` or
+/// `AFTER_TOOL_ROUND` (RFC §6.4).
+pub(crate) fn not_available(name: &str) -> String {
+    error_envelope(&format!("Tool '{name}' is not available in this turn."))
+}
+
 /// A call to a tool the policy denies (RFC §21.1).
 pub(crate) fn not_permitted(name: &str) -> String {
     error_envelope(&format!(

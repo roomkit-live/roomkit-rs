@@ -73,6 +73,7 @@ mod error;
 mod human_input;
 mod images;
 pub mod knowledge;
+mod loop_events;
 pub mod memory;
 mod mock;
 mod provider;
@@ -92,6 +93,10 @@ mod tools;
 pub use self::channel::{AiChannel, AiChannelOptions};
 pub use self::error::AiError;
 pub use self::human_input::{AskOptions, HumanInputToolHandler, HumanInputToolHandlerOptions};
+pub use self::loop_events::{
+    AiGenerationEvent, AiResponseEvent, DeclaredTool, FromToolOptions, GenerationPurpose,
+    ToolDeclarationOrigin, ToolRoundEvent, response_transcript,
+};
 pub use self::mock::{MockAiProvider, MockAiProviderOptions};
 #[doc(hidden)]
 pub use self::provider::read_tool_calls;

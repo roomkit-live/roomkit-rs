@@ -22,6 +22,7 @@
 mod calls;
 mod footprint;
 mod generation;
+mod hooks;
 mod intents;
 mod rules;
 
@@ -32,11 +33,17 @@ use roomkit::model::{LoopEndMarker, LoopEndReason, Metadata, ToolCall, ToolCallO
 use roomkit::{ToolCallReport, TurnHost};
 use roomkit_core::rules::transcript::{Message, Role};
 use serde_json::Value;
+use tokio::time::Instant;
 
 use self::generation::Generation;
+pub(crate) use self::hooks::Adopted;
+use self::hooks::Ran;
 use self::rules::{Limits, final_round_reason};
+use crate::loop_events::DeclaredTool;
 use crate::memory::after_memory;
-use crate::provider::{AiContext, AiMessage, AiProvider, ProviderError, ai_messages};
+use crate::provider::{
+    AiContext, AiMessage, AiProvider, AiToolCall, AiToolResultPart, ProviderError, ai_messages,
+};
 use crate::steering::{Loops, Steering};
 use crate::stream::{Items, Yielder, items, join_all};
 use crate::tools::ToolContext;
@@ -121,6 +128,8 @@ pub(crate) struct Loop<P> {
     /// The channel's running loops, which this one joins as it starts
     /// (RFC §21.3).
     pub(crate) loops: Arc<Loops>,
+    /// What the turn's hooks left of its context (RFC §6.4).
+    pub(crate) adopted: Adopted,
 }
 
 impl<P: AiProvider> Loop<P> {
@@ -135,7 +144,7 @@ impl<P: AiProvider> Loop<P> {
     /// The loop joins the channel's running loops as it starts, and reads
     /// the directives steered into it at its stops (RFC §21.3).
     async fn rounds(
-        self,
+        mut self,
         mut messages: Vec<Message>,
         out: Yielder<Result<TurnItem, ProviderError>>,
     ) {
@@ -144,8 +153,8 @@ impl<P: AiProvider> Loop<P> {
             .loops
             .start(Some(self.context.room_id.clone()), turn_id);
         let mut system_prompt = self.system_prompt.clone();
-        let declared = self.shown_tools(self.toolbox.declared(&self.policy));
-        let mut spent = Spent::default();
+        let mut declared = self.shown_tools(self.declared());
+        let mut spent = Spent::reporting(self.declared_tools());
         let mut had_tool_round = false;
         let mut tool_rounds = 0;
         let mut limits = Limits::starting(&self.bounds);
@@ -160,33 +169,22 @@ impl<P: AiProvider> Loop<P> {
                     .end(LoopEndReason::Cancelled, tool_rounds, spent, ending)
                     .await;
             }
-            let asked = after_memory(
-                &self.remembered,
-                ai_messages(&self.shown_messages(&messages)),
-            );
             let context = AiContext {
-                messages: asked,
-                system_prompt: system_prompt.clone(),
-                temperature: self.temperature,
-                max_tokens: self.max_tokens,
                 tools: declared.clone(),
-                metadata: Metadata::new(),
+                ..self.round_context(&messages, system_prompt.clone())
             };
             let read = Generation::read(&*self.provider, &context, &steering, &out).await;
             let mut generation = match read {
                 Ok(generation) => generation,
                 Err(error) => {
-                    let end = LoopEndMarker {
-                        usage: spent.usage,
-                        usage_complete: Some(false),
-                        ..self.end_of(LoopEndReason::Error, tool_rounds, limits.timeout)
-                    };
-                    steering.close();
-                    return failed(had_tool_round, end, error, &out).await;
+                    let ending = (&limits, &steering, &out);
+                    let failed = (had_tool_round, tool_rounds, spent);
+                    return self.failed(failed, error, ending).await;
                 }
             };
             self.take_intents(&mut generation.calls);
             spent.count(&generation.done.usage);
+            spent.segments.push(generation.text.clone());
             let ending = (&limits, &steering, &out);
             // A stop that came after the model's last event counts as one
             // that came during it (RFC §21.3).
@@ -224,8 +222,15 @@ impl<P: AiProvider> Loop<P> {
             }
             had_tool_round = true;
             limits.warn_if_due(tool_rounds);
-            messages.extend(self.round_of_calls(generation, &steering, &out).await);
+            let (read, ran) = self.round_of_calls(generation, &steering, &out).await;
+            messages.extend(read);
+            spent.calls += u32::try_from(ran.calls.len()).unwrap_or(u32::MAX);
             tool_rounds += 1;
+            let withdrawn = self.adopted.withdrawn.len();
+            messages.extend(self.after_tool_round(round, ran).await);
+            if self.adopted.withdrawn.len() != withdrawn {
+                declared = self.shown_tools(self.declared());
+            }
             if steering.read(&mut messages, &mut system_prompt) {
                 let ending = (&limits, &steering, &out);
                 return self
@@ -247,12 +252,63 @@ impl<P: AiProvider> Loop<P> {
         let (limits, steering, out) = ending;
         steering.close();
         let end = LoopEndMarker {
-            usage: spent.usage,
-            last_usage: Some(spent.last),
+            usage: spent.usage.clone(),
+            last_usage: Some(spent.last.clone()),
             usage_complete: Some(spent.complete),
             ..self.end_of(reason, rounds, limits.timeout)
         };
         out.give(Ok(TurnItem::End(end))).await;
+        // Once the reader read past the end, as Python's turn reports it
+        // when its stream is read to its close.
+        self.report(reason, rounds, &spent);
+    }
+
+    /// The provider failed with `error`: after a round of calls, the loop
+    /// ends `error`, its rounds kept (RFC §6.4 "A turn cut short"), and the
+    /// turn is reported; then the error. `failed` is whether a round ran,
+    /// the rounds of calls and what the turn spent.
+    async fn failed(
+        &self,
+        (after_round, rounds, spent): (bool, u32, Spent),
+        error: ProviderError,
+        ending: Ending<'_>,
+    ) {
+        let (limits, steering, out) = ending;
+        steering.close();
+        if after_round {
+            let end = LoopEndMarker {
+                usage: spent.usage.clone(),
+                usage_complete: Some(false),
+                ..self.end_of(LoopEndReason::Error, rounds, limits.timeout)
+            };
+            out.give(Ok(TurnItem::End(end))).await;
+            self.report(LoopEndReason::Error, rounds, &spent);
+        }
+        out.give(Err(error)).await;
+    }
+
+    /// What a round's generation is asked on `messages` under
+    /// `system_prompt`, its tools aside: the memory's messages then the
+    /// conversation, or what the turn's hooks gave in their place, then
+    /// the rest (RFC §6.4, §20.2).
+    fn round_context(&self, messages: &[Message], system_prompt: Option<String>) -> AiContext {
+        let shown = ai_messages(&self.shown_messages(messages));
+        let asked = match &self.adopted.messages {
+            Some((given, replaced)) => given
+                .iter()
+                .cloned()
+                .chain(shown.into_iter().skip(*replaced))
+                .collect(),
+            None => after_memory(&self.remembered, shown),
+        };
+        AiContext {
+            messages: asked,
+            system_prompt,
+            temperature: self.temperature,
+            max_tokens: self.max_tokens,
+            tools: Vec::new(),
+            metadata: self.adopted.metadata.clone(),
+        }
     }
 
     /// The end of the loop for `reason` after `rounds` rounds of calls, the
@@ -285,11 +341,12 @@ impl<P: AiProvider> Loop<P> {
         generation: Generation,
         steering: &Steering,
         out: &Yielder<Result<TurnItem, ProviderError>>,
-    ) -> Vec<Message> {
+    ) -> (Vec<Message>, Ran) {
         for called in &generation.calls {
             out.give(Ok(TurnItem::ToolStart(called.call.clone()))).await;
         }
-        let ends = if steering.cancelled() {
+        let unrun = steering.cancelled();
+        let ends = if unrun {
             generation
                 .calls
                 .iter()
@@ -305,11 +362,15 @@ impl<P: AiProvider> Loop<P> {
             )
             .await
         };
-        let made = generation
+        let made: Vec<ToolCall> = generation
             .calls
             .into_iter()
             .map(|called| called.call)
             .collect();
+        let mut ran = Ran::default();
+        if !unrun {
+            ran.calls = made.iter().map(ai_tool_call).collect();
+        }
         let mut assistant = Message::assistant_calls(generation.text, made);
         assistant.metadata = generation.done.metadata;
         let mut read = vec![assistant];
@@ -322,10 +383,18 @@ impl<P: AiProvider> Loop<P> {
             // The model reads every outcome but served as a failure (RFC §9.3,
             // Python's `ToolOutcome.as_part`).
             result.is_error = end.outcome != ToolCallOutcome::Served;
+            if !unrun {
+                ran.results.push(AiToolResultPart {
+                    tool_call_id: end.call.id.clone(),
+                    name: end.call.name.clone(),
+                    result: end.result.clone(),
+                    is_error: result.is_error,
+                });
+            }
             read.push(result);
             out.give(Ok(TurnItem::ToolEnd(end))).await;
         }
-        read
+        (read, ran)
     }
 }
 
@@ -379,39 +448,44 @@ async fn try_again(
     true
 }
 
-/// The provider failed: after a round of calls, the loop ends `error`, its
-/// rounds kept (RFC §6.4 "A turn cut short"); then the error.
-async fn failed(
-    after_round: bool,
-    end: LoopEndMarker,
-    error: ProviderError,
-    out: &Yielder<Result<TurnItem, ProviderError>>,
-) {
-    if after_round {
-        out.give(Ok(TurnItem::End(end))).await;
+/// `call` as `AFTER_TOOL_ROUND` hands it: Python's `AIToolCall`.
+fn ai_tool_call(call: &ToolCall) -> AiToolCall {
+    AiToolCall {
+        arguments: call.arguments.clone(),
+        intent: call.intent.clone(),
+        ..AiToolCall::new(call.id.clone(), call.name.clone())
     }
-    out.give(Err(error)).await;
 }
 
 /// What a turn's generations used: their counters summed, the last one's,
-/// and whether every one reported its input and output tokens.
+/// and whether every one reported its input and output tokens; and what
+/// `ON_AI_RESPONSE` reports of the turn (RFC §6.4): each generation's text,
+/// the calls it ran, its declaration, and when it started.
 struct Spent {
     usage: Metadata,
     last: Metadata,
     complete: bool,
+    segments: Vec<String>,
+    calls: u32,
+    declared: Vec<DeclaredTool>,
+    started: Instant,
 }
 
-impl Default for Spent {
-    fn default() -> Self {
+impl Spent {
+    /// Nothing spent yet by a turn that reports `declared` as its
+    /// declaration.
+    fn reporting(declared: Vec<DeclaredTool>) -> Self {
         Self {
             usage: Metadata::new(),
             last: Metadata::new(),
             complete: true,
+            segments: Vec::new(),
+            calls: 0,
+            declared,
+            started: Instant::now(),
         }
     }
-}
 
-impl Spent {
     /// Counts one generation's `used` counters.
     fn count(&mut self, used: &Metadata) {
         add_usage(&mut self.usage, used);

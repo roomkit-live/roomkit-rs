@@ -115,6 +115,8 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::model::ToolCallStatus" = { field = "roomkit.ToolCallContent.__init__(status)", values = ["pending", "completed", "failed"] }
 "roomkit_ai::AiRole" = { field = "roomkit.providers.ai.AIMessage.__init__(role)", values = ["system", "user", "assistant", "tool"] }
 "roomkit::model::LoopEndReason" = { field = "roomkit.models.LoopEndMarker.__init__(reason)", values = ["completed", "max_rounds", "timeout", "budget_exceeded", "truncated", "empty_response", "unfinished", "force_stopped", "cancelled", "error"] }
+"roomkit_ai::GenerationPurpose" = { field = "roomkit.AIGenerationEvent.__init__(purpose)", values = ["answer", "thought"] }
+"roomkit_ai::ToolDeclarationOrigin" = { field = "roomkit.DeclaredTool.__init__(origin)", values = ["always", "pinned", "sticky", "revealed"] }
 
 # The Python exception classes each error enum's variants stand for, by the
 # enum's path, read from the Python source (the snapshot holds no class's
@@ -488,9 +490,9 @@ reason = "not in 0.x: verification (RFC §11.7)"
 [[missing]]
 python = "roomkit.HookTrigger"
 members = [
-    "AFTER_TOOL_ROUND", "AFTER_TTS", "BEFORE_AI_GENERATION",
+    "AFTER_TTS",
     "BEFORE_BRIDGE_AUDIO", "BEFORE_BRIDGE_VIDEO",
-    "ON_ACTIVE_SPEAKER_CHANGED", "ON_AI_RESPONSE", "ON_AI_THINKING",
+    "ON_ACTIVE_SPEAKER_CHANGED", "ON_AI_THINKING",
     "ON_BACKCHANNEL", "ON_BARGE_IN", "ON_CONFERENCE_PARTICIPANT_JOINED",
     "ON_CONFERENCE_PARTICIPANT_LEFT", "ON_CONFERENCE_TRACK_MUTED",
     "ON_CONFERENCE_TRACK_PUBLISHED", "ON_CONFERENCE_TRACK_UNMUTED",

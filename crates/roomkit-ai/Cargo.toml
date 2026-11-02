@@ -12,8 +12,9 @@ publish.workspace = true
 roomkit.workspace = true
 # The rules the agent's transcript is built by (`transcript::conversation`,
 # `is_deleted`, `text_of`), which roomkit keeps private as Python does (step
-# 5, decision 16).
-roomkit-core.workspace = true
+# 5, decision 16); the system clock, which the loop triggers' payloads
+# read when built, as Python's constructors default their timestamp.
+roomkit-core = { workspace = true, features = ["system-environment"] }
 # The `Stream` a provider's response is read as (step 4, decision 11).
 futures-core.workspace = true
 serde.workspace = true

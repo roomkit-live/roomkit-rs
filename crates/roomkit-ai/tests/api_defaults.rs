@@ -12,7 +12,17 @@ use roomkit_ai::memory::{
     HistoryBudgetOptions, IngestOptions, RetrievalMemoryOptions, RetrieveOptions,
     SlidingWindowMemoryOptions, SummarizingMemoryOptions,
 };
+use roomkit_ai::{FromToolOptions, ToolDeclarationOrigin};
 use std::time::Duration;
+
+#[test]
+fn from_tool_options_defaults_as_python() {
+    // roomkit.DeclaredTool.from_tool(origin) = 'always'
+    assert_eq!(
+        FromToolOptions::default().origin,
+        ToolDeclarationOrigin::Always
+    );
+}
 
 #[test]
 fn ai_channel_options_defaults_as_python() {
