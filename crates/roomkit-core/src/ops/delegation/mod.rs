@@ -739,3 +739,61 @@ fn unexpected(effect: EffectId, expected: &'static str) -> ProtocolError {
         got: "another outcome",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::*;
+    use crate::model::{ChannelType, EventId, EventSource, TextContent};
+
+    fn room() -> RoomId {
+        RoomId::new("room_1::task-1").unwrap()
+    }
+
+    fn description() -> RoomEvent {
+        RoomEvent::at(
+            EventId::new("evt_1").unwrap(),
+            room(),
+            EventType::Message,
+            EventSource::new(ChannelId::new("system").unwrap(), ChannelType::SYSTEM),
+            TextContent::new("Find it."),
+            Timestamp::UNIX_EPOCH,
+        )
+    }
+
+    // Python: core/mixins/_child_execution.py _broadcast_and_collect, which
+    // writes a delegated turn's metadata updates as a room's turn does
+    // (core/mixins/helpers.py _write_metadata_updates, whose
+    // patch_room_metadata stamps updated_at); no test of its own (RMK-1188).
+    #[test]
+    fn a_delegated_turn_s_metadata_updates_are_written_stamped_now() {
+        let mut turn = DelegatedTurn::new(Arc::new(KitConfig::default()), room(), description());
+        let now = Timestamp::UNIX_EPOCH;
+        let mut metadata = Metadata::new();
+        metadata.insert("stage".to_owned(), json!("found"));
+        let mut effects = Vec::new();
+        turn.persist(
+            Vec::new(),
+            Vec::new(),
+            metadata.clone(),
+            (now, &mut effects),
+        );
+
+        let written: Vec<_> = effects
+            .iter()
+            .map(|effect| match &effect.request {
+                Request::Store(StoreRequest::UpdateRoom { room_id, updates }) => (
+                    room_id.clone(),
+                    updates.updated_at,
+                    updates.metadata.clone(),
+                ),
+                other => panic!("not a room's write: {other:?}"),
+            })
+            .collect();
+        assert_eq!(written, vec![(room(), Some(now), metadata)]);
+    }
+}
