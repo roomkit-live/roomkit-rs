@@ -64,7 +64,8 @@ pub use environment::{Environment, SequentialEnvironment};
 pub use events::{CommitRecord, DeleteEvent, MutationError, UpdateEvent};
 pub use framework_events::{ChainDepthData, FrameworkEvent, RefusedOperation, TransitionReason};
 pub use inbound::{
-    Inbound, InboundError, InboundResult, InboundTarget, MessageAnswers, default_inbound_event,
+    Inbound, InboundError, InboundResult, InboundTarget, MessageAnswers, TurnResponses,
+    default_inbound_event,
 };
 pub use lifecycle::{
     ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom, DetachChannel, LifecycleChange,

@@ -36,6 +36,7 @@ impl Machine {
                 organization_id,
                 post,
             } => self.begin_post(cx, room_id, organization_id, *post),
+            Call::Responses { responses } => self.begin_answering(cx, *responses),
         }
     }
 

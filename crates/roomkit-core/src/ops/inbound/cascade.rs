@@ -384,7 +384,7 @@ impl Machine {
     /// cascade's passes and sets are over (RFC §10.1 step 14); a cascade
     /// whose turns are cut reads none (RFC §10.1 "Explicit delivery
     /// cancellation").
-    fn queue_streams(&mut self, streams: Vec<StreamedTurn>, set: &DeliverySet) {
+    pub(super) fn queue_streams(&mut self, streams: Vec<StreamedTurn>, set: &DeliverySet) {
         if self.cascade.turns_cut && set.lineage() == Lineage::Call {
             return;
         }
@@ -428,7 +428,12 @@ impl Machine {
     /// A buffered response draws one pass of the cascade's reentry budget
     /// per event (RFC §8.3 "Reentry cap"); a turn whose response is a stream
     /// draws its pass, when it is a chained stream, as it is read.
-    fn queue_response(&mut self, cx: &mut Cx<'_>, response: Response, set: &DeliverySet) {
+    pub(super) fn queue_response(
+        &mut self,
+        cx: &mut Cx<'_>,
+        response: Response,
+        set: &DeliverySet,
+    ) {
         // A cascade whose turns are cut takes no reentry (RFC §10.1
         // "Explicit delivery cancellation").
         if self.cascade.turns_cut && set.lineage() == Lineage::Call {

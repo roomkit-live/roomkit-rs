@@ -61,6 +61,7 @@
 //! `deadline`).
 
 mod adoption;
+mod answering;
 mod answers;
 mod arrival;
 mod arrival_change;
@@ -96,6 +97,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use self::adoption::Adoptions;
+pub use self::answering::TurnResponses;
 pub use self::answers::MessageAnswers;
 pub use self::arrival::InboundTarget;
 use self::cascade::Trigger;
@@ -239,6 +241,28 @@ impl Inbound {
         Self::calling(config, call)
     }
 
+    /// The pipeline for `responses`, the answers of turns the caller asked
+    /// itself on an event it committed outside the pipeline: a delegated
+    /// turn's, in a child room a transport is shared into (RFC §23.3 step
+    /// 5). Each buffered response re-enters as a room's response does (RFC
+    /// §10.1 steps 9 to 14), crossing `BEFORE_BROADCAST` and its source's
+    /// right to write (RFC §7.5 rule 2), and rides the room's delivery
+    /// lane; each stream is read by the room's reader once they are over
+    /// (RFC §12.2 steps 13s and 14s); the cascade they start runs to its
+    /// end, as a message's does. The event they answer is committed
+    /// already, so nothing refuses the call: a failure is its result's
+    /// `error`.
+    ///
+    /// Its output is the cascade's result: the responses the room kept and
+    /// delivered (`response_events`), and the first error met, a stream's
+    /// failure among them.
+    pub fn answering(config: Arc<KitConfig>, responses: TurnResponses) -> Self {
+        let call = Call::Responses {
+            responses: Box::new(responses),
+        };
+        Self::calling(config, call)
+    }
+
     /// The same call, made by the code a delivery set runs, a turn or a
     /// transport's delivery, drawing on `budget`, the reentry budget of the
     /// cascade that delivers, rather than on one of its own (RFC §8.3, gap
@@ -281,6 +305,7 @@ impl Inbound {
         let entry = match call {
             Call::Message { .. } => EntryKind::Message,
             Call::Direct { .. } | Call::Post { .. } => EntryKind::Direct,
+            Call::Responses { .. } => EntryKind::Responses,
         };
         Self {
             config,
@@ -362,6 +387,9 @@ enum Call {
         organization_id: Option<String>,
         post: Box<Post>,
     },
+    /// The answers of turns the caller asked on an event it committed
+    /// (RFC §23.3 step 5).
+    Responses { responses: Box<TurnResponses> },
 }
 
 /// The kind of the call's own entry.
@@ -371,6 +399,9 @@ enum EntryKind {
     Message,
     /// An event injected directly (RFC §10.5).
     Direct,
+    /// The answers to an event committed outside the pipeline (RFC §23.3
+    /// step 5): no entry of the call's own.
+    Responses,
 }
 
 /// One call's state, grouped by what owns it: the facts the call learns
