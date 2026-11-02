@@ -452,14 +452,18 @@ mod tests {
         assert_eq!(
             (
                 "completed".parse::<StatusLevel>().ok(),
-                "done".parse::<StatusLevel>().err().map(|e| e.to_string())
+                "done"
+                    .parse::<StatusLevel>()
+                    .err()
+                    .map(|e| (e.class_name(), e.to_string()))
             ),
             (
                 Some(StatusLevel::Completed),
                 // Python's enum, its value quoted as `!r` writes it.
-                Some(
-                    RoomKitError::Value("'done' is not a valid StatusLevel".to_owned()).to_string()
-                )
+                Some((
+                    "ValueError".to_owned(),
+                    "'done' is not a valid StatusLevel".to_owned()
+                ))
             )
         );
     }

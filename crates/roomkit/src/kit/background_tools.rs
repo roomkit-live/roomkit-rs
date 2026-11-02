@@ -748,15 +748,15 @@ mod tests {
         assert_eq!(
             (
                 first.is_ok(),
-                again.map_err(|error| error.to_string()),
+                again.map_err(|error| (error.class_name(), error.to_string())),
                 declared
             ),
             (
                 true,
-                Err(RoomKitError::Runtime(
+                Err((
+                    "RuntimeError".to_owned(),
                     "setup_background() already called for channel 'speaker'".to_owned()
-                )
-                .to_string()),
+                )),
                 vec![json!(BACKGROUND_TOOL)]
             )
         );
@@ -835,14 +835,17 @@ mod tests {
             .owner_tools
             .declared(&channel("speaker"), &RoomId::new("r").unwrap());
         assert_eq!(
-            (refused.err().map(|error| error.to_string()), declared.len()),
             (
-                Some(
-                    RoomKitError::Value(
-                        "hand_back must be one of ('relay', 'post'), not 'shout'".to_owned()
-                    )
-                    .to_string()
-                ),
+                refused
+                    .err()
+                    .map(|error| (error.class_name(), error.to_string())),
+                declared.len()
+            ),
+            (
+                Some((
+                    "ValueError".to_owned(),
+                    "hand_back must be one of ('relay', 'post'), not 'shout'".to_owned()
+                )),
                 0
             )
         );

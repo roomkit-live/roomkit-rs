@@ -213,7 +213,14 @@ async fn an_unknown_hand_back_and_a_post_by_no_agent_of_the_room_are_refused() {
         ..DelegateOptions::default()
     };
 
-    let words = |outcome: Result<_, RoomKitError>| outcome.err().map(|error| error.to_string());
+    // The words of a ValueError alone.
+    let words = |outcome: Result<_, RoomKitError>| {
+        if let Some(RoomKitError::Value(message)) = outcome.err() {
+            Some(message)
+        } else {
+            None
+        }
+    };
     let refusals = (
         words(
             kit.delegate(&room(), &channel("worker"), "Count.", unknown)
@@ -228,19 +235,11 @@ async fn an_unknown_hand_back_and_a_post_by_no_agent_of_the_room_are_refused() {
     assert_eq!(
         refusals,
         (
+            Some("hand_back must be one of ('relay', 'post'), not 'shout'".to_owned()),
             Some(
-                RoomKitError::Value(
-                    "hand_back must be one of ('relay', 'post'), not 'shout'".to_owned()
-                )
-                .to_string()
-            ),
-            Some(
-                RoomKitError::Value(
-                    "hand_back='post' posts as 'worker', which must be an intelligence channel \
-                     attached to room 'r'"
-                        .to_owned()
-                )
-                .to_string()
+                "hand_back='post' posts as 'worker', which must be an intelligence channel \
+                 attached to room 'r'"
+                    .to_owned()
             )
         )
     );
@@ -262,8 +261,11 @@ async fn start_task_refuses_a_channel_that_is_no_agent_of_the_room() {
         .await;
 
     assert_eq!(
-        refused.err().map(|refusal| refusal.to_string()),
-        Some(RoomKitError::Value("'worker' is not an agent of room 'r'".to_owned()).to_string())
+        matches!(
+            refused,
+            Err(RoomKitError::Value(message)) if message == "'worker' is not an agent of room 'r'"
+        ),
+        true
     );
     kit.close().await.unwrap();
 }
