@@ -21,6 +21,8 @@ mod errors;
 mod harness;
 #[path = "../../../roomkit/tests/conformance/identity.rs"]
 mod identity;
+#[path = "../../../roomkit/tests/conformance/input_calls.rs"]
+mod input_calls;
 #[path = "../../../roomkit/tests/conformance/matching.rs"]
 mod matching;
 #[path = "../../../roomkit/tests/conformance/member_calls.rs"]
