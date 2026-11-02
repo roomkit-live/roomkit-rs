@@ -841,6 +841,12 @@ approved = "2026-11-01"
 reason = "the constructor of Python's `Tool` protocol: a trait has none (architecture: Tools)"
 
 [[exception]]
+rust = "roomkit_ai::AiChannel"
+members = ["set_tool_handler"]
+approved = "2026-11-02"
+reason = "Python's `tool_handler` setter: Rust has no property setter, the reading stays `tool_handler()` (architecture: Tools)"
+
+[[exception]]
 rust = "roomkit_ai::AiChannelOptions"
 members = ["image_resolver"]
 approved = "2026-10-30"

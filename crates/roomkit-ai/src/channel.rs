@@ -33,7 +33,9 @@ use crate::skills::tools::{SkillTools, SkillTurn};
 use crate::steering::{Loops, SteerOptions};
 use crate::tool_loop::{Bounds, Loop};
 use crate::tools::toolbox::Toolbox;
-use crate::tools::{DynToolset, ToolContext, ToolEntry, ToolHandler, ToolPolicy, served_by};
+use crate::tools::{
+    DynToolset, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, served_by,
+};
 
 /// The metadata word of an instruction that stands alone (RFC §10.1.1
 /// rule 7), as the pipeline writes it.
@@ -209,7 +211,8 @@ pub struct AiChannel<P> {
     capabilities: ChannelCapabilities,
     provider: Arc<P>,
     toolbox: Arc<Toolbox>,
-    tool_handler: Option<ToolHandler>,
+    /// The host's handler, which the setter replaces.
+    tool_handler: Arc<RwLock<Option<ToolHandler>>>,
     policy: ToolPolicy,
     bounds: Bounds,
     system_prompt: Arc<RwLock<Option<String>>>,
@@ -254,7 +257,7 @@ impl<P> Clone for AiChannel<P> {
             capabilities: self.capabilities.clone(),
             provider: Arc::clone(&self.provider),
             toolbox: Arc::clone(&self.toolbox),
-            tool_handler: self.tool_handler.clone(),
+            tool_handler: Arc::clone(&self.tool_handler),
             policy: self.policy.clone(),
             bounds: self.bounds.clone(),
             system_prompt: Arc::clone(&self.system_prompt),
@@ -327,7 +330,12 @@ impl<P: AiProvider> AiChannel<P> {
             instructions.add(label, published.as_deref())?;
         }
         let mut toolbox = Toolbox::default();
-        if let Some(served) = served_by(tool_handler.clone(), tools)? {
+        let host = tool_handler.is_some();
+        // The host's handler is read at each call, so that a handler set
+        // later serves the next calls (Python's `tool_handler` setter).
+        let tool_handler = Arc::new(RwLock::new(tool_handler));
+        let serving = (host || !tools.is_empty()).then(|| host_handler(&tool_handler));
+        if let Some(served) = served_by(serving, tools)? {
             toolbox.add_dyn(served.0, served.1)?;
         }
         // A registry given, an empty one too, reserves the skill tools'
@@ -410,10 +418,26 @@ impl<P: AiProvider> AiChannel<P> {
             .unwrap_or_else(PoisonError::into_inner) = prompt.filter(|prompt| !prompt.is_empty());
     }
 
-    /// The handler serving the tools the options define: Python's
+    /// The host's handler, serving the tools the options define that
+    /// neither the channel nor its own tools serve (RFC §21.1): Python's
     /// `tool_handler`.
-    pub fn tool_handler(&self) -> Option<&ToolHandler> {
-        self.tool_handler.as_ref()
+    pub fn tool_handler(&self) -> Option<ToolHandler> {
+        self.tool_handler
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Replaces the host's handler with `handler`, from the next call on,
+    /// `None` taking it away: Python's `tool_handler` setter. The channel's
+    /// own tools, and the tools that serve themselves, keep being served;
+    /// a call to a tool no turn declares still reaches no handler (RFC
+    /// §6.4). Clones of the channel share it.
+    pub fn set_tool_handler(&self, handler: Option<ToolHandler>) {
+        *self
+            .tool_handler
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = handler;
     }
 
     /// The skills active in the room `room_id`, least recently used first:
@@ -640,6 +664,24 @@ fn serve_human_input(
         .register(channel_id.as_str())
         .unwrap_or_default();
     Ok((human, registration))
+}
+
+/// The handler that serves a call with the host's handler `host` holds at
+/// the time of the call; with none, it declines the call, which the
+/// channel's own tools may serve.
+fn host_handler(host: &Arc<RwLock<Option<ToolHandler>>>) -> ToolHandler {
+    let host = Arc::clone(host);
+    ToolHandler::new(move |name, arguments| {
+        let current = host.read().unwrap_or_else(PoisonError::into_inner).clone();
+        async move {
+            match current {
+                Some(handler) => handler.call(name, arguments).await,
+                None => Err(ToolError::unserved(format!(
+                    "no tool handler serves {name}"
+                ))),
+            }
+        }
+    })
 }
 
 /// Refuses a tool `toolbox` serves under one of the names a channel given

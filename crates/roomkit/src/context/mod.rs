@@ -555,6 +555,9 @@ pub fn keep_context<F>(future: F) -> impl Future<Output = F::Output> + Send + 's
 where
     F: Future + Send + 'static,
 {
+    // The tool call a handler runs within rides along, as Python's
+    // `create_task` copies its `ContextVar` (RFC §21.4).
+    let future = crate::tool_call_scope::within_current_tool_call(future);
     CONTEXT.scope(
         ExecutionContext::current(),
         Marks::current().scoped(crate::turn::within_current_turn(future)),

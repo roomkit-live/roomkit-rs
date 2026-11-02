@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `AiChannel::set_tool_handler`, Python's `tool_handler` setter
+  (RMK-1091): the host's handler replaced from the next call on, the
+  channel's own tools still served; `tool_handler()` answers an owned
+  handler.
+- `current_tool_call()` in a task a handler spawns with
+  `roomkit::keep_context` reads the call, as Python's `create_task`
+  copies it (RMK-1076).
 - Knowledge sources and the retrieval memory, Python's (RFC §20.2,
   RMK-1165): `roomkit_ai::knowledge`'s `KnowledgeSource` and
   `KnowledgeResult`, and `RetrievalMemory`, which searches its sources for

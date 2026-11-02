@@ -76,6 +76,7 @@ pub mod store;
 mod stream;
 pub mod tasks;
 pub mod testing;
+mod tool_call_scope;
 mod tool_calls;
 mod transport;
 mod turn;
@@ -197,6 +198,8 @@ pub use self::store::written;
 #[doc(inline)]
 pub use self::store::{ConversationStore, InMemoryStore};
 pub use self::stream::{DeliveryStream, ResponseItem, ResponseStream, StreamItem};
+#[doc(hidden)]
+pub use self::tool_call_scope::{current_tool_call_scope, within_tool_call_scope};
 pub use self::tool_calls::ToolCallEvent;
 #[doc(hidden)]
 pub use self::tool_calls::ToolCallReport;

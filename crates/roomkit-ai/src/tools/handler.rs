@@ -217,19 +217,21 @@ pub struct ToolCallContext {
     pub channel_id: Option<ChannelId>,
 }
 
-tokio::task_local! {
-    static CURRENT_TOOL_CALL: ToolCallContext;
-}
-
 /// The call the current tool handler runs within: Python's
-/// `current_tool_call()`, `None` outside a tool's call.
+/// `current_tool_call()`, `None` outside a tool's call. A task the handler
+/// spawns reads it when spawned with [`roomkit::keep_context`], as
+/// Python's `asyncio.create_task` copies the call's context; spawned
+/// plainly, it reads `None`.
 pub fn current_tool_call() -> Option<ToolCallContext> {
-    CURRENT_TOOL_CALL.try_with(Clone::clone).ok()
+    roomkit::current_tool_call_scope()?
+        .downcast_ref::<ToolCallContext>()
+        .cloned()
 }
 
-/// Runs `work`, a tool's call, within `context`.
+/// Runs `work`, a tool's call, within `context`, which the kit carries
+/// into a task spawned with [`roomkit::keep_context`].
 pub(crate) async fn within_call<T>(context: ToolCallContext, work: impl Future<Output = T>) -> T {
-    CURRENT_TOOL_CALL.scope(context, work).await
+    roomkit::within_tool_call_scope(Arc::new(context), work).await
 }
 
 /// The toolset `tool_handler` and `tools` make, Python's
