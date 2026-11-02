@@ -22,6 +22,7 @@ use roomkit_core::rules::transcript::fence;
 use serde_json::{Value, json};
 
 use super::RoomKit;
+use super::inline::Unstarted;
 use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::orchestration::{PostOptions, StatusLevel};
@@ -240,7 +241,7 @@ impl TaskEnd {
         }
     }
 
-    fn into_result(self, task: &DelegatedTask) -> DelegatedTaskResult {
+    pub(super) fn into_result(self, task: &DelegatedTask) -> DelegatedTaskResult {
         DelegatedTaskResult {
             output: self.output,
             error: self.error,
@@ -314,12 +315,30 @@ impl<S: ConversationStore> RoomKit<S> {
         );
         self.open_child_room(&handle, &parent, &options).await?;
         self.announce_task(&handle, options.post_status).await;
+        // From here the task ends however this call ends: a caller cut
+        // before its run started ends it cancelled (Python's `started`).
+        let unstarted = Unstarted::new(self, &handle, &options);
+        if self.inner.tasks.is_closing() {
+            // The close began while the task was set up: it ends as the
+            // close ends a running one, on both doors.
+            unstarted.started();
+            self.cancelled_end(&handle, &options, false).await;
+            return Ok(handle);
+        }
         if options.wait {
+            unstarted.started();
             self.run_inline(&handle, &options).await;
             return Ok(handle);
         }
-        self.run_background(&handle, &options, notify).await?;
-        Ok(handle)
+        let submitted = self.run_background(&handle, &options, notify).await;
+        unstarted.started();
+        if let Err(error) = &submitted {
+            // A task its runner refused never started: it ends failed.
+            let ended = failed(kit_failure(error), options.context.as_ref());
+            self.complete_inline(&handle, ended.into_result(&handle), &options)
+                .await;
+        }
+        submitted.map(|()| handle)
     }
 
     /// The parent room, read for the organization the caller acts for.
@@ -521,46 +540,11 @@ impl<S: ConversationStore> RoomKit<S> {
         }
     }
 
-    /// Runs the task's turn inline and ends it, recorded for its room as
-    /// ending with the turn that asked for it, or as the strategy's that
-    /// runs it without posting it (RFC §23.4).
-    async fn run_inline(&self, task: &DelegatedTask, options: &DelegateOptions) {
-        let reach = if options.post_status {
-            TaskReach::Turn
-        } else {
-            TaskReach::Strategy
-        };
-        let _recorded = self.record_running(task, reach);
-        task.set_status(TaskStatus::InProgress);
-        let context = options.context.as_ref();
-        let ended = if options.require_structured_result {
-            let (retries, tool) = (options.max_result_retries, options.result_tool.as_ref());
-            Box::pin(self.structured_turns(task, context, retries, tool)).await
-        } else {
-            Box::pin(self.delegated_turn(task, context)).await
-        };
-        self.complete_inline(task, ended.into_result(task), options)
-            .await;
-    }
-
-    /// Records `task` running for its room as `reach` says, until the
-    /// guard drops: a run that never reached its completion is recorded
-    /// failed.
-    fn record_running(&self, task: &DelegatedTask, reach: TaskReach) -> RecordedRunning<'_> {
-        self.inner
-            .room_tasks
-            .start(&task.id, &task.parent_room_id, reach);
-        RecordedRunning {
-            record: &self.inner.room_tasks,
-            task_id: task.id.clone(),
-        }
-    }
-
     /// Ends a task the caller presents itself, inline or never submitted:
     /// its end for its room's `cancel_task`, its child room's status,
     /// `ON_TASK_COMPLETED`, the status bus, its completion callback, then
     /// its waiters. Nothing is handed back.
-    async fn complete_inline(
+    pub(super) async fn complete_inline(
         &self,
         task: &DelegatedTask,
         result: DelegatedTaskResult,
@@ -583,7 +567,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Submits the task to the kit's task runner, its end handed back to
     /// `notify` (RFC §23.3 step 8), recorded for its room as one its
     /// `cancel_task` cancels, or as the strategy's that runs it without
-    /// posting it (RFC §23.4). A submit that fails ends the task failed.
+    /// posting it (RFC §23.4). A submit that fails has not taken the task.
     async fn run_background(
         &self,
         task: &DelegatedTask,
@@ -602,16 +586,9 @@ impl<S: ConversationStore> RoomKit<S> {
             context: options.context.clone(),
             on_complete: Some(self.background_end(task, options, notify)),
         };
-        let outcome = self
-            .task_runner()
+        self.task_runner()
             .submit(self.clone(), task.clone(), submitted)
-            .await;
-        if let Err(error) = &outcome {
-            let ended = failed(kit_failure(error), options.context.as_ref());
-            self.complete_inline(task, ended.into_result(task), options)
-                .await;
-        }
-        outcome
+            .await
     }
 
     /// How a background task ends once its runner ended it: recorded ended
@@ -986,19 +963,6 @@ impl<S: ConversationStore> RoomKit<S> {
         {
             tracing::warn!(target: "roomkit::tasks", task = %result.task_id, %error, "the result was not posted");
         }
-    }
-}
-
-/// A task recorded running for its room until it drops: one never ended
-/// by then is recorded failed, as Python's inline run's `finally` does.
-struct RecordedRunning<'a> {
-    record: &'a crate::tasks::RoomTaskRecord,
-    task_id: String,
-}
-
-impl Drop for RecordedRunning<'_> {
-    fn drop(&mut self) {
-        self.record.end(&self.task_id, "failed");
     }
 }
 

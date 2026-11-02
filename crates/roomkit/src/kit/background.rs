@@ -142,12 +142,19 @@ impl<S: ConversationStore> RoomKit<S> {
         }
         // So do its delegated tasks: each one its runner holds ends
         // cancelled, its observers told, nothing handed back (RFC §23.3), as
-        // the Python implementation's close closes its task runner.
+        // the Python implementation's close closes its task runner; and each
+        // inline one, as its close cancels the runs it holds.
         if tokio::time::timeout_at(grace, self.inner.task_runner.close())
             .await
             .is_err()
         {
             tracing::warn!(target: "roomkit::kit", "the task runner's close outlasted the grace");
+        }
+        if tokio::time::timeout_at(grace, self.inner.inline_tasks.close())
+            .await
+            .is_err()
+        {
+            tracing::warn!(target: "roomkit::kit", "the inline delegations' close outlasted the grace");
         }
         let readers_done = || turns.reads_none();
         let waited = tasks.unspared_idle(readers_done, turns.reads_changed());

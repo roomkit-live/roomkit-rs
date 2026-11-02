@@ -1,5 +1,8 @@
-//! Delegated tasks at the kit's close (RFC §23.3, §12.10.4): what no
-//! shared scenario can say, the suite having no call that closes the kit.
+//! Delegated tasks cut from outside (RFC §23.3, §12.10.4): by the kit's
+//! close, by a caller that stops waiting, by a cancel cut midway; what no
+//! shared scenario can say, the suite having no call that closes the kit
+//! nor one that stops waiting (Python's
+//! `tests/tasks/test_cancelled_delegation.py`).
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
@@ -13,10 +16,16 @@ use roomkit::model::{
     RoomContext, RoomEvent, RoomId, TaskStatus,
 };
 use roomkit::orchestration::StatusEntry;
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
+use roomkit::tasks::{
+    DelegatedTask, DelegatedTaskResult, OnCompleteCallback, SubmitOptions, TaskRunner, WaitOptions,
+};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DelegateOptions, HookExecution,
-    HookOptions, HookTrigger, RoomKit, RoomKitOptions,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
+    DelegateOptions, HookExecution, HookOptions, HookTrigger, RoomKit, RoomKitError,
+    RoomKitOptions,
 };
 use tokio::sync::Notify;
 
@@ -227,4 +236,396 @@ async fn the_end_of_a_task_the_close_cuts_reaches_the_status_hooks() {
         heard.lock().unwrap().clone(),
         vec![posted("pending", "go"), posted("failed", "cancelled")]
     );
+}
+
+/// A kit with its room `p` and `worker`, and what its `ON_TASK_COMPLETED`
+/// hooks heard: each task's status and error, told by `heard`.
+async fn kit_with(
+    worker: impl Channel,
+    options: RoomKitOptions,
+) -> (RoomKit, Arc<Mutex<Vec<(String, String)>>>, Arc<Notify>) {
+    let kit = RoomKit::new(options);
+    kit.register_channel(worker).unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(RoomId::new("p").unwrap()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    let completed: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let heard = Arc::new(Notify::new());
+    let (noted, told) = (Arc::clone(&completed), Arc::clone(&heard));
+    let options = HookOptions {
+        execution: HookExecution::Async,
+        ..HookOptions::default()
+    };
+    kit.hook(
+        HookTrigger::OnTaskCompleted,
+        move |event: RoomEvent, _| {
+            let read = |key: &str| {
+                let value = event.metadata.get(key).and_then(|value| value.as_str());
+                value.unwrap_or_default().to_owned()
+            };
+            noted
+                .lock()
+                .unwrap()
+                .push((read("task_status"), read("error")));
+            told.notify_one();
+            ready(())
+        },
+        options,
+    )
+    .unwrap();
+    (kit, completed, heard)
+}
+
+/// A completion callback holding its task's end open until released:
+/// `seen` records that it entered, then that it finished (Python's
+/// `_Ending`).
+#[derive(Clone, Default)]
+struct Ending {
+    seen: Arc<Mutex<Vec<String>>>,
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl Ending {
+    fn on_complete(&self) -> OnCompleteCallback {
+        let ending = self.clone();
+        Arc::new(move |result: DelegatedTaskResult| {
+            let ending = ending.clone();
+            Box::pin(async move {
+                ending
+                    .seen
+                    .lock()
+                    .unwrap()
+                    .push(format!("{:?}", result.status));
+                ending.entered.notify_one();
+                ending.release.notified().await;
+                ending.seen.lock().unwrap().push("done".to_owned());
+            })
+        })
+    }
+
+    fn seen(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+/// A completion callback recording each result's status.
+fn recording(ended: &Arc<Mutex<Vec<TaskStatus>>>) -> OnCompleteCallback {
+    let ended = Arc::clone(ended);
+    Arc::new(move |result: DelegatedTaskResult| {
+        ended.lock().unwrap().push(result.status);
+        Box::pin(async {})
+    })
+}
+
+/// Runs `call` until `cut` happens, then drops it, as a caller's timeout
+/// does; the call must not end first.
+async fn cut_once<T>(call: impl Future<Output = T>, cut: impl Future<Output = ()>) {
+    tokio::select! {
+        _ = call => panic!("the call ended before its cut"),
+        () = cut => {}
+    }
+}
+
+/// Waits until `heard` told of a completion, within the bound.
+async fn settled(heard: &Notify) {
+    tokio::time::timeout(BOUND, heard.notified()).await.unwrap();
+}
+
+fn cancelled() -> Vec<(String, String)> {
+    vec![("cancelled".to_owned(), "cancelled".to_owned())]
+}
+
+// Python: tests/tasks/test_cancelled_delegation.py::test_an_inline_delegation_its_caller_times_out_ends_cancelled
+// On 0931119 the task never ended: its turn and its end ran in its caller's future.
+#[tokio::test]
+async fn an_inline_delegation_its_caller_times_out_ends_cancelled() {
+    let worker = Agent::new("worker", true);
+    let (kit, completed, heard) = kit_with(worker.clone(), RoomKitOptions::default()).await;
+    let ended: Arc<Mutex<Vec<TaskStatus>>> = Arc::default();
+    let options = DelegateOptions {
+        wait: true,
+        on_complete: Some(recording(&ended)),
+        ..DelegateOptions::default()
+    };
+    let room = RoomId::new("p").unwrap();
+
+    let worker_id = channel("worker");
+    let call = kit.delegate(&room, &worker_id, "go", options);
+    cut_once(call, worker.started.notified()).await;
+    settled(&heard).await;
+
+    assert_eq!(
+        (
+            completed.lock().unwrap().clone(),
+            ended.lock().unwrap().clone()
+        ),
+        (cancelled(), vec![TaskStatus::Cancelled])
+    );
+    kit.close().await.unwrap();
+}
+
+/// What a task runner's calls return.
+type Boxed<T> = std::pin::Pin<Box<dyn Future<Output = T> + Send>>;
+
+/// A runner slow to take a task, as a remote queue can be: its submit
+/// never returns.
+struct NeverTakes;
+
+impl TaskRunner for NeverTakes {
+    fn submit(
+        &self,
+        _kit: RoomKit,
+        _task: DelegatedTask,
+        _options: SubmitOptions,
+    ) -> Boxed<Result<(), RoomKitError>> {
+        Box::pin(pending())
+    }
+
+    fn cancel(&self, _task_id: &str) -> Boxed<bool> {
+        Box::pin(ready(false))
+    }
+
+    fn close(&self) -> Boxed<()> {
+        Box::pin(ready(()))
+    }
+}
+
+// Python: tests/tasks/test_cancelled_delegation.py::test_a_delegation_cut_before_its_task_ran_ends_it
+// On 0931119 neither ended: nothing ends a task its caller cut after its
+// announce.
+#[tokio::test]
+async fn a_delegation_cut_before_its_task_ran_ends_it() {
+    for wait in [true, false] {
+        let worker = Agent::new("worker", true);
+        let options = RoomKitOptions {
+            task_runner: (!wait).then(|| -> Arc<dyn TaskRunner> { Arc::new(NeverTakes) }),
+            ..RoomKitOptions::default()
+        };
+        let (kit, completed, heard) = kit_with(worker, options).await;
+        let announced = Arc::new(Notify::new());
+        let told = Arc::clone(&announced);
+        let observer = HookOptions {
+            execution: HookExecution::Async,
+            ..HookOptions::default()
+        };
+        kit.hook(
+            HookTrigger::OnTaskDelegated,
+            move |_event: RoomEvent, _| {
+                told.notify_one();
+                ready(())
+            },
+            observer,
+        )
+        .unwrap();
+        let options = DelegateOptions {
+            wait,
+            ..DelegateOptions::default()
+        };
+        let room = RoomId::new("p").unwrap();
+
+        let worker_id = channel("worker");
+        let call = kit.delegate(&room, &worker_id, "go", options);
+        cut_once(call, announced.notified()).await;
+        settled(&heard).await;
+
+        assert_eq!(
+            (wait, completed.lock().unwrap().clone()),
+            (wait, cancelled())
+        );
+        kit.close().await.unwrap();
+    }
+}
+
+// Python: tests/tasks/test_task_turn_record.py::test_a_task_cut_mid_turn_carries_its_turn_cancelled[close-inline]
+#[tokio::test]
+async fn an_inline_task_the_close_cuts_mid_turn_carries_its_turn_cancelled() {
+    let worker = Agent::new("worker", true);
+    let (kit, _, _) = kit_with(worker.clone(), RoomKitOptions::default()).await;
+    let options = DelegateOptions {
+        wait: true,
+        ..DelegateOptions::default()
+    };
+    let delegating = kit.clone();
+    let call = tokio::spawn(async move {
+        let room = RoomId::new("p").unwrap();
+        delegating
+            .delegate(&room, &channel("worker"), "Go.", options)
+            .await
+    });
+    tokio::time::timeout(BOUND, worker.started.notified())
+        .await
+        .unwrap();
+
+    tokio::time::timeout(BOUND, kit.close())
+        .await
+        .unwrap()
+        .unwrap();
+    let task = tokio::time::timeout(BOUND, call)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    let result = task.result().unwrap();
+    assert_eq!(
+        (result.status, result.metadata.get("turns").cloned()),
+        (
+            TaskStatus::Cancelled,
+            Some(serde_json::json!({"worker": {"loop_end_reason": "cancelled"}}))
+        )
+    );
+}
+
+// Python: tests/tasks/test_cancelled_delegation.py::test_a_cancel_cut_while_the_task_ends_still_ends_it
+// On 0931119 the task never ended: its end ran in the cancel's future.
+#[tokio::test]
+async fn a_cancel_cut_while_the_task_ends_still_ends_it() {
+    let worker = Agent::new("worker", true);
+    let (kit, completed, heard) = kit_with(worker.clone(), RoomKitOptions::default()).await;
+    let ending = Ending::default();
+    let options = DelegateOptions {
+        on_complete: Some(ending.on_complete()),
+        ..DelegateOptions::default()
+    };
+    let room = RoomId::new("p").unwrap();
+    let task = kit
+        .delegate(&room, &channel("worker"), "go", options)
+        .await
+        .unwrap();
+    tokio::time::timeout(BOUND, worker.started.notified())
+        .await
+        .unwrap();
+
+    let runner = kit.task_runner();
+    let task_id = task.id.clone();
+    let cancelling = tokio::spawn(async move { runner.cancel(&task_id).await });
+    tokio::time::timeout(BOUND, ending.entered.notified())
+        .await
+        .unwrap();
+    cancelling.abort();
+    drop(cancelling.await);
+    ending.release.notify_one();
+
+    let waited = WaitOptions {
+        timeout: Some(BOUND),
+    };
+    let ended = task.wait(waited).await.unwrap();
+    settled(&heard).await;
+    assert_eq!(
+        (ended.status, completed.lock().unwrap().clone()),
+        (TaskStatus::Cancelled, cancelled())
+    );
+    kit.close().await.unwrap();
+}
+
+// Python: tests/tasks/test_cancelled_delegation.py::test_a_task_that_ran_ends_as_it_stands_whatever_cancels_it[cancel], [close]
+// Python's test_a_task_that_ran_ends_whole_though_its_runner_task_is_cancelled
+// cancels the runner's own asyncio task, which roomkit-rs keeps private: a
+// cancel or a close is the one way to cut it from outside.
+// On 0931119 the cancel answered at once, the task's end under way.
+#[tokio::test]
+async fn a_task_that_ran_ends_as_it_stands_whatever_cancels_it() {
+    for door in ["cancel", "close"] {
+        let worker = EchoAgent::new(channel("worker"), "Done.", EchoAgentOptions::default());
+        let (kit, completed, _) = kit_with(worker, RoomKitOptions::default()).await;
+        let ending = Ending::default();
+        let options = DelegateOptions {
+            on_complete: Some(ending.on_complete()),
+            ..DelegateOptions::default()
+        };
+        let room = RoomId::new("p").unwrap();
+        let task = kit
+            .delegate(&room, &channel("worker"), "go", options)
+            .await
+            .unwrap();
+        tokio::time::timeout(BOUND, ending.entered.notified())
+            .await
+            .unwrap();
+
+        let (runner, task_id, closing) = (kit.task_runner(), task.id.clone(), kit.clone());
+        let mut asked = tokio::spawn(async move {
+            match door {
+                "cancel" => Some(runner.cancel(&task_id).await),
+                _ => closing.close().await.ok().map(|()| false),
+            }
+        });
+        let waited = tokio::time::timeout(Duration::from_millis(50), &mut asked).await;
+        let under_way = waited.is_err();
+        ending.release.notify_one();
+        let answer = tokio::time::timeout(BOUND, asked).await.unwrap().unwrap();
+
+        let task_room = kit
+            .store()
+            .get_room(&task.child_room_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let stamped =
+            ["task_status", "task_result"].map(|key| task_room.metadata.get(key).cloned());
+        assert_eq!(
+            (door, under_way, answer, ending.seen(), task.status()),
+            (
+                door,
+                true,
+                Some(false),
+                vec!["Completed".to_owned(), "done".to_owned()],
+                TaskStatus::Completed
+            )
+        );
+        assert_eq!(
+            (completed.lock().unwrap().clone(), stamped),
+            (
+                vec![("completed".to_owned(), String::new())],
+                [
+                    Some(serde_json::json!("completed")),
+                    Some(serde_json::json!("Done."))
+                ]
+            )
+        );
+        kit.close().await.unwrap();
+    }
+}
+
+// Python: tests/tasks/test_cancelled_delegation.py::test_an_inline_caller_timing_out_while_the_task_ends_leaves_its_end_whole
+// On 0931119 the end stopped with its caller, its callback halfway.
+#[tokio::test]
+async fn an_inline_caller_timing_out_while_the_task_ends_leaves_its_end_whole() {
+    let worker = EchoAgent::new(channel("worker"), "Done.", EchoAgentOptions::default());
+    let (kit, completed, heard) = kit_with(worker, RoomKitOptions::default()).await;
+    let ending = Ending::default();
+    let options = DelegateOptions {
+        wait: true,
+        on_complete: Some(ending.on_complete()),
+        ..DelegateOptions::default()
+    };
+    let room = RoomId::new("p").unwrap();
+
+    let worker_id = channel("worker");
+    let call = kit.delegate(&room, &worker_id, "go", options);
+    cut_once(call, ending.entered.notified()).await;
+    ending.release.notify_one();
+    settled(&heard).await;
+    let finished = tokio::time::timeout(BOUND, async {
+        while ending.seen().len() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+
+    assert_eq!(
+        (
+            finished.is_ok(),
+            ending.seen(),
+            completed.lock().unwrap().clone()
+        ),
+        (
+            true,
+            vec!["Completed".to_owned(), "done".to_owned()],
+            vec![("completed".to_owned(), String::new())]
+        )
+    );
+    kit.close().await.unwrap();
 }

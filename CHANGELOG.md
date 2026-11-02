@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A delegated task cut from outside ends `cancelled` once, as Python's
+  (RFC §23.3, RMK-1186): an inline delegation whose caller stops waiting,
+  or that the kit's close cuts, its worker's turn recorded `cancelled`; a
+  delegation cut after its announce, before its run started; a task whose
+  cancel's caller stops waiting, its end running on a task of its own. A
+  cancel or a close that finds a task ending as it stands waits for that
+  end, and returns `false`.
 - A status's publication runs at least as deep as its poster, as
   Python's (RFC §8.3, RMK-1187): what an `ON_STATUS_POSTED` hook sends
   into the room is that deep, so a turn that posts a status, a hook that

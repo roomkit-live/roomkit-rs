@@ -33,6 +33,7 @@ mod ephemeral;
 mod events;
 mod identity;
 mod inject;
+mod inline;
 mod inputs;
 mod members;
 mod options;
@@ -228,6 +229,9 @@ pub(crate) struct Inner<S> {
     pub(crate) identity_hooks: RwLock<Vec<identity::IdentityHook>>,
     /// Where background delegations run (RFC §23.1).
     pub(crate) task_runner: Arc<dyn crate::tasks::TaskRunner<S>>,
+    /// The inline delegations running, which the kit holds until each
+    /// ends, its close among the ways (RFC §23.3).
+    pub(crate) inline_tasks: crate::tasks::HeldTasks,
     /// The tasks the turns' hosts delegated, kept for their `wait_task`
     /// (RFC §10.6.5).
     pub(crate) host_tasks: crate::tasks::HostTasks,
@@ -322,6 +326,7 @@ impl<S: ConversationStore> RoomKit<S> {
             identity_hooks: RwLock::new(Vec::new()),
             task_runner: task_runner
                 .unwrap_or_else(|| Arc::new(crate::tasks::InMemoryTaskRunner::new())),
+            inline_tasks: crate::tasks::HeldTasks::default(),
             host_tasks: crate::tasks::HostTasks::default(),
             delivery_strategy,
             delivery_backend,
