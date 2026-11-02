@@ -526,3 +526,104 @@ async fn a_cancel_leaves_a_delivery_the_worker_deferred_to_its_end() {
     );
     kit.close().await.unwrap();
 }
+
+/// An agent `worker` whose turn streams only its end at `max_rounds`, its
+/// output carrying `metadata` beside the stream.
+struct EndsAtMaxRounds {
+    metadata: roomkit::model::Metadata,
+}
+
+impl Channel for EndsAtMaxRounds {
+    fn channel_id(&self) -> ChannelId {
+        channel("worker")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Err("an agent is sent no message".into()))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        if event.source.channel_id == self.channel_id() {
+            return ready(Ok(ChannelOutput::empty()));
+        }
+        let end = roomkit::model::LoopEndMarker::new(roomkit::model::LoopEndReason::MaxRounds);
+        let items = Items(VecDeque::from([Ok(ResponseItem::LoopEnd(end))]));
+        let mut output = current_turn_host()
+            .unwrap()
+            .respond_with_stream(Box::pin(items));
+        output.response_metadata.extend(self.metadata.clone());
+        ready(Ok(output))
+    }
+}
+
+/// A response whose items are all ready.
+struct Items(VecDeque<Result<ResponseItem, ChannelError>>);
+
+impl Stream for Items {
+    type Item = Result<ResponseItem, ChannelError>;
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.get_mut().0.pop_front())
+    }
+}
+
+// Python: core/event_router.py stream_record, read by
+// core/mixins/_child_execution.py _persist_child_stream: the turn's record
+// lies over the stream's response metadata, so a stream's end at
+// `max_rounds` fails its task whatever else its output said.
+#[tokio::test]
+async fn a_stream_s_end_fails_its_task_beside_what_its_output_said() {
+    let mut metadata = roomkit::model::Metadata::new();
+    metadata.insert("model".to_owned(), serde_json::json!("m"));
+    let kit = kit_of(EndsAtMaxRounds { metadata }).await;
+    let options = DelegateOptions {
+        wait: true,
+        ..DelegateOptions::default()
+    };
+
+    let task = kit
+        .delegate(&room(), &channel("worker"), "go", options)
+        .await
+        .unwrap();
+
+    let result = task.result().unwrap();
+    assert_eq!(
+        (
+            result.status,
+            result.error.as_deref(),
+            result.metadata.get("loop_end_reason").cloned()
+        ),
+        (
+            TaskStatus::Failed,
+            Some("The worker's turn ended max_rounds before its answer"),
+            Some(serde_json::json!("max_rounds"))
+        )
+    );
+    kit.close().await.unwrap();
+}

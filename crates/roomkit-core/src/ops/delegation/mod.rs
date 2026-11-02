@@ -669,12 +669,11 @@ impl Operation for DelegatedTurn {
                 Outcome::Failed(error) => (Some(error), None),
                 _ => return Err(unexpected(id, "a stream's end")),
             };
-            // How the turn ended, read off its stream, as Python's
-            // `_persist_child_stream` reads `stream_record` (RFC §6.4).
-            if let (Some(answer), Some(ended)) = (self.answers.get_mut(slot), ended)
-                && answer.record.is_empty()
-            {
-                answer.record = ended;
+            // How the turn ended, read off its stream over what its output
+            // said, as Python's `stream_record` lays the turn's record over
+            // the stream's response metadata (RFC §6.4).
+            if let (Some(answer), Some(ended)) = (self.answers.get_mut(slot), ended) {
+                answer.record.extend(ended);
             }
             if let (Some(failed), Some(answer)) = (&error, self.answers.get(slot))
                 && let Some(responder) = self.binding_of(&answer.channel_id)

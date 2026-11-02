@@ -69,7 +69,7 @@ impl DelegatedTurn {
 
     /// Each agent's rows, the answers the room kept of it, in the order
     /// stored, and how a streamed turn ended, as the room's result names it
-    /// under `turns`; the cascade's error, a stream's failure, the agent's
+    /// under `turns`, over what its output said; the cascade's error, a stream's failure, the agent's
     /// whose turn it ended, or logged when that cannot be told.
     fn kept_by_the_room(&mut self, result: InboundResult) {
         let turns = result
@@ -86,8 +86,8 @@ impl DelegatedTurn {
             let ended = turns
                 .and_then(|turns| turns.get(answer.channel_id.as_str()))
                 .and_then(Value::as_object);
-            if let (true, Some(ended)) = (answer.record.is_empty(), ended) {
-                answer.record = ended.clone();
+            if let Some(ended) = ended {
+                answer.record.extend(ended.clone());
             }
         }
         let Some(error) = result.error else {
