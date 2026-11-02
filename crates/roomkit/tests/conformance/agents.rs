@@ -415,6 +415,9 @@ async fn answer(tool: &Value) -> Result<ToolResult, ToolError> {
     if let Some(text) = words("returns") {
         return Ok(ToolResult::Text(text));
     }
+    if let Some(value) = tool.get("returns_json") {
+        return Ok(ToolResult::Json(value.clone()));
+    }
     if let Some(raised) = tool.get("raises") {
         let field = |key: &str| raised[key].as_str().unwrap_or_default().to_owned();
         return Err(ToolError::raised_as(field("kind"), field("message")));

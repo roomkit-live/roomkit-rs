@@ -121,6 +121,7 @@ const TOOL: &[&str] = &[
     "hangs",
     "gate",
     "declared",
+    "returns_json",
 ];
 const RAISES: &[&str] = &["kind", "message"];
 const POLICY: &[&str] = &["allow", "deny"];
