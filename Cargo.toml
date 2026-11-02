@@ -46,6 +46,14 @@ serde_json = "1"
 # The SSE parser used by rmcp, for the optional bounded HTTP backend.
 sse-stream = "~0.2"
 sha2 = { version = "0.11", default-features = false }
+# Identity verification's secrets (RFC §11.7.7), hashed as the Python
+# implementation hashes them, scrypt salted with the request's id, so that
+# one store serves both (decided 2026-11-02, HITL of parity stream H): no
+# default features, the function alone.
+scrypt = { version = "0.12", default-features = false }
+# The secrets themselves, from the system's random source: already in the
+# graph through uuid.
+getrandom = "0.4"
 thiserror = "2"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
@@ -67,6 +75,21 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "query", "tokio", "ws"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect"] }
+
+# Identity verification's hash runs at its production work factor in the
+# tests and examples too (RFC §11.7.7): optimized in debug builds, one hash
+# costs tens of milliseconds rather than most of a second.
+[profile.dev.package.scrypt]
+opt-level = 3
+
+[profile.dev.package.salsa20]
+opt-level = 3
+
+[profile.dev.package.pbkdf2]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

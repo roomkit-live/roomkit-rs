@@ -21,6 +21,10 @@ serde.workspace = true
 # A tool call's result as its hooks read it (RFC §9.3), a JSON value; the
 # turn backend's messages, serialized and parsed.
 serde_json.workspace = true
+# A verification request's secret and its hash (RFC §11.7.7), as the
+# Python implementation draws and hashes them.
+getrandom.workspace = true
+scrypt.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
