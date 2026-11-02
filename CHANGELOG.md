@@ -34,6 +34,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   who said it, and stands as a message of the runtime's, fenced; the
   speakers it names count toward labelling the turns. A copy of the
   summary's header in someone's text reads as a copy of a runtime mark.
+- `roomkit_ai::tasks::TaskStatusTool` and `CancelTaskTool`, Python's (RFC
+  §23.4, RMK-1168): `task_status` and `cancel_task` as an agent's own
+  tools, reading the room and the channel of the call they serve.
+- `RoomKitError::ToolNameCollision`, Python's `ToolNameCollisionError`
+  (RFC §21.1, RMK-1168): `setup_background` and `setup_task_tools` refuse
+  a name one of the agent's own tools takes, or one the owner serves it
+  already (was `RoomKitError::Value` for the latter), and set up neither.
 - `RoomKitError::Runtime`, Python's builtin `RuntimeError` (decided by the
   maintainer, RMK-1168): a setup made twice, a verb a turn's host makes
   after its turn that needs it, a human-input request its handler gave up;
