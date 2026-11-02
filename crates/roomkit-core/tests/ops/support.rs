@@ -1375,11 +1375,11 @@ impl Sim {
         Outcome::Hook(HookAnswer::Observed)
     }
 
-    /// The failure of the effect `failing_effect` names, traced as failed.
-    fn refused(&mut self, request: &Request) -> Option<Outcome> {
-        let failing = self.failing_effect?;
+    /// The effect `request` is, as `failing_effect` names it, and the error
+    /// it fails with; `None` for an effect that never fails.
+    fn failure_of(&self, request: &Request) -> Option<(String, ErrorRecord)> {
         let store_down = || ErrorRecord::new("StoreUnavailable", "the store is down");
-        let (target, error) = match request {
+        Some(match request {
             Request::Store(StoreRequest::UpdateRoom { room_id, .. }) => {
                 (format!("update room {room_id}"), store_down())
             }
@@ -1467,7 +1467,13 @@ impl Sim {
             | Request::Identity(_)
             | Request::Channel(_)
             | Request::Hook(HookRequest::RunHook { .. }) => return None,
-        };
+        })
+    }
+
+    /// The failure of the effect `failing_effect` names, traced as failed.
+    fn refused(&mut self, request: &Request) -> Option<Outcome> {
+        let failing = self.failing_effect?;
+        let (target, error) = self.failure_of(request)?;
         let also = self
             .also_failing
             .is_some_and(|also| target.starts_with(also));
