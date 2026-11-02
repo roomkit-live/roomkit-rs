@@ -87,6 +87,43 @@ fn tool(name: &str) -> AiTool {
     AiTool::new(name, "looks things up ".repeat(30)).unwrap()
 }
 
+/// What `tool` costs as Python's `estimate_tool_tokens` measures it.
+fn tool_tokens(tool: &AiTool) -> usize {
+    // A tool taking no parameters declares none.
+    let parameters = match tool.parameters.as_object() {
+        Some(members) if members.is_empty() => 0,
+        _ => estimate_tokens(&roomkit_ai::dumps(&tool.parameters)),
+    };
+    estimate_tokens(&tool.name) + estimate_tokens(&tool.description) + parameters
+}
+
+/// The footprint `options`' agent measured on its turn answering `hello`
+/// outside a kit, recorded by its memory, and what its model was asked.
+async fn measured(options: AiChannelOptions) -> (Vec<Option<TurnFootprint>>, ScriptedProvider) {
+    let model = ScriptedProvider::new([ScriptedRound::answering("ok")]);
+    let memory = Measured::default();
+    let options = AiChannelOptions {
+        memory: Some(Arc::new(memory.clone())),
+        ..options
+    };
+    let agent = AiChannel::new(channel("agent"), model.clone(), options).unwrap();
+    let event = RoomEvent::new(
+        room_id(),
+        EventSource::new(channel("member"), ChannelType::WEBSOCKET),
+        EventContent::Text(TextContent::new("hello")),
+    );
+    let binding = ChannelBinding {
+        category: ChannelCategory::Intelligence,
+        ..ChannelBinding::new(channel("agent"), room_id(), ChannelType::AI)
+    };
+    agent
+        .on_event(event, binding, context_of(Vec::new()))
+        .await
+        .unwrap();
+    let footprints = memory.0.lock().unwrap().clone();
+    (footprints, model)
+}
+
 /// A context of room `r1`, where the agent and the member's channel are
 /// bound and `people` take part on the member's channel.
 fn context_of(people: Vec<Participant>) -> RoomContext {
@@ -131,18 +168,7 @@ async fn the_footprint_is_the_turn_as_its_first_round_sends_it() {
     agent.on_event(event, binding, context).await.unwrap();
 
     let sent = model.requests().remove(0);
-    let tools: usize = sent
-        .tools
-        .iter()
-        .map(|tool| {
-            // A tool taking no parameters declares none.
-            let parameters = match tool.parameters.as_object() {
-                Some(members) if members.is_empty() => 0,
-                _ => estimate_tokens(&roomkit_ai::dumps(&tool.parameters)),
-            };
-            estimate_tokens(&tool.name) + estimate_tokens(&tool.description) + parameters
-        })
-        .sum();
+    let tools: usize = sent.tools.iter().map(tool_tokens).sum();
     let prompt = estimate_tokens(sent.system_prompt.as_deref().unwrap_or(""));
     assert_eq!(
         memory.0.lock().unwrap().clone(),
@@ -226,6 +252,33 @@ async fn a_later_turn_is_measured_again_with_the_rounds_it_replays() {
         calls + 4 + results
     );
     assert_eq!(seen_in_handler.lock().unwrap().clone(), vec![None]);
+}
+
+// Python: tests/test_turn_footprint.py::test_the_footprint_is_the_turn_as_round_0_sends_it
+// (with tool_call_intents on: Python's request alone carries the intent
+// property, `_shown_to_model`, and the footprint measures the tools' own
+// schemas)
+#[tokio::test]
+async fn the_footprint_measures_the_tools_own_schemas_when_intents_are_on() {
+    let declared: Vec<AiTool> = (0..3).map(|n| tool(&format!("tool_{n}"))).collect();
+    let handler = ToolHandler::new(|_name, _arguments| async { Ok(ToolResult::Text("ok".into())) });
+    let options = AiChannelOptions {
+        tools: declared.iter().cloned().map(Into::into).collect(),
+        tool_handler: Some(handler),
+        tool_call_intents: true,
+        ..AiChannelOptions::default()
+    };
+    let (footprints, model) = measured(options).await;
+
+    let own: usize = declared.iter().map(tool_tokens).sum();
+    let shown: usize = model.requests()[0].tools.iter().map(tool_tokens).sum();
+    assert!(shown > own, "the request shows the intent property");
+    // No system prompt: an empty text's estimate.
+    let prompt = estimate_tokens("");
+    assert_eq!(
+        footprints,
+        vec![Some(TurnFootprint::new(prompt + own + NOTES_ROOM, 0))]
+    );
 }
 
 // Python: tests/test_people_taking_part.py::TestTheAgentKnowsWhoIsThere::test_the_turn_s_measure_counts_the_note

@@ -20,15 +20,15 @@ const CUT_NOTE: &str = "[Cut answers, from the runtime: when the person cuts you
 
 impl<P: AiProvider> Loop<P> {
     /// The turn's footprint: its system prompt, the tools its first round
-    /// declares, the notes the channel adds to its input (room for the
+    /// declares, measured on their own schemas (the intent property is the
+    /// request's), the notes the channel adds to its input (room for the
     /// speaker attribution and a cut answer's note, and the note naming the
     /// `people` taking part when two or more do), and the earlier `rounds`
     /// of tool calls its history replays, all of them (the window may drop
     /// some, never add one); its reply budget apart.
     pub(crate) fn footprint(&self, rounds: &[Vec<Message>], people: &[String]) -> TurnFootprint {
         let prompt = estimate_tokens(self.system_prompt.as_deref().unwrap_or(""));
-        let declared = self.shown_tools(self.toolbox.declared(&self.policy));
-        let tools: usize = declared.iter().map(estimate_tool_tokens).sum();
+        let tools: usize = self.declared().iter().map(estimate_tool_tokens).sum();
         let room: Vec<String> = [SPEAKER_ATTRIBUTION_NOTE.to_owned()]
             .into_iter()
             .chain(people_note(people))
