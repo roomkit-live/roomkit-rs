@@ -9,12 +9,15 @@
 //!
 //! - this module: the kit's calls;
 //! - `transitions`: the steps each call takes under the identity's lock;
+//! - `inbound`: what the inbound pipeline's step 5b asks the kit (RFC
+//!   §10.1 step 5b): a sender's verification, a code reply's attempt;
 //! - `timers`: the ends that come when their time runs out (RFC §11.7.5);
 //! - `announce`: the framework events and the hooks;
 //! - `state`, `secret`, `runtime`: what a record reads as, the secrets, and
 //!   what the kit holds.
 
 mod announce;
+pub(crate) mod inbound;
 mod runtime;
 mod secret;
 mod state;

@@ -89,6 +89,7 @@ mod result;
 mod stage;
 mod stamp;
 mod stream;
+mod verification;
 mod work_read;
 
 use std::collections::BTreeMap;

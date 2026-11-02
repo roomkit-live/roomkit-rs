@@ -136,6 +136,17 @@ impl<'a> People<'a> {
     }
 }
 
+/// The room's record `event`'s id names on its channel, if one: the
+/// record of that id reached through the channel, else one of the
+/// identity's records reached through it, else the sender's own record
+/// there (Python's `People(participants).named(event)`).
+pub(crate) fn named_record<'a>(
+    event: &RoomEvent,
+    participants: &'a [Participant],
+) -> Option<&'a Participant> {
+    People::new(participants).named(event)
+}
+
 /// Whether the room has identified `event`'s sender (RFC §11.6 case 2):
 /// the record its id names on its channel is IDENTIFIED. A PENDING or
 /// AMBIGUOUS record is no answer, and an id naming nobody on the channel

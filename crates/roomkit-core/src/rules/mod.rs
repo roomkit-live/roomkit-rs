@@ -26,6 +26,7 @@
 //! | [`instructions`] | §10.1.1: what an instruction must be before anything is read, what a modify keeps of it, what its turn reads, and its responses' fingerprint |
 //! | [`tool_intent`] | §6.4: a tool call's intent, the reserved property it rides in, how its value is normalized and how a replay shows it |
 //! | [`transcript`] | §6.4, §10.1.1 rule 6: the conversation an intelligence channel's turn reads, each message in its author's role, labelled by its speaker when several speak, an instruction marked as the application's, and no copy of the runtime's marks; a block text from outside cannot close |
+//! | [`verification`] | §10.1 step 5b, §11.7.3, §11.7.4: whose verification labels a message, a code reply's form, and how a message is held |
 //!
 //! The crate's own `threads` (§5.2, §10.1 step 8) gives the thread root an
 //! event's parent is rooted to, and its own `records` (§5.1 Lifecycle
@@ -62,5 +63,6 @@ pub mod transcoding;
 pub mod transcript;
 mod unicode;
 mod unicode_data;
+pub mod verification;
 
 pub use self::permissions::{visibility_allows, visible_events};

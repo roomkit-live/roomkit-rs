@@ -13,6 +13,7 @@ use crate::model::{
 };
 use crate::ops::ChannelConfig;
 use crate::rules::transcript::RUNTIME_RECORD;
+use crate::rules::verification::HELD_KEY;
 use crate::rules::{chain_depth, edits, idempotency, instructions, permissions};
 
 /// The event a channel that keeps no data of its own parses from `message`:
@@ -59,8 +60,10 @@ pub fn default_inbound_event(
 /// carries the caller's metadata and its `standalone` word (RFC §10.1.1
 /// rules 3 and 4). No trigger carries the key a response to an instruction
 /// records, whoever wrote it (gap G-065), nor a runtime record, which says
-/// which text the runtime wrote (RFC §6.4), as Python's
-/// `_without_runtime_keys` drops it.
+/// which text the runtime wrote (RFC §6.4), nor the mark of a message held
+/// for verification, whose release would otherwise hand a sender's message
+/// to the agents as another's (RFC §11.7.3), as Python's
+/// `_without_runtime_keys` drops them.
 pub(crate) fn stamp_trigger(
     mut event: RoomEvent,
     message: &InboundMessage,
@@ -78,6 +81,8 @@ pub(crate) fn stamp_trigger(
     instructions::clear_fingerprint(&mut event);
     // Which text is the runtime's (RFC §6.4): never a sender's to say.
     event.metadata.remove(RUNTIME_RECORD);
+    // Which message the runtime holds for verification (RFC §11.7.3).
+    event.metadata.remove(HELD_KEY);
     reset_commit_fields(event)
 }
 

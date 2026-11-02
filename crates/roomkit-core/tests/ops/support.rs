@@ -1102,6 +1102,12 @@ impl Sim {
             Request::Identity(IdentityRequest::RunHooks { trigger, .. }) => {
                 format!("identity hooks {trigger:?}")
             }
+            Request::Identity(IdentityRequest::Verification { identity_id, .. }) => {
+                format!("verification of {identity_id}")
+            }
+            Request::Identity(IdentityRequest::TryCode { request_id, .. }) => {
+                format!("try code of {request_id}")
+            }
             Request::Route { query } => format!("route {} {}", query.channel_id, query.sender_id),
             Request::Channel(ChannelRequest::HandleInbound { channel_id, .. }) => {
                 format!("handle_inbound {channel_id}")

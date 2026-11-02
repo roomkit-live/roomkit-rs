@@ -11,16 +11,13 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use roomkit_core::model::VerificationPolicy;
 use tokio::task::AbortHandle;
 
-/// The kit's verification state, Python's `_verification_policy`,
-/// `_verification_inbound` and `_verification_timers`.
+/// The kit's verification state, Python's `_verification_policy` and
+/// `_verification_timers`; whether its pipeline labels and holds (Python's
+/// `_verification_inbound`) is the core's `KitConfig::verification`.
 #[derive(Debug)]
 pub(crate) struct Verifications {
     /// The policy the kit was built with, the defaults for none.
     pub(super) policy: VerificationPolicy,
-    /// Whether the kit was built with a policy: the inbound pipeline then
-    /// labels and holds (RFC §11.7.3).
-    #[expect(dead_code, reason = "the inbound step 5b reads it (RMK-1172)")]
-    pub(super) inbound: bool,
     timers: Mutex<HashMap<String, Timer>>,
     /// The generation of the next timer armed.
     generation: AtomicU64,
@@ -38,7 +35,6 @@ impl Verifications {
     /// The state of a kit built with `policy`.
     pub(crate) fn new(policy: Option<VerificationPolicy>) -> Self {
         Self {
-            inbound: policy.is_some(),
             policy: policy.unwrap_or_default(),
             timers: Mutex::default(),
             generation: AtomicU64::new(0),

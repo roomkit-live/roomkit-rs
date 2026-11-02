@@ -28,7 +28,7 @@ use crate::context::{ExecutionContext, HookBody, RunShared};
 use crate::error::RoomKitError;
 use crate::events::Handled;
 use crate::hooks;
-use crate::kit::{Inner, run_identity_hooks};
+use crate::kit::{Inner, run_identity_hooks, verification_inbound as verification};
 use crate::room_turns::{self, Queued, Started};
 use crate::router;
 use crate::sends::CIRCUIT_OPEN;
@@ -165,6 +165,15 @@ pub(super) async fn identity<S: ConversationStore>(
             let answer = run_identity_hooks(inner, trigger, &event, &context, &result).await;
             IdentityAnswer::Hooked(answer.map(Box::new)).into()
         }
+        IdentityRequest::Verification {
+            identity_id,
+            organization_id,
+        } => verification::read(inner, &identity_id, organization_id).await,
+        IdentityRequest::TryCode {
+            request_id,
+            room_id,
+            code,
+        } => verification::try_code(inner, &request_id, &room_id, &code).await,
     }
 }
 

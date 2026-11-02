@@ -104,6 +104,7 @@ pub use self::steering::SteerOptions;
 pub use self::task_cancel::CancelTaskOptions;
 pub use self::tasks::DelegateOptions;
 pub(crate) use self::tasks::TaskEnd;
+pub(crate) use self::verification::inbound as verification_inbound;
 pub use self::verification::{
     CompleteVerificationOptions, RecordFailedAttemptOptions, RequestVerificationOptions,
     RevokeVerificationOptions, VerificationOfOptions,
@@ -287,6 +288,7 @@ impl<S: ConversationStore> RoomKit<S> {
             channel_types: identity_channel_types.clone(),
             timeout: identity_timeout,
         });
+        config.verification.clone_from(&verification_policy);
         let inner = Arc::new_cyclic(|kit: &Weak<Inner<S>>| Inner {
             config: RwLock::new(Arc::new(config)),
             channels: RwLock::new(HashMap::new()),

@@ -28,9 +28,10 @@ use std::mem;
 use super::answers::MessageAnswers;
 use super::charge::DeliveryCharge;
 use super::deadline::Stopped;
-use super::identity::{self, Identification, Identified};
+use super::identity::{self, Identification, Identified, Participation};
 use super::instructions::{self, Admission};
 use super::named_room::{Mode, Named, NamedRoom};
+use super::verification::{self, Verifying};
 use super::{InboundError, InboundResult, result, stamp};
 use crate::model::{
     ChannelType, EventId, EventType, Identity, InboundMessage, RoomContext, RoomEvent, RoomId,
@@ -195,6 +196,8 @@ enum State {
     },
     /// Step 5: who sent the message (RFC §11).
     Identifying(Box<Identification>),
+    /// Step 5b: the sender's verification (RFC §11.7).
+    Verifying(Box<Verifying>),
     Done,
 }
 
@@ -294,6 +297,7 @@ impl Arrival {
             } => *awaited == effect,
             State::Naming(step) => step.awaits(effect),
             State::Identifying(step) => step.awaits(effect),
+            State::Verifying(step) => step.awaits(effect),
             State::Start | State::Done => false,
         }
     }
@@ -345,13 +349,34 @@ impl Arrival {
                     self.state = State::Identifying(step);
                     Progress::Waiting
                 }
-                Progress::Done(resolved) => Progress::Done(resolved.map(|resolved| {
+                Progress::Done(Ok(resolved)) => {
+                    let identity = match &resolved.identified {
+                        Identified::Proceed(Some(Participation::Identified(identity))) => {
+                            Some((**identity).clone())
+                        }
+                        Identified::Proceed(_) | Identified::Held(_) => None,
+                    };
+                    let held = matches!(resolved.identified, Identified::Held(_));
                     self.identified = Some(resolved.identified);
-                    Arrived {
+                    let arrived = Arrived {
                         event: resolved.event,
                         context: resolved.context,
+                    };
+                    if held {
+                        return Progress::Done(Ok(arrived));
                     }
-                })),
+                    self.verify(cx, arrived, identity.as_ref())
+                }
+                Progress::Done(Err(stopped)) => Progress::Done(Err(stopped)),
+            },
+            State::Verifying(mut step) => match step.accept(cx, effect, outcome) {
+                Progress::Waiting => {
+                    self.state = State::Verifying(step);
+                    Progress::Waiting
+                }
+                Progress::Done(verified) => {
+                    Progress::Done(verified.map(|(event, context)| Arrived { event, context }))
+                }
             },
             state @ (State::Start
             | State::Resolving(_)
@@ -563,7 +588,7 @@ impl Arrival {
                 &mut arrived.event,
                 &arrived.context,
             );
-            return Progress::Done(Ok(arrived));
+            return self.verify(cx, arrived, None);
         }
         let step = Identification::start(
             cx,
@@ -573,6 +598,25 @@ impl Arrival {
             self.bound,
         );
         self.state = State::Identifying(Box::new(step));
+        Progress::Waiting
+    }
+
+    /// Step 5b once step 5 let the message through: the verification of its
+    /// sender, the identity step 5 `resolved` or the room's identified
+    /// participant the event names, when the kit verifies its senders (RFC
+    /// §10.1 step 5b, §11.7.3); the message goes on at once otherwise.
+    fn verify(
+        &mut self,
+        cx: &mut Cx<'_>,
+        arrived: Arrived,
+        resolved: Option<&Identity>,
+    ) -> Arriving {
+        let Some(sender) = verification::sender(cx, &arrived.event, &arrived.context, resolved)
+        else {
+            return Progress::Done(Ok(arrived));
+        };
+        let step = Verifying::start(cx, arrived.event, arrived.context, sender, self.bound);
+        self.state = State::Verifying(Box::new(step));
         Progress::Waiting
     }
 

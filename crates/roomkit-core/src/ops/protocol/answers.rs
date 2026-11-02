@@ -8,7 +8,7 @@ use super::{
 };
 use crate::model::{
     ChannelId, ChannelOutput, DeliveryError, ErrorRecord, Identity, IdentityHookResult,
-    IdentityResult, RoomContext, RoomEvent, RoomId,
+    IdentityResult, RoomContext, RoomEvent, RoomId, Verification,
 };
 use crate::rules::hook_chain::HookOutcome;
 
@@ -46,6 +46,10 @@ pub(crate) enum RequestKind {
     ResolveSender,
     /// The kit's identity hooks run (RFC §11.2).
     RunIdentityHooks,
+    /// A sender's verification read (RFC §11.7.1).
+    ReadVerification,
+    /// A code reply attempted (RFC §11.7.4).
+    TryCode,
 }
 
 impl Request {
@@ -65,6 +69,8 @@ impl Request {
             Self::Route { .. } => RequestKind::Route,
             Self::Identity(IdentityRequest::Resolve { .. }) => RequestKind::ResolveSender,
             Self::Identity(IdentityRequest::RunHooks { .. }) => RequestKind::RunIdentityHooks,
+            Self::Identity(IdentityRequest::Verification { .. }) => RequestKind::ReadVerification,
+            Self::Identity(IdentityRequest::TryCode { .. }) => RequestKind::TryCode,
         }
     }
 }
@@ -148,6 +154,8 @@ impl RequestKind {
             Self::Route => "Routed",
             Self::ResolveSender => "Resolved or TimedOut",
             Self::RunIdentityHooks => "Hooked",
+            Self::ReadVerification => "Verification",
+            Self::TryCode => "CodeTried",
         }
     }
 
@@ -206,6 +214,10 @@ impl RequestKind {
             Self::RunIdentityHooks => {
                 matches!(outcome, Outcome::Identity(IdentityAnswer::Hooked(_)))
             }
+            Self::ReadVerification => {
+                matches!(outcome, Outcome::Identity(IdentityAnswer::Verification(_)))
+            }
+            Self::TryCode => matches!(outcome, Outcome::Identity(IdentityAnswer::CodeTried(_))),
         }
     }
 
@@ -429,6 +441,23 @@ impl Outcome {
         }
     }
 
+    /// A sender's verification as it stands (RFC §11.7.1).
+    pub(crate) fn into_verification(self) -> Result<Box<Verification>, ErrorRecord> {
+        match self {
+            Self::Identity(IdentityAnswer::Verification(verification)) => Ok(verification),
+            other => Err(other.into_failure()),
+        }
+    }
+
+    /// Whether a message replied to its sender's open code request,
+    /// attempted (RFC §11.7.4).
+    pub(crate) fn into_code_tried(self) -> Result<bool, ErrorRecord> {
+        match self {
+            Self::Identity(IdentityAnswer::CodeTried(tried)) => Ok(tried),
+            other => Err(other.into_failure()),
+        }
+    }
+
     /// The room a router chose, `None` for a new room.
     pub(crate) fn into_routed(self) -> Result<Option<RoomId>, ErrorRecord> {
         match self {
@@ -508,6 +537,8 @@ impl Outcome {
             Self::Identity(IdentityAnswer::Resolved(_)) => "Resolved",
             Self::Identity(IdentityAnswer::TimedOut) => "TimedOut",
             Self::Identity(IdentityAnswer::Hooked(_)) => "Hooked",
+            Self::Identity(IdentityAnswer::Verification(_)) => "Verification",
+            Self::Identity(IdentityAnswer::CodeTried(_)) => "CodeTried",
             Self::Failed(_) => "Failed",
             Self::DeadlinePassed => "DeadlinePassed",
         }

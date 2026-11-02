@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::model::{
     AgentResponsePolicy, ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection,
-    ChannelId, ChannelMediaType, ChannelType, RoomId, Timestamp,
+    ChannelId, ChannelMediaType, ChannelType, RoomId, Timestamp, VerificationPolicy,
 };
 use crate::rules::addresses::{self, AddressForm, Addressing, CountryCode};
 use crate::rules::chain_depth::DEFAULT_MAX_CHAIN_DEPTH;
@@ -200,6 +200,12 @@ pub struct KitConfig {
     /// Identity resolution (RFC §10.1 step 5, §11): `None`, the default,
     /// when the kit has no identity resolver.
     pub identity: Option<IdentityConfig>,
+    /// Identity verification's policy (RFC §10.1 step 5b, §11.7.3): with
+    /// one, the pipeline labels an identified sender's messages with their
+    /// verification and holds an unverified sender's from the room's agents
+    /// (`hold_unverified`); `None`, the default, leaves the pipeline as it
+    /// is.
+    pub verification: Option<VerificationPolicy>,
 }
 
 /// How a kit resolves its senders' identities (RFC §11.4, §11.5).
@@ -223,6 +229,7 @@ impl KitConfig {
             process_timeout: None,
             agent_response_policy: AgentResponsePolicy::default(),
             identity: None,
+            verification: None,
         }
     }
 

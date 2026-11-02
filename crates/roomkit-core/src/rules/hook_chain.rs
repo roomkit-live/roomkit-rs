@@ -7,7 +7,9 @@
 
 use std::time::Duration;
 
-use crate::model::{ErrorRecord, HookAction, HookResult, InjectedEvent, Observation, Task};
+use crate::model::{
+    ErrorRecord, HookAction, HookResult, InjectedEvent, Metadata, Observation, Task,
+};
 use crate::rules::hook_registry::{HookSpec, HookTrigger};
 
 /// What running one hook produced, as the driver observed it.
@@ -112,6 +114,11 @@ pub(crate) struct ChainVerdict<P> {
     pub observations: Vec<Observation>,
     /// The hooks that produced no usable result.
     pub incidents: Vec<HookIncident>,
+    /// The metadata of the hooks' results, merged in hook order, a later
+    /// hook's key over an earlier one's (Python's `SyncPipelineResult
+    /// .metadata`): what `ON_VERIFICATION_REQUIRED` reads its decision in
+    /// (RFC §11.7.3).
+    pub metadata: Metadata,
 }
 
 /// A chain of SYNC hooks on one payload, fed one outcome at a time.
@@ -124,6 +131,7 @@ pub(crate) struct HookChain<P> {
     tasks: Vec<Task>,
     observations: Vec<Observation>,
     incidents: Vec<HookIncident>,
+    metadata: Metadata,
 }
 
 impl<P> HookChain<P> {
@@ -137,6 +145,7 @@ impl<P> HookChain<P> {
             tasks: Vec::new(),
             observations: Vec::new(),
             incidents: Vec::new(),
+            metadata: Metadata::new(),
         }
     }
 
@@ -208,6 +217,7 @@ impl<P> HookChain<P> {
             tasks: self.tasks,
             observations: self.observations,
             incidents: self.incidents,
+            metadata: self.metadata,
         }
     }
 
@@ -224,6 +234,7 @@ impl<P> HookChain<P> {
         self.injected_events.extend(result.injected_events);
         self.tasks.extend(result.tasks);
         self.observations.extend(result.observations);
+        self.metadata.extend(result.metadata);
         match (result.action, result.event) {
             (HookAction::Modify, Some(payload)) => self.payload = keep(payload),
             (HookAction::Block, _) => self.block = Some((hook.name.clone(), result.reason)),

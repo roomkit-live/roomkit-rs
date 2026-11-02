@@ -6,9 +6,9 @@ use std::time::Duration;
 use super::EffectId;
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, ChannelType, DeliveryError, ErrorRecord, EventId,
-    EventUpdates, Identity, IdentityHookResult, IdentityResult, InboundMessage, Metadata,
-    Observation, Participant, ProviderResult, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
-    Task, Timestamp,
+    EventUpdates, Identity, IdentityHookResult, IdentityId, IdentityResult, InboundMessage,
+    Metadata, Observation, Participant, ProviderResult, Room, RoomContext, RoomEvent, RoomId,
+    RoomUpdates, Task, Timestamp, Verification,
 };
 use crate::ops::RecentEvents;
 use crate::rules::hook_chain::HookOutcome;
@@ -468,6 +468,30 @@ pub enum IdentityRequest {
         /// type filled in.
         result: Box<IdentityResult>,
     },
+    /// Read the verification of `identity_id` in `organization_id` as it
+    /// stands now (RFC §10.1 step 5b, §11.7.1): the kit's
+    /// `verification_of`, UNVERIFIED for an identity with none. Answer
+    /// [`IdentityAnswer::Verification`].
+    Verification {
+        /// The sender's identity.
+        identity_id: IdentityId,
+        /// The room's organization (RFC §11.7.7).
+        organization_id: Option<String>,
+    },
+    /// Attempt `code`, a message's whole text, against the request
+    /// `request_id` when it is an open code request of `room_id` (RFC
+    /// §11.7.4): the kit's `complete_verification`, a refusal (a wrong code,
+    /// counted) kept from the message. Answer [`IdentityAnswer::CodeTried`]
+    /// with whether the message replied to the request, attempted; no
+    /// deadline bounds it, as none bounds a write (RFC §13.6).
+    TryCode {
+        /// The identity's open request.
+        request_id: String,
+        /// The message's room.
+        room_id: RoomId,
+        /// The code the message replies with.
+        code: String,
+    },
 }
 
 /// The driver's answer to an [`IdentityRequest`].
@@ -479,6 +503,11 @@ pub enum IdentityAnswer {
     TimedOut,
     /// The first identity hook's answer, `None` when none answered.
     Hooked(Option<Box<IdentityHookResult>>),
+    /// The sender's verification as it stands (RFC §11.7.1).
+    Verification(Box<Verification>),
+    /// Whether the message replied to the open code request, attempted
+    /// (RFC §11.7.4).
+    CodeTried(bool),
 }
 
 /// The driver's answer to an effect, of its request's family, or one of
