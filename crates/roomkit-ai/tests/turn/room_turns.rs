@@ -551,3 +551,73 @@ async fn an_agent_asked_again_in_the_same_delivery_is_not_held_by_its_first_turn
     );
     room.kit.close().await.unwrap();
 }
+
+/// Sends `body` to the room with its delivery named `key`, deferred.
+async fn send_keyed(kit: &RoomKit, body: &str, key: &str) -> InboundResult {
+    let mut message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new(body));
+    message.delivery_key = Some(key.to_owned());
+    let options = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        defer_delivery: true,
+        ..ProcessInboundOptions::default()
+    };
+    kit.process_inbound(message, options).await.unwrap()
+}
+
+/// The cancellation reason `result`'s delivery ends with.
+async fn cancellation_of(result: &InboundResult) -> Option<String> {
+    let delivery = result.delivery.as_ref().unwrap();
+    tokio::time::timeout(WAIT, delivery.wait())
+        .await
+        .unwrap()
+        .unwrap()
+        .cancellation_reason
+}
+
+// Python: tests/test_delivery_cancel_turns.py::test_a_turn_queued_behind_the_room_s_turn_never_starts[serial]
+#[tokio::test]
+async fn a_turn_waiting_its_place_never_starts_once_its_delivery_is_cancelled() {
+    let model = Gated::default();
+    let room = serialized(model.clone(), |options| options).await;
+    let a = send_keyed(&room.kit, "task A", "a").await;
+    model.until_started("task A").await;
+    let b = send_keyed(&room.kit, "task B", "b").await;
+
+    let options = roomkit::CancelDeliveryOptions::default();
+    assert_eq!(room.kit.cancel_delivery("b", options).await, 1);
+    // B's delivery is over once its turn is, which waited its place behind
+    // A's: A still runs.
+    assert_eq!(
+        cancellation_of(&b).await.as_deref(),
+        Some("caller_cancelled")
+    );
+    model.answer("task A");
+    assert_eq!(cancellation_of(&a).await, None);
+
+    assert_eq!(model.asked(), ["task A"]);
+    assert_eq!(said(&room.kit, "assistant").await, ["answer to task A"]);
+    room.kit.close().await.unwrap();
+}
+
+// Python: tests/test_delivery_cancel_turns.py::test_a_running_turn_is_cut_and_the_room_s_next_turn_runs[serial]
+#[tokio::test]
+async fn a_running_turn_cut_lets_the_room_s_next_turn_run() {
+    let model = Gated::default();
+    let room = serialized(model.clone(), |options| options).await;
+    let a = send_keyed(&room.kit, "task A", "a").await;
+    model.until_started("task A").await;
+    let b = send_keyed(&room.kit, "task B", "b").await;
+
+    let options = roomkit::CancelDeliveryOptions::default();
+    assert_eq!(room.kit.cancel_delivery("a", options).await, 1);
+    assert_eq!(
+        cancellation_of(&a).await.as_deref(),
+        Some("caller_cancelled")
+    );
+    model.until_started("task B").await;
+    model.answer("task B");
+    assert_eq!(cancellation_of(&b).await, None);
+
+    assert_eq!(said(&room.kit, "assistant").await, ["answer to task B"]);
+    room.kit.close().await.unwrap();
+}
