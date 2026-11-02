@@ -6,6 +6,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `RoomKitOptions::media_resolver` and `RoomKitOptions::attached_media`,
+  Python's `RoomKit(media_resolver=..., attached_media=...)` (RFC §6.4,
+  RMK-1190): `MediaResolver` gives the bytes of a reference an author
+  sent, `AttachedMedia` names the media an event carries outside its
+  content, and every AI channel registered on the kit reads its turns'
+  events with them, the store and the broadcasts keeping the events as
+  stored; an agent's own `image_resolver` comes first.
+- An AI channel remembers the author images its provider refused (RFC
+  §6.4, RMK-1190), as Python's `RefusedImages`: a turn's first request
+  that carried images and failed on an error not retried, of no status
+  about the key, the bill, a permission, the model or the rate, before
+  anything streamed, marks them refused in the room, and later turns read
+  `[Image refused by the model's provider: “<name>”]` in their place.
 - Delegation and human input as Python's (RFC §9.3, §19.8, §23.3,
   RMK-1192): `delegate` lets a store's failure to read the parent room
   through, no longer `RoomNotFound`; a delegated agent's buffered answers

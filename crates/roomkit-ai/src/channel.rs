@@ -20,7 +20,8 @@ use roomkit_core::rules::transcript::{
 use serde_json::Value;
 
 use crate::author_images::{
-    AuthorImages, DEFAULT_MAX_AUTHOR_IMAGES, ImageResolver, author_images, unseen_images,
+    AuthorImages, DEFAULT_MAX_AUTHOR_IMAGES, ImageResolver, RefusedImages, Resolver, SentImages,
+    author_images, unseen_images, with_attached_media,
 };
 use crate::error::AiError;
 use crate::human_input::HumanInputToolHandler;
@@ -267,12 +268,33 @@ pub struct AiChannel<P> {
 }
 
 /// How an AI channel reads its authors' media (RFC §6.4): Python's
-/// `_media_resolver`, `_max_author_images` and `_describe_empty_event`.
+/// `_media_resolver`, `_max_author_images`, `_describe_empty_event` and
+/// `_refused_images`.
 #[derive(Clone, Default)]
 struct MediaReading {
     resolver: Option<Arc<dyn ImageResolver>>,
     max_author_images: Option<usize>,
     describer: Option<Describer>,
+    refused: Arc<RefusedImages>,
+}
+
+/// The kit's readers of an author's media a turn reads (RFC §6.4), none
+/// outside the kit: what Python's kit wires into the channel.
+#[derive(Default)]
+struct KitMedia {
+    resolver: Option<roomkit::MediaResolver>,
+    attached: Option<roomkit::AttachedMedia>,
+}
+
+impl KitMedia {
+    /// The readers of the kit whose turn `turn` is.
+    fn of(turn: Option<&roomkit::TurnHost>) -> Self {
+        turn.map(|turn| Self {
+            resolver: turn.media_resolver(),
+            attached: turn.attached_media(),
+        })
+        .unwrap_or_default()
+    }
 }
 
 /// What a turn read of the room through its memory (RFC §20.2): its
@@ -432,6 +454,7 @@ impl<P: AiProvider> AiChannel<P> {
                 resolver: image_resolver,
                 max_author_images,
                 describer: describe_empty_event,
+                refused: Arc::default(),
             },
             skills,
             tool_call_intents,
@@ -586,18 +609,27 @@ impl<P: AiProvider> AiChannel<P> {
     ///
     /// The memory reads the room's messages and the turn's event, as
     /// Python's turn context holds them: the channel's earlier rounds are
-    /// read apart, so that they take none of its window.
+    /// read apart, so that they take none of its window. It reads each
+    /// message as the model does, the media the kit's `attached` reader
+    /// names among its parts (RFC §6.4), so that it measures and
+    /// summarizes what the turn sends.
     async fn recalled(
         &self,
         event: &RoomEvent,
         context: &RoomContext,
-        stands_alone: bool,
-        footprint: TurnFootprint,
+        (stands_alone, footprint): (bool, TurnFootprint),
+        attached: Option<&roomkit::AttachedMedia>,
     ) -> Result<Recalled, ChannelError> {
         let (rows, viewed): (Vec<RoomEvent>, Vec<RoomEvent>) = context
             .recent_events
             .iter()
-            .cloned()
+            .map(|past| {
+                if self.is_own_tool_row(past) {
+                    past.clone()
+                } else {
+                    with_attached_media(past, attached)
+                }
+            })
             .partition(|past| self.is_own_tool_row(past));
         let MemoryResult {
             messages,
@@ -666,15 +698,27 @@ impl<P: AiProvider> AiChannel<P> {
 
     /// What the images the turn's `history` and its input `event` carry
     /// become (RFC §6.4); for a model that does not see, a mention that it
-    /// does not see them. Python's `_author_images`.
-    async fn author_images(&self, event: &RoomEvent, history: &RoomContext) -> AuthorImages {
+    /// does not see them. A reference resolves through the agent's own
+    /// resolver, else the `kit`'s. Python's `_author_images`.
+    async fn author_images(
+        &self,
+        event: &RoomEvent,
+        history: &RoomContext,
+        kit: &KitMedia,
+    ) -> AuthorImages {
         let events: Vec<&RoomEvent> = history.recent_events.iter().chain([event]).collect();
         if !self.provider.supports_vision() {
             return unseen_images(&events);
         }
         let room = &history.room.id;
-        let resolver = self.media.resolver.as_deref();
-        author_images(&events, room, resolver, self.media.max_author_images).await
+        let resolver = match (&self.media.resolver, &kit.resolver) {
+            (Some(own), _) => Some(Resolver::Image(own.as_ref())),
+            (None, Some(kit)) => Some(Resolver::Media(kit)),
+            (None, None) => None,
+        };
+        let refused = self.media.refused.of(room);
+        let limit = self.media.max_author_images;
+        author_images(&events, room, resolver, limit, &refused).await
     }
 
     /// Whether `event` is one of the channel's tool-call rows.
@@ -918,16 +962,31 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             remembered: Vec::new(),
             loops: Arc::clone(&self.loops),
             adopted: Adopted::default(),
+            sent_images: None,
         };
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).
         let people = self.people(&context, stands_alone);
         let footprint = looped.footprint(&self.replayed(&context, stands_alone), &people);
+        // The event as the model reads it, the media the application keeps
+        // beside its content among its parts, as its history (RFC §6.4).
+        let kit = KitMedia::of(looped.turn.as_ref());
+        let read = with_attached_media(&event, kit.attached.as_ref());
         let recalled = self
-            .recalled(&event, &context, stands_alone, footprint)
+            .recalled(
+                &read,
+                &context,
+                (stands_alone, footprint),
+                kit.attached.as_ref(),
+            )
             .await?;
         looped.remembered = recalled.messages;
-        let images = self.author_images(&event, &recalled.history).await;
+        let images = self.author_images(&read, &recalled.history, &kit).await;
+        looped.sent_images = Some(SentImages {
+            refused: Arc::clone(&self.media.refused),
+            room: context.room.id.clone(),
+            keys: images.sent(),
+        });
         let reader = TurnReader {
             images: &images,
             vision: self.provider.supports_vision(),
@@ -935,7 +994,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         };
         let messages = conversation_with_memory(
             &self.channel_id,
-            &event,
+            &read,
             &recalled.history,
             usize::MAX,
             |name| self.toolbox.in_tool_memory(name),

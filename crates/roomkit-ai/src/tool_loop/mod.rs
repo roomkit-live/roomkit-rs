@@ -36,7 +36,7 @@ use roomkit_core::rules::transcript::{Message, Role};
 use serde_json::Value;
 use tokio::time::Instant;
 
-use self::generation::Generation;
+use self::generation::{Failed, Generation};
 pub(crate) use self::hooks::Adopted;
 use self::hooks::Ran;
 use self::rules::{Limits, final_round_reason};
@@ -148,6 +148,9 @@ pub(crate) struct Loop<P> {
     pub(crate) loops: Arc<Loops>,
     /// What the turn's hooks left of its context (RFC §6.4).
     pub(crate) adopted: Adopted,
+    /// The author images the turn's requests send, which a refusal of its
+    /// first request marks refused in the room (RFC §6.4).
+    pub(crate) sent_images: Option<crate::author_images::SentImages>,
 }
 
 impl<P: AiProvider> Loop<P> {
@@ -195,7 +198,8 @@ impl<P: AiProvider> Loop<P> {
             let read = Generation::read(&*self.provider, &context, &steering, &out, &prefix).await;
             let mut generation = match read {
                 Ok(generation) => generation,
-                Err(error) => {
+                Err(Failed { error, streamed }) => {
+                    self.refused(round == 0 && !streamed, &error);
                     let ending = (&limits, &steering, &out);
                     let failed = (had_tool_round, tool_rounds, spent);
                     return self.failed(failed, error, ending).await;
@@ -288,6 +292,16 @@ impl<P: AiProvider> Loop<P> {
         // Once the reader read past the end, as Python's turn reports it
         // when its stream is read to its close.
         self.report(reason, rounds, &spent);
+    }
+
+    /// The provider failed with `error` on a request, the turn's `first`
+    /// before anything streamed: the only one that can say its content was
+    /// refused, the author images it sent then refused in the room (RFC
+    /// §6.4).
+    fn refused(&self, first: bool, error: &ProviderError) {
+        if let (true, Some(sent)) = (first, &self.sent_images) {
+            sent.refused_by(error);
+        }
     }
 
     /// The provider failed with `error`: after a round of calls, the loop

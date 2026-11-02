@@ -39,6 +39,13 @@ pub(super) struct Called {
     pub(super) partial: Option<Partial>,
 }
 
+/// A generation its provider failed: the error, and whether the stream had
+/// handed anything before it.
+pub(super) struct Failed {
+    pub(super) error: ProviderError,
+    pub(super) streamed: bool,
+}
+
 /// Why a call never runs, whatever its tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Partial {
@@ -58,25 +65,29 @@ impl Generation {
     ///
     /// # Errors
     ///
-    /// Returns the provider's error.
+    /// Returns the provider's error, and whether the stream had handed
+    /// anything before it.
     pub(super) async fn read<P: AiProvider>(
         provider: &P,
         context: &AiContext,
         steering: &Steering,
         out: &Yielder<Result<TurnItem, ProviderError>>,
         prefix: &str,
-    ) -> Result<Self, ProviderError> {
+    ) -> Result<Self, Failed> {
         let mut stream = provider.generate_structured_stream(context);
         let mut text = String::new();
         let mut delivered = String::new();
         let mut replayed = Replayed::new(prefix);
         let mut calls = Vec::new();
         let mut done = StreamDone::default();
+        let mut streamed = false;
         while let Some(event) = next(&mut stream).await {
             if steering.cancelled() {
                 return Ok(Self::cut(text, delivered));
             }
-            match event? {
+            let event = event.map_err(|error| Failed { error, streamed })?;
+            streamed = true;
+            match event {
                 StreamEvent::TextDelta(delta) => {
                     text.push_str(&delta.text);
                     let released = replayed.add(delta.text);

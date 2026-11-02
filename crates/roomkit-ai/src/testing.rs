@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use roomkit::model::Metadata;
 
 use crate::provider::{
-    AiContext, AiProvider, AiResponse, ProviderError, ProviderStream, StreamDone, StreamEvent,
-    StreamTextDelta, read_tool_calls,
+    AiContext, AiProvider, AiResponse, ProviderError, ProviderErrorOptions, ProviderStream,
+    StreamDone, StreamEvent, StreamTextDelta, read_tool_calls,
 };
 use crate::stream::{Yielder, items};
 
@@ -61,6 +61,11 @@ pub struct ScriptedRound {
     /// The failure the generation ends on, once its text is written, before
     /// its calls and its done event: the provider's stream fails.
     pub fails: Option<String>,
+    /// The refusal the generation ends on, once its text is written,
+    /// before its calls and its done event: the provider refuses the
+    /// request with this HTTP status and message, an error it does not
+    /// retry.
+    pub refuses: Option<(u16, String)>,
     /// Whether its stream ends after its calls without its done event.
     pub without_done: bool,
 }
@@ -77,6 +82,7 @@ impl ScriptedRound {
                 ..StreamDone::default()
             },
             fails: None,
+            refuses: None,
             without_done: false,
         }
     }
@@ -109,6 +115,7 @@ impl ScriptedRound {
                 ..StreamDone::default()
             },
             fails: None,
+            refuses: None,
             without_done: false,
         }
     }
@@ -120,6 +127,29 @@ impl ScriptedRound {
         self.deltas = deltas.into_iter().map(str::to_owned).collect();
         self.text = self.deltas.concat();
         self
+    }
+
+    /// The same round, its provider refusing the request with the HTTP
+    /// `status` and `message` once its text is written, an error it does
+    /// not retry.
+    #[must_use]
+    pub fn refusing(mut self, status: u16, message: impl Into<String>) -> Self {
+        self.refuses = Some((status, message.into()));
+        self
+    }
+
+    /// The error the round ends on, if any: its failure, else its refusal.
+    fn failure(&self) -> Option<ProviderError> {
+        if let Some(failure) = &self.fails {
+            return Some(failure.clone().into());
+        }
+        self.refuses.as_ref().map(|(status, message)| {
+            let options = ProviderErrorOptions {
+                status_code: Some(*status),
+                ..ProviderErrorOptions::default()
+            };
+            ProviderError::new(message.clone(), options)
+        })
     }
 
     /// The same round, failing with `message` once its text is written:
@@ -209,8 +239,8 @@ impl AiProvider for ScriptedProvider {
                     out.give(Ok(StreamEvent::TextDelta(StreamTextDelta { text })))
                         .await;
                 }
-                if let Some(failure) = round.fails {
-                    return out.give(Err(failure.into())).await;
+                if let Some(failure) = round.failure() {
+                    return out.give(Err(failure)).await;
                 }
                 let finish_reason = round.done.finish_reason.as_deref();
                 for call in read_tool_calls(round.calls, finish_reason) {
@@ -228,8 +258,8 @@ impl ScriptedProvider {
     /// The next round, whole: its text, its calls, how it ended.
     fn whole(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
         let round = self.next_round(context)?;
-        if let Some(failure) = round.fails {
-            return Err(failure.into());
+        if let Some(failure) = round.failure() {
+            return Err(failure);
         }
         let calls = read_tool_calls(round.calls, round.done.finish_reason.as_deref());
         Ok(AiResponse {

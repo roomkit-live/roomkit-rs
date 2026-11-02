@@ -14,15 +14,30 @@
 //! that is no such image reads as its label (RFC §6.6), an image for a
 //! model that does not see as an image that model cannot see, an image past
 //! the bound as an earlier image not shown, a reference that does not
-//! resolve as an image unavailable.
+//! resolve as an image unavailable, an image a provider refused as
+//! refused. A request that carried author images and failed on a provider
+//! error not retried marks them refused in the room ([`RefusedImages`]):
+//! one the provider refused would fail every later turn while it stays in
+//! the window.
+//!
+//! An application that keeps a message's media beside its content names
+//! them through the kit's [`AttachedMedia`] reader, and the channel reads
+//! the event with them as parts ([`with_attached_media`]); a reference
+//! among an event's media resolves through the agent's [`ImageResolver`],
+//! else the kit's [`MediaResolver`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex, PoisonError};
 
-use roomkit::model::{EventContent, MediaContent, RoomEvent, RoomId};
+use roomkit::model::{CompositeContent, EventContent, EventType, MediaContent, RoomEvent, RoomId};
+use roomkit::{AttachedMedia, MediaResolver};
+use roomkit_core::rules::edits::is_deleted;
 use roomkit_core::rules::transcoding::text_of;
 use roomkit_core::rules::transcript::{Image, Part, quoted};
+
+use crate::provider::ProviderError;
 
 /// Host-owned, room-authorized resolution of an opaque image reference (RFC §6.4).
 /// Return a resolved data/HTTP image, or `None` for missing/inaccessible content.
@@ -48,12 +63,23 @@ const VISION_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "
 const EARLIER: &str = "Earlier image not shown";
 const NOT_SEEN: &str = "Image not shown, this model does not see images";
 const UNAVAILABLE: &str = "Image unavailable";
+const REFUSED: &str = "Image refused by the model's provider";
 /// How many characters of an image's name a mention quotes.
 const NAME_CHARS: usize = 120;
+/// The size of an image every vision provider takes, read on its bytes:
+/// Python's `MAX_AUTHOR_IMAGE_BYTES`.
+const MAX_AUTHOR_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+/// The rooms whose refused images a channel keeps, the oldest dropped
+/// past it: Python's `_MAX_ROOMS`.
+const MAX_ROOMS: usize = 100;
+/// The statuses of an error that is not about a request's content: an
+/// authentication, a payment, a permission, a missing model, a rate
+/// limit. Python's `_NOT_CONTENT_STATUSES`.
+const NOT_CONTENT_STATUSES: [u16; 5] = [401, 402, 403, 404, 429];
 
 /// An author image: the id of the event that brought it, and its part's
 /// index (0 for a lone media).
-type ImageKey = (String, usize);
+pub(crate) type ImageKey = (String, usize);
 
 /// What an author image becomes: the image sent, or the mention in its
 /// place.
@@ -72,6 +98,15 @@ pub(crate) struct AuthorImages {
 }
 
 impl AuthorImages {
+    /// The images the turn sends as images: Python's `AuthorImages.sent`.
+    pub(crate) fn sent(&self) -> HashSet<ImageKey> {
+        self.decided
+            .iter()
+            .filter(|(_, decided)| matches!(decided, Decided::Image(_)))
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
     /// Whether the part `index` of the event `event_id` is an image this
     /// turn decided.
     pub(crate) fn decides(&self, event_id: &str, index: usize) -> bool {
@@ -119,16 +154,28 @@ pub(crate) fn unseen_images(events: &[&RoomEvent]) -> AuthorImages {
     AuthorImages { decided }
 }
 
+/// What resolves a turn's image references: the agent's own
+/// [`ImageResolver`], else the kit's [`MediaResolver`].
+#[derive(Clone, Copy)]
+pub(crate) enum Resolver<'a> {
+    /// The agent's (`AiChannelOptions::image_resolver`).
+    Image(&'a dyn ImageResolver),
+    /// The kit's (`RoomKitOptions::media_resolver`): Python's.
+    Media(&'a MediaResolver),
+}
+
 /// Decides what each image `events` carry becomes, the newest first, the
-/// newest `limit` sent, and resolves the references among those sent
-/// through `resolver`, for `room`. Python's `author_images`.
+/// newest `limit` sent, those `refused` in the room read as refused, and
+/// resolves the references among those sent through `resolver`, for
+/// `room`. Python's `author_images`.
 pub(crate) async fn author_images(
     events: &[&RoomEvent],
     room: &RoomId,
-    resolver: Option<&dyn ImageResolver>,
+    resolver: Option<Resolver<'_>>,
     limit: Option<usize>,
+    refused: &HashSet<ImageKey>,
 ) -> AuthorImages {
-    let (mut decided, references) = decide(events, limit);
+    let (mut decided, references) = decide(events, limit, refused);
     for (key, media) in references {
         let image = resolved(media, room, resolver).await;
         decided.insert(key, image);
@@ -137,11 +184,12 @@ pub(crate) async fn author_images(
 }
 
 /// The image or mention each image of `events` gets, and the references
-/// still to resolve among the images kept: the newest `limit` of them.
-/// Python's `_decide`.
+/// still to resolve among the images kept: the newest `limit` of them, an
+/// image `refused` taking no place among them. Python's `_decide`.
 fn decide<'a>(
     events: &[&'a RoomEvent],
     limit: Option<usize>,
+    refused: &HashSet<ImageKey>,
 ) -> (
     HashMap<ImageKey, Decided>,
     Vec<(ImageKey, &'a MediaContent)>,
@@ -156,7 +204,9 @@ fn decide<'a>(
             if seen || !is_vision_image(media) {
                 continue;
             }
-            if limit.is_some_and(|limit| kept >= limit) {
+            if refused.contains(&key) {
+                decided.insert(key, Decided::Mention(mention(REFUSED, media)));
+            } else if limit.is_some_and(|limit| kept >= limit) {
                 decided.insert(key, Decided::Mention(mention(EARLIER, media)));
             } else if is_reference(&media.url) {
                 kept += 1;
@@ -183,25 +233,167 @@ fn inline(media: &MediaContent) -> Decided {
 /// The image a reference names, as the host's `resolver` gives it for
 /// `room`, or the mention that takes its place when it gives none to send.
 /// Python's `_resolved`.
-async fn resolved(
-    media: &MediaContent,
-    room: &RoomId,
-    resolver: Option<&dyn ImageResolver>,
-) -> Decided {
-    let unavailable = || Decided::Mention(mention(UNAVAILABLE, media));
-    let (Some(resolver), Some(reference)) =
-        (resolver, Image::new(&media.url, &vision_image_type(media)))
-    else {
-        return unavailable();
+async fn resolved(media: &MediaContent, room: &RoomId, resolver: Option<Resolver<'_>>) -> Decided {
+    let kind = vision_image_type(media);
+    let image = match resolver {
+        None => None,
+        Some(Resolver::Image(resolver)) => match Image::new(&media.url, &kind) {
+            Some(reference) => resolver
+                .resolve(&reference, room)
+                .await
+                .filter(Image::is_resolved),
+            None => None,
+        },
+        Some(Resolver::Media(resolver)) => resolver
+            .call(media.clone(), room.clone())
+            .await
+            .filter(|data| !data.is_empty() && data.len() <= MAX_AUTHOR_IMAGE_BYTES)
+            .and_then(|data| Image::new(&to_data_uri(&data, &kind), &kind)),
     };
-    match resolver
-        .resolve(&reference, room)
-        .await
-        .filter(Image::is_resolved)
-    {
-        Some(image) => Decided::Image(image),
-        None => unavailable(),
+    image.map_or_else(
+        || Decided::Mention(mention(UNAVAILABLE, media)),
+        Decided::Image,
+    )
+}
+
+/// `data` as a base64 `data:` URI of the type `kind`: Python's
+/// `to_data_uri`, standard base64 with its padding.
+fn to_data_uri(data: &[u8], kind: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let byte = |at: usize| chunk.get(at).copied().unwrap_or(0);
+        let word = u32::from_be_bytes([0, byte(0), byte(1), byte(2)]);
+        for position in 0..4 {
+            let index = (word >> (18 - 6 * position)) & 0x3f;
+            let digit = usize::try_from(index)
+                .ok()
+                .and_then(|at| ALPHABET.get(at))
+                .copied();
+            match digit.filter(|_| position <= chunk.len()) {
+                Some(digit) => encoded.push(char::from(digit)),
+                None => encoded.push('='),
+            }
+        }
     }
+    format!("data:{kind};base64,{encoded}")
+}
+
+/// `event` as an AI channel reads it (RFC §6.4): its content, then the
+/// media the application's `reader` names for it, as the parts of one
+/// composite. The event itself when the reader names none, an
+/// instruction, the application's own direction, as it is, and a deleted
+/// event with its content withheld, its media with it (§10.3). Python's
+/// `with_attached_media`.
+pub(crate) fn with_attached_media(event: &RoomEvent, reader: Option<&AttachedMedia>) -> RoomEvent {
+    let Some(reader) = reader else {
+        return event.clone();
+    };
+    if event.r#type == EventType::Instruction || is_deleted(event) {
+        return event.clone();
+    }
+    let attached = reader.call(event);
+    if attached.is_empty() {
+        return event.clone();
+    }
+    match followed_by(&event.content, attached) {
+        Some(content) => RoomEvent {
+            content,
+            ..event.clone()
+        },
+        None => event.clone(),
+    }
+}
+
+/// `content`'s parts then `attached`; a text without words gives them its
+/// place. `None` when the parts make no composite. Python's
+/// `_followed_by`.
+fn followed_by(content: &EventContent, attached: Vec<MediaContent>) -> Option<EventContent> {
+    let mut parts: Vec<EventContent> = if let EventContent::Composite(composite) = content {
+        composite.parts().to_vec()
+    } else if matches!(content, EventContent::Text(text) if text.body.trim().is_empty()) {
+        Vec::new()
+    } else {
+        vec![content.clone()]
+    };
+    parts.extend(attached.into_iter().map(EventContent::Media));
+    if parts.len() == 1 {
+        return parts.pop();
+    }
+    CompositeContent::new(parts)
+        .ok()
+        .map(EventContent::Composite)
+}
+
+/// The author images a provider refused, per room: later turns send a
+/// mention in their place. Python's `RefusedImages`.
+#[derive(Debug, Default)]
+pub(crate) struct RefusedImages {
+    /// The rooms' refused images, the room refused in last at the back.
+    by_room: Mutex<VecDeque<(RoomId, HashSet<ImageKey>)>>,
+}
+
+impl RefusedImages {
+    /// The images refused in `room`.
+    pub(crate) fn of(&self, room: &RoomId) -> HashSet<ImageKey> {
+        let by_room = self.by_room.lock().unwrap_or_else(PoisonError::into_inner);
+        by_room
+            .iter()
+            .find(|(at, _)| at == room)
+            .map(|(_, keys)| keys.clone())
+            .unwrap_or_default()
+    }
+
+    /// Records `keys` as refused in `room`, the oldest room dropped past
+    /// [`MAX_ROOMS`].
+    fn add(&self, room: &RoomId, keys: &HashSet<ImageKey>) {
+        let mut by_room = self.by_room.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut refused = by_room
+            .iter()
+            .position(|(at, _)| at == room)
+            .and_then(|at| by_room.remove(at))
+            .map(|(_, refused)| refused)
+            .unwrap_or_default();
+        refused.extend(keys.iter().cloned());
+        by_room.push_back((room.clone(), refused));
+        while by_room.len() > MAX_ROOMS {
+            by_room.pop_front();
+        }
+    }
+}
+
+/// The author images a turn's requests send in its room, which a
+/// provider's refusal of the turn's first request marks refused there
+/// (RFC §6.4).
+#[derive(Clone, Debug)]
+pub(crate) struct SentImages {
+    pub(crate) refused: Arc<RefusedImages>,
+    pub(crate) room: RoomId,
+    pub(crate) keys: HashSet<ImageKey>,
+}
+
+impl SentImages {
+    /// Sends no more the images the turn's request carried, its provider
+    /// having refused `error` on it, an error that may be about its
+    /// content: they read as refused in the room's later turns. Python's
+    /// `_forget_sent_images`.
+    pub(crate) fn refused_by(&self, error: &ProviderError) {
+        if refuses_content(error) && !self.keys.is_empty() {
+            self.refused.add(&self.room, &self.keys);
+        }
+    }
+}
+
+/// Whether `error` may be the provider refusing what a request carried:
+/// not retried, and no authentication, payment, permission, missing model
+/// or rate limit (RFC §6.4). Only the turn's first request, before
+/// anything streamed, can say so: a later round, or a stream under way,
+/// shows the content was taken. Python's `refuses_content`.
+fn refuses_content(error: &ProviderError) -> bool {
+    !error.retryable
+        && !error
+            .status_code
+            .is_some_and(|status| NOT_CONTENT_STATUSES.contains(&status))
 }
 
 /// The text that takes an image's place, naming it as its author did: its
@@ -333,7 +525,14 @@ mod tests {
         let present = photo("e1", "attachment://present", "lamp.png");
         let missing = photo("e2", "attachment://missing", "gone.png");
         let room = RoomId::new("allowed").unwrap();
-        let images = author_images(&[&present, &missing], &room, Some(&resolver), Some(4)).await;
+        let images = author_images(
+            &[&present, &missing],
+            &room,
+            Some(super::Resolver::Image(&resolver)),
+            Some(4),
+            &HashSet::new(),
+        )
+        .await;
         let sent = Image::new("data:image/png;base64,AQIDBA==", "image/png").unwrap();
         assert_eq!(said(&images, &present), [Part::Image(sent)]);
         assert_eq!(
@@ -343,7 +542,14 @@ mod tests {
         assert_eq!(resolver.0.load(Ordering::SeqCst), 2);
         // Another room's turn is given none of them.
         let foreign = RoomId::new("foreign").unwrap();
-        let images = author_images(&[&present], &foreign, Some(&resolver), Some(4)).await;
+        let images = author_images(
+            &[&present],
+            &foreign,
+            Some(super::Resolver::Image(&resolver)),
+            Some(4),
+            &HashSet::new(),
+        )
+        .await;
         assert_eq!(
             said(&images, &present),
             text("[Image unavailable: “lamp.png”]")
@@ -362,7 +568,7 @@ mod tests {
         let refs: Vec<&RoomEvent> = events.iter().collect();
         let room = RoomId::new("allowed").unwrap();
         for (bound, sent) in [(Some(1), 1), (Some(0), 0), (None, 5)] {
-            let images = author_images(&refs, &room, None, bound).await;
+            let images = author_images(&refs, &room, None, bound, &HashSet::new()).await;
             let images_sent = events
                 .iter()
                 .flat_map(|event| said(&images, event))
@@ -376,11 +582,162 @@ mod tests {
     #[test]
     fn an_empty_data_uri_reads_as_unavailable() {
         let empty = photo("e1", "data:image/jpeg;base64,", "lamp.png");
-        let (decided, _) = decide(&[&empty], Some(4));
+        let (decided, _) = decide(&[&empty], Some(4), &HashSet::new());
         let images = AuthorImages { decided };
         assert_eq!(
             said(&images, &empty),
             text("[Image unavailable: “lamp.png”]")
         );
+    }
+
+    /// The kit's reader in the Python tests' shape: each file the event's
+    /// `files` metadata names, as a png.
+    fn reader() -> AttachedMedia {
+        AttachedMedia::new(|event| {
+            let files = event
+                .metadata
+                .get("files")
+                .and_then(|files| files.as_array());
+            files
+                .into_iter()
+                .flatten()
+                .filter_map(|name| name.as_str())
+                .map(|name| MediaContent::new(format!("app-media://{name}"), "image/png").unwrap())
+                .collect()
+        })
+    }
+
+    fn message(body: &str, files: &[&str]) -> RoomEvent {
+        let mut event = photo("e1", "app-media://unused", "unused.png");
+        event.content = EventContent::Text(roomkit::model::TextContent::new(body));
+        event
+            .metadata
+            .insert("files".to_owned(), serde_json::json!(files));
+        event
+    }
+
+    // Python: tests/test_attached_media.py::TestNotSeen::test_an_instruction_is_read_as_it_is
+    #[test]
+    fn an_instruction_is_read_as_it_is() {
+        let instruction = RoomEvent {
+            r#type: EventType::Instruction,
+            ..message("summarize the room", &["photo-1"])
+        };
+        assert_eq!(
+            with_attached_media(&instruction, Some(&reader())),
+            instruction
+        );
+    }
+
+    // Python: tests/test_attached_media.py::TestNotSeen::test_a_deleted_message_s_media_stays_withheld
+    #[test]
+    fn a_deleted_message_s_media_stays_withheld() {
+        let mut deleted = message("here is my lamp", &["photo-1"]);
+        deleted
+            .metadata
+            .insert("deleted".to_owned(), serde_json::Value::Bool(true));
+        assert_eq!(with_attached_media(&deleted, Some(&reader())), deleted);
+    }
+
+    // Python: tests/test_attached_media.py::TestWithoutWords::test_a_model_that_sees_gets_the_image_alone
+    #[test]
+    fn a_model_that_sees_gets_the_image_alone() {
+        let read = with_attached_media(&message(" ", &["photo-1"]), Some(&reader()));
+        let photo = MediaContent::new("app-media://photo-1", "image/png").unwrap();
+        assert_eq!(read.content, EventContent::Media(photo));
+    }
+
+    // Python: tests/test_attached_media.py::TestAttached::test_they_follow_the_events_own_media
+    #[test]
+    fn they_follow_the_events_own_media() {
+        let mut event = message("both", &["photo-1"]);
+        let own = MediaContent::new("data:image/png;base64,AQIDBA==", "image/png").unwrap();
+        let words = EventContent::Text(roomkit::model::TextContent::new("both"));
+        let parts = vec![words.clone(), EventContent::Media(own.clone())];
+        event.content = EventContent::Composite(CompositeContent::new(parts).unwrap());
+        let read = with_attached_media(&event, Some(&reader()));
+        let attached = MediaContent::new("app-media://photo-1", "image/png").unwrap();
+        let EventContent::Composite(read) = read.content else {
+            panic!("not a composite: {read:?}");
+        };
+        let expected = [
+            words,
+            EventContent::Media(own),
+            EventContent::Media(attached),
+        ];
+        assert_eq!(read.parts(), expected);
+    }
+
+    // Python: tests/test_author_images.py::TestReference::test_a_reference_reaches_the_model_as_the_hosts_image
+    #[tokio::test]
+    async fn a_reference_reaches_the_model_as_the_kit_s_image() {
+        let resolver = MediaResolver::new(|media, room| async move {
+            let bytes: &[u8] = match media.url.as_str() {
+                "app-media://one" => b"a",
+                "app-media://two" => b"ab",
+                "app-media://three" => b"abc",
+                _ => return None,
+            };
+            (room.as_str() == "allowed").then(|| bytes.to_vec())
+        });
+        let room = RoomId::new("allowed").unwrap();
+        let events = [
+            photo("e1", "app-media://one", "one.png"),
+            photo("e2", "app-media://two", "two.png"),
+            photo("e3", "app-media://three", "three.png"),
+            photo("e4", "app-media://none", "none.png"),
+        ];
+        let refs: Vec<&RoomEvent> = events.iter().collect();
+        let images = author_images(
+            &refs,
+            &room,
+            Some(super::Resolver::Media(&resolver)),
+            None,
+            &HashSet::new(),
+        )
+        .await;
+        let sent = |data: &str| {
+            let url = format!("data:image/png;base64,{data}");
+            vec![Part::Image(Image::new(&url, "image/png").unwrap())]
+        };
+        assert_eq!(said(&images, &events[0]), sent("YQ=="));
+        assert_eq!(said(&images, &events[1]), sent("YWI="));
+        assert_eq!(said(&images, &events[2]), sent("YWJj"));
+        assert_eq!(
+            said(&images, &events[3]),
+            text("[Image unavailable: “none.png”]")
+        );
+    }
+
+    // Python: tests/test_author_images.py::TestRefusal::test_an_error_that_is_not_about_the_content_refuses_nothing
+    #[test]
+    fn an_error_that_is_not_about_the_content_refuses_nothing() {
+        let room = RoomId::new("allowed").unwrap();
+        let error = |status: Option<u16>, retryable: bool| {
+            let options = crate::provider::ProviderErrorOptions {
+                status_code: status,
+                retryable,
+                ..Default::default()
+            };
+            ProviderError::new("refused", options)
+        };
+        for status in [401, 402, 403, 404, 429] {
+            assert!(!refuses_content(&error(Some(status), false)), "{status}");
+        }
+        assert!(!refuses_content(&error(Some(400), true)));
+        assert!(refuses_content(&error(Some(400), false)));
+        assert!(refuses_content(&error(None, false)));
+        // The refusal marks the images the request sent, in its room alone.
+        let refused = Arc::new(RefusedImages::default());
+        let sent = SentImages {
+            refused: Arc::clone(&refused),
+            room: room.clone(),
+            keys: HashSet::from([("e1".to_owned(), 0)]),
+        };
+        sent.refused_by(&error(Some(429), false));
+        assert!(refused.of(&room).is_empty());
+        sent.refused_by(&error(Some(400), false));
+        assert_eq!(refused.of(&room), sent.keys);
+        assert!(refused.of(&RoomId::new("other").unwrap()).is_empty());
     }
 }
