@@ -15,6 +15,7 @@ use serde_json::Value;
 use tokio::sync::{Notify, oneshot};
 use uuid::Uuid;
 
+use super::inputs::ExecutorInputs;
 use crate::error::RoomKitError;
 use crate::turn::{OwnerToolAnswer, TurnKit};
 use crate::turns::codec::{encode_end, encode_end_item, encode_start};
@@ -240,6 +241,8 @@ pub(crate) struct HostLink {
     kit: Arc<dyn TurnKit>,
     /// The tools the owner serves the turn, as its request lists them.
     owner_tools: Vec<OwnerTool>,
+    /// The turn's open human-input requests (RFC §10.6.5).
+    inputs: Arc<ExecutorInputs>,
 }
 
 impl std::fmt::Debug for HostLink {
@@ -262,6 +265,7 @@ impl HostLink {
     ) -> Self {
         Self {
             facts,
+            inputs: Arc::new(ExecutorInputs::new(Arc::clone(&sender))),
             sender,
             open: AtomicBool::new(true),
             pending: Mutex::new(HashMap::new()),
@@ -487,10 +491,19 @@ impl HostLink {
         self.settled.notify_waiters();
     }
 
-    /// The turn ended: its host's verbs cross as `room_call` from now on.
+    /// The turn ended: its host's verbs cross as `room_call` from now on,
+    /// and its human-input requests still open are withdrawn.
     pub(crate) fn close(&self) {
-        let _pending = lock(&self.pending);
-        self.open.store(false, Ordering::Release);
+        {
+            let _pending = lock(&self.pending);
+            self.open.store(false, Ordering::Release);
+        }
+        self.inputs.close();
+    }
+
+    /// The turn's human-input requests.
+    pub(crate) fn inputs(&self) -> Arc<ExecutorInputs> {
+        Arc::clone(&self.inputs)
     }
 
     /// Whether every call the turn sent was answered.

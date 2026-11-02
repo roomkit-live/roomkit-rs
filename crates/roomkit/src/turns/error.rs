@@ -382,6 +382,7 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::RemoteTurn { .. } => "RemoteTurn",
         RoomKitError::TurnLink { .. } => "TurnLink",
         RoomKitError::Internal(_) => "Internal",
+        RoomKitError::HumanInputRejected(_) => "HumanInputRejected",
     };
     (variant, fields)
 }

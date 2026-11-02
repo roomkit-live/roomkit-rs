@@ -293,6 +293,7 @@ impl HookRegistration {
             Kept::Status(_) => DeliveryStatus::accepts(self.trigger),
             Kept::StatusEntry(_) => StatusEntry::accepts(self.trigger),
             Kept::Observation(_) => Observation::accepts(self.trigger),
+            Kept::Input(_) => crate::human_input::PendingInputEvent::accepts(self.trigger),
         }
     }
 
@@ -377,13 +378,16 @@ mod sealed {
     impl Sealed for roomkit_core::model::DeliveryStatus {}
     impl Sealed for crate::orchestration::StatusEntry {}
     impl Sealed for roomkit_core::model::Observation {}
+    impl Sealed for crate::human_input::PendingInputEvent {}
 }
 
 /// What a trigger hands its hooks (RFC §9.2): a [`RoomEvent`] for the
 /// event and lifecycle triggers, a [`ToolCallEvent`] for `BEFORE_TOOL_USE`
 /// and `ON_TOOL_CALL`, a [`SessionStartedEvent`] for `ON_SESSION_STARTED`,
 /// a [`DeliveryStatus`] for `ON_DELIVERY_STATUS`, a [`StatusEntry`] for
-/// `ON_STATUS_POSTED`, an [`Observation`] for `ON_FEEDBACK`. A
+/// `ON_STATUS_POSTED`, an [`Observation`] for `ON_FEEDBACK`, a
+/// [`PendingInputEvent`](crate::human_input::PendingInputEvent) for
+/// `ON_USER_INPUT_REQUIRED`. A
 /// registration whose handler takes another payload than its trigger's is
 /// refused.
 pub trait HookPayload: sealed::Sealed + Clone + Send + Sync + 'static {
@@ -405,6 +409,7 @@ impl HookPayload for RoomEvent {
                     | HookTrigger::OnDeliveryStatus
                     | HookTrigger::OnStatusPosted
                     | HookTrigger::OnFeedback
+                    | HookTrigger::OnUserInputRequired
             )
     }
 
@@ -463,6 +468,16 @@ impl HookPayload for Observation {
     }
 }
 
+impl HookPayload for crate::human_input::PendingInputEvent {
+    fn accepts(trigger: HookTrigger) -> bool {
+        trigger == HookTrigger::OnUserInputRequired
+    }
+
+    fn kept(handler: Arc<dyn HookHandler<Self>>) -> Kept {
+        Kept::Input(handler)
+    }
+}
+
 /// A hook's handler as the kit keeps it, by its payload.
 #[doc(hidden)]
 #[derive(Clone)]
@@ -479,6 +494,8 @@ pub enum Kept {
     StatusEntry(Arc<dyn HookHandler<StatusEntry>>),
     /// A feedback's hook.
     Observation(Arc<dyn HookHandler<Observation>>),
+    /// A human-input request's hook.
+    Input(Arc<dyn HookHandler<crate::human_input::PendingInputEvent>>),
 }
 
 impl std::fmt::Debug for Kept {
@@ -490,6 +507,7 @@ impl std::fmt::Debug for Kept {
             Self::Status(_) => "Kept::Status",
             Self::StatusEntry(_) => "Kept::StatusEntry",
             Self::Observation(_) => "Kept::Observation",
+            Self::Input(_) => "Kept::Input",
         })
     }
 }
@@ -555,10 +573,12 @@ pub(crate) async fn run_kept(
             "HookError",
             "a delivery status's hook does not run on an event",
         )),
-        Kept::StatusEntry(_) | Kept::Observation(_) => HookOutcome::Raised(ErrorRecord::new(
-            "HookError",
-            "a hook whose payload is no event does not run on an event",
-        )),
+        Kept::StatusEntry(_) | Kept::Observation(_) | Kept::Input(_) => {
+            HookOutcome::Raised(ErrorRecord::new(
+                "HookError",
+                "a hook whose payload is no event does not run on an event",
+            ))
+        }
     }
 }
 

@@ -318,7 +318,8 @@ impl ObservedPayload for StatusEntry {
             | Kept::ToolCall(_)
             | Kept::Session(_)
             | Kept::Status(_)
-            | Kept::Observation(_) => None,
+            | Kept::Observation(_)
+            | Kept::Input(_) => None,
         }
     }
 }
@@ -331,7 +332,8 @@ impl ObservedPayload for RoomEvent {
             | Kept::ToolCall(_)
             | Kept::Session(_)
             | Kept::Status(_)
-            | Kept::StatusEntry(_) => None,
+            | Kept::StatusEntry(_)
+            | Kept::Input(_) => None,
         }
     }
 }
@@ -344,7 +346,8 @@ impl ObservedPayload for Observation {
             | Kept::ToolCall(_)
             | Kept::Session(_)
             | Kept::Status(_)
-            | Kept::StatusEntry(_) => None,
+            | Kept::StatusEntry(_)
+            | Kept::Input(_) => None,
         }
     }
 }

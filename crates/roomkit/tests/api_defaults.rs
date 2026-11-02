@@ -1168,3 +1168,58 @@ fn steer_options_defaults_as_python() {
     // roomkit.RoomKit.steer(organization_id) = None
     assert!(defaults.organization_id.is_none());
 }
+
+#[test]
+fn reject_input_options_defaults_as_python() {
+    let defaults = roomkit::RejectInputOptions::default();
+    // roomkit.RoomKit.reject_input(reason) = ''
+    assert_eq!(defaults.reason, "");
+}
+
+#[test]
+fn turn_timeouts_input_hold_timeout_defaults_as_python() {
+    let defaults = roomkit::TurnTimeouts::default();
+    // roomkit.TurnTimeouts.__init__(input_hold_timeout) = 60.0
+    assert_eq!(defaults.input_hold_timeout, Duration::from_secs(60));
+}
+
+#[test]
+fn human_input_handler_options_defaults_as_python() {
+    use roomkit::human_input::{
+        CloseOptions, CreateDetachedOptions, CreateOptions, HumanInputHandlerOptions,
+        RejectOptions, WaitOptions,
+    };
+    // roomkit.HumanInputHandler.__init__(retention) = 128
+    assert_eq!(HumanInputHandlerOptions::default().retention, 128);
+    let create = CreateOptions::default();
+    // roomkit.HumanInputHandler.create(room_id) = ''
+    assert_eq!(create.room_id, "");
+    // roomkit.HumanInputHandler.create(tool_call_id) = ''
+    assert_eq!(create.tool_call_id, "");
+    // roomkit.HumanInputHandler.create(channel_id) = ''
+    assert_eq!(create.channel_id, "");
+    // roomkit.HumanInputHandler.create(channel_type) = <ChannelType.AI: 'ai'>
+    assert_eq!(create.channel_type, roomkit::model::ChannelType::AI);
+    // roomkit.HumanInputHandler.create(actor_id) = None
+    assert!(create.actor_id.is_none());
+    let detached = CreateDetachedOptions::default();
+    // roomkit.HumanInputHandler.create_detached(room_id) = ''
+    assert_eq!(detached.room_id, "");
+    // roomkit.HumanInputHandler.create_detached(tool_call_id) = ''
+    assert_eq!(detached.tool_call_id, "");
+    // roomkit.HumanInputHandler.create_detached(channel_id) = ''
+    assert_eq!(detached.channel_id, "");
+    // roomkit.HumanInputHandler.create_detached(channel_type) = <ChannelType.AI: 'ai'>
+    assert_eq!(detached.channel_type, roomkit::model::ChannelType::AI);
+    // roomkit.HumanInputHandler.create_detached(actor_id) = None
+    assert!(detached.actor_id.is_none());
+    // roomkit.HumanInputHandler.wait(timeout) = 300
+    assert_eq!(WaitOptions::default().timeout, Duration::from_secs(300));
+    let close = CloseOptions::default();
+    // roomkit.HumanInputHandler.close(channel_id) = None
+    assert!(close.channel_id.is_none());
+    // roomkit.HumanInputHandler.close(registration) = None
+    assert!(close.registration.is_none());
+    // roomkit.HumanInputHandler.reject(reason) = ''
+    assert_eq!(RejectOptions::default().reason, "");
+}

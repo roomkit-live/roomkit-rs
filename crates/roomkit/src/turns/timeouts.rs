@@ -25,7 +25,10 @@ const SHORTEST: Duration = Duration::from_millis(1);
 ///   beating, is never lost;
 /// - `cancel`: how long the owner waits for a cancelled turn's end, 5
 ///   seconds, after which the turn ends failed and its later frames are
-///   dropped.
+///   dropped;
+/// - `input_hold_timeout`: how long the owner holds an answer for a
+///   human-input request it does not know yet, 60 seconds (RFC §10.6.5),
+///   so that a request is answerable from its creation.
 ///
 /// A value under a millisecond is taken as a millisecond.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +41,9 @@ pub struct TurnTimeouts {
     pub heartbeat_timeout: Duration,
     /// How long the owner waits for a cancelled turn's end.
     pub cancel: Duration,
+    /// How long the owner holds an answer for a human-input request it
+    /// does not know yet.
+    pub input_hold_timeout: Duration,
 }
 
 impl Default for TurnTimeouts {
@@ -47,6 +53,7 @@ impl Default for TurnTimeouts {
             heartbeat_interval: Duration::from_secs(2),
             heartbeat_timeout: Duration::from_secs(10),
             cancel: Duration::from_secs(5),
+            input_hold_timeout: Duration::from_secs(60),
         }
     }
 }
@@ -65,6 +72,7 @@ impl TurnTimeouts {
             heartbeat_interval: self.heartbeat_interval.max(SHORTEST),
             heartbeat_timeout: self.heartbeat_timeout.max(SHORTEST),
             cancel: self.cancel.max(SHORTEST),
+            input_hold_timeout: self.input_hold_timeout.max(SHORTEST),
         }
     }
 
@@ -160,6 +168,7 @@ mod tests {
                 timeouts.heartbeat_interval,
                 timeouts.heartbeat_timeout,
                 timeouts.cancel,
+                timeouts.input_hold_timeout,
                 timeouts.silent_intervals(),
                 timeouts.accept_intervals(),
             ),
@@ -168,6 +177,7 @@ mod tests {
                 Duration::from_secs(2),
                 Duration::from_secs(10),
                 Duration::from_secs(5),
+                Duration::from_secs(60),
                 5,
                 5
             )
@@ -183,7 +193,7 @@ mod tests {
             accept: Duration::from_millis(bound),
             heartbeat_interval: Duration::from_millis(interval),
             heartbeat_timeout: Duration::from_millis(bound),
-            cancel: Duration::from_secs(5),
+            ..TurnTimeouts::default()
         };
         let counted: Vec<(u32, u32)> = [(2000, 5000), (2000, 7000), (2000, 3000), (2000, 900)]
             .into_iter()
@@ -202,6 +212,7 @@ mod tests {
             heartbeat_interval: Duration::ZERO,
             heartbeat_timeout: Duration::ZERO,
             cancel: Duration::ZERO,
+            input_hold_timeout: Duration::ZERO,
         }
         .bounded();
         assert_eq!(
@@ -212,6 +223,7 @@ mod tests {
                     heartbeat_interval: Duration::from_millis(1),
                     heartbeat_timeout: Duration::from_millis(1),
                     cancel: Duration::from_millis(1),
+                    input_hold_timeout: Duration::from_millis(1),
                 },
                 1
             )

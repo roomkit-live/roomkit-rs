@@ -102,6 +102,7 @@ fn hook_trigger_serializes_to_python_s_values() {
             ("AFTER_DELIVER", HookTrigger::AfterDeliver),
             ("ON_TASK_DELEGATED", HookTrigger::OnTaskDelegated),
             ("ON_TASK_COMPLETED", HookTrigger::OnTaskCompleted),
+            ("ON_USER_INPUT_REQUIRED", HookTrigger::OnUserInputRequired),
         ],
     );
 }
@@ -118,6 +119,21 @@ fn status_level_serializes_to_python_s_values() {
             ("PENDING", StatusLevel::Pending),
             ("INFO", StatusLevel::Info),
             ("COMPLETED", StatusLevel::Completed),
+        ],
+    );
+}
+
+/// `roomkit.PendingInputStatus`'s members.
+#[test]
+fn pending_input_status_serializes_to_python_s_values() {
+    use roomkit::human_input::PendingInputStatus;
+    serializes_to(
+        "roomkit.PendingInputStatus",
+        &[
+            ("PENDING", PendingInputStatus::Pending),
+            ("RESOLVED", PendingInputStatus::Resolved),
+            ("REJECTED", PendingInputStatus::Rejected),
+            ("TIMED_OUT", PendingInputStatus::TimedOut),
         ],
     );
 }

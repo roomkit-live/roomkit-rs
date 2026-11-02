@@ -23,6 +23,7 @@ use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::events::FrameworkEvent;
 use crate::hooks::{self, HookHandler};
+use crate::human_input::PendingInputEvent;
 use crate::kit::Inner;
 use crate::orchestration::{StatusEntry, StatusLevel};
 use crate::store::ConversationStore;
@@ -37,6 +38,8 @@ use crate::turns::wire::{
 };
 use crate::turns::{HostLink, TurnError, send_event_arguments};
 use crate::{DelegateOptions, RoomKit, SendEventOptions, UpdateRoomMetadataOptions};
+
+mod inputs;
 
 tokio::task_local! {
     static TURN: TurnHost;
@@ -64,7 +67,7 @@ pub fn current_turn_host() -> Option<TurnHost> {
 }
 
 /// The turn's host the current task runs within, reachable or not.
-fn turn_in_scope() -> Option<TurnHost> {
+pub(crate) fn turn_in_scope() -> Option<TurnHost> {
     TURN.try_with(Clone::clone).ok()
 }
 
@@ -540,7 +543,7 @@ impl TurnHost {
     /// it ran past its timeout, SYNC or ASYNC (RFC §8.2, §9.1), as the
     /// Python implementation's engine emits it: about the turn's room and
     /// agent.
-    fn report_timeout(&self, spec: &HookSpec, ran: &HookOutcome<ToolCallEvent>) {
+    fn report_timeout<P>(&self, spec: &HookSpec, ran: &HookOutcome<P>) {
         if !matches!(ran, HookOutcome::TimedOut) {
             return;
         }
@@ -1136,6 +1139,16 @@ pub(crate) trait TurnKit: Send + Sync {
         channel_type: &ChannelType,
     ) -> Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)>;
 
+    /// The `ON_USER_INPUT_REQUIRED` hooks that fire for the requests of
+    /// the agent `channel_id` of `channel_type` in the room `room_id`, the
+    /// kit's and the room's: its SYNC chain in chain order, then its
+    /// observers (RFC §9.3).
+    fn input_hooks(
+        &self,
+        agent: (&RoomId, &ChannelId),
+        channel_type: &ChannelType,
+    ) -> Vec<(HookSpec, Arc<dyn HookHandler<PendingInputEvent>>)>;
+
     /// The kit's clock, now.
     fn now(&self) -> Timestamp;
 
@@ -1264,6 +1277,16 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
     ) -> Vec<(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)> {
         self.upgrade()
             .map(|inner| inner.tool_hooks(trigger, agent, channel_type))
+            .unwrap_or_default()
+    }
+
+    fn input_hooks(
+        &self,
+        agent: (&RoomId, &ChannelId),
+        channel_type: &ChannelType,
+    ) -> Vec<(HookSpec, Arc<dyn HookHandler<PendingInputEvent>>)> {
+        self.upgrade()
+            .map(|inner| inner.input_hooks(agent, channel_type))
             .unwrap_or_default()
     }
 

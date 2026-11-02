@@ -14,7 +14,10 @@
 //! - `pulls`: the window a reader grants its stream (RFC §10.6.4);
 //! - `owner`: the owner's side of a turn, its output, its stream, its
 //!   liveness, the verbs its turn asks;
-//! - `executor`: the executor's side of a turn.
+//! - `executor`: the executor's side of a turn, its human-input requests
+//!   among it;
+//! - `owner_inputs`: the owner's record of its turns' human-input
+//!   requests, which the kit's `answer_input` and `reject_input` answer.
 //!
 //! In memory, the events a request carries, the event it answers and the
 //! room's history, cross as they are (RFC §10.6.1): records nothing changes
@@ -31,6 +34,7 @@ mod executor;
 mod memory;
 mod observe;
 mod owner;
+mod owner_inputs;
 mod pipe;
 mod pulls;
 mod records;
@@ -54,12 +58,14 @@ use uuid::Uuid;
 pub(crate) use self::codec::send_event_arguments;
 pub(crate) use self::error::{CHANNEL_ERROR, TURN_LINK_ERROR, record_of, variant_name};
 pub(crate) use self::error::{TurnError, TurnFailure, to_record};
-pub(crate) use self::executor::HostLink;
+pub(crate) use self::executor::{ExecutorInputs, HostLink, InputSettler};
 use self::memory::Request;
 pub(crate) use self::memory::{CarriedRequest, MemoryTurn};
 use self::observe::Observers;
 pub(crate) use self::observe::{Carried, Tap};
 pub(crate) use self::owner::{Canceller, OwnerTurn, RemoteItem};
+pub(crate) use self::owner_inputs::InputTurn;
+use self::owner_inputs::OwnerInputs;
 use self::pipe::{MAX_MESSAGE_BYTES, pipe};
 use self::records::RoomRecords;
 use self::started::StartedTurns;
@@ -107,6 +113,9 @@ pub(crate) struct Turns {
     /// The turns submitted and not over, which steering reaches (RFC
     /// §10.6.8).
     started: Mutex<StartedTurns>,
+    /// The open human-input requests of the turns, and the answers held
+    /// for ones not open yet (RFC §10.6.5).
+    pub(crate) inputs: OwnerInputs,
 }
 
 impl Default for Turns {
@@ -121,6 +130,7 @@ impl Default for Turns {
             reads_changed: Notify::new(),
             cut: watch::Sender::new(false),
             started: Mutex::new(StartedTurns::default()),
+            inputs: OwnerInputs::default(),
         }
     }
 }
@@ -333,6 +343,21 @@ impl Turns {
             reached = reached.saturating_add(target.steer(directive).await);
         }
         reached
+    }
+
+    /// Answers the human-input request `request_id` of a turn with
+    /// `value` (RFC §10.6.5): whether the tool waiting on it reads the
+    /// answer, one for a request not open yet held for the hold bound.
+    pub(crate) async fn answer_input(&self, request_id: &str, value: &str) -> bool {
+        let hold = self.timeouts().bounded().input_hold_timeout;
+        self.inputs.answer(request_id, value, hold).await
+    }
+
+    /// Rejects the human-input request `request_id` for `reason`: whether
+    /// the waiting tool reads the rejection.
+    pub(crate) async fn reject_input(&self, request_id: &str, reason: &str) -> bool {
+        let hold = self.timeouts().bounded().input_hold_timeout;
+        self.inputs.reject(request_id, reason, hold).await
     }
 
     /// The executor that took `turn_id` in `room_id`, as it said so.

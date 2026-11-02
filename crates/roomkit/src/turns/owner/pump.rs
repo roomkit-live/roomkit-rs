@@ -20,7 +20,7 @@ use crate::turns::error::{TurnError, one};
 use crate::turns::pipe::PipeReceiver;
 use crate::turns::timeouts::Beat;
 use crate::turns::wire::{CallContext, Control, Frame, Item, WireError};
-use crate::turns::{Turns, lock};
+use crate::turns::{InputTurn, Turns, lock};
 
 /// How the pump's watch of a turn ended.
 #[derive(Debug)]
@@ -202,6 +202,18 @@ impl Pump {
                 self.state.steers.answer(&steer_id, loops);
             }
             Frame::Record { record } => self.hand(Main::Record(record)),
+            // The turn's human-input requests, which the owner answers
+            // (RFC §10.6.5).
+            Frame::InputRequest { request_id, .. } => {
+                self.turns.inputs.opened(self.input_turn(), &request_id);
+            }
+            Frame::InputClosed { request_id, .. } => {
+                self.turns.inputs.closed(&self.input_turn(), &request_id);
+            }
+            Frame::InputTaken { request_id, taken } => {
+                let turn = self.input_turn();
+                self.turns.inputs.taken(&turn, &request_id, taken);
+            }
             Frame::ToolEnded { .. } | Frame::Ephemeral { .. } => {
                 tracing::trace!(target: "roomkit::turns", turn = %self.state.turn.turn_id, "a frame left unread");
             }
@@ -350,6 +362,12 @@ impl Pump {
         drop(self.main.send(main));
     }
 
+    /// The turn as the owner's record of its human-input requests names it.
+    fn input_turn(&self) -> Arc<dyn InputTurn> {
+        let turn: Arc<crate::turns::MemoryTurn> = Arc::clone(&self.state.turn);
+        turn
+    }
+
     /// The turn is over for the owner: its reader learns why; dropped, the
     /// pump cancels its verbs and drops later frames.
     fn finish(self, ending: Ending) {
@@ -381,6 +399,9 @@ impl Drop for Pump {
             call.abort();
         }
         self.state.over.send_replace(true);
+        // Its human-input requests are withdrawn, an answer awaiting its
+        // verdict not taken (RFC §10.6.5).
+        self.turns.inputs.turn_ended(&self.input_turn());
         // Over first: a steer that comes after reads it and waits for none.
         self.state.steers.end();
         self.state.turn.shut();

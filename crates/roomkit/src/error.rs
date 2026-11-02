@@ -267,6 +267,12 @@ pub enum RoomKitError {
     /// delegated task's [`wait`](crate::tasks::DelegatedTask::wait).
     #[error("the wait timed out")]
     Timeout,
+    /// Python's `HumanInputRejectedError`: a human-input request rejected,
+    /// by a person or an `ON_USER_INPUT_REQUIRED` hook, with the reason
+    /// given ([`HumanInputHandler::wait`](crate::human_input::HumanInputHandler::wait),
+    /// RFC §9.3). The human-input tool reads it as a refusal.
+    #[error("{0}")]
+    HumanInputRejected(String),
 }
 
 impl RoomKitError {
@@ -339,7 +345,8 @@ impl RoomKitError {
             | Self::ProviderDelivery { .. }
             | Self::TurnLink { .. }
             | Self::KitClosed
-            | Self::ShutdownCancelled => format!("{}Error", turns::variant_name(self)),
+            | Self::ShutdownCancelled
+            | Self::HumanInputRejected(_) => format!("{}Error", turns::variant_name(self)),
         }
     }
 

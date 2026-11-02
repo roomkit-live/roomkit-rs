@@ -58,6 +58,7 @@ mod events;
 mod history;
 mod hooks;
 mod host;
+pub mod human_input;
 pub mod identity;
 mod inbound;
 mod kit;
@@ -156,6 +157,7 @@ pub use self::hooks::{
 };
 pub use self::host::{HostChannel, HostChannelOptions};
 pub use self::inbound::{DeliveryHandle, InboundResult};
+pub use self::kit::RejectInputOptions;
 pub use self::kit::{
     AddMemberOptions, EnsureParticipantOptions, IsMemberOptions, RemoveMemberOptions,
     RenameMemberOptions, ResolveParticipantOptions,

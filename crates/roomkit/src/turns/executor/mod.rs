@@ -22,6 +22,7 @@
 //! - A stream advances only within what the owner granted, and never past
 //!   an item that is no delta until a later pull (`pulls`).
 
+mod inputs;
 mod link;
 mod work;
 
@@ -31,6 +32,7 @@ use std::sync::Arc;
 
 use roomkit_core::rules::chain_depth::response_depth;
 
+pub(crate) use self::inputs::{ExecutorInputs, InputSettler};
 pub(crate) use self::link::HostLink;
 use self::link::{FrameSender, TurnFacts};
 use self::work::{Flow, work};
@@ -448,6 +450,15 @@ fn apply(control: Control, flow: &Flow, link: &HostLink, steering: &Steering) ->
             ..
         } => {
             link.resolve_tool(&call_id, outcome, result, error.as_ref());
+            None
+        }
+        Control::InputAnswer {
+            request_id,
+            outcome,
+            value,
+            reason,
+        } => {
+            link.inputs().answer(&request_id, outcome, value, reason);
             None
         }
     }

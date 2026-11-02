@@ -7,9 +7,9 @@
 //! channel control outside any turn; and `room_call`, a host verb made
 //! after its turn. A frame and a control message travel in an envelope that
 //! numbers them per direction ([`super::pipe`]). The messages of features
-//! 0.1 lacks are not modelled (the human-input messages, `committed_event`,
-//! `channel_call`, `room_publication`), but `ephemeral`, which a Python
-//! executor sends, is read so that it can be dropped.
+//! 0.1 lacks are not modelled (`committed_event`, `channel_call`,
+//! `room_publication`), but `ephemeral`, which a Python executor sends, is
+//! read so that it can be dropped.
 
 use std::collections::BTreeMap;
 
@@ -326,6 +326,28 @@ pub(crate) enum Frame {
         #[serde(default)]
         loops: Option<u64>,
     },
+    /// A tool of the turn asked a person for input (RFC §10.6.5): sent
+    /// before `ON_USER_INPUT_REQUIRED` fires, so the owner can answer it at
+    /// once.
+    InputRequest {
+        request_id: String,
+        tool_name: String,
+        #[serde(default)]
+        arguments: Metadata,
+    },
+    /// A request settled where its tool waits, by other than the owner's
+    /// answer (an answer the handler took, a hook's block, its bound, a
+    /// release): `reason` its status.
+    InputClosed {
+        request_id: String,
+        reason: String,
+    },
+    /// Whether the owner's `input_answer` settled its request: one settled
+    /// first where its tool waits did not take it.
+    InputTaken {
+        request_id: String,
+        taken: bool,
+    },
 }
 
 /// A control message, owner to executor, or the answer to a call (RFC
@@ -369,6 +391,26 @@ pub(crate) enum Control {
         #[serde(default)]
         structured_content: Option<Value>,
     },
+    /// The outcome the owner recorded for an `input_request` (RFC
+    /// §10.6.5): answered with its `value`, or rejected with its `reason`.
+    InputAnswer {
+        request_id: String,
+        outcome: InputOutcome,
+        #[serde(default)]
+        value: Option<String>,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+}
+
+/// The outcome an `input_answer` carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InputOutcome {
+    /// Answered with a value.
+    Answered,
+    /// Rejected with a reason.
+    Rejected,
 }
 
 /// How the owner's handler took a `tool_call` (RFC §10.6.5, §21.4).

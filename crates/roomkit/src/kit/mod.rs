@@ -30,6 +30,7 @@ mod ephemeral;
 mod events;
 mod identity;
 mod inject;
+mod inputs;
 mod members;
 mod options;
 mod output;
@@ -73,6 +74,7 @@ pub use self::ephemeral::{
 pub use self::identity::IdentityHookOptions;
 pub(crate) use self::identity::run_identity_hooks;
 use self::inject::Entered;
+pub use self::inputs::RejectInputOptions;
 pub use self::members::{
     AddMemberOptions, EnsureParticipantOptions, IsMemberOptions, RemoveMemberOptions,
     RenameMemberOptions, ResolveParticipantOptions,
