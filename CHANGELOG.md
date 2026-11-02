@@ -22,6 +22,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   are an `f64`, 0.7 by default, as Python's `float` (RMK-1089, decided by
   the maintainer): a model that takes no temperature is the provider's to
   know, `OpenAiConfig::supports_custom_temperature`.
+- `StatusBus::recent_text(RecentTextOptions { n })`, Python's (RFC §19.8,
+  §6.4, RMK-1147): the bus's newest entries as an agent's context reads
+  them, the agent and the action as identifiers, the detail quoted. The
+  delegation's identifiers keep letters with their marks, composed first,
+  as Python's `identifier`.
 - `RoomKit::setup_background(agent, SetupBackgroundOptions { worker,
   hand_back })` and `RoomKit::setup_task_tools(agent)`, Python's (RFC
   §23.4, §10.6.5, RMK-1144): `work_in_background`, `task_status` and
