@@ -18,6 +18,7 @@ use super::worker::{RunWorkerLoopOptions, run_for};
 use crate::error::RoomKitError;
 use crate::kit::RoomKit;
 use crate::store::ConversationStore;
+use crate::tasks::{Marks, Unit};
 
 /// What [`InMemoryDeliveryBackend::new`] takes: Python's
 /// `InMemoryDeliveryBackend(max_queue_size=1000, max_dead_letter_size=1000,
@@ -72,10 +73,13 @@ struct Shared {
     worker_id: String,
 }
 
-/// The worker `start` runs, and whether the kit it works for still lives.
+/// The worker `start` runs, whether the kit it works for still lives, and
+/// whether that kit's close spares it: the close was called from the
+/// worker's own work.
 struct Worker {
     task: JoinHandle<()>,
     kit_alive: Box<dyn Fn() -> bool + Send + Sync>,
+    spared: Box<dyn Fn() -> bool + Send + Sync>,
 }
 
 impl Worker {
@@ -401,13 +405,18 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
                 batch_size: 5,
                 poll_timeout: Duration::from_secs(2),
             };
+            // The worker is a unit of the kit's work, so a close called
+            // from it, a hook of an item it executes, spares it.
+            let marks = Marks::default().with(Unit::new());
+            let (tasks, own) = (Arc::clone(&kit.inner.tasks), marks.clone());
             let kit = kit.downgrade();
             let watched = kit.clone();
             *worker = Some(Worker {
-                task: tokio::spawn(async move {
+                task: tokio::spawn(marks.scoped(async move {
                     run_for(backend, kit, &worker_id, options).await;
-                }),
+                })),
                 kit_alive: Box::new(move || watched.alive()),
+                spared: Box::new(move || tasks.spares(&own)),
             });
             tracing::info!(target: "roomkit::delivery", worker = %self.shared.worker_id, "in-memory delivery worker started");
             Ok(())
@@ -417,7 +426,10 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
     fn close(&self) -> Answer<'_, ()> {
         Box::pin(async move {
             let worker = self.shared.worker.lock().await.take();
-            if let Some(worker) = worker {
+            // A close called from the worker's own work neither cuts nor
+            // waits for it, which would cut the close itself, as Python's
+            // `cancel_and_wait` skips the caller's task: it runs on, alone.
+            if let Some(worker) = worker.filter(|worker| !(worker.spared)()) {
                 worker.task.abort();
                 drop(worker.task.await);
             }

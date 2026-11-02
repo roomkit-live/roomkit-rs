@@ -629,6 +629,44 @@ async fn a_started_kit_no_one_holds_is_gone() {
     assert!(weak.upgrade().is_none());
 }
 
+// Python: tests/test_task_utils.py::TestCancelAndWait::test_skips_none_and_the_current_task,
+// as the in-memory backend's close cancels its worker with cancel_and_wait:
+// a close called from the worker's own work, a SYNC hook of the item it
+// executes (BEFORE_DELIVER) or of its publication (BEFORE_BROADCAST),
+// neither cuts nor waits for that worker, and returns to the hook.
+#[tokio::test]
+async fn a_close_from_the_worker_s_own_hook_returns() {
+    for trigger in [HookTrigger::BeforeDeliver, HookTrigger::BeforeBroadcast] {
+        let options = RoomKitOptions {
+            delivery_backend: Some(Arc::new(InMemoryDeliveryBackend::default())),
+            ..RoomKitOptions::default()
+        };
+        let kit = kit_with_room(options).await;
+        kit.start().await.unwrap();
+        let (closed, returned) = tokio::sync::oneshot::channel();
+        let closed = Arc::new(Mutex::new(Some(closed)));
+        let weak = kit.downgrade();
+        kit.hook(
+            trigger,
+            move |_event: RoomEvent, _context: RoomContext| {
+                let (weak, closed) = (weak.clone(), closed.lock().unwrap().take());
+                async move {
+                    if let (Some(kit), Some(closed)) = (weak.upgrade(), closed) {
+                        drop(closed.send(kit.close().await));
+                    }
+                }
+            },
+            HookOptions::default(),
+        )
+        .unwrap();
+        kit.deliver(&room(), "hello", DeliverOptions::default())
+            .await
+            .unwrap();
+        let returned = tokio::time::timeout(Duration::from_secs(5), returned).await;
+        assert_eq!(returned.unwrap(), Ok(Ok(())), "{trigger:?}");
+    }
+}
+
 // Python: tests/delivery/test_targeted.py::test_enqueue_replay_preserves_address_and_key
 #[tokio::test]
 async fn a_queued_item_keeps_its_address_and_key_across_a_retry() {
