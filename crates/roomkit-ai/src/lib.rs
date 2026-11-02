@@ -107,7 +107,7 @@ pub use self::skills::{DiscoverOptions, Skill, SkillError, SkillMetadata, SkillR
 pub use self::steering::SteerOptions;
 pub use self::tools::{
     AiTool, Tool, ToolCallContext, ToolEntry, ToolError, ToolFuture, ToolHandler, ToolPolicy,
-    ToolResult, compose_tool_handlers, current_tool_call,
+    ToolResult, compose_tool_handlers, current_tool_actor_id, current_tool_call,
 };
 #[doc(hidden)]
 pub use self::tools::{ToolContext, Tools, alias_server, arguments, served_tool_name};

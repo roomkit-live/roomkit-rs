@@ -9,8 +9,8 @@ use std::time::Duration;
 use roomkit::human_input::CloseOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelId, ChannelOutput, ChannelType,
-    EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent, RoomId,
-    SteeringDirective,
+    EventDirection, EventSource, EventType, InboundMessage, Participant, RoomContext, RoomEvent,
+    RoomId, SteeringDirective,
 };
 use roomkit::{Channel, ChannelDeclaration, ChannelError, current_turn_host};
 use roomkit_core::rules::transcript::{
@@ -684,6 +684,25 @@ fn host_handler(host: &Arc<RwLock<Option<ToolHandler>>>) -> ToolHandler {
     })
 }
 
+/// The participant whose event woke the turn, as its tools read it
+/// (Python's `actor_id`): the event's participant, but none when that id
+/// names a participant the room reached through other channels only, as
+/// Python's `People.names_another` reads it (RFC §5.5).
+fn turn_actor(event: &RoomEvent, participants: &[Participant]) -> Option<String> {
+    let id = event.source.participant_id.as_ref()?.as_str();
+    let channel = &event.source.channel_id;
+    let known = participants.iter().any(|record| record.id.as_str() == id);
+    let named_directly = participants.iter().any(|record| {
+        let names = record.id.as_str() == id
+            || record
+                .identity_id
+                .as_ref()
+                .is_some_and(|identity| identity.as_str() == id);
+        names && record.connected_via.contains(channel)
+    });
+    (!known || named_directly).then(|| id.to_owned())
+}
+
 /// Refuses a tool `toolbox` serves under one of the names a channel given
 /// skills keeps for its own.
 fn reserve_skill_names(toolbox: &Toolbox) -> Result<(), AiError> {
@@ -779,7 +798,8 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         let system_prompt = self.turn_system_prompt(&context, stands_alone);
         let tools = ToolContext::new(context.room.id.clone(), self.channel_id.clone())
             .within(turn.clone())
-            .standing_alone(stands_alone);
+            .standing_alone(stands_alone)
+            .acting_for(turn_actor(&event, &context.participants));
         // The tools the room's owner serves this turn join the agent's own
         // (RFC §10.6.5).
         let toolbox = crate::tools::owner::with_owner_tools(&self.toolbox, turn.as_ref())?;

@@ -223,15 +223,46 @@ pub struct ToolCallContext {
 /// Python's `asyncio.create_task` copies the call's context; spawned
 /// plainly, it reads `None`.
 pub fn current_tool_call() -> Option<ToolCallContext> {
-    roomkit::current_tool_call_scope()?
-        .downcast_ref::<ToolCallContext>()
-        .cloned()
+    let scope = roomkit::current_tool_call_scope()?;
+    scope
+        .downcast_ref::<CallScope>()
+        .map(|scope| scope.call.clone())
 }
 
-/// Runs `work`, a tool's call, within `context`, which the kit carries
-/// into a task spawned with [`roomkit::keep_context`].
-pub(crate) async fn within_call<T>(context: ToolCallContext, work: impl Future<Output = T>) -> T {
-    roomkit::within_tool_call_scope(Arc::new(context), work).await
+/// The participant whose event woke the turn the current tool handler runs
+/// within: Python's `current_tool_actor_id()`. `None` outside a tool's
+/// call, for a turn no participant woke (a system injection, a webhook),
+/// and for a sender the room reached through other channels only, whose
+/// id read back would name them (RFC §5.5). A task the handler spawns with
+/// [`roomkit::keep_context`] reads it too.
+///
+/// It names the turn; it does not authenticate it: a handler that reaches
+/// a person's data with it loads the participant and requires its
+/// identification first (RFC §11).
+pub fn current_tool_actor_id() -> Option<String> {
+    let scope = roomkit::current_tool_call_scope()?;
+    scope.downcast_ref::<CallScope>()?.actor_id.clone()
+}
+
+/// What a tool's call runs within: the call, and who woke its turn.
+struct CallScope {
+    call: ToolCallContext,
+    actor_id: Option<String>,
+}
+
+/// Runs `work`, a tool's call, within `context`, for the turn `actor_id`
+/// woke, which the kit carries into a task spawned with
+/// [`roomkit::keep_context`].
+pub(crate) async fn within_call<T>(
+    context: ToolCallContext,
+    actor_id: Option<String>,
+    work: impl Future<Output = T>,
+) -> T {
+    let scope = CallScope {
+        call: context,
+        actor_id,
+    };
+    roomkit::within_tool_call_scope(Arc::new(scope), work).await
 }
 
 /// The toolset `tool_handler` and `tools` make, Python's
@@ -297,7 +328,8 @@ impl DynToolset for ServedBy {
         // context before it calls the handler; its answer may decline the
         // call, as Python's `declined_answer` reads it (RFC §21.4).
         let handler = self.handler.clone();
-        Box::pin(within_call(within, async move {
+        let actor_id = context.actor_id.clone();
+        Box::pin(within_call(within, actor_id, async move {
             match handler.call(call.name.clone(), call.arguments).await {
                 Ok(answer) if is_unknown_tool_answer(&answer) => Err(ToolError::unserved(format!(
                     "tool '{}' is not served here",

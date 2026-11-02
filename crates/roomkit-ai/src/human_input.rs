@@ -166,7 +166,7 @@ impl HumanInputToolHandler {
             tool_call_id: call.tool_call_id,
             channel_id: call.channel_id.map(|id| id.to_string()).unwrap_or_default(),
             channel_type: options.channel_type,
-            actor_id: None,
+            actor_id: crate::current_tool_actor_id(),
         };
         self.asked(name, arguments, request).await
     }
@@ -248,7 +248,7 @@ impl DynToolset for HumanInputToolset {
                 tool_call_id: call.id.clone(),
                 channel_id: context.channel_id.to_string(),
                 channel_type: ChannelType::AI,
-                actor_id: None,
+                actor_id: context.actor_id.clone(),
             };
             self.0
                 .asked(&call.name, call.arguments, request)

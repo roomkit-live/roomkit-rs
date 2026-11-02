@@ -35,7 +35,7 @@ pub use self::builder::Tools;
 pub(crate) use self::handler::served_by;
 pub use self::handler::{
     Tool, ToolCallContext, ToolEntry, ToolFuture, ToolHandler, ToolResult, compose_tool_handlers,
-    current_tool_call,
+    current_tool_actor_id, current_tool_call,
 };
 pub use self::policy::ToolPolicy;
 #[doc(hidden)]
@@ -228,6 +228,9 @@ pub struct ToolContext {
     /// Whether the turn is an instruction that stands alone, which reads
     /// none of the room's working state (RFC §10.1.1 rule 7).
     pub(crate) stands_alone: bool,
+    /// The participant whose event woke the turn, Python's tool loop
+    /// context's `actor_id`, read with [`current_tool_actor_id`].
+    pub(crate) actor_id: Option<String>,
 }
 
 impl ToolContext {
@@ -239,7 +242,14 @@ impl ToolContext {
             channel_id,
             turn: None,
             stands_alone: false,
+            actor_id: None,
         }
+    }
+
+    /// The same context, its turn woken by `actor_id`'s event.
+    pub(crate) fn acting_for(mut self, actor_id: Option<String>) -> Self {
+        self.actor_id = actor_id;
+        self
     }
 
     /// The same context, within `turn`.
