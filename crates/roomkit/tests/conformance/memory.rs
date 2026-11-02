@@ -9,10 +9,11 @@ use std::sync::Arc;
 
 use roomkit::ChannelError;
 use roomkit::model::{RoomContext, RoomEvent, RoomId};
+use roomkit_ai::knowledge::{KnowledgeResult, KnowledgeSource, SearchOptions};
 use roomkit_ai::memory::{
     BudgetAwareMemory, BudgetAwareMemoryOptions, CompactingMemory, CompactingMemoryOptions,
-    MemoryProvider, MemoryResult, RetrieveOptions, SlidingWindowMemory, SlidingWindowMemoryOptions,
-    SummarizingMemory, SummarizingMemoryOptions,
+    MemoryProvider, MemoryResult, RetrievalMemory, RetrievalMemoryOptions, RetrieveOptions,
+    SlidingWindowMemory, SlidingWindowMemoryOptions, SummarizingMemory, SummarizingMemoryOptions,
 };
 use roomkit_ai::testing::ScriptedProvider;
 use roomkit_ai::{AiMessage, AiRole};
@@ -87,10 +88,76 @@ pub(crate) fn scripted_memory(
         Some(compacting) => self::compacting(compacting, memory, needed(summarizer.clone())?)?,
         None => memory,
     };
-    match spec.get("summarizing") {
-        Some(summarizing) => self::summarizing(summarizing, memory, needed(summarizer)?),
+    let memory = match spec.get("summarizing") {
+        Some(summarizing) => self::summarizing(summarizing, memory, needed(summarizer)?)?,
+        None => memory,
+    };
+    match spec.get("retrieval") {
+        Some(retrieval) => self::retrieval(retrieval, memory),
         None => Ok(memory),
     }
+}
+
+/// A knowledge source answering every search with its results, at most
+/// the search's limit, or failing with its `fails`.
+struct ScriptedSource {
+    name: String,
+    results: Vec<KnowledgeResult>,
+    fails: Option<String>,
+}
+
+impl KnowledgeSource for ScriptedSource {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn search<'a>(
+        &'a self,
+        _query: &'a str,
+        options: SearchOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<KnowledgeResult>, ChannelError>> + Send + 'a>> {
+        let answer = match &self.fails {
+            Some(fails) => Err(fails.clone().into()),
+            None => Ok(self.results.iter().take(options.limit).cloned().collect()),
+        };
+        Box::pin(std::future::ready(answer))
+    }
+}
+
+/// `inner` in a retrieval memory of `spec`'s sources and parameters.
+fn retrieval(
+    spec: &Value,
+    inner: Arc<dyn MemoryProvider>,
+) -> Result<Arc<dyn MemoryProvider>, String> {
+    let sources = spec["sources"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|source| {
+            let results = source["results"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|result| KnowledgeResult {
+                    score: result["score"].as_f64().unwrap_or(0.0),
+                    source: result["source"].as_str().unwrap_or_default().to_owned(),
+                    ..KnowledgeResult::new(result["content"].as_str().unwrap_or_default())
+                })
+                .collect();
+            let source: Arc<dyn KnowledgeSource> = Arc::new(ScriptedSource {
+                name: source["name"].as_str().unwrap_or_default().to_owned(),
+                results,
+                fails: source["fails"].as_str().map(str::to_owned),
+            });
+            source
+        })
+        .collect();
+    let defaults = RetrievalMemoryOptions::default();
+    let options = RetrievalMemoryOptions {
+        max_results: count(spec, "max_results", defaults.max_results)?,
+        min_query_length: count(spec, "min_query_length", defaults.min_query_length)?,
+    };
+    Ok(Arc::new(RetrievalMemory::new(sources, inner, options)))
 }
 
 fn needed(summarizer: Option<ScriptedProvider>) -> Result<ScriptedProvider, String> {

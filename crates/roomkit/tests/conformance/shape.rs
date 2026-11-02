@@ -118,6 +118,7 @@ const MEMORY: &[&str] = &[
     "compacting",
     "summarizing",
     "summarizer",
+    "retrieval",
 ];
 const MEMORY_MESSAGE: &[&str] = &["role", "text"];
 const BUDGET_AWARE: &[&str] = &[
@@ -132,6 +133,9 @@ const COMPACTING: &[&str] = &[
     "safety_margin_ratio",
     "min_events",
 ];
+const RETRIEVAL: &[&str] = &["sources", "max_results", "min_query_length"];
+const SOURCE: &[&str] = &["name", "results", "fails"];
+const SOURCE_RESULT: &[&str] = &["content", "score", "source"];
 const SUMMARIZING: &[&str] = &[
     "max_context_tokens",
     "tier1_ratio",
@@ -493,6 +497,20 @@ fn memory(memory: &Value, path: &str, found: &mut Vec<String>) {
         &format!("{path}.summarizing"),
         found,
     );
+    let retrieval = &memory["retrieval"];
+    optional(retrieval, RETRIEVAL, &format!("{path}.retrieval"), found);
+    for (index, source) in items(&retrieval["sources"]) {
+        let source_path = format!("{path}.retrieval.sources[{index}]");
+        members(source, SOURCE, &source_path, found);
+        for (position, result) in items(&source["results"]) {
+            members(
+                result,
+                SOURCE_RESULT,
+                &format!("{source_path}.results[{position}]"),
+                found,
+            );
+        }
+    }
     let summarizer = &memory["summarizer"];
     optional(summarizer, MODEL, &format!("{path}.summarizer"), found);
     for (index, round) in items(&summarizer["rounds"]) {
