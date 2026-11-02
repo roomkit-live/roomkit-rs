@@ -17,7 +17,8 @@ const MEDIA_TYPE_LIMIT: usize = 64;
 /// `result`, the server's answer to a call of `name`, as the model reads
 /// it, within [`RESULT_LIMIT`] characters:
 /// - each part's text, one part read as itself and several as a JSON array
-///   of them, as the reference implementation's `text_body` reads them;
+///   of them written as Python's `json.dumps` writes it, as the reference
+///   implementation's `text_body` reads them;
 /// - what is not text (an image, audio, a binary resource, a link to a
 ///   resource) as a one-line note naming its kind and type, never its
 ///   encoding, since base64 read as text is noise the model pays for (RFC
@@ -56,7 +57,7 @@ fn body(name: &str, result: CallToolResult) -> String {
     let text = match (texts.as_slice(), result.structured_content) {
         ([only], _) => only.clone(),
         ([], Some(structured)) => structured.to_string(),
-        (texts, _) => serde_json::Value::from(texts).to_string(),
+        (texts, _) => dumps(&serde_json::Value::from(texts)),
     };
     bounded(name, &text)
 }

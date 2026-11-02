@@ -71,7 +71,8 @@ async fn is_error_fails_the_call_with_the_server_s_words() {
 
 /// RFC §21.2: what is not text reaches the model as a short note naming
 /// what was left out, never as its encoding; the type a note names is kept
-/// to a media type's characters.
+/// to a media type's characters. Several parts read as a JSON array written
+/// as Python's `json.dumps` writes it (`", "` between items).
 #[tokio::test]
 async fn what_is_not_text_reaches_the_model_as_a_note() {
     let expected = json!([
@@ -84,7 +85,7 @@ async fn what_is_not_text_reaches_the_model_as_a_note() {
     ]);
     assert_eq!(
         answer("content", &json!({})).await,
-        Ok(ToolResult::Text(expected.to_string()))
+        Ok(ToolResult::Text(roomkit_ai::dumps(&expected)))
     );
 }
 
