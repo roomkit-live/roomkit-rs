@@ -131,6 +131,21 @@ pub enum HookTrigger {
     /// that ended, or of the request that completed the verification that
     /// ended, its data the reason and what ended.
     OnVerificationEnded,
+    /// An AI channel's loop ran a round of calls, before it builds the next
+    /// (RFC §6.4, Between two rounds): its payload is the round, whose
+    /// hooks may withdraw tools for the rest of the turn and add messages
+    /// the next round reads. A turn fires it, on the turn executor hosting
+    /// the channel.
+    AfterToolRound,
+    /// An AI channel's turn is about to generate (RFC §6.4, What the
+    /// generation hooks see): its payload is the context the turn starts
+    /// from, which its hooks may replace, or block the turn. A turn fires
+    /// it, on the turn executor hosting the channel.
+    BeforeAiGeneration,
+    /// An AI channel's turn completed (RFC §6.4, §9.2): its payload is the
+    /// turn's response, observed. A turn fires it, on the turn executor
+    /// hosting the channel.
+    OnAiResponse,
 }
 
 impl HookTrigger {
@@ -145,7 +160,9 @@ impl HookTrigger {
             | Self::BeforeToolUse
             | Self::OnToolCall
             | Self::BeforeDeliver
-            | Self::OnUserInputRequired => HookExecution::Sync,
+            | Self::OnUserInputRequired
+            | Self::AfterToolRound
+            | Self::BeforeAiGeneration => HookExecution::Sync,
             Self::AfterBroadcast
             | Self::OnEventUpdated
             | Self::OnEventDeleted
@@ -172,7 +189,8 @@ impl HookTrigger {
             | Self::OnParticipantLeft
             | Self::OnParticipantUpdated
             | Self::OnVerificationCompleted
-            | Self::OnVerificationEnded => HookExecution::Async,
+            | Self::OnVerificationEnded
+            | Self::OnAiResponse => HookExecution::Async,
         }
     }
 
@@ -212,19 +230,27 @@ impl HookTrigger {
             | Self::OnParticipantUpdated
             | Self::OnUserInputRequired
             | Self::OnVerificationCompleted
-            | Self::OnVerificationEnded => false,
+            | Self::OnVerificationEnded
+            | Self::AfterToolRound
+            | Self::BeforeAiGeneration
+            | Self::OnAiResponse => false,
         }
     }
 
     /// Whether a turn fires the trigger, on the turn executor hosting the
     /// channel, rather than the room owner (RFC §10.6.6), as the Python
     /// implementation's `TURN_TRIGGERS` lists them: `BEFORE_TOOL_USE`,
-    /// `ON_TOOL_CALL` and `ON_USER_INPUT_REQUIRED` among the triggers this
-    /// list holds.
+    /// `ON_TOOL_CALL`, `ON_USER_INPUT_REQUIRED` and an AI channel's loop
+    /// triggers among the triggers this list holds.
     #[doc(hidden)]
     pub fn is_turn_trigger(self) -> bool {
         match self {
-            Self::BeforeToolUse | Self::OnToolCall | Self::OnUserInputRequired => true,
+            Self::BeforeToolUse
+            | Self::OnToolCall
+            | Self::OnUserInputRequired
+            | Self::AfterToolRound
+            | Self::BeforeAiGeneration
+            | Self::OnAiResponse => true,
             Self::BeforeBroadcast
             | Self::AfterBroadcast
             | Self::OnEventUpdated
@@ -955,6 +981,12 @@ fn payload_of(trigger: HookTrigger) -> &'static str {
         "a SessionStartedEvent"
     } else if trigger == HookTrigger::OnUserInputRequired {
         "a PendingInputEvent"
+    } else if trigger == HookTrigger::AfterToolRound {
+        "a ToolRoundEvent"
+    } else if trigger == HookTrigger::BeforeAiGeneration {
+        "an AIGenerationEvent"
+    } else if trigger == HookTrigger::OnAiResponse {
+        "an AIResponseEvent"
     } else {
         "a RoomEvent"
     }
