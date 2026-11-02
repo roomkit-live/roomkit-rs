@@ -422,19 +422,50 @@ pub(crate) fn plan_targets(
     plan
 }
 
+/// Whether `event` asks `agent` to act (RFC §19.3, §19.4). The address
+/// decides first, and a conversation router's supervisor, which the event's
+/// `_always_process` lists, is asked on top of it (§19.4 step 4); without
+/// an address, an agent's output asks no agent under `AddressedOnly` but the
+/// supervisor; otherwise the router's `_routed_to` names the one agent asked
+/// beside the supervisor, and with no stamp every agent is asked.
 fn solicits(
     event: &RoomEvent,
     agent: &ChannelBinding,
     from_agent: bool,
     policy: AgentResponsePolicy,
 ) -> bool {
-    match &event.addressed_to {
-        Some(addressed) => addressed.contains(&agent.channel_id),
-        None => match policy {
-            AgentResponsePolicy::AgentChain => true,
-            AgentResponsePolicy::AddressedOnly => !from_agent,
-        },
+    let always = always_processes(event, &agent.channel_id);
+    if let Some(addressed) = &event.addressed_to {
+        return addressed.contains(&agent.channel_id) || always;
     }
+    if from_agent && policy == AgentResponsePolicy::AddressedOnly {
+        return always;
+    }
+    match event.metadata.get(ROUTED_TO) {
+        None | Some(serde_json::Value::Null) => true,
+        Some(routed) => routed.as_str() == Some(agent.channel_id.as_str()) || always,
+    }
+}
+
+/// The metadata key a conversation router stamps the agent it selected
+/// under (RFC §19.4).
+const ROUTED_TO: &str = "_routed_to";
+
+/// The metadata key a conversation router lists the agents always asked
+/// under, its supervisor (RFC §19.4 step 4).
+const ALWAYS_PROCESS: &str = "_always_process";
+
+/// Whether `event`'s `_always_process` lists `channel_id`.
+fn always_processes(event: &RoomEvent, channel_id: &ChannelId) -> bool {
+    event
+        .metadata
+        .get(ALWAYS_PROCESS)
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|listed| {
+            listed
+                .iter()
+                .any(|id| id.as_str() == Some(channel_id.as_str()))
+        })
 }
 
 #[cfg(test)]
@@ -1305,6 +1336,85 @@ mod tests {
             let mut event = event_from(&bindings[0]);
             event.chain_depth = 3;
             assert_eq!(ids(&plan(&event, &bindings).agents), ["writer"]);
+        }
+
+        fn routed(event: &mut RoomEvent, routed_to: &str, always: &[&str]) {
+            event
+                .metadata
+                .insert(ROUTED_TO.to_owned(), serde_json::json!(routed_to));
+            event
+                .metadata
+                .insert(ALWAYS_PROCESS.to_owned(), serde_json::json!(always));
+        }
+
+        // Python: tests/test_addressing.py::TestSolicitation::test_address_outranks_the_router
+        #[test]
+        fn the_address_outranks_the_router() {
+            let bindings = [transport("human"), agent("claude-code"), agent("codex")];
+            let mut event = event_from(&bindings[0]);
+            event.addressed_to = Some(vec![channel("codex")]);
+            routed(&mut event, "claude-code", &[]);
+            assert_eq!(ids(&plan(&event, &bindings).agents), ["codex"]);
+        }
+
+        // Python: tests/test_addressing.py::TestSolicitation::test_supervisor_still_acts_on_an_addressed_event
+        #[test]
+        fn the_supervisor_still_acts_on_an_addressed_event() {
+            let bindings = [
+                transport("human"),
+                agent("claude-code"),
+                agent("codex"),
+                agent("supervisor"),
+            ];
+            let mut event = event_from(&bindings[0]);
+            event.addressed_to = Some(vec![channel("codex")]);
+            event
+                .metadata
+                .insert(ALWAYS_PROCESS.to_owned(), serde_json::json!(["supervisor"]));
+            assert_eq!(
+                ids(&plan(&event, &bindings).agents),
+                ["codex", "supervisor"]
+            );
+        }
+
+        // Python: tests/test_addressing.py::TestSolicitation::test_router_still_decides_when_unaddressed
+        #[test]
+        fn the_router_still_decides_when_unaddressed() {
+            let bindings = [
+                transport("human"),
+                agent("claude-code"),
+                agent("codex"),
+                agent("supervisor"),
+            ];
+            let mut event = event_from(&bindings[0]);
+            routed(&mut event, "claude-code", &["supervisor"]);
+            assert_eq!(
+                ids(&plan(&event, &bindings).agents),
+                ["claude-code", "supervisor"]
+            );
+        }
+
+        // Python: tests/test_rfc_arbitrations.py::TestSupervisorAlwaysReceives::test_addressed_only_still_reaches_the_supervisor
+        // Python: tests/test_rfc_arbitrations.py::TestSupervisorAlwaysReceives::test_other_agents_are_still_not_solicited
+        #[test]
+        fn addressed_only_still_reaches_the_supervisor_alone() {
+            let bindings = [agent("agent-a"), agent("other-agent"), agent("supervisor")];
+            let mut event = event_from(&bindings[0]);
+            event
+                .metadata
+                .insert(ALWAYS_PROCESS.to_owned(), serde_json::json!(["supervisor"]));
+            let plan = plan_delivery(&event, &bindings, AgentResponsePolicy::AddressedOnly, 5);
+            assert_eq!(ids(&plan.agents), ["supervisor"]);
+        }
+
+        /// RFC §19.4: the router's `_none_` names no agent, which keeps an
+        /// agent's answer from every other agent but the supervisor.
+        #[test]
+        fn a_stamp_naming_no_agent_asks_the_supervisor_alone() {
+            let bindings = [agent("agent-a"), agent("agent-b"), agent("supervisor")];
+            let mut event = event_from(&bindings[0]);
+            routed(&mut event, "_none_", &["supervisor"]);
+            assert_eq!(ids(&plan(&event, &bindings).agents), ["supervisor"]);
         }
 
         #[test]
