@@ -694,11 +694,6 @@ members = ["room_vision"]
 reason = "not in 0.x: vision"
 
 [[missing]]
-python = "roomkit.orchestration.StatusBus"
-members = ["recent_text"]
-reason = "not in 0.x: the bus's recent entries as an agent's context, written with RFC 6.4's quoting of external text"
-
-[[missing]]
 python = "roomkit.TurnTimeouts.__init__"
 params = ["input_hold_timeout"]
 reason = "not in 0.x: human input"

@@ -974,6 +974,13 @@ fn status_backend_options_defaults_as_python() {
 }
 
 #[test]
+fn recent_text_options_defaults_as_python() {
+    let defaults = orchestration::RecentTextOptions::default();
+    // roomkit.orchestration.StatusBus.recent_text(n) = 10
+    assert_eq!(defaults.n, 10);
+}
+
+#[test]
 fn setup_background_options_defaults_as_python() {
     let defaults = roomkit::SetupBackgroundOptions::default();
     // roomkit.RoomKit.setup_background(worker) = None

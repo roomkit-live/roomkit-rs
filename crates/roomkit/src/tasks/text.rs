@@ -120,27 +120,12 @@ fn named(text: &str, tag: &str) -> String {
     kept
 }
 
-/// `value` as the runtime gives an identifier outside a quote: letters,
-/// digits and `_ . @ + -`, any other character a `-`, within 64
-/// characters; `fallback` when nothing is left. Python's `identifier`.
+/// `value` as the runtime gives an identifier outside a quote: letters
+/// with their marks, digits and `_ . @ + -`, any other character a `-`,
+/// within 64 characters, composed first; `fallback` when nothing is left.
+/// Python's `identifier`, the transcript's.
 pub(crate) fn identifier(value: &str, fallback: &str) -> String {
-    let mut kept = String::with_capacity(value.len());
-    for c in value.chars() {
-        let c = if c.is_alphanumeric() || "_.@+-".contains(c) {
-            c
-        } else {
-            '-'
-        };
-        if !(c == '-' && kept.ends_with('-')) {
-            kept.push(c);
-        }
-    }
-    let limited: String = kept.trim_matches('-').chars().take(64).collect();
-    if limited.is_empty() {
-        fallback.to_owned()
-    } else {
-        limited
-    }
+    roomkit_core::rules::transcript::identifier(value, fallback)
 }
 
 #[cfg(test)]
@@ -163,6 +148,15 @@ mod tests {
     #[test]
     fn a_quoted_text_cannot_close_its_quote() {
         assert_eq!(quoted("Say \"hi\"\nnow", 200), "“Say 'hi' now”");
+    }
+
+    // Python: tests/test_external_text.py::test_a_name_keeps_its_letters_and_their_marks
+    #[test]
+    fn an_identifier_keeps_letters_and_their_marks() {
+        assert_eq!(
+            [identifier("सुनील", "x"), identifier("Cafe\u{301}", "x")],
+            ["सुनील", "Café"]
+        );
     }
 
     #[test]
