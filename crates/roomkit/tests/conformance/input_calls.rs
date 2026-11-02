@@ -93,20 +93,35 @@ pub(crate) fn input_hook_handler(
             let scope = Scope::with_request(&room_id, &event.pending_id);
             perform(&run, &reaction, &scope).await?;
             match reaction.get("result") {
-                Some(result) => Ok(input_hook_result(result)?),
+                Some(result) => Ok(input_hook_result(result, &event)?),
                 None => Ok(allow),
             }
         })
     }
 }
 
-/// A scenario's hook result on a request: an allow or a block with its
-/// reason.
-fn input_hook_result(spec: &Value) -> Result<HookResult<PendingInputEvent>, String> {
+/// A scenario's hook result on a request: an allow, a block with its
+/// reason, or a modify whose `event` is a patch on `request`, its members
+/// replacing the request's.
+fn input_hook_result(
+    spec: &Value,
+    request: &PendingInputEvent,
+) -> Result<HookResult<PendingInputEvent>, String> {
     let action: HookAction = serde_json::from_value(spec["action"].clone())
         .map_err(|error| format!("action: {error}"))?;
     let mut result = HookResult::new(action);
     result.reason = spec["reason"].as_str().map(str::to_owned);
+    if let Some(Value::Object(patch)) = spec.get("event") {
+        let mut patched = serde_json::to_value(request).map_err(|error| error.to_string())?;
+        for (member, value) in patch {
+            if patched.get(member).is_none() {
+                return Err(format!("a request has no member {member}"));
+            }
+            patched[member] = value.clone();
+        }
+        result.event =
+            Some(serde_json::from_value(patched).map_err(|error| format!("event: {error}"))?);
+    }
     Ok(result)
 }
 
