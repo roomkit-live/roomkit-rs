@@ -47,6 +47,7 @@ mod fence;
 mod images;
 pub use images::Image;
 mod marks;
+mod quote;
 mod rounds;
 mod speakers;
 #[cfg(test)]
@@ -56,9 +57,11 @@ pub use self::fence::fence;
 #[doc(hidden)]
 pub use self::fence::named_blocks;
 pub use self::marks::SPEAKER_NOTE as SPEAKER_ATTRIBUTION_NOTE;
+pub use self::marks::SUMMARY_HEADER;
 use self::marks::{
     INSTRUCTION_MARK, NOTES_HEADER, SPEAKER_NOTE, without_copies, without_header_copies,
 };
+pub use self::quote::quoted;
 use self::rounds::{ToolRound, tool_rounds};
 use self::speakers::{
     Speaker, labelled_lines, labels_turns, people_taking_part, speaker, tell_apart,
@@ -555,6 +558,16 @@ pub fn steered_text(
         Some(label) if several => Some(labelled_lines(&text, &label)),
         Some(_) | None => Some(text),
     }
+}
+
+/// How many people take part besides the agent of `channel_id` (RFC §6.4),
+/// silent ones included: the room's active participants who are neither
+/// bots nor observers, nor on the agent's own channel, and whose messages
+/// reach the agent; none for an agent the room does not bind. Python's
+/// `len(people_taking_part(context, channel_id))`, which a summary's lines
+/// count toward labelling.
+pub fn people_count(context: &RoomContext, channel_id: &ChannelId) -> usize {
+    people_taking_part(context, channel_id, &Authors::new(context))
 }
 
 /// `text` with each copy of a runtime mark it holds replaced (RFC §6.4):
