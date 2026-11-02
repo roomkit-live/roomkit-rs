@@ -7,8 +7,9 @@ use roomkit_ai::AiChannelOptions;
 use roomkit_ai::DiscoverOptions;
 use roomkit_ai::MockAiProviderOptions;
 use roomkit_ai::memory::{
-    BudgetAwareMemoryOptions, EstimateEventTokensOptions, HistoryBudgetOptions, IngestOptions,
-    RetrieveOptions, SlidingWindowMemoryOptions,
+    BudgetAwareMemoryOptions, CompactingMemoryOptions, EstimateEventTokensOptions,
+    HistoryBudgetOptions, IngestOptions, RetrieveOptions, SlidingWindowMemoryOptions,
+    SummarizingMemoryOptions,
 };
 use std::time::Duration;
 
@@ -99,6 +100,28 @@ fn memory_options_defaults_as_python() {
     assert!(history.current_event.is_none());
     // roomkit.memory.history_budget(reply_tokens) = 0
     assert_eq!(history.reply_tokens, 0);
+    let compacting = CompactingMemoryOptions::default();
+    // roomkit.memory.CompactingMemory.__init__(summary_ratio) = 0.1
+    assert!((compacting.summary_ratio - 0.1).abs() < f64::EPSILON);
+    // roomkit.memory.CompactingMemory.__init__(safety_margin_ratio) = 0.15
+    assert!((compacting.safety_margin_ratio - 0.15).abs() < f64::EPSILON);
+    // roomkit.memory.CompactingMemory.__init__(min_events) = 5
+    assert_eq!(compacting.min_events, 5);
+    // roomkit.memory.CompactingMemory.__init__(summary_cache_ttl_seconds) = 300.0
+    assert_eq!(compacting.summary_cache_ttl, Duration::from_mins(5));
+    let summarizing = SummarizingMemoryOptions::default();
+    // roomkit.memory.SummarizingMemory.__init__(tier1_ratio) = 0.5
+    assert!((summarizing.tier1_ratio - 0.5).abs() < f64::EPSILON);
+    // roomkit.memory.SummarizingMemory.__init__(tier2_ratio) = 0.85
+    assert!((summarizing.tier2_ratio - 0.85).abs() < f64::EPSILON);
+    // roomkit.memory.SummarizingMemory.__init__(truncate_chars) = 2000
+    assert_eq!(summarizing.truncate_chars, 2000);
+    // roomkit.memory.SummarizingMemory.__init__(summary_max_tokens) = 1000
+    assert_eq!(summarizing.summary_max_tokens, 1000);
+    // roomkit.memory.SummarizingMemory.__init__(min_events) = 5
+    assert_eq!(summarizing.min_events, 5);
+    // roomkit.memory.SummarizingMemory.__init__(summary_cache_ttl_seconds) = 1800.0
+    assert_eq!(summarizing.summary_cache_ttl, Duration::from_mins(30));
 }
 
 #[test]

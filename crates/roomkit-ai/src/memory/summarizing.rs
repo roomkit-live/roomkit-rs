@@ -1,0 +1,419 @@
+//! A two-tier memory that keeps the context to its window (RFC §20.3):
+//! Python's `SummarizingMemory`. Tier 1 truncates the large bodies of the
+//! older events, with no model call; tier 2 has a model summarize the
+//! older events, a prior summary carried into the new one.
+
+use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use roomkit::ChannelError;
+use roomkit::model::{EventContent, RoomContext, RoomEvent, RoomId, TextContent};
+use tokio::time::Instant;
+
+use super::summary::{
+    SUMMARIZER_PROMPT, SUMMARY_FAILED, SummaryLines, is_summary, prior_summary, summary_message,
+    unavailable,
+};
+use super::token_estimator::{
+    EstimateEventTokensOptions, estimate_event_tokens, estimate_message_tokens,
+    estimate_notes_tokens,
+};
+use super::{IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
+use crate::provider::{AiContext, AiMessage, AiProvider, AiRole};
+
+/// How many summaries the cache keeps.
+const MAX_CACHE_ENTRIES: usize = 200;
+
+/// What [`SummarizingMemory::new`] takes beside its inner memory, its
+/// summarizer and its window: Python's keywords and their defaults.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SummarizingMemoryOptions {
+    /// The share of the window past which tier 1 truncates: 0.50.
+    pub tier1_ratio: f64,
+    /// The share of the window past which tier 2 summarizes: 0.85.
+    pub tier2_ratio: f64,
+    /// The most characters an older event's body keeps in tier 1: 2,000.
+    pub truncate_chars: usize,
+    /// The most tokens the summary is asked for: 1,000.
+    pub summary_max_tokens: u32,
+    /// The fewest events kept after a summary: 5.
+    pub min_events: usize,
+    /// How long a summary is reused: 30 minutes.
+    pub summary_cache_ttl: Duration,
+}
+
+impl Default for SummarizingMemoryOptions {
+    fn default() -> Self {
+        Self {
+            tier1_ratio: 0.50,
+            tier2_ratio: 0.85,
+            truncate_chars: 2000,
+            summary_max_tokens: 1000,
+            min_events: 5,
+            summary_cache_ttl: Duration::from_mins(30),
+        }
+    }
+}
+
+/// Wraps a memory and keeps what it retrieved within a window of tokens
+/// in two tiers (RFC §20.3): Python's `SummarizingMemory`.
+///
+/// - Tier 1, past `tier1_ratio` of the window: the text bodies of the
+///   older half of the events are cut to `truncate_chars`, with no model
+///   call.
+/// - Tier 2, past `tier2_ratio`: the older events are summarized by
+///   `provider`, a prior summary of the inner memory's carried into the
+///   new one, the latest events kept whole, `min_events` of them at least;
+///   the summary's message replaces the prior one (RFC §6.4).
+///
+/// Then the oldest events are dropped until the result fits the window.
+/// The inner memory's messages and notes are paid for first and handed on
+/// as they are. A summary is reused for the same lines, for
+/// `summary_cache_ttl`. A summarizer that fails, or answers nothing, leaves
+/// a summary that says so.
+pub struct SummarizingMemory<P> {
+    inner: Arc<dyn MemoryProvider>,
+    provider: P,
+    max_context_tokens: usize,
+    options: SummarizingMemoryOptions,
+    /// The summaries made, oldest first: the lines' key, when, the summary.
+    cache: Mutex<Vec<(String, Instant, String)>>,
+}
+
+impl<P: AiProvider> SummarizingMemory<P> {
+    /// `inner`, kept to a window of `max_context_tokens`, its older events
+    /// summarized by `provider`.
+    pub fn new(
+        inner: Arc<dyn MemoryProvider>,
+        provider: P,
+        max_context_tokens: usize,
+        options: SummarizingMemoryOptions,
+    ) -> Self {
+        Self {
+            inner,
+            provider,
+            max_context_tokens,
+            options,
+            cache: Mutex::default(),
+        }
+    }
+
+    /// The memory's result for `events`, `inner` the inner memory's.
+    async fn reduced(
+        &self,
+        room_id: &RoomId,
+        inner: MemoryResult,
+        lines: SummaryLines<'_>,
+    ) -> MemoryResult {
+        let injected = injected_tokens(&inner);
+        let mut events = inner.events.clone();
+        let mut total = injected + events_tokens(&events);
+        if total > share(self.max_context_tokens, self.options.tier1_ratio) && events.len() > 1 {
+            events = self.truncated(events);
+            total = injected + events_tokens(&events);
+        }
+        let tier2 = share(self.max_context_tokens, self.options.tier2_ratio);
+        if total > tier2 && events.len() > self.options.min_events {
+            let summarized = self.summarized(room_id, events, inner, tier2, lines).await;
+            return self.within_window(summarized);
+        }
+        self.within_window(MemoryResult { events, ..inner })
+    }
+
+    /// Tier 1: the text bodies of the older half of `events` cut to
+    /// `truncate_chars`, an annotation replacing their tail.
+    fn truncated(&self, events: Vec<RoomEvent>) -> Vec<RoomEvent> {
+        let midpoint = events.len() / 2;
+        events
+            .into_iter()
+            .enumerate()
+            .map(|(at, event)| {
+                if at < midpoint {
+                    self.cut(event)
+                } else {
+                    event
+                }
+            })
+            .collect()
+    }
+
+    /// `event` with its text body cut to `truncate_chars`, the annotation
+    /// replacing its tail, never making it longer; any other content as it
+    /// is.
+    fn cut(&self, event: RoomEvent) -> RoomEvent {
+        let EventContent::Text(text) = &event.content else {
+            return event;
+        };
+        let length = text.body.chars().count();
+        if length <= self.options.truncate_chars {
+            return event;
+        }
+        let annotation = format!("\n[... truncated from {length} chars ...]");
+        let cutoff = self
+            .options
+            .truncate_chars
+            .saturating_sub(annotation.chars().count());
+        let body: String = text.body.chars().take(cutoff).collect();
+        let content = TextContent {
+            body: format!("{body}{annotation}"),
+            ..text.clone()
+        };
+        RoomEvent {
+            content: EventContent::Text(content),
+            ..event
+        }
+    }
+
+    /// Tier 2: the older events summarized, the latest kept whole, within
+    /// `budget`; `inner`'s messages kept but a prior summary, which the new
+    /// one carries.
+    async fn summarized(
+        &self,
+        room_id: &RoomId,
+        events: Vec<RoomEvent>,
+        inner: MemoryResult,
+        budget: usize,
+        mut lines: SummaryLines<'_>,
+    ) -> MemoryResult {
+        let costs: Vec<i64> = events
+            .iter()
+            .map(|event| to_i64(event_tokens(event)))
+            .collect();
+        let event_budget = to_i64(budget) - i64::from(self.options.summary_max_tokens);
+        let mut keep_from = 0;
+        let mut running = 0;
+        for at in (0..events.len()).rev() {
+            running += costs.get(at).copied().unwrap_or(0);
+            if running > event_budget && events.len() - at >= self.options.min_events {
+                keep_from = at;
+                break;
+            }
+        }
+        if keep_from == 0 {
+            return MemoryResult { events, ..inner };
+        }
+        let mut trimmed = events;
+        let kept = trimmed.split_off(keep_from);
+        lines.kept.clone_from(&kept);
+        let prior = prior_summary(&inner.messages);
+        let summary = self
+            .summary(room_id, &trimmed, prior.as_deref(), &lines)
+            .await;
+        let mut messages: Vec<AiMessage> = inner
+            .messages
+            .iter()
+            .filter(|message| !is_summary(message))
+            .cloned()
+            .collect();
+        messages.push(summary_message(&summary));
+        let mut speakers = inner.speakers.clone();
+        speakers.extend(lines.named(&trimmed));
+        speakers.sort();
+        speakers.dedup();
+        MemoryResult {
+            messages,
+            events: kept,
+            speakers,
+            ..inner
+        }
+    }
+
+    /// The summary of `events`, from the cache when the same lines were
+    /// summarized within its time to live.
+    async fn summary(
+        &self,
+        room_id: &RoomId,
+        events: &[RoomEvent],
+        prior: Option<&str>,
+        lines: &SummaryLines<'_>,
+    ) -> String {
+        let texts = lines.lines(events);
+        let key = std::iter::once(room_id.as_str().to_owned())
+            .chain(texts.iter().cloned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let now = Instant::now();
+        if let Some(summary) = self.cached(&key, now) {
+            return summary;
+        }
+        let mut parts = vec![
+            "Summarize this conversation concisely. Focus on: decisions made, key findings, \
+             tool results, errors encountered, and current task state. Be specific about names, \
+             error messages, and action outcomes."
+                .to_owned(),
+        ];
+        if let Some(prior) = prior.filter(|prior| !prior.is_empty()) {
+            parts.push(format!(
+                "\nA prior summary exists. Incorporate its key points:\n{prior}"
+            ));
+        }
+        parts.push(format!("\n{}", texts.join("\n")));
+        let context = AiContext {
+            messages: vec![AiMessage::new(AiRole::User, parts.join("\n"))],
+            system_prompt: Some(SUMMARIZER_PROMPT.to_owned()),
+            temperature: 0.0,
+            max_tokens: Some(self.options.summary_max_tokens),
+            ..AiContext::default()
+        };
+        let summary = match self.provider.generate(&context).await {
+            Ok(response) => match response.content.trim() {
+                "" => SUMMARY_FAILED.to_owned(),
+                summary => summary.to_owned(),
+            },
+            Err(error) => {
+                tracing::warn!(target: "roomkit::memory", %error, "failed to generate a summary");
+                unavailable(events.len())
+            }
+        };
+        self.cache_lock().push((key, now, summary.clone()));
+        summary
+    }
+
+    /// The summary cached under `key`, still within its time to live; one
+    /// past it is dropped, and the oldest when the cache is full.
+    fn cached(&self, key: &str, now: Instant) -> Option<String> {
+        let mut cache = self.cache_lock();
+        if let Some(at) = cache.iter().position(|(cached, _, _)| cached == key) {
+            let (_, made, summary) = cache.get(at)?;
+            if now.duration_since(*made) < self.options.summary_cache_ttl {
+                return Some(summary.clone());
+            }
+            cache.remove(at);
+        }
+        if cache.len() >= MAX_CACHE_ENTRIES {
+            cache.remove(0);
+        }
+        None
+    }
+
+    fn cache_lock(&self) -> std::sync::MutexGuard<'_, Vec<(String, Instant, String)>> {
+        self.cache.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `result` with its oldest events dropped until it fits the window,
+    /// one at least kept.
+    fn within_window(&self, mut result: MemoryResult) -> MemoryResult {
+        let injected = injected_tokens(&result);
+        while injected + events_tokens(&result.events) > self.max_context_tokens
+            && result.events.len() > 1
+        {
+            result.events.remove(0);
+        }
+        result
+    }
+}
+
+/// `max_context_tokens * ratio`, cut toward zero, as Python's `int()`.
+fn share(max_context_tokens: usize, ratio: f64) -> usize {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        reason = "Python's int(max_context_tokens * ratio) of a ratio not below 0"
+    )]
+    let share = (max_context_tokens as f64 * ratio).max(0.0) as usize;
+    share
+}
+
+fn to_i64(tokens: usize) -> i64 {
+    i64::try_from(tokens).unwrap_or(i64::MAX)
+}
+
+fn event_tokens(event: &RoomEvent) -> usize {
+    estimate_event_tokens(event, EstimateEventTokensOptions::default())
+}
+
+fn events_tokens(events: &[RoomEvent]) -> usize {
+    events.iter().map(event_tokens).sum()
+}
+
+/// What `result` puts in the window besides its events: its messages and
+/// the turn's notes, neither of which a tier trims.
+fn injected_tokens(result: &MemoryResult) -> usize {
+    result
+        .messages
+        .iter()
+        .map(estimate_message_tokens)
+        .sum::<usize>()
+        + estimate_notes_tokens(&result.notes)
+}
+
+impl<P: AiProvider> MemoryProvider for SummarizingMemory<P> {
+    fn name(&self) -> String {
+        format!("SummarizingMemory({})", self.inner.name())
+    }
+
+    fn recent_events_window(&self) -> usize {
+        self.inner.recent_events_window()
+    }
+
+    fn retrieve<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+        current_event: &'a RoomEvent,
+        context: &'a RoomContext,
+        options: RetrieveOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<MemoryResult, ChannelError>> + Send + 'a>> {
+        Box::pin(async move {
+            let channel_id = options.channel_id.clone();
+            let inner = self
+                .inner
+                .retrieve(room_id, current_event, context, options)
+                .await?;
+            let lines = SummaryLines {
+                context,
+                current: Some(current_event),
+                channel_id: channel_id.as_ref(),
+                kept: Vec::new(),
+            };
+            Ok(self.reduced(room_id, inner, lines).await)
+        })
+    }
+
+    fn ingest<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+        event: &'a RoomEvent,
+        options: IngestOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ChannelError>> + Send + 'a>> {
+        self.inner.ingest(room_id, event, options)
+    }
+
+    /// Clears the inner memory, then every cached summary: their keys are
+    /// the lines, the room's among others.
+    fn clear<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ChannelError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.inner.clear(room_id).await?;
+            self.cache_lock().clear();
+            Ok(())
+        })
+    }
+
+    /// Closes the inner memory, then the summarizer.
+    fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            self.inner.close().await;
+            self.provider.close().await;
+        })
+    }
+}
+
+impl<P> fmt::Debug for SummarizingMemory<P> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SummarizingMemory")
+            .field("inner", &self.inner.name())
+            .field("max_context_tokens", &self.max_context_tokens)
+            .field("options", &self.options)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests;

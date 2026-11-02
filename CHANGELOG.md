@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The summarizing and compacting memories, Python's (RFC §20.3, §6.4,
+  RMK-1165): `SummarizingMemory` truncates the older events' long bodies,
+  then has a model summarize the older events, a prior summary carried
+  into the new one; `CompactingMemory` summarizes the events it trims
+  past its window. Their summary reads each turn quoted on one line after
+  who said it, and stands as a message of the runtime's, fenced; the
+  speakers it names count toward labelling the turns. A copy of the
+  summary's header in someone's text reads as a copy of a runtime mark.
 - `RoomKitError::Runtime`, Python's builtin `RuntimeError` (decided by the
   maintainer, RMK-1168): a setup made twice, a verb a turn's host makes
   after its turn that needs it, a human-input request its handler gave up;

@@ -13,13 +13,21 @@
 //!   tokens, once the turn's footprint ([`current_turn_footprint`]) is paid
 //!   for (RFC §20.3); the estimates it counts with
 //!   ([`estimate_tokens`], [`history_budget`]...).
+//! - [`SummarizingMemory`] and [`CompactingMemory`]: another memory's
+//!   older events summarized by a model, the summary's message standing
+//!   for them (RFC §20.3, §6.4).
 
 mod budget_aware;
+mod compacting;
 mod footprint;
 #[cfg(test)]
 mod mock;
 mod repr;
 mod sliding_window;
+mod summarizing;
+mod summary;
+#[cfg(test)]
+mod testing;
 mod token_estimator;
 
 use std::any::type_name;
@@ -30,11 +38,13 @@ use roomkit::ChannelError;
 use roomkit::model::{ChannelId, RoomContext, RoomEvent, RoomId};
 
 pub use self::budget_aware::{BudgetAwareMemory, BudgetAwareMemoryOptions};
+pub use self::compacting::{CompactingMemory, CompactingMemoryOptions};
 pub(crate) use self::footprint::measured;
 pub use self::footprint::{TurnFootprint, current_turn_footprint};
 #[cfg(test)]
 pub(crate) use self::mock::{MockMemoryProvider, MockMemoryProviderOptions};
 pub use self::sliding_window::{SlidingWindowMemory, SlidingWindowMemoryOptions};
+pub use self::summarizing::{SummarizingMemory, SummarizingMemoryOptions};
 pub(crate) use self::token_estimator::estimate_tool_tokens;
 pub use self::token_estimator::{
     EstimateEventTokensOptions, HistoryBudgetOptions, estimate_context_tokens,
