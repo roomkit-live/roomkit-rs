@@ -36,15 +36,17 @@ impl TurnHost {
     /// order, each hook reading the request as the one before left it, a
     /// block rejecting it; a hook that raises or runs past its timeout lets
     /// it through (the trigger fails open). Its ASYNC hooks observe a
-    /// request the chain let through. Emits `user_input_required` with the
-    /// chain's verdict (RFC §8.2). Whether the request stands; a request
-    /// naming no room fires nothing and stands.
+    /// request the chain let through, as the chain left it. Emits
+    /// `user_input_required` with the chain's verdict, naming the request
+    /// as the tool asked it, whatever a hook's modify made of it (RFC
+    /// §8.2, Python's `build_on_user_input_required_hook`). Whether the
+    /// request stands; a request naming no room fires nothing and stands.
     pub(crate) async fn user_input_required(&self, event: PendingInputEvent) -> bool {
         if event.room_id.is_empty() {
             return true;
         }
         let hooks = self.input_hooks(&event);
-        let (current, blocked) = self.input_chain(&hooks, event).await;
+        let (current, blocked) = self.input_chain(&hooks, event.clone()).await;
         let allowed = blocked.is_none();
         if allowed {
             self.observe_input(&hooks, &current);
@@ -52,15 +54,12 @@ impl TurnHost {
         let mut data = Metadata::new();
         data.insert(
             "pending_id".to_owned(),
-            Value::from(current.pending_id.as_str()),
+            Value::from(event.pending_id.as_str()),
         );
-        data.insert(
-            "tool_name".to_owned(),
-            Value::from(current.tool_name.as_str()),
-        );
+        data.insert("tool_name".to_owned(), Value::from(event.tool_name.as_str()));
         data.insert(
             "tool_call_id".to_owned(),
-            Value::from(current.tool_call_id.as_str()),
+            Value::from(event.tool_call_id.as_str()),
         );
         data.insert("allowed".to_owned(), Value::Bool(allowed));
         data.insert(
