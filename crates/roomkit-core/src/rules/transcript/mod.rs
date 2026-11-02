@@ -309,15 +309,14 @@ pub fn conversation_with_memory(
 
 /// A turn of the conversation before it is rendered: its role, what its
 /// event says, who said it, whether it is the application's instruction,
-/// whether it is the turn's input, its event's place in the timeline, and
-/// the rounds of tool calls read after it.
+/// its event's place in the timeline, and the rounds of tool calls read
+/// after it.
 #[derive(Clone, Debug)]
 struct Turn {
     role: Role,
     content: TurnContent,
     speaker: Option<Speaker>,
     instruction: bool,
-    input: bool,
     index: u64,
     rounds: Vec<ToolRound>,
 }
@@ -336,7 +335,6 @@ impl Turn {
             content: read(event),
             speaker: if own { None } else { speaker(event, authors) },
             instruction: false,
-            input: false,
             index: event.index,
             rounds: Vec::new(),
         }
@@ -363,7 +361,6 @@ impl Turn {
                 speaker(event, authors)
             },
             instruction,
-            input: true,
             index: event.index,
             rounds: Vec::new(),
         }
@@ -534,10 +531,12 @@ pub fn replayed_rounds(
 /// The conversation's messages: each turn in its role, a participant's
 /// turn labelled when the conversation labels them, the instruction marked
 /// as the application's, the rounds read after a turn following it, then
-/// the turn's notes after its input: the speaker note when the turns are
-/// labelled, then the `remembered` notes the memory retrieved.
+/// the turn's notes (the speaker note when the turns are labelled, then the
+/// `remembered` notes the memory retrieved) after the last message when it
+/// is a user's, the input or not, else as a user message of their own
+/// (Python's `with_turn_notes`): some chat formats refuse two user messages
+/// in a row.
 fn rendered(turns: Vec<Turn>, labelled: bool, remembered: &[String]) -> Vec<Message> {
-    let ends_on_input = turns.last().is_some_and(|turn| turn.input);
     let mut messages: Vec<Message> = Vec::with_capacity(turns.len());
     for turn in turns {
         let content = match (&turn.speaker, turn.content) {
@@ -559,7 +558,7 @@ fn rendered(turns: Vec<Turn>, labelled: bool, remembered: &[String]) -> Vec<Mess
         .collect();
     if let Some(notes) = joined_notes(&blocks) {
         match messages.pop() {
-            Some(input) if ends_on_input => messages.push(with_notes(input, &notes)),
+            Some(last) if last.role == Role::User => messages.push(with_notes(last, &notes)),
             Some(other) => messages.extend([other, Message::new(Role::User, notes)]),
             None => messages.push(Message::new(Role::User, notes)),
         }
