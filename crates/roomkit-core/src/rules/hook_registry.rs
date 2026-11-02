@@ -117,6 +117,11 @@ pub enum HookTrigger {
     OnParticipantLeft,
     /// `rename_member` changed a member's display name (RFC §5.5).
     OnParticipantUpdated,
+    /// A tool asked a person for input (RFC §9.3, §10.6.5): its payload is
+    /// the request, a block rejects it unless it was answered first, and a
+    /// hook that fails lets it through. A turn fires it, on the turn
+    /// executor hosting the channel.
+    OnUserInputRequired,
 }
 
 impl HookTrigger {
@@ -130,7 +135,8 @@ impl HookTrigger {
             | Self::BeforeTts
             | Self::BeforeToolUse
             | Self::OnToolCall
-            | Self::BeforeDeliver => HookExecution::Sync,
+            | Self::BeforeDeliver
+            | Self::OnUserInputRequired => HookExecution::Sync,
             Self::AfterBroadcast
             | Self::OnEventUpdated
             | Self::OnEventDeleted
@@ -192,18 +198,20 @@ impl HookTrigger {
             | Self::OnParticipantIdentified
             | Self::OnParticipantJoined
             | Self::OnParticipantLeft
-            | Self::OnParticipantUpdated => false,
+            | Self::OnParticipantUpdated
+            | Self::OnUserInputRequired => false,
         }
     }
 
     /// Whether a turn fires the trigger, on the turn executor hosting the
     /// channel, rather than the room owner (RFC §10.6.6), as the Python
-    /// implementation's `TURN_TRIGGERS` lists them: `BEFORE_TOOL_USE` and
-    /// `ON_TOOL_CALL` among the triggers this list holds.
+    /// implementation's `TURN_TRIGGERS` lists them: `BEFORE_TOOL_USE`,
+    /// `ON_TOOL_CALL` and `ON_USER_INPUT_REQUIRED` among the triggers this
+    /// list holds.
     #[doc(hidden)]
     pub fn is_turn_trigger(self) -> bool {
         match self {
-            Self::BeforeToolUse | Self::OnToolCall => true,
+            Self::BeforeToolUse | Self::OnToolCall | Self::OnUserInputRequired => true,
             Self::BeforeBroadcast
             | Self::AfterBroadcast
             | Self::OnEventUpdated
@@ -930,6 +938,8 @@ fn payload_of(trigger: HookTrigger) -> &'static str {
         "a ToolCallEvent"
     } else if trigger == HookTrigger::OnSessionStarted {
         "a SessionStartedEvent"
+    } else if trigger == HookTrigger::OnUserInputRequired {
+        "a PendingInputEvent"
     } else {
         "a RoomEvent"
     }
