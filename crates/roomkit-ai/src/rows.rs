@@ -220,8 +220,8 @@ fn start_row(call: &ToolCall) -> ToolCallContent {
 }
 
 /// A call's end row: the arguments it ran with, how it ended, what the
-/// model read of it, its images within the row's bound, and, when it did
-/// not serve, the same as its error.
+/// model read of it, its binary payloads within the row's bound, and, when
+/// it did not serve, the same as its error.
 fn end_row(end: ToolEnd) -> ToolCallContent {
     let mut row = ToolCallContent::new(end.call.name, end.call.id);
     row.arguments = end.call.arguments;

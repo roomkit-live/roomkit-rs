@@ -78,6 +78,31 @@ async fn the_server_s_tools_are_declared_and_its_answers_read() {
     room.kit.close().await.unwrap();
 }
 
+/// RFC §21.4, §6.4: an image a server's tool returns goes through the
+/// agent's turn as an image part: a model that does not see images reads
+/// it, and its end row keeps it, as the `[image]` mark of the result's
+/// text, where the result read as a text noted it.
+// Python: tests/test_mcp_tool_provider.py::test_tool_handler_returns_an_image_as_an_image_part,
+// end to end, through _shape_for_model.
+#[tokio::test]
+async fn a_server_s_image_reaches_the_turn_as_an_image_part() {
+    let server = connected("normal").await;
+    let model = calling(&[("call_1", "content", r#"{"shown": true}"#)]);
+    let room = Room::with(serving(&model, &server, |options| options)).await;
+    room.says("Show me the page.").await;
+    let ends = room.ends().await;
+    let row = ends[0].result.as_str().unwrap_or_default().to_owned();
+    let read = format!("{:?}", model.requests()[1].messages);
+    assert_eq!(
+        (
+            row.starts_with("first\n[image]\n"),
+            read.contains("first\\n[image]\\n")
+        ),
+        (true, true)
+    );
+    room.kit.close().await.unwrap();
+}
+
 /// RFC §21.2: the server's tools are subject to the agent's tool policy: a
 /// tool it denies is never declared, and a call to it is refused.
 #[tokio::test]

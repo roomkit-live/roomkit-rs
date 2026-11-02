@@ -4,10 +4,12 @@
 //! The row is stored, broadcast and handed to the hooks of the event
 //! pipeline, so a screenshot's base64 must not ride along without bound.
 //! The model's own copy of the result is not this: it keeps every image.
-//! A result reaches the row as content parts, as a text, or as JSON, the
-//! shape a tool's structured output takes; each binary payload in it is
-//! kept while the payloads kept so far, its own included, stay within the
-//! bound, else a note naming its kind, type and size stands in its place.
+//! A result reaches the row as content parts, as a text, or as JSON, a
+//! handler's JSON answer, which roomkit-rs keeps as JSON where Python dumps
+//! it to a string (and walks JSON only of an ACP agent's output and a
+//! structured copy); each binary payload in it is kept while the payloads
+//! kept so far, its own included, stay within the bound, else a note
+//! naming its kind, type and size stands in its place.
 
 use serde_json::{Map, Value};
 
@@ -159,7 +161,9 @@ fn binary_block(node: &Map<String, Value>) -> Option<BinaryBlock> {
 }
 
 /// The first of `values` Python's `or` reads as set: present, and neither
-/// null, false, zero, nor an empty string, list or object.
+/// null, false, zero, nor an empty string, list or object. Where none is,
+/// Python's `or` yields the last, an empty payload kept whole; here the
+/// block is none, and its members are walked.
 fn first_set<const N: usize>(values: [Option<&Value>; N]) -> Option<&Value> {
     values.into_iter().flatten().find(|value| match value {
         Value::Null => false,

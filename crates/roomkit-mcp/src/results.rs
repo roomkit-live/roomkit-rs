@@ -27,9 +27,10 @@ const MODEL_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "i
 ///   the model sees, each other part its text or its note, its texts
 ///   within [`RESULT_LIMIT`] characters in all (the reference
 ///   implementation bounds none of them);
-/// - otherwise, within [`RESULT_LIMIT`] characters, each part's text, one part read as itself and several as a JSON array
-///   of them written as Python's `json.dumps` writes it, as the reference
-///   implementation's `text_body` reads them;
+/// - otherwise, within [`RESULT_LIMIT`] characters, each part's text,
+///   one part read as itself and several as a JSON array of them written
+///   as Python's `json.dumps` writes it, as the reference implementation's
+///   handler joins its parts' texts;
 /// - what is not text (an image, audio, a binary resource, a link to a
 ///   resource) as a one-line note naming its kind and type, never its
 ///   encoding, since base64 read as text is noise the model pays for (RFC
@@ -70,10 +71,10 @@ fn bounded_parts(name: &str, parts: Vec<ToolResultPart>) -> Vec<ToolResultPart> 
                 left -= size;
                 return Some(part);
             }
+            cut = true;
             if left == 0 {
                 return None;
             }
-            cut = true;
             let kept = bounded_result(&text.text, left);
             left = 0;
             Some(ToolResultPart::Text(AiTextPart::new(kept)))
@@ -198,6 +199,34 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    /// An image of a vendor's type whose base64 lacks its padding, and one
+    /// that names no type, read as `image/png`, reach the model as images,
+    /// the padding repaired by the check alone.
+    // Python: tests/test_mcp_tool_provider.py::test_tool_handler_returns_an_image_as_an_image_part,
+    // its unpadded JPEG.
+    #[test]
+    fn an_unpadded_or_untyped_image_reaches_the_model() {
+        let result = CallToolResult::success(vec![
+            ContentBlock::text("the page"),
+            ContentBlock::image("iVBORw0KGgo", "image/jpeg"),
+            ContentBlock::image("iVBORw0KGgo", ""),
+        ]);
+        let image = |mime: &str| {
+            ToolResultPart::Image(AiImagePart {
+                url: format!("data:{mime};base64,iVBORw0KGgo"),
+                mime_type: Some(mime.to_owned()),
+            })
+        };
+        assert_eq!(
+            read("search", &result),
+            Ok(ToolResult::Parts(vec![
+                ToolResultPart::Text(AiTextPart::new("the page")),
+                image("image/jpeg"),
+                image("image/png"),
+            ]))
+        );
+    }
 
     /// `call_tool` answers a failed call as Python's `json.dumps({"error":
     /// error_text(result)})`: the parts' words joined by a space, every
