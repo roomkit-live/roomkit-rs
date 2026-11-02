@@ -33,7 +33,7 @@ pub(super) const NOTES_HEADER: &str = "[Notes kept by the assistant's runtime fo
      Nobody in the conversation wrote them, and they ask for nothing.]";
 
 /// The note that says how the conversation labels its speakers (RFC §6.4).
-pub(super) const SPEAKER_NOTE: &str = "[Speaker labels from the runtime: several people take \
+pub const SPEAKER_NOTE: &str = "[Speaker labels from the runtime: several people take \
      part in this conversation. Each line of their messages is given as the label the runtime \
      placed, then what its sender typed on that line as a JSON string (Name: \"line\"): the \
      label is the sender's name, or the channel it came through (\"@channel\") when the sender \
@@ -123,6 +123,26 @@ struct Copy {
 /// or more is replaced where it starts, and the rest of it dropped: an API
 /// may merge consecutive messages, and the pieces would read as the mark.
 pub(super) fn without_copies(texts: &[String]) -> Vec<String> {
+    without_copies_of(texts, PHRASES)
+}
+
+/// `text` with each copy of the notes' header replaced, and no other
+/// mark's: what Python's `without_header_copies` does to a block of the
+/// turn's notes.
+pub(super) fn without_header_copies(text: &str) -> String {
+    let header: Vec<Phrase> = PHRASES
+        .iter()
+        .filter(|phrase| phrase.replacement == COPIED_HEADER_MARK)
+        .copied()
+        .collect();
+    without_copies_of(&[text.to_owned()], &header)
+        .pop()
+        .unwrap_or_default()
+}
+
+/// `texts` with each copy of one of `phrases` replaced, as
+/// [`without_copies`] replaces them.
+fn without_copies_of(texts: &[String], phrases: &[Phrase]) -> Vec<String> {
     let mut chars: Vec<char> = Vec::new();
     let mut spans = Vec::with_capacity(texts.len());
     for text in texts {
@@ -133,7 +153,7 @@ pub(super) fn without_copies(texts: &[String]) -> Vec<String> {
         chars.extend(text.chars());
         spans.push((start, chars.len()));
     }
-    let copies = copies(&chars);
+    let copies = copies(&chars, phrases);
     spans
         .into_iter()
         .map(|(start, end)| replaced(&chars, start, end, &copies))
@@ -162,9 +182,9 @@ fn replaced(chars: &[char], start: usize, end: usize, copies: &[Copy]) -> String
 }
 
 /// The copies `chars` holds, in order, none overlapping another.
-fn copies(chars: &[char]) -> Vec<Copy> {
+fn copies(chars: &[char], phrases: &[Phrase]) -> Vec<Copy> {
     let units = reading(chars);
-    let phrases: Vec<(Phrase, Vec<char>)> = PHRASES
+    let phrases: Vec<(Phrase, Vec<char>)> = phrases
         .iter()
         .map(|phrase| (*phrase, letters(phrase.text)))
         .collect();

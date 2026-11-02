@@ -28,8 +28,13 @@
 //!   than the history's first message is left out, so that the history
 //!   never opens on the assistant's calls.
 //!
+//! - What a turn's memory adds beside its history (RFC §20.2,
+//!   [`TurnMemory`]): the notes it retrieved for the turn alone, after the
+//!   runtime's own in the turn's notes, and the labels its messages name
+//!   participants by, which count toward labelling the turns.
+//!
 //! Only what §6.4 requires of every AI channel is built: no note of who
-//! takes part, no memory, no tool notes, no cut answers. Author images are bounded and
+//! takes part, no tool notes, no cut answers. Author images are bounded and
 //! carried separately; the runtime resolves opaque references only for vision providers.
 //!
 //! Within a turn, the tool loop extends the conversation with its rounds
@@ -48,7 +53,10 @@ mod speakers;
 mod tests;
 
 pub use self::fence::fence;
-use self::marks::{INSTRUCTION_MARK, NOTES_HEADER, SPEAKER_NOTE, without_copies};
+pub use self::marks::SPEAKER_NOTE as SPEAKER_ATTRIBUTION_NOTE;
+use self::marks::{
+    INSTRUCTION_MARK, NOTES_HEADER, SPEAKER_NOTE, without_copies, without_header_copies,
+};
 use self::rounds::{ToolRound, tool_rounds};
 use self::speakers::{
     Speaker, labelled_lines, labels_turns, people_taking_part, speaker, tell_apart,
@@ -184,6 +192,35 @@ pub fn conversation(
     history: usize,
     replayed: impl Fn(&str) -> bool,
 ) -> Vec<Message> {
+    let memory = TurnMemory::default();
+    conversation_with_memory(channel_id, event, context, history, replayed, &memory)
+}
+
+/// What a turn's memory adds to the conversation beside the history it
+/// retrieved (RFC §20.2): Python's `MemoryResult.notes` and `.speakers`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TurnMemory {
+    /// What the memory retrieved for this turn alone (knowledge passages):
+    /// blocks of the turn's notes, after the runtime's own, a copy of a
+    /// runtime mark in them replaced.
+    pub notes: Vec<String>,
+    /// The labels the memory's messages name participants by (a summary's
+    /// lines, `Alice`, `@sms1`): each counts as a speaker toward labelling
+    /// the turns, unless a turn's speaker already has it.
+    pub speakers: Vec<String>,
+}
+
+/// [`conversation`], with what the turn's memory adds beside its history
+/// (RFC §20.2): its `notes` ride the turn's notes, after the speaker note,
+/// and its `speakers` count toward labelling the turns (RFC §6.4).
+pub fn conversation_with_memory(
+    channel_id: &ChannelId,
+    event: &RoomEvent,
+    context: &RoomContext,
+    history: usize,
+    replayed: impl Fn(&str) -> bool,
+    memory: &TurnMemory,
+) -> Vec<Message> {
     let mut authors = Authors::new(context);
     let mut turns = past_turns(channel_id, event, context, history, &mut authors);
     if !turns.is_empty() {
@@ -192,11 +229,16 @@ pub fn conversation(
     }
     turns.push(Turn::input(event, &mut authors));
     tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
-    let sources = turns
+    let speakers: Vec<&Speaker> = turns
         .iter()
         .filter(|turn| turn.role == Role::User && !turn.text.is_empty())
         .filter_map(|turn| turn.speaker.as_ref())
-        .map(|speaker| speaker.source.as_str());
+        .collect();
+    let named = remembered_speakers(&speakers, &memory.speakers);
+    let sources = speakers
+        .iter()
+        .map(|speaker| speaker.source.as_str())
+        .chain(named.iter().map(String::as_str));
     // An instruction that stands alone reads nothing of the room, its roster
     // included (RFC §10.1.1 rule 7).
     let people = if is_standalone(event) {
@@ -206,7 +248,7 @@ pub fn conversation(
     };
     let labelled = labels_turns(sources, people);
     let turns = cleaned(turns, labelled);
-    let mut messages = rendered(turns, labelled);
+    let mut messages = rendered(turns, labelled, &memory.notes);
     images::bound(&mut messages);
     messages
 }
@@ -366,11 +408,70 @@ fn cleaned(mut turns: Vec<Turn>, labelled: bool) -> Vec<Turn> {
     kept
 }
 
+/// The speakers a memory's messages name that no turn's speaker is, each
+/// as a source of its own: Python counts speakers by label, and a label a
+/// turn already has is that turn's speaker (RFC §6.4).
+fn remembered_speakers(speakers: &[&Speaker], named: &[String]) -> Vec<String> {
+    named
+        .iter()
+        .filter(|label| !label.is_empty())
+        .filter(|label| speakers.iter().all(|speaker| &speaker.label != *label))
+        .map(|label| format!("\u{0}{label}"))
+        .collect()
+}
+
+/// The turn's notes (RFC §6.4): `blocks` after the runtime's header, a
+/// blank line between, each copy of the header in them replaced; `None`
+/// with no block. Python's `turn_notes`.
+pub fn turn_notes(blocks: &[String]) -> Option<String> {
+    let blocks: Vec<String> = blocks
+        .iter()
+        .map(|block| without_header_copies(block))
+        .collect();
+    joined_notes(&blocks)
+}
+
+/// `blocks` others wrote, each copy of a runtime mark replaced, one that
+/// runs over two blocks too, as the notes join them, and a block left
+/// blank dropped.
+fn cleaned_notes(blocks: &[String]) -> Vec<String> {
+    without_copies(blocks)
+        .into_iter()
+        .filter(|block| !block.trim().is_empty())
+        .collect()
+}
+
+/// `blocks` under the notes' header, a blank line between; `None` with no
+/// block.
+fn joined_notes(blocks: &[String]) -> Option<String> {
+    if blocks.is_empty() {
+        return None;
+    }
+    Some(format!("{NOTES_HEADER}\n\n{}", blocks.join("\n\n")))
+}
+
+/// The channel `channel_id`'s earlier rounds of tool calls among `events`,
+/// each as the messages it is replayed as (RFC §6.4 "The tools of earlier
+/// turns"): its assistant's message making the calls, then a tool message
+/// per result, as [`conversation`] replays them, every round its rows hold,
+/// wherever the history it is placed in starts.
+pub fn replayed_rounds(
+    events: &[RoomEvent],
+    channel_id: &ChannelId,
+    replayed: impl Fn(&str) -> bool,
+) -> Vec<Vec<Message>> {
+    tool_rounds(events, channel_id, &replayed)
+        .into_iter()
+        .map(|round| round.messages)
+        .collect()
+}
+
 /// The conversation's messages: each turn in its role, a participant's
 /// turn labelled when the conversation labels them, the instruction marked
 /// as the application's, the rounds read after a turn following it, then
-/// the turn's notes after its input.
-fn rendered(turns: Vec<Turn>, labelled: bool) -> Vec<Message> {
+/// the turn's notes after its input: the speaker note when the turns are
+/// labelled, then the `remembered` notes the memory retrieved.
+fn rendered(turns: Vec<Turn>, labelled: bool, remembered: &[String]) -> Vec<Message> {
     let ends_on_input = turns.last().is_some_and(|turn| turn.input);
     let mut messages: Vec<Message> = Vec::with_capacity(turns.len());
     for turn in turns {
@@ -386,8 +487,12 @@ fn rendered(turns: Vec<Turn>, labelled: bool) -> Vec<Message> {
         messages.push(message);
         messages.extend(turn.rounds.into_iter().flat_map(|round| round.messages));
     }
-    if labelled {
-        let notes = format!("{NOTES_HEADER}\n\n{SPEAKER_NOTE}");
+    let speaker_note = labelled.then(|| SPEAKER_NOTE.to_owned());
+    let blocks: Vec<String> = speaker_note
+        .into_iter()
+        .chain(cleaned_notes(remembered))
+        .collect();
+    if let Some(notes) = joined_notes(&blocks) {
         match messages.last_mut() {
             Some(input) if ends_on_input => {
                 input.text.push_str("\n\n");
