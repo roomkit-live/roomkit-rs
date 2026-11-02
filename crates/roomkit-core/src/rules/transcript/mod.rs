@@ -61,11 +61,15 @@ mod tests;
 pub use self::fence::fence;
 #[doc(hidden)]
 pub use self::fence::named_blocks;
+#[doc(hidden)]
+pub use self::marks::COMPACTION_HEADER;
 pub use self::marks::SPEAKER_NOTE as SPEAKER_ATTRIBUTION_NOTE;
 pub use self::marks::SUMMARY_HEADER;
 use self::marks::{
     INSTRUCTION_MARK, NOTES_HEADER, SPEAKER_NOTE, without_copies, without_header_copies,
 };
+#[doc(hidden)]
+pub use self::quote::FENCED_TAGS;
 pub use self::quote::quoted;
 use self::rounds::{ToolRound, tool_rounds};
 use self::speakers::{Speaker, labelled_lines, labels_turns, speaker, tell_apart};

@@ -72,7 +72,7 @@ const BIDI_CONTROLS: &[char] = &[
 ];
 
 /// The tags of the blocks a cut can reach: Python's `FENCED_TAGS`.
-const FENCED_TAGS: &[&str] = &[
+pub const FENCED_TAGS: &[&str] = &[
     "tool_result",
     "worker_output",
     "knowledge",
