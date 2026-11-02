@@ -265,9 +265,8 @@ impl<P: AiProvider> Loop<P> {
                 prefix.clone_from(&generation.text);
             }
             let (read, ran) = self.round_of_calls(generation, &steering, &out).await;
-            let at = messages.len();
+            self.media.keep_results(messages.len(), &ran.results);
             messages.extend(read);
-            self.media.keep_results(at, &ran.results);
             // A round counts once its calls ran (Python's `_run_announced_calls`).
             spent.calls += u32::try_from(ran.calls.len()).unwrap_or(u32::MAX);
             tool_rounds += u32::from(!ran.calls.is_empty());
@@ -362,18 +361,17 @@ impl<P: AiProvider> Loop<P> {
     /// the rest (RFC §6.4, §20.2).
     fn round_context(&self, messages: &[Message], system_prompt: Option<String>) -> AiContext {
         let shown = self.shown(messages);
-        let asked = match &self.adopted.messages {
-            // What the hooks or a compaction left holds the replayed images.
-            Some((given, replaced)) => given
+        // What the hooks or a compaction left holds the replayed images.
+        let asked = if let Some((given, replaced)) = &self.adopted.messages {
+            given
                 .iter()
                 .cloned()
                 .chain(shown.into_iter().skip(*replaced))
-                .collect(),
-            None => {
-                let conversation = shown.len();
-                let asked = after_memory(&self.remembered, shown);
-                self.media.with_turn_images(asked, conversation)
-            }
+                .collect()
+        } else {
+            let conversation = shown.len();
+            let asked = after_memory(&self.remembered, shown);
+            self.media.with_turn_images(asked, conversation)
         };
         AiContext {
             messages: asked,
