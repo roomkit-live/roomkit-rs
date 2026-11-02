@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- An MCP part whose server named no media type is noted as Python notes
+  it, `image/png` for an image, `audio` for audio, `binary` for a
+  resource, where it read `unknown` (RMK-1251); a link of no type still
+  reads `unknown`, as Python's now does.
 - An attach's `CHANNEL_ATTACHED` record is stamped once its channel's
   `on_room_attached` answered, after what the channel wrote into the room,
   and the hooks of an attach or a detach read the room as the channel left

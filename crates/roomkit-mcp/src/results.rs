@@ -127,7 +127,7 @@ impl ImageBudget {
             self.bytes += size;
             return ToolResultPart::Image(image);
         }
-        let words = note("image", image.mime_type.as_deref());
+        let words = note("image", image.mime_type.as_deref(), "image/png");
         ToolResultPart::Text(AiTextPart::new(words))
     }
 }
@@ -200,11 +200,13 @@ fn bounded(name: &str, text: &str) -> String {
 fn text_of(part: &ContentBlock) -> String {
     match part {
         ContentBlock::Text(text) => text.text.clone(),
-        ContentBlock::Image(image) => note("image", Some(&image.mime_type)),
-        ContentBlock::Audio(audio) => note("audio", Some(&audio.mime_type)),
+        ContentBlock::Image(image) => note("image", Some(&image.mime_type), "image/png"),
+        ContentBlock::Audio(audio) => note("audio", Some(&audio.mime_type), "audio"),
         ContentBlock::Resource(embedded) => resource_text(&embedded.resource),
-        ContentBlock::ResourceLink(link) => note("resource_link", link.mime_type.as_deref()),
-        _ => note("other", None),
+        ContentBlock::ResourceLink(link) => {
+            note("resource_link", link.mime_type.as_deref(), "unknown")
+        }
+        _ => note("other", None, "unknown"),
     }
 }
 
@@ -214,24 +216,25 @@ fn resource_text(resource: &ResourceContents) -> String {
     match resource {
         ResourceContents::TextResourceContents { text, .. } => text.clone(),
         ResourceContents::BlobResourceContents { mime_type, .. } => {
-            note("resource", mime_type.as_deref())
+            note("resource", mime_type.as_deref(), "binary")
         }
-        _ => note("resource", None),
+        _ => note("resource", None, "binary"),
     }
 }
 
 /// The note standing for a part the model is not shown, as the reference
 /// implementation words it; the type the server named is kept to the
 /// characters a media type has, so that the note carries no text of the
-/// server's.
-fn note(kind: &str, media_type: Option<&str>) -> String {
+/// server's, and `unnamed` stands for none, as the reference
+/// implementation names it (`image/png`, `audio`, `binary`, `unknown`).
+fn note(kind: &str, media_type: Option<&str>, unnamed: &str) -> String {
     let named: String = media_type
         .unwrap_or_default()
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '+' | '-' | '_'))
         .take(MEDIA_TYPE_LIMIT)
         .collect();
-    let named = if named.is_empty() { "unknown" } else { &named };
+    let named = if named.is_empty() { unnamed } else { &named };
     format!("[{kind} content ({named}) not shown to the model]")
 }
 
@@ -339,6 +342,35 @@ mod tests {
         assert_eq!(
             text("cancel_order", &result),
             r#"{"error": "Commande d\u00e9j\u00e0 exp\u00e9di\u00e9e \"42\""}"#
+        );
+    }
+
+    /// A part whose server named no media type is noted under the name the
+    /// reference implementation gives it: an image `image/png`, audio
+    /// `audio`, a blob resource `binary`, a link `unknown`.
+    // Python: tests/test_mcp_tool_provider.py::test_tool_handler_notes_what_the_model_cannot_take,
+    // its untyped cases.
+    #[test]
+    fn a_part_of_no_type_is_noted_as_python_names_it() {
+        let blob = ResourceContents::BlobResourceContents {
+            uri: "file:///a.bin".to_owned(),
+            mime_type: None,
+            blob: "JVBERi0=".to_owned(),
+            meta: None,
+        };
+        let parts = [
+            ContentBlock::image("not base64!", ""),
+            ContentBlock::audio("UklGRg==", ""),
+            ContentBlock::resource(blob),
+        ];
+        let notes: Vec<String> = parts.iter().map(text_of).collect();
+        assert_eq!(
+            notes,
+            [
+                "[image content (image/png) not shown to the model]",
+                "[audio content (audio) not shown to the model]",
+                "[resource content (binary) not shown to the model]",
+            ]
         );
     }
 }
