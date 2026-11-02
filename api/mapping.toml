@@ -142,6 +142,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit.EventNotFoundError" = ["0"]
 "roomkit.HumanInputRejectedError" = ["0"]
 "roomkit.ToolNameCollisionError" = ["0"]
+"roomkit.VerificationRefusedError" = []
 "roomkit.IdempotencyKeyTakenError" = ["room_id", "channel_id", "key"]
 "roomkit.ProviderDeliveryError" = []
 "roomkit.KitClosedError" = []
@@ -504,7 +505,7 @@ members = [
     "ON_SCREEN_SHARE_STOPPED", "ON_SPEAKER_CHANGE", "ON_SPEAK_DECISION",
     "ON_SPEAK_QUEUE", "ON_SPEECH_END", "ON_SPEECH_START", "ON_THOUGHT", "ON_TTS_CANCELLED", "ON_TURN_COMPLETE",
     "ON_TURN_INCOMPLETE", "ON_VAD_AUDIO_LEVEL",
-    "ON_VAD_SILENCE", "ON_VERIFICATION_COMPLETED", "ON_VERIFICATION_ENDED",
+    "ON_VAD_SILENCE",
     "ON_VERIFICATION_REQUIRED", "ON_VIDEO_DETECTION", "ON_VIDEO_SESSION_ENDED",
     "ON_VIDEO_SESSION_STARTED", "ON_VIDEO_TRACK_ADDED",
     "ON_VIDEO_TRACK_REMOVED", "ON_VISION_RESULT",
@@ -566,12 +567,9 @@ reason = "not in 0.x: the engine is the kit's, built with it; its chains run in 
 [[missing]]
 python = "roomkit.RoomKit"
 members = [
-    "check_verifications", "complete_verification",
-    "record_failed_attempt",
-    "request_verification", "revoke_verification",
-    "sender_verification", "verification_of",
+    "sender_verification",
 ]
-reason = "not in 0.x: identity resolution and verification"
+reason = "not in 0.x: the verification step 5b of the inbound pipeline (RMK-1172)"
 
 [[missing]]
 python = "roomkit.RoomKit"
@@ -635,7 +633,7 @@ params = [
     "telemetry",
     "inbound_rate_limit", "orchestration", "persistence_policy",
     "delivery_gap_timeout", "delivery_claim_lock_manager",
-    "verification_policy", "media_resolver", "attached_media", "turn_backend",
+    "media_resolver", "attached_media", "turn_backend",
     "error_classes",
 ]
 reason = "not in 0.x: a keyword for a feature Rust lacks (lot 1's list: identity, locks across processes, voice, delivery backends, orchestration, telemetry, the turn backend, the gap skip)"

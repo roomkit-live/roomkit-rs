@@ -286,6 +286,17 @@ pub enum RoomKitError {
     /// and the agent ([`setup_task_tools`](crate::RoomKit::setup_task_tools)).
     #[error("{0}")]
     ToolNameCollision(String),
+    /// Python's `VerificationRefusedError(reason)`: a verification request
+    /// could not be completed (RFC §11.7.2). `reason` is `not_found` (no
+    /// such request in the caller's organization), `not_open` (completed,
+    /// failed, expired or cancelled already), `expired` (its time ran out
+    /// now), `mismatch` (a wrong secret, counted as an attempt) or `failed`
+    /// (the wrong secret that used up its attempts).
+    #[error("verification refused: {reason}")]
+    VerificationRefused {
+        /// Why.
+        reason: String,
+    },
 }
 
 impl RoomKitError {
@@ -361,7 +372,8 @@ impl RoomKitError {
             | Self::KitClosed
             | Self::ShutdownCancelled
             | Self::HumanInputRejected(_)
-            | Self::ToolNameCollision(_) => format!("{}Error", turns::variant_name(self)),
+            | Self::ToolNameCollision(_)
+            | Self::VerificationRefused { .. } => format!("{}Error", turns::variant_name(self)),
         }
     }
 

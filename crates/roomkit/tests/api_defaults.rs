@@ -509,6 +509,8 @@ fn room_kit_options_defaults_as_python() {
     assert_eq!(defaults.identity_timeout, Duration::from_secs(10));
     // roomkit.RoomKit.__init__(task_runner) = None
     assert!(defaults.task_runner.is_none());
+    // roomkit.RoomKit.__init__(verification_policy) = None
+    assert!(defaults.verification_policy.is_none());
     // roomkit.RoomKit.__init__(store) = None
     let store: Arc<InMemoryStore> = defaults.store;
     assert_eq!(Arc::strong_count(&store), 1);
@@ -1222,4 +1224,70 @@ fn human_input_handler_options_defaults_as_python() {
     assert!(close.registration.is_none());
     // roomkit.HumanInputHandler.reject(reason) = ''
     assert_eq!(RejectOptions::default().reason, "");
+}
+
+#[test]
+fn request_verification_options_defaults_as_python() {
+    let defaults = roomkit::RequestVerificationOptions::default();
+    // roomkit.RoomKit.request_verification(method) = 'link'
+    assert_eq!(defaults.method, "link");
+    // roomkit.RoomKit.request_verification(window_start) = None
+    assert!(defaults.window_start.is_none());
+    // roomkit.RoomKit.request_verification(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn complete_verification_options_defaults_as_python() {
+    let defaults = roomkit::CompleteVerificationOptions::default();
+    // roomkit.RoomKit.complete_verification(method) = None
+    assert!(defaults.method.is_none());
+    // roomkit.RoomKit.complete_verification(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn record_failed_attempt_options_defaults_as_python() {
+    let defaults = roomkit::RecordFailedAttemptOptions::default();
+    // roomkit.RoomKit.record_failed_attempt(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn revoke_verification_options_defaults_as_python() {
+    let defaults = roomkit::RevokeVerificationOptions::default();
+    // roomkit.RoomKit.revoke_verification(reason) = 'revoked'
+    assert_eq!(defaults.reason, "revoked");
+    // roomkit.RoomKit.revoke_verification(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn verification_of_options_defaults_as_python() {
+    let defaults = roomkit::VerificationOfOptions::default();
+    // roomkit.RoomKit.verification_of(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn verification_policy_defaults_as_python() {
+    let defaults = roomkit::model::VerificationPolicy::default();
+    // roomkit.VerificationPolicy.__init__(ttl) = 900.0
+    assert_eq!(defaults.ttl, Duration::from_mins(15));
+    // roomkit.VerificationPolicy.__init__(request_ttl) = 600.0
+    assert_eq!(defaults.request_ttl, Duration::from_mins(10));
+    // roomkit.VerificationPolicy.__init__(code_request_ttl) = 300.0
+    assert_eq!(defaults.code_request_ttl, Duration::from_mins(5));
+    // roomkit.VerificationPolicy.__init__(max_attempts) = 3
+    assert_eq!(defaults.max_attempts, 3);
+    // roomkit.VerificationPolicy.__init__(code_length) = 6
+    assert_eq!(defaults.code_length, 6);
+    // roomkit.VerificationPolicy.__init__(release_on_verify) = True
+    assert!(defaults.release_on_verify);
+    // roomkit.VerificationPolicy.__init__(release_max_messages) = 20
+    assert_eq!(defaults.release_max_messages, 20);
+    // roomkit.VerificationPolicy.__init__(release_max_age) = 3600.0
+    assert_eq!(defaults.release_max_age, Duration::from_hours(1));
+    // roomkit.VerificationPolicy.__init__(hold_unverified) = True
+    assert!(defaults.hold_unverified);
 }

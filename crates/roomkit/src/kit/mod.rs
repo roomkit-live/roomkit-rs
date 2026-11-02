@@ -18,7 +18,9 @@
 //! - `timers`: applying room timers, on demand or in the background;
 //! - `background`: waiting for the kit's background work, and ending it;
 //! - `shutdown`: the kit's one shutdown, which every close joins;
-//! - `weak`: the kit held without keeping it alive.
+//! - `weak`: the kit held without keeping it alive;
+//! - `verification`: identity verification's requests, completion,
+//!   revocation and timers (RFC §11.7).
 
 mod addresses;
 mod background;
@@ -49,6 +51,7 @@ mod tasks;
 mod tests;
 mod timeline;
 mod timers;
+mod verification;
 mod weak;
 
 use std::collections::HashMap;
@@ -99,6 +102,10 @@ pub use self::steering::SteerOptions;
 pub use self::task_cancel::CancelTaskOptions;
 pub use self::tasks::DelegateOptions;
 pub(crate) use self::tasks::TaskEnd;
+pub use self::verification::{
+    CompleteVerificationOptions, RecordFailedAttemptOptions, RequestVerificationOptions,
+    RevokeVerificationOptions, VerificationOfOptions,
+};
 pub use self::weak::WeakRoomKit;
 use crate::channel::DynChannel;
 use crate::context;
@@ -232,6 +239,8 @@ pub(crate) struct Inner<S> {
     pub(crate) owner_tools: crate::turns::served::OwnerToolStore<S>,
     /// How each agent's background tasks run, by agent (RFC §23.4).
     pub(crate) background_setups: RwLock<HashMap<ChannelId, background_tools::BackgroundSetup>>,
+    /// Identity verification's policy, locks and timers (RFC §11.7).
+    pub(crate) verification: verification::Verifications,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -266,6 +275,7 @@ impl<S: ConversationStore> RoomKit<S> {
             task_runner,
             delivery_strategy,
             delivery_backend,
+            verification_policy,
         } = options;
         let mut config = KitConfig::new();
         config.max_chain_depth = max_chain_depth;
@@ -310,6 +320,7 @@ impl<S: ConversationStore> RoomKit<S> {
             task_cancels: crate::tasks::TaskCancels::default(),
             owner_tools: crate::turns::served::OwnerToolStore::default(),
             background_setups: RwLock::new(HashMap::new()),
+            verification: verification::Verifications::new(verification_policy),
         });
         inner.subscribe_status_bus();
         Self { inner }

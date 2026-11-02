@@ -392,6 +392,7 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::HumanInputRejected(_) => "HumanInputRejected",
         RoomKitError::Runtime(_) => "Runtime",
         RoomKitError::ToolNameCollision(_) => "ToolNameCollision",
+        RoomKitError::VerificationRefused { .. } => "VerificationRefused",
     };
     (variant, fields)
 }

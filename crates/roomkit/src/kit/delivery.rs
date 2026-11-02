@@ -256,9 +256,13 @@ impl<S: ConversationStore> RoomKit<S> {
         self.inner.delivery_backend.clone()
     }
 
-    /// Starts the kit's own work that runs once it is entered: its delivery
-    /// backend's worker (RFC §22.2), Python's `async with RoomKit(...) as
-    /// kit` entering the kit; [`close`](Self::close) stops it. Rust has no
+    /// Starts the kit's own work that runs once it is entered: the
+    /// verifications in force resumed, those whose time passed ended and the
+    /// others' timers armed (RFC §11.7.5,
+    /// [`check_verifications`](Self::check_verifications), a store that
+    /// cannot answer logged and passed over), then its delivery backend's
+    /// worker (RFC §22.2), Python's `async with RoomKit(...) as kit`
+    /// entering the kit; [`close`](Self::close) stops them. Rust has no
     /// async context manager, so the kit is started by this call. Starting
     /// it again starts nothing more.
     ///
@@ -269,6 +273,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// backend's failure to start.
     pub async fn start(&self) -> Result<(), RoomKitError> {
         self.inner.open()?;
+        self.resume_verifications().await;
         if let Some(backend) = self.inner.delivery_backend.clone() {
             backend
                 .start(self.clone())

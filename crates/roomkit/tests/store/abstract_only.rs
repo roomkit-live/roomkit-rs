@@ -458,3 +458,22 @@ async fn a_store_without_verification_refuses_by_name() {
     };
     assert_eq!(refusals, [(); 6].map(|()| Some(refusal())));
 }
+
+/// Python: `tests/test_verification_lifecycle.py::test_a_kit_whose_store_keeps_no_verification_still_starts`.
+/// Resuming the verifications in force never stops a kit from starting: a
+/// store that keeps none (RFC §11.7 is Level 2) has none to resume.
+#[tokio::test]
+async fn a_kit_whose_store_keeps_no_verification_still_starts() {
+    let kit = RoomKit::new(RoomKitOptions::with_store(AbstractOnly::default()));
+
+    kit.start().await.unwrap();
+
+    assert_eq!(
+        kit.store()
+            .get_room(&RoomId::new("nope").unwrap())
+            .await
+            .unwrap(),
+        None
+    );
+    kit.close().await.unwrap();
+}

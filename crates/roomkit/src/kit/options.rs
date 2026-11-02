@@ -12,7 +12,8 @@ use std::time::Duration;
 use roomkit_core::model::{
     Access, AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId,
     ChannelType, DirectEvent, EventContent, EventId, EventSource, EventType, Metadata,
-    ParticipantId, Post, RateLimit, RetryPolicy, RoomId, RoomTimers, Timestamp, Visibility,
+    ParticipantId, Post, RateLimit, RetryPolicy, RoomId, RoomTimers, Timestamp, VerificationPolicy,
+    Visibility,
 };
 
 use crate::identity::IdentityResolver;
@@ -105,6 +106,13 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// started by [`RoomKit::start`](crate::RoomKit::start) and closed by
     /// the kit's close; `None` executes each request in the call.
     pub delivery_backend: Option<Arc<dyn crate::DeliveryBackend<S>>>,
+    /// Python `verification_policy=None`: how long an identity verification
+    /// and its requests last (RFC §11.7). Set, the inbound pipeline labels
+    /// an identified sender's messages with their verification and, while
+    /// it is not verified, holds them from the room's agents (RFC §11.7.3);
+    /// `None` leaves the pipeline as it is, the kit's verification calls
+    /// reading the defaults.
+    pub verification_policy: Option<VerificationPolicy>,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -133,6 +141,7 @@ impl<S> RoomKitOptions<S> {
             task_runner: None,
             delivery_strategy: None,
             delivery_backend: None,
+            verification_policy: None,
         }
     }
 }

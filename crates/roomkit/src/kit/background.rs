@@ -111,6 +111,7 @@ impl<S: ConversationStore> RoomKit<S> {
             // close's own call runs in included (RFC §12.10.4).
             self.inner.tasks.close();
             self.inner.turns.cut_all();
+            self.inner.verification.cancel_timers();
             let Starting { marks, ended } = starting;
             let kit = self.clone();
             tokio::spawn(marks.scoped(async move {
