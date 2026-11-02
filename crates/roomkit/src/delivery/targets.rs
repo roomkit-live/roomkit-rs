@@ -531,4 +531,59 @@ mod tests {
         assert_eq!(published.count(), 0);
         kit.close().await.unwrap();
     }
+
+    // A keyed publication waiting for its section's lock when the kit closes
+    // is refused once it holds the lock, as Python's process_inbound raises
+    // KitClosedError, which its strategy reports as strategy_failed: nothing
+    // published under its key.
+    #[tokio::test]
+    async fn a_keyed_publication_waiting_for_its_section_as_the_kit_closes_is_refused() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let (room, text) = (RoomId::new("r1").unwrap(), ChannelId::new("text").unwrap());
+        let transport = RecordingTransport::new(
+            text.clone(),
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        );
+        kit.register_channel(transport).unwrap();
+        let create = CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..CreateRoomOptions::default()
+        };
+        kit.create_room(create).await.unwrap();
+        kit.attach_channel(&room, &text, AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let held = kit.inner.locks.lock(&room).await;
+        let delivering = tokio::spawn({
+            let (kit, room) = (kit.clone(), room.clone());
+            async move {
+                let keyed = DeliverOptions {
+                    idempotency_key: Some("k".to_owned()),
+                    ..DeliverOptions::default()
+                };
+                kit.deliver(&room, "done", keyed).await
+            }
+        });
+        while kit.inner.locks.waiting(&room) == 0 {
+            tokio::task::yield_now().await;
+        }
+        kit.close().await.unwrap();
+        drop(held);
+        let refused = tokio::time::timeout(Duration::from_secs(5), delivering)
+            .await
+            .expect("the delivery ends once it holds the lock")
+            .unwrap()
+            .unwrap();
+        assert_eq!(refused.status, DeliveryOutcomeStatus::Failed);
+        assert_eq!(refused.reason.as_deref(), Some("strategy_failed"));
+        let error = refused.error.expect("the refusal's error");
+        assert_eq!(error.code, "KitClosedError");
+        let options = crate::store::ListEventsOptions::default();
+        let stored = kit.store().list_events(&room, options).await.unwrap();
+        let published = stored
+            .iter()
+            .filter(|event| event.source.participant_id.is_some());
+        assert_eq!(published.count(), 0);
+    }
 }
