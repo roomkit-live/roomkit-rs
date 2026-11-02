@@ -263,7 +263,7 @@ mod tests {
     use std::time::Duration;
 
     use pretty_assertions::assert_eq;
-    use roomkit_core::model::{ChannelId, RoomId, TaskStatus};
+    use roomkit_core::model::{ChannelId, ErrorRecord, RoomId, TaskStatus};
 
     use super::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, WaitOptions};
     use crate::error::RoomKitError;
@@ -361,5 +361,27 @@ mod tests {
         task.cancel();
         let waited = task.wait(within(1000)).await.unwrap();
         assert_eq!(waited.status, TaskStatus::Cancelled);
+    }
+
+    // Python: tests/tasks/test_task_turn_record.py::test_a_cut_tasks_result_copies_and_pickles
+    // A copy of a cut task's result keeps its failure, which its serialized
+    // form leaves out. An error record has no reason nor narration of its
+    // own: Python's TaskCutShortError has no Rust type.
+    #[test]
+    fn a_cut_tasks_result_keeps_its_failure_when_copied_never_on_the_wire() {
+        let cut = ErrorRecord::new("TaskCutShortError", "The worker's turn ended max_rounds");
+        let result = DelegatedTaskResult {
+            output: Some("Checking.".to_owned()),
+            exception: Some(cut.clone()),
+            ..DelegatedTaskResult::of(&task(), TaskStatus::Failed)
+        };
+
+        let copied = result.clone();
+        let wire = serde_json::to_value(&result).unwrap();
+        let read: DelegatedTaskResult = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            (copied.exception, wire.get("exception"), read.exception),
+            (Some(cut), None, None)
+        );
     }
 }
