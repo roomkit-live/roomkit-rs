@@ -18,8 +18,8 @@ use super::background_tools::collision;
 use super::tasks::{TaskEnd, failed, kit_failure, task_outcome};
 use crate::error::RoomKitError;
 use crate::store::{ConversationStore, ListEventsOptions};
-use crate::tasks::DelegatedTask;
-use crate::tasks::json::dumps_object;
+use crate::tasks::json::{dumps_object, json as write_json};
+use crate::tasks::{DelegatedTask, ResultTool};
 use crate::turn::OwnerToolAnswer;
 use crate::turns::served::OwnerToolEntry;
 
@@ -52,11 +52,14 @@ impl<S: ConversationStore> RoomKit<S> {
         task: &DelegatedTask,
         context: Option<&Metadata>,
         retries: u32,
+        result_tool: Option<&ResultTool>,
     ) -> TaskEnd {
         if !self.takes_owner_tools(&task.agent_id) {
             return Box::pin(self.delegated_turn(task, context)).await;
         }
-        let _served = match ServedResult::serve(self, &task.agent_id, &task.child_room_id) {
+        let tool = result_tool.map_or(Forced::SubmitResult, Forced::Given);
+        let served = ServedResult::serve(self, &task.agent_id, &task.child_room_id, tool);
+        let _served = match served {
             Ok(served) => served,
             Err(error) => return failed(kit_failure(&error), context),
         };
@@ -71,7 +74,7 @@ impl<S: ConversationStore> RoomKit<S> {
             let outcome = task_outcome(&answers, &task.agent_id);
             turns = outcome.turns;
             let submitted = self
-                .submitted_result(&task.child_room_id, &task.agent_id)
+                .submitted_result(&task.child_room_id, &task.agent_id, tool)
                 .await;
             // A turn cut short, or failed after it began, keeps a result it
             // submitted before, and fails the task without one.
@@ -81,17 +84,17 @@ impl<S: ConversationStore> RoomKit<S> {
                 return TaskEnd::finished(None, Some(failure), context, turns);
             }
             if let Some(payload) = submitted {
-                return TaskEnd::finished(Some(dumps(&payload)), None, context, turns);
+                return TaskEnd::finished(Some(payload), None, context, turns);
             }
             if let Some(text) = outcome.response.filter(|text| !text.is_empty()) {
                 last_output = text;
             }
-            message = String::from(REMINDER);
+            message = String::from(tool.reminder());
         }
         let attempts = retries.saturating_add(1);
-        tracing::warn!(target: "roomkit::tasks", task = %task.id, agent = %task.agent_id, attempts, "a delegated agent never called {SUBMIT_RESULT}");
-        let missing = missing_payload(task.agent_id.as_str(), &last_output, attempts);
-        TaskEnd::finished(Some(dumps(&missing)), None, context, turns)
+        tracing::warn!(target: "roomkit::tasks", task = %task.id, agent = %task.agent_id, attempts, tool = tool.name(), "a delegated agent never called its result tool");
+        let missing = tool.missing(task.agent_id.as_str(), &last_output, attempts);
+        TaskEnd::finished(Some(missing), None, context, turns)
     }
 
     /// Whether `agent` is an intelligence channel whose turns declare the
@@ -104,12 +107,17 @@ impl<S: ConversationStore> RoomKit<S> {
         })
     }
 
-    /// The payload of the worker's last call of the result tool in its
-    /// child room that ended served, normalized; `None` when there is none.
+    /// The payload of the worker's last call of `tool` in its child room
+    /// that ended served, normalized and written; `None` when there is none.
     /// A refused, failed or blocked call is no result, and another
     /// channel's call is not the worker's (RFC §23.3). Python's
     /// `_scan_for_submitted_result`.
-    async fn submitted_result(&self, room_id: &RoomId, worker: &ChannelId) -> Option<Payload> {
+    async fn submitted_result(
+        &self,
+        room_id: &RoomId,
+        worker: &ChannelId,
+        tool: Forced<'_>,
+    ) -> Option<String> {
         let options = ListEventsOptions {
             before_index: Some(LATEST_TAIL_CURSOR),
             limit: SCANNED,
@@ -119,14 +127,14 @@ impl<S: ConversationStore> RoomKit<S> {
         events
             .iter()
             .rev()
-            .find_map(|event| submitted_by(event, worker))
+            .find_map(|event| submitted_by(event, worker, tool))
     }
 }
 
-/// The payload `event` carries when it is `worker`'s call of the result
-/// tool that ended served; a row written before outcomes existed says it
+/// The payload `event` carries, written, when it is `worker`'s call of
+/// `tool` that ended served; a row written before outcomes existed says it
 /// by its status (Python's `_served`).
-fn submitted_by(event: &RoomEvent, worker: &ChannelId) -> Option<Payload> {
+fn submitted_by(event: &RoomEvent, worker: &ChannelId, tool: Forced<'_>) -> Option<String> {
     if event.r#type != EventType::ToolCallEnd || &event.source.channel_id != worker {
         return None;
     }
@@ -137,7 +145,69 @@ fn submitted_by(event: &RoomEvent, worker: &ChannelId) -> Option<Payload> {
         Some(outcome) => outcome == ToolCallOutcome::Served,
         None => call.status == ToolCallStatus::Completed,
     };
-    (matches_result_tool(&call.tool_name) && served).then(|| normalize(&call.arguments))
+    (tool.matches(&call.tool_name) && served).then(|| tool.payload(&call.arguments))
+}
+
+/// The tool a structured delegation forces: `submit_result`, Python's
+/// `SUBMIT_RESULT`, or the one the caller gave.
+#[derive(Clone, Copy)]
+enum Forced<'tool> {
+    SubmitResult,
+    Given(&'tool ResultTool),
+}
+
+impl<'tool> Forced<'tool> {
+    fn name(self) -> &'tool str {
+        match self {
+            Self::SubmitResult => SUBMIT_RESULT,
+            Self::Given(tool) => tool.name(),
+        }
+    }
+
+    fn definition(self) -> Value {
+        match self {
+            Self::SubmitResult => submit_result_definition(),
+            Self::Given(tool) => tool.tool.clone(),
+        }
+    }
+
+    fn reminder(self) -> &'tool str {
+        match self {
+            Self::SubmitResult => REMINDER,
+            Self::Given(tool) => &tool.reminder,
+        }
+    }
+
+    fn matches(self, tool_name: &str) -> bool {
+        match self {
+            Self::SubmitResult => matches_result_tool(tool_name),
+            Self::Given(tool) => tool.matches(tool_name),
+        }
+    }
+
+    /// A served call's `arguments` as the payload returned, written as
+    /// Python's `json.dumps` writes it.
+    fn payload(self, arguments: &Metadata) -> String {
+        match self {
+            Self::SubmitResult => dumps(&normalize(arguments)),
+            Self::Given(tool) => written((tool.normalize)(arguments)),
+        }
+    }
+
+    /// The payload returned for a worker that never called the tool.
+    fn missing(self, role: &str, last_output: &str, attempts: u32) -> String {
+        match self {
+            Self::SubmitResult => dumps(&missing_payload(role, last_output, attempts)),
+            Self::Given(tool) => written((tool.on_missing)(role, last_output, attempts)),
+        }
+    }
+}
+
+/// A payload a caller's function built, written in its keys' order.
+fn written(payload: Metadata) -> String {
+    let mut text = String::new();
+    write_json(&mut text, &Value::Object(payload), true);
+    text
 }
 
 /// The result tool served for one worker in one child room, withdrawn
@@ -146,6 +216,7 @@ struct ServedResult<'kit, S> {
     kit: &'kit RoomKit<S>,
     agent: ChannelId,
     room_id: RoomId,
+    name: String,
 }
 
 impl<'kit, S: ConversationStore> ServedResult<'kit, S> {
@@ -156,21 +227,19 @@ impl<'kit, S: ConversationStore> ServedResult<'kit, S> {
         kit: &'kit RoomKit<S>,
         agent: &ChannelId,
         room_id: &RoomId,
+        tool: Forced<'_>,
     ) -> Result<Self, RoomKitError> {
+        let name = tool.name().to_owned();
         let own = kit
             .inner
             .channel(agent)
             .map(|channel| channel.own_tool_names())
             .unwrap_or_default();
-        if own.iter().any(|name| name == SUBMIT_RESULT) {
-            return Err(collision(
-                SUBMIT_RESULT,
-                "one of the channel's own tools",
-                agent,
-            ));
+        if own.contains(&name) {
+            return Err(collision(&name, "one of the channel's own tools", agent));
         }
         let entry = OwnerToolEntry {
-            definition: submit_result_definition(),
+            definition: tool.definition(),
             serve: Arc::new(|_kit, _call| {
                 Box::pin(async { OwnerToolAnswer::Served(Value::String(received())) })
             }),
@@ -178,11 +247,12 @@ impl<'kit, S: ConversationStore> ServedResult<'kit, S> {
         kit.inner
             .owner_tools
             .register_in_room(agent, room_id, entry)
-            .map_err(|clash| collision(SUBMIT_RESULT, &clash, agent))?;
+            .map_err(|clash| collision(&name, &clash, agent))?;
         Ok(Self {
             kit,
             agent: agent.clone(),
             room_id: room_id.clone(),
+            name,
         })
     }
 }
@@ -192,7 +262,7 @@ impl<S> Drop for ServedResult<'_, S> {
         self.kit
             .inner
             .owner_tools
-            .unregister_in_room(&self.agent, &self.room_id, SUBMIT_RESULT);
+            .unregister_in_room(&self.agent, &self.room_id, &self.name);
     }
 }
 
@@ -378,24 +448,45 @@ mod tests {
             end_row("w1", SUBMIT_RESULT, ToolCallOutcome::Failed),
             end_row("other", SUBMIT_RESULT, ToolCallOutcome::Served),
         ];
-        assert!(rows.iter().all(|row| submitted_by(row, &worker).is_none()));
+        assert!(
+            rows.iter()
+                .all(|row| submitted_by(row, &worker, Forced::SubmitResult).is_none())
+        );
     }
 
     // Python: tests/tasks/test_structured_result.py::TestOnlyTheWorkersServedResultCounts::test_the_scan_takes_the_workers_served_call
     #[test]
     fn the_scan_takes_the_worker_s_served_call() {
         let worker = ChannelId::new("w1").unwrap();
-        let found = submitted_by(
-            &end_row("w1", SUBMIT_RESULT, ToolCallOutcome::Served),
-            &worker,
-        );
+        let row = end_row("w1", SUBMIT_RESULT, ToolCallOutcome::Served);
         assert_eq!(
-            found.map(|payload| dumps(&payload)),
+            submitted_by(&row, &worker, Forced::SubmitResult),
             Some(
                 "{\"status\": \"completed\", \"summary\": \"mine\", \"data\": {}, \
                  \"deliverables\": [], \"reason\": \"\"}"
                     .to_owned()
             )
+        );
+    }
+
+    // Python: tests/tasks/test_structured_result.py::TestAnotherResultTool::test_a_prefixed_gateway_call_is_found_in_the_trace
+    #[test]
+    fn a_prefixed_call_of_a_given_tool_is_found_in_the_trace() {
+        let given = ResultTool::new(
+            json!({ "name": "submit_verdict" }),
+            Arc::new(|arguments: &Metadata| arguments.clone()),
+            Arc::new(|_: &str, _: &str, _: u32| Metadata::new()),
+            "Call it.",
+        );
+        let worker = ChannelId::new("w1").unwrap();
+        let row = end_row(
+            "w1",
+            "mcp__gateway__submit_verdict",
+            ToolCallOutcome::Served,
+        );
+        assert_eq!(
+            submitted_by(&row, &worker, Forced::Given(&given)),
+            Some("{\"summary\": \"mine\"}".to_owned())
         );
     }
 

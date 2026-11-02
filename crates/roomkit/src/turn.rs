@@ -312,7 +312,8 @@ impl TurnHost {
     /// `TurnHost.delegate(room_id, agent_id, task, **options)`, its options
     /// those of a background delegation that are data: `wait`,
     /// `on_complete`, `organization_id` and an inline run's
-    /// `require_structured_result` and `max_result_retries` are refused.
+    /// `require_structured_result`, `max_result_retries` and `result_tool`
+    /// are refused.
     ///
     /// # Errors
     ///
@@ -328,7 +329,8 @@ impl TurnHost {
     ) -> Result<String, RoomKitError> {
         let defaults = DelegateOptions::default();
         let inline_only = options.require_structured_result
-            || options.max_result_retries != defaults.max_result_retries;
+            || options.max_result_retries != defaults.max_result_retries
+            || options.result_tool.is_some();
         if options.wait
             || options.on_complete.is_some()
             || options.organization_id.is_some()

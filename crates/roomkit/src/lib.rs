@@ -211,6 +211,7 @@ pub use self::tool_calls::ToolCallReport;
 pub use self::transport::{TransportChannel, TransportChannelOptions};
 pub use self::turn::{PostStatusOptions, ToolGate, TurnHost, WaitTaskOptions, current_turn_host};
 // For the AI channel's turn alone: the answer of a tool the owner serves.
+pub use self::tasks::result_tool::ResultTool;
 #[doc(hidden)]
 pub use self::turn::OwnerToolAnswer;
 pub use self::turns::TurnTimeouts;

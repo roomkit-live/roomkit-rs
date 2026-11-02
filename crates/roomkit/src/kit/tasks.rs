@@ -30,8 +30,8 @@ use crate::store::{GetConversationOptions, PatchRoomMetadataOptions};
 use crate::tasks::brief::{conversation_block, worker_description};
 use crate::tasks::text::{bounded_text, identifier, one_line, quoted};
 use crate::tasks::{
-    DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, OnCompleteCallback, SubmitOptions,
-    TaskReach, TaskRunner,
+    DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, OnCompleteCallback, ResultTool,
+    SubmitOptions, TaskReach, TaskRunner,
 };
 use crate::{
     AttachChannelOptions, CreateRoomOptions, DeliverOptions, GetRoomOptions, SendEventOptions,
@@ -82,8 +82,8 @@ the language the conversation is in, whatever the result's.";
 /// What [`RoomKit::delegate`] takes beside the room, the agent and the
 /// task: Python's `delegate(..., *, wait=False, context=None,
 /// share_channels=None, notify=None, on_complete=None,
-/// require_structured_result=False, max_result_retries=3, post_status=True,
-/// brief=None, hand_back='relay', organization_id=None)`.
+/// require_structured_result=False, max_result_retries=3, result_tool=None,
+/// post_status=True, brief=None, hand_back='relay', organization_id=None)`.
 #[derive(Clone)]
 pub struct DelegateOptions {
     /// Python `wait=False`: run the agent inline and return the ended
@@ -109,6 +109,9 @@ pub struct DelegateOptions {
     /// Python `max_result_retries=3`: how many times a turn ending without
     /// the call is re-prompted.
     pub max_result_retries: u32,
+    /// Python `result_tool=None`: the tool to force, when not
+    /// `submit_result`.
+    pub result_tool: Option<ResultTool>,
     /// Python `post_status=True`: follow the task on the status bus.
     pub post_status: bool,
     /// Python `brief=None`: what the agent is told instead of the task.
@@ -135,6 +138,7 @@ impl Default for DelegateOptions {
             on_complete: None,
             require_structured_result: false,
             max_result_retries: 3,
+            result_tool: None,
             post_status: true,
             brief: None,
             conversation: 0,
@@ -152,6 +156,7 @@ impl std::fmt::Debug for DelegateOptions {
             .field("notify", &self.notify)
             .field("require_structured_result", &self.require_structured_result)
             .field("max_result_retries", &self.max_result_retries)
+            .field("result_tool", &self.result_tool)
             .field("hand_back", &self.hand_back)
             .finish_non_exhaustive()
     }
@@ -529,7 +534,8 @@ impl<S: ConversationStore> RoomKit<S> {
         task.set_status(TaskStatus::InProgress);
         let context = options.context.as_ref();
         let ended = if options.require_structured_result {
-            Box::pin(self.structured_turns(task, context, options.max_result_retries)).await
+            let (retries, tool) = (options.max_result_retries, options.result_tool.as_ref());
+            Box::pin(self.structured_turns(task, context, retries, tool)).await
         } else {
             Box::pin(self.delegated_turn(task, context)).await
         };

@@ -28,12 +28,14 @@ pub(crate) mod json;
 pub(crate) mod lines;
 mod marks;
 mod record;
+pub(crate) mod result_tool;
 mod runner;
 pub(crate) mod text;
 
 pub use self::delegated::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, WaitOptions};
 pub(crate) use self::hosted::HostTasks;
 pub(crate) use self::record::{AGENT_REACH, RoomTaskRecord, TaskCancel, TaskCancels, TaskReach};
+pub(crate) use self::result_tool::ResultTool;
 pub use self::runner::{InMemoryTaskRunner, OnCompleteCallback, SubmitOptions, TaskRunner};
 // For roomkit-ai's `TaskStatusTool` and `CancelTaskTool` alone, which
 // serve the task tools the kit serves as an owner's tools.
