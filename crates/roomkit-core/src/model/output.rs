@@ -49,15 +49,43 @@ pub struct ErrorRecord {
     pub error_type: String,
     /// The error's message.
     pub message: String,
+    /// The error's attributes JSON carries, as Python's `error_record`
+    /// keeps them (RFC §10.6.8): a provider error's `retryable`,
+    /// `provider`, `status_code` and `context_overflow`. Empty for an
+    /// error that has none. Boxed: a record rides many errors, which
+    /// stay small.
+    #[serde(default, skip_serializing_if = "no_attributes")]
+    pub attributes: Box<Metadata>,
+}
+
+/// Whether a record carries no attributes, which it then does not write.
+#[expect(
+    clippy::borrowed_box,
+    reason = "serde's skip_serializing_if is handed the field as it is"
+)]
+fn no_attributes(attributes: &Box<Metadata>) -> bool {
+    attributes.is_empty()
 }
 
 impl ErrorRecord {
-    /// An error of `error_type` saying `message`.
+    /// An error of `error_type` saying `message`, with no attributes.
     pub fn new(error_type: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             error_type: error_type.into(),
             message: message.into(),
+            attributes: Box::default(),
         }
+    }
+
+    /// Whether a retry may succeed, as the error's `retryable` attribute
+    /// says when it is a bool, else `true`: Python's
+    /// `bool(getattr(exc, "retryable", True))`. Outside the public API.
+    #[doc(hidden)]
+    pub fn retryable(&self) -> bool {
+        self.attributes
+            .get("retryable")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true)
     }
 }
 

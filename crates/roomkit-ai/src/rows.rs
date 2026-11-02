@@ -9,10 +9,11 @@ use std::task::{Context, Poll};
 
 use futures_core::Stream;
 use roomkit::model::{
-    ChannelOutput, ErrorRecord, EventContent, EventSource, EventType, LoopEndMarker, RoomEvent,
-    TextContent, ToolCall, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    ChannelOutput, ErrorRecord, EventContent, EventSource, EventType, LoopEndMarker, Metadata,
+    RoomEvent, TextContent, ToolCall, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use roomkit::{ChannelError, ClassedError, ResponseItem, ResponseStream};
+use serde_json::Value;
 
 use crate::provider::ProviderError;
 use crate::stream::next;
@@ -131,7 +132,10 @@ impl Rows<'_> {
         // reported, not as a channel's.
         output.error = error.map(|error| {
             let raised = ClassedError::new(PROVIDER_ERROR, error.clone());
-            ErrorRecord::new(raised.class(), error.to_string())
+            ErrorRecord {
+                attributes: Box::new(attributes_of(error)),
+                ..ErrorRecord::new(raised.class(), error.to_string())
+            }
         });
         output
     }
@@ -165,9 +169,25 @@ impl Stream for Responding {
 const PROVIDER_ERROR: &str = "roomkit.providers.ai.base:ProviderError";
 
 /// A provider's failure as the turn raises it: under its Python class,
-/// which the kit records (RMK-1208).
+/// which the kit records (RMK-1208), with its attributes, Python's
+/// `ProviderError` instance's, which its record keeps (RMK-1239).
 fn raised(error: ProviderError) -> ChannelError {
-    Box::new(ClassedError::new(PROVIDER_ERROR, error))
+    let attributes = attributes_of(&error);
+    Box::new(ClassedError::new(PROVIDER_ERROR, error).with_attributes(attributes))
+}
+
+/// A provider's failure's attributes, as Python's `error_record` reads a
+/// `ProviderError`'s.
+fn attributes_of(error: &ProviderError) -> Metadata {
+    let mut attributes = Metadata::new();
+    attributes.insert("retryable".to_owned(), Value::from(error.retryable));
+    attributes.insert("provider".to_owned(), Value::from(error.provider.clone()));
+    attributes.insert("status_code".to_owned(), Value::from(error.status_code));
+    attributes.insert(
+        "context_overflow".to_owned(),
+        Value::from(error.context_overflow),
+    );
+    attributes
 }
 
 /// `error`, a failure the turn met before its loop, raised under its

@@ -335,6 +335,9 @@ pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
         if let Some(overflow) = refusal["context_overflow"].as_bool() {
             round = round.with_context_overflow(overflow);
         }
+        if let Some(provider) = refusal["provider"].as_str() {
+            round = round.refused_by(provider);
+        }
     }
     if spec.get("done") == Some(&Value::Bool(false)) {
         round = round.without_done();

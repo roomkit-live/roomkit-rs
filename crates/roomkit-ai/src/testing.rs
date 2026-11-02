@@ -69,6 +69,9 @@ pub struct ScriptedRound {
     /// How the provider classes its refusal: a context too long for the
     /// model, not one, or unclassed (`ProviderError::context_overflow`).
     context_overflow: Option<bool>,
+    /// The provider that refuses, by its name; none when empty
+    /// (`ProviderError::provider`).
+    provider: String,
     /// Whether its stream ends after its calls without its done event.
     pub without_done: bool,
     /// Whether its failure or refusal comes after its calls.
@@ -89,6 +92,7 @@ impl ScriptedRound {
             fails: None,
             refuses: None,
             context_overflow: None,
+            provider: String::new(),
             without_done: false,
             failure_after_calls: false,
         }
@@ -124,6 +128,7 @@ impl ScriptedRound {
             fails: None,
             refuses: None,
             context_overflow: None,
+            provider: String::new(),
             without_done: false,
             failure_after_calls: false,
         }
@@ -157,6 +162,14 @@ impl ScriptedRound {
         self
     }
 
+    /// The same round, its refusal made by the provider named `provider`
+    /// (`ProviderError::provider`); a refusal names none without it.
+    #[must_use]
+    pub fn refused_by(mut self, provider: impl Into<String>) -> Self {
+        self.provider = provider.into();
+        self
+    }
+
     /// The error the round ends on, if any: its failure, else its refusal.
     fn failure(&self) -> Option<ProviderError> {
         if let Some(failure) = &self.fails {
@@ -166,6 +179,7 @@ impl ScriptedRound {
             let options = ProviderErrorOptions {
                 status_code: Some(*status),
                 context_overflow: self.context_overflow,
+                provider: self.provider.clone(),
                 ..ProviderErrorOptions::default()
             };
             ProviderError::new(message.clone(), options)

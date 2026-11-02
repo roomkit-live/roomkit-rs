@@ -386,12 +386,17 @@ async fn host_call(
                 timeout: timeout_ms.map(std::time::Duration::from_millis),
             };
             let outcome = host.wait_task(&task_id, options).await;
-            // The failure as it crosses: its kind and its message.
+            // The failure as it crosses: its kind, its message and its
+            // attributes.
             let waited = |result: &Option<roomkit::tasks::DelegatedTaskResult>| {
                 result.as_ref().map_or(Value::Null, |result| {
-                    let exception = result.exception.as_ref().map(
-                        |failure| json!({ "kind": failure.error_type, "message": failure.message }),
-                    );
+                    let exception = result.exception.as_ref().map(|failure| {
+                        json!({
+                            "kind": failure.error_type,
+                            "message": failure.message,
+                            "attributes": failure.attributes,
+                        })
+                    });
                     json!({ "result": result, "exception": exception })
                 })
             };

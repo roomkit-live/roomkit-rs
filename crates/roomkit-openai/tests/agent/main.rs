@@ -468,10 +468,20 @@ async fn a_provider_error_fails_the_turn_and_fires_on_error() {
     let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
     let message = "openai (401): the provider answered HTTP 401 (invalid_request_error): \
                    Incorrect API key provided.";
-    // Raised as Python's `ProviderError`, its class kept (RMK-1208).
+    // Raised as Python's `ProviderError`, its class kept (RMK-1208), its
+    // attributes as Python's `error_record` keeps them (RMK-1239).
+    let attributes = json!({
+        "retryable": false,
+        "provider": "openai",
+        "status_code": 401,
+        "context_overflow": null,
+    });
     assert_eq!(
         result.error,
-        Some(ErrorRecord::new("ProviderError", message))
+        Some(ErrorRecord {
+            attributes: Box::new(attributes.as_object().unwrap().clone()),
+            ..ErrorRecord::new("ProviderError", message)
+        })
     );
     assert!(!result.blocked, "the message stays delivered");
     assert_eq!(

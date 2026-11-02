@@ -6,6 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A failed task's exception and a turn's error record keep the error's
+  attributes, as Python's `error_record` (RMK-1239): `ErrorRecord`'s
+  `attributes`, a provider error's `retryable`, `provider`, `status_code`
+  and `context_overflow`, which `wait_task` hands on. An agent's delivery
+  that an error failed before its turn reads that error's `retryable`, as
+  Python's `_delivery_error`: a `ProviderError` (a budget-aware memory's
+  overflow) is not retryable, where it read retryable. Breaking:
+  `ErrorRecord` has the new public field `attributes`; build one with
+  `ErrorRecord::new`, or add `attributes: Box::default()` to a struct
+  literal.
 - A `ProviderError` reads with its provider and the status it answered
   first, as Python's (RMK-1238): `openai (401): the provider answered HTTP
   401 ...`, `anthropic: connection reset`, so a turn's error record and

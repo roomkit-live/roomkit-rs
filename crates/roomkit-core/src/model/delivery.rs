@@ -60,17 +60,17 @@ impl DeliveryResult {
     }
 
     /// The failed delivery to `channel_id` of a call that raised `error`,
-    /// which declares nothing of itself, as the Python implementation's
-    /// `_delivery_error` reports it: its type as the code (Python's class
-    /// name; a boxed Rust error has none, and reads `ChannelError`), its
-    /// message, retryable. Outside the public API.
+    /// as the Python implementation's `_delivery_error` reports it: its
+    /// type as the code (Python's class name; a boxed Rust error has none,
+    /// and reads `ChannelError`), its message, retryable as the error's
+    /// `retryable` attribute says, else retryable. Outside the public API.
     #[doc(hidden)]
     pub fn raised(channel_id: ChannelId, error: &ErrorRecord) -> Self {
         Self {
-            error: Some(DeliveryError::new(
-                error.error_type.clone(),
-                error.message.clone(),
-            )),
+            error: Some(DeliveryError {
+                retryable: error.retryable(),
+                ..DeliveryError::new(error.error_type.clone(), error.message.clone())
+            }),
             ..Self::new(channel_id, DeliveryResultStatus::Failed)
         }
     }

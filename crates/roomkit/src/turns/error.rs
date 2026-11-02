@@ -139,18 +139,31 @@ pub(crate) fn record_of(error: &(dyn Error + Send + Sync + 'static)) -> ErrorRec
     if let Some(RemoteError(crossed)) = error.downcast_ref::<RemoteError>() {
         return to_record(crossed);
     }
-    let kind = error
-        .downcast_ref::<ClassedError>()
-        .map_or(CHANNEL_ERROR, ClassedError::class);
-    ErrorRecord::new(kind, error.to_string())
+    let classed = error.downcast_ref::<ClassedError>();
+    ErrorRecord {
+        attributes: Box::new(
+            classed
+                .map(ClassedError::attributes)
+                .cloned()
+                .unwrap_or_default(),
+        ),
+        ..ErrorRecord::new(
+            classed.map_or(CHANNEL_ERROR, ClassedError::class),
+            error.to_string(),
+        )
+    }
 }
 
 /// `error`, a channel's, as it crosses, its causes after it.
 pub(crate) fn channel_error(error: &(dyn Error + 'static)) -> WireError {
-    let kind = error
-        .downcast_ref::<ClassedError>()
-        .map_or(CHANNEL_ERROR, ClassedError::class);
-    let mut record = one(kind, error.to_string());
+    let classed = error.downcast_ref::<ClassedError>();
+    let mut record = one(
+        classed.map_or(CHANNEL_ERROR, ClassedError::class),
+        error.to_string(),
+    );
+    if let Some(classed) = classed {
+        record.attributes.clone_from(classed.attributes());
+    }
     let mut cause = error.source();
     while let Some(next) = cause {
         if record.causes.len() >= CAUSES_KEPT {
@@ -276,12 +289,23 @@ impl TurnFailure {
 
 /// A core error record as it crosses.
 pub(crate) fn from_record(record: &ErrorRecord) -> WireError {
-    one(record.error_type.clone(), record.message.clone())
+    WireError {
+        attributes: (*record.attributes).clone(),
+        ..one(record.error_type.clone(), record.message.clone())
+    }
 }
 
-/// The core error record a crossed error is, on the owner.
+/// The core error record a crossed error is, on the owner, its attributes
+/// kept but a kit error's, which name its variant.
 pub(crate) fn to_record(error: &WireError) -> ErrorRecord {
-    ErrorRecord::new(error.kind.clone(), error.message.clone())
+    let record = ErrorRecord::new(error.kind.clone(), error.message.clone());
+    if error.kind == KIT_ERROR {
+        return record;
+    }
+    ErrorRecord {
+        attributes: Box::new(error.attributes.clone()),
+        ..record
+    }
 }
 
 /// `error`, a kit's, as it crosses: its variant among its attributes.

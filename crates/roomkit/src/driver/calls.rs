@@ -1033,21 +1033,29 @@ fn channel_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {
 /// failure of the code its class carries, `kit_closed`, or else of its
 /// Python class's name, as Python's delivery reads an error's `code` or
 /// its type's name (RFC §5.13); any other a failure of the class a
-/// [`ClassedError`] names, else of type `ChannelError`, a boxed error
-/// having no class name.
+/// [`ClassedError`] names, its attributes kept, else of type
+/// `ChannelError`, a boxed error having no class name.
 fn channel_failed(error: &ChannelError) -> Outcome {
     let kit_error = error.downcast_ref::<RoomKitError>();
+    let classed = error.downcast_ref::<ClassedError>();
     let code = match kit_error {
         Some(RoomKitError::ProviderDelivery { result }) => {
             return ChannelOutcome::ProviderDelivery(Box::new(result.clone())).into();
         }
         Some(kit_error) => kit_error.code().unwrap_or_else(|| kit_error.class_name()),
-        None => error
-            .downcast_ref::<ClassedError>()
+        None => classed
             .map_or("ChannelError", ClassedError::class)
             .to_owned(),
     };
-    Outcome::Failed(ErrorRecord::new(code, error.to_string()))
+    Outcome::Failed(ErrorRecord {
+        attributes: Box::new(
+            classed
+                .map(ClassedError::attributes)
+                .cloned()
+                .unwrap_or_default(),
+        ),
+        ..ErrorRecord::new(code, error.to_string())
+    })
 }
 
 /// A channel's answer, unless a response it carries holds a content its

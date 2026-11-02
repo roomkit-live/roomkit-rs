@@ -41,7 +41,7 @@ const KIT: &[&str] = &[
 ];
 const MEDIA_RESOLVER: &[&str] = &["media"];
 const ATTACHED_MEDIA: &[&str] = &["key"];
-const REFUSES: &[&str] = &["status", "message", "context_overflow"];
+const REFUSES: &[&str] = &["status", "message", "context_overflow", "provider"];
 const RESOLVER: &[&str] = &["answers"];
 const RESOLVER_ANSWER: &[&str] = &["when", "repeat", "gate", "fail", "result"];
 const RESOLVER_WHEN: &[&str] = &["sender_id", "channel_id", "room_id", "text"];
