@@ -50,7 +50,8 @@ impl<S: ConversationStore> RoomKit<S> {
             declaration.channel_type.clone(),
         );
         let channel_id = declaration.channel_id.clone();
-        let human_input = human_input.map(|handler| (channel_id.clone(), handler));
+        let human_input =
+            human_input.map(|handler| (channel_id.clone(), handler, Arc::clone(&channel)));
         self.inner.try_change_config(|config| {
             config.register_channel(declaration)?;
             // The channel is in place before an operation can see its
@@ -59,7 +60,13 @@ impl<S: ConversationStore> RoomKit<S> {
             write(&self.inner.channels).insert(channel_id, channel);
             Ok::<(), RoomKitError>(())
         })?;
-        if let Some((channel_id, handler)) = human_input {
+        if let Some((channel_id, handler, channel)) = human_input {
+            // Registered on its handler once the kit holds it, the channel
+            // a kit registered last owning its id's requests (RMK-1201).
+            // Only a handler closed whole refuses it: its requests are
+            // then refused at each call.
+            let registration = handler.register(channel_id.as_str()).unwrap_or_default();
+            channel.human_input_registered(registration);
             self.inner.wire_human_input(&channel_id, &handler);
         }
         drop(self.inner.emit(registered));

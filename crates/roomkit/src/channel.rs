@@ -492,6 +492,16 @@ pub trait Channel: Send + Sync + 'static {
     fn human_input_handler(&self) -> Option<crate::human_input::HumanInputHandler> {
         None
     }
+
+    /// Takes `registration`, the token of the channel's registration on
+    /// its [`human_input_handler`](Self::human_input_handler), which the
+    /// kit takes once it registered the channel, as Python's
+    /// `_wire_ai_channel` registers it: its close names it. Nothing by
+    /// default.
+    #[doc(hidden)]
+    fn human_input_registered(&self, registration: u64) {
+        let _ = registration;
+    }
 }
 
 /// The event `channel`, keeping no data of its own, parses from `message`
@@ -607,6 +617,8 @@ pub(crate) trait DynChannel: Send + Sync {
     ) -> BoxFuture<'_, Result<ChannelOutput, ChannelError>>;
 
     fn close(&self) -> BoxFuture<'_, ()>;
+
+    fn human_input_registered(&self, registration: u64);
 }
 
 impl<C: Channel> DynChannel for C {
@@ -710,6 +722,10 @@ impl<C: Channel> DynChannel for C {
 
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(Channel::close(self))
+    }
+
+    fn human_input_registered(&self, registration: u64) {
+        Channel::human_input_registered(self, registration);
     }
 }
 

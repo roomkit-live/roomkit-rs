@@ -1155,18 +1155,18 @@ impl<P: AiProvider> Channel for AiChannel<P> {
     }
 
     /// The handler its person's tools keep their requests in, which the
-    /// kit wires at registration, as Python's `_wire_ai_channel`: the
-    /// channel registers there as the owner of its id's requests, the one a
-    /// kit registered last owning them (RMK-1201). Only a handler already
-    /// closed whole refuses it: its requests are then refused at each call.
+    /// kit wires at registration, as Python's `_wire_ai_channel`.
     fn human_input_handler(&self) -> Option<roomkit::human_input::HumanInputHandler> {
-        let (human, registration) = self.human_input.as_ref()?;
-        let handler = human.handler();
-        let token = handler
-            .register(self.channel_id.as_str())
-            .unwrap_or_default();
-        registration.store(token, Ordering::Release);
-        Some(handler.clone())
+        Some(self.human_input.as_ref()?.0.handler().clone())
+    }
+
+    /// Keeps the token of its registration on its handler, which the kit
+    /// takes once it registered the channel: the one a kit registered last
+    /// owns its id's requests, and its close names it (RMK-1201).
+    fn human_input_registered(&self, registration: u64) {
+        if let Some((_, kept)) = &self.human_input {
+            kept.store(registration, Ordering::Release);
+        }
     }
 }
 

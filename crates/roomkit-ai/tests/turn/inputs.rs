@@ -490,3 +490,38 @@ async fn the_channel_a_kit_registered_last_owns_its_id_s_requests() {
     other.close().await.unwrap();
     assert!(settled);
 }
+
+// Python: core/framework.py register_channel raises before
+// _wire_ai_channel (RMK-1201): a registration the kit refuses, or an
+// agent a strategy is given and never installs, takes nothing of the id's
+// requests from the channel the kit holds, whose kit's close settles them.
+#[tokio::test]
+async fn a_registration_that_never_lands_owns_no_request() {
+    use roomkit::human_input::CreateDetachedOptions;
+    use roomkit::{RoomKit, RoomKitError, RoomKitOptions};
+
+    let shared = HumanInputHandler::default();
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(agent_asking_through(&shared)).unwrap();
+    let refused = kit.register_channel(agent_asking_through(&shared));
+    let _never_installed =
+        roomkit::orchestration::StrategyAgent::channel(agent_asking_through(&shared));
+    let options = CreateDetachedOptions {
+        room_id: "room-1".to_owned(),
+        channel_id: "ai".to_owned(),
+        ..CreateDetachedOptions::default()
+    };
+    let request = shared
+        .create_detached("AskUser", Metadata::new(), options)
+        .await
+        .unwrap();
+
+    kit.close().await.unwrap();
+
+    let settled = !shared.pending().contains_key(&request.pending_id);
+    assert!(matches!(
+        refused,
+        Err(RoomKitError::ChannelAlreadyRegistered(_))
+    ));
+    assert!(settled);
+}
