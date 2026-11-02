@@ -20,6 +20,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   about the key, the bill, a permission, the model or the rate, before
   anything streamed, marks them refused in the room, and later turns read
   `[Image refused by the model's provider: “<name>”]` in their place.
+  `ScriptedRound::with_context_overflow` classes a scripted refusal as a
+  context too long for the model, or as not one.
 - Delegation and human input as Python's (RFC §9.3, §19.8, §23.3,
   RMK-1192): `delegate` lets a store's failure to read the parent room
   through, no longer `RoomNotFound`; a delegated agent's buffered answers

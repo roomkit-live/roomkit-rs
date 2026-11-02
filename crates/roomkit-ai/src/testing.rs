@@ -66,6 +66,9 @@ pub struct ScriptedRound {
     /// request with this HTTP status and message, an error it does not
     /// retry.
     pub refuses: Option<(u16, String)>,
+    /// How the provider classes its refusal: a context too long for the
+    /// model, not one, or unclassed (`ProviderError::context_overflow`).
+    context_overflow: Option<bool>,
     /// Whether its stream ends after its calls without its done event.
     pub without_done: bool,
 }
@@ -83,6 +86,7 @@ impl ScriptedRound {
             },
             fails: None,
             refuses: None,
+            context_overflow: None,
             without_done: false,
         }
     }
@@ -116,6 +120,7 @@ impl ScriptedRound {
             },
             fails: None,
             refuses: None,
+            context_overflow: None,
             without_done: false,
         }
     }
@@ -138,6 +143,16 @@ impl ScriptedRound {
         self
     }
 
+    /// The same round, its provider's refusal classed as a context too
+    /// long for the model when `overflow`, as not one otherwise
+    /// (`ProviderError::context_overflow`); a refusal is unclassed without
+    /// it.
+    #[must_use]
+    pub fn with_context_overflow(mut self, overflow: bool) -> Self {
+        self.context_overflow = Some(overflow);
+        self
+    }
+
     /// The error the round ends on, if any: its failure, else its refusal.
     fn failure(&self) -> Option<ProviderError> {
         if let Some(failure) = &self.fails {
@@ -146,6 +161,7 @@ impl ScriptedRound {
         self.refuses.as_ref().map(|(status, message)| {
             let options = ProviderErrorOptions {
                 status_code: Some(*status),
+                context_overflow: self.context_overflow,
                 ..ProviderErrorOptions::default()
             };
             ProviderError::new(message.clone(), options)

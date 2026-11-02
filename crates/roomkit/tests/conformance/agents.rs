@@ -311,6 +311,9 @@ pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
             return Err("refuses: no status and message".into());
         };
         round = round.refusing(status, message);
+        if let Some(overflow) = refusal["context_overflow"].as_bool() {
+            round = round.with_context_overflow(overflow);
+        }
     }
     if spec.get("done") == Some(&Value::Bool(false)) {
         round = round.without_done();

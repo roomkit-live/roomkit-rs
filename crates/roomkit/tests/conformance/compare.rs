@@ -185,6 +185,10 @@ impl Comparison<'_> {
             let calls = Value::Array(self.observed.resolver.clone());
             self.check(expected, Some(&calls), "resolver");
         }
+        if let Some(expected) = expect.get("media_resolver") {
+            let calls = Value::Array(self.observed.media_resolver.clone());
+            self.check(expected, Some(&calls), "media_resolver");
+        }
         for (channel, expected) in expect["models"].as_object().into_iter().flatten() {
             let requests = self
                 .observed

@@ -1,23 +1,38 @@
 //! The kit's readers of an author's media (roomkit-specs
 //! `conformance/README.md`, "Setup"): `setup.kit.media_resolver` answers
-//! each reference it names with its bytes, written in base64, and
-//! `setup.kit.attached_media` names as an event's media the media contents
-//! its metadata lists under `key` (RFC §6.4).
+//! each reference it names with its bytes, written in base64, recording
+//! each call under `media_resolver`, and `setup.kit.attached_media` names
+//! as an event's media the media contents its metadata lists under `key`
+//! (RFC §6.4).
 
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 
 use roomkit::model::EventContent;
 use roomkit::{AttachedMedia, MediaResolver, RoomKitOptions};
-use serde_json::Value;
+use serde_json::{Value, json};
 
-/// The kit's media readers a scenario's `setup.kit` names, over `options`.
-pub(crate) fn kit_options<S>(mut options: RoomKitOptions<S>, kit: &Value) -> RoomKitOptions<S> {
+use crate::identity::RunSlot;
+use crate::run::lock;
+
+/// The kit's media readers a scenario's `setup.kit` names, over `options`:
+/// the resolver records its calls into the run `slot` holds.
+pub(crate) fn kit_options<S>(
+    mut options: RoomKitOptions<S>,
+    kit: &Value,
+    slot: &RunSlot,
+) -> RoomKitOptions<S> {
     if let Some(media) = kit["media_resolver"]["media"].as_object() {
         let held: HashMap<String, Vec<u8>> = media
             .iter()
             .filter_map(|(url, data)| Some((url.clone(), decoded(data.as_str()?)?)))
             .collect();
-        options.media_resolver = Some(MediaResolver::new(move |media, _room_id| {
+        let slot = slot.clone();
+        options.media_resolver = Some(MediaResolver::new(move |media, room_id| {
+            if let Some(run) = slot.run().filter(|run| run.recording.load(Ordering::SeqCst)) {
+                let call = json!({ "url": media.url, "room_id": room_id });
+                lock(&run.observed).media_resolver.push(call);
+            }
             let bytes = held.get(&media.url).cloned();
             async move { Ok(bytes) }
         }));
