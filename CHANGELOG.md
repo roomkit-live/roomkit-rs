@@ -35,6 +35,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`Channel 'ana' is not an intelligence channel`), nothing attached, as
   for an agent named by its id (RFC §19.7, RMK-1233): the transport was
   attached as the agent, taking its turns.
+- A transport whose `on_event` returns a record replies as an agent does,
+  as Python's `_settle_buffered_replies` merges every target's output
+  (RMK-1248): its keys reach the caller's `response_metadata`, and its end
+  goes under `turns` by its channel; only agents' did.
 - The kit's close cuts a streaming target whose read the operation
   stopped (a delivery cancelled by its key) as it cuts any reader, as
   Python's close cancels a `deliver_stream()` at any point (RMK-1236): a

@@ -534,17 +534,17 @@ impl DeliverySet {
         }
         self.outcome.tasks.extend(output.tasks);
         self.outcome.observations.extend(output.observations);
-        if is_agent {
-            reply_record::record_reply(
-                &mut self.outcome.response_metadata,
-                &responder.channel_id,
-                (&output.response_metadata, &output.response_events),
-                streamed.is_none(),
-            );
-            if let Some(error) = &output.error {
-                let failed = DeliveryResult::raised(responder.channel_id.clone(), error);
-                self.turn_failed(cx, index, error, failed);
-            }
+        // Every target's turn that writes a record replies, a transport's
+        // too (Python's `_settle_buffered_replies`, RMK-1248).
+        reply_record::record_reply(
+            &mut self.outcome.response_metadata,
+            &responder.channel_id,
+            (&output.response_metadata, &output.response_events),
+            streamed.is_none(),
+        );
+        if let Some(error) = output.error.as_ref().filter(|_| is_agent) {
+            let failed = DeliveryResult::raised(responder.channel_id.clone(), error);
+            self.turn_failed(cx, index, error, failed);
         }
         match streamed.filter(|_| is_agent) {
             Some(turn) => self.outcome.streams.push(StreamedTurn { responder, turn }),
