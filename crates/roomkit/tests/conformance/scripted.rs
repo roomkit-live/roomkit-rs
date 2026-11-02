@@ -348,25 +348,31 @@ impl ScriptedChannel {
         } else {
             Vec::new()
         };
-        let list = |key: &str| {
-            output
-                .get(key)
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-        };
-        let dumped = json!({
-            "responded": respond && reaction.get("respond").is_some(),
-            "response_events": responses,
-            "tasks": list("tasks").iter().map(|t| complete_task(t, &room_id)).collect::<Vec<_>>(),
-            "observations": list("observations")
-                .iter()
-                .map(|o| complete_observation(o, &room_id, &channel_id))
-                .collect::<Vec<_>>(),
-            "metadata_updates": output.get("metadata_updates").cloned().unwrap_or_else(|| json!({})),
-        });
+        let mut dumped = side_effects(&output, &room_id, &channel_id);
+        dumped["responded"] = json!(respond && reaction.get("respond").is_some());
+        dumped["response_events"] = json!(responses);
         Ok(serde_json::from_value(dumped)?)
     }
+}
+
+/// The output a reaction's `output` gives, in the serialized form: its
+/// tasks, observations and room metadata updates, completed for `room_id`.
+fn side_effects(output: &Value, room_id: &str, channel_id: &str) -> Value {
+    let list = |key: &str| {
+        output
+            .get(key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    json!({
+        "tasks": list("tasks").iter().map(|t| complete_task(t, room_id)).collect::<Vec<_>>(),
+        "observations": list("observations")
+            .iter()
+            .map(|o| complete_observation(o, room_id, channel_id))
+            .collect::<Vec<_>>(),
+        "metadata_updates": output.get("metadata_updates").cloned().unwrap_or_else(|| json!({})),
+    })
 }
 
 impl Channel for ScriptedChannel {
@@ -563,10 +569,12 @@ impl Channel for ScriptedChannel {
                 }
             }
         }
-        match reaction.get("fail").and_then(Value::as_str) {
-            Some(message) => Err(ScriptedFailure(message.to_owned()).into()),
-            None => Ok(ChannelOutput::default()),
+        if let Some(message) = reaction.get("fail").and_then(Value::as_str) {
+            return Err(ScriptedFailure(message.to_owned()).into());
         }
+        let output = reaction.get("output").cloned().unwrap_or_default();
+        let dumped = side_effects(&output, &room_id, channel_id.as_str());
+        Ok(serde_json::from_value(dumped)?)
     }
 }
 
