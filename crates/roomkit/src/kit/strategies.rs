@@ -19,7 +19,7 @@ use roomkit_core::model::{ChannelCategory, ChannelId, Metadata, RoomId};
 use tokio::sync::Notify;
 
 use super::RoomKit;
-use crate::context::Section;
+use crate::context::{ExecutionContext, Section};
 use crate::error::RoomKitError;
 use crate::kit::{AttachChannelOptions, DetachChannelOptions, GetRoomOptions};
 use crate::orchestration::{Orchestration, StrategyAgent};
@@ -332,8 +332,14 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// Waits until no install runs in `room_id`: an uninstall called
     /// meanwhile takes back what the install recorded, rather than let it
-    /// record itself again (decided 2026-11-02, RMK-1247).
+    /// record itself again (decided 2026-11-02, RMK-1247). Code under a
+    /// live lease on the room's lock waits for no install, which waits for
+    /// that lock or runs under it (RFC §19.7: neither waits on work that
+    /// needs it): nothing is installed yet.
     async fn install_over(&self, room_id: &RoomId) {
+        if ExecutionContext::current().lease(room_id).is_some() {
+            return;
+        }
         let strategies = &self.inner.room_strategies;
         loop {
             let mut ended = pin!(strategies.installs_ended.notified());
@@ -741,7 +747,7 @@ impl<S: ConversationStore> Drop for InstallGuard<S> {
             };
             // The writes the cut calls had decided run to their end: the
             // room is read once they landed, the lock held meanwhile.
-            kit.inner.tasks.none_within(section.unit()).await;
+            kit.inner.tasks.calls_over_within(section.unit()).await;
             section
                 .scope(kit.undo_cancelled(&room_id, &strategy, before))
                 .await;

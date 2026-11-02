@@ -447,6 +447,183 @@ async fn a_cut_install_is_taken_back_once_its_decided_write_landed() {
     kit.close().await.unwrap();
 }
 
+/// A strategy whose install delegates a task in the background, then
+/// never ends.
+struct Delegates;
+
+impl Orchestration for Delegates {
+    fn agents(&self) -> Vec<StrategyAgent> {
+        Vec::new()
+    }
+
+    fn install<'call>(
+        &'call self,
+        kit: &'call RoomKit,
+        room_id: &'call RoomId,
+    ) -> StrategyFuture<'call> {
+        Box::pin(async move {
+            let worker = ChannelId::new("worker").unwrap();
+            let options = roomkit::DelegateOptions::default();
+            kit.delegate(room_id, &worker, "Find it.", options).await?;
+            std::future::pending::<()>().await;
+            Ok(())
+        })
+    }
+}
+
+/// An agent whose turn waits until it is let go.
+struct Slow(Arc<tokio::sync::Notify>);
+
+impl Channel for Slow {
+    fn channel_id(&self) -> ChannelId {
+        ChannelId::new("worker").unwrap()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(default_inbound_event(self, &message, &context)))
+    }
+
+    fn on_event(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let gate = Arc::clone(&self.0);
+        async move {
+            gate.notified().await;
+            Ok(ChannelOutput::empty())
+        }
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
+}
+
+// Python: core/mixins/strategies.py::StrategyMixin._install_strategy: a
+// cancelled install is undone at once in its task, and a task it delegated
+// goes on by itself.
+#[tokio::test]
+async fn a_cut_install_frees_its_room_while_a_task_it_delegated_runs_on() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let turn = Arc::new(tokio::sync::Notify::new());
+    kit.register_channel(Slow(Arc::clone(&turn))).unwrap();
+    with_room(&kit).await;
+    let delegates: Arc<dyn Orchestration> = Arc::new(Delegates);
+    let room = r1();
+    let install = kit.install_strategy(&room, delegates, InstallStrategyOptions::default());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), install)
+            .await
+            .is_err()
+    );
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while kit
+        .room_strategy(&r1(), RoomStrategyOptions::default())
+        .is_some()
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the room stayed claimed while the task it delegated ran"
+        );
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    turn.notify_one();
+    kit.close().await.unwrap();
+}
+
+/// A strategy whose install waits until it is let go, then attaches its
+/// agent.
+struct Gated(Arc<tokio::sync::Notify>);
+
+impl Orchestration for Gated {
+    fn agents(&self) -> Vec<StrategyAgent> {
+        vec![ChannelId::new("sales").unwrap().into()]
+    }
+
+    fn install<'call>(
+        &'call self,
+        _kit: &'call RoomKit,
+        _room_id: &'call RoomId,
+    ) -> StrategyFuture<'call> {
+        Box::pin(async move {
+            self.0.notified().await;
+            Ok(())
+        })
+    }
+}
+
+// Python: core/mixins/strategies.py::StrategyMixin.uninstall_strategy,
+// which waits for an install under way (decided 2026-11-02, RMK-1247); the
+// shared scenario orchestration/an-uninstall-during-an-install-takes-it-
+// back-once-it-is-over says it without making sure the uninstall waits.
+#[tokio::test(start_paused = true)]
+async fn an_uninstall_during_an_install_waits_for_it_then_takes_it_back() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(Quiet("sales")).unwrap();
+    with_room(&kit).await;
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let gated: Arc<dyn Orchestration> = Arc::new(Gated(Arc::clone(&gate)));
+    let installing = kit.clone();
+    let install = tokio::spawn(async move {
+        let options = InstallStrategyOptions::default();
+        installing.install_strategy(&r1(), gated, options).await
+    });
+    while kit
+        .room_strategy(&r1(), RoomStrategyOptions::default())
+        .is_none()
+    {
+        tokio::task::yield_now().await;
+    }
+    let uninstalling = kit.clone();
+    let uninstall = tokio::spawn(async move {
+        let options = UninstallStrategyOptions::default();
+        uninstalling.uninstall_strategy(&r1(), options).await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !uninstall.is_finished(),
+        "the uninstall answered while the install ran"
+    );
+
+    gate.notify_one();
+    install.await.unwrap().unwrap();
+    assert!(uninstall.await.unwrap().unwrap());
+    assert!(
+        kit.room_strategy(&r1(), RoomStrategyOptions::default())
+            .is_none()
+    );
+    let bindings = kit
+        .list_bindings(&r1(), ListBindingsOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        bindings.len(),
+        0,
+        "the agent the install attached is detached"
+    );
+    kit.close().await.unwrap();
+}
+
 /// A transport channel: what a live agent's id must not name.
 struct Sms(&'static str);
 

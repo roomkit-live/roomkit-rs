@@ -174,6 +174,32 @@ struct Running {
 }
 
 impl State {
+    /// Whether `running` is a call the code of `unit` made, or a call or a
+    /// store write of one, at any depth: a call's run or a write within
+    /// `unit` with no other work between, a task it delegated or a run gone
+    /// on detached, still running. A unit between whose task ended is a
+    /// cut call's, its writes running on.
+    fn is_call_of(&self, running: &Running, unit: Unit) -> bool {
+        if !matches!(running.kind, Kind::Call | Kind::Write) {
+            return false;
+        }
+        let Some(at) = running.within.iter().position(|within| *within == unit) else {
+            return false;
+        };
+        let own = running.within.len().saturating_sub(1);
+        running
+            .within
+            .get(at + 1..own)
+            .into_iter()
+            .flatten()
+            .all(|between| {
+                self.running
+                    .values()
+                    .find(|other| other.within.last() == Some(between))
+                    .is_none_or(|other| other.kind == Kind::Call)
+            })
+    }
+
     /// Whether the close spares `running`: a unit it runs within.
     fn spares(&self, running: &Running) -> bool {
         running.within.iter().any(|unit| self.spared.contains(unit))
@@ -439,16 +465,20 @@ impl Tasks {
         .await;
     }
 
-    /// Waits until no tracked task runs within `unit`: the work a section
-    /// of the host's code started, a cut call's store write among it.
-    pub(crate) async fn none_within(&self, unit: Unit) {
+    /// Waits until none of the calls the code of `unit` made runs, nor a
+    /// store write of one: what a section of the host's code was cut short
+    /// in, its calls aborted with it, their decided writes running to their
+    /// end. Other work that code started (a task it delegated, a run gone
+    /// on detached) is not waited for: it lives on its own, and may wait
+    /// for the lock the waiter holds.
+    pub(crate) async fn calls_over_within(&self, unit: Unit) {
         let none = Notify::new();
         self.wait_until(
             |state| {
                 state
                     .running
                     .values()
-                    .all(|running| !running.within.contains(&unit))
+                    .all(|running| !state.is_call_of(running, unit))
             },
             || true,
             &none,

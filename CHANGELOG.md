@@ -39,7 +39,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ON_ROOM_CREATED` hooks once the strategy is installed; an install cut
   short is taken back once the writes it had decided landed; and
   `uninstall_strategy` called during an install waits for it, then takes
-  it back.
+  it back, but from code holding the room's lock, which gets `false` at
+  once.
 - An MCP tool's result holding a PNG, JPEG, GIF or WebP image whose base64
   decodes reaches the model as its parts, the image an image part it
   sees, as Python's MCP handler (RMK-1242); any other image is still a

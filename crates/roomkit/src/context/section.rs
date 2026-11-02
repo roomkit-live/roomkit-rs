@@ -10,8 +10,8 @@
 //! the lock at once, and its release gives nothing back; any other caller
 //! waits for the section's end. The work the code started in the kit
 //! (its calls' runs, their store writes) runs within the section's unit,
-//! which [`Tasks::none_within`](crate::tasks::Tasks::none_within) waits
-//! for: what reads the room after a cut must not read it before a write
+//! which [`Tasks::calls_over_within`](crate::tasks::Tasks::calls_over_within)
+//! reads: what reads the room after a cut must not read it before a write
 //! the cut call had decided lands.
 
 use std::future::Future;
