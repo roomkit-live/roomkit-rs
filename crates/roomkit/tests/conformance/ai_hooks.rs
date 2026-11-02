@@ -13,7 +13,7 @@ use roomkit::model::hook::AllowOptions;
 use roomkit::model::{HookAction, HookResult, RoomContext};
 use roomkit::{HookError, TurnPayload};
 use roomkit_ai::{
-    AiContext, AiGenerationEvent, AiMessage, AiResponseEvent, AiRole, ToolRoundEvent,
+    AiContext, AiGenerationEvent, AiMessage, AiResponseEvent, AiRole, AiTool, ToolRoundEvent,
 };
 use serde_json::{Map, Value, json};
 
@@ -52,7 +52,9 @@ impl Scripted for AiGenerationEvent {
     }
 
     /// The replacement event: its context's `system_prompt` and `messages`
-    /// the patch's, its `tools` those of the context the patch names.
+    /// the patch's, its `tools` those of the context the patch names, and
+    /// each tool `define` gives in place of the tool of its name, or after
+    /// them.
     fn patched(mut self, patch: &Value) -> Result<Self, String> {
         for (member, value) in patch.as_object().into_iter().flatten() {
             let context = &mut self.ai_context;
@@ -70,7 +72,27 @@ impl Scripted for AiGenerationEvent {
                         .tools
                         .retain(|tool| kept.contains(&tool.name.as_str()));
                 }
+                // Applied after the others, as Python's runner does.
+                "define" => {}
                 other => return Err(format!("{other}: no generation member the harness patches")),
+            }
+        }
+        for definition in patch["define"].as_array().into_iter().flatten() {
+            let tool = AiTool {
+                parameters: definition
+                    .get("parameters")
+                    .cloned()
+                    .unwrap_or_else(|| json!({ "type": "object" })),
+                ..AiTool::new(
+                    definition["name"].as_str().unwrap_or_default(),
+                    definition["description"].as_str().unwrap_or_default(),
+                )
+                .map_err(|e| e.to_string())?
+            };
+            let tools = &mut self.ai_context.tools;
+            match tools.iter_mut().find(|own| own.name == tool.name) {
+                Some(own) => *own = tool,
+                None => tools.push(tool),
             }
         }
         Ok(self)

@@ -113,6 +113,7 @@ const TOOL: &[&str] = &[
     "declines",
     "hangs",
     "gate",
+    "declared",
 ];
 const RAISES: &[&str] = &["kind", "message"];
 const POLICY: &[&str] = &["allow", "deny"];

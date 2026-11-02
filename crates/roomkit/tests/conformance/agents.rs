@@ -21,8 +21,8 @@ use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContentPart, AiContext, AiMessageContent, AiProvider,
     AiResponse, AiRole, AiTool, HumanInputToolHandler, HumanInputToolHandlerOptions, ProviderError,
-    ProviderStream, StreamEvent, Tool, ToolContext, ToolEntry, ToolError, ToolPolicy, ToolResult,
-    Tools,
+    ProviderStream, StreamEvent, Tool, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy,
+    ToolResult, Tools,
 };
 use serde_json::{Value, json};
 
@@ -187,6 +187,7 @@ pub(crate) fn scripted_agent(
             summarizer,
         )?);
     }
+    options.tool_handler = undeclared_tools(spec, run);
     if let Some(human) = spec.get("human_input") {
         options.human_input_handler = Some(human_input(human)?);
     }
@@ -307,13 +308,44 @@ pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
     Ok(round)
 }
 
-/// The scripted tools of `spec`, each answering every call one way, held
-/// at its `gate` first, `run`'s.
+/// The scripted tools of `spec` the agent does not declare, served by its
+/// tool handler all the same (README: a tool's `declared`); `None` when
+/// every tool is declared.
+fn undeclared_tools(spec: &Value, run: &Arc<Run>) -> Option<ToolHandler> {
+    let undeclared: Vec<Value> = spec["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|tool| tool["declared"] == false)
+        .cloned()
+        .collect();
+    if undeclared.is_empty() {
+        return None;
+    }
+    let run = Arc::downgrade(run);
+    Some(ToolHandler::new(move |name, _arguments| {
+        let behaviour = undeclared.iter().find(|tool| tool["name"] == name).cloned();
+        let run = Weak::clone(&run);
+        async move {
+            let Some(behaviour) = behaviour else {
+                return Err(ToolError::unserved(format!("{name} is not this handler's")));
+            };
+            if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
+                run.gates.hold(gate).await;
+            }
+            answer(&behaviour).await
+        }
+    }))
+}
+
+/// The scripted tools of `spec` the agent declares, each answering every
+/// call one way, held at its `gate` first, `run`'s.
 fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
     spec["tools"]
         .as_array()
         .into_iter()
         .flatten()
+        .filter(|tool| tool["declared"] != false)
         .fold(Tools::new(), |tools, tool| {
             let definition = AiTool {
                 parameters: tool
