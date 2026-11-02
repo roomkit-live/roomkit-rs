@@ -36,7 +36,7 @@ use super::pass::{CommitPass, PassOrigin};
 use super::record::RecordPass;
 use super::stream::{self, PendingRow, Read, StreamEnd, StreamJob, StreamRead};
 use super::{Machine, Stage};
-use crate::model::{ChannelBinding, Metadata, RoomEvent, RoomId};
+use crate::model::{RoomEvent, RoomId};
 use crate::ops::io::Io;
 use crate::ops::protocol::{EffectId, Entry, EntryId, Notice, Outcome};
 use crate::ops::{Cx, Progress, RefusedOperation};
@@ -523,20 +523,17 @@ impl Machine {
         }
     }
 
-    /// A stream is read: its target's side effects are kept, and its
-    /// failure, the response's or the target's, fires `ON_ERROR` and is the
-    /// call's error when the stream is the call's own (RFC §12.2 step 13s):
-    /// a chained stream's is not its caller's.
+    /// A stream is read: its failure, the response's or the target's, fires
+    /// `ON_ERROR` and is the call's error when the stream is the call's own
+    /// (RFC §12.2 step 13s): a chained stream's is not its caller's. Nothing
+    /// else of the streaming target's output is kept, as Python's
+    /// `_deliver_segments` keeps nothing of `deliver_stream()` (RFC §10.1
+    /// step 15): the rows the stream commits are delivered to the others,
+    /// whose outputs are.
     fn stream_over(&mut self, cx: &mut Cx<'_>, end: StreamEnd) {
         let (Some(output), Some(context)) = (end.output, end.context) else {
             return;
         };
-        // The streamed response the targets' tasks were made for is not
-        // held here: their observers read the system payload.
-        self.side_effects
-            .collect(output.tasks, output.observations, Some(&context), None);
-        self.side_effects
-            .update_metadata(kept_metadata(&end.job.responder, output.metadata_updates));
         let Some(error) = output.error else {
             return;
         };
@@ -545,26 +542,4 @@ impl Machine {
             self.trigger.note_error(Some(error));
         }
     }
-}
-
-/// `updates` without the keys only the framework writes, of the namespace
-/// the implementation reserves or of the room's private state (RFC §5.1,
-/// §10.6.5, §14.1, gap G-049), which a stream's target may not write.
-fn kept_metadata(responder: &ChannelBinding, updates: Metadata) -> Metadata {
-    updates
-        .into_iter()
-        .filter(|(key, _)| {
-            let the_framework_s = crate::rules::attachment::the_framework_s(key);
-            if the_framework_s {
-                tracing::warn!(
-                    target: "roomkit::core::inbound",
-                    room_id = %responder.room_id,
-                    key = %key,
-                    "a streaming target's room metadata update names a key only the framework \
-                     writes; the key is refused"
-                );
-            }
-            !the_framework_s
-        })
-        .collect()
 }

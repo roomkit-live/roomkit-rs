@@ -638,14 +638,15 @@ impl DeliverySet {
     }
 
     /// A transport's `deliver()` returned: sent, unless its provider refused.
+    /// Of its output the room keeps the metadata updates alone: a
+    /// transport's tasks and observations are its `on_event()`'s, as
+    /// Python's router merges them (RFC §10.1 step 15).
     fn on_delivered(&mut self, index: usize, output: ChannelOutput) {
         let Some(target) = self.targets.get(index) else {
             return;
         };
         let channel_id = target.binding.channel_id.clone();
         self.collect_metadata(&channel_id, output.metadata_updates);
-        self.outcome.tasks.extend(output.tasks);
-        self.outcome.observations.extend(output.observations);
         match output.provider_result {
             // A provider's refusal is the Python implementation's
             // `ProviderDeliveryError`, which its transport raises.
