@@ -6,14 +6,27 @@
 use roomkit_ai::AiChannelOptions;
 use roomkit_ai::DiscoverOptions;
 use roomkit_ai::MockAiProviderOptions;
-use roomkit_ai::knowledge::{IndexOptions, SearchOptions};
+use roomkit_ai::knowledge::{IndexOptions, MockKnowledgeSourceOptions, SearchOptions};
 use roomkit_ai::memory::{
     BudgetAwareMemoryOptions, CompactingMemoryOptions, EstimateEventTokensOptions,
-    HistoryBudgetOptions, IngestOptions, RetrievalMemoryOptions, RetrieveOptions,
-    SlidingWindowMemoryOptions, SummarizingMemoryOptions,
+    HistoryBudgetOptions, IngestOptions, MockMemoryProviderOptions, RetrievalMemoryOptions,
+    RetrieveOptions, SlidingWindowMemoryOptions, SummarizingMemoryOptions,
 };
 use roomkit_ai::{FromToolOptions, ToolDeclarationOrigin};
 use std::time::Duration;
+
+#[test]
+fn mock_memory_and_knowledge_options_defaults_as_python() {
+    let memory = MockMemoryProviderOptions::default();
+    // roomkit.memory.MockMemoryProvider.__init__(messages) = None
+    assert_eq!(memory.messages.len(), 0);
+    // roomkit.memory.MockMemoryProvider.__init__(events) = None
+    assert_eq!(memory.events.len(), 0);
+    // roomkit.memory.MockMemoryProvider.__init__(notes) = None
+    assert_eq!(memory.notes.len(), 0);
+    // roomkit.knowledge.MockKnowledgeSource.__init__(results) = None
+    assert_eq!(MockKnowledgeSourceOptions::default().results.len(), 0);
+}
 
 #[test]
 fn from_tool_options_defaults_as_python() {

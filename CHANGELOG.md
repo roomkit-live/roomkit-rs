@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `roomkit_ai::memory::MockMemoryProvider` and
+  `roomkit_ai::knowledge::MockKnowledgeSource` are public, Python's
+  (RMK-1178), with `MockMemoryProviderOptions` and
+  `MockKnowledgeSourceOptions`: what each was asked reads through
+  `retrieve_calls()`, `ingest_calls()`, `clear_calls()`, `search_calls()`,
+  `index_calls()` and `closed()`, Python's attributes.
 - `AiChannelOptions::tool_timeouts`, Python's (RFC §21.6, RMK-1166): a
   bound per tool name, above `tool_timeout` and above a tool's own bound
   (a person's answer), `None` leaving that tool unbounded; a bound of zero

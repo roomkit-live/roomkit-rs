@@ -13,13 +13,13 @@ use crate::provider::AiMessage;
 /// What [`MockMemoryProvider::new`] takes: Python's
 /// `MockMemoryProvider(messages=None, events=None, notes=None)`.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct MockMemoryProviderOptions {
-    /// The messages every retrieval answers.
-    pub(crate) messages: Vec<AiMessage>,
-    /// The events every retrieval answers.
-    pub(crate) events: Vec<RoomEvent>,
-    /// The notes every retrieval answers.
-    pub(crate) notes: Vec<String>,
+pub struct MockMemoryProviderOptions {
+    /// Python `messages=None`: the messages every retrieval answers.
+    pub messages: Vec<AiMessage>,
+    /// Python `events=None`: the events every retrieval answers.
+    pub events: Vec<RoomEvent>,
+    /// Python `notes=None`: the notes every retrieval answers.
+    pub notes: Vec<String>,
 }
 
 /// What a mock memory was asked.
@@ -32,17 +32,45 @@ struct Asked {
 }
 
 /// A memory that answers what it was given and records what it was asked:
-/// Python's `MockMemoryProvider`, for this crate's tests until its
-/// recorded calls take their public form.
+/// Python's `MockMemoryProvider`, for a host's tests of its agents. What it
+/// recorded reads through methods of Python's attributes' names.
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use roomkit::model::ChannelId;
+/// use roomkit_ai::memory::{MemoryProvider, MockMemoryProvider, MockMemoryProviderOptions};
+/// use roomkit_ai::{AiChannel, AiChannelOptions, MockAiProvider, MockAiProviderOptions};
+///
+/// let memory = Arc::new(MockMemoryProvider::new(MockMemoryProviderOptions {
+///     notes: vec!["The customer prefers email.".into()],
+///     ..MockMemoryProviderOptions::default()
+/// }));
+/// let shared: Arc<dyn MemoryProvider> = memory.clone();
+/// let agent = AiChannel::new(
+///     ChannelId::new("assistant")?,
+///     MockAiProvider::new(MockAiProviderOptions::default()),
+///     AiChannelOptions {
+///         memory: Some(shared),
+///         ..AiChannelOptions::default()
+///     },
+/// )?;
+/// # drop(agent);
+/// assert!(memory.retrieve_calls().is_empty());
+/// assert!(!memory.closed());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Default)]
-pub(crate) struct MockMemoryProvider {
+pub struct MockMemoryProvider {
     answer: MockMemoryProviderOptions,
     asked: Mutex<Asked>,
 }
 
 impl MockMemoryProvider {
-    /// The memory answering `options`' messages, events and notes.
-    pub(crate) fn new(options: MockMemoryProviderOptions) -> Self {
+    /// The memory answering `options`' messages, events and notes:
+    /// Python's `MockMemoryProvider(messages=None, events=None,
+    /// notes=None)`.
+    pub fn new(options: MockMemoryProviderOptions) -> Self {
         Self {
             answer: options,
             asked: Mutex::default(),
@@ -51,25 +79,23 @@ impl MockMemoryProvider {
 
     /// Each retrieval it was asked, in order: the room, the turn's event,
     /// the context and the channel asking. Python's `retrieve_calls`.
-    pub(crate) fn retrieve_calls(
-        &self,
-    ) -> Vec<(RoomId, RoomEvent, RoomContext, Option<ChannelId>)> {
+    pub fn retrieve_calls(&self) -> Vec<(RoomId, RoomEvent, RoomContext, Option<ChannelId>)> {
         self.asked().retrieved.clone()
     }
 
     /// Each event it learnt, in order: the room, the event and the channel.
     /// Python's `ingest_calls`.
-    pub(crate) fn ingest_calls(&self) -> Vec<(RoomId, RoomEvent, Option<ChannelId>)> {
+    pub fn ingest_calls(&self) -> Vec<(RoomId, RoomEvent, Option<ChannelId>)> {
         self.asked().ingested.clone()
     }
 
     /// The rooms it was asked to forget, in order: Python's `clear_calls`.
-    pub(crate) fn clear_calls(&self) -> Vec<RoomId> {
+    pub fn clear_calls(&self) -> Vec<RoomId> {
         self.asked().cleared.clone()
     }
 
     /// Whether it was closed: Python's `closed`.
-    pub(crate) fn closed(&self) -> bool {
+    pub fn closed(&self) -> bool {
         self.asked().closed
     }
 

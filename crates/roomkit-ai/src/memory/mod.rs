@@ -22,7 +22,6 @@
 mod budget_aware;
 mod compacting;
 mod footprint;
-#[cfg(test)]
 mod mock;
 mod repr;
 mod retrieval;
@@ -44,8 +43,7 @@ pub use self::budget_aware::{BudgetAwareMemory, BudgetAwareMemoryOptions};
 pub use self::compacting::{CompactingMemory, CompactingMemoryOptions};
 pub(crate) use self::footprint::measured;
 pub use self::footprint::{TurnFootprint, current_turn_footprint};
-#[cfg(test)]
-pub(crate) use self::mock::{MockMemoryProvider, MockMemoryProviderOptions};
+pub use self::mock::{MockMemoryProvider, MockMemoryProviderOptions};
 pub use self::retrieval::{RetrievalMemory, RetrievalMemoryOptions};
 pub use self::sliding_window::{SlidingWindowMemory, SlidingWindowMemoryOptions};
 pub use self::summarizing::{SummarizingMemory, SummarizingMemoryOptions};

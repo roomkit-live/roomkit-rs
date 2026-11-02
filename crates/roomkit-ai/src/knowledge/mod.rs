@@ -14,10 +14,8 @@ use std::pin::Pin;
 use roomkit::ChannelError;
 use roomkit::model::{Metadata, RoomId};
 
-#[cfg(test)]
 mod mock;
-#[cfg(test)]
-pub(crate) use self::mock::MockKnowledgeSource;
+pub use self::mock::{MockKnowledgeSource, MockKnowledgeSourceOptions};
 
 /// One result of a knowledge source's search: Python's
 /// `KnowledgeResult(content, score=0.0, source="", metadata={})`.

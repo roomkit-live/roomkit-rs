@@ -10,7 +10,7 @@ use roomkit::model::{
 };
 
 use super::*;
-use crate::knowledge::MockKnowledgeSource;
+use crate::knowledge::{MockKnowledgeSource, MockKnowledgeSourceOptions};
 use crate::memory::testing::{context, event, room};
 use crate::memory::{
     MockMemoryProvider, MockMemoryProviderOptions, SlidingWindowMemory, SlidingWindowMemoryOptions,
@@ -53,7 +53,9 @@ fn inner(events: Vec<RoomEvent>) -> Arc<MockMemoryProvider> {
 }
 
 fn source(results: Vec<KnowledgeResult>) -> Arc<MockKnowledgeSource> {
-    Arc::new(MockKnowledgeSource::new(results))
+    Arc::new(MockKnowledgeSource::new(MockKnowledgeSourceOptions {
+        results,
+    }))
 }
 
 fn memory(
