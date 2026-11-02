@@ -16,7 +16,7 @@ use super::options::{
 };
 use crate::error::RoomKitError;
 use crate::turn::{TurnHost, turn_in_scope};
-use crate::turns::{ExecutorInputs, InputSettler, TurnError};
+use crate::turns::{ExecutorInputs, InputSettler};
 
 /// The reason a request a hook blocked reads (RFC §9.3).
 const DENIED: &str = "Denied by ON_USER_INPUT_REQUIRED hook";
@@ -139,7 +139,7 @@ impl HumanInputHandler {
     ///
     /// # Errors
     ///
-    /// Python's `RuntimeError` once the handler closed.
+    /// [`RoomKitError::Runtime`] once the handler closed.
     #[doc(hidden)]
     pub fn register(&self, channel_id: &str) -> Result<u64, RoomKitError> {
         let mut state = self.state();
@@ -233,7 +233,7 @@ impl HumanInputHandler {
     ///
     /// # Errors
     ///
-    /// Python's `RuntimeError` once the handler, or the scope of
+    /// [`RoomKitError::Runtime`] once the handler, or the scope of
     /// `options.channel_id`, closed.
     #[expect(
         clippy::unused_async,
@@ -402,7 +402,7 @@ impl HumanInputHandler {
     /// [`RoomKitError::Timeout`] when the bound passes first, or a retained
     /// request had timed out; [`RoomKitError::HumanInputRejected`] for a
     /// request rejected, by a person or an `ON_USER_INPUT_REQUIRED` hook;
-    /// Python's `RuntimeError` for one the handler gave up before an
+    /// [`RoomKitError::Runtime`] for one the handler gave up before an
     /// answer (its close, a release); [`RoomKitError::Value`] for an id
     /// never seen, or evicted from the retention.
     pub async fn wait(
@@ -680,11 +680,9 @@ fn outcome(record: &PendingInput, withdrawn: bool) -> Result<String, RoomKitErro
     }
 }
 
-/// Python's `RuntimeError`, under its class's name as the turn's host
-/// refuses a verb after its turn, until the kit has a variant of its own
-/// for it (HITL d81d6136).
+/// Python's `RuntimeError`.
 fn runtime(message: String) -> RoomKitError {
-    TurnError::new("RuntimeError", message).into_kit_error()
+    RoomKitError::Runtime(message)
 }
 
 /// A wait dropped before its outcome releases its request: nobody waits for

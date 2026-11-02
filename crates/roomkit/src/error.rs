@@ -273,6 +273,13 @@ pub enum RoomKitError {
     /// RFC §9.3). The human-input tool reads it as a refusal.
     #[error("{0}")]
     HumanInputRejected(String),
+    /// Python's builtin `RuntimeError`: a call the kit's state refuses, a
+    /// tool set up twice on one agent
+    /// ([`setup_background`](crate::RoomKit::setup_background)), a verb a
+    /// turn's host makes after its turn that needs it, a human-input request
+    /// its handler gave up.
+    #[error("{0}")]
+    Runtime(String),
 }
 
 impl RoomKitError {
@@ -325,6 +332,7 @@ impl RoomKitError {
             Self::RemoteTurn { kind, .. } => remote_class_name(kind),
             Self::Internal(_) => "AssertionError".to_owned(),
             Self::Timeout => "TimeoutError".to_owned(),
+            Self::Runtime(_) => "RuntimeError".to_owned(),
             Self::Store(_) => turns::CHANNEL_ERROR.to_owned(),
             Self::RoomNotFound(_)
             | Self::RoomAlreadyExists(_)

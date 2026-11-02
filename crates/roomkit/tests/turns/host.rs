@@ -319,8 +319,8 @@ async fn a_verb_that_needs_its_turn_is_refused_after_it() {
                         )
                         .await;
                     drop(done.send(match delegated {
-                        Err(RoomKitError::RemoteTurn { kind, message, .. }) => {
-                            format!("{kind}: {}", message.contains("needs a turn"))
+                        Err(RoomKitError::Runtime(message)) => {
+                            format!("RuntimeError: {}", message.contains("needs a turn"))
                         }
                         other => format!("{other:?}"),
                     }));

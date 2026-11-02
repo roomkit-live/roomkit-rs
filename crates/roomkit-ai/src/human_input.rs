@@ -209,6 +209,8 @@ impl HumanInputToolHandler {
         }
         let kind = if let RoomKitError::RemoteTurn { kind, .. } = error {
             kind.clone()
+        } else if matches!(error, RoomKitError::Runtime(_)) {
+            "RuntimeError".to_owned()
         } else {
             "RoomKitError".to_owned()
         };

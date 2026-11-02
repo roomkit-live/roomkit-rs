@@ -317,7 +317,7 @@ impl TurnHost {
     ///
     /// [`RoomKitError::Value`] for another room than the turn's, or an
     /// option the verb does not carry; the delegation's refusal otherwise;
-    /// after the turn, the verb needs it: a `RuntimeError`.
+    /// after the turn, the verb needs it: [`RoomKitError::Runtime`].
     pub async fn delegate(
         &self,
         room_id: &RoomId,
@@ -356,7 +356,7 @@ impl TurnHost {
     /// # Errors
     ///
     /// A link's failure as [`send_event`](Self::send_event)'s; after the
-    /// turn, the verb needs it: a `RuntimeError`.
+    /// turn, the verb needs it: [`RoomKitError::Runtime`].
     pub async fn wait_task(
         &self,
         task_id: &str,
@@ -387,7 +387,7 @@ impl TurnHost {
     /// # Errors
     ///
     /// A link's failure as [`send_event`](Self::send_event)'s; after the
-    /// turn, the verb needs it: a `RuntimeError`.
+    /// turn, the verb needs it: [`RoomKitError::Runtime`].
     pub async fn room_tasks(&self) -> Result<Vec<Metadata>, RoomKitError> {
         let lines = self.verb(ROOM_TASKS, &RoomTasks::default()).await?;
         decoded(lines)
@@ -426,7 +426,7 @@ impl TurnHost {
     /// Sends `verb` with `arguments` to the room's owner, at least as deep
     /// as the current work: its result as data. After the turn, a verb
     /// that needs it is refused before it is sent, as Python's host refuses
-    /// it (`RuntimeError`).
+    /// it ([`RoomKitError::Runtime`], its `RuntimeError`).
     async fn verb<T: serde::Serialize>(
         &self,
         verb: &str,
@@ -439,7 +439,7 @@ impl TurnHost {
                 "{verb} needs a turn: after its turn ended, a host sends {} only (RFC §10.6.5)",
                 sent.join(", ")
             );
-            return Err(TurnError::new("RuntimeError", message).into_kit_error());
+            return Err(RoomKitError::Runtime(message));
         }
         let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
         let Ok(Value::Object(arguments)) = serde_json::to_value(arguments) else {

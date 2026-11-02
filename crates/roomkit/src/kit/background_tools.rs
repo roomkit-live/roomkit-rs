@@ -91,7 +91,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// [`RoomKitError::Value`] for an unknown hand-back;
     /// [`RoomKitError::ChannelNotRegistered`] for an agent the kit does not
-    /// hold; the refusal of a tool already set up on the agent.
+    /// hold; [`RoomKitError::Runtime`] for a tool already set up on the
+    /// agent.
     pub fn setup_background(
         &self,
         agent: &ChannelId,
@@ -128,7 +129,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// # Errors
     ///
     /// [`RoomKitError::ChannelNotRegistered`] for an agent the kit does not
-    /// hold; the refusal of tools already set up on the agent;
+    /// hold; [`RoomKitError::Runtime`] for tools already set up on the agent;
     /// [`RoomKitError::Value`] for a name the owner serves the agent
     /// already, neither set up.
     pub fn setup_task_tools(&self, agent: &ChannelId) -> Result<(), RoomKitError> {
@@ -187,12 +188,12 @@ impl<S: ConversationStore> RoomKit<S> {
 }
 
 /// The refusal of a setup made twice on one agent: Python's
-/// `RuntimeError`, under its class's name as the turn's host refuses a verb
-/// after its turn, until the kit has a variant of its own for it (HITL
-/// d81d6136).
+/// `RuntimeError`.
 fn already_set_up(setup: &str, agent: &ChannelId) -> RoomKitError {
-    let message = format!("{setup}() already called for channel {:?}", agent.as_str());
-    crate::turns::TurnError::new("RuntimeError", message).into_kit_error()
+    RoomKitError::Runtime(format!(
+        "{setup}() already called for channel {:?}",
+        agent.as_str()
+    ))
 }
 
 /// What serves a tool with `answer`, the kit and the call to its text.
@@ -547,14 +548,10 @@ mod tests {
         assert_eq!(
             (
                 first.is_ok(),
-                again.map_err(|error| error.class_name()),
+                again.map_err(|error| matches!(error, RoomKitError::Runtime(_))),
                 declared
             ),
-            (
-                true,
-                Err("RuntimeError".to_owned()),
-                vec![json!(BACKGROUND_TOOL)]
-            )
+            (true, Err(true), vec![json!(BACKGROUND_TOOL)])
         );
     }
 

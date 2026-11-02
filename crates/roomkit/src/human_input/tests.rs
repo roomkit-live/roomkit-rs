@@ -299,6 +299,10 @@ async fn a_release_gives_an_unanswered_request_up_once() {
     assert!(handler.release(&id));
     let given_up = waiting.await.unwrap().unwrap_err();
     assert_eq!(given_up.to_string(), "Released before an answer arrived");
+    assert_eq!(
+        given_up,
+        RoomKitError::Runtime("Released before an answer arrived".to_owned())
+    );
     assert_eq!(given_up.class_name(), "RuntimeError");
     assert!(!handler.release(&id));
     assert!(!handler.release("nope"));

@@ -26,6 +26,9 @@ const KIT_ERROR: &str = "RoomKitError";
 /// The kind a builtin `ValueError` crosses as.
 const VALUE_ERROR: &str = "ValueError";
 
+/// Python's builtin `RuntimeError`, which crosses as itself, as `ValueError`.
+const RUNTIME_ERROR: &str = "RuntimeError";
+
 /// The attribute that names a kit error's variant.
 const VARIANT: &str = "variant";
 
@@ -299,6 +302,9 @@ pub(crate) fn rebuild_kit_error(error: &WireError) -> RoomKitError {
     if error.kind == VALUE_ERROR {
         return RoomKitError::Value(error.message.clone());
     }
+    if error.kind == RUNTIME_ERROR {
+        return RoomKitError::Runtime(error.message.clone());
+    }
     if is_link_reason(&error.kind) {
         return TurnError::new(error.kind.clone(), error.message.clone()).into_kit_error();
     }
@@ -331,6 +337,7 @@ fn rebuilt_variant(error: &WireError) -> Option<RoomKitError> {
             RoomKitError::RoomNotFound(RoomId::new(id).ok()?)
         }
         "Value" => RoomKitError::Value(error.message.clone()),
+        "Runtime" => RoomKitError::Runtime(error.message.clone()),
         _ => return None,
     })
 }
@@ -383,6 +390,7 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::TurnLink { .. } => "TurnLink",
         RoomKitError::Internal(_) => "Internal",
         RoomKitError::HumanInputRejected(_) => "HumanInputRejected",
+        RoomKitError::Runtime(_) => "Runtime",
     };
     (variant, fields)
 }
@@ -467,6 +475,29 @@ mod tests {
                 "the provider failed",
                 vec!["connection refused"]
             )
+        );
+    }
+
+    /// RFC §10.6.8, as Python's codec rebuilds a builtin as itself
+    /// (`turns/_error_codec.py` `_REBUILT_PACKAGES`): a `RuntimeError`
+    /// crossing comes back as the kit's `Runtime`, and the kit's `Runtime`
+    /// crosses and comes back as itself.
+    #[test]
+    fn a_runtime_error_comes_back_as_itself() {
+        let crossed = one(
+            "RuntimeError",
+            "setup_background() already called".to_owned(),
+        );
+        let sent = || RoomKitError::Runtime("needs a turn".to_owned());
+        assert_eq!(
+            [
+                rebuild_kit_error(&crossed),
+                rebuild_kit_error(&kit_error(&sent()))
+            ],
+            [
+                RoomKitError::Runtime("setup_background() already called".to_owned()),
+                sent(),
+            ]
         );
     }
 
