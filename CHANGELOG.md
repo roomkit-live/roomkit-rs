@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A delegated agent whose buffered output says it did not answer leaves
+  its task failed with nothing kept, as Python's `_buffered_outcome`
+  (RFC §23.3 step 6, RMK-1201): its reply is neither stored nor taken as
+  the task's output, its record names no turn, where the task completed
+  with the reply's text.
 - A keyed delivery's section holds the room lock, as Python's (RFC §22.1,
   RMK-1207): its key's lookup, its transport's check, its transport's
   parse and its commit run under the lock as one section, whatever work

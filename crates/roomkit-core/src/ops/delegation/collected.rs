@@ -69,7 +69,6 @@ impl Collected {
                     ..
                 } = *output;
                 answer.responded = responded;
-                answer.record = response_metadata;
                 if let Some(failed) = &error {
                     self.failed(&binding, failed.clone());
                 }
@@ -77,7 +76,13 @@ impl Collected {
                 self.tasks.extend(tasks);
                 self.observations.extend(observations);
                 self.keep_metadata(&binding.channel_id, metadata_updates);
-                self.buffered.push((slot, binding, response_events));
+                // An output that did not answer keeps no rows and no end, as
+                // Python's `_buffered_outcome` keeps nothing of it (RFC
+                // §23.3 step 6).
+                if responded {
+                    answer.record = response_metadata;
+                    self.buffered.push((slot, binding, response_events));
+                }
             }
             Some(Outcome::Channel(ChannelOutcome::Streamed(output))) => {
                 answer.responded = true;

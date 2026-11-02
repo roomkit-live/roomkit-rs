@@ -1086,3 +1086,99 @@ async fn a_hand_back_that_reaches_nobody_is_logged_with_its_status_and_reason() 
     assert!(logged, "{:?}", logs.0.lock().unwrap());
     kit.close().await.unwrap();
 }
+
+/// An agent `worker` whose output says it did not answer, though it holds
+/// a reply and a record naming its end.
+struct Unanswering;
+
+impl roomkit::Channel for Unanswering {
+    fn channel_id(&self) -> ChannelId {
+        channel("worker")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn handle_inbound(
+        &self,
+        _message: roomkit::model::InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, roomkit::ChannelError>> + Send {
+        ready(Err("an agent is sent no message".into()))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, roomkit::ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, roomkit::ChannelError>> + Send {
+        let source = roomkit::model::EventSource {
+            direction: roomkit::model::EventDirection::Outbound,
+            ..roomkit::model::EventSource::new(channel("worker"), ChannelType::AI)
+        };
+        let reply = RoomEvent::new(
+            event.room_id.clone(),
+            source,
+            roomkit::model::TextContent::new("Found it."),
+        );
+        let mut output = ChannelOutput {
+            responded: false,
+            response_events: vec![reply],
+            ..ChannelOutput::empty()
+        };
+        output
+            .response_metadata
+            .insert("loop_end_reason".to_owned(), serde_json::json!("completed"));
+        ready(Ok(output))
+    }
+}
+
+// Python: core/mixins/_child_execution.py _buffered_outcome: an output that
+// did not answer keeps nothing, its reply and its record unread, and the
+// task, with no answer, fails with no error and names no turn.
+#[tokio::test]
+async fn a_worker_that_did_not_answer_fails_its_task_with_nothing_kept() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(Unanswering).unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    let options = DelegateOptions {
+        wait: true,
+        ..DelegateOptions::default()
+    };
+
+    let task = kit
+        .delegate(&room(), &channel("worker"), "Find it.", options)
+        .await
+        .unwrap();
+
+    let result = task.result().unwrap();
+    assert_eq!(
+        (
+            result.status,
+            result.output,
+            result.error,
+            result.metadata.get("turns").cloned()
+        ),
+        (TaskStatus::Failed, None, None, None)
+    );
+    kit.close().await.unwrap();
+}
