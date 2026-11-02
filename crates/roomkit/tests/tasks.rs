@@ -106,6 +106,7 @@ impl Channel for Agent {
 }
 
 // Python: tests/tasks/test_cancelled_delegation.py::test_closing_the_kit_hands_nothing_back
+// Python: tests/tasks/test_delegation_result_delivery.py::test_a_closing_framework_hands_nothing_back
 #[tokio::test]
 async fn closing_the_kit_ends_a_background_task_cancelled_and_hands_nothing_back() {
     let kit = RoomKit::new(RoomKitOptions::default());

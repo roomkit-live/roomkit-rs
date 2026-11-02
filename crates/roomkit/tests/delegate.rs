@@ -8,25 +8,30 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::future::{pending, ready};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
+use futures_core::Stream;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Observation,
     Participant, ParticipantId, Room, RoomEvent, RoomId, Task,
 };
-use roomkit::model::{ChannelOutput, EventContent, RoomContext, TaskStatus};
+use roomkit::model::{
+    ChannelOutput, EventContent, EventType, RoomContext, TaskStatus, ToolCallContent,
+};
 use roomkit::tasks::{DelegatedTask, SubmitOptions, TaskRunner, WaitOptions};
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
-    ConversationStore, CreateRoomOptions, DelegateOptions, HookExecution, HookOptions, HookTrigger,
-    InMemoryStore, RoomKit, RoomKitError, RoomKitOptions, StartTaskOptions, StoreError,
-    StoreFailure, store,
+    CancelTaskOptions, ConversationStore, CreateRoomOptions, DelegateOptions, HookExecution,
+    HookOptions, HookTrigger, InMemoryStore, ResponseItem, RoomKit, RoomKitError, RoomKitOptions,
+    StartTaskOptions, StoreError, StoreFailure, current_turn_host, store,
 };
+use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::Notify;
 
 /// How long a wait that should end may take before the test fails it.
@@ -460,11 +465,15 @@ async fn a_delegation_cut_once_the_kit_closed_still_ends_its_task() {
 }
 
 /// An in-memory store recording which of its writes stored each event, by
-/// the event's id.
+/// the event's id; its commit of the text `held` names, once, tells
+/// `entered`, then waits for `go`.
 #[derive(Debug, Default)]
 struct RecordsEventWrites {
     store: InMemoryStore,
     writes: Mutex<Vec<(EventId, &'static str)>>,
+    held: Mutex<Option<&'static str>>,
+    entered: Notify,
+    go: Notify,
 }
 
 impl RecordsEventWrites {
@@ -488,6 +497,15 @@ impl ConversationStore for RecordsEventWrites {
         options: store::CommitEventOptions,
     ) -> Result<RoomEvent, StoreError> {
         self.note(&event, "commit_event");
+        let holds = {
+            let mut held = self.held.lock().unwrap();
+            let text = text_of(&event.content);
+            held.is_some_and(|held| held == text) && held.take().is_some()
+        };
+        if holds {
+            self.entered.notify_one();
+            self.go.notified().await;
+        }
         self.store.commit_event(room_id, event, options).await
     }
 
@@ -630,6 +648,157 @@ async fn a_background_task_commits_each_event_of_its_child_room() {
             vec!["Find it.", "Found it."],
             BTreeSet::from([vec!["commit_event"]]),
             BTreeSet::from(["commit_event"])
+        )
+    );
+    kit.close().await.unwrap();
+}
+
+/// The agent `looker`, whose turn answers with a stream writing text, the
+/// start of a call `search` and text again; `closed` says its stream was
+/// dropped.
+#[derive(Clone, Default)]
+struct Looker {
+    closed: Arc<AtomicBool>,
+}
+
+/// A `Looker`'s response.
+struct Looking {
+    items: VecDeque<ResponseItem>,
+    closed: Arc<AtomicBool>,
+}
+
+impl Stream for Looking {
+    type Item = Result<ResponseItem, roomkit::ChannelError>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _context: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.get_mut().items.pop_front().map(Ok))
+    }
+}
+
+impl Drop for Looking {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+impl roomkit::Channel for Looker {
+    fn channel_id(&self) -> ChannelId {
+        channel("looker")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> roomkit::model::ChannelCategory {
+        roomkit::model::ChannelCategory::Intelligence
+    }
+
+    fn handle_inbound(
+        &self,
+        _message: roomkit::model::InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, roomkit::ChannelError>> + Send {
+        ready(Err("an agent is sent no message".into()))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, roomkit::ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, roomkit::ChannelError>> + Send {
+        let output = if event.source.channel_id == self.channel_id() {
+            ChannelOutput::empty()
+        } else {
+            let response = Looking {
+                items: VecDeque::from([
+                    ResponseItem::Text("Looking. ".to_owned()),
+                    ResponseItem::ToolCallStart(ToolCallContent::new("search", "t1")),
+                    ResponseItem::Text("never read".to_owned()),
+                ]),
+                closed: Arc::clone(&self.closed),
+            };
+            current_turn_host()
+                .unwrap()
+                .respond_with_stream(Box::pin(response))
+        };
+        ready(Ok(output))
+    }
+}
+
+// Python: tests/tasks/test_child_room_trace.py::TestAChildTraceCutShort::test_a_delegation_cancelled_mid_write_closes_its_response
+// RFC §12.2 step 13s: nothing else reads a delegated response, so a task
+// cancelled while its trace stores a row closes it, the rows it began kept
+// and its open call ended.
+#[tokio::test]
+#[ignore = "RMK-1208: a cancelled task's work is aborted mid-commit, its trace rows dropped"]
+async fn a_task_cancelled_while_its_trace_stores_a_row_closes_its_response() {
+    let store = RecordsEventWrites {
+        held: Mutex::new(Some("Looking. ")),
+        ..RecordsEventWrites::default()
+    };
+    let kit = kit_with(store).await;
+    let looker = Looker::default();
+    kit.register_channel(looker.clone()).unwrap();
+    let task = kit
+        .delegate(
+            &room(),
+            &channel("looker"),
+            "Find it.",
+            DelegateOptions::default(),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(BOUND, kit.store().entered.notified())
+        .await
+        .unwrap();
+
+    let cancelling = {
+        let (kit, task_id) = (kit.clone(), task.id.clone());
+        tokio::spawn(async move {
+            kit.cancel_task(&task_id, CancelTaskOptions::default())
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    kit.store().go.notify_one();
+    let cancelled = tokio::time::timeout(BOUND, cancelling)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let rows: Vec<EventType> = kit
+        .store()
+        .list_events(&task.child_room_id, store::ListEventsOptions::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.source.channel_id == channel("looker"))
+        .map(|event| event.r#type)
+        .collect();
+    assert_eq!(
+        (cancelled, looker.closed.load(Ordering::SeqCst), rows),
+        (
+            true,
+            true,
+            vec![
+                EventType::Message,
+                EventType::ToolCallStart,
+                EventType::ToolCallEnd
+            ]
         )
     );
     kit.close().await.unwrap();
