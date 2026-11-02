@@ -18,10 +18,11 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, EventContent, IdentityId, RoomEvent, RoomId, VerificationPolicy,
-    VerificationRequest, VerificationStatus,
+    ChannelId, EventContent, EventId, IdentityId, ObservationId, RoomEvent, RoomId, Timestamp,
+    VerificationPolicy, VerificationRequest, VerificationStatus,
 };
 use roomkit::store::GetVerificationOptions;
+use roomkit::testing::{Environment, SequentialEnvironment, kit_with_environment};
 use roomkit::{
     CompleteVerificationOptions, ConversationStore, CreateRoomOptions, HookExecution, HookOptions,
     HookTrigger, InMemoryStore, RecordFailedAttemptOptions, RequestVerificationOptions,
@@ -63,6 +64,12 @@ async fn kit_on(store: Arc<InMemoryStore>, policy: VerificationPolicy) -> (RoomK
         };
         kit.create_room(create).await.unwrap();
     }
+    let fired = record_ends(&kit);
+    (kit, fired)
+}
+
+/// Records the verification hooks `kit` fires.
+fn record_ends(kit: &RoomKit) -> Fired {
     let fired: Fired = Arc::default();
     for trigger in [
         HookTrigger::OnVerificationCompleted,
@@ -88,11 +95,68 @@ async fn kit_on(store: Arc<InMemoryStore>, policy: VerificationPolicy) -> (RoomK
         )
         .unwrap();
     }
-    (kit, fired)
+    fired
 }
 
 async fn kit(policy: VerificationPolicy) -> (RoomKit, Fired) {
     kit_on(Arc::new(InMemoryStore::new()), policy).await
+}
+
+/// The kit's clock on tokio's: a test run on paused time (`start_paused`)
+/// reads its instants as its timers see them, so a lifetime's end comes at
+/// its instant whatever the machine's load, a secret's hash included (time
+/// does not advance while it runs on the blocking pool).
+#[derive(Debug)]
+struct PausedClock {
+    start: tokio::time::Instant,
+    ids: SequentialEnvironment,
+}
+
+impl PausedClock {
+    fn new() -> Self {
+        Self {
+            start: tokio::time::Instant::now(),
+            ids: SequentialEnvironment::new(
+                Timestamp::from_unix_millis(1_800_000_000_000).unwrap(),
+            ),
+        }
+    }
+}
+
+impl Environment for PausedClock {
+    fn now(&self) -> Timestamp {
+        let elapsed = tokio::time::Instant::now().duration_since(self.start);
+        self.ids.now().checked_add(elapsed).unwrap()
+    }
+
+    fn new_event_id(&self) -> EventId {
+        self.ids.new_event_id()
+    }
+
+    fn new_observation_id(&self) -> ObservationId {
+        self.ids.new_observation_id()
+    }
+
+    fn new_room_id(&self) -> RoomId {
+        self.ids.new_room_id()
+    }
+}
+
+/// A kit with `policy` on [`PausedClock`], its room `r1` created, recording
+/// the verification hooks it fires.
+async fn paused_kit(policy: VerificationPolicy) -> (RoomKit, Fired) {
+    let options = RoomKitOptions {
+        verification_policy: Some(policy),
+        ..RoomKitOptions::default()
+    };
+    let kit = kit_with_environment(options, PausedClock::new());
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    let fired = record_ends(&kit);
+    (kit, fired)
 }
 
 fn policy() -> VerificationPolicy {
@@ -239,9 +303,9 @@ async fn a_revocation_fires_the_end_once_and_stops_the_timer() {
 }
 
 // Python: tests/test_verification_lifecycle.py::test_a_verification_that_outlived_an_unanswered_request_still_ends
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_verification_that_outlived_an_unanswered_request_still_ends() {
-    let (kit, fired) = kit(VerificationPolicy {
+    let (kit, fired) = paused_kit(VerificationPolicy {
         ttl: Duration::from_millis(800),
         request_ttl: Duration::from_millis(250),
         ..policy()
@@ -324,9 +388,9 @@ async fn a_closed_kit_ends_nothing_afterwards() {
 }
 
 // Python: tests/test_verification_lifecycle.py::test_a_completed_request_ends_nothing_at_its_expiry
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_completed_request_ends_nothing_at_its_expiry() {
-    let (kit, fired) = kit(VerificationPolicy {
+    let (kit, fired) = paused_kit(VerificationPolicy {
         ttl: Duration::from_secs(5),
         request_ttl: Duration::from_millis(250),
         ..policy()
