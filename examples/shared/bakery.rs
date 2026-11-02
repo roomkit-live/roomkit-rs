@@ -11,9 +11,10 @@ use serde_json::{Value, json};
 /// What the agent is told before each conversation.
 pub const SYSTEM_PROMPT: &str = "You answer the customers of a bakery, in one short sentence.";
 
-/// The one order the lookup finds, as its result says it.
+/// The one order the lookup finds, as its result says it: the model reads
+/// it as Python's `json.dumps` writes it.
 pub const ORDER_42: &str =
-    r#"{"items":"two loaves","order":"42","pickup":"5 pm","status":"ready"}"#;
+    r#"{"items": "two loaves", "order": "42", "pickup": "5 pm", "status": "ready"}"#;
 
 /// The bakery's tool: `lookup_order`, finding an order by its number (RFC
 /// §6.4, §21.4), a tool that serves its own calls. A number it does not

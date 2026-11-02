@@ -315,7 +315,7 @@ fn check_each_call(
         "lookup_order is served with the order number the hook rewrote, and the model reads its result",
         outcome("lookup_order") == Some(ToolCallOutcome::Served)
             && end("lookup_order").is_some_and(|row| row.arguments.get("order") == Some(&json!("42")))
-            && read("lookup_order") == r#"{"order":"42","shipped":"Monday","status":"shipped"}"#,
+            && read("lookup_order") == r#"{"order": "42", "shipped": "Monday", "status": "shipped"}"#,
     );
     checks.expect(
         "delete_customer is refused by the policy, and never reaches the approval",
