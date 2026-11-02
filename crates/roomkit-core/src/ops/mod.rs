@@ -61,7 +61,7 @@ pub use delegation::{DelegatedAnswer, DelegatedTurn, DelegationError};
 #[doc(hidden)]
 pub use environment::SystemEnvironment;
 pub use environment::{Environment, SequentialEnvironment};
-pub use events::{CommitRecord, DeleteEvent, MutationError, UpdateEvent};
+pub use events::{CommitRecord, DeleteEvent, MutationError, RestoreHeld, Restored, UpdateEvent};
 pub use framework_events::{ChainDepthData, FrameworkEvent, RefusedOperation, TransitionReason};
 pub use inbound::{
     Inbound, InboundError, InboundResult, InboundTarget, MessageAnswers, TurnResponses,

@@ -134,6 +134,9 @@ pub struct EventUpdates {
     pub source: Option<EventSource>,
     /// The event's new metadata, replacing the stored map whole.
     pub metadata: Option<Metadata>,
+    /// The event's new visibility: what a held message's release restores
+    /// (RFC §11.7.6), the host's `update_event` never naming one.
+    pub visibility: Option<Visibility>,
 }
 
 impl EventUpdates {
@@ -152,6 +155,9 @@ impl EventUpdates {
         }
         if let Some(metadata) = &self.metadata {
             event.metadata.clone_from(metadata);
+        }
+        if let Some(visibility) = &self.visibility {
+            event.visibility.clone_from(visibility);
         }
     }
 }

@@ -21,6 +21,7 @@
 //! §13.5): the driver grants it within the execution context that holds it.
 
 mod change;
+mod restore;
 mod section;
 
 use std::sync::Arc;
@@ -28,6 +29,8 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use self::change::{Commit, Delete, DirectWork, Update};
+use self::restore::Restore;
+pub use self::restore::Restored;
 use self::section::EventSection;
 use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
 use super::{Environment, KitConfig};
@@ -199,6 +202,56 @@ impl Operation for DeleteEvent {
         self.section.poll(environment, |removed| {
             removed.into_iter().map(|event| event.id).collect()
         })
+    }
+
+    fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
+        self.section.complete(id, outcome)
+    }
+}
+
+/// Releases held messages (RFC §11.7.6): under the room's lock, each of
+/// the events a completed request releases that is still held, read
+/// again, gets back the visibility its hold mark recorded, `all` when it
+/// recorded none, and loses its mark; one no longer held (released
+/// already, or changed meanwhile), or of another room, is skipped. Once
+/// the lock is released, the room is read again and `ON_EVENT_UPDATED`
+/// fires for each restored, with the event as it now stands (RFC §10.3).
+/// Its output is the events restored, and those whose delivery was
+/// cancelled while they were held. A room that does not exist restores
+/// nothing. Python's `_restore_held`, with the hooks of `_release_held`.
+#[derive(Debug)]
+pub struct RestoreHeld {
+    section: EventSection<Restore>,
+}
+
+impl RestoreHeld {
+    /// The release of `event_ids` in `room_id`, made from outside the
+    /// room's work: its hooks' bodies run on a budget of their own.
+    pub fn new(config: Arc<KitConfig>, room_id: RoomId, event_ids: Vec<EventId>) -> Self {
+        let work = DirectWork::outside(&config);
+        let change = Restore::new(event_ids, work);
+        Self {
+            section: EventSection::new(config, room_id, None, change),
+        }
+    }
+
+    /// The same release, made in the room's work `draw` names, its hooks'
+    /// calls at least `floor` deep: their bodies draw on that work's budget
+    /// (RFC §9.5.1, §10.3). The release itself draws nothing, made from a
+    /// hook's body too: it is the framework's change, as the Python
+    /// implementation's `_release_held` makes it.
+    #[must_use]
+    pub fn made_in(mut self, draw: Draw, floor: u32) -> Self {
+        self.section.change_mut().work = DirectWork { draw, floor };
+        self
+    }
+}
+
+impl Operation for RestoreHeld {
+    type Output = Result<Restored, MutationError>;
+
+    fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
+        self.section.poll(environment, |restored| restored)
     }
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {

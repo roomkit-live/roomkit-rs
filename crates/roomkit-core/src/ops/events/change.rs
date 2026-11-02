@@ -109,7 +109,7 @@ impl DirectWork {
 
     /// Fires `trigger` for `payload` with `context`, the triggers' bodies
     /// the work of the change's (RFC §10.3).
-    fn fire(
+    pub(super) fn fire(
         &self,
         cx: &mut Cx<'_>,
         trigger: HookTrigger,

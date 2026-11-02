@@ -5,6 +5,7 @@
 //! `core/mixins/verification.py`.
 
 mod digits;
+pub mod release;
 
 use serde_json::json;
 

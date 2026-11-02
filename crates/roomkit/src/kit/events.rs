@@ -55,6 +55,7 @@ impl<S: ConversationStore> RoomKit<S> {
             content: options.content,
             source: options.source,
             metadata: options.metadata,
+            visibility: None,
         };
         self.update_stored(room_id, event_id, updates, options.organization_id)
             .await
