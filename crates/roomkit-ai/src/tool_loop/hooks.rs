@@ -40,6 +40,10 @@ pub(crate) struct Adopted {
     pub(crate) metadata: Metadata,
     /// The tools withdrawn for the rest of the turn.
     pub(crate) withdrawn: BTreeSet<String>,
+    /// Where the turn's input is among the messages a round is asked on,
+    /// its notes included, as the hooks left it: what a compaction keeps
+    /// whole (RFC §6.4).
+    pub(crate) turn_input: Option<usize>,
 }
 
 /// The calls a round ran, as `AFTER_TOOL_ROUND` hands them: none when the

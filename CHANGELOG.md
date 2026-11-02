@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- An AI channel compacts its context once and replays the call when its
+  provider refuses it as too long for the model (RFC §6.4 "A turn
+  compacted", RMK-1225), as Python's: the error's `context_overflow`,
+  else its words (`is_context_overflow_message`); the history before the
+  turn's input, or the older half, is summarized into the user message
+  after it, a call never parted from its result, and the turn's later
+  rounds build on it. A context of four messages or fewer, or one with
+  nothing before its input, is not compacted: the turn fails, as it did.
 - `RoomKitOptions::media_resolver` and `RoomKitOptions::attached_media`,
   Python's `RoomKit(media_resolver=..., attached_media=...)` (RFC §6.4,
   RMK-1190): `MediaResolver` gives the bytes of a reference an author

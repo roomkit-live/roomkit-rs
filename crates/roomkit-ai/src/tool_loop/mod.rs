@@ -9,6 +9,8 @@
 //!
 //! - this module: the items and the loop's rounds;
 //! - `generation`: one generation read from its provider, and its calls;
+//! - `compaction`: a context the provider refused as too long, compacted
+//!   once and its call replayed (RFC §6.4 "A turn compacted");
 //! - `calls`: one call through its gate (RFC §21.1) and its tool, reported
 //!   to the kit's hooks (RFC §9.3).
 //!
@@ -20,6 +22,7 @@
 //! yet run.
 
 mod calls;
+mod compaction;
 mod footprint;
 mod generation;
 mod hooks;
@@ -180,6 +183,7 @@ impl<P: AiProvider> Loop<P> {
         let mut tool_rounds = 0;
         let mut prefix = String::new();
         let mut limits = Limits::starting(&self.bounds);
+        self.find_turn_input(&messages, system_prompt.clone());
         if steering.read(&mut messages, &mut system_prompt) {
             let ending = (&limits, &steering, &out);
             return self.end(LoopEndReason::Cancelled, 0, spent, ending).await;
@@ -191,11 +195,9 @@ impl<P: AiProvider> Loop<P> {
                     .end(LoopEndReason::Cancelled, tool_rounds, spent, ending)
                     .await;
             }
-            let context = AiContext {
-                tools: declared.clone(),
-                ..self.round_context(&messages, system_prompt.clone())
-            };
-            let read = Generation::read(&*self.provider, &context, &steering, &out, &prefix).await;
+            let asked = (declared.clone(), system_prompt.clone());
+            let reading = (&steering, &out, prefix.as_str());
+            let read = self.generate(&messages, asked, reading).await;
             let mut generation = match read {
                 Ok(generation) => generation,
                 Err(Failed { error, streamed }) => {
