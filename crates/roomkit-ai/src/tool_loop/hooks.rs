@@ -33,8 +33,9 @@ use crate::provider::{
 /// itself (RFC §6.4).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Adopted {
-    /// The messages the hooks gave, standing for the memory's and for the
-    /// conversation's first messages, as many as the second member says.
+    /// The messages the hooks gave, or a compaction made (RFC §6.4),
+    /// standing for the memory's and for the conversation's first
+    /// messages, as many as the second member says.
     pub(crate) messages: Option<(Vec<AiMessage>, usize)>,
     /// The provider data every round carries.
     pub(crate) metadata: Metadata,
