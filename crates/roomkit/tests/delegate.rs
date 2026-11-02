@@ -1101,8 +1101,10 @@ async fn a_hand_back_that_reaches_nobody_is_logged_with_its_status_and_reason() 
 }
 
 /// An agent `worker` whose output says it did not answer, though it holds
-/// a reply and a record naming its end.
-struct Unanswering;
+/// a reply and a record naming its end, `ended`.
+struct Unanswering {
+    ended: &'static str,
+}
 
 impl roomkit::Channel for Unanswering {
     fn channel_id(&self) -> ChannelId {
@@ -1156,7 +1158,7 @@ impl roomkit::Channel for Unanswering {
         };
         output
             .response_metadata
-            .insert("loop_end_reason".to_owned(), serde_json::json!("completed"));
+            .insert("loop_end_reason".to_owned(), serde_json::json!(self.ended));
         ready(Ok(output))
     }
 }
@@ -1168,37 +1170,39 @@ impl roomkit::Channel for Unanswering {
 // responder_turn_entries, RFC §23.3 step 6).
 #[tokio::test]
 async fn a_worker_that_did_not_answer_fails_its_task_with_nothing_kept() {
-    let kit = RoomKit::new(RoomKitOptions::default());
-    kit.register_channel(Unanswering).unwrap();
-    let create = CreateRoomOptions {
-        room_id: Some(room()),
-        ..CreateRoomOptions::default()
-    };
-    kit.create_room(create).await.unwrap();
-    let options = DelegateOptions {
-        wait: true,
-        ..DelegateOptions::default()
-    };
+    for ended in ["completed", "max_rounds"] {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        kit.register_channel(Unanswering { ended }).unwrap();
+        let create = CreateRoomOptions {
+            room_id: Some(room()),
+            ..CreateRoomOptions::default()
+        };
+        kit.create_room(create).await.unwrap();
+        let options = DelegateOptions {
+            wait: true,
+            ..DelegateOptions::default()
+        };
 
-    let task = kit
-        .delegate(&room(), &channel("worker"), "Find it.", options)
-        .await
-        .unwrap();
+        let task = kit
+            .delegate(&room(), &channel("worker"), "Find it.", options)
+            .await
+            .unwrap();
 
-    let result = task.result().unwrap();
-    assert_eq!(
-        (
-            result.status,
-            result.output,
-            result.error,
-            result.metadata.get("turns").cloned()
-        ),
-        (
-            TaskStatus::Failed,
-            None,
-            None,
-            Some(serde_json::json!({"worker": {"loop_end_reason": "completed"}}))
-        )
-    );
-    kit.close().await.unwrap();
+        let result = task.result().unwrap();
+        assert_eq!(
+            (
+                result.status,
+                result.output,
+                result.error,
+                result.metadata.get("turns").cloned()
+            ),
+            (
+                TaskStatus::Failed,
+                None,
+                None,
+                Some(serde_json::json!({"worker": {"loop_end_reason": ended}}))
+            )
+        );
+        kit.close().await.unwrap();
+    }
 }
