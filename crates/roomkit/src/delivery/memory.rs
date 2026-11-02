@@ -3,6 +3,8 @@
 //! with the process.
 
 use std::collections::{HashMap, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -16,7 +18,7 @@ use super::item::{DeliveryItem, DeliveryItemStatus, check_retry_delays, retry_de
 use super::outcome::DeliveryOutcomeStatus;
 use super::worker::{RunWorkerLoopOptions, run_for};
 use crate::error::RoomKitError;
-use crate::kit::RoomKit;
+use crate::kit::{RoomKit, WeakRoomKit};
 use crate::store::ConversationStore;
 use crate::tasks::{Marks, Unit};
 
@@ -71,13 +73,21 @@ struct Shared {
     /// for it.
     worker: tokio::sync::Mutex<Option<Worker>>,
     worker_id: String,
+    /// The start of a kit that started while the worker worked for another
+    /// kit: the worker hands itself on to it once its own kit is gone.
+    next: Mutex<Option<Restart>>,
 }
+
+/// A start a worker leaves for when its kit is gone.
+type Restart = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
 
 /// The worker `start` runs, whether the kit it works for still lives, and
 /// whether that kit's close spares it: the close was called from the
 /// worker's own work.
 struct Worker {
     task: JoinHandle<()>,
+    /// The kit it works for, by the address of its state.
+    kit: usize,
     kit_alive: Box<dyn Fn() -> bool + Send + Sync>,
     spared: Box<dyn Fn() -> bool + Send + Sync>,
 }
@@ -95,6 +105,10 @@ struct State {
     in_flight: HashMap<String, DeliveryItem>,
     delayed: HashMap<String, (DeliveryItem, JoinHandle<()>)>,
     dead_letter: VecDeque<DeliveryItem>,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl std::fmt::Debug for InMemoryDeliveryBackend {
@@ -134,6 +148,7 @@ impl InMemoryDeliveryBackend {
                 room: Notify::new(),
                 worker: tokio::sync::Mutex::new(None),
                 worker_id: worker_id.chars().take(12).collect(),
+                next: Mutex::new(None),
             }),
         }
     }
@@ -227,6 +242,21 @@ impl InMemoryDeliveryBackend {
         self.queue_again(&mut state, items);
         drop(state);
         self.shared.queued.notify_waiters();
+    }
+
+    /// Leaves the start of `kit` for the worker, once its own kit is gone.
+    fn start_next<S: ConversationStore>(&self, kit: WeakRoomKit<S>) {
+        let backend = self.clone();
+        let restart: Restart = Box::new(move || {
+            Box::pin(async move {
+                if let Some(kit) = kit.upgrade()
+                    && let Err(error) = DeliveryBackend::<S>::start(&backend, kit).await
+                {
+                    tracing::warn!(target: "roomkit::delivery", %error, "the delivery worker was not handed on");
+                }
+            })
+        });
+        *lock(&self.shared.next) = Some(restart);
     }
 
     /// Claims `item` for `worker_id`.
@@ -389,7 +419,13 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
     fn start(&self, kit: RoomKit<S>) -> Answer<'_, ()> {
         Box::pin(async move {
             let mut worker = self.shared.worker.lock().await;
-            if worker.as_ref().is_some_and(Worker::works) {
+            let starting = Arc::as_ptr(&kit.inner).addr();
+            if let Some(working) = worker.as_ref().filter(|worker| worker.works()) {
+                // Its kit may be held by the worker alone, for the batch it
+                // executes: this kit takes the worker on once it is gone.
+                if working.kit != starting {
+                    self.start_next(kit.downgrade());
+                }
                 return Ok(());
             }
             if let Some(stale) = worker.take() {
@@ -411,10 +447,17 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
             let (tasks, own) = (Arc::clone(&kit.inner.tasks), marks.clone());
             let kit = kit.downgrade();
             let watched = kit.clone();
+            let shared = Arc::clone(&self.shared);
+            *lock(&self.shared.next) = None;
             *worker = Some(Worker {
                 task: tokio::spawn(marks.scoped(async move {
                     run_for(backend, kit, &worker_id, options).await;
+                    // Its kit gone: a kit started meanwhile takes it on.
+                    if let Some(restart) = lock(&shared.next).take() {
+                        tokio::spawn(restart());
+                    }
                 })),
+                kit: starting,
                 kit_alive: Box::new(move || watched.alive()),
                 spared: Box::new(move || tasks.spares(&own)),
             });

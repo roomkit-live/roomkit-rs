@@ -28,6 +28,7 @@ use roomkit::{
     InMemoryDeliveryBackendOptions, InMemoryStore, NackOptions, RoomKit, RoomKitError,
     RoomKitOptions,
 };
+use tokio::sync::Notify;
 
 type Kit = RoomKit<InMemoryStore>;
 
@@ -610,6 +611,55 @@ async fn a_kit_sharing_a_backend_whose_kit_is_gone_starts_its_worker() {
 #[tokio::test(start_paused = true)]
 async fn an_item_claimed_as_the_kit_went_is_queued_again_uncounted() {
     assert!(a_kit_sharing_the_backend_of_a_gone_kit(true).await);
+}
+
+// Rust alone (RMK-1157, the light review's point 6): a kit that starts
+// while a gone kit's worker still executes a batch, holding that kit for
+// it, takes the worker on once the batch is over.
+#[tokio::test]
+async fn a_kit_started_while_a_gone_kit_s_worker_executes_takes_it_on() {
+    let backend = InMemoryDeliveryBackend::default();
+    let options = || RoomKitOptions {
+        delivery_backend: Some(Arc::new(backend.clone())),
+        ..RoomKitOptions::default()
+    };
+    let gone = kit_with_room(options()).await;
+    let (reached, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (held, freed) = (Arc::clone(&reached), Arc::clone(&release));
+    gone.hook(
+        HookTrigger::BeforeDeliver,
+        move |_event: RoomEvent, _context: RoomContext| {
+            let (held, freed) = (Arc::clone(&held), Arc::clone(&freed));
+            async move {
+                held.notify_one();
+                freed.notified().await;
+            }
+        },
+        HookOptions::default(),
+    )
+    .unwrap();
+    gone.start().await.unwrap();
+    gone.deliver(&room(), "held", DeliverOptions::default())
+        .await
+        .unwrap();
+    // Its worker executes the item, holding the kit, when the kit goes.
+    reached.notified().await;
+    drop(gone);
+    let kit = kit_with_room(options()).await;
+    kit.start().await.unwrap();
+    kit.deliver(&room(), "result", DeliverOptions::default())
+        .await
+        .unwrap();
+    release.notify_one();
+    let published = tokio::time::timeout(Duration::from_secs(5), async {
+        while published(&kit).await == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .is_ok();
+    kit.close().await.unwrap();
+    assert!(published, "the new kit's item was never executed");
 }
 
 // Rust alone: the kit holds its backend, whose worker holds the kit weakly,
