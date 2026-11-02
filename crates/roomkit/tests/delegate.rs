@@ -75,6 +75,9 @@ struct RoomReadsFail {
     entered: Notify,
     go: Notify,
     contexts_down: AtomicBool,
+    /// Set, a context of the room `r` reads it gone, its own read still
+    /// finding it.
+    context_gone: AtomicBool,
 }
 
 impl ConversationStore for RoomReadsFail {
@@ -89,6 +92,19 @@ impl ConversationStore for RoomReadsFail {
             )));
         }
         self.store.list_participants(room_id).await
+    }
+
+    async fn load_room_context(
+        &self,
+        room_id: &RoomId,
+    ) -> Result<(Option<Room>, Vec<ChannelBinding>, Vec<Participant>), StoreError> {
+        if *room_id == room() && self.context_gone.load(Ordering::SeqCst) {
+            return Ok((None, Vec::new(), Vec::new()));
+        }
+        let room = self.get_room(room_id).await?;
+        let bindings = self.list_bindings(room_id).await?;
+        let participants = self.list_participants(room_id).await?;
+        Ok((room, bindings, participants))
     }
 
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
@@ -284,6 +300,46 @@ async fn a_task_failing_before_it_is_announced_fires_no_completion() {
         );
         kit.close().await.unwrap();
     }
+}
+
+// Python: core/mixins/delegation.py _announce_task, whose _build_context
+// raises RoomNotFoundError for a parent room gone since delegate read it:
+// the delegation fails with it, the task never announced.
+#[tokio::test]
+async fn a_parent_room_gone_at_the_announce_fails_the_delegation() {
+    let kit = kit_with(RoomReadsFail::default()).await;
+    let heard: Arc<Mutex<Vec<RoomEvent>>> = Arc::default();
+    let noted = Arc::clone(&heard);
+    let observer = HookOptions {
+        execution: HookExecution::Async,
+        ..HookOptions::default()
+    };
+    let record = move |event: RoomEvent, _| {
+        noted.lock().unwrap().push(event);
+        ready(())
+    };
+    kit.hook(HookTrigger::OnTaskDelegated, record, observer)
+        .unwrap();
+
+    kit.store().context_gone.store(true, Ordering::SeqCst);
+    let refused = kit
+        .delegate(
+            &room(),
+            &channel("worker"),
+            "Count.",
+            DelegateOptions::default(),
+        )
+        .await;
+    idle(&kit).await;
+
+    assert_eq!(
+        (
+            refused.err().map(|refusal| refusal.to_string()),
+            heard.lock().unwrap().len()
+        ),
+        (Some(RoomKitError::RoomNotFound(room()).to_string()), 0)
+    );
+    kit.close().await.unwrap();
 }
 
 // Python: tests/tasks/test_delegation_brief_and_hand_back.py::test_an_unknown_hand_back_and_a_negative_conversation_are_refused

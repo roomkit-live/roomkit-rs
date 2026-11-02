@@ -28,12 +28,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reader keeps it (RFC §12.2 step 13s, §23.3, RMK-1208): its work is cut
   where it reads its turn, not aborted, so the text its turn wrote is
   stored marked `cancelled`, a row whose write was under way is kept, and
-  a call left open ends `failed`, its error `cancelled`, its tool cut, no
-  longer running to its 30 s bound. A task cancelled before it ran names
-  no turn under `turns`.
+  a call left open ends `failed`, its error `cancelled` (`kit_closed` for
+  the close), its tool cut, no longer running to its 30 s bound; a
+  streaming target that reads no further is dropped, not waited for, and
+  a delivery the worker deferred runs on. A task cancelled before it ran
+  names no turn under `turns`.
 - A delegation whose parent room's context the store fails to read as
-  the task is announced fails with the store's error, as Python's
-  `_announce_task` raises it (RFC §23.3, RMK-1208): no `ON_TASK_DELEGATED`,
+  the task is announced fails with the store's error, or `RoomNotFound`
+  for a room gone meanwhile, as Python's `_announce_task` raises it (RFC
+  §23.3, RMK-1208): no `ON_TASK_DELEGATED`,
   no `ON_TASK_COMPLETED`, no completion callback and no status line, where
   the task ran and completed.
 - An author's image goes as Python's `_inline` sends it (RFC §6.4,

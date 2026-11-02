@@ -447,8 +447,9 @@ impl<S: ConversationStore> Inner<S> {
 
     /// Fires `trigger`'s hooks on `event` as [`observe_event`] does, its
     /// room's context read first whether a hook is registered or not, as
-    /// Python's `_announce_task` builds it: a read that fails is the
-    /// caller's error, no hook fired.
+    /// Python's `_announce_task` builds it, its recent events only for a
+    /// hook: a read that fails, or finds the room gone, is the caller's
+    /// error, no hook fired.
     ///
     /// [`observe_event`]: Self::observe_event
     pub(super) async fn announce_event(
@@ -456,10 +457,16 @@ impl<S: ConversationStore> Inner<S> {
         trigger: HookTrigger,
         event: RoomEvent,
     ) -> Result<(), RoomKitError> {
-        let recent_events = self.config().recent_events().read_by_the_caller();
-        let context = driver::load_context(&*self.store, &event.room_id, recent_events).await?;
         let observers = self.event_observers(trigger, &event);
-        if let (false, Some(context)) = (observers.is_empty(), context) {
+        let recent_events = match observers.is_empty() {
+            true => self.config().recent_events(),
+            false => self.config().recent_events().read_by_the_caller(),
+        };
+        let context = driver::load_context(&*self.store, &event.room_id, recent_events).await?;
+        let Some(context) = context else {
+            return Err(RoomKitError::RoomNotFound(event.room_id));
+        };
+        if !observers.is_empty() {
             self.observe(observers, event, context, async {});
         }
         Ok(())
