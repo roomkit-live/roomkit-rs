@@ -115,6 +115,11 @@ async fn a_tool_the_policy_denies_is_not_declared_and_refused() {
 /// RFC §21.6: a server that never answers a call, and one whose answer is
 /// a message over the bound, which is dropped unread, are cut at the
 /// agent's bound per call; the connection serves the next call.
+///
+/// The next call's answer comes once the 5 MiB message ahead of it was
+/// read off the pipe, which a loaded machine stretches past the agent's
+/// 200 ms: that call has a bound of its own, so the test reads what the
+/// connection serves, not how fast it drains.
 #[tokio::test]
 async fn a_call_the_server_never_answers_is_cut_at_the_agent_s_bound() {
     let server = connected("normal").await;
@@ -125,6 +130,7 @@ async fn a_call_the_server_never_answers_is_cut_at_the_agent_s_bound() {
     ]);
     let agent = serving(&model, &server, |options| AiChannelOptions {
         tool_timeout: Some(Duration::from_millis(200)),
+        tool_timeouts: [("echo".to_owned(), Some(Duration::from_secs(30)))].into(),
         ..options
     });
     let room = Room::with(agent).await;

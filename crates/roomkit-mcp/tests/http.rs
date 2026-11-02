@@ -282,14 +282,24 @@ async fn cancelled_discovery_deletes_its_session_before_returning() {
     assert!(matches!(error, McpError::Cancelled));
     assert_eq!(fixture.shared.seen.lock().unwrap().deleted, 1);
 }
+/// The connection's deadline passes while the tool listing hangs, its
+/// session negotiated: the session is deleted. The clock is paused and
+/// moved past the deadline once the fixture holds the listing, so the
+/// deadline never cuts the handshake first, however slow the machine.
 #[tokio::test]
 async fn discovery_deadline_drains_the_connection() {
     let fixture = Fixture::start("hang").await;
     let client = fixture
         .labelled(None)
-        .with_connect_timeout(Duration::from_millis(100));
-    let error = tokio::time::timeout(Duration::from_secs(5), client.connect())
+        .with_connect_timeout(Duration::from_secs(60));
+    let connecting = tokio::spawn(async move { client.connect().await });
+    fixture.shared.listing.notified().await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    let error = tokio::time::timeout(Duration::from_secs(5), connecting)
         .await
+        .unwrap()
         .unwrap()
         .unwrap_err();
     assert!(matches!(
