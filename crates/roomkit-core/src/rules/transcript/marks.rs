@@ -611,7 +611,9 @@ mod tests {
     // Python: tests/test_runtime_mark_copies.py::test_a_whole_copy_keeps_the_punctuation_after_it
     #[test]
     fn a_whole_copy_keeps_the_punctuation_after_it() {
-        let instruction = &INSTRUCTION_MARK[1..INSTRUCTION_MARK.len() - 1];
+        let instruction = INSTRUCTION_MARK
+            .trim_start_matches('[')
+            .trim_end_matches(']');
         assert_eq!(
             [
                 cleaned("x context compacted - earlier conversation summary."),
