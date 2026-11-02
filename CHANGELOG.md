@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- In a delegated room a transport is shared into, the stream an agent
+  answers another agent's answer with is read by the room's reader, as
+  Python's (RFC §23.3 step 5, RMK-1185): it was lost, the driver told a
+  read of a turn it did not hold.
 - Of what a transport returns, the room keeps, as Python's, its
   `on_event()`'s tasks, observations and metadata updates, its
   `deliver()`'s metadata updates alone, and nothing of a streaming

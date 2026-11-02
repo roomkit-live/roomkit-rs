@@ -258,11 +258,19 @@ impl Inbound {
     /// Its output is the cascade's result: the responses the room kept and
     /// delivered (`response_events`), and the first error met, a stream's
     /// failure among them.
+    ///
+    /// Its own effects are numbered past the turns `responses` streams
+    /// name, which the driver keeps under the caller's ids: a caller that
+    /// renames the effects of the call it nests tells a `ReadStream` of one
+    /// of the call's own turns from one of those (RMK-1185).
     pub fn answering(config: Arc<KitConfig>, responses: TurnResponses) -> Self {
+        let handed: Vec<EffectId> = responses.streamed.iter().map(|(turn, _)| *turn).collect();
         let call = Call::Responses {
             responses: Box::new(responses),
         };
-        Self::calling(config, call)
+        let mut inbound = Self::calling(config, call);
+        inbound.io.number_past(handed);
+        inbound
     }
 
     /// The room's agents run again on `event_id`, an event `room_id`

@@ -130,6 +130,17 @@ impl Io {
         }
     }
 
+    /// Numbers the effects issued from now on past each of `taken`, ids the
+    /// operation is handed rather than issues: an effect of its own then
+    /// never shares an id with one of them.
+    pub(crate) fn number_past(&mut self, taken: impl IntoIterator<Item = EffectId>) {
+        for id in taken {
+            if id >= self.next_id {
+                self.next_id = id.next();
+            }
+        }
+    }
+
     /// Makes the sections advanced from now on work for the cascade whose
     /// budget is `budget`: a hook, a parse or a route they ask for under a
     /// lock or in an admission order carries it (`Effect::budget`, RFC
