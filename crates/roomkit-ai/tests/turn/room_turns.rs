@@ -508,13 +508,20 @@ fn an_agent_that_steers_its_room_turns_declares_them_serialized() {
 
 /// RFC §6.4: a host holding the kit reads how a registered channel takes a
 /// room's turns, as Python's `kit.get_channel(id).steers_room_turns`: an
-/// agent that steers them serializes them, an agent without the option does
-/// neither, nor does a transport.
+/// agent that steers them serializes them, one that serializes them does not
+/// steer them, an agent without either option does neither, nor does a
+/// transport.
 #[tokio::test]
 async fn a_registered_channel_says_whether_it_steers_its_room_turns() {
     let kit = RoomKit::new(RoomKitOptions::default());
-    for (id, steer_room_turns) in [("steering", true), ("plain", false)] {
+    let agents = [
+        ("steering", false, true),
+        ("serializing", true, false),
+        ("plain", false, false),
+    ];
+    for (id, serialize_room_turns, steer_room_turns) in agents {
         let options = AiChannelOptions {
+            serialize_room_turns,
             steer_room_turns,
             ..AiChannelOptions::default()
         };
@@ -535,8 +542,13 @@ async fn a_registered_channel_says_whether_it_steers_its_room_turns() {
         )
     };
     assert_eq!(
-        [read("steering"), read("plain"), read("sms")],
-        [(true, true), (false, false), (false, false)]
+        [
+            read("steering"),
+            read("serializing"),
+            read("plain"),
+            read("sms")
+        ],
+        [(true, true), (true, false), (false, false), (false, false)]
     );
     kit.close().await.unwrap();
 }

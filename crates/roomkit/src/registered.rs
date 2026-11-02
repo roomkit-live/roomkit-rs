@@ -16,9 +16,9 @@ use roomkit_core::rules::addresses::AddressForm;
 use crate::channel::{BoxFuture, DynChannel};
 
 /// A registered channel as the kit holds it, an object a trait with
-/// `async` methods cannot be: its id, type, category and direction, and how
-/// it writes the addresses a router compares (RFC §5.7). Only the kit makes
-/// one.
+/// `async` methods cannot be: its id, type, category and direction, how it
+/// writes the addresses a router compares (RFC §5.7), and how it takes a
+/// room's turns (RFC §6.4). Only the kit makes one.
 pub trait RegisteredChannel: sealed::Sealed + Debug + Send + Sync {
     /// The channel's id.
     fn channel_id(&self) -> &ChannelId;
