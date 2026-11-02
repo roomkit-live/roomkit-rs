@@ -76,11 +76,13 @@ impl Collected {
                 self.tasks.extend(tasks);
                 self.observations.extend(observations);
                 self.keep_metadata(&binding.channel_id, metadata_updates);
-                // An output that did not answer keeps no rows and no end, as
-                // Python's `_buffered_outcome` keeps nothing of it (RFC
-                // §23.3 step 6).
+                // Its record names its turn under the task's `turns`
+                // whatever ended it (Python's `responder_turn_entries`); an
+                // output that did not answer stores no rows, and its end
+                // and text are not the task's, as Python's
+                // `_buffered_outcome` keeps nothing of it (RFC §23.3 step 6).
+                answer.record = response_metadata;
                 if responded {
-                    answer.record = response_metadata;
                     self.buffered.push((slot, binding, response_events));
                 }
             }

@@ -1162,8 +1162,10 @@ impl roomkit::Channel for Unanswering {
 }
 
 // Python: core/mixins/_child_execution.py _buffered_outcome: an output that
-// did not answer keeps nothing, its reply and its record unread, and the
-// task, with no answer, fails with no error and names no turn.
+// did not answer keeps nothing, its reply unstored and its end not the
+// task's, and the task, with no answer, fails with no error; its record
+// still names its turn under `turns` (core/event_router.py
+// responder_turn_entries, RFC §23.3 step 6).
 #[tokio::test]
 async fn a_worker_that_did_not_answer_fails_its_task_with_nothing_kept() {
     let kit = RoomKit::new(RoomKitOptions::default());
@@ -1191,7 +1193,12 @@ async fn a_worker_that_did_not_answer_fails_its_task_with_nothing_kept() {
             result.error,
             result.metadata.get("turns").cloned()
         ),
-        (TaskStatus::Failed, None, None, None)
+        (
+            TaskStatus::Failed,
+            None,
+            None,
+            Some(serde_json::json!({"worker": {"loop_end_reason": "completed"}}))
+        )
     );
     kit.close().await.unwrap();
 }

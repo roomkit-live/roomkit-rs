@@ -1200,8 +1200,13 @@ fn outcome_parts(
     let Some(answer) = answers.iter().find(|answer| &answer.channel_id == agent_id) else {
         return (None, None, turns);
     };
-    let text = last_answer(answer);
-    let end = turn_end(answer);
+    // An output that did not answer gives the task neither its text nor
+    // its end (Python's `_buffered_outcome`).
+    let (text, end) = if answer.responded {
+        (last_answer(answer), turn_end(answer))
+    } else {
+        (None, None)
+    };
     if let Some(error) = &answer.error {
         let completed = matches!(end.as_deref(), None | Some("completed"));
         let failure = Failure {
