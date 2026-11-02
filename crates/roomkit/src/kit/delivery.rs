@@ -273,8 +273,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// backend's failure to start.
     pub async fn start(&self) -> Result<(), RoomKitError> {
         self.inner.open()?;
-        // Python's `__aenter__` subscribes the kit to its bus first.
+        // Python's `__aenter__` subscribes the kit to its bus first; a
+        // close that ended the wait refuses the start.
         self.inner.subscribed().await;
+        self.inner.open()?;
         self.resume_verifications().await;
         if let Some(backend) = self.inner.delivery_backend.clone() {
             backend
@@ -403,8 +405,6 @@ impl<S: ConversationStore> RoomKit<S> {
         status: DeliveryStatus,
         options: ProcessDeliveryStatusOptions,
     ) -> Result<(), RoomKitError> {
-        // A room activity: Python builds the room's context.
-        self.inner.subscribed().await;
         let organization_id = options.organization_id.as_deref();
         let Some(room_id) = self.room_of(&status, organization_id).await? else {
             tracing::warn!(
@@ -414,6 +414,8 @@ impl<S: ConversationStore> RoomKit<S> {
             );
             return Ok(());
         };
+        // A room activity once its room is found: Python builds its context.
+        self.inner.subscribed().await;
         let inner = &self.inner;
         let recent = inner.config().recent_events();
         let Some(context) = driver::load_context(&*inner.store, &room_id, recent).await? else {

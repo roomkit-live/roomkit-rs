@@ -408,9 +408,11 @@ impl<S: ConversationStore> Inner<S> {
     /// not wait.
     pub(crate) async fn subscribed(&self) {
         let mut closing = self.turns.cutting();
+        // The close first: once it started, no try is claimed.
         tokio::select! {
-            () = self.status_subscription.subscribe() => {}
+            biased;
             _ = closing.wait_for(|cut| *cut) => {}
+            () = self.status_subscription.subscribe() => {}
         }
     }
 
