@@ -428,3 +428,11 @@ pub fn without_mark_copies(text: &str) -> String {
 pub fn json_text_line(line: &str) -> String {
     speakers::json_text_line(line)
 }
+
+/// `value` as the runtime gives an identifier outside a quote (RFC §6.4):
+/// letters with their marks, digits and `_ . @ + -`, every other character
+/// a `-`, within 64 characters, composed first; `fallback` when nothing is
+/// left. Python's `_text.identifier`.
+pub fn identifier(value: &str, fallback: &str) -> String {
+    speakers::identifier(value, fallback)
+}

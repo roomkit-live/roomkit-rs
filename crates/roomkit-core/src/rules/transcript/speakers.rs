@@ -137,7 +137,7 @@ fn channel_label(channel_id: &ChannelId) -> String {
 /// `value` as the runtime gives an identifier outside a quote (RFC §6.4):
 /// letters with their marks, digits and `_ . @ + -`, every other character
 /// a `-`, within 64 characters; `fallback` when nothing is left.
-fn identifier(value: &str, fallback: &str) -> String {
+pub(super) fn identifier(value: &str, fallback: &str) -> String {
     let mut kept = String::with_capacity(value.len());
     for c in unicode::nfc(value).chars() {
         let c = if IDENTIFIER_EXTRA.contains(c) || unicode::is_name_char(c) {
