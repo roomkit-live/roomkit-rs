@@ -74,6 +74,10 @@ const TASK_CUT_SHORT: &str = "TaskCutShortError";
 /// The record key of how a turn ended (RFC §6.4).
 const LOOP_END_REASON: &str = "loop_end_reason";
 
+/// The metadata key of a task whose failure its worker's turn reported
+/// (RFC §23.3 step 6): Python's `error_reported`.
+const ERROR_REPORTED: &str = "error_reported";
+
 /// What closes an intelligence channel's hand-back, whose turn gives the
 /// result only: Python's `RESULT_TURN_NOTE`.
 const RESULT_TURN_NOTE: &str = "This turn only gives this task's result: give it, without \
@@ -185,6 +189,10 @@ pub(super) struct Failure {
     /// The failure itself, its type kept: what the worker's turn raised,
     /// or the cut that ended it (Python's `exception`).
     exception: ErrorRecord,
+    /// The worker's turn reported it to `ON_ERROR` in the child room
+    /// (Python's `mark_reported`): whoever reads the task hands it on
+    /// without a second report.
+    reported: bool,
 }
 
 impl TaskEnd {
@@ -207,6 +215,9 @@ impl TaskEnd {
         {
             output = output.or_else(|| failure.narration.clone());
             metadata.insert(LOOP_END_REASON.to_owned(), json!(reason));
+        }
+        if failure.as_ref().is_some_and(|failure| failure.reported) {
+            metadata.insert(ERROR_REPORTED.to_owned(), json!(true));
         }
         let (error, exception) = failure
             .map(|failure| (failure.message, failure.exception))
@@ -990,6 +1001,7 @@ pub(super) fn failed(exception: ErrorRecord, context: Option<&Metadata>) -> Task
         reason: None,
         narration: None,
         exception,
+        reported: false,
     };
     TaskEnd::finished(None, Some(failure), context, Metadata::new())
 }
@@ -1165,6 +1177,9 @@ fn outcome_parts(
             reason: (!completed).then(|| end.clone()).flatten(),
             narration: (!completed).then(|| text.clone()).flatten(),
             exception: error.clone(),
+            // Reported in the child room, by its reader or the delivery
+            // set's (RFC §23.3 step 6).
+            reported: true,
         };
         return (None, Some(failure), turns);
     }
@@ -1175,6 +1190,7 @@ fn outcome_parts(
             message,
             reason: Some(reason),
             narration: text,
+            reported: false,
         };
         return (None, Some(failure), turns);
     }
