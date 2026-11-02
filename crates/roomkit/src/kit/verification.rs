@@ -18,6 +18,7 @@
 //!   what the kit holds.
 
 mod announce;
+mod held;
 pub(crate) mod inbound;
 mod release;
 mod runtime;

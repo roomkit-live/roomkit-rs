@@ -14,6 +14,7 @@ use roomkit_core::ops::{Inbound, RestoreHeld, Restored};
 use roomkit_core::rules::verification::release::{held_window, window_scan};
 
 use crate::context::ExecutionContext;
+use crate::delivery_keys::NamedGuard;
 use crate::driver;
 use crate::error::RoomKitError;
 use crate::kit::RoomKit;
@@ -84,10 +85,10 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(driver::run(&self.inner, RELEASE, operation).await??)
     }
 
-    /// Runs the room's agents on the last event `restored` holds, unless its
-    /// delivery was cancelled while it was held (RFC §10.1 "Explicit
-    /// delivery cancellation"): no agent answers it then. The earlier ones
-    /// are its context.
+    /// Runs the room's agents on the last event `restored` holds, named by
+    /// its delivery's key, unless that delivery was cancelled while it was
+    /// held (RFC §10.1 "Explicit delivery cancellation"), in this process or
+    /// another: no agent answers it then. The earlier ones are its context.
     async fn answer_released(
         &self,
         room_id: &RoomId,
@@ -96,13 +97,29 @@ impl<S: ConversationStore> RoomKit<S> {
         let Some(last) = restored.events.last() else {
             return Ok(());
         };
-        if restored.cancelled.contains(&last.id) {
+        let named = self.unhold_released(&restored.events);
+        let cancelled = named
+            .as_ref()
+            .is_some_and(|named| named.named().cancelled().is_some());
+        if cancelled || restored.cancelled.contains(&last.id) {
             return Ok(());
         }
         let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
         let rerun = Inbound::rerun(self.config(), room_id.clone(), last.id.clone(), floor);
-        let ran = driver::run_inbound(&self.inner, RELEASE, Some(room_id), rerun, false).await;
+        let ran = driver::run_rerun(&self.inner, RELEASE, room_id, rerun, named).await;
         ran.output??;
         Ok(())
+    }
+
+    /// Stops holding the deliveries of `released`, Python's
+    /// `_unhold_released`: the last one's, which names its answer, or `None`
+    /// when this process holds none; the earlier ones are over.
+    fn unhold_released(&self, released: &[RoomEvent]) -> Option<NamedGuard> {
+        let keys = &self.inner.delivery_keys;
+        let mut named: Vec<Option<NamedGuard>> = released
+            .iter()
+            .map(|event| keys.unhold(&event.id))
+            .collect();
+        named.pop().flatten()
     }
 }

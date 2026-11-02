@@ -218,7 +218,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let refused = refusal_of(&entry);
         let entry = match context::adopt(entry).await {
             Adopting::Settled(result, completion) => {
-                if let Some(named) = named {
+                if let Some(named) = named.filter(|named| named.named().has_key()) {
                     self.name_adopted(named, &completion);
                 }
                 return Ok(Entered {
@@ -238,15 +238,15 @@ impl<S: ConversationStore> RoomKit<S> {
         let room_id = entry.room_id().clone();
         let operation = self.operation(entry)?;
         let ran =
-            driver::run_named(&self.inner, call, Some(&room_id), operation, defer, named).await;
+            driver::run_inbound(&self.inner, call, Some(&room_id), operation, defer, named).await;
         Entered::ran(ran, refused)
     }
 
     /// Names the delivery of a call the room's work adopted by `named`
     /// until its set ran, as `completion` tells: a cancellation by its key
     /// cuts the turns of the entry's cascade in the run that adopted it.
-    fn name_adopted(&self, named: NamedGuard, completion: &Completion) {
-        named.named().attach(Arc::clone(&completion.cancel));
+    fn name_adopted(&self, mut named: NamedGuard, completion: &Completion) {
+        named.attach(Arc::clone(&completion.cancel));
         let mut delivered = completion.delivered.clone();
         let over = async move {
             // Closed, the adopting run is over: the delivery with it.

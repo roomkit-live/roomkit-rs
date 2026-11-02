@@ -58,7 +58,7 @@ use self::in_flight::InFlight;
 use self::inbound::Caller;
 pub(crate) use self::inbound::{
     CALLER_CANCELLED, InboundOutput, Ran, Record, StoredAnswers, cancelled_end, ended, run_inbound,
-    run_named,
+    run_rerun,
 };
 use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};

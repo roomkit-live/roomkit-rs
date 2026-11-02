@@ -139,15 +139,16 @@ impl StoredAnswers {
 
 impl Record {
     /// The record of a call whose delivery `named` names, if any: its cut
-    /// is the one the key asks for.
-    fn new(named: Option<&Arc<Named>>) -> Self {
+    /// is the one the key asks for, until the run is over.
+    fn new(named: Option<&mut NamedGuard>) -> Self {
         let cancel = Arc::new(CancelRequest::default());
-        if let Some(named) = named {
+        let named = named.map(|named| {
             named.attach(Arc::clone(&cancel));
-        }
+            Arc::clone(named.named())
+        });
         Self {
             cancel,
-            named: named.cloned(),
+            named,
             cancelled: watch::Sender::new(None),
             decided: Mutex::new(None),
             answers: StoredAnswers::default(),
@@ -197,6 +198,11 @@ impl Record {
     }
 
     fn decide(&self, result: &InboundResult) {
+        // A held event keeps its delivery named until its release (RFC
+        // §11.7.6), decided before the room's lock is released.
+        if let Some(named) = &self.named {
+            named.decided(result);
+        }
         *self.decided.lock().unwrap_or_else(PoisonError::into_inner) = Some(result.clone());
     }
 
@@ -505,6 +511,10 @@ impl Caller {
 /// decided yet (gap G-076). A call that `defer`s its delivery is answered at
 /// its decision, its run going on, handed back in [`Ran::delivery`].
 ///
+/// The call's delivery is named by `named`, a key's name of it, for as
+/// long as the run goes on (RFC §10.1 "Explicit delivery cancellation"): a
+/// cancellation by the key cuts the run's turns.
+///
 /// # Errors
 ///
 /// As [`run`](super::run), and [`RoomKitError::ReentrantCall`] for such a lock, or
@@ -518,20 +528,51 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     room_id: Option<&RoomId>,
     inbound: Inbound,
     defer: bool,
+    named: Option<NamedGuard>,
 ) -> Ran {
-    run_named(inner, call, room_id, inbound, defer, None).await
+    run_leased(inner, call, room_id, inbound, defer, named, Leases::Refused).await
 }
 
-/// [`run_inbound`], the call's delivery named by `named`, a key's name of
-/// it, for as long as the run goes on (RFC §10.1 "Explicit delivery
-/// cancellation"): a cancellation by the key cuts the run's turns.
-pub(crate) async fn run_named<S: ConversationStore>(
+/// Runs `rerun`, the room's agents run again on a stored event (RFC
+/// §11.7.6), as [`run_inbound`] runs a call, its delivery named by `named`;
+/// but the room's lock its execution context holds a lease on is granted
+/// to it at once, as to any separate operation (RFC §13.5): a rerun is no
+/// call the section holding the lock adopts. Called under the lock, its
+/// caller is answered once its set is planned, the set running in the
+/// room's lane after that section.
+///
+/// # Errors
+///
+/// As [`run_inbound`], but for the lock its context holds.
+pub(crate) async fn run_rerun<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    call: &'static str,
+    room_id: &RoomId,
+    rerun: Inbound,
+    named: Option<NamedGuard>,
+) -> Ran {
+    run_leased(
+        inner,
+        call,
+        Some(room_id),
+        rerun,
+        false,
+        named,
+        Leases::Granted,
+    )
+    .await
+}
+
+/// [`run_inbound`], a lock its context holds a lease on treated as
+/// `leases` says.
+async fn run_leased<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
     room_id: Option<&RoomId>,
     inbound: Inbound,
     defer: bool,
     named: Option<NamedGuard>,
+    leases: Leases,
 ) -> Ran {
     if let Err(error) = inner.open() {
         return Ran::ended(Err(error));
@@ -539,7 +580,8 @@ pub(crate) async fn run_named<S: ConversationStore>(
     let context = ExecutionContext::current();
     let inbound = charged(inbound, room_id, &context);
     let (answer, decided) = oneshot::channel();
-    let record = Arc::new(Record::new(named.as_ref().map(NamedGuard::named)));
+    let mut named = named;
+    let record = Arc::new(Record::new(named.as_mut()));
     let kit = Arc::clone(inner);
     let mut caller = Caller::new(answer, defer, Arc::clone(&record));
     let run = async move {
@@ -551,7 +593,7 @@ pub(crate) async fn run_named<S: ConversationStore>(
             environment,
             call,
             inbound,
-            Leases::Refused,
+            leases,
             Driven::Inbound(&mut caller),
         )
         .await;

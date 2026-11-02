@@ -338,6 +338,7 @@ impl<S: ConversationStore> RoomKit<S> {
             delivery_keys: Arc::default(),
         });
         inner.subscribe_status_bus();
+        inner.name_held_deliveries();
         Self { inner }
     }
 
@@ -517,7 +518,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 message: Box::new(message),
                 answers: answers.map(Box::new),
             };
-            self.enter_named(entry, PROCESS_INBOUND, defer_delivery, named)
+            self.enter_named(entry, PROCESS_INBOUND, defer_delivery, Some(named))
                 .await?
         } else {
             context::as_deep_as_its_turn(&mut message.chain_depth);
@@ -528,13 +529,13 @@ impl<S: ConversationStore> RoomKit<S> {
                 }
                 None => Inbound::new(self.config(), target, organization_id, message),
             };
-            let ran = driver::run_named(
+            let ran = driver::run_inbound(
                 &self.inner,
                 PROCESS_INBOUND,
                 None,
                 routed,
                 defer_delivery,
-                named,
+                Some(named),
             )
             .await;
             Entered::ran(ran, RoomKitError::from)?
