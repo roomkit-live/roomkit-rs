@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `DeliveryHandle::cancel(CancelOptions { reason, timeout })`, Python's
+  `DeliveryHandle.cancel` (RFC §10.1, RMK-1194): it cuts the call's turns
+  and returns the call's result once they are over, the first reason kept;
+  `RoomKitError::Timeout` past `timeout` (5 s by default), the cleanup
+  going on for `wait` to join; `RoomKitError::Runtime` from the room's
+  lane or under its lock, nothing cancelled.
 - Identity verification's release and a delivery key's reach match
   Python's (RFC §10.1, §11.7.6, RMK-1195): a message a SYNC hook sends
   into its room is located in the room's organization and, held, stays
