@@ -35,6 +35,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`Channel 'ana' is not an intelligence channel`), nothing attached, as
   for an agent named by its id (RFC §19.7, RMK-1233): the transport was
   attached as the agent, taking its turns.
+- A kit whose status bus does not subscribe at once subscribes at its
+  first room activity, which awaits it, as Python's
+  `_ensure_status_bus_subscribed` (RMK-1201): a status posted once that
+  call is over reaches the room's `ON_STATUS_POSTED` hooks, the kit built
+  in a runtime or outside one, and a subscription cut short is made again
+  by the next activity. It was started in the background, a status posted
+  meanwhile missed.
 - A transport whose `on_event` returns a record replies as an agent does,
   as Python's `_settle_buffered_replies` merges every target's output
   (RMK-1248): its keys reach the caller's `response_metadata`, and its end

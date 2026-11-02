@@ -604,7 +604,6 @@ impl<S> Inner<S> {
         if self.tasks.is_closing() {
             return Err(RoomKitError::KitClosed);
         }
-        self.status_subscription.start();
         Ok(())
     }
 

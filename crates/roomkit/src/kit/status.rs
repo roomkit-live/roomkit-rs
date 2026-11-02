@@ -3,9 +3,11 @@
 //! implementation's `status_bus`, `update_room_metadata`,
 //! `list_observations` and `submit_feedback`.
 //!
-//! The kit subscribes to its bus when it is built: an entry naming a room in
-//! its metadata's `room_id` fires that room's `ON_STATUS_POSTED` hooks, and
-//! every entry is the framework event `status_posted`.
+//! The kit subscribes to its bus when it is built, or, when the bus does not
+//! subscribe at once, at its first room activity, which awaits it: an entry
+//! naming a room in its metadata's `room_id` fires that room's
+//! `ON_STATUS_POSTED` hooks, and every entry is the framework event
+//! `status_posted`.
 
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -364,11 +366,11 @@ impl ObservedPayload for Observation {
 type Observers = Vec<(HookSpec, Kept)>;
 
 impl<S: ConversationStore> Inner<S> {
-    /// Subscribes the kit to its status bus, at its construction: a custom
-    /// backend whose subscription does not end at once subscribes on the
-    /// current runtime, in the background; outside a runtime, every
-    /// backend's at the kit's first call made in one, as Python's kit
-    /// subscribes at a room's first activity (`_ensure_status_bus_subscribed`).
+    /// Subscribes the kit to its status bus, at its construction: a
+    /// backend whose subscription ends at once is subscribed now; any other
+    /// at the kit's first room activity made in a runtime, which awaits it,
+    /// as Python's kit subscribes at a room's first activity
+    /// (`_ensure_status_bus_subscribed`).
     pub(super) fn subscribe_status_bus(self: &Arc<Self>) {
         let kit = Arc::downgrade(self);
         let callback: StatusCallback = Arc::new(move |entry| {
@@ -380,19 +382,36 @@ impl<S: ConversationStore> Inner<S> {
             })
         });
         let bus = self.status_bus.clone();
-        let mut subscribing: BoxFuture<'static, ()> =
-            Box::pin(async move { bus.subscribe(callback).await });
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            // Not polled here: a backend that reaches a server needs the
-            // runtime's reactor from its first poll.
-            self.status_subscription.keep(subscribing);
-            return;
-        };
-        let mut waking = Context::from_waker(Waker::noop());
-        if subscribing.as_mut().poll(&mut waking).is_ready() {
-            return;
+        let subscriber: Subscriber = Arc::new(move || {
+            let (bus, callback) = (bus.clone(), Arc::clone(&callback));
+            Box::pin(async move { bus.subscribe(callback).await })
+        });
+        let mut subscribing = subscriber();
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let mut waking = Context::from_waker(Waker::noop());
+            if subscribing.as_mut().poll(&mut waking).is_ready() {
+                return;
+            }
         }
-        drop(runtime.spawn(subscribing));
+        // Outside a runtime, not polled: a backend that reaches a server
+        // needs the runtime's reactor from its first poll.
+        self.status_subscription.keep(subscriber, subscribing);
+    }
+
+    /// Opens the kit for a room activity (Python's `_ensure_status_bus_subscribed`
+    /// in the context a call builds): its subscription to its bus, when one
+    /// waits, is made first, so that a status posted once the call is over
+    /// reaches the room's hooks.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started.
+    pub(crate) async fn open_for_activity(&self) -> Result<(), RoomKitError> {
+        if self.tasks.is_closing() {
+            return Err(RoomKitError::KitClosed);
+        }
+        self.status_subscription.subscribe().await;
+        self.open()
     }
 
     /// What the kit does with an entry posted on its bus (RFC §19.8): emit
@@ -646,43 +665,85 @@ mod tests {
     }
 }
 
-/// The kit's subscription to its status bus, made outside a runtime: it
-/// goes on on the runtime of the kit's first call made in one, once
-/// (Python's `_ensure_status_bus_subscribed`, claimed before it
-/// subscribes).
+/// What subscribes the kit to its bus, made again for each try.
+type Subscriber = Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
+
+/// The kit's subscription to its status bus, when it did not end at its
+/// construction: the first room activity makes it and awaits it (Python's
+/// `_ensure_status_bus_subscribed`, claimed before it subscribes, another
+/// activity going on meanwhile). One that does not end, its call or its
+/// runtime dropped first, is made again by the next activity, as Python
+/// tries a failed one again.
 #[derive(Default)]
 pub(crate) struct PendingSubscription {
-    waiting: AtomicBool,
-    subscribing: Mutex<Option<BoxFuture<'static, ()>>>,
+    waiting: Arc<AtomicBool>,
+    subscriber: Mutex<Option<Subscriber>>,
+    /// The subscription its construction started, polled once already.
+    started: Mutex<Option<BoxFuture<'static, ()>>>,
 }
 
 impl PendingSubscription {
-    /// Keeps `subscribing` until a call is made in a runtime.
-    fn keep(&self, subscribing: BoxFuture<'static, ()>) {
-        *self
-            .subscribing
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(subscribing);
+    /// Keeps `subscriber`, and `started`, its first try, until a call is
+    /// made in a runtime.
+    fn keep(&self, subscriber: Subscriber, started: BoxFuture<'static, ()>) {
+        *lock(&self.subscriber) = Some(subscriber);
+        *lock(&self.started) = Some(started);
         self.waiting.store(true, Ordering::Release);
     }
 
-    /// Goes on with the subscription kept, on the current runtime, in the
-    /// background: nothing once it went on, or outside a runtime.
-    pub(crate) fn start(&self) {
-        if !self.waiting.load(Ordering::Acquire) {
-            return;
+    /// The subscription a call claims, once: its first try, else a new
+    /// one; `None` when none waits.
+    fn claim(&self) -> Option<Claimed> {
+        if !self.waiting.swap(false, Ordering::AcqRel) {
+            return None;
         }
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
+        let subscribing = match lock(&self.started).take() {
+            Some(started) => started,
+            None => (lock(&self.subscriber).clone()?)(),
         };
-        let taken = self
-            .subscribing
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        self.waiting.store(false, Ordering::Release);
-        if let Some(subscribing) = taken {
-            drop(runtime.spawn(subscribing));
+        Some(Claimed {
+            waiting: Arc::clone(&self.waiting),
+            subscribing,
+        })
+    }
+
+    /// Makes the subscription waiting and awaits it: nothing when none
+    /// waits, or another activity claimed it.
+    async fn subscribe(&self) {
+        if let Some(claimed) = self.claim() {
+            claimed.run().await;
         }
     }
+}
+
+/// A subscription a call claimed: waiting again unless it runs to its end.
+struct Claimed {
+    waiting: Arc<AtomicBool>,
+    subscribing: BoxFuture<'static, ()>,
+}
+
+impl Claimed {
+    /// Runs the subscription to its end; dropped before, it waits again
+    /// for the next call.
+    async fn run(self) {
+        let mut again = Again(Some(self.waiting));
+        self.subscribing.await;
+        again.0 = None;
+    }
+}
+
+/// Sets a subscription waiting again when dropped holding its flag.
+struct Again(Option<Arc<AtomicBool>>);
+
+impl Drop for Again {
+    fn drop(&mut self) {
+        if let Some(waiting) = self.0.take() {
+            waiting.store(true, Ordering::Release);
+        }
+    }
+}
+
+/// `mutex`'s value, a poisoned one's included.
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

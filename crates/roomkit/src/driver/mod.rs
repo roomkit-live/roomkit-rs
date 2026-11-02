@@ -176,10 +176,13 @@ pub(crate) async fn run_on<S: ConversationStore, O: Operation + Send + 'static>(
 where
     O::Output: Send + 'static,
 {
-    inner.open()?;
-    Box::pin(run_in_its_task(inner, environment, call, operation, false))
-        .await
-        .map_err(Stop::into_error)
+    // Boxed whole: the operation waits there for the kit's subscription.
+    Box::pin(async move {
+        inner.open_for_activity().await?;
+        run_in_its_task(inner, environment, call, operation, false).await
+    })
+    .await
+    .map_err(Stop::into_error)
 }
 
 /// Runs `operation` as [`run`] does, a run the kit's close cut reading its

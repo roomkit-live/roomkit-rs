@@ -280,3 +280,143 @@ fn a_status_posted_after_room_activity_reaches_the_rooms_hooks() {
     });
     assert_eq!(heard, (true, vec!["agent-1".to_owned()]));
 }
+
+/// What a status `bus` posted for room `r` right after `kit`'s first room
+/// activity, a room's creation, reaches of its `ON_STATUS_POSTED` hooks:
+/// the agents heard.
+#[expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+async fn heard_right_after_the_first_activity(kit: &RoomKit, bus: &StatusBus) -> Vec<String> {
+    use roomkit::model::RoomId;
+    use roomkit::{CreateRoomOptions, HookExecution, HookOptions, HookTrigger};
+
+    let (heard, told) = (
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let (notes, telling) = (Arc::clone(&heard), Arc::clone(&told));
+    let options = HookOptions {
+        execution: HookExecution::Async,
+        ..HookOptions::default()
+    };
+    kit.hook(
+        HookTrigger::OnStatusPosted,
+        move |entry: StatusEntry, _| {
+            notes.lock().unwrap().push(entry.agent_id);
+            telling.notify_one();
+            std::future::ready(())
+        },
+        options,
+    )
+    .unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(RoomId::new("r").unwrap()),
+        ..CreateRoomOptions::default()
+    })
+    .await
+    .unwrap();
+    let mut metadata = roomkit::model::Metadata::new();
+    metadata.insert("room_id".to_owned(), serde_json::json!("r"));
+    let options = PostAsyncOptions {
+        metadata: Some(metadata),
+        ..PostAsyncOptions::default()
+    };
+    bus.post_async("agent-1", "working", StatusLevel::Pending, options)
+        .await;
+    drop(tokio::time::timeout(std::time::Duration::from_secs(1), told.notified()).await);
+    kit.close().await.unwrap();
+    heard.lock().unwrap().clone()
+}
+
+/// A status bus over a backend whose subscription does not end at once.
+fn late_bus() -> StatusBus {
+    let held: Arc<dyn StatusBackend> = Arc::new(Late::default());
+    StatusBus::new(StatusBusOptions {
+        backend: Some(held),
+        ..StatusBusOptions::default()
+    })
+}
+
+// Python: tests/test_status_posted_without_context_manager.py::test_a_status_posted_after_room_activity_reaches_the_rooms_hooks
+// RMK-1201 (1): the first room activity awaits the kit's subscription
+// (Python's `_ensure_status_bus_subscribed`), so a status posted right
+// after it reaches the room's hooks over a bus that subscribes late,
+// whether the kit was built in a runtime or outside one.
+#[test]
+fn a_status_posted_right_after_the_first_activity_reaches_a_late_bus_s_hooks() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let bus = late_bus();
+    let outside = RoomKit::new(RoomKitOptions {
+        status_bus: Some(bus.clone()),
+        ..RoomKitOptions::default()
+    });
+    let heard_outside = runtime.block_on(heard_right_after_the_first_activity(&outside, &bus));
+    let bus = late_bus();
+    let heard_within = runtime.block_on(async {
+        let within = RoomKit::new(RoomKitOptions {
+            status_bus: Some(bus.clone()),
+            ..RoomKitOptions::default()
+        });
+        heard_right_after_the_first_activity(&within, &bus).await
+    });
+
+    assert_eq!(
+        (heard_outside, heard_within),
+        (vec!["agent-1".to_owned()], vec!["agent-1".to_owned()])
+    );
+}
+
+/// A backend whose first subscription never ends, as one whose server
+/// does not answer; the next subscribes at once.
+#[derive(Default)]
+struct FirstTryHangs {
+    kept: InMemoryStatusBackend,
+    tries: std::sync::atomic::AtomicUsize,
+}
+
+impl StatusBackend for FirstTryHangs {
+    fn publish(&self, entry: StatusEntry) -> Future<'_, ()> {
+        self.kept.publish(entry)
+    }
+
+    fn recent(&self, n: usize, options: BackendRecentOptions) -> Future<'_, Vec<StatusEntry>> {
+        self.kept.recent(n, options)
+    }
+
+    fn subscribe(&self, callback: Callback) -> Future<'_, ()> {
+        Box::pin(async move {
+            if self.tries.fetch_add(1, Ordering::SeqCst) == 0 {
+                std::future::pending::<()>().await;
+            }
+            self.kept.subscribe(callback).await;
+        })
+    }
+
+    fn unsubscribe(&self, callback: Callback) -> Future<'_, ()> {
+        self.kept.unsubscribe(callback)
+    }
+}
+
+// Python: core/framework.py _ensure_status_bus_subscribed, "a subscription
+// that failed is tried again by the next one" (RMK-1201 (1)): an activity
+// dropped while the kit subscribes leaves the subscription to the next.
+#[tokio::test]
+async fn a_subscription_cut_short_is_made_again_by_the_next_activity() {
+    let held: Arc<dyn StatusBackend> = Arc::new(FirstTryHangs::default());
+    let bus = StatusBus::new(StatusBusOptions {
+        backend: Some(held),
+        ..StatusBusOptions::default()
+    });
+    let kit = RoomKit::new(RoomKitOptions {
+        status_bus: Some(bus.clone()),
+        ..RoomKitOptions::default()
+    });
+    let first = kit.create_room(roomkit::CreateRoomOptions::default());
+    let cut = tokio::time::timeout(std::time::Duration::from_millis(10), first).await;
+
+    let heard = heard_right_after_the_first_activity(&kit, &bus).await;
+
+    assert_eq!((cut.is_err(), heard), (true, vec!["agent-1".to_owned()]));
+}
