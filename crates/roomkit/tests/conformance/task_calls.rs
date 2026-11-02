@@ -67,6 +67,8 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "brief",
             "conversation",
             "hand_back",
+            "require_structured_result",
+            "max_result_retries",
         ],
         "task.wait" | "host.wait_task" | "cancel_task" => &["task_id"],
         "start_task" => &["room_id", "agent_id", "task", "hand_back"],
@@ -226,6 +228,10 @@ async fn delegate(run: &Arc<Run>, spec: &Value) -> Result<(Called, Option<String
         post_status: optional(spec, "post_status")?.unwrap_or(defaults.post_status),
         brief: optional(spec, "brief")?,
         hand_back: optional(spec, "hand_back")?.unwrap_or(defaults.hand_back),
+        require_structured_result: optional(spec, "require_structured_result")?
+            .unwrap_or(defaults.require_structured_result),
+        max_result_retries: optional(spec, "max_result_retries")?
+            .unwrap_or(defaults.max_result_retries),
         organization_id: organization_id(spec),
         ..DelegateOptions::default()
     };
