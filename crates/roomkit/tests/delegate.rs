@@ -461,6 +461,33 @@ async fn an_invalid_agent_raises() {
     kit.close().await.unwrap();
 }
 
+// Python: tests/test_declared_strategies.py::test_an_id_naming_a_transport_is_no_agent
+// (channels/declared.py held_agent: the category before the tools).
+#[tokio::test]
+async fn an_id_naming_a_transport_is_no_agent() {
+    let kit = kit_with(InMemoryStore::default()).await;
+    let sms = RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+
+    let refused = [
+        kit.setup_task_tools(&channel("sms")).err(),
+        kit.setup_background(&channel("sms"), roomkit::SetupBackgroundOptions::default())
+            .err(),
+    ];
+
+    let refusal = || {
+        Some(RoomKitError::Value(
+            "Channel 'sms' is not an intelligence channel".to_owned(),
+        ))
+    };
+    assert_eq!(refused, [refusal(), refusal()]);
+    kit.close().await.unwrap();
+}
+
 /// An agent counting the turns it is asked.
 #[derive(Clone, Default)]
 struct Counted {

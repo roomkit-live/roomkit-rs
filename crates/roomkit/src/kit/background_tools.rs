@@ -11,7 +11,7 @@
 
 use std::sync::{Arc, PoisonError};
 
-use roomkit_core::model::{ChannelId, Metadata, RoomId};
+use roomkit_core::model::{ChannelCategory, ChannelId, Metadata, RoomId};
 use serde_json::{Value, json};
 
 use super::RoomKit;
@@ -157,9 +157,10 @@ impl<S: ConversationStore> RoomKit<S> {
         self.register_owner_tools(agent, entries)
     }
 
-    /// Refuses an agent the kit does not hold, or one whose turns never
-    /// declare the tools the room's owner serves (RFC §10.6.5): a tool set
-    /// up for it would never be seen. Python's `owner_tools_of`.
+    /// Refuses an agent the kit does not hold, a channel that is no
+    /// intelligence channel, or one whose turns never declare the tools
+    /// the room's owner serves (RFC §10.6.5): a tool set up for it would
+    /// never be seen. Python's `owner_tools_of`, through `held_agent`.
     fn registered_agent(&self, agent: &ChannelId) -> Result<(), RoomKitError> {
         let Some(channel) = self.inner.channel(agent) else {
             return Err(RoomKitError::ChannelNotRegistered {
@@ -171,11 +172,18 @@ impl<S: ConversationStore> RoomKit<S> {
                 ),
             });
         };
-        if !channel.declaration().takes_owner_tools {
+        let declaration = channel.declaration();
+        if declaration.category != ChannelCategory::Intelligence {
             return Err(RoomKitError::Value(format!(
-                "Channel '{}' does not take the tools its room owner serves (RFC §10.6.5): its \
+                "Channel {} is not an intelligence channel",
+                repr(agent.as_str())
+            )));
+        }
+        if !declaration.takes_owner_tools {
+            return Err(RoomKitError::Value(format!(
+                "Channel {} does not take the tools its room owner serves (RFC §10.6.5): its \
                  turns would never declare them",
-                agent.as_str()
+                repr(agent.as_str())
             )));
         }
         Ok(())
