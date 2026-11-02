@@ -96,8 +96,8 @@ pub mod model {
         ParticipantRole, ParticipantStatus, ProviderResult, RateLimit, RetryPolicy, RichContent,
         RichFormat, Room, RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, SystemContent,
         Task, TaskId, TaskStatus, TemplateContent, TextContent, ThreadSummary, Timestamp,
-        ToolCallContent, ToolCallOutcome, ToolCallStatus, VerificationStatus, VideoContent,
-        Visibility,
+        ToolCallContent, ToolCallOutcome, ToolCallStatus, Verification, VerificationRequest,
+        VerificationRequestStatus, VerificationStatus, VideoContent, Visibility,
     };
 
     pub use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};

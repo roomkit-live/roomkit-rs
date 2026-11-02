@@ -27,6 +27,7 @@ use roomkit::model::ParticipantRole;
 use roomkit::model::ParticipantStatus;
 use roomkit::model::RoomStatus;
 use roomkit::model::TaskStatus;
+use roomkit::model::VerificationRequestStatus;
 use roomkit::model::VerificationStatus;
 use roomkit::model::Visibility;
 
@@ -416,6 +417,21 @@ fn verification_status_serializes_to_python_s_values() {
             ("VERIFIED", VerificationStatus::Verified),
             ("EXPIRED", VerificationStatus::Expired),
             ("REVOKED", VerificationStatus::Revoked),
+        ],
+    );
+}
+
+/// `roomkit.VerificationRequestStatus`'s members.
+#[test]
+fn verification_request_status_serializes_to_python_s_values() {
+    serializes_to(
+        "roomkit.VerificationRequestStatus",
+        &[
+            ("OPEN", VerificationRequestStatus::Open),
+            ("COMPLETED", VerificationRequestStatus::Completed),
+            ("FAILED", VerificationRequestStatus::Failed),
+            ("EXPIRED", VerificationRequestStatus::Expired),
+            ("CANCELLED", VerificationRequestStatus::Cancelled),
         ],
     );
 }
