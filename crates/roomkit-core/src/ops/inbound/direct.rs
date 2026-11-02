@@ -358,7 +358,7 @@ impl Machine {
         if self.cascade.drawn_on().is_some_and(|budget| !budget.take()) {
             return self.start_capped_trigger(event, call);
         }
-        if cx.config.hooks.off_lock_checks(&event).is_empty() {
+        if self.off_lock_checks(cx, &event).is_empty() {
             return self.start_trigger(event, None);
         }
         self.after_arrival(cx, Arrived { event, context });
@@ -367,7 +367,7 @@ impl Machine {
     /// The event's room is read for its off-lock check when an off-lock
     /// hook fires for it, and its pass starts otherwise.
     fn go_in(&mut self, cx: &mut Cx<'_>, event: RoomEvent, call: DirectCall) {
-        if cx.config.hooks.off_lock_checks(&event).is_empty() {
+        if self.off_lock_checks(cx, &event).is_empty() {
             return self.start_trigger(event, None);
         }
         let mut read = Box::new(DirectRead::new(event, call));

@@ -577,8 +577,7 @@ async fn run_leased<S: ConversationStore>(
     if let Err(error) = inner.open() {
         return Ran::ended(Err(error));
     }
-    let context = ExecutionContext::current();
-    let inbound = charged(inbound, room_id, &context);
+    let (inbound, context) = placed(inbound, room_id, ExecutionContext::current());
     let (answer, decided) = oneshot::channel();
     let mut named = named;
     let record = Arc::new(Record::new(named.as_mut()));
@@ -688,6 +687,31 @@ fn closed_at_its_end(
 /// link's.
 fn by_close(error: &ErrorRecord) -> bool {
     error.error_type == KIT_CLOSED || error.error_type == TURN_LINK_ERROR
+}
+
+/// `inbound`, a call into `room_id` or routed, as `context` places it, and
+/// the context its run runs in. Nested under the room's lock its code hands
+/// the run (a keyed publication's section, RFC §22.1), it draws on the
+/// budget of the room's work that code runs in, if any, as the Python
+/// implementation's NESTED call does (RFC §9.5.1 Reentrance): a pass of
+/// the cascade an admission order or a delivery works for, or a hook call
+/// of the cascade whose hook body it runs within; and its run stands in no
+/// admission order of the room ([`ExecutionContext::nested_run`]).
+/// Otherwise [`charged`], in `context`.
+fn placed(
+    inbound: Inbound,
+    room_id: Option<&RoomId>,
+    context: ExecutionContext,
+) -> (Inbound, ExecutionContext) {
+    let Some(room_id) = room_id.filter(|room_id| context.hands(room_id)) else {
+        return (charged(inbound, room_id, &context), context);
+    };
+    let inbound = inbound.under_lock(room_id.clone());
+    let inbound = match context.room_work(room_id) {
+        Some((draw, _depth)) => inbound.drawing_on(draw),
+        None => inbound,
+    };
+    (inbound, context.nested_run(room_id))
 }
 
 /// `inbound`, a call into `room_id` or routed, charged to the reentry

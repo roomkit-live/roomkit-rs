@@ -1,6 +1,7 @@
 //! Per-room mutual exclusion, in one process (RFC §13.5).
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::RoomId;
@@ -15,7 +16,7 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 /// processes needs a distributed lock (RFC §13.5).
 #[derive(Debug, Default)]
 pub(crate) struct RoomMutexes {
-    rooms: Mutex<Rooms>,
+    rooms: Arc<Mutex<Rooms>>,
 }
 
 /// The rooms' mutexes, and how many callers wait for each.
@@ -29,21 +30,35 @@ struct Rooms {
 ///
 /// The guard exists from the moment its caller starts waiting, holding a
 /// handle on the mutex, so a wait that is cancelled before it holds the
-/// mutex goes through the same drop and leaves nothing behind.
+/// mutex goes through the same drop and leaves nothing behind. It holds
+/// the rooms' table itself, so one taken with [`RoomMutexes::lock_owned`]
+/// outlives the borrow it was taken through.
 #[derive(Debug)]
 pub(crate) struct RoomGuard<'mutexes> {
     guard: Option<OwnedMutexGuard<()>>,
     /// The waiter's handle on the mutex, until it holds it.
     waiting: Option<Arc<AsyncMutex<()>>>,
     room_id: RoomId,
-    mutexes: &'mutexes RoomMutexes,
+    rooms: Arc<Mutex<Rooms>>,
+    mutexes: PhantomData<&'mutexes RoomMutexes>,
 }
 
 impl RoomMutexes {
     /// Waits for the room's mutex and returns its guard.
     pub(crate) async fn lock(&self, room_id: &RoomId) -> RoomGuard<'_> {
+        self.acquire(room_id).await
+    }
+
+    /// [`lock`](Self::lock), its guard owned: code that hands the lock it
+    /// holds to a run of the driver (a keyed delivery's section, RFC
+    /// §22.1).
+    pub(crate) async fn lock_owned(&self, room_id: &RoomId) -> RoomGuard<'static> {
+        self.acquire(room_id).await
+    }
+
+    async fn acquire<'guard>(&self, room_id: &RoomId) -> RoomGuard<'guard> {
         let mutex = {
-            let mut rooms = self.rooms();
+            let mut rooms = lock(&self.rooms);
             *rooms.waiting.entry(room_id.clone()).or_default() += 1;
             Arc::clone(rooms.mutexes.entry(room_id.clone()).or_default())
         };
@@ -51,26 +66,32 @@ impl RoomMutexes {
             guard: None,
             waiting: Some(Arc::clone(&mutex)),
             room_id: room_id.clone(),
-            mutexes: self,
+            rooms: Arc::clone(&self.rooms),
+            mutexes: PhantomData,
         };
         // Cancelled during this wait, the pending lock future, declared after
         // `guard`, is dropped first, then `guard`, which finds the mutex held
         // by the map alone when nobody else uses it.
         guard.guard = Some(mutex.lock_owned().await);
         guard.waiting = None;
-        unwait(&mut self.rooms(), room_id);
+        unwait(&mut lock(&guard.rooms), &guard.room_id);
         guard
     }
 
     /// How many callers wait for the room's mutex now. Outside the kit's
     /// work: the conformance runner's `wait_for_lock` step.
     pub(crate) fn waiting(&self, room_id: &RoomId) -> usize {
-        self.rooms().waiting.get(room_id).copied().unwrap_or(0)
+        lock(&self.rooms).waiting.get(room_id).copied().unwrap_or(0)
     }
 
+    #[cfg(test)]
     fn rooms(&self) -> MutexGuard<'_, Rooms> {
-        self.rooms.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.rooms)
     }
+}
+
+fn lock(rooms: &Mutex<Rooms>) -> MutexGuard<'_, Rooms> {
+    rooms.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Counts one waiter of `room_id`'s mutex less.
@@ -89,7 +110,7 @@ impl Drop for RoomGuard<'_> {
         // reference to it.
         drop(self.guard.take());
         let cancelled = self.waiting.take().is_some();
-        let mut rooms = self.mutexes.rooms();
+        let mut rooms = lock(&self.rooms);
         if cancelled {
             unwait(&mut rooms, &self.room_id);
         }

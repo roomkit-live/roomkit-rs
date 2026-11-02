@@ -15,6 +15,11 @@
 //!
 //! The driver reads the context of the task that runs it:
 //!
+//! - a room's lock code holds outside every run and hands the run of the
+//!   call it makes (a keyed publication's section, RFC §22.1) is that
+//!   run's: the call is nested under it, adopted by no frame, takes no
+//!   admission ticket in the room, and its run stands in none of the room's
+//!   admission order ([`Hand`]);
 //! - a lock a frame holds a live lease on is granted at once to a separate
 //!   operation (counted in the run that asks, released with the lease
 //!   holder's release only), and refused to an inbound call;
@@ -78,8 +83,8 @@ mod adoption;
 mod run;
 
 use std::future::Future;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit_core::model::{ChannelCategory, RoomId};
 use roomkit_core::ops::{ChannelRequest, Effect, EffectId, Request};
@@ -88,6 +93,7 @@ use roomkit_core::rules::chain_depth::{self, Draw, ReentryBudget};
 pub(crate) use self::adoption::{Adopting, Adoption, Completion, Reply, adopt, adopt_by_own_run};
 use self::run::Lease;
 pub(crate) use self::run::{RunShared, Written};
+use crate::locks::RoomGuard;
 use crate::tasks::Marks;
 
 tokio::task_local! {
@@ -126,14 +132,40 @@ pub(crate) struct Work {
 }
 
 /// The frames of the calls the current task runs within, the innermost
-/// last, the body of the ASYNC hook it runs within, outside them all, and
-/// the depth its calls keep whatever runs (`floor`): the depth a tool
-/// call's observers read as the call's trigger fired (RFC §8.3).
+/// last, the body of the ASYNC hook it runs within, outside them all, the
+/// depth its calls keep whatever runs (`floor`): the depth a tool call's
+/// observers read as the call's trigger fired (RFC §8.3), and the room's
+/// lock its code hands the run of the call it makes, if any (`hand`).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExecutionContext {
     frames: Arc<[Frame]>,
     body: Option<HookBody>,
     floor: Option<u32>,
+    hand: Option<Hand>,
+}
+
+/// A room's lock that code holds outside every run and hands the run of the
+/// call it makes: a keyed publication's section (RFC §22.1). That run takes
+/// it at its first request for the room's lock, and its call is nested
+/// under it (`Inbound::under_lock`), the Python implementation's NESTED
+/// placement: no frame adopts the call, and its run takes no admission
+/// ticket in the room. A call made within that run's calls is handed
+/// nothing.
+#[derive(Clone, Debug)]
+pub(crate) struct Hand {
+    room_id: RoomId,
+    guard: Arc<Mutex<Option<RoomGuard<'static>>>>,
+}
+
+impl Hand {
+    /// The lock, unless the run took it: its holder releases it by dropping
+    /// it, once the call returned.
+    pub(crate) fn take_back(&self) -> Option<RoomGuard<'static>> {
+        self.guard
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
 }
 
 /// The body of an ASYNC hook a cascade fires once an event's delivery set
@@ -306,6 +338,7 @@ impl ExecutionContext {
             frames: frames.into(),
             body: self.body.clone(),
             floor: self.floor,
+            hand: None,
         }
     }
 
@@ -318,12 +351,68 @@ impl ExecutionContext {
         self
     }
 
+    /// This context, handing `guard`, the lock of `room_id` its code holds,
+    /// to the run of the call it makes ([`Hand`]); the hand, through which
+    /// the code takes back what the run did not take.
+    pub(crate) fn handing(mut self, room_id: RoomId, guard: RoomGuard<'static>) -> (Self, Hand) {
+        let hand = Hand {
+            room_id,
+            guard: Arc::new(Mutex::new(Some(guard))),
+        };
+        self.hand = Some(hand.clone());
+        (self, hand)
+    }
+
+    /// The context of the run of a call nested under `room_id`'s lock, which
+    /// this context's code hands it ([`Hand`]): its frames stand in the
+    /// room's admission order no more. That run's sections and its
+    /// delivery set are the room's innermost work, as the Python
+    /// implementation's section and delivery frames shadow the admission
+    /// frame they run within (RFC §9.5.1 Reentrance): its later passes wait
+    /// for the lock as any section's, and a call its turns make into the
+    /// room is a new arrival, not one adopted beside its caller's event.
+    pub(crate) fn nested_run(&self, room_id: &RoomId) -> Self {
+        let frames: Vec<Frame> = self
+            .frames
+            .iter()
+            .cloned()
+            .map(|mut frame| {
+                if frame.work.admitted.as_ref() == Some(room_id) {
+                    frame.work.admitted = None;
+                }
+                frame
+            })
+            .collect();
+        Self {
+            frames: frames.into(),
+            ..self.clone()
+        }
+    }
+
+    /// Whether this context's code holds `room_id`'s lock and hands it to
+    /// the run of the call it makes: that call is nested under it.
+    pub(crate) fn hands(&self, room_id: &RoomId) -> bool {
+        self.hand
+            .as_ref()
+            .is_some_and(|hand| &hand.room_id == room_id)
+    }
+
+    /// The lock of `room_id` this context hands the run it starts, taken:
+    /// the run holds it from now on.
+    pub(crate) fn take_handed(&self, room_id: &RoomId) -> Option<RoomGuard<'static>> {
+        self.hand
+            .as_ref()
+            .filter(|hand| &hand.room_id == room_id)
+            .and_then(Hand::take_back)
+    }
+
     /// The context of a hook's `body`, which runs outside every call.
     pub(crate) fn of_hook_body(body: HookBody) -> Self {
         Self {
             frames: Arc::default(),
             body: Some(body),
             floor: None,
+            hand: None,
         }
     }
 

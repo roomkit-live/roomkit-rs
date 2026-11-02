@@ -69,11 +69,6 @@ pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
         "§11.7.6: a hook's release is answered once its section is over (G-092, RMK-1200)",
     ),
     (
-        "delivery/a-keyed-delivery-whose-transport-is-detached-before-its-section-writes-nothing",
-        "§22.1: a keyed publication's lookup, transport check and commit run in one section \
-         under the room lock (RMK-1207)",
-    ),
-    (
         "tasks/a-hand-back-leaves-the-notified-agent-s-prompt-as-its-binding-holds-it",
         "§6.4: a binding's metadata system_prompt is the agent's turn prompt (G-093, RMK-1208)",
     ),

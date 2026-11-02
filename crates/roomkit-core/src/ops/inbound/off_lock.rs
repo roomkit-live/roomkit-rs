@@ -195,11 +195,22 @@ impl OffLockCheck {
 }
 
 impl Machine {
+    /// The off-lock hooks `event`'s check runs before the room lock: none
+    /// in the room the call is nested under (`Inbound::under_lock`), whose
+    /// pass runs every hook under the lock, as an adopted entry's does
+    /// (RFC §9.5.1).
+    pub(super) fn off_lock_checks(&self, cx: &Cx<'_>, event: &RoomEvent) -> Vec<HookId> {
+        if self.call.under_lock.as_ref() == Some(&event.room_id) {
+            return Vec::new();
+        }
+        cx.config.hooks.off_lock_checks(event)
+    }
+
     /// The trigger arrived in its room: its off-lock check runs when an
     /// off-lock hook fires for it; otherwise its pass starts at once, with
     /// no ticket (RFC §9.5.1).
     pub(super) fn after_arrival(&mut self, cx: &mut Cx<'_>, arrived: Arrived) {
-        let hooks = cx.config.hooks.off_lock_checks(&arrived.event);
+        let hooks = self.off_lock_checks(cx, &arrived.event);
         if hooks.is_empty() {
             return self.start_trigger(arrived.event, None);
         }

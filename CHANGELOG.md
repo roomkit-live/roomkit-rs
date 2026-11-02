@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A keyed delivery's section holds the room lock, as Python's (RFC §22.1,
+  RMK-1207): its key's lookup, its transport's check and its commit run
+  under the lock, whatever work of the room its caller runs in, an
+  off-lock hook's body included, and its call is nested under that lock:
+  no admission ticket, its off-lock hooks run under it. A transport
+  detached ahead of it is `unavailable`/`channel_unavailable`, nothing
+  written, where a `BLOCKED` record was stored under the key.
 - A JSON object keeps its members in the order they were written, as
   Python's dict does (RMK-1198): serde_json's `preserve_order` is on for
   the workspace. A tool's JSON result `{"total": 3, "items": [...],

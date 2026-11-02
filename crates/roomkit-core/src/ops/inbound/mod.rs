@@ -335,6 +335,20 @@ impl Inbound {
         self
     }
 
+    /// The same call, made by code that holds `room_id`'s lock and hands
+    /// it to the call's run: a keyed publication's section (RFC §22.1).
+    /// The call is nested under that lock, the Python implementation's
+    /// NESTED placement (RFC §9.5.1 Reentrance): in that room it takes no
+    /// admission ticket, which would wait behind an arrival waiting for
+    /// that very lock, and its off-lock hooks run in its pass, under the
+    /// lock, with the hooks that need it. The driver answers the run's
+    /// first request for the lock with the lock handed.
+    #[must_use]
+    pub fn under_lock(mut self, room_id: RoomId) -> Self {
+        self.machine.call.under_lock = Some(room_id);
+        self
+    }
+
     fn calling(config: Arc<KitConfig>, call: Call) -> Self {
         let budget = ReentryBudget::new(config.max_chain_depth);
         let entry = match call {
@@ -494,6 +508,9 @@ struct CallFacts {
     /// What the trigger's pass writes of the message's sender, as step 5
     /// left them (RFC §10.1 step 5).
     participation: Option<identity::Participation>,
+    /// The room whose lock the call's caller holds and hands the call's
+    /// run (`Inbound::under_lock`).
+    under_lock: Option<RoomId>,
 }
 
 impl CallFacts {
@@ -506,6 +523,7 @@ impl CallFacts {
             direct: None,
             bound: Bound::Unbounded,
             participation: None,
+            under_lock: None,
         }
     }
 }

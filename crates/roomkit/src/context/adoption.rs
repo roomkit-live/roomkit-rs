@@ -73,9 +73,13 @@ pub(crate) enum Adopting {
 /// Hands `entry` to the run of the current task's context whose work under
 /// its room's lock or in its admission order made it, if any: the call is
 /// adopted by that run's operation, or declined (RFC §13.5, §9.5.1
-/// Reentrance).
+/// Reentrance). A call whose context hands it its room's lock runs apart,
+/// nested under that lock ([`Hand`](super::Hand)).
 pub(crate) async fn adopt(entry: Entry) -> Adopting {
     let context = ExecutionContext::current();
+    if context.hands(entry.room_id()) {
+        return Adopting::Apart(entry);
+    }
     let Some(frame) = context.taker(entry.room_id()).cloned() else {
         return Adopting::Apart(entry);
     };
