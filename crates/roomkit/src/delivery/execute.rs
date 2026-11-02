@@ -93,28 +93,7 @@ pub async fn execute_delivery<S: ConversationStore>(
     let content = before_deliver(&hooks, item).await;
     let mut effective = item.clone();
     if let Some(content) = content {
-        let strategy = options
-            .strategy
-            .unwrap_or_else(|| deserialize_strategy(&item.strategy));
-        let delivery = DeliveryContext {
-            content: content.clone(),
-            channel_id: item.channel_id.clone(),
-            metadata: item.metadata.clone(),
-            addressed_to: item.addressed_to.clone(),
-            idempotency_key: item.idempotency_key.clone(),
-            session_id: item.session_id.clone(),
-            chain_depth: item.chain_depth,
-            instruction: item.instruction,
-            ..DeliveryContext::new(kit.clone(), item.room_id.clone(), String::new())
-        };
-        let outcome = match strategy.deliver(delivery).await {
-            Ok(Some(outcome)) => outcome,
-            Ok(None) => DeliveryOutcome {
-                reason: Some("strategy_outcome_unknown".to_owned()),
-                ..DeliveryOutcome::new(DeliveryOutcomeStatus::Unknown)
-            },
-            Err(error) => strategy_failed(&error),
-        };
+        let outcome = run_strategy(kit, item, options.strategy, &content).await;
         item.outcome = Some(item.owned(outcome));
         effective.content = content;
     }
@@ -123,6 +102,41 @@ pub async fn execute_delivery<S: ConversationStore>(
     item.outcome
         .clone()
         .unwrap_or_else(|| item.owned(DeliveryOutcome::new(DeliveryOutcomeStatus::Unknown)))
+}
+
+/// What the strategy, `strategy` or the one `item` keeps, makes of `item`
+/// delivering `content`: a strategy that cannot be read from the item, or
+/// that raises, fails it, as Python's `execute_delivery` reads and runs it
+/// in one `try`; one that reports no outcome leaves it unknown.
+async fn run_strategy<S: ConversationStore>(
+    kit: &RoomKit<S>,
+    item: &DeliveryItem,
+    strategy: Option<Arc<dyn DeliveryStrategy<S>>>,
+    content: &str,
+) -> DeliveryOutcome {
+    let strategy = match strategy.map_or_else(|| deserialize_strategy(&item.strategy), Ok) {
+        Ok(strategy) => strategy,
+        Err(error) => return strategy_failed(&error),
+    };
+    let delivery = DeliveryContext {
+        content: content.to_owned(),
+        channel_id: item.channel_id.clone(),
+        metadata: item.metadata.clone(),
+        addressed_to: item.addressed_to.clone(),
+        idempotency_key: item.idempotency_key.clone(),
+        session_id: item.session_id.clone(),
+        chain_depth: item.chain_depth,
+        instruction: item.instruction,
+        ..DeliveryContext::new(kit.clone(), item.room_id.clone(), String::new())
+    };
+    match strategy.deliver(delivery).await {
+        Ok(Some(outcome)) => outcome,
+        Ok(None) => DeliveryOutcome {
+            reason: Some("strategy_outcome_unknown".to_owned()),
+            ..DeliveryOutcome::new(DeliveryOutcomeStatus::Unknown)
+        },
+        Err(error) => strategy_failed(&error),
+    }
 }
 
 /// A strategy that raised `error`: its execution failed, its class and

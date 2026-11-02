@@ -297,6 +297,12 @@ pub enum RoomKitError {
         /// Why.
         reason: String,
     },
+    /// Python's builtin `TypeError`: a value of the wrong kind, as the
+    /// Python implementation's message says: a delivery strategy's
+    /// serialized parameter it takes no such argument for
+    /// ([`deserialize_strategy`](crate::delivery::deserialize_strategy)).
+    #[error("{0}")]
+    Type(String),
 }
 
 impl RoomKitError {
@@ -350,6 +356,7 @@ impl RoomKitError {
             Self::Internal(_) => "AssertionError".to_owned(),
             Self::Timeout => "TimeoutError".to_owned(),
             Self::Runtime(_) => "RuntimeError".to_owned(),
+            Self::Type(_) => "TypeError".to_owned(),
             Self::Store(_) => turns::CHANNEL_ERROR.to_owned(),
             Self::RoomNotFound(_)
             | Self::RoomAlreadyExists(_)

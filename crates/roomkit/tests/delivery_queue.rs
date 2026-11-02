@@ -193,6 +193,31 @@ async fn after_deliver_reports_a_strategy_that_raised() {
     kit.close().await.unwrap();
 }
 
+// Python: delivery/worker.py's execute_delivery, which reads the item's
+// strategy (deserialize_strategy's `cls(**params)`) and runs it in one
+// `try`: a strategy the item names with an argument its class does not take
+// fails the execution, and nothing is published.
+#[tokio::test]
+async fn an_item_whose_strategy_cannot_be_read_fails_its_execution() {
+    use roomkit::ConversationStore;
+    let kit = kit_with_room(RoomKitOptions::default()).await;
+    let mut item = DeliveryItem::new(room(), "hello");
+    item.strategy =
+        serde_json::from_value(serde_json::json!({"type": "queued", "params": {"bufer": 1.0}}))
+            .unwrap();
+    let outcome = execute_delivery(&kit, &mut item, ExecuteDeliveryOptions::default()).await;
+    assert_eq!(outcome.status, DeliveryOutcomeStatus::Failed);
+    assert_eq!(outcome.reason.as_deref(), Some("strategy_failed"));
+    assert_eq!(outcome.error.unwrap().code, "TypeError");
+    let options = roomkit::store::ListEventsOptions::default();
+    let events = kit.store().list_events(&room(), options).await.unwrap();
+    let published = |event: &RoomEvent| {
+        matches!(&event.content, EventContent::Text(text) if text.body == "hello")
+    };
+    assert!(!events.iter().any(published));
+    kit.close().await.unwrap();
+}
+
 // Python: delivery/worker.py's fire_delivery_hooks: an unsuccessful outcome
 // with neither error nor reason reports a null error.
 #[tokio::test]

@@ -338,6 +338,7 @@ fn rebuilt_variant(error: &WireError) -> Option<RoomKitError> {
         }
         "Value" => RoomKitError::Value(error.message.clone()),
         "Runtime" => RoomKitError::Runtime(error.message.clone()),
+        "Type" => RoomKitError::Type(error.message.clone()),
         _ => return None,
     })
 }
@@ -393,6 +394,7 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::Runtime(_) => "Runtime",
         RoomKitError::ToolNameCollision(_) => "ToolNameCollision",
         RoomKitError::VerificationRefused { .. } => "VerificationRefused",
+        RoomKitError::Type(_) => "Type",
     };
     (variant, fields)
 }

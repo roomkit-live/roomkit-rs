@@ -30,7 +30,7 @@ duration_suffix = "_seconds"
 # by the variant's path, the variant the builtin's name without `Error`;
 # `ExceptionGroup` the answer of a close whose channels failed (decided
 # 2026-10-29).
-builtin_errors = { "roomkit::RoomKitError::Value" = "ValueError", "roomkit::RoomKitError::Cancelled" = "asyncio.CancelledError", "roomkit::RoomKitError::ExceptionGroup" = "ExceptionGroup", "roomkit::RoomKitError::Timeout" = "TimeoutError", "roomkit::RoomKitError::Runtime" = "RuntimeError", "roomkit::StoreError::Value" = "ValueError" }
+builtin_errors = { "roomkit::RoomKitError::Value" = "ValueError", "roomkit::RoomKitError::Cancelled" = "asyncio.CancelledError", "roomkit::RoomKitError::ExceptionGroup" = "ExceptionGroup", "roomkit::RoomKitError::Timeout" = "TimeoutError", "roomkit::RoomKitError::Runtime" = "RuntimeError", "roomkit::StoreError::Value" = "ValueError", "roomkit::RoomKitError::Type" = "TypeError" }
 # The variants carrying a builtin that stand for Python's value of it, no
 # member: Python's visibility naming channels is a comma-joined `str`.
 builtin_payloads = ["roomkit::model::Visibility::Channels"]

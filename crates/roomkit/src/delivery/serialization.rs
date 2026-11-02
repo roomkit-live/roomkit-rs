@@ -11,6 +11,7 @@ use serde_json::Value;
 use super::item::immediate;
 use super::queued::{Queued, QueuedOptions};
 use super::strategy::{DeliveryStrategy, Immediate, WaitForIdle, WaitForIdleOptions};
+use crate::error::RoomKitError;
 use crate::store::ConversationStore;
 
 /// `strategy` as a delivery queue keeps it, `{"type": ..., "params":
@@ -29,46 +30,145 @@ pub fn serialize_strategy<S: 'static>(strategy: Option<&dyn DeliveryStrategy<S>>
 }
 
 /// The strategy `data`, a serialized one, names: Python's
-/// `deserialize_strategy(data)`. A type it does not know, or none, gives
-/// `Immediate`, the former logged; a parameter it does not name takes its
-/// default.
-pub fn deserialize_strategy<S: ConversationStore>(data: &Metadata) -> Arc<dyn DeliveryStrategy<S>> {
-    let params = data.get("params").and_then(Value::as_object);
-    let seconds = |name: &str| {
-        params
-            .and_then(|params| params.get(name))
-            .and_then(Value::as_f64)
-            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+/// `deserialize_strategy(data)`, which builds `cls(**params)`. A type it
+/// does not know, or none, gives `Immediate`, the former logged and its
+/// params unread; a parameter it does not name takes its default.
+///
+/// A duration is a number of seconds, one below zero waiting none, as the
+/// Python implementation's strategies wait none for it.
+///
+/// # Errors
+///
+/// [`RoomKitError::Type`], Python's `TypeError`, for `params` that is no
+/// object, a parameter the type takes no such argument for (`immediate`
+/// takes none), or one whose value is of the wrong kind: a duration that
+/// is no number, a separator that is no string. The Python implementation
+/// keeps such a value and fails once it uses it; a strategy here holds a
+/// duration and a string only, so it fails when read.
+pub fn deserialize_strategy<S: ConversationStore>(
+    data: &Metadata,
+) -> Result<Arc<dyn DeliveryStrategy<S>>, RoomKitError> {
+    let kind = match data.get("type") {
+        None => "immediate",
+        Some(Value::String(kind)) => kind.as_str(),
+        Some(other) => {
+            tracing::warn!(target: "roomkit::delivery", strategy = %other, "an unknown strategy type runs as Immediate");
+            return Ok(Arc::new(Immediate));
+        }
     };
-    match data
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("immediate")
-    {
-        "immediate" => Arc::new(Immediate),
+    let (class, names): (&str, &[&str]) = match kind {
+        "immediate" => ("Immediate", &[]),
+        "wait_for_idle" => ("WaitForIdle", &["buffer", "playback_timeout"]),
+        "queued" => ("Queued", &["buffer", "playback_timeout", "separator"]),
+        unknown => {
+            tracing::warn!(target: "roomkit::delivery", strategy = %unknown, "an unknown strategy type runs as Immediate");
+            return Ok(Arc::new(Immediate));
+        }
+    };
+    let params = Params::read(data, class, names)?;
+    Ok(match kind {
         "wait_for_idle" => {
             let defaults = WaitForIdleOptions::default();
             Arc::new(WaitForIdle::new(WaitForIdleOptions {
-                buffer: seconds("buffer").unwrap_or(defaults.buffer),
-                playback_timeout: seconds("playback_timeout").unwrap_or(defaults.playback_timeout),
+                buffer: params.seconds("buffer")?.unwrap_or(defaults.buffer),
+                playback_timeout: params
+                    .seconds("playback_timeout")?
+                    .unwrap_or(defaults.playback_timeout),
             }))
         }
         "queued" => {
             let defaults = QueuedOptions::default();
-            let separator = params
-                .and_then(|params| params.get("separator"))
-                .and_then(Value::as_str)
-                .map_or(defaults.separator, str::to_owned);
             Arc::new(Queued::new(QueuedOptions {
-                buffer: seconds("buffer").unwrap_or(defaults.buffer),
-                playback_timeout: seconds("playback_timeout").unwrap_or(defaults.playback_timeout),
-                separator,
+                buffer: params.seconds("buffer")?.unwrap_or(defaults.buffer),
+                playback_timeout: params
+                    .seconds("playback_timeout")?
+                    .unwrap_or(defaults.playback_timeout),
+                separator: params.text("separator")?.unwrap_or(defaults.separator),
             }))
         }
-        unknown => {
-            tracing::warn!(target: "roomkit::delivery", strategy = %unknown, "an unknown strategy type runs as Immediate");
-            Arc::new(Immediate)
+        _ => Arc::new(Immediate),
+    })
+}
+
+/// A serialized strategy's `params`, checked against the arguments its
+/// class takes, as Python's `cls(**params)` checks them.
+struct Params<'a> {
+    class: &'static str,
+    params: Option<&'a serde_json::Map<String, Value>>,
+}
+
+impl<'a> Params<'a> {
+    fn read(data: &'a Metadata, class: &'static str, names: &[&str]) -> Result<Self, RoomKitError> {
+        let params = match data.get("params") {
+            None => None,
+            Some(Value::Object(params)) => Some(params),
+            Some(other) => {
+                return Err(RoomKitError::Type(format!(
+                    "{class}() argument after ** must be a mapping, not {}",
+                    python_type(other)
+                )));
+            }
+        };
+        let unknown = params
+            .into_iter()
+            .flat_map(serde_json::Map::keys)
+            .find(|name| !names.contains(&name.as_str()));
+        match unknown {
+            Some(_) if names.is_empty() => Err(RoomKitError::Type(format!(
+                "{class}() takes no arguments"
+            ))),
+            Some(name) => Err(RoomKitError::Type(format!(
+                "{class}.__init__() got an unexpected keyword argument '{name}'"
+            ))),
+            None => Ok(Self { class, params }),
         }
+    }
+
+    fn value(&self, name: &str) -> Option<&'a Value> {
+        self.params.and_then(|params| params.get(name))
+    }
+
+    /// The duration `name` gives, in seconds: none below zero, the longest
+    /// one past the range.
+    fn seconds(&self, name: &str) -> Result<Option<Duration>, RoomKitError> {
+        let Some(value) = self.value(name) else {
+            return Ok(None);
+        };
+        let Some(seconds) = value.as_f64() else {
+            return Err(self.wrong_kind(name, "a number of seconds", value));
+        };
+        Ok(Some(
+            Duration::try_from_secs_f64(seconds.max(0.0)).unwrap_or(Duration::MAX),
+        ))
+    }
+
+    fn text(&self, name: &str) -> Result<Option<String>, RoomKitError> {
+        match self.value(name) {
+            None => Ok(None),
+            Some(Value::String(text)) => Ok(Some(text.clone())),
+            Some(value) => Err(self.wrong_kind(name, "a str", value)),
+        }
+    }
+
+    fn wrong_kind(&self, name: &str, wanted: &str, value: &Value) -> RoomKitError {
+        RoomKitError::Type(format!(
+            "{}() argument '{name}' must be {wanted}, not {}",
+            self.class,
+            python_type(value)
+        ))
+    }
+}
+
+/// The name of the Python type a JSON value reads as.
+fn python_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "NoneType",
+        Value::Bool(_) => "bool",
+        Value::Number(number) if number.is_f64() => "float",
+        Value::Number(_) => "int",
+        Value::String(_) => "str",
+        Value::Array(_) => "list",
+        Value::Object(_) => "dict",
     }
 }
 
@@ -85,7 +185,7 @@ mod tests {
     }
 
     fn read(data: Value) -> Arc<dyn DeliveryStrategy<InMemoryStore>> {
-        deserialize_strategy(&serde_json::from_value(data).unwrap())
+        deserialize_strategy(&serde_json::from_value(data).unwrap()).unwrap()
     }
 
     fn secs(seconds: f64) -> Duration {
@@ -168,11 +268,53 @@ mod tests {
             ..QueuedOptions::default()
         });
         let original: &dyn DeliveryStrategy<InMemoryStore> = &original;
-        let restored = deserialize_strategy::<InMemoryStore>(&serialize_strategy(Some(original)));
+        let restored =
+            deserialize_strategy::<InMemoryStore>(&serialize_strategy(Some(original))).unwrap();
         assert_eq!(
             written(Some(&*restored))["params"]["separator"],
             json!(" // ")
         );
         assert_eq!(written(Some(&*restored))["params"]["buffer"], json!(2.0));
+    }
+
+    fn refusal(data: Value) -> String {
+        match deserialize_strategy::<InMemoryStore>(&serde_json::from_value(data).unwrap()) {
+            Err(RoomKitError::Type(message)) => message,
+            Err(other) => panic!("not a TypeError: {other:?}"),
+            Ok(_) => panic!("read"),
+        }
+    }
+
+    // Python: delivery/serialization.py's deserialize_strategy, `cls(**params)`:
+    // an argument the class does not take raises TypeError, and params that
+    // is no mapping; an unknown type reads none of them. A value of the
+    // wrong kind is refused when read (Python raises once it uses it); a
+    // duration below zero waits none.
+    #[test]
+    fn params_the_strategy_takes_no_such_argument_for_are_refused() {
+        assert_eq!(
+            refusal(json!({"type": "wait_for_idle", "params": {"bufer": 2.0}})),
+            "WaitForIdle.__init__() got an unexpected keyword argument 'bufer'"
+        );
+        assert_eq!(
+            refusal(json!({"type": "immediate", "params": {"buffer": 1.0}})),
+            "Immediate() takes no arguments"
+        );
+        assert_eq!(
+            refusal(json!({"type": "queued", "params": null})),
+            "Queued() argument after ** must be a mapping, not NoneType"
+        );
+        assert_eq!(
+            refusal(json!({"type": "queued", "params": {"buffer": "x"}})),
+            "Queued() argument 'buffer' must be a number of seconds, not str"
+        );
+        assert_eq!(
+            refusal(json!({"type": "queued", "params": {"separator": 5}})),
+            "Queued() argument 'separator' must be a str, not int"
+        );
+        let unknown = read(json!({"type": "later", "params": {"anything": 1}}));
+        assert_eq!(written(Some(&*unknown))["type"], json!("immediate"));
+        let negative = read(json!({"type": "wait_for_idle", "params": {"buffer": -1}}));
+        assert_eq!(written(Some(&*negative))["params"]["buffer"], json!(0.0));
     }
 }
