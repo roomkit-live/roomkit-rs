@@ -7,10 +7,10 @@
 use std::error::Error;
 use std::fmt;
 
-/// `error`, raised as an instance of `class`, its Python class's name
-/// (`ProviderError`), which the kit records as Python's `error_type_name`
-/// reports an error: a task's exception, ON_ERROR's `error_type`, a
-/// failed delivery's code. Shown as `error` is, its causes `error`'s.
+/// `error`, raised as an instance of `class`, its Python class, which the
+/// kit records by its last name as Python's `error_type_name` reports an
+/// error: a task's exception, ON_ERROR's `error_type`, a failed delivery's
+/// code. Shown as `error` is, its causes `error`'s.
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct ClassedError {
@@ -27,9 +27,12 @@ impl ClassedError {
         }
     }
 
-    /// The name of the class the error is raised as.
+    /// The name the error is reported under, as Python's `error_type_name`
+    /// reads its class: the last name of a qualified one
+    /// (`roomkit.providers.ai.base:ProviderError` reads `ProviderError`).
     pub fn class(&self) -> &str {
-        &self.class
+        let name = self.class.rsplit(':').next().unwrap_or(&self.class);
+        name.rsplit('.').next().unwrap_or(name)
     }
 
     /// The error raised.

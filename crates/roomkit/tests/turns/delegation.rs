@@ -691,7 +691,10 @@ impl Channel for RefusedMidStream {
             return ready(Ok(ChannelOutput::empty()));
         }
         let refusal = std::io::Error::other("upstream 503");
-        let raised: ChannelError = Box::new(roomkit::ClassedError::new("ProviderError", refusal));
+        let raised: ChannelError = Box::new(roomkit::ClassedError::new(
+            "roomkit.providers.ai.base:ProviderError",
+            refusal,
+        ));
         let items = Items(VecDeque::from([
             Ok(ResponseItem::Text("Looking.".to_owned())),
             Err(raised),
@@ -705,8 +708,9 @@ impl Channel for RefusedMidStream {
 
 // Python: tests/tasks/test_task_turn_record.py, a failed task keeps the
 // error its worker's turn raised (tasks/models.py _as_raised), its class
-// the provider's, never a channel's, named as Rust's records name a class
-// (Python's `roomkit.providers.ai.base:ProviderError`): the scenario
+// the provider's, never a channel's, recorded by its last name as Python's
+// `error_type_name` reads `roomkit.providers.ai.base:ProviderError`: the
+// scenario
 // tasks/a-failed-task-keeps-the-error-its-worker-s-turn-raised, which
 // roomkit-ai's provider errors pass once they name their class.
 #[tokio::test]
