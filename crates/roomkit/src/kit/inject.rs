@@ -216,10 +216,15 @@ impl<S: ConversationStore> RoomKit<S> {
         self.inner.open()?;
         self.reached_from_its_work(&entry).await?;
         let refused = refusal_of(&entry);
+        if let Some(named) = named.as_ref().filter(|named| named.named().has_key())
+            && ExecutionContext::current().works_in_room(entry.room_id())
+        {
+            self.locate_in_room(named.named(), entry.room_id()).await;
+        }
         let entry = match context::adopt(entry).await {
             Adopting::Settled(result, completion) => {
                 if let Some(named) = named.filter(|named| named.named().has_key()) {
-                    self.name_adopted(named, &result, &completion).await;
+                    self.name_adopted(named, &result, &completion);
                 }
                 return Ok(Entered {
                     result: (*result).map_err(refused)?,
@@ -245,20 +250,18 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Names the delivery of a call the room's work adopted by `named`
     /// until its set ran, as `completion` tells: a cancellation by its key
     /// cuts the turns of the entry's cascade in the run that adopted it.
-    /// Decided as `result` tells, its delivery is located in its room's
-    /// organization, and holds its event held for verification until its
-    /// release, as any call's (RFC §10.1, §11.7.6); Python's adopted call
-    /// takes `_prepare_event_inner`'s `named.locate` and `_name_held`.
-    /// Called before the room's work that adopted it goes on, so under its
-    /// lock: no release reaches the event before.
-    async fn name_adopted(
+    /// Decided as `result` tells, it holds its event held for verification
+    /// until its release, as any call's (RFC §11.7.6); Python's adopted call
+    /// takes `_name_held`. Called as the call settles, before the room's work
+    /// that adopted it goes on, so under its lock: no release reaches the
+    /// event before.
+    fn name_adopted(
         &self,
         mut named: NamedGuard,
         result: &Result<InboundResult, InboundError>,
         completion: &Completion,
     ) {
         if let Ok(result) = result {
-            self.locate_adopted(named.named(), result).await;
             named.named().decided(result);
         }
         named.attach(Arc::clone(&completion.cancel));
@@ -271,23 +274,24 @@ impl<S: ConversationStore> RoomKit<S> {
         drop(self.inner.tasks.spawn_alone(Kind::Turn, over));
     }
 
-    /// Locates `named`, the delivery of an adopted call that `result`
-    /// decided, in its room's organization, unless its call named its
-    /// organization: the room is read, as Python's adopted call reads it.
-    /// A room the read does not find, gone or not read, leaves it where it
-    /// is: a scoped cancellation then reaches it no more than before.
-    async fn locate_adopted(&self, named: &Named, result: &InboundResult) {
-        let Some(event) = result.event.as_ref().filter(|_| !named.is_located()) else {
+    /// Locates `named`, the delivery of a call made from the work of
+    /// `room_id`, which that work may adopt, in the room's organization,
+    /// unless its call named its organization: the room is read before the
+    /// call is handed over, as Python's adopted call reads it first
+    /// (`_prepare_event_inner`). A room the read does not find, gone or not
+    /// read, leaves it where it is.
+    async fn locate_in_room(&self, named: &Named, room_id: &RoomId) {
+        if named.is_located() {
             return;
-        };
-        match self.store().get_room(&event.room_id).await {
+        }
+        match self.store().get_room(room_id).await {
             Ok(Some(room)) => named.locate(room.organization_id.as_deref()),
             Ok(None) => {}
             Err(error) => tracing::debug!(
                 target: "roomkit::delivery",
-                room_id = %event.room_id,
+                room_id = %room_id,
                 %error,
-                "reading the room of an adopted call failed; its delivery stays unlocated"
+                "reading the room of a call from its work failed; its delivery stays unlocated"
             ),
         }
     }
