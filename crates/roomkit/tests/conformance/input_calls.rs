@@ -53,7 +53,7 @@ pub(crate) async fn call(
             };
             run.kit().reject_input(&request, options).await
         }
-        other => return Err(format!("no call {other}").into()),
+        other => return Err(format!("no call {other}")),
     };
     Ok((
         finish(run, name, outcome, |taken| Value::Bool(*taken)),

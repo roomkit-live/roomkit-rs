@@ -63,7 +63,7 @@ fn human_input_tool_handler_options_defaults_as_python() {
     // roomkit.HumanInputToolHandler.__init__(handler) = None
     assert!(defaults.handler.is_none());
     // roomkit.HumanInputToolHandler.__init__(tool_definitions) = None
-    assert!(defaults.tool_definitions.is_empty());
+    assert_eq!(defaults.tool_definitions, Vec::<roomkit_ai::AiTool>::new());
     // roomkit.HumanInputToolHandler.ask(channel_type) = <ChannelType.AI: 'ai'>
     assert_eq!(
         roomkit_ai::AskOptions::default().channel_type,
