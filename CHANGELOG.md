@@ -23,6 +23,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A tool a `BEFORE_AI_GENERATION` hook adds to an agent with no tool of its
   own is declared too, its calls going to the tool handler, as Python's
   (RFC §6.4, RMK-1181).
+- A held message's key names its delivery until its release is answered,
+  as Python's (RFC §11.7.6, RMK-1182): cancelled after its call, in
+  flight or while its set runs, it is released with no answer, the
+  cancellation written on its hold mark so that a release in another
+  process reads it; a cancel during the released answer cuts it; a
+  message nothing will release is named no longer than its call, and one
+  held past `release_max_age` no more. `complete_verification` called
+  from a hook under the room's lock releases as Python's: its answer
+  runs in the room's lane after the hook's section, where it failed
+  `ReentrantCall`.
 - A status's publication runs at least as deep as its poster, as
   Python's (RFC §8.3, RMK-1187): what an `ON_STATUS_POSTED` hook sends
   into the room is that deep, so a turn that posts a status, a hook that
