@@ -178,7 +178,9 @@ pub(crate) async fn read<S: ConversationStore>(
     let read = producer.read_by(reader, pulled, reader_done, stops).await;
     let mut output = producer.finish(read).await;
     // How the turn ended reaches the operation under the caller's `turns`,
-    // as Python's `_add_turn` puts it there (RFC §6.4).
+    // as Python's `_add_turn` puts it there (RFC §6.4); a `turns` the
+    // target's own output says is not its caller's.
+    output.response_metadata.remove(TURNS);
     if let Some(entry) = producer.segments.turn_entry() {
         add_turn(&mut output.response_metadata, &responder.channel_id, entry);
     }

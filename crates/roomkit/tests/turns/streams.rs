@@ -30,10 +30,11 @@ use crate::support::{asks, channel, received, room};
 use roomkit_core::rules::transcoding::text_of;
 
 /// A WebSocket transport that streams and keeps the length of each text
-/// it is handed.
+/// it is handed, its output saying `says`.
 #[derive(Clone)]
 struct Counting {
     sizes: Arc<Mutex<Vec<usize>>>,
+    says: roomkit::model::Metadata,
 }
 
 impl Counting {
@@ -107,7 +108,10 @@ impl Channel for Counting {
                 self.sizes.lock().unwrap().push(text.len());
             }
         }
-        Ok(ChannelOutput::default())
+        Ok(ChannelOutput {
+            response_metadata: self.says.clone(),
+            ..ChannelOutput::default()
+        })
     }
 
     fn handle_inbound(
@@ -146,6 +150,7 @@ async fn deltas_yielded_together_cross_as_one_item() {
     .unwrap();
     let target = Counting {
         sizes: Arc::default(),
+        says: roomkit::model::Metadata::new(),
     };
     kit.register_channel(target.clone()).unwrap();
     let words: Vec<String> = (0..200).map(|n| format!("w{n} ")).collect();
@@ -623,5 +628,55 @@ async fn a_stream_cancelled_after_it_wrote_ends_in_the_middle_of_its_stream() {
             "The turn ended in the middle of its stream".to_owned()
         ))
     );
+    kit.close().await.unwrap();
+}
+
+// RFC §6.4, §10.1 step 15: what a streaming target's `deliver_stream()`
+// returns is not its caller's, as Python's `_deliver_segments` keeps
+// nothing of it: a `turns` it says never reaches the caller's record,
+// which names the agent's turn alone.
+#[tokio::test]
+async fn a_streaming_target_s_own_turns_never_reach_the_caller() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(roomkit::testing::RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        roomkit::testing::RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    let mut says = roomkit::model::Metadata::new();
+    says.insert(
+        "turns".to_owned(),
+        json!({"intruder": {"loop_end_reason": "completed"}}),
+    );
+    let target = Counting {
+        sizes: Arc::default(),
+        says,
+    };
+    kit.register_channel(target).unwrap();
+    let model = ScriptedProvider::new([ScriptedRound::writing(["The answer."])]);
+    kit.register_channel(
+        AiChannel::new(channel("ai"), model, AiChannelOptions::default()).unwrap(),
+    )
+    .unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["sms", "ws", "ai"] {
+        kit.attach_channel(&room(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+
+    let result = asks(&kit, "Answer.").await;
+
+    let turns: Vec<String> = result.response_metadata["turns"]
+        .as_object()
+        .map(|turns| turns.keys().cloned().collect())
+        .unwrap_or_default();
+    assert_eq!(turns, ["ai"]);
     kit.close().await.unwrap();
 }
