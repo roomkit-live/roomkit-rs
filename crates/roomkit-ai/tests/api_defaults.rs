@@ -90,3 +90,12 @@ fn steer_options_defaults_as_python() {
     // roomkit.AIChannel.steer(turn_id) = None
     assert!(defaults.turn_id.is_none());
 }
+
+#[test]
+fn ai_channel_room_turn_options_defaults_as_python() {
+    let defaults = AiChannelOptions::default();
+    // roomkit.AIChannel.__init__(serialize_room_turns) = False
+    assert!(!defaults.serialize_room_turns);
+    // roomkit.AIChannel.__init__(steer_room_turns) = False
+    assert!(!defaults.steer_room_turns);
+}

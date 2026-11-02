@@ -458,14 +458,14 @@ members = [
     "active_turns", "channel_call", "connect_session", "disconnect_session",
     "emit_trace", "on_room_attached", "on_room_detached", "on_room_event",
     "on_trace", "resolve_trace_room", "restore_room_state", "room_state",
-    "serializes_room_turns", "trace_enabled", "update_binding",
+    "trace_enabled", "update_binding",
 ]
-reason = "not in 0.x: identity resolution, active turns, tracing, sessions, room callbacks, channel calls, room state, serialized turns (lot 4's list)"
+reason = "not in 0.x: identity resolution, active turns, tracing, sessions, room callbacks, channel calls, room state (lot 4's list)"
 
 [[missing]]
 python = "roomkit.ChannelDeclaration.__init__"
-params = ["identity", "thinks_while_listening", "takes_owner_tools", "serializes_room_turns"]
-reason = "not in 0.x: agent identity, the thinker, owner-served tools and serialized turns"
+params = ["identity", "thinks_while_listening", "takes_owner_tools"]
+reason = "not in 0.x: agent identity, the thinker and owner-served tools"
 
 [[missing]]
 python = "roomkit.ConversationStore"
@@ -864,9 +864,9 @@ params = [
     "tool_search_threshold_tokens", "tool_timeouts", "describe_empty_event",
     "max_author_images", "speak_policy", "speak_timeout", "thinker",
     "think_wait", "text_coalesce_ms", "text_coalesce_chars",
-    "publish_text_deltas", "serialize_room_turns",
+    "publish_text_deltas",
 ]
-reason = "not in 0.x: continuation, thinking, provider retry and fallback, scripts and sandbox, external and human tools, structured output, eviction, planning, tool search, budgets, per-tool bounds, speaking turns, the thinker, coalescing and serialized turns"
+reason = "not in 0.x: continuation, thinking, provider retry and fallback, scripts and sandbox, external and human tools, structured output, eviction, planning, tool search, budgets, per-tool bounds, speaking turns, the thinker and coalescing"
 
 [[missing]]
 python = "roomkit.MemoryResult.__init__"
