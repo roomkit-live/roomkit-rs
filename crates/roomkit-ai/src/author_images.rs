@@ -164,6 +164,17 @@ pub(crate) enum Resolver<'a> {
     Media(&'a MediaResolver),
 }
 
+impl<'a> Resolver<'a> {
+    /// What resolves a turn's references: the agent's `own` resolver, else
+    /// the `kit`'s; none without either.
+    pub(crate) fn of(
+        own: Option<&'a dyn ImageResolver>,
+        kit: Option<&'a MediaResolver>,
+    ) -> Option<Self> {
+        own.map(Self::Image).or_else(|| kit.map(Self::Media))
+    }
+}
+
 /// Decides what each image `events` carry becomes, the newest first, the
 /// newest `limit` sent, those `refused` in the room read as refused, and
 /// resolves the references among those sent through `resolver`, for
@@ -244,11 +255,15 @@ async fn resolved(media: &MediaContent, room: &RoomId, resolver: Option<Resolver
                 .filter(Image::is_resolved),
             None => None,
         },
-        Some(Resolver::Media(resolver)) => resolver
-            .call(media.clone(), room.clone())
-            .await
-            .filter(|data| !data.is_empty() && data.len() <= MAX_AUTHOR_IMAGE_BYTES)
-            .and_then(|data| Image::new(&to_data_uri(&data, &kind), &kind)),
+        Some(Resolver::Media(resolver)) => match resolver.call(media.clone(), room.clone()).await {
+            Ok(data) => data
+                .filter(|data| !data.is_empty() && data.len() <= MAX_AUTHOR_IMAGE_BYTES)
+                .and_then(|data| Image::new(&to_data_uri(&data, &kind), &kind)),
+            Err(error) => {
+                tracing::warn!(target: "roomkit::ai", room_id = %room, %error, "the media resolver failed on an image");
+                None
+            }
+        },
     };
     image.map_or_else(
         || Decided::Mention(mention(UNAVAILABLE, media)),
@@ -292,10 +307,14 @@ pub(crate) fn with_attached_media(event: &RoomEvent, reader: Option<&AttachedMed
     if event.r#type == EventType::Instruction || is_deleted(event) {
         return event.clone();
     }
-    let attached = reader.call(event);
-    if attached.is_empty() {
-        return event.clone();
-    }
+    let attached = match reader.call(event) {
+        Ok(attached) if !attached.is_empty() => attached,
+        Ok(_) => return event.clone(),
+        Err(error) => {
+            tracing::warn!(target: "roomkit::ai", event_id = %event.id, %error, "the attached-media reader failed");
+            return event.clone();
+        }
+    };
     match followed_by(&event.content, attached) {
         Some(content) => RoomEvent {
             content,
@@ -598,12 +617,12 @@ mod tests {
                 .metadata
                 .get("files")
                 .and_then(|files| files.as_array());
-            files
+            Ok(files
                 .into_iter()
                 .flatten()
                 .filter_map(|name| name.as_str())
                 .map(|name| MediaContent::new(format!("app-media://{name}"), "image/png").unwrap())
-                .collect()
+                .collect())
         })
     }
 
@@ -676,9 +695,9 @@ mod tests {
                 "app-media://one" => b"a",
                 "app-media://two" => b"ab",
                 "app-media://three" => b"abc",
-                _ => return None,
+                _ => return Ok(None),
             };
-            (room.as_str() == "allowed").then(|| bytes.to_vec())
+            Ok((room.as_str() == "allowed").then(|| bytes.to_vec()))
         });
         let room = RoomId::new("allowed").unwrap();
         let events = [
@@ -739,5 +758,67 @@ mod tests {
         sent.refused_by(&error(Some(400), false));
         assert_eq!(refused.of(&room), sent.keys);
         assert!(refused.of(&RoomId::new("other").unwrap()).is_empty());
+    }
+
+    // Python: tests/test_attached_media.py::TestNotSeen::test_a_reader_that_fails_names_none
+    #[test]
+    fn a_reader_that_fails_names_none() {
+        let broken = AttachedMedia::new(|_| Err("record unreadable".into()));
+        let event = message("look", &["photo-1"]);
+        assert_eq!(with_attached_media(&event, Some(&broken)), event);
+    }
+
+    // Python: tests/test_author_images.py::TestMention::test_an_image_that_does_not_resolve_leaves_the_turn_a_mention
+    #[tokio::test]
+    async fn an_image_that_does_not_resolve_leaves_the_turn_a_mention() {
+        let resolver = MediaResolver::new(|media, _room| async move {
+            match media.url.as_str() {
+                "app-media://fails" => Err("storage unreachable".into()),
+                "app-media://empty" => Ok(Some(Vec::new())),
+                "app-media://large" => Ok(Some(vec![0; MAX_AUTHOR_IMAGE_BYTES + 1])),
+                _ => Ok(None),
+            }
+        });
+        let room = RoomId::new("allowed").unwrap();
+        for url in ["fails", "empty", "large", "none"] {
+            let event = photo("e1", &format!("app-media://{url}"), "lamp.png");
+            let resolver = Some(super::Resolver::Media(&resolver));
+            let images = author_images(&[&event], &room, resolver, None, &HashSet::new()).await;
+            assert_eq!(
+                said(&images, &event),
+                text("[Image unavailable: “lamp.png”]"),
+                "{url}"
+            );
+        }
+    }
+
+    /// Rust only: an agent's own `ImageResolver` (approved 2026-10-30)
+    /// comes before the kit's `MediaResolver`.
+    #[test]
+    fn the_agent_s_own_resolver_comes_first() {
+        let own = Resolver(AtomicUsize::new(0));
+        let kit = MediaResolver::new(|_, _| async { Ok(None) });
+        let chosen = super::Resolver::of(Some(&own), Some(&kit));
+        assert!(matches!(chosen, Some(super::Resolver::Image(_))));
+        let chosen = super::Resolver::of(None, Some(&kit));
+        assert!(matches!(chosen, Some(super::Resolver::Media(_))));
+        assert!(super::Resolver::of(None, None).is_none());
+    }
+
+    /// Python's `RefusedImages`: the newest 100 rooms' refusals are kept,
+    /// a room refused in again counting as the newest.
+    #[test]
+    fn refusals_are_kept_for_the_newest_hundred_rooms() {
+        let refused = RefusedImages::default();
+        let keys = HashSet::from([("e1".to_owned(), 0)]);
+        let room = |at: usize| RoomId::new(format!("room-{at}")).unwrap();
+        for at in 0..MAX_ROOMS {
+            refused.add(&room(at), &keys);
+        }
+        refused.add(&room(0), &keys);
+        refused.add(&room(MAX_ROOMS), &keys);
+        assert_eq!(refused.of(&room(0)), keys);
+        assert!(refused.of(&room(1)).is_empty());
+        assert_eq!(refused.of(&room(MAX_ROOMS)), keys);
     }
 }

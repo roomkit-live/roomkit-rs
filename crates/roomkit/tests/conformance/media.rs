@@ -19,21 +19,21 @@ pub(crate) fn kit_options<S>(mut options: RoomKitOptions<S>, kit: &Value) -> Roo
             .collect();
         options.media_resolver = Some(MediaResolver::new(move |media, _room_id| {
             let bytes = held.get(&media.url).cloned();
-            async move { bytes }
+            async move { Ok(bytes) }
         }));
     }
     if let Some(key) = kit["attached_media"]["key"].as_str() {
         let key = key.to_owned();
         options.attached_media = Some(AttachedMedia::new(move |event| {
             let records = event.metadata.get(&key).and_then(Value::as_array);
-            records
+            Ok(records
                 .into_iter()
                 .flatten()
                 .filter_map(|record| match serde_json::from_value(record.clone()) {
                     Ok(EventContent::Media(media)) => Some(media),
                     _ => None,
                 })
-                .collect()
+                .collect())
         }));
     }
     options

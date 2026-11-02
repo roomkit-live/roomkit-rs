@@ -1258,9 +1258,7 @@ pub(crate) trait TurnKit: Send + Sync {
 
     /// The application's readers of an author's media the kit was built
     /// with, which its AI channels read (RFC §6.4).
-    fn media(&self) -> crate::media::KitMedia {
-        crate::media::KitMedia::default()
-    }
+    fn media(&self) -> crate::media::KitMedia;
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {

@@ -12,7 +12,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sent, `AttachedMedia` names the media an event carries outside its
   content, and every AI channel registered on the kit reads its turns'
   events with them, the store and the broadcasts keeping the events as
-  stored; an agent's own `image_resolver` comes first.
+  stored; an agent's own `image_resolver` comes first. A reader or a
+  resolver that fails is logged and reads as none, never a failed turn.
 - An AI channel remembers the author images its provider refused (RFC
   §6.4, RMK-1190), as Python's `RefusedImages`: a turn's first request
   that carried images and failed on an error not retried, of no status

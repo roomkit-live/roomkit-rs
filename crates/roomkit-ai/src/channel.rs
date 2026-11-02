@@ -238,7 +238,8 @@ impl fmt::Debug for AiChannelOptions {
 ///
 /// It answers a message or an instruction, never its own events, and takes
 /// no inbound message. Cloning it shares its provider, its tools, its
-/// skills and its system prompt.
+/// skills, its system prompt, its running loops and the author images its
+/// provider refused.
 pub struct AiChannel<P> {
     channel_id: ChannelId,
     capabilities: ChannelCapabilities,
@@ -711,11 +712,7 @@ impl<P: AiProvider> AiChannel<P> {
             return unseen_images(&events);
         }
         let room = &history.room.id;
-        let resolver = match (&self.media.resolver, &kit.resolver) {
-            (Some(own), _) => Some(Resolver::Image(own.as_ref())),
-            (None, Some(kit)) => Some(Resolver::Media(kit)),
-            (None, None) => None,
-        };
+        let resolver = Resolver::of(self.media.resolver.as_deref(), kit.resolver.as_ref());
         let refused = self.media.refused.of(room);
         let limit = self.media.max_author_images;
         author_images(&events, room, resolver, limit, &refused).await
