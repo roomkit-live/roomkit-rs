@@ -15,7 +15,7 @@ use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelId, EventContent, HookResult, Metadata, Observation, RoomContext, RoomId,
 };
-use roomkit::orchestration::{PostAsyncOptions, RecentOptions, StatusLevel};
+use roomkit::orchestration::{PostAsyncOptions, RecentOptions, RecentTextOptions, StatusLevel};
 use roomkit::tasks::DelegatedTask;
 use roomkit::{
     CancelTaskOptions, DelegateOptions, HookError, ListObservationsOptions, ListTasksOptions,
@@ -42,6 +42,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
     Some(match call {
         "status.post" | "host.post_status" => STATUS,
         "status.recent" => &["n", "agent_id", "status"],
+        "status.recent_text" => &["n"],
         "update_room_metadata" | "host.update_room_metadata" => &["room_id", "metadata"],
         "submit_feedback" => &[
             "room_id",
@@ -145,6 +146,13 @@ pub(crate) async fn call(
             };
             (Ok(dump(&kit.status_bus().recent(options).await)), None)
         }
+        "status.recent_text" => {
+            let options = RecentTextOptions {
+                n: optional(spec, "n")?.unwrap_or(RecentTextOptions::default().n),
+            };
+            let text = kit.status_bus().recent_text(options).await;
+            (Ok(Value::String(text)), None)
+        }
         "update_room_metadata" => {
             let options = UpdateRoomMetadataOptions {
                 organization_id: organization_id(spec),
@@ -184,21 +192,7 @@ pub(crate) async fn call(
         }
         "delegate" => delegate(run, spec).await?,
         "start_task" => start_task(run, spec).await?,
-        "setup_background" => {
-            let defaults = SetupBackgroundOptions::default();
-            let options = SetupBackgroundOptions {
-                worker: optional(spec, "worker")?,
-                hand_back: optional(spec, "hand_back")?.unwrap_or(defaults.hand_back),
-            };
-            let agent: ChannelId = field(spec, "agent_id")?;
-            let outcome = kit.setup_background(&agent, options);
-            (finish(run, name, outcome, |()| Value::Null), None)
-        }
-        "setup_task_tools" => {
-            let agent: ChannelId = field(spec, "agent_id")?;
-            let outcome = kit.setup_task_tools(&agent);
-            (finish(run, name, outcome, |()| Value::Null), None)
-        }
+        "setup_background" | "setup_task_tools" => setup_tools(run, name, spec)?,
         "task.wait" => {
             let task_id: String = field(spec, "task_id")?;
             let task = lock(&run.tasks)
@@ -246,6 +240,27 @@ async fn delegate(run: &Arc<Run>, spec: &Value) -> Result<(Called, Option<String
         lock(&run.tasks).insert(task.id.clone(), task.clone());
     }
     Ok((finish(run, "delegate", outcome, task_record), id))
+}
+
+/// `setup_background` or `setup_task_tools` on the scenario's agent.
+fn setup_tools(
+    run: &Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<(Called, Option<String>), Unreadable> {
+    let kit = run.kit();
+    let agent: ChannelId = field(spec, "agent_id")?;
+    let outcome = if name == "setup_background" {
+        let defaults = SetupBackgroundOptions::default();
+        let options = SetupBackgroundOptions {
+            worker: optional(spec, "worker")?,
+            hand_back: optional(spec, "hand_back")?.unwrap_or(defaults.hand_back),
+        };
+        kit.setup_background(&agent, options)
+    } else {
+        kit.setup_task_tools(&agent)
+    };
+    Ok((finish(run, name, outcome, |()| Value::Null), None))
 }
 
 /// `start_task` with the scenario's keywords: the task, its label its id.
