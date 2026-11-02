@@ -354,7 +354,10 @@ impl<C: SectionChange> Changing<C> {
     /// change's records committed on it, stamped now, after what the
     /// channel wrote, and the change reporting it, as the Python
     /// implementation emits an attach's record after `on_room_attached`
-    /// and its hooks read the room then (RFC §5.1, §6.1).
+    /// and its hooks read the room then (RFC §5.1, §6.1). A read that fails,
+    /// or finds the room gone, leaves the change as it was decided: it
+    /// stands, its records are committed on the room as it decided them,
+    /// and what its channel raised still fails it.
     fn on_reread(
         &mut self,
         cx: &mut Cx<'_>,
@@ -367,14 +370,30 @@ impl<C: SectionChange> Changing<C> {
             records,
             ..
         } = rereading;
-        let mut context = match outcome.into_context() {
-            Ok(Some(context)) => context,
-            Ok(None) => return Progress::Done(Err(SectionError::RoomNotFound(room_id))),
-            Err(error) => return Progress::Done(Err(SectionError::Store(error))),
+        let reread = match outcome.into_context() {
+            Ok(context) => context,
+            Err(error) => {
+                tracing::warn!(
+                    target: "roomkit::framework",
+                    room_id = %room_id,
+                    error = %error.message,
+                    "the room could not be read again once its channel answered; the change \
+                     reports the room as it decided it"
+                );
+                None
+            }
         };
-        change::write_records(cx, &mut decision.writes, &mut context, &records);
-        if let Some(reported) = C::told_context(&mut decision.done) {
-            *reported = context;
+        match (reread, C::told_context(&mut decision.done)) {
+            (Some(mut context), reported) => {
+                change::write_records(cx, &mut decision.writes, &mut context, &records);
+                if let Some(reported) = reported {
+                    *reported = context;
+                }
+            }
+            (None, Some(decided)) => {
+                change::write_records(cx, &mut decision.writes, decided, &records);
+            }
+            (None, None) => {}
         }
         self.write_next(cx, *decision)
     }

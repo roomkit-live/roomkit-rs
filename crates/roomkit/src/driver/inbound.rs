@@ -753,12 +753,32 @@ fn placed(
     };
     let room_id = under.room_id().clone();
     let inbound = inbound.under_lock(room_id.clone());
-    let inbound = match context.room_work(&room_id) {
-        Some((draw, _depth)) => inbound.drawing_on(draw),
-        None => inbound,
+    let inbound = match &under {
+        Under::Hand(..) => match context.room_work(&room_id) {
+            Some((draw, _depth)) => inbound.drawing_on(draw),
+            None => inbound,
+        },
+        Under::Lease(_) => drawing_under_lease(inbound, &room_id, &context),
     };
     let context = context.nested_run(&room_id);
     (inbound, context, Some(under))
+}
+
+/// `inbound`, nested on a lease of `room_id`'s lock, charged to the budget
+/// of the room's work the code that made it runs within: the innermost
+/// frame of that work that carries one (a delivery, a pass whose hook
+/// attached), past the lifecycle change that told its channel, which
+/// carries none; else the hook body's; else a delivery's in another room.
+/// The Python implementation charges such a call to the innermost frame of
+/// the room's work (RFC §9.5.1, §8.3).
+fn drawing_under_lease(inbound: Inbound, room_id: &RoomId, context: &ExecutionContext) -> Inbound {
+    if let Some(draw) = context.work_budget(room_id) {
+        return inbound.drawing_on(draw);
+    }
+    match context.delivery() {
+        Some((delivering, draw)) => inbound.drawing_on_from_delivery(delivering, draw),
+        None => inbound,
+    }
 }
 
 /// The lease `context` holds on `room_id`'s lock, for an inbound call into

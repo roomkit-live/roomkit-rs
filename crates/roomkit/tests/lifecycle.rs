@@ -1494,13 +1494,21 @@ mod attaching {
     use pretty_assertions::assert_eq;
     use roomkit::SendEventOptions;
     use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// An SMS channel whose attach, once told, takes a second, then sends
-    /// a message into the room from `ws`.
+    /// a message into the room from `ws`; when it `relays`, each message
+    /// delivered to it attaches it again, up to a bound, counted there.
     struct Settling {
         kit: Arc<OnceLock<RoomKit>>,
         clock: Clock,
+        relays: Option<Arc<AtomicUsize>>,
+        /// Whether its detach deletes the room through the store.
+        deletes_the_room: bool,
     }
+
+    /// Where a relaying channel stops, were nothing to stop it before.
+    const RELAYS: usize = 300;
 
     impl Channel for Settling {
         fn channel_id(&self) -> ChannelId {
@@ -1536,13 +1544,22 @@ mod attaching {
             ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
         }
 
-        fn deliver(
+        async fn deliver(
             &self,
-            _event: RoomEvent,
+            event: RoomEvent,
             _binding: ChannelBinding,
             _context: RoomContext,
-        ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-            ready(Ok(ChannelOutput::empty()))
+        ) -> Result<ChannelOutput, ChannelError> {
+            let Some(relays) = &self.relays else {
+                return Ok(ChannelOutput::empty());
+            };
+            if relays.fetch_add(1, Ordering::SeqCst) < RELAYS {
+                let kit = self.kit.get().unwrap();
+                let options = AttachChannelOptions::default();
+                kit.attach_channel(&event.room_id, &channel("sms"), options)
+                    .await?;
+            }
+            Ok(ChannelOutput::empty())
         }
 
         async fn on_room_attached(
@@ -1560,6 +1577,14 @@ mod attaching {
                 SendEventOptions::default(),
             )
             .await?;
+            Ok(())
+        }
+
+        async fn on_room_detached(&self, room_id: RoomId) -> Result<(), ChannelError> {
+            if self.deletes_the_room {
+                let kit = self.kit.get().unwrap();
+                kit.store().delete_room(&room_id).await.unwrap();
+            }
             Ok(())
         }
     }
@@ -1580,7 +1605,10 @@ mod attaching {
     /// channel is told, after what the channel wrote into the room, and its
     /// hooks read the room as the channel left it, as Python emits
     /// `CHANNEL_ATTACHED` after `on_room_attached` and reads the room then.
-    // Python: tests/test_channel_attach_contract.py::TestAttachOrder::test_the_channel_is_told_before_anything_else_is
+    // Python: no test pins the record's stamp nor the hooks' room; the
+    // nearest, tests/test_channel_attach_contract.py::TestAttachOrder::
+    // test_the_channel_is_told_before_anything_else_is, has the channel told
+    // before the hooks. Lifecycle records are normalized out of scenarios.
     #[tokio::test]
     async fn an_attach_s_record_follows_what_its_channel_wrote() {
         let clock = Clock::new();
@@ -1595,6 +1623,8 @@ mod attaching {
         kit.register_channel(Settling {
             kit: Arc::clone(&handle),
             clock: clock.clone(),
+            relays: None,
+            deletes_the_room: false,
         })
         .unwrap();
         assert!(handle.set(kit.clone()).is_ok());
@@ -1653,5 +1683,105 @@ mod attaching {
                 Some(vec!["set up".to_owned()])
             )
         );
+    }
+
+    /// RFC §9.5.1, §8.3: a room callback's send nested under the lock of
+    /// an attach a delivery made draws on the reentry budget of the
+    /// cascade that delivers, so a channel that attaches itself again on
+    /// each message it is delivered stops at the cap, its last send stored
+    /// `BLOCKED`, as Python's (the review of RMK-1245).
+    #[tokio::test]
+    async fn a_callback_s_send_from_a_delivery_draws_on_its_cascade() {
+        let clock = Clock::new();
+        let kit = kit_with_environment(RoomKitOptions::default(), Arc::clone(&clock.0));
+        let ws = RecordingTransport::new(
+            channel("ws"),
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        );
+        kit.register_channel(ws.clone()).unwrap();
+        let handle = Arc::new(OnceLock::new());
+        let relays = Arc::new(AtomicUsize::new(0));
+        kit.register_channel(Settling {
+            kit: Arc::clone(&handle),
+            clock: clock.clone(),
+            relays: Some(Arc::clone(&relays)),
+            deletes_the_room: false,
+        })
+        .unwrap();
+        assert!(handle.set(kit.clone()).is_ok());
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        kit.attach_channel(&room_id(), ws.channel_id(), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        kit.attach_channel(&room_id(), &channel("sms"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let blocked = || async {
+            let rows = kit
+                .store()
+                .list_events(&room_id(), every_row())
+                .await
+                .unwrap();
+            rows.iter()
+                .any(|event| text(event) == Some("set up") && event.status == EventStatus::Blocked)
+        };
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !blocked().await
+            && relays.load(Ordering::SeqCst) < RELAYS
+            && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            (blocked().await, relays.load(Ordering::SeqCst) < RELAYS),
+            (true, true)
+        );
+    }
+
+    /// RFC §6.1: a detach whose channel deleted the room as it was told
+    /// still answers that it detached, as Python's `detach_channel`
+    /// returns `True`: the room read again finds nothing, and the change
+    /// stands as it was decided (the review of RMK-1246).
+    #[tokio::test]
+    async fn a_detach_whose_channel_deleted_the_room_still_detached() {
+        let clock = Clock::new();
+        let kit = kit_with_environment(RoomKitOptions::default(), Arc::clone(&clock.0));
+        let ws = RecordingTransport::new(
+            channel("ws"),
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        );
+        kit.register_channel(ws.clone()).unwrap();
+        let handle = Arc::new(OnceLock::new());
+        kit.register_channel(Settling {
+            kit: Arc::clone(&handle),
+            clock: clock.clone(),
+            relays: None,
+            deletes_the_room: true,
+        })
+        .unwrap();
+        assert!(handle.set(kit.clone()).is_ok());
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        kit.attach_channel(&room_id(), ws.channel_id(), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        kit.attach_channel(&room_id(), &channel("sms"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let detached = kit
+            .detach_channel(&room_id(), &channel("sms"), DetachChannelOptions::default())
+            .await;
+        assert!(matches!(detached, Ok(true)), "{detached:?}");
     }
 }

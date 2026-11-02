@@ -528,6 +528,22 @@ impl ExecutionContext {
             })
     }
 
+    /// The budget of `room_id`'s work this context runs within: that of the
+    /// innermost frame working in the room that carries one, a frame that
+    /// carries none (a lifecycle change's call) read past, else that of the
+    /// hook body it runs within there.
+    pub(crate) fn work_budget(&self, room_id: &RoomId) -> Option<Draw> {
+        self.frames
+            .iter()
+            .rev()
+            .filter(|frame| frame.works_in(room_id))
+            .find_map(|frame| frame.work.budget.clone().map(Draw::Pass))
+            .or_else(|| {
+                self.body_in(room_id)
+                    .map(|body| Draw::HookCall(body.budget.clone()))
+            })
+    }
+
     /// The room the innermost running frame of a delivery delivers in, and
     /// what a message the router places draws on its cascade's budget once
     /// routed into that room: a pass; else the room of the running hook
