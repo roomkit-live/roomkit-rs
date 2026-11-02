@@ -277,6 +277,13 @@ pub(crate) trait DynToolset: Send + Sync {
     /// then, once nothing can withhold the result any more (RFC §24.4: an
     /// activation counts once its call is served).
     fn settled(&self, _call: &ToolCall, _outcome: ToolCallOutcome, _context: &ToolContext) {}
+
+    /// Whether its calls carry a bound of their own, in place of the
+    /// channel's bound per call (RFC §21.6): a person's answer, under its
+    /// handler's timeout.
+    fn bounds_itself(&self) -> bool {
+        false
+    }
 }
 
 /// The last segment of `T`'s name, without its generic arguments.

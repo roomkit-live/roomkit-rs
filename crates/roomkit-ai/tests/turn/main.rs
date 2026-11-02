@@ -6,6 +6,7 @@
 
 mod bounds;
 mod history;
+mod inputs;
 mod intents;
 mod mock;
 mod room_turns;

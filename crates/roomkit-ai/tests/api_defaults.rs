@@ -51,6 +51,24 @@ fn ai_channel_options_defaults_as_python() {
     assert_eq!(defaults.tool_timeout, Some(Duration::from_secs(30)));
     // roomkit.AIChannel.__init__(tools) = None
     assert!(defaults.tools.is_empty());
+    // roomkit.AIChannel.__init__(human_input_handler) = None
+    assert!(defaults.human_input_handler.is_none());
+}
+
+#[test]
+fn human_input_tool_handler_options_defaults_as_python() {
+    let defaults = roomkit_ai::HumanInputToolHandlerOptions::default();
+    // roomkit.HumanInputToolHandler.__init__(timeout) = 300
+    assert_eq!(defaults.timeout, Duration::from_secs(300));
+    // roomkit.HumanInputToolHandler.__init__(handler) = None
+    assert!(defaults.handler.is_none());
+    // roomkit.HumanInputToolHandler.__init__(tool_definitions) = None
+    assert!(defaults.tool_definitions.is_empty());
+    // roomkit.HumanInputToolHandler.ask(channel_type) = <ChannelType.AI: 'ai'>
+    assert_eq!(
+        roomkit_ai::AskOptions::default().channel_type,
+        roomkit::model::ChannelType::AI
+    );
 }
 
 #[test]

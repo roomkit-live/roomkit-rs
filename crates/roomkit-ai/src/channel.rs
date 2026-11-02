@@ -6,6 +6,7 @@ use std::future::{self, Future};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
+use roomkit::human_input::CloseOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelId, ChannelOutput, ChannelType,
     EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent, RoomId,
@@ -18,6 +19,7 @@ use roomkit_core::rules::transcript::{
 use serde_json::Value;
 
 use crate::error::AiError;
+use crate::human_input::HumanInputToolHandler;
 use crate::images::ImageResolver;
 use crate::memory::{
     IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions, SlidingWindowMemory,
@@ -110,6 +112,13 @@ pub struct AiChannelOptions {
     /// its own (RFC §6.4, §21.3); it implies `serialize_room_turns`.
     /// Python's `steer_room_turns`.
     pub steer_room_turns: bool,
+    /// The tools that ask a person (RFC §9.3): Python's
+    /// `human_input_handler`. The channel declares its tools and serves its
+    /// names itself, before the tool handler, under its own timeout rather
+    /// than `tool_timeout`; each request fires the kit's
+    /// `ON_USER_INPUT_REQUIRED` hooks, and the channel's close settles the
+    /// requests still open.
+    pub human_input_handler: Option<HumanInputToolHandler>,
 }
 
 impl Default for AiChannelOptions {
@@ -136,6 +145,7 @@ impl Default for AiChannelOptions {
             image_resolver: None,
             serialize_room_turns: false,
             steer_room_turns: false,
+            human_input_handler: None,
         }
     }
 }
@@ -215,6 +225,9 @@ pub struct AiChannel<P> {
     loops: Arc<Loops>,
     /// How it takes a room's turns (RFC §6.4).
     room_turns: RoomTurns,
+    /// The tools that ask a person, and the token of the channel's
+    /// registration on their handler.
+    human_input: Option<(HumanInputToolHandler, u64)>,
 }
 
 /// What a turn read of the room through its memory (RFC §20.2): its
@@ -255,6 +268,7 @@ impl<P> Clone for AiChannel<P> {
             tool_call_intents_required: self.tool_call_intents_required,
             loops: Arc::clone(&self.loops),
             room_turns: self.room_turns,
+            human_input: self.human_input.clone(),
         }
     }
 }
@@ -301,6 +315,7 @@ impl<P: AiProvider> AiChannel<P> {
             image_resolver,
             serialize_room_turns,
             steer_room_turns,
+            human_input_handler,
         } = options;
         if tool_timeout.is_some_and(|bound| bound.is_zero()) {
             return Err(AiError::ToolTimeout);
@@ -320,6 +335,10 @@ impl<P: AiProvider> AiChannel<P> {
         if skills.is_some() {
             reserve_skill_names(&toolbox)?;
         }
+        let human_input = match human_input_handler {
+            Some(human) => Some(serve_human_input(&mut toolbox, human, &channel_id)?),
+            None => None,
+        };
         let skills = match skills.filter(SkillRegistry::has_entries) {
             Some(skills) => {
                 let skill_tools = Arc::new(SkillTools::new(skills, skills_in_prompt));
@@ -363,6 +382,7 @@ impl<P: AiProvider> AiChannel<P> {
                 serialized: serialize_room_turns || steer_room_turns,
                 steered: steer_room_turns,
             },
+            human_input,
         })
     }
 
@@ -589,6 +609,39 @@ fn capabilities<P: AiProvider>(provider: &P) -> ChannelCapabilities {
     capabilities
 }
 
+/// Serves the person's tools `human` defines, and the names it serves that
+/// `toolbox` declares already, before their own toolset (RFC §9.3), the
+/// channel `channel_id` registered on its handler: the token of the
+/// registration.
+///
+/// # Errors
+///
+/// [`AiError::DuplicateTool`] for a definition under a name the channel
+/// serves already, or given twice (RFC §21.1).
+fn serve_human_input(
+    toolbox: &mut Toolbox,
+    human: HumanInputToolHandler,
+    channel_id: &ChannelId,
+) -> Result<(HumanInputToolHandler, u64), AiError> {
+    let toolset = human.toolset();
+    let defined = human.tools();
+    let declared_elsewhere: Vec<String> = human
+        .tool_names()
+        .iter()
+        .filter(|name| !defined.iter().any(|tool| &tool.name == *name))
+        .cloned()
+        .collect();
+    toolbox.add_dyn(Arc::clone(&toolset), defined)?;
+    toolbox.intercept(toolset, &declared_elsewhere);
+    // Only a handler already closed whole refuses a registration: its
+    // requests are then refused at each call.
+    let registration = human
+        .handler()
+        .register(channel_id.as_str())
+        .unwrap_or_default();
+    Ok((human, registration))
+}
+
 /// Refuses a tool `toolbox` serves under one of the names a channel given
 /// skills keeps for its own.
 fn reserve_skill_names(toolbox: &Toolbox) -> Result<(), AiError> {
@@ -756,11 +809,19 @@ impl<P: AiProvider> Channel for AiChannel<P> {
     }
 
     /// Closes the channel's provider ([`AiProvider::close`]), then its
-    /// memory, as Python's `close()`: what serves its tools is the host's
-    /// to close.
+    /// memory, as Python's `close()`, and settles the requests its
+    /// person's tools still have open: what serves its other tools is the
+    /// host's to close.
     async fn close(&self) {
         self.provider.close().await;
         self.memory.close().await;
+        if let Some((human, registration)) = &self.human_input {
+            let options = CloseOptions {
+                channel_id: Some(self.channel_id.to_string()),
+                registration: Some(*registration),
+            };
+            human.handler().close(options).await;
+        }
     }
 }
 

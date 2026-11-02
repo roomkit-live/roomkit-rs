@@ -68,6 +68,7 @@
 
 mod channel;
 mod error;
+mod human_input;
 mod images;
 pub mod memory;
 mod mock;
@@ -86,6 +87,7 @@ mod tools;
 
 pub use self::channel::{AiChannel, AiChannelOptions};
 pub use self::error::AiError;
+pub use self::human_input::{AskOptions, HumanInputToolHandler, HumanInputToolHandlerOptions};
 pub use self::mock::{MockAiProvider, MockAiProviderOptions};
 #[doc(hidden)]
 pub use self::provider::read_tool_calls;

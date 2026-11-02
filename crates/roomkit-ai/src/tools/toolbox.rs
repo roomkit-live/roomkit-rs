@@ -86,6 +86,24 @@ impl Toolbox {
         Ok(())
     }
 
+    /// Serves the names of `names` the agent declares already with
+    /// `toolset`, before the toolset that served them (RFC §9.3: a person's
+    /// tools before the host's handler).
+    pub(crate) fn intercept(&mut self, toolset: Arc<dyn DynToolset>, names: &[String]) {
+        let position = self.toolsets.len();
+        self.toolsets.push(toolset);
+        for name in names {
+            if let Some(served) = self.served.get_mut(name) {
+                *served = position;
+                for (tool, at) in &mut self.tools {
+                    if &tool.name == name {
+                        *at = position;
+                    }
+                }
+            }
+        }
+    }
+
     /// Whether the model may call the tool `name` under `policy`: the
     /// policy's word, save for a tool of the agent's own that it does not
     /// govern (RFC §21.1).

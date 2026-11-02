@@ -138,6 +138,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit.IdentityNotFoundError" = ["0"]
 "roomkit.AddressLinkedError" = ["channel_type"]
 "roomkit.EventNotFoundError" = ["0"]
+"roomkit.HumanInputRejectedError" = ["0"]
 "roomkit.IdempotencyKeyTakenError" = ["room_id", "channel_id", "key"]
 "roomkit.ProviderDeliveryError" = []
 "roomkit.KitClosedError" = []
@@ -499,13 +500,13 @@ members = [
     "ON_RECORDING_STOPPED", "ON_SCREEN_SHARE_STARTED",
     "ON_SCREEN_SHARE_STOPPED", "ON_SPEAKER_CHANGE", "ON_SPEAK_DECISION",
     "ON_SPEAK_QUEUE", "ON_SPEECH_END", "ON_SPEECH_START", "ON_THOUGHT", "ON_TTS_CANCELLED", "ON_TURN_COMPLETE",
-    "ON_TURN_INCOMPLETE", "ON_USER_INPUT_REQUIRED", "ON_VAD_AUDIO_LEVEL",
+    "ON_TURN_INCOMPLETE", "ON_VAD_AUDIO_LEVEL",
     "ON_VAD_SILENCE", "ON_VERIFICATION_COMPLETED", "ON_VERIFICATION_ENDED",
     "ON_VERIFICATION_REQUIRED", "ON_VIDEO_DETECTION", "ON_VIDEO_SESSION_ENDED",
     "ON_VIDEO_SESSION_STARTED", "ON_VIDEO_TRACK_ADDED",
     "ON_VIDEO_TRACK_REMOVED", "ON_VISION_RESULT",
 ]
-reason = "not in 0.x: the 62 hook triggers Rust lacks"
+reason = "not in 0.x: the 61 hook triggers Rust lacks"
 
 [[missing]]
 python = "roomkit.InboundMessage.__init__"
@@ -530,12 +531,12 @@ reason = "not ported: plumbing (lot 2)"
 [[missing]]
 python = "roomkit.RoomKit"
 members = [
-    "answer_input", "claim_room_strategy",
+    "claim_room_strategy",
     "install_strategy", "regenerate_response",
-    "regenerate_target", "reject_input", "room_strategy",
+    "regenerate_target", "room_strategy",
     "room_strategy_is_current", "turn_executor", "uninstall_strategy",
 ]
-reason = "not in 0.x: delegation, tasks, orchestration strategies, human input and regeneration"
+reason = "not in 0.x: orchestration strategies, the turn executor and regeneration"
 
 [[missing]]
 python = "roomkit.RoomKit.delegate"
@@ -595,6 +596,11 @@ reason = "not in 0.x: a channel's per-room verbs, through the turn backend (RFC 
 python = "roomkit.RoomKit"
 members = ["cancel_delivery"]
 reason = "not in 0.x: delivery cancellation by key (parity stream F's lot 5, RMK-1133)"
+
+[[missing]]
+python = "roomkit.PendingInput.__init__"
+params = ["_event", "_withdrawn"]
+reason = "the handler's own state, held private: the event its waiter awaits, and whether the handler gave the request up"
 
 [[missing]]
 python = "roomkit.DeliveryContext.__init__"
@@ -689,11 +695,6 @@ reason = "not in 0.x: Rust has no roles"
 python = "roomkit.TurnHost"
 members = ["room_vision"]
 reason = "not in 0.x: vision"
-
-[[missing]]
-python = "roomkit.TurnTimeouts.__init__"
-params = ["input_hold_timeout"]
-reason = "not in 0.x: human input"
 
 [[missing]]
 python = "roomkit.providers.ai.AIContext.__init__"
@@ -855,7 +856,7 @@ python = "roomkit.AIChannel.__init__"
 params = [
     "continuation", "thinking_coalesce_ms", "thinking_coalesce_chars",
     "retry_policy", "fallback_provider", "script_executor", "sandbox",
-    "external_tool_handler", "human_input_handler",
+    "external_tool_handler",
     "thinking_budget", "enable_thinking", "reasoning_effort",
     "response_schema", "evict_threshold_tokens", "enable_planning",
     "config_provider", "tool_search", "tool_search_pinned",

@@ -58,4 +58,29 @@ pub enum AiError {
     /// and a turn (RFC §21.3). Python's `ValueError`.
     #[error("steer() addresses a loop_id, a room_id or a turn_id, not several")]
     SteerAddress,
+    /// A human-input tool handler given no tool name to serve. Python's
+    /// `ValueError`.
+    #[error("tool_names must not be empty")]
+    HumanInputNames,
+    /// A human-input tool handler given a definition under a name it does
+    /// not serve. Python's `ValueError`.
+    #[error(
+        "Tool definition '{name}' not in tool_names {{{}}}",
+        quoted_names(tool_names)
+    )]
+    HumanInputDefinition {
+        /// The definition's name.
+        name: String,
+        /// The names served.
+        tool_names: Vec<String>,
+    },
+}
+
+/// `names` as Python writes a set of strings' items.
+fn quoted_names(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

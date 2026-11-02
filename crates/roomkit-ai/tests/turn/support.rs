@@ -103,17 +103,22 @@ impl Room {
     }
 
     pub(crate) async fn says(&self, text: &str) -> InboundResult {
+        Self::says_on(&self.kit, text).await
+    }
+
+    /// A message from the room's transport, as [`says`](Self::says), on
+    /// `kit`, which a task of its own may hold.
+    pub(crate) async fn says_on(kit: &RoomKit, text: &str) -> InboundResult {
         let message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new(text));
-        self.kit
-            .process_inbound(
-                message,
-                ProcessInboundOptions {
-                    room_id: Some(room_id()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap()
+        kit.process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
     }
 
     pub(crate) async fn timeline(&self) -> Vec<RoomEvent> {
