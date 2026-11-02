@@ -55,7 +55,8 @@ const STANDALONE: &str = "standalone";
     reason = "Python's keywords, each a switch of its own"
 )]
 pub struct AiChannelOptions {
-    /// What every turn's system prompt opens with.
+    /// What every turn's system prompt opens with, unless the channel's
+    /// binding in the room says its own (`system_prompt` in its metadata).
     pub system_prompt: Option<String>,
     /// How freely the model samples, handed to the provider: Python's
     /// `float`, 0.7 by default. A model that takes no temperature is the
@@ -562,7 +563,8 @@ impl<P: AiProvider> AiChannel<P> {
 
     /// The system prompt of a turn in `context`'s room: its binding's
     /// `system_prompt`, else the channel's own (Python's `_turn_settings`,
-    /// binding metadata first; a `null` there is not set), then the MCP
+    /// binding metadata first; a `null` there, or a value that is no text,
+    /// is not set), then the MCP
     /// servers' instructions (RFC §21.2), then what its skills add (RFC
     /// §6.4, §24.4).
     fn turn_system_prompt(
@@ -571,12 +573,16 @@ impl<P: AiProvider> AiChannel<P> {
         context: &RoomContext,
         stands_alone: bool,
     ) -> Option<String> {
-        let bound = binding
+        // An empty one lifts the channel's prompt for the room (RFC
+        // Appendix A.9), the turn then sending none.
+        let own = match binding
             .metadata
             .get("system_prompt")
             .and_then(Value::as_str)
-            .map(str::to_owned);
-        let own = bound.or_else(|| self.system_prompt());
+        {
+            Some(bound) => Some(bound.to_owned()).filter(|bound| !bound.is_empty()),
+            None => self.system_prompt(),
+        };
         let prompt = self.server_instructions.after(own.as_deref());
         let Some(skills) = &self.skills else {
             return prompt;
@@ -986,7 +992,8 @@ impl<P: AiProvider> Channel for AiChannel<P> {
                 (stands_alone, footprint),
                 kit.attached.as_ref(),
             )
-            .await?;
+            .await
+            .map_err(rows::provider_failure)?;
         looped.remembered = recalled.messages;
         let images = self.author_images(&read, &recalled.history, &kit).await;
         looped.sent_images = Some(SentImages {

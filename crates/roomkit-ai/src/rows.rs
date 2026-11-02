@@ -130,7 +130,10 @@ impl Rows<'_> {
         };
         // Recorded under its class's name, as Python's `ProviderError` is
         // reported, not as a channel's.
-        output.error = error.map(|error| ErrorRecord::new("ProviderError", error.to_string()));
+        output.error = error.map(|error| {
+            let raised = ClassedError::new(PROVIDER_ERROR, error.clone());
+            ErrorRecord::new(raised.class(), error.to_string())
+        });
         output
     }
 }
@@ -163,9 +166,19 @@ impl Stream for Responding {
 const PROVIDER_ERROR: &str = "roomkit.providers.ai.base:ProviderError";
 
 /// A provider's failure as the turn raises it: under its Python class,
-/// which the kit records (G-097).
+/// which the kit records (RMK-1208).
 fn raised(error: ProviderError) -> ChannelError {
     Box::new(ClassedError::new(PROVIDER_ERROR, error))
+}
+
+/// `error`, a failure the turn met before its loop, raised under its
+/// Python class when it is a provider's (the budget-aware memory's
+/// context overflow), as it is.
+pub(crate) fn provider_failure(error: ChannelError) -> ChannelError {
+    match error.downcast::<ProviderError>() {
+        Ok(failure) => raised(*failure),
+        Err(other) => other,
+    }
 }
 
 /// One item of the loop, as the response reads it.

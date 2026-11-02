@@ -9,6 +9,7 @@ mod history;
 mod inputs;
 mod intents;
 mod mock;
+mod prompt;
 mod room_turns;
 mod servers;
 mod steering;
