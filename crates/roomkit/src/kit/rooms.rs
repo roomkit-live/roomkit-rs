@@ -49,13 +49,14 @@ impl<S: ConversationStore> RoomKit<S> {
         if let Some(room_id) = &options.room_id {
             // A strategy recorded for this id belonged to a room that is
             // gone: taken back before the new room is announced.
-            self.forget_strategy(room_id).await?;
+            // Boxed, as the install: a room created with none keeps a small
+            // future.
+            Box::pin(self.forget_strategy(room_id)).await?;
         }
         let room = self.create_room_record(options).await?;
         if let Some(strategy) = orchestration {
             // The path install_strategy() takes: claimed, recorded (RFC §19.7).
-            self.install_on(&room.id, strategy, room.organization_id.clone())
-                .await?;
+            Box::pin(self.install_on(&room.id, strategy, room.organization_id.clone())).await?;
         }
         Ok(room)
     }
