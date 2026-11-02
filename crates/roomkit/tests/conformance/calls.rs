@@ -123,7 +123,6 @@ pub(crate) async fn call(
                 room_id: optional(spec, "room_id")?,
                 organization_id: organization_id(spec),
                 defer_delivery: optional::<bool>(spec, "defer_delivery")?.unwrap_or(false),
-                ..ProcessInboundOptions::default()
             };
             let outcome = run.kit().process_inbound(message, options).await;
             keep_handle(run, spec, &outcome);

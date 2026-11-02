@@ -53,12 +53,16 @@ impl Channel for Stalled {
         ChannelCategory::Intelligence
     }
 
-    fn handle_inbound(
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait's method is a future"
+    )]
+    async fn handle_inbound(
         &self,
         _message: InboundMessage,
         _context: RoomContext,
-    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        async { Err(ChannelError::from("an agent receives no message")) }
+    ) -> Result<RoomEvent, ChannelError> {
+        Err(ChannelError::from("an agent receives no message"))
     }
 
     fn on_event(
@@ -75,13 +79,17 @@ impl Channel for Stalled {
         }
     }
 
-    fn deliver(
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait's method is a future"
+    )]
+    async fn deliver(
         &self,
         _event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
-    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        async { Ok(ChannelOutput::empty()) }
+    ) -> Result<ChannelOutput, ChannelError> {
+        Ok(ChannelOutput::empty())
     }
 }
 
