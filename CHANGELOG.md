@@ -11,6 +11,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   worker hands its work back through `submit_result`, served in the child
   room alone, re-prompted when a turn ends without it, the missing payload
   once the retries are spent; `TurnHost::delegate` refuses both.
+- `roomkit::ResultTool` and `DelegateOptions::result_tool`, Python's (RFC
+  §23.3, RMK-1158): the tool a structured delegation forces in place of
+  `submit_result`, its definition as JSON.
 - `ChannelDeclaration::takes_owner_tools`, Python's (RFC §10.6.5):
   `setup_background` and `setup_task_tools` refuse a channel whose turns
   take no tool the owner serves (`RoomKitError::Value`).
