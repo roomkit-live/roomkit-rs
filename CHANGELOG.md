@@ -21,6 +21,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   neither `max_tokens` nor `max_completion_tokens`, and the endpoint
   decides; a turn's own bound still goes. Breaking: write
   `max_tokens: Some(n)` where `max_tokens: n` was.
+- Identity verification in the inbound pipeline, Python's step 5b (RFC
+  §10.1 step 5b, §11.7.3, §11.7.4, RMK-1172): with a verification policy,
+  an identified sender's message is labelled `source.verification`; an
+  unverified sender's fires `HookTrigger::OnVerificationRequired`, whose
+  hooks block it, pass it (`HookResult::allow_unverified`) or leave it held
+  from the room's agents, its transports still reached; an unverified edit
+  or delete is refused; a reply that is the code of the sender's open code
+  request is attempted and consumed, never stored.
+  `RoomKit::sender_verification` reads the sender's verification for a
+  hook.
 - `roomkit_ai::current_tool_actor_id`, Python's (RFC §10.6.5, RMK-1176):
   who woke the turn a tool's call runs in; a human-input request names
   them as its `actor_id`.
