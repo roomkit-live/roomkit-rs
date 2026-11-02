@@ -87,6 +87,7 @@ fn inbound_result(result: &InboundResult) -> Value {
         "error": result.error.as_ref().map(|record| record.message.clone()),
         "response_metadata": result.response_metadata,
         "delivery_results": dump(&result.delivery_results),
+        "cancellation_reason": result.cancellation_reason,
     })
 }
 
@@ -196,6 +197,18 @@ pub(crate) async fn call(
         }
         verification if crate::verification_calls::handles(verification) => {
             crate::verification_calls::call(run, verification, spec).await?
+        }
+        "cancel_delivery" => {
+            let key = field::<String>(spec, "key")?;
+            let mut options = roomkit::CancelDeliveryOptions {
+                organization_id: organization_id(spec),
+                ..roomkit::CancelDeliveryOptions::default()
+            };
+            if let Some(reason) = optional::<String>(spec, "reason")? {
+                options.reason = reason;
+            }
+            let cancelled = run.kit().cancel_delivery(&key, options).await;
+            (Ok(json!(cancelled)), None)
         }
         _ => (lifecycle_call(run, name, spec).await?, None),
     })

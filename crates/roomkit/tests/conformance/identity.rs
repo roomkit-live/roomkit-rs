@@ -30,7 +30,7 @@ impl RunSlot {
         drop(self.0.set(Arc::downgrade(run)));
     }
 
-    fn run(&self) -> Option<Arc<Run>> {
+    pub(crate) fn run(&self) -> Option<Arc<Run>> {
         self.0.get().and_then(Weak::upgrade)
     }
 }

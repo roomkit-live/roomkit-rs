@@ -24,8 +24,12 @@ use crate::normalize::Observed;
 use crate::run::{Check, Run, Scope, lock};
 
 /// A router answering every routed message with one room (README,
-/// `kit.router`).
-struct ScriptedRouter(RoomId);
+/// `kit.router`), once held at its gate when it has one.
+struct ScriptedRouter {
+    room: RoomId,
+    gate: Option<String>,
+    run: RunSlot,
+}
 
 impl InboundRoomRouter for ScriptedRouter {
     fn route<'a>(
@@ -34,8 +38,13 @@ impl InboundRoomRouter for ScriptedRouter {
         _channel_type: &'a ChannelType,
         _options: RouteOptions,
     ) -> RouterFuture<'a> {
-        let room = self.0.clone();
-        Box::pin(async move { Ok(Some(room)) })
+        let room = self.room.clone();
+        Box::pin(async move {
+            if let (Some(gate), Some(run)) = (&self.gate, self.run.run()) {
+                run.gates.hold(gate).await;
+            }
+            Ok(Some(room))
+        })
     }
 }
 
@@ -58,12 +67,20 @@ fn delivery_backend(kit: &Value) -> Option<roomkit::InMemoryDeliveryBackend> {
 
 /// The kit's options a scenario's setup names, over `options`: its
 /// chain-depth limit, its `process_timeout` and its router.
-fn kit_options<S>(mut options: RoomKitOptions<S>, kit: &Value) -> RoomKitOptions<S> {
+fn kit_options<S>(
+    mut options: RoomKitOptions<S>,
+    kit: &Value,
+    slot: &RunSlot,
+) -> RoomKitOptions<S> {
     if let Some(room) = kit["router"]["room_id"]
         .as_str()
         .and_then(|id| RoomId::new(id).ok())
     {
-        options.inbound_router = Some(Arc::new(ScriptedRouter(room)));
+        options.inbound_router = Some(Arc::new(ScriptedRouter {
+            room,
+            gate: kit["router"]["gate"].as_str().map(str::to_owned),
+            run: slot.clone(),
+        }));
     }
     if let Some(depth) = kit["max_chain_depth"].as_u64() {
         options.max_chain_depth = u32::try_from(depth).unwrap_or(u32::MAX);
@@ -82,8 +99,11 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     let backend = delivery_backend(&setup["kit"]);
     let queue = backend.clone();
     let (kit, _store_file) = crate::new_kit(|options| {
-        let options =
-            identity::kit_options(kit_options(options, &setup["kit"]), &setup["kit"], &slot);
+        let options = identity::kit_options(
+            kit_options(options, &setup["kit"], &slot),
+            &setup["kit"],
+            &slot,
+        );
         let mut options = crate::verification_calls::kit_options(options, &setup["kit"]);
         if let Some(backend) = queue {
             options.delivery_backend = Some(Arc::new(backend));
