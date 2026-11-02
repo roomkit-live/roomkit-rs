@@ -345,11 +345,14 @@ async fn host_call(
             let outcome = host
                 .wait_task(&task_id, roomkit::WaitTaskOptions::default())
                 .await;
+            // The failure as it crosses: its kind and its message.
             let waited = |result: &Option<roomkit::tasks::DelegatedTaskResult>| {
-                result.as_ref().map_or(
-                    Value::Null,
-                    |result| json!({ "result": result, "exception": null }),
-                )
+                result.as_ref().map_or(Value::Null, |result| {
+                    let exception = result.exception.as_ref().map(
+                        |failure| json!({ "kind": failure.error_type, "message": failure.message }),
+                    );
+                    json!({ "result": result, "exception": exception })
+                })
             };
             (finish(run, name, outcome, waited), None)
         }
