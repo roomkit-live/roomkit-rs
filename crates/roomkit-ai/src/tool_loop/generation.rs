@@ -20,7 +20,10 @@ const MAX_CALLS_PER_ROUND: usize = 32;
 /// A generation, read whole: its text, its calls, how it ended.
 #[derive(Debug)]
 pub(super) struct Generation {
+    /// What the model wrote, which it reads back.
     pub(super) text: String,
+    /// What the room was handed of it: its text less a replayed prefix.
+    pub(super) delivered: String,
     pub(super) calls: Vec<Called>,
     pub(super) done: StreamDone,
     /// A `Cancel` stopped it before its end (RFC §21.3).
@@ -61,48 +64,123 @@ impl Generation {
         context: &AiContext,
         steering: &Steering,
         out: &Yielder<Result<TurnItem, ProviderError>>,
+        prefix: &str,
     ) -> Result<Self, ProviderError> {
         let mut stream = provider.generate_structured_stream(context);
         let mut text = String::new();
+        let mut delivered = String::new();
+        let mut replayed = Replayed::new(prefix);
         let mut calls = Vec::new();
+        let mut done = StreamDone::default();
         while let Some(event) = next(&mut stream).await {
             if steering.cancelled() {
-                return Ok(Self::cut(text));
+                return Ok(Self::cut(text, delivered));
             }
             match event? {
                 StreamEvent::TextDelta(delta) => {
                     text.push_str(&delta.text);
-                    out.give(Ok(TurnItem::Text(delta.text))).await;
+                    let released = replayed.add(delta.text);
+                    deliver(released, &mut delivered, out).await;
                 }
                 StreamEvent::ToolCall(call) => calls.push(call),
-                StreamEvent::Done(done) => {
-                    let calls = read_calls(calls);
-                    return Ok(Self {
-                        text,
-                        calls,
-                        done,
-                        cancelled: false,
-                    });
+                StreamEvent::Done(ended) => {
+                    done = ended;
+                    break;
                 }
             }
         }
-        let calls = read_calls(calls);
+        deliver(replayed.finish(), &mut delivered, out).await;
         Ok(Self {
             text,
-            calls,
-            done: StreamDone::default(),
+            delivered,
+            calls: read_calls(calls),
+            done,
             cancelled: false,
         })
     }
 
-    /// A generation a `Cancel` stopped after it wrote `text`.
-    fn cut(text: String) -> Self {
+    /// A generation a `Cancel` stopped after it wrote `text`, `delivered`
+    /// of it handed to the room.
+    fn cut(text: String, delivered: String) -> Self {
         Self {
             text,
+            delivered,
             calls: Vec::new(),
             done: StreamDone::default(),
             cancelled: true,
         }
+    }
+}
+
+/// Hands `pieces` to the room, each in turn, and keeps them in
+/// `delivered`.
+async fn deliver(
+    pieces: Vec<String>,
+    delivered: &mut String,
+    out: &Yielder<Result<TurnItem, ProviderError>>,
+) {
+    for piece in pieces.into_iter().filter(|piece| !piece.is_empty()) {
+        delivered.push_str(&piece);
+        out.give(Ok(TurnItem::Text(piece))).await;
+    }
+}
+
+/// Withholds the text a round replays of the round of calls before it (a
+/// model repeating `Let me look.` after a call) until new text or a
+/// difference settles it: a prefix followed by new text is dropped, while
+/// a generation that ends inside it gets it back, as it may be the whole
+/// answer (RFC §6.4). Python's `_PrefixDeduplicator`.
+struct Replayed<'a> {
+    prefix: &'a str,
+    active: bool,
+    offset: usize,
+    held: Vec<String>,
+}
+
+impl<'a> Replayed<'a> {
+    fn new(prefix: &'a str) -> Self {
+        Self {
+            prefix,
+            active: !prefix.is_empty(),
+            offset: 0,
+            held: Vec::new(),
+        }
+    }
+
+    /// The pieces ready to hand to the room once `text` came.
+    fn add(&mut self, text: String) -> Vec<String> {
+        if !self.active {
+            return vec![text];
+        }
+        let end = self.offset + text.len();
+        let released = if end <= self.prefix.len() {
+            if self.prefix.get(self.offset..end) == Some(text.as_str()) {
+                self.offset = end;
+                self.held.push(text);
+                return Vec::new();
+            }
+            std::mem::take(&mut self.held)
+                .into_iter()
+                .chain([text])
+                .collect()
+        } else {
+            let tail = self.prefix.get(self.offset..).unwrap_or_default();
+            match text.strip_prefix(tail) {
+                Some(rest) => vec![rest.to_owned()],
+                None => std::mem::take(&mut self.held)
+                    .into_iter()
+                    .chain([text])
+                    .collect(),
+            }
+        };
+        self.active = false;
+        self.held.clear();
+        released
+    }
+
+    /// What it still holds, when no new text followed the prefix.
+    fn finish(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.held)
     }
 }
 

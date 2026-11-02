@@ -175,6 +175,7 @@ impl<P: AiProvider> Loop<P> {
         let mut spent = Spent::reporting(self.declared_tools());
         let mut had_tool_round = false;
         let mut tool_rounds = 0;
+        let mut prefix = String::new();
         let mut limits = Limits::starting(&self.bounds);
         if steering.read(&mut messages, &mut system_prompt) {
             let ending = (&limits, &steering, &out);
@@ -191,7 +192,7 @@ impl<P: AiProvider> Loop<P> {
                 tools: declared.clone(),
                 ..self.round_context(&messages, system_prompt.clone())
             };
-            let read = Generation::read(&*self.provider, &context, &steering, &out).await;
+            let read = Generation::read(&*self.provider, &context, &steering, &out, &prefix).await;
             let mut generation = match read {
                 Ok(generation) => generation,
                 Err(error) => {
@@ -203,7 +204,8 @@ impl<P: AiProvider> Loop<P> {
             self.take_intents(&mut generation.calls);
             spent.count(&generation.done.usage);
             limits.count(&generation.done.usage);
-            spent.segments.push(generation.text.clone());
+            // What the room saw (RFC §6.4, The turn's record).
+            spent.segments.push(generation.delivered.clone());
             let ending = (&limits, &steering, &out);
             // A stop that came after the model's last event counts as one
             // that came during it (RFC §21.3).
@@ -241,6 +243,11 @@ impl<P: AiProvider> Loop<P> {
             }
             had_tool_round = true;
             limits.warn_if_due(tool_rounds);
+            // A later round that opens by replaying this one's words is
+            // handed to the room from where it goes on.
+            if !generation.text.is_empty() {
+                prefix.clone_from(&generation.text);
+            }
             let (read, ran) = self.round_of_calls(generation, &steering, &out).await;
             messages.extend(read);
             spent.calls += u32::try_from(ran.calls.len()).unwrap_or(u32::MAX);
