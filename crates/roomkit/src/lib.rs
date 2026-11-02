@@ -51,6 +51,7 @@ mod channel;
 mod context;
 mod cursors;
 pub mod delivery;
+mod delivery_keys;
 mod driver;
 mod environment;
 mod error;
@@ -178,7 +179,10 @@ pub use self::kit::{
     RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
     UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
-pub use self::kit::{CancelTaskOptions, SetupBackgroundOptions, StartTaskOptions, SteerOptions};
+pub use self::kit::{
+    CancelDeliveryOptions, CancelTaskOptions, SetupBackgroundOptions, StartTaskOptions,
+    SteerOptions,
+};
 pub use self::kit::{
     CompleteVerificationOptions, RecordFailedAttemptOptions, RequestVerificationOptions,
     RevokeVerificationOptions, VerificationOfOptions,

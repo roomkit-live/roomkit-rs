@@ -1021,6 +1021,15 @@ fn cancel_task_options_defaults_as_python() {
 }
 
 #[test]
+fn cancel_delivery_options_defaults_as_python() {
+    let defaults = roomkit::CancelDeliveryOptions::default();
+    // roomkit.RoomKit.cancel_delivery(reason) = 'caller_cancelled'
+    assert_eq!(defaults.reason, "caller_cancelled");
+    // roomkit.RoomKit.cancel_delivery(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
 fn list_tasks_options_defaults_as_python() {
     let defaults = ListTasksOptions::default();
     // roomkit.RoomKit.list_tasks(status) = None

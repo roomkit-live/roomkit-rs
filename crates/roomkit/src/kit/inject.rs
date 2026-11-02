@@ -14,11 +14,12 @@ use tokio::task::JoinHandle;
 use super::RoomKit;
 use super::options::{CommitEventOptions, SendEventOptions};
 use crate::context::{self, Adopting, Completion, ExecutionContext};
+use crate::delivery_keys::NamedGuard;
 use crate::driver::{self, InboundOutput, Ran, Record, Stop};
 use crate::error::RoomKitError;
 use crate::inbound::DeliveryHandle;
 use crate::store::ConversationStore;
-use crate::tasks::Tasks;
+use crate::tasks::{Kind, Tasks};
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Injects an event of `content` from the registered channel
@@ -186,9 +187,24 @@ impl<S: ConversationStore> RoomKit<S> {
     /// there, rather than wait for itself.
     pub(super) async fn enter(
         &self,
+        entry: Entry,
+        call: &'static str,
+        defer: bool,
+    ) -> Result<Entered, RoomKitError> {
+        self.enter_named(entry, call, defer, None).await
+    }
+
+    /// [`enter`](Self::enter), the call's delivery named by `named`, a
+    /// key's name of it, until its delivery is over (RFC §10.1 "Explicit
+    /// delivery cancellation"): its run's while it goes on, or, for a call
+    /// the room's work adopted, its entry's in that run until its delivery
+    /// set ran.
+    pub(super) async fn enter_named(
+        &self,
         mut entry: Entry,
         call: &'static str,
         defer: bool,
+        named: Option<NamedGuard>,
     ) -> Result<Entered, RoomKitError> {
         let chain_depth = match &mut entry {
             Entry::Message { message, .. } => &mut message.chain_depth,
@@ -202,6 +218,9 @@ impl<S: ConversationStore> RoomKit<S> {
         let refused = refusal_of(&entry);
         let entry = match context::adopt(entry).await {
             Adopting::Settled(result, completion) => {
+                if let Some(named) = named {
+                    self.name_adopted(named, &completion);
+                }
                 return Ok(Entered {
                     result: (*result).map_err(refused)?,
                     following: Following::Adopted(completion),
@@ -218,8 +237,23 @@ impl<S: ConversationStore> RoomKit<S> {
         };
         let room_id = entry.room_id().clone();
         let operation = self.operation(entry)?;
-        let ran = driver::run_inbound(&self.inner, call, Some(&room_id), operation, defer).await;
+        let ran =
+            driver::run_named(&self.inner, call, Some(&room_id), operation, defer, named).await;
         Entered::ran(ran, refused)
+    }
+
+    /// Names the delivery of a call the room's work adopted by `named`
+    /// until its set ran, as `completion` tells: a cancellation by its key
+    /// cuts the turns of the entry's cascade in the run that adopted it.
+    fn name_adopted(&self, named: NamedGuard, completion: &Completion) {
+        named.named().attach(Arc::clone(&completion.cancel));
+        let mut delivered = completion.delivered.clone();
+        let over = async move {
+            // Closed, the adopting run is over: the delivery with it.
+            drop(delivered.wait_for(Option::is_some).await);
+            drop(named);
+        };
+        drop(self.inner.tasks.spawn_alone(Kind::Turn, over));
     }
 
     /// Checks that the organization `entry` names reaches its room when the

@@ -43,7 +43,8 @@ use std::task::Poll;
 use roomkit_core::model::{ErrorRecord, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::{
     AnswerOf, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest,
-    InboundResult, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, StoreRequest,
+    InboundResult, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, StoreOutcome,
+    StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinHandle, JoinSet};
@@ -55,9 +56,13 @@ use self::calls::{WentOn, Written};
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::in_flight::InFlight;
 use self::inbound::Caller;
-pub(crate) use self::inbound::{InboundOutput, Ran, Record, StoredAnswers, ended, run_inbound};
+pub(crate) use self::inbound::{
+    CALLER_CANCELLED, InboundOutput, Ran, Record, StoredAnswers, cancelled_end, ended, run_inbound,
+    run_named,
+};
 use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
+use crate::delivery_keys::CancelRequest;
 use crate::error::RoomKitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
@@ -330,6 +335,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         callers: HashMap::new(),
         deliveries: HashMap::new(),
         entry_answers: HashMap::new(),
+        entry_cancels: HashMap::new(),
         clocks: Clocks::read(&*environment),
         environment,
         refused: None,
@@ -387,6 +393,9 @@ struct Driver<'kit, S> {
     /// The answers of each adopted entry's cascade, which its handle reads
     /// when the run ends without telling its delivery's end.
     entry_answers: HashMap<EntryId, Arc<StoredAnswers>>,
+    /// The cut each adopted entry's caller may ask of its turns, until
+    /// asked (RFC §10.1 "Explicit delivery cancellation").
+    entry_cancels: HashMap<EntryId, Arc<CancelRequest>>,
     clocks: Clocks,
     /// The environment the run started with, which every poll of its
     /// operation and every call it makes read.
@@ -463,6 +472,8 @@ enum Event<'kit> {
     Adoption(Adoption),
     /// The caller of an inbound call stopped waiting.
     CallerGone,
+    /// The delivery of an entry the operation adopted was cancelled.
+    EntryCancelled(EntryId),
     /// The kit's close moved on to this phase.
     Phase(Phase),
 }
@@ -486,6 +497,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 caller.offer(&self.context, self.call, decided, self.refused.as_ref());
                 // A caller gone before a commit in flight decided the call.
                 self.cut_turns_once_gone(&mut operation);
+                self.end_cancelled_once_over();
             }
             let effects = match step.next {
                 Next::Ready(output) => {
@@ -579,8 +591,14 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                         return Ok(());
                     }
                     if self.cut_turns_once_gone(operation) {
+                        self.end_cancelled_once_over();
                         return Ok(());
                     }
+                }
+                Some(Event::EntryCancelled(entry)) => {
+                    let cut = operation.cancel_entry_turns(entry);
+                    self.give_up(&cut);
+                    return Ok(());
                 }
                 Some(Event::Waited(id, waited)) => {
                     let outcome = self.held.settle(waited);
@@ -731,8 +749,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     }
 
     /// Cuts the turns of the call's cascade once its caller is gone and the
-    /// call decided, once (RFC §10.1 "Explicit delivery cancellation"): the
-    /// operation gives them up, and their calls are aborted. Whether it did.
+    /// call decided, or once its delivery is cancelled, once (RFC §10.1
+    /// "Explicit delivery cancellation"): the operation gives them up, and
+    /// their calls are aborted. Whether it did.
     fn cut_turns_once_gone<O: Operation>(&mut self, operation: &mut O) -> bool {
         if !self.caller.as_deref_mut().is_some_and(Caller::cuts) {
             return false;
@@ -740,11 +759,39 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         tracing::debug!(
             target: "roomkit::driver",
             call = self.call,
-            "the caller of a decided call stopped waiting; its turns are cut, its events delivered"
+            "a call's caller stopped waiting or cancelled its delivery; its turns are cut, its events delivered"
         );
         let cut = operation.cancel_turns();
         self.give_up(&cut);
         true
+    }
+
+    /// Reports the call as its cancellation ends it once the turns it cut
+    /// are over, once its delivery cancelled and the call decided: its
+    /// caller then reads it without waiting for the delivery that goes on
+    /// (RFC §10.1 "Explicit delivery cancellation").
+    fn end_cancelled_once_over(&mut self) {
+        let Some(caller) = self.caller.as_deref_mut() else {
+            return;
+        };
+        if !caller.ends_cancelled() {
+            return;
+        }
+        let ending = inbound::end_once_over(Arc::clone(caller.record()), self.cut.clone());
+        drop(self.inner.tasks.spawn_alone(Kind::Turn, ending));
+    }
+
+    /// Locates the call's delivery once `outcome`, a call's, reads its
+    /// room: the first room the run reads is the call's (RFC §10.1 step 3),
+    /// whose organization a scoped cancellation by key reaches (RFC §17.2).
+    fn locate(&self, outcome: &Outcome) {
+        if let (Some(caller), Outcome::Store(StoreOutcome::Context(context))) =
+            (self.caller.as_deref(), outcome)
+        {
+            caller
+                .record()
+                .locate(context.room.organization_id.as_deref());
+        }
     }
 
     /// Joins the calls the operation gave up on, aborted: the run ends once
@@ -1003,6 +1050,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             calls,
             adoptions,
             caller,
+            entry_cancels,
             phases,
             phase,
             ..
@@ -1021,6 +1069,13 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 && caller.poll_gone(cx).is_ready()
             {
                 return Poll::Ready(Some(Event::CallerGone));
+            }
+            let cancelled = entry_cancels
+                .iter()
+                .find_map(|(entry, cancel)| cancel.poll(cx).then_some(*entry));
+            if let Some(entry) = cancelled {
+                entry_cancels.remove(&entry);
+                return Poll::Ready(Some(Event::EntryCancelled(entry)));
             }
             let ready = waits
                 .iter_mut()
@@ -1067,6 +1122,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
         };
         let effect = self.effect_of_task.remove(&task)?;
+        self.locate(&outcome);
         self.call_of_effect.remove(&effect);
         self.written.extend(self.writing.remove(&effect));
         self.shared.answered(effect);
@@ -1083,12 +1139,14 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             reply,
             delivered,
             answers,
+            cancel,
         } = adoption;
         match operation.adopt(entry, origin) {
             Ok(id) => {
                 self.callers.insert(id, reply);
                 self.deliveries.insert(id, delivered);
                 self.entry_answers.insert(id, answers);
+                self.entry_cancels.insert(id, cancel);
             }
             Err(entry) => {
                 tracing::debug!(
@@ -1106,6 +1164,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// step 18).
     fn delivered(&mut self, delivered: Delivered) {
         self.entry_answers.remove(&delivered.entry);
+        self.entry_cancels.remove(&delivered.entry);
         if let Some(completion) = self.deliveries.remove(&delivered.entry) {
             completion.send_replace(Some(delivered.result));
         }

@@ -28,26 +28,32 @@
 //! its commit was in flight. A room its step 2 created is completed first,
 //! its creation never within the call's bound.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
 
 use roomkit_core::model::{ErrorRecord, EventId, EventStatus, RoomEvent, RoomId};
 use roomkit_core::ops::{
     Decided, Inbound, InboundError, InboundResult, KIT_CLOSED, Outcome, StoreOutcome,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tokio::task::{JoinError, JoinHandle};
 
 use super::calls::{self, Written};
 use super::in_flight::InFlight;
 use super::{Committed, Driven, Leases, Stop};
 use crate::context::ExecutionContext;
+use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::{RoomKitError, with_causes};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::tasks::{Kind, Tasks};
+use crate::turns::Canceller;
 use crate::turns::TURN_LINK_ERROR;
+
+/// Why a call's delivery is cancelled when its caller asks it without a
+/// reason: its handle's `request_cancel`, Python's default
+/// `reason="caller_cancelled"`.
+pub(crate) const CALLER_CANCELLED: &str = "caller_cancelled";
 
 /// What an inbound call's run comes to: the operation's output, or why the
 /// kit's call failed.
@@ -78,11 +84,20 @@ impl Ran {
 /// What an inbound call's run leaves its caller beside its output: the
 /// call's decision, and the answers its cascade committed, so that a run
 /// the kit's close aborted, its unwind run out, still reports the call it
-/// decided (RFC §10.1 step 18, §12.10.4).
-#[derive(Debug, Default)]
+/// decided (RFC §10.1 step 18, §12.10.4); the cut of its turns its caller
+/// asks for, and what it reports once they are cut (RFC §10.1 "Explicit
+/// delivery cancellation").
+#[derive(Debug)]
 pub(crate) struct Record {
-    cancel_requested: AtomicBool,
-    cancel_waker: Mutex<Option<Waker>>,
+    /// The cut of the call's turns, once asked for.
+    cancel: Arc<CancelRequest>,
+    /// The name its delivery key gives the delivery, located once the
+    /// call's room is read.
+    named: Option<Arc<Named>>,
+    /// The call as its cancellation ends it, once its turns are cut and
+    /// over: what its caller reads without waiting for the delivery going
+    /// on.
+    cancelled: watch::Sender<Option<InboundResult>>,
     decided: Mutex<Option<InboundResult>>,
     /// The commits of the call's own answers: what the call reports as its
     /// `response_events` once the kit's close aborted its run.
@@ -123,31 +138,62 @@ impl StoredAnswers {
 }
 
 impl Record {
-    pub(crate) fn request_cancel(&self) {
-        self.cancel_requested.store(true, Ordering::Release);
-        if let Some(waker) = self
-            .cancel_waker
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-        {
-            waker.wake();
+    /// The record of a call whose delivery `named` names, if any: its cut
+    /// is the one the key asks for.
+    fn new(named: Option<&Arc<Named>>) -> Self {
+        let cancel = Arc::new(CancelRequest::default());
+        if let Some(named) = named {
+            named.attach(Arc::clone(&cancel));
+        }
+        Self {
+            cancel,
+            named: named.cloned(),
+            cancelled: watch::Sender::new(None),
+            decided: Mutex::new(None),
+            answers: StoredAnswers::default(),
+            in_flight: InFlight::default(),
         }
     }
 
-    fn poll_cancel(&self, cx: &Context<'_>) -> bool {
-        // Register before checking so a concurrent request cannot lose its wake.
-        let mut waker = self
-            .cancel_waker
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if self.cancel_requested.load(Ordering::Acquire) {
-            waker.take();
-            true
-        } else {
-            waker.clone_from(&Some(cx.waker().clone()));
-            false
+    /// Asks for the cut of the call's turns, for `reason`: whether this
+    /// request was the first (RFC §10.1 "Explicit delivery cancellation").
+    pub(crate) fn request_cancel(&self, reason: &str) -> bool {
+        self.cancel.request(reason)
+    }
+
+    /// Why the call's turns are cut, once asked.
+    fn cancel_reason(&self) -> Option<String> {
+        self.cancel.reason()
+    }
+
+    /// The call's room is read, of `organization_id`: its delivery's key,
+    /// if any, names a delivery of that organization from now on.
+    pub(super) fn locate(&self, organization_id: Option<&str>) {
+        if let Some(named) = &self.named {
+            named.locate(organization_id);
         }
+    }
+
+    /// Reports the call as its cancellation ends it, its turns cut and
+    /// over: decided, its committed answers, `cancellation_reason` the
+    /// reason asked; nothing for a call refused before the room's lock,
+    /// which reports its refusal (RFC §10.1 "Explicit delivery
+    /// cancellation").
+    fn end_cancelled(&self) {
+        let Some(reason) = self.cancel_reason() else {
+            return;
+        };
+        let decided = self
+            .decided
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let Some(mut result) = decided.filter(|result| !result.refused_before_the_lock) else {
+            return;
+        };
+        result.response_events = self.answers.stored();
+        result.cancellation_reason = Some(reason);
+        self.cancelled.send_replace(Some(result));
     }
 
     fn decide(&self, result: &InboundResult) {
@@ -178,6 +224,22 @@ impl Record {
         result.response_events = self.answers.stored();
         result.cancellation_reason = Some(KIT_CLOSED.to_owned());
         result
+    }
+}
+
+/// The call `record` records as its cancellation ends it, once its turns
+/// are cut and over ([`Record::end_cancelled`]); never, for a call not
+/// cancelled.
+pub(crate) async fn cancelled_end(record: &Record) -> InboundResult {
+    let mut cancelled = record.cancelled.subscribe();
+    let ended = cancelled
+        .wait_for(Option::is_some)
+        .await
+        .map(|result| result.clone());
+    match ended {
+        Ok(result) => result.unwrap_or_default(),
+        // The record outlives every wait on it: never closed.
+        Err(_closed) => std::future::pending().await,
     }
 }
 
@@ -227,22 +289,25 @@ pub(super) struct Caller {
     decided: bool,
     /// Whether the run saw that its caller stopped waiting.
     gone: bool,
-    /// What the run did once its caller was gone.
+    /// What the run did once its caller was gone or cancelled the call's
+    /// delivery.
     departure: Departure,
     /// What the run leaves its caller beside its output.
     record: Arc<Record>,
 }
 
-/// What a run did once its caller was gone: expired its operation before
-/// the call's decision, then cut its turns once the call was decided.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Departure {
-    /// Nothing yet.
-    Unseen,
+/// What a run did once its caller was gone, or cancelled the call's
+/// delivery: each at most once.
+#[derive(Clone, Copy, Debug, Default)]
+struct Departure {
     /// The run expired its operation, its caller gone before the decision.
-    Expired,
-    /// The run cut its call's turns, the call decided.
-    TurnsCut,
+    expired: bool,
+    /// The run cut its call's turns: its caller gone once the call was
+    /// decided, or its delivery cancelled.
+    turns_cut: bool,
+    /// The run reports the call as its cancellation ends it, once its cut
+    /// turns are over ([`Record::end_cancelled`]).
+    ending: bool,
 }
 
 impl Caller {
@@ -254,7 +319,7 @@ impl Caller {
             defer,
             decided: false,
             gone: false,
-            departure: Departure::Unseen,
+            departure: Departure::default(),
             record,
         }
     }
@@ -325,7 +390,7 @@ impl Caller {
     /// Ready once the run sees that its caller stopped waiting, once: never
     /// for a caller answered at the decision already.
     pub(super) fn poll_gone(&mut self, cx: &mut Context<'_>) -> Poll<()> {
-        if self.departure != Departure::TurnsCut && self.record.poll_cancel(cx) {
+        if !self.departure.turns_cut && self.record.cancel.poll(cx) {
             return Poll::Ready(());
         }
         let Some(answer) = self.answer.as_mut().filter(|_| !self.gone) else {
@@ -341,25 +406,45 @@ impl Caller {
     /// Whether the run expires its operation now: its caller stopped
     /// waiting before the call's decision, and it did not yet.
     pub(super) fn expires(&mut self) -> bool {
-        let expires = self.gone && !self.decided && self.departure == Departure::Unseen;
+        let expires = self.gone && !self.decided && !self.departure.expired;
         if expires {
-            self.departure = Departure::Expired;
+            self.departure.expired = true;
         }
         expires
     }
 
-    /// Whether the run cuts its call's turns now: its caller stopped waiting
-    /// and the call is decided, before or after its caller left, and it did
-    /// not yet (RFC §10.1: the awaited path propagates its caller's
-    /// cancellation, decision 2 of step 3).
+    /// Whether the run cuts its call's turns now, and did not yet: its
+    /// caller stopped waiting and the call is decided, before or after its
+    /// caller left (RFC §10.1: the awaited path propagates its caller's
+    /// cancellation, decision 2 of step 3), or its delivery is cancelled,
+    /// decided or not: a call cancelled before its commit is committed and
+    /// delivered all the same, and none of its turns starts.
     pub(super) fn cuts(&mut self) -> bool {
-        let cuts = (self.gone || self.record.cancel_requested.load(Ordering::Acquire))
-            && self.decided
-            && self.departure != Departure::TurnsCut;
+        let asked = self.record.cancel_reason().is_some();
+        let cuts = !self.departure.turns_cut && (asked || self.gone && self.decided);
         if cuts {
-            self.departure = Departure::TurnsCut;
+            self.departure.turns_cut = true;
         }
         cuts
+    }
+
+    /// Whether the run now reports the call as its cancellation ends it,
+    /// once its cut turns are over, and did not yet: its delivery
+    /// cancelled, and the call decided.
+    pub(super) fn ends_cancelled(&mut self) -> bool {
+        let Departure {
+            turns_cut, ending, ..
+        } = self.departure;
+        let ends = !ending && turns_cut && self.decided && self.record.cancel_reason().is_some();
+        if ends {
+            self.departure.ending = true;
+        }
+        ends
+    }
+
+    /// The record the run reports the call's cancelled end on.
+    pub(super) fn record(&self) -> &Arc<Record> {
+        &self.record
     }
 
     /// Whether nobody reads the run's output: its caller was answered at
@@ -434,16 +519,32 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     inbound: Inbound,
     defer: bool,
 ) -> Ran {
+    run_named(inner, call, room_id, inbound, defer, None).await
+}
+
+/// [`run_inbound`], the call's delivery named by `named`, a key's name of
+/// it, for as long as the run goes on (RFC §10.1 "Explicit delivery
+/// cancellation"): a cancellation by the key cuts the run's turns.
+pub(crate) async fn run_named<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    call: &'static str,
+    room_id: Option<&RoomId>,
+    inbound: Inbound,
+    defer: bool,
+    named: Option<NamedGuard>,
+) -> Ran {
     if let Err(error) = inner.open() {
         return Ran::ended(Err(error));
     }
     let context = ExecutionContext::current();
     let inbound = charged(inbound, room_id, &context);
     let (answer, decided) = oneshot::channel();
-    let record = Arc::new(Record::default());
+    let record = Arc::new(Record::new(named.as_ref().map(NamedGuard::named)));
     let kit = Arc::clone(inner);
     let mut caller = Caller::new(answer, defer, Arc::clone(&record));
     let run = async move {
+        // The key names the delivery until the run is over.
+        let _named = named;
         let environment = kit.environment();
         let output = super::drive(
             &kit,
@@ -456,13 +557,12 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
         .await;
         let closing = kit.tasks.is_closing();
         let mut output = closed_at_its_end(output, closing);
-        if caller.departure == Departure::TurnsCut
-            && caller.record.cancel_requested.load(Ordering::Acquire)
+        if caller.departure.turns_cut
+            && let Some(reason) = caller.record.cancel_reason()
             && let Ok(Ok(result)) = &mut output
+            && !result.refused_before_the_lock
         {
-            result
-                .cancellation_reason
-                .get_or_insert_with(|| "caller_cancelled".to_owned());
+            result.cancellation_reason.get_or_insert(reason);
         }
         caller.log_unread_end(call, &output, closing);
         output
@@ -472,6 +572,7 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     let Some(mut task) = inner.tasks.spawn(Kind::Run, context.scope(run)) else {
         return Ran::ended(Err(RoomKitError::KitClosed));
     };
+    let cancelled = Arc::clone(&record);
     tokio::select! {
         biased;
         joined = &mut task => Ran::ended(ended(joined, &record, &inner.tasks)),
@@ -479,7 +580,25 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
             output: answer,
             delivery: defer.then_some((task, record)),
         },
+        // Its delivery cancelled, the call returns once its turns are over:
+        // the delivery going on, or its set still waiting in the room's
+        // lane, is not its turns' work (RFC §10.1 "Explicit delivery
+        // cancellation"). The run goes on, detached.
+        result = cancelled_end(&cancelled) => Ran {
+            output: Ok(Ok(result)),
+            delivery: defer.then_some((task, record)),
+        },
     }
+}
+
+/// Reports `record`'s call as its cancellation ends it once each of `turns`,
+/// the turns cut, is over for its owner (RFC §10.1 "Explicit delivery
+/// cancellation": the cancellation joins the turns it cuts).
+pub(super) async fn end_once_over(record: Arc<Record>, turns: Vec<Canceller>) {
+    for turn in &turns {
+        turn.ended().await;
+    }
+    record.end_cancelled();
 }
 
 /// `output`, a run's at its end, as the kit's close leaves it, once it

@@ -27,6 +27,7 @@ mod background;
 pub(crate) mod background_tools;
 mod bindings;
 mod delivery;
+mod delivery_keys;
 mod engine;
 mod ephemeral;
 mod events;
@@ -71,6 +72,7 @@ use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookSubject, HookTrig
 
 pub use self::background_tools::SetupBackgroundOptions;
 pub use self::delivery::{DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions};
+pub use self::delivery_keys::CancelDeliveryOptions;
 pub use self::engine::{HasHooksOptions, HookEngine};
 pub use self::ephemeral::{
     PublishPresenceOptions, PublishReactionOptions, PublishReadReceiptOptions,
@@ -244,6 +246,9 @@ pub(crate) struct Inner<S> {
     pub(crate) background_setups: RwLock<HashMap<ChannelId, background_tools::BackgroundSetup>>,
     /// Identity verification's policy, locks and timers (RFC §11.7).
     pub(crate) verification: verification::Verifications,
+    /// The deliveries a caller named by a key (RFC §10.1 "Explicit
+    /// delivery cancellation").
+    pub(crate) delivery_keys: Arc<crate::delivery_keys::DeliveryKeys>,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -325,6 +330,7 @@ impl<S: ConversationStore> RoomKit<S> {
             owner_tools: crate::turns::served::OwnerToolStore::default(),
             background_setups: RwLock::new(HashMap::new()),
             verification: verification::Verifications::new(verification_policy),
+            delivery_keys: Arc::default(),
         });
         inner.subscribe_status_bus();
         Self { inner }
@@ -493,6 +499,12 @@ impl<S: ConversationStore> RoomKit<S> {
             defer_delivery,
             organization_id,
         } = options;
+        // The message's key names its delivery from the call's start (RFC
+        // §10.1 "Explicit delivery cancellation").
+        let named = self
+            .inner
+            .delivery_keys
+            .naming(message.delivery_key.as_deref(), organization_id.as_deref());
         let entered = if let Some(room_id) = room_id {
             let entry = Entry::Message {
                 room_id,
@@ -500,7 +512,8 @@ impl<S: ConversationStore> RoomKit<S> {
                 message: Box::new(message),
                 answers: answers.map(Box::new),
             };
-            self.enter(entry, PROCESS_INBOUND, defer_delivery).await?
+            self.enter_named(entry, PROCESS_INBOUND, defer_delivery, named)
+                .await?
         } else {
             context::as_deep_as_its_turn(&mut message.chain_depth);
             let target = InboundTarget::Routed;
@@ -510,9 +523,15 @@ impl<S: ConversationStore> RoomKit<S> {
                 }
                 None => Inbound::new(self.config(), target, organization_id, message),
             };
-            let ran =
-                driver::run_inbound(&self.inner, PROCESS_INBOUND, None, routed, defer_delivery)
-                    .await;
+            let ran = driver::run_named(
+                &self.inner,
+                PROCESS_INBOUND,
+                None,
+                routed,
+                defer_delivery,
+                named,
+            )
+            .await;
             Entered::ran(ran, RoomKitError::from)?
         };
         Ok(entered.into_result(defer_delivery, &self.inner.tasks))

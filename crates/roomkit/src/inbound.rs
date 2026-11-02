@@ -243,7 +243,7 @@ impl DeliveryHandle {
         }
         match &self.shared.following {
             Following::Run { record, .. } => {
-                record.request_cancel();
+                record.request_cancel(driver::CALLER_CANCELLED);
                 true
             }
             Following::Adopted(_) | Following::Nothing => false,
@@ -314,7 +314,16 @@ impl Shared {
                 let Some(running) = run.as_mut() else {
                     return Ended::Over(Box::new(self.decided.clone()));
                 };
-                let joined = running.await;
+                let joined = tokio::select! {
+                    biased;
+                    joined = running => joined,
+                    // Its delivery cancelled, the call is over once its
+                    // turns are: the delivery goes on, detached (RFC §10.1
+                    // "Explicit delivery cancellation").
+                    result = driver::cancelled_end(record) => {
+                        return Ended::Over(Box::new(result));
+                    }
+                };
                 *run = None;
                 match driver::ended(joined, record, &self.tasks) {
                     Ok(Ok(result)) => Ended::Over(Box::new(result)),

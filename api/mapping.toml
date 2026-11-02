@@ -579,11 +579,6 @@ members = ["channel_call"]
 reason = "not in 0.x: a channel's per-room verbs, through the turn backend (RFC 10.6.3)"
 
 [[missing]]
-python = "roomkit.RoomKit"
-members = ["cancel_delivery"]
-reason = "not in 0.x: delivery cancellation by key (parity stream F's lot 5, RMK-1133)"
-
-[[missing]]
 python = "roomkit.PendingInput.__init__"
 params = ["_event", "_withdrawn"]
 reason = "the handler's own state, held private: the event its waiter awaits, and whether the handler gave the request up"

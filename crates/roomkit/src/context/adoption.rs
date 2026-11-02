@@ -8,6 +8,7 @@ use roomkit_core::ops::{EffectId, Entry, InboundError, InboundResult};
 use tokio::sync::{oneshot, watch};
 
 use super::{ExecutionContext, Frame};
+use crate::delivery_keys::CancelRequest;
 use crate::driver::StoredAnswers;
 
 /// What an adopted entry's caller receives (RFC §10.1 step 18).
@@ -23,6 +24,9 @@ pub(crate) struct Completion {
     pub(crate) delivered: watch::Receiver<Option<InboundResult>>,
     /// The answers its cascade committed.
     pub(crate) answers: Arc<StoredAnswers>,
+    /// The cut of its turns its caller asks for: its delivery cancelled
+    /// (RFC §10.1 "Explicit delivery cancellation").
+    pub(crate) cancel: Arc<CancelRequest>,
 }
 
 /// A call into a room, handed to the run whose work made it.
@@ -38,6 +42,9 @@ pub(crate) struct Adoption {
     pub(crate) delivered: watch::Sender<Option<InboundResult>>,
     /// Where its cascade's answers go, as they are committed.
     pub(crate) answers: Arc<StoredAnswers>,
+    /// The cut of its turns its caller asks for, which the run carries out
+    /// once asked.
+    pub(crate) cancel: Arc<CancelRequest>,
 }
 
 /// The answer of the run a call into its room was handed to.
@@ -91,9 +98,11 @@ async fn hand(frame: &Frame, entry: Entry) -> Adopting {
     let (reply, answer) = oneshot::channel();
     let (delivered, told) = watch::channel(None);
     let answers = Arc::new(StoredAnswers::default());
+    let cancel = Arc::new(CancelRequest::default());
     let completion = Completion {
         delivered: told,
         answers: Arc::clone(&answers),
+        cancel: Arc::clone(&cancel),
     };
     let adoption = Adoption {
         entry,
@@ -101,6 +110,7 @@ async fn hand(frame: &Frame, entry: Entry) -> Adopting {
         reply,
         delivered,
         answers,
+        cancel,
     };
     if let Err(unsent) = frame.run.hand(adoption) {
         // The run is over: it holds nothing of the room any more.
