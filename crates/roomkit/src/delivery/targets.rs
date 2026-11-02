@@ -11,12 +11,22 @@ use roomkit_core::model::{
 };
 use roomkit_core::rules::publications;
 
+use std::sync::PoisonError;
+use std::time::Duration;
+
+use roomkit_core::ops::FrameworkEvent as CoreEvent;
+
 use super::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
 use super::strategy::DeliveryContext;
+use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::inbound::{DeliveryHandle, InboundResult};
 use crate::kit::RoomKit;
+use crate::locks::RoomGuard;
 use crate::store::ConversationStore;
+
+/// The reason a call `process_timeout` stopped is refused with (RFC §13.6).
+const PROCESS_TIMEOUT: &str = "process_timeout";
 
 /// The framework's own sender, who writes a delivery into its room: the host
 /// speaking, never a correspondent of the room's channel (RFC §10.4).
@@ -187,16 +197,22 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// Publishes `request` into its room through `channel_id`, as a message
     /// the framework's own sender writes on it, and reports what it came
-    /// to: Python's `deliver_to_channel`. A keyed publication is looked up
-    /// within the room first, and once more by the pipeline under the room
-    /// lock, so a concurrent replay finds the first's key (RFC §22.1). The
-    /// call waits for the turn its publication asks for, unless the request
-    /// says not to; dropped meanwhile, it cancels that turn.
+    /// to: Python's `deliver_to_channel`. A keyed publication looks its key
+    /// up within the room, checks its transport and commits in one section
+    /// under the room lock, so a concurrent replay finds the first's key
+    /// and a detach seen there writes nothing (RFC §22.1). The call waits
+    /// for the turn its publication asks for, once the lock is released,
+    /// unless the request says not to; dropped meanwhile, it cancels that
+    /// turn.
     pub(crate) async fn deliver_to_channel(
         &self,
         request: &DeliveryContext<S>,
         channel_id: ChannelId,
     ) -> Result<DeliveryOutcome, RoomKitError> {
+        let section = match self.publication_section(request).await {
+            Ok(section) => section,
+            Err(refused) => return Ok(*refused),
+        };
         if let Some(published) = self.replay_publication(request).await? {
             return Ok(published);
         }
@@ -206,7 +222,7 @@ impl<S: ConversationStore> RoomKit<S> {
         };
         let (message, publishing) = publication(request, channel_id);
         let result = self
-            .publish_delivery(message, &request.room_id, publishing)
+            .publish_within(section, message, &request.room_id, publishing)
             .await?;
         let (result, waited) = match result.delivery.clone() {
             Some(delivery) if request.wait_for_turn => {
@@ -223,6 +239,76 @@ impl<S: ConversationStore> RoomKit<S> {
             turn_complete: waited && outcome.turn_complete,
             ..outcome
         })
+    }
+}
+
+impl<S: ConversationStore> RoomKit<S> {
+    /// The room lock a keyed publication's section holds (RFC §22.1),
+    /// waited for within `process_timeout`, as the pipeline's own wait is
+    /// bounded (RFC §13.6): `None` for any other request, and for a caller
+    /// that holds the lock already or stands in the room's admission order,
+    /// whose section adopts the publication. Past the timeout, the refusal.
+    async fn publication_section(
+        &self,
+        request: &DeliveryContext<S>,
+    ) -> Result<Option<RoomGuard<'static>>, Box<DeliveryOutcome>> {
+        let room_id = &request.room_id;
+        let context = ExecutionContext::current();
+        if !request.keyed_publication()
+            || context.lease(room_id).is_some()
+            || context.is_admitted_to(room_id)
+        {
+            return Ok(None);
+        }
+        let locking = self.inner.locks.lock_owned(room_id);
+        let Some(timeout) = self.inner.config().process_timeout else {
+            return Ok(Some(locking.await));
+        };
+        match tokio::time::timeout(timeout, locking).await {
+            Ok(guard) => Ok(Some(guard)),
+            Err(_elapsed) => Err(Box::new(text_outcome(
+                self.refuse_on_timeout(room_id, timeout).await,
+            ))),
+        }
+    }
+
+    /// Refuses what `process_timeout` stopped before the room's lock, with
+    /// the `process_timeout` framework event (RFC §8.2, §13.6): Python's
+    /// `_refuse_on_timeout(room_id)`.
+    async fn refuse_on_timeout(&self, room_id: &RoomId, timeout: Duration) -> InboundResult {
+        tracing::error!(target: "roomkit::delivery", room_id = %room_id, timeout = timeout.as_secs_f64(), "a keyed publication timed out waiting for the room lock");
+        let notice =
+            CoreEvent::process_timeout(Some(room_id.clone()), None, None, timeout.as_secs_f64());
+        if let Some(handled) = self.inner.emit(notice) {
+            handled.wait().await;
+        }
+        InboundResult {
+            blocked: true,
+            reason: Some(PROCESS_TIMEOUT.to_owned()),
+            ..InboundResult::default()
+        }
+    }
+
+    /// Publishes `message` into `room_id`, the run of its pipeline handed
+    /// `section`, the room's lock the delivery holds, when it holds it: the
+    /// commit is the section's (RFC §22.1). A run refused before the lock
+    /// leaves it, and it is released.
+    async fn publish_within(
+        &self,
+        section: Option<RoomGuard<'static>>,
+        message: InboundMessage,
+        room_id: &RoomId,
+        publishing: Option<String>,
+    ) -> Result<InboundResult, RoomKitError> {
+        let Some(guard) = section else {
+            return self.publish_delivery(message, room_id, publishing).await;
+        };
+        let (context, hand) = ExecutionContext::current().handing(room_id.clone(), guard);
+        let published = context
+            .scope(self.publish_delivery(message, room_id, publishing))
+            .await;
+        drop(hand.lock().unwrap_or_else(PoisonError::into_inner).take());
+        published
     }
 }
 

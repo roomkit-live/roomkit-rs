@@ -191,8 +191,8 @@ impl<'kit> Held<'kit> {
 
     /// The room's lock: on a live lease of the context, granted at once
     /// (RFC §13.5) or refused, as the run's `leases` say; refused to an
-    /// inbound call whose context stands in the room's admission order;
-    /// waited for otherwise.
+    /// inbound call whose context stands in the room's admission order; the
+    /// one the context hands the run, taken; waited for otherwise.
     fn acquire(
         &mut self,
         rooms: Rooms<'kit>,
@@ -210,6 +210,13 @@ impl<'kit> Held<'kit> {
             }
             self.shared.granted(lease);
             self.locks.insert(room_id, LockHold::Granted);
+            return Hold::Now(HoldOutcome::Locked.into());
+        }
+        // The lock the code that made the call holds and hands it: the
+        // run's own from now on (a keyed delivery's section, RFC §22.1).
+        if let Some(guard) = context.take_handed(&room_id) {
+            self.shared.locked(room_id.clone());
+            self.locks.insert(room_id, LockHold::Own(guard));
             return Hold::Now(HoldOutcome::Locked.into());
         }
         let wait = async move {

@@ -88,6 +88,7 @@ use roomkit_core::rules::chain_depth::{self, Draw, ReentryBudget};
 pub(crate) use self::adoption::{Adopting, Adoption, Completion, Reply, adopt, adopt_by_own_run};
 use self::run::Lease;
 pub(crate) use self::run::{RunShared, Written};
+use crate::locks::RoomGuard;
 use crate::tasks::Marks;
 
 tokio::task_local! {
@@ -134,7 +135,15 @@ pub(crate) struct ExecutionContext {
     frames: Arc<[Frame]>,
     body: Option<HookBody>,
     floor: Option<u32>,
+    /// A room's lock the code holds and hands to the run of the call it
+    /// makes, its own section's (RFC §22.1): that run takes it at its first
+    /// `AcquireLock` of the room. A call made within that run's calls is
+    /// handed nothing.
+    hand: Option<Hand>,
 }
+
+/// A room's lock, held until the run it is handed to takes it.
+pub(crate) type Hand = Arc<std::sync::Mutex<Option<(RoomId, RoomGuard<'static>)>>>;
 
 /// The body of an ASYNC hook a cascade fires once an event's delivery set
 /// has run, or a direct change does, or of an ASYNC hook of a SYNC trigger,
@@ -306,6 +315,7 @@ impl ExecutionContext {
             frames: frames.into(),
             body: self.body.clone(),
             floor: self.floor,
+            hand: None,
         }
     }
 
@@ -318,12 +328,35 @@ impl ExecutionContext {
         self
     }
 
+    /// This context, handing `guard`, the lock of `room_id` the code holds,
+    /// to the run of the call it makes: that run takes it as its own when it
+    /// asks for the room's lock, rather than wait for it. What the run did
+    /// not take is the code's again through the [`Hand`] (a keyed
+    /// delivery's section, RFC §22.1).
+    pub(crate) fn handing(mut self, room_id: RoomId, guard: RoomGuard<'static>) -> (Self, Hand) {
+        let hand: Hand = Arc::new(std::sync::Mutex::new(Some((room_id, guard))));
+        self.hand = Some(Arc::clone(&hand));
+        (self, hand)
+    }
+
+    /// The lock of `room_id` this context hands to the run it starts, taken:
+    /// the run holds it from now on.
+    pub(crate) fn take_handed(&self, room_id: &RoomId) -> Option<RoomGuard<'static>> {
+        let hand = self.hand.as_ref()?;
+        let mut held = hand.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if held.as_ref().is_some_and(|(room, _)| room == room_id) {
+            return held.take().map(|(_, guard)| guard);
+        }
+        None
+    }
+
     /// The context of a hook's `body`, which runs outside every call.
     pub(crate) fn of_hook_body(body: HookBody) -> Self {
         Self {
             frames: Arc::default(),
             body: Some(body),
             floor: None,
+            hand: None,
         }
     }
 
