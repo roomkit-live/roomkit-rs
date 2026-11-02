@@ -24,8 +24,8 @@ use roomkit::model::{
 use roomkit::store::GetVerificationOptions;
 use roomkit::{
     CompleteVerificationOptions, ConversationStore, CreateRoomOptions, HookExecution, HookOptions,
-    HookTrigger, InMemoryStore, RequestVerificationOptions, RevokeVerificationOptions, RoomKit,
-    RoomKitOptions, VerificationOfOptions,
+    HookTrigger, InMemoryStore, RecordFailedAttemptOptions, RequestVerificationOptions,
+    RevokeVerificationOptions, RoomKit, RoomKitOptions, VerificationOfOptions,
 };
 use serde_json::Value;
 
@@ -344,5 +344,53 @@ async fn a_completed_request_ends_nothing_at_its_expiry() {
         .await
         .unwrap();
     assert_eq!(state.status, VerificationStatus::Verified);
+    kit.close().await.unwrap();
+}
+
+// Python: core/mixins/verification.py, complete_verification's attempt and
+// record_failed_attempt, each under the identity's lock from the kit's lock
+// manager (`verification:<organization>:<identity>`): two wrong secrets at
+// the last attempt count once. Each attempt's hash runs off the runtime, so
+// the second call reads the request while the first one hashes: without
+// the lock both would read one attempt left and both fail it.
+#[tokio::test]
+async fn two_attempts_at_the_last_one_count_once() {
+    let (kit, fired) = kit(VerificationPolicy {
+        max_attempts: 2,
+        ..policy()
+    })
+    .await;
+    let (request, _) = request(&kit, RequestVerificationOptions::default()).await;
+    kit.record_failed_attempt(&request.id, RecordFailedAttemptOptions::default())
+        .await
+        .unwrap();
+
+    let wrong =
+        || kit.complete_verification(&request.id, "wrong", CompleteVerificationOptions::default());
+    let (first, second) = tokio::join!(wrong(), wrong());
+    roomkit::testing::idle(&kit).await;
+
+    let mut reasons: Vec<String> = [first, second]
+        .into_iter()
+        .map(|outcome| match outcome {
+            Err(roomkit::RoomKitError::VerificationRefused { reason }) => reason,
+            other => format!("{other:?}"),
+        })
+        .collect();
+    reasons.sort();
+    let stored = kit
+        .store()
+        .get_verification_request(&request.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (reasons, stored.attempts, ends(&fired)),
+        (
+            vec!["failed".to_owned(), "not_open".to_owned()],
+            2,
+            vec![("failed".to_owned(), "request".to_owned())]
+        )
+    );
     kit.close().await.unwrap();
 }
