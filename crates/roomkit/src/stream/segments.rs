@@ -25,6 +25,9 @@ use serde_json::Value;
 /// The record's key that says how the turn ended (RFC §6.4).
 const LOOP_END_REASON: &str = "loop_end_reason";
 
+/// The record's key that holds the turn's usage (RFC §6.4).
+const AI_USAGE: &str = "ai_usage";
+
 /// The mark of a text its reader stopped (RFC §12.2 step 13s).
 const CANCELLED: &str = "cancelled";
 
@@ -196,6 +199,20 @@ impl Segments {
             self.owed = false;
         }
         self.last_message = Some(row.clone());
+    }
+
+    /// The turn's entry under its caller's `turns`, once its end was read
+    /// or its reader stopped it: its end and usage (Python's
+    /// `stream_turn_entry`, RFC §6.4).
+    pub(super) fn turn_entry(&self) -> Option<Metadata> {
+        let record = self.record.as_ref()?;
+        let end = record.get(LOOP_END_REASON)?;
+        let mut entry = Metadata::new();
+        entry.insert(LOOP_END_REASON.to_owned(), end.clone());
+        if let Some(usage) = record.get(AI_USAGE) {
+            entry.insert(AI_USAGE.to_owned(), usage.clone());
+        }
+        Some(entry)
     }
 
     /// The last message the store holds, and the record it is owed: the

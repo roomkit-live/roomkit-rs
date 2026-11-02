@@ -29,6 +29,8 @@
 
 use std::collections::VecDeque;
 
+use serde_json::Value;
+
 use super::delivery::{DeliverySet, SetOutcome};
 use super::direct::DirectCall;
 use super::job::{Job, RecordNote, RowNote, Run};
@@ -36,7 +38,7 @@ use super::pass::{CommitPass, PassOrigin};
 use super::record::RecordPass;
 use super::stream::{self, PendingRow, Read, StreamEnd, StreamJob, StreamRead};
 use super::{Machine, Stage};
-use crate::model::{RoomEvent, RoomId};
+use crate::model::{Metadata, RoomEvent, RoomId};
 use crate::ops::io::Io;
 use crate::ops::protocol::{EffectId, Entry, EntryId, Notice, Outcome};
 use crate::ops::{Cx, Progress, RefusedOperation};
@@ -535,21 +537,47 @@ impl Machine {
 
     /// A stream is read: its failure, the response's or the target's, fires
     /// `ON_ERROR` and is the call's error when the stream is the call's own
-    /// (RFC §12.2 step 13s): a chained stream's is not its caller's. Nothing
-    /// else of the streaming target's output is kept, as Python's
-    /// `_deliver_segments` keeps nothing of `deliver_stream()` (RFC §10.1
-    /// step 15): the rows the stream commits are delivered to the others,
-    /// whose outputs are.
+    /// (RFC §12.2 step 13s): a chained stream's is not its caller's. How
+    /// its turn ended goes under the call's `turns`, the stream the call's
+    /// own (RFC §6.4, Python's `_add_turn`). Nothing else of the streaming
+    /// target's output is kept, as Python's `_deliver_segments` keeps
+    /// nothing of `deliver_stream()` (RFC §10.1 step 15): the rows the
+    /// stream commits are delivered to the others, whose outputs are.
     fn stream_over(&mut self, cx: &mut Cx<'_>, end: StreamEnd) {
-        let (Some(output), Some(context)) = (end.output, end.context) else {
+        let (Some(mut output), Some(context)) = (end.output, end.context) else {
             return;
         };
+        let own = !end.job.chained && end.job.lineage == Lineage::Call;
+        if let (true, Some(turns)) = (own, output.response_metadata.remove(TURNS)) {
+            add_turns(&mut self.trigger.result.response_metadata, turns);
+        }
         let Some(error) = output.error else {
             return;
         };
         stream::report_failure(cx, &end.job, &context, &error);
-        if !end.job.chained && end.job.lineage == Lineage::Call {
+        if own {
             self.trigger.note_error(Some(error));
         }
+    }
+}
+
+/// The key of a caller's record under which each turn's end is (RFC §6.4).
+const TURNS: &str = "turns";
+
+/// Merges `turns`, a stream's entries by channel, into `record`'s, entry
+/// by entry, so that one channel's end never replaces another's (Python's
+/// `add_turn_entry`).
+fn add_turns(record: &mut Metadata, turns: Value) {
+    let Value::Object(turns) = turns else {
+        return;
+    };
+    let into = record
+        .entry(TURNS.to_owned())
+        .or_insert_with(|| Value::Object(Metadata::new()));
+    if !into.is_object() {
+        *into = Value::Object(Metadata::new());
+    }
+    if let Value::Object(into) = into {
+        into.extend(turns);
     }
 }

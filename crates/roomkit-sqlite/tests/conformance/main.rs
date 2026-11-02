@@ -83,11 +83,6 @@ pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
          (G-094, RMK-1208)",
     ),
     (
-        "streaming/a-room-turn-its-reader-stopped-tells-its-caller-cancelled",
-        "§6.4: the caller's record names each streamed reply's end under turns (G-095, \
-         RMK-1208)",
-    ),
-    (
         "tasks/a-task-cut-before-its-worker-wrote-any-text-fails-with-no-output",
         "§23.3 step 6: a delegated turn cut before any text fails its task naming its end \
          (G-096, RMK-1208)",

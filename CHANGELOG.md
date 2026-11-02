@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A room turn whose response streams names how it ended under `turns` in
+  the caller's `response_metadata`, keyed by its channel, as Python's
+  `_add_turn` (RFC §6.4, §10.1 step 18, RMK-1208): `{"turns": {"agent":
+  {"loop_end_reason": "cancelled"}}}` for an agent whose streaming channel
+  stopped reading it, where the result carried no `turns`.
 - A delegated task cancelled, cut by a caller that stops waiting for it
   inline, or by the kit's close keeps its trace, as Python's cancelled
   reader keeps it (RFC §12.2 step 13s, §23.3, RMK-1208): its work is cut

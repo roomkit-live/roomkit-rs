@@ -35,10 +35,11 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelOutput, ErrorRecord, EventDirection, EventId, EventSource, EventUpdates,
-    Metadata, RoomEvent, RoomId,
+    ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, EventDirection, EventId, EventSource,
+    EventUpdates, Metadata, RoomEvent, RoomId,
 };
 use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, ROW_HIDDEN, ROW_WITHHELD, StreamTarget};
+use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::segments::Segments;
@@ -74,6 +75,9 @@ type Read = Option<Result<RemoteItem, ChannelError>>;
 /// The reason a read the operation stops cuts its turn with (RFC §10.1
 /// "Explicit delivery cancellation").
 pub(crate) const CALLER_CANCELLED: &str = "caller_cancelled";
+
+/// The key of a caller's record under which each turn's end is (RFC §6.4).
+const TURNS: &str = "turns";
 
 /// The reason the kit's shutdown cuts a turn with (RFC §10.6.8).
 pub(crate) const KIT_CLOSED: &str = "kit_closed";
@@ -172,11 +176,30 @@ pub(crate) async fn read<S: ConversationStore>(
         read
     };
     let read = producer.read_by(reader, pulled, reader_done, stops).await;
-    let output = producer.finish(read).await;
+    let mut output = producer.finish(read).await;
+    // How the turn ended reaches the operation under the caller's `turns`,
+    // as Python's `_add_turn` puts it there (RFC §6.4).
+    if let Some(entry) = producer.segments.turn_entry() {
+        add_turn(&mut output.response_metadata, &responder.channel_id, entry);
+    }
     if let Some((event_id, metadata)) = producer.segments.owed_record() {
         write_record(inner, &producer.room_id, &event_id, metadata).await;
     }
     ChannelOutcome::Output(Box::new(output)).into()
+}
+
+/// Puts `channel_id`'s turn `entry` under `record`'s `turns`, beside the
+/// other channels' (Python's `add_turn_entry`).
+fn add_turn(record: &mut Metadata, channel_id: &ChannelId, entry: Metadata) {
+    let turns = record
+        .entry(TURNS.to_owned())
+        .or_insert_with(|| Value::Object(Metadata::new()));
+    if !turns.is_object() {
+        *turns = Value::Object(Metadata::new());
+    }
+    if let Value::Object(turns) = turns {
+        turns.insert(channel_id.to_string(), Value::Object(entry));
+    }
 }
 
 /// The driver's reader of a stream no channel streams: read to its end.
