@@ -36,7 +36,12 @@ const KIT: &[&str] = &[
     "identity_timeout_ms",
     "delivery_backend",
     "verification_policy",
+    "media_resolver",
+    "attached_media",
 ];
+const MEDIA_RESOLVER: &[&str] = &["media"];
+const ATTACHED_MEDIA: &[&str] = &["key"];
+const REFUSES: &[&str] = &["status", "message"];
 const RESOLVER: &[&str] = &["answers"];
 const RESOLVER_ANSWER: &[&str] = &["when", "repeat", "gate", "fail", "result"];
 const RESOLVER_WHEN: &[&str] = &["sender_id", "channel_id", "room_id", "text"];
@@ -100,6 +105,7 @@ const MODEL_ROUND: &[&str] = &[
     "fails",
     "done",
     "gate",
+    "refuses",
 ];
 const MODEL_CALL: &[&str] = &["id", "name", "arguments", "cut"];
 const TOOL: &[&str] = &[
@@ -344,6 +350,19 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
         "setup.kit.delivery_backend",
         &mut found,
     );
+    let kit = &setup["kit"];
+    optional(
+        &kit["media_resolver"],
+        MEDIA_RESOLVER,
+        "setup.kit.media_resolver",
+        &mut found,
+    );
+    optional(
+        &kit["attached_media"],
+        ATTACHED_MEDIA,
+        "setup.kit.attached_media",
+        &mut found,
+    );
     for (position, channel) in items(&setup["channels"]) {
         self::channel(channel, &format!("setup.channels[{position}]"), &mut found);
     }
@@ -450,6 +469,12 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     for (index, round) in items(&model["rounds"]) {
         let round_path = format!("{path}.model.rounds[{index}]");
         members(round, MODEL_ROUND, &round_path, found);
+        optional(
+            &round["refuses"],
+            REFUSES,
+            &format!("{round_path}.refuses"),
+            found,
+        );
         for (position, call) in items(&round["calls"]) {
             members(
                 call,

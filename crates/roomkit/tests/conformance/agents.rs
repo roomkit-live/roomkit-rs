@@ -302,6 +302,16 @@ pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
     if let Some(failure) = spec.get("fails") {
         round = round.failing(failure.as_str().ok_or("fails: not a text")?);
     }
+    if let Some(refusal) = spec.get("refuses") {
+        let status = refusal["status"]
+            .as_u64()
+            .and_then(|status| u16::try_from(status).ok());
+        let message = refusal["message"].as_str();
+        let (Some(status), Some(message)) = (status, message) else {
+            return Err("refuses: no status and message".into());
+        };
+        round = round.refusing(status, message);
+    }
     if spec.get("done") == Some(&Value::Bool(false)) {
         round = round.without_done();
     }

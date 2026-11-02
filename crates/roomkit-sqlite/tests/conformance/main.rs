@@ -27,6 +27,8 @@ mod identity;
 mod input_calls;
 #[path = "../../../roomkit/tests/conformance/matching.rs"]
 mod matching;
+#[path = "../../../roomkit/tests/conformance/media.rs"]
+mod media;
 #[path = "../../../roomkit/tests/conformance/member_calls.rs"]
 mod member_calls;
 #[path = "../../../roomkit/tests/conformance/memory.rs"]
