@@ -23,8 +23,7 @@ const MEDIA_TYPE_LIMIT: usize = 64;
 ///   resource) as a one-line note naming its kind and type, never its
 ///   encoding, since base64 read as text is noise the model pays for (RFC
 ///   §21.2);
-/// - a result with no part, an empty JSON array (`[]`), whatever its
-///   structured content, which the model never reads;
+/// - a result with no part, its structured content as JSON;
 /// - a result that says `isError`, a failed call (the tool ran) whose words
 ///   the model reads, its parts' texts joined by spaces.
 pub(crate) fn read(name: &str, result: CallToolResult) -> Result<ToolResult, ToolError> {
@@ -55,9 +54,10 @@ fn error_text(result: &CallToolResult) -> String {
 /// The text of a result that does not say `isError`, within the bound.
 fn body(name: &str, result: CallToolResult) -> String {
     let texts: Vec<String> = result.content.iter().map(text_of).collect();
-    let text = match texts.as_slice() {
-        [only] => only.clone(),
-        texts => dumps(&serde_json::Value::from(texts)),
+    let text = match (texts.as_slice(), result.structured_content) {
+        ([only], _) => only.clone(),
+        ([], Some(structured)) => structured.to_string(),
+        (texts, _) => dumps(&serde_json::Value::from(texts)),
     };
     bounded(name, &text)
 }
