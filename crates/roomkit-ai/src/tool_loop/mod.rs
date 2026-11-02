@@ -200,6 +200,9 @@ impl<P: AiProvider> Loop<P> {
                 if let Some(said) =
                     limits.try_again(had_tool_round, &generation.text, finish_reason)
                 {
+                    // The round's text is a segment of its own: the next
+                    // round's never runs on from it (RFC §6.4).
+                    out.give(Ok(TurnItem::SegmentBreak)).await;
                     messages.extend(said);
                     continue;
                 }

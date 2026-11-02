@@ -26,6 +26,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A task's name and a quoted text fold the information separators
   (`\x1c` to `\x1f`) as Python's `str.split()` does, so a sender cannot
   start what a reader takes for a line of its own (RFC §6.4).
+- A round the tool loop asks the model again ends its segment, as
+  Python's: its text is a message of its own, which the next round's text
+  never runs on from (RFC §6.4, RMK-1073).
 - `AiChannel::set_tool_handler`, Python's `tool_handler` setter
   (RMK-1091): the host's handler replaced from the next call on, the
   channel's own tools still served; `tool_handler()` answers an owned
