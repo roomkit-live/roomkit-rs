@@ -2,6 +2,8 @@
 //! context"), as Python's `roomkit._text.quoted` writes it: on one line,
 //! bounded at a word, between quotes it cannot close.
 
+use super::fence::named_blocks;
+
 /// `text` within `limit` characters, cut at a word, the cut ending in `…`:
 /// Python's `bounded_text`.
 fn bounded_text(text: &str, limit: usize) -> String {
@@ -86,37 +88,11 @@ pub fn quoted(text: &str, limit: usize) -> String {
         .map(|c| if DOUBLE_QUOTES.contains(&c) { '\'' } else { c })
         .collect();
     let flat = if flat.chars().count() > limit {
-        named_blocks(&flat)
+        named_blocks(&flat, FENCED_TAGS)
     } else {
         flat
     };
     format!("“{}”", bounded_text(&flat, limit))
-}
-
-/// `text` with each fenced block, from its opening tag through its closing
-/// one or the text's end, replaced by its tag in brackets: Python's
-/// `named_blocks`, for the tags as written.
-fn named_blocks(text: &str) -> String {
-    FENCED_TAGS
-        .iter()
-        .fold(text.to_owned(), |text, tag| named(&text, tag))
-}
-
-fn named(text: &str, tag: &str) -> String {
-    let (opening, closing) = (format!("<{tag}>"), format!("</{tag}>"));
-    let mut kept = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some((before, after)) = rest.split_once(opening.as_str()) {
-        kept.push_str(before);
-        kept.push('[');
-        kept.push_str(tag);
-        kept.push(']');
-        rest = after
-            .split_once(closing.as_str())
-            .map_or("", |(_, tail)| tail);
-    }
-    kept.push_str(rest);
-    kept
 }
 
 #[cfg(test)]
