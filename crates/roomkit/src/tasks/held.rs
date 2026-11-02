@@ -5,12 +5,13 @@
 //! `hold_task` holds.
 //!
 //! A task ends once, by whoever takes its end first: its work once it ran,
-//! or a cancel, which stops the work and ends the task cancelled on a run
-//! of its own, tracked by the kit, so that a cancel whose caller stops
-//! waiting still ends it. A cancel that finds the end taken waits for the
-//! task to end as it stands, unless it runs within one of the task's own
-//! runs (an `on_complete` that closes the kit), which would wait for
-//! itself.
+//! or a cancel, which cuts the work ([`TaskCut`]) and ends the task
+//! cancelled on a run of its own, tracked by the kit, so that a cancel
+//! whose caller stops waiting still ends it. The cut work stores what its
+//! turn said before it stops, as Python's cancelled reader does. A cancel
+//! that finds the end taken waits for the task to end as it stands, unless
+//! it runs within one of the task's own runs (an `on_complete` that closes
+//! the kit), which would wait for itself.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -19,8 +20,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use super::{Kind, Marks, Tasks, Unit};
+use super::{Kind, Marks, TaskCut, Tasks, Unit};
 use crate::channel::BoxFuture;
+use crate::stream::{CALLER_CANCELLED, KIT_CLOSED};
 
 /// The task runs the kit holds, by task id.
 #[derive(Clone, Default)]
@@ -32,8 +34,10 @@ pub(crate) struct HeldTasks {
 /// runs, and what tells its end.
 struct Held {
     tasks: Arc<Tasks>,
-    /// The work, until a cancel takes it to stop it.
+    /// The work, until a cancel takes it to wait for its end.
     work: Option<JoinHandle<()>>,
+    /// What cuts the work.
+    cut: Arc<TaskCut>,
     /// How the task ends cancelled, until its work or a cancel takes it.
     end_cancelled: Option<BoxFuture<'static, ()>>,
     /// Told once the task ended, however it ended; dropped with the entry.
@@ -119,9 +123,13 @@ impl HeldTasks {
         };
         let noted = claim.clone();
         let work = work(claim);
+        let cut = Arc::new(TaskCut::default());
+        let (cuts, cutting) = (Arc::clone(&tasks.task_cuts), Arc::clone(&cut));
         let run = async move {
-            noted.held.note_run(&noted.task_id);
-            work.await;
+            let unit = noted.held.note_run(&noted.task_id);
+            // The reads of the work's turns find its cut by its unit.
+            let _registered = unit.map(|unit| cuts.register(unit, Arc::clone(&cutting)));
+            cutting.run(work).await;
         };
         // Held while the work is spawned: a cancel finds its work there.
         let mut held = self.lock();
@@ -130,6 +138,7 @@ impl HeldTasks {
             Held {
                 tasks: Arc::clone(tasks),
                 work: None,
+                cut,
                 end_cancelled: Some(end_cancelled),
                 ended,
                 units: Vec::new(),
@@ -145,12 +154,12 @@ impl HeldTasks {
         Some(told)
     }
 
-    /// Cancels `task_id`: its work stopped, it ends cancelled on a run of
-    /// its own, which this call waits for; `true` then. A task ending as
-    /// it stands is waited for, `false`; so is one the runner does not
-    /// hold, at once.
+    /// Cancels `task_id`: its work cut, it ends cancelled on a run of its
+    /// own, which this call waits for; `true` then. A task ending as it
+    /// stands is waited for, `false`; so is one the runner does not hold,
+    /// at once.
     pub(crate) async fn cancel(&self, task_id: &str) -> bool {
-        match self.find(task_id) {
+        match self.find(task_id, CALLER_CANCELLED) {
             None => false,
             Some(Found::Ending { ended, units }) => {
                 wait_unless_within(ended, &units).await;
@@ -177,7 +186,7 @@ impl HeldTasks {
     pub(crate) fn cancel_apart(&self, task_id: &str) {
         let Some(Found::End {
             tasks, work, end, ..
-        }) = self.find(task_id)
+        }) = self.find(task_id, CALLER_CANCELLED)
         else {
             return;
         };
@@ -204,7 +213,7 @@ impl HeldTasks {
             }
             let (mut here, mut waits) = (Vec::new(), Vec::new());
             for task_id in next {
-                match self.find(&task_id) {
+                match self.find(&task_id, KIT_CLOSED) {
                     None => {}
                     Some(Found::End {
                         tasks,
@@ -235,8 +244,8 @@ impl HeldTasks {
         self.lock().len()
     }
 
-    /// `task_id`'s end a cancel took: `work` stopped, then `end`, then
-    /// the task's waiters told.
+    /// `task_id`'s end a cancel took: `work`, cut, waited for, then `end`,
+    /// then the task's waiters told.
     fn ending(
         &self,
         task_id: &str,
@@ -249,24 +258,29 @@ impl HeldTasks {
         };
         Box::pin(async move {
             ending.held.note_run(&ending.task_id);
-            stop(work).await;
+            over(work).await;
             end.await;
             drop(ending);
         })
     }
 
-    /// What a cancel finds of `task_id`, its end taken when it is there.
-    fn find(&self, task_id: &str) -> Option<Found> {
+    /// What a cancel finds of `task_id`, its end taken when it is there,
+    /// its work cut then with `reason`, before the work's first step: a
+    /// task cut before it ran never begins.
+    fn find(&self, task_id: &str, reason: &'static str) -> Option<Found> {
         let mut held = self.lock();
         let entry = held.get_mut(task_id)?;
         let ended = entry.ended.subscribe();
         Some(match entry.end_cancelled.take() {
-            Some(end) => Found::End {
-                tasks: Arc::clone(&entry.tasks),
-                work: entry.work.take(),
-                end,
-                ended,
-            },
+            Some(end) => {
+                entry.cut.cut(reason);
+                Found::End {
+                    tasks: Arc::clone(&entry.tasks),
+                    work: entry.work.take(),
+                    end,
+                    ended,
+                }
+            }
             None => Found::Ending {
                 ended,
                 units: entry.units.clone(),
@@ -283,14 +297,14 @@ impl HeldTasks {
         entry.end_cancelled.take()
     }
 
-    /// Notes the unit the current code runs in as one of `task_id`'s runs.
-    fn note_run(&self, task_id: &str) {
-        let Some(unit) = Marks::current().innermost() else {
-            return;
-        };
+    /// Notes the unit the current code runs in as one of `task_id`'s runs:
+    /// that unit.
+    fn note_run(&self, task_id: &str) -> Option<Unit> {
+        let unit = Marks::current().innermost()?;
         if let Some(entry) = self.lock().get_mut(task_id) {
             entry.units.push(unit);
         }
+        Some(unit)
     }
 
     /// `task_id` ended: its entry goes, and its waiters with it.
@@ -305,11 +319,12 @@ impl HeldTasks {
     }
 }
 
-/// Stops `work` and waits until it is over.
-async fn stop(work: Option<JoinHandle<()>>) {
+/// Waits until `work`, cut, is over: dropped where it waits, or once the
+/// reads of its turns stored what they said.
+async fn over(work: Option<JoinHandle<()>>) {
     if let Some(work) = work {
-        work.abort();
-        // Its outcome is its abort, or its own end: either way it is over.
+        // Its outcome is its end, or its abort by the close's cut: either
+        // way it is over.
         drop(work.await);
     }
 }

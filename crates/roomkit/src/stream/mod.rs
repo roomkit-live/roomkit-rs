@@ -40,7 +40,7 @@ use tokio::sync::{mpsc, oneshot};
 
 pub(crate) use self::loop_end::read_record;
 pub use self::loop_end::{LoopEndMarker, LoopEndReason};
-pub(crate) use self::reader::{KeptStream, Stops, StreamRead, read};
+pub(crate) use self::reader::{CALLER_CANCELLED, KIT_CLOSED, KeptStream, Stops, StreamRead, read};
 use crate::channel::ChannelError;
 
 /// One item of a turn's response, as an intelligence channel writes it (RFC

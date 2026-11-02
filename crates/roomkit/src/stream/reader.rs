@@ -73,10 +73,10 @@ type Read = Option<Result<RemoteItem, ChannelError>>;
 
 /// The reason a read the operation stops cuts its turn with (RFC §10.1
 /// "Explicit delivery cancellation").
-const CALLER_CANCELLED: &str = "caller_cancelled";
+pub(crate) const CALLER_CANCELLED: &str = "caller_cancelled";
 
 /// The reason the kit's shutdown cuts a turn with (RFC §10.6.8).
-const KIT_CLOSED: &str = "kit_closed";
+pub(crate) const KIT_CLOSED: &str = "kit_closed";
 
 /// Who reads a stream's rows in the stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,14 +187,17 @@ async fn drain(mut stream: DeliveryStream) -> Result<ChannelOutput, ChannelError
     Ok(ChannelOutput::default())
 }
 
-/// What stops a read from outside: the operation's stop of this read, and
-/// the kit's close, which cuts every turn as it starts.
+/// What stops a read from outside: the operation's stop of this read, the
+/// kit's close, which cuts every turn as it starts, and the cut of the
+/// held task whose work the read runs within (RFC §23.3).
 #[derive(Debug)]
 pub(crate) struct Stops {
     /// `true` once the operation stops the read.
     pub(crate) read: watch::Receiver<bool>,
     /// `true` once the kit's close started.
     pub(crate) kit: watch::Receiver<bool>,
+    /// The reason the task the read runs within is cut with, once it is.
+    pub(crate) task: Option<watch::Receiver<Option<&'static str>>>,
 }
 
 impl Stops {
@@ -203,9 +206,19 @@ impl Stops {
     pub(crate) async fn stopped(&mut self) -> &'static str {
         let read = async { self.read.wait_for(|stopped| *stopped).await.is_ok() };
         let kit = async { self.kit.wait_for(|cut| *cut).await.is_ok() };
+        let task = async {
+            let Some(task) = self.task.as_mut() else {
+                return None;
+            };
+            task.wait_for(Option::is_some)
+                .await
+                .ok()
+                .and_then(|cut| *cut)
+        };
         tokio::select! {
             true = read => CALLER_CANCELLED,
             true = kit => KIT_CLOSED,
+            Some(reason) = task => reason,
             else => std::future::pending().await,
         }
     }

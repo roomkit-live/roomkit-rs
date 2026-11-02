@@ -37,7 +37,7 @@ use crate::store::{
     PatchRoomMetadataOptions, ResolveIdentityOptions, StoreError, written,
 };
 use crate::stream::{self, KeptStream, Stops};
-use crate::tasks::{Kind, Marks};
+use crate::tasks::{Kind, Marks, TaskCut};
 use crate::turn::TurnKit;
 use crate::turns::{self, Answer};
 use crate::unwind::{self, unwinding};
@@ -490,9 +490,14 @@ async fn read_stream<S: ConversationStore>(
     (effect, turn): (EffectId, EffectId),
     read: stream::StreamRead,
 ) -> Outcome {
+    // The cut of the held task whose work the read runs within: the work
+    // is not dropped while the read stores what its turn said.
+    let task_cut = inner.tasks.task_cuts.of(&Marks::current());
+    let _task_read = task_cut.as_ref().map(TaskCut::reading);
     let mut stops = Stops {
         read: shared.stop_signal(effect),
         kit: inner.turns.cutting(),
+        task: task_cut.as_ref().map(|cut| cut.signal()),
     };
     let (kept, _place) = match shared.take_queued(turn) {
         Some(queued) => match queued.start(inner, &mut stops).await {

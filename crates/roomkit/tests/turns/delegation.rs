@@ -284,7 +284,6 @@ async fn a_failed_response_closes_the_call_it_left_open() {
 
 // Python: tests/tasks/test_child_room_trace.py::TestAChildTraceCutShort::test_a_cancelled_stream_keeps_its_text_marked_cancelled
 #[tokio::test]
-#[ignore = "RMK-1208: a cancelled task's work is aborted, its open text segment never stored"]
 async fn a_cancelled_task_keeps_its_text_marked_cancelled() {
     let text = ResponseItem::Text("Half an ans".to_owned());
     let worker = Streaming::new([text], End::Hangs);
@@ -327,7 +326,6 @@ async fn a_cancelled_task_keeps_its_text_marked_cancelled() {
 
 // Python: tests/tasks/test_child_room_trace.py::TestAChildTraceCutShort::test_a_delegation_cancelled_while_its_tool_runs_leaves_no_call_open
 #[tokio::test]
-#[ignore = "RMK-1208: a cut inline delegation leaves its call open, its tool running 30 s"]
 async fn an_inline_delegation_cut_while_its_tool_runs_leaves_no_call_open() {
     let started = Arc::new(Notify::new());
     let model = ScriptedProvider::new([

@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A delegated task cancelled, cut by a caller that stops waiting for it
+  inline, or by the kit's close keeps its trace, as Python's cancelled
+  reader keeps it (RFC §12.2 step 13s, §23.3, RMK-1208): its work is cut
+  where it reads its turn, not aborted, so the text its turn wrote is
+  stored marked `cancelled`, a row whose write was under way is kept, and
+  a call left open ends `failed`, its error `cancelled`, its tool cut, no
+  longer running to its 30 s bound. A task cancelled before it ran names
+  no turn under `turns`.
 - A delegation whose parent room's context the store fails to read as
   the task is announced fails with the store's error, as Python's
   `_announce_task` raises it (RFC §23.3, RMK-1208): no `ON_TASK_DELEGATED`,

@@ -822,7 +822,6 @@ impl roomkit::Channel for Looker {
 // cancelled while its trace stores a row closes it, the rows it began kept
 // and its open call ended.
 #[tokio::test]
-#[ignore = "RMK-1208: a cancelled task's work is aborted mid-commit, its trace rows dropped"]
 async fn a_task_cancelled_while_its_trace_stores_a_row_closes_its_response() {
     let store = RecordsEventWrites {
         held: Mutex::new(Some("Looking. ")),

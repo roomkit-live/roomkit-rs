@@ -640,13 +640,10 @@ async fn a_task_cancelled_before_it_ran_a_line_still_ends() {
 }
 
 // Python: tests/tasks/test_task_turn_record.py::test_a_task_cut_before_its_turn_began_carries_none
-// On 7435a43 the task names its worker's turn cancelled though its worker
-// was never asked: a cancel stops the work from a task of its own
-// (tasks/held.rs lines 152-175, 252), which runs after the work's first
-// poll has marked it in progress (tasks/runner.rs lines 116, 124).
-// Python's cancel of an asyncio task that never ran leaves it pending.
+// A cancel cuts the work before its first step, as Python's cancel of an
+// asyncio task that never ran leaves it pending: its worker never asked,
+// the task names no turn.
 #[tokio::test]
-#[ignore = "RMK-1208: a cancel's end lets the unstarted work run once, which marks it begun"]
 async fn a_task_cut_before_its_turn_began_names_no_turn() {
     let worker = Agent::new("worker", true);
     let (kit, _, _) = kit_with(worker.clone(), RoomKitOptions::default()).await;

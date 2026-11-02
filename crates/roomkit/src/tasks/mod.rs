@@ -22,6 +22,7 @@
 // not started; its grace ends, cutting what is left; it seals the kit.
 
 pub(crate) mod brief;
+mod cut;
 mod delegated;
 mod held;
 mod hosted;
@@ -33,6 +34,7 @@ pub(crate) mod result_tool;
 mod runner;
 pub(crate) mod text;
 
+pub(crate) use self::cut::{TaskCut, TaskCuts};
 pub use self::delegated::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, WaitOptions};
 pub(crate) use self::held::{Claim, HeldTasks, spawn_apart, until_ended};
 pub(crate) use self::hosted::HostTasks;
@@ -127,6 +129,9 @@ pub(crate) struct Tasks {
     changed: Notify,
     /// The instant of the close's cut, once it came.
     cut_at: Mutex<Option<Instant>>,
+    /// The cuts of the held tasks' works, which their turns' reads stop
+    /// on (RFC §23.3).
+    pub(crate) task_cuts: Arc<TaskCuts>,
 }
 
 impl Default for Tasks {
@@ -136,6 +141,7 @@ impl Default for Tasks {
             phase: watch::Sender::new(Phase::Open),
             changed: Notify::new(),
             cut_at: Mutex::new(None),
+            task_cuts: Arc::default(),
         }
     }
 }
