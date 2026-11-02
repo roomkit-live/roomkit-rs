@@ -97,6 +97,10 @@ pub(crate) fn scripted_agent(spec: &Value) -> Result<(AiChannel<Paced>, Scripted
         let rounds = rounds.as_u64().ok_or("max_tool_rounds: not a count")?;
         options.max_tool_rounds = u32::try_from(rounds).map_err(|e| e.to_string())?;
     }
+    if let Some(window) = spec.get("max_context_events") {
+        let window = window.as_u64().ok_or("max_context_events: not a count")?;
+        options.max_context_events = usize::try_from(window).map_err(|e| e.to_string())?;
+    }
     let agent = AiChannel::new(id, Paced(model.clone()), options).map_err(|e| e.to_string())?;
     Ok((agent, model))
 }
@@ -213,14 +217,20 @@ fn tool_policy(spec: &Value) -> ToolPolicy {
     }
 }
 
-/// Each request `model` received, as the scenario reads it: the tool
-/// results it carries, and whether the model reads each call as failed
-/// (README, `models`).
+/// Each request `model` received, as the scenario reads it: the messages
+/// it carries, each its role and its text parts joined, and the tool
+/// results, with whether the model reads each call as failed (README,
+/// `models`).
 pub(crate) fn requests(model: &ScriptedProvider) -> Vec<Value> {
     model.requests().iter().map(request).collect()
 }
 
 fn request(request: &AiContext) -> Value {
+    let messages: Vec<Value> = request
+        .messages
+        .iter()
+        .map(|message| json!({ "role": message.role.as_str(), "text": message.content.text() }))
+        .collect();
     let results: Vec<Value> = request
         .messages
         .iter()
@@ -234,7 +244,7 @@ fn request(request: &AiContext) -> Value {
             })
         })
         .collect();
-    json!({ "tool_results": results })
+    json!({ "messages": messages, "tool_results": results })
 }
 
 /// The handler of the scripted hook `spec` on a tool trigger: it records
