@@ -4,6 +4,14 @@ use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Metadata, ModelError, Observation, RoomEvent, Task};
 
+/// The hook metadata key [`HookResult::allow_unverified`] sets (RFC
+/// §11.7.3), Python's `VERIFICATION_DECISION_KEY`; its value `pass` lets an
+/// unverified sender's message through.
+pub(crate) const VERIFICATION_DECISION_KEY: &str = "roomkit:verification";
+
+/// The value of [`VERIFICATION_DECISION_KEY`] that passes a message.
+pub(crate) const VERIFICATION_PASS: &str = "pass";
+
 /// What a SYNC hook does with its payload (RFC §9.4): the Python
 /// implementation's `Literal["allow", "block", "modify"]` of
 /// `HookResult.action`.
@@ -104,6 +112,24 @@ impl<P> HookResult<P> {
     pub fn allow(options: AllowOptions) -> Self {
         Self {
             injected_events: options.injected.unwrap_or_default(),
+            ..Self::new(HookAction::Allow)
+        }
+    }
+
+    /// On `ON_VERIFICATION_REQUIRED`: let an unverified sender's message
+    /// through (RFC §11.7.3), Python's `HookResult.allow_unverified()`. It
+    /// goes on labelled with the sender's verification; without this, the
+    /// message is held from the room's agents. A plain [`allow`](Self::allow)
+    /// does not pass it: a hook that only watches never lets a message
+    /// through by accident.
+    pub fn allow_unverified() -> Self {
+        let mut metadata = Metadata::new();
+        metadata.insert(
+            VERIFICATION_DECISION_KEY.to_owned(),
+            VERIFICATION_PASS.into(),
+        );
+        Self {
+            metadata,
             ..Self::new(HookAction::Allow)
         }
     }

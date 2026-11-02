@@ -111,6 +111,10 @@ fn hook_trigger_serializes_to_python_s_values() {
             ("AFTER_TOOL_ROUND", HookTrigger::AfterToolRound),
             ("BEFORE_AI_GENERATION", HookTrigger::BeforeAiGeneration),
             ("ON_AI_RESPONSE", HookTrigger::OnAiResponse),
+            (
+                "ON_VERIFICATION_REQUIRED",
+                HookTrigger::OnVerificationRequired,
+            ),
         ],
     );
 }

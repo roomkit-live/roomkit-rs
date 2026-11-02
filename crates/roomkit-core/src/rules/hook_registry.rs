@@ -146,6 +146,14 @@ pub enum HookTrigger {
     /// turn's response, observed. A turn fires it, on the turn executor
     /// hosting the channel.
     OnAiResponse,
+    /// An identified sender who is not VERIFIED wrote a message (RFC §10.1
+    /// step 5b, §11.7.3): its SYNC hooks hold the message (the default),
+    /// pass it with [`HookResult::allow_unverified`] or block it. Its
+    /// payload is the message's event, labelled with the sender's
+    /// verification.
+    ///
+    /// [`HookResult::allow_unverified`]: crate::model::HookResult::allow_unverified
+    OnVerificationRequired,
 }
 
 impl HookTrigger {
@@ -162,7 +170,8 @@ impl HookTrigger {
             | Self::BeforeDeliver
             | Self::OnUserInputRequired
             | Self::AfterToolRound
-            | Self::BeforeAiGeneration => HookExecution::Sync,
+            | Self::BeforeAiGeneration
+            | Self::OnVerificationRequired => HookExecution::Sync,
             Self::AfterBroadcast
             | Self::OnEventUpdated
             | Self::OnEventDeleted
@@ -233,7 +242,8 @@ impl HookTrigger {
             | Self::OnVerificationEnded
             | Self::AfterToolRound
             | Self::BeforeAiGeneration
-            | Self::OnAiResponse => false,
+            | Self::OnAiResponse
+            | Self::OnVerificationRequired => false,
         }
     }
 
@@ -281,7 +291,8 @@ impl HookTrigger {
             | Self::OnParticipantLeft
             | Self::OnParticipantUpdated
             | Self::OnVerificationCompleted
-            | Self::OnVerificationEnded => false,
+            | Self::OnVerificationEnded
+            | Self::OnVerificationRequired => false,
         }
     }
 

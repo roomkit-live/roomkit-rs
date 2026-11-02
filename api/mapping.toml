@@ -483,11 +483,6 @@ members = [
 reason = "not in 0.x: voice deliveries and the connection"
 
 [[missing]]
-python = "roomkit.HookResult"
-members = ["allow_unverified"]
-reason = "not in 0.x: verification (RFC §11.7)"
-
-[[missing]]
 python = "roomkit.HookTrigger"
 members = [
     "AFTER_TTS",
@@ -508,7 +503,7 @@ members = [
     "ON_SPEAK_QUEUE", "ON_SPEECH_END", "ON_SPEECH_START", "ON_THOUGHT", "ON_TTS_CANCELLED", "ON_TURN_COMPLETE",
     "ON_TURN_INCOMPLETE", "ON_VAD_AUDIO_LEVEL",
     "ON_VAD_SILENCE",
-    "ON_VERIFICATION_REQUIRED", "ON_VIDEO_DETECTION", "ON_VIDEO_SESSION_ENDED",
+    "ON_VIDEO_DETECTION", "ON_VIDEO_SESSION_ENDED",
     "ON_VIDEO_SESSION_STARTED", "ON_VIDEO_TRACK_ADDED",
     "ON_VIDEO_TRACK_REMOVED", "ON_VISION_RESULT",
 ]
