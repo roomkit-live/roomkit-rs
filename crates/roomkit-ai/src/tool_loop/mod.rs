@@ -200,8 +200,14 @@ impl<P: AiProvider> Loop<P> {
             let read = self.generate(&messages, asked, reading).await;
             let mut generation = match read {
                 Ok(generation) => generation,
-                Err(Failed { error, streamed }) => {
+                Err(Failed {
+                    error,
+                    streamed,
+                    delivered,
+                }) => {
                     self.refused(round == 0 && !streamed, &error);
+                    // What the room saw of the failed round stays its own.
+                    spent.segments.push(delivered);
                     let ending = (&limits, &steering, &out);
                     let failed = (had_tool_round, tool_rounds, spent);
                     return self.failed(failed, error, ending).await;

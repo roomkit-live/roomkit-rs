@@ -39,11 +39,25 @@ pub(super) struct Called {
     pub(super) partial: Option<Partial>,
 }
 
-/// A generation its provider failed: the error, and whether the stream had
-/// handed anything before it.
+/// A generation its provider failed: the error, whether the stream had
+/// handed anything before it, and what the room was handed of its text.
 pub(super) struct Failed {
     pub(super) error: ProviderError,
     pub(super) streamed: bool,
+    /// The text delivered before the failure, which the room keeps: the
+    /// turn's last segment when the failure ends it `error` (RFC §6.4).
+    pub(super) delivered: String,
+}
+
+impl Failed {
+    /// A failure before the provider handed anything.
+    pub(super) fn before_streaming(error: ProviderError) -> Self {
+        Self {
+            error,
+            streamed: false,
+            delivered: String::new(),
+        }
+    }
 }
 
 /// Why a call never runs, whatever its tool.
@@ -65,8 +79,8 @@ impl Generation {
     ///
     /// # Errors
     ///
-    /// Returns the provider's error, and whether the stream had handed
-    /// anything before it.
+    /// Returns the provider's error, whether the stream had handed
+    /// anything before it, and the text the room was handed.
     pub(super) async fn read<P: AiProvider>(
         provider: &P,
         context: &AiContext,
@@ -85,7 +99,16 @@ impl Generation {
             if steering.cancelled() {
                 return Ok(Self::cut(text, delivered));
             }
-            let event = event.map_err(|error| Failed { error, streamed })?;
+            let event = match event {
+                Ok(event) => event,
+                Err(error) => {
+                    return Err(Failed {
+                        error,
+                        streamed,
+                        delivered,
+                    });
+                }
+            };
             streamed = true;
             match event {
                 StreamEvent::TextDelta(delta) => {

@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A turn its provider failed after a round of calls reports, on
+  `ON_AI_RESPONSE`, what the failed round had handed the room as its last
+  segment (RFC §6.4, RMK-1199), as Python's: `["Let me look.", "Partial
+  answer"]` where the report read `["Let me look."]`.
 - An AI channel compacts its context once and replays the call when its
   provider refuses it as too long for the model (RFC §6.4 "A turn
   compacted", RMK-1225), as Python's: the error's `context_overflow`,

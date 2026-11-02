@@ -74,15 +74,13 @@ impl<P: AiProvider> Loop<P> {
             Err(Failed {
                 error,
                 streamed: false,
+                ..
             }) if error.is_context_overflow() => error,
             read => return read,
         };
         tracing::warn!(target: "roomkit::ai", %error, "context overflow: compacting and replaying");
         let (compacted, turn_input) = compacted(&context.messages, self.adopted.turn_input)
-            .map_err(|error| Failed {
-                error,
-                streamed: false,
-            })?;
+            .map_err(Failed::before_streaming)?;
         // Counted as the provider reads them: a round's results are one message.
         let shown = ai_messages(&self.shown_messages(messages)).len();
         self.adopted.messages = Some((compacted.clone(), shown));
