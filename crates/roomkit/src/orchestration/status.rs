@@ -570,7 +570,9 @@ mod tests {
         assert_eq!(heard.lock().unwrap().clone(), vec![entry]);
     }
 
-    // Python: tests/orchestration/test_status_bus.py::test_bus_subscribe_async_callback
+    // Python: tests/orchestration/test_status_bus.py::test_bus_subscribe_async_callback, test_bus_subscribe_sync_callback
+    // `heard`'s callback records in its body and returns a ready future: a
+    // sync callback's form, Rust's callbacks all returning a future.
     #[tokio::test]
     async fn post_async_returns_once_the_subscribers_ran() {
         let bus = bus();

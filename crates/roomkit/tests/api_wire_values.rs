@@ -120,6 +120,7 @@ fn hook_trigger_serializes_to_python_s_values() {
 }
 
 /// `roomkit.orchestration.StatusLevel`'s members.
+// Python: tests/orchestration/test_status_bus.py::test_status_level_values
 #[test]
 fn status_level_serializes_to_python_s_values() {
     use roomkit::orchestration::StatusLevel;

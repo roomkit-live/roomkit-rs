@@ -74,15 +74,43 @@ mod tests {
         );
     }
 
+    /// The forecast whose summary, cut inside « 14,9 », was read back as
+    /// 1 °C (RMK-556).
+    const FORECAST: &str = "À Montréal, il fait actuellement 6,5 °C avec un ciel dégagé et un \
+        vent de 12,7 km/h. Demain, mercredi 7 octobre, on attend de la pluie, avec 42 % de \
+        risque, une minimale de 4,9 °C et une maximale de 14,9 °C.";
+
+    // Python: tests/test_task_status.py::test_a_bounded_text_is_cut_at_a_word_and_marked
     #[test]
     fn a_bounded_text_is_cut_at_a_word() {
         assert_eq!(
             [
                 bounded_text("short", 10),
                 bounded_text("one two three four", 10),
+                // No space to cut at.
+                bounded_text(&"x".repeat(300), 200),
             ],
-            ["short".to_owned(), "one two…".to_owned()]
+            [
+                "short".to_owned(),
+                "one two…".to_owned(),
+                format!("{}…", "x".repeat(199))
+            ]
         );
+        let cut = bounded_text(FORECAST, 200);
+        let kept = cut.strip_suffix('…').unwrap_or(&cut);
+        let last = kept.split_whitespace().last().unwrap_or_default();
+        assert_eq!(
+            (
+                cut.ends_with('…'),
+                cut.chars().count() <= 200,
+                FORECAST.starts_with(kept),
+                // A whole word, not « 1 » of « 14,9 ».
+                FORECAST.split_whitespace().any(|word| word == last),
+            ),
+            (true, true, true, true)
+        );
+        // Python's RESULT_LIMIT, a completed entry's whole result.
+        assert!(bounded_text(&FORECAST.repeat(40), 4_000).chars().count() <= 4_000);
     }
 
     #[test]

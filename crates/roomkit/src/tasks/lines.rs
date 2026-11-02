@@ -278,6 +278,64 @@ mod tests {
         assert_eq!(lines[1].get("task"), Some(&json!("Write it.")));
     }
 
+    /// A task's entry `seconds` past 15:00, as Python's `_entry` writes it
+    /// in `tests/tasks/test_task_progress_note.py`.
+    fn counted(status: StatusLevel, detail: &str, seconds: u32) -> StatusEntry {
+        let ts = format!("2026-10-07T15:00:{seconds:02}+00:00");
+        let mut entry = StatusEntry::new(ts, "counter", TASK_ACTION, status);
+        entry.detail = detail.to_owned();
+        for (key, value) in [("room_id", "r"), ("task_id", "t1"), ("child_room_id", "c1")] {
+            entry.metadata.insert(key.to_owned(), json!(value));
+        }
+        entry
+    }
+
+    // Python: tests/tasks/test_task_progress_note.py::test_progress_is_kept_apart_and_never_ends_a_task
+    #[test]
+    fn progress_is_kept_apart_and_never_ends_a_task() {
+        let entries = [
+            counted(StatusLevel::Pending, "count 20 s", 0),
+            counted(StatusLevel::Info, "5/20 s", 5),
+            counted(StatusLevel::Info, "12/20 s", 12),
+        ];
+        let lines = room_tasks(entries.iter());
+
+        let read: Vec<_> = lines
+            .iter()
+            .map(|line| {
+                let member = |key| line.get(key).cloned().unwrap_or(Value::Null);
+                (member("status"), member("progress"), member("progress_at"))
+            })
+            .collect();
+        assert_eq!(
+            read,
+            vec![(
+                json!("running"),
+                json!("12/20 s"),
+                json!("2026-10-07T15:00:12+00:00")
+            )]
+        );
+    }
+
+    // Python: tests/tasks/test_task_progress_note.py::test_a_task_that_ended_stays_ended_whatever_progress_follows
+    #[test]
+    fn a_task_that_ended_stays_ended_whatever_progress_follows() {
+        let mut ended = counted(StatusLevel::Completed, "20 s counted", 20);
+        ended
+            .metadata
+            .insert("task_status".to_owned(), json!("completed"));
+        let entries = [
+            counted(StatusLevel::Pending, "count 20 s", 0),
+            ended,
+            counted(StatusLevel::Info, "20/20 s", 21),
+        ];
+
+        assert_eq!(
+            read(&room_tasks(entries.iter())),
+            vec![(json!("t1"), json!("counter"), json!("completed"))]
+        );
+    }
+
     /// The run's line, keyed again by its task once its terminal entry names
     /// it, goes last, as Python's `tasks[task_id] = tasks.pop(by_agent)`
     /// moves it in the dict's order.

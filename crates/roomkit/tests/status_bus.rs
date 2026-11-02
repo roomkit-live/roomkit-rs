@@ -71,6 +71,30 @@ async fn the_kit_s_bus_is_the_one_its_options_name() {
     );
 }
 
+// Python: tests/test_framework_status_bus.py::test_context_manager_subscribes
+// The kit subscribes to its bus as it is built, where Python's subscribes
+// as its context manager opens: a status posted has reached its handlers by
+// the time `post_async` returns, with no wait for the kit to go idle.
+#[tokio::test]
+async fn a_status_posted_has_reached_the_kit_s_handlers_once_posted() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let heard: Arc<Mutex<Vec<String>>> = Arc::default();
+    let notes = Arc::clone(&heard);
+    kit.on("status_posted", move |event| {
+        let agent = event.data["agent_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        notes.lock().unwrap().push(agent);
+        async {}
+    })
+    .unwrap();
+    kit.status_bus()
+        .post_async("a", "act", StatusLevel::Ok, PostAsyncOptions::default())
+        .await;
+    assert_eq!(heard.lock().unwrap().clone(), ["a"]);
+}
+
 // Python: tests/test_framework_status_bus.py::test_close_closes_status_bus
 #[tokio::test]
 async fn the_kit_s_close_closes_its_bus() {
