@@ -35,7 +35,7 @@ use roomkit::model::{CompositeContent, EventContent, EventType, MediaContent, Ro
 use roomkit::{AttachedMedia, MediaResolver};
 use roomkit_core::rules::edits::is_deleted;
 use roomkit_core::rules::transcoding::text_of;
-use roomkit_core::rules::transcript::{Image, Part, quoted};
+use roomkit_core::rules::transcript::{Image, Part, media_type, quoted};
 
 use crate::provider::ProviderError;
 use crate::stream::join_all;
@@ -67,9 +67,6 @@ const UNAVAILABLE: &str = "Image unavailable";
 const REFUSED: &str = "Image refused by the model's provider";
 /// How many characters of an image's name a mention quotes.
 const NAME_CHARS: usize = 120;
-/// The size of an image every vision provider takes, read on its bytes:
-/// Python's `MAX_AUTHOR_IMAGE_BYTES`.
-const MAX_AUTHOR_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 /// The rooms whose refused images a channel keeps, the oldest dropped
 /// past it: Python's `_MAX_ROOMS`.
 const MAX_ROOMS: usize = 100;
@@ -261,9 +258,7 @@ async fn resolved(media: &MediaContent, room: &RoomId, resolver: Option<Resolver
             None => None,
         },
         Some(Resolver::Media(resolver)) => match resolver.call(media.clone(), room.clone()).await {
-            Ok(data) => data
-                .filter(|data| !data.is_empty() && data.len() <= MAX_AUTHOR_IMAGE_BYTES)
-                .and_then(|data| Image::new(&to_data_uri(&data, &kind), &kind)),
+            Ok(data) => data.and_then(|data| Image::from_bytes(&data, &kind)),
             Err(error) => {
                 tracing::warn!(target: "roomkit::ai", room_id = %room, %error, "the media resolver failed on an image");
                 None
@@ -274,29 +269,6 @@ async fn resolved(media: &MediaContent, room: &RoomId, resolver: Option<Resolver
         || Decided::Mention(mention(UNAVAILABLE, media)),
         Decided::Image,
     )
-}
-
-/// `data` as a base64 `data:` URI of the type `kind`: Python's
-/// `to_data_uri`, standard base64 with its padding.
-fn to_data_uri(data: &[u8], kind: &str) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut encoded = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let byte = |at: usize| chunk.get(at).copied().unwrap_or(0);
-        let word = u32::from_be_bytes([0, byte(0), byte(1), byte(2)]);
-        for position in 0..4 {
-            let index = (word >> (18 - 6 * position)) & 0x3f;
-            let digit = usize::try_from(index)
-                .ok()
-                .and_then(|at| ALPHABET.get(at))
-                .copied();
-            match digit.filter(|_| position <= chunk.len()) {
-                Some(digit) => encoded.push(char::from(digit)),
-                None => encoded.push('='),
-            }
-        }
-    }
-    format!("data:{kind};base64,{encoded}")
 }
 
 /// `event` as an AI channel reads it (RFC §6.4): its content, then the
@@ -473,21 +445,6 @@ fn vision_image_type(media: &MediaContent) -> String {
     media_type(declared.unwrap_or(&media.mime_type))
 }
 
-/// `mime_type` as RoomKit compares it: lowercased, its parameters aside,
-/// its aliases folded. Python's `media_type`.
-fn media_type(mime_type: &str) -> String {
-    let bare = mime_type
-        .split(';')
-        .next()
-        .unwrap_or(mime_type)
-        .trim()
-        .to_lowercase();
-    match bare.as_str() {
-        "image/jpg" | "image/pjpeg" => "image/jpeg".to_owned(),
-        _ => bare,
-    }
-}
-
 /// Whether `url` names a media the application holds and resolves: neither
 /// a data URI nor a link. Python's `is_reference`.
 fn is_reference(url: &str) -> bool {
@@ -502,6 +459,7 @@ fn is_reference(url: &str) -> bool {
 mod tests {
     use super::*;
     use roomkit::model::{ChannelId, ChannelType, EventSource, EventType};
+    use roomkit_core::rules::transcript::to_data_uri;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::time::{Instant, sleep};
@@ -778,24 +736,29 @@ mod tests {
     // Python: tests/test_author_images.py::TestMention::test_an_image_that_does_not_resolve_leaves_the_turn_a_mention
     #[tokio::test]
     async fn an_image_that_does_not_resolve_leaves_the_turn_a_mention() {
+        const MAX_AUTHOR_IMAGE_BYTES: usize = 5 * 1024 * 1024;
         let resolver = MediaResolver::new(|media, _room| async move {
             match media.url.as_str() {
                 "app-media://fails" => Err("storage unreachable".into()),
                 "app-media://empty" => Ok(Some(Vec::new())),
                 "app-media://large" => Ok(Some(vec![0; MAX_AUTHOR_IMAGE_BYTES + 1])),
+                "app-media://max" => Ok(Some(vec![0; MAX_AUTHOR_IMAGE_BYTES])),
                 _ => Ok(None),
             }
         });
         let room = RoomId::new("allowed").unwrap();
-        for url in ["fails", "empty", "large", "none"] {
+        // RMK-1197: 5 MiB of bytes resolve, though their base64 reads a
+        // byte more off its length.
+        let max = Image::from_bytes(&vec![0; MAX_AUTHOR_IMAGE_BYTES], "image/png").unwrap();
+        for url in ["fails", "empty", "large", "none", "max"] {
             let event = photo("e1", &format!("app-media://{url}"), "lamp.png");
             let resolver = Some(super::Resolver::Media(&resolver));
             let images = author_images(&[&event], &room, resolver, None, &HashSet::new()).await;
-            assert_eq!(
-                said(&images, &event),
-                text("[Image unavailable: “lamp.png”]"),
-                "{url}"
-            );
+            let expected = match url {
+                "max" => vec![Part::Image(max.clone())],
+                _ => text("[Image unavailable: “lamp.png”]"),
+            };
+            assert_eq!(said(&images, &event), expected, "{url}");
         }
     }
 

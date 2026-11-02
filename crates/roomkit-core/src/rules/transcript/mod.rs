@@ -47,10 +47,12 @@
 //! way.
 
 mod content;
+mod data_uri;
 mod fence;
 mod images;
 pub use self::content::{Part, TurnContent};
-pub use images::Image;
+pub use self::data_uri::{DataUriError, parse_data_uri, to_data_uri};
+pub use images::{Image, media_type};
 mod marks;
 mod quote;
 mod rounds;

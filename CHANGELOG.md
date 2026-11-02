@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- An author's image goes as Python's `_inline` sends it (RFC §6.4,
+  RMK-1197): a data URI is read for its data's presence and its size
+  alone, its scheme, type and parameters in lower case, its data as
+  written (a parameter beside `base64`, unpadded, URL-safe or wrapped
+  base64 no longer read "[Image unavailable]"); a link goes as written,
+  a `..` segment, a backslash or a control character included; 5 MiB of
+  bytes a `MediaResolver` gives resolve, where their base64's length read
+  a byte more.
 - A turn its provider failed after a round of calls reports, on
   `ON_AI_RESPONSE`, what the failed round had handed the room as its last
   segment (RFC §6.4, RMK-1199), as Python's: `["Let me look.", "Partial
