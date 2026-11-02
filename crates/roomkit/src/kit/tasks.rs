@@ -747,7 +747,8 @@ impl<S: ConversationStore> RoomKit<S> {
         );
         message.status = EventStatus::Delivered;
         message.visibility = Visibility::Intelligence;
-        let operation = DelegatedTurn::new(self.config(), task.child_room_id.clone(), message);
+        let operation = DelegatedTurn::new(self.config(), task.child_room_id.clone(), message)
+            .of_agent(task.agent_id.clone());
         match Box::pin(driver::run(&self.inner, "delegate", operation)).await {
             Ok(Ok(answers)) => Ok(answers),
             Ok(Err(error)) => Err(delegation_failure(&error)),
@@ -1037,7 +1038,8 @@ pub(super) fn kit_failure(error: &RoomKitError) -> ErrorRecord {
 
 /// A delegated turn that could not run, as the failure of its task: the
 /// store's failure as it was recorded, a child room gone as Python's
-/// `RoomNotFoundError`, a refused commit as the kit's error.
+/// `RoomNotFoundError`, a refused commit as the kit's error, and the room's
+/// refusal of the answers as the kit's error for it.
 fn delegation_failure(error: &roomkit_core::ops::DelegationError) -> ErrorRecord {
     match error {
         roomkit_core::ops::DelegationError::Store(record) => record.clone(),
@@ -1046,6 +1048,9 @@ fn delegation_failure(error: &roomkit_core::ops::DelegationError) -> ErrorRecord
         }
         roomkit_core::ops::DelegationError::Commit(_) => {
             ErrorRecord::new("RoomKitError", error.to_string())
+        }
+        roomkit_core::ops::DelegationError::Room(refused) => {
+            kit_failure(&RoomKitError::from(refused.clone()))
         }
     }
 }

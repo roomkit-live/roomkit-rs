@@ -1,19 +1,27 @@
-//! A delegated turn on the trace path (RFC §23.3 steps 4 to 6): the
-//! task's description, a system message only the child room's
-//! intelligence channels read, committed outside the pipeline, then handed
-//! to each of them; what they answer is kept as the room's trace, each row
-//! committed as it is, crossing no hook and riding no lane, a streamed
-//! answer's rows as its reader ends them, which nobody else reads. The
-//! Python implementation's `_broadcast_and_collect` and `_collect_answer`
-//! for a child room no transport is shared into.
+//! A delegated turn (RFC §23.3 steps 4 to 6): the task's description, a
+//! system message only the child room's intelligence channels read,
+//! committed outside the pipeline, then handed to each of them. In a child
+//! room no transport is shared into, what they answer is kept as the room's
+//! trace, each row committed as it is, crossing no hook and riding no lane,
+//! a streamed answer's rows as its reader ends them, which nobody else
+//! reads. In one a transport is shared into, what they answer is committed
+//! as a room's responses are, through `BEFORE_BROADCAST`, the agent's right
+//! to write and the room's lane, a stream read by the room's reader, so
+//! that the transport is told the answers as its binding reads
+//! ([`Inbound::answering`]). The Python implementation's
+//! `_broadcast_and_collect`, with `_collect_answer` or `_deliver_answer`.
 
+mod collected;
 mod nested;
+mod room_path;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use self::collected::{Buffered, Collected, Streamed};
 use self::nested::Nested;
 use super::events::{CommitRecord, MutationError};
+use super::inbound::{Inbound, InboundError};
 use super::protocol::{
     ChannelOutcome, ChannelRequest, Delivered, Effect, EffectId, Entry, EntryId, InboundResult,
     Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, Step, StoreOutcome,
@@ -21,8 +29,8 @@ use super::protocol::{
 };
 use super::{Environment, KitConfig};
 use crate::model::{
-    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, EventStatus, EventType,
-    Metadata, Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Visibility,
+    ChannelBinding, ChannelCategory, ChannelId, ErrorRecord, EventStatus, EventType, Metadata,
+    Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Visibility,
 };
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions;
@@ -56,6 +64,10 @@ pub enum DelegationError {
     /// The store failed a read or a write.
     #[error("{}", .0.message)]
     Store(ErrorRecord),
+    /// The room did not take the answers, committed as a room's responses
+    /// (RFC §23.3 step 5).
+    #[error(transparent)]
+    Room(InboundError),
 }
 
 /// One delegated turn in a child room, Python's `_broadcast_and_collect`
@@ -93,6 +105,14 @@ pub struct DelegatedTurn {
     /// stored whose `ON_TASK_CREATED` has not fired yet.
     filing: Option<(EffectId, Vec<Task>)>,
     created: Vec<Task>,
+    /// The agent the task is given to, whose turn a stream's failure ends
+    /// when several agents streamed.
+    agent_id: Option<ChannelId>,
+    /// The answers committed as a room's, in a child room a transport is
+    /// shared into.
+    room_path: Option<Nested<Inbound>>,
+    /// The agents whose answer the room's path reads as a stream.
+    streamers: Vec<ChannelId>,
     next_entry: EntryId,
     notices: Vec<Notice>,
     settled: Vec<Settled>,
@@ -124,12 +144,25 @@ impl DelegatedTurn {
             asked_context: None,
             filing: None,
             created: Vec::new(),
+            agent_id: None,
+            room_path: None,
+            streamers: Vec::new(),
             next_entry: EntryId::first(),
             notices: Vec::new(),
             settled: Vec::new(),
             delivered: Vec::new(),
             failed: None,
         }
+    }
+
+    /// The same turn, of a task given to `agent_id`: when several of the
+    /// child room's agents answer by a stream and the room's reader fails
+    /// one, the failure is that agent's when its turn did not end
+    /// otherwise (RFC §23.3 step 6).
+    #[must_use]
+    pub fn of_agent(mut self, agent_id: ChannelId) -> Self {
+        self.agent_id = Some(agent_id);
+        self
     }
 
     fn issue(&mut self, request: impl Into<Request>) -> Effect {
@@ -198,71 +231,37 @@ impl DelegatedTurn {
         }
     }
 
-    /// Once every turn answered: the buffered answers' rows to commit, in
-    /// the order the turns were asked, their side effects to store, then
-    /// the streams to read, one at a time.
+    /// Once every turn answered: their side effects to store, then their
+    /// answers committed, as the trace or by the room's path when a
+    /// transport is shared into the room (RFC §23.3 step 5).
     fn collect(&mut self, effects: &mut Vec<Effect>) {
         let asked = std::mem::take(&mut self.asked);
-        let mut tasks: Vec<Task> = Vec::new();
-        let mut observations: Vec<Observation> = Vec::new();
-        let mut metadata = Metadata::new();
+        let mut collected = Collected::default();
         for (turn, binding, outcome) in asked {
-            let slot = self.answers.len();
-            let mut answer = DelegatedAnswer {
-                channel_id: binding.channel_id.clone(),
-                responded: false,
-                rows: Vec::new(),
-                record: Metadata::new(),
-                error: None,
-            };
-            match outcome {
-                Some(Outcome::Channel(ChannelOutcome::Output(output))) => {
-                    let ChannelOutput {
-                        responded,
-                        response_events,
-                        response_metadata,
-                        tasks: filed,
-                        observations: noted,
-                        metadata_updates,
-                        error,
-                        ..
-                    } = *output;
-                    answer.responded = responded;
-                    answer.record = response_metadata;
-                    answer.error = error;
-                    for row in response_events {
-                        self.rows.push_back((slot, row, None));
-                    }
-                    tasks.extend(filed);
-                    observations.extend(noted);
-                    metadata.extend(metadata_updates);
-                }
-                Some(Outcome::Channel(ChannelOutcome::Streamed(output))) => {
-                    answer.responded = true;
-                    answer.record.clone_from(&output.response_metadata);
-                    tasks.extend(output.tasks);
-                    observations.extend(output.observations);
-                    metadata.extend(output.metadata_updates);
-                    self.streams.push_back((turn, slot));
-                }
-                // A turn that raised answers nothing, and carries no error to
-                // the task: its delivery set logged it, as Python's router
-                // does, and kept no output of it.
-                Some(Outcome::Channel(ChannelOutcome::Raised(raised))) => {
-                    log_raised(&binding.channel_id, &raised.error);
-                }
-                Some(Outcome::Channel(ChannelOutcome::ProviderDelivery(result))) => {
-                    let message = result.error.unwrap_or_default();
-                    log_raised(
-                        &binding.channel_id,
-                        &ErrorRecord::new("ProviderDeliveryError", message),
-                    );
-                }
-                Some(Outcome::Failed(error)) => log_raised(&binding.channel_id, &error),
-                Some(_) | None => {}
-            }
+            let answer = collected.take(turn, binding, outcome, self.answers.len());
             self.answers.push(answer);
         }
+        self.persist(
+            collected.tasks,
+            collected.observations,
+            collected.metadata,
+            effects,
+        );
+        if room_path::shares_a_transport(&self.bindings) {
+            self.take_the_room_path(collected.buffered, collected.streamed);
+        } else {
+            self.keep_the_trace(collected.buffered, collected.streamed);
+        }
+    }
+
+    /// Stores the side effects the turns returned (RFC §10.1 step 15).
+    fn persist(
+        &mut self,
+        tasks: Vec<Task>,
+        observations: Vec<Observation>,
+        metadata: Metadata,
+        effects: &mut Vec<Effect>,
+    ) {
         if !tasks.is_empty() || !observations.is_empty() {
             let write = self.issue(StoreRequest::PersistSideEffects {
                 room_id: self.room_id.clone(),
@@ -285,6 +284,20 @@ impl DelegatedTurn {
             });
             self.persisting.push(write.id);
             effects.push(write);
+        }
+    }
+
+    /// The answers kept as the trace: the buffered answers' rows to commit,
+    /// in the order the turns were asked, then the streams to read, one at
+    /// a time.
+    fn keep_the_trace(&mut self, buffered: Vec<Buffered>, streamed: Vec<Streamed>) {
+        for (slot, _, rows) in buffered {
+            for row in rows {
+                self.rows.push_back((slot, row, None));
+            }
+        }
+        for (turn, slot, _) in streamed {
+            self.streams.push_back((turn, slot));
         }
     }
 
@@ -458,6 +471,7 @@ impl DelegatedTurn {
             && self.streams.is_empty()
             && self.reading.is_none()
             && self.persisting.is_empty()
+            && self.room_path.is_none()
     }
 }
 
@@ -477,6 +491,7 @@ impl Operation for DelegatedTurn {
         }
         self.advance_rows(environment, &mut effects);
         self.advance_streams(&mut effects);
+        self.advance_room_path(environment, &mut effects);
         self.tasks_created(environment);
         let next = if !effects.is_empty() {
             Next::Effects(effects)
@@ -541,6 +556,9 @@ impl Operation for DelegatedTurn {
             }
             return Ok(());
         }
+        if let Some(path) = self.room_path.as_mut().filter(|path| path.owns(id)) {
+            return path.complete(id, outcome);
+        }
         if let Some(position) = self.persisting.iter().position(|write| *write == id) {
             self.persisting.remove(position);
             let filed = self.filing.take_if(|(write, _)| *write == id);
@@ -561,6 +579,15 @@ impl Operation for DelegatedTurn {
         reason = "any entry but a row of the stream being read is handed back, whatever it is"
     )]
     fn adopt(&mut self, entry: Entry, origin: EffectId) -> Result<EntryId, Box<Entry>> {
+        // The room's path adopts what the code of its effects calls into the
+        // room, its streams' rows among them; the trace adopts nothing then.
+        let entry = match self.room_path.as_mut() {
+            Some(path) => match path.adopt(entry, origin) {
+                Ok(id) => return Ok(id),
+                Err(entry) => *entry,
+            },
+            None => entry,
+        };
         let Some((_, slot)) = self.reading.filter(|(read, _)| *read == origin) else {
             return Err(Box::new(entry));
         };
@@ -574,11 +601,6 @@ impl Operation for DelegatedTurn {
             other => Err(Box::new(other)),
         }
     }
-}
-
-/// Logs the raise of `channel_id`'s turn, which the task does not carry.
-fn log_raised(channel_id: &ChannelId, error: &ErrorRecord) {
-    tracing::warn!(target: "roomkit::tasks", channel = %channel_id, error = %error.message, "a delegated turn raised");
 }
 
 /// The protocol error of `outcome`, which does not answer `effect`.

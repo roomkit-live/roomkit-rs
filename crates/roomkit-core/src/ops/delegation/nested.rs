@@ -1,10 +1,16 @@
 //! An operation run inside another, its effects renamed with the outer
-//! operation's ids so that the two never share one.
+//! operation's ids so that the two never share one. The entries it adopts
+//! keep its own ids: an outer operation that nests one which adopts
+//! entries adopts none itself. An inner decision is not the outer
+//! operation's, and is dropped.
 
 use std::collections::BTreeMap;
 
 use crate::ops::Environment;
-use crate::ops::protocol::{Effect, EffectId, Next, Notice, Operation, Outcome, ProtocolError};
+use crate::ops::protocol::{
+    Delivered, Effect, EffectId, Entry, EntryId, Next, Notice, Operation, Outcome, ProtocolError,
+    Settled,
+};
 
 /// An inner operation and the outer ids of its outstanding effects.
 #[derive(Debug)]
@@ -12,6 +18,10 @@ pub(super) struct Nested<O> {
     op: O,
     /// The inner id of each outstanding effect, by its outer id.
     ids: BTreeMap<EffectId, EffectId>,
+    /// What the inner operation settled and delivered of the entries it
+    /// adopted, not taken yet.
+    settled: Vec<Settled>,
+    delivered: Vec<Delivered>,
 }
 
 impl<O: Operation> Nested<O> {
@@ -19,6 +29,8 @@ impl<O: Operation> Nested<O> {
         Self {
             op,
             ids: BTreeMap::new(),
+            settled: Vec::new(),
+            delivered: Vec::new(),
         }
     }
 
@@ -34,6 +46,8 @@ impl<O: Operation> Nested<O> {
     ) -> Option<O::Output> {
         let step = self.op.poll(environment);
         notices.extend(step.notices);
+        self.settled.extend(step.settled);
+        self.delivered.extend(step.delivered);
         match step.next {
             Next::Effects(own) => {
                 for mut effect in own {
@@ -53,6 +67,25 @@ impl<O: Operation> Nested<O> {
     /// Whether `id` names one of the inner operation's effects.
     pub(super) fn owns(&self, id: EffectId) -> bool {
         self.ids.contains_key(&id)
+    }
+
+    /// What the inner operation settled and delivered of its adopted
+    /// entries since this was last taken, for the outer step.
+    pub(super) fn take_entries(&mut self) -> (Vec<Settled>, Vec<Delivered>) {
+        (
+            std::mem::take(&mut self.settled),
+            std::mem::take(&mut self.delivered),
+        )
+    }
+
+    /// Hands the inner operation a call the code its effect `origin` runs
+    /// made into its room; `entry` back when `origin` is not its own, or
+    /// when it does not adopt it.
+    pub(super) fn adopt(&mut self, entry: Entry, origin: EffectId) -> Result<EntryId, Box<Entry>> {
+        match self.ids.get(&origin) {
+            Some(inner) => self.op.adopt(entry, *inner),
+            None => Err(Box::new(entry)),
+        }
     }
 
     /// Hands the inner operation the answer to its effect `id`.
