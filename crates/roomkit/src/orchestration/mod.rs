@@ -7,6 +7,7 @@
 pub mod backend;
 mod memory;
 mod status;
+mod strategy;
 mod text;
 
 pub use self::memory::{InMemoryStatusBackend, InMemoryStatusBackendOptions};
@@ -14,4 +15,5 @@ pub use self::status::{
     HasCompletedOptions, PostAsyncOptions, PostOptions, RecentOptions, StatusBus, StatusBusOptions,
     StatusEntry, StatusLevel,
 };
+pub use self::strategy::{Orchestration, StrategyAgent, StrategyFuture};
 pub use self::text::RecentTextOptions;

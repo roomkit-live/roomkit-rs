@@ -371,7 +371,7 @@ impl Channel for CountingHost {
 async fn sms_room<S: ConversationStore>(
     kit: &RoomKit<S>,
     organization: Option<&str>,
-    options: CreateRoomOptions,
+    options: CreateRoomOptions<S>,
 ) -> Sms {
     let sms = Sms::default();
     kit.register_channel(sms.clone()).unwrap();

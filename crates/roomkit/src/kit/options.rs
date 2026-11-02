@@ -123,6 +123,10 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// after the event's own content, then resolves as an author's media
     /// (RFC §6.4). The store and the broadcasts keep the event as stored.
     pub attached_media: Option<crate::AttachedMedia>,
+    /// Python `orchestration=None`: the strategy every room the kit creates
+    /// is installed with, unless its creation names another or none (RFC
+    /// §19.7, [`CreateRoomOptions::orchestration`]).
+    pub orchestration: Option<Arc<dyn crate::Orchestration<S>>>,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -154,6 +158,7 @@ impl<S> RoomKitOptions<S> {
             verification_policy: None,
             media_resolver: None,
             attached_media: None,
+            orchestration: None,
         }
     }
 }
@@ -172,6 +177,7 @@ impl<S> fmt::Debug for RoomKitOptions<S> {
             .field("identity_channel_types", &self.identity_channel_types)
             .field("identity_timeout", &self.identity_timeout)
             .field("task_runner", &self.task_runner.is_some())
+            .field("orchestration", &self.orchestration.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -248,8 +254,7 @@ scoped_options! {
 /// What [`RoomKit::create_room`](crate::RoomKit::create_room) takes, Python's
 /// `create_room(room_id=None, metadata=None, ..., organization_id=None,
 /// timers=None, agent_response_policy=None)`.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct CreateRoomOptions {
+pub struct CreateRoomOptions<S = InMemoryStore> {
     /// The room's id; `None`, a generated one.
     pub room_id: Option<RoomId>,
     /// Integrator-defined data. A key only the framework writes, under
@@ -263,6 +268,72 @@ pub struct CreateRoomOptions {
     /// What an agent's own output solicits in the room (RFC §19.3.1);
     /// `None`, the kit's ([`RoomKitOptions::agent_response_policy`]).
     pub agent_response_policy: Option<AgentResponsePolicy>,
+    /// Python `orchestration`: the strategy the room is installed with (RFC
+    /// §19.7), through [`RoomKit::install_strategy`](crate::RoomKit::install_strategy)'s
+    /// path. `None` (Python's argument left out) takes the kit's
+    /// ([`RoomKitOptions::orchestration`]); `Some(None)` (Python's `None`)
+    /// installs none; `Some(Some(strategy))` installs `strategy`.
+    pub orchestration: Option<Option<Arc<dyn crate::Orchestration<S>>>>,
+}
+
+impl<S> Default for CreateRoomOptions<S> {
+    fn default() -> Self {
+        Self {
+            room_id: None,
+            metadata: Metadata::default(),
+            organization_id: None,
+            timers: None,
+            agent_response_policy: None,
+            orchestration: None,
+        }
+    }
+}
+
+impl<S> Clone for CreateRoomOptions<S> {
+    fn clone(&self) -> Self {
+        Self {
+            room_id: self.room_id.clone(),
+            metadata: self.metadata.clone(),
+            organization_id: self.organization_id.clone(),
+            timers: self.timers.clone(),
+            agent_response_policy: self.agent_response_policy,
+            orchestration: self.orchestration.clone(),
+        }
+    }
+}
+
+impl<S> PartialEq for CreateRoomOptions<S> {
+    /// Equal when every field is, the strategies the same objects.
+    fn eq(&self, other: &Self) -> bool {
+        let same_strategy = match (&self.orchestration, &other.orchestration) {
+            (None, None) | (Some(None), Some(None)) => true,
+            (Some(Some(mine)), Some(Some(theirs))) => Arc::ptr_eq(mine, theirs),
+            _ => false,
+        };
+        self.room_id == other.room_id
+            && self.metadata == other.metadata
+            && self.organization_id == other.organization_id
+            && self.timers == other.timers
+            && self.agent_response_policy == other.agent_response_policy
+            && same_strategy
+    }
+}
+
+impl<S> fmt::Debug for CreateRoomOptions<S> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CreateRoomOptions")
+            .field("room_id", &self.room_id)
+            .field("metadata", &self.metadata)
+            .field("organization_id", &self.organization_id)
+            .field("timers", &self.timers)
+            .field("agent_response_policy", &self.agent_response_policy)
+            .field(
+                "orchestration",
+                &self.orchestration.as_ref().map(Option::is_some),
+            )
+            .finish()
+    }
 }
 
 /// What [`RoomKit::attach_channel`](crate::RoomKit::attach_channel) takes

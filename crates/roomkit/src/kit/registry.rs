@@ -29,18 +29,28 @@ impl<S: ConversationStore> RoomKit<S> {
     /// [`RoomKitError::Value`] for a channel claiming the type `system` (RFC
     /// §5.3).
     pub fn register_channel(&self, channel: impl Channel) -> Result<(), RoomKitError> {
-        self.inner.open()?;
         let declaration = config_of(&channel);
+        let human_input = channel.human_input_handler();
+        self.register_dyn(Arc::new(channel), declaration, human_input)
+    }
+
+    /// [`register_channel`](Self::register_channel) for a channel already
+    /// behind a trait object, with its declaration and its human-input
+    /// handler read from it: a strategy's agent given live (RFC §19.7).
+    pub(crate) fn register_dyn(
+        &self,
+        channel: Arc<dyn DynChannel>,
+        declaration: roomkit_core::ops::ChannelConfig,
+        human_input: Option<crate::human_input::HumanInputHandler>,
+    ) -> Result<(), RoomKitError> {
+        self.inner.open()?;
         declaration.capabilities.check()?;
         let registered = CoreEvent::channel_registered(
             declaration.channel_id.clone(),
             declaration.channel_type.clone(),
         );
         let channel_id = declaration.channel_id.clone();
-        let human_input = channel
-            .human_input_handler()
-            .map(|handler| (channel_id.clone(), handler));
-        let channel: Arc<dyn DynChannel> = Arc::new(channel);
+        let human_input = human_input.map(|handler| (channel_id.clone(), handler));
         self.inner.try_change_config(|config| {
             config.register_channel(declaration)?;
             // The channel is in place before an operation can see its

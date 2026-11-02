@@ -108,6 +108,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `AiToolResultPart::result` is a `ToolResult` (`AiToolResultPart` has
   Python's `as_text()` and `split_for_message()`), and `ToolResult` has a
   third variant, `Parts`, which an exhaustive match must name.
+- A room takes an orchestration strategy while it lives, one at a time
+  (RFC §19.7, RMK-1233): `RoomKit::install_strategy`,
+  `uninstall_strategy`, `claim_room_strategy` and `room_strategy`,
+  `RoomKitOptions::orchestration` and `CreateRoomOptions::orchestration`,
+  as Python's. A strategy implements `Orchestration`; its agents, given
+  live or by id, are attached at the install, and the uninstall takes
+  back the room hooks, agents and metadata keys the install added.
 - An AI channel's turn takes its binding's metadata `system_prompt` over
   its own, as Python's `_turn_settings` (RFC Appendix A.9, RMK-1208): a
   hand-back to an agent whose binding holds a persona runs on it, where

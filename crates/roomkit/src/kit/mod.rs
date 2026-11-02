@@ -47,6 +47,7 @@ mod shutdown;
 mod start_task;
 mod status;
 mod steering;
+mod strategies;
 mod structured;
 mod task_cancel;
 mod tasks;
@@ -104,6 +105,9 @@ pub use self::status::{
     ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,
 };
 pub use self::steering::SteerOptions;
+pub use self::strategies::{
+    ClaimRoomStrategyOptions, InstallStrategyOptions, RoomStrategyOptions, UninstallStrategyOptions,
+};
 pub use self::task_cancel::CancelTaskOptions;
 pub use self::tasks::DelegateOptions;
 pub(crate) use self::tasks::TaskEnd;
@@ -258,6 +262,11 @@ pub(crate) struct Inner<S> {
     /// The deliveries a caller named by a key (RFC §10.1 "Explicit
     /// delivery cancellation").
     pub(crate) delivery_keys: Arc<crate::delivery_keys::DeliveryKeys>,
+    /// The strategy a room the kit creates is installed with, unless its
+    /// creation names another or none (RFC §19.7).
+    pub(crate) default_orchestration: Option<Arc<dyn crate::Orchestration<S>>>,
+    /// The strategies installed through the kit, by room (RFC §19.7).
+    pub(crate) room_strategies: strategies::RoomStrategies<S>,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -295,6 +304,7 @@ impl<S: ConversationStore> RoomKit<S> {
             verification_policy,
             media_resolver,
             attached_media,
+            orchestration,
         } = options;
         let mut config = KitConfig::new();
         config.max_chain_depth = max_chain_depth;
@@ -348,6 +358,8 @@ impl<S: ConversationStore> RoomKit<S> {
                 attached_media,
             },
             delivery_keys: Arc::default(),
+            default_orchestration: orchestration,
+            room_strategies: strategies::RoomStrategies::default(),
         });
         inner.subscribe_status_bus();
         inner.name_held_deliveries();

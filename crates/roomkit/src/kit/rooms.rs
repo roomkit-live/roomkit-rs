@@ -36,7 +36,27 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// Returns [`RoomKitError::RoomAlreadyExists`] when the room exists
     /// already, nothing written, as Python raises `RoomAlreadyExistsError`.
-    pub async fn create_room(&self, options: CreateRoomOptions) -> Result<Room, RoomKitError> {
+    pub async fn create_room(&self, options: CreateRoomOptions<S>) -> Result<Room, RoomKitError> {
+        let orchestration = options
+            .orchestration
+            .clone()
+            .unwrap_or_else(|| self.inner.default_orchestration.clone());
+        let room = self.create_room_record(options).await?;
+        // A strategy recorded for this id belonged to a room that is gone.
+        self.forget_strategy(&room.id).await?;
+        if let Some(strategy) = orchestration {
+            // The path install_strategy() takes: claimed, recorded (RFC §19.7).
+            self.install_on(&room.id, strategy, room.organization_id.clone())
+                .await?;
+        }
+        Ok(room)
+    }
+
+    /// The room `options` describes, written, its creation announced.
+    async fn create_room_record(
+        &self,
+        options: CreateRoomOptions<S>,
+    ) -> Result<Room, RoomKitError> {
         let inner = &self.inner;
         let environment = inner.environment();
         let config = self.config();

@@ -404,6 +404,16 @@ approved = "2026-11-01"
 reason = "the kit holds its realtime backend as a trait object, as its router: RealtimeBackend's methods return a boxed future (architecture: the Python names table)"
 
 [[exception]]
+rust = "roomkit::orchestration::StrategyFuture"
+approved = "2026-11-02"
+reason = "the kit holds a room's strategy as a trait object, as its router: Orchestration's install and uninstall return a boxed future (architecture: the Python names table; HITL 2af87061)"
+
+[[exception]]
+rust = "roomkit::orchestration::StrategyAgent"
+approved = "2026-11-02"
+reason = "Python's Orchestration.agents() returns `AIChannel | ACPChannel | str` in one list: a Rust list of a union is a type of its own, an agent given live or named by its id, as ToolEntry (architecture: the Python names table; HITL 2af87061)"
+
+[[exception]]
 rust = "roomkit::RouterFuture"
 approved = "2026-10-27"
 reason = "the kit holds its router as a trait object: InboundRoomRouter::route returns a boxed future"
@@ -531,12 +541,10 @@ reason = "not ported: plumbing (lot 2)"
 [[missing]]
 python = "roomkit.RoomKit"
 members = [
-    "claim_room_strategy",
-    "install_strategy", "regenerate_response",
-    "regenerate_target", "room_strategy",
-    "room_strategy_is_current", "turn_executor", "uninstall_strategy",
+    "regenerate_response", "regenerate_target",
+    "room_strategy_is_current", "turn_executor",
 ]
-reason = "not in 0.x: orchestration strategies, the turn executor and regeneration"
+reason = "not in 0.x: a discussion's strategy stored with the room (stream I, RMK-1233), the turn executor and regeneration"
 
 [[missing]]
 python = "roomkit.RoomKit"
@@ -610,7 +618,7 @@ params = [
     "lock_manager",
     "stt", "tts", "voice",
     "telemetry",
-    "inbound_rate_limit", "orchestration", "persistence_policy",
+    "inbound_rate_limit", "persistence_policy",
     "delivery_gap_timeout", "delivery_claim_lock_manager",
     "turn_backend",
     "error_classes",
@@ -619,8 +627,8 @@ reason = "not in 0.x: a keyword for a feature Rust lacks (lot 1's list: identity
 
 [[missing]]
 python = "roomkit.RoomKit.create_room"
-params = ["recorders", "orchestration"]
-reason = "not in 0.x: recording and orchestration"
+params = ["recorders"]
+reason = "not in 0.x: recording"
 
 [[missing]]
 python = "roomkit.Skill"

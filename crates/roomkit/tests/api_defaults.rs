@@ -133,7 +133,9 @@ fn commit_event_options_defaults_as_python() {
 
 #[test]
 fn create_room_options_defaults_as_python() {
-    let defaults = CreateRoomOptions::default();
+    let defaults: CreateRoomOptions = CreateRoomOptions::default();
+    // roomkit.RoomKit.create_room(orchestration) = <object object>: the kit's
+    assert!(defaults.orchestration.is_none());
     // roomkit.RoomKit.create_room(agent_response_policy) = None
     assert!(defaults.agent_response_policy.is_none());
     // roomkit.RoomKit.create_room(metadata) = None
@@ -521,6 +523,8 @@ fn room_kit_options_defaults_as_python() {
     assert!(defaults.media_resolver.is_none());
     // roomkit.RoomKit.__init__(attached_media) = None
     assert!(defaults.attached_media.is_none());
+    // roomkit.RoomKit.__init__(orchestration) = None
+    assert!(defaults.orchestration.is_none());
     // roomkit.RoomKit.__init__(store) = None
     let store: Arc<InMemoryStore> = defaults.store;
     assert_eq!(Arc::strong_count(&store), 1);
@@ -1318,4 +1322,32 @@ fn verification_policy_defaults_as_python() {
     assert_eq!(defaults.release_max_age, Duration::from_hours(1));
     // roomkit.VerificationPolicy.__init__(hold_unverified) = True
     assert!(defaults.hold_unverified);
+}
+
+#[test]
+fn install_strategy_options_defaults_as_python() {
+    let defaults = roomkit::InstallStrategyOptions::default();
+    // roomkit.RoomKit.install_strategy(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn uninstall_strategy_options_defaults_as_python() {
+    let defaults = roomkit::UninstallStrategyOptions::default();
+    // roomkit.RoomKit.uninstall_strategy(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn claim_room_strategy_options_defaults_as_python() {
+    let defaults = roomkit::ClaimRoomStrategyOptions::default();
+    // roomkit.RoomKit.claim_room_strategy(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn room_strategy_options_defaults_as_python() {
+    let defaults = roomkit::RoomStrategyOptions::default();
+    // roomkit.RoomKit.room_strategy(organization_id) = None
+    assert!(defaults.organization_id.is_none());
 }
