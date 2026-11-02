@@ -316,6 +316,7 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "instruction",
         ],
         "cancel_delivery" => &["key", "reason"],
+        "steer" => &["channel_id", "directive", "room_id"],
         other => {
             return crate::task_calls::arguments(other)
                 .or_else(|| crate::store_calls::arguments(other))

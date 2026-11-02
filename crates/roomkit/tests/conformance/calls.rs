@@ -198,20 +198,38 @@ pub(crate) async fn call(
         verification if crate::verification_calls::handles(verification) => {
             crate::verification_calls::call(run, verification, spec).await?
         }
-        "cancel_delivery" => {
-            let key = field::<String>(spec, "key")?;
-            let mut options = roomkit::CancelDeliveryOptions {
-                organization_id: organization_id(spec),
-                ..roomkit::CancelDeliveryOptions::default()
-            };
-            if let Some(reason) = optional::<String>(spec, "reason")? {
-                options.reason = reason;
-            }
-            let cancelled = run.kit().cancel_delivery(&key, options).await;
-            (Ok(json!(cancelled)), None)
-        }
+        "cancel_delivery" | "steer" => (cancel_or_steer(run, name, spec).await?, None),
         _ => (lifecycle_call(run, name, spec).await?, None),
     })
+}
+
+/// `cancel_delivery`, or `steer`: a directive to an agent's running turns.
+async fn cancel_or_steer(
+    run: &std::sync::Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<Called, Unreadable> {
+    if name == "steer" {
+        let directive = field::<roomkit::model::SteeringDirective>(spec, "directive")?;
+        let channel = field::<ChannelId>(spec, "channel_id")?;
+        let options = roomkit::SteerOptions {
+            room_id: optional::<RoomId>(spec, "room_id")?,
+            organization_id: organization_id(spec),
+            ..roomkit::SteerOptions::default()
+        };
+        let reached = run.kit().steer(directive, &channel, options).await;
+        return Ok(finish(run, name, reached, |reached| json!(reached)));
+    }
+    let key = field::<String>(spec, "key")?;
+    let mut options = roomkit::CancelDeliveryOptions {
+        organization_id: organization_id(spec),
+        ..roomkit::CancelDeliveryOptions::default()
+    };
+    if let Some(reason) = optional::<String>(spec, "reason")? {
+        options.reason = reason;
+    }
+    let cancelled = run.kit().cancel_delivery(&key, options).await;
+    Ok(Ok(json!(cancelled)))
 }
 
 async fn lifecycle_call(

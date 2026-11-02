@@ -442,17 +442,22 @@ fn request(request: &AiContext) -> Value {
             })
         })
         .collect();
+    // Every result of each tool message: a round's results are one message.
     let results: Vec<Value> = request
         .messages
         .iter()
         .filter(|message| message.role == AiRole::Tool)
-        .map(|message| {
-            let result = message.tool_result();
-            json!({
-                "tool_call_id": result.map(|result| result.tool_call_id.clone()),
-                "content": message.text(),
-                "is_error": result.map(|result| result.is_error),
-            })
+        .flat_map(|message| match &message.content {
+            AiMessageContent::Parts(parts) => parts.as_slice(),
+            AiMessageContent::Text(_) => &[],
+        })
+        .filter_map(|part| match part {
+            AiContentPart::ToolResult(result) => Some(json!({
+                "tool_call_id": result.tool_call_id,
+                "content": result.result,
+                "is_error": result.is_error,
+            })),
+            AiContentPart::Text(_) | AiContentPart::Image(_) | AiContentPart::ToolCall(_) => None,
         })
         .collect();
     let tools: serde_json::Map<String, Value> = request
