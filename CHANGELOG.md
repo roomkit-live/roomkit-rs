@@ -13,6 +13,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   RMK-1179). Breaking: a task or an observation a transport returned from
   `deliver()` or `deliver_stream()` is no longer stored; return it from
   `on_event()`.
+- A completed verification releases what its sender wrote while the
+  request was open, as Python's (RFC §11.7.6, RMK-1173): with the policy's
+  `release_on_verify`, the held messages of the request's window, within
+  `release_max_messages` and `release_max_age`, get back the scope they
+  had, `ON_EVENT_UPDATED` fires for each, and the room's agents answer the
+  last one before `complete_verification` returns
+  (`roomkit_core::ops::RestoreHeld`, `Inbound::rerun`).
 - `AiChannelOptions::turn_budget_tokens`, Python's (RFC §6.4, RMK-1166):
   past the billed tokens it allows (input, output and cache tokens), the
   loop ends `budget_exceeded` at its next round boundary, asks for no retry
