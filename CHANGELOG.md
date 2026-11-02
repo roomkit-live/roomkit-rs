@@ -22,6 +22,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   are an `f64`, 0.7 by default, as Python's `float` (RMK-1089, decided by
   the maintainer): a model that takes no temperature is the provider's to
   know, `OpenAiConfig::supports_custom_temperature`.
+- `RoomKit::setup_background(agent, SetupBackgroundOptions { worker,
+  hand_back })` and `RoomKit::setup_task_tools(agent)`, Python's (RFC
+  §23.4, §10.6.5, RMK-1144): `work_in_background`, `task_status` and
+  `cancel_task`, served by the room's owner wherever the agent's turns run.
+  The turn backend carries a turn's owner tools in its request, their
+  calls as `tool_call` and `tool_result`; an `AiChannel`'s turn declares
+  them beside its own tools. `start_task` runs on the agent's setup's
+  worker. `RoomKitError::Runtime`, Python's `RuntimeError`, refuses a
+  setup made twice.
 - Python's delegation ends (RFC §23.3, RMK-1158): the tasks a delegated
   turn files fire `ON_TASK_CREATED` in its child room;
   `DelegatedTaskResult::exception`, the failure itself (a
