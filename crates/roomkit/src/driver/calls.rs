@@ -15,7 +15,7 @@ use roomkit_core::model::{
 use roomkit_core::ops::{
     AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId,
     FrameworkEvent as CoreEvent, HookAnswer, HookRequest, IdentityAnswer, IdentityRequest,
-    KIT_CLOSED, Notice, Outcome, RecentEvents, StoreOutcome, StoreRequest,
+    KIT_CLOSED, Notice, Outcome, RecentEvents, StoreOutcome, StoreRequest, StreamTarget,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookTrigger};
@@ -23,12 +23,13 @@ use roomkit_core::rules::routing::RouteQuery;
 use tokio::sync::{oneshot, watch};
 use tokio::task::JoinSet;
 
-use crate::channel::ChannelError;
+use crate::channel::{ChannelError, DynChannel};
 use crate::context::{ExecutionContext, HookBody, RunShared};
 use crate::error::RoomKitError;
 use crate::events::Handled;
 use crate::hooks;
 use crate::kit::{Inner, run_identity_hooks};
+use crate::room_turns::{self, Queued, Started};
 use crate::router;
 use crate::sends::CIRCUIT_OPEN;
 use crate::store::{
@@ -425,28 +426,12 @@ pub(super) async fn channel<S: ConversationStore>(
             if binding.category != ChannelCategory::Intelligence {
                 return channel_output(channel.on_event(event, binding, *context).await);
             }
-            // A turn: it runs through the turn backend (RFC §10.6), on the
-            // room's conversation and its channel's tool rows (RFC §6.4).
             let window = inner.config().recent_events_limit(&context.bindings);
-            let context =
-                crate::history::turn_context(&*inner.store, &binding, &event, *context, window);
-            let context = context.await;
-            let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
-            let cut = |turn| shared.turn_submitted(effect, turn);
-            let answered = inner.turns.run(&kit, &binding, event, context, cut).await;
-            let outcome = match answered {
-                Ok(Answer::Output(output)) => checked_output(output),
-                Ok(Answer::Streamed(output, turn)) => {
-                    shared.keep_stream(effect, KeptStream { turn });
-                    ChannelOutcome::Streamed(output).into()
-                }
-                Err(failure) => failure.into_outcome(),
-            };
-            // Its stream kept first, the turn stops being one the call
-            // awaits: an abort between the two reads the stream kept, never
-            // a delivery cut running.
-            shared.turn_answered(effect);
-            outcome
+            if serializes(&*channel, &binding) {
+                let asked = (&*channel, binding);
+                return ask_in_line(inner, shared, effect, asked, event, *context, window).await;
+            }
+            take_turn(inner, shared, effect, binding, event, *context, window).await
         }
         ChannelRequest::Deliver {
             binding,
@@ -475,20 +460,107 @@ pub(super) async fn channel<S: ConversationStore>(
             answers,
             target,
         } => {
-            let kept = shared.take_stream(turn);
-            // The kit's close waits, within its grace, for the read of a turn
-            // it cut to store what the turn said.
-            let _reading = kept.as_ref().map(|_| inner.turns.reading());
-            let stops = Stops {
-                read: shared.stop_signal(effect),
-                kit: inner.turns.cutting(),
-            };
-            Box::pin(stream::read(
-                inner, kept, stops, responder, *answers, target,
+            Box::pin(read_stream(
+                inner,
+                shared,
+                (effect, turn),
+                responder,
+                *answers,
+                target,
             ))
             .await
         }
     }
+}
+
+/// Reads the stream the turn of `turn` answered with, for the read
+/// `effect`: a turn that waited its place starts now, and holds it until
+/// what it said is stored (RFC §6.4).
+async fn read_stream<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    shared: &RunShared,
+    (effect, turn): (EffectId, EffectId),
+    responder: ChannelBinding,
+    answers: RoomEvent,
+    target: Option<StreamTarget>,
+) -> Outcome {
+    let mut stops = Stops {
+        read: shared.stop_signal(effect),
+        kit: inner.turns.cutting(),
+    };
+    let (kept, _place) = match shared.take_queued(turn) {
+        Some(queued) => match queued.start(inner, &mut stops).await {
+            Started::Turn(kept, place) => (Some(kept), Some(place)),
+            Started::Answered(outcome) => return outcome,
+        },
+        None => (shared.take_stream(turn), None),
+    };
+    // The kit's close waits, within its grace, for the read of a turn it
+    // cut to store what the turn said.
+    let _reading = kept.as_ref().map(|_| inner.turns.reading());
+    stream::read(inner, kept, stops, responder, answers, target).await
+}
+
+/// The turn of `binding`'s intelligence channel on `event`, for the call
+/// `effect`: it runs through the turn backend (RFC §10.6), on the room's
+/// conversation and its channel's tool rows (RFC §6.4).
+async fn take_turn<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    shared: &RunShared,
+    effect: EffectId,
+    binding: ChannelBinding,
+    event: RoomEvent,
+    context: RoomContext,
+    window: usize,
+) -> Outcome {
+    let context = crate::history::turn_context(&*inner.store, &binding, &event, context, window);
+    let context = context.await;
+    let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
+    let cut = |turn| shared.turn_submitted(effect, turn);
+    let answered = inner.turns.run(&kit, &binding, event, context, cut).await;
+    let outcome = match answered {
+        Ok(Answer::Output(output)) => checked_output(output),
+        Ok(Answer::Streamed(output, turn)) => {
+            shared.keep_stream(effect, KeptStream { turn });
+            ChannelOutcome::Streamed(output).into()
+        }
+        Err(failure) => failure.into_outcome(),
+    };
+    // Its stream kept first, the turn stops being one the call awaits: an
+    // abort between the two reads the stream kept, never a delivery cut
+    // running.
+    shared.turn_answered(effect);
+    outcome
+}
+
+/// Whether `channel`'s turn waits its place in the room (RFC §6.4): an
+/// intelligence channel that takes a room's turns one at a time, unless
+/// muted, which reacts to each event as it comes, its answer not
+/// delivered (RFC §7.2).
+fn serializes(channel: &dyn DynChannel, binding: &ChannelBinding) -> bool {
+    channel.serializes_room_turns() && !binding.muted
+}
+
+/// The turn of a channel that takes a room's turns one at a time (RFC
+/// §6.4): for one that steers them, `event` handed to the turn its line
+/// in the room holds alone, no turn of its own; otherwise a turn that takes
+/// its place in the line now and starts once the turns asked before it
+/// are over, as its stream is read.
+async fn ask_in_line<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    shared: &RunShared,
+    effect: EffectId,
+    (channel, binding): (&dyn DynChannel, ChannelBinding),
+    event: RoomEvent,
+    context: RoomContext,
+    window: usize,
+) -> Outcome {
+    if channel.steers_room_turns() && room_turns::steered(inner, &binding, &event, &context).await {
+        return ChannelOutcome::Output(Box::default()).into();
+    }
+    let place = inner.room_turns.join(&event.room_id, &binding.channel_id);
+    shared.keep_queued(effect, Queued::new(place, binding, event, context, window));
+    ChannelOutcome::Streamed(Box::default()).into()
 }
 
 /// Runs hooks (RFC §9.3): one SYNC hook within its timeout, or observers,

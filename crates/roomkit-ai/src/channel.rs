@@ -39,6 +39,10 @@ const STANDALONE: &str = "standalone";
 /// `AIChannel` keywords for the features this implementation has, with
 /// Python's defaults.
 #[derive(Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Python's keywords, each a switch of its own"
+)]
 pub struct AiChannelOptions {
     /// What every turn's system prompt opens with.
     pub system_prompt: Option<String>,
@@ -95,6 +99,15 @@ pub struct AiChannelOptions {
     pub tool_call_intents_required: bool,
     /// What resolves the room's image references on every turn (RFC §6.4).
     pub image_resolver: Option<Arc<dyn ImageResolver>>,
+    /// Whether the channel's turns in a room run one after the other, each
+    /// reading the answers before it (RFC §6.4): Python's
+    /// `serialize_room_turns`.
+    pub serialize_room_turns: bool,
+    /// Whether a message for a room where the channel's turn runs is handed
+    /// to that turn, which reads it at its next stop, rather than a turn of
+    /// its own (RFC §6.4, §21.3); it implies `serialize_room_turns`.
+    /// Python's `steer_room_turns`.
+    pub steer_room_turns: bool,
 }
 
 impl Default for AiChannelOptions {
@@ -119,6 +132,8 @@ impl Default for AiChannelOptions {
             tool_call_intents: false,
             tool_call_intents_required: false,
             image_resolver: None,
+            serialize_room_turns: false,
+            steer_room_turns: false,
         }
     }
 }
@@ -196,6 +211,17 @@ pub struct AiChannel<P> {
     tool_call_intents_required: bool,
     /// The turns' running loops, which steering reaches (RFC §21.3).
     loops: Arc<Loops>,
+    /// How it takes a room's turns (RFC §6.4).
+    room_turns: RoomTurns,
+}
+
+/// How an AI channel takes a room's turns (RFC §6.4).
+#[derive(Clone, Copy, Debug)]
+struct RoomTurns {
+    /// One after the other.
+    serialized: bool,
+    /// A message during a turn handed to it, the turns serialized.
+    steered: bool,
 }
 
 impl<P> Clone for AiChannel<P> {
@@ -218,6 +244,7 @@ impl<P> Clone for AiChannel<P> {
             tool_call_intents: self.tool_call_intents,
             tool_call_intents_required: self.tool_call_intents_required,
             loops: Arc::clone(&self.loops),
+            room_turns: self.room_turns,
         }
     }
 }
@@ -262,6 +289,8 @@ impl<P: AiProvider> AiChannel<P> {
             tool_call_intents,
             tool_call_intents_required,
             image_resolver,
+            serialize_room_turns,
+            steer_room_turns,
         } = options;
         if tool_timeout.is_some_and(|bound| bound.is_zero()) {
             return Err(AiError::ToolTimeout);
@@ -320,6 +349,10 @@ impl<P: AiProvider> AiChannel<P> {
             tool_call_intents,
             tool_call_intents_required,
             loops: Arc::default(),
+            room_turns: RoomTurns {
+                serialized: serialize_room_turns || steer_room_turns,
+                steered: steer_room_turns,
+            },
         })
     }
 
@@ -644,6 +677,18 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             Some(turn) => Ok(turn.respond_with_stream(rows::response(items))),
             None => Ok(rows::collect(self.source(), &event, items).await?),
         }
+    }
+
+    /// Whether its turns in a room run one after the other
+    /// (`serialize_room_turns`, or `steer_room_turns`).
+    fn serializes_room_turns(&self) -> bool {
+        self.room_turns.serialized
+    }
+
+    /// Whether a message that comes while its turn runs in the room is read
+    /// by that turn (`steer_room_turns`).
+    fn steers_room_turns(&self) -> bool {
+        self.room_turns.steered
     }
 
     /// Steers the loops of the turn `turn_id` (RFC §10.6.8), as the kit's

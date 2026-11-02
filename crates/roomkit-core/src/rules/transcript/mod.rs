@@ -416,6 +416,40 @@ pub fn turn_labels<'a>(
         .collect()
 }
 
+/// The text `event` reads as for the running turn of `channel_id` it is
+/// steered into (RFC §6.4 "A message for the running turn", §21.3): its
+/// content's text form (§6.6), each of its lines under its speaker's label
+/// when the room has several speakers, as the turn's history labels them;
+/// `None` for an event that reads as no text, which waits a turn of its
+/// own. Python's `steered_message`, its speakers counted by label among the
+/// context's events and `event`.
+pub fn steered_text(
+    event: &RoomEvent,
+    context: &RoomContext,
+    channel_id: &ChannelId,
+) -> Option<String> {
+    let text = text_of(&event.content);
+    if text.is_empty() {
+        return None;
+    }
+    let mut authors = Authors::new(context);
+    let others = context
+        .recent_events
+        .iter()
+        .filter(|recent| recent.id != event.id);
+    let labels: Vec<Option<String>> = others
+        .chain([event])
+        .map(|said| speaker(said, &mut authors).map(|speaker| speaker.label))
+        .collect();
+    let distinct: std::collections::BTreeSet<&str> =
+        labels.iter().flatten().map(String::as_str).collect();
+    let several = people_taking_part(context, channel_id, &authors) >= 2 || distinct.len() >= 2;
+    match labels.last().cloned().flatten() {
+        Some(label) if several => Some(labelled_lines(&text, &label)),
+        Some(_) | None => Some(text),
+    }
+}
+
 /// `text` with each copy of a runtime mark it holds replaced (RFC §6.4):
 /// a message a host steers into a turn (RFC §21.3) reads as no mark of
 /// the runtime's. Python's `without_mark_copies`.

@@ -25,8 +25,10 @@ pub type ChannelError = Box<dyn Error + Send + Sync>;
 /// What the room's owner knows of a channel without its object (RFC
 /// §10.6.2): Python's `ChannelDeclaration(*, channel_id, channel_type=AI,
 /// category=INTELLIGENCE, capabilities=<an AI channel's>,
-/// recent_events_window=50)`, its kind, what it can do and the history it
-/// reads. A field left out reads as an AI channel built with its defaults.
+/// recent_events_window=50, serializes_room_turns=False,
+/// steers_room_turns=False)`, its kind, what it can do, the history it
+/// reads and how it takes a room's turns. A field left out reads as an AI
+/// channel built with its defaults.
 ///
 /// ```
 /// use roomkit::ChannelDeclaration;
@@ -50,6 +52,15 @@ pub struct ChannelDeclaration {
     pub capabilities: ChannelCapabilities,
     /// How many of the room's latest events its turn reads: 50 by default.
     pub recent_events_window: usize,
+    /// Whether its turns in a room run one after the other, in the order
+    /// they were asked, which the room's owner keeps (RFC §6.4): `false` by
+    /// default.
+    pub serializes_room_turns: bool,
+    /// Whether a message for a room where its turn runs is handed to that
+    /// turn, read at its next stop, rather than waiting a turn of its own
+    /// (RFC §6.4, §21.3): `false` by default. It implies
+    /// `serializes_room_turns`.
+    pub steers_room_turns: bool,
 }
 
 impl ChannelDeclaration {
@@ -62,6 +73,8 @@ impl ChannelDeclaration {
             category: ChannelCategory::Intelligence,
             capabilities: ai_channel_capabilities(),
             recent_events_window: 50,
+            serializes_room_turns: false,
+            steers_room_turns: false,
         }
     }
 }
@@ -275,8 +288,25 @@ pub trait Channel: Send + Sync + 'static {
         None
     }
 
+    /// Whether the channel's turns in a room run one after the other, in
+    /// the order they were asked, each reading the answers before it (RFC
+    /// §6.4): `false` by default, a room's turns side by side.
+    fn serializes_room_turns(&self) -> bool {
+        false
+    }
+
+    /// Whether a message for a room where the channel's turn runs is handed
+    /// to that turn, which reads it at its next stop (between two rounds of
+    /// tool calls, or once it has answered), rather than a turn of its own
+    /// (RFC §6.4, §21.3). Such a channel serializes its room turns. `false`
+    /// by default.
+    fn steers_room_turns(&self) -> bool {
+        false
+    }
+
     /// What the room's owner knows of the channel (RFC §10.6.2): its id,
-    /// type, category, capabilities and history window.
+    /// type, category, capabilities, history window and how it takes a
+    /// room's turns.
     fn declaration(&self) -> ChannelDeclaration {
         ChannelDeclaration {
             channel_id: self.channel_id(),
@@ -284,6 +314,8 @@ pub trait Channel: Send + Sync + 'static {
             category: self.category(),
             capabilities: self.capabilities(),
             recent_events_window: self.recent_events_window(),
+            serializes_room_turns: self.serializes_room_turns(),
+            steers_room_turns: self.steers_room_turns(),
         }
     }
 
@@ -460,6 +492,10 @@ pub(crate) trait DynChannel: Send + Sync {
 
     fn steer_turn(&self, directive: &SteeringDirective, turn_id: &str) -> Option<usize>;
 
+    fn serializes_room_turns(&self) -> bool;
+
+    fn steers_room_turns(&self) -> bool;
+
     fn handle_inbound(
         &self,
         message: InboundMessage,
@@ -518,6 +554,14 @@ impl<C: Channel> DynChannel for C {
 
     fn steer_turn(&self, directive: &SteeringDirective, turn_id: &str) -> Option<usize> {
         Channel::steer_turn(self, directive, turn_id)
+    }
+
+    fn serializes_room_turns(&self) -> bool {
+        Channel::serializes_room_turns(self) || Channel::steers_room_turns(self)
+    }
+
+    fn steers_room_turns(&self) -> bool {
+        Channel::steers_room_turns(self)
     }
 
     fn handle_inbound(

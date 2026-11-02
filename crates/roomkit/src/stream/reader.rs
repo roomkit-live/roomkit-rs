@@ -182,7 +182,7 @@ pub(crate) struct Stops {
 impl Stops {
     /// Returns once the read is stopped, with the reason its turn is cut
     /// with.
-    async fn stopped(&mut self) -> &'static str {
+    pub(crate) async fn stopped(&mut self) -> &'static str {
         let read = async { self.read.wait_for(|stopped| *stopped).await.is_ok() };
         let kit = async { self.kit.wait_for(|cut| *cut).await.is_ok() };
         tokio::select! {

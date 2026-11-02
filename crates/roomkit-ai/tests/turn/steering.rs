@@ -592,3 +592,194 @@ async fn a_stop_in_one_room_leaves_the_other_rooms_turn_running() {
     );
     room.kit.close().await.unwrap();
 }
+
+/// The room, its agent steering its room turns, answering through `model`
+/// with `tools`.
+async fn steering_turns(model: Gated, tools: Tools) -> Room {
+    let options = AiChannelOptions {
+        tools: tools.into(),
+        steer_room_turns: true,
+        ..AiChannelOptions::default()
+    };
+    Room::with_agent(AiChannel::new(channel("assistant"), model, options).unwrap()).await
+}
+
+/// The texts of `channel_id`'s messages in the room.
+async fn bodies(room: &Room, channel_id: &str) -> Vec<String> {
+    room.timeline()
+        .await
+        .into_iter()
+        .filter(|event| event.source.channel_id == channel(channel_id))
+        .filter(|event| event.r#type == EventType::Message)
+        .filter_map(|event| {
+            if let EventContent::Text(text) = event.content {
+                Some(text.body)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+// Python: tests/test_steering_during_turn.py::test_a_message_during_a_tool_round_is_stored_and_read_by_the_running_turn
+#[tokio::test]
+async fn a_message_during_a_tool_round_is_stored_and_read_by_the_running_turn() {
+    let model = Gated::new([call(), ScriptedRound::answering("a.py")], usize::MAX);
+    let tool = Paused::new().holding();
+    let room = Arc::new(steering_turns(model.clone(), tool.tools()).await);
+    let turn = first_turn(&room);
+    tool.started().await;
+
+    let sent = room.says(STEERED).await;
+    tool.release();
+    turn.await.unwrap();
+
+    let requests = model.requests();
+    let read_once = requests[1]
+        .messages
+        .iter()
+        .filter(|message| message.text().contains(STEERED))
+        .count();
+    assert!(!sent.blocked);
+    assert_eq!((requests.len(), read_once), (2, 1));
+    assert_eq!(bodies(&room, "sms").await, ["List the files.", STEERED]);
+    assert_eq!(bodies(&room, "assistant").await, ["Let me check.", "a.py"]);
+    room.kit.close().await.unwrap();
+}
+
+// Python: tests/test_steering_during_turn.py::test_a_message_while_the_model_answers_is_answered_by_the_same_turn
+#[tokio::test]
+async fn a_message_while_the_model_answers_is_answered_by_the_same_turn() {
+    let model = Gated::new(
+        [
+            ScriptedRound::answering("a.py, b.txt"),
+            ScriptedRound::answering("a.py"),
+        ],
+        0,
+    );
+    let room = Arc::new(steering_turns(model.clone(), Paused::new().tools()).await);
+    let turn = first_turn(&room);
+    model.answering().await;
+
+    room.says(STEERED).await;
+    model.release();
+    turn.await.unwrap();
+
+    let requests = model.requests();
+    assert_eq!(model.most_at_once.load(Ordering::SeqCst), 1);
+    assert_eq!(requests.len(), 2);
+    assert!(read(&requests[1], STEERED));
+    assert_eq!(bodies(&room, "assistant").await, ["a.py, b.txt", "a.py"]);
+    room.kit.close().await.unwrap();
+}
+
+// Python: tests/test_steering_during_turn.py::test_off_a_message_during_a_turn_starts_its_own
+#[tokio::test]
+async fn off_a_message_during_a_turn_starts_its_own() {
+    let model = Gated::new(
+        [
+            ScriptedRound::answering("first"),
+            ScriptedRound::answering("second"),
+        ],
+        0,
+    );
+    let room = Arc::new(with_tools(model.clone(), Paused::new().tools()).await);
+    let turn = first_turn(&room);
+    model.answering().await;
+    let second = {
+        let room = Arc::clone(&room);
+        tokio::spawn(async move {
+            room.says("two").await;
+        })
+    };
+    model.entered(2).await;
+    model.release();
+    turn.await.unwrap();
+    second.await.unwrap();
+
+    assert_eq!(model.most_at_once.load(Ordering::SeqCst), 2);
+    room.kit.close().await.unwrap();
+}
+
+// Python: tests/test_steering_during_turn.py::test_a_steered_message_carries_its_speaker_when_the_room_has_several
+#[tokio::test]
+async fn a_steered_message_carries_its_speaker_when_the_room_has_several() {
+    let model = Gated::new([call(), ScriptedRound::answering("ok")], usize::MAX);
+    let tool = Paused::new().holding();
+    let options = AiChannelOptions {
+        tools: tool.tools().into(),
+        steer_room_turns: true,
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(channel("assistant"), model.clone(), options).unwrap();
+    let kit = RoomKit::new(roomkit::RoomKitOptions::default());
+    // A transport that keeps a message's metadata, its sender's name among
+    // it, as Python's SMS channel does.
+    let sms = roomkit::TransportChannel::new(
+        channel("sms"),
+        roomkit::model::ChannelType::SMS,
+        roomkit::TransportChannelOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    kit.register_channel(agent).unwrap();
+    kit.create_room(roomkit::CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let group = roomkit::AttachChannelOptions {
+        group: true,
+        ..Default::default()
+    };
+    kit.attach_channel(&room_id(), &channel("sms"), group)
+        .await
+        .unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("assistant"),
+        roomkit::AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    let said = |sender: &str, name: &str, body: &str| {
+        let mut message = roomkit::model::InboundMessage::new(
+            channel("sms"),
+            sender,
+            roomkit::model::TextContent::new(body),
+        );
+        message
+            .metadata
+            .insert("sender_name".to_owned(), name.into());
+        let options = roomkit::ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        };
+        (message, options)
+    };
+    let (first, options) = said("+15550001", "Alice", "go");
+    let turn = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            kit.process_inbound(first, options).await.unwrap();
+        })
+    };
+    tool.started().await;
+
+    let (steered, options) = said("+15550002", "Bob", STEERED);
+    kit.process_inbound(steered, options).await.unwrap();
+    tool.release();
+    turn.await.unwrap();
+
+    let requests = model.requests();
+    assert!(
+        read(&requests[1], &format!("Bob: \"{STEERED}\"")),
+        "{:?}",
+        requests[1]
+            .messages
+            .iter()
+            .map(roomkit_ai::AiMessage::text)
+            .collect::<Vec<_>>()
+    );
+    kit.close().await.unwrap();
+}

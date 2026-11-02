@@ -65,6 +65,62 @@ pub(crate) async fn turn_context<S: ConversationStore>(
     }
 }
 
+/// `context`, the room as a turn that waited its place starts on (RFC §6.4
+/// "A room's turns one after the other"), with the history
+/// [`turn_context`] reads, and the channel's own messages committed since
+/// `event`: the answers of the turns before it, never a message that came
+/// after it, which waits a turn of its own. An edit or a deletion made
+/// meanwhile applies, as the store holds it now.
+pub(crate) async fn turn_context_as_asked<S: ConversationStore>(
+    store: &S,
+    binding: &ChannelBinding,
+    event: &RoomEvent,
+    context: RoomContext,
+    window: usize,
+) -> RoomContext {
+    let mut context = turn_context(store, binding, event, context, window).await;
+    let own = EventFilter {
+        event_types: Some(vec![EventType::Message]),
+        source_channel_id: Some(binding.channel_id.clone()),
+        ..EventFilter::default()
+    };
+    let since = ListEventsOptions {
+        limit: u64::try_from(window).unwrap_or(u64::MAX),
+        event_filter: Some(own),
+        after_index: Some(event.index),
+        ..ListEventsOptions::default()
+    };
+    match store.list_events(&event.room_id, since).await {
+        Ok(answers) => {
+            let known: std::collections::HashSet<_> = context
+                .recent_events
+                .iter()
+                .map(|known| known.id.clone())
+                .collect();
+            let answers = answers
+                .into_iter()
+                .filter(|answer| !known.contains(&answer.id));
+            context.recent_events.extend(answers);
+            context.recent_events.sort_by_key(|event| event.index);
+            let recent_events = visible_events(&context, &binding.channel_id);
+            RoomContext {
+                recent_events,
+                ..context
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "roomkit::turns",
+                room_id = %event.room_id,
+                channel_id = %binding.channel_id,
+                %error,
+                "could not read the answers before a waiting turn: it reads the room as asked"
+            );
+            context
+        }
+    }
+}
+
 /// The room's latest messages up to `event`, `event` among them when it
 /// is no message, then `binding`'s channel's latest tool-call rows, merged
 /// in timeline order. The Python implementation's turn reads its trigger as

@@ -15,6 +15,7 @@ use roomkit_core::ops::{EffectId, Outcome};
 use tokio::sync::{mpsc, watch};
 
 use super::adoption::Adoption;
+use crate::room_turns::Queued;
 use crate::stream::KeptStream;
 use crate::turns::Canceller;
 
@@ -54,6 +55,10 @@ pub(crate) struct RunShared {
     /// The turns the run's calls submitted and await the output of, by
     /// their effect: a call given up cuts its turn at once.
     turns: Mutex<HashMap<EffectId, Canceller>>,
+    /// The turns asked that wait their place in their channel's line in
+    /// the room, by their turn's effect, until their stream is read (RFC
+    /// §6.4): one never read gives its place up.
+    queued: Mutex<HashMap<EffectId, Queued>>,
 }
 
 /// A claim on one tenure of a room's lock, which code run under that lock
@@ -76,6 +81,7 @@ impl RunShared {
             streams: Mutex::new(HashMap::new()),
             stops: Mutex::new(HashMap::new()),
             turns: Mutex::new(HashMap::new()),
+            queued: Mutex::new(HashMap::new()),
         });
         (shared, received)
     }
@@ -141,6 +147,27 @@ impl RunShared {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
+        self.queued
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+
+    /// Keeps the turn of `effect` waiting its place, until its stream is
+    /// read.
+    pub(crate) fn keep_queued(&self, effect: EffectId, queued: Queued) {
+        self.queued
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(effect, queued);
+    }
+
+    /// The turn of `effect` waiting its place, taken to be read.
+    pub(crate) fn take_queued(&self, effect: EffectId) -> Option<Queued> {
+        self.queued
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&effect)
     }
 
     /// The call of `effect` submitted a turn, which `turn` cuts.

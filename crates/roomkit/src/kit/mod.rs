@@ -189,6 +189,9 @@ pub(crate) struct Inner<S> {
     pub(crate) events: Handlers,
     /// The turn backend every intelligence turn runs through (RFC §10.6).
     pub(crate) turns: Arc<Turns>,
+    /// The lines of the channels that take a room's turns one at a time
+    /// (RFC §6.4).
+    pub(crate) room_turns: Arc<crate::room_turns::RoomTurns>,
     /// The breakers and the rate limits of the transports' sends (RFC
     /// §13.1, §13.2).
     pub(crate) sends: crate::sends::Sends,
@@ -286,6 +289,7 @@ impl<S: ConversationStore> RoomKit<S> {
             environment,
             events: Handlers::default(),
             turns: Arc::default(),
+            room_turns: Arc::default(),
             sends: crate::sends::Sends::default(),
             channels_closed: tokio::sync::OnceCell::new(),
             shutdown: shutdown::Shutdown::default(),
