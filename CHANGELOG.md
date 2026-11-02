@@ -44,6 +44,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the room from where it goes on, and `ON_AI_RESPONSE`'s segments say what
   the room saw, as Python's (RFC §6.4, RMK-1180); the model still reads its
   own text whole.
+- `RoomKit::cancel_delivery(key, CancelDeliveryOptions)` cancels the
+  deliveries of the messages sent with that `InboundMessage::delivery_key`,
+  as Python's (RFC §10.1 "Explicit delivery cancellation", RMK-1152): the
+  key names a delivery from `process_inbound`'s start until it is over, an
+  adopted call's included; each delivery's turns are cut, a turn not
+  started never starts, the message still delivered; a scoped cancel
+  reaches only its organization's rooms, and waits for the room's read
+  when the call named none; it answers how many it cancelled. A cancelled
+  call, awaited or through its handle, returns once its turns are over,
+  its `cancellation_reason` the reason given, the delivery going on.
 - Of what a transport returns, the room keeps, as Python's, its
   `on_event()`'s tasks, observations and metadata updates, its
   `deliver()`'s metadata updates alone, and nothing of a streaming
