@@ -16,7 +16,11 @@ use serde_json::Value;
 
 use crate::error::AiError;
 use crate::images::ImageResolver;
-use crate::provider::AiProvider;
+use crate::memory::{
+    IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions, SlidingWindowMemory,
+    SlidingWindowMemoryOptions,
+};
+use crate::provider::{AiMessage, AiProvider};
 use crate::rows;
 use crate::server_instructions::ServerInstructions;
 use crate::skills::SkillRegistry;
@@ -41,8 +45,12 @@ pub struct AiChannelOptions {
     /// The most tokens a generation writes; `None` leaves it to the
     /// provider's configuration.
     pub max_tokens: Option<u32>,
-    /// How many of the room's latest messages a turn reads before its input.
+    /// The window of the default memory: how many of the room's latest
+    /// events a turn reads, its own among them (RFC §20.3).
     pub max_context_events: usize,
+    /// Where a turn reads its history (RFC §20): Python's `memory`; `None`
+    /// is a [`SlidingWindowMemory`] of `max_context_events`.
+    pub memory: Option<Arc<dyn MemoryProvider>>,
     /// The handler serving the calls of the tools `tools` defines.
     pub tool_handler: Option<ToolHandler>,
     /// The tools the model may call: definitions the handler serves, and
@@ -92,6 +100,7 @@ impl Default for AiChannelOptions {
             temperature: Some(0.7),
             max_tokens: None,
             max_context_events: 50,
+            memory: None,
             tool_handler: None,
             tools: Vec::new(),
             max_tool_rounds: 50,
@@ -176,7 +185,7 @@ pub struct AiChannel<P> {
     temperature: Option<f64>,
     max_tokens: Option<u32>,
     server_instructions: ServerInstructions,
-    history: usize,
+    memory: Arc<dyn MemoryProvider>,
     image_resolver: Option<Arc<dyn ImageResolver>>,
     skills: Option<Arc<SkillTools>>,
     tool_call_intents: bool,
@@ -197,7 +206,7 @@ impl<P> Clone for AiChannel<P> {
             temperature: self.temperature,
             max_tokens: self.max_tokens,
             server_instructions: self.server_instructions.clone(),
-            history: self.history,
+            memory: Arc::clone(&self.memory),
             image_resolver: self.image_resolver.clone(),
             skills: self.skills.clone(),
             tool_call_intents: self.tool_call_intents,
@@ -231,6 +240,7 @@ impl<P: AiProvider> AiChannel<P> {
             temperature,
             max_tokens,
             max_context_events,
+            memory,
             tool_handler,
             tools,
             max_tool_rounds,
@@ -293,7 +303,11 @@ impl<P: AiProvider> AiChannel<P> {
             temperature,
             max_tokens,
             server_instructions: instructions,
-            history: max_context_events,
+            memory: memory.unwrap_or_else(|| {
+                Arc::new(SlidingWindowMemory::new(SlidingWindowMemoryOptions {
+                    max_events: max_context_events,
+                }))
+            }),
             image_resolver,
             skills,
             tool_call_intents,
@@ -363,6 +377,81 @@ impl<P: AiProvider> AiChannel<P> {
             stands_alone,
         };
         Some(skills.system_prompt(prompt.as_deref(), turn))
+    }
+
+    /// Hands `event` to the memory as it reaches the channel, whether the
+    /// channel answers it or not (Python's `_ingest`): never one of its
+    /// own, a tool call's row, or an instruction, which is the
+    /// application's and not the conversation's (RFC §10.1.1). A failure
+    /// is logged, and the turn goes on.
+    async fn ingest(&self, event: &RoomEvent, context: &RoomContext) {
+        let skipped = event.source.channel_id == self.channel_id
+            || matches!(
+                event.r#type,
+                EventType::ToolCallStart | EventType::ToolCallEnd | EventType::Instruction
+            );
+        if skipped {
+            return;
+        }
+        let options = IngestOptions {
+            channel_id: Some(self.channel_id.clone()),
+        };
+        if let Err(error) = self.memory.ingest(&context.room.id, event, options).await {
+            tracing::warn!(target: "roomkit::ai", room_id = %context.room.id, %error, "memory ingestion failed");
+        }
+    }
+
+    /// What a turn on `event` reads of the room: `context` with its history
+    /// as the memory retrieved it from the channel's view (RFC §20.1), the
+    /// channel's own tool rows kept beside it for the rounds it replays
+    /// (RFC §6.4), and the messages the memory built; nothing of the
+    /// memory for an instruction that stands alone, which reads none of
+    /// the room (RFC §10.1.1 rule 7).
+    ///
+    /// The memory reads the room's messages and the turn's event, as
+    /// Python's turn context holds them: the channel's earlier rounds are
+    /// read apart, so that they take none of its window.
+    async fn history(
+        &self,
+        event: &RoomEvent,
+        context: &RoomContext,
+        stands_alone: bool,
+    ) -> Result<(RoomContext, Vec<AiMessage>), ChannelError> {
+        let (rows, viewed): (Vec<RoomEvent>, Vec<RoomEvent>) = context
+            .recent_events
+            .iter()
+            .cloned()
+            .partition(|past| self.is_own_tool_row(past));
+        let MemoryResult { messages, events } = if stands_alone {
+            MemoryResult::default()
+        } else {
+            let viewed = RoomContext {
+                recent_events: viewed,
+                ..context.clone()
+            };
+            let options = RetrieveOptions {
+                channel_id: Some(self.channel_id.clone()),
+            };
+            self.memory
+                .retrieve(&event.room_id, event, &viewed, options)
+                .await?
+        };
+        let mut recent_events = events;
+        recent_events.extend(rows);
+        let history = RoomContext {
+            recent_events,
+            ..context.clone()
+        };
+        Ok((history, messages))
+    }
+
+    /// Whether `event` is one of the channel's tool-call rows.
+    fn is_own_tool_row(&self, event: &RoomEvent) -> bool {
+        event.source.channel_id == self.channel_id
+            && matches!(
+                event.r#type,
+                EventType::ToolCallStart | EventType::ToolCallEnd
+            )
     }
 
     /// The source of the channel's rows.
@@ -440,9 +529,9 @@ impl<P: AiProvider> Channel for AiChannel<P> {
     }
 
     /// The events a turn reads: Python's `recent_events_window`, its
-    /// `max_context_events`.
+    /// memory's.
     fn recent_events_window(&self) -> usize {
-        self.history
+        self.memory.recent_events_window()
     }
 
     /// An AI channel takes no inbound message, as Python's refuses one: a
@@ -473,10 +562,13 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         _binding: ChannelBinding,
         context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
+        self.ingest(&event, &context).await;
         if !self.answers(&event) {
             return Ok(ChannelOutput::default());
         }
-        let mut messages = conversation(&self.channel_id, &event, &context, self.history, |name| {
+        let stands_alone = stands_alone(&event);
+        let (history, remembered) = self.history(&event, &context, stands_alone).await?;
+        let mut messages = conversation(&self.channel_id, &event, &history, usize::MAX, |name| {
             self.toolbox.in_tool_memory(name)
         });
         crate::images::resolve(
@@ -487,7 +579,6 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         )
         .await;
         let turn = current_turn_host();
-        let stands_alone = stands_alone(&event);
         let system_prompt = self.turn_system_prompt(&context, stands_alone);
         let tools = ToolContext::new(context.room.id.clone(), self.channel_id.clone())
             .within(turn.clone())
@@ -504,6 +595,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             context: tools,
             intents: self.tool_call_intents,
             intents_required: self.tool_call_intents_required,
+            remembered,
         };
         let items = looped.run(messages);
         match turn {
@@ -513,10 +605,12 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         }
     }
 
-    /// Closes the channel's provider ([`AiProvider::close`]), as Python's
-    /// `close()`: what serves its tools is the host's to close.
+    /// Closes the channel's provider ([`AiProvider::close`]), then its
+    /// memory, as Python's `close()`: what serves its tools is the host's
+    /// to close.
     async fn close(&self) {
         self.provider.close().await;
+        self.memory.close().await;
     }
 }
 

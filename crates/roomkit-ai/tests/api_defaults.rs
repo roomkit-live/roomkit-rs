@@ -6,6 +6,7 @@
 use roomkit_ai::AiChannelOptions;
 use roomkit_ai::DiscoverOptions;
 use roomkit_ai::MockAiProviderOptions;
+use roomkit_ai::memory::{IngestOptions, RetrieveOptions, SlidingWindowMemoryOptions};
 use std::time::Duration;
 
 #[test]
@@ -19,6 +20,8 @@ fn ai_channel_options_defaults_as_python() {
     assert!(defaults.max_tokens.is_none());
     // roomkit.AIChannel.__init__(max_tool_rounds) = 50
     assert_eq!(defaults.max_tool_rounds, 50);
+    // roomkit.AIChannel.__init__(memory) = None
+    assert!(defaults.memory.is_none());
     // roomkit.AIChannel.__init__(server_instructions) = None
     assert_eq!(defaults.server_instructions, Vec::new());
     // roomkit.AIChannel.__init__(skills) = None
@@ -45,6 +48,16 @@ fn ai_channel_options_defaults_as_python() {
     assert_eq!(defaults.tool_timeout, Some(Duration::from_secs(30)));
     // roomkit.AIChannel.__init__(tools) = None
     assert!(defaults.tools.is_empty());
+}
+
+#[test]
+fn memory_options_defaults_as_python() {
+    // roomkit.memory.SlidingWindowMemory.__init__(max_events) = 50
+    assert_eq!(SlidingWindowMemoryOptions::default().max_events, 50);
+    // roomkit.MemoryProvider.retrieve(channel_id) = None
+    assert!(RetrieveOptions::default().channel_id.is_none());
+    // roomkit.MemoryProvider.ingest(channel_id) = None
+    assert!(IngestOptions::default().channel_id.is_none());
 }
 
 #[test]

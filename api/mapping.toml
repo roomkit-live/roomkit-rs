@@ -43,6 +43,7 @@ roomkit = ["roomkit"]
 "roomkit::testing" = ["roomkit.testing"]
 "roomkit::tools" = ["roomkit.tools"]
 roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skills"]
+"roomkit_ai::memory" = ["roomkit.memory", "roomkit"]
 roomkit_openai = ["roomkit.providers.openai"]
 roomkit_mcp = ["roomkit.tools"]
 roomkit_sqlite = ["roomkit", "roomkit.store"]
@@ -863,7 +864,7 @@ python = "roomkit.AIChannel.__init__"
 params = [
     "continuation", "thinking_coalesce_ms", "thinking_coalesce_chars",
     "retry_policy", "fallback_provider", "script_executor", "sandbox",
-    "external_tool_handler", "human_input_handler", "memory",
+    "external_tool_handler", "human_input_handler",
     "thinking_budget", "enable_thinking", "reasoning_effort",
     "response_schema", "evict_threshold_tokens", "enable_planning",
     "config_provider", "tool_search", "tool_search_pinned",
@@ -874,7 +875,12 @@ params = [
     "think_wait", "text_coalesce_ms", "text_coalesce_chars",
     "publish_text_deltas", "serialize_room_turns",
 ]
-reason = "not in 0.x: continuation, thinking, provider retry and fallback, scripts and sandbox, external and human tools, memory, structured output, eviction, planning, tool search, budgets, per-tool bounds, speaking turns, the thinker, coalescing and serialized turns"
+reason = "not in 0.x: continuation, thinking, provider retry and fallback, scripts and sandbox, external and human tools, structured output, eviction, planning, tool search, budgets, per-tool bounds, speaking turns, the thinker, coalescing and serialized turns"
+
+[[missing]]
+python = "roomkit.MemoryResult.__init__"
+params = ["notes", "speakers"]
+reason = "not in 0.x: what a memory retrieved for the turn alone (RFC 20.2 notes) and the speakers a summary names, which the turn's notes would carry (RMK-1162)"
 
 [[missing]]
 python = "roomkit.AIChannel"

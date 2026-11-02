@@ -27,7 +27,7 @@ use serde_json::Value;
 
 use self::generation::Generation;
 use self::rules::{Limits, final_round_reason};
-use crate::provider::{AiContext, AiProvider, ProviderError, ai_messages};
+use crate::provider::{AiContext, AiMessage, AiProvider, ProviderError, ai_messages};
 use crate::stream::{Items, Yielder, items, join_all};
 use crate::tools::ToolContext;
 use crate::tools::ToolPolicy;
@@ -102,6 +102,9 @@ pub(crate) struct Loop<P> {
     pub(crate) intents: bool,
     /// Whether enabled intents are required in the model-facing schemas.
     pub(crate) intents_required: bool,
+    /// The messages the memory built (a summary), read before the
+    /// conversation at every round (RFC §20.2).
+    pub(crate) remembered: Vec<AiMessage>,
 }
 
 impl<P: AiProvider> Loop<P> {
@@ -124,8 +127,10 @@ impl<P: AiProvider> Loop<P> {
         let mut tool_rounds = 0;
         let mut limits = Limits::starting(&self.bounds);
         for round in 0..=self.bounds.max_rounds {
+            let mut asked = self.remembered.clone();
+            asked.extend(ai_messages(&self.shown_messages(&messages)));
             let context = AiContext {
-                messages: ai_messages(&self.shown_messages(&messages)),
+                messages: asked,
                 system_prompt: self.system_prompt.clone(),
                 temperature: self.temperature,
                 max_tokens: self.max_tokens,

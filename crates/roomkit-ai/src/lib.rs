@@ -15,6 +15,9 @@
 //!   serve themselves; an MCP server gives its tools and its handler
 //!   (`roomkit-mcp`).
 //! - [`ToolPolicy`]: which tools the model may call (RFC §21.1).
+//! - [`memory`]: where a turn reads its history (RFC §20), Python's
+//!   `roomkit.memory`: [`MemoryProvider`](memory::MemoryProvider), and
+//!   [`SlidingWindowMemory`](memory::SlidingWindowMemory), the default.
 //! - [`SkillRegistry`]: the skills of the host's directories (RFC §24),
 //!   which the channel lists in its system prompt and the model activates.
 //! - The instructions an MCP server publishes, which the system prompt
@@ -66,6 +69,7 @@
 mod channel;
 mod error;
 mod images;
+pub mod memory;
 mod mock;
 mod provider;
 pub use images::ImageResolver;
