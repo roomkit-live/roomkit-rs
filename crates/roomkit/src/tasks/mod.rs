@@ -439,6 +439,23 @@ impl Tasks {
         .await;
     }
 
+    /// Waits until no tracked task runs within `unit`: the work a section
+    /// of the host's code started, a cut call's store write among it.
+    pub(crate) async fn none_within(&self, unit: Unit) {
+        let none = Notify::new();
+        self.wait_until(
+            |state| {
+                state
+                    .running
+                    .values()
+                    .all(|running| !running.within.contains(&unit))
+            },
+            || true,
+            &none,
+        )
+        .await;
+    }
+
     /// Waits until no task of a turn's the close does not spare runs: the
     /// turn backend's close waits for its turns alone.
     pub(crate) async fn unspared_turns_idle(&self) {

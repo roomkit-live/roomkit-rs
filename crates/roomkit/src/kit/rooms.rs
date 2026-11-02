@@ -2,10 +2,13 @@
 //! its read and its transitions, each for the organization its options
 //! name (RFC §17.2).
 
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use roomkit_core::model::{Room, RoomId};
-use roomkit_core::ops::{ArchiveRoom, CloseRoom, CreateRoom, PauseRoom, ReopenRoom, ResumeRoom};
+use roomkit_core::ops::{
+    AnnounceRoomCreated, ArchiveRoom, CloseRoom, CreateRoom, PauseRoom, ReopenRoom, ResumeRoom,
+};
 use roomkit_core::rules::organizations;
 
 use super::RoomKit;
@@ -16,6 +19,7 @@ use super::options::{
 };
 use crate::driver;
 use crate::error::RoomKitError;
+use crate::orchestration::Orchestration;
 use crate::store::{ConversationStore, StoreError};
 
 impl<S: ConversationStore> RoomKit<S> {
@@ -37,34 +41,58 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Returns [`RoomKitError::RoomAlreadyExists`] when the room exists
     /// already, nothing written, as Python raises `RoomAlreadyExistsError`.
     /// With a strategy (`options.orchestration`, or the kit's), the room is
-    /// created and announced first, then installed: an install that fails
-    /// returns what [`install_strategy`](Self::install_strategy) returns,
-    /// the room kept, holding the strategy only when the install could not
-    /// be read or taken back whole.
+    /// written, then installed, then announced, as Python's: its
+    /// `ON_ROOM_CREATED` hooks see what the install set up (RFC §19.7). An
+    /// install that fails returns what
+    /// [`install_strategy`](Self::install_strategy) returns, the room kept,
+    /// unannounced, holding the strategy only when the install could not be
+    /// read or taken back whole.
     pub async fn create_room(&self, options: CreateRoomOptions<S>) -> Result<Room, RoomKitError> {
         let orchestration = options
             .orchestration
             .clone()
             .unwrap_or_else(|| self.inner.default_orchestration.clone());
-        if let Some(room_id) = &options.room_id {
-            // A strategy recorded for this id belonged to a room that is
-            // gone: taken back before the new room is announced.
-            // Boxed, as the install: a room created with none keeps a small
-            // future.
-            Box::pin(self.forget_strategy(room_id)).await?;
+        let forgets = options
+            .room_id
+            .as_ref()
+            .is_some_and(|room_id| self.holds_strategy_record(room_id));
+        if orchestration.is_none() && !forgets {
+            return self.create_room_record(options, true).await;
         }
-        let room = self.create_room_record(options).await?;
+        // Boxed: a room created with no strategy keeps a small future.
+        Box::pin(self.create_room_with_strategy(options, orchestration)).await
+    }
+
+    /// The room `options` describes, written, then the strategy recorded
+    /// for its id taken back, its strategy installed and its creation
+    /// announced, in that order: its `ON_ROOM_CREATED` hooks see what the
+    /// install set up (RFC §19.7).
+    async fn create_room_with_strategy(
+        &self,
+        options: CreateRoomOptions<S>,
+        orchestration: Option<Arc<dyn Orchestration<S>>>,
+    ) -> Result<Room, RoomKitError> {
+        let room = self.create_room_record(options, false).await?;
+        // A strategy recorded for this id belonged to a room that is gone.
+        self.forget_strategy(&room.id).await?;
         if let Some(strategy) = orchestration {
             // The path install_strategy() takes: claimed, recorded (RFC §19.7).
             Box::pin(self.install_on(&room.id, strategy, room.organization_id.clone())).await?;
         }
+        let announce = AnnounceRoomCreated::new(self.config(), room.id.clone());
+        let environment = self.inner.environment();
+        driver::run_on(&self.inner, environment, "create_room", announce)
+            .await?
+            .map_err(RoomKitError::from)?;
         Ok(room)
     }
 
-    /// The room `options` describes, written, its creation announced.
+    /// The room `options` describes, written, its creation announced when
+    /// `announced`.
     async fn create_room_record(
         &self,
         options: CreateRoomOptions<S>,
+        announced: bool,
     ) -> Result<Room, RoomKitError> {
         let inner = &self.inner;
         let environment = inner.environment();
@@ -81,6 +109,11 @@ impl<S: ConversationStore> RoomKit<S> {
         };
         let room_id = room.id.clone();
         let create = CreateRoom::new(config, room);
+        let create = if announced {
+            create
+        } else {
+            create.unannounced()
+        };
         let created = driver::run_on(inner, environment, "create_room", create).await?;
         created.map_err(|error| match RoomKitError::from(error) {
             taken if taken.recorded_refusal() == Some("RoomAlreadyExists") => {

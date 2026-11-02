@@ -1,7 +1,8 @@
 //! The in-memory store behind the methods Python's `ConversationStore`
 //! makes abstract (as `tests/store/abstract_only_store.rs`), whose binding
-//! reads, binding removals and room writes fail on demand: what a strategy's
-//! install and uninstall meet when the store fails.
+//! reads, binding removals and room writes fail on demand, and whose
+//! binding writes wait on demand: what a strategy's install and uninstall
+//! meet when the store fails or is slow.
 
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Observation,
@@ -18,6 +19,10 @@ pub(crate) struct AbstractOnly {
     pub(crate) fail_removes: std::sync::atomic::AtomicBool,
     /// `update_room` fails while set.
     pub(crate) fail_updates: std::sync::atomic::AtomicBool,
+    /// `add_binding` waits while a test holds it written.
+    pub(crate) binding_gate: tokio::sync::RwLock<()>,
+    /// Told as an `add_binding` reaches the gate.
+    pub(crate) binding_reached: tokio::sync::Notify,
     pub(crate) store: InMemoryStore,
 }
 
@@ -61,6 +66,8 @@ impl ConversationStore for AbstractOnly {
     }
 
     async fn add_binding(&self, binding: ChannelBinding) -> Result<ChannelBinding, StoreError> {
+        self.binding_reached.notify_one();
+        let _open = self.binding_gate.read().await;
         self.store.add_binding(binding).await
     }
 

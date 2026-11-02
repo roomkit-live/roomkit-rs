@@ -64,16 +64,7 @@ pub(crate) async fn new_kit(configure: impl FnOnce(RoomKitOptions) -> RoomKitOpt
 
 /// Scenario id → the rule this implementation breaks (roomkit-specs
 /// `conformance/README.md`, "Known failures").
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
-    (
-        "orchestration/an-install-holds-the-room-until-it-is-over",
-        "§19.7, §13.5: an install runs without the room's lock (RMK-1247)",
-    ),
-    (
-        "orchestration/a-room-created-with-a-strategy-is-announced-once-it-is-installed",
-        "§19.7: create_room installs after its room is announced (RMK-1247)",
-    ),
-];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.

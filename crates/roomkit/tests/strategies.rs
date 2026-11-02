@@ -391,6 +391,62 @@ async fn an_uninstall_that_cannot_finish_keeps_the_room_claimed() {
     kit.close().await.unwrap();
 }
 
+// Python: core/mixins/strategies.py::StrategyMixin._install_strategy, whose
+// `except BaseException` takes back an install cut short in the install's
+// task, under the room's lock, once the cut call's decided write landed.
+#[tokio::test(start_paused = true)]
+async fn a_cut_install_is_taken_back_once_its_decided_write_landed() {
+    let kit = RoomKit::new(RoomKitOptions::with_store(Faulty::default()));
+    kit.register_channel(Quiet("sales")).unwrap();
+    with_room(&kit).await;
+    let strategy: Arc<dyn Orchestration<Faulty>> = Arc::new(WithAgent);
+    let held = kit.store().binding_gate.write().await;
+    let room = r1();
+    let install = kit.install_strategy(&room, strategy, InstallStrategyOptions::default());
+    // Cut as the agent's binding is written: the write runs to its end.
+    tokio::select! {
+        installed = install => panic!("the install ended: {installed:?}"),
+        () = kit.store().binding_reached.notified() => {}
+    }
+    let undone = async {
+        while kit
+            .room_strategy(&r1(), RoomStrategyOptions::default())
+            .is_some()
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    };
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), undone)
+            .await
+            .is_err(),
+        "the undo read the room before the cut call's write landed"
+    );
+
+    drop(held);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while kit
+        .room_strategy(&r1(), RoomStrategyOptions::default())
+        .is_some()
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the room stayed claimed"
+        );
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let bindings = kit
+        .list_bindings(&r1(), ListBindingsOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        bindings.len(),
+        0,
+        "the agent the cut install attached is detached"
+    );
+    kit.close().await.unwrap();
+}
+
 /// A transport channel: what a live agent's id must not name.
 struct Sms(&'static str);
 

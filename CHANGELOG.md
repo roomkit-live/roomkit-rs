@@ -27,6 +27,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   does not adopt runs nested under that lock, on the lease of the code
   that made it, as Python's call nests under the lock its caller holds
   (RFC §6.1, §9.5.1, RMK-1245).
+- A strategy's install holds its room's lock while it runs, as Python's
+  (RFC §19.7, §13.5, RMK-1247): another caller's attach waits for it and
+  stays bound after the uninstall; `create_room` with a strategy runs its
+  `ON_ROOM_CREATED` hooks once the strategy is installed; an install cut
+  short is taken back once the writes it had decided landed; and
+  `uninstall_strategy` called during an install waits for it, then takes
+  it back.
 - An MCP tool's result holding a PNG, JPEG, GIF or WebP image whose base64
   decodes reaches the model as its parts, the image an image part it
   sees, as Python's MCP handler (RMK-1242); any other image is still a

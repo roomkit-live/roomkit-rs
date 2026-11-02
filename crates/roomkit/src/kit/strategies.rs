@@ -12,11 +12,14 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
+use std::pin::pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{ChannelCategory, ChannelId, Metadata, RoomId};
+use tokio::sync::Notify;
 
 use super::RoomKit;
+use crate::context::Section;
 use crate::error::RoomKitError;
 use crate::kit::{AttachChannelOptions, DetachChannelOptions, GetRoomOptions};
 use crate::orchestration::{Orchestration, StrategyAgent};
@@ -64,12 +67,16 @@ pub struct RoomStrategyOptions {
 /// The strategies installed through the kit, by room.
 pub(crate) struct RoomStrategies<S> {
     rooms: Mutex<HashMap<RoomId, Installed<S>>>,
+    /// Told whenever an install ends, whatever its end: what an uninstall
+    /// called meanwhile waits for.
+    installs_ended: Notify,
 }
 
 impl<S> Default for RoomStrategies<S> {
     fn default() -> Self {
         Self {
             rooms: Mutex::new(HashMap::new()),
+            installs_ended: Notify::new(),
         }
     }
 }
@@ -174,15 +181,16 @@ impl<S: ConversationStore> RoomKit<S> {
                 },
             )
             .await?;
-        self.install_on(room_id, strategy, room.organization_id)
-            .await
+        // Boxed: the install, under its section, makes a large future.
+        Box::pin(self.install_on(room_id, strategy, room.organization_id)).await
     }
 
     /// Takes the room's strategy back out (RFC §19.7): its own uninstall
     /// step, then what its install added for the room. Python's
     /// `uninstall_strategy(room_id, *, organization_id=None)`: whether the
     /// room held a strategy. The room answers by its
-    /// `agent_response_policy` again and may take another strategy.
+    /// `agent_response_policy` again and may take another strategy. An
+    /// install under way is waited for, then taken back.
     ///
     /// # Errors
     ///
@@ -203,6 +211,7 @@ impl<S: ConversationStore> RoomKit<S> {
             },
         )
         .await?;
+        self.install_over(room_id).await;
         let Some(strategy) = self.recorded_strategy(room_id) else {
             return Ok(false);
         };
@@ -250,8 +259,10 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Installs `strategy` in `room_id`, of `organization_id`, the room
-    /// read: claimed before any await, then its agents attached, its install
-    /// run and what it added recorded; a failed install is taken back.
+    /// read: claimed before any await, then, under the room's lock (RFC
+    /// §13.5), its agents attached, its install run and what it added
+    /// recorded; a failed install is taken back. What changes in the room
+    /// meanwhile is the install's: any other caller waits for its end.
     pub(crate) async fn install_on(
         &self,
         room_id: &RoomId,
@@ -266,9 +277,12 @@ impl<S: ConversationStore> RoomKit<S> {
             room_id: room_id.clone(),
             strategy: Arc::clone(&strategy),
             before: None,
+            section: None,
             armed: true,
         };
-        let before = match self.snapshot(room_id).await {
+        let section = Arc::new(Section::enter(&self.inner.locks, room_id).await);
+        guard.section = Some(Arc::clone(&section));
+        let before = match section.scope(self.snapshot(room_id)).await {
             Ok(before) => before,
             Err(error) => {
                 guard.armed = false;
@@ -277,30 +291,64 @@ impl<S: ConversationStore> RoomKit<S> {
             }
         };
         guard.before = Some(before.clone());
+        let outcome = section
+            .scope(self.install_steps(room_id, &strategy, &before))
+            .await;
+        guard.armed = false;
+        outcome
+    }
+
+    /// Attaches the strategy's agents, runs its install and records what
+    /// it added to `room_id` since `before`, or takes it back.
+    async fn install_steps(
+        &self,
+        room_id: &RoomId,
+        strategy: &Arc<dyn Orchestration<S>>,
+        before: &Snapshot,
+    ) -> Result<(), RoomKitError> {
         let installed = match self.attach_agents(room_id, strategy.as_ref()).await {
             Ok(()) => strategy.install(self, room_id).await,
             Err(error) => Err(error),
         };
-        let (added, unread) = self.added_since(room_id, &before).await;
-        let outcome = match (installed, unread) {
+        let (added, unread) = self.added_since(room_id, before).await;
+        match (installed, unread) {
             (Err(error), unread) => {
-                self.undo_install(room_id, &strategy, added, unread.is_none())
+                self.undo_install(room_id, strategy, added, unread.is_none())
                     .await;
                 Err(error)
             }
             (Ok(()), Some(error)) => {
                 // What the read missed stays the strategy's: the room stays
                 // claimed, for uninstall_strategy to take back.
-                self.record(room_id, &strategy, added);
+                self.record(room_id, strategy, added);
                 Err(error)
             }
             (Ok(()), None) => {
-                self.record(room_id, &strategy, added);
+                self.record(room_id, strategy, added);
                 Ok(())
             }
-        };
-        guard.armed = false;
-        outcome
+        }
+    }
+
+    /// Waits until no install runs in `room_id`: an uninstall called
+    /// meanwhile takes back what the install recorded, rather than let it
+    /// record itself again (decided 2026-11-02, RMK-1247).
+    async fn install_over(&self, room_id: &RoomId) {
+        let strategies = &self.inner.room_strategies;
+        loop {
+            let mut ended = pin!(strategies.installs_ended.notified());
+            // Listening before looking: an install that ends between the two
+            // still wakes this one.
+            ended.as_mut().enable();
+            let installing = strategies
+                .rooms()
+                .get(room_id)
+                .is_some_and(|installed| installed.installing);
+            if !installing {
+                return;
+            }
+            ended.await;
+        }
     }
 
     /// What an install added to `room_id` since `before`; with the read's
@@ -349,7 +397,7 @@ impl<S: ConversationStore> RoomKit<S> {
             .await;
     }
 
-    /// Takes back the strategy recorded for `room_id` when the store has
+    /// Takes back the strategy recorded for `room_id` once the store has
     /// just created the room anew: the record outlived its room (deleted
     /// from the store), and what its install set up would serve the new
     /// room, whose bindings and metadata hold none of the old one's.
@@ -357,15 +405,6 @@ impl<S: ConversationStore> RoomKit<S> {
         let Some(strategy) = self.recorded_strategy(room_id) else {
             return Ok(());
         };
-        let held = self
-            .store()
-            .get_room(room_id)
-            .await
-            .map_err(|error| self.read_failed(error))?;
-        if held.is_some() {
-            // The room lives: its creation is refused, its strategy stays.
-            return Ok(());
-        }
         strategy.uninstall(self, room_id).await?;
         let Added { hooks, .. } = self.recorded_added(room_id, &strategy);
         let added = Added {
@@ -619,6 +658,8 @@ impl<S: ConversationStore> RoomKit<S> {
             installed.added = added;
             installed.installing = false;
         }
+        drop(rooms);
+        self.inner.room_strategies.installs_ended.notify_waiters();
     }
 
     /// Ends the install of the record of `strategy` in `room_id`, keeping
@@ -631,6 +672,8 @@ impl<S: ConversationStore> RoomKit<S> {
         {
             installed.installing = false;
         }
+        drop(rooms);
+        self.inner.room_strategies.installs_ended.notify_waiters();
     }
 
     fn update_record(
@@ -657,17 +700,28 @@ impl<S: ConversationStore> RoomKit<S> {
         {
             rooms.remove(room_id);
         }
+        drop(rooms);
+        self.inner.room_strategies.installs_ended.notify_waiters();
+    }
+
+    /// Whether `room_id` holds a strategy recorded through this kit, its
+    /// install over or not.
+    pub(crate) fn holds_strategy_record(&self, room_id: &RoomId) -> bool {
+        self.inner.room_strategies.rooms().contains_key(room_id)
     }
 }
 
 /// An install under way: dropped before its end, it takes the install
-/// back in a task of its own, as a failed install is.
+/// back in a task of its own, as a failed install is, the room's lock
+/// still held.
 struct InstallGuard<S: ConversationStore> {
     kit: RoomKit<S>,
     room_id: RoomId,
     strategy: Arc<dyn Orchestration<S>>,
     /// The room before the install, once read.
     before: Option<Snapshot>,
+    /// The room's lock the install holds, once taken.
+    section: Option<Arc<Section>>,
     armed: bool,
 }
 
@@ -678,9 +732,19 @@ impl<S: ConversationStore> Drop for InstallGuard<S> {
         }
         let (kit, room_id) = (self.kit.clone(), self.room_id.clone());
         let (strategy, before) = (Arc::clone(&self.strategy), self.before.take());
+        let section = self.section.take();
         let tasks = Arc::clone(&kit.inner.tasks);
         let undo: crate::channel::BoxFuture<'static, ()> = Box::pin(async move {
-            kit.undo_cancelled(&room_id, &strategy, before).await;
+            let Some(section) = section else {
+                kit.undo_cancelled(&room_id, &strategy, before).await;
+                return;
+            };
+            // The writes the cut calls had decided run to their end: the
+            // room is read once they landed, the lock held meanwhile.
+            kit.inner.tasks.none_within(section.unit()).await;
+            section
+                .scope(kit.undo_cancelled(&room_id, &strategy, before))
+                .await;
         });
         // The kit's close waits for the undo; once it spawns no more work,
         // the undo runs apart all the same, as a held task's end does.

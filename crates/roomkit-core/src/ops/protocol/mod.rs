@@ -49,6 +49,15 @@ impl EffectId {
     pub(crate) fn next(self) -> Self {
         Self(self.0.saturating_add(1))
     }
+
+    /// The id of no operation's effect: the one a frame of code the host
+    /// runs under a room's lock it took itself carries (a strategy's
+    /// install, RFC §13.5, §19.7), which only that code's frame reads.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn of_host_section() -> Self {
+        Self(u64::MAX)
+    }
 }
 
 /// Something the driver does for an operation.

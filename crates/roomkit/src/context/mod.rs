@@ -81,6 +81,7 @@
 
 mod adoption;
 mod run;
+mod section;
 
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -92,6 +93,7 @@ use roomkit_core::rules::chain_depth::{self, Draw, ReentryBudget};
 
 pub(crate) use self::adoption::{Adopting, Adoption, Completion, Reply, adopt, adopt_by_own_run};
 pub(crate) use self::run::{Lease, RunShared, Written};
+pub(crate) use self::section::Section;
 use crate::locks::RoomGuard;
 use crate::tasks::Marks;
 
