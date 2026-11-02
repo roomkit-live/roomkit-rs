@@ -134,7 +134,7 @@ fn commit_event_options_defaults_as_python() {
 #[test]
 fn create_room_options_defaults_as_python() {
     let defaults: CreateRoomOptions = CreateRoomOptions::default();
-    // roomkit.RoomKit.create_room(orchestration) = <object object>: the kit's
+    // roomkit.RoomKit.create_room(orchestration) = <object object>
     assert!(defaults.orchestration.is_none());
     // roomkit.RoomKit.create_room(agent_response_policy) = None
     assert!(defaults.agent_response_policy.is_none());

@@ -115,6 +115,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as Python's. A strategy implements `Orchestration`; its agents, given
   live or by id, are attached at the install, and the uninstall takes
   back the room hooks, agents and metadata keys the install added.
+  Breaking: `CreateRoomOptions` takes the kit's store type, as
+  `RoomKitOptions` does, and no longer derives `PartialEq` and `Debug`
+  (it implements both, a strategy compared by identity): code naming
+  `CreateRoomOptions` for a kit over another store names
+  `CreateRoomOptions<S>`.
 - An AI channel's turn takes its binding's metadata `system_prompt` over
   its own, as Python's `_turn_settings` (RFC Appendix A.9, RMK-1208): a
   hand-back to an agent whose binding holds a persona runs on it, where
