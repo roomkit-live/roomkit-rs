@@ -6,6 +6,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `RoomKit::delegate`'s `require_structured_result` and
+  `max_result_retries`, Python's (RFC §23.3, RMK-1158): an inline run's
+  worker hands its work back through `submit_result`, served in the child
+  room alone, re-prompted when a turn ends without it, the missing payload
+  once the retries are spent; `TurnHost::delegate` refuses both.
+- `ChannelDeclaration::takes_owner_tools`, Python's (RFC §10.6.5):
+  `setup_background` and `setup_task_tools` refuse a channel whose turns
+  take no tool the owner serves (`RoomKitError::Value`).
+- A task's name and a quoted text fold the information separators
+  (`\x1c` to `\x1f`) as Python's `str.split()` does, so a sender cannot
+  start what a reader takes for a line of its own (RFC §6.4).
 - `AiChannel::set_tool_handler`, Python's `tool_handler` setter
   (RMK-1091): the host's handler replaced from the next call on, the
   channel's own tools still served; `tool_handler()` answers an owned
