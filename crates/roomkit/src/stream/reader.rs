@@ -153,6 +153,7 @@ pub(crate) async fn read<S: ConversationStore>(
         segments: Segments::new(source, answers, correlation_id),
         stream: Some(kept.turn),
         cut: None,
+        reader_cut: false,
         unanswered: None,
         reads: channel.as_ref().map_or(Reads::Nobody, |_| Reads::Target),
         ready: VecDeque::new(),
@@ -226,6 +227,16 @@ pub(crate) struct Stops {
 }
 
 impl Stops {
+    /// Whether the read is stopped by what cuts its reader too: the kit's
+    /// close, or the cut of the held task it runs within.
+    fn cuts_the_reader(&self) -> bool {
+        *self.kit.borrow()
+            || self
+                .task
+                .as_ref()
+                .is_some_and(|task| task.borrow().is_some())
+    }
+
     /// Returns once the read is stopped, with the reason its turn is cut
     /// with.
     pub(crate) async fn stopped(&mut self) -> &'static str {
@@ -238,9 +249,11 @@ impl Stops {
                 .ok()
                 .and_then(|cut| *cut)
         };
+        // The kit's close first: a cut it races ends `kit_closed`.
         tokio::select! {
-            true = read => CALLER_CANCELLED,
+            biased;
             true = kit => KIT_CLOSED,
+            true = read => CALLER_CANCELLED,
             Some(reason) = task => reason,
             else => std::future::pending().await,
         }
@@ -255,6 +268,9 @@ struct Producer {
     stream: Option<OwnerTurn>,
     /// Why the read was stopped from outside, once it was: the turn is cut.
     cut: Option<&'static str>,
+    /// Whether the stop cuts the reader with the turn: the kit's close or
+    /// a held task's cut, not the operation's stop of the read.
+    reader_cut: bool,
     /// The reader's pull the read stopped on, unanswered: kept open until
     /// the reader is dropped, so that it never reads an end there.
     unanswered: Option<oneshot::Sender<Pulled>>,
@@ -274,8 +290,9 @@ impl Producer {
     /// Answers the pulls of `reader`, the stream's target or the driver's
     /// drain, until both are done: what the reader returned. The reader is
     /// polled first, so that what was handed it is taken before the
-    /// producer's end is seen. The kit's close cuts the reader with the
-    /// turn, as the Python implementation cancels its stream readers: a
+    /// producer's end is seen. The kit's close, and the cut of the held
+    /// task the read runs within, cut the reader with the turn, as the
+    /// Python implementation cancels its stream readers: a
     /// streaming target that reads on no more holds nothing, its
     /// `deliver_stream()` dropped once polled one last time, so that what
     /// it was handed it took, and that text is stored (RFC §12.2 step
@@ -300,7 +317,7 @@ impl Producer {
                 () = &mut serving => {}
             }
         }
-        if self.cut != Some(KIT_CLOSED) {
+        if !self.reader_cut {
             // The reader reads the stream's end.
             drop(self.unanswered.take());
             drop(pulls);
@@ -335,6 +352,7 @@ impl Producer {
                 _ = &mut reader_done => return,
                 reason = stops.stopped() => {
                     self.cut = Some(reason);
+                    self.reader_cut = stops.cuts_the_reader();
                     return;
                 }
                 pull = pulls.recv() => match pull {
@@ -364,6 +382,7 @@ impl Producer {
                 biased;
                 reason = stops.stopped() => {
                     self.cut = Some(reason);
+                    self.reader_cut = stops.cuts_the_reader();
                     self.unanswered = Some(pull);
                     return false;
                 }

@@ -30,11 +30,13 @@ use crate::support::{asks, channel, received, room};
 use roomkit_core::rules::transcoding::text_of;
 
 /// A WebSocket transport that streams and keeps the length of each text
-/// it is handed, its output saying `says`.
+/// it is handed, its output saying `says`; with `stalls`, it tells it
+/// and reads nothing.
 #[derive(Clone)]
 struct Counting {
     sizes: Arc<Mutex<Vec<usize>>>,
     says: roomkit::model::Metadata,
+    stalls: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl Counting {
@@ -103,6 +105,10 @@ impl Channel for Counting {
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
+        if let Some(stalls) = &self.stalls {
+            stalls.notify_one();
+            std::future::pending::<()>().await;
+        }
         while let Some(item) = stream.next().await {
             if let Ok(StreamItem::Text(text)) = item {
                 self.sizes.lock().unwrap().push(text.len());
@@ -151,6 +157,7 @@ async fn deltas_yielded_together_cross_as_one_item() {
     let target = Counting {
         sizes: Arc::default(),
         says: roomkit::model::Metadata::new(),
+        stalls: None,
     };
     kit.register_channel(target.clone()).unwrap();
     let words: Vec<String> = (0..200).map(|n| format!("w{n} ")).collect();
@@ -652,6 +659,7 @@ async fn a_streaming_target_s_own_turns_never_reach_the_caller() {
     let target = Counting {
         sizes: Arc::default(),
         says,
+        stalls: None,
     };
     kit.register_channel(target).unwrap();
     let model = ScriptedProvider::new([ScriptedRound::writing(["The answer."])]);
@@ -678,5 +686,55 @@ async fn a_streaming_target_s_own_turns_never_reach_the_caller() {
         .map(|turns| turns.keys().cloned().collect())
         .unwrap_or_default();
     assert_eq!(turns, ["ai"]);
+    kit.close().await.unwrap();
+}
+
+// RFC §23.3, §12.2 step 13s: a task's cancel cuts the reader of its
+// worker's stream as the kit's close does, as Python's cancel raises in
+// the target's `deliver_stream()`: a streaming target shared into the
+// child room that reads nothing does not hold the cancel.
+#[tokio::test]
+async fn a_cancel_does_not_wait_for_a_streaming_target_that_reads_nothing() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let stalled = Arc::new(tokio::sync::Notify::new());
+    let target = Counting {
+        sizes: Arc::default(),
+        says: roomkit::model::Metadata::new(),
+        stalls: Some(Arc::clone(&stalled)),
+    };
+    kit.register_channel(target).unwrap();
+    let model = ScriptedProvider::new([ScriptedRound::writing(["Working."])]);
+    kit.register_channel(
+        AiChannel::new(channel("ai"), model, AiChannelOptions::default()).unwrap(),
+    )
+    .unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room(), &channel("ws"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let options = roomkit::DelegateOptions {
+        share_channels: Some(vec![channel("ws")]),
+        ..roomkit::DelegateOptions::default()
+    };
+    let task = kit
+        .delegate(&room(), &channel("ai"), "Go.", options)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), stalled.notified())
+        .await
+        .unwrap();
+
+    let cancel = kit.cancel_task(&task.id, roomkit::CancelTaskOptions::default());
+    let cancelled = tokio::time::timeout(Duration::from_secs(5), cancel).await;
+
+    assert_eq!(
+        (cancelled, task.result().map(|ended| ended.status)),
+        (Ok(true), Some(roomkit::model::TaskStatus::Cancelled))
+    );
     kit.close().await.unwrap();
 }
