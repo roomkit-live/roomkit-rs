@@ -249,7 +249,9 @@ impl InMemoryDeliveryBackend {
         let backend = self.clone();
         let restart: Restart = Box::new(move || {
             Box::pin(async move {
-                if let Some(kit) = kit.upgrade()
+                // A kit closed meanwhile starts no worker, as its own
+                // start refuses to.
+                if let Some(kit) = kit.upgrade().filter(|kit| kit.inner.open().is_ok())
                     && let Err(error) = DeliveryBackend::<S>::start(&backend, kit).await
                 {
                     tracing::warn!(target: "roomkit::delivery", %error, "the delivery worker was not handed on");
@@ -420,13 +422,20 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
         Box::pin(async move {
             let mut worker = self.shared.worker.lock().await;
             let starting = Arc::as_ptr(&kit.inner).addr();
-            if let Some(working) = worker.as_ref().filter(|worker| worker.works()) {
+            let serving = worker.as_ref().filter(|worker| worker.works());
+            if let Some(serving) = serving.map(|worker| worker.kit) {
+                if serving == starting {
+                    return Ok(());
+                }
                 // Its kit may be held by the worker alone, for the batch it
                 // executes: this kit takes the worker on once it is gone.
-                if working.kit != starting {
-                    self.start_next(kit.downgrade());
+                self.start_next(kit.downgrade());
+                if worker.as_ref().is_some_and(Worker::works) {
+                    return Ok(());
                 }
-                return Ok(());
+                // It ended meanwhile, maybe before it read the start left
+                // for it: this kit starts its worker now.
+                drop(lock(&self.shared.next).take());
             }
             if let Some(stale) = worker.take() {
                 // Its kit gone: stopped, and the items it claimed queued
@@ -469,6 +478,7 @@ impl<S: ConversationStore> DeliveryBackend<S> for InMemoryDeliveryBackend {
     fn close(&self) -> Answer<'_, ()> {
         Box::pin(async move {
             let worker = self.shared.worker.lock().await.take();
+            drop(lock(&self.shared.next).take());
             // A close called from the worker's own work neither cuts nor
             // waits for it, which would cut the close itself, as Python's
             // `cancel_and_wait` skips the caller's task: it runs on, alone.
