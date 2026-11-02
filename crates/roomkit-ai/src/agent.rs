@@ -512,8 +512,6 @@ impl<P: AiProvider> Channel for Agent<P> {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-
     use roomkit::model::{Room, RoomId};
     use serde_json::json;
 
@@ -533,7 +531,7 @@ mod tests {
             let mut room = Room::new(RoomId::new("r1").unwrap());
             room.metadata
                 .insert("_conversation_state".to_owned(), state.into());
-            assert_eq!(room_language(&room).as_deref(), Some("fr"));
+            assert_eq!(room_language(&room), Some("fr"));
         }
     }
 }
