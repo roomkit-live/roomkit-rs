@@ -201,6 +201,13 @@ pub fn conversation(
     conversation_with_memory(channel_id, event, context, history, replayed, &memory)
 }
 
+/// The metadata key, on an event or a message a memory builds, naming what
+/// the runtime wrote (`summary`, `handoff`): its marks are the runtime's
+/// and are kept, where a copy of one anywhere else is replaced (RFC §6.4).
+/// Only the runtime writes it: the inbound pipeline drops it from what a
+/// sender supplies. Python's `RUNTIME_RECORD`.
+pub const RUNTIME_RECORD: &str = "runtime_record";
+
 /// What a turn's memory adds to the conversation beside the history it
 /// retrieved (RFC §20.2): Python's `MemoryResult.notes` and `.speakers`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

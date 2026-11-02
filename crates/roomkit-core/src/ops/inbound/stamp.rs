@@ -12,6 +12,7 @@ use crate::model::{
     InjectedEvent, Metadata, ParticipantId, RoomEvent, RoomId, TextContent, Timestamp, Visibility,
 };
 use crate::ops::ChannelConfig;
+use crate::rules::transcript::RUNTIME_RECORD;
 use crate::rules::{chain_depth, edits, idempotency, instructions, permissions};
 
 /// The event a channel that keeps no data of its own parses from `message`:
@@ -57,7 +58,9 @@ pub fn default_inbound_event(
 /// to intelligence channels only, addressed as the caller addressed it, and
 /// carries the caller's metadata and its `standalone` word (RFC §10.1.1
 /// rules 3 and 4). No trigger carries the key a response to an instruction
-/// records, whoever wrote it (gap G-065).
+/// records, whoever wrote it (gap G-065), nor a runtime record, which says
+/// which text the runtime wrote (RFC §6.4), as Python's
+/// `_without_runtime_keys` drops it.
 pub(crate) fn stamp_trigger(
     mut event: RoomEvent,
     message: &InboundMessage,
@@ -73,6 +76,8 @@ pub(crate) fn stamp_trigger(
         instructions::stamp(&mut event, &message.metadata, message.standalone);
     }
     instructions::clear_fingerprint(&mut event);
+    // Which text is the runtime's (RFC §6.4): never a sender's to say.
+    event.metadata.remove(RUNTIME_RECORD);
     reset_commit_fields(event)
 }
 
