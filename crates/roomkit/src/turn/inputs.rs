@@ -56,7 +56,10 @@ impl TurnHost {
             "pending_id".to_owned(),
             Value::from(event.pending_id.as_str()),
         );
-        data.insert("tool_name".to_owned(), Value::from(event.tool_name.as_str()));
+        data.insert(
+            "tool_name".to_owned(),
+            Value::from(event.tool_name.as_str()),
+        );
         data.insert(
             "tool_call_id".to_owned(),
             Value::from(event.tool_call_id.as_str()),
