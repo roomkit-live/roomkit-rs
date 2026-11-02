@@ -2,11 +2,13 @@
 //! (RFC §23.3, §23.4): a parent room the store fails to read, a hand-back
 //! they cannot keep, an agent that is none of the room's, each as the
 //! Python implementation's (`core/mixins/delegation.py`,
-//! `core/mixins/background.py`, `tasks/background.py`); and a delegation
-//! the kit's close lands in before its task ran (RFC §12.10.4).
+//! `core/mixins/background.py`, `tasks/background.py`); a delegation
+//! the kit's close lands in before its task ran (RFC §12.10.4); and the
+//! store write a task's child room's events go through (RFC §14.3).
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+use std::collections::BTreeSet;
 use std::future::{pending, ready};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,8 +19,8 @@ use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Observation,
     Participant, ParticipantId, Room, RoomEvent, RoomId, Task,
 };
-use roomkit::model::{ChannelOutput, RoomContext, TaskStatus};
-use roomkit::tasks::{DelegatedTask, SubmitOptions, TaskRunner};
+use roomkit::model::{ChannelOutput, EventContent, RoomContext, TaskStatus};
+use roomkit::tasks::{DelegatedTask, SubmitOptions, TaskRunner, WaitOptions};
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
     ConversationStore, CreateRoomOptions, DelegateOptions, HookExecution, HookOptions, HookTrigger,
@@ -455,4 +457,180 @@ async fn a_delegation_cut_once_the_kit_closed_still_ends_its_task() {
         task.result().map(|result| (result.status, result.error)),
         Some((TaskStatus::Cancelled, Some("cancelled".to_owned())))
     );
+}
+
+/// An in-memory store recording which of its writes stored each event, by
+/// the event's id.
+#[derive(Debug, Default)]
+struct RecordsEventWrites {
+    store: InMemoryStore,
+    writes: Mutex<Vec<(EventId, &'static str)>>,
+}
+
+impl RecordsEventWrites {
+    fn note(&self, event: &RoomEvent, write: &'static str) {
+        self.writes.lock().unwrap().push((event.id.clone(), write));
+    }
+
+    /// The writes that stored `event`.
+    fn writes_of(&self, event: &RoomEvent) -> Vec<&'static str> {
+        let writes = self.writes.lock().unwrap();
+        let of_it = writes.iter().filter(|(id, _)| *id == event.id);
+        of_it.map(|(_, write)| *write).collect()
+    }
+}
+
+impl ConversationStore for RecordsEventWrites {
+    async fn commit_event(
+        &self,
+        room_id: &RoomId,
+        event: RoomEvent,
+        options: store::CommitEventOptions,
+    ) -> Result<RoomEvent, StoreError> {
+        self.note(&event, "commit_event");
+        self.store.commit_event(room_id, event, options).await
+    }
+
+    async fn add_event(&self, event: RoomEvent) -> Result<RoomEvent, StoreError> {
+        self.note(&event, "add_event");
+        self.store.add_event(event).await
+    }
+
+    async fn add_event_auto_index(
+        &self,
+        room_id: &RoomId,
+        event: RoomEvent,
+    ) -> Result<RoomEvent, StoreError> {
+        self.note(&event, "add_event_auto_index");
+        self.store.add_event_auto_index(room_id, event).await
+    }
+
+    forward! {
+        create_room(room: Room) -> Room;
+        get_room(room_id: &RoomId) -> Option<Room>;
+        update_room(room: Room) -> Room;
+        delete_room(room_id: &RoomId) -> bool;
+        list_rooms(options: store::ListRoomsOptions) -> Vec<Room>;
+        find_rooms(options: store::FindRoomsOptions) -> Vec<Room>;
+        advance_delivered_index(
+            room_id: &RoomId,
+            index: u64,
+            options: store::AdvanceDeliveredIndexOptions
+        ) -> bool;
+        add_binding(binding: ChannelBinding) -> ChannelBinding;
+        get_binding(room_id: &RoomId, channel_id: &ChannelId) -> Option<ChannelBinding>;
+        update_binding(binding: ChannelBinding) -> ChannelBinding;
+        remove_binding(room_id: &RoomId, channel_id: &ChannelId) -> bool;
+        list_bindings(room_id: &RoomId) -> Vec<ChannelBinding>;
+        add_participant(participant: Participant) -> Participant;
+        get_participant(room_id: &RoomId, participant_id: &ParticipantId) -> Option<Participant>;
+        update_participant(participant: Participant) -> Participant;
+        delete_participant(room_id: &RoomId, participant_id: &ParticipantId) -> ();
+        list_participants(room_id: &RoomId) -> Vec<Participant>;
+        create_identity(identity: Identity) -> Identity;
+        get_identity(identity_id: &IdentityId) -> Option<Identity>;
+        resolve_identity(
+            channel_type: &ChannelType,
+            address: &str,
+            options: store::ResolveIdentityOptions
+        ) -> Option<Identity>;
+        link_address(
+            identity_id: &IdentityId,
+            channel_type: &ChannelType,
+            address: &str,
+            options: store::LinkAddressOptions
+        ) -> ();
+        check_idempotency(room_id: &RoomId, key: &str, channel_id: Option<&ChannelId>) -> bool;
+        get_event(event_id: &EventId) -> Option<RoomEvent>;
+        update_event(event: RoomEvent) -> RoomEvent;
+        delete_event(
+            room_id: &RoomId,
+            event_id: &EventId,
+            options: store::DeleteEventOptions
+        ) -> Vec<RoomEvent>;
+        get_event_count(room_id: &RoomId, options: store::GetEventCountOptions) -> u64;
+        list_events(room_id: &RoomId, options: store::ListEventsOptions) -> Vec<RoomEvent>;
+        add_task(task: Task) -> Task;
+        add_observation(observation: Observation) -> Observation;
+        list_tasks(room_id: &RoomId, options: store::ListTasksOptions) -> Vec<Task>;
+        list_observations(room_id: &RoomId) -> Vec<Observation>;
+        get_task(task_id: &roomkit::model::TaskId) -> Option<Task>;
+        update_task(task: Task) -> Task;
+        mark_read(room_id: &RoomId, channel_id: &ChannelId, event_id: &EventId) -> ();
+        mark_all_read(room_id: &RoomId, channel_id: &ChannelId) -> ();
+        get_unread_count(room_id: &RoomId, channel_id: &ChannelId) -> u64;
+        list_read_markers(room_id: &RoomId) -> std::collections::BTreeMap<ChannelId, u64>;
+        find_latest_room(
+            participant_id: &ParticipantId,
+            options: store::FindLatestRoomOptions
+        ) -> Option<Room>;
+        find_room_id_by_channel(
+            channel_id: &ChannelId,
+            options: store::FindRoomIdByChannelOptions
+        ) -> Option<RoomId>;
+        get_thread_summaries(
+            room_id: &RoomId,
+            root_event_ids: &[EventId]
+        ) -> std::collections::BTreeMap<EventId, roomkit::model::ThreadSummary>;
+    }
+}
+
+// Python: tests/tasks/test_runner.py::TestInMemoryTaskRunner::test_events_committed_atomically
+// RFC §10.1, §14.3: the task's description and its worker's answer are each
+// stored by the one atomic commit, never by `add_event` nor
+// `add_event_auto_index`, whose index and counters are not one write.
+#[tokio::test]
+async fn a_background_task_commits_each_event_of_its_child_room() {
+    let kit = kit_with(RecordsEventWrites::default()).await;
+    let task = kit
+        .delegate(
+            &room(),
+            &channel("worker"),
+            "Find it.",
+            DelegateOptions::default(),
+        )
+        .await
+        .unwrap();
+    let waited = WaitOptions {
+        timeout: Some(BOUND),
+    };
+    task.wait(waited).await.unwrap();
+
+    let timeline = kit
+        .store()
+        .list_events(&task.child_room_id, store::ListEventsOptions::default())
+        .await
+        .unwrap();
+    // The room's lifecycle records (RFC §5.1), which a store may hold, are
+    // committed too: only the texts are named.
+    let texts: Vec<&str> = timeline
+        .iter()
+        .filter_map(|event| {
+            let EventContent::Text(content) = &event.content else {
+                return None;
+            };
+            Some(content.body.as_str())
+        })
+        .collect();
+    let stored_by: BTreeSet<Vec<&str>> = timeline
+        .iter()
+        .map(|event| kit.store().writes_of(event))
+        .collect();
+    let every_write: BTreeSet<&str> = kit
+        .store()
+        .writes
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, write)| *write)
+        .collect();
+    assert_eq!(
+        (texts, stored_by, every_write),
+        (
+            vec!["Find it.", "Found it."],
+            BTreeSet::from([vec!["commit_event"]]),
+            BTreeSet::from(["commit_event"])
+        )
+    );
+    kit.close().await.unwrap();
 }

@@ -185,6 +185,36 @@ async fn closing_the_kit_ends_a_background_task_cancelled_and_hands_nothing_back
     );
 }
 
+// Python: tests/tasks/test_runner.py::TestInMemoryTaskRunner::test_close_cancels_all_inflight
+#[tokio::test]
+async fn closing_the_kit_ends_every_background_task_cancelled() {
+    let worker = Agent::new("worker", true);
+    let (kit, _, _) = kit_with(worker.clone(), RoomKitOptions::default()).await;
+    let room = RoomId::new("p").unwrap();
+    let mut tasks = Vec::new();
+    for _ in 0..2 {
+        let task = kit
+            .delegate(&room, &channel("worker"), "go", DelegateOptions::default())
+            .await
+            .unwrap();
+        tokio::time::timeout(BOUND, worker.started.notified())
+            .await
+            .unwrap();
+        tasks.push(task);
+    }
+
+    tokio::time::timeout(BOUND, kit.close())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let ended: Vec<_> = tasks
+        .iter()
+        .map(|task| task.result().map(|result| result.status))
+        .collect();
+    assert_eq!(ended, vec![Some(TaskStatus::Cancelled); 2]);
+}
+
 /// The background task the kit's close cuts posts its end on the status
 /// bus, `failed` saying it was cancelled, which the room's
 /// `ON_STATUS_POSTED` hooks hear during the close:
@@ -340,6 +370,7 @@ fn cancelled() -> Vec<(String, String)> {
 
 // Python: tests/tasks/test_cancelled_delegation.py::test_an_inline_delegation_its_caller_times_out_ends_cancelled
 // On 0931119 the task never ended: its turn and its end ran in its caller's future.
+// Python: tests/tasks/test_integration.py::TestDelegateIntegration::test_cancelled_inline_delegation_fires_completion_hook
 #[tokio::test]
 async fn an_inline_delegation_its_caller_times_out_ends_cancelled() {
     let worker = Agent::new("worker", true);
@@ -526,6 +557,8 @@ async fn a_cancel_cut_while_the_task_ends_still_ends_it() {
 // cancels the runner's own asyncio task, which roomkit-rs keeps private: a
 // cancel or a close is the one way to cut it from outside.
 // On 0931119 the cancel answered at once, the task's end under way.
+// Python: tests/tasks/test_integration.py::TestDelegateIntegration::test_on_complete_callback
+// Python: tests/tasks/test_runner.py::TestInMemoryTaskRunner::test_on_complete_callback_called
 #[tokio::test]
 async fn a_task_that_ran_ends_as_it_stands_whatever_cancels_it() {
     for door in ["cancel", "close"] {
