@@ -955,3 +955,78 @@ async fn the_kit_s_strategy_hands_a_task_s_result_back_as_an_instruction() {
     assert_eq!(*strategy.given.lock().unwrap(), vec![true]);
     kit.close().await.unwrap();
 }
+
+/// A subscriber that keeps the message of every event logged while it is
+/// the thread's default.
+#[derive(Clone, Default)]
+struct Logs(Arc<Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for Logs {
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message<'a>(&'a mut String);
+        impl tracing::field::Visit for Message<'_> {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    *self.0 = format!("{value:?}");
+                }
+            }
+        }
+        let mut message = String::new();
+        event.record(&mut Message(&mut message));
+        self.0.lock().unwrap().push(message);
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+// Python: tests/tasks/test_delegation_result_delivery.py::test_a_room_without_transport_leaves_the_result_to_the_hook
+// Its log, which a scenario cannot assert; what it observes is the scenario
+// tasks/a-hand-back-in-a-room-with-no-transport-reaches-no-agent.
+#[tokio::test]
+async fn a_hand_back_that_reaches_nobody_is_logged_with_its_status_and_reason() {
+    let logs = Logs::default();
+    let _logging = tracing::subscriber::set_default(logs.clone());
+    let kit = kit_with(InMemoryStore::default()).await;
+    let assistant = EchoAgent::new(channel("assistant"), "ok", EchoAgentOptions::default());
+    kit.register_channel(assistant).unwrap();
+    let as_agent = AttachChannelOptions {
+        category: Some(ChannelCategory::Intelligence),
+        ..AttachChannelOptions::default()
+    };
+    kit.attach_channel(&room(), &channel("assistant"), as_agent)
+        .await
+        .unwrap();
+    let options = DelegateOptions {
+        notify: Some(channel("assistant")),
+        ..DelegateOptions::default()
+    };
+
+    let task = kit
+        .delegate(&room(), &channel("worker"), "task", options)
+        .await
+        .unwrap();
+    let waited = WaitOptions {
+        timeout: Some(BOUND),
+    };
+    task.wait(waited).await.unwrap();
+    idle(&kit).await;
+
+    let told = "Result for assistant in room r not delivered: unavailable (no_transport)";
+    let logged = logs.0.lock().unwrap().iter().any(|line| line == told);
+    assert!(logged, "{:?}", logs.0.lock().unwrap());
+    kit.close().await.unwrap();
+}

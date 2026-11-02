@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A task's result handed back to nobody is logged as Python's
+  `_log_not_delivered` logs it (RFC §15.2, RMK-1208): `Result for
+  assistant in room r not delivered: unavailable (no_transport)`, a
+  warning, or a debug line when the notified agent's turn failed.
 - A delegated task whose worker's streamed turn ended short of its answer
   names that end, as Python's `_persist_child_stream` reads it off the
   stream's record (RFC §6.4, §23.3 step 6, RMK-1208): a turn failed after

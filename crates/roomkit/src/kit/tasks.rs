@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 use super::RoomKit;
 use super::inline::Unstarted;
 use crate::context::ExecutionContext;
+use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
 use crate::error::{RoomKitError, repr};
 use crate::orchestration::{PostOptions, StatusLevel};
 use crate::store::ConversationStore;
@@ -938,8 +939,11 @@ impl<S: ConversationStore> RoomKit<S> {
         } else {
             text
         };
-        if let Err(error) = self.deliver(&result.parent_room_id, text, options).await {
-            tracing::warn!(target: "roomkit::tasks", task = %result.task_id, %error, "the result was not handed back");
+        match self.deliver(&result.parent_room_id, text, options).await {
+            Ok(outcome) => log_not_delivered(notify, &result.parent_room_id, &outcome),
+            Err(error) => {
+                tracing::warn!(target: "roomkit::tasks", task = %result.task_id, %error, "the result was not handed back");
+            }
         }
     }
 
@@ -1109,6 +1113,29 @@ fn posted_text(result: &DelegatedTaskResult, task: &str) -> Option<String> {
         return Some(format!("The task{named} was cancelled."));
     }
     Some(format!("The task{named} failed."))
+}
+
+/// Logs a hand-back that reached nobody, as Python's `_log_not_delivered`:
+/// a warning, unless the notified agent's turn failed, which was logged
+/// where it failed and is only noted here (RFC §15.2).
+fn log_not_delivered(notify: &ChannelId, room_id: &RoomId, outcome: &DeliveryOutcome) {
+    let status = match outcome.status {
+        DeliveryOutcomeStatus::Blocked => "blocked",
+        DeliveryOutcomeStatus::Unavailable => "unavailable",
+        DeliveryOutcomeStatus::Failed => "failed",
+        _ => return,
+    };
+    // Python's `%s` of a reason it does not have.
+    let reason = outcome.reason.as_deref().unwrap_or("None");
+    let turn_failed = outcome
+        .inbound
+        .as_ref()
+        .is_some_and(|inbound| inbound.error.is_some());
+    if turn_failed {
+        tracing::debug!(target: "roomkit::tasks", "Result for {notify} in room {room_id} not delivered: {status} ({reason})");
+    } else {
+        tracing::warn!(target: "roomkit::tasks", "Result for {notify} in room {room_id} not delivered: {status} ({reason})");
+    }
 }
 
 /// The work a task hands back: its output, unless it failed.
