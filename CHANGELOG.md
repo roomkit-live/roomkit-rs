@@ -25,6 +25,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that stream's `correlation_id`, the one its rows carry, now given by the
   operation (`ChannelRequest::ReadStream::correlation_id`). It was a
   `system` event, `outbound`, with neither.
+- JSON the model reads is written as Python's `json.dumps` (RMK-1096): a
+  tool's JSON value as `json.dumps(value, ensure_ascii=False)` (`", "` and
+  `": "` between members), an MCP result of several parts as a JSON array
+  of their texts, and the kit's refusal envelope with every character past
+  ASCII escaped.
 - In a delegated room a transport is shared into, the stream an agent
   answers another agent's answer with is read by the room's reader, as
   Python's (RFC §23.3 step 5, RMK-1185): it was lost, the driver told a
