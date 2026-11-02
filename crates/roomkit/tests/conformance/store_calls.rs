@@ -8,13 +8,13 @@
 use std::sync::Arc;
 
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelType, EventId, EventType, Metadata, Participant,
+    ChannelBinding, ChannelId, ChannelType, EventId, EventType, IdentityId, Metadata, Participant,
     ParticipantId, Room, RoomEvent, RoomId, RoomStatus, Task, TaskId, TaskStatus, Timestamp,
-    Visibility,
+    Verification, VerificationRequest, Visibility,
 };
 use roomkit::store::{
     CommitEventOptions, DeleteEventOptions, FindLatestRoomOptions, FindRoomIdByChannelOptions,
-    GetTimelineOptions, ListTasksOptions,
+    GetTimelineOptions, GetVerificationOptions, ListTasksOptions,
 };
 use roomkit::{
     ConversationStore, EventFilter, ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions,
@@ -64,6 +64,11 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "store.mark_all_read" | "store.get_unread_count" | "mark_all_read" => {
             &["room_id", "channel_id"]
         }
+        "store.put_verification" => &["verification"],
+        "store.get_verification" => &["identity_id"],
+        "store.list_verifications_in_force" => &[],
+        "store.create_verification_request" | "store.update_verification_request" => &["request"],
+        "store.get_verification_request" => &["request_id"],
         _ => return None,
     })
 }
@@ -390,6 +395,44 @@ async fn writes_and_tasks(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Ca
             };
             stored(run, name, store.list_tasks(&room()?, options).await)
         }
+        _ => verifications(run, name, spec).await?,
+    })
+}
+
+/// The store's verifications and their requests (RFC §11.7, §14.1): a
+/// record taken as written, with its model's defaults.
+async fn verifications(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+    let store = run.kit().store();
+    let request = || -> Result<VerificationRequest, Unreadable> { field(spec, "request") };
+    Ok(match name {
+        "store.put_verification" => {
+            let verification: Verification = field(spec, "verification")?;
+            stored(run, name, store.put_verification(verification).await)
+        }
+        "store.get_verification" => {
+            let identity: IdentityId = field(spec, "identity_id")?;
+            let options = GetVerificationOptions {
+                organization_id: optional::<String>(spec, "organization_id")?,
+            };
+            stored(run, name, store.get_verification(&identity, options).await)
+        }
+        "store.list_verifications_in_force" => {
+            stored(run, name, store.list_verifications_in_force().await)
+        }
+        "store.create_verification_request" => stored(
+            run,
+            name,
+            store.create_verification_request(request()?).await,
+        ),
+        "store.get_verification_request" => {
+            let request_id: String = field(spec, "request_id")?;
+            stored(run, name, store.get_verification_request(&request_id).await)
+        }
+        "store.update_verification_request" => stored(
+            run,
+            name,
+            store.update_verification_request(request()?).await,
+        ),
         other => return Err(format!("no call {other}")),
     })
 }
