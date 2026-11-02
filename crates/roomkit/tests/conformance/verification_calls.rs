@@ -2,8 +2,10 @@
 //! "Calls"), made on the kit: `request_verification`, whose `as` label
 //! names the request's id and `<label>.secret` its secret,
 //! `complete_verification`, `record_failed_attempt`, `revoke_verification`,
-//! `verification_of` and `check_verifications`; and the kit's
-//! `verification_policy`, its lifetimes in milliseconds.
+//! `verification_of`, `check_verifications`, and `sender_verification`, an
+//! action of a scripted hook on the event and the context the hook was
+//! handed; and the kit's `verification_policy`, its lifetimes in
+//! milliseconds.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +19,7 @@ use serde_json::{Value, json};
 
 use crate::calls::{Called, Unreadable, dump, field, finish, optional};
 use crate::run::Run;
+use crate::scripted::HOOKED;
 
 /// The framework events of identity verification (RFC §8.2, §11.7),
 /// recorded beside the §26.1 table's.
@@ -40,7 +43,7 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "record_failed_attempt" => &["request_id"],
         "revoke_verification" => &["identity_id", "reason"],
         "verification_of" => &["identity_id"],
-        "check_verifications" => &[],
+        "check_verifications" | "sender_verification" => &[],
         _ => return None,
     })
 }
@@ -173,6 +176,15 @@ pub(crate) async fn call(
         "check_verifications" => {
             let outcome = kit.check_verifications().await;
             finish(run, name, outcome, dump)
+        }
+        "sender_verification" => {
+            let Ok((event, context)) = HOOKED.try_with(Clone::clone) else {
+                return Err("sender_verification outside a scripted hook's action".to_owned());
+            };
+            let outcome = kit.sender_verification(&event, &context).await;
+            finish(run, name, outcome, |verification| {
+                verification.as_ref().map_or(Value::Null, dump)
+            })
         }
         other => return Err(format!("no call {other}")),
     };

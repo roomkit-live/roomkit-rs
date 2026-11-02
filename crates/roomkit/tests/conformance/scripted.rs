@@ -26,6 +26,12 @@ use crate::templates::{complete_event, complete_observation, complete_task, hook
 /// How long a step waits for a call to reach a gate before the scenario fails.
 pub(crate) const GATE_BOUND: Duration = Duration::from_secs(5);
 
+tokio::task_local! {
+    /// The payload and the context of the scripted hook whose actions run,
+    /// which `sender_verification` reads (identity verification, §11.7.3).
+    pub(crate) static HOOKED: (RoomEvent, RoomContext);
+}
+
 /// What a reaction's `fail` raises.
 #[derive(Debug)]
 pub(crate) struct ScriptedFailure(pub(crate) String);
@@ -658,7 +664,10 @@ pub(crate) fn hook_handler(
                 return Ok(HookResult::allow(AllowOptions::default()));
             };
             let scope = Scope::with_event(&room_id, payload.id.as_ref());
-            perform(&run, &reaction, &scope).await?;
+            let hooked = (payload.clone(), context);
+            HOOKED
+                .scope(hooked, perform(&run, &reaction, &scope))
+                .await?;
             Ok(hook_result(reaction.get("result"), &payload, &room_id)?)
         })
     }
