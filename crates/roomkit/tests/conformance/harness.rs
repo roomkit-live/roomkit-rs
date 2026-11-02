@@ -230,12 +230,38 @@ async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
         if !run.gates.wait_for(gate).await {
             run.problem(format!("{path}: no call reached the gate {gate}"));
         }
+    } else if let Some(room_id) = step["wait_for_lock"].as_str() {
+        let waiters = step["waiters"]
+            .as_u64()
+            .map_or(1, |waiters| usize::try_from(waiters).unwrap_or(usize::MAX));
+        if !wait_for_lock(run, room_id, waiters).await {
+            run.problem(format!(
+                "{path}: {waiters} calls never waited for {room_id}'s lock"
+            ));
+        }
     } else if let Some(gate) = step["open"].as_str() {
         run.gates.open(gate);
     } else if step.get("idle").is_some() {
         run.idle().await;
     }
     outcomes
+}
+
+/// Waits until `waiters` calls wait for the lock of the room `room_id`:
+/// whether they did within the gates' bound.
+async fn wait_for_lock(run: &Arc<Run>, room_id: &str, waiters: usize) -> bool {
+    let Ok(room_id) = RoomId::new(room_id) else {
+        return false;
+    };
+    let kit = run.kit();
+    let waited = async {
+        while roomkit::testing::room_lock_waiters(&kit, &room_id) < waiters {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    };
+    tokio::time::timeout(crate::scripted::GATE_BOUND, waited)
+        .await
+        .is_ok()
 }
 
 async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {

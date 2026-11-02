@@ -15,7 +15,14 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 /// processes needs a distributed lock (RFC §13.5).
 #[derive(Debug, Default)]
 pub(crate) struct RoomMutexes {
-    rooms: Mutex<HashMap<RoomId, Arc<AsyncMutex<()>>>>,
+    rooms: Mutex<Rooms>,
+}
+
+/// The rooms' mutexes, and how many callers wait for each.
+#[derive(Debug, Default)]
+struct Rooms {
+    mutexes: HashMap<RoomId, Arc<AsyncMutex<()>>>,
+    waiting: HashMap<RoomId, usize>,
 }
 
 /// A held room mutex; dropping it releases the mutex.
@@ -35,7 +42,11 @@ pub(crate) struct RoomGuard<'mutexes> {
 impl RoomMutexes {
     /// Waits for the room's mutex and returns its guard.
     pub(crate) async fn lock(&self, room_id: &RoomId) -> RoomGuard<'_> {
-        let mutex = Arc::clone(self.rooms().entry(room_id.clone()).or_default());
+        let mutex = {
+            let mut rooms = self.rooms();
+            *rooms.waiting.entry(room_id.clone()).or_default() += 1;
+            Arc::clone(rooms.mutexes.entry(room_id.clone()).or_default())
+        };
         let mut guard = RoomGuard {
             guard: None,
             waiting: Some(Arc::clone(&mutex)),
@@ -47,11 +58,28 @@ impl RoomMutexes {
         // by the map alone when nobody else uses it.
         guard.guard = Some(mutex.lock_owned().await);
         guard.waiting = None;
+        unwait(&mut self.rooms(), room_id);
         guard
     }
 
-    fn rooms(&self) -> MutexGuard<'_, HashMap<RoomId, Arc<AsyncMutex<()>>>> {
+    /// How many callers wait for the room's mutex now. Outside the kit's
+    /// work: the conformance runner's `wait_for_lock` step.
+    pub(crate) fn waiting(&self, room_id: &RoomId) -> usize {
+        self.rooms().waiting.get(room_id).copied().unwrap_or(0)
+    }
+
+    fn rooms(&self) -> MutexGuard<'_, Rooms> {
         self.rooms.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Counts one waiter of `room_id`'s mutex less.
+fn unwait(rooms: &mut Rooms, room_id: &RoomId) {
+    if let Some(waiting) = rooms.waiting.get_mut(room_id) {
+        *waiting -= 1;
+        if *waiting == 0 {
+            rooms.waiting.remove(room_id);
+        }
     }
 }
 
@@ -60,15 +88,19 @@ impl Drop for RoomGuard<'_> {
         // Release the mutex first, and a waiter's handle on it: each holds a
         // reference to it.
         drop(self.guard.take());
-        drop(self.waiting.take());
+        let cancelled = self.waiting.take().is_some();
         let mut rooms = self.mutexes.rooms();
+        if cancelled {
+            unwait(&mut rooms, &self.room_id);
+        }
         // A waiter cloned the mutex under this same lock before waiting, so a
         // mutex only the map still holds has neither holder nor waiter.
         let unused = rooms
+            .mutexes
             .get(&self.room_id)
             .is_some_and(|mutex| Arc::strong_count(mutex) == 1);
         if unused {
-            rooms.remove(&self.room_id);
+            rooms.mutexes.remove(&self.room_id);
         }
     }
 }
@@ -86,7 +118,7 @@ mod tests {
         let mutexes = RoomMutexes::default();
         drop(mutexes.lock(&room_id()).await);
         assert!(
-            mutexes.rooms().is_empty(),
+            mutexes.rooms().mutexes.is_empty(),
             "the room's mutex should be gone"
         );
     }
@@ -103,12 +135,14 @@ mod tests {
         };
         // Let the waiter clone the mutex and start waiting.
         tokio::task::yield_now().await;
+        assert_eq!(mutexes.waiting(&room_id()), 1, "the waiter is counted");
         drop(held);
         waiter.await.unwrap();
         assert!(
-            mutexes.rooms().is_empty(),
+            mutexes.rooms().mutexes.is_empty(),
             "the last holder removes the mutex"
         );
+        assert_eq!(mutexes.waiting(&room_id()), 0, "the holder waits no more");
     }
 
     /// The holder lets the mutex go while a waiter still holds its handle;
@@ -129,9 +163,10 @@ mod tests {
         waiter.abort();
         assert!(waiter.await.unwrap_err().is_cancelled());
         assert!(
-            mutexes.rooms().is_empty(),
+            mutexes.rooms().mutexes.is_empty(),
             "the cancelled waiter removes the mutex"
         );
+        assert_eq!(mutexes.waiting(&room_id()), 0, "a cancelled waiter waits no more");
     }
 
     #[tokio::test]

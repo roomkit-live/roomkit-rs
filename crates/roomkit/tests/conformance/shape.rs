@@ -245,6 +245,7 @@ const STEPS: &[(&str, &[&str])] = &[
     ("wait_for", &["wait_for"]),
     ("open", &["open"]),
     ("idle", &["idle"]),
+    ("wait_for_lock", &["wait_for_lock", "waiters"]),
 ];
 
 /// Each call's arguments, beside `call` and `organization_id`.

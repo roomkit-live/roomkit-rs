@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use roomkit_core::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelId, ChannelOutput, ChannelType,
     EventContent, EventDirection, EventSource, EventType, InboundMessage, ParticipantId,
-    RoomContext, RoomEvent, TextContent,
+    RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit_core::rules::addresses::{
     ChannelAddressing, ChannelAddressingOptions, CountryCode, NormalizeOptions, addressing_of,
@@ -63,6 +63,15 @@ pub async fn idle<S>(kit: &RoomKit<S>) {
 #[doc(hidden)]
 pub fn set_turn_timeouts<S>(kit: &RoomKit<S>, timeouts: TurnTimeouts) {
     kit.inner.turns.set_timeouts(timeouts.bounded());
+}
+
+/// How many calls wait for the lock of the room `room_id` in `kit` now: the
+/// conformance runner's `wait_for_lock` step, which knows calls started in
+/// the background meet only once they wait for it. A test seam: the Python
+/// implementation's kit has no such call.
+#[doc(hidden)]
+pub fn room_lock_waiters<S>(kit: &RoomKit<S>, room_id: &RoomId) -> usize {
+    kit.inner.locks.waiting(room_id)
 }
 
 /// A delivery a [`RecordingTransport`] made.
