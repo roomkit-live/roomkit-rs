@@ -114,7 +114,7 @@ pub fn media_type(mime_type: &str) -> String {
         .split(';')
         .next()
         .unwrap_or(mime_type)
-        .trim()
+        .trim_matches(is_space)
         .to_lowercase();
     match bare.as_str() {
         "image/jpg" | "image/pjpeg" => "image/jpeg".to_owned(),
@@ -203,6 +203,7 @@ mod tests {
             "data:image/png;Name=Lamp.png; BASE64 ,AQ-_\nBA",
             "data:image/png,AQIDBA==",
             "data:image/png;\u{1f}BASE64,AA==",
+            "data:\u{1f}IMAGE/PNG;base64,AA==",
         ]
         .map(|url| Image::new(url, "image/png").map(|image| image.url().to_owned()));
         assert_eq!(
@@ -212,6 +213,7 @@ mod tests {
                 Some("data:image/png;base64,AA==".to_owned()),
                 Some("data:image/png;name=lamp.png;base64,AQ-_\nBA".to_owned()),
                 Some("data:image/png,AQIDBA==".to_owned()),
+                Some("data:image/png;base64,AA==".to_owned()),
                 Some("data:image/png;base64,AA==".to_owned()),
             ]
         );
