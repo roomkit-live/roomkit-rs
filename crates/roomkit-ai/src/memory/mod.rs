@@ -16,6 +16,8 @@
 //! - [`SummarizingMemory`] and [`CompactingMemory`]: another memory's
 //!   older events summarized by a model, the summary's message standing
 //!   for them (RFC §20.3, §6.4).
+//! - [`RetrievalMemory`]: another memory's result with what knowledge
+//!   sources hold for the turn's words, as the turn's note (RFC §20.2).
 
 mod budget_aware;
 mod compacting;
@@ -23,6 +25,7 @@ mod footprint;
 #[cfg(test)]
 mod mock;
 mod repr;
+mod retrieval;
 mod sliding_window;
 mod summarizing;
 mod summary;
@@ -43,6 +46,7 @@ pub(crate) use self::footprint::measured;
 pub use self::footprint::{TurnFootprint, current_turn_footprint};
 #[cfg(test)]
 pub(crate) use self::mock::{MockMemoryProvider, MockMemoryProviderOptions};
+pub use self::retrieval::{RetrievalMemory, RetrievalMemoryOptions};
 pub use self::sliding_window::{SlidingWindowMemory, SlidingWindowMemoryOptions};
 pub use self::summarizing::{SummarizingMemory, SummarizingMemoryOptions};
 pub(crate) use self::token_estimator::estimate_tool_tokens;
@@ -51,7 +55,7 @@ pub use self::token_estimator::{
     estimate_event_tokens, estimate_message_tokens, estimate_notes_tokens, estimate_tokens,
     extract_event_text, history_budget,
 };
-use roomkit_core::rules::transcript::without_mark_copies;
+use roomkit_core::rules::transcript::{RUNTIME_RECORD, without_mark_copies};
 use serde_json::Value;
 
 use crate::provider::{AiContentPart, AiMessage, AiMessageContent, AiRole, AiTextPart};
@@ -147,10 +151,6 @@ pub(crate) fn runtime_or_cleaned(mut message: AiMessage) -> AiMessage {
     }
     message
 }
-
-/// The metadata key, on a message, naming what the runtime wrote (a
-/// summary): its marks are the runtime's (RFC §6.4).
-pub(crate) const RUNTIME_RECORD: &str = "runtime_record";
 
 /// What [`MemoryProvider::retrieve`] takes beside the room, the event and
 /// the context: Python's keyword-only `channel_id=None`.

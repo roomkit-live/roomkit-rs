@@ -6,6 +6,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Knowledge sources and the retrieval memory, Python's (RFC §20.2,
+  RMK-1165): `roomkit_ai::knowledge`'s `KnowledgeSource` and
+  `KnowledgeResult`, and `RetrievalMemory`, which searches its sources for
+  the turn's words and hands the best passages on as the turn's note,
+  each fenced as knowledge, and indexes each event it learns.
+- The inbound pipeline drops a runtime record (`runtime_record`) from a
+  sender's message, as Python does: only the runtime says which text it
+  wrote (RFC §6.4).
+- A quoted text folds the information separators (`\x1c` to `\x1f`) as
+  Python's `str.split()` does, so that none starts a line of its own in a
+  summary's lines.
 - An `InjectMessage` of a role the transcript does not hold reads as the
   user's, and `tool` as a tool's result, where it was dropped (RMK-1175).
 - The summarizing and compacting memories, Python's (RFC §20.3, §6.4,

@@ -9,11 +9,10 @@ use roomkit::model::{
     ChannelId, ChannelType, EventId, EventType, Metadata, RoomContext, RoomEvent,
 };
 use roomkit_core::rules::transcript::{
-    SUMMARY_HEADER, fence, people_count, quoted, turn_labels, without_mark_copies,
+    RUNTIME_RECORD, SUMMARY_HEADER, fence, people_count, quoted, turn_labels, without_mark_copies,
 };
 use serde_json::Value;
 
-use super::RUNTIME_RECORD;
 use super::token_estimator::extract_event_text;
 use crate::provider::{AiMessage, AiMessageContent, AiRole};
 

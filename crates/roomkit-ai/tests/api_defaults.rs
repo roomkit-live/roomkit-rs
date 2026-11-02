@@ -6,10 +6,11 @@
 use roomkit_ai::AiChannelOptions;
 use roomkit_ai::DiscoverOptions;
 use roomkit_ai::MockAiProviderOptions;
+use roomkit_ai::knowledge::{IndexOptions, SearchOptions};
 use roomkit_ai::memory::{
     BudgetAwareMemoryOptions, CompactingMemoryOptions, EstimateEventTokensOptions,
-    HistoryBudgetOptions, IngestOptions, RetrieveOptions, SlidingWindowMemoryOptions,
-    SummarizingMemoryOptions,
+    HistoryBudgetOptions, IngestOptions, RetrievalMemoryOptions, RetrieveOptions,
+    SlidingWindowMemoryOptions, SummarizingMemoryOptions,
 };
 use std::time::Duration;
 
@@ -122,6 +123,22 @@ fn memory_options_defaults_as_python() {
     assert_eq!(summarizing.min_events, 5);
     // roomkit.memory.SummarizingMemory.__init__(summary_cache_ttl_seconds) = 1800.0
     assert_eq!(summarizing.summary_cache_ttl, Duration::from_mins(30));
+    let retrieval = RetrievalMemoryOptions::default();
+    // roomkit.memory.RetrievalMemory.__init__(max_results) = 5
+    assert_eq!(retrieval.max_results, 5);
+    // roomkit.memory.RetrievalMemory.__init__(min_query_length) = 3
+    assert_eq!(retrieval.min_query_length, 3);
+}
+
+#[test]
+fn knowledge_options_defaults_as_python() {
+    let search = SearchOptions::default();
+    // roomkit.knowledge.KnowledgeSource.search(room_id) = None
+    assert!(search.room_id.is_none());
+    // roomkit.knowledge.KnowledgeSource.search(limit) = 5
+    assert_eq!(search.limit, 5);
+    // roomkit.knowledge.KnowledgeSource.index(metadata) = None
+    assert!(IndexOptions::default().metadata.is_none());
 }
 
 #[test]
