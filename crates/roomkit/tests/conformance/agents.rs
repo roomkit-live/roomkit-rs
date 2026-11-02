@@ -139,6 +139,13 @@ pub(crate) fn scripted_agent(
         let window = window.as_u64().ok_or("max_context_events: not a count")?;
         options.max_context_events = usize::try_from(window).map_err(|e| e.to_string())?;
     }
+    if let Some(bound) = spec.get("tool_timeout_ms") {
+        options.tool_timeout = milliseconds(bound, "tool_timeout_ms")?;
+    }
+    for (name, bound) in spec["tool_timeouts_ms"].as_object().into_iter().flatten() {
+        let bound = milliseconds(bound, "tool_timeouts_ms")?;
+        options.tool_timeouts.insert(name.clone(), bound);
+    }
     let mut models = vec![(id.to_string(), model.clone())];
     if let Some(memory) = spec.get("memory") {
         let summarizer = match memory.get("summarizer") {
@@ -329,6 +336,18 @@ async fn answer(tool: &Value) -> Result<ToolResult, ToolError> {
         return Err(ToolError::unserved("the call is not this tool's"));
     }
     pending().await
+}
+
+/// A bound in milliseconds, `null` bounding nothing (README, "Scripted
+/// agents").
+fn milliseconds(bound: &Value, member: &str) -> Result<Option<Duration>, String> {
+    if bound.is_null() {
+        return Ok(None);
+    }
+    let bound = bound
+        .as_u64()
+        .ok_or_else(|| format!("{member}: not milliseconds"))?;
+    Ok(Some(Duration::from_millis(bound)))
 }
 
 fn tool_policy(spec: &Value) -> ToolPolicy {
