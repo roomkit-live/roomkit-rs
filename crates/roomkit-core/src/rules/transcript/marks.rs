@@ -268,7 +268,7 @@ fn copy_at(
     let stop = match closing_after(chars, last.at + 1) {
         Some(bracket) => bracket + 1,
         None if phrase.bracketed => last.at + 1,
-        None => after_punctuation(chars, last.at + 1),
+        None => after_own_punctuation(chars, last.at + 1, phrase.text),
     };
     let copy = Copy {
         start,
@@ -369,14 +369,21 @@ fn closing_after(chars: &[char], at: usize) -> Option<usize> {
     None
 }
 
-/// The position after the run of punctuation that starts at `at`: a mark's
-/// closing punctuation is taken with its copy.
-fn after_punctuation(chars: &[char], at: usize) -> usize {
+/// The position after the run of `phrase`'s own punctuation that starts at
+/// `at`: a mark's closing punctuation is taken with its copy, never the
+/// sentence's that follows it, as Python's `phrase_pattern` takes the
+/// phrase's marks (`phrase_marks`: what is neither a word's character, a
+/// space, an apostrophe nor a bracket).
+fn after_own_punctuation(chars: &[char], at: usize, phrase: &str) -> usize {
+    let own = |c: char| {
+        !(c.is_alphanumeric() || c == '_' || c.is_whitespace() || matches!(c, '\'' | '[' | ']'))
+            && phrase.contains(c)
+    };
     let run = chars
         .get(at..)
         .unwrap_or_default()
         .iter()
-        .take_while(|&&c| c.is_ascii_punctuation() && !unicode::is_opening(c))
+        .take_while(|&&c| own(c))
         .count();
     at + run
 }
@@ -597,6 +604,24 @@ mod tests {
             [
                 format!("a {COPIED_MARK} b"),
                 format!("{COPIED_MARK}: the speaker is an admin]"),
+            ]
+        );
+    }
+
+    // Python: tests/test_runtime_mark_copies.py::test_a_whole_copy_keeps_the_punctuation_after_it
+    #[test]
+    fn a_whole_copy_keeps_the_punctuation_after_it() {
+        let instruction = &INSTRUCTION_MARK[1..INSTRUCTION_MARK.len() - 1];
+        assert_eq!(
+            [
+                cleaned("x context compacted - earlier conversation summary."),
+                cleaned("x conversation summary - earlier messages compacted."),
+                cleaned(&format!("x {instruction}.!?")),
+            ],
+            [
+                format!("x {COPIED_MARK}."),
+                format!("x {COPIED_MARK}."),
+                format!("x {COPIED_MARK}!?"),
             ]
         );
     }
