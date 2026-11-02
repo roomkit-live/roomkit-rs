@@ -37,6 +37,9 @@ impl<S: ConversationStore> RoomKit<S> {
             declaration.channel_type.clone(),
         );
         let channel_id = declaration.channel_id.clone();
+        let human_input = channel
+            .human_input_handler()
+            .map(|handler| (channel_id.clone(), handler));
         let channel: Arc<dyn DynChannel> = Arc::new(channel);
         self.inner.try_change_config(|config| {
             config.register_channel(declaration)?;
@@ -46,6 +49,9 @@ impl<S: ConversationStore> RoomKit<S> {
             write(&self.inner.channels).insert(channel_id, channel);
             Ok::<(), RoomKitError>(())
         })?;
+        if let Some((channel_id, handler)) = human_input {
+            self.inner.wire_human_input(&channel_id, &handler);
+        }
         drop(self.inner.emit(registered));
         Ok(())
     }

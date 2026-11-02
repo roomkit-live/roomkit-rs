@@ -439,6 +439,19 @@ pub trait Channel: Send + Sync + 'static {
     fn close(&self) -> impl Future<Output = ()> + Send {
         async {}
     }
+
+    /// The handler the channel's tools that ask a person keep their
+    /// requests in, which the kit hands its `ON_USER_INPUT_REQUIRED` hooks
+    /// when it registers the channel, for the requests made outside its
+    /// turns (RFC §9.3): none by default.
+    ///
+    /// For the workspace's AI channel, as the Python implementation's kit
+    /// wires an AI channel's handler in `register_channel`: outside the
+    /// public API.
+    #[doc(hidden)]
+    fn human_input_handler(&self) -> Option<crate::human_input::HumanInputHandler> {
+        None
+    }
 }
 
 /// The event `channel`, keeping no data of its own, parses from `message`

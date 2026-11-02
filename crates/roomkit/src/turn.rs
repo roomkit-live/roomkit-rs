@@ -43,6 +43,7 @@ mod inputs;
 mod loop_hooks;
 mod media;
 
+pub(crate) use self::inputs::InputNotification;
 pub use self::loop_hooks::TurnChain;
 
 tokio::task_local! {

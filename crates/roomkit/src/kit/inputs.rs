@@ -1,17 +1,21 @@
 //! A turn's human-input requests, answered on the room's owner (RFC
 //! §10.6.5): Python's `RoomKit.answer_input` and `reject_input`, and the
-//! `ON_USER_INPUT_REQUIRED` hooks a turn's requests fire (RFC §9.3).
+//! `ON_USER_INPUT_REQUIRED` hooks a request fires (RFC §9.3), made in a
+//! turn or outside the kit's turns.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
-use roomkit_core::model::{ChannelId, ChannelType, RoomId};
+use roomkit_core::model::{ChannelId, ChannelType, RoomContext, RoomId};
 use roomkit_core::rules::hook_registry::{HookSpec, HookSubject, HookTrigger};
 
 use super::{Inner, RoomKit, read};
+use crate::channel::BoxFuture;
+use crate::driver;
 use crate::error::RoomKitError;
 use crate::hooks::{HookHandler, Kept};
-use crate::human_input::PendingInputEvent;
+use crate::human_input::{HumanInputHandler, PendingInputEvent};
 use crate::store::ConversationStore;
+use crate::turn::{InputNotification, TurnKit};
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Answers the human-input request `request_id` of a turn this kit
@@ -88,4 +92,82 @@ impl<S: ConversationStore> Inner<S> {
             })
             .collect()
     }
+
+    /// Hands `handler`, the human-input handler of the channel
+    /// `channel_id` this kit registers, the kit's `ON_USER_INPUT_REQUIRED`
+    /// hooks for the channel's requests made outside its turns, as from a
+    /// host's webhook or job (RFC §9.3): Python's `_wire_ai_channel`
+    /// handing the handler `build_on_user_input_required_hook`.
+    pub(crate) fn wire_human_input(
+        self: &Arc<Self>,
+        channel_id: &ChannelId,
+        handler: &HumanInputHandler,
+    ) {
+        let kit = Arc::downgrade(self);
+        let registered = channel_id.clone();
+        handler.set_on_input_required(
+            channel_id.as_str(),
+            Arc::new(move |event| -> BoxFuture<'static, bool> {
+                Box::pin(user_input_required(
+                    Weak::clone(&kit),
+                    registered.clone(),
+                    event,
+                ))
+            }),
+        );
+    }
+
+    /// The context a room's `ON_USER_INPUT_REQUIRED` hooks read, as
+    /// Python's `hook_context` builds it; `None`, logged, for a room the
+    /// store lacks, or a store that fails the read.
+    async fn input_context(&self, room_id: &RoomId) -> Option<RoomContext> {
+        let recent_events = self.config().recent_events();
+        match driver::load_context(&*self.store, room_id, recent_events).await {
+            Ok(Some(context)) => Some(context),
+            Ok(None) => {
+                tracing::warn!(target: "roomkit::hooks", %room_id, "the room of a human-input request is not found: its hooks do not run");
+                None
+            }
+            Err(error) => {
+                tracing::warn!(target: "roomkit::hooks", %room_id, %error, "the hooks of a human-input request could not run");
+                None
+            }
+        }
+    }
+}
+
+/// The kit's `ON_USER_INPUT_REQUIRED` hooks on `event`, a request of the
+/// agent `registered` made outside the kit's turns, as
+/// [`InputNotification::run`] says, about the request's room and agent:
+/// Python's `build_on_user_input_required_hook`. Whether the request
+/// stands; it stands, nothing fired, for a request naming no room, a kit
+/// gone, or a room whose context its hooks cannot read.
+async fn user_input_required<S: ConversationStore>(
+    kit: Weak<Inner<S>>,
+    registered: ChannelId,
+    event: PendingInputEvent,
+) -> bool {
+    let (Some(inner), Ok(room_id)) = (kit.upgrade(), RoomId::new(&event.room_id)) else {
+        return true;
+    };
+    let channel_id = ChannelId::new(&event.channel_id).unwrap_or(registered);
+    let hooks = inner.input_hooks((&room_id, &channel_id), &event.channel_type);
+    // A context is store reads: built only for a hook that reads it.
+    let hooks = if hooks.is_empty() {
+        None
+    } else {
+        let Some(context) = inner.input_context(&room_id).await else {
+            return true;
+        };
+        Some((hooks, context))
+    };
+    drop(inner);
+    let kit: Arc<dyn TurnKit> = Arc::new(kit);
+    let notification = InputNotification {
+        kit,
+        ids: (room_id, channel_id),
+        hooks,
+        turn: None,
+    };
+    notification.run(event).await
 }

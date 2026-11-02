@@ -14,6 +14,7 @@ use super::options::{
     CloseOptions, CreateDetachedOptions, CreateOptions, HumanInputHandlerOptions, RejectOptions,
     WaitOptions,
 };
+use crate::channel::BoxFuture;
 use crate::error::RoomKitError;
 use crate::turn::{TurnHost, turn_in_scope};
 use crate::turns::{ExecutorInputs, InputSettler};
@@ -43,9 +44,10 @@ const DENIED: &str = "Denied by ON_USER_INPUT_REQUIRED hook";
 ///   one still open when its turn ends is withdrawn, but a detached one.
 ///
 /// The hooks run for a request of a channel the handler serves (an
-/// `AiChannel` given it as its human-input handler registers it), made
-/// within one of the kit's turns: a request made anywhere else is told to
-/// nobody.
+/// `AiChannel` given it as its human-input handler registers it): through
+/// the turn it is made in, else through the kit the channel is registered
+/// on, as from a host's webhook or job. A request of a channel no kit
+/// registered, made outside a turn, is told to nobody.
 #[derive(Clone)]
 pub struct HumanInputHandler {
     shared: Arc<Shared>,
@@ -71,6 +73,9 @@ struct State {
     /// The requests opened in a turn the kit runs: their owner keeps the
     /// record that answers them (RFC §10.6.5).
     turn_of: HashMap<String, Arc<ExecutorInputs>>,
+    /// The kit's hooks of each channel a kit registered, for its requests
+    /// made outside a turn: Python's `_on_input_required_by_channel`.
+    on_input_required: HashMap<String, OnInputRequired>,
     /// In tests, what lands once a wait's bound passed, before the wait
     /// reads its request: the window another thread's answer can arrive in.
     #[cfg(test)]
@@ -90,6 +95,31 @@ struct Entry {
 /// A request that settled, which its turn's owner learns of once the
 /// handler's lock is let go.
 type Closing = Option<(Arc<ExecutorInputs>, String, PendingInputStatus)>;
+
+/// The kit's `ON_USER_INPUT_REQUIRED` hooks on a request, and whether it
+/// stands: Python's `OnInputRequiredCallback`, which the kit hands the
+/// handler of a channel it registers.
+pub(crate) type OnInputRequired =
+    Arc<dyn Fn(PendingInputEvent) -> BoxFuture<'static, bool> + Send + Sync>;
+
+/// What runs a request's `ON_USER_INPUT_REQUIRED` hooks.
+enum Announcer {
+    /// The turn the request is made in.
+    Turn(TurnHost),
+    /// The kit its channel is registered on, for a request made outside a
+    /// turn.
+    Kit(OnInputRequired),
+}
+
+impl Announcer {
+    /// Runs the hooks on `event`: whether the request stands.
+    async fn announce(self, event: PendingInputEvent) -> bool {
+        match self {
+            Self::Turn(host) => host.user_input_required(event).await,
+            Self::Kit(on_input_required) => on_input_required(event).await,
+        }
+    }
+}
 
 impl std::fmt::Debug for HumanInputHandler {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -161,6 +191,21 @@ impl HumanInputHandler {
         Ok(registration)
     }
 
+    /// Runs `on_input_required`, the kit's `ON_USER_INPUT_REQUIRED` hooks,
+    /// for the requests of `channel_id` made outside a turn, until the
+    /// channel's scope closes: a kit hands it at the channel's
+    /// registration, as Python's kit hands `_set_on_input_required` its
+    /// callback.
+    pub(crate) fn set_on_input_required(
+        &self,
+        channel_id: &str,
+        on_input_required: OnInputRequired,
+    ) {
+        self.state()
+            .on_input_required
+            .insert(channel_id.to_owned(), on_input_required);
+    }
+
     /// Settles the requests of `options.channel_id`, every request when
     /// `None`, and stops their notifications: each still pending is
     /// rejected, read by its waiter as given up (Python's `RuntimeError`).
@@ -183,6 +228,7 @@ impl HumanInputHandler {
                 None => {
                     state.closed = true;
                     state.registrations.clear();
+                    state.on_input_required.clear();
                 }
                 Some(channel) => {
                     if registration
@@ -192,6 +238,7 @@ impl HumanInputHandler {
                     }
                     state.closed_channels.insert(channel.clone());
                     state.registrations.remove(channel);
+                    state.on_input_required.remove(channel);
                 }
             }
             let owned: Vec<String> = state
@@ -322,9 +369,9 @@ impl HumanInputHandler {
             if let Some(inputs) = &inputs {
                 state.turn_of.insert(pending_id, Arc::clone(inputs));
             }
-            // The hooks are run through the turn, for a channel this
-            // handler serves.
-            turn.filter(|_| registered(&state, &record.channel_id))
+            // The hooks are run through the turn, else the kit, for a
+            // channel this handler serves.
+            announcer(&state, turn, &record.channel_id)
         };
         if notified.is_some() || inputs.is_some() {
             let mut event = PendingInputEvent::new(
@@ -344,8 +391,8 @@ impl HumanInputHandler {
     }
 
     /// Starts the notification of `event`, off the waiting path: the
-    /// request's owner told first, then `host`'s hooks (RFC §10.6.5).
-    fn notify(&self, event: PendingInputEvent, host: Option<TurnHost>) {
+    /// request's owner told first, then `announcer`'s hooks (RFC §10.6.5).
+    fn notify(&self, event: PendingInputEvent, announcer: Option<Announcer>) {
         let weak = Arc::downgrade(&self.shared);
         let channel = event.channel_id.clone();
         let number = {
@@ -353,8 +400,11 @@ impl HumanInputHandler {
             state.next_notification = state.next_notification.saturating_add(1);
             state.next_notification
         };
-        let spawner = host.clone();
-        let task = crate::keep_context(notification(Weak::clone(&weak), event, host, number));
+        let spawner = match &announcer {
+            Some(Announcer::Turn(host)) => Some(host.clone()),
+            Some(Announcer::Kit(_)) | None => None,
+        };
+        let task = crate::keep_context(notification(Weak::clone(&weak), event, announcer, number));
         let abort = match spawner {
             Some(host) => host.spawn(Box::pin(task)),
             None => Some(tokio::spawn(task).abort_handle()),
@@ -632,12 +682,12 @@ impl InputSettler for HumanInputHandler {
 }
 
 /// The notification `number` of `event`: the turn's owner told, then
-/// `host`'s `ON_USER_INPUT_REQUIRED` hooks, a block rejecting the request
-/// (RFC §9.3: they fail open).
+/// `announcer`'s `ON_USER_INPUT_REQUIRED` hooks, a block rejecting the
+/// request (RFC §9.3: they fail open).
 async fn notification(
     shared: Weak<Shared>,
     event: PendingInputEvent,
-    host: Option<TurnHost>,
+    announcer: Option<Announcer>,
     number: u64,
 ) {
     let Some(handler) = shared.upgrade().map(|shared| HumanInputHandler { shared }) else {
@@ -649,9 +699,9 @@ async fn notification(
     };
     if scope_open {
         handler.open_on_owner(&event.pending_id);
-        if let Some(host) = host {
+        if let Some(announcer) = announcer {
             let pending_id = event.pending_id.clone();
-            if !host.user_input_required(event).await {
+            if !announcer.announce(event).await {
                 handler.reject(
                     &pending_id,
                     RejectOptions {
@@ -669,6 +719,27 @@ async fn notification(
 fn registered(state: &State, channel_id: &str) -> bool {
     state.registrations.contains_key(channel_id)
         || (channel_id.is_empty() && state.registrations.len() == 1)
+}
+
+/// What runs the hooks of a request of `channel_id`, for a channel the
+/// handler serves: the turn it is made in, else the kit that registered
+/// the channel, the one kit for a request naming no channel (Python's
+/// `_callback_for`).
+fn announcer(state: &State, turn: Option<TurnHost>, channel_id: &str) -> Option<Announcer> {
+    if !registered(state, channel_id) {
+        return None;
+    }
+    if let Some(host) = turn {
+        return Some(Announcer::Turn(host));
+    }
+    let kit = match state.on_input_required.get(channel_id) {
+        Some(kit) => Some(kit),
+        None if channel_id.is_empty() && state.on_input_required.len() == 1 => {
+            state.on_input_required.values().next()
+        }
+        None => None,
+    };
+    kit.map(|kit| Announcer::Kit(Arc::clone(kit)))
 }
 
 /// The request `pending_id`, still pending, given up by the handler for

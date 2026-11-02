@@ -1073,6 +1073,12 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             human.handler().close(options).await;
         }
     }
+
+    /// The handler its person's tools keep their requests in, which the
+    /// kit wires at registration, as Python's `_wire_ai_channel`.
+    fn human_input_handler(&self) -> Option<roomkit::human_input::HumanInputHandler> {
+        Some(self.human_input.as_ref()?.0.handler().clone())
+    }
 }
 
 /// Whether `event` is an instruction that stands alone, which reads none

@@ -10,6 +10,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ON_AI_RESPONSE`, what the failed round had handed the room as its last
   segment (RFC §6.4, RMK-1199), as Python's: `["Let me look.", "Partial
   answer"]` where the report read `["Let me look."]`.
+- A human-input request an AI channel's handler takes outside the kit's
+  turns, as from a host's webhook or job, fires the kit's
+  `ON_USER_INPUT_REQUIRED` hooks and emits `user_input_required`, as
+  Python's (RFC §9.3, RMK-1201): the kit wires the channel's handler when
+  it registers the channel, a shared handler's requests reaching the kit
+  of their channel. It was told to nobody.
 - `HumanInputHandler::wait` returns an answer accepted as its bound
   passes, as Python's (RFC §9.3, RMK-1201): `resolve()` from another
   thread could return `true` after the timeout fired and before the wait

@@ -312,3 +312,132 @@ async fn the_handler_s_timeout_bounds_the_call_not_the_channel_s() {
         )]
     );
 }
+
+/// What a kit saw of the requests of its agent: the ids its
+/// `ON_USER_INPUT_REQUIRED` hooks were handed, and its
+/// `user_input_required` events.
+struct Seen {
+    requests: Arc<Mutex<Vec<String>>>,
+    events: tokio::sync::mpsc::UnboundedReceiver<roomkit::FrameworkEvent>,
+}
+
+/// A kit whose agent `agent` asks a person through `shared`, its room
+/// `room` created, and what it sees of the agent's requests.
+async fn kit_asking_through(
+    shared: &HumanInputHandler,
+    agent: &str,
+    room: &str,
+) -> (roomkit::RoomKit, Seen) {
+    use roomkit::model::{ChannelId, RoomId};
+    use roomkit::{CreateRoomOptions, RoomKit, RoomKitOptions};
+    use roomkit_ai::AiChannel;
+
+    let options = HumanInputToolHandlerOptions {
+        handler: Some(shared.clone()),
+        ..HumanInputToolHandlerOptions::default()
+    };
+    let human = HumanInputToolHandler::new(["AskUser"], options).unwrap();
+    let options = AiChannelOptions {
+        human_input_handler: Some(human),
+        ..AiChannelOptions::default()
+    };
+    let model = ScriptedProvider::new([ScriptedRound::answering("Done.")]);
+    let agent = AiChannel::new(ChannelId::new(agent).unwrap(), model, options).unwrap();
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(agent).unwrap();
+    let options = CreateRoomOptions {
+        room_id: Some(RoomId::new(room).unwrap()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(options).await.unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&requests);
+    kit.hook(
+        HookTrigger::OnUserInputRequired,
+        move |event: PendingInputEvent, _context: RoomContext| {
+            recorded.lock().unwrap().push(event.pending_id);
+            async { Ok(HookResult::allow(AllowOptions::default())) }
+        },
+        HookOptions::default(),
+    )
+    .unwrap();
+    let (emitted, events) = tokio::sync::mpsc::unbounded_channel();
+    kit.on("user_input_required", move |event| {
+        drop(emitted.send(event));
+        async {}
+    })
+    .unwrap();
+    (kit, Seen { requests, events })
+}
+
+// Python: tests/test_human_input.py::test_shared_handler_routes_framework_callbacks_by_channel
+#[tokio::test]
+async fn a_shared_handler_s_requests_fire_the_hooks_of_their_channel_s_kit() {
+    use roomkit::human_input::CreateDetachedOptions;
+
+    let shared = HumanInputHandler::default();
+    let (first_kit, mut first) = kit_asking_through(&shared, "ai-first", "room-first").await;
+    let (second_kit, mut second) = kit_asking_through(&shared, "ai-second", "room-second").await;
+
+    // Asked outside every turn, as from a host's webhook or job.
+    let asked = |room: &str, agent: &str| CreateDetachedOptions {
+        room_id: room.to_owned(),
+        channel_id: agent.to_owned(),
+        ..CreateDetachedOptions::default()
+    };
+    let first_request = shared
+        .create_detached("AskUser", Metadata::new(), asked("room-first", "ai-first"))
+        .await
+        .unwrap();
+    let second_request = shared
+        .create_detached(
+            "AskUser",
+            Metadata::new(),
+            asked("room-second", "ai-second"),
+        )
+        .await
+        .unwrap();
+
+    let within = Duration::from_secs(1);
+    let first_event = tokio::time::timeout(within, first.events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let second_event = tokio::time::timeout(within, second.events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let named = |event: &roomkit::FrameworkEvent| {
+        (
+            event.channel_id.as_ref().map(ToString::to_string),
+            event.data["pending_id"].clone(),
+        )
+    };
+    assert_eq!(
+        named(&first_event),
+        (Some("ai-first".to_owned()), json!(first_request.pending_id))
+    );
+    assert_eq!(
+        named(&second_event),
+        (
+            Some("ai-second".to_owned()),
+            json!(second_request.pending_id)
+        )
+    );
+    assert!(first.events.try_recv().is_err());
+    assert!(second.events.try_recv().is_err());
+    assert_eq!(
+        first.requests.lock().unwrap().as_slice(),
+        std::slice::from_ref(&first_request.pending_id)
+    );
+    assert_eq!(
+        second.requests.lock().unwrap().as_slice(),
+        std::slice::from_ref(&second_request.pending_id)
+    );
+
+    shared.release(&first_request.pending_id);
+    shared.release(&second_request.pending_id);
+    first_kit.close().await.unwrap();
+    second_kit.close().await.unwrap();
+}
