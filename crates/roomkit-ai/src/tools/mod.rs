@@ -15,6 +15,7 @@
 
 mod builder;
 mod handler;
+pub(crate) mod owner;
 mod policy;
 pub(crate) mod repair;
 pub(crate) mod schema;

@@ -620,9 +620,12 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         let tools = ToolContext::new(context.room.id.clone(), self.channel_id.clone())
             .within(turn.clone())
             .standing_alone(stands_alone);
+        // The tools the room's owner serves this turn join the agent's own
+        // (RFC §10.6.5).
+        let toolbox = crate::tools::owner::with_owner_tools(&self.toolbox, turn.as_ref())?;
         let looped = Loop {
             provider: Arc::clone(&self.provider),
-            toolbox: Arc::clone(&self.toolbox),
+            toolbox,
             policy: self.policy.clone(),
             bounds: self.bounds.clone(),
             system_prompt,
