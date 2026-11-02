@@ -154,3 +154,6 @@ impl Drop for Finishing<'_> {
             .finish(self.task_id, &self.cancel, self.cancelled);
     }
 }
+
+#[cfg(test)]
+mod tests;

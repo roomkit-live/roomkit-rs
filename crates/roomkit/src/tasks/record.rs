@@ -174,6 +174,12 @@ impl TaskCancel {
         }
     }
 
+    /// Whether `channel_id` asked for this cancel.
+    #[cfg(test)]
+    pub(crate) fn asked(&self, channel_id: &str) -> bool {
+        lock(&self.callers).contains(channel_id)
+    }
+
     /// Whether the cancel cancelled the task, once it ended.
     pub(crate) async fn outcome(&self) -> bool {
         let mut cancelled = self.cancelled.subscribe();

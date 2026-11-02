@@ -36,6 +36,8 @@ pub(crate) mod text;
 pub use self::delegated::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, WaitOptions};
 pub(crate) use self::held::{Claim, HeldTasks, spawn_apart, until_ended};
 pub(crate) use self::hosted::HostTasks;
+#[cfg(test)]
+pub(crate) use self::record::ENDED_ROOM_TASKS_KEPT;
 pub(crate) use self::record::{AGENT_REACH, RoomTaskRecord, TaskCancel, TaskCancels, TaskReach};
 pub(crate) use self::result_tool::ResultTool;
 pub use self::runner::{InMemoryTaskRunner, OnCompleteCallback, SubmitOptions, TaskRunner};
