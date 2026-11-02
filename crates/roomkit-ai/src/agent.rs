@@ -16,19 +16,14 @@ use roomkit::model::{
 };
 use roomkit::{
     AgentIdentity, Channel, ChannelAddressing, ChannelDeclaration, ChannelError, CountryCode,
-    DeliveryStream,
+    DeliveryStream, get_conversation_state,
 };
-use serde_json::Value;
 
 use crate::channel::{AiChannel, AiChannelOptions};
 use crate::error::AiError;
 use crate::provider::AiProvider;
 use crate::steering::SteerOptions;
 use crate::tools::ToolHandler;
-
-/// The room metadata key Python's conversation state is stored under
-/// (`roomkit.orchestration.state`).
-const CONVERSATION_STATE: &str = "_conversation_state";
 
 /// What [`Agent::new`] takes beside the channel's id and provider:
 /// Python's `Agent(channel_id, *, provider, name=None, role=None,
@@ -333,12 +328,9 @@ impl IdentityPrompt {
 
 /// The language `room`'s conversation state sets for its agents, if any:
 /// its `context`'s `language` (Python's `handler.set_language()`).
-pub(crate) fn room_language(room: &Room) -> Option<&str> {
-    room.metadata
-        .get(CONVERSATION_STATE)?
-        .get("context")?
-        .get("language")
-        .and_then(Value::as_str)
+pub(crate) fn room_language(room: &Room) -> Option<String> {
+    let state = get_conversation_state(room).ok()?;
+    state.context.get("language")?.as_str().map(str::to_owned)
 }
 
 impl<P: AiProvider> Channel for Agent<P> {
