@@ -165,9 +165,8 @@ impl<S: ConversationStore> Drop for Unstarted<S> {
         let Some(ending) = self.ending.take() else {
             return;
         };
-        let refused = match spawn_apart(&self.kit.inner.tasks, ending) {
-            Ok(_) => return,
-            Err(refused) => refused,
+        let Err(refused) = spawn_apart(&self.kit.inner.tasks, ending) else {
+            return;
         };
         // The kit spawns no more work, its close cutting or over: the end
         // runs all the same, apart, its completion callback among it, as

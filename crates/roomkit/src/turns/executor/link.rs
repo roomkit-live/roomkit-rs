@@ -309,7 +309,7 @@ impl HostLink {
                     kind: "RuntimeError".to_owned(),
                     message: format!(
                         "The turn has ended: tool {} is not sent to the room owner",
-                        repr(&name)
+                        repr(name)
                     ),
                 };
             }
@@ -333,7 +333,7 @@ impl HostLink {
                 kind: "TypeError".to_owned(),
                 message: format!(
                     "the arguments of tool {} cannot cross the turn backend: {why}",
-                    repr(&name)
+                    repr(name)
                 ),
             };
         }
