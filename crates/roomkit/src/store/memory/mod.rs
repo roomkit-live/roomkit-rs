@@ -405,7 +405,7 @@ impl ConversationStore for InMemoryStore {
             return Ok(None);
         };
         for key in &options.unset {
-            record.room.metadata.remove(key);
+            record.room.metadata.shift_remove(key);
         }
         record.room.metadata.extend(patch);
         record.room.updated_at = super::written::now();
@@ -581,7 +581,7 @@ impl ConversationStore for InMemoryStore {
         let Some(record) = rooms.get_mut(room_id) else {
             return Ok(());
         };
-        record.room.metadata.remove(key);
+        record.room.metadata.shift_remove(key);
         match value {
             Some(value) => record.private.insert(key.to_owned(), value),
             None => record.private.remove(key),

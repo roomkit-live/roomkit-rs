@@ -85,7 +85,7 @@ pub(crate) fn metadata(mut parsed: Metadata, caller: &Metadata, standalone: bool
             parsed.insert(key.clone(), value.clone());
         }
     }
-    parsed.remove(STANDALONE);
+    parsed.shift_remove(STANDALONE);
     if standalone {
         parsed.insert(STANDALONE.to_owned(), Value::Bool(true));
     }
@@ -136,7 +136,7 @@ pub(crate) fn keep_checked(original: &RoomEvent, modified: &mut RoomEvent) {
                 .insert(STANDALONE.to_owned(), word.clone());
         }
         None => {
-            modified.metadata.remove(STANDALONE);
+            modified.metadata.shift_remove(STANDALONE);
         }
     }
 }
@@ -154,7 +154,7 @@ fn keep_fingerprint(original: &RoomEvent, modified: &mut RoomEvent) {
                 .insert(INSTRUCTION.to_owned(), value.clone());
         }
         Some(_) | None => {
-            modified.metadata.remove(INSTRUCTION);
+            modified.metadata.shift_remove(INSTRUCTION);
         }
     }
 }
@@ -257,7 +257,7 @@ pub(crate) fn mark_response(response: &mut RoomEvent, trigger: &RoomEvent) {
 /// instruction, a hook's injected event (gap G-065). The RFC defines the
 /// key on a response to an instruction only, where the pipeline writes it.
 pub(crate) fn clear_fingerprint(event: &mut RoomEvent) {
-    event.metadata.remove(INSTRUCTION);
+    event.metadata.shift_remove(INSTRUCTION);
 }
 
 #[cfg(test)]
@@ -457,7 +457,7 @@ mod tests {
         #[test]
         fn a_modify_keeps_the_instruction_s_standalone_word() {
             let kept = replaced(|event| {
-                event.metadata.remove(STANDALONE);
+                event.metadata.shift_remove(STANDALONE);
             });
             assert!(is_standalone(&kept));
         }
@@ -518,7 +518,7 @@ mod tests {
                 .metadata
                 .insert(INSTRUCTION.to_owned(), json!("Offer a refund."));
             let mut modified = message.clone();
-            modified.metadata.remove(INSTRUCTION);
+            modified.metadata.shift_remove(INSTRUCTION);
             keep_checked(&message, &mut modified);
             assert_eq!(modified.metadata.get(INSTRUCTION), None);
         }

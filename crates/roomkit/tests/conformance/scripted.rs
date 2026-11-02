@@ -549,7 +549,7 @@ impl Channel for ScriptedChannel {
             .unwrap_or_default();
         let mut held = reaction.clone();
         if let Some(held) = held.as_object_mut() {
-            held.remove("fail");
+            held.shift_remove("fail");
         }
         perform(&run, &held, &Scope::in_room(&room_id)).await?;
         let stop_after = reaction.get("stop_after").and_then(Value::as_str);

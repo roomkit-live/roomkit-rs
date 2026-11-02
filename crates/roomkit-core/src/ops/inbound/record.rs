@@ -197,7 +197,7 @@ impl RecordWork {
     /// stored `BLOCKED` takes no author record, one it came with dropped
     /// (RFC §10.1 step 12).
     fn commit(&mut self, cx: &mut Cx<'_>) {
-        self.record.metadata.remove(authors::AUTHOR);
+        self.record.metadata.shift_remove(authors::AUTHOR);
         let request = StoreRequest::Commit {
             event: Box::new(self.record.clone()),
             target: None,

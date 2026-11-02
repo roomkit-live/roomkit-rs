@@ -351,7 +351,7 @@ pub trait ConversationStore: Send + Sync + 'static {
                 return Ok(None);
             };
             for key in &options.unset {
-                room.metadata.remove(key);
+                room.metadata.shift_remove(key);
             }
             room.metadata.extend(patch);
             room.updated_at = written::now();

@@ -111,6 +111,10 @@ pub(super) struct Call {
 }
 
 /// What a run takes in before its next poll, in the order it came.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a mail is moved once, from the queue to the run: an answer carries its outcome whole"
+)]
 enum Mail {
     /// The answer to one of its effects.
     Answer(EffectId, Outcome),

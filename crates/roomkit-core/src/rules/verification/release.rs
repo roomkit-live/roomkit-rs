@@ -244,7 +244,7 @@ mod tests {
         let (updates, cancelled) = restoring(&event).unwrap();
         assert_eq!(updates.visibility, Some(Visibility::All));
         assert!(cancelled);
-        event.metadata.remove(HELD_KEY);
+        event.metadata.shift_remove(HELD_KEY);
         assert!(restoring(&event).is_none());
     }
 }

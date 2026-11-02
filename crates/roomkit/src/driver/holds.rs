@@ -83,6 +83,10 @@ pub(super) enum Waited<'kit> {
 }
 
 /// What a hold comes to.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a hold is moved once, to the run that asked: an answer carries its outcome whole"
+)]
 pub(super) enum Hold<'kit> {
     /// Answered at once.
     Now(Outcome),

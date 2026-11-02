@@ -6,6 +6,11 @@ allow-indexing-slicing-in-tests = true
 allow-dbg-in-tests = true
 allow-print-in-tests = true
 
+# RoomKitError is 128 bytes since a map keeps its members' order, as
+# Python's dict does (RMK-1198): its delivery failure carries the provider's
+# result whole, metadata included.
+large-error-threshold = 136
+
 # Product names read as words in documentation, not as code.
 doc-valid-idents = ["RoomKit", "PyO3", "WhatsApp", "OpenAI", "OpenRouter", "DeepSeek", ".."]
 
@@ -17,4 +22,6 @@ doc-valid-idents = ["RoomKit", "PyO3", "WhatsApp", "OpenAI", "OpenRouter", "Deep
 disallowed-methods = [
     { path = "std::time::SystemTime::now", reason = "read the time from the Environment" },
     { path = "std::time::Instant::now", reason = "read the time from the Environment" },
+    { path = "serde_json::Map::remove", reason = "swaps the last member into its place: shift_remove keeps the order Python keeps (RMK-1198)" },
+    { path = "serde_json::Map::remove_entry", reason = "swaps the last member into its place: shift_remove keeps the order Python keeps (RMK-1198)" },
 ]

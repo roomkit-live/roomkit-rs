@@ -137,7 +137,7 @@ pub(super) fn blocked(
 ) -> Committing {
     event.status = EventStatus::Blocked;
     event.blocked_by = Some(blocked_by.clone());
-    event.metadata.remove(AUTHOR);
+    event.metadata.shift_remove(AUTHOR);
     cx.io
         .notify(Notice::FrameworkEvent(FrameworkEvent::EventBlocked {
             room_id: event.room_id.clone(),

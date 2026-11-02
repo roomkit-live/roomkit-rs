@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A JSON object keeps its members in the order they were written, as
+  Python's dict does (RMK-1198): serde_json's `preserve_order` is on for
+  the workspace. A tool's JSON result `{"total": 3, "items": [...],
+  "currency": "EUR"}` reaches the model so, where it read `{"currency",
+  "items", "total"}`; a call's arguments, a stored metadata map and a
+  metadata record's keys keep their order too. A key removed from a map
+  leaves the others in place (`shift_remove`; clippy refuses
+  `Map::remove`, which swaps the last one in).
 - A task's result handed back to nobody is logged as Python's
   `_log_not_delivered` logs it (RFC §15.2, RMK-1208): `Result for
   assistant in room r not delivered: unavailable (no_transport)`, a

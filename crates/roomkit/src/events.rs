@@ -145,11 +145,11 @@ fn placed(notice: &Notice, timestamp: Timestamp) -> FrameworkEvent {
         Ok(Value::Object(fields)) => fields,
         _ => Metadata::new(),
     };
-    let r#type = match fields.remove("event") {
+    let r#type = match fields.shift_remove("event") {
         Some(Value::String(name)) => name,
         _ => "unknown".to_owned(),
     };
-    let mut id = |name: &str| match fields.remove(name) {
+    let mut id = |name: &str| match fields.shift_remove(name) {
         Some(Value::String(id)) => Some(id),
         _ => None,
     };

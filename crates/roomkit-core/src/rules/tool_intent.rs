@@ -116,7 +116,7 @@ pub fn declares_intent(parameters: &Value) -> bool {
 /// Takes the reserved property out of `call`'s arguments, its value
 /// normalized as the call's intent; leaves a call without it as it is.
 pub fn take_intent(call: &mut ToolCall) {
-    if let Some(value) = call.arguments.remove(INTENT_PROPERTY) {
+    if let Some(value) = call.arguments.shift_remove(INTENT_PROPERTY) {
         call.intent = normalized_intent(&value);
     }
 }

@@ -318,7 +318,7 @@ impl AuthorRegister {
             return None;
         };
         let mut data = value.clone();
-        data.remove("names");
+        data.shift_remove("names");
         Some(Self {
             data,
             names: names.clone(),
@@ -522,7 +522,7 @@ pub(crate) fn with_author(
     context: &RoomContext,
     timeline: Option<&[RoomEvent]>,
 ) -> Result<Option<Metadata>, NeedsTimeline> {
-    event.metadata.remove(AUTHOR);
+    event.metadata.shift_remove(AUTHOR);
     let named = event.source.participant_id.is_some()
         || event.metadata.get(SENDER_NAME).is_some_and(truthy);
     if !named || event.status == EventStatus::Blocked {
@@ -631,7 +631,7 @@ pub(crate) fn keep_record(metadata: &mut Metadata, stored: &RoomEvent) {
             metadata.insert(AUTHOR.to_owned(), record.clone());
         }
         None => {
-            metadata.remove(AUTHOR);
+            metadata.shift_remove(AUTHOR);
         }
     }
 }

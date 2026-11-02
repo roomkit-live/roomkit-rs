@@ -116,8 +116,9 @@ async fn an_echo_agent_answers_an_instruction_the_room_never_stores() {
             1,
             Some(&instruction.id),
             Some(
-                "{\"length\":19,\"sha256\":\
-                 \"3554dc2dd06b3ebfe63a746bc71c12b591d2a0173185087859a8c2d7e912ca6e\"}"
+                "{\"sha256\":\
+                 \"3554dc2dd06b3ebfe63a746bc71c12b591d2a0173185087859a8c2d7e912ca6e\",\
+                 \"length\":19}"
                     .to_owned()
             ),
         )

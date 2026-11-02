@@ -45,8 +45,8 @@ pub(crate) enum Record {
         old: Visibility,
         new: Visibility,
     },
-    /// A binding's metadata changed: the keys the update named, in key
-    /// order.
+    /// A binding's metadata changed: the keys the update named, in the
+    /// order it named them.
     MetadataUpdated {
         channel_id: ChannelId,
         keys: Vec<String>,
@@ -519,6 +519,30 @@ mod tests {
                 }),
             ]
         );
+    }
+
+    /// A metadata record names the keys in the order the update gave them,
+    /// as Python's `list(metadata.keys())` (rfc-gaps G-046, RMK-1198).
+    #[test]
+    fn a_metadata_record_names_the_keys_in_the_update_s_order() {
+        let old = ChannelBinding::at(
+            channel("ws-a"),
+            RoomId::new("r1").unwrap(),
+            crate::model::ChannelType::WEBSOCKET,
+            crate::model::ChannelCategory::default(),
+            crate::model::ChannelDirection::default(),
+            Timestamp::from_unix_millis(0).unwrap(),
+        );
+        let mut update = Metadata::new();
+        update.insert("zone".to_owned(), json!("eu"));
+        update.insert("alpha".to_owned(), json!(1));
+        let mut new = old.clone();
+        new.metadata.clone_from(&update);
+        let keys: Vec<Value> = Record::of_update(&old, &new, &update)
+            .iter()
+            .map(|record| written(record)["data"]["keys"].clone())
+            .collect();
+        assert_eq!(keys, [json!(["zone", "alpha"])]);
     }
 
     /// A timer's record names the threshold and the instant it fell due, in

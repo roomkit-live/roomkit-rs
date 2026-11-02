@@ -162,7 +162,7 @@ pub(crate) fn patch_metadata(
         return Ok(None);
     };
     for key in unset {
-        room.metadata.remove(key);
+        room.metadata.shift_remove(key);
     }
     room.metadata.extend(patch);
     room.updated_at = now;
@@ -260,7 +260,7 @@ pub(crate) fn set_private_state(
         return Ok(());
     };
     write_private(connection, room_id, key, value)?;
-    if room.metadata.remove(key).is_some() {
+    if room.metadata.shift_remove(key).is_some() {
         write(connection, &room, &data)?;
     }
     Ok(())

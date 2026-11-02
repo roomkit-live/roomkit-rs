@@ -356,7 +356,9 @@ mod tests {
     #[test]
     fn open_schema_is_left_alone() {
         let mut open = hub();
-        open.as_object_mut().unwrap().remove("additionalProperties");
+        open.as_object_mut()
+            .unwrap()
+            .shift_remove("additionalProperties");
         assert_eq!(
             folded(&open, json!({ "action": "x", "board_id": "1" })),
             Fold::Untouched

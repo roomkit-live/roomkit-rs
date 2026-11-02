@@ -87,7 +87,7 @@ impl RoomUpdates {
             room.timers.last_activity_at = last_activity_at;
         }
         for key in &self.removed_metadata {
-            room.metadata.remove(key);
+            room.metadata.shift_remove(key);
         }
         room.metadata.extend(
             self.metadata
@@ -103,7 +103,7 @@ impl RoomUpdates {
                         .insert(key.clone(), serde_json::Value::Object(value.clone()));
                 }
                 None => {
-                    room.metadata.remove(key);
+                    room.metadata.shift_remove(key);
                 }
             }
         }

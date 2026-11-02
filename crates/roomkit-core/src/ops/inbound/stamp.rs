@@ -80,9 +80,9 @@ pub(crate) fn stamp_trigger(
     }
     instructions::clear_fingerprint(&mut event);
     // Which text is the runtime's (RFC §6.4): never a sender's to say.
-    event.metadata.remove(RUNTIME_RECORD);
+    event.metadata.shift_remove(RUNTIME_RECORD);
     // Which message the runtime holds for verification (RFC §11.7.3).
-    event.metadata.remove(HELD_KEY);
+    event.metadata.shift_remove(HELD_KEY);
     reset_commit_fields(event)
 }
 
@@ -103,7 +103,7 @@ fn trigger_type(event: &mut RoomEvent, message: &InboundMessage) {
              it stays what the caller sent"
         );
         event.r#type = message.event_type;
-        event.metadata.remove(instructions::STANDALONE);
+        event.metadata.shift_remove(instructions::STANDALONE);
     }
 }
 

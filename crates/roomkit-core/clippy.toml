@@ -30,6 +30,8 @@ disallowed-methods = [
     { path = "std::io::stdout", reason = "the core performs no I/O" },
     { path = "std::io::stderr", reason = "the core performs no I/O" },
     { path = "std::process::exit", reason = "the core returns errors, the host decides" },
+    { path = "serde_json::Map::remove", reason = "swaps the last member into its place: shift_remove keeps the order Python keeps (RMK-1198)" },
+    { path = "serde_json::Map::remove_entry", reason = "swaps the last member into its place: shift_remove keeps the order Python keeps (RMK-1198)" },
 ]
 
 disallowed-types = [

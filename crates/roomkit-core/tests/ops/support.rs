@@ -1586,7 +1586,7 @@ impl Sim {
     /// store that keeps a room's private state apart does (RFC §14.1).
     fn update_room(&mut self, mut updates: RoomUpdates) {
         if let Some(register) = updates.private_state.remove("author_register") {
-            self.room.metadata.remove("author_register");
+            self.room.metadata.shift_remove("author_register");
             self.author_register = register;
         }
         updates.apply(&mut self.room);

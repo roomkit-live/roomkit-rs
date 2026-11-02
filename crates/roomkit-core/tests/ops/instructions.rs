@@ -763,7 +763,7 @@ mod the_response {
         let mut sim = with_agent();
         hook_seeing(&mut sim, "redactor", |event| {
             let mut redacted = event.clone();
-            redacted.metadata.remove("instruction");
+            redacted.metadata.shift_remove("instruction");
             HookResult::modify(redacted, ModifyOptions::default())
         });
         sim.send(instruction()).unwrap();
@@ -856,7 +856,7 @@ mod an_instruction_key_the_pipeline_did_not_write {
     fn redacting(sim: &mut Sim) {
         hook_seeing(sim, "redactor", |event| {
             let mut redacted = event.clone();
-            redacted.metadata.remove("instruction");
+            redacted.metadata.shift_remove("instruction");
             HookResult::modify(redacted, ModifyOptions::default())
         });
     }

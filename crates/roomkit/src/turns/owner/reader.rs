@@ -366,6 +366,10 @@ impl Drop for OwnerTurn {
 }
 
 /// What one read gave the reader.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a read is moved once, to the reader: an item carries its event whole"
+)]
 enum Read {
     Item(RemoteItem),
     Skipped,

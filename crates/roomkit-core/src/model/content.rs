@@ -19,6 +19,10 @@ pub const MAX_COMPOSITE_DEPTH: usize = 5;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Python's content union, each variant its content as a caller builds it: a tool call's maps keep their order (RMK-1198)"
+)]
 pub enum EventContent {
     /// Plain text.
     Text(TextContent),

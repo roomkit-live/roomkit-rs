@@ -517,6 +517,10 @@ pub enum IdentityAnswer {
 /// The driver's answer to an effect, of its request's family, or one of
 /// the answers every request may get.
 #[derive(Clone, Debug, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "an outcome is moved once, from the driver to the operation that asked: the store's carries its record whole"
+)]
 pub enum Outcome {
     /// A hold's answer.
     Hold(HoldOutcome),
@@ -598,6 +602,10 @@ pub enum HoldOutcome {
 
 /// The driver's answer to a [`StoreRequest`].
 #[derive(Clone, Debug, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "an outcome is moved once, from the driver to the operation that asked: a record is carried whole"
+)]
 pub enum StoreOutcome {
     /// The room's context.
     Context(Box<RoomContext>),
