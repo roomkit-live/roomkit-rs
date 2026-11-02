@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A delegated turn's child room is a room for the chain's depth limit and
+  its metadata, as Python's (RFC §8.3, §10.1 step 15, RMK-1188): an agent
+  whose answer would reach `max_chain_depth` is not asked, its `BLOCKED`
+  record and observation stored there and `chain_depth_exceeded` emitted;
+  the agents' room metadata updates drop a key only the framework writes
+  and stamp `updated_at`; a provider's refusal naming no error is reported
+  `provider_send_failed`.
 - A delegated task cut from outside ends `cancelled` once, as Python's
   (RFC §23.3, RMK-1186): an inline delegation whose caller stops waiting,
   or that the kit's close cuts, its worker's turn recorded `cancelled`; a

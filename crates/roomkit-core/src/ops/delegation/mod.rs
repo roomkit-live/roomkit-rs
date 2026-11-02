@@ -13,6 +13,7 @@
 
 mod collected;
 mod nested;
+mod not_asked;
 mod room_path;
 
 use std::collections::VecDeque;
@@ -30,7 +31,7 @@ use super::protocol::{
 use super::{Environment, KitConfig};
 use crate::model::{
     ChannelBinding, ChannelCategory, ChannelId, ErrorRecord, EventStatus, EventType, Metadata,
-    Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Visibility,
+    Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp, Visibility,
 };
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions;
@@ -118,6 +119,11 @@ pub struct DelegatedTurn {
     room_path: Option<Nested<Inbound>>,
     /// The agents whose answer the room's path reads as a stream.
     streamers: Vec<ChannelId>,
+    /// The agents not asked, their answer reaching the chain's depth
+    /// limit, each with its record to commit (RFC §8.3).
+    not_asked: VecDeque<(ChannelBinding, RoomEvent)>,
+    /// The record of an agent not asked being committed.
+    recording: Option<(Nested<CommitRecord>, ChannelBinding)>,
     next_entry: EntryId,
     notices: Vec<Notice>,
     settled: Vec<Settled>,
@@ -153,6 +159,8 @@ impl DelegatedTurn {
             failures: Vec::new(),
             room_path: None,
             streamers: Vec::new(),
+            not_asked: VecDeque::new(),
+            recording: None,
             next_entry: EntryId::first(),
             notices: Vec::new(),
             settled: Vec::new(),
@@ -213,8 +221,14 @@ impl DelegatedTurn {
     }
 
     /// Asks each intelligence channel the description reaches for its
-    /// turn, with what of the room it may read (RFC §7.5 rule 8).
-    fn ask(&mut self, context: &RoomContext, effects: &mut Vec<Effect>) {
+    /// turn, with what of the room it may read (RFC §7.5 rule 8), but one
+    /// whose answer would reach the chain's depth limit (RFC §8.3).
+    fn ask(
+        &mut self,
+        context: &RoomContext,
+        environment: &dyn Environment,
+        effects: &mut Vec<Effect>,
+    ) {
         self.bindings.clone_from(&context.bindings);
         self.asked_context = Some(Box::new(context.clone()));
         let Some(message) = self.committed.clone() else {
@@ -223,6 +237,7 @@ impl DelegatedTurn {
         for binding in &context.bindings {
             if binding.category != ChannelCategory::Intelligence
                 || !permissions::receives(binding, &message)
+                || self.not_asked(binding, &message, environment)
             {
                 continue;
             }
@@ -240,7 +255,7 @@ impl DelegatedTurn {
     /// Once every turn answered: their side effects to store, then their
     /// answers committed, as the trace or by the room's path when a
     /// transport is shared into the room (RFC §23.3 step 5).
-    fn collect(&mut self, effects: &mut Vec<Effect>) {
+    fn collect(&mut self, environment: &dyn Environment, effects: &mut Vec<Effect>) {
         let asked = std::mem::take(&mut self.asked);
         let mut collected = Collected::default();
         for (turn, binding, outcome) in asked {
@@ -252,7 +267,7 @@ impl DelegatedTurn {
             collected.tasks,
             collected.observations,
             collected.metadata,
-            effects,
+            (environment.now(), effects),
         );
         if room_path::shares_a_transport(&self.bindings) {
             self.take_the_room_path(collected.buffered, collected.streamed);
@@ -261,13 +276,14 @@ impl DelegatedTurn {
         }
     }
 
-    /// Stores the side effects the turns returned (RFC §10.1 step 15).
+    /// Stores the side effects the turns returned (RFC §10.1 step 15), the
+    /// room's metadata updates stamped `now` as a room's are.
     fn persist(
         &mut self,
         tasks: Vec<Task>,
         observations: Vec<Observation>,
         metadata: Metadata,
-        effects: &mut Vec<Effect>,
+        (now, effects): (Timestamp, &mut Vec<Effect>),
     ) {
         if !tasks.is_empty() || !observations.is_empty() {
             let write = self.issue(StoreRequest::PersistSideEffects {
@@ -285,6 +301,7 @@ impl DelegatedTurn {
             let write = self.issue(StoreRequest::UpdateRoom {
                 room_id: self.room_id.clone(),
                 updates: RoomUpdates {
+                    updated_at: Some(now),
                     metadata,
                     ..RoomUpdates::default()
                 },
@@ -525,6 +542,8 @@ impl DelegatedTurn {
             && self.reading.is_none()
             && self.persisting.is_empty()
             && self.room_path.is_none()
+            && self.not_asked.is_empty()
+            && self.recording.is_none()
     }
 }
 
@@ -535,12 +554,13 @@ impl Operation for DelegatedTurn {
         let mut effects = Vec::new();
         self.advance_message(environment, &mut effects);
         if let Some(context) = self.loaded.take() {
-            self.ask(&context, &mut effects);
+            self.ask(&context, environment, &mut effects);
         }
+        self.advance_not_asked(environment, &mut effects);
         let all_answered =
             !self.asked.is_empty() && self.asked.iter().all(|(_, _, outcome)| outcome.is_some());
         if all_answered {
-            self.collect(&mut effects);
+            self.collect(environment, &mut effects);
         }
         self.advance_rows(environment, &mut effects);
         self.advance_streams(environment, &mut effects);
@@ -577,6 +597,13 @@ impl Operation for DelegatedTurn {
             .committing
             .as_mut()
             .filter(|(commit, ..)| commit.owns(id))
+        {
+            return commit.complete(id, outcome);
+        }
+        if let Some((commit, _)) = self
+            .recording
+            .as_mut()
+            .filter(|(commit, _)| commit.owns(id))
         {
             return commit.complete(id, outcome);
         }

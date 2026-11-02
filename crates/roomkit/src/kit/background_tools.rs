@@ -93,7 +93,8 @@ impl<S: ConversationStore> RoomKit<S> {
     /// §12.10.4); [`RoomKitError::Value`] for an unknown hand-back;
     /// [`RoomKitError::ChannelNotRegistered`] for an agent the kit does not
     /// hold; [`RoomKitError::Runtime`] for a tool already set up on the
-    /// agent.
+    /// agent; [`RoomKitError::ToolNameCollision`] for its name taken by one
+    /// of the agent's own tools.
     pub fn setup_background(
         &self,
         agent: &ChannelId,
@@ -133,9 +134,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// [`RoomKitError::KitClosed`] once the kit's close started (RFC
     /// §12.10.4); [`RoomKitError::ChannelNotRegistered`] for an agent the
     /// kit does not hold; [`RoomKitError::Runtime`] for tools already set up
-    /// on the agent;
-    /// [`RoomKitError::Value`] for a name the owner serves the agent
-    /// already, neither set up.
+    /// on the agent; [`RoomKitError::ToolNameCollision`] for a name one of
+    /// the agent's own tools takes or the owner serves it already, neither
+    /// set up (Python's `ToolNameCollisionError`).
     pub fn setup_task_tools(&self, agent: &ChannelId) -> Result<(), RoomKitError> {
         self.inner.open()?;
         self.registered_agent(agent)?;

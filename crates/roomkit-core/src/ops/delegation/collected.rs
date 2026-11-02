@@ -5,6 +5,7 @@ use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, Metadata, Observation, RoomEvent, Task,
 };
 use crate::ops::protocol::{CHANNEL_NOT_REGISTERED, ChannelOutcome, EffectId, Outcome, TURN_CUT};
+use crate::rules::attachment;
 
 use super::DelegatedAnswer;
 
@@ -75,7 +76,7 @@ impl Collected {
                 answer.error = error;
                 self.tasks.extend(tasks);
                 self.observations.extend(observations);
-                self.metadata.extend(metadata_updates);
+                self.keep_metadata(&binding.channel_id, metadata_updates);
                 self.buffered.push((slot, binding, response_events));
             }
             Some(Outcome::Channel(ChannelOutcome::Streamed(output))) => {
@@ -83,7 +84,7 @@ impl Collected {
                 answer.record.clone_from(&output.response_metadata);
                 self.tasks.extend(output.tasks);
                 self.observations.extend(output.observations);
-                self.metadata.extend(output.metadata_updates);
+                self.keep_metadata(&binding.channel_id, output.metadata_updates);
                 self.streamed.push((turn, slot, binding));
             }
             // A turn that raised answers nothing, and carries no error to
@@ -94,7 +95,11 @@ impl Collected {
                 self.failed(&binding, raised.error);
             }
             Some(Outcome::Channel(ChannelOutcome::ProviderDelivery(result))) => {
-                let message = result.error.unwrap_or_default();
+                // Python's `ProviderDeliveryError` says so of a refusal that
+                // names no error.
+                let message = result
+                    .error
+                    .unwrap_or_else(|| "provider_send_failed".to_owned());
                 let error = ErrorRecord::new("ProviderDeliveryError", message);
                 log_raised(&binding.channel_id, &error);
                 self.failed(&binding, error);
@@ -112,6 +117,26 @@ impl Collected {
         answer
     }
 
+    /// Keeps the room metadata updates `channel_id`'s turn returned, as a
+    /// room's delivery set keeps them: a key only the framework writes is
+    /// refused (RFC §5.1, §10.1 step 15, gap G-049; Python's
+    /// `without_framework_keys`).
+    fn keep_metadata(&mut self, channel_id: &ChannelId, updates: Metadata) {
+        for (key, value) in updates {
+            if attachment::the_framework_s(&key) {
+                tracing::warn!(
+                    target: "roomkit::tasks",
+                    channel_id = %channel_id,
+                    key = %key,
+                    "a delegated turn's room metadata update names a key only the framework writes; \
+                     the key is refused"
+                );
+                continue;
+            }
+            self.metadata.insert(key, value);
+        }
+    }
+
     /// Keeps `binding`'s turn failure, to report under `generation`.
     fn failed(&mut self, binding: &ChannelBinding, error: ErrorRecord) {
         self.failures.push(Failure {
@@ -126,4 +151,39 @@ impl Collected {
 /// Logs the raise of `channel_id`'s turn, which the task does not carry.
 fn log_raised(channel_id: &ChannelId, error: &ErrorRecord) {
     tracing::warn!(target: "roomkit::tasks", channel = %channel_id, error = %error.message, "a delegated turn raised");
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+    use crate::model::{
+        ChannelCategory, ChannelDirection, ChannelType, ProviderResult, RoomId, Timestamp,
+    };
+
+    // RMK-1188: Python's `ProviderDeliveryError(result)` reads
+    // `result.error or "provider_send_failed"` (core/exceptions.py).
+    #[test]
+    fn a_refusal_naming_no_error_is_reported_as_python_names_it() {
+        let worker = ChannelBinding::at(
+            ChannelId::new("worker").unwrap(),
+            RoomId::new("r::task-1").unwrap(),
+            ChannelType::AI,
+            ChannelCategory::Intelligence,
+            ChannelDirection::Bidirectional,
+            Timestamp::UNIX_EPOCH,
+        );
+        let refused = ChannelOutcome::ProviderDelivery(Box::new(ProviderResult::new(false)));
+        let mut collected = Collected::default();
+
+        collected.take(EffectId::first(), worker, Some(refused.into()), 0);
+
+        let reported: Vec<&str> = collected
+            .failures
+            .iter()
+            .map(|failure| failure.error.message.as_str())
+            .collect();
+        assert_eq!(reported, ["provider_send_failed"]);
+    }
 }
