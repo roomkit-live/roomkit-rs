@@ -30,7 +30,7 @@ impl Request {
             system_prompt: context.system_prompt.clone(),
             messages: context.messages.iter().map(message).collect(),
             tools: context.tools.clone(),
-            temperature: context.temperature,
+            temperature: Some(context.temperature),
             max_tokens: context.max_tokens,
         }
     }

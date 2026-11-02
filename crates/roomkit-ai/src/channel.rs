@@ -40,8 +40,10 @@ const STANDALONE: &str = "standalone";
 pub struct AiChannelOptions {
     /// What every turn's system prompt opens with.
     pub system_prompt: Option<String>,
-    /// How freely the model samples, handed to the provider.
-    pub temperature: Option<f64>,
+    /// How freely the model samples, handed to the provider: Python's
+    /// `float`, 0.7 by default. A model that takes no temperature is the
+    /// provider's to know (`OpenAiConfig::supports_custom_temperature`).
+    pub temperature: f64,
     /// The most tokens a generation writes; `None` leaves it to the
     /// provider's configuration.
     pub max_tokens: Option<u32>,
@@ -97,7 +99,7 @@ impl Default for AiChannelOptions {
     fn default() -> Self {
         Self {
             system_prompt: None,
-            temperature: Some(0.7),
+            temperature: 0.7,
             max_tokens: None,
             max_context_events: 50,
             memory: None,
@@ -182,7 +184,7 @@ pub struct AiChannel<P> {
     policy: ToolPolicy,
     bounds: Bounds,
     system_prompt: Arc<RwLock<Option<String>>>,
-    temperature: Option<f64>,
+    temperature: f64,
     max_tokens: Option<u32>,
     server_instructions: ServerInstructions,
     memory: Arc<dyn MemoryProvider>,

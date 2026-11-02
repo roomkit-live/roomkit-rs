@@ -92,7 +92,7 @@ pub(crate) struct Loop<P> {
     pub(crate) bounds: Bounds,
     pub(crate) system_prompt: Option<String>,
     /// How freely the model samples, handed to the provider.
-    pub(crate) temperature: Option<f64>,
+    pub(crate) temperature: f64,
     /// The most tokens a generation writes, handed to the provider.
     pub(crate) max_tokens: Option<u32>,
     /// The kit's turn, whose hooks each call runs; `None` outside the kit.

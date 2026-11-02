@@ -16,8 +16,8 @@ pub struct AiContext {
     pub messages: Vec<AiMessage>,
     /// The system prompt, when there is one.
     pub system_prompt: Option<String>,
-    /// How freely the model samples; `None` leaves it to the provider.
-    pub temperature: Option<f64>,
+    /// How freely the model samples: Python's `float`, 0.7 by default.
+    pub temperature: f64,
     /// The most tokens the generation writes; `None` leaves it to the
     /// provider's configuration.
     pub max_tokens: Option<u32>,
@@ -32,7 +32,7 @@ impl Default for AiContext {
         Self {
             messages: Vec::new(),
             system_prompt: None,
-            temperature: Some(0.7),
+            temperature: 0.7,
             max_tokens: None,
             tools: Vec::new(),
             metadata: Metadata::new(),

@@ -31,7 +31,7 @@ fn ai_channel_options_defaults_as_python() {
     // roomkit.AIChannel.__init__(system_prompt) = None
     assert!(defaults.system_prompt.is_none());
     // roomkit.AIChannel.__init__(temperature) = 0.7
-    assert_eq!(defaults.temperature, Some(0.7));
+    assert!((defaults.temperature - 0.7).abs() < f64::EPSILON);
     // roomkit.AIChannel.__init__(tool_call_intents) = False
     assert!(!defaults.tool_call_intents);
     // roomkit.AIChannel.__init__(tool_call_intents_required) = False
