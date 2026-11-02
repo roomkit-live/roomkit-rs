@@ -70,7 +70,8 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
             "require_structured_result",
             "max_result_retries",
         ],
-        "task.wait" | "host.wait_task" | "cancel_task" => &["task_id"],
+        "task.wait" | "cancel_task" => &["task_id"],
+        "host.wait_task" => &["task_id", "timeout_ms"],
         "start_task" => &["room_id", "agent_id", "task", "hand_back"],
         "setup_background" => &["agent_id", "worker", "hand_back"],
         "setup_task_tools" => &["agent_id"],
@@ -380,9 +381,11 @@ async fn host_call(
         }
         "host.wait_task" => {
             let task_id: String = field(spec, "task_id")?;
-            let outcome = host
-                .wait_task(&task_id, roomkit::WaitTaskOptions::default())
-                .await;
+            let timeout_ms: Option<u64> = optional(spec, "timeout_ms")?;
+            let options = roomkit::WaitTaskOptions {
+                timeout: timeout_ms.map(std::time::Duration::from_millis),
+            };
+            let outcome = host.wait_task(&task_id, options).await;
             // The failure as it crosses: its kind and its message.
             let waited = |result: &Option<roomkit::tasks::DelegatedTaskResult>| {
                 result.as_ref().map_or(Value::Null, |result| {
