@@ -91,6 +91,7 @@ mod tool_loop;
 mod tool_usage;
 mod tools;
 mod transcript_content;
+mod turn_settings;
 
 pub use self::channel::{AiChannel, AiChannelOptions};
 pub use self::error::AiError;

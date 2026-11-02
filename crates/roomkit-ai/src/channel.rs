@@ -42,6 +42,7 @@ use crate::tools::{
     DynToolset, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, served_by,
 };
 use crate::transcript_content::{Describer, TurnReader};
+use crate::turn_settings::TurnSettings;
 
 /// The metadata word of an instruction that stands alone (RFC §10.1.1
 /// rule 7), as the pipeline writes it.
@@ -777,13 +778,6 @@ impl<P: AiProvider> AiChannel<P> {
     }
 }
 
-/// A turn's setting `key` as `binding`'s metadata sets it, over the
-/// channel's own (Python's `_turn_source`, binding metadata first): `None`
-/// for a `null` there, or a value `read` does not take, as not set.
-fn bound<T>(binding: &ChannelBinding, key: &str, read: impl Fn(&Value) -> Option<T>) -> Option<T> {
-    binding.metadata.get(key).and_then(read)
-}
-
 /// What an AI channel takes: text, rich content and media whatever its
 /// model sees, each media read by the channel itself, so that the event a
 /// turn answers reads as the same event does in its history (RFC §6.4).
@@ -1006,6 +1000,12 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         if !self.answers(&event) {
             return Ok(ChannelOutput::default());
         }
+        let settings = TurnSettings::read(
+            &binding.metadata,
+            self.temperature,
+            self.max_tokens,
+            self.bounds.turn_budget_tokens,
+        )?;
         let stands_alone = stands_alone(&event);
         let turn = current_turn_host();
         let system_prompt = self.turn_system_prompt(&binding, &context, stands_alone);
@@ -1020,15 +1020,13 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             provider: Arc::clone(&self.provider),
             toolbox,
             policy: self.policy.clone(),
-            bounds: self.bounds.clone(),
+            bounds: Bounds {
+                turn_budget_tokens: settings.turn_budget_tokens,
+                ..self.bounds.clone()
+            },
             system_prompt,
-            temperature: bound(&binding, "temperature", Value::as_f64).unwrap_or(self.temperature),
-            max_tokens: bound(&binding, "max_tokens", |tokens| {
-                tokens
-                    .as_u64()
-                    .and_then(|tokens| u32::try_from(tokens).ok())
-            })
-            .or(self.max_tokens),
+            temperature: settings.temperature,
+            max_tokens: settings.max_tokens,
             turn: turn.clone(),
             context: tools,
             intents: self.tool_call_intents,
@@ -1078,6 +1076,9 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             &recalled.memory,
             |said| reader.read(said),
         );
+        // The context takes the settings once the conversation is read, as
+        // Python's AIContext validates them.
+        settings.validated()?;
         looped.place_turn_images(&messages);
         // What the turn's generation hooks leave is its context; a block
         // runs no generation (RFC §6.4).

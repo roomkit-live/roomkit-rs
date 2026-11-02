@@ -40,15 +40,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   agent that leaves and joins again sends the author images its provider
   refused there, replays none of the images its tools returned there, and
   reads the skills active there again from the store.
-- An AI turn takes the `temperature` and `max_tokens` its binding's
-  metadata sets, over the channel's own, as Python's `_turn_settings`
-  (RFC §6.4, Appendix A.9, RMK-1237), a `null` there not set. Unlike
-  Python's, which hands any value to its model's validation, a
-  temperature that is no JSON number and a max tokens that is no JSON
-  integer from 0 to `u32::MAX` (a `64.0`, a `"64"`, a `-5`) are not set
-  either. The binding's other settings
-  (thinking, reasoning effort, response schema, turn budgets) are not
-  read yet.
+- An AI turn takes the `temperature`, `max_tokens` and
+  `turn_budget_tokens` its binding's metadata sets, over the channel's
+  own, as Python's `_turn_settings` and `_turn_budget` (RFC §6.4,
+  Appendix A.9, RMK-1237), a `null` there not set. The temperature and
+  the max tokens are read as pydantic's lax mode reads them (`"0.3"`
+  gives 0.3, `64.0` and `"100"` give 64 and 100, `true` gives 1); any
+  other value (`"hot"`, `1.5`) fails the turn with pydantic's
+  `ValidationError` text, and so does a max tokens outside `u32` (`-5`,
+  which Python sends). A token budget that is not a positive integer
+  (`"1200"`, `64.0`, `0`) fails the turn with Python's `ValueError`. The
+  binding's thinking, reasoning effort, response schema and cost budget
+  come with those features.
 - A buffered reply's end and usage go under its caller's `turns`, by its
   channel, read off its turn's record or else the last of its messages
   that names one, as
