@@ -9,7 +9,8 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::collections::{BTreeSet, VecDeque};
-use std::future::{pending, ready};
+use std::future::{Future, pending, ready};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
@@ -22,14 +23,18 @@ use roomkit::model::{
     Participant, ParticipantId, Room, RoomEvent, RoomId, Task,
 };
 use roomkit::model::{
-    ChannelOutput, EventContent, EventType, RoomContext, TaskStatus, ToolCallContent,
+    ChannelCategory, ChannelOutput, DeliveryOutcome, DeliveryOutcomeStatus, EventContent,
+    EventType, RoomContext, TaskStatus, ToolCallContent,
 };
 use roomkit::tasks::{DelegatedTask, SubmitOptions, TaskRunner, WaitOptions};
-use roomkit::testing::{EchoAgent, EchoAgentOptions};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions, idle,
+};
 use roomkit::{
-    CancelTaskOptions, ConversationStore, CreateRoomOptions, DelegateOptions, HookExecution,
-    HookOptions, HookTrigger, InMemoryStore, ResponseItem, RoomKit, RoomKitError, RoomKitOptions,
-    StartTaskOptions, StoreError, StoreFailure, current_turn_host, store,
+    AttachChannelOptions, CancelTaskOptions, ConversationStore, CreateRoomOptions, DelegateOptions,
+    DeliveryContext, DeliveryStrategy, HookExecution, HookOptions, HookTrigger, InMemoryStore,
+    ResponseItem, RoomKit, RoomKitError, RoomKitOptions, StartTaskOptions, StoreError,
+    StoreFailure, current_turn_host, store,
 };
 use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::Notify;
@@ -801,5 +806,80 @@ async fn a_task_cancelled_while_its_trace_stores_a_row_closes_its_response() {
             ]
         )
     );
+    kit.close().await.unwrap();
+}
+
+/// A delivery strategy that records whether each delivery it is given is an
+/// instruction, and sends it.
+#[derive(Default)]
+struct RecordsInstructions {
+    given: Mutex<Vec<bool>>,
+}
+
+impl DeliveryStrategy for RecordsInstructions {
+    fn deliver(
+        &self,
+        ctx: DeliveryContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<DeliveryOutcome>, RoomKitError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            self.given.lock().unwrap().push(ctx.instruction);
+            Ok(Some(DeliveryOutcome::new(DeliveryOutcomeStatus::Sent)))
+        })
+    }
+}
+
+// Python: tests/tasks/test_delegation_result_delivery.py::test_the_kit_s_delivery_strategy_carries_the_result
+// RFC §23.3 step 8: a background task's result is handed back through
+// `deliver()`, as an instruction, by the kit's strategy.
+#[tokio::test]
+async fn the_kit_s_strategy_hands_a_task_s_result_back_as_an_instruction() {
+    let strategy = Arc::new(RecordsInstructions::default());
+    let shared: Arc<dyn DeliveryStrategy> = Arc::<RecordsInstructions>::clone(&strategy);
+    let kit = RoomKit::new(RoomKitOptions {
+        delivery_strategy: Some(shared),
+        ..RoomKitOptions::default()
+    });
+    let text = RecordingTransport::new(
+        channel("text"),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(text).unwrap();
+    for (id, reply) in [("assistant", "ok"), ("worker", "Findings.")] {
+        let agent = EchoAgent::new(channel(id), reply, EchoAgentOptions::default());
+        kit.register_channel(agent).unwrap();
+    }
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    kit.attach_channel(&room(), &channel("text"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let as_agent = AttachChannelOptions {
+        category: Some(ChannelCategory::Intelligence),
+        ..AttachChannelOptions::default()
+    };
+    kit.attach_channel(&room(), &channel("assistant"), as_agent)
+        .await
+        .unwrap();
+    let delegation = DelegateOptions {
+        notify: Some(channel("assistant")),
+        ..DelegateOptions::default()
+    };
+    let task = kit
+        .delegate(&room(), &channel("worker"), "task", delegation)
+        .await
+        .unwrap();
+    task.wait(WaitOptions {
+        timeout: Some(BOUND),
+    })
+    .await
+    .unwrap();
+    idle(&kit).await;
+
+    assert_eq!(*strategy.given.lock().unwrap(), vec![true]);
     kit.close().await.unwrap();
 }

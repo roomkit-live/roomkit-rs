@@ -20,14 +20,11 @@ use roomkit::model::{
     ChannelCategory, ChannelId, ChannelType, EventContent, HookResult, RoomContext, RoomEvent,
     RoomId, TextContent,
 };
-use roomkit::tasks::WaitOptions;
-use roomkit::testing::{
-    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions, idle,
-};
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions, idle};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, DelegateOptions, DeliverOptions, DeliveryBackend,
-    DeliveryBackendError, DeliveryContext, DeliveryItem, DeliveryStrategy, DequeueOptions,
-    GetDeadLetterItemsOptions, HookExecution, HookOptions, HookTrigger, InMemoryDeliveryBackend,
+    AttachChannelOptions, CreateRoomOptions, DeliverOptions, DeliveryBackend, DeliveryBackendError,
+    DeliveryContext, DeliveryItem, DeliveryStrategy, DequeueOptions, GetDeadLetterItemsOptions,
+    HookExecution, HookOptions, HookTrigger, InMemoryDeliveryBackend,
     InMemoryDeliveryBackendOptions, InMemoryStore, NackOptions, RoomKit, RoomKitError,
     RoomKitOptions,
 };
@@ -123,54 +120,6 @@ async fn the_strategy_is_given_the_item_s_request() {
         assert_eq!(given[0].channel_id, Some(channel("ch1")));
         assert_eq!(given[0].metadata["key"], "val");
     }
-    kit.close().await.unwrap();
-}
-
-// Python: tests/tasks/test_delegation_result_delivery.py::test_the_kit_s_delivery_strategy_carries_the_result
-// RFC §23.3 step 8: a background task's result is handed back through
-// `deliver()`, as an instruction, by the kit's strategy.
-#[tokio::test]
-async fn the_kit_s_strategy_hands_a_task_s_result_back_as_an_instruction() {
-    let strategy = Arc::new(Recording::default());
-    let shared: Arc<dyn DeliveryStrategy> = Arc::<Recording>::clone(&strategy);
-    let options = RoomKitOptions {
-        delivery_strategy: Some(shared),
-        ..RoomKitOptions::default()
-    };
-    let kit = kit_with_room(options).await;
-    for (id, reply) in [("assistant", "ok"), ("worker", "Findings.")] {
-        let agent = EchoAgent::new(channel(id), reply, EchoAgentOptions::default());
-        kit.register_channel(agent).unwrap();
-    }
-    let as_agent = AttachChannelOptions {
-        category: Some(ChannelCategory::Intelligence),
-        ..AttachChannelOptions::default()
-    };
-    kit.attach_channel(&room(), &channel("assistant"), as_agent)
-        .await
-        .unwrap();
-    let delegation = DelegateOptions {
-        notify: Some(channel("assistant")),
-        ..DelegateOptions::default()
-    };
-    let task = kit
-        .delegate(&room(), &channel("worker"), "task", delegation)
-        .await
-        .unwrap();
-    let waited = WaitOptions {
-        timeout: Some(Duration::from_secs(5)),
-    };
-    task.wait(waited).await.unwrap();
-    idle(&kit).await;
-
-    let instructions: Vec<bool> = strategy
-        .given
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|ctx| ctx.instruction)
-        .collect();
-    assert_eq!(instructions, vec![true]);
     kit.close().await.unwrap();
 }
 
