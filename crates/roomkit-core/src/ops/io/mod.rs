@@ -288,6 +288,13 @@ impl Io {
         Some(answer.into())
     }
 
+    /// Records that the operation holds `room_id`'s lock from its start, the
+    /// lock its caller handed it (`Inbound::under_lock`): once it asks for
+    /// that lock's release, an acquire of the room waits for its answer.
+    pub(crate) fn hold_handed(&mut self, room_id: RoomId) {
+        self.locks.hold(room_id);
+    }
+
     /// Makes the sections advanced from now on nested under the section
     /// that holds `room_id`'s lock, or sections of their own for `None`;
     /// returns what it replaces, which its caller puts back.

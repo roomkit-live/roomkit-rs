@@ -351,6 +351,7 @@ impl Inbound {
     #[must_use]
     pub fn under_lock(mut self, room_id: RoomId) -> Self {
         self.io.nest(Some(room_id.clone()));
+        self.io.hold_handed(room_id.clone());
         self.machine.trigger.handed = Some(room_id.clone());
         self.machine.call.under_lock = Some(room_id);
         self

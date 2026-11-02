@@ -72,6 +72,14 @@ impl RoomLocks {
         Some(effect)
     }
 
+    /// Records that the operation holds `room_id`'s lock from its start: the
+    /// lock its caller handed it (`Inbound::under_lock`). An acquire of the
+    /// room is held back until that lock's release is answered, as one
+    /// behind any section of the operation that holds it.
+    pub(super) fn hold(&mut self, room_id: RoomId) {
+        self.rooms.entry(room_id).or_default();
+    }
+
     /// Withdraws `effect`, an acquire held back here, from the queue it
     /// waits in: it never goes out. Whether it was held back.
     pub(super) fn withdraw(&mut self, effect: EffectId) -> bool {
@@ -188,6 +196,25 @@ mod tests {
         locks.admit(release(2));
         let after_release = locks.answered(release(2).id, &HoldOutcome::Released.into());
         assert_eq!((held_back, after_release), (None, vec![acquire(1)]));
+    }
+
+    /// A lock the operation's caller handed it is held from its start: an
+    /// acquire made once its release is asked for waits for that release's
+    /// answer, and the room stays held while that acquire's section holds
+    /// it (RMK-1207).
+    #[test]
+    fn an_acquire_after_a_handed_lock_s_release_waits_for_it() {
+        let mut locks = RoomLocks::default();
+        locks.hold(room_id());
+        let released = locks.admit(release(0));
+        let held_back = locks.admit(acquire(1));
+        let after_release = locks.answered(release(0).id, &HoldOutcome::Released.into());
+        locks.answered(acquire(1).id, &HoldOutcome::Locked.into());
+        let while_held = locks.admit(acquire(2));
+        assert_eq!(
+            (released, held_back, after_release, while_held),
+            (Some(release(0)), None, vec![acquire(1)], None)
+        );
     }
 
     #[test]

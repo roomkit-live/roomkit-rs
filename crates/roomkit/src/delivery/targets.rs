@@ -287,10 +287,10 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// Publishes `message` into `room_id`, handing `section`, the room's
     /// lock the delivery holds, when it holds it, to the run of its
-    /// pipeline: the call is nested under it (`Inbound::under_lock`), and
-    /// its commit is the section's (RFC §22.1). A run that never asked for
-    /// the lock, refused before it, leaves it, and it is released once the
-    /// call returns.
+    /// pipeline, which holds it from its start: the call is nested under it
+    /// (`Inbound::under_lock`), and its commit is the section's (RFC
+    /// §22.1). A call refused before any run takes the lock, the kit closed
+    /// among others, leaves it here, released once the call returns.
     async fn publish_within(
         &self,
         section: Option<RoomGuard<'static>>,
