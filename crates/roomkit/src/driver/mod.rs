@@ -320,10 +320,12 @@ async fn drive<S: ConversationStore, O: Operation>(
     };
     let (shared, adoptions) = RunShared::new();
     let mut held = Held::new(Arc::clone(&shared), leases);
-    if let Some(caller) = &mut caller
-        && let Some((room_id, guard)) = caller.hand.take()
-    {
-        held.take_hand(room_id, guard);
+    if let Some(caller) = &mut caller {
+        match caller.hand.take() {
+            Some(inbound::Under::Hand(room_id, guard)) => held.take_hand(room_id, guard),
+            Some(inbound::Under::Lease(lease)) => held.take_lease(lease),
+            None => {}
+        }
     }
     let driver = Driver {
         calls: JoinSet::new(),

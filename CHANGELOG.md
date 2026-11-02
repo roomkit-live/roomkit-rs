@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A channel's room callback (`on_room_attached`, `on_room_detached`) that
+  sends into its room stores its event, where it failed
+  `RoomKitError::ReentrantCall`: a call the run holding the room's lock
+  does not adopt runs nested under that lock, on the lease of the code
+  that made it, as Python's call nests under the lock its caller holds
+  (RFC §6.1, §9.5.1, RMK-1245).
 - An MCP tool's result holding a PNG, JPEG, GIF or WebP image whose base64
   decodes reaches the model as its parts, the image an image part it
   sees, as Python's MCP handler (RMK-1242); any other image is still a

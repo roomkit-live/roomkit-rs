@@ -41,7 +41,7 @@ use tokio::task::{JoinError, JoinHandle};
 use super::calls::{self, Written};
 use super::in_flight::InFlight;
 use super::{Committed, Driven, Leases, Stop};
-use crate::context::ExecutionContext;
+use crate::context::{ExecutionContext, Lease};
 use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::{RoomKitError, with_causes};
 use crate::kit::Inner;
@@ -301,9 +301,32 @@ pub(super) struct Caller {
     departure: Departure,
     /// What the run leaves its caller beside its output.
     record: Arc<Record>,
-    /// The room's lock the caller's code handed the call, which the run
-    /// holds from its start (`Inbound::under_lock`, RFC §22.1).
-    pub(super) hand: Option<(RoomId, RoomGuard<'static>)>,
+    /// The room's lock the run holds from its start, its call nested under
+    /// it (`Inbound::under_lock`).
+    pub(super) hand: Option<Under>,
+}
+
+/// The room's lock an inbound call's run holds from its start, its call
+/// nested under it (`Inbound::under_lock`).
+#[derive(Debug)]
+pub(super) enum Under {
+    /// The lock the caller's code handed the call: a keyed publication's
+    /// section (RFC §22.1).
+    Hand(RoomId, RoomGuard<'static>),
+    /// The lock held by a run that did not adopt the call, granted on the
+    /// lease of the code under it that made the call: a channel told of a
+    /// lifecycle change under the room's lock (RFC §6.1, §9.5.1), as the
+    /// Python implementation's call nests under the lock its caller holds.
+    Lease(Lease),
+}
+
+impl Under {
+    fn room_id(&self) -> &RoomId {
+        match self {
+            Self::Hand(room_id, _) => room_id,
+            Self::Lease(lease) => lease.room_id(),
+        }
+    }
 }
 
 /// What a run did once its caller was gone, or cancelled the call's
@@ -506,7 +529,9 @@ impl Caller {
 /// caller whose context detaches from the call's room, its decision. A lock
 /// its context holds a lease on is refused to it: a call nested under the
 /// lock is adopted by the section that holds it, and one that reaches the
-/// driver would commit within that section's tenure. A call made within a
+/// lock's wait would commit within that section's tenure; a call into the
+/// room the run holding the lock did not adopt runs nested on the lease
+/// ([`declined_under`]). A call made within a
 /// delivery set's code, a turn or a transport's delivery, into the room the
 /// set delivers in draws on the reentry budget of the cascade that
 /// delivers while that code runs, a routed message once step 2 kept it
@@ -582,7 +607,14 @@ async fn run_leased<S: ConversationStore>(
     if let Err(error) = inner.open() {
         return Ran::ended(Err(error));
     }
-    let (inbound, context, hand) = placed(inbound, room_id, ExecutionContext::current());
+    let (inbound, context, hand) = placed(inbound, room_id, ExecutionContext::current(), leases);
+    // Nested on the lease of a run that did not adopt it, the call's later
+    // sections are granted the lock while that lease lives, as a separate
+    // operation's are (RFC §13.5).
+    let leases = match hand {
+        Some(Under::Lease(_)) => Leases::Granted,
+        _ => leases,
+    };
     let (answer, decided) = oneshot::channel();
     let mut named = named;
     let record = Arc::new(Record::new(named.as_mut()));
@@ -698,35 +730,53 @@ fn by_close(error: &ErrorRecord) -> bool {
 /// `inbound`, a call into `room_id` or routed, as `context` places it, the
 /// context its run runs in, and the room's lock the run holds from its
 /// start. Nested under the room's lock its code hands the run (a keyed
-/// publication's section, RFC §22.1), taken from the hand, it draws on the
-/// budget of the room's work that code runs in, if any, as the Python
-/// implementation's NESTED call does (RFC §9.5.1 Reentrance): a pass of
-/// the cascade an admission order or a delivery works for, or a hook call
-/// of the cascade whose hook body it runs within; and its run stands in no
-/// admission order of the room ([`ExecutionContext::nested_run`]).
-/// Otherwise [`charged`], in `context`.
+/// publication's section, RFC §22.1), taken from the hand, or under the
+/// lock of a run that did not adopt the call, on the lease of the code that
+/// made it ([`declined_under`]), it draws on the budget of the room's work
+/// that code runs in, if any, as the Python implementation's NESTED call
+/// does (RFC §9.5.1 Reentrance): a pass of the cascade an admission order
+/// or a delivery works for, or a hook call of the cascade whose hook body
+/// it runs within; and its run stands in no admission order of the room
+/// ([`ExecutionContext::nested_run`]). Otherwise [`charged`], in `context`.
 fn placed(
     inbound: Inbound,
     room_id: Option<&RoomId>,
     context: ExecutionContext,
-) -> (
-    Inbound,
-    ExecutionContext,
-    Option<(RoomId, RoomGuard<'static>)>,
-) {
+    leases: Leases,
+) -> (Inbound, ExecutionContext, Option<Under>) {
     let hand = room_id
         .filter(|room_id| context.hands(room_id))
-        .and_then(|_| context.take_hand());
-    let Some((room_id, guard)) = hand else {
+        .and_then(|_| context.take_hand())
+        .map(|(room_id, guard)| Under::Hand(room_id, guard));
+    let Some(under) = hand.or_else(|| declined_under(room_id, &context, leases)) else {
         return (charged(inbound, room_id, &context), context, None);
     };
+    let room_id = under.room_id().clone();
     let inbound = inbound.under_lock(room_id.clone());
     let inbound = match context.room_work(&room_id) {
         Some((draw, _depth)) => inbound.drawing_on(draw),
         None => inbound,
     };
     let context = context.nested_run(&room_id);
-    (inbound, context, Some((room_id, guard)))
+    (inbound, context, Some(under))
+}
+
+/// The lease `context` holds on `room_id`'s lock, for an inbound call into
+/// the room its run would refuse (`leases`): the call reaches the driver
+/// though code under the lock made it, so the run holding the lock did not
+/// adopt it, as a lifecycle change telling a channel of it adopts nothing
+/// (RFC §6.1 `on_room_attached`). Refused, the call could only fail; the
+/// Python implementation nests it under the lock its caller holds, and so
+/// does this run.
+fn declined_under(
+    room_id: Option<&RoomId>,
+    context: &ExecutionContext,
+    leases: Leases,
+) -> Option<Under> {
+    if leases != Leases::Refused {
+        return None;
+    }
+    context.lease(room_id?).map(Under::Lease)
 }
 
 /// `inbound`, a call into `room_id` or routed, charged to the reentry

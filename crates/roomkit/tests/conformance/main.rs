@@ -66,11 +66,6 @@ pub(crate) async fn new_kit(configure: impl FnOnce(RoomKitOptions) -> RoomKitOpt
 /// `conformance/README.md`, "Known failures").
 pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
-        "rooms/a-channel-sends-into-the-room-it-is-told-of",
-        "§9.5.1: a room callback's send into its room, under the room's lock, is refused \
-         ReentrantCall where it is adopted (RMK-1245)",
-    ),
-    (
         "orchestration/an-install-holds-the-room-until-it-is-over",
         "§19.7, §13.5: an install runs without the room's lock (RMK-1247)",
     ),

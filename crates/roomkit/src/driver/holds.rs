@@ -25,9 +25,12 @@
 //!   separate operation, a lifecycle change or a record's commit, and its
 //!   release gives nothing back: the lease holder releases it. It is
 //!   refused to an inbound call ([`Hold::Refused`]): one nested under the
-//!   lock is adopted by the section that holds it, so one that reaches the
-//!   driver, a message routed back into the room, would commit within that
-//!   section's tenure, and would wait for its own caller's delivery;
+//!   lock is adopted by the section that holds it, or runs nested on the
+//!   lease from its start when that section's run adopts nothing, as a
+//!   lifecycle change telling a channel of it ([`Held::take_lease`]), so
+//!   one that waits for it, a message routed back into the room, would
+//!   commit within that section's tenure, and would wait for its own
+//!   caller's delivery;
 //! - the lock of a room a frame of the context stands in the admission
 //!   order of is refused to an inbound call too: a call made there into the
 //!   room is adopted beside the frame's work, so one that reaches the
@@ -155,6 +158,17 @@ impl<'kit> Held<'kit> {
     pub(super) fn take_hand(&mut self, room_id: RoomId, guard: RoomGuard<'static>) {
         self.shared.locked(room_id.clone());
         self.locks.insert(room_id, LockHold::Own(guard));
+    }
+
+    /// Takes `lease`, a lease on its room's lock the call's code holds,
+    /// held by a run that did not adopt the call: the run holds the lock on
+    /// it from its start, granted as a separate operation's is, so that the
+    /// calls its operation makes under it (`Inbound::under_lock`) hold a
+    /// lease on it, and its release gives nothing back.
+    pub(super) fn take_lease(&mut self, lease: Lease) {
+        self.shared.granted(lease.clone());
+        self.locks
+            .insert(lease.room_id().clone(), LockHold::Granted(lease));
     }
 
     /// Whether the set of `event_id` runs from its placement: its place was
