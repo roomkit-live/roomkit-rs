@@ -2,11 +2,12 @@
 //! to a context window (RFC §20.3): Python's
 //! `roomkit.memory.token_estimator`.
 
-use roomkit::model::{EventContent, MediaContent, RoomEvent};
+use roomkit::model::{EventContent, RoomEvent};
 use roomkit_core::rules::transcoding::text_of;
 use serde_json::Value;
 
 use super::repr::python_str;
+use crate::author_images::is_vision_image;
 use crate::provider::{AiContentPart, AiContext, AiMessage, AiMessageContent};
 use crate::skills::dumps;
 use crate::tools::AiTool;
@@ -18,9 +19,6 @@ const IMAGE_TOKENS: usize = 1000;
 
 /// What a message costs beyond its parts: its role and its delimiters.
 const MESSAGE_OVERHEAD: usize = 4;
-
-/// The image types every vision provider takes (RFC §6.4).
-const VISION_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 /// About one token for four characters of English: Python's
 /// `estimate_tokens`, `len(text) // 4 + 1`, counted in code points.
@@ -186,34 +184,6 @@ fn spoken_tokens(text: Option<&str>, image: usize) -> usize {
         return 0;
     }
     MESSAGE_OVERHEAD + text.map_or(0, estimate_tokens) + image
-}
-
-/// Whether `media` is an image of a type every vision provider takes: its
-/// `data:` URI's type, else its own, folded (`image/jpg` is `image/jpeg`).
-fn is_vision_image(media: &MediaContent) -> bool {
-    let declared = media
-        .url
-        .get(..5)
-        .filter(|scheme| scheme.eq_ignore_ascii_case("data:"))
-        .and_then(|_| media.url.get(5..))
-        .map(|rest| rest.split(',').next().unwrap_or(rest));
-    let kind = folded(declared.unwrap_or(&media.mime_type));
-    VISION_IMAGE_TYPES.contains(&kind.as_str())
-}
-
-/// `mime_type` as RoomKit compares it: lowercased, its parameters aside,
-/// its aliases folded.
-fn folded(mime_type: &str) -> String {
-    let bare = mime_type
-        .split(';')
-        .next()
-        .unwrap_or(mime_type)
-        .trim()
-        .to_lowercase();
-    match bare.as_str() {
-        "image/jpg" | "image/pjpeg" => "image/jpeg".to_owned(),
-        _ => bare,
-    }
 }
 
 /// What `context` costs: its system prompt, its messages and its tools.

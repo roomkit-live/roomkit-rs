@@ -34,8 +34,10 @@
 //!   participants by, which count toward labelling the turns.
 //!
 //! Only what §6.4 requires of every AI channel is built: no note of who
-//! takes part, no tool notes, no cut answers. Author images are bounded and
-//! carried separately; the runtime resolves opaque references only for vision providers.
+//! takes part, no tool notes, no cut answers. What each event says is the
+//! channel's to read ([`TurnContent`]): an AI channel reads an author's
+//! media itself, as an image for a model that sees or a mention in its
+//! place (RFC §6.4); [`conversation`] reads each event's text form.
 //!
 //! Within a turn, the tool loop extends the conversation with its rounds
 //! (RFC §6.4, Appendix A.9 `ai_message_parts`): the assistant's message that
@@ -43,8 +45,10 @@
 //! ([`Message::tool_result`]). A later turn's history replays them the same
 //! way.
 
+mod content;
 mod fence;
 mod images;
+pub use self::content::{Part, TurnContent};
 pub use images::Image;
 mod marks;
 mod quote;
@@ -109,8 +113,15 @@ pub struct Message {
     pub role: Role,
     /// What the model reads of it.
     pub text: String,
-    /// Bounded author images, kept separate from text (RFC §6.4).
+    /// Images, read after its text: what a provider reads of a message
+    /// it rewrites from its parts. The transcript writes a message with
+    /// images as `parts`.
     pub images: Vec<Image>,
+    /// The message's content as parts, in order, when it is parts: an
+    /// author's media as a model that sees reads it (RFC §6.4), each image
+    /// at its place. `text` then holds its text parts joined and `images`
+    /// its images, for a reader taking them apart. Empty for a text alone.
+    pub parts: Vec<Part>,
     /// The calls an assistant's message makes, in the order its round made
     /// them; none on any other.
     pub tool_calls: Vec<ToolCall>,
@@ -132,6 +143,7 @@ impl Message {
             role,
             text: text.into(),
             images: Vec::new(),
+            parts: Vec::new(),
             tool_calls: Vec::new(),
             tool_call_id: None,
             is_error: false,
@@ -166,6 +178,29 @@ impl Message {
             ..Self::new(Role::Tool, text)
         }
     }
+
+    /// A message of `role` saying `content`: a text, or parts, its text
+    /// parts joined in `text` and its images in `images`.
+    fn of_content(role: Role, content: TurnContent) -> Self {
+        match content {
+            TurnContent::Text(text) => Self::new(role, text),
+            TurnContent::Parts(parts) => {
+                let mut text = String::new();
+                let mut images = Vec::new();
+                for part in &parts {
+                    match part {
+                        Part::Text(part) => text.push_str(part),
+                        Part::Image(image) => images.push(image.clone()),
+                    }
+                }
+                Self {
+                    images,
+                    parts,
+                    ..Self::new(role, text)
+                }
+            }
+        }
+    }
 }
 
 /// The conversation the turn of the channel `channel_id` on `event` reads
@@ -179,6 +214,9 @@ impl Message {
 /// content of what was deleted. The history holds the room's MESSAGE events,
 /// as edited, and none deleted, blocked or empty; `event` is never the
 /// channel's own.
+///
+/// Each event reads as its text form (RFC §6.6); [`conversation_with_memory`]
+/// takes the channel's reading.
 ///
 /// The rounds replayed are read from the channel's own tool rows among the
 /// context's events (RFC §6.4 "The tools of earlier turns"): each call's
@@ -198,7 +236,8 @@ pub fn conversation(
     replayed: impl Fn(&str) -> bool,
 ) -> Vec<Message> {
     let memory = TurnMemory::default();
-    conversation_with_memory(channel_id, event, context, history, replayed, &memory)
+    let read = |said: &RoomEvent| TurnContent::Text(text_of(&said.content));
+    conversation_with_memory(channel_id, event, context, history, replayed, &memory, read)
 }
 
 /// The metadata key, on an event or a message a memory builds, naming what
@@ -224,7 +263,11 @@ pub struct TurnMemory {
 
 /// [`conversation`], with what the turn's memory adds beside its history
 /// (RFC §20.2): its `notes` ride the turn's notes, after the speaker note,
-/// and its `speakers` count toward labelling the turns (RFC §6.4).
+/// and its `speakers` count toward labelling the turns (RFC §6.4). Each
+/// event says what `read` reads of it, history and input alike, an event
+/// that reads as nothing left out: an AI channel's reading of its
+/// authors' media (RFC §6.4). An instruction reads as its text form
+/// (RFC §10.1.1).
 pub fn conversation_with_memory(
     channel_id: &ChannelId,
     event: &RoomEvent,
@@ -232,18 +275,19 @@ pub fn conversation_with_memory(
     history: usize,
     replayed: impl Fn(&str) -> bool,
     memory: &TurnMemory,
+    read: impl Fn(&RoomEvent) -> TurnContent,
 ) -> Vec<Message> {
     let mut authors = Authors::new(context);
-    let mut turns = past_turns(channel_id, event, context, history, &mut authors);
+    let mut turns = past_turns(channel_id, event, context, history, &mut authors, &read);
     if !turns.is_empty() {
         let rounds = tool_rounds(&context.recent_events, channel_id, &replayed);
         place(&mut turns, rounds, rounds_before(event));
     }
-    turns.push(Turn::input(event, &mut authors));
+    turns.push(Turn::input(event, &mut authors, &read));
     tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
     let speakers: Vec<&Speaker> = turns
         .iter()
-        .filter(|turn| turn.role == Role::User && !turn.text.is_empty())
+        .filter(|turn| turn.role == Role::User && !turn.content.is_blank())
         .filter_map(|turn| turn.speaker.as_ref())
         .collect();
     let named = remembered_speakers(&speakers, &memory.speakers);
@@ -260,20 +304,17 @@ pub fn conversation_with_memory(
     };
     let labelled = labels_turns(sources, people);
     let turns = cleaned(turns, labelled);
-    let mut messages = rendered(turns, labelled, &memory.notes);
-    images::bound(&mut messages);
-    messages
+    rendered(turns, labelled, &memory.notes)
 }
 
-/// A turn of the conversation before it is rendered: its role, the text
-/// its event brings, who said it, whether it is the application's
-/// instruction, whether it is the turn's input, its event's place in the
-/// timeline, and the rounds of tool calls read after it.
+/// A turn of the conversation before it is rendered: its role, what its
+/// event says, who said it, whether it is the application's instruction,
+/// whether it is the turn's input, its event's place in the timeline, and
+/// the rounds of tool calls read after it.
 #[derive(Clone, Debug)]
 struct Turn {
     role: Role,
-    images: Vec<Image>,
-    text: String,
+    content: TurnContent,
     speaker: Option<Speaker>,
     instruction: bool,
     input: bool,
@@ -282,17 +323,17 @@ struct Turn {
 }
 
 impl Turn {
-    /// A turn of the room's history.
-    fn past(event: &RoomEvent, channel_id: &ChannelId, authors: &mut Authors<'_>) -> Self {
+    /// A turn of the room's history, saying what `read` reads of it.
+    fn past(
+        event: &RoomEvent,
+        channel_id: &ChannelId,
+        authors: &mut Authors<'_>,
+        read: &impl Fn(&RoomEvent) -> TurnContent,
+    ) -> Self {
         let own = &event.source.channel_id == channel_id;
         Self {
             role: if own { Role::Assistant } else { Role::User },
-            images: if own {
-                Vec::new()
-            } else {
-                images::collect(&event.content)
-            },
-            text: text_of(&event.content),
+            content: read(event),
             speaker: if own { None } else { speaker(event, authors) },
             instruction: false,
             input: false,
@@ -301,18 +342,21 @@ impl Turn {
         }
     }
 
-    /// The turn's input: `event`, an instruction never attributed to a
-    /// speaker.
-    fn input(event: &RoomEvent, authors: &mut Authors<'_>) -> Self {
+    /// The turn's input: `event`, saying what `read` reads of it; an
+    /// instruction, its text form, never attributed to a speaker.
+    fn input(
+        event: &RoomEvent,
+        authors: &mut Authors<'_>,
+        read: &impl Fn(&RoomEvent) -> TurnContent,
+    ) -> Self {
         let instruction = event.r#type == EventType::Instruction;
         Self {
             role: Role::User,
-            images: if instruction {
-                Vec::new()
+            content: if instruction {
+                TurnContent::Text(text_of(&event.content))
             } else {
-                images::collect(&event.content)
+                read(event)
             },
-            text: text_of(&event.content),
             speaker: if instruction {
                 None
             } else {
@@ -342,6 +386,7 @@ fn past_turns(
     context: &RoomContext,
     history: usize,
     authors: &mut Authors<'_>,
+    read: &impl Fn(&RoomEvent) -> TurnContent,
 ) -> Vec<Turn> {
     if is_standalone(event) {
         return Vec::new();
@@ -350,8 +395,8 @@ fn past_turns(
         .recent_events
         .iter()
         .filter(|past| past.id != event.id && is_conversation(past))
-        .map(|past| Turn::past(past, channel_id, authors))
-        .filter(|turn| !turn.text.trim().is_empty() || !turn.images.is_empty())
+        .map(|past| Turn::past(past, channel_id, authors, read))
+        .filter(|turn| !turn.content.is_blank())
         .collect();
     let skip = turns.len().saturating_sub(history);
     turns.into_iter().skip(skip).collect()
@@ -385,10 +430,11 @@ fn is_conversation(event: &RoomEvent) -> bool {
 }
 
 /// `turns` with each copy of a runtime mark replaced (RFC §6.4): in each
-/// turn, and over each run of consecutive user turns the runtime does not
-/// label, which an API may merge into one message; a replayed round ends a
-/// run, and is never rewritten. A turn a copy wholly held is left out, the
-/// rounds read after it then read after the turn before it.
+/// turn, over its text parts, and over each run of consecutive user turns
+/// the runtime does not label, which an API may merge into one message; a
+/// replayed round ends a run, and is never rewritten. A turn a copy wholly
+/// held is left out, the rounds read after it then read after the turn
+/// before it.
 fn cleaned(mut turns: Vec<Turn>, labelled: bool) -> Vec<Turn> {
     let mut start = 0;
     while start < turns.len() {
@@ -402,16 +448,23 @@ fn cleaned(mut turns: Vec<Turn>, labelled: bool) -> Vec<Turn> {
             .max(1);
         let end = start + run;
         if let Some(group) = turns.get_mut(start..end) {
-            let texts: Vec<String> = group.iter().map(|turn| turn.text.clone()).collect();
-            for (turn, text) in group.iter_mut().zip(without_copies(&texts)) {
-                turn.text = text;
+            let counts: Vec<usize> = group
+                .iter()
+                .map(|turn| turn.content.texts().len())
+                .collect();
+            let texts: Vec<String> = group.iter().flat_map(|turn| turn.content.texts()).collect();
+            let mut cleaned = without_copies(&texts).into_iter();
+            for (turn, count) in group.iter_mut().zip(counts) {
+                let own: Vec<String> = cleaned.by_ref().take(count).collect();
+                let content = std::mem::replace(&mut turn.content, TurnContent::Parts(Vec::new()));
+                turn.content = content.with_texts(own);
             }
         }
         start = end;
     }
     let mut kept: Vec<Turn> = Vec::with_capacity(turns.len());
     for turn in turns {
-        if !turn.text.trim().is_empty() || !turn.images.is_empty() {
+        if !turn.content.is_blank() {
             kept.push(turn);
         } else if let Some(before) = kept.last_mut() {
             before.rounds.extend(turn.rounds);
@@ -487,16 +540,16 @@ fn rendered(turns: Vec<Turn>, labelled: bool, remembered: &[String]) -> Vec<Mess
     let ends_on_input = turns.last().is_some_and(|turn| turn.input);
     let mut messages: Vec<Message> = Vec::with_capacity(turns.len());
     for turn in turns {
-        let text = match (&turn.speaker, turn.instruction) {
-            (_, true) => format!("{INSTRUCTION_MARK}\n{}", turn.text),
-            (Some(speaker), false) if labelled && turn.role == Role::User => {
-                labelled_lines(&turn.text, &speaker.label)
+        let content = match (&turn.speaker, turn.content) {
+            (_, TurnContent::Text(text)) if turn.instruction => {
+                TurnContent::Text(format!("{INSTRUCTION_MARK}\n{text}"))
             }
-            (_, false) => turn.text,
+            (Some(speaker), content) if labelled && turn.role == Role::User => {
+                content.labelled(&speaker.label)
+            }
+            (_, content) => content,
         };
-        let mut message = Message::new(turn.role, text);
-        message.images = turn.images;
-        messages.push(message);
+        messages.push(Message::of_content(turn.role, content));
         messages.extend(turn.rounds.into_iter().flat_map(|round| round.messages));
     }
     let speaker_note = labelled.then(|| SPEAKER_NOTE.to_owned());
@@ -505,15 +558,35 @@ fn rendered(turns: Vec<Turn>, labelled: bool, remembered: &[String]) -> Vec<Mess
         .chain(cleaned_notes(remembered))
         .collect();
     if let Some(notes) = joined_notes(&blocks) {
-        match messages.last_mut() {
-            Some(input) if ends_on_input => {
-                input.text.push_str("\n\n");
-                input.text.push_str(&notes);
-            }
-            Some(_) | None => messages.push(Message::new(Role::User, notes)),
+        match messages.pop() {
+            Some(input) if ends_on_input => messages.push(with_notes(input, &notes)),
+            Some(other) => messages.extend([other, Message::new(Role::User, notes)]),
+            None => messages.push(Message::new(Role::User, notes)),
         }
     }
     messages
+}
+
+/// The turn's `input` with `notes` after it (RFC §6.4): a text input a
+/// blank line after its text, an input of parts a part of its own.
+/// Python's `with_turn_notes`.
+fn with_notes(input: Message, notes: &str) -> Message {
+    let Message {
+        role,
+        text,
+        parts,
+        metadata,
+        ..
+    } = input;
+    let content = if parts.is_empty() {
+        TurnContent::Text(text)
+    } else {
+        TurnContent::Parts(parts)
+    };
+    Message {
+        metadata,
+        ..Message::of_content(role, content.followed_by(notes))
+    }
 }
 
 /// The label each of `events` opens with where a model reads it (RFC §6.4),

@@ -52,6 +52,10 @@ fn ai_channel_options_defaults_as_python() {
     assert!(defaults.turn_budget_tokens.is_none());
     // roomkit.AIChannel.__init__(tool_timeouts) = None
     assert!(defaults.tool_timeouts.is_empty());
+    // roomkit.AIChannel.__init__(describe_empty_event) = None
+    assert!(defaults.describe_empty_event.is_none());
+    // roomkit.AIChannel.__init__(max_author_images) = 4
+    assert_eq!(defaults.max_author_images, Some(4));
     // roomkit.AIChannel.__init__(memory) = None
     assert!(defaults.memory.is_none());
     // roomkit.AIChannel.__init__(server_instructions) = None

@@ -19,9 +19,11 @@ use roomkit_core::rules::transcript::{
 };
 use serde_json::Value;
 
+use crate::author_images::{
+    AuthorImages, DEFAULT_MAX_AUTHOR_IMAGES, ImageResolver, author_images, unseen_images,
+};
 use crate::error::AiError;
 use crate::human_input::HumanInputToolHandler;
-use crate::images::ImageResolver;
 use crate::memory::{
     IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions, SlidingWindowMemory,
     SlidingWindowMemoryOptions, TurnFootprint, measured, runtime_or_cleaned,
@@ -37,6 +39,7 @@ use crate::tools::toolbox::Toolbox;
 use crate::tools::{
     DynToolset, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, served_by,
 };
+use crate::transcript_content::{Describer, TurnReader};
 
 /// The metadata word of an instruction that stands alone (RFC §10.1.1
 /// rule 7), as the pipeline writes it.
@@ -96,6 +99,21 @@ pub struct AiChannelOptions {
     /// the loop ends `budget_exceeded` at its next round boundary (RFC
     /// §6.4). Python's `turn_budget_tokens`; `None` sets none.
     pub turn_budget_tokens: Option<u64>,
+    /// What the turn's transcript says of an event whose content reads as
+    /// nothing in it (a captionless upload that is no image, for a model
+    /// that does not see; an empty text): a text, or `None` to leave the
+    /// event out, a lone media then reading as its label (RFC §6.4).
+    /// Python's `describe_empty_event`.
+    #[expect(
+        clippy::type_complexity,
+        reason = "Python's Callable[[RoomEvent], str | None]"
+    )]
+    pub describe_empty_event: Option<Arc<dyn Fn(&RoomEvent) -> Option<String> + Send + Sync>>,
+    /// How many of the newest author images a turn sends as images, its
+    /// history and its input counted together, an older one read as an
+    /// earlier image not shown (RFC §6.4); `None` bounds nothing. Python's
+    /// `max_author_images`, 4 by default.
+    pub max_author_images: Option<usize>,
     /// The skills the channel serves (RFC §24).
     pub skills: Option<SkillRegistry>,
     /// Whether the system prompt lists the skills; without, the host lists
@@ -150,6 +168,8 @@ impl Default for AiChannelOptions {
             tool_timeout: Some(Duration::from_secs(30)),
             tool_timeouts: BTreeMap::new(),
             turn_budget_tokens: None,
+            describe_empty_event: None,
+            max_author_images: Some(DEFAULT_MAX_AUTHOR_IMAGES),
             skills: None,
             skills_in_prompt: true,
             tool_policy: None,
@@ -232,7 +252,8 @@ pub struct AiChannel<P> {
     max_tokens: Option<u32>,
     server_instructions: ServerInstructions,
     memory: Arc<dyn MemoryProvider>,
-    image_resolver: Option<Arc<dyn ImageResolver>>,
+    /// How its turns read their authors' media (RFC §6.4).
+    media: MediaReading,
     skills: Option<Arc<SkillTools>>,
     tool_call_intents: bool,
     tool_call_intents_required: bool,
@@ -243,6 +264,15 @@ pub struct AiChannel<P> {
     /// The tools that ask a person, and the token of the channel's
     /// registration on their handler.
     human_input: Option<(HumanInputToolHandler, u64)>,
+}
+
+/// How an AI channel reads its authors' media (RFC §6.4): Python's
+/// `_media_resolver`, `_max_author_images` and `_describe_empty_event`.
+#[derive(Clone, Default)]
+struct MediaReading {
+    resolver: Option<Arc<dyn ImageResolver>>,
+    max_author_images: Option<usize>,
+    describer: Option<Describer>,
 }
 
 /// What a turn read of the room through its memory (RFC §20.2): its
@@ -277,7 +307,7 @@ impl<P> Clone for AiChannel<P> {
             max_tokens: self.max_tokens,
             server_instructions: self.server_instructions.clone(),
             memory: Arc::clone(&self.memory),
-            image_resolver: self.image_resolver.clone(),
+            media: self.media.clone(),
             skills: self.skills.clone(),
             tool_call_intents: self.tool_call_intents,
             tool_call_intents_required: self.tool_call_intents_required,
@@ -323,6 +353,8 @@ impl<P: AiProvider> AiChannel<P> {
             tool_timeout,
             tool_timeouts,
             turn_budget_tokens,
+            describe_empty_event,
+            max_author_images,
             skills,
             skills_in_prompt,
             tool_policy,
@@ -369,7 +401,7 @@ impl<P: AiProvider> AiChannel<P> {
             None => None,
         };
         Ok(Self {
-            capabilities: capabilities(&provider),
+            capabilities: ai_channel_capabilities(),
             channel_id,
             provider: Arc::new(provider),
             toolbox: Arc::new(toolbox),
@@ -395,7 +427,11 @@ impl<P: AiProvider> AiChannel<P> {
                     max_events: max_context_events,
                 }))
             }),
-            image_resolver,
+            media: MediaReading {
+                resolver: image_resolver,
+                max_author_images,
+                describer: describe_empty_event,
+            },
             skills,
             tool_call_intents,
             tool_call_intents_required,
@@ -616,6 +652,19 @@ impl<P: AiProvider> AiChannel<P> {
         })
     }
 
+    /// What the images the turn's `history` and its input `event` carry
+    /// become (RFC §6.4); for a model that does not see, a mention that it
+    /// does not see them. Python's `_author_images`.
+    async fn author_images(&self, event: &RoomEvent, history: &RoomContext) -> AuthorImages {
+        let events: Vec<&RoomEvent> = history.recent_events.iter().chain([event]).collect();
+        if !self.provider.supports_vision() {
+            return unseen_images(&events);
+        }
+        let room = &history.room.id;
+        let resolver = self.media.resolver.as_deref();
+        author_images(&events, room, resolver, self.media.max_author_images).await
+    }
+
     /// Whether `event` is one of the channel's tool-call rows.
     fn is_own_tool_row(&self, event: &RoomEvent) -> bool {
         event.source.channel_id == self.channel_id
@@ -634,16 +683,18 @@ impl<P: AiProvider> AiChannel<P> {
     }
 }
 
-/// What `provider`'s channel takes: text, and media when its model takes
-/// images (RFC §6.4).
-fn capabilities<P: AiProvider>(provider: &P) -> ChannelCapabilities {
+/// What an AI channel takes: text, rich content and media whatever its
+/// model sees, each media read by the channel itself, so that the event a
+/// turn answers reads as the same event does in its history (RFC §6.4).
+/// Python's `ai_channel_capabilities`.
+fn ai_channel_capabilities() -> ChannelCapabilities {
     let mut capabilities = ChannelCapabilities::default();
-    if provider.supports_vision() {
-        capabilities
-            .media_types
-            .insert(roomkit::model::ChannelMediaType::Media);
-        capabilities.supports_media = true;
-    }
+    capabilities.media_types.extend([
+        roomkit::model::ChannelMediaType::Rich,
+        roomkit::model::ChannelMediaType::Media,
+    ]);
+    capabilities.supports_rich_text = true;
+    capabilities.supports_media = true;
     capabilities
 }
 
@@ -863,21 +914,21 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             .recalled(&event, &context, stands_alone, footprint)
             .await?;
         looped.remembered = recalled.messages;
-        let mut messages = conversation_with_memory(
+        let images = self.author_images(&event, &recalled.history).await;
+        let reader = TurnReader {
+            images: &images,
+            vision: self.provider.supports_vision(),
+            describer: self.media.describer.as_ref(),
+        };
+        let messages = conversation_with_memory(
             &self.channel_id,
             &event,
             &recalled.history,
             usize::MAX,
             |name| self.toolbox.in_tool_memory(name),
             &recalled.memory,
+            |said| reader.read(said),
         );
-        crate::images::resolve(
-            &mut messages,
-            self.provider.supports_vision(),
-            self.image_resolver.as_deref(),
-            &context.room.id,
-        )
-        .await;
         // What the turn's generation hooks leave is its context; a block
         // runs no generation (RFC §6.4).
         if !looped.before_generation(&event, &messages).await {

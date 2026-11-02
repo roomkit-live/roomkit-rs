@@ -20,6 +20,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   had, `ON_EVENT_UPDATED` fires for each, and the room's agents answer the
   last one before `complete_verification` returns
   (`roomkit_core::ops::RestoreHeld`, `Inbound::rerun`).
+- An AI channel reads its authors' media as Python's (RFC §6.4, RMK-1090):
+  it declares text, rich content and media whatever its model sees, so the
+  kit hands it the event untranscoded; each image goes after its caption,
+  at its place among the message's parts; a model that does not see reads
+  `[Image not shown, this model does not see images: “<name>”]`, an image
+  past the bound `[Earlier image not shown: “<name>”]`, one that does not
+  resolve `[Image unavailable: “<name>”]`, where it read `[Media: …]` or
+  lost the image. Inline images are bounded to 5 MiB, as Python's.
+- `AiChannelOptions::max_author_images` (default `Some(4)`) and
+  `AiChannelOptions::describe_empty_event`, Python's (RFC §6.4, RMK-1166):
+  how many of the newest author images a turn sends, and what its
+  transcript says of an event that reads as nothing in it.
 - `AiChannelOptions::turn_budget_tokens`, Python's (RFC §6.4, RMK-1166):
   past the billed tokens it allows (input, output and cache tokens), the
   loop ends `budget_exceeded` at its next round boundary, asks for no retry

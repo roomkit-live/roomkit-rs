@@ -854,8 +854,8 @@ params = [
     "config_provider", "tool_search", "tool_search_pinned",
     "tool_search_threshold", "tool_search_threshold_pct",
     "tool_search_miss_hint", "turn_budget_usd",
-    "tool_search_threshold_tokens", "describe_empty_event",
-    "max_author_images", "speak_policy", "speak_timeout", "thinker",
+    "tool_search_threshold_tokens",
+    "speak_policy", "speak_timeout", "thinker",
     "think_wait", "text_coalesce_ms", "text_coalesce_chars",
     "publish_text_deltas",
 ]

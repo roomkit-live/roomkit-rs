@@ -74,3 +74,45 @@ async fn a_channel_over_the_mock_answers_its_responses_round_robin() {
         }
     }
 }
+
+/// The capabilities of an agent over a mock that sees, or does not.
+fn capabilities_over(vision: bool) -> roomkit::model::ChannelCapabilities {
+    let options = MockAiProviderOptions {
+        vision,
+        ..MockAiProviderOptions::default()
+    };
+    let provider = MockAiProvider::new(options);
+    let agent = AiChannel::new(channel("ai1"), provider, AiChannelOptions::default()).unwrap();
+    roomkit::Channel::capabilities(&agent)
+}
+
+// Python: tests/test_channels/test_ai.py::TestAIChannel::test_capabilities_with_vision_provider
+#[test]
+fn capabilities_with_vision_provider() {
+    let capabilities = capabilities_over(true);
+    assert!(
+        capabilities
+            .media_types
+            .contains(&roomkit::model::ChannelMediaType::Media)
+    );
+    assert!(capabilities.supports_media);
+}
+
+// Python: tests/test_channels/test_ai.py::TestAIChannel::test_capabilities_without_vision
+/// A model that does not see still takes media, rich content too: the
+/// channel reads each media itself, the event a turn answers as the same
+/// event in its history (RFC §6.4).
+#[test]
+fn capabilities_without_vision() {
+    use roomkit::model::ChannelMediaType;
+    let capabilities = capabilities_over(false);
+    for kind in [
+        ChannelMediaType::Text,
+        ChannelMediaType::Rich,
+        ChannelMediaType::Media,
+    ] {
+        assert!(capabilities.media_types.contains(&kind), "{kind:?}");
+    }
+    assert!(capabilities.supports_media);
+    assert!(capabilities.supports_rich_text);
+}

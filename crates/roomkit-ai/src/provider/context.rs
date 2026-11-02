@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use roomkit::model::Metadata;
-use roomkit_core::rules::transcript::{Message, Role};
+use roomkit_core::rules::transcript::{Image, Message, Part, Role};
 
 use crate::tools::AiTool;
 
@@ -333,21 +333,25 @@ fn content(message: &Message, tools: &HashMap<&str, &str>) -> AiMessageContent {
             is_error: message.is_error,
         })]);
     }
-    if message.images.is_empty() && message.tool_calls.is_empty() {
+    if message.parts.is_empty() && message.images.is_empty() && message.tool_calls.is_empty() {
         return AiMessageContent::Text(message.text.clone());
     }
     let mut parts = Vec::new();
-    if !message.text.is_empty() {
-        parts.push(AiContentPart::Text(AiTextPart {
-            text: message.text.clone(),
+    if message.parts.is_empty() {
+        if !message.text.is_empty() {
+            parts.push(AiContentPart::Text(AiTextPart {
+                text: message.text.clone(),
+            }));
+        }
+        parts.extend(message.images.iter().map(image_part));
+    } else {
+        parts.extend(message.parts.iter().map(|part| match part {
+            Part::Text(text) => AiContentPart::Text(AiTextPart { text: text.clone() }),
+            Part::Image(image) => image_part(image),
+            // A part the transcript adds later reads as nothing.
+            _ => AiContentPart::Text(AiTextPart::new("")),
         }));
     }
-    parts.extend(message.images.iter().map(|image| {
-        AiContentPart::Image(AiImagePart {
-            url: image.url().to_owned(),
-            mime_type: Some(image.mime_type().to_owned()),
-        })
-    }));
     parts.extend(message.tool_calls.iter().map(|call| {
         AiContentPart::ToolCall(AiToolCallPart {
             id: call.id.clone(),
@@ -357,4 +361,12 @@ fn content(message: &Message, tools: &HashMap<&str, &str>) -> AiMessageContent {
         })
     }));
     AiMessageContent::Parts(parts)
+}
+
+/// `image` as a message's part, its type given.
+fn image_part(image: &Image) -> AiContentPart {
+    AiContentPart::Image(AiImagePart {
+        url: image.url().to_owned(),
+        mime_type: Some(image.mime_type().to_owned()),
+    })
 }

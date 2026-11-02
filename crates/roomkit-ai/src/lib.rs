@@ -68,17 +68,17 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+mod author_images;
 mod channel;
 mod error;
 mod human_input;
-mod images;
 pub mod knowledge;
 mod loop_events;
 pub mod memory;
 mod mock;
 mod provider;
 pub mod tasks;
-pub use images::ImageResolver;
+pub use author_images::ImageResolver;
 mod rows;
 mod server_instructions;
 mod skills;
@@ -89,6 +89,7 @@ pub mod testing;
 mod texts;
 mod tool_loop;
 mod tools;
+mod transcript_content;
 
 pub use self::channel::{AiChannel, AiChannelOptions};
 pub use self::error::AiError;

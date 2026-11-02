@@ -1,6 +1,12 @@
-//! Bounded author images (RFC §6.4). This module never resolves references or
-//! reads bytes; application references remain opaque until the runtime asks its host.
-use crate::model::EventContent;
+//! An author's image as a turn sends it (RFC §6.4). This module never
+//! resolves references or reads bytes; application references remain
+//! opaque until the runtime asks its host. Which images a turn sends is the
+//! channel's to decide.
+
+/// The most bytes an inline image holds, read off its base64's length:
+/// Anthropic's documented per-image limit, Python's
+/// `MAX_AUTHOR_IMAGE_BYTES`.
+const MAX_INLINE_BYTES: usize = 5 * 1024 * 1024;
 
 /// An image URL or opaque application reference, separate from prompt text.
 #[derive(Clone, PartialEq, Eq)]
@@ -19,8 +25,10 @@ impl std::fmt::Debug for Image {
 
 impl Image {
     /// Accept a supported image with a safe URL/reference (RFC §6.4). Inline
-    /// base64 is bounded to 5 MB; local paths and executable schemes are refused.
-    /// Invalid or unsupported media returns `None` and keeps its text mention.
+    /// base64 holds some data and at most 5 MiB, read off its length as
+    /// Python's `MAX_AUTHOR_IMAGE_BYTES` reads it; local paths and
+    /// executable schemes are refused. Invalid or unsupported media returns
+    /// `None`, and the channel reads a mention in its place.
     pub fn new(url: &str, mime_type: &str) -> Option<Self> {
         let mime_type = mime_type.split(';').next()?.trim().to_ascii_lowercase();
         let mime_type = if mime_type == "image/jpg" {
@@ -44,8 +52,7 @@ impl Image {
             if header != format!("{mime_type};base64")
                 || data.is_empty()
                 || data.len() % 4 != 0
-                || data.len() / 4 * 3 - data.chars().rev().take_while(|c| *c == '=').count().min(2)
-                    > 5_000_000
+                || data.len() * 3 / 4 > MAX_INLINE_BYTES
                 || !data
                     .trim_end_matches('=')
                     .bytes()
@@ -100,53 +107,9 @@ impl Image {
     }
 }
 
-pub(super) fn collect(content: &EventContent) -> Vec<Image> {
-    let mut images = Vec::new();
-    visit(content, &mut images);
-    images
-}
-
-fn visit(content: &EventContent, images: &mut Vec<Image>) {
-    match content {
-        EventContent::Media(media) => {
-            if let Some(image) = Image::new(&media.url, &media.mime_type) {
-                if images.len() == 4 {
-                    images.remove(0);
-                }
-                images.push(image);
-            }
-        }
-        EventContent::Composite(parts) => {
-            for part in parts.parts() {
-                visit(part, images);
-            }
-        }
-        EventContent::Text(_)
-        | EventContent::Rich(_)
-        | EventContent::Location(_)
-        | EventContent::Audio(_)
-        | EventContent::Video(_)
-        | EventContent::System(_)
-        | EventContent::Template(_)
-        | EventContent::Edit(_)
-        | EventContent::Delete(_)
-        | EventContent::ToolCall(_) => {}
-    }
-}
-
-pub(super) fn bound(messages: &mut [super::Message]) {
-    let mut remaining: usize = 4;
-    for message in messages.iter_mut().rev() {
-        let remove = message.images.len().saturating_sub(remaining);
-        message.images.drain(..remove);
-        remaining = remaining.saturating_sub(message.images.len());
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::transcript::{Message, Role};
     #[test]
     fn image_urls_never_become_local_paths_and_debug_never_prints_payloads() {
         for url in [
@@ -169,28 +132,5 @@ mod tests {
                 .unwrap()
                 .is_resolved()
         );
-    }
-    #[test]
-    fn newest_four_images_are_kept_without_dropping_text_mentions() {
-        let mut messages: Vec<_> = (0..6)
-            .map(|id| {
-                let mut message = Message::new(Role::User, format!("image {id}"));
-                message
-                    .images
-                    .push(Image::new(&format!("media://{id}"), "image/png").unwrap());
-                message
-            })
-            .collect();
-        bound(&mut messages);
-        assert_eq!(messages.len(), 6);
-        assert_eq!(
-            messages
-                .iter()
-                .flat_map(|m| &m.images)
-                .map(Image::url)
-                .collect::<Vec<_>>(),
-            ["media://2", "media://3", "media://4", "media://5"]
-        );
-        assert_eq!(messages.first().unwrap().text, "image 0");
     }
 }

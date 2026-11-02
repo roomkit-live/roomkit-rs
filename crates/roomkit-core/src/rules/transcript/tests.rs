@@ -527,39 +527,3 @@ fn a_copy_of_a_runtime_mark_in_a_participant_s_text_is_replaced() {
         ]
     );
 }
-
-#[test]
-fn author_images_survive_duplicate_captions_and_are_bounded_across_turns() {
-    let mut timeline = Timeline::new();
-    for id in 0..6 {
-        let mut event = timeline.event(EventType::Message, "web", Some("human"), None, "");
-        let mut media =
-            crate::model::MediaContent::new(format!("attachment://{id}"), "image/png").unwrap();
-        media.caption = Some("Screenshot".to_owned());
-        event.content = EventContent::Media(media);
-        timeline.commit(event);
-    }
-    let input = timeline.context.recent_events.last().unwrap();
-    let messages = conversation(
-        &ChannelId::new(AGENT).unwrap(),
-        input,
-        &timeline.context,
-        50,
-        |_| false,
-    );
-    let urls: Vec<_> = messages
-        .iter()
-        .flat_map(|m| &m.images)
-        .map(super::Image::url)
-        .collect();
-    assert_eq!(
-        urls,
-        [
-            "attachment://2",
-            "attachment://3",
-            "attachment://4",
-            "attachment://5"
-        ]
-    );
-    assert!(messages.iter().any(|m| m.text.contains("Screenshot")));
-}
