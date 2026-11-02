@@ -102,12 +102,16 @@ impl Stream for PacedStream<'_> {
     }
 }
 
-/// The scripted agent `spec` describes, and its model; its gates are
+/// A scripted agent's models by the name `expect.models` gives them: its
+/// own under its id, its memory's summarizer under `<id>/summarizer`.
+pub(crate) type Models = Vec<(String, ScriptedProvider)>;
+
+/// The scripted agent `spec` describes, and its models; its gates are
 /// `run`'s.
 pub(crate) fn scripted_agent(
     spec: &Value,
     run: &Arc<Run>,
-) -> Result<(AiChannel<Paced>, ScriptedProvider), String> {
+) -> Result<(AiChannel<Paced>, Models), String> {
     let id = ChannelId::new(spec["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
     let scripted = spec["model"]["rounds"].as_array().into_iter().flatten();
     let rounds = scripted.clone().map(round).collect::<Result<Vec<_>, _>>()?;
@@ -132,8 +136,23 @@ pub(crate) fn scripted_agent(
         let window = window.as_u64().ok_or("max_context_events: not a count")?;
         options.max_context_events = usize::try_from(window).map_err(|e| e.to_string())?;
     }
+    let mut models = vec![(id.to_string(), model.clone())];
     if let Some(memory) = spec.get("memory") {
-        options.memory = Some(scripted_memory(memory, options.max_context_events)?);
+        let summarizer = match memory.get("summarizer") {
+            Some(summarizer) => {
+                let rounds = summarizer["rounds"].as_array().into_iter().flatten();
+                let summarizer =
+                    ScriptedProvider::new(rounds.map(round).collect::<Result<Vec<_>, _>>()?);
+                models.push((format!("{id}/summarizer"), summarizer.clone()));
+                Some(summarizer)
+            }
+            None => None,
+        };
+        options.memory = Some(scripted_memory(
+            memory,
+            options.max_context_events,
+            summarizer,
+        )?);
     }
     if let Some(human) = spec.get("human_input") {
         options.human_input_handler = Some(human_input(human)?);
@@ -144,7 +163,7 @@ pub(crate) fn scripted_agent(
         run: Arc::downgrade(run),
     };
     let agent = AiChannel::new(id, paced, options).map_err(|e| e.to_string())?;
-    Ok((agent, model))
+    Ok((agent, models))
 }
 
 /// A scripted agent's human-input tools (README, "Scripted agents").
@@ -182,7 +201,7 @@ fn human_input(spec: &Value) -> Result<HumanInputToolHandler, String> {
 }
 
 /// One round of the model's script.
-fn round(spec: &Value) -> Result<ScriptedRound, String> {
+pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
     let calls: Vec<(String, String, String)> = spec["calls"]
         .as_array()
         .into_iter()

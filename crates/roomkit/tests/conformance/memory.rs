@@ -10,9 +10,11 @@ use std::sync::Arc;
 use roomkit::ChannelError;
 use roomkit::model::{RoomContext, RoomEvent, RoomId};
 use roomkit_ai::memory::{
-    BudgetAwareMemory, BudgetAwareMemoryOptions, MemoryProvider, MemoryResult, RetrieveOptions,
-    SlidingWindowMemory, SlidingWindowMemoryOptions,
+    BudgetAwareMemory, BudgetAwareMemoryOptions, CompactingMemory, CompactingMemoryOptions,
+    MemoryProvider, MemoryResult, RetrieveOptions, SlidingWindowMemory, SlidingWindowMemoryOptions,
+    SummarizingMemory, SummarizingMemoryOptions,
 };
+use roomkit_ai::testing::ScriptedProvider;
 use roomkit_ai::{AiMessage, AiRole};
 use serde_json::Value;
 
@@ -52,11 +54,14 @@ impl MemoryProvider for Scripted {
     }
 }
 
-/// The memory `spec` describes; `max_events` is its window by default, the
-/// agent's `max_context_events`.
+/// The memory `spec` describes, its wrappers from the innermost;
+/// `max_events` is its window by default, the agent's
+/// `max_context_events`, and `summarizer` the model a compacting or
+/// summarizing memory summarizes with.
 pub(crate) fn scripted_memory(
     spec: &Value,
     max_events: usize,
+    summarizer: Option<ScriptedProvider>,
 ) -> Result<Arc<dyn MemoryProvider>, String> {
     let max_events = match spec.get("max_events") {
         Some(count) => count_of(count, "max_events")?,
@@ -74,10 +79,78 @@ pub(crate) fn scripted_memory(
         notes: texts(&spec["notes"]),
         speakers: texts(&spec["speakers"]),
     });
-    match spec.get("budget_aware") {
-        Some(budget) => budget_aware(budget, memory),
+    let memory = match spec.get("budget_aware") {
+        Some(budget) => budget_aware(budget, memory)?,
+        None => memory,
+    };
+    let memory = match spec.get("compacting") {
+        Some(compacting) => self::compacting(compacting, memory, needed(summarizer.clone())?)?,
+        None => memory,
+    };
+    match spec.get("summarizing") {
+        Some(summarizing) => self::summarizing(summarizing, memory, needed(summarizer)?),
         None => Ok(memory),
     }
+}
+
+fn needed(summarizer: Option<ScriptedProvider>) -> Result<ScriptedProvider, String> {
+    summarizer.ok_or_else(|| "a compacting or summarizing memory needs its summarizer".to_owned())
+}
+
+/// `inner` in a compacting memory of `spec`'s parameters.
+fn compacting(
+    spec: &Value,
+    inner: Arc<dyn MemoryProvider>,
+    summarizer: ScriptedProvider,
+) -> Result<Arc<dyn MemoryProvider>, String> {
+    let defaults = CompactingMemoryOptions::default();
+    let options = CompactingMemoryOptions {
+        summary_ratio: ratio(spec, "summary_ratio", defaults.summary_ratio)?,
+        safety_margin_ratio: ratio(spec, "safety_margin_ratio", defaults.safety_margin_ratio)?,
+        min_events: count(spec, "min_events", defaults.min_events)?,
+        ..defaults
+    };
+    let window = count_of(&spec["max_context_tokens"], "max_context_tokens")?;
+    Ok(Arc::new(CompactingMemory::new(
+        inner, summarizer, window, options,
+    )))
+}
+
+/// `inner` in a summarizing memory of `spec`'s parameters.
+fn summarizing(
+    spec: &Value,
+    inner: Arc<dyn MemoryProvider>,
+    summarizer: ScriptedProvider,
+) -> Result<Arc<dyn MemoryProvider>, String> {
+    let defaults = SummarizingMemoryOptions::default();
+    let summary_max_tokens = count(
+        spec,
+        "summary_max_tokens",
+        defaults.summary_max_tokens as usize,
+    )?;
+    let options = SummarizingMemoryOptions {
+        tier1_ratio: ratio(spec, "tier1_ratio", defaults.tier1_ratio)?,
+        tier2_ratio: ratio(spec, "tier2_ratio", defaults.tier2_ratio)?,
+        truncate_chars: count(spec, "truncate_chars", defaults.truncate_chars)?,
+        summary_max_tokens: u32::try_from(summary_max_tokens).map_err(|e| e.to_string())?,
+        min_events: count(spec, "min_events", defaults.min_events)?,
+        ..defaults
+    };
+    let window = count_of(&spec["max_context_tokens"], "max_context_tokens")?;
+    Ok(Arc::new(SummarizingMemory::new(
+        inner, summarizer, window, options,
+    )))
+}
+
+fn ratio(spec: &Value, name: &str, default: f64) -> Result<f64, String> {
+    spec.get(name).map_or(Ok(default), |ratio| {
+        ratio.as_f64().ok_or(format!("{name}: not a number"))
+    })
+}
+
+fn count(spec: &Value, name: &str, default: usize) -> Result<usize, String> {
+    spec.get(name)
+        .map_or(Ok(default), |count| count_of(count, name))
 }
 
 /// `inner` in a budget-aware memory of `spec`'s parameters.

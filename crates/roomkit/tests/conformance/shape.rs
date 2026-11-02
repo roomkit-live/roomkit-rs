@@ -115,6 +115,9 @@ const MEMORY: &[&str] = &[
     "notes",
     "speakers",
     "budget_aware",
+    "compacting",
+    "summarizing",
+    "summarizer",
 ];
 const MEMORY_MESSAGE: &[&str] = &["role", "text"];
 const BUDGET_AWARE: &[&str] = &[
@@ -122,6 +125,20 @@ const BUDGET_AWARE: &[&str] = &[
     "safety_margin_ratio",
     "min_events",
     "reserved_tokens",
+];
+const COMPACTING: &[&str] = &[
+    "max_context_tokens",
+    "summary_ratio",
+    "safety_margin_ratio",
+    "min_events",
+];
+const SUMMARIZING: &[&str] = &[
+    "max_context_tokens",
+    "tier1_ratio",
+    "tier2_ratio",
+    "truncate_chars",
+    "summary_max_tokens",
+    "min_events",
 ];
 const ROOM: &[&str] = &[
     "id",
@@ -464,6 +481,28 @@ fn memory(memory: &Value, path: &str, found: &mut Vec<String>) {
         &format!("{path}.budget_aware"),
         found,
     );
+    optional(
+        &memory["compacting"],
+        COMPACTING,
+        &format!("{path}.compacting"),
+        found,
+    );
+    optional(
+        &memory["summarizing"],
+        SUMMARIZING,
+        &format!("{path}.summarizing"),
+        found,
+    );
+    let summarizer = &memory["summarizer"];
+    optional(summarizer, MODEL, &format!("{path}.summarizer"), found);
+    for (index, round) in items(&summarizer["rounds"]) {
+        members(
+            round,
+            MODEL_ROUND,
+            &format!("{path}.summarizer.rounds[{index}]"),
+            found,
+        );
+    }
 }
 
 fn hook(hook: &Value, path: &str, found: &mut Vec<String>) {
