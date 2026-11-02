@@ -71,6 +71,10 @@ struct State {
     /// The requests opened in a turn the kit runs: their owner keeps the
     /// record that answers them (RFC §10.6.5).
     turn_of: HashMap<String, Arc<ExecutorInputs>>,
+    /// In tests, what lands once a wait's bound passed, before the wait
+    /// reads its request: the window another thread's answer can arrive in.
+    #[cfg(test)]
+    at_bound: Option<Box<dyn FnOnce() + Send>>,
 }
 
 struct Entry {
@@ -393,7 +397,8 @@ impl HumanInputHandler {
     }
 
     /// Waits until the request is answered, rejected or past
-    /// `options.timeout`. An outcome already reached and consumed is
+    /// `options.timeout`; an answer accepted as the bound passes is
+    /// returned. An outcome already reached and consumed is
     /// replayed from the retention. Dropped before its outcome, the wait
     /// releases the request, so a late answer is not taken for it.
     ///
@@ -432,28 +437,61 @@ impl HumanInputHandler {
             handler: self,
             pending_id: Some(pending_id),
         };
-        let waited =
-            match tokio::time::timeout(options.timeout, settled.wait_for(Option::is_some)).await {
-                Ok(Ok(settled)) => settled.clone(),
-                Ok(Err(_)) | Err(_) => None,
-            };
+        // Settled or past its bound, the request's outcome is read under
+        // the lock, in `conclude`.
+        drop(tokio::time::timeout(options.timeout, settled.wait_for(Option::is_some)).await);
         released.disarm();
-        let closed = {
+        #[cfg(test)]
+        self.bound_passed(&settled);
+        self.conclude(pending_id, &settled)
+    }
+
+    /// Ends a wait on `pending_id`: a request still pending times out, one
+    /// that settled keeps its outcome, an answer accepted as the bound
+    /// passed included (RFC §9.3); the request retires, and its outcome is
+    /// reported.
+    fn conclude(
+        &self,
+        pending_id: &str,
+        settled: &watch::Receiver<Option<(PendingInput, bool)>>,
+    ) -> Result<String, RoomKitError> {
+        let (closed, waited) = {
             let mut state = self.state();
-            if waited.is_none()
-                && let Some(entry) = state.pending.get_mut(pending_id)
+            if let Some(entry) = state.pending.get_mut(pending_id)
                 && entry.record.status == PendingInputStatus::Pending
             {
                 entry.record.status = PendingInputStatus::TimedOut;
                 let timed_out = Some((entry.record.clone(), entry.withdrawn));
                 entry.settled.send_replace(timed_out);
             }
-            self.retire(&mut state, pending_id)
+            let waited = settled.borrow().clone();
+            (self.retire(&mut state, pending_id), waited)
         };
         tell_owner(closed);
         match waited {
             Some((record, withdrawn)) => outcome(&record, withdrawn),
             None => Err(RoomKitError::Timeout),
+        }
+    }
+
+    /// Lands `landing` the next time a wait's bound passes, before the wait
+    /// reads its request, as an answer from another thread can.
+    #[cfg(test)]
+    pub(crate) fn at_bound(&self, landing: impl FnOnce() + Send + 'static) {
+        self.state().at_bound = Some(Box::new(landing));
+    }
+
+    /// Runs what a test lands once a wait's bound passed with no outcome.
+    #[cfg(test)]
+    fn bound_passed(&self, settled: &watch::Receiver<Option<(PendingInput, bool)>>) {
+        let unsettled = settled.borrow().is_none();
+        let landing = if unsettled {
+            self.state().at_bound.take()
+        } else {
+            None
+        };
+        if let Some(landing) = landing {
+            landing();
         }
     }
 

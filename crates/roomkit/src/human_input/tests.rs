@@ -101,6 +101,22 @@ async fn a_wait_past_its_bound_times_out_and_is_replayed() {
     );
 }
 
+// Python: tests/test_human_input.py::test_wait_returns_an_answer_accepted_at_the_deadline
+#[tokio::test(start_paused = true)]
+async fn an_answer_accepted_as_the_bound_passes_is_returned() {
+    let handler = HumanInputHandler::default();
+    let id = asked(&handler, "ai").await;
+    // The answer lands once the bound passed, before the wait reads the
+    // request: another thread answering at the deadline.
+    handler.at_bound({
+        let (handler, id) = (handler.clone(), id.clone());
+        move || assert!(handler.resolve(&id, "yes"))
+    });
+    assert_eq!(handler.wait(&id, within(20)).await, Ok("yes".to_owned()));
+    // Recorded as answered, not timed out.
+    assert_eq!(handler.wait(&id, within(20)).await, Ok("yes".to_owned()));
+}
+
 // Python: tests/test_human_input.py::test_wait_nonexistent_raises_value_error,
 // test_resolve_nonexistent_returns_false, test_reject_nonexistent_returns_false,
 // test_resolve_already_resolved_returns_false

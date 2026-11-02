@@ -10,6 +10,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ON_AI_RESPONSE`, what the failed round had handed the room as its last
   segment (RFC §6.4, RMK-1199), as Python's: `["Let me look.", "Partial
   answer"]` where the report read `["Let me look."]`.
+- `HumanInputHandler::wait` returns an answer accepted as its bound
+  passes, as Python's (RFC §9.3, RMK-1201): `resolve()` from another
+  thread could return `true` after the timeout fired and before the wait
+  read the request, which the wait then reported as `RoomKitError::Timeout`,
+  the answer lost.
 - An AI channel compacts its context once and replays the call when its
   provider refuses it as too long for the model (RFC §6.4 "A turn
   compacted", RMK-1225), as Python's: the error's `context_overflow`,
