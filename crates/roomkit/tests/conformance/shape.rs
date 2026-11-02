@@ -71,6 +71,8 @@ const CHANNEL: &[&str] = &[
     "tool_policy",
     "max_tool_rounds",
     "max_context_events",
+    "serialize_room_turns",
+    "steer_room_turns",
     "addresses",
     "streams_in",
     "recent_events_window",
@@ -86,6 +88,7 @@ const MODEL_ROUND: &[&str] = &[
     "usage",
     "fails",
     "done",
+    "gate",
 ];
 const MODEL_CALL: &[&str] = &["id", "name", "arguments", "cut"];
 const TOOL: &[&str] = &[
@@ -98,6 +101,7 @@ const TOOL: &[&str] = &[
     "refuses",
     "declines",
     "hangs",
+    "gate",
 ];
 const RAISES: &[&str] = &["kind", "message"];
 const POLICY: &[&str] = &["allow", "deny"];

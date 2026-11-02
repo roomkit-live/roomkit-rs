@@ -26,31 +26,50 @@ use crate::scripted::{Reactions, perform};
 /// A scenario's scripted model: `ScriptedProvider`'s script, the model
 /// waiting between two of a round's deltas, so that a reader is handed
 /// each apart (deltas yielded without waiting may cross as one, RFC
-/// §10.6.4; `conformance/README.md`, "Scripted agents").
-pub(crate) struct Paced(ScriptedProvider);
+/// §10.6.4; `conformance/README.md`, "Scripted agents"), and holding a
+/// round with a `gate` there, before it writes anything.
+pub(crate) struct Paced {
+    script: ScriptedProvider,
+    /// Each round's gate, by its place in the script.
+    gates: Vec<Option<String>>,
+    run: Weak<Run>,
+}
 
 impl AiProvider for Paced {
     fn model_name(&self) -> &str {
-        self.0.model_name()
+        self.script.model_name()
     }
 
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
-        self.0.generate(context).await
+        self.script.generate(context).await
     }
 
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
+        let position = self.script.requests().len();
+        let gate = self.gates.get(position).cloned().flatten();
+        let run = Weak::clone(&self.run);
+        let holding: Option<Pin<Box<dyn Future<Output = ()> + Send>>> = gate.map(|gate| {
+            let held: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
+                if let Some(run) = run.upgrade() {
+                    run.gates.hold(&gate).await;
+                }
+            });
+            held
+        });
         Box::pin(PacedStream {
-            inner: self.0.generate_structured_stream(context),
+            inner: self.script.generate_structured_stream(context),
+            holding,
             held: None,
             after_text: false,
         })
     }
 }
 
-/// A scripted generation's events, each text delta that follows another
-/// held for one poll.
+/// A scripted generation's events, held at its round's gate first, each
+/// text delta that follows another held for one poll.
 struct PacedStream<'a> {
     inner: ProviderStream<'a>,
+    holding: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     held: Option<Result<StreamEvent, ProviderError>>,
     after_text: bool,
 }
@@ -60,6 +79,10 @@ impl Stream for PacedStream<'_> {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
+        if let Some(holding) = this.holding.as_mut() {
+            ready!(holding.as_mut().poll(cx));
+            this.holding = None;
+        }
         if let Some(held) = this.held.take() {
             return Poll::Ready(Some(held));
         }
@@ -76,18 +99,23 @@ impl Stream for PacedStream<'_> {
     }
 }
 
-/// The scripted agent `spec` describes, and its model.
-pub(crate) fn scripted_agent(spec: &Value) -> Result<(AiChannel<Paced>, ScriptedProvider), String> {
+/// The scripted agent `spec` describes, and its model; its gates are
+/// `run`'s.
+pub(crate) fn scripted_agent(
+    spec: &Value,
+    run: &Arc<Run>,
+) -> Result<(AiChannel<Paced>, ScriptedProvider), String> {
     let id = ChannelId::new(spec["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
-    let rounds = spec["model"]["rounds"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(round)
-        .collect::<Result<Vec<_>, _>>()?;
+    let scripted = spec["model"]["rounds"].as_array().into_iter().flatten();
+    let rounds = scripted.clone().map(round).collect::<Result<Vec<_>, _>>()?;
+    let gates = scripted
+        .map(|round| round["gate"].as_str().map(str::to_owned))
+        .collect();
     let model = ScriptedProvider::new(rounds);
     let mut options = AiChannelOptions {
-        tools: tools(spec).into(),
+        tools: tools(spec, run).into(),
+        serialize_room_turns: spec["serialize_room_turns"] == true,
+        steer_room_turns: spec["steer_room_turns"] == true,
         ..AiChannelOptions::default()
     };
     if let Some(policy) = spec.get("tool_policy") {
@@ -101,7 +129,12 @@ pub(crate) fn scripted_agent(spec: &Value) -> Result<(AiChannel<Paced>, Scripted
         let window = window.as_u64().ok_or("max_context_events: not a count")?;
         options.max_context_events = usize::try_from(window).map_err(|e| e.to_string())?;
     }
-    let agent = AiChannel::new(id, Paced(model.clone()), options).map_err(|e| e.to_string())?;
+    let paced = Paced {
+        script: model.clone(),
+        gates,
+        run: Arc::downgrade(run),
+    };
+    let agent = AiChannel::new(id, paced, options).map_err(|e| e.to_string())?;
     Ok((agent, model))
 }
 
@@ -153,8 +186,9 @@ fn round(spec: &Value) -> Result<ScriptedRound, String> {
     Ok(round)
 }
 
-/// The scripted tools of `spec`, each answering every call one way.
-fn tools(spec: &Value) -> Tools {
+/// The scripted tools of `spec`, each answering every call one way, held
+/// at its `gate` first, `run`'s.
+fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
     spec["tools"]
         .as_array()
         .into_iter()
@@ -172,9 +206,15 @@ fn tools(spec: &Value) -> Tools {
                 .unwrap()
             };
             let behaviour = tool.clone();
+            let run = Arc::downgrade(run);
             tools.tool(definition, move |_call: ToolCall, _context: ToolContext| {
-                let behaviour = behaviour.clone();
-                async move { answer(&behaviour).await }
+                let (behaviour, run) = (behaviour.clone(), Weak::clone(&run));
+                async move {
+                    if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
+                        run.gates.hold(gate).await;
+                    }
+                    answer(&behaviour).await
+                }
             })
         })
 }
