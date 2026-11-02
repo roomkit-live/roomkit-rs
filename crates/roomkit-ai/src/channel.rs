@@ -560,11 +560,23 @@ impl<P: AiProvider> AiChannel<P> {
             && (event.r#type == EventType::Message || event.r#type == EventType::Instruction)
     }
 
-    /// The system prompt of a turn in `context`'s room: the channel's own,
-    /// then the MCP servers' instructions (RFC §21.2), then what its skills
-    /// add (RFC §6.4, §24.4).
-    fn turn_system_prompt(&self, context: &RoomContext, stands_alone: bool) -> Option<String> {
-        let own = self.system_prompt();
+    /// The system prompt of a turn in `context`'s room: its binding's
+    /// `system_prompt`, else the channel's own (Python's `_turn_settings`,
+    /// binding metadata first; a `null` there is not set), then the MCP
+    /// servers' instructions (RFC §21.2), then what its skills add (RFC
+    /// §6.4, §24.4).
+    fn turn_system_prompt(
+        &self,
+        binding: &ChannelBinding,
+        context: &RoomContext,
+        stands_alone: bool,
+    ) -> Option<String> {
+        let bound = binding
+            .metadata
+            .get("system_prompt")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let own = bound.or_else(|| self.system_prompt());
         let prompt = self.server_instructions.after(own.as_deref());
         let Some(skills) = &self.skills else {
             return prompt;
@@ -925,7 +937,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
     async fn on_event(
         &self,
         event: RoomEvent,
-        _binding: ChannelBinding,
+        binding: ChannelBinding,
         context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
         self.ingest(&event, &context).await;
@@ -934,7 +946,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         }
         let stands_alone = stands_alone(&event);
         let turn = current_turn_host();
-        let system_prompt = self.turn_system_prompt(&context, stands_alone);
+        let system_prompt = self.turn_system_prompt(&binding, &context, stands_alone);
         let tools = ToolContext::new(context.room.id.clone(), self.channel_id.clone())
             .within(turn.clone())
             .standing_alone(stands_alone)

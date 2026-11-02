@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- An AI channel's turn takes its binding's metadata `system_prompt` over
+  its own, as Python's `_turn_settings` reads the binding first (RFC §6.4,
+  §23.3 step 8, RMK-1208): a hand-back to an agent whose binding holds
+  "You are Marie, the host's persona." runs on that prompt, where the
+  turn's prompt was the channel's. A `null` there leaves the channel's.
 - An AI channel's provider failure is raised as Python's `ProviderError`
   (RFC §23.3 step 6, RMK-1208): a failed task's `exception`, the
   `process_inbound` result's `error`, `ON_ERROR`'s `error_type` and a
