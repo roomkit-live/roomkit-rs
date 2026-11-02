@@ -83,6 +83,10 @@ pub(crate) enum OpenAiError {
         /// API key removed.
         message: String,
     },
+    /// An image part's `data:` URI does not read (Python's
+    /// `image_part_payload`): checked before the request, which never goes.
+    #[error("invalid image part: {0}")]
+    Image(roomkit_core::rules::transcript::DataUriError),
     /// A tool's name is one the vendor refuses (RFC §6.7): checked before
     /// the request, which never goes.
     #[error("tool '{name}': {vendor} accepts tool names matching {rule}")]
@@ -228,6 +232,7 @@ impl From<OpenAiError> for ProviderError {
             OpenAiError::StreamFailed { message } => (names_transient(message), None, None),
             OpenAiError::ToolName { .. } => (false, None, Some(false)),
             OpenAiError::Credential(_)
+            | OpenAiError::Image(_)
             | OpenAiError::BaseUrl { .. }
             | OpenAiError::Client { .. }
             | OpenAiError::AnswerTooLong { .. }

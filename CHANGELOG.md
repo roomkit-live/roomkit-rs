@@ -14,6 +14,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a `..` segment, a backslash or a control character included; 5 MiB of
   bytes a `MediaResolver` gives resolve, where their base64's length read
   a byte more.
+- The OpenAI provider reads an image's data URI as Python's
+  `image_part_uri` (RMK-1197): whitespace and a missing padding repaired,
+  the URI rebuilt from its bytes; one that does not read, URL-safe base64
+  included, fails the turn before the request with `invalid image part:
+  …`, not retried, and the room then reads the image as refused.
 - A turn its provider failed after a round of calls reports, on
   `ON_AI_RESPONSE`, what the failed round had handed the room as its last
   segment (RFC §6.4, RMK-1199), as Python's: `["Let me look.", "Partial

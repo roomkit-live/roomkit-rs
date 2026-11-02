@@ -17,8 +17,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
-    ChannelId, ChannelType, ErrorRecord, EventType, InboundMessage, RoomEvent, RoomId, TextContent,
-    Timestamp,
+    ChannelId, ChannelType, ErrorRecord, EventType, InboundMessage, MediaContent, RoomEvent,
+    RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::{
     RecordingTransport, RecordingTransportOptions, SequentialEnvironment, kit_with_environment,
@@ -482,6 +482,43 @@ async fn a_provider_error_fails_the_turn_and_fires_on_error() {
     assert_eq!(text_of(&on_error.content), message);
     // The turn's response failed as it was read (RFC §12.2 step 13s).
     assert_eq!(on_error.metadata["error_category"], "streaming");
+}
+
+/// RMK-1197: an author's image whose `data:` URI does not read, here
+/// URL-safe base64, fails its turn before anything is sent, as Python's
+/// `image_part_uri` refuses it; the room then reads it as refused
+/// (Python's `RefusedImages`, RFC §6.4), so the next turn goes.
+// Python: tests/test_providers/test_image_parts.py::test_a_malformed_uri_is_a_non_retryable_provider_error_naming_the_cause
+#[tokio::test]
+async fn an_image_its_provider_cannot_read_fails_one_turn_then_reads_as_refused() {
+    let room = Room::configured(
+        vec![Reply::completion("I cannot see it.")],
+        API_KEY,
+        |config| OpenAiConfig {
+            vision: true,
+            ..config
+        },
+    )
+    .await;
+    let mut photo = MediaContent::new("data:image/png;base64,AQ-_BA==", "image/png").unwrap();
+    photo.filename = Some("lamp.png".to_owned());
+    let options = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    let message = InboundMessage::new(channel("web"), "alice", photo);
+    let first = room.kit.process_inbound(message, options).await.unwrap();
+    assert_eq!(
+        first.error.map(|error| error.message),
+        Some("invalid image part: data URI payload is not valid base64".to_owned())
+    );
+    assert!(room.fake.requests().is_empty(), "nothing is sent");
+    room.says(&room.web, "alice", "Alice", "and now?").await;
+    let sent = Value::Array(messages(&room.fake, 0)).to_string();
+    assert!(
+        sent.contains("[Image refused by the model's provider: “lamp.png”]"),
+        "{sent}"
+    );
 }
 
 #[tokio::test]

@@ -44,6 +44,23 @@ pub(crate) fn answer(provider: &OpenAiAiProvider, request: Request) -> ProviderS
     })
 }
 
+/// A generation refused before its request was sent: its error, then
+/// nothing.
+pub(crate) fn refused<'a>(error: OpenAiError) -> ProviderStream<'a> {
+    Box::pin(Refused(Some(error.into())))
+}
+
+/// The error a refused generation hands, once.
+struct Refused(Option<ProviderError>);
+
+impl Stream for Refused {
+    type Item = Item;
+
+    fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Item>> {
+        Poll::Ready(self.get_mut().0.take().map(Err))
+    }
+}
+
 /// A generation's stream: the step that reads its next event, run only as
 /// the stream is polled.
 struct Answer<'a> {

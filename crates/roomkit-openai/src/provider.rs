@@ -172,7 +172,10 @@ impl AiProvider for OpenAiAiProvider {
     }
 
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
-        stream::answer(self, Request::of(context))
+        match Request::of(context) {
+            Ok(request) => stream::answer(self, request),
+            Err(error) => stream::refused(error),
+        }
     }
 }
 

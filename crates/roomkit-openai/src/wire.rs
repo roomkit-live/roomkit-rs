@@ -878,7 +878,7 @@ mod image_tests {
             )],
             ..AiContext::default()
         };
-        let request = Request::of(&context);
+        let request = Request::of(&context).unwrap();
         let config = OpenAiConfig {
             base_url: Some("http://localhost/v1".into()),
             vision: true,

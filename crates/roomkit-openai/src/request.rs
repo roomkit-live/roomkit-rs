@@ -8,7 +8,9 @@ use roomkit_ai::{
     AiContentPart, AiContext, AiMessage, AiMessageContent, AiRole, AiTool, StreamDone, StreamEvent,
     StreamTextDelta, read_tool_calls,
 };
-use roomkit_core::rules::transcript::{Image, Message, Part, Role};
+use roomkit_core::rules::transcript::{Image, Message, Part, Role, parse_data_uri};
+
+use crate::error::OpenAiError;
 
 /// What one generation asks: the system prompt, the conversation as the
 /// transcript writes it, the tools.
@@ -25,21 +27,30 @@ pub(crate) struct Request {
 
 impl Request {
     /// The request `context` stands for.
-    pub(crate) fn of(context: &AiContext) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// [`OpenAiError::Image`] for an image part whose `data:` URI does not
+    /// read: the request is never sent.
+    pub(crate) fn of(context: &AiContext) -> Result<Self, OpenAiError> {
+        let mut written = Vec::new();
+        for message in &context.messages {
+            written.extend(messages(message)?);
+        }
+        Ok(Self {
             system_prompt: context.system_prompt.clone(),
-            messages: context.messages.iter().flat_map(messages).collect(),
+            messages: written,
             tools: context.tools.clone(),
             temperature: Some(context.temperature),
             max_tokens: context.max_tokens,
-        }
+        })
     }
 }
 
 /// The transcript messages `message` is: a round's tool message is one per
 /// result, each answering its call (Python's `chat_request._rendered`);
 /// any other is one.
-fn messages(message: &AiMessage) -> Vec<Message> {
+fn messages(message: &AiMessage) -> Result<Vec<Message>, OpenAiError> {
     let results: Vec<_> = match &message.content {
         AiMessageContent::Parts(parts) => parts
             .iter()
@@ -53,9 +64,9 @@ fn messages(message: &AiMessage) -> Vec<Message> {
         AiMessageContent::Text(_) => Vec::new(),
     };
     if results.len() < 2 {
-        return vec![self::message(message)];
+        return Ok(vec![self::message(message)?]);
     }
-    results
+    Ok(results
         .into_iter()
         .map(|result| {
             let mut written = Message::tool_result(&result.tool_call_id, &result.result);
@@ -63,18 +74,18 @@ fn messages(message: &AiMessage) -> Vec<Message> {
             written.metadata.clone_from(&message.metadata);
             written
         })
-        .collect()
+        .collect())
 }
 
 /// `message` as the transcript writes it: its text, its images, its calls,
 /// the call its result answers; a message of text and images keeps its
 /// parts in order, each image at its place (Python's `chat_request._plain`).
-fn message(message: &AiMessage) -> Message {
+fn message(message: &AiMessage) -> Result<Message, OpenAiError> {
     let parts: &[AiContentPart] = match &message.content {
         AiMessageContent::Text(text) => {
             let mut written = Message::new(role(message.role), text.clone());
             written.metadata.clone_from(&message.metadata);
-            return written;
+            return Ok(written);
         }
         AiMessageContent::Parts(parts) => parts,
     };
@@ -91,7 +102,7 @@ fn message(message: &AiMessage) -> Message {
             }
             AiContentPart::Image(image) => {
                 let mime_type = image.mime_type.as_deref().unwrap_or_default();
-                if let Some(image) = Image::new(&image.url, mime_type) {
+                if let Some(image) = read_image(&image.url, mime_type)? {
                     ordered.push(Part::Image(image.clone()));
                     images.push(image);
                 }
@@ -116,7 +127,26 @@ fn message(message: &AiMessage) -> Message {
     };
     written.images = images;
     written.metadata.clone_from(&message.metadata);
-    written
+    Ok(written)
+}
+
+/// The image a part names, as Python's `image_part_uri` forwards it: a
+/// link as it is, a `data:` URI read and rebuilt from its bytes, so that
+/// whitespace and a missing padding are repaired and only the type stays
+/// of its header; `None` for one the transcript does not take.
+///
+/// # Errors
+///
+/// [`OpenAiError::Image`] for a `data:` URI that does not read (no
+/// payload, no base64, the URL-safe alphabet's included): the request is
+/// never sent.
+fn read_image(url: &str, mime_type: &str) -> Result<Option<Image>, OpenAiError> {
+    if !url.starts_with("data:") {
+        return Ok(Image::new(url, mime_type));
+    }
+    let fallback = Some(mime_type).filter(|kind| !kind.is_empty());
+    let (kind, data) = parse_data_uri(url, fallback).map_err(OpenAiError::Image)?;
+    Ok(Image::from_bytes(&data, &kind))
 }
 
 /// The transcript's role of `role`; the system's reads as a user's, the
@@ -209,6 +239,28 @@ mod tests {
 
     use super::*;
 
+    // Python: tests/test_providers/test_image_parts.py::test_uri_is_rebuilt_for_a_data_uri_and_untouched_for_a_url
+    #[test]
+    fn uri_is_rebuilt_for_a_data_uri_and_untouched_for_a_url() {
+        let read = |url: &str| {
+            read_image(url, "image/png")
+                .unwrap()
+                .map(|image| image.url().to_owned())
+        };
+        assert_eq!(
+            [
+                read("data:;base64,QUJD\nMTIz"),
+                read("data:image/png;name=lamp.png;base64,QUJDMTI"),
+                read("https://example.com/a.png"),
+            ],
+            [
+                Some("data:image/png;base64,QUJDMTIz".to_owned()),
+                Some("data:image/png;base64,QUJDMTI=".to_owned()),
+                Some("https://example.com/a.png".to_owned()),
+            ]
+        );
+    }
+
     // Python: tests/test_providers/test_chat_request.py::test_an_image_result_rides_a_user_message_after_the_tool_messages
     // (its tool messages: one per result of the round's one message)
     #[test]
@@ -224,6 +276,7 @@ mod tests {
             ..AiContext::default()
         };
         let written: Vec<(Role, Option<String>, String)> = Request::of(&context)
+            .unwrap()
             .messages
             .into_iter()
             .map(|message| (message.role, message.tool_call_id, message.text))
