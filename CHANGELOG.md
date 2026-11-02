@@ -10,12 +10,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   metadata sets, over the channel's own, as Python's `_turn_settings`
   (RFC §6.4, Appendix A.9, RMK-1237), a `null` there not set. Unlike
   Python's, which hands any value to its model's validation, a
-  temperature that is no number and a max tokens that is no whole
-  number in `u32` are not set either. The binding's other settings
+  temperature that is no JSON number and a max tokens that is no JSON
+  integer from 0 to `u32::MAX` (a `64.0`, a `"64"`, a `-5`) are not set
+  either. The binding's other settings
   (thinking, reasoning effort, response schema, turn budgets) are not
   read yet.
 - A buffered reply's end and usage go under its caller's `turns`, by its
-  channel, read off its turn's record or else its last message, as
+  channel, read off its turn's record or else the last of its messages
+  that names one, as
   Python's `record_buffered_reply` (RFC §6.4, RMK-1235): `{x: 1, turns:
   {bot: {loop_end_reason: completed}}}` where it read `{loop_end_reason:
   completed, x: 1}`. Every agent reply's record, a stream's first one
