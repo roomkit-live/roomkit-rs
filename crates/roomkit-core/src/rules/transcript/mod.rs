@@ -636,13 +636,18 @@ pub fn turn_labels<'a>(
 /// content's text form (§6.6), each of its lines under its speaker's label
 /// when the room has several speakers, as the turn's history labels them;
 /// `None` for an event that reads as no text, which waits a turn of its
-/// own. Python's `steered_message`, its speakers counted by label among the
-/// context's events and `event`.
+/// own, and for an edit or a delete, no message a turn may answer (RFC
+/// §10.3), whose own turn the agent does not take. Python's
+/// `steered_message`, its speakers counted by label among the context's
+/// events and `event`.
 pub fn steered_text(
     event: &RoomEvent,
     context: &RoomContext,
     channel_id: &ChannelId,
 ) -> Option<String> {
+    if matches!(event.r#type, EventType::Edit | EventType::Delete) {
+        return None;
+    }
     let text = text_of(&event.content);
     if text.is_empty() {
         return None;

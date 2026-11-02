@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    Cancel, EventContent, EventType, InjectMessage, RoomEvent, SteeringDirective,
+    Cancel, DeleteContent, EditContent, EventContent, EventId, EventType, InjectMessage, RoomEvent,
+    SteeringDirective,
 };
 use roomkit::{ConversationStore, RoomKit, RoomKitError, SteerOptions, current_turn_host};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
@@ -671,6 +672,81 @@ async fn a_message_while_the_model_answers_is_answered_by_the_same_turn() {
     assert!(read(&requests[1], STEERED));
     assert_eq!(bodies(&room, "assistant").await, ["a.py, b.txt", "a.py"]);
     room.kit.close().await.unwrap();
+}
+
+/// A change of the turn's message, sent while the model answers: steered,
+/// it returns at once; waiting its place, once the turn ends. The model's
+/// requests once both are over.
+async fn a_change_while_the_model_answers(
+    change: impl FnOnce(EventId) -> roomkit::model::InboundMessage,
+) -> Vec<AiContext> {
+    let model = Gated::new(
+        [
+            ScriptedRound::answering("a.py, b.txt"),
+            ScriptedRound::answering("a.py"),
+        ],
+        0,
+    );
+    let room = Arc::new(steering_turns(model.clone(), Paused::new().tools()).await);
+    let turn = first_turn(&room);
+    model.answering().await;
+    let target = room
+        .timeline()
+        .await
+        .into_iter()
+        .find(|event| event.r#type == EventType::Message)
+        .unwrap()
+        .id;
+    let mut sent = {
+        let room = Arc::clone(&room);
+        let message = change(target);
+        tokio::spawn(async move {
+            let options = roomkit::ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            };
+            room.kit.process_inbound(message, options).await.unwrap()
+        })
+    };
+    let early = tokio::time::timeout(std::time::Duration::from_millis(50), &mut sent).await;
+    model.release();
+    turn.await.unwrap();
+    let result = match early {
+        Ok(joined) => joined.unwrap(),
+        Err(_) => sent.await.unwrap(),
+    };
+    assert!(!result.blocked, "{:?}", result.reason);
+    room.kit.close().await.unwrap();
+    model.requests()
+}
+
+// Python: tests/test_steering_during_turn.py::test_an_edit_or_a_delete_while_the_model_answers_is_not_steered
+#[tokio::test]
+async fn an_edit_while_the_model_answers_is_not_steered() {
+    let requests = a_change_while_the_model_answers(|target| {
+        let edit = EditContent::new(
+            target,
+            roomkit::model::TextContent::new("List the .py files."),
+        );
+        let mut message = roomkit::model::InboundMessage::new(channel("sms"), "+15550001", edit);
+        message.event_type = EventType::Edit;
+        message
+    })
+    .await;
+    assert_eq!(requests.len(), 1);
+}
+
+// Python: tests/test_steering_during_turn.py::test_an_edit_or_a_delete_while_the_model_answers_is_not_steered
+#[tokio::test]
+async fn a_delete_while_the_model_answers_is_not_steered() {
+    let requests = a_change_while_the_model_answers(|target| {
+        let delete = DeleteContent::new(target);
+        let mut message = roomkit::model::InboundMessage::new(channel("sms"), "+15550001", delete);
+        message.event_type = EventType::Delete;
+        message
+    })
+    .await;
+    assert_eq!(requests.len(), 1);
 }
 
 // Python: tests/test_steering_during_turn.py::test_off_a_message_during_a_turn_starts_its_own
