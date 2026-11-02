@@ -1021,6 +1021,15 @@ fn cancel_task_options_defaults_as_python() {
 }
 
 #[test]
+fn delivery_handle_cancel_options_defaults_as_python() {
+    let defaults = roomkit::CancelOptions::default();
+    // roomkit.DeliveryHandle.cancel(reason) = 'caller_cancelled'
+    assert_eq!(defaults.reason, "caller_cancelled");
+    // roomkit.DeliveryHandle.cancel(timeout) = 5.0
+    assert_eq!(defaults.timeout, Duration::from_secs(5));
+}
+
+#[test]
 fn cancel_delivery_options_defaults_as_python() {
     let defaults = roomkit::CancelDeliveryOptions::default();
     // roomkit.RoomKit.cancel_delivery(reason) = 'caller_cancelled'

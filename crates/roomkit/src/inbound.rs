@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, PoisonError};
+use std::time::Duration;
 
 use roomkit_core::model::{ChannelId, DeliveryResult, ErrorRecord, Metadata, RoomEvent};
 use roomkit_core::ops::{self, KIT_CLOSED};
@@ -113,6 +114,27 @@ impl InboundResult {
 impl From<ops::InboundResult> for InboundResult {
     fn from(result: ops::InboundResult) -> Self {
         Self::of(result, None)
+    }
+}
+
+/// What [`DeliveryHandle::cancel`] takes: Python's
+/// `cancel(*, reason='caller_cancelled', timeout=5.0)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CancelOptions {
+    /// Python `reason='caller_cancelled'`: why, the result's
+    /// `cancellation_reason`; a handle cancelled already keeps its first.
+    pub reason: String,
+    /// Python `timeout=5.0`: how long the cancel waits for the turns it
+    /// cuts to be over.
+    pub timeout: Duration,
+}
+
+impl Default for CancelOptions {
+    fn default() -> Self {
+        Self {
+            reason: driver::CALLER_CANCELLED.to_owned(),
+            timeout: Duration::from_secs(5),
+        }
     }
 }
 
@@ -250,6 +272,45 @@ impl DeliveryHandle {
         }
     }
 
+    /// Stops this call's turns and waits for them to be over (RFC §10.1
+    /// "Explicit delivery cancellation"), then reports the call as
+    /// [`wait`](Self::wait) does, `cancellation_reason` the reason given: a
+    /// turn not started never starts, a running one is cut, and nothing
+    /// answers the message after. The message itself stays stored and is
+    /// still delivered to the room's other channels; a delivery still
+    /// waiting in the room's lane follows in lane order. Other turns are not
+    /// touched. A second cancel keeps the first reason; a handle done
+    /// returns its result unchanged. Code without the handle cancels the
+    /// same way by the message's `delivery_key`
+    /// ([`cancel_delivery`](crate::RoomKit::cancel_delivery)).
+    ///
+    /// Dropped before it returns, the cancel stands: the cut turns end
+    /// without this caller, and [`wait`](Self::wait) joins them.
+    ///
+    /// # Errors
+    ///
+    /// [`RoomKitError::Timeout`] when the cut turns are not over within
+    /// `timeout`: their cleanup still runs, and [`wait`](Self::wait) joins
+    /// it; [`RoomKitError::Runtime`] when called, the delivery not done,
+    /// from the room's own work where its cleanup would wait for this call,
+    /// a turn or a delivery in the room, or a hook under its lock: nothing is
+    /// cancelled; what [`wait`](Self::wait) fails with.
+    pub async fn cancel(&self, options: CancelOptions) -> Result<InboundResult, RoomKitError> {
+        let CancelOptions { reason, timeout } = options;
+        if self.done() {
+            return self.wait().await;
+        }
+        if self.shared.waits_for_itself() {
+            return Err(RoomKitError::Runtime(
+                "Cannot drain delivery from its lane or room lock".to_owned(),
+            ));
+        }
+        self.shared.request_cancel(&reason);
+        tokio::time::timeout(timeout, self.wait())
+            .await
+            .map_err(|_elapsed| RoomKitError::Timeout)?
+    }
+
     /// Waits until the delivery is over, then reports the call as one that
     /// waited for it would have: its `delivery_results`, `error`,
     /// `response_metadata`, `response_events` and `cancellation_reason`
@@ -297,6 +358,20 @@ impl DeliveryHandle {
 }
 
 impl Shared {
+    /// Asks the run that delivers the call, or the run that adopted it, to
+    /// cut its turns, for `reason`.
+    fn request_cancel(&self, reason: &str) {
+        match &self.following {
+            Following::Run { record, .. } => {
+                record.request_cancel(reason);
+            }
+            Following::Adopted(completion) => {
+                completion.cancel.request(reason);
+            }
+            Following::Nothing => {}
+        }
+    }
+
     /// Whether a wait in the current task's context would wait for itself:
     /// the context is work of the event's room that the delivery waits for.
     fn waits_for_itself(&self) -> bool {

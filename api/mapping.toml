@@ -520,11 +520,6 @@ params = ["session"]
 reason = "not in 0.x: voice and video"
 
 [[missing]]
-python = "roomkit.DeliveryHandle"
-members = ["cancel"]
-reason = "Rust exposes request_cancel plus wait for owned detached runs; Python cancel and cancellation of adopted delivery are not yet mapped"
-
-[[missing]]
 python = "roomkit.InboundResult"
 members = ["report_cascade"]
 reason = "not ported: plumbing (lot 2)"
