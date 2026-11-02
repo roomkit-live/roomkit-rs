@@ -9,10 +9,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A failed task's exception and a turn's error record keep the error's
   attributes, as Python's `error_record` (RMK-1239): `ErrorRecord`'s
   `attributes`, a provider error's `retryable`, `provider`, `status_code`
-  and `context_overflow`, which `wait_task` hands on. An agent's delivery
-  that an error failed before its turn reads that error's `retryable`, as
-  Python's `_delivery_error`: a `ProviderError` (a budget-aware memory's
-  overflow) is not retryable, where it read retryable. Breaking:
+  and `context_overflow`, a task cut short's `reason` and `narration`, a
+  turn link's `reason`, which `wait_task` hands on. A delivery failed by
+  a raised error reads the `code` and the `retryable` its record
+  declares, as Python's `_delivery_error`: a `ProviderError` (a
+  budget-aware memory's overflow) is not retryable, where it read
+  retryable. Breaking:
   `ErrorRecord` has the new public field `attributes`; build one with
   `ErrorRecord::new`, or add `attributes: Box::default()` to a struct
   literal.
@@ -29,7 +31,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   registered` for most, `Agent channel 'worker' not registered` from
   `delegate`, and `Channel 'worker' is not registered: a strategy names by
   its id an agent the kit holds, live or by its declaration` from
-  `setup_background` and `setup_task_tools`. Match it with
+  `setup_background` and `setup_task_tools`, which refuse a channel
+  that is no intelligence channel first, as Python's `held_agent`:
+  `Channel 'sms' is not an intelligence channel`. Match it with
   `RoomKitError::ChannelNotRegistered { channel_id, .. }` where
   `RoomKitError::ChannelNotRegistered(channel_id)` was written.
 - `Channel::on_room_attached` and `Channel::on_room_detached`, as Python's
