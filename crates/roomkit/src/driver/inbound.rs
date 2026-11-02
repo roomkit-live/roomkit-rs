@@ -46,7 +46,7 @@ use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::{RoomKitError, with_causes};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::tasks::{Kind, Tasks};
+use crate::tasks::{Kind, Marks, Tasks};
 use crate::turns::Canceller;
 use crate::turns::TURN_LINK_ERROR;
 
@@ -587,6 +587,10 @@ async fn run_leased<S: ConversationStore>(
     let run = async move {
         // The key names the delivery until the run is over.
         let _named = named;
+        // A deferred delivery goes on apart from its caller, as Python's
+        // task of its own: the cut of a held task its caller works for
+        // does not reach its turns (RFC §23.3).
+        let _apart = defer.then(|| kit.tasks.task_cuts.apart(&Marks::current()));
         let environment = kit.environment();
         let output = super::drive(
             &kit,

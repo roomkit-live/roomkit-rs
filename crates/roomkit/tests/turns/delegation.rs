@@ -395,3 +395,134 @@ async fn an_inline_delegation_cut_while_its_tool_runs_leaves_no_call_open() {
     );
     kit.close().await.unwrap();
 }
+
+/// An agent named `id` that says `first` and calls `tool`, then answers
+/// `last`.
+fn calling_agent<F, R>(
+    id: &str,
+    first: &str,
+    tool: &str,
+    run: F,
+    last: &str,
+) -> AiChannel<ScriptedProvider>
+where
+    F: Fn(roomkit::model::ToolCall, roomkit_ai::ToolContext) -> R + Send + Sync + 'static,
+    R: Future<Output = Result<ToolResult, roomkit_ai::ToolError>> + Send + 'static,
+{
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling(first, [("c1", tool, "{}")]),
+        ScriptedRound::answering(last),
+    ]);
+    let options = AiChannelOptions {
+        tools: Tools::new()
+            .tool(AiTool::new(tool, "d").unwrap(), run)
+            .into(),
+        ..AiChannelOptions::default()
+    };
+    AiChannel::new(channel(id), model, options).unwrap()
+}
+
+// RFC §23.3: a deferred delivery the worker's tool started runs apart from
+// the task, as Python's `_defer_inbound_delivery` runs it on a task of its
+// own: cancelling the task leaves the turns of that delivery to their end.
+#[tokio::test]
+async fn a_cancel_leaves_a_delivery_the_worker_deferred_to_its_end() {
+    let kit_slot: Arc<std::sync::Mutex<Option<RoomKit>>> = Arc::default();
+    let posted = Arc::new(Notify::new());
+    let (held, told) = (Arc::clone(&kit_slot), Arc::clone(&posted));
+    let post = move |_call, _context| {
+        let (held, told) = (Arc::clone(&held), Arc::clone(&told));
+        async move {
+            let kit = held.lock().unwrap().clone().unwrap();
+            let message = InboundMessage::new(
+                channel("sms"),
+                "+15550000001",
+                roomkit::model::TextContent::new("from the worker"),
+            );
+            let options = roomkit::ProcessInboundOptions {
+                room_id: Some(room()),
+                defer_delivery: true,
+                ..roomkit::ProcessInboundOptions::default()
+            };
+            kit.process_inbound(message, options).await.unwrap();
+            told.notify_one();
+            pending::<Result<ToolResult, roomkit_ai::ToolError>>().await
+        }
+    };
+    let worker = calling_agent("worker", "Posting.", "post", post, "Worker done.");
+    let (started, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (running, released) = (Arc::clone(&started), Arc::clone(&release));
+    let slow = move |_call, _context| {
+        let (running, released) = (Arc::clone(&running), Arc::clone(&released));
+        async move {
+            running.notify_one();
+            released.notified().await;
+            Ok(ToolResult::Text("slow done".to_owned()))
+        }
+    };
+    let helper = calling_agent("helper", "Helping.", "slow", slow, "Helper done.");
+    let kit = kit_of(worker).await;
+    let sms = roomkit::testing::RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        roomkit::testing::RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    kit.register_channel(helper).unwrap();
+    for id in ["sms", "helper"] {
+        kit.attach_channel(
+            &room(),
+            &channel(id),
+            roomkit::AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    *kit_slot.lock().unwrap() = Some(kit.clone());
+    let task = kit
+        .delegate(
+            &room(),
+            &channel("worker"),
+            "go",
+            DelegateOptions::default(),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(BOUND, async {
+        posted.notified().await;
+        started.notified().await;
+    })
+    .await
+    .unwrap();
+
+    let cancelled = kit
+        .cancel_task(&task.id, CancelTaskOptions::default())
+        .await;
+    release.notify_one();
+    roomkit::testing::idle(&kit).await;
+
+    let rows = rows_of(&kit, &room(), "helper").await;
+    assert_eq!(
+        (cancelled, rows),
+        (
+            true,
+            vec![
+                (EventType::Message, "Helping.".to_owned(), None, None),
+                (
+                    EventType::ToolCallStart,
+                    "slow".to_owned(),
+                    Some(ToolCallStatus::Pending),
+                    None
+                ),
+                (
+                    EventType::ToolCallEnd,
+                    "slow".to_owned(),
+                    Some(ToolCallStatus::Completed),
+                    None
+                ),
+                (EventType::Message, "Helper done.".to_owned(), None, None),
+            ]
+        )
+    );
+    kit.close().await.unwrap();
+}

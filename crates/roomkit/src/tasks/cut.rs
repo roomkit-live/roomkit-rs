@@ -9,7 +9,9 @@
 //! marked `cancelled` and its open calls ended `failed`, as Python's
 //! reader does in its `finally`; the work is dropped once no read runs.
 //! A read finds the cut of the task its code runs within by its marks:
-//! the innermost unit a held task's work runs in.
+//! the innermost unit a held task's work runs in, unless a run set apart
+//! from that work stands between them (a deferred delivery, which Python
+//! runs as a task of its own).
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -101,41 +103,66 @@ impl Drop for TaskRead {
     }
 }
 
-/// The cuts of the held tasks' works, by the unit each work runs in.
+/// What a unit is to the reads within it.
+#[derive(Debug)]
+enum Mark {
+    /// A held task's work runs in it, cut with this.
+    Cut(Arc<TaskCut>),
+    /// A run set apart from the work that started it runs in it.
+    Apart,
+}
+
+/// The cuts of the held tasks' works, by the unit each work runs in, and
+/// the runs set apart from them.
 #[derive(Debug, Default)]
 pub(crate) struct TaskCuts {
-    cuts: Mutex<HashMap<Unit, Arc<TaskCut>>>,
+    marks: Mutex<HashMap<Unit, Mark>>,
 }
 
 impl TaskCuts {
     /// Registers `cut` as the cut of the work running in `unit` until the
     /// guard drops.
     pub(crate) fn register(self: &Arc<Self>, unit: Unit, cut: Arc<TaskCut>) -> Registered {
-        self.lock().insert(unit, cut);
+        self.mark(unit, Mark::Cut(cut))
+    }
+
+    /// Sets the run in the innermost unit of `marks` apart from the work
+    /// that started it until the guard drops: no cut of a task that work
+    /// belongs to reaches the reads within it.
+    pub(crate) fn apart(self: &Arc<Self>, marks: &Marks) -> Option<Registered> {
+        Some(self.mark(marks.innermost()?, Mark::Apart))
+    }
+
+    /// The cut of the held task whose work the code of `marks` runs
+    /// within, the innermost: a background task a task's work started
+    /// runs within that work, and only its own cut stops it; none past a
+    /// run set apart.
+    pub(crate) fn of(&self, marks: &Marks) -> Option<Arc<TaskCut>> {
+        let held = self.lock();
+        for unit in marks.units().iter().rev() {
+            match held.get(unit) {
+                Some(Mark::Cut(cut)) => return Some(Arc::clone(cut)),
+                Some(Mark::Apart) => return None,
+                None => {}
+            }
+        }
+        None
+    }
+
+    fn mark(self: &Arc<Self>, unit: Unit, mark: Mark) -> Registered {
+        self.lock().insert(unit, mark);
         Registered {
             cuts: Arc::clone(self),
             unit,
         }
     }
 
-    /// The cut of the held task whose work the code of `marks` runs
-    /// within, the innermost: a background task a task's work started
-    /// runs within that work, and only its own cut stops it.
-    pub(crate) fn of(&self, marks: &Marks) -> Option<Arc<TaskCut>> {
-        let cuts = self.lock();
-        marks
-            .units()
-            .iter()
-            .rev()
-            .find_map(|unit| cuts.get(unit).cloned())
-    }
-
-    fn lock(&self) -> MutexGuard<'_, HashMap<Unit, Arc<TaskCut>>> {
-        self.cuts.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> MutexGuard<'_, HashMap<Unit, Mark>> {
+        self.marks.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
-/// A work's cut registered, until it drops.
+/// A unit's mark registered, until it drops.
 #[derive(Debug)]
 pub(crate) struct Registered {
     cuts: Arc<TaskCuts>,
@@ -153,7 +180,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_read_finds_the_cut_of_its_innermost_held_work() {
+    fn a_read_finds_the_cut_of_its_innermost_held_work_short_of_a_run_apart() {
         let cuts = Arc::new(TaskCuts::default());
         let (outer, inner) = (Unit::new(), Unit::new());
         let (outer_cut, inner_cut) = (Arc::new(TaskCut::default()), Arc::new(TaskCut::default()));
@@ -163,5 +190,11 @@ mod tests {
         assert!(Arc::ptr_eq(&cuts.of(&marks).unwrap(), &inner_cut));
         drop(held);
         assert!(Arc::ptr_eq(&cuts.of(&marks).unwrap(), &outer_cut));
+        let deferred = Marks::default().with(outer).with(Unit::new());
+        let apart = cuts.apart(&deferred);
+        let within = deferred.with(Unit::new());
+        assert!(cuts.of(&within).is_none());
+        drop(apart);
+        assert!(cuts.of(&within).is_some());
     }
 }
