@@ -12,6 +12,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `TaskCutShortError` for a worker cut short), which `TurnHost::wait_task`
   reads beside the result; the kit's close ends each background task its
   runner holds `cancelled`, its observers told, nothing handed back.
+- `AiChannel` reads its history through a memory (RFC §20), Python's:
+  `roomkit_ai::memory::{MemoryProvider, MemoryResult, SlidingWindowMemory}`
+  and `AiChannelOptions::memory`, the default a `SlidingWindowMemory` of
+  `max_context_events`. Its window holds the turn's own event, so a turn
+  reads one message fewer before its input, and none of the agent's tool
+  rows (RMK-1072). A memory's messages come before the history, it learns
+  every event the channel is handed but its own, a tool row or an
+  instruction, and the channel's close closes it.
 - `DelegateOptions::conversation` and `RoomKit::start_task(room_id,
   agent_id, task, StartTaskOptions { hand_back, organization_id })`,
   Python's (RFC §23.3 step 4, §23.4, RMK-1144, RMK-1158): a worker reads
