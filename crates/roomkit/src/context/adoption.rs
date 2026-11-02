@@ -8,7 +8,7 @@ use roomkit_core::ops::{EffectId, Entry, InboundError, InboundResult};
 use tokio::sync::{oneshot, watch};
 
 use super::{ExecutionContext, Frame};
-use crate::delivery_keys::CancelRequest;
+use crate::delivery_keys::{CancelRequest, Named};
 use crate::driver::StoredAnswers;
 
 /// What an adopted entry's caller receives (RFC §10.1 step 18).
@@ -45,6 +45,12 @@ pub(crate) struct Adoption {
     /// The cut of its turns its caller asks for, which the run carries out
     /// once asked.
     pub(crate) cancel: Arc<CancelRequest>,
+    /// The name its delivery key gives it, if its call has a key: the run
+    /// that adopts it names its delivery from its settling, under the
+    /// room's lock, so that an event held for verification is held by the
+    /// key before any release can reach it (RFC §11.7.6), as Python's
+    /// `_name_held`, until its set ran.
+    pub(crate) named: Option<Arc<Named>>,
 }
 
 /// The answer of the run a call into its room was handed to.
@@ -74,8 +80,9 @@ pub(crate) enum Adopting {
 /// its room's lock or in its admission order made it, if any: the call is
 /// adopted by that run's operation, or declined (RFC §13.5, §9.5.1
 /// Reentrance). A call whose context hands it its room's lock runs apart,
-/// nested under that lock ([`Hand`](super::Hand)).
-pub(crate) async fn adopt(entry: Entry) -> Adopting {
+/// nested under that lock ([`Hand`](super::Hand)). Its delivery is named by
+/// `named`, a key's name of it, if any.
+pub(crate) async fn adopt(entry: Entry, named: Option<Arc<Named>>) -> Adopting {
     let context = ExecutionContext::current();
     if context.hands(entry.room_id()) {
         return Adopting::Apart(entry);
@@ -83,7 +90,7 @@ pub(crate) async fn adopt(entry: Entry) -> Adopting {
     let Some(frame) = context.taker(entry.room_id()).cloned() else {
         return Adopting::Apart(entry);
     };
-    hand(&frame, entry).await
+    hand(&frame, entry, named).await
 }
 
 /// Hands `entry` to the run whose call the current task runs, the innermost
@@ -94,11 +101,12 @@ pub(crate) async fn adopt_by_own_run(entry: Entry) -> Adopting {
     let Some(frame) = context.frames.last().cloned() else {
         return Adopting::Apart(entry);
     };
-    hand(&frame, entry).await
+    hand(&frame, entry, None).await
 }
 
-/// Hands `entry` to `frame`'s run, and waits for its decision.
-async fn hand(frame: &Frame, entry: Entry) -> Adopting {
+/// Hands `entry`, named by `named`, to `frame`'s run, and waits for its
+/// decision.
+async fn hand(frame: &Frame, entry: Entry, named: Option<Arc<Named>>) -> Adopting {
     let (reply, answer) = oneshot::channel();
     let (delivered, told) = watch::channel(None);
     let answers = Arc::new(StoredAnswers::default());
@@ -115,6 +123,7 @@ async fn hand(frame: &Frame, entry: Entry) -> Adopting {
         delivered,
         answers,
         cancel,
+        named,
     };
     if let Err(unsent) = frame.run.hand(adoption) {
         // The run is over: it holds nothing of the room any more.

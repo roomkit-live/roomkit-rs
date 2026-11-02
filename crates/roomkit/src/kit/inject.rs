@@ -19,7 +19,7 @@ use crate::driver::{self, InboundOutput, Ran, Record, Stop};
 use crate::error::RoomKitError;
 use crate::inbound::DeliveryHandle;
 use crate::store::ConversationStore;
-use crate::tasks::{Kind, Tasks};
+use crate::tasks::Tasks;
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Injects an event of `content` from the registered channel
@@ -221,11 +221,13 @@ impl<S: ConversationStore> RoomKit<S> {
         {
             self.locate_in_room(named.named(), entry.room_id()).await;
         }
-        let entry = match context::adopt(entry).await {
+        let adopted_named = named
+            .as_ref()
+            .filter(|named| named.named().has_key())
+            .map(|named| Arc::clone(named.named()));
+        let entry = match context::adopt(entry, adopted_named).await {
+            // The run that adopted it names its delivery until its set ran.
             Adopting::Settled(result, completion) => {
-                if let Some(named) = named.filter(|named| named.named().has_key()) {
-                    self.name_adopted(named, &result, &completion);
-                }
                 return Ok(Entered {
                     result: (*result).map_err(refused)?,
                     following: Following::Adopted(completion),
@@ -245,33 +247,6 @@ impl<S: ConversationStore> RoomKit<S> {
         let ran =
             driver::run_inbound(&self.inner, call, Some(&room_id), operation, defer, named).await;
         Entered::ran(ran, refused)
-    }
-
-    /// Names the delivery of a call the room's work adopted by `named`
-    /// until its set ran, as `completion` tells: a cancellation by its key
-    /// cuts the turns of the entry's cascade in the run that adopted it.
-    /// Decided as `result` tells, it holds its event held for verification
-    /// until its release, as any call's (RFC §11.7.6); Python's adopted call
-    /// takes `_name_held`. Called as the call settles, before the room's work
-    /// that adopted it goes on, so under its lock: no release reaches the
-    /// event before.
-    fn name_adopted(
-        &self,
-        mut named: NamedGuard,
-        result: &Result<InboundResult, InboundError>,
-        completion: &Completion,
-    ) {
-        if let Ok(result) = result {
-            named.named().decided(result);
-        }
-        named.attach(Arc::clone(&completion.cancel));
-        let mut delivered = completion.delivered.clone();
-        let over = async move {
-            // Closed, the adopting run is over: the delivery with it.
-            drop(delivered.wait_for(Option::is_some).await);
-            drop(named);
-        };
-        drop(self.inner.tasks.spawn_alone(Kind::Turn, over));
     }
 
     /// Locates `named`, the delivery of a call made from the work of

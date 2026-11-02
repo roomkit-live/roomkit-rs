@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A message the room's work adopts in its admission order (an off-lock
+  hook's or a parse's `process_inbound` into its room), named by its
+  delivery key, is named as the run that adopted it settles it, under the
+  room's lock, as Python's `_name_held` (RFC §11.7.6, RMK-1200): held for
+  verification, it is held by its key before any release can reach it,
+  where its caller named it once it resumed, after the lock was let go.
 - A release made from a SYNC hook (`complete_verification` under the
   room's lock) places its answer in the room's lane at the release, and the
   answer leaves its place once the hook's section is over, as Python's

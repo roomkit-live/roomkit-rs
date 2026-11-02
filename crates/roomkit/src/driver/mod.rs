@@ -62,7 +62,7 @@ pub(crate) use self::inbound::{
 };
 use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
-use crate::delivery_keys::CancelRequest;
+use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::RoomKitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
@@ -342,6 +342,8 @@ async fn drive<S: ConversationStore, O: Operation>(
         deliveries: HashMap::new(),
         entry_answers: HashMap::new(),
         entry_cancels: HashMap::new(),
+        entry_named: HashMap::new(),
+        entry_names: HashMap::new(),
         clocks: Clocks::read(&*environment),
         environment,
         refused: None,
@@ -402,6 +404,11 @@ struct Driver<'kit, S> {
     /// The cut each adopted entry's caller may ask of its turns, until
     /// asked (RFC §10.1 "Explicit delivery cancellation").
     entry_cancels: HashMap<EntryId, Arc<CancelRequest>>,
+    /// The name each adopted entry's delivery key gives it, with the cut
+    /// its caller may ask, until the entry settles.
+    entry_named: HashMap<EntryId, (Arc<Named>, Arc<CancelRequest>)>,
+    /// The name of each settled entry's delivery, held until its set ran.
+    entry_names: HashMap<EntryId, NamedGuard>,
     clocks: Clocks,
     /// The environment the run started with, which every poll of its
     /// operation and every call it makes read.
@@ -1146,9 +1153,13 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             delivered,
             answers,
             cancel,
+            named,
         } = adoption;
         match operation.adopt(entry, origin) {
             Ok(id) => {
+                if let Some(named) = named {
+                    self.entry_named.insert(id, (named, Arc::clone(&cancel)));
+                }
                 self.callers.insert(id, reply);
                 self.deliveries.insert(id, delivered);
                 self.entry_answers.insert(id, answers);
@@ -1167,17 +1178,21 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     }
 
     /// Tells the caller of an adopted entry its delivery's end (RFC §10.1
-    /// step 18).
+    /// step 18), and stops naming that delivery.
     fn delivered(&mut self, delivered: Delivered) {
         self.entry_answers.remove(&delivered.entry);
         self.entry_cancels.remove(&delivered.entry);
         if let Some(completion) = self.deliveries.remove(&delivered.entry) {
             completion.send_replace(Some(delivered.result));
         }
+        // Its set ran: the delivery is over, but for an event it holds.
+        self.entry_names.remove(&delivered.entry);
     }
 
-    /// Answers the caller of a settled entry, at its commit.
+    /// Answers the caller of a settled entry, at its commit, once its
+    /// delivery is named.
     fn answer(&mut self, settled: Settled) {
+        self.name_settled(&settled);
         let Some(caller) = self.callers.remove(&settled.entry) else {
             return;
         };
@@ -1191,6 +1206,23 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 "the caller of an adopted entry stopped waiting for its result"
             );
         }
+    }
+
+    /// Names the delivery of `settled`, an adopted entry its key names,
+    /// until its set ran, its cut that of the entry's turns in this run; an
+    /// event of it held for verification is held by the key until its
+    /// release (RFC §11.7.6). Done as the entry settles, under the room's
+    /// lock, as Python's `_name_held`: no release reaches the event before.
+    fn name_settled(&mut self, settled: &Settled) {
+        let Some((named, cancel)) = self.entry_named.remove(&settled.entry) else {
+            return;
+        };
+        if let Ok(result) = &settled.result {
+            named.decided(result);
+        }
+        let mut guard = NamedGuard::of(named);
+        guard.attach(cancel);
+        self.entry_names.insert(settled.entry, guard);
     }
 
     /// The operation's output, or the refusal of a wait on what the run's

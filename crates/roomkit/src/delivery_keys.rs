@@ -292,6 +292,15 @@ pub(crate) struct NamedGuard {
 }
 
 impl NamedGuard {
+    /// A guard of its own on `named`, for code that runs its delivery
+    /// beside the code that named it: the run that adopted its call.
+    pub(crate) fn of(named: Arc<Named>) -> Self {
+        Self {
+            named,
+            target: None,
+        }
+    }
+
     /// The delivery it names.
     pub(crate) fn named(&self) -> &Arc<Named> {
         &self.named
