@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `OpenAiAiProvider` sends a user's message of parts as its text and
+  image blocks in order, as Python's (RFC §6.4, RMK-1191): a caption, its
+  image, then the next text, where it sent the texts joined, then every
+  image.
 - An AI channel's turn reads as Python's (RFC §6.4, RMK-1193): a round's
   results reach the model as one tool message, in the turn and replayed
   (the OpenAI request still writes a tool message per result); a `Cancel`
