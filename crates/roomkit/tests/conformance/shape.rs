@@ -26,6 +26,7 @@ const SETUP: &[&str] = &[
     "hooks",
     "identity_hooks",
     "identities",
+    "strategies",
 ];
 const KIT: &[&str] = &[
     "max_chain_depth",
@@ -38,6 +39,7 @@ const KIT: &[&str] = &[
     "verification_policy",
     "media_resolver",
     "attached_media",
+    "orchestration",
 ];
 const MEDIA_RESOLVER: &[&str] = &["media"];
 const ATTACHED_MEDIA: &[&str] = &["key"];
@@ -301,7 +303,7 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "commit_event" => &["room_id", "event"],
         "update_event" => &["room_id", "event_id", "content", "source", "metadata"],
         "delete_event" => &["room_id", "event_id", "cascade_replies"],
-        "create_room" => &["room"],
+        "create_room" => &["room", "orchestration"],
         "attach_channel" => &[
             "room_id",
             "channel_id",
@@ -344,7 +346,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
                 .or_else(|| crate::store_calls::arguments(other))
                 .or_else(|| crate::member_calls::arguments(other))
                 .or_else(|| crate::input_calls::arguments(other))
-                .or_else(|| crate::verification_calls::arguments(other));
+                .or_else(|| crate::verification_calls::arguments(other))
+                .or_else(|| crate::strategy_calls::arguments(other));
         }
     })
 }
@@ -357,6 +360,7 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
     optional(setup, SETUP, "setup", &mut found);
     optional(&setup["kit"], KIT, "setup.kit", &mut found);
     identity(setup, &mut found);
+    strategies(setup, &mut found);
     optional(
         &setup["kit"]["delivery_backend"],
         DELIVERY_BACKEND,
@@ -410,6 +414,28 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
         }
     }
     found
+}
+
+/// The members of the scripted strategies, and of their install and
+/// uninstall (RFC §19.7).
+fn strategies(setup: &Value, found: &mut Vec<String>) {
+    use crate::strategy_calls::{STRATEGY, STRATEGY_STEP};
+    for (position, strategy) in items(&setup["strategies"]) {
+        let path = format!("setup.strategies[{position}]");
+        members(strategy, STRATEGY, &path, found);
+        for member in ["install", "uninstall"] {
+            let at = format!("{path}.{member}");
+            optional(&strategy[member], STRATEGY_STEP, &at, found);
+            for (index, action) in items(&strategy[member]["do"]) {
+                call(
+                    action,
+                    &["as", "expect"],
+                    &format!("{at}.do[{index}]"),
+                    found,
+                );
+            }
+        }
+    }
 }
 
 /// The members of the scripted resolver and the identity hooks (RFC §11).

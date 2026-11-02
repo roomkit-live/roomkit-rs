@@ -98,6 +98,10 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     let slot = RunSlot::default();
     let backend = delivery_backend(&setup["kit"]);
     let queue = backend.clone();
+    let strategies = crate::strategy_calls::strategies(&setup, &slot);
+    let default = setup["kit"]["orchestration"]
+        .as_str()
+        .and_then(|id| strategies.get(id).cloned());
     let (kit, _store_file) = crate::new_kit(|options| {
         let options = identity::kit_options(
             kit_options(options, &setup["kit"], &slot),
@@ -109,12 +113,14 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
         if let Some(backend) = queue {
             options.delivery_backend = Some(Arc::new(backend));
         }
+        options.orchestration = default;
         options
     })
     .await;
     let run = Arc::new(Run::new(kit, scenario));
     slot.set(&run);
     *lock(&run.backend) = backend;
+    *lock(&run.strategies) = strategies;
     if let Err(problem) = set_up(&run, &setup).await {
         return vec![format!("setup: {problem}")];
     }
@@ -143,7 +149,7 @@ async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
     }
     crate::member_calls::store_identities(run, &setup["identities"]).await?;
     for room in setup["rooms"].as_array().into_iter().flatten() {
-        if let Err(error) = calls::create_room(run, room).await? {
+        if let Err(error) = calls::create_room(run, room, None).await? {
             return Err(format!("create {room}: {error}"));
         }
         for binding in room["bindings"].as_array().into_iter().flatten() {

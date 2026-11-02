@@ -45,6 +45,8 @@ mod scripted;
 mod shape;
 #[path = "../../../roomkit/tests/conformance/store_calls.rs"]
 mod store_calls;
+#[path = "../../../roomkit/tests/conformance/strategy_calls.rs"]
+mod strategy_calls;
 #[path = "../support/mod.rs"]
 mod support;
 #[path = "../../../roomkit/tests/conformance/task_calls.rs"]

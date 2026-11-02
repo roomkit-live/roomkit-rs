@@ -34,6 +34,7 @@ mod scenarios;
 mod scripted;
 mod shape;
 mod store_calls;
+mod strategy_calls;
 mod task_calls;
 mod templates;
 mod verification_calls;

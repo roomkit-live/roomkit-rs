@@ -129,6 +129,8 @@ pub(crate) struct Run {
     /// The in-memory delivery backend the kit was built with, whose queue
     /// and worker the idle wait waits for (README, "Setup").
     pub(crate) backend: Mutex<Option<roomkit::InMemoryDeliveryBackend>>,
+    /// The scenario's scripted strategies, by id (README, "Setup").
+    pub(crate) strategies: Mutex<HashMap<String, crate::strategy_calls::Strategy>>,
 }
 
 impl Run {
@@ -167,6 +169,7 @@ impl Run {
             after_turn: Mutex::default(),
             models: Mutex::default(),
             backend: Mutex::default(),
+            strategies: Mutex::default(),
         }
     }
 

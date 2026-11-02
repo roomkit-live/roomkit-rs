@@ -200,6 +200,9 @@ pub(crate) async fn call(
             crate::verification_calls::call(run, verification, spec).await?
         }
         "cancel_delivery" | "steer" => (cancel_or_steer(run, name, spec).await?, None),
+        "install_strategy" | "uninstall_strategy" | "claim_room_strategy" | "room_strategy" => {
+            (crate::strategy_calls::call(run, name, spec).await?, None)
+        }
         "delivery.cancel" | "delivery.wait" => (handle_call(run, name, spec).await?, None),
         _ => (lifecycle_call(run, name, spec).await?, None),
     })
@@ -299,7 +302,10 @@ async fn lifecycle_call(
             let outcome = run.kit().delete_event(&room, &event, options).await;
             finish(run, name, outcome, dump)
         }
-        "create_room" => create_room(run, &spec["room"]).await?,
+        "create_room" => {
+            let orchestration = crate::strategy_calls::room_orchestration(run, spec)?;
+            create_room(run, &spec["room"], orchestration).await?
+        }
         "attach_channel" => {
             let (room, channel) = (room_id(spec)?, channel_id(spec)?);
             let options = AttachChannelOptions {
@@ -479,10 +485,16 @@ fn binding_options(spec: &Value) -> Result<AttachChannelOptions, Unreadable> {
     Ok(options)
 }
 
-/// Creates the room `room` describes, for its organization when it names one.
+/// Creates the room `room` describes, for its organization when it names
+/// one, with the strategy `orchestration` names.
+#[expect(
+    clippy::option_option,
+    reason = "CreateRoomOptions::orchestration's three cases"
+)]
 pub(crate) async fn create_room(
     run: &std::sync::Arc<Run>,
     room: &Value,
+    orchestration: Option<Option<crate::strategy_calls::Strategy>>,
 ) -> Result<Called, Unreadable> {
     let timers = match room.get("timers") {
         Some(timers) => Some(RoomTimers {
@@ -497,6 +509,7 @@ pub(crate) async fn create_room(
         metadata: optional::<Metadata>(room, "metadata")?.unwrap_or_default(),
         organization_id: organization_id(room),
         timers,
+        orchestration,
         ..Default::default()
     };
     let outcome = run.kit().create_room(options).await;
