@@ -568,6 +568,8 @@ fn request(request: &AiContext) -> Value {
         "messages": messages,
         "tool_results": results,
         "system_prompt": request.system_prompt,
+        "temperature": request.temperature,
+        "max_tokens": request.max_tokens,
         "tools": tools,
     })
 }

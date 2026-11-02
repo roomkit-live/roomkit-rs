@@ -764,6 +764,13 @@ impl<P: AiProvider> AiChannel<P> {
     }
 }
 
+/// A turn's setting `key` as `binding`'s metadata sets it, over the
+/// channel's own (Python's `_turn_source`, binding metadata first): `None`
+/// for a `null` there, or a value `read` does not take, as not set.
+fn bound<T>(binding: &ChannelBinding, key: &str, read: impl Fn(&Value) -> Option<T>) -> Option<T> {
+    binding.metadata.get(key).and_then(read)
+}
+
 /// What an AI channel takes: text, rich content and media whatever its
 /// model sees, each media read by the channel itself, so that the event a
 /// turn answers reads as the same event does in its history (RFC §6.4).
@@ -978,8 +985,13 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             policy: self.policy.clone(),
             bounds: self.bounds.clone(),
             system_prompt,
-            temperature: self.temperature,
-            max_tokens: self.max_tokens,
+            temperature: bound(&binding, "temperature", Value::as_f64).unwrap_or(self.temperature),
+            max_tokens: bound(&binding, "max_tokens", |tokens| {
+                tokens
+                    .as_u64()
+                    .and_then(|tokens| u32::try_from(tokens).ok())
+            })
+            .or(self.max_tokens),
             turn: turn.clone(),
             context: tools,
             intents: self.tool_call_intents,

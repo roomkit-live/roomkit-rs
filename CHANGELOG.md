@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- An AI turn takes the `temperature` and `max_tokens` its binding's
+  metadata sets, over the channel's own, as Python's `_turn_settings`
+  (RFC §6.4, Appendix A.9, RMK-1237); a `null` there, or a value that is
+  no number, is not set. The binding's other settings (thinking,
+  reasoning effort, response schema, turn budgets) are not read yet.
 - A buffered reply's end and usage go under its caller's `turns`, by its
   channel, read off its turn's record or else its last message, as
   Python's `record_buffered_reply` (RFC §6.4, RMK-1235); the caller's
