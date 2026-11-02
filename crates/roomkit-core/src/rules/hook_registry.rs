@@ -122,6 +122,15 @@ pub enum HookTrigger {
     /// hook that fails lets it through. A turn fires it, on the turn
     /// executor hosting the channel.
     OnUserInputRequired,
+    /// A verification request completed (RFC §11.7.2): its payload is a
+    /// system event of the request's room, its data the identity, the
+    /// request, its channel, the method and the expiry.
+    OnVerificationCompleted,
+    /// A verification or a request ended: expired, revoked, failed (RFC
+    /// §11.7.5): its payload is a system event of the room of the request
+    /// that ended, or of the request that completed the verification that
+    /// ended, its data the reason and what ended.
+    OnVerificationEnded,
 }
 
 impl HookTrigger {
@@ -161,7 +170,9 @@ impl HookTrigger {
             | Self::OnParticipantIdentified
             | Self::OnParticipantJoined
             | Self::OnParticipantLeft
-            | Self::OnParticipantUpdated => HookExecution::Async,
+            | Self::OnParticipantUpdated
+            | Self::OnVerificationCompleted
+            | Self::OnVerificationEnded => HookExecution::Async,
         }
     }
 
@@ -199,7 +210,9 @@ impl HookTrigger {
             | Self::OnParticipantJoined
             | Self::OnParticipantLeft
             | Self::OnParticipantUpdated
-            | Self::OnUserInputRequired => false,
+            | Self::OnUserInputRequired
+            | Self::OnVerificationCompleted
+            | Self::OnVerificationEnded => false,
         }
     }
 
@@ -240,7 +253,9 @@ impl HookTrigger {
             | Self::OnParticipantIdentified
             | Self::OnParticipantJoined
             | Self::OnParticipantLeft
-            | Self::OnParticipantUpdated => false,
+            | Self::OnParticipantUpdated
+            | Self::OnVerificationCompleted
+            | Self::OnVerificationEnded => false,
         }
     }
 

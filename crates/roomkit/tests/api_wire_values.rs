@@ -103,6 +103,11 @@ fn hook_trigger_serializes_to_python_s_values() {
             ("ON_TASK_DELEGATED", HookTrigger::OnTaskDelegated),
             ("ON_TASK_COMPLETED", HookTrigger::OnTaskCompleted),
             ("ON_USER_INPUT_REQUIRED", HookTrigger::OnUserInputRequired),
+            (
+                "ON_VERIFICATION_COMPLETED",
+                HookTrigger::OnVerificationCompleted,
+            ),
+            ("ON_VERIFICATION_ENDED", HookTrigger::OnVerificationEnded),
         ],
     );
 }
