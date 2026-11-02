@@ -20,6 +20,11 @@ allowed=(
     jiff-static
     # serde and serde_json.
     serde serde_core serde_derive serde_json itoa memchr zmij
+    # serde_json's preserve_order (RMK-1198): an object keeps its members'
+    # order, as Python's dict. With std, its map hashes with the standard
+    # library's RandomState, as the core's HashMaps do; foldhash, built
+    # without std, reads no clock.
+    indexmap equivalent hashbrown foldhash
     # The derive macros of serde and thiserror.
     proc-macro2 quote syn unicode-ident
     # thiserror.
