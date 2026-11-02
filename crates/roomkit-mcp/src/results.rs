@@ -20,13 +20,24 @@ const MEDIA_TYPE_LIMIT: usize = 64;
 /// reaches the model as a note. Python's `_MODEL_IMAGE_TYPES`.
 const MODEL_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
+/// How many images of one result the model is shown, as an agent's
+/// default `max_author_images`: the maintainer's bound (RMK-1242), which
+/// the reference implementation does not have.
+const MODEL_IMAGES_MAX: usize = 4;
+
+/// How many data URL characters the images of one result the model is
+/// shown take in all: the maintainer's bound (RMK-1242).
+const MODEL_IMAGE_CHARS_MAX: usize = 5 * 1024 * 1024;
+
 /// `result`, the server's answer to a call of `name`, as the model reads
 /// it, as the reference implementation's `handler_result`:
 /// - a result with an image the vendors accept (PNG, JPEG, GIF or WebP,
 ///   its base64 decoding), its parts in order, each image an image part
 ///   the model sees, each other part its text or its note, its texts
-///   within [`RESULT_LIMIT`] characters in all (the reference
-///   implementation bounds none of them);
+///   within [`RESULT_LIMIT`] characters in all, its first
+///   [`MODEL_IMAGES_MAX`] images within [`MODEL_IMAGE_CHARS_MAX`] in all,
+///   each image past either a note (the reference implementation bounds
+///   none of them);
 /// - otherwise, within [`RESULT_LIMIT`] characters, each part's text,
 ///   one part read as itself and several as a JSON array of them written
 ///   as Python's `json.dumps` writes it, as the reference implementation's
@@ -56,20 +67,23 @@ pub(crate) fn read(name: &str, result: &CallToolResult) -> Result<ToolResult, To
 /// `parts` with their texts within [`RESULT_LIMIT`] characters in all, as
 /// a text result is: each text kept whole while it fits, the one past the
 /// bound cut with a note saying how long it was, the texts after it left
-/// out; the images kept.
+/// out; its images within [`MODEL_IMAGES_MAX`] and
+/// [`MODEL_IMAGE_CHARS_MAX`], each image past either its note.
 fn bounded_parts(name: &str, parts: Vec<ToolResultPart>) -> Vec<ToolResultPart> {
     let mut left = RESULT_LIMIT;
     let mut cut = false;
+    let mut images = ImageBudget::default();
     let kept: Vec<ToolResultPart> = parts
         .into_iter()
         .filter_map(|part| {
-            let ToolResultPart::Text(text) = &part else {
-                return Some(part);
+            let text = match part {
+                ToolResultPart::Image(image) => return Some(images.keep(image)),
+                ToolResultPart::Text(text) => text,
             };
             let size = text.text.chars().count();
             if size <= left {
                 left -= size;
-                return Some(part);
+                return Some(ToolResultPart::Text(text));
             }
             cut = true;
             if left == 0 {
@@ -89,6 +103,28 @@ fn bounded_parts(name: &str, parts: Vec<ToolResultPart>) -> Vec<ToolResultPart> 
         );
     }
     kept
+}
+
+/// The images of one result the model is shown so far.
+#[derive(Default)]
+struct ImageBudget {
+    count: usize,
+    chars: usize,
+}
+
+impl ImageBudget {
+    /// `image` as the model is shown it: itself while the result's images
+    /// stay within their bounds, its note past them.
+    fn keep(&mut self, image: AiImagePart) -> ToolResultPart {
+        let size = image.url.chars().count();
+        if self.count < MODEL_IMAGES_MAX && self.chars + size <= MODEL_IMAGE_CHARS_MAX {
+            self.count += 1;
+            self.chars += size;
+            return ToolResultPart::Image(image);
+        }
+        let words = note("image", image.mime_type.as_deref());
+        ToolResultPart::Text(AiTextPart::new(words))
+    }
 }
 
 /// One part of a result as the model reads it: an image the vendors
@@ -225,6 +261,38 @@ mod tests {
                 image("image/jpeg"),
                 image("image/png"),
             ]))
+        );
+    }
+
+    /// The maintainer's bounds (RMK-1242): a result's first four images,
+    /// within 5 MiB of data URL in all, reach the model; each image past
+    /// either reads as its note.
+    #[test]
+    fn a_result_s_images_are_bounded_in_number_and_size() {
+        let tiny = || ContentBlock::image("iVBORw0KGgo", "image/png");
+        let big = ContentBlock::image("A".repeat(5 * 1024 * 1024), "image/jpeg");
+        let many = CallToolResult::success((0..6).map(|_| tiny()).collect());
+        let large = CallToolResult::success(vec![tiny(), big]);
+        let shown = |result: &CallToolResult| match read("draw", result) {
+            Ok(ToolResult::Parts(parts)) => parts
+                .iter()
+                .map(|part| match part {
+                    ToolResultPart::Image(_) => "image".to_owned(),
+                    ToolResultPart::Text(text) => text.text.clone(),
+                })
+                .collect::<Vec<_>>(),
+            other => panic!("{other:?}"),
+        };
+        let png = "[image content (image/png) not shown to the model]";
+        let jpeg = "[image content (image/jpeg) not shown to the model]";
+        assert_eq!(
+            (shown(&many), shown(&large)),
+            (
+                ["image", "image", "image", "image", png, png]
+                    .map(str::to_owned)
+                    .to_vec(),
+                ["image", jpeg].map(str::to_owned).to_vec()
+            )
         );
     }
 
