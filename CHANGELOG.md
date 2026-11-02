@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A message steered into a running turn and the lines a summarizer reads
+  tell nameless senders of one channel apart (`@sms`, then `@sms (2)`) and
+  count speakers by source, as the conversation does, and a delegation's
+  conversation block labels them so; a steered message no longer counts the
+  agent's own replies, the application's instructions, tool-call records or
+  blank turns as speakers (RFC §6.4, RMK-1221).
+- An edit or a delete is not steered into a running turn: it waits its
+  place, for no turn (RFC §10.3, RMK-1226).
 - A sender's routing stamps are dropped, as Python's now are: a message
   that arrived with `_routed_to` or `_always_process` in its metadata chose
   the agent that answered it, or added one to its address; the kit drops
