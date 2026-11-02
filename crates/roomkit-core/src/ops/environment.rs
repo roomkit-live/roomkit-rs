@@ -30,7 +30,7 @@ pub trait Environment {
     fn new_room_id(&self) -> RoomId;
 }
 
-/// The system clock, at millisecond precision, and random version 4 UUIDs as
+/// The system clock, at microsecond precision, and random version 4 UUIDs as
 /// ids: the environment of a kit, and of the model's filling constructors
 /// (`RoomEvent::new`, `Room::new`, ...), which fill what the Python
 /// implementation's model defaults fill. Compiled under the
@@ -47,12 +47,20 @@ impl Environment for SystemEnvironment {
         reason = "the system environment is where the kit reads the wall clock"
     )]
     fn now(&self) -> Timestamp {
-        let millis = std::time::SystemTime::now()
+        // At the microsecond, as Python's `datetime.now(UTC)`: two instants
+        // a millisecond apart at most, a message and the request opened
+        // after it, read in their order (RFC §11.7.6's window).
+        let micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
-            .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
-            .and_then(|millis| Timestamp::from_unix_millis(millis).ok());
-        millis.unwrap_or_else(|| {
+            .and_then(|elapsed| {
+                let millis = i64::try_from(elapsed.as_millis()).ok()?;
+                let within = Duration::from_micros(u64::from(elapsed.subsec_micros() % 1000));
+                Timestamp::from_unix_millis(millis)
+                    .ok()?
+                    .checked_add(within)
+            });
+        micros.unwrap_or_else(|| {
             tracing::error!(
                 target: "roomkit::environment",
                 "the system clock is outside the supported range; using the Unix epoch"
