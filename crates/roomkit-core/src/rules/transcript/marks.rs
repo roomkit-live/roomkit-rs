@@ -617,11 +617,13 @@ mod tests {
                 cleaned("x context compacted - earlier conversation summary."),
                 cleaned("x conversation summary - earlier messages compacted."),
                 cleaned(&format!("x {instruction}.!?")),
+                cleaned(&format!("x {instruction}., and more")),
             ],
             [
                 format!("x {COPIED_MARK}."),
                 format!("x {COPIED_MARK}."),
                 format!("x {COPIED_MARK}!?"),
+                format!("x {COPIED_MARK} and more"),
             ]
         );
     }
