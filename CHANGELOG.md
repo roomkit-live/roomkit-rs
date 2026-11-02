@@ -35,6 +35,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`Channel 'ana' is not an intelligence channel`), nothing attached, as
   for an agent named by its id (RFC §19.7, RMK-1233): the transport was
   attached as the agent, taking its turns.
+- The kit's close cuts a streaming target whose read the operation
+  stopped (a delivery cancelled by its key) as it cuts any reader, as
+  Python's close cancels a `deliver_stream()` at any point (RMK-1236): a
+  target that never returns once handed the stream's end no longer holds
+  the close for its five seconds of grace.
 - An AI channel attached to a room, or detached from it, forgets what it
   kept for the room, as Python's `_forget_room` (RMK-1219, RMK-1240): an
   agent that leaves and joins again sends the author images its provider

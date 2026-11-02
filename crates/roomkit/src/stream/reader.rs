@@ -30,7 +30,7 @@
 
 use std::collections::VecDeque;
 use std::future::{Future, poll_fn};
-use std::pin::pin;
+use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::task::Poll;
 
@@ -213,6 +213,18 @@ async fn drain(mut stream: DeliveryStream) -> Result<ChannelOutput, ChannelError
     Ok(ChannelOutput::default())
 }
 
+/// What `reader` gives when polled one last time, then dropped where it
+/// waits: nothing more than a default output if it is not done.
+async fn last_poll<R>(mut reader: Pin<Box<R>>) -> Result<ChannelOutput, ChannelError>
+where
+    R: Future<Output = Result<ChannelOutput, ChannelError>> + ?Sized,
+{
+    match poll_fn(|cx| Poll::Ready(reader.as_mut().poll(cx))).await {
+        Poll::Ready(read) => read,
+        Poll::Pending => Ok(ChannelOutput::default()),
+    }
+}
+
 /// What stops a read from outside: the operation's stop of this read, the
 /// kit's close, which cuts every turn as it starts, and the cut of the
 /// held task whose work the read runs within (RFC §23.3).
@@ -235,6 +247,21 @@ impl Stops {
                 .task
                 .as_ref()
                 .is_some_and(|task| task.borrow().is_some())
+    }
+
+    /// Returns once what cuts the reader too stops the read: the kit's
+    /// close, or the cut of the held task it runs within.
+    async fn until_reader_cut(&mut self) {
+        let kit = async { self.kit.wait_for(|cut| *cut).await.is_ok() };
+        let task = async {
+            let task = self.task.as_mut()?;
+            task.wait_for(Option::is_some).await.ok().map(|_| ())
+        };
+        tokio::select! {
+            true = kit => {}
+            Some(()) = task => {}
+            else => std::future::pending().await,
+        }
     }
 
     /// Returns once the read is stopped, with the reason its turn is cut
@@ -296,18 +323,20 @@ impl Producer {
     /// streaming target that reads on no more holds nothing, its
     /// `deliver_stream()` dropped once polled one last time, so that what
     /// it was handed it took, and that text is stored (RFC §12.2 step
-    /// 13s).
+    /// 13s). Once the operation stopped the read, or the stream ended, the
+    /// reader reads its end, unless the close or the task's cut comes
+    /// first, which cut it as above (RMK-1236).
     async fn read_by(
         &mut self,
         reader: impl Future<Output = Result<ChannelOutput, ChannelError>>,
         pulls: mpsc::UnboundedReceiver<oneshot::Sender<Pulled>>,
         reader_done: oneshot::Receiver<()>,
-        stops: Stops,
+        mut stops: Stops,
     ) -> Result<ChannelOutput, ChannelError> {
         let mut reader = Box::pin(reader);
         let mut pulls = pulls;
         {
-            let mut serving = pin!(self.serve(&mut pulls, reader_done, stops));
+            let mut serving = pin!(self.serve(&mut pulls, reader_done, &mut stops));
             tokio::select! {
                 biased;
                 read = &mut reader => {
@@ -321,19 +350,20 @@ impl Producer {
             // The reader reads the stream's end.
             drop(self.unanswered.take());
             drop(pulls);
-            return reader.await;
+            tokio::select! {
+                biased;
+                read = &mut reader => return read,
+                () = stops.until_reader_cut() => {}
+            }
+            return last_poll(reader).await;
         }
         // The pulls and the one left unanswered stay open while the reader
         // is polled one last time: it is dropped where it waits, never
         // reading an end the stream did not have.
-        let last = poll_fn(|cx| Poll::Ready(reader.as_mut().poll(cx))).await;
-        drop(reader);
+        let last = last_poll(reader).await;
         drop(self.unanswered.take());
         drop(pulls);
-        match last {
-            Poll::Ready(read) => read,
-            Poll::Pending => Ok(ChannelOutput::default()),
-        }
+        last
     }
 
     /// Answers the reader's pulls, until it stops or is handed the end, or
@@ -344,7 +374,7 @@ impl Producer {
         &mut self,
         pulls: &mut mpsc::UnboundedReceiver<oneshot::Sender<Pulled>>,
         mut reader_done: oneshot::Receiver<()>,
-        mut stops: Stops,
+        stops: &mut Stops,
     ) {
         loop {
             let pull = tokio::select! {
@@ -360,7 +390,7 @@ impl Producer {
                     None => return,
                 },
             };
-            if !self.answer(pull, &mut stops).await {
+            if !self.answer(pull, stops).await {
                 return;
             }
         }

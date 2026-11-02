@@ -31,12 +31,14 @@ use roomkit_core::rules::transcoding::text_of;
 
 /// A WebSocket transport that streams and keeps the length of each text
 /// it is handed, its output saying `says`; with `stalls`, it tells it
-/// and reads nothing.
+/// and reads nothing; with `lingers`, it reads to the stream's end, tells
+/// it, and never returns.
 #[derive(Clone)]
 struct Counting {
     sizes: Arc<Mutex<Vec<usize>>>,
     says: roomkit::model::Metadata,
     stalls: Option<Arc<tokio::sync::Notify>>,
+    lingers: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl Counting {
@@ -114,6 +116,10 @@ impl Channel for Counting {
                 self.sizes.lock().unwrap().push(text.len());
             }
         }
+        if let Some(lingers) = &self.lingers {
+            lingers.notify_one();
+            std::future::pending::<()>().await;
+        }
         Ok(ChannelOutput {
             response_metadata: self.says.clone(),
             ..ChannelOutput::default()
@@ -158,6 +164,7 @@ async fn deltas_yielded_together_cross_as_one_item() {
         sizes: Arc::default(),
         says: roomkit::model::Metadata::new(),
         stalls: None,
+        lingers: None,
     };
     kit.register_channel(target.clone()).unwrap();
     let words: Vec<String> = (0..200).map(|n| format!("w{n} ")).collect();
@@ -660,6 +667,7 @@ async fn a_streaming_target_s_own_turns_never_reach_the_caller() {
         sizes: Arc::default(),
         says,
         stalls: None,
+        lingers: None,
     };
     kit.register_channel(target).unwrap();
     let model = ScriptedProvider::new([ScriptedRound::writing(["The answer."])]);
@@ -701,6 +709,7 @@ async fn a_cancel_does_not_wait_for_a_streaming_target_that_reads_nothing() {
         sizes: Arc::default(),
         says: roomkit::model::Metadata::new(),
         stalls: Some(Arc::clone(&stalled)),
+        lingers: None,
     };
     kit.register_channel(target).unwrap();
     let model = ScriptedProvider::new([ScriptedRound::writing(["Working."])]);
@@ -737,4 +746,80 @@ async fn a_cancel_does_not_wait_for_a_streaming_target_that_reads_nothing() {
         (Ok(true), Some(roomkit::model::TaskStatus::Cancelled))
     );
     kit.close().await.unwrap();
+}
+
+// RFC §12.2 step 13s, §13.6 (RMK-1236): the kit's close cuts the reader
+// of a stream even once the operation stopped that read, as Python's close
+// cancels a reader in its `deliver_stream()` at any point: a delivery is
+// cancelled by its key, and its streaming target, handed the stream's end,
+// never returns; the close does not spend its grace waiting for it.
+#[tokio::test]
+async fn a_close_does_not_wait_for_a_target_whose_read_was_stopped() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let ended = Arc::new(tokio::sync::Notify::new());
+    let target = Counting {
+        sizes: Arc::default(),
+        says: roomkit::model::Metadata::new(),
+        stalls: None,
+        lingers: Some(Arc::clone(&ended)),
+    };
+    kit.register_channel(target).unwrap();
+    let waiting = Arc::new(tokio::sync::Notify::new());
+    let told = Arc::clone(&waiting);
+    let wait = move |_call, _context| {
+        let told = Arc::clone(&told);
+        async move {
+            told.notify_one();
+            std::future::pending::<Result<roomkit_ai::ToolResult, roomkit_ai::ToolError>>().await
+        }
+    };
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("Hello.", [("t1", "wait", "{}")]),
+        ScriptedRound::answering("Bye."),
+    ]);
+    let options = AiChannelOptions {
+        tools: roomkit_ai::Tools::new()
+            .tool(roomkit_ai::AiTool::new("wait", "d").unwrap(), wait)
+            .into(),
+        ..AiChannelOptions::default()
+    };
+    kit.register_channel(AiChannel::new(channel("ai"), model, options).unwrap())
+        .unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["ws", "ai"] {
+        kit.attach_channel(&room(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let mut message = InboundMessage::new(channel("ws"), "alice", TextContent::new("hi"));
+    message.delivery_key = Some("k".to_owned());
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..ProcessInboundOptions::default()
+    };
+    let sender = kit.clone();
+    let processed = tokio::spawn(async move { sender.process_inbound(message, options).await });
+    tokio::time::timeout(Duration::from_secs(5), waiting.notified())
+        .await
+        .unwrap();
+    let stopped = kit
+        .cancel_delivery("k", roomkit::CancelDeliveryOptions::default())
+        .await;
+    tokio::time::timeout(Duration::from_secs(5), ended.notified())
+        .await
+        .unwrap();
+
+    // Within the close's grace of five seconds, never spent.
+    let closed = tokio::time::timeout(Duration::from_secs(2), kit.close()).await;
+
+    let reason = processed.await.unwrap().unwrap().cancellation_reason;
+    assert_eq!(
+        (stopped, closed.is_ok(), reason.as_deref()),
+        (1, true, Some("caller_cancelled"))
+    );
 }
