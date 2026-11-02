@@ -75,6 +75,8 @@ const CHANNEL: &[&str] = &[
     "tool_timeout_ms",
     "tool_timeouts_ms",
     "turn_budget_tokens",
+    "max_author_images",
+    "describe_empty_event",
     "serialize_room_turns",
     "steer_room_turns",
     "human_input",
@@ -88,7 +90,7 @@ const CHANNEL: &[&str] = &[
 const ADDRESSES: &[&str] = &["normalizes", "conversation_key"];
 const HUMAN_INPUT: &[&str] = &["tool_names", "timeout_ms", "tools"];
 const HUMAN_TOOL: &[&str] = &["name", "description", "parameters"];
-const MODEL: &[&str] = &["rounds"];
+const MODEL: &[&str] = &["rounds", "vision"];
 const MODEL_ROUND: &[&str] = &[
     "text",
     "deltas",

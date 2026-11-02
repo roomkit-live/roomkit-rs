@@ -19,9 +19,10 @@ use roomkit_ai::tasks::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiRole, AiTool,
-    HumanInputToolHandler, HumanInputToolHandlerOptions, ProviderError, ProviderStream,
-    StreamEvent, Tool, ToolContext, ToolEntry, ToolError, ToolPolicy, ToolResult, Tools,
+    AiChannel, AiChannelOptions, AiContentPart, AiContext, AiMessageContent, AiProvider,
+    AiResponse, AiRole, AiTool, HumanInputToolHandler, HumanInputToolHandlerOptions, ProviderError,
+    ProviderStream, StreamEvent, Tool, ToolContext, ToolEntry, ToolError, ToolPolicy, ToolResult,
+    Tools,
 };
 use serde_json::{Value, json};
 
@@ -39,11 +40,17 @@ pub(crate) struct Paced {
     /// Each round's gate, by its place in the script.
     gates: Vec<Option<String>>,
     run: Weak<Run>,
+    /// Whether the model sees images (README: `model.vision`).
+    vision: bool,
 }
 
 impl AiProvider for Paced {
     fn model_name(&self) -> &str {
         self.script.model_name()
+    }
+
+    fn supports_vision(&self) -> bool {
+        self.vision
     }
 
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
@@ -146,6 +153,18 @@ pub(crate) fn scripted_agent(
         let budget = budget.as_u64().ok_or("turn_budget_tokens: not a count")?;
         options.turn_budget_tokens = Some(budget);
     }
+    if let Some(bound) = spec.get("max_author_images") {
+        options.max_author_images = if bound.is_null() {
+            None
+        } else {
+            let bound = bound.as_u64().ok_or("max_author_images: not a count")?;
+            Some(usize::try_from(bound).map_err(|e| e.to_string())?)
+        };
+    }
+    if let Some(describer) = spec.get("describe_empty_event") {
+        let says = describer["says"].as_str().map(str::to_owned);
+        options.describe_empty_event = Some(Arc::new(move |_| says.clone()));
+    }
     for (name, bound) in spec["tool_timeouts_ms"].as_object().into_iter().flatten() {
         let bound = milliseconds(bound, "tool_timeouts_ms")?;
         options.tool_timeouts.insert(name.clone(), bound);
@@ -176,6 +195,7 @@ pub(crate) fn scripted_agent(
         script: model.clone(),
         gates,
         run: Arc::downgrade(run),
+        vision: spec["model"]["vision"] == true,
     };
     let agent = AiChannel::new(id, paced, options).map_err(|e| e.to_string())?;
     Ok((agent, models))
@@ -382,7 +402,13 @@ fn request(request: &AiContext) -> Value {
     let messages: Vec<Value> = request
         .messages
         .iter()
-        .map(|message| json!({ "role": message.role.as_str(), "text": message.content.text() }))
+        .map(|message| {
+            json!({
+                "role": message.role.as_str(),
+                "text": message.content.text(),
+                "parts": parts(&message.content),
+            })
+        })
         .collect();
     let results: Vec<Value> = request
         .messages
@@ -409,6 +435,24 @@ fn request(request: &AiContext) -> Value {
         "system_prompt": request.system_prompt,
         "tools": tools,
     })
+}
+
+/// A message's text and image parts in order, `null` for a text content
+/// (README, `models`).
+fn parts(content: &AiMessageContent) -> Value {
+    let AiMessageContent::Parts(parts) = content else {
+        return Value::Null;
+    };
+    parts
+        .iter()
+        .filter_map(|part| match part {
+            AiContentPart::Text(text) => Some(json!({ "text": text.text })),
+            AiContentPart::Image(image) => {
+                Some(json!({ "image": image.url, "mime_type": image.mime_type }))
+            }
+            AiContentPart::ToolCall(_) | AiContentPart::ToolResult(_) => None,
+        })
+        .collect()
 }
 
 /// The handler of the scripted hook `spec` on a tool trigger: it records
