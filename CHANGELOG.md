@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- An AI channel's provider failure is raised as Python's `ProviderError`
+  (RFC §23.3 step 6, RMK-1208): a failed task's `exception`, the
+  `process_inbound` result's `error`, `ON_ERROR`'s `error_type` and a
+  failed delivery's code read `ProviderError`, where they read
+  `ChannelError`.
 - A channel's error that names its Python class (the hidden
   `ClassedError`, which roomkit-ai's provider errors are to use) keeps
   that class wherever the kit records it, as Python keeps the exception's

@@ -12,7 +12,7 @@ use roomkit::model::{
     ChannelOutput, ErrorRecord, EventContent, EventSource, EventType, LoopEndMarker, RoomEvent,
     TextContent, ToolCall, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
-use roomkit::{ChannelError, ResponseItem, ResponseStream};
+use roomkit::{ChannelError, ClassedError, ResponseItem, ResponseStream};
 use serde_json::Value;
 
 use crate::provider::ProviderError;
@@ -128,7 +128,9 @@ impl Rows<'_> {
                 ..ChannelOutput::empty()
             }
         };
-        output.error = error.map(|error| ErrorRecord::new("ChannelError", error.to_string()));
+        // Recorded under its class's name, as Python's `ProviderError` is
+        // reported, not as a channel's.
+        output.error = error.map(|error| ErrorRecord::new("ProviderError", error.to_string()));
         output
     }
 }
@@ -153,8 +155,17 @@ impl Stream for Responding {
             Poll::Ready(item) => item,
             Poll::Pending => return Poll::Pending,
         };
-        Poll::Ready(item.map(|item| item.map(response_item).map_err(Into::into)))
+        Poll::Ready(item.map(|item| item.map(response_item).map_err(raised)))
     }
+}
+
+/// The class a provider's failure is raised as, Python's.
+const PROVIDER_ERROR: &str = "roomkit.providers.ai.base:ProviderError";
+
+/// A provider's failure as the turn raises it: under its Python class,
+/// which the kit records (G-097).
+fn raised(error: ProviderError) -> ChannelError {
+    Box::new(ClassedError::new(PROVIDER_ERROR, error))
 }
 
 /// One item of the loop, as the response reads it.

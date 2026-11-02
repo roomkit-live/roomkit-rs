@@ -468,9 +468,10 @@ async fn a_provider_error_fails_the_turn_and_fires_on_error() {
     let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
     let message =
         "the provider answered HTTP 401 (invalid_request_error): Incorrect API key provided.";
+    // Raised as Python's `ProviderError`, its class kept (G-097).
     assert_eq!(
         result.error,
-        Some(ErrorRecord::new("ChannelError", message))
+        Some(ErrorRecord::new("ProviderError", message))
     );
     assert!(!result.blocked, "the message stays delivered");
     assert_eq!(
