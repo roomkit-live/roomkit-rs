@@ -554,9 +554,10 @@ impl TaskRunner<RoomReadsFail> for Keeps {
 
 // Python: core/mixins/delegation.py delegate, whose caller cut before the
 // task ran ends it (_end_cut, shielded), its handle given its cancelled
-// result however the kit's close left its store and hooks: a caller cut
-// once the kit's close is over still ends the task its runner was handed
-// (RMK-1192, the light review's edge a).
+// result and its completion callback run however the kit's close left its
+// store and hooks: a caller cut once the kit's close is over still ends
+// the task its runner was handed (RMK-1192, the light review's edge a;
+// RMK-1201 point 4).
 #[tokio::test]
 async fn a_delegation_cut_once_the_kit_closed_still_ends_its_task() {
     let runner = Keeps::default();
@@ -572,16 +573,20 @@ async fn a_delegation_cut_once_the_kit_closed_still_ends_its_task() {
     };
     kit.create_room(create).await.unwrap();
 
+    let ended: Arc<Mutex<Vec<TaskStatus>>> = Arc::default();
+    let noted = Arc::clone(&ended);
+    let options = DelegateOptions {
+        on_complete: Some(Arc::new(move |result: DelegatedTaskResult| {
+            noted.lock().unwrap().push(result.status);
+            Box::pin(async {})
+        })),
+        ..DelegateOptions::default()
+    };
     let delegating = {
         let kit = kit.clone();
         tokio::spawn(async move {
-            kit.delegate(
-                &room(),
-                &channel("worker"),
-                "Go.",
-                DelegateOptions::default(),
-            )
-            .await
+            kit.delegate(&room(), &channel("worker"), "Go.", options)
+                .await
         })
     };
     tokio::time::timeout(BOUND, submitted.notified())
@@ -595,9 +600,17 @@ async fn a_delegation_cut_once_the_kit_closed_still_ends_its_task() {
     drop(delegating.await);
 
     let task = handed.lock().unwrap().clone().unwrap();
+    let waited = WaitOptions {
+        timeout: Some(BOUND),
+    };
+    let result = task.wait(waited).await.unwrap();
     assert_eq!(
-        task.result().map(|result| (result.status, result.error)),
-        Some((TaskStatus::Cancelled, Some("cancelled".to_owned())))
+        (result.status, result.error, ended.lock().unwrap().clone()),
+        (
+            TaskStatus::Cancelled,
+            Some("cancelled".to_owned()),
+            vec![TaskStatus::Cancelled]
+        )
     );
 }
 

@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A delegation its caller cuts once the kit's close refuses new work
+  still ends its task to its end, its completion callback included, on a
+  run apart, as Python's shielded `_end_cut` (RFC §23.3, RMK-1201), where
+  the task was given its result and the callback never ran.
 - A delegated agent whose buffered output says it did not answer leaves
   its task failed with nothing kept, as Python's `_buffered_outcome`
   (RFC §23.3 step 6, RMK-1201): its reply is neither stored nor taken as

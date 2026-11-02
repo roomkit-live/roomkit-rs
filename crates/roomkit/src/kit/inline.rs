@@ -15,7 +15,7 @@ use super::RoomKit;
 use super::tasks::{DelegateOptions, TaskEnd};
 use crate::channel::BoxFuture;
 use crate::store::ConversationStore;
-use crate::tasks::{Claim, DelegatedTask, HeldTasks, Kind, TaskReach, spawn_apart, until_ended};
+use crate::tasks::{Claim, DelegatedTask, HeldTasks, TaskReach, spawn_apart, until_ended};
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Runs the task's turn inline and ends it, recorded for its room as
@@ -165,20 +165,21 @@ impl<S: ConversationStore> Drop for Unstarted<S> {
         let Some(ending) = self.ending.take() else {
             return;
         };
-        if self
-            .kit
-            .inner
-            .tasks
-            .spawn_alone(Kind::Turn, ending)
-            .is_some()
-        {
+        let refused = match spawn_apart(&self.kit.inner.tasks, ending) {
+            Ok(_) => return,
+            Err(refused) => refused,
+        };
+        // The kit spawns no more work, its close cutting or over: the end
+        // runs all the same, apart, its completion callback among it, as
+        // Python's shielded `_end_cut` runs to its end.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            drop(runtime.spawn(refused));
             return;
         }
-        // The kit spawns no more work: the task ends cancelled here, its
-        // handle given its result, with nothing stored nor told, as
-        // Python's shielded end gives it once the close released the store
-        // and the hooks.
-        tracing::debug!(target: "roomkit::tasks", task = %self.task.id, "the kit is shut down: a delegation cut before it started ends without its writes");
+        // No runtime to run it on: the task ends cancelled here, its handle
+        // given its result, with nothing stored nor told.
+        drop(refused);
+        tracing::debug!(target: "roomkit::tasks", task = %self.task.id, "no runtime: a delegation cut before it started ends without its writes");
         let ended = TaskEnd::cancelled(self.context.as_ref(), false, &self.task.agent_id);
         self.kit.inner.room_tasks.end(&self.task.id, "cancelled");
         self.task.set_result(ended.into_result(&self.task));
