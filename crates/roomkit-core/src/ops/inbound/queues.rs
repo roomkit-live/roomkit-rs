@@ -548,7 +548,7 @@ impl Machine {
             return;
         };
         let own = !end.job.chained && end.job.lineage == Lineage::Call;
-        if let (true, Some(turns)) = (own, output.response_metadata.remove(TURNS)) {
+        if let (true, Some(turns)) = (own, output.response_metadata.shift_remove(TURNS)) {
             add_turns(&mut self.trigger.result.response_metadata, turns);
         }
         let Some(error) = output.error else {
