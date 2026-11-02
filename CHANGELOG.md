@@ -13,6 +13,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cancel's caller stops waiting, its end running on a task of its own. A
   cancel or a close that finds a task ending as it stands waits for that
   end, and returns `false`.
+- A tool a `BEFORE_AI_GENERATION` hook adds to an agent with no tool of its
+  own is declared too, its calls going to the tool handler, as Python's
+  (RFC §6.4, RMK-1181).
 - A status's publication runs at least as deep as its poster, as
   Python's (RFC §8.3, RMK-1187): what an `ON_STATUS_POSTED` hook sends
   into the room is that deep, so a turn that posts a status, a hook that
