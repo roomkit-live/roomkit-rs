@@ -50,8 +50,11 @@ impl TurnSettings {
     ///
     /// # Errors
     ///
-    /// A token budget that is not a positive integer, as Python's
-    /// `turn_budget` raises `ValueError` before the turn reads anything.
+    /// A system prompt that is no text, with every field refused, as
+    /// Python's `_turn_settings` reads it as `AIContext` does before the
+    /// turn reads it as a text (RMK-1237); then a token budget that is not
+    /// a positive integer, as Python's `turn_budget` raises `ValueError`
+    /// before the turn reads anything.
     pub(crate) fn read(
         metadata: &Metadata,
         temperature: f64,
@@ -64,8 +67,10 @@ impl TurnSettings {
             turn_budget_tokens,
             refused: Vec::new(),
         };
-        if let Some(budget) = set(metadata, "turn_budget_tokens") {
-            settings.turn_budget_tokens = Some(positive_budget(budget)?);
+        let prompt = set(metadata, "system_prompt").filter(|prompt| !prompt.is_string());
+        if let Some(prompt) = prompt {
+            let refusal = Refusal::new("string_type", "Input should be a valid string", prompt);
+            settings.refused.push(refusal.of("system_prompt"));
         }
         if let Some(value) = set(metadata, "temperature") {
             match lax_float(value) {
@@ -78,6 +83,12 @@ impl TurnSettings {
                 Ok(read) => settings.max_tokens = Some(read),
                 Err(refusal) => settings.refused.push(refusal.of("max_tokens")),
             }
+        }
+        if prompt.is_some() {
+            settings.validated()?;
+        }
+        if let Some(budget) = set(metadata, "turn_budget_tokens") {
+            settings.turn_budget_tokens = Some(positive_budget(budget)?);
         }
         Ok(settings)
     }
@@ -501,6 +512,37 @@ mod tests {
         assert!(
             past.unwrap_err()
                 .contains("Input should be less than or equal to 4294967295 [type=less_than_equal")
+        );
+    }
+
+    // Python: tests/test_channels/test_turn_config.py::TestABindingPromptThatIsNoText::test_a_prompt_that_is_no_text_fails_the_turn
+    #[test]
+    fn a_prompt_that_is_no_text_fails_the_turn() {
+        for (prompt, shown, kind) in [
+            (json!(5), "5", "int"),
+            (json!(0), "0", "int"),
+            (json!(false), "False", "bool"),
+            (json!([]), "[]", "list"),
+            (json!({"a": 1}), "{'a': 1}", "dict"),
+        ] {
+            let metadata = json!({
+                "system_prompt": prompt,
+                "temperature": "hot",
+                "turn_budget_tokens": "1200",
+            });
+            assert_eq!(
+                read(metadata).map(|settings| settings.temperature),
+                Err(format!(
+                    "2 validation errors for AIContext\nsystem_prompt\n  Input should be a valid \
+                     string [type=string_type, input_value={shown}, input_type={kind}]\n\
+                     temperature\n  Input should be a valid number, unable to parse string as a \
+                     number [type=float_parsing, input_value='hot', input_type=str]"
+                ))
+            );
+        }
+        assert_eq!(
+            read(json!({"system_prompt": "A room's own."})).map(|settings| settings.temperature),
+            Ok(0.7)
         );
     }
 

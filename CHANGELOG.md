@@ -54,9 +54,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   other value (`"hot"`, `1.5`) fails the turn with pydantic's
   `ValidationError` text, and so does a max tokens outside `u32` (`-5`,
   which Python sends). A token budget that is not a positive integer
-  (`"1200"`, `64.0`, `0`) fails the turn with Python's `ValueError`. The
-  binding's thinking, reasoning effort, response schema and cost budget
-  come with those features.
+  (`"1200"`, `64.0`, `0`) fails the turn with Python's `ValueError`, and
+  a system prompt that is no text (`5`, `0`, `false`) fails it first with
+  pydantic's `ValidationError`, as Python now reads it. The binding's
+  thinking, reasoning effort, response schema and cost budget come with
+  those features.
 - A buffered reply's end and usage go under its caller's `turns`, by its
   channel, read off its turn's record or else the last of its messages
   that names one, as
