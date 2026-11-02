@@ -19,7 +19,7 @@ pub(crate) fn bounded_text(text: &str, limit: usize) -> String {
 
 /// `text` on one line, each run of whitespace one space, whitespace as
 /// Python's `str.split()` reads it (the information separators `\x1c` to
-/// `\x1f` among it, which Unicode's White_Space leaves out): Python's
+/// `\x1f` among it, which Unicode's `White_Space` leaves out): Python's
 /// `one_line`. A separator kept would let a sender start what a reader
 /// takes for a line of its own.
 pub(crate) fn one_line(text: &str) -> String {
