@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A tool's end row bounds what it keeps of a text result that is a data
+  URI and of a JSON result's binary blocks (image or audio `data`, `url`
+  or `source.data`, a resource's `blob`), within the 512 KiB its image
+  parts share, a note in place of each payload past it, as Python's
+  `tool_event_payload` (RMK-1241).
 - A strategy's agent given live under the id of a channel the kit holds
   that is not an intelligence channel is refused, `RoomKitError::Value`
   (`Channel 'ana' is not an intelligence channel`), nothing attached, as

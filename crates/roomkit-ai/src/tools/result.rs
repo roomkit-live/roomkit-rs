@@ -4,6 +4,7 @@
 
 use serde_json::{Map, Value};
 
+use super::row_bound::{self, Budget};
 use crate::provider::{AiImagePart, AiTextPart};
 use crate::skills::dumps_unescaped;
 
@@ -14,10 +15,6 @@ const IMAGE_MARK: &str = "[image]";
 /// What a tool message says of a result of images alone, its images going
 /// after it: Python's `split_for_message`.
 const IMAGE_BELOW: &str = "[see image below]";
-
-/// The URL characters of images a call's end row keeps: Python's
-/// `TOOL_EVENT_IMAGE_MAX_CHARS`.
-const ROW_IMAGE_MAX_CHARS: usize = 512 * 1024;
 
 /// What a tool's call answers with (RFC §21.4): Python's `ToolResult`,
 /// `str | list[AITextPart | AIImagePart]`. A text the model reads as it
@@ -134,31 +131,35 @@ impl ToolResult {
         }
     }
 
-    /// The result as the room's end row keeps it: each image kept while
-    /// the images kept so far, its own included, stay within 512 KiB of
-    /// URL, else a note naming its type and size, a later, smaller one
-    /// still kept. Python's `tool_event_payload` on a result of parts.
+    /// The result as the room's end row keeps it: each binary payload (an
+    /// image part, a data URI text, an image, audio or blob block of JSON)
+    /// kept while the payloads kept so far, its own included, stay within
+    /// 512 KiB, else a note naming its kind, type and size, a later, smaller
+    /// one still kept. Python's `tool_event_result`.
     pub(crate) fn into_row_value(self) -> Value {
-        let Self::Parts(parts) = self else {
-            return self.into_value();
-        };
-        let mut used = 0;
-        let kept = parts
-            .into_iter()
-            .map(|part| match part {
-                ToolResultPart::Image(image) => {
-                    let size = image.url.chars().count();
-                    if used + size <= ROW_IMAGE_MAX_CHARS {
-                        used += size;
-                        return ToolResultPart::Image(image);
-                    }
-                    let note = row_note(image.mime_type.as_deref(), size);
-                    ToolResultPart::Text(AiTextPart::new(note))
-                }
-                ToolResultPart::Text(_) => part,
-            })
-            .collect();
-        Self::Parts(kept).into_value()
+        let mut budget = Budget::default();
+        match self {
+            Self::Text(text) => Value::String(row_bound::text(text, &mut budget)),
+            Self::Json(value) => row_bound::json(value, &mut budget),
+            Self::Parts(parts) => {
+                let kept = parts
+                    .into_iter()
+                    .map(|part| match part {
+                        ToolResultPart::Image(image) => {
+                            let size = image.url.chars().count();
+                            if budget.keep(size) {
+                                return ToolResultPart::Image(image);
+                            }
+                            let mime = image.mime_type.as_deref();
+                            let note = row_bound::note("image", mime, size);
+                            ToolResultPart::Text(AiTextPart::new(note))
+                        }
+                        ToolResultPart::Text(_) => part,
+                    })
+                    .collect();
+                Self::Parts(kept).into_value()
+            }
+        }
     }
 
     /// The images among the result's parts, in order.
@@ -251,17 +252,6 @@ fn as_part(item: &Value) -> Option<ToolResultPart> {
     }
 }
 
-/// The note an end row keeps in place of an image of `mime` and `size` URL
-/// characters: Python's `_note`, its size decoded, in KB.
-fn row_note(mime: Option<&str>, size: usize) -> String {
-    let label = match mime {
-        Some(mime) if !mime.is_empty() => format!("image {mime}"),
-        _ => "image".to_owned(),
-    };
-    let decoded_kb = (size * 3 / 4 / 1024).max(1);
-    format!("[{label}, {decoded_kb} KB, not kept in the event]")
-}
-
 /// `part` as Python's model dumps it.
 fn part_value(part: ToolResultPart) -> Value {
     let mut fields = Map::new();
@@ -287,7 +277,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
-    use super::{ToolResult, ToolResultPart, read};
+    use super::{ToolResult, ToolResultPart, Value, read};
     use crate::provider::{AiImagePart, AiTextPart};
 
     fn image(url: &str) -> ToolResultPart {
@@ -348,6 +338,32 @@ mod tests {
         assert_eq!(kept, expected.into_value());
         let under = ToolResult::Parts(vec![page, sized(200)]);
         assert_eq!(under.clone().into_row_value(), under.into_value());
+    }
+
+    // Python: tests/test_tool_event_result.py::TestToolEventResult::test_a_string_result_is_unchanged
+    // and TestJsonShapes::test_a_data_uri_string_is_bounded, on a text and a
+    // JSON result.
+    #[test]
+    fn a_row_bounds_a_text_s_data_uri_and_a_json_s_blocks() {
+        let plain = "x".repeat(2_000_000);
+        let uri = format!("data:image/jpeg;base64,{}", "A".repeat(600 * 1024));
+        let block =
+            json!({"type": "image", "data": "A".repeat(300 * 1024), "mimeType": "image/png"});
+        let json_row = ToolResult::Json(json!([block.clone(), block.clone()])).into_row_value();
+        assert_eq!(
+            (
+                ToolResult::Text(plain.clone()).into_row_value() == Value::String(plain),
+                ToolResult::Text(uri).into_row_value(),
+                json_row[0] == block,
+                json_row[1]["text"].clone(),
+            ),
+            (
+                true,
+                json!("[data URI image/jpeg, 450 KB, not kept in the event]"),
+                true,
+                json!("[image image/png, 225 KB, not kept in the event]"),
+            )
+        );
     }
 
     // Python: tests/test_providers/test_anthropic.py::test_as_text_flattens_parts

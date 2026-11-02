@@ -19,6 +19,7 @@ pub(crate) mod owner;
 mod policy;
 pub(crate) mod repair;
 mod result;
+mod row_bound;
 pub(crate) mod schema;
 pub(crate) mod toolbox;
 
