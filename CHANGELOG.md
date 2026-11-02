@@ -13,6 +13,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   more taking part, the turn's notes name them; notes join the last user
   message when the input reads as nothing; the turn's footprint measures
   the tools on their own schemas and counts the people note.
+- An MCP tool's successful result with no content part reads `[]`, as
+  Python's `text_body`, rather than its structured content's JSON
+  (RFC §21.2, RMK-1193).
 - A cancel waiting for a delegated task that ends as it stands goes on
   once that end is over however it stops, the close's cut included, as
   Python's (RFC §23.3, RMK-1186); a delegation announced as the kit's
