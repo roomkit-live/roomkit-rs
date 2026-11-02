@@ -403,9 +403,28 @@ impl State {
     }
 }
 
+/// `event` without the routing stamps only a hook writes, each dropped
+/// with a warning (RFC §19.4).
+pub(in crate::ops::inbound) fn without_routing_stamps(mut event: RoomEvent) -> RoomEvent {
+    let dropped = crate::rules::permissions::strip_routing_stamps(&mut event);
+    if !dropped.is_empty() {
+        tracing::warn!(
+            target: "roomkit::routing",
+            room_id = %event.room_id,
+            event_id = %event.id,
+            ?dropped,
+            "an event arrived with routing stamps only a hook writes: dropped"
+        );
+    }
+    event
+}
+
 impl CommitPass {
-    /// A pass of `event`, stamped already, from `origin`.
+    /// A pass of `event`, stamped already, from `origin`, without the
+    /// routing stamps it arrived with: a check's outcome keeps those its
+    /// off-lock hooks wrote (RFC §19.4).
     pub(super) fn new(origin: PassOrigin, event: RoomEvent) -> Self {
+        let event = without_routing_stamps(event);
         let lineage = match origin {
             PassOrigin::Adopted(entry) => Lineage::Entry(entry),
             PassOrigin::Trigger | PassOrigin::Response { .. } | PassOrigin::Injected { .. } => {

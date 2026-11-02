@@ -209,7 +209,9 @@ impl Machine {
     /// The trigger arrived in its room: its off-lock check runs when an
     /// off-lock hook fires for it; otherwise its pass starts at once, with
     /// no ticket (RFC §9.5.1).
-    pub(super) fn after_arrival(&mut self, cx: &mut Cx<'_>, arrived: Arrived) {
+    pub(super) fn after_arrival(&mut self, cx: &mut Cx<'_>, mut arrived: Arrived) {
+        // Only a hook writes the routing stamps (RFC §19.4).
+        arrived.event = super::pass::without_routing_stamps(arrived.event);
         let hooks = self.off_lock_checks(cx, &arrived.event);
         if hooks.is_empty() {
             return self.start_trigger(arrived.event, None);

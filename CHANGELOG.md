@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A sender's routing stamps are dropped, as Python's now are: a message
+  that arrived with `_routed_to` or `_always_process` in its metadata chose
+  the agent that answered it, or added one to its address; the kit drops
+  both before an event's `BEFORE_BROADCAST` hooks run, with a warning, so
+  only a hook, the conversation router among them, writes them (RFC §19.4,
+  RMK-1233).
 - A room's conversation state and the conversation router (RFC §19.2,
   §19.4), as Python's: `ConversationState` with `transition`,
   `ConversationPhase`, `PhaseTransition`, `get_conversation_state`,

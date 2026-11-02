@@ -455,6 +455,17 @@ const ROUTED_TO: &str = "_routed_to";
 /// under, its supervisor (RFC §19.4 step 4).
 const ALWAYS_PROCESS: &str = "_always_process";
 
+/// Removes from `event`'s metadata the routing stamps it carries, and names
+/// them: only a hook writes them, the router among hooks, so an event's
+/// stamps are dropped before its `BEFORE_BROADCAST` hooks run (RFC §19.4),
+/// or its sender would choose the agent that answers it.
+pub(crate) fn strip_routing_stamps(event: &mut RoomEvent) -> Vec<&'static str> {
+    [ROUTED_TO, ALWAYS_PROCESS]
+        .into_iter()
+        .filter(|key| event.metadata.shift_remove(*key).is_some())
+        .collect()
+}
+
 /// Whether `event`'s `_always_process` lists `channel_id`.
 fn always_processes(event: &RoomEvent, channel_id: &ChannelId) -> bool {
     event
@@ -1406,6 +1417,42 @@ mod tests {
                 .insert(ALWAYS_PROCESS.to_owned(), serde_json::json!(["supervisor"]));
             let plan = plan_delivery(&event, &bindings, AgentResponsePolicy::AddressedOnly, 5);
             assert_eq!(ids(&plan.agents), ["supervisor"]);
+        }
+
+        // Python: tests/test_addressing.py::TestSolicitation::test_a_supervisor_stamp_that_is_no_list_asks_no_one_more
+        #[test]
+        fn a_supervisor_stamp_that_is_no_list_asks_no_one_more() {
+            let bindings = [transport("human"), agent("codex"), agent("super")];
+            for stamp in [
+                serde_json::json!("supervisor"),
+                serde_json::json!({"super": true}),
+                serde_json::Value::Null,
+            ] {
+                let mut event = event_from(&bindings[0]);
+                event.addressed_to = Some(vec![channel("codex")]);
+                event.metadata.insert(ALWAYS_PROCESS.to_owned(), stamp);
+                assert_eq!(ids(&plan(&event, &bindings).agents), ["codex"]);
+            }
+        }
+
+        /// RFC §19.4: only a hook writes the routing stamps, so an event's
+        /// own are stripped, the rest of its metadata kept.
+        #[test]
+        fn an_event_s_routing_stamps_are_stripped_and_named() {
+            let bindings = [transport("human"), agent("a")];
+            let mut event = event_from(&bindings[0]);
+            routed(&mut event, "a", &["a"]);
+            event
+                .metadata
+                .insert("custom".to_owned(), serde_json::json!("kept"));
+            assert_eq!(
+                strip_routing_stamps(&mut event),
+                [ROUTED_TO, ALWAYS_PROCESS]
+            );
+            assert_eq!(
+                serde_json::Value::Object(event.metadata),
+                serde_json::json!({"custom": "kept"})
+            );
         }
 
         /// RFC §19.4: the router's `_none_` names no agent, which keeps an
