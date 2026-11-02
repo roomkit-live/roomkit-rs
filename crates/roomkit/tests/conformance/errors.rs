@@ -31,9 +31,9 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         }
         RoomKitError::ReentrantCall { .. } => named("reentrant"),
         RoomKitError::EventNotFound(_) => named("event_not_found"),
-        RoomKitError::Value(_) | RoomKitError::ChannelAlreadyRegistered(_) => {
-            named("invalid_argument")
-        }
+        RoomKitError::Value(_)
+        | RoomKitError::ChannelAlreadyRegistered(_)
+        | RoomKitError::ToolNameCollision(_) => named("invalid_argument"),
         _ => return None,
     })
 }

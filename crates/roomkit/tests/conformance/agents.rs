@@ -14,11 +14,14 @@ use futures_core::Stream;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{ChannelId, HookAction, HookResult, Metadata, RoomContext, ToolCall};
 use roomkit::{HookError, ToolCallEvent};
+use roomkit_ai::tasks::{
+    CancelTaskTool, CancelTaskToolOptions, TaskStatusTool, TaskStatusToolOptions,
+};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiRole, AiTool,
     HumanInputToolHandler, HumanInputToolHandlerOptions, ProviderError, ProviderStream,
-    StreamEvent, ToolContext, ToolError, ToolPolicy, ToolResult, Tools,
+    StreamEvent, Tool, ToolContext, ToolEntry, ToolError, ToolPolicy, ToolResult, Tools,
 };
 use serde_json::{Value, json};
 
@@ -157,6 +160,7 @@ pub(crate) fn scripted_agent(
     if let Some(human) = spec.get("human_input") {
         options.human_input_handler = Some(human_input(human)?);
     }
+    options.tools.extend(kit_tools(spec, run)?);
     let paced = Paced {
         script: model.clone(),
         gates,
@@ -164,6 +168,30 @@ pub(crate) fn scripted_agent(
     };
     let agent = AiChannel::new(id, paced, options).map_err(|e| e.to_string())?;
     Ok((agent, models))
+}
+
+/// The tools the kit makes that a scripted agent is given as its own
+/// (README, "Scripted agents").
+fn kit_tools(spec: &Value, run: &Arc<Run>) -> Result<Vec<ToolEntry>, String> {
+    spec["kit_tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|name| {
+            let tool: Arc<dyn Tool> = match name.as_str() {
+                Some("task_status") => Arc::new(TaskStatusTool::new(
+                    run.kit(),
+                    TaskStatusToolOptions::default(),
+                )),
+                Some("cancel_task") => Arc::new(CancelTaskTool::new(
+                    run.kit(),
+                    CancelTaskToolOptions::default(),
+                )),
+                _ => return Err(format!("kit_tools: no tool {name}")),
+            };
+            Ok(ToolEntry::Tool(tool))
+        })
+        .collect()
 }
 
 /// A scripted agent's human-input tools (README, "Scripted agents").

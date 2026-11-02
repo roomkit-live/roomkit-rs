@@ -74,6 +74,7 @@ const CHANNEL: &[&str] = &[
     "serialize_room_turns",
     "steer_room_turns",
     "human_input",
+    "kit_tools",
     "addresses",
     "streams_in",
     "recent_events_window",
