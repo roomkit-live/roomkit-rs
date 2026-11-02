@@ -150,8 +150,10 @@ mod tests {
         ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventId,
         EventSource, EventType, Room, RoomContext, RoomEvent, RoomId, TextContent, Timestamp,
     };
-    use crate::ops::SequentialEnvironment;
+    use std::sync::Arc;
+
     use crate::ops::protocol::Step;
+    use crate::ops::{Inbound, KitConfig, SequentialEnvironment, TurnResponses};
 
     /// The turn the inner operation is handed, issued by the outer one.
     fn handed() -> EffectId {
@@ -297,6 +299,35 @@ mod tests {
     fn a_read_of_a_handed_turn_keeps_the_id_it_was_handed_under() {
         let (effects, _) = run_nested();
         assert_eq!(read_turn(&effects[2]), handed());
+    }
+
+    // RMK-1185: the room's path a delegated turn nests issues none of the
+    // ids its streamed turns are handed under.
+    #[test]
+    fn the_room_s_path_numbers_its_effects_past_the_turns_it_is_handed() {
+        let handed = (0..5).fold(EffectId::first(), |id, _| id.next());
+        let context = RoomContext::new(Room::at(
+            RoomId::new("room_1").unwrap(),
+            Timestamp::UNIX_EPOCH,
+        ));
+        let responses = TurnResponses {
+            event: task(),
+            context,
+            buffered: Vec::new(),
+            streamed: vec![(handed, agent())],
+        };
+        let mut path = Inbound::answering(Arc::new(KitConfig::default()), responses);
+
+        let step = path.poll(&SequentialEnvironment::default());
+
+        let Next::Effects(effects) = step.next else {
+            panic!("the path asked for nothing: {:?}", step.next);
+        };
+        let ids: Vec<EffectId> = effects.iter().map(|effect| effect.id).collect();
+        assert!(
+            !ids.is_empty() && ids.iter().all(|id| *id > handed),
+            "{ids:?} not past {handed:?}"
+        );
     }
 
     #[test]
