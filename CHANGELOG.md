@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `roomkit_ai::current_tool_actor_id`, Python's (RFC §10.6.5, RMK-1176):
+  who woke the turn a tool's call runs in; a human-input request names
+  them as its `actor_id`.
+- `ON_TASK_CREATED` is handed, as Python's, an internal `task_created`
+  event carrying the source and content of the event the task was made
+  for, the task in its metadata (RFC §10.1 step 15, RMK-1167).
 - `RoomKit::delegate`'s `require_structured_result` and
   `max_result_retries`, Python's (RFC §23.3, RMK-1158): an inline run's
   worker hands its work back through `submit_result`, served in the child
