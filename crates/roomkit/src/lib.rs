@@ -99,8 +99,9 @@ pub mod model {
         ParticipantRole, ParticipantStatus, ProviderResult, RateLimit, RetryPolicy, RichContent,
         RichFormat, Room, RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, SystemContent,
         Task, TaskId, TaskStatus, TemplateContent, TextContent, ThreadSummary, Timestamp,
-        ToolCallContent, ToolCallOutcome, ToolCallStatus, Verification, VerificationRequest,
-        VerificationRequestStatus, VerificationStatus, VideoContent, Visibility,
+        ToolCallContent, ToolCallOutcome, ToolCallStatus, Verification, VerificationPolicy,
+        VerificationRequest, VerificationRequestStatus, VerificationStatus, VideoContent,
+        Visibility,
     };
 
     pub use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
@@ -174,6 +175,10 @@ pub use self::kit::{
     UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
 pub use self::kit::{CancelTaskOptions, SetupBackgroundOptions, StartTaskOptions, SteerOptions};
+pub use self::kit::{
+    CompleteVerificationOptions, RecordFailedAttemptOptions, RequestVerificationOptions,
+    RevokeVerificationOptions, VerificationOfOptions,
+};
 pub use self::kit::{
     DelegateOptions, DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions,
 };

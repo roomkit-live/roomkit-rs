@@ -69,7 +69,9 @@ pub use side_effects::{Confidence, Observation, Task, TaskStatus};
 pub use time::Timestamp;
 pub use tool_call::ToolCall;
 pub use updates::{BindingUpdate, EventUpdates, RoomUpdates};
-pub use verification::{Verification, VerificationRequest, VerificationRequestStatus};
+pub use verification::{
+    Verification, VerificationPolicy, VerificationRequest, VerificationRequestStatus,
+};
 pub use visibility::{ChannelSet, Visibility};
 
 /// Integrator-defined data: the RFC's `map<string, any>`.
