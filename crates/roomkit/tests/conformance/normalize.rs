@@ -56,6 +56,9 @@ pub(crate) struct Observed {
     pub(crate) participants: BTreeMap<String, Vec<Value>>,
     /// The scripted resolver's calls, in order.
     pub(crate) resolver: Vec<Value>,
+    /// The human-input requests the run showed, in the order it first
+    /// showed them: `$p1`, `$p2`...
+    pub(crate) requests: Vec<String>,
 }
 
 impl Observed {
@@ -75,6 +78,7 @@ pub(crate) struct Normalizer {
     events: HashMap<String, String>,
     lifecycle: HashMap<String, Vec<i64>>,
     others: HashMap<String, String>,
+    requests: HashMap<String, String>,
     instants: Vec<String>,
 }
 
@@ -117,6 +121,12 @@ impl Normalizer {
             events,
             lifecycle,
             others: HashMap::new(),
+            requests: observed
+                .requests
+                .iter()
+                .enumerate()
+                .map(|(position, id)| (id.clone(), format!("$p{}", position + 1)))
+                .collect(),
             instants,
         };
         // The ids of no timeline are named in the order the step outcomes,
@@ -226,6 +236,9 @@ impl Normalizer {
             return alias.clone();
         }
         if let Some(alias) = self.others.get(text) {
+            return alias.clone();
+        }
+        if let Some(alias) = self.requests.get(text) {
             return alias.clone();
         }
         if key.is_some_and(|key| ID_KEYS.contains(&key)) {

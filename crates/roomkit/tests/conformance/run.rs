@@ -64,6 +64,9 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 pub(crate) struct Scope {
     room: Option<String>,
     event: Option<String>,
+    /// The human-input request a hook on `on_user_input_required` was
+    /// handed, which `$request` names.
+    request: Option<String>,
 }
 
 impl Scope {
@@ -71,6 +74,7 @@ impl Scope {
         Self {
             room: Some(room.to_owned()),
             event: None,
+            request: None,
         }
     }
 
@@ -78,6 +82,15 @@ impl Scope {
         Self {
             room: Some(room.to_owned()),
             event: Some(event.to_owned()),
+            request: None,
+        }
+    }
+
+    pub(crate) fn with_request(room: &str, request: &str) -> Self {
+        Self {
+            room: Some(room.to_owned()),
+            event: None,
+            request: Some(request.to_owned()),
         }
     }
 }
@@ -122,6 +135,7 @@ impl Run {
         let tapped: Vec<&str> = LEVEL_0_EVENTS
             .iter()
             .chain(&crate::task_calls::LEVEL_2_EVENTS)
+            .chain(&crate::input_calls::INPUT_EVENTS)
             .copied()
             .collect();
         let events = EventTap::on(&kit, &tapped);
@@ -245,6 +259,22 @@ impl Run {
     /// Records a call of the hook `name` whose payload is no event, a
     /// status entry or an observation, under `member` (README,
     /// "Expectations").
+    /// Records a call of the hook `name` on `on_user_input_required`, its
+    /// payload under `request` (README, "Expectations"): the request is
+    /// the run's next `$p<n>` when it is new.
+    pub(crate) fn record_request_hook(
+        &self,
+        name: &str,
+        trigger: &str,
+        room_id: &str,
+        request: Value,
+    ) {
+        if let Some(pending_id) = request["pending_id"].as_str() {
+            saw_request(&mut lock(&self.observed), pending_id);
+        }
+        self.record_payload_hook(name, trigger, room_id, "request", request);
+    }
+
     pub(crate) fn record_payload_hook(
         &self,
         name: &str,
@@ -344,6 +374,11 @@ impl Run {
             && let Some(room) = &event.room_id
         {
             observed.created_rooms.push(room.as_str().to_owned());
+        }
+        if event.r#type == "user_input_required"
+            && let Some(pending_id) = event.data.get("pending_id").and_then(Value::as_str)
+        {
+            saw_request(&mut observed, pending_id);
         }
         if !self.recording.load(Ordering::SeqCst) {
             return;
@@ -495,9 +530,22 @@ impl Run {
             match text {
                 "$room" => return scope.room.clone().unwrap_or_default(),
                 "$event" => return scope.event.clone().unwrap_or_default(),
+                "$request" if scope.request.is_some() => {
+                    return scope.request.clone().unwrap_or_default();
+                }
                 _ => {}
             }
             self.drain_events();
+            if let Some(number) = text
+                .strip_prefix("$p")
+                .and_then(|n| n.parse::<usize>().ok())
+            {
+                let observed = lock(&self.observed);
+                return number
+                    .checked_sub(1)
+                    .and_then(|position| observed.requests.get(position))
+                    .map_or_else(|| text.to_owned(), Clone::clone);
+            }
             if let Some(number) = text
                 .strip_prefix("$r")
                 .and_then(|n| n.parse::<usize>().ok())
@@ -600,5 +648,12 @@ fn every_row() -> roomkit::store::ListEventsOptions {
             ..roomkit::EventFilter::default()
         }),
         ..roomkit::store::ListEventsOptions::default()
+    }
+}
+
+/// A human-input request the run shows: the next `$p<n>` when it is new.
+fn saw_request(observed: &mut Observed, pending_id: &str) {
+    if !observed.requests.iter().any(|seen| seen == pending_id) {
+        observed.requests.push(pending_id.to_owned());
     }
 }

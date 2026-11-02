@@ -73,6 +73,7 @@ const CHANNEL: &[&str] = &[
     "max_context_events",
     "serialize_room_turns",
     "steer_room_turns",
+    "human_input",
     "addresses",
     "streams_in",
     "recent_events_window",
@@ -80,6 +81,8 @@ const CHANNEL: &[&str] = &[
     "memory",
 ];
 const ADDRESSES: &[&str] = &["normalizes", "conversation_key"];
+const HUMAN_INPUT: &[&str] = &["tool_names", "timeout_ms", "tools"];
+const HUMAN_TOOL: &[&str] = &["name", "description", "parameters"];
 const MODEL: &[&str] = &["rounds"];
 const MODEL_ROUND: &[&str] = &[
     "text",
@@ -285,7 +288,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         other => {
             return crate::task_calls::arguments(other)
                 .or_else(|| crate::store_calls::arguments(other))
-                .or_else(|| crate::member_calls::arguments(other));
+                .or_else(|| crate::member_calls::arguments(other))
+                .or_else(|| crate::input_calls::arguments(other));
         }
     })
 }
@@ -390,6 +394,16 @@ fn optional(value: &Value, known: &[&str], path: &str, found: &mut Vec<String>) 
 
 fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     members(channel, CHANNEL, path, found);
+    let human = &channel["human_input"];
+    optional(human, HUMAN_INPUT, &format!("{path}.human_input"), found);
+    for (index, tool) in items(&human["tools"]) {
+        members(
+            tool,
+            HUMAN_TOOL,
+            &format!("{path}.human_input.tools[{index}]"),
+            found,
+        );
+    }
     for kind in ["parse", "on_event", "deliver", "deliver_stream"] {
         for (index, reaction) in items(&channel[kind]) {
             self::reaction(reaction, &format!("{path}.{kind}[{index}]"), found);

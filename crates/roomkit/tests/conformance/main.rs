@@ -22,6 +22,7 @@ mod compare;
 mod errors;
 mod harness;
 mod identity;
+mod input_calls;
 mod matching;
 mod member_calls;
 mod memory;

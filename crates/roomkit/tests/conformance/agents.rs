@@ -7,6 +7,7 @@ use std::future::{Future, pending};
 use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, ready};
+use std::time::Duration;
 
 use futures_core::Stream;
 
@@ -15,8 +16,9 @@ use roomkit::model::{ChannelId, HookAction, HookResult, Metadata, RoomContext, T
 use roomkit::{HookError, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiRole, AiTool, ProviderError,
-    ProviderStream, StreamEvent, ToolContext, ToolError, ToolPolicy, ToolResult, Tools,
+    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiRole, AiTool,
+    HumanInputToolHandler, HumanInputToolHandlerOptions, ProviderError, ProviderStream,
+    StreamEvent, ToolContext, ToolError, ToolPolicy, ToolResult, Tools,
 };
 use serde_json::{Value, json};
 
@@ -133,6 +135,9 @@ pub(crate) fn scripted_agent(
     if let Some(memory) = spec.get("memory") {
         options.memory = Some(scripted_memory(memory, options.max_context_events)?);
     }
+    if let Some(human) = spec.get("human_input") {
+        options.human_input_handler = Some(human_input(human)?);
+    }
     let paced = Paced {
         script: model.clone(),
         gates,
@@ -140,6 +145,40 @@ pub(crate) fn scripted_agent(
     };
     let agent = AiChannel::new(id, paced, options).map_err(|e| e.to_string())?;
     Ok((agent, model))
+}
+
+/// A scripted agent's human-input tools (README, "Scripted agents").
+fn human_input(spec: &Value) -> Result<HumanInputToolHandler, String> {
+    let names = spec["tool_names"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str);
+    let timeout = spec["timeout_ms"].as_f64().unwrap_or(300_000.0);
+    let tool_definitions = spec["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|tool| {
+            Ok(AiTool {
+                parameters: tool
+                    .get("parameters")
+                    .cloned()
+                    .unwrap_or_else(|| json!({ "type": "object" })),
+                ..AiTool::new(
+                    tool["name"].as_str().unwrap_or_default(),
+                    tool["description"].as_str().unwrap_or_default(),
+                )
+                .map_err(|e| e.to_string())?
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let options = HumanInputToolHandlerOptions {
+        timeout: Duration::from_secs_f64(timeout / 1000.0),
+        tool_definitions,
+        ..HumanInputToolHandlerOptions::default()
+    };
+    HumanInputToolHandler::new(names, options).map_err(|e| e.to_string())
 }
 
 /// One round of the model's script.

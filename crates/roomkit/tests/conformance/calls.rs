@@ -189,6 +189,9 @@ pub(crate) async fn call(
         member if crate::member_calls::handles(member) => {
             crate::member_calls::call(run, member, spec).await?
         }
+        input if crate::input_calls::handles(input) => {
+            crate::input_calls::call(run, input, spec).await?
+        }
         _ => (lifecycle_call(run, name, spec).await?, None),
     })
 }
@@ -573,6 +576,7 @@ fn add_room_hook(
     );
     let status = payload_hook_handler::<StatusEntry>(hook, run, "status_entry");
     let feedback = payload_hook_handler::<Observation>(hook, run, "observation");
+    let input = crate::input_calls::input_hook_handler(hook, run);
     Ok(async move {
         let added = match (tool, trigger) {
             (Some(tool), _) => {
@@ -585,6 +589,10 @@ fn add_room_hook(
             }
             (None, HookTrigger::OnFeedback) => {
                 kit.add_room_hook(&room, trigger, execution, feedback, options)
+                    .await
+            }
+            (None, HookTrigger::OnUserInputRequired) => {
+                kit.add_room_hook(&room, trigger, execution, input, options)
                     .await
             }
             (None, _) => {
@@ -628,6 +636,9 @@ pub(crate) fn register_hook(
         kit.hook(trigger, handler, options)
     } else if trigger == HookTrigger::OnFeedback {
         let handler = payload_hook_handler::<Observation>(hook, run, "observation");
+        kit.hook(trigger, handler, options)
+    } else if trigger == HookTrigger::OnUserInputRequired {
+        let handler = crate::input_calls::input_hook_handler(hook, run);
         kit.hook(trigger, handler, options)
     } else {
         kit.hook(trigger, hook_handler(hook, run), options)
