@@ -51,12 +51,15 @@ pub struct AgentOptions {
     /// The voice it speaks with; not in the block.
     pub voice: Option<String>,
     /// What it says first once a session with it is ready; not in the
-    /// block.
+    /// block. Declared in its identity only: roomkit-rs greets no session
+    /// yet, Python's `ON_SESSION_STARTED` greeting coming with the voice
+    /// lots.
     pub greeting: Option<String>,
     /// The language it answers in, unless the room's conversation state
     /// sets one: the block's `Language:`.
     pub language: Option<String>,
     /// Whether it greets a session once ready: `true` by default.
+    /// Declared in its identity only, as `greeting`.
     pub auto_greet: bool,
     /// Whether its turns' system prompt ends with its identity block:
     /// `true` by default. `false` keeps the fields readable for a host that
