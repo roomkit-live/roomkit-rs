@@ -247,6 +247,11 @@ impl HostLink {
         }
     }
 
+    /// The id of the turn it serves (RFC §10.6.3).
+    pub(crate) fn turn_id(&self) -> &str {
+        &self.facts.turn
+    }
+
     /// Whether the turn it serves still runs.
     pub(crate) fn is_open(&self) -> bool {
         self.open.load(Ordering::Acquire)

@@ -8,9 +8,9 @@
 //! after its turn. A frame and a control message travel in an envelope that
 //! numbers them per direction ([`super::pipe`]). The messages of features
 //! 0.1 lacks are not modelled (owner-served `tool_call`, the human-input
-//! messages, `steer`, `committed_event`, `channel_call`,
-//! `room_publication`), but `ephemeral`, which a Python executor sends, is
-//! read so that it can be dropped.
+//! messages, `committed_event`, `channel_call`, `room_publication`), but
+//! `ephemeral`, which a Python executor sends, is read so that it can be
+//! dropped.
 
 use std::collections::BTreeMap;
 
@@ -21,6 +21,8 @@ use roomkit_core::model::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::steering::SteeringDirective;
 
 /// A tool the owner serves a turn (RFC §10.6.5): none in 0.1, read as its
 /// JSON.
@@ -307,6 +309,14 @@ pub(crate) enum Frame {
         #[serde(default)]
         data: Metadata,
     },
+    /// How many loops a `steer` reached; none for a channel without
+    /// steering, whose owner then cuts the turn on a `Cancel` (RFC
+    /// §10.6.8).
+    SteerResult {
+        steer_id: String,
+        #[serde(default)]
+        loops: Option<u64>,
+    },
 }
 
 /// A control message, owner to executor, or the answer to a call (RFC
@@ -331,6 +341,12 @@ pub(crate) enum Control {
         result: Value,
         #[serde(default)]
         error: Option<WireError>,
+    },
+    /// A steering directive for the turn's loop (RFC §21.3), answered by
+    /// `steer_result`.
+    Steer {
+        steer_id: String,
+        directive: SteeringDirective,
     },
 }
 

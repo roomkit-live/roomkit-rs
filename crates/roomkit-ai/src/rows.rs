@@ -77,6 +77,7 @@ impl Rows<'_> {
                 self.end_segment();
                 self.record(&end);
             }
+            TurnItem::SegmentBreak => self.end_segment(),
         }
     }
 
@@ -163,6 +164,7 @@ fn response_item(item: TurnItem) -> ResponseItem {
         TurnItem::ToolStart(call) => ResponseItem::ToolCallStart(start_row(&call)),
         TurnItem::ToolEnd(end) => ResponseItem::ToolCallEnd(end_row(end)),
         TurnItem::End(end) => ResponseItem::LoopEnd(end),
+        TurnItem::SegmentBreak => ResponseItem::SegmentBreak,
     }
 }
 

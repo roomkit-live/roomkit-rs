@@ -160,6 +160,14 @@ impl TurnHost {
         self.shared.link.reaches_owner()
     }
 
+    /// The id of the turn it serves, as the turn backend names it (RFC
+    /// §10.6.8): what `RoomKit::steer` addresses a turn by. Python's
+    /// private `current_turn_id()`, which the AI channel's loop reads.
+    #[doc(hidden)]
+    pub fn turn_id(&self) -> &str {
+        self.shared.link.turn_id()
+    }
+
     /// Answers the turn with `stream`, its response as it is written (RFC
     /// §6.1 `response_stream`, §6.4 "One loop, streamed or not"): the
     /// channel's `on_event()` returns the output this gives, to which it may

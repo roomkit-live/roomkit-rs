@@ -9,6 +9,7 @@ use std::time::Duration;
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelId, ChannelOutput, ChannelType,
     EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent, RoomId,
+    SteeringDirective,
 };
 use roomkit::{Channel, ChannelError, current_turn_host};
 use roomkit_core::rules::transcript::conversation;
@@ -25,6 +26,7 @@ use crate::rows;
 use crate::server_instructions::ServerInstructions;
 use crate::skills::SkillRegistry;
 use crate::skills::tools::{SkillTools, SkillTurn};
+use crate::steering::{Loops, SteerOptions};
 use crate::tool_loop::{Bounds, Loop};
 use crate::tools::toolbox::Toolbox;
 use crate::tools::{DynToolset, ToolContext, ToolEntry, ToolHandler, ToolPolicy, served_by};
@@ -192,6 +194,8 @@ pub struct AiChannel<P> {
     skills: Option<Arc<SkillTools>>,
     tool_call_intents: bool,
     tool_call_intents_required: bool,
+    /// The turns' running loops, which steering reaches (RFC §21.3).
+    loops: Arc<Loops>,
 }
 
 impl<P> Clone for AiChannel<P> {
@@ -213,6 +217,7 @@ impl<P> Clone for AiChannel<P> {
             skills: self.skills.clone(),
             tool_call_intents: self.tool_call_intents,
             tool_call_intents_required: self.tool_call_intents_required,
+            loops: Arc::clone(&self.loops),
         }
     }
 }
@@ -314,6 +319,7 @@ impl<P: AiProvider> AiChannel<P> {
             skills,
             tool_call_intents,
             tool_call_intents_required,
+            loops: Arc::default(),
         })
     }
 
@@ -354,6 +360,35 @@ impl<P: AiProvider> AiChannel<P> {
             .as_ref()
             .map(|skills| skills.active_names(room_id))
             .unwrap_or_default()
+    }
+
+    /// Queues `directive` for the running tool loops `options` address
+    /// (RFC §21.3): Python's `steer(directive, *, loop_id=None,
+    /// room_id=None, turn_id=None)`. Safe to call from anywhere; a `Cancel`
+    /// also stops the loop's generation at its next event, and its round's
+    /// calls announced but not run.
+    ///
+    /// One channel serves every room it is bound to, so a host acting for
+    /// one room addresses that room: a `Cancel` reaches every loop of the
+    /// room (or of the turn `turn_id`), any other directive the most recent
+    /// one, never a loop of another room. With no address, the directive
+    /// reaches the channel's most recent loop, whatever its room. A loop is
+    /// reachable once its turn's stream is read, until it has read its
+    /// queue for the last time: at its end, or once the model answered
+    /// with no message steered in meanwhile.
+    ///
+    /// Returns how many loops the directive reached.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AiError::SteerAddress`], Python's `ValueError`, when more
+    /// than one of `loop_id`, `room_id` and `turn_id` is given.
+    pub fn steer(
+        &self,
+        directive: impl Into<SteeringDirective>,
+        options: SteerOptions,
+    ) -> Result<usize, AiError> {
+        self.loops.steer(&directive.into(), options)
     }
 
     /// Whether the channel takes a turn on `event`: a message or an
@@ -598,6 +633,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             intents: self.tool_call_intents,
             intents_required: self.tool_call_intents_required,
             remembered,
+            loops: Arc::clone(&self.loops),
         };
         let items = looped.run(messages);
         match turn {
@@ -605,6 +641,16 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             Some(turn) => Ok(turn.respond_with_stream(rows::response(items))),
             None => Ok(rows::collect(self.source(), &event, items).await?),
         }
+    }
+
+    /// Steers the loops of the turn `turn_id` (RFC §10.6.8), as the kit's
+    /// turn executor applies a `steer`.
+    fn steer_turn(&self, directive: &SteeringDirective, turn_id: &str) -> Option<usize> {
+        let options = SteerOptions {
+            turn_id: Some(turn_id.to_owned()),
+            ..SteerOptions::default()
+        };
+        Some(self.loops.steer(directive, options).unwrap_or(0))
     }
 
     /// Closes the channel's provider ([`AiProvider::close`]), then its

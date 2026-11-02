@@ -9,6 +9,7 @@ use super::TurnItem;
 use crate::provider::{
     AiContext, AiProvider, ProviderError, StreamDone, StreamEvent, StreamToolCall,
 };
+use crate::steering::Steering;
 use crate::stream::{Yielder, next};
 
 /// The most calls one generation's round runs: far above a model's
@@ -22,6 +23,8 @@ pub(super) struct Generation {
     pub(super) text: String,
     pub(super) calls: Vec<Called>,
     pub(super) done: StreamDone,
+    /// A `Cancel` stopped it before its end (RFC §21.3).
+    pub(super) cancelled: bool,
 }
 
 /// A call as the loop reads it.
@@ -46,7 +49,9 @@ impl Generation {
     /// Reads `provider`'s answer to `context`, handing its text to `out` as
     /// it comes. A stream that ends without its done event is read whole
     /// all the same, its calls kept, with no finish reason and no usage, as
-    /// Python's stream round reads it.
+    /// Python's stream round reads it. A `Cancel` `steering` received stops
+    /// the read at the next event, which is dropped with the stream (RFC
+    /// §21.3).
     ///
     /// # Errors
     ///
@@ -54,12 +59,16 @@ impl Generation {
     pub(super) async fn read<P: AiProvider>(
         provider: &P,
         context: &AiContext,
+        steering: &Steering,
         out: &Yielder<Result<TurnItem, ProviderError>>,
     ) -> Result<Self, ProviderError> {
         let mut stream = provider.generate_structured_stream(context);
         let mut text = String::new();
         let mut calls = Vec::new();
         while let Some(event) = next(&mut stream).await {
+            if steering.cancelled() {
+                return Ok(Self::cut(text));
+            }
             match event? {
                 StreamEvent::TextDelta(delta) => {
                     text.push_str(&delta.text);
@@ -68,7 +77,12 @@ impl Generation {
                 StreamEvent::ToolCall(call) => calls.push(call),
                 StreamEvent::Done(done) => {
                     let calls = read_calls(calls);
-                    return Ok(Self { text, calls, done });
+                    return Ok(Self {
+                        text,
+                        calls,
+                        done,
+                        cancelled: false,
+                    });
                 }
             }
         }
@@ -77,7 +91,18 @@ impl Generation {
             text,
             calls,
             done: StreamDone::default(),
+            cancelled: false,
         })
+    }
+
+    /// A generation a `Cancel` stopped after it wrote `text`.
+    fn cut(text: String) -> Self {
+        Self {
+            text,
+            calls: Vec::new(),
+            done: StreamDone::default(),
+            cancelled: true,
+        }
     }
 }
 

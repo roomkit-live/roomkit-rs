@@ -118,7 +118,11 @@ impl Pump {
                     }
                 }
                 Ok(()) = cancelled.changed(), if deadline.is_none() => {
-                    deadline = Some(Instant::now() + timeouts.cancel);
+                    // A steering cut waits for the end as after a close
+                    // (RFC §10.6.8).
+                    if !self.state.steer_cut.load(Ordering::Acquire) {
+                        deadline = Some(Instant::now() + timeouts.cancel);
+                    }
                 }
                 () = until(deadline) => break Ending::GaveUp,
                 silent = beat.tick() => {
@@ -188,6 +192,9 @@ impl Pump {
             ),
             // What the reader settles itself, before it closes (a call's
             // early end), and the ephemerals no owner of 0.1 publishes.
+            Frame::SteerResult { steer_id, loops } => {
+                self.state.steers.answer(&steer_id, loops);
+            }
             Frame::Record { record } => self.hand(Main::Record(record)),
             Frame::ToolEnded { .. } | Frame::Ephemeral { .. } => {
                 tracing::trace!(target: "roomkit::turns", turn = %self.state.turn.turn_id, "a frame left unread");
@@ -329,6 +336,8 @@ impl Drop for Pump {
             call.abort();
         }
         self.state.over.send_replace(true);
+        // Over first: a steer that comes after reads it and waits for none.
+        self.state.steers.end();
         self.state.turn.shut();
         *lock(&self.state.waiting) = ExecutionContext::default();
     }

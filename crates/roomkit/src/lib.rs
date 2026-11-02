@@ -69,6 +69,7 @@ pub mod realtime;
 mod registered;
 mod router;
 mod sends;
+mod steering;
 pub mod store;
 mod stream;
 pub mod tasks;
@@ -100,6 +101,7 @@ pub mod model {
     };
 
     pub use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
+    pub use crate::steering::{Cancel, InjectMessage, SteeringDirective, UpdateSystemPrompt};
     pub use crate::stream::{LoopEndMarker, LoopEndReason};
     /// What a hook returns: [`HookResult`]'s constructors and their options,
     /// Python's keywords of `HookResult.allow`, `block` and `modify`.
@@ -167,7 +169,7 @@ pub use self::kit::{
     RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
     UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
-pub use self::kit::{CancelTaskOptions, StartTaskOptions};
+pub use self::kit::{CancelTaskOptions, StartTaskOptions, SteerOptions};
 pub use self::kit::{
     DelegateOptions, DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions,
 };

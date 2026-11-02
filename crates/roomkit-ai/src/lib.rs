@@ -76,6 +76,7 @@ pub use images::ImageResolver;
 mod rows;
 mod server_instructions;
 mod skills;
+mod steering;
 mod stream;
 #[doc(hidden)]
 pub mod testing;
@@ -97,6 +98,7 @@ pub use self::provider::{
 #[doc(hidden)]
 pub use self::skills::dumps;
 pub use self::skills::{DiscoverOptions, Skill, SkillError, SkillMetadata, SkillRegistry};
+pub use self::steering::SteerOptions;
 pub use self::tools::{
     AiTool, Tool, ToolCallContext, ToolEntry, ToolError, ToolFuture, ToolHandler, ToolPolicy,
     ToolResult, compose_tool_handlers, current_tool_call,

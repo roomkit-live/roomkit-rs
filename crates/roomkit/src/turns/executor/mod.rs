@@ -40,6 +40,7 @@ use super::timeouts::Beat;
 use super::wire::{ContextRest, Control, Frame, RequestRest, TurnRequest};
 use super::{CarriedRequest, MemoryTurn, Turns, lock};
 use crate::channel::DynChannel;
+use crate::steering::SteeringDirective;
 use crate::turn::{self, TurnHost, TurnKit};
 use tokio::task::AbortHandle;
 use tokio::time::{Instant, MissedTickBehavior};
@@ -131,6 +132,11 @@ impl Executor {
         );
         let flow = Arc::new(Flow::default());
         let _released = Released(Arc::clone(&link));
+        let steering = Steering {
+            channel: Arc::clone(&channel),
+            turn_id: request.turn_id.clone(),
+            sender: Arc::clone(&self.sender),
+        };
         let work: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(work(
             Arc::clone(&self.turn),
             Arc::clone(&self.sender),
@@ -140,7 +146,9 @@ impl Executor {
             channel,
         ));
         let beating = Beating::start(&self.kit, &self.sender, &self.turn);
-        let cut = self.watch(&mut controls, work, &flow, &link).await;
+        let cut = self
+            .watch(&mut controls, work, &flow, (&link, &steering))
+            .await;
         drop(beating);
         self.end(cut, &host, &link);
         panicked.disarm();
@@ -179,7 +187,7 @@ impl Executor {
         controls: &mut PipeReceiver<Control>,
         work: Pin<Box<dyn Future<Output = ()> + Send>>,
         flow: &Flow,
-        link: &HostLink,
+        (link, steering): (&HostLink, &Steering),
     ) -> Option<Cut> {
         let timeouts = self.turn.timeouts;
         let mut beat = Beat::new(&timeouts, true);
@@ -201,7 +209,7 @@ impl Executor {
                 control = controls.get() => {
                     beat.heard();
                     match control {
-                        Ok((_, control)) => match apply(control, flow, link) {
+                        Ok((_, control)) => match apply(control, flow, link, steering) {
                             Some(Cut::Cancelled(_)) if self.kit.acting() => {
                                 return Some(self.let_go(work.take(), flow, link).await);
                             }
@@ -376,9 +384,29 @@ impl Drop for Panicked {
     }
 }
 
+/// How the turn's executor steers its loops (RFC §10.6.8): through its
+/// channel, answering each `steer` with its `steer_result`.
+struct Steering {
+    channel: Arc<dyn DynChannel>,
+    turn_id: String,
+    sender: Arc<FrameSender>,
+}
+
+impl Steering {
+    /// Applies `directive` to the turn's loops, and tells the owner how
+    /// many it reached; none for a channel without steering.
+    fn apply(&self, steer_id: String, directive: &SteeringDirective) {
+        let loops = self
+            .channel
+            .steer_turn(directive, &self.turn_id)
+            .map(|loops| u64::try_from(loops).unwrap_or(u64::MAX));
+        drop(self.sender.send(&Frame::SteerResult { steer_id, loops }));
+    }
+}
+
 /// Applies one control message of the owner's; how it cuts the work, when
 /// it does.
-fn apply(control: Control, flow: &Flow, link: &HostLink) -> Option<Cut> {
+fn apply(control: Control, flow: &Flow, link: &HostLink, steering: &Steering) -> Option<Cut> {
     match control {
         Control::Pull { count, read } => {
             if count > 0 {
@@ -402,6 +430,13 @@ fn apply(control: Control, flow: &Flow, link: &HostLink) -> Option<Cut> {
             error,
         } => {
             link.resolve(&call_id, result, error.as_ref());
+            None
+        }
+        Control::Steer {
+            steer_id,
+            directive,
+        } => {
+            steering.apply(steer_id, &directive);
             None
         }
     }

@@ -1,7 +1,7 @@
-//! What building an AI channel fails with.
+//! What building or steering an AI channel fails with.
 
-/// What building an AI channel failed with: what Python's raises as
-/// `ValueError`.
+/// What building or steering an AI channel failed with: what Python's
+/// raises as `ValueError`.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AiError {
@@ -54,4 +54,8 @@ pub enum AiError {
         /// How many were given.
         given: usize,
     },
+    /// A steering directive addressed to more than one of a loop, a room
+    /// and a turn (RFC §21.3). Python's `ValueError`.
+    #[error("steer() addresses a loop_id, a room_id or a turn_id, not several")]
+    SteerAddress,
 }

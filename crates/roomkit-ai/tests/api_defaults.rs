@@ -79,3 +79,14 @@ fn mock_ai_provider_options_defaults_as_python() {
     // roomkit.providers.ai.MockAIProvider.__init__(vision) = False
     assert!(!defaults.vision);
 }
+
+#[test]
+fn steer_options_defaults_as_python() {
+    let defaults = roomkit_ai::SteerOptions::default();
+    // roomkit.AIChannel.steer(loop_id) = None
+    assert!(defaults.loop_id.is_none());
+    // roomkit.AIChannel.steer(room_id) = None
+    assert!(defaults.room_id.is_none());
+    // roomkit.AIChannel.steer(turn_id) = None
+    assert!(defaults.turn_id.is_none());
+}

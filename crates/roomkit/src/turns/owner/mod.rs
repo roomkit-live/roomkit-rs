@@ -17,10 +17,11 @@
 
 mod pump;
 mod reader;
+mod steering;
 mod verbs;
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
 
 use roomkit_core::model::{ChannelBinding, ChannelId, Metadata, Room, RoomEvent, RoomId};
@@ -28,6 +29,8 @@ use tokio::sync::{mpsc, watch};
 
 use self::pump::Pump;
 pub(crate) use self::reader::{OwnerTurn, RemoteItem};
+pub(crate) use self::steering::Steerable;
+use self::steering::Steers;
 pub(crate) use self::verbs::{answer_room_call, last_turn};
 use super::error::TurnError;
 use super::pipe::PipeReceiver;
@@ -91,6 +94,12 @@ pub(super) struct OwnerState {
     pub(super) cancel: watch::Sender<Option<String>>,
     /// Whether the turn is over for the owner.
     pub(super) over: watch::Sender<bool>,
+    /// The `steer` messages sent and not answered yet (RFC §10.6.8).
+    pub(super) steers: Steers,
+    /// Set once a steering `Cancel` cut a turn whose channel has no
+    /// steering: the owner waits for its end without the cancel bound, and
+    /// its reader reads it to its end as after a close (RFC §10.6.8).
+    pub(super) steer_cut: AtomicBool,
 }
 
 /// What cuts a turn from outside its reader: the run whose call the turn
@@ -131,6 +140,8 @@ pub(crate) fn open(
         granted: AtomicU64::new(0),
         cancel: watch::Sender::new(None),
         over: watch::Sender::new(false),
+        steers: Steers::default(),
+        steer_cut: AtomicBool::new(false),
     });
     let (main, received) = mpsc::unbounded_channel();
     let pump = Pump::new(Arc::clone(&state), frames, main, kit, turns);

@@ -1134,3 +1134,14 @@ fn is_member_options_defaults_as_python() {
     // roomkit.RoomKit.is_member(organization_id) = None
     assert!(defaults.organization_id.is_none());
 }
+
+#[test]
+fn steer_options_defaults_as_python() {
+    let defaults = roomkit::SteerOptions::default();
+    // roomkit.RoomKit.steer(room_id) = None
+    assert!(defaults.room_id.is_none());
+    // roomkit.RoomKit.steer(turn_id) = None
+    assert!(defaults.turn_id.is_none());
+    // roomkit.RoomKit.steer(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}

@@ -40,6 +40,7 @@ mod rooms;
 mod shutdown;
 mod start_task;
 mod status;
+mod steering;
 mod task_cancel;
 mod tasks;
 #[cfg(test)]
@@ -90,6 +91,7 @@ pub use self::start_task::StartTaskOptions;
 pub use self::status::{
     ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,
 };
+pub use self::steering::SteerOptions;
 pub use self::task_cancel::CancelTaskOptions;
 pub use self::tasks::DelegateOptions;
 pub(crate) use self::tasks::TaskEnd;

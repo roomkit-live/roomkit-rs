@@ -9,6 +9,7 @@ mod history;
 mod intents;
 mod mock;
 mod servers;
+mod steering;
 mod support;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

@@ -384,7 +384,7 @@ impl Producer {
             }
             // The loop goes on after a round without a call: its text is a
             // segment of its own (RFC §6.4).
-            Some(Ok(RemoteItem::SegmentBreak)) => {
+            Some(Ok(RemoteItem::SegmentBreak | RemoteItem::Item(ResponseItem::SegmentBreak))) => {
                 if let Some(row) = self.segments.last_text(false) {
                     self.commit(row).await;
                 }
@@ -523,7 +523,11 @@ impl Producer {
                 }
                 Some(
                     Some(Ok(
-                        RemoteItem::Item(ResponseItem::Text(_) | ResponseItem::LoopEnd(_))
+                        RemoteItem::Item(
+                            ResponseItem::Text(_)
+                            | ResponseItem::LoopEnd(_)
+                            | ResponseItem::SegmentBreak,
+                        )
                         | RemoteItem::SegmentBreak,
                     ))
                     | None,

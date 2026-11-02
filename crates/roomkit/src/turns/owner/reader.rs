@@ -5,10 +5,12 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use roomkit_core::model::{ChannelOutput, Metadata};
+use roomkit_core::model::{
+    ChannelOutput, Metadata, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+};
 use tokio::sync::{mpsc, watch};
 
-use super::{Canceller, Main, OwnerState, cancel};
+use super::{Canceller, Main, OwnerState, Steerable, cancel};
 use crate::channel::ChannelError;
 use crate::context::ExecutionContext;
 use crate::stream::ResponseItem;
@@ -25,6 +27,8 @@ enum Stage {
     Output,
     /// It reads the stream: dropped, it closes it.
     Stream,
+    /// A steering cut ended it: the calls it left open end, cancelled.
+    Cut,
     /// It read all it will.
     Done,
 }
@@ -51,8 +55,8 @@ pub(crate) struct OwnerTurn {
     stage: Stage,
     window: PullWindow,
     /// The calls whose start was read and whose end was not: the start's
-    /// frame, and the call's id.
-    open: Vec<(u64, String)>,
+    /// frame, and the start.
+    open: Vec<(u64, ToolCallContent)>,
     /// The turn's record as the last `record` frame gave it: the record a
     /// loop's end ends the turn on.
     record: Option<Metadata>,
@@ -103,6 +107,10 @@ impl OwnerTurn {
                 Some(Main::Error(error)) => return Err(TurnFailure::crossed(&error)),
                 Some(Main::Failed(error)) => Err(error.to_record()),
                 Some(Main::End) if cutting => Err(TurnError::link_reason("cancelled").to_record()),
+                // Cut by a steering `Cancel` before it answered (RFC §10.6.8).
+                Some(Main::End) if self.state.steer_cut.load(Ordering::Acquire) => {
+                    return Ok((ChannelOutput::empty(), false));
+                }
                 // An end, or a frame that is not the output, as Python's
                 // owner reads either.
                 Some(Main::End | Main::Item(..) | Main::Record(_)) => Err(TurnError::new(
@@ -120,6 +128,9 @@ impl OwnerTurn {
     /// reader read enough of its window (RFC §10.6.4); `None` at its end.
     pub(crate) async fn next_item(&mut self) -> Option<Result<RemoteItem, ChannelError>> {
         loop {
+            if self.stage == Stage::Cut {
+                return self.cut_end();
+            }
             if self.stage != Stage::Stream {
                 return None;
             }
@@ -136,6 +147,12 @@ impl OwnerTurn {
                 }
                 Some(Main::Error(error)) => Read::Failed(Box::new(RemoteError(error))),
                 Some(Main::Failed(error)) => Read::Failed(Box::new(error)),
+                // Cut by a steering `Cancel`: the calls it left open end
+                // cancelled, one per read, then the stream (RFC §10.6.4).
+                Some(Main::End) if self.state.steer_cut.load(Ordering::Acquire) => {
+                    self.stage = Stage::Cut;
+                    return self.cut_end();
+                }
                 // An end, or a second output, as Python's owner reads either.
                 Some(Main::End | Main::Output(..)) => Read::Failed(Box::new(TurnError::new(
                     "executor_lost",
@@ -156,6 +173,23 @@ impl OwnerTurn {
                 }
             }
         }
+    }
+
+    /// The next end of a call a steering cut left open, cancelled; `None`
+    /// once none is left, the stream over.
+    fn cut_end(&mut self) -> Option<Result<RemoteItem, ChannelError>> {
+        if self.open.is_empty() {
+            self.stage = Stage::Done;
+            return None;
+        }
+        let (_, start) = self.open.remove(0);
+        let end = ToolCallContent {
+            status: ToolCallStatus::Failed,
+            outcome: Some(ToolCallOutcome::Cancelled),
+            error: Some("cancelled".to_owned()),
+            ..start
+        };
+        Some(Ok(RemoteItem::Item(ResponseItem::ToolCallEnd(end))))
     }
 
     /// Grants the executor the window again, the stream advancing in the
@@ -197,8 +231,8 @@ impl OwnerTurn {
                 ..
             } => {
                 self.window.read_other();
-                self.open.push((seq, tool_id.clone()));
                 let start = decode_start(tool_name, tool_id, arguments, intent);
+                self.open.push((seq, start.clone()));
                 Read::Item(RemoteItem::Item(ResponseItem::ToolCallStart(start)))
             }
             Item::ToolEnd {
@@ -266,10 +300,9 @@ impl OwnerTurn {
     /// earliest open under its id (two calls under one id are two calls,
     /// RFC §6.4).
     fn close_start(&mut self, start: Option<u64>, tool_id: &str) {
-        let position = self
-            .open
-            .iter()
-            .position(|(seq, id)| start == Some(*seq) || (start.is_none() && id == tool_id));
+        let position = self.open.iter().position(|(seq, open)| {
+            start == Some(*seq) || (start.is_none() && open.tool_id == tool_id)
+        });
         if let Some(position) = position {
             self.open.remove(position);
         }
@@ -278,7 +311,7 @@ impl OwnerTurn {
     /// The arguments the open call `tool_id` runs with once its gate fixed
     /// them, when the executor said so (`tool_args`).
     pub(crate) fn ran_with(&self, tool_id: &str) -> Option<Metadata> {
-        let (seq, _) = self.open.iter().find(|(_, id)| id == tool_id)?;
+        let (seq, _) = self.open.iter().find(|(_, open)| open.tool_id == tool_id)?;
         lock(&self.state.ran_with).get(seq).cloned()
     }
 
@@ -294,6 +327,11 @@ impl OwnerTurn {
     /// executor was lost, or its cancel bound passed.
     pub(crate) async fn ended(&self) {
         self.canceller().ended().await;
+    }
+
+    /// What steers the turn from outside its reader (RFC §10.6.8).
+    pub(crate) fn steerable(&self) -> Steerable {
+        Steerable::new(&self.state)
     }
 
     /// What cuts the turn from outside its reader.
@@ -322,7 +360,7 @@ impl Drop for OwnerTurn {
             Stage::Output => cancel(&self.state, "cancelled"),
             // A stream nobody reads further: the reader's close (§10.6.4).
             Stage::Stream if !*self.state.over.borrow() => self.put(&Control::Close),
-            Stage::Stream | Stage::Done => {}
+            Stage::Stream | Stage::Cut | Stage::Done => {}
         }
     }
 }

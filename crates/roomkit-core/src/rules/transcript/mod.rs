@@ -73,6 +73,9 @@ pub enum Role {
     /// A tool's result, within the turn whose round called it and replayed
     /// in later turns' history.
     Tool,
+    /// The application's words within the conversation: a message a host
+    /// steers into a turn as `system` (RFC §21.3).
+    System,
 }
 
 /// One message of the conversation a turn reads. Its fields are read as
@@ -411,6 +414,13 @@ pub fn turn_labels<'a>(
         .into_iter()
         .map(|event| speaker(event, &mut authors).map(|speaker| speaker.label))
         .collect()
+}
+
+/// `text` with each copy of a runtime mark it holds replaced (RFC §6.4):
+/// a message a host steers into a turn (RFC §21.3) reads as no mark of
+/// the runtime's. Python's `without_mark_copies`.
+pub fn without_mark_copies(text: &str) -> String {
+    without_copies(&[text.to_owned()]).pop().unwrap_or_default()
 }
 
 /// `line` as a JSON string a model does not read as ending early (RFC

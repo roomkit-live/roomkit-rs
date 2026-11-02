@@ -34,6 +34,7 @@ mod owner;
 mod pipe;
 mod pulls;
 mod records;
+mod started;
 #[cfg(test)]
 mod tests;
 mod timeouts;
@@ -60,6 +61,8 @@ pub(crate) use self::observe::{Carried, Tap};
 pub(crate) use self::owner::{Canceller, OwnerTurn, RemoteItem};
 use self::pipe::{MAX_MESSAGE_BYTES, pipe};
 use self::records::RoomRecords;
+use self::started::StartedTurns;
+pub(crate) use self::started::SteerAddress;
 pub use self::timeouts::TurnTimeouts;
 pub(crate) use self::wire::SEND_EVENT;
 use self::wire::{
@@ -68,6 +71,7 @@ use self::wire::{
 };
 use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
+use crate::steering::SteeringDirective;
 use crate::tasks::{Marks, Unit};
 use crate::turn::TurnKit;
 
@@ -99,6 +103,9 @@ pub(crate) struct Turns {
     /// Set as the kit's close starts: every turn is cut (RFC §10.6.8,
     /// §12.10.4).
     cut: watch::Sender<bool>,
+    /// The turns submitted and not over, which steering reaches (RFC
+    /// §10.6.8).
+    started: Mutex<StartedTurns>,
 }
 
 impl Default for Turns {
@@ -112,6 +119,7 @@ impl Default for Turns {
             reads: Mutex::new(0),
             reads_changed: Notify::new(),
             cut: watch::Sender::new(false),
+            started: Mutex::new(StartedTurns::default()),
         }
     }
 }
@@ -280,6 +288,7 @@ impl Turns {
         let (controls, controls_read) = pipe(Arc::clone(&turn_id), Carried::Control, observers);
         let memory = Arc::new(MemoryTurn::new(turn_id, frames, controls, timeouts));
         let facts = owner::Facts::of(binding, &event, &context.room);
+        let (room_id, organization_id) = (facts.room_id.clone(), facts.organization_id.clone());
         let (turn, pump) = owner::open(
             Arc::clone(&memory),
             frames_read,
@@ -298,7 +307,29 @@ impl Turns {
             memory.shut();
             return Err(closed());
         }
+        lock(&self.started).start(
+            (&memory.turn_id, &room_id, &binding.channel_id),
+            organization_id.as_deref(),
+            turn.steerable(),
+        );
         Ok(turn)
+    }
+
+    /// Steers the running turns `address` names (RFC §21.3, §10.6.8): a
+    /// `Cancel` reaches every turn of a room, any other directive its most
+    /// recent; each turn's executor applies it through the channel. How
+    /// many loops it reached, summed.
+    pub(crate) async fn steer(
+        &self,
+        directive: &SteeringDirective,
+        address: SteerAddress<'_>,
+    ) -> usize {
+        let targets = lock(&self.started).targets(directive, address);
+        let mut reached = 0usize;
+        for target in targets {
+            reached = reached.saturating_add(target.steer(directive).await);
+        }
+        reached
     }
 
     /// The executor that took `turn_id` in `room_id`, as it said so.

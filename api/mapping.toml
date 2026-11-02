@@ -617,7 +617,7 @@ python = "roomkit.RoomKit"
 members = [
     "bind_voice_session", "connect_video", "connect_voice", "disconnect_video",
     "disconnect_voice", "join", "leave", "listen_only", "send_greeting",
-    "speak_queue", "steer", "stt", "synthesize", "talk_again", "transcribe",
+    "speak_queue", "stt", "synthesize", "talk_again", "transcribe",
     "tts", "voice",
 ]
 reason = "not in 0.x: voice and video"
@@ -884,8 +884,8 @@ reason = "not in 0.x: what a memory retrieved for the turn alone (RFC 20.2 notes
 
 [[missing]]
 python = "roomkit.AIChannel"
-members = ["extra_tools", "steer", "thinks_while_listening"]
-reason = "not in 0.x: tools added at run time, steering and the thinker"
+members = ["extra_tools", "thinks_while_listening"]
+reason = "not in 0.x: tools added at run time and the thinker"
 
 [[missing]]
 python = "roomkit.tools.ToolCallContext.__init__"

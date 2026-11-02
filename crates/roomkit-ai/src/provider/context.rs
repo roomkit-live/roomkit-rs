@@ -316,6 +316,7 @@ fn role(role: Role) -> AiRole {
     match role {
         Role::Assistant => AiRole::Assistant,
         Role::Tool => AiRole::Tool,
+        Role::System => AiRole::System,
         // A role the transcript adds later reads as someone else's.
         Role::User | _ => AiRole::User,
     }

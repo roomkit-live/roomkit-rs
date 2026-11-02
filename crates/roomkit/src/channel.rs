@@ -15,6 +15,7 @@ use roomkit_core::rules::addresses::{
     Addressing, ChannelAddressing, ChannelAddressingOptions, CountryCode,
 };
 
+use crate::steering::SteeringDirective;
 use crate::stream::{DeliveryStream, StreamItem};
 
 /// What a channel's call failed with. The pipeline records it as the error's
@@ -262,6 +263,18 @@ pub trait Channel: Send + Sync + 'static {
         (addressing, None)
     }
 
+    /// Applies `directive` to the loops of the turn `turn_id` the channel
+    /// runs (RFC §10.6.8 `steer`): how many it reached, or `None` for a
+    /// channel without steering, whose owner then cuts the turn on a
+    /// `Cancel`. `None` by default.
+    ///
+    /// For the workspace's AI channel, as the Python implementation's
+    /// executor reads a channel's own `steer()`: outside the public API.
+    #[doc(hidden)]
+    fn steer_turn(&self, _directive: &SteeringDirective, _turn_id: &str) -> Option<usize> {
+        None
+    }
+
     /// What the room's owner knows of the channel (RFC §10.6.2): its id,
     /// type, category, capabilities and history window.
     fn declaration(&self) -> ChannelDeclaration {
@@ -445,6 +458,8 @@ pub(crate) trait DynChannel: Send + Sync {
 
     fn supports_streaming_delivery_for(&self, room_id: &RoomId) -> bool;
 
+    fn steer_turn(&self, directive: &SteeringDirective, turn_id: &str) -> Option<usize>;
+
     fn handle_inbound(
         &self,
         message: InboundMessage,
@@ -499,6 +514,10 @@ impl<C: Channel> DynChannel for C {
 
     fn supports_streaming_delivery_for(&self, room_id: &RoomId) -> bool {
         Channel::supports_streaming_delivery_for(self, room_id)
+    }
+
+    fn steer_turn(&self, directive: &SteeringDirective, turn_id: &str) -> Option<usize> {
+        Channel::steer_turn(self, directive, turn_id)
     }
 
     fn handle_inbound(

@@ -63,6 +63,12 @@ pub enum ResponseItem {
     /// Python's private `ToolCallEndMarker`, which roomkit-ai writes.
     #[doc(hidden)]
     ToolCallEnd(ToolCallContent),
+    /// The loop asks the model again within the turn (a message steered in
+    /// once it answered, RFC §21.3): the text before it is a segment of its
+    /// own, a MESSAGE of its own (RFC §6.4). Python's private
+    /// `SegmentBreakMarker`, which roomkit-ai writes.
+    #[doc(hidden)]
+    SegmentBreak,
 }
 
 /// A turn's response as its channel writes it: a stream ended by its last

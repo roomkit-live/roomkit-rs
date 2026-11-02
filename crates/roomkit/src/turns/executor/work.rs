@@ -216,6 +216,12 @@ impl Pump<'_> {
                 self.host.forget_ran_with(&end.tool_id);
                 self.sender.send_end(end)
             }
+            Some(Ok(ResponseItem::SegmentBreak)) => self
+                .sender
+                .send(&Frame::Item {
+                    item: Item::SegmentBreak,
+                })
+                .map(drop),
             Some(Ok(ResponseItem::LoopEnd(marker))) => {
                 let (whole, item) = encode_loop_end(&marker);
                 let recorded = match whole {

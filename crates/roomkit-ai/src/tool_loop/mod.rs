@@ -11,6 +11,13 @@
 //! - `generation`: one generation read from its provider, and its calls;
 //! - `calls`: one call through its gate (RFC §21.1) and its tool, reported
 //!   to the kit's hooks (RFC §9.3).
+//!
+//! The loop reads the directives a host steers into it (RFC §21.3,
+//! `crate::steering`) at its stops: at its start, after each round of
+//! calls, and once the model has answered, when a message steered in
+//! meanwhile asks the model again in the same turn. A `Cancel` also stops
+//! a generation at its next event, and the round's calls announced but not
+//! yet run.
 
 mod calls;
 mod generation;
@@ -20,14 +27,15 @@ mod rules;
 use std::sync::Arc;
 use std::time::Duration;
 
-use roomkit::TurnHost;
 use roomkit::model::{LoopEndMarker, LoopEndReason, Metadata, ToolCall, ToolCallOutcome};
-use roomkit_core::rules::transcript::Message;
+use roomkit::{ToolCallReport, TurnHost};
+use roomkit_core::rules::transcript::{Message, Role};
 use serde_json::Value;
 
 use self::generation::Generation;
 use self::rules::{Limits, final_round_reason};
 use crate::provider::{AiContext, AiMessage, AiProvider, ProviderError, ai_messages};
+use crate::steering::{Loops, Steering};
 use crate::stream::{Items, Yielder, items, join_all};
 use crate::tools::ToolContext;
 use crate::tools::ToolPolicy;
@@ -45,6 +53,9 @@ pub(crate) enum TurnItem {
     /// The loop ended: why, after how many rounds, what they used (RFC
     /// §6.4 "The turn's record").
     End(LoopEndMarker),
+    /// The loop asks the model again after it answered: the text before is
+    /// a segment of its own.
+    SegmentBreak,
 }
 
 /// How a call ended.
@@ -105,6 +116,9 @@ pub(crate) struct Loop<P> {
     /// The messages the memory built (a summary), read before the
     /// conversation at every round (RFC §20.2).
     pub(crate) remembered: Vec<AiMessage>,
+    /// The channel's running loops, which this one joins as it starts
+    /// (RFC §21.3).
+    pub(crate) loops: Arc<Loops>,
 }
 
 impl<P: AiProvider> Loop<P> {
@@ -114,30 +128,48 @@ impl<P: AiProvider> Loop<P> {
     }
 
     /// Runs rounds until the model answers, the round bound or the deadline
-    /// passes, or the provider fails; a round with no call to run may be
-    /// tried again, in a round's place (Appendix A.9).
+    /// passes, a host cancels it, or the provider fails; a round with no
+    /// call to run may be tried again, in a round's place (Appendix A.9).
+    /// The loop joins the channel's running loops as it starts, and reads
+    /// the directives steered into it at its stops (RFC §21.3).
     async fn rounds(
         self,
         mut messages: Vec<Message>,
         out: Yielder<Result<TurnItem, ProviderError>>,
     ) {
+        let turn_id = self.turn.as_ref().map(|turn| turn.turn_id().to_owned());
+        let steering = self
+            .loops
+            .start(Some(self.context.room_id.clone()), turn_id);
+        let mut system_prompt = self.system_prompt.clone();
         let declared = self.shown_tools(self.toolbox.declared(&self.policy));
         let mut spent = Spent::default();
         let mut had_tool_round = false;
         let mut tool_rounds = 0;
         let mut limits = Limits::starting(&self.bounds);
+        if steering.read(&mut messages, &mut system_prompt) {
+            let ending = (&limits, &steering, &out);
+            return self.end(LoopEndReason::Cancelled, 0, spent, ending).await;
+        }
         for round in 0..=self.bounds.max_rounds {
+            if steering.cancelled() {
+                let ending = (&limits, &steering, &out);
+                return self
+                    .end(LoopEndReason::Cancelled, tool_rounds, spent, ending)
+                    .await;
+            }
             let mut asked = self.remembered.clone();
             asked.extend(ai_messages(&self.shown_messages(&messages)));
             let context = AiContext {
                 messages: asked,
-                system_prompt: self.system_prompt.clone(),
+                system_prompt: system_prompt.clone(),
                 temperature: self.temperature,
                 max_tokens: self.max_tokens,
                 tools: declared.clone(),
                 metadata: Metadata::new(),
             };
-            let mut generation = match Generation::read(&*self.provider, &context, &out).await {
+            let read = Generation::read(&*self.provider, &context, &steering, &out).await;
+            let mut generation = match read {
                 Ok(generation) => generation,
                 Err(error) => {
                     let end = LoopEndMarker {
@@ -145,11 +177,20 @@ impl<P: AiProvider> Loop<P> {
                         usage_complete: Some(false),
                         ..self.end_of(LoopEndReason::Error, tool_rounds, limits.timeout)
                     };
+                    steering.close();
                     return failed(had_tool_round, end, error, &out).await;
                 }
             };
             self.take_intents(&mut generation.calls);
             spent.count(&generation.done.usage);
+            let ending = (&limits, &steering, &out);
+            // A stop that came after the model's last event counts as one
+            // that came during it (RFC §21.3).
+            if generation.cancelled || steering.cancelled() {
+                return self
+                    .end(LoopEndReason::Cancelled, tool_rounds, spent, ending)
+                    .await;
+            }
             if generation.calls.is_empty() {
                 let finish_reason = generation.done.finish_reason.as_deref();
                 if let Some(said) =
@@ -161,35 +202,48 @@ impl<P: AiProvider> Loop<P> {
                 let limit = limits.passed();
                 let reason =
                     final_round_reason(had_tool_round, &generation.text, finish_reason, limit);
-                return self.end(reason, tool_rounds, &limits, spent, &out).await;
+                let answer = Message::new(Role::Assistant, generation.text);
+                if reason == LoopEndReason::Completed
+                    && round < self.bounds.max_rounds
+                    && steering.read_after_answer(&mut messages, &mut system_prompt, answer)
+                {
+                    out.give(Ok(TurnItem::SegmentBreak)).await;
+                    continue;
+                }
+                let ending = (&limits, &steering, &out);
+                return self.end(reason, tool_rounds, spent, ending).await;
             }
             if round == self.bounds.max_rounds {
                 break;
             }
             if let Some(limit) = limits.reached(tool_rounds) {
-                return self.end(limit, tool_rounds, &limits, spent, &out).await;
+                let ending = (&limits, &steering, &out);
+                return self.end(limit, tool_rounds, spent, ending).await;
             }
             had_tool_round = true;
             limits.warn_if_due(tool_rounds);
-            messages.extend(self.round_of_calls(generation, &out).await);
+            messages.extend(self.round_of_calls(generation, &steering, &out).await);
             tool_rounds += 1;
+            if steering.read(&mut messages, &mut system_prompt) {
+                let ending = (&limits, &steering, &out);
+                return self
+                    .end(LoopEndReason::Cancelled, tool_rounds, spent, ending)
+                    .await;
+            }
         }
         // The round bound passed, a try in the last round's place included.
         tracing::warn!(target: "roomkit::ai", max_rounds = self.bounds.max_rounds, "the tool loop reached its round bound");
-        self.end(LoopEndReason::MaxRounds, tool_rounds, &limits, spent, &out)
+        let ending = (&limits, &steering, &out);
+        self.end(LoopEndReason::MaxRounds, tool_rounds, spent, ending)
             .await;
     }
 
     /// Ends the loop for `reason` after `rounds` rounds of calls, with what
-    /// its generations used.
-    async fn end(
-        &self,
-        reason: LoopEndReason,
-        rounds: u32,
-        limits: &Limits,
-        spent: Spent,
-        out: &Yielder<Result<TurnItem, ProviderError>>,
-    ) {
+    /// its generations used, under its `limits`: it reads the directives
+    /// `steering` holds no more (RFC §21.3), then tells `out`.
+    async fn end(&self, reason: LoopEndReason, rounds: u32, spent: Spent, ending: Ending<'_>) {
+        let (limits, steering, out) = ending;
+        steering.close();
         let end = LoopEndMarker {
             usage: spent.usage,
             last_usage: Some(spent.last),
@@ -221,23 +275,34 @@ impl<P: AiProvider> Loop<P> {
     /// Runs a round's calls, each starting once the reader read every
     /// start, concurrently, their ends handed over in call order; returns
     /// what the next generation reads of the round: its message with its
-    /// calls, then each result.
+    /// calls, then each result. A `Cancel` that came while the calls were
+    /// announced stops them all: none runs, each ends cancelled (RFC
+    /// §21.3).
     async fn round_of_calls(
         &self,
         generation: Generation,
+        steering: &Steering,
         out: &Yielder<Result<TurnItem, ProviderError>>,
     ) -> Vec<Message> {
         for called in &generation.calls {
             out.give(Ok(TurnItem::ToolStart(called.call.clone()))).await;
         }
-        let ends = join_all(
+        let ends = if steering.cancelled() {
             generation
                 .calls
                 .iter()
-                .map(|called| self.serve(called))
-                .collect(),
-        )
-        .await;
+                .map(|called| self.unrun(called.call.clone()))
+                .collect()
+        } else {
+            join_all(
+                generation
+                    .calls
+                    .iter()
+                    .map(|called| self.serve(called))
+                    .collect(),
+            )
+            .await
+        };
         let made = generation
             .calls
             .into_iter()
@@ -259,6 +324,37 @@ impl<P: AiProvider> Loop<P> {
             out.give(Ok(TurnItem::ToolEnd(end))).await;
         }
         read
+    }
+}
+
+/// What a loop's end reads: its limits, its steering, its reader.
+type Ending<'a> = (
+    &'a Limits,
+    &'a Steering,
+    &'a Yielder<Result<TurnItem, ProviderError>>,
+);
+
+impl<P: AiProvider> Loop<P> {
+    /// The end of an announced call a `Cancel` kept from running (RFC
+    /// §21.3): failed, `cancelled`, reported to the kit's observers once as
+    /// a call the turn cut (RFC §9.3).
+    fn unrun(&self, call: ToolCall) -> ToolEnd {
+        if let Some(turn) = &self.turn {
+            let tool = serde_json::to_string(&call.name).unwrap_or_default();
+            let read = format!(
+                "{{\"error\": \"Tool call cancelled\", \"tool\": {tool}, \"hint\": \"The turn ended before its result.\"}}"
+            );
+            let report = ToolCallReport::new(call.clone())
+                .ended(ToolCallOutcome::Cancelled, Value::String(read))
+                .with_error_detail("cancelled".to_owned());
+            turn.report_tool_call(&report);
+        }
+        ToolEnd {
+            call,
+            outcome: ToolCallOutcome::Cancelled,
+            result: "cancelled".to_owned(),
+            duration: Duration::ZERO,
+        }
     }
 }
 
