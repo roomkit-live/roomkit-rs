@@ -24,4 +24,6 @@ disallowed-methods = [
     { path = "std::time::Instant::now", reason = "read the time from the Environment" },
     { path = "serde_json::Map::remove", reason = "swaps the last member into its place: shift_remove keeps the order Python keeps (RMK-1198)" },
     { path = "serde_json::Map::remove_entry", reason = "swaps the last member into its place: shift_remove keeps the order Python keeps (RMK-1198)" },
+    { path = "serde_json::map::OccupiedEntry::remove", reason = "swaps the last member into its place: shift_remove keeps the order Python keeps (RMK-1198)" },
+    { path = "serde_json::map::OccupiedEntry::remove_entry", reason = "swaps the last member into its place: shift_remove_entry keeps the order Python keeps (RMK-1198)" },
 ]
