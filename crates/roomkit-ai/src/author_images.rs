@@ -805,21 +805,23 @@ mod tests {
         assert!(super::Resolver::of(None, None).is_none());
     }
 
-    /// Python's `RefusedImages`: the newest 100 rooms' refusals are kept,
-    /// a room refused in again counting as the newest.
+    /// Python's `RefusedImages` (`_MAX_ROOMS = 100`): the newest hundred
+    /// rooms' refusals are kept, a room refused in again counting as the
+    /// newest, and the 101st room drops the oldest.
     #[test]
     fn refusals_are_kept_for_the_newest_hundred_rooms() {
         let refused = RefusedImages::default();
         let keys = HashSet::from([("e1".to_owned(), 0)]);
         let room = |at: usize| RoomId::new(format!("room-{at}")).unwrap();
-        for at in 0..MAX_ROOMS {
+        for at in 0..100 {
             refused.add(&room(at), &keys);
         }
+        assert_eq!(refused.of(&room(0)), keys, "a hundred rooms kept");
         refused.add(&room(0), &keys);
-        refused.add(&room(MAX_ROOMS), &keys);
-        assert_eq!(refused.of(&room(0)), keys);
-        assert!(refused.of(&room(1)).is_empty());
-        assert_eq!(refused.of(&room(2)), keys, "the oldest room kept");
-        assert_eq!(refused.of(&room(MAX_ROOMS)), keys);
+        refused.add(&room(100), &keys);
+        assert!(refused.of(&room(1)).is_empty(), "the 101st drops the oldest");
+        assert_eq!(refused.of(&room(0)), keys, "refused in again, the newest");
+        assert_eq!(refused.of(&room(2)), keys);
+        assert_eq!(refused.of(&room(100)), keys);
     }
 }
