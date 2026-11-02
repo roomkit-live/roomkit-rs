@@ -8,16 +8,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - An AI turn takes the `temperature` and `max_tokens` its binding's
   metadata sets, over the channel's own, as Python's `_turn_settings`
-  (RFC §6.4, Appendix A.9, RMK-1237); a `null` there, or a value that is
-  no number, is not set. The binding's other settings (thinking,
-  reasoning effort, response schema, turn budgets) are not read yet.
+  (RFC §6.4, Appendix A.9, RMK-1237), a `null` there not set. Unlike
+  Python's, which hands any value to its model's validation, a
+  temperature that is no number and a max tokens that is no whole
+  number in `u32` are not set either. The binding's other settings
+  (thinking, reasoning effort, response schema, turn budgets) are not
+  read yet.
 - A buffered reply's end and usage go under its caller's `turns`, by its
   channel, read off its turn's record or else its last message, as
-  Python's `record_buffered_reply` (RFC §6.4, RMK-1235); the caller's
-  record keeps the rest of the reply's record, its `loop_end_reason` and
-  `ai_usage` no longer at its top level: `{x: 1, turns: {bot:
-  {loop_end_reason: completed}}}` where it read `{loop_end_reason:
-  completed, x: 1}`.
+  Python's `record_buffered_reply` (RFC §6.4, RMK-1235): `{x: 1, turns:
+  {bot: {loop_end_reason: completed}}}` where it read `{loop_end_reason:
+  completed, x: 1}`. Every agent reply's record, a stream's first one
+  included, reaches the caller without its turn's own keys
+  (`loop_end_reason`, `ai_usage`, `turns`), as Python's
+  `merge_channel_record`.
 - A failed task's exception and a turn's error record keep the error's
   attributes, as Python's `error_record` (RMK-1239): `ErrorRecord`'s
   `attributes`, a provider error's `retryable`, `provider`, `status_code`

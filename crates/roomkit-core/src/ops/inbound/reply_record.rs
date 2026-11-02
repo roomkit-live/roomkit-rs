@@ -53,7 +53,8 @@ pub(super) fn record_reply(
 /// A buffered reply's entry under its caller's `turns`: the end the first
 /// of its record `reply` and its messages' metadata, last first, names,
 /// with that record's usage; `None` when none names an end (Python's
-/// `turn_summary`).
+/// `turn_summary`). Python's `recorded_turn_end` also reads an ACP
+/// agent's `acp` record, which roomkit-rs has no channel to write.
 fn reply_turn_entry(reply: &Metadata, responses: &[RoomEvent]) -> Option<Metadata> {
     let messages = responses
         .iter()
