@@ -206,6 +206,7 @@ impl<S: ConversationStore> RoomKit<S> {
         options: SubmitFeedbackOptions,
     ) -> Result<(), RoomKitError> {
         self.inner.open()?;
+        self.inner.subscribed().await;
         self.reached(room_id, options.organization_id.as_deref())
             .await?;
         let channel_id = options.channel_id.clone();
@@ -398,26 +399,19 @@ impl<S: ConversationStore> Inner<S> {
         self.status_subscription.keep(subscriber, subscribing);
     }
 
-    /// Opens the kit for a room activity (Python's `_ensure_status_bus_subscribed`
-    /// in the context a call builds, and in `send_event`): its subscription
-    /// to its bus, when one waits, is made first, so that a status posted
-    /// once the call is over reaches the room's hooks.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RoomKitError::KitClosed`] once the kit's close started.
-    pub(crate) async fn open_for_activity(&self) -> Result<(), RoomKitError> {
-        if self.tasks.is_closing() {
-            return Err(RoomKitError::KitClosed);
-        }
-        // The close does not wait for a subscription that never ends: the
-        // call is refused, the subscription left to the next activity.
+    /// Makes the kit's subscription to its bus, when one waits, the first
+    /// thing of a room activity (Python's `_ensure_status_bus_subscribed`
+    /// in the context a call builds, `send_event` and `async with`), so
+    /// that a status posted once the call is over reaches the room's hooks.
+    /// The close's start ends the wait, the subscription left to the next
+    /// activity: the call goes on under the close's rules, as one that did
+    /// not wait.
+    pub(crate) async fn subscribed(&self) {
         let mut closing = self.turns.cutting();
         tokio::select! {
             () = self.status_subscription.subscribe() => {}
-            _ = closing.wait_for(|cut| *cut) => return Err(RoomKitError::KitClosed),
+            _ = closing.wait_for(|cut| *cut) => {}
         }
-        self.open()
     }
 
     /// What the kit does with an entry posted on its bus (RFC §19.8): emit

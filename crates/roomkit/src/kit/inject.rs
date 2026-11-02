@@ -213,7 +213,8 @@ impl<S: ConversationStore> RoomKit<S> {
             Entry::Post { post, .. } => &mut post.chain_depth,
         };
         context::as_deep_as_its_turn(chain_depth);
-        self.inner.open_for_activity().await?;
+        self.inner.open()?;
+        self.inner.subscribed().await;
         self.reached_from_its_work(&entry).await?;
         let refused = refusal_of(&entry);
         if let Some(named) = named.as_ref().filter(|named| named.named().has_key())

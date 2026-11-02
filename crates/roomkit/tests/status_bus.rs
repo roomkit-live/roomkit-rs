@@ -290,6 +290,12 @@ enum Activity {
     ProcessInbound,
     /// An event sent into the room `r` its store holds.
     SendEvent,
+    /// A message its router routes into the room `r` its store holds.
+    RoutedInbound,
+    /// A feedback on the room `r` its store holds.
+    Feedback,
+    /// The kit started, as Python's `async with`.
+    Start,
 }
 
 /// A kit over `bus` whose store holds the room `r`, its channel `sms`
@@ -343,6 +349,16 @@ async fn first(kit: &RoomKit, activity: Activity) {
             };
             kit.process_inbound(message, options).await.unwrap();
         }
+        Activity::RoutedInbound => {
+            let message = InboundMessage::new(sms, "+15551234567", TextContent::new("hi"));
+            let options = ProcessInboundOptions::default();
+            kit.process_inbound(message, options).await.unwrap();
+        }
+        Activity::Feedback => {
+            let options = roomkit::SubmitFeedbackOptions::default();
+            kit.submit_feedback(&room, 0.5, options).await.unwrap();
+        }
+        Activity::Start => kit.start().await.unwrap(),
         Activity::SendEvent => {
             let text = TextContent::new("hi");
             kit.send_event(&room, &sms, text, SendEventOptions::default())
@@ -486,25 +502,33 @@ async fn a_subscription_cut_short_is_made_again_by_the_next_activity() {
     assert_eq!((cut.is_err(), heard), (true, vec!["agent-1".to_owned()]));
 }
 
-// Python: core/mixins/helpers.py _build_context and core/framework.py
-// _send_event await _ensure_status_bus_subscribed (RMK-1201 (1)): a
-// message or an event sent into a room the store holds is a first room
+// Python: core/mixins/helpers.py _build_context (process_inbound routed or
+// not, submit_feedback), core/framework.py _send_event and __aenter__ await
+// _ensure_status_bus_subscribed (RMK-1201 (1)): each is a first room
 // activity too.
 #[tokio::test]
 async fn a_message_or_an_event_is_a_first_room_activity() {
     let mut heard = Vec::new();
-    for activity in [Activity::ProcessInbound, Activity::SendEvent] {
+    let activities = [
+        Activity::ProcessInbound,
+        Activity::RoutedInbound,
+        Activity::SendEvent,
+        Activity::Feedback,
+        Activity::Start,
+    ];
+    for activity in activities {
         let bus = late_bus();
         let kit = kit_with_a_room(&bus).await;
         heard.push(heard_right_after(&kit, &bus, activity).await);
     }
 
-    assert_eq!(heard, vec![vec!["agent-1".to_owned()]; 2]);
+    assert_eq!(heard, vec![vec!["agent-1".to_owned()]; 5]);
 }
 
-// Python: the close cuts a call still waiting for its bus subscription
-// once its grace is over (RMK-1201 (1)): the close does not leave a first
-// activity waiting for a subscription that never ends.
+// RMK-1201 (1): the close does not leave a first activity waiting for a
+// subscription that never ends: the wait ends at the close's start and the
+// call goes on under the close's rules, as Python's close cuts the call
+// (Python waits its grace first, where Rust does not).
 #[tokio::test]
 async fn the_close_ends_an_activity_waiting_for_its_subscription() {
     let held: Arc<dyn StatusBackend> = Arc::new(FirstTryHangs::default());
@@ -527,6 +551,8 @@ async fn the_close_ends_an_activity_waiting_for_its_subscription() {
     kit.close().await.unwrap();
     let ended = tokio::time::timeout(std::time::Duration::from_secs(2), activity).await;
 
-    let refused = ended.map(|joined| matches!(joined, Ok(Err(roomkit::RoomKitError::KitClosed))));
-    assert_eq!(refused, Ok(true));
+    // Admitted before the close, the call ends under its rules: it creates
+    // its room, as Python's does when its subscription ends within the grace.
+    let created = ended.map(|joined| joined.is_ok_and(|created| created.is_ok()));
+    assert_eq!(created, Ok(true));
 }

@@ -625,7 +625,7 @@ async fn run_leased<S: ConversationStore>(
         // The key names the delivery until the run is over.
         let _named = named;
         // A room activity: the kit's subscription to its bus first.
-        kit.open_for_activity().await?;
+        kit.subscribed().await;
         // A deferred delivery goes on apart from its caller, as Python's
         // task of its own: the cut of a held task its caller works for
         // does not reach its turns (RFC §23.3).
