@@ -45,6 +45,7 @@ pub enum DeliveryItemStatus {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DeliveryItem {
     /// Its id, a fresh hex one by default.
+    #[serde(default = "fresh_id")]
     pub id: String,
     /// The room it delivers into.
     pub room_id: RoomId,
@@ -82,7 +83,8 @@ pub struct DeliveryItem {
     /// `RetryPolicy` counts them (RFC §13.2): 3 means four attempts at most.
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
-    /// When it was made.
+    /// When it was made, now by default.
+    #[serde(default = "now")]
     pub created_at: Timestamp,
     /// Where it stands.
     #[serde(default)]
@@ -105,6 +107,16 @@ fn default_max_retries() -> u32 {
     MAX_RETRIES
 }
 
+/// A fresh id, 32 hex digits: Python's `uuid4().hex`.
+fn fresh_id() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// Now, by the system's clock: Python's `datetime.now(UTC)`.
+fn now() -> Timestamp {
+    SystemEnvironment.now()
+}
+
 /// The immediate strategy's serialized form, an item's by default.
 pub(crate) fn immediate() -> Metadata {
     let mut strategy = Metadata::new();
@@ -118,7 +130,7 @@ impl DeliveryItem {
     /// made now, with Python's defaults for the rest.
     pub fn new(room_id: RoomId, content: impl Into<String>) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().simple().to_string(),
+            id: fresh_id(),
             room_id,
             content: content.into(),
             channel_id: None,
@@ -131,7 +143,7 @@ impl DeliveryItem {
             metadata: Metadata::new(),
             retry_count: 0,
             max_retries: MAX_RETRIES,
-            created_at: SystemEnvironment.now(),
+            created_at: now(),
             status: DeliveryItemStatus::Pending,
             worker_id: None,
             error: None,
@@ -200,6 +212,15 @@ mod tests {
         assert_eq!(item.status, DeliveryItemStatus::Pending);
         assert_eq!((item.worker_id, item.error), (None, None));
         assert_eq!(item.id.len(), 32);
+        // Python's `DeliveryItem(room_id=..., content=...)` validates these
+        // two fields alone: read from them, an item takes a fresh id and
+        // the instant it is read.
+        let before = SystemEnvironment.now();
+        let read: DeliveryItem =
+            serde_json::from_value(json!({"room_id": "r1", "content": "hello"})).unwrap();
+        assert_eq!(read.id.len(), 32);
+        assert_ne!(read.id, item.id);
+        assert!(read.created_at >= before && read.created_at <= SystemEnvironment.now());
     }
 
     // Python: tests/delivery/test_base.py::TestDeliveryItem::test_unique_ids
