@@ -1,7 +1,9 @@
-//! What a call holds besides the room lock, and lets go of on every path:
-//! the room's admission ticket, from its off-lock check to the end of its
-//! trigger's pass (RFC §9.5.1). Its events' places in the room's delivery
-//! lane are their sets' to leave (`delivery`).
+//! What a call holds besides its sections' room lock, and lets go of on
+//! every path: the room's admission ticket, from its off-lock check to the
+//! end of its trigger's pass (RFC §9.5.1), and the room's lock its caller
+//! handed it, from its start to the end of that pass (`Inbound::under_lock`,
+//! RFC §22.1). Its events' places in the room's delivery lane are their
+//! sets' to leave (`delivery`).
 //!
 //! A call ends once every entry it adopted is settled and every event it
 //! committed delivered (gap G-070): an adopted entry's caller is answered
@@ -48,6 +50,7 @@ impl Machine {
     /// operation is over once every entry it adopted is settled and every
     /// event it committed delivered.
     pub(super) fn end(&mut self, cx: &mut Cx<'_>, outcome: Result<InboundResult, InboundError>) {
+        self.release_hand(cx);
         self.publish(cx, &outcome);
         self.cascade.stop();
         if self.trigger.ticket.is_some() {
@@ -59,7 +62,7 @@ impl Machine {
     /// Ends with `outcome` once the last adopted entry is settled and the
     /// last committed event delivered.
     fn end_after_the_cascade(&mut self, outcome: Result<InboundResult, InboundError>) {
-        if !self.adopted.is_idle() || !self.cascade.is_idle() {
+        if !self.is_settled() {
             self.stage.enter(Stage::Ending(Box::new(outcome)));
             return;
         }
@@ -69,12 +72,47 @@ impl Machine {
     /// Goes on ending once the last adopted entry is settled and the last
     /// committed event delivered.
     pub(super) fn end_once_settled(&mut self) {
-        let over = self.adopted.is_idle() && self.cascade.is_idle();
-        if !matches!(self.stage.current(), Stage::Ending(_)) || !over {
+        if !matches!(self.stage.current(), Stage::Ending(_)) || !self.is_settled() {
             return;
         }
         if let Stage::Ending(outcome) = self.stage.take() {
             self.finish(*outcome);
+        }
+    }
+
+    /// Whether every entry the call adopted is settled, every event it
+    /// committed delivered, and the lock its caller handed it released.
+    fn is_settled(&self) -> bool {
+        self.adopted.is_idle() && self.cascade.is_idle() && self.trigger.releasing_hand.is_none()
+    }
+
+    /// Lets go of the room's lock the call's caller handed it
+    /// (`Inbound::under_lock`), once its trigger's pass is over or as it
+    /// ends before: what the call asks from then on is asked outside that
+    /// lock, and its later sections take the lock as any section does.
+    pub(super) fn release_hand(&mut self, cx: &mut Cx<'_>) {
+        let Some(room_id) = self.trigger.handed.take() else {
+            return;
+        };
+        cx.io.nest(None);
+        let effect = cx.io.issue(HoldRequest::ReleaseLock { room_id });
+        self.trigger.releasing_hand = Some(effect);
+    }
+
+    /// The handed lock is released, or its release failed, which changes
+    /// nothing the call decided: it is logged, and the result carries it
+    /// when no earlier error was met (gap G-025).
+    pub(super) fn on_hand_released(&mut self, released: Outcome) {
+        self.trigger.releasing_hand = None;
+        if let Err(error) = released.into_released() {
+            tracing::warn!(
+                target: "roomkit::core::inbound",
+                room_id = ?self.call.room_id,
+                error_type = %error.error_type,
+                message = %error.message,
+                "releasing the room lock its caller handed the call failed; what the call decided stands"
+            );
+            self.trigger.note_error(Some(error));
         }
     }
 

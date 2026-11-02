@@ -45,6 +45,7 @@ use crate::context::ExecutionContext;
 use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::{RoomKitError, with_causes};
 use crate::kit::Inner;
+use crate::locks::RoomGuard;
 use crate::store::ConversationStore;
 use crate::tasks::{Kind, Marks, Tasks};
 use crate::turns::Canceller;
@@ -300,6 +301,9 @@ pub(super) struct Caller {
     departure: Departure,
     /// What the run leaves its caller beside its output.
     record: Arc<Record>,
+    /// The room's lock the caller's code handed the call, which the run
+    /// holds from its start (`Inbound::under_lock`, RFC §22.1).
+    pub(super) hand: Option<(RoomId, RoomGuard<'static>)>,
 }
 
 /// What a run did once its caller was gone, or cancelled the call's
@@ -327,6 +331,7 @@ impl Caller {
             gone: false,
             departure: Departure::default(),
             record,
+            hand: None,
         }
     }
 
@@ -577,12 +582,13 @@ async fn run_leased<S: ConversationStore>(
     if let Err(error) = inner.open() {
         return Ran::ended(Err(error));
     }
-    let (inbound, context) = placed(inbound, room_id, ExecutionContext::current());
+    let (inbound, context, hand) = placed(inbound, room_id, ExecutionContext::current());
     let (answer, decided) = oneshot::channel();
     let mut named = named;
     let record = Arc::new(Record::new(named.as_mut()));
     let kit = Arc::clone(inner);
     let mut caller = Caller::new(answer, defer, Arc::clone(&record));
+    caller.hand = hand;
     let run = async move {
         // The key names the delivery until the run is over.
         let _named = named;
@@ -689,9 +695,10 @@ fn by_close(error: &ErrorRecord) -> bool {
     error.error_type == KIT_CLOSED || error.error_type == TURN_LINK_ERROR
 }
 
-/// `inbound`, a call into `room_id` or routed, as `context` places it, and
-/// the context its run runs in. Nested under the room's lock its code hands
-/// the run (a keyed publication's section, RFC §22.1), it draws on the
+/// `inbound`, a call into `room_id` or routed, as `context` places it, the
+/// context its run runs in, and the room's lock the run holds from its
+/// start. Nested under the room's lock its code hands the run (a keyed
+/// publication's section, RFC §22.1), taken from the hand, it draws on the
 /// budget of the room's work that code runs in, if any, as the Python
 /// implementation's NESTED call does (RFC §9.5.1 Reentrance): a pass of
 /// the cascade an admission order or a delivery works for, or a hook call
@@ -702,16 +709,24 @@ fn placed(
     inbound: Inbound,
     room_id: Option<&RoomId>,
     context: ExecutionContext,
-) -> (Inbound, ExecutionContext) {
-    let Some(room_id) = room_id.filter(|room_id| context.hands(room_id)) else {
-        return (charged(inbound, room_id, &context), context);
+) -> (
+    Inbound,
+    ExecutionContext,
+    Option<(RoomId, RoomGuard<'static>)>,
+) {
+    let hand = room_id
+        .filter(|room_id| context.hands(room_id))
+        .and_then(|_| context.take_hand());
+    let Some((room_id, guard)) = hand else {
+        return (charged(inbound, room_id, &context), context, None);
     };
     let inbound = inbound.under_lock(room_id.clone());
-    let inbound = match context.room_work(room_id) {
+    let inbound = match context.room_work(&room_id) {
         Some((draw, _depth)) => inbound.drawing_on(draw),
         None => inbound,
     };
-    (inbound, context.nested_run(room_id))
+    let context = context.nested_run(&room_id);
+    (inbound, context, Some((room_id, guard)))
 }
 
 /// `inbound`, a call into `room_id` or routed, charged to the reentry

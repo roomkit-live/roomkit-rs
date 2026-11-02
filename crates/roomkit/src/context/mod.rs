@@ -146,11 +146,11 @@ pub(crate) struct ExecutionContext {
 
 /// A room's lock that code holds outside every run and hands the run of the
 /// call it makes: a keyed publication's section (RFC §22.1). That run takes
-/// it at its first request for the room's lock, and its call is nested
-/// under it (`Inbound::under_lock`), the Python implementation's NESTED
-/// placement: no frame adopts the call, and its run takes no admission
-/// ticket in the room. A call made within that run's calls is handed
-/// nothing.
+/// it as it starts, and its call is nested under it (`Inbound::under_lock`),
+/// the Python implementation's NESTED placement: no frame adopts the call,
+/// its run takes no admission ticket in the room, and what the call asks
+/// until its trigger's pass is over, its parse included, is asked under
+/// the lock. A call made within that run's calls is handed nothing.
 #[derive(Clone, Debug)]
 pub(crate) struct Hand {
     room_id: RoomId,
@@ -397,13 +397,11 @@ impl ExecutionContext {
             .is_some_and(|hand| &hand.room_id == room_id)
     }
 
-    /// The lock of `room_id` this context hands the run it starts, taken:
-    /// the run holds it from now on.
-    pub(crate) fn take_handed(&self, room_id: &RoomId) -> Option<RoomGuard<'static>> {
-        self.hand
-            .as_ref()
-            .filter(|hand| &hand.room_id == room_id)
-            .and_then(Hand::take_back)
+    /// The room's lock this context hands the run it starts, taken, with
+    /// its room: the run holds it from its start.
+    pub(crate) fn take_hand(&self) -> Option<(RoomId, RoomGuard<'static>)> {
+        let hand = self.hand.as_ref()?;
+        Some((hand.room_id.clone(), hand.take_back()?))
     }
 
     /// The context of a hook's `body`, which runs outside every call.

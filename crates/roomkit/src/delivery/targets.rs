@@ -481,7 +481,7 @@ mod tests {
     use roomkit_core::model::{ChannelType, RoomId};
 
     use super::*;
-    use crate::testing::{RecordingTransport, RecordingTransportOptions};
+    use crate::testing::{EventTap, RecordingTransport, RecordingTransportOptions};
     use crate::{AttachChannelOptions, CreateRoomOptions, DeliverOptions, RoomKitOptions};
 
     // Python: tests/test_proactive_delivery.py::TestAKeyNamesOnePublicationInItsRoom::test_a_room_lock_held_past_process_timeout_refuses_the_publication
@@ -506,6 +506,7 @@ mod tests {
         kit.attach_channel(&room, &text, AttachChannelOptions::default())
             .await
             .unwrap();
+        let tap = EventTap::on(&kit, &["process_timeout"]);
         let held = kit.inner.locks.lock(&room).await;
         let keyed = DeliverOptions {
             idempotency_key: Some("k".to_owned()),
@@ -515,6 +516,13 @@ mod tests {
         drop(held);
         assert_eq!(outcome.status, DeliveryOutcomeStatus::Blocked);
         assert_eq!(outcome.reason.as_deref(), Some("process_timeout"));
+        crate::testing::idle(&kit).await;
+        let reported: Vec<_> = tap
+            .events()
+            .into_iter()
+            .map(|event| (event.room_id, event.data["timeout"].as_f64()))
+            .collect();
+        assert_eq!(reported, [(Some(room.clone()), Some(0.05))]);
         let options = crate::store::ListEventsOptions::default();
         let stored = kit.store().list_events(&room, options).await.unwrap();
         let published = stored

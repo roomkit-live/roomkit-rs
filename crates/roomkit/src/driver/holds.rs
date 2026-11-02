@@ -9,11 +9,12 @@
 //! own adopted entries may hold what it waits for. A wait carries the
 //! effect's deadline (RFC §13.6): past it, what was waited for is not taken.
 //!
+//! A room's lock the caller's code handed the call (a keyed publication's
+//! section, RFC §22.1) is the run's from its start, until the operation,
+//! nested under it, releases it.
+//!
 //! The run reads the execution context of the task that runs it:
 //!
-//! - the room's lock its caller's code holds and hands it (a keyed
-//!   publication's section, RFC §22.1) is taken at the run's first request
-//!   for it, and released with the run's release;
 //! - a lock the context holds a live lease on is granted at once to a
 //!   separate operation, a lifecycle change or a record's commit, and its
 //!   release gives nothing back: the lease holder releases it. It is
@@ -136,6 +137,16 @@ impl<'kit> Held<'kit> {
         }
     }
 
+    /// Takes `guard`, `room_id`'s lock its caller's code handed the call (a
+    /// keyed publication's section, RFC §22.1): the run holds it from its
+    /// start, a tenure of its own, so that the calls its operation makes
+    /// under it (`Inbound::under_lock`), a parse among them, hold a lease on
+    /// it, until the operation releases it.
+    pub(super) fn take_hand(&mut self, room_id: RoomId, guard: RoomGuard<'static>) {
+        self.shared.locked(room_id.clone());
+        self.locks.insert(room_id, LockHold::Own(guard));
+    }
+
     /// Whether the set of `event_id` runs from its placement: its place was
     /// taken first in `room_id`'s lane, the lane idle; a set placed behind
     /// another is queued. The Python implementation aligns on this rule
@@ -196,11 +207,10 @@ impl<'kit> Held<'kit> {
         }
     }
 
-    /// The room's lock: the one the context hands the run, taken (a keyed
-    /// publication's section, RFC §22.1); on a live lease of the context,
-    /// granted at once (RFC §13.5) or refused, as the run's `leases` say;
-    /// refused to an inbound call whose context stands in the room's
-    /// admission order; waited for otherwise.
+    /// The room's lock: on a live lease of the context, granted at once
+    /// (RFC §13.5) or refused, as the run's `leases` say; refused to an
+    /// inbound call whose context stands in the room's admission order;
+    /// waited for otherwise.
     fn acquire(
         &mut self,
         rooms: Rooms<'kit>,
@@ -209,13 +219,6 @@ impl<'kit> Held<'kit> {
         room_id: RoomId,
         deadline: Option<Instant>,
     ) -> Hold<'kit> {
-        // The lock its caller's code holds and hands it: the run's own from
-        // now on, its release the lock's.
-        if let Some(guard) = context.take_handed(&room_id) {
-            self.shared.locked(room_id.clone());
-            self.locks.insert(room_id, LockHold::Own(guard));
-            return Hold::Now(HoldOutcome::Locked.into());
-        }
         if self.leases == Leases::Refused && context.is_admitted_to(&room_id) {
             return Hold::Refused(room_id);
         }

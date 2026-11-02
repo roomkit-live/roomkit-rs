@@ -314,11 +314,17 @@ async fn drive<S: ConversationStore, O: Operation>(
     leases: Leases,
     how: Driven<'_>,
 ) -> Result<O::Output, Stop> {
-    let (caller, own, in_flight) = match how {
+    let (mut caller, own, in_flight) = match how {
         Driven::Inbound(caller) => (Some(caller), false, None),
         Driven::Call { own, in_flight } => (None, own, Some(in_flight)),
     };
     let (shared, adoptions) = RunShared::new();
+    let mut held = Held::new(Arc::clone(&shared), leases);
+    if let Some(caller) = &mut caller
+        && let Some((room_id, guard)) = caller.hand.take()
+    {
+        held.take_hand(room_id, guard);
+    }
     let driver = Driver {
         calls: JoinSet::new(),
         waits: Vec::new(),
@@ -326,7 +332,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         call,
         context: ExecutionContext::current(),
         marks: Marks::current(),
-        held: Held::new(Arc::clone(&shared), leases),
+        held,
         indexes: Indexes::default(),
         shared,
         adoptions,

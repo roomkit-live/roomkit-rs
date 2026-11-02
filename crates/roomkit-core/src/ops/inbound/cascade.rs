@@ -21,7 +21,7 @@ use super::{InboundError, InboundResult, Machine, Stage, instructions, report, s
 use crate::model::{
     ChannelCategory, ChannelId, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, RoomId,
 };
-use crate::ops::protocol::EntryId;
+use crate::ops::protocol::{EffectId, EntryId};
 use crate::ops::{Abort, Cx};
 use crate::rules::chain_depth;
 use crate::rules::permissions::DeliveryPlan;
@@ -32,6 +32,12 @@ pub(super) struct Trigger {
     /// The room whose admission ticket the call holds, from its off-lock
     /// check to its trigger's pass's end (RFC §9.5.1).
     pub(super) ticket: Option<RoomId>,
+    /// The room whose lock the call's caller handed it
+    /// (`Inbound::under_lock`), held from the call's start to its trigger's
+    /// pass's end.
+    pub(super) handed: Option<RoomId>,
+    /// The release of that lock, until the driver answers it.
+    pub(super) releasing_hand: Option<EffectId>,
     /// Whether the trigger is decided: committed or, for an instruction,
     /// which is never committed, delivered or blocked by its pass. A failure
     /// after it no longer voids the result (RFC §13.6, gap G-065).
@@ -71,6 +77,11 @@ impl Machine {
     /// before that entry's; a pass that failed is settled once the ticket
     /// is released.
     pub(super) fn settle(&mut self, cx: &mut Cx<'_>, finished: Finished) {
+        if matches!(finished, Finished::Pass(_, PassOrigin::Trigger)) {
+            // Before its decision and its set: what follows is asked
+            // outside the lock its caller handed it.
+            self.release_hand(cx);
+        }
         if self.trigger.ticket.is_some() {
             match finished {
                 Finished::Pass(Ok(report), PassOrigin::Trigger) => {

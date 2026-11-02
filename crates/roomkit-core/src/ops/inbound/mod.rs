@@ -336,15 +336,22 @@ impl Inbound {
     }
 
     /// The same call, made by code that holds `room_id`'s lock and hands
-    /// it to the call's run: a keyed publication's section (RFC §22.1).
-    /// The call is nested under that lock, the Python implementation's
-    /// NESTED placement (RFC §9.5.1 Reentrance): in that room it takes no
-    /// admission ticket, which would wait behind an arrival waiting for
-    /// that very lock, and its off-lock hooks run in its pass, under the
-    /// lock, with the hooks that need it. The driver answers the run's
-    /// first request for the lock with the lock handed.
+    /// it to the call's run, which holds it from its start: a keyed
+    /// publication's section (RFC §22.1). The call is nested under that
+    /// lock, the Python implementation's NESTED placement (RFC §9.5.1
+    /// Reentrance). Until its trigger's pass is over, everything it asks is
+    /// asked under the lock, as a section nested in another's asks it: its
+    /// sections' requests for the lock are answered at once, without the
+    /// driver, and a parse, an identity hook or a hook it runs holds a lease
+    /// on it; then it releases the lock, and its later sections take it as
+    /// any section does. In that room it takes no admission ticket, which
+    /// would wait behind an arrival waiting for that very lock, and its
+    /// off-lock hooks run in its pass, under the lock, with the hooks that
+    /// need it.
     #[must_use]
     pub fn under_lock(mut self, room_id: RoomId) -> Self {
+        self.io.nest(Some(room_id.clone()));
+        self.machine.trigger.handed = Some(room_id.clone());
         self.machine.call.under_lock = Some(room_id);
         self
     }
@@ -607,6 +614,9 @@ impl Machine {
         }
         if self.cascade.stream_awaits(effect) {
             return self.on_stream_outcome(cx, outcome);
+        }
+        if self.trigger.releasing_hand == Some(effect) {
+            return self.on_hand_released(outcome);
         }
         match self.stage.take() {
             Stage::Arriving(arrival) => self.on_arrival(cx, arrival, effect, outcome),
