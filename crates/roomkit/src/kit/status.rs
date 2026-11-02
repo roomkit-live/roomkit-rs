@@ -399,9 +399,9 @@ impl<S: ConversationStore> Inner<S> {
     }
 
     /// Opens the kit for a room activity (Python's `_ensure_status_bus_subscribed`
-    /// in the context a call builds): its subscription to its bus, when one
-    /// waits, is made first, so that a status posted once the call is over
-    /// reaches the room's hooks.
+    /// in the context a call builds, and in `send_event`): its subscription
+    /// to its bus, when one waits, is made first, so that a status posted
+    /// once the call is over reaches the room's hooks.
     ///
     /// # Errors
     ///
@@ -410,7 +410,13 @@ impl<S: ConversationStore> Inner<S> {
         if self.tasks.is_closing() {
             return Err(RoomKitError::KitClosed);
         }
-        self.status_subscription.subscribe().await;
+        // The close does not wait for a subscription that never ends: the
+        // call is refused, the subscription left to the next activity.
+        let mut closing = self.turns.cutting();
+        tokio::select! {
+            () = self.status_subscription.subscribe() => {}
+            _ = closing.wait_for(|cut| *cut) => return Err(RoomKitError::KitClosed),
+        }
         self.open()
     }
 

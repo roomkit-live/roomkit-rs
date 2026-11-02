@@ -281,13 +281,83 @@ fn a_status_posted_after_room_activity_reaches_the_rooms_hooks() {
     assert_eq!(heard, (true, vec!["agent-1".to_owned()]));
 }
 
-/// What a status `bus` posted for room `r` right after `kit`'s first room
-/// activity, a room's creation, reaches of its `ON_STATUS_POSTED` hooks:
-/// the agents heard.
+/// A kit's first room activity.
+#[derive(Clone, Copy, Debug)]
+enum Activity {
+    /// The room `r` created.
+    CreateRoom,
+    /// A message sent into the room `r` its store holds.
+    ProcessInbound,
+    /// An event sent into the room `r` its store holds.
+    SendEvent,
+}
+
+/// A kit over `bus` whose store holds the room `r`, its channel `sms`
+/// registered and bound there.
 #[expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-async fn heard_right_after_the_first_activity(kit: &RoomKit, bus: &StatusBus) -> Vec<String> {
-    use roomkit::model::RoomId;
-    use roomkit::{CreateRoomOptions, HookExecution, HookOptions, HookTrigger};
+async fn kit_with_a_room(bus: &StatusBus) -> RoomKit {
+    use roomkit::model::{ChannelBinding, ChannelId, ChannelType, Room, RoomId};
+    use roomkit::{ConversationStore, InMemoryStore};
+
+    let store = Arc::new(InMemoryStore::default());
+    let room = RoomId::new("r").unwrap();
+    store.create_room(Room::new(room.clone())).await.unwrap();
+    let sms = ChannelId::new("sms").unwrap();
+    let binding = ChannelBinding::new(sms.clone(), room, ChannelType::SMS);
+    store.add_binding(binding).await.unwrap();
+    let kit = RoomKit::new(RoomKitOptions {
+        store,
+        status_bus: Some(bus.clone()),
+        ..RoomKitOptions::default()
+    });
+    let transport = roomkit::testing::RecordingTransport::new(
+        sms,
+        ChannelType::SMS,
+        roomkit::testing::RecordingTransportOptions::default(),
+    );
+    kit.register_channel(transport).unwrap();
+    kit
+}
+
+/// Makes `activity`, `kit`'s first.
+#[expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+async fn first(kit: &RoomKit, activity: Activity) {
+    use roomkit::model::{ChannelId, InboundMessage, RoomId, TextContent};
+    use roomkit::{CreateRoomOptions, ProcessInboundOptions, SendEventOptions};
+
+    let room = RoomId::new("r").unwrap();
+    let sms = ChannelId::new("sms").unwrap();
+    match activity {
+        Activity::CreateRoom => {
+            let options = CreateRoomOptions {
+                room_id: Some(room),
+                ..CreateRoomOptions::default()
+            };
+            kit.create_room(options).await.unwrap();
+        }
+        Activity::ProcessInbound => {
+            let message = InboundMessage::new(sms, "+15551234567", TextContent::new("hi"));
+            let options = ProcessInboundOptions {
+                room_id: Some(room),
+                ..ProcessInboundOptions::default()
+            };
+            kit.process_inbound(message, options).await.unwrap();
+        }
+        Activity::SendEvent => {
+            let text = TextContent::new("hi");
+            kit.send_event(&room, &sms, text, SendEventOptions::default())
+                .await
+                .unwrap();
+        }
+    }
+}
+
+/// What a status `bus` posted for room `r` right after `kit`'s first room
+/// activity, `activity`, reaches of its `ON_STATUS_POSTED` hooks: the
+/// agents heard.
+#[expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+async fn heard_right_after(kit: &RoomKit, bus: &StatusBus, activity: Activity) -> Vec<String> {
+    use roomkit::{HookExecution, HookOptions, HookTrigger};
 
     let (heard, told) = (
         Arc::new(Mutex::new(Vec::new())),
@@ -308,12 +378,7 @@ async fn heard_right_after_the_first_activity(kit: &RoomKit, bus: &StatusBus) ->
         options,
     )
     .unwrap();
-    kit.create_room(CreateRoomOptions {
-        room_id: Some(RoomId::new("r").unwrap()),
-        ..CreateRoomOptions::default()
-    })
-    .await
-    .unwrap();
+    first(kit, activity).await;
     let mut metadata = roomkit::model::Metadata::new();
     metadata.insert("room_id".to_owned(), serde_json::json!("r"));
     let options = PostAsyncOptions {
@@ -352,14 +417,14 @@ fn a_status_posted_right_after_the_first_activity_reaches_a_late_bus_s_hooks() {
         status_bus: Some(bus.clone()),
         ..RoomKitOptions::default()
     });
-    let heard_outside = runtime.block_on(heard_right_after_the_first_activity(&outside, &bus));
+    let heard_outside = runtime.block_on(heard_right_after(&outside, &bus, Activity::CreateRoom));
     let bus = late_bus();
     let heard_within = runtime.block_on(async {
         let within = RoomKit::new(RoomKitOptions {
             status_bus: Some(bus.clone()),
             ..RoomKitOptions::default()
         });
-        heard_right_after_the_first_activity(&within, &bus).await
+        heard_right_after(&within, &bus, Activity::CreateRoom).await
     });
 
     assert_eq!(
@@ -416,7 +481,52 @@ async fn a_subscription_cut_short_is_made_again_by_the_next_activity() {
     let first = kit.create_room(roomkit::CreateRoomOptions::default());
     let cut = tokio::time::timeout(std::time::Duration::from_millis(10), first).await;
 
-    let heard = heard_right_after_the_first_activity(&kit, &bus).await;
+    let heard = heard_right_after(&kit, &bus, Activity::CreateRoom).await;
 
     assert_eq!((cut.is_err(), heard), (true, vec!["agent-1".to_owned()]));
+}
+
+// Python: core/mixins/helpers.py _build_context and core/framework.py
+// _send_event await _ensure_status_bus_subscribed (RMK-1201 (1)): a
+// message or an event sent into a room the store holds is a first room
+// activity too.
+#[tokio::test]
+async fn a_message_or_an_event_is_a_first_room_activity() {
+    let mut heard = Vec::new();
+    for activity in [Activity::ProcessInbound, Activity::SendEvent] {
+        let bus = late_bus();
+        let kit = kit_with_a_room(&bus).await;
+        heard.push(heard_right_after(&kit, &bus, activity).await);
+    }
+
+    assert_eq!(heard, vec![vec!["agent-1".to_owned()]; 2]);
+}
+
+// Python: the close cuts a call still waiting for its bus subscription
+// once its grace is over (RMK-1201 (1)): the close does not leave a first
+// activity waiting for a subscription that never ends.
+#[tokio::test]
+async fn the_close_ends_an_activity_waiting_for_its_subscription() {
+    let held: Arc<dyn StatusBackend> = Arc::new(FirstTryHangs::default());
+    let bus = StatusBus::new(StatusBusOptions {
+        backend: Some(held),
+        ..StatusBusOptions::default()
+    });
+    let kit = RoomKit::new(RoomKitOptions {
+        status_bus: Some(bus),
+        ..RoomKitOptions::default()
+    });
+    let waiting = kit.clone();
+    let activity = tokio::spawn(async move {
+        waiting
+            .create_room(roomkit::CreateRoomOptions::default())
+            .await
+    });
+    tokio::task::yield_now().await;
+
+    kit.close().await.unwrap();
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(2), activity).await;
+
+    let refused = ended.map(|joined| matches!(joined, Ok(Err(roomkit::RoomKitError::KitClosed))));
+    assert_eq!(refused, Ok(true));
 }

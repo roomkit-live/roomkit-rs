@@ -199,14 +199,11 @@ pub(crate) async fn run_reading_back<S: ConversationStore, O: Operation + Send +
 where
     O::Output: Send + 'static,
 {
-    inner.open()?;
-    Box::pin(run_in_its_task(
-        inner,
-        inner.environment(),
-        call,
-        operation,
-        false,
-    ))
+    // Boxed whole: the operation waits there for the kit's subscription.
+    Box::pin(async move {
+        inner.open_for_activity().await?;
+        run_in_its_task(inner, inner.environment(), call, operation, false).await
+    })
     .await
 }
 
