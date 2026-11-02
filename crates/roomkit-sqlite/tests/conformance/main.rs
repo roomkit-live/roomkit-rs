@@ -25,6 +25,8 @@ mod identity;
 mod matching;
 #[path = "../../../roomkit/tests/conformance/member_calls.rs"]
 mod member_calls;
+#[path = "../../../roomkit/tests/conformance/memory.rs"]
+mod memory;
 #[path = "../../../roomkit/tests/conformance/normalize.rs"]
 mod normalize;
 #[path = "../../../roomkit/tests/conformance/run.rs"]
