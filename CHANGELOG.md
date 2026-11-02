@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A status's publication runs at least as deep as its poster, as
+  Python's (RFC §8.3, RMK-1187): what an `ON_STATUS_POSTED` hook sends
+  into the room is that deep, so a turn that posts a status, a hook that
+  tells the agent again, stops at `max_chain_depth`; it ran at depth 0
+  and never stopped. The hooks fire during the kit's close too, until the
+  kit is sealed: the end of a task the close cuts reaches them.
 - `submit_feedback`, `start_task`, `setup_background` and
   `setup_task_tools` are refused `KitClosed` once the kit's close started,
   before their arguments are read, and `cancel_task` returns `false`

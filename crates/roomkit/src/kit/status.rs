@@ -394,7 +394,8 @@ impl<S: ConversationStore> Inner<S> {
     /// What the kit does with an entry posted on its bus (RFC §19.8): emit
     /// `status_posted`, then fire the `ON_STATUS_POSTED` hooks of the room
     /// its metadata names, none for a room the store lacks or once the kit
-    /// is closed.
+    /// is sealed: during its close too, as Python's, so that the end of a
+    /// task the close cuts reaches them (RMK-1187).
     async fn on_status_posted(self: Arc<Self>, entry: StatusEntry) {
         let data = match serde_json::to_value(&entry) {
             Ok(Value::Object(data)) => data,
@@ -415,7 +416,7 @@ impl<S: ConversationStore> Inner<S> {
         else {
             return;
         };
-        if self.tasks.is_closing() {
+        if self.tasks.is_sealed() {
             return;
         }
         let Some(context) = self.observed_context(&room_id).await else {

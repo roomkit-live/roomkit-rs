@@ -12,6 +12,7 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, InboundMessage,
     RoomContext, RoomEvent, RoomId, TaskStatus,
 };
+use roomkit::orchestration::StatusEntry;
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DelegateOptions, HookExecution,
@@ -172,5 +173,58 @@ async fn closing_the_kit_ends_a_background_task_cancelled_and_hands_nothing_back
             vec![("cancelled".to_owned(), "cancelled".to_owned())],
             0
         )
+    );
+}
+
+/// The background task the kit's close cuts posts its end on the status
+/// bus, `failed` saying it was cancelled, which the room's
+/// `ON_STATUS_POSTED` hooks hear during the close:
+/// they fire until the kit is sealed (RFC §19.8, §12.10.4). Python's
+/// `_on_status_posted` fires them until `_build_context` refuses, the
+/// store sealed (core/framework.py). On a6aa969 they stopped at the
+/// close's start.
+#[tokio::test]
+async fn the_end_of_a_task_the_close_cuts_reaches_the_status_hooks() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let worker = Agent::new("worker", true);
+    kit.register_channel(worker.clone()).unwrap();
+    let room = RoomId::new("p").unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    let heard: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let noted = Arc::clone(&heard);
+    let options = HookOptions {
+        execution: HookExecution::Async,
+        ..HookOptions::default()
+    };
+    kit.hook(
+        HookTrigger::OnStatusPosted,
+        move |entry: StatusEntry, _| {
+            let level = entry.status.to_string();
+            noted.lock().unwrap().push((level, entry.detail));
+            ready(())
+        },
+        options,
+    )
+    .unwrap();
+    kit.delegate(&room, &channel("worker"), "go", DelegateOptions::default())
+        .await
+        .unwrap();
+    tokio::time::timeout(BOUND, worker.started.notified())
+        .await
+        .unwrap();
+
+    tokio::time::timeout(BOUND, kit.close())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let posted = |level: &str, detail: &str| (level.to_owned(), detail.to_owned());
+    assert_eq!(
+        heard.lock().unwrap().clone(),
+        vec![posted("pending", "go"), posted("failed", "cancelled")]
     );
 }

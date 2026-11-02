@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::backend::{self, StatusBackend, StatusCallback};
 use super::memory::{InMemoryStatusBackend, InMemoryStatusBackendOptions};
+use crate::context::ExecutionContext;
 use crate::environment::SystemEnvironment;
 use crate::error::RoomKitError;
 
@@ -307,13 +308,19 @@ impl StatusBus {
     }
 
     /// The publication of `entry`, to run where its poster says: the kit
-    /// runs its own posts' as work it tracks.
+    /// runs its own posts' as work it tracks. It runs at least as deep as
+    /// its poster, read now: a hook it fires sends at least that deep, as
+    /// Python's `post` publishes in a task that copies the poster's context,
+    /// so that a status hook that tells an agent again ends at the depth
+    /// limit (RFC §8.3, RMK-1187).
     pub(crate) fn publication(
         &self,
         entry: StatusEntry,
     ) -> impl Future<Output = ()> + Send + use<> {
         let backend = Arc::clone(&self.backend);
-        async move { backend.publish(entry).await }
+        let poster = ExecutionContext::current().turn_depth().unwrap_or(0);
+        let within = ExecutionContext::default().at_least(poster);
+        within.scope(async move { backend.publish(entry).await })
     }
 
     /// Hands every entry posted from now on to `callback`.
