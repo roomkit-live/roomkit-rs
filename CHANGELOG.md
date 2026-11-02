@@ -26,6 +26,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A task's name and a quoted text fold the information separators
   (`\x1c` to `\x1f`) as Python's `str.split()` does, so a sender cannot
   start what a reader takes for a line of its own (RFC §6.4).
+- The AI loop's triggers, Python's (RFC §6.4, §9.2, RMK-1164):
+  `HookTrigger::{BeforeAiGeneration, AfterToolRound, OnAiResponse}`, whose
+  payloads are roomkit-ai's `AiGenerationEvent`, `ToolRoundEvent` and
+  `AiResponseEvent` (with `DeclaredTool` and `response_transcript`). A
+  generation hook's modify is the turn's context, its block runs no
+  generation; a round's hook withdraws tools for the rest of the turn and
+  adds messages the next round reads; the response reports the turn's
+  segments, calls, rounds, end reason, usage and declaration. The kit
+  emits `before_ai_generation` and `ai_response`.
 - A round the tool loop asks the model again ends its segment, as
   Python's: its text is a message of its own, which the next round's text
   never runs on from (RFC §6.4, RMK-1073).
