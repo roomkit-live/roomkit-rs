@@ -1,10 +1,10 @@
 //! What a delegated turn's agents returned once they all answered: their
-//! side effects and their answers, buffered or streamed.
+//! side effects, their answers, buffered or streamed, and their failures.
 
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, Metadata, Observation, RoomEvent, Task,
 };
-use crate::ops::protocol::{ChannelOutcome, EffectId, Outcome};
+use crate::ops::protocol::{CHANNEL_NOT_REGISTERED, ChannelOutcome, EffectId, Outcome, TURN_CUT};
 
 use super::DelegatedAnswer;
 
@@ -24,6 +24,8 @@ pub(super) struct Collected {
     pub(super) metadata: Metadata,
     pub(super) buffered: Vec<Buffered>,
     pub(super) streamed: Vec<Streamed>,
+    /// The turns that failed, to report under `generation`.
+    pub(super) failures: Vec<(ChannelBinding, ErrorRecord, &'static str)>,
 }
 
 impl Collected {
@@ -57,6 +59,9 @@ impl Collected {
                 } = *output;
                 answer.responded = responded;
                 answer.record = response_metadata;
+                if let Some(failed) = &error {
+                    self.failed(&binding, failed.clone());
+                }
                 answer.error = error;
                 self.tasks.extend(tasks);
                 self.observations.extend(observations);
@@ -72,22 +77,34 @@ impl Collected {
                 self.streamed.push((turn, slot, binding));
             }
             // A turn that raised answers nothing, and carries no error to
-            // the task: its delivery set logged it, as Python's router
-            // does, and kept no output of it.
+            // the task: it is logged and reported, as Python's router and
+            // `_report_intelligence_errors` do, and no output of it kept.
             Some(Outcome::Channel(ChannelOutcome::Raised(raised))) => {
                 log_raised(&binding.channel_id, &raised.error);
+                self.failed(&binding, raised.error);
             }
             Some(Outcome::Channel(ChannelOutcome::ProviderDelivery(result))) => {
                 let message = result.error.unwrap_or_default();
-                log_raised(
-                    &binding.channel_id,
-                    &ErrorRecord::new("ProviderDeliveryError", message),
-                );
+                let error = ErrorRecord::new("ProviderDeliveryError", message);
+                log_raised(&binding.channel_id, &error);
+                self.failed(&binding, error);
             }
-            Some(Outcome::Failed(error)) => log_raised(&binding.channel_id, &error),
+            Some(Outcome::Failed(error)) => {
+                log_raised(&binding.channel_id, &error);
+                // An agent not registered ran no turn, and a turn its
+                // cascade cut is no failure: neither is reported.
+                if error.error_type != CHANNEL_NOT_REGISTERED && error.error_type != TURN_CUT {
+                    self.failed(&binding, error);
+                }
+            }
             Some(_) | None => {}
         }
         answer
+    }
+
+    /// Keeps `binding`'s turn failure, to report under `generation`.
+    fn failed(&mut self, binding: &ChannelBinding, error: ErrorRecord) {
+        self.failures.push((binding.clone(), error, "generation"));
     }
 }
 

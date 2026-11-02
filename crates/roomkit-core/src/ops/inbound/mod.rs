@@ -105,6 +105,7 @@ use self::persist::SideEffects;
 use self::queues::Cascade;
 use self::stage::{CallStage, Stage};
 pub use self::stamp::default_inbound_event;
+pub(crate) use self::stamp::error_event;
 use super::io::Io;
 use super::protocol::{Decided, EffectId, Entry, EntryId, Operation, Outcome, ProtocolError, Step};
 use super::{Cx, Environment, KitConfig};

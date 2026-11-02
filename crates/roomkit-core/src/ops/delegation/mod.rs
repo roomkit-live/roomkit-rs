@@ -21,7 +21,7 @@ use std::sync::Arc;
 use self::collected::{Buffered, Collected, Streamed};
 use self::nested::Nested;
 use super::events::{CommitRecord, MutationError};
-use super::inbound::{Inbound, InboundError};
+use super::inbound::{Inbound, InboundError, error_event};
 use super::protocol::{
     ChannelOutcome, ChannelRequest, Delivered, Effect, EffectId, Entry, EntryId, InboundResult,
     Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, Step, StoreOutcome,
@@ -108,6 +108,9 @@ pub struct DelegatedTurn {
     /// The agent the task is given to, whose turn a stream's failure ends
     /// when several agents streamed.
     agent_id: Option<ChannelId>,
+    /// The turns' failures not reported yet, each with its category: a
+    /// turn's own (`generation`), a trace stream's (`streaming`).
+    failures: Vec<(ChannelBinding, ErrorRecord, &'static str)>,
     /// The answers committed as a room's, in a child room a transport is
     /// shared into.
     room_path: Option<Nested<Inbound>>,
@@ -145,6 +148,7 @@ impl DelegatedTurn {
             filing: None,
             created: Vec::new(),
             agent_id: None,
+            failures: Vec::new(),
             room_path: None,
             streamers: Vec::new(),
             next_entry: EntryId::first(),
@@ -241,6 +245,7 @@ impl DelegatedTurn {
             let answer = collected.take(turn, binding, outcome, self.answers.len());
             self.answers.push(answer);
         }
+        self.failures.append(&mut collected.failures);
         self.persist(
             collected.tasks,
             collected.observations,
@@ -455,6 +460,42 @@ impl DelegatedTurn {
         }
     }
 
+    /// Fires `ON_ERROR`'s observers in the child room for each turn that
+    /// failed, once, as a room's turn reports it (RFC §9.2, §23.3 step 6):
+    /// a turn's own failure under `generation`, a trace stream's under
+    /// `streaming`, one deeper than the description it answers. Python's
+    /// `_report_intelligence_errors` and `_report_turn_failure`; a stream
+    /// the room's reader reads reports its own failure.
+    fn report_failures(&mut self, environment: &dyn Environment) {
+        let failures = std::mem::take(&mut self.failures);
+        let (Some(description), Some(context)) = (&self.committed, &self.asked_context) else {
+            return;
+        };
+        for (responder, error, category) in failures {
+            let payload = error_event(
+                environment.new_event_id(),
+                &responder,
+                description,
+                description.response_visibility.as_ref(),
+                &error,
+                category,
+                environment.now(),
+            );
+            let hooks = self.config.hooks.observers(HookTrigger::OnError, &payload);
+            if hooks.is_empty() {
+                continue;
+            }
+            self.notices.push(Notice::AsyncHooks {
+                trigger: HookTrigger::OnError,
+                hooks,
+                event: Box::new(payload),
+                context: Box::new(permissions::context_for(&responder, context)),
+                after_delivery: None,
+                then: None,
+            });
+        }
+    }
+
     fn binding_of(&self, channel_id: &ChannelId) -> Option<ChannelBinding> {
         self.bindings
             .iter()
@@ -492,6 +533,7 @@ impl Operation for DelegatedTurn {
         self.advance_rows(environment, &mut effects);
         self.advance_streams(&mut effects);
         self.advance_room_path(environment, &mut effects);
+        self.report_failures(environment);
         self.tasks_created(environment);
         let next = if !effects.is_empty() {
             Next::Effects(effects)
@@ -549,6 +591,11 @@ impl Operation for DelegatedTurn {
                 Outcome::Failed(error) => Some(error),
                 _ => return Err(unexpected(id, "a stream's end")),
             };
+            if let (Some(failed), Some(answer)) = (&error, self.answers.get(slot))
+                && let Some(responder) = self.binding_of(&answer.channel_id)
+            {
+                self.failures.push((responder, failed.clone(), "streaming"));
+            }
             if let Some(answer) = self.answers.get_mut(slot)
                 && answer.error.is_none()
             {
