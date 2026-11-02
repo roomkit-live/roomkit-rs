@@ -1197,15 +1197,17 @@ mod tests {
     use crate::{ToolResult, ToolResultPart};
 
     /// RFC §6.4, §10.6.3: a detach alone, as an executor discarding a stale
-    /// room calls it, drops the room's refused images and its tools'
-    /// images, and no other room's.
-    // Python: tests/test_speak_listening.py::test_the_channel_forgets_the_state_of_a_room_it_leaves_or_joins,
+    /// room calls it, drops the room's refused images, its tools' images
+    /// and its active skills, and no other room's.
+    // Python: tests/test_turns_channel_control.py::test_detaching_an_ai_channel_drops_everything_it_kept_for_the_room,
     // of what roomkit-rs keeps.
     #[tokio::test]
-    async fn a_detach_forgets_the_room_s_images_alone() {
+    async fn a_detach_forgets_what_the_room_kept_alone() {
         let id = ChannelId::new("ai1").unwrap();
-        let agent =
+        let mut agent =
             AiChannel::new(id, ScriptedProvider::new([]), AiChannelOptions::default()).unwrap();
+        let skills = Arc::new(SkillTools::new(SkillRegistry::new(), false));
+        agent.skills = Some(Arc::clone(&skills));
         let (room, other) = (RoomId::new("r1").unwrap(), RoomId::new("r2").unwrap());
         let image = ToolResult::Parts(vec![ToolResultPart::Image(AiImagePart {
             url: "data:image/png;base64,AAAA".to_owned(),
@@ -1218,14 +1220,20 @@ mod tests {
                 .media
                 .tool_usage
                 .record(at, "draw", &Metadata::new(), &image);
+            skills.activated(at, "doc-helper");
         }
         Channel::on_room_detached(&agent, room.clone())
             .await
             .unwrap();
         let kept = |at: &RoomId| {
             let images = agent.media.tool_usage.turn_images(at);
-            (agent.media.refused.of(at).len(), images.is_empty())
+            let active = skills.active_names(at);
+            (
+                agent.media.refused.of(at).len(),
+                images.is_empty(),
+                active.len(),
+            )
         };
-        assert_eq!((kept(&room), kept(&other)), ((0, true), (1, false)));
+        assert_eq!((kept(&room), kept(&other)), ((0, true, 0), (1, false, 1)));
     }
 }

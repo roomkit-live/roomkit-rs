@@ -209,6 +209,12 @@ impl SkillTools {
         Ok(ToolResult::Text(answer))
     }
 
+    /// Records `name` as active in `room`, as a served activation does.
+    #[cfg(test)]
+    pub(crate) fn activated(&self, room: &RoomId, name: &str) {
+        self.lock().activate(room, name);
+    }
+
     /// Forgets the skills active in `room`: its next turn reads them again
     /// from its stored rows (RFC §10.6.3).
     pub(crate) fn forget(&self, room: &RoomId) {
