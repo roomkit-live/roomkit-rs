@@ -354,10 +354,12 @@ impl<C: SectionChange> Changing<C> {
     /// change's records committed on it, stamped now, after what the
     /// channel wrote, and the change reporting it, as the Python
     /// implementation emits an attach's record after `on_room_attached`
-    /// and its hooks read the room then (RFC §5.1, §6.1). A read that fails,
-    /// or finds the room gone, leaves the change as it was decided: it
-    /// stands, its records are committed on the room as it decided them,
-    /// and what its channel raised still fails it.
+    /// and its hooks read the room then (RFC §5.1, §6.1). A read that fails
+    /// leaves the change as it was decided: it stands, its records are
+    /// committed on the room as it decided them, and what its channel
+    /// raised still fails it. A room the read finds gone takes no record,
+    /// as the Python implementation's record of a missing room is refused,
+    /// and the change stands.
     fn on_reread(
         &mut self,
         cx: &mut Cx<'_>,
@@ -371,7 +373,8 @@ impl<C: SectionChange> Changing<C> {
             ..
         } = rereading;
         let reread = match outcome.into_context() {
-            Ok(context) => context,
+            Ok(Some(context)) => Some(context),
+            Ok(None) => return self.write_next(cx, *decision),
             Err(error) => {
                 tracing::warn!(
                     target: "roomkit::framework",

@@ -862,7 +862,7 @@ impl Channel for Tagger {
         &self,
         message: InboundMessage,
         context: RoomContext,
-    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
         ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
     }
 
@@ -871,7 +871,7 @@ impl Channel for Tagger {
         _event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
-    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         ready(Ok(ChannelOutput::empty()))
     }
 }
@@ -1503,6 +1503,9 @@ mod attaching {
         kit: Arc<OnceLock<RoomKit>>,
         clock: Clock,
         relays: Option<Arc<AtomicUsize>>,
+        /// Whether its attach, once it sent, deletes the room through the
+        /// store.
+        deletes_on_attach: bool,
         /// Whether its detach deletes the room through the store.
         deletes_the_room: bool,
     }
@@ -1577,6 +1580,9 @@ mod attaching {
                 SendEventOptions::default(),
             )
             .await?;
+            if self.deletes_on_attach {
+                kit.store().delete_room(&room_id).await.unwrap();
+            }
             Ok(())
         }
 
@@ -1624,6 +1630,7 @@ mod attaching {
             kit: Arc::clone(&handle),
             clock: clock.clone(),
             relays: None,
+            deletes_on_attach: false,
             deletes_the_room: false,
         })
         .unwrap();
@@ -1706,6 +1713,7 @@ mod attaching {
             kit: Arc::clone(&handle),
             clock: clock.clone(),
             relays: Some(Arc::clone(&relays)),
+            deletes_on_attach: false,
             deletes_the_room: false,
         })
         .unwrap();
@@ -1763,6 +1771,7 @@ mod attaching {
             kit: Arc::clone(&handle),
             clock: clock.clone(),
             relays: None,
+            deletes_on_attach: false,
             deletes_the_room: true,
         })
         .unwrap();
@@ -1783,5 +1792,47 @@ mod attaching {
             .detach_channel(&room_id(), &channel("sms"), DetachChannelOptions::default())
             .await;
         assert!(matches!(detached, Ok(true)), "{detached:?}");
+    }
+
+    /// RFC §5.1, §6.1: an attach whose channel deleted the room as it was
+    /// told returns its binding, the room taking no record, as Python's
+    /// record of a missing room is refused (the review of RMK-1246).
+    #[tokio::test]
+    async fn an_attach_whose_channel_deleted_the_room_returns_its_binding() {
+        let clock = Clock::new();
+        let kit = kit_with_environment(RoomKitOptions::default(), Arc::clone(&clock.0));
+        let ws = RecordingTransport::new(
+            channel("ws"),
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        );
+        kit.register_channel(ws.clone()).unwrap();
+        let handle = Arc::new(OnceLock::new());
+        kit.register_channel(Settling {
+            kit: Arc::clone(&handle),
+            clock: clock.clone(),
+            relays: None,
+            deletes_on_attach: true,
+            deletes_the_room: false,
+        })
+        .unwrap();
+        assert!(handle.set(kit.clone()).is_ok());
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        kit.attach_channel(&room_id(), ws.channel_id(), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let attached = kit
+            .attach_channel(&room_id(), &channel("sms"), AttachChannelOptions::default())
+            .await
+            .map(|binding| binding.channel_id);
+        assert!(
+            matches!(&attached, Ok(id) if *id == channel("sms")),
+            "{attached:?}"
+        );
     }
 }
