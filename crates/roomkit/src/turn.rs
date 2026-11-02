@@ -20,7 +20,7 @@ use tokio::task::AbortHandle;
 
 use crate::channel::{BoxFuture, DynChannel};
 use crate::context::ExecutionContext;
-use crate::error::RoomKitError;
+use crate::error::{RoomKitError, repr};
 use crate::events::FrameworkEvent;
 use crate::hooks::{self, HookHandler, TurnHook};
 use crate::human_input::PendingInputEvent;
@@ -342,7 +342,7 @@ impl TurnHost {
             || inline_only
         {
             return Err(RoomKitError::Value(
-                "The arguments of verb \"delegate\" are not valid: a turn's host delegates in \
+                "The arguments of verb 'delegate' are not valid: a turn's host delegates in \
                  the background, with data only"
                     .to_owned(),
             ));
@@ -460,7 +460,10 @@ impl TurnHost {
         let Ok(Value::Object(arguments)) = serde_json::to_value(arguments) else {
             return Err(TurnError::new(
                 "TypeError",
-                format!("the arguments of verb {verb:?} cannot cross the turn backend"),
+                format!(
+                    "the arguments of verb {} cannot cross the turn backend",
+                    repr(verb)
+                ),
             )
             .into_kit_error());
         };
@@ -1298,7 +1301,8 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
                 .lookup(&call.channel_id, &call.room_id, &name);
             let Some(serve) = served else {
                 return OwnerToolAnswer::Unserved(format!(
-                    "No tool {name:?} is served by the room owner"
+                    "No tool {} is served by the room owner",
+                    repr(&name)
                 ));
             };
             serve(kit, call).await

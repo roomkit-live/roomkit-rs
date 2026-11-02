@@ -21,6 +21,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::Facts;
+use crate::error::repr;
 use crate::orchestration::StatusEntry;
 use crate::turn::TurnKit;
 use crate::turns::codec::decode_send_event;
@@ -149,7 +150,7 @@ async fn run_verb(
         }
         _ => Err(refusal(
             VALUE_ERROR,
-            format!("No verb {verb:?} is served by the room owner"),
+            format!("No verb {} is served by the room owner", repr(verb)),
         )),
     }
 }
@@ -166,21 +167,28 @@ fn post_status(
     if args.action == TASK_ACTION {
         return Err(refusal(
             VALUE_ERROR,
-            format!("A turn's host posts no {TASK_ACTION:?} status: the framework does"),
+            format!(
+                "A turn's host posts no {} status: the framework does",
+                repr(TASK_ACTION)
+            ),
         ));
     }
     let mut metadata = args.metadata.unwrap_or_default();
     if metadata.contains_key(RUN_ENTRY) {
         return Err(refusal(
             VALUE_ERROR,
-            format!("A turn's host posts no {RUN_ENTRY:?} status: the framework does"),
+            format!(
+                "A turn's host posts no {} status: the framework does",
+                repr(RUN_ENTRY)
+            ),
         ));
     }
     let named = metadata
         .entry("room_id")
         .or_insert_with(|| Value::from(scope.room_id.as_str()));
     if named.as_str() != Some(scope.room_id.as_str()) {
-        return Err(other_room(scope, &named.to_string()));
+        let named = named.as_str().map_or_else(|| named.to_string(), repr);
+        return Err(other_room(scope, &named));
     }
     let entry = StatusEntry::posted(
         args.agent_id,
@@ -204,7 +212,7 @@ fn decoded<T: DeserializeOwned>(verb: &str, arguments: Metadata) -> Result<T, Bo
 fn invalid(verb: &str, why: &str) -> Box<WireError> {
     refusal(
         VALUE_ERROR,
-        format!("The arguments of verb {verb:?} are not valid: {why}"),
+        format!("The arguments of verb {} are not valid: {why}", repr(verb)),
     )
 }
 
@@ -226,14 +234,17 @@ fn within_its_room(
     organization_id: Option<&str>,
 ) -> Result<(), Box<WireError>> {
     if room_id != scope.room_id {
-        return Err(other_room(scope, room_id.as_str()));
+        return Err(other_room(scope, &repr(room_id.as_str())));
     }
     if let Some(organization_id) = organization_id
         && Some(organization_id) != scope.organization_id
     {
         return Err(refusal(
             VALUE_ERROR,
-            format!("A turn's host acts in its room's organization, not in {organization_id:?}"),
+            format!(
+                "A turn's host acts in its room's organization, not in {}",
+                repr(organization_id)
+            ),
         ));
     }
     Ok(())
@@ -244,8 +255,8 @@ fn other_room(scope: &Scope<'_>, named: &str) -> Box<WireError> {
     refusal(
         VALUE_ERROR,
         format!(
-            "A turn's host acts for its room {:?}, not for {named}",
-            scope.room_id.as_str()
+            "A turn's host acts for its room {}, not for {named}",
+            repr(scope.room_id.as_str())
         ),
     )
 }
@@ -307,7 +318,10 @@ pub(crate) async fn answer_room_call(
         if !BETWEEN_TURNS.contains(&verb.as_str()) {
             return Err(refusal(
                 VALUE_ERROR,
-                format!("{verb:?} needs a turn: it is not served between turns"),
+                format!(
+                    "{} needs a turn: it is not served between turns",
+                    repr(&verb)
+                ),
             ));
         }
         let organization_id = room_organization(kit, &room_id).await?;
@@ -345,7 +359,7 @@ async fn room_organization(
         Ok(Some(room)) => Ok(room.organization_id),
         Ok(None) => Err(refusal(
             VALUE_ERROR,
-            format!("No room {:?}", room_id.as_str()),
+            format!("No room {}", repr(room_id.as_str())),
         )),
         Err(error) => Err(Box::new(kit_error(&error))),
     }

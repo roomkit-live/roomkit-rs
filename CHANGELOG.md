@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A turn's host and its link quote the names their refusals give as
+  Python's `!r` quotes them (RMK-1201): `A turn's host acts for its room
+  'r1', not for 'r2'`, `No room 'r'`, `No verb 'x' is served by the room
+  owner`, where they read `"r1"`, `"r"`, `"x"`, and a room named as
+  another one's read unquoted.
 - A delegation its caller cuts once the kit's close refuses new work
   still ends its task to its end, its completion callback included, on a
   run apart, as Python's shielded `_end_cut` (RFC §23.3, RMK-1201), where

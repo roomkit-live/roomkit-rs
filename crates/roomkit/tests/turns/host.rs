@@ -36,7 +36,7 @@ async fn a_turn_s_host_refuses_another_room() {
                 )
                 .await;
             *noted.lock().unwrap() = Some(match sent {
-                Err(RoomKitError::Value(_)) => "ValueError".to_owned(),
+                Err(RoomKitError::Value(message)) => format!("ValueError: {message}"),
                 other => format!("{other:?}"),
             });
             Ok(ToolResult::Text("42".to_owned()))
@@ -56,9 +56,14 @@ async fn a_turn_s_host_refuses_another_room() {
         .get_timeline(&RoomId::new("r2").unwrap(), GetTimelineOptions::default())
         .await
         .unwrap();
+    // The rooms quoted as Python's `!r` quotes them.
+    let refused = format!(
+        "ValueError: A turn's host acts for its room '{}', not for 'r2'",
+        room()
+    );
     assert_eq!(
         (read.lock().unwrap().clone(), elsewhere.len()),
-        (Some("ValueError".to_owned()), 0)
+        (Some(refused), 0)
     );
 }
 

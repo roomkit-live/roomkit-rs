@@ -16,7 +16,7 @@ use tokio::sync::{Notify, oneshot};
 use uuid::Uuid;
 
 use super::inputs::ExecutorInputs;
-use crate::error::RoomKitError;
+use crate::error::{RoomKitError, repr};
 use crate::turn::{OwnerToolAnswer, TurnKit};
 use crate::turns::codec::{encode_end, encode_end_item, encode_start};
 use crate::turns::error::{TurnError, rebuild_kit_error};
@@ -308,7 +308,8 @@ impl HostLink {
                 return OwnerToolAnswer::Failed {
                     kind: "RuntimeError".to_owned(),
                     message: format!(
-                        "The turn has ended: tool {name:?} is not sent to the room owner"
+                        "The turn has ended: tool {} is not sent to the room owner",
+                        repr(&name)
                     ),
                 };
             }
@@ -331,7 +332,8 @@ impl HostLink {
             return OwnerToolAnswer::Failed {
                 kind: "TypeError".to_owned(),
                 message: format!(
-                    "the arguments of tool {name:?} cannot cross the turn backend: {why}"
+                    "the arguments of tool {} cannot cross the turn backend: {why}",
+                    repr(&name)
                 ),
             };
         }
@@ -399,7 +401,10 @@ impl HostLink {
             self.withdraw(&call_id, false);
             return Err(TurnError::new(
                 "TypeError",
-                format!("the arguments of verb {verb:?} cannot cross the turn backend: {why}"),
+                format!(
+                    "the arguments of verb {} cannot cross the turn backend: {why}",
+                    repr(verb)
+                ),
             )
             .into_kit_error());
         }
