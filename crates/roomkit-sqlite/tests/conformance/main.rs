@@ -61,9 +61,13 @@ use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 
 use crate::support::TempFile;
 
-/// Scenario id → the rule this implementation breaks on this store: none
-/// beyond the in-memory store's (crates/roomkit/tests/conformance).
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+/// Scenario id → the rule this implementation breaks on this store: the
+/// in-memory store's (crates/roomkit/tests/conformance), none beyond.
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[(
+    "rooms/a-channel-sends-into-the-room-it-is-told-of",
+    "§9.5.1: a room callback's send into its room, under the room's lock, is refused \
+     ReentrantCall where it is adopted (RMK-1245)",
+)];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.
