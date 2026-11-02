@@ -393,6 +393,28 @@ pub enum ChannelRequest {
         /// The channels asked, in the order the response's rows reach them.
         channel_ids: Vec<ChannelId>,
     },
+    /// Call the channel's `on_room_attached()` (RFC §6.1) with the binding
+    /// an attach stored, under the room's lock, before the attach is
+    /// recorded or announced; an intelligence channel's runs on its
+    /// executor, which logs what it raises (RFC §10.6.3). Answer
+    /// [`ChannelOutcome::Told`], also for a channel the driver no longer
+    /// holds, or [`Outcome::Failed`] with what the channel raised, which
+    /// refuses the attach.
+    RoomAttached {
+        /// The binding the attach stored.
+        binding: ChannelBinding,
+    },
+    /// Call the channel's `on_room_detached()` (RFC §6.1) once a detach
+    /// removed its binding and recorded it, under the room's lock, before
+    /// the detach is announced; an intelligence channel's runs on its
+    /// executor, which logs what it raises (RFC §10.6.3). Answer
+    /// [`ChannelOutcome::Told`], also for a channel the driver no longer
+    /// holds, or [`Outcome::Failed`] with what the channel raised, which the
+    /// detach returns once announced.
+    RoomDetached {
+        /// The binding the detach removed.
+        binding: ChannelBinding,
+    },
 }
 
 /// The channel that reads a turn's response as it is written (RFC §6.1
@@ -662,6 +684,10 @@ pub enum ChannelOutcome {
     /// error rebuilt across the turn backend. An answer of
     /// [`ChannelRequest::OnEvent`].
     Raised(Box<Raised>),
+    /// The channel was told of its room's attach or detach, or holds
+    /// nothing to be told: an answer of [`ChannelRequest::RoomAttached`] and
+    /// [`ChannelRequest::RoomDetached`].
+    Told,
 }
 
 /// An error a call raised that declares its delivery error

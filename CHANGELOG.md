@@ -6,6 +6,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `Channel::on_room_attached` and `Channel::on_room_detached`, as Python's
+  (RFC §6.1, RMK-1219): the kit awaits them under the room's lock, the
+  attach's with the stored binding before the attach is recorded or
+  announced, the detach's once the binding is removed, before its hooks.
+  A transport that refuses its attach fails it with
+  `RoomKitError::Channel`, the binding it replaced put back; one that
+  fails its detach fails the call once the detach is announced. An
+  intelligence channel's run on its executor, which logs what they raise.
+  Both default to doing nothing.
 - Breaking: `DeliveryHandle::request_cancel` is removed; `cancel` is the
   handle's only cancel, as Python's (RMK-1204). Write
   `handle.cancel(CancelOptions::default()).await?` for

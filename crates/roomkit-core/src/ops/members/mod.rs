@@ -149,7 +149,10 @@ fn ended_with(
             },
             None => MemberError::RoomNotFound(room_id),
         }),
-        Err(SectionError::Store(error)) => Err(MemberError::Store(error)),
+        // A member change tells no channel.
+        Err(SectionError::Store(error) | SectionError::Channel { error, .. }) => {
+            Err(MemberError::Store(error))
+        }
         Err(SectionError::Lock(error)) => Err(MemberError::Lock(error)),
         Err(SectionError::Refused(refusal)) => Err(refusal),
     }

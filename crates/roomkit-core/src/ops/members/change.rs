@@ -179,6 +179,7 @@ impl SectionChange for MemberChange {
                 report,
                 context,
             },
+            telling: None,
         })
     }
 

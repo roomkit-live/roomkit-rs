@@ -146,16 +146,18 @@ fn attach_automatically(
         return Decision::unwritten(Recorded::Kept(context));
     }
     context.bindings.push(binding.clone());
-    let mut writes = VecDeque::from([StoreRequest::StoreBinding {
+    let writes = VecDeque::from([StoreRequest::StoreBinding {
         binding: binding.clone(),
     }]);
-    change::write_records(cx, &mut writes, &mut context, &[Record::attached(binding)]);
+    let mut then = VecDeque::new();
+    change::write_records(cx, &mut then, &mut context, &[Record::attached(binding)]);
     Decision {
         writes,
         done: Recorded::Attached(Attached {
             binding: Box::new(binding.clone()),
             context,
         }),
+        telling: Some(change::told_of_attach(binding, then, None)),
     }
 }
 

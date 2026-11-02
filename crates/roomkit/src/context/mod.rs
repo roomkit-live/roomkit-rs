@@ -244,7 +244,10 @@ impl Work {
                 Some(chain_depth::response_depth(answers)),
             ),
             Request::Channel(
-                ChannelRequest::HandleInbound { .. } | ChannelRequest::StreamsIn { .. },
+                ChannelRequest::HandleInbound { .. }
+                | ChannelRequest::StreamsIn { .. }
+                | ChannelRequest::RoomAttached { .. }
+                | ChannelRequest::RoomDetached { .. },
             )
             | Request::Hold(_)
             | Request::Store(_)

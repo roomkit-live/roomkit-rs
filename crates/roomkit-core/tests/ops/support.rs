@@ -1128,6 +1128,12 @@ impl Sim {
             Request::Channel(ChannelRequest::StreamsIn { room_id, .. }) => {
                 format!("streams_in {room_id}")
             }
+            Request::Channel(ChannelRequest::RoomAttached { binding }) => {
+                format!("on_room_attached {}", binding.channel_id)
+            }
+            Request::Channel(ChannelRequest::RoomDetached { binding }) => {
+                format!("on_room_detached {}", binding.channel_id)
+            }
             Request::Hook(HookRequest::RunHook { hook, .. }) => {
                 format!("hook {}", self.config.hooks.get(*hook).unwrap().name)
             }
@@ -1189,6 +1195,9 @@ impl Sim {
             Request::Channel(ChannelRequest::StreamsIn { channel_ids, .. }) => {
                 Outcome::Channel(ChannelOutcome::StreamsIn(channel_ids))
             }
+            Request::Channel(
+                ChannelRequest::RoomAttached { .. } | ChannelRequest::RoomDetached { .. },
+            ) => Outcome::Channel(ChannelOutcome::Told),
             Request::Hook(HookRequest::RunHook {
                 hook,
                 event,
@@ -1381,6 +1390,14 @@ impl Sim {
                 (format!("store room {}", room.id), store_down())
             }
             Request::Store(StoreRequest::Commit { .. }) => ("commit".to_owned(), store_down()),
+            Request::Channel(ChannelRequest::RoomAttached { binding }) => (
+                format!("on_room_attached {}", binding.channel_id),
+                ErrorRecord::new("ChannelError", "the outside world said no"),
+            ),
+            Request::Channel(ChannelRequest::RoomDetached { binding }) => (
+                format!("on_room_detached {}", binding.channel_id),
+                ErrorRecord::new("ChannelError", "the outside world said no"),
+            ),
             Request::Store(StoreRequest::GetEvent { event_id }) => {
                 (format!("get_event {event_id}"), store_down())
             }

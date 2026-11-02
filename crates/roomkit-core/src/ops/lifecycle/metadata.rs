@@ -43,6 +43,7 @@ impl SectionChange for MetadataChange {
         Ok(Decision {
             writes: VecDeque::from([write]),
             done: context,
+            telling: None,
         })
     }
 

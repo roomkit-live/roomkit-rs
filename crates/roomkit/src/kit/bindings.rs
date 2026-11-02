@@ -2,8 +2,8 @@
 //! calls for each, for the organization their options name (RFC §17.2).
 
 use roomkit_core::model::{
-    Access, BindingUpdate, ChannelBinding, ChannelCategory, ChannelId, Metadata, Participant,
-    ParticipantStatus, RoomId, Visibility,
+    Access, BindingUpdate, ChannelBinding, ChannelId, Metadata, Participant, ParticipantStatus,
+    RoomId, Visibility,
 };
 use roomkit_core::ops::{AttachChannel, DetachChannel, LifecycleError, UpdateBinding};
 
@@ -80,11 +80,7 @@ impl<S: ConversationStore> RoomKit<S> {
             Some((draw, floor)) => attach.made_in(draw, floor),
             None => attach,
         };
-        let binding = driver::run_on(&self.inner, environment, "attach_channel", attach).await??;
-        if binding.category == ChannelCategory::Intelligence {
-            self.inner.turns.attached(&binding);
-        }
-        Ok(binding)
+        Ok(driver::run_on(&self.inner, environment, "attach_channel", attach).await??)
     }
 
     /// Why an attach of `channel_id`, which no channel is registered under,
@@ -134,18 +130,12 @@ impl<S: ConversationStore> RoomKit<S> {
             Some((draw, floor)) => detach.made_in(draw, floor),
             None => detach,
         };
-        let binding = match driver::run(&self.inner, "detach_channel", detach).await? {
-            Ok(binding) => binding,
-            Err(LifecycleError::ChannelNotBound { .. }) => return Ok(false),
-            Err(LifecycleError::RoomNotFound(_)) if !scoped => return Ok(false),
-            Err(error) => return Err(error.into()),
-        };
-        if binding.category == ChannelCategory::Intelligence {
-            self.inner
-                .turns
-                .detached(&binding.channel_id, &binding.room_id);
+        match driver::run(&self.inner, "detach_channel", detach).await? {
+            Ok(_) => Ok(true),
+            Err(LifecycleError::ChannelNotBound { .. }) => Ok(false),
+            Err(LifecycleError::RoomNotFound(_)) if !scoped => Ok(false),
+            Err(error) => Err(error.into()),
         }
-        Ok(true)
     }
 
     /// Mutes a channel in a room (RFC §7.2): it still reads the room's

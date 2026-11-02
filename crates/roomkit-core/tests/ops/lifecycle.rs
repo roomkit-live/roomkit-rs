@@ -237,6 +237,63 @@ mod attach_channel {
     }
 
     /// RFC §7.5 rule 7: an explicit attach is the integrator's decision.
+    /// RFC §6.1 `on_room_attached`: a channel that refuses its attach,
+    /// once its binding is stored, has it removed under the lock, nothing
+    /// recorded nor announced, and the attach fails with what it raised.
+    // Python: tests/test_channel_attach_contract.py::TestRefusedAttach
+    #[test]
+    fn refused_by_its_channel_removes_the_binding_and_announces_nothing() {
+        let mut sim = Sim::new();
+        sim.observer("audit", HookTrigger::OnChannelAttached);
+        sim.failing_effect = Some("on_room_attached sms");
+        let attached = sim.run(AttachChannel::new(sim.shared_config(), sms_binding(), None));
+        assert_eq!(
+            (
+                attached,
+                sim.trace.clone(),
+                bound(&sim.bindings),
+                sim.framework_event_names(),
+                sim.async_contexts().len()
+            ),
+            (
+                Err(LifecycleError::ChannelFailed {
+                    channel_id: channel("sms"),
+                    error: ErrorRecord::new("ChannelError", "the outside world said no"),
+                }),
+                [
+                    "lock room_1",
+                    "load_context room_1",
+                    "store binding sms",
+                    "on_room_attached sms failed",
+                    "delete binding sms",
+                    "release room_1",
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+                Vec::<String>::new(),
+                Vec::<String>::new(),
+                0
+            )
+        );
+    }
+
+    /// RFC §6.1 `on_room_attached`: an attach over a live attachment its
+    /// channel refuses puts back the binding it replaced.
+    // Python: tests/test_channel_attach_contract.py::TestRefusedReattach::test_the_binding_it_replaced_is_put_back
+    #[test]
+    fn refused_by_its_channel_puts_back_the_binding_it_replaced() {
+        let mut sim = Sim::new();
+        let live = sim.transport("sms").clone();
+        sim.failing_effect = Some("on_room_attached sms");
+        let mut binding = sms_binding();
+        binding.access = Access::ReadOnly;
+        let attached = sim.run(AttachChannel::new(sim.shared_config(), binding, None));
+        assert_eq!(
+            (attached.is_err(), sim.bindings.clone()),
+            (true, vec![live])
+        );
+    }
+
     #[test]
     fn after_a_detach_clears_the_revocation_before_storing_the_binding() {
         let mut sim = Sim::new();
@@ -380,6 +437,40 @@ mod detach_channel {
                 bound(&sim.async_contexts()[0].bindings)
             ),
             (vec![HookTrigger::OnChannelDetached], vec!["ws".to_owned()])
+        );
+    }
+
+    /// RFC §6.1 `on_room_detached`: a channel that fails on its detach
+    /// fails the call once the detach is recorded and announced.
+    // Python: tests/test_channel_attach_contract.py::TestDetach::test_a_failure_still_tells_the_rooms_observers
+    #[test]
+    fn failed_by_its_channel_still_detaches_and_announces_then_fails() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.observer("audit", HookTrigger::OnChannelDetached);
+        sim.failing_effect = Some("on_room_detached sms");
+        let detached = sim.run(DetachChannel::new(
+            sim.shared_config(),
+            room_id(),
+            channel("sms"),
+            None,
+        ));
+        assert_eq!(
+            (
+                detached,
+                bound(&sim.bindings),
+                sim.framework_event_names(),
+                sim.async_contexts().len()
+            ),
+            (
+                Err(LifecycleError::ChannelFailed {
+                    channel_id: channel("sms"),
+                    error: ErrorRecord::new("ChannelError", "the outside world said no"),
+                }),
+                Vec::<String>::new(),
+                vec!["room_channel_detached".to_owned()],
+                1
+            )
         );
     }
 

@@ -83,17 +83,20 @@ impl SectionChange for HostAttach {
             ..(*self.0).clone()
         };
         context.bindings.push(binding.clone());
-        let mut writes = VecDeque::from([StoreRequest::StoreBinding {
+        let writes = VecDeque::from([StoreRequest::StoreBinding {
             binding: binding.clone(),
         }]);
+        let mut then = VecDeque::new();
         let record = Record::attached(&binding);
-        change::write_records(cx, &mut writes, &mut context, &[record]);
+        change::write_records(cx, &mut then, &mut context, &[record]);
+        let telling = change::told_of_attach(&binding, then, None);
         Ok(Decision {
             writes,
             done: HostAttached::Attached(Attached {
                 binding: Box::new(binding),
                 context,
             }),
+            telling: Some(telling),
         })
     }
 
@@ -267,6 +270,12 @@ impl HostPost {
             }
             Err(SectionError::Store(error)) => Err(Stopped::Failed(InboundError::Store(error))),
             Err(SectionError::Lock(error)) => Err(Stopped::Failed(InboundError::Lock(error))),
+            Err(SectionError::Channel { channel_id, error }) => {
+                Err(Stopped::Failed(InboundError::ChannelFailed {
+                    channel_id,
+                    error,
+                }))
+            }
         }
     }
 

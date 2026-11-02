@@ -468,11 +468,10 @@ reason = "RMK-1029, a feature roomkit-rs has first: the turn's record keeps the 
 python = "roomkit.Channel"
 members = [
     "active_turns", "channel_call", "connect_session", "disconnect_session",
-    "emit_trace", "on_room_attached", "on_room_detached", "on_room_event",
-    "on_trace", "resolve_trace_room", "restore_room_state", "room_state",
-    "trace_enabled", "update_binding",
+    "emit_trace", "on_room_event", "on_trace", "resolve_trace_room",
+    "restore_room_state", "room_state", "trace_enabled", "update_binding",
 ]
-reason = "not in 0.x: identity resolution, active turns, tracing, sessions, room callbacks, channel calls, room state (lot 4's list)"
+reason = "not in 0.x: identity resolution, active turns, tracing, sessions, a room's committed events, channel calls, room state (lot 4's list)"
 
 [[missing]]
 python = "roomkit.ChannelDeclaration.__init__"

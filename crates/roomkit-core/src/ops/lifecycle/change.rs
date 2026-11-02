@@ -15,7 +15,7 @@ use super::record;
 use super::report::Reported;
 use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomContext, RoomEvent, RoomUpdates};
 use crate::ops::Cx;
-use crate::ops::protocol::StoreRequest;
+use crate::ops::protocol::{ChannelRequest, EffectId, StoreRequest};
 use crate::rules::lifecycle::{self, Transition};
 use crate::rules::records::Record;
 use crate::rules::{attachment, host};
@@ -78,11 +78,44 @@ pub(crate) trait SectionChange: Debug {
 }
 
 /// The writes a change makes, in order, and what it did once they are
-/// stored.
+/// stored; the channel it tells once they are, if any.
 #[derive(Debug)]
 pub(crate) struct Decision<D> {
     pub(crate) writes: VecDeque<StoreRequest>,
     pub(crate) done: D,
+    pub(crate) telling: Option<Telling>,
+}
+
+/// A channel told of the change under the room's lock once the change's
+/// writes are stored, and what follows its answer (RFC §6.1
+/// `on_room_attached`, `on_room_detached`).
+#[derive(Debug)]
+pub(crate) struct Telling {
+    /// The binding the change stored or removed, which names the channel
+    /// told and its room.
+    pub(crate) binding: ChannelBinding,
+    /// Whether the channel is told of its attach, else of its detach.
+    pub(crate) attach: bool,
+    /// The writes made once the channel answered.
+    pub(crate) then: VecDeque<StoreRequest>,
+    /// What the channel's refusal does: undoes the change with these
+    /// writes, which put the room back as the change found it, and fails
+    /// it; `None`, the change stands, then fails once reported.
+    pub(crate) undo: Option<VecDeque<StoreRequest>>,
+}
+
+impl Telling {
+    /// The channel's call, on behalf of the section that holds its room's
+    /// lock, as the Python implementation awaits it under the lock.
+    pub(crate) fn issue(&self, cx: &mut Cx<'_>) -> EffectId {
+        let binding = self.binding.clone();
+        let request = if self.attach {
+            ChannelRequest::RoomAttached { binding }
+        } else {
+            ChannelRequest::RoomDetached { binding }
+        };
+        cx.io.issue_locked(request, self.binding.room_id.clone())
+    }
 }
 
 impl<D> Decision<D> {
@@ -91,6 +124,7 @@ impl<D> Decision<D> {
         Self {
             writes: VecDeque::new(),
             done,
+            telling: None,
         }
     }
 
@@ -99,6 +133,7 @@ impl<D> Decision<D> {
         Decision {
             writes: self.writes,
             done: map(self.done),
+            telling: self.telling,
         }
     }
 }
@@ -205,20 +240,52 @@ impl SectionChange for AttachChange {
         writes.push_back(StoreRequest::StoreBinding {
             binding: ChannelBinding::clone(binding),
         });
+        let replaced = bound(&context, &binding.channel_id).ok();
         context
             .bindings
             .retain(|bound| bound.channel_id != binding.channel_id);
         context.bindings.push(ChannelBinding::clone(binding));
-        write_records(cx, &mut writes, &mut context, &[Record::attached(binding)]);
+        let mut then = VecDeque::new();
+        write_records(cx, &mut then, &mut context, &[Record::attached(binding)]);
+        let telling = told_of_attach(binding, then, replaced);
         let done = Attached {
             binding: binding.clone(),
             context,
         };
-        Ok(Decision { writes, done })
+        Ok(Decision {
+            writes,
+            done,
+            telling: Some(telling),
+        })
     }
 
     fn reported(done: &Attached) -> Option<(Reported<'_>, &RoomContext)> {
         Some(done.reported())
+    }
+}
+
+/// The channel of `binding`, an attach's, told of it once the binding is
+/// stored, before `then`, the attach's record, is written (RFC §6.1
+/// `on_room_attached`): its refusal puts back `replaced`, the binding the
+/// attach replaced, or removes the binding when there was none, as the
+/// Python implementation's `_undo_refused_binding`.
+pub(crate) fn told_of_attach(
+    binding: &ChannelBinding,
+    then: VecDeque<StoreRequest>,
+    replaced: Option<ChannelBinding>,
+) -> Telling {
+    let undo = match replaced {
+        Some(replaced) => StoreRequest::StoreBinding { binding: replaced },
+        None => StoreRequest::DeleteBinding {
+            room_id: binding.room_id.clone(),
+            channel_id: binding.channel_id.clone(),
+        },
+    };
+    Telling {
+        binding: binding.clone(),
+        attach: true,
+        then,
+        undo: Some(VecDeque::from([undo])),
     }
 }
 
@@ -253,11 +320,21 @@ impl SectionChange for DetachChange {
             .retain(|bound| &bound.channel_id != channel_id);
         let record = Record::Detached(channel_id.clone());
         write_records(cx, &mut writes, &mut context, &[record]);
+        let telling = Telling {
+            binding: binding.clone(),
+            attach: false,
+            then: VecDeque::new(),
+            undo: None,
+        };
         let done = Detached {
             binding: Box::new(binding),
             context,
         };
-        Ok(Decision { writes, done })
+        Ok(Decision {
+            writes,
+            done,
+            telling: Some(telling),
+        })
     }
 
     fn reported(done: &Detached) -> Option<(Reported<'_>, &RoomContext)> {
@@ -296,7 +373,7 @@ impl SectionChange for UpdateChange {
         }
         let records = Record::of_update(&current, &updated, &self.update.metadata);
         let mut decision = store_updated(&current, updated, context);
-        let Decision { writes, done } = &mut decision;
+        let Decision { writes, done, .. } = &mut decision;
         write_records(cx, writes, &mut done.context, &records);
         Ok(decision)
     }
@@ -354,6 +431,7 @@ impl SectionChange for TransitionChange {
         Ok(Decision {
             writes: VecDeque::from([write]),
             done,
+            telling: None,
         })
     }
 
@@ -419,6 +497,7 @@ pub(crate) fn store_updated(
             muted,
             context,
         },
+        telling: None,
     }
 }
 

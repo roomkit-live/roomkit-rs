@@ -400,6 +400,8 @@ pub(super) async fn channel<S: ConversationStore>(
             room_id,
             channel_ids,
         } => streams_in(inner, &room_id, channel_ids),
+        ChannelRequest::RoomAttached { binding } => room_attached(inner, binding).await,
+        ChannelRequest::RoomDetached { binding } => room_detached(inner, binding).await,
         ChannelRequest::HandleInbound {
             channel_id,
             message,
@@ -654,7 +656,55 @@ fn refused_once_sealed(request: &ChannelRequest) -> ErrorRecord {
         ChannelRequest::HandleInbound { .. }
         | ChannelRequest::OnEvent { .. }
         | ChannelRequest::Deliver { .. }
-        | ChannelRequest::StreamsIn { .. } => cut_by_close(),
+        | ChannelRequest::StreamsIn { .. }
+        | ChannelRequest::RoomAttached { .. }
+        | ChannelRequest::RoomDetached { .. } => cut_by_close(),
+    }
+}
+
+/// Tells `binding`'s channel of its attach (RFC §6.1 `on_room_attached`):
+/// an intelligence channel through the turn backend, whose executor logs
+/// what it raises (RFC §10.6.3); any other directly, what it raises
+/// refusing the attach.
+async fn room_attached<S>(inner: &Inner<S>, binding: ChannelBinding) -> Outcome {
+    let channel = inner.channel(&binding.channel_id);
+    if binding.category == ChannelCategory::Intelligence {
+        inner.turns.attached(&binding, channel).await;
+        return ChannelOutcome::Told.into();
+    }
+    let Some(channel) = channel else {
+        return ChannelOutcome::Told.into();
+    };
+    told(
+        channel
+            .on_room_attached(binding.room_id.clone(), binding)
+            .await,
+    )
+}
+
+/// Tells `binding`'s channel of its detach (RFC §6.1 `on_room_detached`):
+/// an intelligence channel through the turn backend, whose executor logs
+/// what it raises (RFC §10.6.3); any other directly, what it raises
+/// failing the detach once announced. A channel no longer registered is
+/// not told.
+async fn room_detached<S>(inner: &Inner<S>, binding: ChannelBinding) -> Outcome {
+    let channel = inner.channel(&binding.channel_id);
+    if binding.category == ChannelCategory::Intelligence {
+        let (channel_id, room_id) = (&binding.channel_id, &binding.room_id);
+        inner.turns.detached(channel_id, room_id, channel).await;
+        return ChannelOutcome::Told.into();
+    }
+    let Some(channel) = channel else {
+        return ChannelOutcome::Told.into();
+    };
+    told(channel.on_room_detached(binding.room_id).await)
+}
+
+/// A room callback's answer: told, or failed with what the channel raised.
+fn told(answered: Result<(), ChannelError>) -> Outcome {
+    match answered {
+        Ok(()) => ChannelOutcome::Told.into(),
+        Err(error) => Outcome::Failed(ErrorRecord::new("ChannelError", error.to_string())),
     }
 }
 

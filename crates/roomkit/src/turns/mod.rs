@@ -76,6 +76,7 @@ use self::wire::{
     ChannelControl, ChannelControlEnvelope, OwnerMessage, OwnerMessageEnvelope, PreviousTurn,
     RoomCallResult,
 };
+use crate::channel::DynChannel;
 use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::steering::SteeringDirective;
@@ -402,48 +403,99 @@ impl Turns {
     }
 
     /// Tells the kit's own executor that `binding`'s intelligence channel
-    /// was attached to its room (RFC §10.6.3 `room_attached`): a channel of
-    /// 0.1 keeps no state per room, so the executor applies nothing.
-    pub(crate) fn attached(&self, binding: &ChannelBinding) {
-        self.control(&ChannelControl::RoomAttached {
+    /// was attached to its room (RFC §10.6.3 `room_attached`): it calls the
+    /// channel's `on_room_attached`, `channel` the executor's, and logs
+    /// what the channel raises.
+    pub(crate) async fn attached(
+        &self,
+        binding: &ChannelBinding,
+        channel: Option<Arc<dyn DynChannel>>,
+    ) {
+        let message = ChannelControl::RoomAttached {
             channel_id: binding.channel_id.clone(),
             room_id: binding.room_id.clone(),
             binding: Box::new(binding.clone()),
-        });
+        };
+        if let Some(message) = self.control(&message) {
+            apply(channel, message).await;
+        }
     }
 
     /// Tells the kit's own executor that `channel_id` was detached from
     /// `room_id` (RFC §10.6.3 `room_detached`): the room's next turn of the
     /// channel names no previous turn, and work its last turn began is
-    /// refused.
-    pub(crate) fn detached(&self, channel_id: &ChannelId, room_id: &RoomId) {
+    /// refused; the executor calls the channel's `on_room_detached`,
+    /// `channel` the executor's, and logs what the channel raises.
+    pub(crate) async fn detached(
+        &self,
+        channel_id: &ChannelId,
+        room_id: &RoomId,
+        channel: Option<Arc<dyn DynChannel>>,
+    ) {
         self.records().pop(channel_id, room_id);
-        self.control(&ChannelControl::RoomDetached {
+        let message = ChannelControl::RoomDetached {
             channel_id: channel_id.clone(),
             room_id: room_id.clone(),
-        });
+        };
+        if let Some(message) = self.control(&message) {
+            apply(channel, message).await;
+        }
     }
 
-    /// Carries a channel control message to the kit's own executor, which
-    /// parses it and applies it as the channel's own attach or detach
-    /// would: no channel of 0.1 holds state per room.
-    fn control(&self, message: &ChannelControl) {
+    /// Carries a channel control message to the kit's own executor: the
+    /// message as the executor parses it, `None` when it could not cross.
+    fn control(&self, message: &ChannelControl) -> Option<ChannelControl> {
         let envelope = serde_json::to_string(&ChannelControlEnvelope {
             message: message.clone(),
         });
         let Ok(raw) = envelope else {
             tracing::warn!(target: "roomkit::turns", "a channel control message could not be written");
-            return;
+            return None;
         };
         self.observers().tell(Carried::ChannelControl, &raw);
         match serde_json::from_str::<ChannelControlEnvelope>(&raw) {
-            Ok(parsed) => {
-                tracing::trace!(target: "roomkit::turns", message = ?parsed.message, "channel control applied");
-            }
+            Ok(parsed) => Some(parsed.message),
             Err(error) => {
                 tracing::warn!(target: "roomkit::turns", %error, "a channel control message could not be read");
+                None
             }
         }
+    }
+}
+
+/// Applies a room's attach or detach `message` on the executor to
+/// `channel`, the executor's (`None`: none registered), as the Python
+/// implementation's `ExecutorRooms.apply`: what the channel raises is
+/// logged, never returned (RFC §10.6.3).
+async fn apply(channel: Option<Arc<dyn DynChannel>>, message: ChannelControl) {
+    let Some(channel) = channel else {
+        return;
+    };
+    let (kind, channel_id, room_id, applied) = match message {
+        ChannelControl::RoomAttached {
+            channel_id,
+            room_id,
+            binding,
+        } => {
+            let applied = channel.on_room_attached(room_id.clone(), *binding).await;
+            ("room_attached", channel_id, room_id, applied)
+        }
+        ChannelControl::RoomDetached {
+            channel_id,
+            room_id,
+        } => {
+            let applied = channel.on_room_detached(room_id.clone()).await;
+            ("room_detached", channel_id, room_id, applied)
+        }
+    };
+    if let Err(error) = applied {
+        tracing::error!(
+            target: "roomkit::turns",
+            channel_id = %channel_id,
+            room_id = %room_id,
+            %error,
+            "Channel {channel_id} failed to apply {kind} for room {room_id}"
+        );
     }
 }
 

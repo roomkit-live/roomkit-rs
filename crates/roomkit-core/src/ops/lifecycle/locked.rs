@@ -6,12 +6,13 @@
 //! operation runs one as its whole work ([`LockedChange`]), and the inbound
 //! pipeline runs one for the attach of its step 2 (RFC §10.1 step 2).
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use super::LifecycleError;
-use super::change::{Decision, SectionChange};
+use super::change::{Decision, SectionChange, Telling};
 use super::{record, report};
-use crate::model::{ErrorRecord, Room, RoomContext, RoomId};
+use crate::model::{ChannelId, ErrorRecord, Room, RoomContext, RoomId};
 use crate::ops::io::Io;
 use crate::ops::protocol::{EffectId, Outcome, ProtocolError, Step, StoreRequest};
 use crate::ops::section::{Failure, Section, SectionWork};
@@ -28,6 +29,12 @@ pub(crate) enum SectionError<R> {
     Store(ErrorRecord),
     Lock(ErrorRecord),
     Refused(R),
+    /// The channel the change told refused it, which is undone (RFC §6.1
+    /// `on_room_attached`).
+    Channel {
+        channel_id: ChannelId,
+        error: ErrorRecord,
+    },
 }
 
 impl SectionError<LifecycleError> {
@@ -38,6 +45,9 @@ impl SectionError<LifecycleError> {
             Self::Store(error) => LifecycleError::Store(error),
             Self::Lock(error) => LifecycleError::Lock(error),
             Self::Refused(error) => error,
+            Self::Channel { channel_id, error } => {
+                LifecycleError::ChannelFailed { channel_id, error }
+            }
         }
     }
 }
@@ -110,7 +120,15 @@ impl<C: SectionChange<Refusal = LifecycleError>> LockedChange<C> {
         section.start(&mut cx);
         while let Some((effect, outcome)) = cx.io.next_outcome() {
             if let Progress::Done(ended) = section.accept(&mut cx, effect, outcome) {
-                *result = Some(ended.result.map_err(SectionError::into_lifecycle));
+                // A change that stands though its channel raised, a detach,
+                // fails once it is reported.
+                let raised = section.work().raised.clone();
+                *result = Some(match (ended.result, raised) {
+                    (Ok(_), Some((channel_id, error))) => {
+                        Err(LifecycleError::ChannelFailed { channel_id, error })
+                    }
+                    (result, _) => result.map_err(SectionError::into_lifecycle),
+                });
             }
         }
         let ready = result
@@ -162,6 +180,22 @@ pub(crate) struct Changing<C: SectionChange> {
     /// The room's work the change is made in, and the least depth of its
     /// trigger's calls; `None` outside the room's work.
     work: Option<(Draw, u32)>,
+    /// The channel's call outstanding, the change telling it.
+    told: Option<Told<C::Done>>,
+    /// What the channel the change told raised, and its id.
+    raised: Option<(ChannelId, ErrorRecord)>,
+    /// Whether the writes under way undo the change its channel refused.
+    undoing: bool,
+}
+
+/// A channel's call a change waits for, and what follows its answer.
+#[derive(Debug)]
+struct Told<D> {
+    effect: EffectId,
+    decision: Box<Decision<D>>,
+    channel_id: ChannelId,
+    then: VecDeque<StoreRequest>,
+    undo: Option<VecDeque<StoreRequest>>,
 }
 
 impl<C: SectionChange> Changing<C> {
@@ -172,6 +206,9 @@ impl<C: SectionChange> Changing<C> {
             writing: None,
             reading: None,
             work: None,
+            told: None,
+            raised: None,
+            undoing: false,
         }
     }
 
@@ -187,20 +224,76 @@ impl<C: SectionChange> Changing<C> {
         }
     }
 
-    /// Issues the decision's next write, or ends once none is left.
+    /// Issues the decision's next write, or tells its channel once none is
+    /// left, or ends.
     fn write_next(
         &mut self,
         cx: &mut Cx<'_>,
         mut decision: Decision<C::Done>,
     ) -> Progress<SectionResult<C>> {
-        match decision.writes.pop_front() {
-            Some(request) => {
-                let effect = record::issue_write(cx, request);
-                self.writing = Some((effect, Box::new(decision)));
-                Progress::Waiting
-            }
-            None => Progress::Done(Ok(decision.done)),
+        if let Some(request) = decision.writes.pop_front() {
+            let effect = record::issue_write(cx, request);
+            self.writing = Some((effect, Box::new(decision)));
+            return Progress::Waiting;
         }
+        if let Some(telling) = decision.telling.take() {
+            let effect = telling.issue(cx);
+            let Telling {
+                binding,
+                then,
+                undo,
+                ..
+            } = telling;
+            self.told = Some(Told {
+                effect,
+                decision: Box::new(decision),
+                channel_id: binding.channel_id,
+                then,
+                undo,
+            });
+            return Progress::Waiting;
+        }
+        self.ended(decision.done)
+    }
+
+    /// What the change ends with once its writes are made: its channel's
+    /// refusal when they undid it.
+    fn ended(&self, done: C::Done) -> Progress<SectionResult<C>> {
+        match (&self.raised, self.undoing) {
+            (Some((channel_id, error)), true) => Progress::Done(Err(SectionError::Channel {
+                channel_id: channel_id.clone(),
+                error: error.clone(),
+            })),
+            _ => Progress::Done(Ok(done)),
+        }
+    }
+
+    /// Goes on once the channel answered `outcome`: with the writes that
+    /// follow, or, refused, with those that undo the change.
+    fn on_told(
+        &mut self,
+        cx: &mut Cx<'_>,
+        told: Told<C::Done>,
+        outcome: Outcome,
+    ) -> Progress<SectionResult<C>> {
+        let Told {
+            mut decision,
+            channel_id,
+            then,
+            undo,
+            ..
+        } = told;
+        decision.writes = then;
+        // The protocol lets `Told` alone answer it otherwise.
+        let Outcome::Failed(error) = outcome else {
+            return self.write_next(cx, *decision);
+        };
+        self.raised = Some((channel_id, error));
+        if let Some(undo) = undo {
+            self.undoing = true;
+            decision.writes = undo;
+        }
+        self.write_next(cx, *decision)
     }
 }
 
@@ -266,13 +359,23 @@ impl<C: SectionChange> SectionWork for Changing<C> {
                 Err(error) => Progress::Done(Err(SectionError::Store(error))),
             };
         }
+        if let Some(told) = self.told.take() {
+            if told.effect != effect {
+                self.told = Some(told);
+                return Progress::Waiting;
+            }
+            return self.on_told(cx, told, outcome);
+        }
         let Some((_, decision)) = self.writing.take() else {
             return Progress::Waiting;
         };
         // A lifecycle record's commit is answered `Committed`, every other
-        // write `Stored`.
+        // write `Stored`. A write undoing a refused change that fails too
+        // leaves the refusal the reason the change fails, as the Python
+        // implementation logs it and raises the channel's error.
         match outcome.into_written() {
             Ok(()) => self.write_next(cx, *decision),
+            Err(_) if self.undoing => self.ended(decision.done),
             Err(error) => Progress::Done(Err(SectionError::Store(error))),
         }
     }
@@ -287,6 +390,7 @@ impl<C: SectionChange> SectionWork for Changing<C> {
                 .reading
                 .as_ref()
                 .is_some_and(|(reading, _)| *reading == effect)
+            || self.told.as_ref().is_some_and(|told| told.effect == effect)
     }
 
     /// A failed release changes nothing the change did; a lifecycle change

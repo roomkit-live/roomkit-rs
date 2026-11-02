@@ -475,12 +475,15 @@ fn starts_session(channel_type: &ChannelType) -> bool {
 }
 
 /// What a failed attach or record fails the message with; neither ever
-/// refuses.
+/// refuses, but the channel attached may refuse its attach (RFC §6.1).
 fn change_failure(error: SectionError<Infallible>) -> InboundError {
     match error {
         SectionError::RoomNotFound(room_id) => InboundError::RoomNotFound(room_id),
         SectionError::Store(error) => InboundError::Store(error),
         SectionError::Lock(error) => InboundError::Lock(error),
         SectionError::Refused(never) => match never {},
+        SectionError::Channel { channel_id, error } => {
+            InboundError::ChannelFailed { channel_id, error }
+        }
     }
 }

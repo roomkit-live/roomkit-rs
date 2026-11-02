@@ -87,6 +87,16 @@ pub enum LifecycleError {
     /// what was decided under the lock stands (gap G-025).
     #[error("the room lock failed: {0:?}")]
     Lock(ErrorRecord),
+    /// The channel raised on its room's attach, which is undone, or on its
+    /// detach, which stands, announced (RFC §6.1 `on_room_attached`,
+    /// `on_room_detached`).
+    #[error("channel {channel_id} failed: {error:?}")]
+    ChannelFailed {
+        /// The channel.
+        channel_id: ChannelId,
+        /// What it raised.
+        error: ErrorRecord,
+    },
 }
 
 /// Creates a room, then runs the `ON_ROOM_CREATED` hooks, waiting for them

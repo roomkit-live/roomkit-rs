@@ -379,6 +379,46 @@ pub trait Channel: Send + Sync + 'static {
         async { Ok(ChannelOutput::empty()) }
     }
 
+    /// Establishes what a new binding claims exists (RFC §6.1
+    /// `on_room_attached`): the kit's attach calls it with the binding it
+    /// stored, under the room's lock, before the attach is recorded or
+    /// announced, its `ON_CHANNEL_ATTACHED` hooks included. An inbound
+    /// message's automatic attach calls it too.
+    ///
+    /// An error refuses the attach: the kit puts back the binding it
+    /// replaced, or removes it, and the attach fails with
+    /// [`RoomKitError::Channel`](crate::RoomKitError::Channel), what the
+    /// channel raised its message. An intelligence channel's runs on its
+    /// executor, which logs its error and keeps the binding (RFC §10.6.3).
+    ///
+    /// The default does nothing.
+    fn on_room_attached(
+        &self,
+        _room_id: RoomId,
+        _binding: ChannelBinding,
+    ) -> impl Future<Output = Result<(), ChannelError>> + Send {
+        async { Ok(()) }
+    }
+
+    /// Lets go of what [`on_room_attached`](Channel::on_room_attached)
+    /// established, and of everything the channel keeps for the room (RFC
+    /// §6.1 `on_room_detached`): the kit's detach calls it once the binding
+    /// is removed and the detach recorded, under the room's lock, before its
+    /// `ON_CHANNEL_DETACHED` hooks run.
+    ///
+    /// An error undoes nothing: the detach is announced all the same, then
+    /// fails with [`RoomKitError::Channel`](crate::RoomKitError::Channel).
+    /// An intelligence channel's runs on its executor, which logs its error
+    /// (RFC §10.6.3). A channel no longer registered is not told.
+    ///
+    /// The default does nothing.
+    fn on_room_detached(
+        &self,
+        _room_id: RoomId,
+    ) -> impl Future<Output = Result<(), ChannelError>> + Send {
+        async { Ok(()) }
+    }
+
     /// Pushes an event to the channel's external recipient (RFC §6.1).
     fn deliver(
         &self,
@@ -543,6 +583,14 @@ pub(crate) trait DynChannel: Send + Sync {
         context: RoomContext,
     ) -> BoxFuture<'_, Result<ChannelOutput, ChannelError>>;
 
+    fn on_room_attached(
+        &self,
+        room_id: RoomId,
+        binding: ChannelBinding,
+    ) -> BoxFuture<'_, Result<(), ChannelError>>;
+
+    fn on_room_detached(&self, room_id: RoomId) -> BoxFuture<'_, Result<(), ChannelError>>;
+
     fn deliver(
         &self,
         event: RoomEvent,
@@ -621,6 +669,18 @@ impl<C: Channel> DynChannel for C {
         context: RoomContext,
     ) -> BoxFuture<'_, Result<ChannelOutput, ChannelError>> {
         Box::pin(Channel::on_event(self, event, binding, context))
+    }
+
+    fn on_room_attached(
+        &self,
+        room_id: RoomId,
+        binding: ChannelBinding,
+    ) -> BoxFuture<'_, Result<(), ChannelError>> {
+        Box::pin(Channel::on_room_attached(self, room_id, binding))
+    }
+
+    fn on_room_detached(&self, room_id: RoomId) -> BoxFuture<'_, Result<(), ChannelError>> {
+        Box::pin(Channel::on_room_detached(self, room_id))
     }
 
     fn deliver(

@@ -39,6 +39,8 @@ pub(crate) enum RequestKind {
     /// A turn or a delivery: `on_event()` or `deliver()`.
     ChannelCall,
     StreamsIn,
+    /// A channel told of its room's attach or detach.
+    RoomCallback,
     RunHook,
     RunObservers,
     Route,
@@ -64,6 +66,9 @@ impl Request {
                 | ChannelRequest::ReadStream { .. },
             ) => RequestKind::ChannelCall,
             Self::Channel(ChannelRequest::StreamsIn { .. }) => RequestKind::StreamsIn,
+            Self::Channel(
+                ChannelRequest::RoomAttached { .. } | ChannelRequest::RoomDetached { .. },
+            ) => RequestKind::RoomCallback,
             Self::Hook(HookRequest::RunHook { .. }) => RequestKind::RunHook,
             Self::Hook(HookRequest::RunObservers { .. }) => RequestKind::RunObservers,
             Self::Route { .. } => RequestKind::Route,
@@ -149,6 +154,7 @@ impl RequestKind {
             Self::HandleInbound => "Parsed",
             Self::ChannelCall => "Output",
             Self::StreamsIn => "StreamsIn",
+            Self::RoomCallback => "Told",
             Self::RunHook => "Ran",
             Self::RunObservers => "Observed",
             Self::Route => "Routed",
@@ -204,6 +210,7 @@ impl RequestKind {
                 )
             ),
             Self::StreamsIn => matches!(outcome, Outcome::Channel(ChannelOutcome::StreamsIn(_))),
+            Self::RoomCallback => matches!(outcome, Outcome::Channel(ChannelOutcome::Told)),
             Self::RunHook => matches!(outcome, Outcome::Hook(HookAnswer::Ran(_))),
             Self::RunObservers => matches!(outcome, Outcome::Hook(HookAnswer::Observed)),
             Self::Route => matches!(outcome, Outcome::Routed(_)),
@@ -531,6 +538,7 @@ impl Outcome {
             Self::Channel(ChannelOutcome::ProviderDelivery(_)) => "ProviderDelivery",
             Self::Channel(ChannelOutcome::StreamsIn(_)) => "StreamsIn",
             Self::Channel(ChannelOutcome::Raised(_)) => "Raised",
+            Self::Channel(ChannelOutcome::Told) => "Told",
             Self::Hook(HookAnswer::Ran(_)) => "Ran",
             Self::Hook(HookAnswer::Observed) => "Observed",
             Self::Routed(_) => "Routed",

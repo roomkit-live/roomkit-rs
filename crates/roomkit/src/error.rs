@@ -663,6 +663,9 @@ impl From<LifecycleError> for RoomKitError {
             },
             LifecycleError::Store(error) => store_failure(error),
             LifecycleError::Lock(error) => Self::Lock(error),
+            LifecycleError::ChannelFailed { channel_id, error } => {
+                Self::Channel { channel_id, error }
+            }
             other => Self::Internal(other.to_string()),
         }
     }
