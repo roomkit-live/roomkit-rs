@@ -60,16 +60,27 @@ impl DeliveryResult {
     }
 
     /// The failed delivery to `channel_id` of a call that raised `error`,
-    /// as the Python implementation's `_delivery_error` reports it: its
-    /// type as the code (Python's class name; a boxed Rust error has none,
-    /// and reads `ChannelError`), its message, retryable as the error's
-    /// `retryable` attribute says, else retryable. Outside the public API.
+    /// as the Python implementation's `_delivery_error` reports it: the
+    /// `code` its attributes declare, as `str()` writes it, when Python
+    /// reads it true, else its type (Python's class name; a boxed Rust
+    /// error has none, and reads `ChannelError`); its message; retryable
+    /// as Python reads its `retryable` attribute true, retryable when it
+    /// has none. Outside the public API.
     #[doc(hidden)]
     pub fn raised(channel_id: ChannelId, error: &ErrorRecord) -> Self {
+        let code = error
+            .attributes
+            .get("code")
+            .and_then(python_str)
+            .unwrap_or_else(|| error.error_type.clone());
+        let retryable = error
+            .attributes
+            .get("retryable")
+            .is_none_or(|retryable| python_str(retryable).is_some());
         Self {
             error: Some(DeliveryError {
-                retryable: error.retryable(),
-                ..DeliveryError::new(error.error_type.clone(), error.message.clone())
+                retryable,
+                ..DeliveryError::new(code, error.message.clone())
             }),
             ..Self::new(channel_id, DeliveryResultStatus::Failed)
         }
@@ -327,6 +338,45 @@ mod tests {
                     "{'b': [1, \"it's\"], 'c': None, 'd': True, 'e': 1e-05}",
                     true
                 ),
+            ]
+        );
+    }
+
+    /// Python's `_delivery_error(message, exc)`: `str(exc.code or
+    /// type(exc).__name__)` and `bool(getattr(exc, "retryable", True))`,
+    /// read off the error's record (RMK-1239).
+    #[test]
+    fn a_raised_error_s_delivery_reads_its_declared_code_and_retryable() {
+        let raised = |attributes: Value| {
+            let record = ErrorRecord {
+                attributes: Box::new(serde_json::from_value(attributes).unwrap()),
+                ..ErrorRecord::new("ProviderError", "refused")
+            };
+            let error = DeliveryResult::raised(ChannelId::new("ai").unwrap(), &record)
+                .error
+                .unwrap();
+            (error.code, error.retryable)
+        };
+        let read = [
+            raised(json!({})),
+            raised(json!({ "retryable": false })),
+            raised(json!({ "retryable": null })),
+            raised(json!({ "retryable": 0, "code": "E42" })),
+            raised(json!({ "retryable": "no", "code": 30007 })),
+            raised(json!({ "code": "" })),
+            raised(json!({ "code": null })),
+        ];
+        let read_as = |code: &str, retryable: bool| (code.to_owned(), retryable);
+        assert_eq!(
+            read,
+            [
+                read_as("ProviderError", true),
+                read_as("ProviderError", false),
+                read_as("ProviderError", false),
+                read_as("E42", false),
+                read_as("30007", true),
+                read_as("ProviderError", true),
+                read_as("ProviderError", true),
             ]
         );
     }

@@ -76,17 +76,6 @@ impl ErrorRecord {
             attributes: Box::default(),
         }
     }
-
-    /// Whether a retry may succeed, as the error's `retryable` attribute
-    /// says when it is a bool, else `true`: Python's
-    /// `bool(getattr(exc, "retryable", True))`. Outside the public API.
-    #[doc(hidden)]
-    pub fn retryable(&self) -> bool {
-        self.attributes
-            .get("retryable")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(true)
-    }
 }
 
 #[cfg(test)]
