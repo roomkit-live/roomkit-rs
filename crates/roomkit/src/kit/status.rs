@@ -458,9 +458,10 @@ impl<S: ConversationStore> Inner<S> {
         event: RoomEvent,
     ) -> Result<(), RoomKitError> {
         let observers = self.event_observers(trigger, &event);
-        let recent_events = match observers.is_empty() {
-            true => self.config().recent_events(),
-            false => self.config().recent_events().read_by_the_caller(),
+        let recent_events = if observers.is_empty() {
+            self.config().recent_events()
+        } else {
+            self.config().recent_events().read_by_the_caller()
         };
         let context = driver::load_context(&*self.store, &event.room_id, recent_events).await?;
         let Some(context) = context else {
