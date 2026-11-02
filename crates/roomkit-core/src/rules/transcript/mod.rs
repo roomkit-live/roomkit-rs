@@ -53,6 +53,8 @@ mod speakers;
 mod tests;
 
 pub use self::fence::fence;
+#[doc(hidden)]
+pub use self::fence::named_blocks;
 pub use self::marks::SPEAKER_NOTE as SPEAKER_ATTRIBUTION_NOTE;
 use self::marks::{
     INSTRUCTION_MARK, NOTES_HEADER, SPEAKER_NOTE, without_copies, without_header_copies,

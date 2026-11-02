@@ -188,6 +188,125 @@ fn ends_opening_name(next: Option<char>) -> bool {
     !next.is_some_and(|c| unicode::is_alnum(c) || matches!(c, '_' | '.' | ':' | '-'))
 }
 
+/// `text` with each block of `tags` replaced by its tag in brackets
+/// (`[tool_result]`), a block cut off before its end included: Python's
+/// `named_blocks`, for text about to be cut short (RFC §6.4): quoting part
+/// of a block could leave it open.
+///
+/// A block opens with its tag as written (`<tool_result>`, any case, an
+/// invisible character between its letters, attributes before its end
+/// bracket), and closes with a closing tag as a model reads it, the one
+/// [`fence`] neutralises; each runs through the first end bracket after
+/// it, in any of its forms. Read in linear time.
+#[doc(hidden)]
+pub fn named_blocks(text: &str, tags: &[&str]) -> String {
+    tags.iter()
+        .fold(text.to_owned(), |text, tag| named(&text, tag))
+}
+
+/// `text` with each `tag` block, from its opening through its closing or
+/// the text's end, replaced by `[tag]`.
+fn named(text: &str, tag: &str) -> String {
+    let written: Vec<char> = tag.chars().collect();
+    let name: Vec<char> = tag.chars().flat_map(char::to_lowercase).collect();
+    let chars: Vec<char> = text.chars().collect();
+    let mut kept = String::with_capacity(text.len());
+    let mut pos = 0;
+    while let Some((start, end)) = next_tag(&chars, pos, |at| opening_at(&chars, at, &written)) {
+        let closed = next_tag(&chars, end, |at| closing_at(&chars, at, &name));
+        kept.extend(chars.get(pos..start).unwrap_or_default());
+        kept.push('[');
+        kept.push_str(tag);
+        kept.push(']');
+        pos = closed.map_or(chars.len(), |(_, after)| after);
+    }
+    kept.extend(chars.get(pos..).unwrap_or_default());
+    kept
+}
+
+/// The first tag `starts` finds at or after `pos`, from its bracket through
+/// the first end bracket after its name; `None` when none is ended. No end
+/// bracket after a tag's name means none after any later tag either, so a
+/// text of tags never ended is read once.
+fn next_tag(
+    chars: &[char],
+    pos: usize,
+    starts: impl Fn(usize) -> Option<usize>,
+) -> Option<(usize, usize)> {
+    let (start, name_end) = (pos..chars.len()).find_map(|at| starts(at).map(|end| (at, end)))?;
+    let bracket = chars
+        .get(name_end..)?
+        .iter()
+        .position(|&c| reads_as(c, '>'))?;
+    Some((start, name_end + bracket + 1))
+}
+
+/// Where the name of an opening tag of `written` that starts at `chars[at]`
+/// ends: `<`, room, the name as written in any case, an invisible character
+/// between its letters, then a space, an invisible character, a slash or
+/// the bracket (`<task-list>` is another tag).
+fn opening_at(chars: &[char], at: usize, written: &[char]) -> Option<usize> {
+    if chars.get(at) != Some(&'<') {
+        return None;
+    }
+    let mut position = gap(chars, at + 1);
+    for (index, letter) in written.iter().enumerate() {
+        if index > 0 {
+            while chars.get(position).is_some_and(|&c| is_invisible(c)) {
+                position += 1;
+            }
+        }
+        if !chars
+            .get(position)
+            .is_some_and(|&c| same_letter(c, *letter))
+        {
+            return None;
+        }
+        position += 1;
+    }
+    chars
+        .get(position)
+        .is_some_and(|&c| c.is_whitespace() || is_invisible(c) || c == '/' || c == '>')
+        .then_some(position)
+}
+
+/// Where the name of a closing tag of `name` that starts at `chars[at]`
+/// ends, as a model reads one: the closing tag [`fence`] neutralises.
+fn closing_at(chars: &[char], at: usize, name: &[char]) -> Option<usize> {
+    if !chars.get(at).is_some_and(|&c| reads_as(c, '<')) {
+        return None;
+    }
+    let mut start = gap(chars, at + 1);
+    let mut slashes = 0;
+    loop {
+        let slash = start + usize::from(chars.get(start) == Some(&'\\'));
+        if !chars.get(slash).is_some_and(|&c| reads_as(c, '/')) {
+            break;
+        }
+        start = gap(chars, slash + 1);
+        slashes += 1;
+    }
+    (slashes > 0)
+        .then(|| name_end(chars, start, name, ends_closing_name))
+        .flatten()
+}
+
+/// Whether `c` is `letter` as a case-blind match reads it.
+fn same_letter(c: char, letter: char) -> bool {
+    c == letter || c.to_lowercase().eq(letter.to_lowercase())
+}
+
+/// Whether `c` is a character a text holds without showing it, Python's
+/// `INVISIBLE`: a joint that is neither spacing nor a combining mark, but
+/// the combining grapheme joiner, which Unicode marks ignorable.
+fn is_invisible(c: char) -> bool {
+    let combining = matches!(
+        c,
+        '\u{300}'..='\u{34e}' | '\u{350}'..='\u{36f}' | '\u{20d0}'..='\u{20ff}' | '\u{fe20}'..='\u{fe2f}'
+    );
+    unicode::is_joint(c) && !c.is_whitespace() && !combining
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -293,5 +412,111 @@ mod tests {
         let text = "</".repeat(100_000) + "</server_instructions>";
         let fenced = fence(TAG, &text);
         assert!(fenced.ends_with("</server_instructions_>\n</server_instructions>"));
+    }
+
+    /// The tags of the blocks a cut can reach: Python's `FENCED_TAGS`.
+    const FENCED: &[&str] = &[
+        "tool_result",
+        "worker_output",
+        "knowledge",
+        "conversation_summary",
+        "context",
+        "task",
+        "vision",
+    ];
+
+    /// One character of each range Unicode marks ignorable by default, as
+    /// the Python tests list them.
+    const IGNORABLE: &[char] = &[
+        '\u{ad}',
+        '\u{34f}',
+        '\u{61c}',
+        '\u{115f}',
+        '\u{17b4}',
+        '\u{180e}',
+        '\u{200b}',
+        '\u{200f}',
+        '\u{202a}',
+        '\u{202e}',
+        '\u{2060}',
+        '\u{2066}',
+        '\u{2069}',
+        '\u{3164}',
+        '\u{fe0f}',
+        '\u{feff}',
+        '\u{ffa0}',
+        '\u{fff0}',
+        '\u{1bca0}',
+        '\u{1d173}',
+        '\u{e0001}',
+        '\u{e0fff}',
+    ];
+
+    // Python: tests/test_external_text.py::test_a_block_named_with_an_invisible_character_is_named_when_cut
+    #[test]
+    fn a_block_named_with_an_invisible_character_is_named_when_cut() {
+        let missed: Vec<char> = IGNORABLE
+            .iter()
+            .copied()
+            .filter(|hidden| {
+                let text = format!("a <tool_{hidden}result>secret</tool_result> b");
+                named_blocks(&text, FENCED) != "a [tool_result] b"
+            })
+            .collect();
+        assert_eq!(missed, Vec::<char>::new());
+    }
+
+    // Python: tests/test_external_text.py::test_a_longer_tag_name_opens_no_block_to_name
+    #[test]
+    fn a_longer_tag_name_opens_no_block_to_name() {
+        let text = "Run the <task-list> view, then compare a > b and report.";
+        assert_eq!(named_blocks(text, FENCED), text);
+    }
+
+    // Python: tests/test_external_text.py::test_a_block_opened_with_long_attributes_is_named
+    #[test]
+    fn a_block_opened_with_long_attributes_is_named() {
+        let opening = format!("<tool_result attr='{}'>", "z".repeat(300));
+        let text = format!("a {opening}secret</tool_result> b");
+        assert_eq!(named_blocks(&text, FENCED), "a [tool_result] b");
+    }
+
+    // Python: tests/test_channels/test_compaction_keeps_input.py (a worker's
+    // output named), and named_blocks' closing tag read as fence reads one
+    #[test]
+    fn a_block_closes_at_a_closing_tag_a_model_reads_or_at_the_text_s_end() {
+        let cases = [
+            (
+                "a <worker_output>\nw\n</worker_output> b",
+                "a [worker_output] b",
+            ),
+            ("a <TOOL_RESULT>x</tool_result> b", "a [tool_result] b"),
+            (
+                "a <tool_result>x\u{ff1c}\u{ff0f}tool_result\u{ff1e} b",
+                "a [tool_result] b",
+            ),
+            ("a <tool_result>x</ tool_result > b", "a [tool_result] b"),
+            ("a <tool_result>x</tool_result.> b", "a [tool_result] b"),
+            ("a <task>never closed", "a [task]"),
+            ("a <tool_result>x</tool_resultx> b", "a [tool_result]"),
+        ];
+        let read: Vec<String> = cases
+            .iter()
+            .map(|(text, _)| named_blocks(text, FENCED))
+            .collect();
+        let expected: Vec<&str> = cases.iter().map(|(_, named)| *named).collect();
+        assert_eq!(read, expected);
+    }
+
+    // Python: tests/test_external_text.py::test_the_readers_run_in_linear_time
+    // (opening+invisibles, openings, closings after an opening)
+    #[test]
+    fn named_blocks_reads_a_long_text_once() {
+        let invisible = format!("<tool_result{}", "\u{3164}\u{200b}".repeat(200_000));
+        assert_eq!(named_blocks(&invisible, FENCED), invisible);
+        let openings = "<tool_result ".repeat(70_000);
+        assert_eq!(named_blocks(&openings, FENCED), openings);
+        let closings = format!("<task>\n{}", "</task ".repeat(130_000));
+        assert_eq!(named_blocks(&closings, FENCED), "[task]");
     }
 }
