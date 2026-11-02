@@ -206,11 +206,17 @@ pub(crate) fn stream_failure(error: &(dyn Error + Send + Sync + 'static)) -> Wir
 /// name, as a transport's failure reads (`RoomKitError::Value` as
 /// `ValueError`), the `code` and `retryable` it declares among its
 /// attributes, as Python's error crosses with its JSON attributes
-/// (RMK-1085); a cancel as Python's `TurnLinkError`, saying `cancelled`;
-/// any other as a channel's.
+/// (RMK-1085); a cancel as Python's `TurnLinkError`, saying `cancelled`,
+/// its reason `executor_lost`; any other as a channel's.
 fn failure(error: &(dyn Error + Send + Sync + 'static), cancelled: &str) -> WireError {
     match error.downcast_ref::<RoomKitError>() {
-        Some(RoomKitError::Cancelled) => one(TURN_LINK_ERROR, cancelled.to_owned()),
+        Some(RoomKitError::Cancelled) => {
+            let mut crossed = one(TURN_LINK_ERROR, cancelled.to_owned());
+            crossed
+                .attributes
+                .insert("reason".to_owned(), Value::from("executor_lost"));
+            crossed
+        }
         Some(kit_error) => {
             let mut crossed = one(
                 kit_error.code().unwrap_or_else(|| kit_error.class_name()),
@@ -463,6 +469,37 @@ mod tests {
     #[derive(Debug, Error)]
     #[error("the provider failed")]
     struct Outer(#[source] std::io::Error);
+
+    /// An agent's turn cancelled on its executor crosses as Python's
+    /// `TurnLinkError("executor_lost", ...)` (roomkit
+    /// `src/roomkit/turns/_owner_turn.py`), its reason among its
+    /// attributes, which the owner's record keeps (RMK-1239).
+    #[test]
+    fn a_cancelled_turn_crosses_as_its_executor_lost() {
+        let records = [
+            turn_failure(&RoomKitError::Cancelled),
+            stream_failure(&RoomKitError::Cancelled),
+        ]
+        .map(|crossed| {
+            let record = to_record(&crossed);
+            (
+                record.error_type,
+                record.message,
+                record.attributes.get("reason").cloned(),
+            )
+        });
+        let lost = |message: &str| {
+            (
+                TURN_LINK_ERROR.to_owned(),
+                message.to_owned(),
+                Some(Value::from("executor_lost")),
+            )
+        };
+        assert_eq!(
+            records,
+            [lost(ENDED_BEFORE_ITS_OUTPUT), lost(ENDED_IN_ITS_STREAM)]
+        );
+    }
 
     /// RMK-1106: a link's failure is recorded under `TurnLinkError` in the
     /// words Python's `TurnLinkError` writes for its reason, no reason
