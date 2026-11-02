@@ -187,12 +187,12 @@ impl<S: ConversationStore> RoomKit<S> {
 }
 
 /// The refusal of a setup made twice on one agent: Python's
-/// `RuntimeError`.
+/// `RuntimeError`, under its class's name as the turn's host refuses a verb
+/// after its turn, until the kit has a variant of its own for it (HITL
+/// d81d6136).
 fn already_set_up(setup: &str, agent: &ChannelId) -> RoomKitError {
-    RoomKitError::Runtime(format!(
-        "{setup}() already called for channel {:?}",
-        agent.as_str()
-    ))
+    let message = format!("{setup}() already called for channel {:?}", agent.as_str());
+    crate::turns::TurnError::new("RuntimeError", message).into_kit_error()
 }
 
 /// What serves a tool with `answer`, the kit and the call to its text.

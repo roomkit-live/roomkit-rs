@@ -331,7 +331,6 @@ fn rebuilt_variant(error: &WireError) -> Option<RoomKitError> {
             RoomKitError::RoomNotFound(RoomId::new(id).ok()?)
         }
         "Value" => RoomKitError::Value(error.message.clone()),
-        "Runtime" => RoomKitError::Runtime(error.message.clone()),
         _ => return None,
     })
 }
@@ -383,7 +382,6 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::RemoteTurn { .. } => "RemoteTurn",
         RoomKitError::TurnLink { .. } => "TurnLink",
         RoomKitError::Internal(_) => "Internal",
-        RoomKitError::Runtime(_) => "Runtime",
     };
     (variant, fields)
 }

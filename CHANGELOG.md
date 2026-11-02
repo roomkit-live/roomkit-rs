@@ -34,8 +34,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The turn backend carries a turn's owner tools in its request, their
   calls as `tool_call` and `tool_result`; an `AiChannel`'s turn declares
   them beside its own tools. `start_task` runs on the agent's setup's
-  worker. `RoomKitError::Runtime`, Python's `RuntimeError`, refuses a
-  setup made twice.
+  worker. A setup made twice is refused as Python's `RuntimeError`.
 - Python's delegation ends (RFC §23.3, RMK-1158): the tasks a delegated
   turn files fire `ON_TASK_CREATED` in its child room;
   `DelegatedTaskResult::exception`, the failure itself (a
