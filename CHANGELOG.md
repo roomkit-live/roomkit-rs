@@ -11,7 +11,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `handle.cancel(CancelOptions::default()).await?` for
   `handle.request_cancel()` then `handle.wait().await?`: it asks the same
   cut, `caller_cancelled` by default, and returns once the cut turns are
-  over; it also reaches a call the room's work adopted.
+  over; it also reaches a call the room's work adopted. Unlike the old
+  pair, it gives up after its `timeout` (5 s by default) with
+  `RoomKitError::Timeout`, and from the room's own work (a SYNC hook
+  under the lock, a turn or a delivery in the room) it fails with
+  `RoomKitError::Runtime` and cancels nothing, as Python's: cancel there
+  by the message's key, `cancel_delivery`.
 - A message the room's work adopts in its admission order (an off-lock
   hook's or a parse's `process_inbound` into its room), named by its
   delivery key, is named as the run that adopted it settles it, under the
@@ -20,8 +25,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   where its caller named it once it resumed, after the lock was let go.
 - A release made from a SYNC hook (`complete_verification` under the
   room's lock) places its answer in the room's lane at the release, and the
-  answer leaves its place once the hook's section is over, as Python's
-  (RFC §11.7.6, RMK-1200): a
+  answer leaves its place once the hook's section is over, as the RFC
+  says (§11.7.6, the maintainer's choice, RMK-1200): a
   hook that then closes the room has no agent answer the released message
   (`room_refused_event`, operation `regenerate`), where the agent answered
   it while the section still ran.
