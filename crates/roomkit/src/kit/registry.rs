@@ -11,7 +11,7 @@ use roomkit_core::rules::hook_registry::HookTrigger;
 
 use super::{RoomKit, read, write};
 use crate::channel::{Channel, DynChannel, config_of};
-use crate::error::RoomKitError;
+use crate::error::{RoomKitError, repr};
 use crate::hooks::{Closure, HookHandler, HookOptions, HookPayload, IntoHookReturn};
 use crate::registered::{Registered, RegisteredChannel};
 use crate::store::ConversationStore;
@@ -24,10 +24,11 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
     /// §12.10.4); [`RoomKitError::Value`] for capabilities their model refuses,
     /// a limit of 0, as the Python implementation's model refuses them when
-    /// the channel builds them; then [`RoomKitError::ChannelAlreadyRegistered`]
-    /// when a channel with its id is registered already, and
-    /// [`RoomKitError::Value`] for a channel claiming the type `system` (RFC
-    /// §5.3).
+    /// the channel builds them, and for a channel that steers its room turns
+    /// but does not serialize them (RFC §6.4); then
+    /// [`RoomKitError::ChannelAlreadyRegistered`] when a channel with its id
+    /// is registered already, and [`RoomKitError::Value`] for a channel
+    /// claiming the type `system` (RFC §5.3).
     pub fn register_channel(&self, channel: impl Channel) -> Result<(), RoomKitError> {
         let declaration = config_of(&channel);
         let human_input = channel.human_input_handler();
@@ -45,6 +46,7 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Result<(), RoomKitError> {
         self.inner.open()?;
         declaration.capabilities.check()?;
+        refuse_unserialized_steering(channel.as_ref(), &declaration.channel_id)?;
         let registered = CoreEvent::channel_registered(
             declaration.channel_id.clone(),
             declaration.channel_type.clone(),
@@ -222,4 +224,20 @@ impl<S: ConversationStore> RoomKit<S> {
         let hook = options.registration(trigger, P::kept(handler));
         self.hook_engine().register(hook).map(drop)
     }
+}
+
+/// A channel that steers its room turns serializes them (RFC §6.4): one that
+/// says it steers them but not that it serializes them would be neither, its
+/// steering silently dead, as Python's `register_channel` refuses it.
+fn refuse_unserialized_steering(
+    channel: &dyn DynChannel,
+    channel_id: &ChannelId,
+) -> Result<(), RoomKitError> {
+    if channel.steers_room_turns() && !channel.serializes_room_turns() {
+        return Err(RoomKitError::Value(format!(
+            "Channel {} steers its room turns but does not serialize them",
+            repr(channel_id.as_str())
+        )));
+    }
+    Ok(())
 }

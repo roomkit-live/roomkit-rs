@@ -18,7 +18,8 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
-    ProcessInboundOptions, ResponseItem, RoomKit, RoomKitOptions, SteerOptions, current_turn_host,
+    ProcessInboundOptions, ResponseItem, RoomKit, RoomKitError, RoomKitOptions, SteerOptions,
+    current_turn_host,
 };
 use tokio::sync::watch;
 
@@ -488,6 +489,70 @@ async fn a_channel_that_steers_its_room_turns_says_it_serializes_them() {
         ],
         [(true, true), (true, true)]
     );
+    kit.close().await.unwrap();
+}
+
+/// A channel that says it steers its room turns and does not serialize
+/// them, which no channel can do (RFC §6.4).
+struct Contradicting;
+
+impl Channel for Contradicting {
+    fn channel_id(&self) -> roomkit::model::ChannelId {
+        channel("ai")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn serializes_room_turns(&self) -> bool {
+        false
+    }
+
+    fn steers_room_turns(&self) -> bool {
+        true
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        Buffered.handle_inbound(message, context)
+    }
+
+    fn deliver(
+        &self,
+        event: RoomEvent,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        Buffered.deliver(event, binding, context)
+    }
+}
+
+// Python: tests/test_room_turns_in_order.py::test_a_channel_that_steers_its_room_turns_without_serializing_them_is_refused
+#[tokio::test]
+async fn a_channel_that_steers_its_room_turns_without_serializing_them_is_refused() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+
+    let refused = kit.register_channel(Contradicting).map_err(|error| {
+        let value = matches!(error, RoomKitError::Value(_));
+        (value, error.to_string())
+    });
+
+    assert_eq!(
+        refused,
+        Err((
+            true,
+            "Channel 'ai' steers its room turns but does not serialize them".to_owned()
+        ))
+    );
+    assert!(kit.get_channel(&channel("ai")).is_none());
     kit.close().await.unwrap();
 }
 

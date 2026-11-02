@@ -664,7 +664,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   serializes_room_turns` and `steers_room_turns`, `ChannelDeclaration`'s
   two fields; a channel's `serializes_room_turns` defaults to its
   `steers_room_turns`, so a channel that steers its room turns serializes
-  them and declares them serialized (RMK-1253). A serialized agent's turn
+  them and declares them serialized, and `register_channel` refuses one
+  that says it steers them but does not serialize them with
+  `RoomKitError::Value`, as Python's (RMK-1253). A serialized agent's turn
   in a room takes its place as its delivery set asks it and starts,
   outside the delivery lane, once the turns before it stored what they
   said, on the room as it is then less the messages committed after it
