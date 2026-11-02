@@ -437,7 +437,14 @@ impl<S: ConversationStore> RoomKit<S> {
                 .inner
                 .channel(agent.channel_id())
                 .map(|channel| channel.declaration())
-                .ok_or_else(|| RoomKitError::ChannelNotRegistered(agent.channel_id().clone()))?;
+                .ok_or_else(|| RoomKitError::ChannelNotRegistered {
+                    channel_id: agent.channel_id().clone(),
+                    message: format!(
+                        "Channel '{}' is not registered: a strategy names by its id an agent \
+                         the kit holds, live or by its declaration",
+                        agent.channel_id()
+                    ),
+                })?;
             if declaration.category != ChannelCategory::Intelligence {
                 return Err(RoomKitError::Value(format!(
                     "Channel '{}' is not an intelligence channel",
