@@ -25,19 +25,19 @@ const MODEL_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "i
 /// the reference implementation does not have.
 const MODEL_IMAGES_MAX: usize = 4;
 
-/// How many data URL characters the images of one result the model is
-/// shown take in all: the maintainer's bound (RMK-1242).
-const MODEL_IMAGE_CHARS_MAX: usize = 5 * 1024 * 1024;
+/// How many bytes of data URL the images of one result the model is shown
+/// take in all: the maintainer's bound (RMK-1242).
+const MODEL_IMAGE_BYTES_MAX: usize = 5 * 1024 * 1024;
 
 /// `result`, the server's answer to a call of `name`, as the model reads
 /// it, as the reference implementation's `handler_result`:
 /// - a result with an image the vendors accept (PNG, JPEG, GIF or WebP,
 ///   its base64 decoding), its parts in order, each image an image part
 ///   the model sees, each other part its text or its note, its texts
-///   within [`RESULT_LIMIT`] characters in all, its first
-///   [`MODEL_IMAGES_MAX`] images within [`MODEL_IMAGE_CHARS_MAX`] in all,
-///   each image past either a note (the reference implementation bounds
-///   none of them);
+///   within [`RESULT_LIMIT`] characters in all, at most
+///   [`MODEL_IMAGES_MAX`] of its images within [`MODEL_IMAGE_BYTES_MAX`]
+///   in all, each image past either a note that counts as a text (the
+///   reference implementation bounds none of them);
 /// - otherwise, within [`RESULT_LIMIT`] characters, each part's text,
 ///   one part read as itself and several as a JSON array of them written
 ///   as Python's `json.dumps` writes it, as the reference implementation's
@@ -67,8 +67,9 @@ pub(crate) fn read(name: &str, result: &CallToolResult) -> Result<ToolResult, To
 /// `parts` with their texts within [`RESULT_LIMIT`] characters in all, as
 /// a text result is: each text kept whole while it fits, the one past the
 /// bound cut with a note saying how long it was, the texts after it left
-/// out; its images within [`MODEL_IMAGES_MAX`] and
-/// [`MODEL_IMAGE_CHARS_MAX`], each image past either its note.
+/// out; at most [`MODEL_IMAGES_MAX`] of its images within
+/// [`MODEL_IMAGE_BYTES_MAX`] in all, each image past either its note,
+/// counted as a text.
 fn bounded_parts(name: &str, parts: Vec<ToolResultPart>) -> Vec<ToolResultPart> {
     let mut left = RESULT_LIMIT;
     let mut cut = false;
@@ -76,8 +77,12 @@ fn bounded_parts(name: &str, parts: Vec<ToolResultPart>) -> Vec<ToolResultPart> 
     let kept: Vec<ToolResultPart> = parts
         .into_iter()
         .filter_map(|part| {
+            // An image held back is a note, which counts as the texts do.
             let text = match part {
-                ToolResultPart::Image(image) => return Some(images.keep(image)),
+                ToolResultPart::Image(image) => match images.keep(image) {
+                    ToolResultPart::Text(note) => note,
+                    shown @ ToolResultPart::Image(_) => return Some(shown),
+                },
                 ToolResultPart::Text(text) => text,
             };
             let size = text.text.chars().count();
@@ -109,17 +114,17 @@ fn bounded_parts(name: &str, parts: Vec<ToolResultPart>) -> Vec<ToolResultPart> 
 #[derive(Default)]
 struct ImageBudget {
     count: usize,
-    chars: usize,
+    bytes: usize,
 }
 
 impl ImageBudget {
     /// `image` as the model is shown it: itself while the result's images
-    /// stay within their bounds, its note past them.
+    /// shown stay within their bounds, its note past them.
     fn keep(&mut self, image: AiImagePart) -> ToolResultPart {
-        let size = image.url.chars().count();
-        if self.count < MODEL_IMAGES_MAX && self.chars + size <= MODEL_IMAGE_CHARS_MAX {
+        let size = image.url.len();
+        if self.count < MODEL_IMAGES_MAX && self.bytes + size <= MODEL_IMAGE_BYTES_MAX {
             self.count += 1;
-            self.chars += size;
+            self.bytes += size;
             return ToolResultPart::Image(image);
         }
         let words = note("image", image.mime_type.as_deref());
@@ -264,15 +269,15 @@ mod tests {
         );
     }
 
-    /// The maintainer's bounds (RMK-1242): a result's first four images,
-    /// within 5 MiB of data URL in all, reach the model; each image past
-    /// either reads as its note.
+    /// The maintainer's bounds (RMK-1242): at most four of a result's
+    /// images, within 5 MiB of data URL in all, reach the model; each image
+    /// past either reads as its note.
     #[test]
     fn a_result_s_images_are_bounded_in_number_and_size() {
         let tiny = || ContentBlock::image("iVBORw0KGgo", "image/png");
-        let big = ContentBlock::image("A".repeat(5 * 1024 * 1024), "image/jpeg");
+        let three_mib = || ContentBlock::image("A".repeat(3 * 1024 * 1024), "image/jpeg");
         let many = CallToolResult::success((0..6).map(|_| tiny()).collect());
-        let large = CallToolResult::success(vec![tiny(), big]);
+        let large = CallToolResult::success(vec![three_mib(), three_mib()]);
         let shown = |result: &CallToolResult| match read("draw", result) {
             Ok(ToolResult::Parts(parts)) => parts
                 .iter()
@@ -294,6 +299,30 @@ mod tests {
                 ["image", jpeg].map(str::to_owned).to_vec()
             )
         );
+    }
+
+    /// The note of an image held back counts as a text: a result whose
+    /// text fills the bound shows its first four images and no note past
+    /// it.
+    #[test]
+    fn a_held_back_image_s_note_counts_within_the_texts_bound() {
+        let mut content = vec![ContentBlock::text("x".repeat(RESULT_LIMIT))];
+        content.extend((0..5).map(|_| ContentBlock::image("iVBORw0KGgo", "image/png")));
+        let Ok(ToolResult::Parts(parts)) = read("draw", &CallToolResult::success(content)) else {
+            panic!("no parts");
+        };
+        let images = parts
+            .iter()
+            .filter(|part| matches!(part, ToolResultPart::Image(_)))
+            .count();
+        let texts: usize = parts
+            .iter()
+            .filter_map(|part| match part {
+                ToolResultPart::Text(text) => Some(text.text.chars().count()),
+                ToolResultPart::Image(_) => None,
+            })
+            .sum();
+        assert_eq!((images, texts), (4, RESULT_LIMIT));
     }
 
     /// `call_tool` answers a failed call as Python's `json.dumps({"error":
