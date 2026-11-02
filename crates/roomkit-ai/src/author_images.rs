@@ -38,6 +38,7 @@ use roomkit_core::rules::transcoding::text_of;
 use roomkit_core::rules::transcript::{Image, Part, quoted};
 
 use crate::provider::ProviderError;
+use crate::stream::join_all;
 
 /// Host-owned, room-authorized resolution of an opaque image reference (RFC §6.4).
 /// Return a resolved data/HTTP image, or `None` for missing/inaccessible content.
@@ -178,7 +179,8 @@ impl<'a> Resolver<'a> {
 /// Decides what each image `events` carry becomes, the newest first, the
 /// newest `limit` sent, those `refused` in the room read as refused, and
 /// resolves the references among those sent through `resolver`, for
-/// `room`. Python's `author_images`.
+/// `room`, all together as Python's `asyncio.gather` does: a turn waits
+/// for its slowest reference, not for their sum. Python's `author_images`.
 pub(crate) async fn author_images(
     events: &[&RoomEvent],
     room: &RoomId,
@@ -187,10 +189,13 @@ pub(crate) async fn author_images(
     refused: &HashSet<ImageKey>,
 ) -> AuthorImages {
     let (mut decided, references) = decide(events, limit, refused);
-    for (key, media) in references {
-        let image = resolved(media, room, resolver).await;
-        decided.insert(key, image);
-    }
+    let resolving = references
+        .iter()
+        .map(|(_, media)| resolved(media, room, resolver))
+        .collect();
+    let images = join_all(resolving).await;
+    let keys = references.into_iter().map(|(key, _)| key);
+    decided.extend(keys.zip(images));
     AuthorImages { decided }
 }
 
@@ -498,6 +503,8 @@ mod tests {
     use super::*;
     use roomkit::model::{ChannelId, ChannelType, EventSource, EventType};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tokio::time::{Instant, sleep};
 
     struct Resolver(AtomicUsize);
     impl ImageResolver for Resolver {
@@ -823,5 +830,35 @@ mod tests {
         assert_eq!(refused.of(&room(0)), keys, "refused in again, the newest");
         assert_eq!(refused.of(&room(2)), keys);
         assert_eq!(refused.of(&room(100)), keys);
+    }
+
+    // Python: channels/_author_images.py::author_images resolves the
+    // references together (`asyncio.gather`): four slow ones take the
+    // slowest one's time, each event given its own image.
+    #[tokio::test(start_paused = true)]
+    async fn references_resolve_together() {
+        let resolver = MediaResolver::new(|media, _room| async move {
+            let at: u8 = media.url.trim_start_matches("app-media://").parse()?;
+            sleep(Duration::from_millis(100 - 10 * u64::from(at))).await;
+            Ok(Some(vec![at]))
+        });
+        let events: Vec<RoomEvent> = (0..4)
+            .map(|at| {
+                let url = format!("app-media://{at}");
+                photo(&format!("e{at}"), &url, &format!("p{at}.png"))
+            })
+            .collect();
+        let refs: Vec<&RoomEvent> = events.iter().collect();
+        let room = RoomId::new("allowed").unwrap();
+        let started = Instant::now();
+        let resolver = Some(super::Resolver::Media(&resolver));
+        let images = author_images(&refs, &room, resolver, None, &HashSet::new()).await;
+        let took = started.elapsed();
+        assert!(took < Duration::from_millis(150), "resolved one after another: {took:?}");
+        for (at, event) in (0u8..).zip(&events) {
+            let url = to_data_uri(&[at], "image/png");
+            let sent = Image::new(&url, "image/png").unwrap();
+            assert_eq!(said(&images, event), [Part::Image(sent)], "e{at}");
+        }
     }
 }
