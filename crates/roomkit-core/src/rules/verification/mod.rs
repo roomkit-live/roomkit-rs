@@ -141,14 +141,22 @@ fn is_python_digit(c: char) -> bool {
 mod tests {
     use super::*;
     use crate::model::{
-        ChannelBinding, ChannelId, ChannelType, EventSource, Room, RoomId, TextContent,
+        ChannelBinding, ChannelDirection, ChannelId, ChannelType, EventId, EventSource, EventType,
+        Room, RoomId, TextContent, Timestamp,
     };
 
+    fn now() -> Timestamp {
+        Timestamp::from_unix_millis(0).unwrap()
+    }
+
     fn message(body: &str) -> RoomEvent {
-        RoomEvent::new(
+        RoomEvent::at(
+            EventId::new("e1").unwrap(),
             RoomId::new("room-1").unwrap(),
+            EventType::Message,
             EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS),
             TextContent::new(body),
+            now(),
         )
     }
 
@@ -188,16 +196,17 @@ mod tests {
     // Python: core/mixins/verification.py::_transport_part.
     #[test]
     fn a_held_scope_keeps_its_transports_only() {
-        let room = Room::new(RoomId::new("room-1").unwrap());
+        let room = Room::at(RoomId::new("room-1").unwrap(), now());
         let mut context = RoomContext::new(room);
         let binding = |id: &str, category| {
-            let mut binding = ChannelBinding::new(
+            ChannelBinding::at(
                 ChannelId::new(id).unwrap(),
                 RoomId::new("room-1").unwrap(),
                 ChannelType::WEBSOCKET,
-            );
-            binding.category = category;
-            binding
+                category,
+                ChannelDirection::Bidirectional,
+                now(),
+            )
         };
         context.bindings = vec![
             binding("advisor", ChannelCategory::Transport),
