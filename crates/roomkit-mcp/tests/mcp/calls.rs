@@ -105,12 +105,14 @@ async fn a_result_past_its_bound_is_cut_with_a_note() {
     );
 }
 
-/// A result with no part reads as its structured content.
+/// A result with no part reads as an empty JSON array, as Python's
+/// `text_body` reads it: the model never reads the structured content.
+// Python: tests/test_mcp_structured_content.py::test_structured_content_published_to_tool_call_context
 #[tokio::test]
-async fn structured_content_alone_reads_as_its_json() {
+async fn a_result_with_no_part_reads_as_an_empty_array() {
     assert_eq!(
         answer("structured", &json!({})).await,
-        Ok(ToolResult::Text(r#"{"status":"shipped"}"#.to_owned()))
+        Ok(ToolResult::Text("[]".to_owned()))
     );
 }
 
