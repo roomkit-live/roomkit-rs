@@ -504,3 +504,25 @@ impl Io {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::EventId;
+    use crate::ops::protocol::StoreRequest;
+
+    // RMK-1185: a nested operation handed a turn under its caller's id
+    // never issues that id itself.
+    #[test]
+    fn an_operation_numbers_its_effects_past_the_ids_it_is_handed() {
+        let mut io = Io::new();
+        let handed = (0..3).fold(EffectId::first(), |id, _| id.next());
+        io.number_past([handed]);
+
+        let own = io.issue(StoreRequest::GetEvent {
+            event_id: EventId::new("evt_1").unwrap(),
+        });
+
+        assert!(own > handed, "{own:?} is not past {handed:?}");
+    }
+}

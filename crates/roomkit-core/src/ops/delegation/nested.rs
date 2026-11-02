@@ -261,11 +261,13 @@ mod tests {
     }
 
     /// The outer ids of a run of `Reader` nested past the handed turn,
-    /// its turn answered by a stream: what the driver is asked.
+    /// its turn answered by a stream: what the driver is asked. The outer
+    /// operation's ids run past the inner ones, as they do once it issued
+    /// effects of its own, so that a renamed id shows.
     fn run_nested() -> (Vec<Effect>, Vec<Notice>) {
         let environment = SequentialEnvironment::default();
         let mut nested = Nested::new(Reader::default());
-        let mut next = handed().next();
+        let mut next = (0..7).fold(handed(), |id, _| id.next());
         let (mut effects, mut notices) = (Vec::new(), Vec::new());
         nested.poll(&environment, &mut next, &mut effects, &mut notices);
         let turn = effects[0].id;
