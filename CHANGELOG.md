@@ -19,6 +19,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `RegisteredChannel::steers_room_turns` and `serializes_room_turns`, as
   a host reads Python's `kit.get_channel(id).steers_room_turns` (RFC §6.4,
   RMK-1253): a channel that steers them serializes them.
+- `Channel::serializes_room_turns` defaults to `steers_room_turns`, as
+  Python's now does, so a channel that only steers its room turns declares
+  them serialized too (`declaration()`), where it read `false`; the kit
+  takes the channel's own answer, as Python's router does (RMK-1253).
 - A whole copy of a runtime mark that no closing bracket follows takes
   only the mark's own punctuation with it, as Python's: `x context
   compacted - earlier conversation summary.` reads `x [A copy of a runtime

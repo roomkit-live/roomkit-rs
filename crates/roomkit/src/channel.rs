@@ -351,9 +351,11 @@ pub trait Channel: Send + Sync + 'static {
 
     /// Whether the channel's turns in a room run one after the other, in
     /// the order they were asked, each reading the answers before it (RFC
-    /// §6.4): `false` by default, a room's turns side by side.
+    /// §6.4): by default, whether it steers them
+    /// ([`steers_room_turns`](Channel::steers_room_turns)), which implies
+    /// it; otherwise a room's turns run side by side.
     fn serializes_room_turns(&self) -> bool {
-        false
+        self.steers_room_turns()
     }
 
     /// Whether a message for a room where the channel's turn runs is handed
@@ -706,7 +708,7 @@ impl<C: Channel> DynChannel for C {
     }
 
     fn serializes_room_turns(&self) -> bool {
-        Channel::serializes_room_turns(self) || Channel::steers_room_turns(self)
+        Channel::serializes_room_turns(self)
     }
 
     fn steers_room_turns(&self) -> bool {

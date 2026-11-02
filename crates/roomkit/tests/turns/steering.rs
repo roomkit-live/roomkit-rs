@@ -420,9 +420,93 @@ impl Channel for Buffered {
     }
 }
 
+/// An intelligence channel that declares it steers its room turns, which
+/// takes them one at a time (RFC §6.4), and answers beside a stream as
+/// [`Buffered`] does.
+struct Steering;
+
+impl Channel for Steering {
+    fn channel_id(&self) -> roomkit::model::ChannelId {
+        channel("ai")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn steers_room_turns(&self) -> bool {
+        true
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        Buffered.handle_inbound(message, context)
+    }
+
+    fn deliver(
+        &self,
+        event: RoomEvent,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        Buffered.deliver(event, binding, context)
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        Buffered.on_event(event, binding, context)
+    }
+}
+
+// Python: tests/test_room_turns_in_order.py::test_a_channel_that_steers_its_room_turns_says_it_serializes_them
+#[tokio::test]
+async fn a_channel_that_steers_its_room_turns_says_it_serializes_them() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(Steering).unwrap();
+
+    let registered = kit.get_channel(&channel("ai")).unwrap();
+    let declared = Steering.declaration();
+
+    assert_eq!(
+        [
+            (
+                registered.serializes_room_turns(),
+                registered.steers_room_turns()
+            ),
+            (declared.serializes_room_turns, declared.steers_room_turns),
+        ],
+        [(true, true), (true, true)]
+    );
+    kit.close().await.unwrap();
+}
+
 // Python: tests/test_room_turns_in_order.py::test_a_turn_that_waited_its_place_and_answers_beside_its_stream_fails
 #[tokio::test]
 async fn a_turn_that_waited_its_place_and_answers_beside_its_stream_fails() {
+    assert_eq!(
+        [
+            answered_beside_its_stream(Buffered).await,
+            answered_beside_its_stream(Steering).await,
+        ],
+        [Some("TypeError".to_owned()), Some("TypeError".to_owned())]
+    );
+}
+
+/// The error of a message's turn for `agent`, a channel that takes the
+/// room's turns one at a time and answers beside its stream; it said
+/// nothing.
+async fn answered_beside_its_stream(agent: impl Channel) -> Option<String> {
     let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(RecordingTransport::new(
         channel("sms"),
@@ -430,7 +514,7 @@ async fn a_turn_that_waited_its_place_and_answers_beside_its_stream_fails() {
         RecordingTransportOptions::default(),
     ))
     .unwrap();
-    kit.register_channel(Buffered).unwrap();
+    kit.register_channel(agent).unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room()),
         ..Default::default()
@@ -450,8 +534,7 @@ async fn a_turn_that_waited_its_place_and_answers_beside_its_stream_fails() {
 
     let result = kit.process_inbound(message, options).await.unwrap();
 
-    let error = result.error.map(|error| error.error_type);
-    assert_eq!(error.as_deref(), Some("TypeError"));
     assert_eq!(agent_rows(&kit).await.0, Vec::<String>::new());
     kit.close().await.unwrap();
+    result.error.map(|error| error.error_type)
 }

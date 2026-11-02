@@ -44,10 +44,9 @@ pub trait RegisteredChannel: sealed::Sealed + Debug + Send + Sync {
     fn recipient_address(&self, binding: &ChannelBinding) -> Option<String>;
 
     /// Whether the room's owner runs the channel's turns in a room one after
-    /// the other, in the order they were asked (RFC §6.4): what
-    /// [`Channel::serializes_room_turns`](crate::Channel::serializes_room_turns)
-    /// says, or `true` for a channel that steers its room turns, as the kit
-    /// takes them.
+    /// the other, in the order they were asked (RFC §6.4):
+    /// [`Channel::serializes_room_turns`](crate::Channel::serializes_room_turns),
+    /// by default whether it steers them.
     fn serializes_room_turns(&self) -> bool;
 
     /// Whether a message for a room where the channel's turn runs is handed
