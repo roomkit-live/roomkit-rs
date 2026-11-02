@@ -390,3 +390,59 @@ async fn an_uninstall_that_cannot_finish_keeps_the_room_claimed() {
     assert_eq!(bindings.len(), 0, "the agent it attached is detached");
     kit.close().await.unwrap();
 }
+
+/// A transport channel: what a live agent's id must not name.
+struct Sms(&'static str);
+
+impl Channel for Sms {
+    fn channel_id(&self) -> ChannelId {
+        ChannelId::new(self.0).unwrap()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::SMS
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(default_inbound_event(self, &message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
+}
+
+// Python: tests/test_declared_strategies.py::test_a_live_agent_under_a_transport_s_id_is_no_agent
+#[tokio::test]
+async fn a_live_agent_under_a_transport_s_id_is_no_agent() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(Sms("ana")).unwrap();
+    let team: Arc<dyn Orchestration> = Arc::new(Team(vec![Quiet("ana")]));
+    let options = CreateRoomOptions {
+        room_id: Some(r1()),
+        orchestration: Some(Some(team)),
+        ..Default::default()
+    };
+
+    let refused = kit.create_room(options).await;
+
+    assert!(
+        matches!(&refused, Err(RoomKitError::Value(message)) if message == "Channel 'ana' is not an intelligence channel"),
+        "{refused:?}"
+    );
+    let bindings = kit
+        .list_bindings(&r1(), ListBindingsOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(bindings.len(), 0, "nothing is attached");
+    kit.close().await.unwrap();
+}

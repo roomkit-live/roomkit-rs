@@ -430,21 +430,28 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Registers each of `agents` given live that the kit does not hold
-    /// yet: all of them, or none when an agent named by its id is refused.
+    /// yet: all of them, or none when an agent named by its id, or given
+    /// live under the id of a channel the kit holds, is no intelligence
+    /// channel the kit holds.
     fn register_strategy_agents(&self, agents: &[StrategyAgent]) -> Result<(), RoomKitError> {
-        for agent in agents.iter().filter(|agent| agent.live().is_none()) {
-            let declaration = self
-                .inner
-                .channel(agent.channel_id())
-                .map(|channel| channel.declaration())
-                .ok_or_else(|| RoomKitError::ChannelNotRegistered {
+        for agent in agents {
+            let held = self.inner.channel(agent.channel_id());
+            // A live agent the kit holds no channel for is registered below;
+            // one under a held id is the kit's channel, an agent only when it
+            // is an intelligence channel (decided 2026-11-02, HITL 91d5d8e9).
+            if agent.live().is_some() && held.is_none() {
+                continue;
+            }
+            let declaration = held.map(|channel| channel.declaration()).ok_or_else(|| {
+                RoomKitError::ChannelNotRegistered {
                     channel_id: agent.channel_id().clone(),
                     message: format!(
                         "Channel '{}' is not registered: a strategy names by its id an agent \
                          the kit holds, live or by its declaration",
                         agent.channel_id()
                     ),
-                })?;
+                }
+            })?;
             if declaration.category != ChannelCategory::Intelligence {
                 return Err(RoomKitError::Value(format!(
                     "Channel '{}' is not an intelligence channel",

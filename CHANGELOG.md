@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A strategy's agent given live under the id of a channel the kit holds
+  that is not an intelligence channel is refused, `RoomKitError::Value`
+  (`Channel 'ana' is not an intelligence channel`), nothing attached, as
+  for an agent named by its id (RFC §19.7, RMK-1233): the transport was
+  attached as the agent, taking its turns.
 - An AI channel attached to a room, or detached from it, forgets what it
   kept for the room, as Python's `_forget_room` (RMK-1219, RMK-1240): an
   agent that leaves and joins again sends the author images its provider
