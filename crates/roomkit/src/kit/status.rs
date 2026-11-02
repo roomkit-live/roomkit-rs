@@ -366,9 +366,9 @@ type Observers = Vec<(HookSpec, Kept)>;
 impl<S: ConversationStore> Inner<S> {
     /// Subscribes the kit to its status bus, at its construction: a custom
     /// backend whose subscription does not end at once subscribes on the
-    /// current runtime, in the background; outside a runtime, at the kit's
-    /// first call made in one, as Python's kit subscribes at a room's first
-    /// activity (`_ensure_status_bus_subscribed`).
+    /// current runtime, in the background; outside a runtime, every
+    /// backend's at the kit's first call made in one, as Python's kit
+    /// subscribes at a room's first activity (`_ensure_status_bus_subscribed`).
     pub(super) fn subscribe_status_bus(self: &Arc<Self>) {
         let kit = Arc::downgrade(self);
         let callback: StatusCallback = Arc::new(move |entry| {
@@ -382,15 +382,17 @@ impl<S: ConversationStore> Inner<S> {
         let bus = self.status_bus.clone();
         let mut subscribing: BoxFuture<'static, ()> =
             Box::pin(async move { bus.subscribe(callback).await });
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            // Not polled here: a backend that reaches a server needs the
+            // runtime's reactor from its first poll.
+            self.status_subscription.keep(subscribing);
+            return;
+        };
         let mut waking = Context::from_waker(Waker::noop());
         if subscribing.as_mut().poll(&mut waking).is_ready() {
             return;
         }
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            drop(runtime.spawn(subscribing));
-        } else {
-            self.status_subscription.keep(subscribing);
-        }
+        drop(runtime.spawn(subscribing));
     }
 
     /// What the kit does with an entry posted on its bus (RFC §19.8): emit
@@ -613,10 +615,10 @@ mod tests {
     }
 }
 
-/// The kit's subscription to its status bus, made outside a runtime by a
-/// backend whose subscription did not end at once: it goes on on the
-/// runtime of the kit's first call made in one, once (Python's
-/// `_ensure_status_bus_subscribed`, claimed before it subscribes).
+/// The kit's subscription to its status bus, made outside a runtime: it
+/// goes on on the runtime of the kit's first call made in one, once
+/// (Python's `_ensure_status_bus_subscribed`, claimed before it
+/// subscribes).
 #[derive(Default)]
 pub(crate) struct PendingSubscription {
     waiting: AtomicBool,

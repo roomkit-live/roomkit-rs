@@ -157,7 +157,8 @@ async fn a_feedback_naming_no_channel_is_an_observation_of_no_channel() {
 }
 
 /// A backend whose subscription does not end at once, as one that reaches
-/// a server does: it is put off once, then subscribes, and says so.
+/// a server does: it waits on the runtime's timer first, which a poll made
+/// outside a runtime cannot, then subscribes, and says so.
 #[derive(Default)]
 struct Late {
     kept: InMemoryStatusBackend,
@@ -175,16 +176,7 @@ impl StatusBackend for Late {
 
     fn subscribe(&self, callback: Callback) -> Future<'_, ()> {
         Box::pin(async move {
-            let mut put_off = false;
-            std::future::poll_fn(|context| {
-                if put_off {
-                    return std::task::Poll::Ready(());
-                }
-                put_off = true;
-                context.waker().wake_by_ref();
-                std::task::Poll::Pending
-            })
-            .await;
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             self.kept.subscribe(callback).await;
             self.subscribed.notify_one();
         })
