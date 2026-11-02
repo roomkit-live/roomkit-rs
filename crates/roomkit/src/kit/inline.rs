@@ -9,7 +9,7 @@
 //! the kit's close ends it so too. A task whose turn ran ends as it stands,
 //! whatever cuts its caller then.
 
-use roomkit_core::model::TaskStatus;
+use roomkit_core::model::{Metadata, TaskStatus};
 
 use super::RoomKit;
 use super::tasks::{DelegateOptions, TaskEnd};
@@ -123,6 +123,8 @@ impl Drop for Waiting<'_> {
 pub(super) struct Unstarted<S: ConversationStore> {
     ending: Option<BoxFuture<'static, ()>>,
     kit: RoomKit<S>,
+    task: DelegatedTask,
+    context: Option<Metadata>,
 }
 
 impl<S: ConversationStore> Unstarted<S> {
@@ -131,6 +133,8 @@ impl<S: ConversationStore> Unstarted<S> {
         Self {
             ending: Some(kit.cancelled_end(task, options, false)),
             kit: kit.clone(),
+            task: task.clone(),
+            context: options.context.clone(),
         }
     }
 
@@ -166,9 +170,17 @@ impl<S: ConversationStore> Drop for Unstarted<S> {
             .inner
             .tasks
             .spawn_alone(Kind::Turn, ending)
-            .is_none()
+            .is_some()
         {
-            tracing::debug!(target: "roomkit::tasks", "the kit is shut down: a delegation cut before it started does not end");
+            return;
         }
+        // The kit spawns no more work: the task ends cancelled here, its
+        // handle given its result, with nothing stored nor told, as
+        // Python's shielded end gives it once the close released the store
+        // and the hooks.
+        tracing::debug!(target: "roomkit::tasks", task = %self.task.id, "the kit is shut down: a delegation cut before it started ends without its writes");
+        let ended = TaskEnd::cancelled(self.context.as_ref(), false, &self.task.agent_id);
+        self.kit.inner.room_tasks.end(&self.task.id, "cancelled");
+        self.task.set_result(ended.into_result(&self.task));
     }
 }

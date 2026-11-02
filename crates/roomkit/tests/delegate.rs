@@ -2,22 +2,33 @@
 //! (RFC §23.3, §23.4): a parent room the store fails to read, a hand-back
 //! they cannot keep, an agent that is none of the room's, each as the
 //! Python implementation's (`core/mixins/delegation.py`,
-//! `core/mixins/background.py`, `tasks/background.py`).
+//! `core/mixins/background.py`, `tasks/background.py`); and a delegation
+//! the kit's close lands in before its task ran (RFC §12.10.4).
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+use std::future::{pending, ready};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Observation,
     Participant, ParticipantId, Room, RoomEvent, RoomId, Task,
 };
+use roomkit::model::{ChannelOutput, RoomContext, TaskStatus};
+use roomkit::tasks::{DelegatedTask, SubmitOptions, TaskRunner};
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
-    ConversationStore, CreateRoomOptions, DelegateOptions, InMemoryStore, RoomKit, RoomKitError,
-    RoomKitOptions, StartTaskOptions, StoreError, StoreFailure, store,
+    ConversationStore, CreateRoomOptions, DelegateOptions, HookExecution, HookOptions, HookTrigger,
+    InMemoryStore, RoomKit, RoomKitError, RoomKitOptions, StartTaskOptions, StoreError,
+    StoreFailure, store,
 };
+use tokio::sync::Notify;
+
+/// How long a wait that should end may take before the test fails it.
+const BOUND: Duration = Duration::from_secs(5);
 
 fn channel(id: &str) -> ChannelId {
     ChannelId::new(id).unwrap()
@@ -39,14 +50,27 @@ macro_rules! forward {
 }
 
 /// An in-memory store whose reads of a room fail once `down` is set, as a
-/// database gone does.
+/// database gone does; once `held` is set, its read of the room `r`'s
+/// participants, which a context of it reads, tells `entered`, then waits
+/// for `go`.
 #[derive(Debug, Default)]
 struct RoomReadsFail {
     store: InMemoryStore,
     down: AtomicBool,
+    held: AtomicBool,
+    entered: Notify,
+    go: Notify,
 }
 
 impl ConversationStore for RoomReadsFail {
+    async fn list_participants(&self, room_id: &RoomId) -> Result<Vec<Participant>, StoreError> {
+        if *room_id == room() && self.held.swap(false, Ordering::SeqCst) {
+            self.entered.notify_one();
+            self.go.notified().await;
+        }
+        self.store.list_participants(room_id).await
+    }
+
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
         if self.down.load(Ordering::SeqCst) {
             return Err(StoreError::Unavailable(StoreFailure::new(
@@ -76,7 +100,6 @@ impl ConversationStore for RoomReadsFail {
         get_participant(room_id: &RoomId, participant_id: &ParticipantId) -> Option<Participant>;
         update_participant(participant: Participant) -> Participant;
         delete_participant(room_id: &RoomId, participant_id: &ParticipantId) -> ();
-        list_participants(room_id: &RoomId) -> Vec<Participant>;
         create_identity(identity: Identity) -> Identity;
         get_identity(identity_id: &IdentityId) -> Option<Identity>;
         resolve_identity(
@@ -190,10 +213,7 @@ async fn an_unknown_hand_back_and_a_post_by_no_agent_of_the_room_are_refused() {
         ..DelegateOptions::default()
     };
 
-    let words = |outcome: Result<_, RoomKitError>| match outcome {
-        Err(RoomKitError::Value(message)) => message,
-        other => format!("not a ValueError: {:?}", other.map(|_| ())),
-    };
+    let words = |outcome: Result<_, RoomKitError>| outcome.err().map(|error| error.to_string());
     let refusals = (
         words(
             kit.delegate(&room(), &channel("worker"), "Count.", unknown)
@@ -208,10 +228,20 @@ async fn an_unknown_hand_back_and_a_post_by_no_agent_of_the_room_are_refused() {
     assert_eq!(
         refusals,
         (
-            "hand_back must be one of ('relay', 'post'), not 'shout'".to_owned(),
-            "hand_back='post' posts as 'worker', which must be an intelligence channel \
-             attached to room 'r'"
-                .to_owned()
+            Some(
+                RoomKitError::Value(
+                    "hand_back must be one of ('relay', 'post'), not 'shout'".to_owned()
+                )
+                .to_string()
+            ),
+            Some(
+                RoomKitError::Value(
+                    "hand_back='post' posts as 'worker', which must be an intelligence channel \
+                     attached to room 'r'"
+                        .to_owned()
+                )
+                .to_string()
+            )
         )
     );
     kit.close().await.unwrap();
@@ -236,4 +266,191 @@ async fn start_task_refuses_a_channel_that_is_no_agent_of_the_room() {
         Some(RoomKitError::Value("'worker' is not an agent of room 'r'".to_owned()).to_string())
     );
     kit.close().await.unwrap();
+}
+
+/// An agent counting the turns it is asked.
+#[derive(Clone, Default)]
+struct Counted {
+    asked: Arc<Mutex<usize>>,
+}
+
+impl roomkit::Channel for Counted {
+    fn channel_id(&self) -> ChannelId {
+        channel("worker")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> roomkit::model::ChannelCategory {
+        roomkit::model::ChannelCategory::Intelligence
+    }
+
+    fn handle_inbound(
+        &self,
+        _message: roomkit::model::InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, roomkit::ChannelError>> + Send {
+        ready(Err("an agent is sent no message".into()))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, roomkit::ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
+
+    fn on_event(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, roomkit::ChannelError>> + Send {
+        *self.asked.lock().unwrap() += 1;
+        ready(Ok(ChannelOutput::empty()))
+    }
+}
+
+// Python: tests/test_kit_close_doors.py::test_a_task_announced_as_the_kit_closes_ends_cancelled[inline], [background]
+// The kit's close lands between the task's announcement, whose observers'
+// context is read from the store, and its run: the task ends cancelled
+// there, the kit spawning nothing more, and its worker never runs.
+#[tokio::test]
+async fn a_task_announced_as_the_kit_closes_ends_cancelled() {
+    for wait in [true, false] {
+        let worker = Counted::default();
+        let kit = RoomKit::new(RoomKitOptions::with_store(RoomReadsFail::default()));
+        kit.register_channel(worker.clone()).unwrap();
+        let create = CreateRoomOptions {
+            room_id: Some(room()),
+            ..CreateRoomOptions::default()
+        };
+        kit.create_room(create).await.unwrap();
+        let observer = HookOptions {
+            execution: HookExecution::Async,
+            ..HookOptions::default()
+        };
+        kit.hook(
+            HookTrigger::OnTaskDelegated,
+            |_event: RoomEvent, _| ready(()),
+            observer,
+        )
+        .unwrap();
+        kit.store().held.store(true, Ordering::SeqCst);
+        let options = DelegateOptions {
+            wait,
+            ..DelegateOptions::default()
+        };
+
+        let delegating = {
+            let kit = kit.clone();
+            tokio::spawn(async move {
+                kit.delegate(&room(), &channel("worker"), "Go.", options)
+                    .await
+            })
+        };
+        tokio::time::timeout(BOUND, kit.store().entered.notified())
+            .await
+            .unwrap();
+        tokio::time::timeout(BOUND, kit.close())
+            .await
+            .unwrap()
+            .unwrap();
+        kit.store().go.notify_one();
+        let task = tokio::time::timeout(BOUND, delegating)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            (
+                wait,
+                task.result().map(|result| result.status),
+                *worker.asked.lock().unwrap()
+            ),
+            (wait, Some(TaskStatus::Cancelled), 0)
+        );
+    }
+}
+
+/// A runner that never takes a task, keeping the one it is handed.
+#[derive(Default)]
+struct Keeps {
+    handed: Arc<Mutex<Option<DelegatedTask>>>,
+    submitted: Arc<Notify>,
+}
+
+impl TaskRunner<RoomReadsFail> for Keeps {
+    fn submit(
+        &self,
+        _kit: RoomKit<RoomReadsFail>,
+        task: DelegatedTask,
+        _options: SubmitOptions,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), RoomKitError>> + Send>> {
+        *self.handed.lock().unwrap() = Some(task);
+        self.submitted.notify_one();
+        Box::pin(pending())
+    }
+
+    fn cancel(&self, _task_id: &str) -> std::pin::Pin<Box<dyn Future<Output = bool> + Send>> {
+        Box::pin(ready(false))
+    }
+
+    fn close(&self) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(ready(()))
+    }
+}
+
+// Python: core/mixins/delegation.py delegate, whose caller cut before the
+// task ran ends it (_end_cut, shielded), its handle given its cancelled
+// result however the kit's close left its store and hooks: a caller cut
+// once the kit's close is over still ends the task its runner was handed
+// (RMK-1192, the light review's edge a).
+#[tokio::test]
+async fn a_delegation_cut_once_the_kit_closed_still_ends_its_task() {
+    let runner = Keeps::default();
+    let (handed, submitted) = (Arc::clone(&runner.handed), Arc::clone(&runner.submitted));
+    let kit = RoomKit::new(RoomKitOptions {
+        task_runner: Some(Arc::new(runner)),
+        ..RoomKitOptions::with_store(RoomReadsFail::default())
+    });
+    kit.register_channel(Counted::default()).unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+
+    let delegating = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            kit.delegate(
+                &room(),
+                &channel("worker"),
+                "Go.",
+                DelegateOptions::default(),
+            )
+            .await
+        })
+    };
+    tokio::time::timeout(BOUND, submitted.notified())
+        .await
+        .unwrap();
+    tokio::time::timeout(BOUND, kit.close())
+        .await
+        .unwrap()
+        .unwrap();
+    delegating.abort();
+    drop(delegating.await);
+
+    let task = handed.lock().unwrap().clone().unwrap();
+    assert_eq!(
+        task.result().map(|result| (result.status, result.error)),
+        Some((TaskStatus::Cancelled, Some("cancelled".to_owned())))
+    );
 }
