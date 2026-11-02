@@ -99,7 +99,7 @@ impl<S: ConversationStore> RoomKit<S> {
             .get_room(room_id, GetRoomOptions { organization_id })
             .await
         {
-            Ok(_) => RoomKitError::ChannelNotRegistered(channel_id.clone()),
+            Ok(_) => RoomKitError::channel_not_registered(channel_id.clone()),
             Err(error) => error,
         }
     }

@@ -843,7 +843,10 @@ fn refusals() -> Vec<(&'static str, Setup, Arguments, RoomKitError)> {
             "an unregistered channel",
             Setup::Nothing,
             |post| post.channel_id = Some(channel("ghost")),
-            RoomKitError::ChannelNotRegistered(channel("ghost")),
+            RoomKitError::ChannelNotRegistered {
+                channel_id: channel("ghost"),
+                message: "Channel ghost not registered".to_owned(),
+            },
         ),
         (
             "host taken by another type",

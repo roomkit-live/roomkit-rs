@@ -18,7 +18,7 @@ pub(crate) fn named(name: &str) -> Value {
 pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
     Some(match error {
         RoomKitError::RoomNotFound(_) => named("room_not_found"),
-        RoomKitError::ChannelNotRegistered(_) => named("channel_not_registered"),
+        RoomKitError::ChannelNotRegistered { .. } => named("channel_not_registered"),
         RoomKitError::ChannelNotFound { .. } => named("channel_not_bound"),
         RoomKitError::ParticipantNotFound { .. } => named("participant_not_found"),
         RoomKitError::IdentityNotFound(_) => named("identity_not_found"),

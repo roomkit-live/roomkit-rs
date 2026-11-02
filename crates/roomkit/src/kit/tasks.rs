@@ -303,7 +303,10 @@ impl<S: ConversationStore> RoomKit<S> {
             .parent_room(room_id, options.organization_id.as_deref())
             .await?;
         if self.inner.channel(agent_id).is_none() {
-            return Err(RoomKitError::ChannelNotRegistered(agent_id.clone()));
+            return Err(RoomKitError::ChannelNotRegistered {
+                channel_id: agent_id.clone(),
+                message: format!("Agent channel '{agent_id}' not registered"),
+            });
         }
         let notify = options.notify.clone().unwrap_or_else(|| agent_id.clone());
         self.check_hand_back(room_id, &options.hand_back, &notify, options.wait)

@@ -338,7 +338,10 @@ fn rebuilt_variant(error: &WireError) -> Option<RoomKitError> {
         ),
         "ChannelNotRegistered" => {
             let id = error.attributes.get("channel_id")?.as_str()?;
-            RoomKitError::ChannelNotRegistered(ChannelId::new(id).ok()?)
+            RoomKitError::ChannelNotRegistered {
+                channel_id: ChannelId::new(id).ok()?,
+                message: error.message.clone(),
+            }
         }
         "RoomNotFound" => {
             let id = error.attributes.get("room_id")?.as_str()?;
@@ -373,7 +376,7 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::ReentrantCall { .. } => "ReentrantCall",
         RoomKitError::ReentryLoopCap(_) => "ReentryLoopCap",
         RoomKitError::ChannelNotFound { .. } => "ChannelNotFound",
-        RoomKitError::ChannelNotRegistered(channel_id) => {
+        RoomKitError::ChannelNotRegistered { channel_id, .. } => {
             fields.insert("channel_id".to_owned(), Value::from(channel_id.as_str()));
             "ChannelNotRegistered"
         }
@@ -517,7 +520,7 @@ mod tests {
     /// class; any other as a stand-in keeping its kind and message.
     #[test]
     fn a_kit_error_comes_back_as_itself_or_as_a_turn_error() {
-        let unknown = || RoomKitError::ChannelNotRegistered(ChannelId::new("sms").unwrap());
+        let unknown = || RoomKitError::channel_not_registered(ChannelId::new("sms").unwrap());
         let reentrant = || RoomKitError::ReentrantCall {
             room_id: RoomId::new("room_1").unwrap(),
         };

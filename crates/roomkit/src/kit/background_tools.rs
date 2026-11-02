@@ -162,7 +162,14 @@ impl<S: ConversationStore> RoomKit<S> {
     /// up for it would never be seen. Python's `owner_tools_of`.
     fn registered_agent(&self, agent: &ChannelId) -> Result<(), RoomKitError> {
         let Some(channel) = self.inner.channel(agent) else {
-            return Err(RoomKitError::ChannelNotRegistered(agent.clone()));
+            return Err(RoomKitError::ChannelNotRegistered {
+                channel_id: agent.clone(),
+                message: format!(
+                    "Channel {} is not registered: a strategy names by its id an agent the kit \
+                     holds, live or by its declaration",
+                    repr(agent.as_str())
+                ),
+            });
         };
         if !channel.declaration().takes_owner_tools {
             return Err(RoomKitError::Value(format!(

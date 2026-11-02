@@ -6,6 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `RoomKitError::ChannelNotRegistered` carries its message, as
+  Python's `ChannelNotRegisteredError` does (RMK-1201):
+  `ChannelNotRegistered { channel_id, message }`. Its text is the site's,
+  where it read `channel sms not registered` everywhere: `Channel sms not
+  registered` for most, `Agent channel 'worker' not registered` from
+  `delegate`, and `Channel 'worker' is not registered: a strategy names by
+  its id an agent the kit holds, live or by its declaration` from
+  `setup_background` and `setup_task_tools`. Match it with
+  `RoomKitError::ChannelNotRegistered { channel_id, .. }` where
+  `RoomKitError::ChannelNotRegistered(channel_id)` was written.
 - `Channel::on_room_attached` and `Channel::on_room_detached`, as Python's
   (RFC §6.1, RMK-1219): the kit awaits them under the room's lock, the
   attach's with the stored binding before the attach is recorded or

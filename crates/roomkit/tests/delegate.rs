@@ -414,6 +414,53 @@ async fn start_task_refuses_a_channel_that_is_no_agent_of_the_room() {
     kit.close().await.unwrap();
 }
 
+// Python: tests/tasks/test_integration.py::TestDelegateIntegration::test_invalid_agent_raises
+// and tests/test_declared_strategies.py::test_an_id_the_kit_does_not_hold_is_refused,
+// in their words: `delegate`'s (core/mixins/delegation.py), the
+// background helpers' (channels/declared.py `held_agent`), and every
+// other site's (core/mixins/channel_ops.py `attach_channel`).
+#[tokio::test]
+async fn an_invalid_agent_raises() {
+    let kit = kit_with(InMemoryStore::default()).await;
+    let ghost = channel("nonexistent-agent");
+
+    let refusals = [
+        kit.delegate(&room(), &ghost, "do stuff", DelegateOptions::default())
+            .await
+            .err(),
+        kit.setup_task_tools(&ghost).err(),
+        kit.attach_channel(&room(), &ghost, AttachChannelOptions::default())
+            .await
+            .err(),
+    ]
+    .map(|refused| {
+        refused.map(|error| {
+            (
+                matches!(error, RoomKitError::ChannelNotRegistered { .. }),
+                error.to_string(),
+            )
+        })
+    });
+
+    assert_eq!(
+        refusals,
+        [
+            Some((
+                true,
+                "Agent channel 'nonexistent-agent' not registered".to_owned()
+            )),
+            Some((
+                true,
+                "Channel 'nonexistent-agent' is not registered: a strategy names by its id an \
+                 agent the kit holds, live or by its declaration"
+                    .to_owned()
+            )),
+            Some((true, "Channel nonexistent-agent not registered".to_owned())),
+        ]
+    );
+    kit.close().await.unwrap();
+}
+
 /// An agent counting the turns it is asked.
 #[derive(Clone, Default)]
 struct Counted {

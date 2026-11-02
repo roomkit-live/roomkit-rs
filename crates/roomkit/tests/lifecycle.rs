@@ -547,7 +547,10 @@ mod unregistering {
             .await;
         assert_eq!(
             refused,
-            Err(RoomKitError::ChannelNotRegistered(channel("sms")))
+            Err(RoomKitError::ChannelNotRegistered {
+                channel_id: channel("sms"),
+                message: "Channel sms not registered".to_owned(),
+            })
         );
     }
 
@@ -1177,7 +1180,10 @@ mod bindings {
                 )),
                 Some(RoomKitError::RoomNotFound(missing.clone())),
                 Some(RoomKitError::RoomNotFound(missing)),
-                Some(RoomKitError::ChannelNotRegistered(channel("ghost"))),
+                Some(RoomKitError::ChannelNotRegistered {
+                    channel_id: channel("ghost"),
+                    message: "Channel ghost not registered".to_owned(),
+                }),
                 Some(RoomKitError::Value(
                     "Channel 'host' is a host channel: it can be attached as a transport \
                      only, never as an intelligence channel"

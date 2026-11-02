@@ -100,9 +100,16 @@ pub enum RoomKitError {
         channel_id: ChannelId,
     },
     /// Python's `ChannelNotRegisteredError`: no channel is registered under
-    /// the id.
-    #[error("channel {0} not registered")]
-    ChannelNotRegistered(ChannelId),
+    /// the id. Its message is the site's, as Python's exception carries
+    /// its own: `Channel sms not registered` for most,
+    /// `Agent channel 'worker' not registered` for a delegation's agent.
+    #[error("{message}")]
+    ChannelNotRegistered {
+        /// The id no channel is registered under.
+        channel_id: ChannelId,
+        /// What the error says.
+        message: String,
+    },
     /// Python's `ChannelAlreadyRegisteredError`: another channel is
     /// registered under the id.
     #[error(
@@ -367,7 +374,7 @@ impl RoomKitError {
             | Self::ReentrantCall { .. }
             | Self::ReentryLoopCap(_)
             | Self::ChannelNotFound { .. }
-            | Self::ChannelNotRegistered(_)
+            | Self::ChannelNotRegistered { .. }
             | Self::ChannelAlreadyRegistered(_)
             | Self::ParticipantNotFound { .. }
             | Self::IdentityNotFound(_)
@@ -478,6 +485,17 @@ fn store_failure(record: ErrorRecord) -> RoomKitError {
 const STORE_VALUE: &str = "Value";
 
 impl RoomKitError {
+    /// No channel is registered under `channel_id`, in the words of most of
+    /// Python's sites (`core/mixins/channel_ops.py`, `core/mixins/inbound.py`,
+    /// `core/_host_post.py`...): `Channel sms not registered`.
+    pub(crate) fn channel_not_registered(channel_id: ChannelId) -> Self {
+        let message = format!("Channel {channel_id} not registered");
+        Self::ChannelNotRegistered {
+            channel_id,
+            message,
+        }
+    }
+
     /// The name the core recorded a store's refusal under, when this error
     /// is one: `RoomAlreadyExists`, `IdempotencyKeyTaken`... A door that
     /// knows what the refusal names rebuilds Python's class from it.
@@ -499,7 +517,7 @@ impl RoomKitError {
 impl From<InboundError> for RoomKitError {
     fn from(error: InboundError) -> Self {
         match error {
-            InboundError::UnknownChannel(channel_id) => Self::ChannelNotRegistered(channel_id),
+            InboundError::UnknownChannel(channel_id) => Self::channel_not_registered(channel_id),
             InboundError::RoomNotFound(room_id) => Self::RoomNotFound(room_id),
             InboundError::InboundOnHostChannel(channel_id) => Self::Value(format!(
                 "Channel {} is a host channel and receives no external payload: the host \
@@ -693,7 +711,7 @@ impl From<ConfigError> for RoomKitError {
     fn from(error: ConfigError) -> Self {
         match error {
             ConfigError::DuplicateChannel(channel_id) => Self::ChannelAlreadyRegistered(channel_id),
-            ConfigError::UnknownChannel(channel_id) => Self::ChannelNotRegistered(channel_id),
+            ConfigError::UnknownChannel(channel_id) => Self::channel_not_registered(channel_id),
             other @ (ConfigError::ReservedChannelType { .. } | _) => Self::Value(other.to_string()),
         }
     }

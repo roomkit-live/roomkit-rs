@@ -725,7 +725,10 @@ async fn a_message_on_an_unregistered_channel_is_refused() {
         .await;
     assert_eq!(
         refused.err(),
-        Some(RoomKitError::ChannelNotRegistered(channel("telegram")))
+        Some(RoomKitError::ChannelNotRegistered {
+            channel_id: channel("telegram"),
+            message: "Channel telegram not registered".to_owned(),
+        })
     );
 }
 
