@@ -122,9 +122,11 @@ pub(crate) async fn call(
             let options = ProcessInboundOptions {
                 room_id: optional(spec, "room_id")?,
                 organization_id: organization_id(spec),
+                defer_delivery: optional::<bool>(spec, "defer_delivery")?.unwrap_or(false),
                 ..ProcessInboundOptions::default()
             };
             let outcome = run.kit().process_inbound(message, options).await;
+            keep_handle(run, spec, &outcome);
             let id = outcome
                 .as_ref()
                 .ok()
@@ -199,11 +201,51 @@ pub(crate) async fn call(
             crate::verification_calls::call(run, verification, spec).await?
         }
         "cancel_delivery" | "steer" => (cancel_or_steer(run, name, spec).await?, None),
+        "delivery.cancel" | "delivery.wait" => (handle_call(run, name, spec).await?, None),
         _ => (lifecycle_call(run, name, spec).await?, None),
     })
 }
 
 /// `cancel_delivery`, or `steer`: a directive to an agent's running turns.
+/// Keeps the completion handle of a deferred call by its label (RFC §10.1
+/// step 18), for the `delivery.*` calls that name it.
+fn keep_handle(run: &Run, spec: &Value, outcome: &Result<InboundResult, RoomKitError>) {
+    let (Some(label), Ok(result)) = (spec.get("as").and_then(Value::as_str), outcome) else {
+        return;
+    };
+    if let Some(handle) = &result.delivery {
+        crate::run::lock(&run.handles).insert(label.to_owned(), handle.clone());
+    }
+}
+
+/// `delivery.cancel` or `delivery.wait` on the handle its `of` names; a
+/// cancel the handle refuses where its cleanup would wait for its caller
+/// reads `waits_for_itself`.
+async fn handle_call(
+    run: &std::sync::Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<Called, Unreadable> {
+    let label = field::<String>(spec, "of")?;
+    let Some(handle) = crate::run::lock(&run.handles).get(&label).cloned() else {
+        return Err(format!("no deferred call is labelled {label}"));
+    };
+    if name == "delivery.wait" {
+        return Ok(finish(run, name, handle.wait().await, inbound_result));
+    }
+    let mut options = roomkit::CancelOptions::default();
+    if let Some(reason) = optional::<String>(spec, "reason")? {
+        options.reason = reason;
+    }
+    if let Some(timeout) = optional::<u64>(spec, "timeout_ms")? {
+        options.timeout = Duration::from_millis(timeout);
+    }
+    match handle.cancel(options).await {
+        Err(RoomKitError::Runtime(_)) => Ok(Err(named("waits_for_itself"))),
+        outcome => Ok(finish(run, name, outcome, inbound_result)),
+    }
+}
+
 async fn cancel_or_steer(
     run: &std::sync::Arc<Run>,
     name: &str,

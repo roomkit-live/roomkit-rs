@@ -120,6 +120,8 @@ pub(crate) struct Run {
     pub(crate) background: Mutex<HashMap<String, JoinHandle<Value>>>,
     /// The tasks `delegate` returned, by their id.
     pub(crate) tasks: Mutex<HashMap<String, roomkit::tasks::DelegatedTask>>,
+    /// The completion handles of deferred calls, by their call's label.
+    pub(crate) handles: Mutex<HashMap<String, roomkit::DeliveryHandle>>,
     /// The work scripted turns left for after them (`after_turn`).
     after_turn: Mutex<Vec<JoinHandle<()>>>,
     /// The scripted agents' models, by channel.
@@ -161,6 +163,7 @@ impl Run {
             events_read: Mutex::new(0),
             background: Mutex::default(),
             tasks: Mutex::default(),
+            handles: Mutex::default(),
             after_turn: Mutex::default(),
             models: Mutex::default(),
             backend: Mutex::default(),
