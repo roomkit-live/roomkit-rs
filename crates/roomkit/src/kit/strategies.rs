@@ -157,6 +157,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// room, what its install added taken back;
     /// [`RoomKitError::ChannelNotRegistered`] for an agent named by an id
     /// the kit does not hold; and what the strategy's install failed with.
+    /// When what the install added could not be read, or not all of it
+    /// taken back, the store's error or the install's is returned and the
+    /// room stays the strategy's: `uninstall_strategy` takes back the rest.
     pub async fn install_strategy(
         &self,
         room_id: &RoomId,
@@ -489,8 +492,6 @@ impl<S: ConversationStore> RoomKit<S> {
             .collect())
     }
 
-    /// Takes back what a failed install added; the room stays claimed for
-    /// what could not be, so `uninstall_strategy` can finish it.
     /// Takes back what a failed install added, `added`, read whole when
     /// `complete`; the room stays claimed for what could not be, so
     /// `uninstall_strategy` can finish it. The record holds `added` first,
@@ -663,11 +664,17 @@ impl<S: ConversationStore> Drop for InstallGuard<S> {
         }
         let (kit, room_id) = (self.kit.clone(), self.room_id.clone());
         let (strategy, before) = (Arc::clone(&self.strategy), self.before.take());
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => drop(runtime.spawn(async move {
-                kit.undo_cancelled(&room_id, &strategy, before).await;
-            })),
-            Err(_) => kit.drop_record(&room_id, &strategy),
+        let tasks = Arc::clone(&kit.inner.tasks);
+        let undo: crate::channel::BoxFuture<'static, ()> = Box::pin(async move {
+            kit.undo_cancelled(&room_id, &strategy, before).await;
+        });
+        // The kit's close waits for the undo; once it spawns no more work,
+        // the undo runs apart all the same, as a held task's end does.
+        let Err(refused) = crate::tasks::spawn_apart(&tasks, undo) else {
+            return;
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            drop(runtime.spawn(refused));
         }
     }
 }

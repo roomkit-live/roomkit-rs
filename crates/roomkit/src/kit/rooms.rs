@@ -39,7 +39,8 @@ impl<S: ConversationStore> RoomKit<S> {
     /// With a strategy (`options.orchestration`, or the kit's), the room is
     /// created and announced first, then installed: an install that fails
     /// returns what [`install_strategy`](Self::install_strategy) returns,
-    /// the room kept, holding no strategy.
+    /// the room kept, holding the strategy only when the install could not
+    /// be read or taken back whole.
     pub async fn create_room(&self, options: CreateRoomOptions<S>) -> Result<Room, RoomKitError> {
         let orchestration = options
             .orchestration
