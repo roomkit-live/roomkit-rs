@@ -27,9 +27,9 @@ const MEDIA_TYPE_LIMIT: usize = 64;
 ///   structured content, which the model never reads;
 /// - a result that says `isError`, a failed call (the tool ran) whose words
 ///   the model reads, its parts' texts joined by spaces.
-pub(crate) fn read(name: &str, result: CallToolResult) -> Result<ToolResult, ToolError> {
+pub(crate) fn read(name: &str, result: &CallToolResult) -> Result<ToolResult, ToolError> {
     if result.is_error == Some(true) {
-        return Err(ToolError::failed(bounded(name, &error_text(&result))));
+        return Err(ToolError::failed(bounded(name, &error_text(result))));
     }
     Ok(ToolResult::Text(body(name, result)))
 }
@@ -37,9 +37,9 @@ pub(crate) fn read(name: &str, result: CallToolResult) -> Result<ToolResult, Too
 /// `result` as Python's `call_tool` returns it: its text, as [`read`]
 /// reads it, or for a result that says `isError` the envelope
 /// `{"error": "<its words>"}`, written as Python's `json.dumps` writes it.
-pub(crate) fn text(name: &str, result: CallToolResult) -> String {
+pub(crate) fn text(name: &str, result: &CallToolResult) -> String {
     if result.is_error == Some(true) {
-        let words = bounded(name, &error_text(&result));
+        let words = bounded(name, &error_text(result));
         return dumps(&serde_json::json!({ "error": words }));
     }
     body(name, result)
@@ -53,7 +53,7 @@ fn error_text(result: &CallToolResult) -> String {
 }
 
 /// The text of a result that does not say `isError`, within the bound.
-fn body(name: &str, result: CallToolResult) -> String {
+fn body(name: &str, result: &CallToolResult) -> String {
     let texts: Vec<String> = result.content.iter().map(text_of).collect();
     let text = match texts.as_slice() {
         [only] => only.clone(),
@@ -133,7 +133,7 @@ mod tests {
             ContentBlock::text("\"42\""),
         ]);
         assert_eq!(
-            text("cancel_order", result),
+            text("cancel_order", &result),
             r#"{"error": "Commande d\u00e9j\u00e0 exp\u00e9di\u00e9e \"42\""}"#
         );
     }

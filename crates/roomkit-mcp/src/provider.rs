@@ -400,7 +400,7 @@ impl McpToolProvider {
         options: CallToolOptions,
     ) -> Result<String, McpError> {
         let result = self.call_result(name, arguments, options.timeout).await?;
-        Ok(results::text(name, result))
+        Ok(results::text(name, &result))
     }
 
     /// The same provider, its command's server given `grace` to exit at its
@@ -481,7 +481,7 @@ impl McpToolProvider {
             .call_result(lookup, arguments, timeout)
             .await
             .map_err(|error| raised(&error))?;
-        results::read(lookup, result)
+        results::read(lookup, &result)
     }
 
     /// The server's answer to a call of `name`, within `timeout`.
