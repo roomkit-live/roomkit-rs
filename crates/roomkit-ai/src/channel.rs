@@ -12,7 +12,7 @@ use roomkit::model::{
     EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent, RoomId,
     SteeringDirective,
 };
-use roomkit::{Channel, ChannelError, current_turn_host};
+use roomkit::{Channel, ChannelDeclaration, ChannelError, current_turn_host};
 use roomkit_core::rules::transcript::{
     Message, TurnMemory, conversation_with_memory, replayed_rounds,
 };
@@ -848,6 +848,22 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             ..SteerOptions::default()
         };
         Some(self.loops.steer(directive, options).unwrap_or(0))
+    }
+
+    /// What the room's owner knows of the channel (RFC §10.6.2), its turns
+    /// declaring the tools the owner serves (RFC §10.6.5), as Python's
+    /// `AIChannel.declaration()` says.
+    fn declaration(&self) -> ChannelDeclaration {
+        ChannelDeclaration {
+            channel_id: self.channel_id(),
+            channel_type: ChannelType::AI,
+            category: ChannelCategory::Intelligence,
+            capabilities: self.capabilities(),
+            takes_owner_tools: true,
+            recent_events_window: self.recent_events_window(),
+            serializes_room_turns: Channel::serializes_room_turns(self),
+            steers_room_turns: Channel::steers_room_turns(self),
+        }
     }
 
     /// The names of the tools the channel serves itself, which a tool its

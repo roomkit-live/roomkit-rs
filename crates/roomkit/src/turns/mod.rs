@@ -285,7 +285,7 @@ impl Turns {
         );
         let history = std::mem::take(&mut context.recent_events);
         let observers = self.observers();
-        let owner_tools = kit.owner_tools(&binding.channel_id);
+        let owner_tools = kit.owner_tools(&binding.channel_id, &event.room_id);
         let request = Request {
             turn_id: &turn_id,
             binding,

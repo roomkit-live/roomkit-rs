@@ -45,6 +45,7 @@ mod shutdown;
 mod start_task;
 mod status;
 mod steering;
+mod structured;
 mod task_cancel;
 mod tasks;
 #[cfg(test)]

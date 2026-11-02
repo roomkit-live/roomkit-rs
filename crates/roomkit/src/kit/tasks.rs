@@ -81,7 +81,8 @@ the language the conversation is in, whatever the result's.";
 
 /// What [`RoomKit::delegate`] takes beside the room, the agent and the
 /// task: Python's `delegate(..., *, wait=False, context=None,
-/// share_channels=None, notify=None, on_complete=None, post_status=True,
+/// share_channels=None, notify=None, on_complete=None,
+/// require_structured_result=False, max_result_retries=3, post_status=True,
 /// brief=None, hand_back='relay', organization_id=None)`.
 #[derive(Clone)]
 pub struct DelegateOptions {
@@ -99,6 +100,15 @@ pub struct DelegateOptions {
     pub notify: Option<ChannelId>,
     /// Python `on_complete=None`: run once the task ended, with its result.
     pub on_complete: Option<OnCompleteCallback>,
+    /// Python `require_structured_result=False`: inline runs only (RFC
+    /// §23.3), the agent hands its work back by calling the result tool,
+    /// `submit_result`, served in the child room alone, re-prompted up to
+    /// `max_result_retries` times; the result's `output` is then the tool's
+    /// JSON payload.
+    pub require_structured_result: bool,
+    /// Python `max_result_retries=3`: how many times a turn ending without
+    /// the call is re-prompted.
+    pub max_result_retries: u32,
     /// Python `post_status=True`: follow the task on the status bus.
     pub post_status: bool,
     /// Python `brief=None`: what the agent is told instead of the task.
@@ -123,6 +133,8 @@ impl Default for DelegateOptions {
             share_channels: None,
             notify: None,
             on_complete: None,
+            require_structured_result: false,
+            max_result_retries: 3,
             post_status: true,
             brief: None,
             conversation: 0,
@@ -138,6 +150,8 @@ impl std::fmt::Debug for DelegateOptions {
             .debug_struct("DelegateOptions")
             .field("wait", &self.wait)
             .field("notify", &self.notify)
+            .field("require_structured_result", &self.require_structured_result)
+            .field("max_result_retries", &self.max_result_retries)
             .field("hand_back", &self.hand_back)
             .finish_non_exhaustive()
     }
@@ -158,7 +172,7 @@ pub(crate) struct TaskEnd {
 /// ended before its answer or failed after it began, how it ended and its
 /// last narration (RFC §23.3 step 6).
 #[derive(Clone, Debug, PartialEq)]
-struct Failure {
+pub(super) struct Failure {
     message: String,
     reason: Option<String>,
     narration: Option<String>,
@@ -170,7 +184,7 @@ struct Failure {
 impl TaskEnd {
     /// A task that ran: completed with the worker's `response`, or failed
     /// with `failure`; its turns' entries under `turns`.
-    fn finished(
+    pub(super) fn finished(
         response: Option<String>,
         failure: Option<Failure>,
         context: Option<&Metadata>,
@@ -513,7 +527,12 @@ impl<S: ConversationStore> RoomKit<S> {
         };
         let _recorded = self.record_running(task, reach);
         task.set_status(TaskStatus::InProgress);
-        let ended = Box::pin(self.delegated_turn(task, options.context.as_ref())).await;
+        let context = options.context.as_ref();
+        let ended = if options.require_structured_result {
+            Box::pin(self.structured_turns(task, context, options.max_result_retries)).await
+        } else {
+            Box::pin(self.delegated_turn(task, context)).await
+        };
         self.complete_inline(task, ended.into_result(task), options)
             .await;
     }
@@ -686,7 +705,30 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// The task's turn in its child room on its description (RFC §23.3
     /// steps 4 to 6): its outcome.
-    async fn delegated_turn(&self, task: &DelegatedTask, context: Option<&Metadata>) -> TaskEnd {
+    pub(super) async fn delegated_turn(
+        &self,
+        task: &DelegatedTask,
+        context: Option<&Metadata>,
+    ) -> TaskEnd {
+        let answers = match Box::pin(self.delegated_answers(task, task.description.clone())).await {
+            Ok(answers) => answers,
+            Err(failure) => return failed(failure, context),
+        };
+        let outcome = task_outcome(&answers, &task.agent_id);
+        if let Some(failure) = &outcome.failure {
+            tracing::warn!(target: "roomkit::tasks", task = %task.id, error = %failure.message, "a delegated task failed");
+        }
+        TaskEnd::finished(outcome.response, outcome.failure, context, outcome.turns)
+    }
+
+    /// One turn of the task's child room on `text`, a system message only
+    /// its intelligence channels read (RFC §23.3 steps 4 to 6): what each
+    /// agent answered, or why the turn could not run.
+    pub(super) async fn delegated_answers(
+        &self,
+        task: &DelegatedTask,
+        text: String,
+    ) -> Result<Vec<DelegatedAnswer>, ErrorRecord> {
         let environment = self.inner.environment();
         let source = EventSource::new(ChannelId::system(), ChannelType::SYSTEM);
         let mut message = RoomEvent::at(
@@ -694,22 +736,17 @@ impl<S: ConversationStore> RoomKit<S> {
             task.child_room_id.clone(),
             EventType::Message,
             source,
-            TextContent::new(task.description.clone()),
+            TextContent::new(text),
             environment.now(),
         );
         message.status = EventStatus::Delivered;
         message.visibility = Visibility::Intelligence;
         let operation = DelegatedTurn::new(self.config(), task.child_room_id.clone(), message);
-        let answers = match Box::pin(driver::run(&self.inner, "delegate", operation)).await {
-            Ok(Ok(answers)) => answers,
-            Ok(Err(error)) => return failed(delegation_failure(&error), context),
-            Err(error) => return failed(kit_failure(&error), context),
-        };
-        let (response, failure, turns) = task_outcome(&answers, &task.agent_id);
-        if let Some(failure) = &failure {
-            tracing::warn!(target: "roomkit::tasks", task = %task.id, error = %failure.message, "a delegated task failed");
+        match Box::pin(driver::run(&self.inner, "delegate", operation)).await {
+            Ok(Ok(answers)) => Ok(answers),
+            Ok(Err(error)) => Err(delegation_failure(&error)),
+            Err(error) => Err(kit_failure(&error)),
         }
-        TaskEnd::finished(response, failure, context, turns)
     }
 
     /// Stamps the child room with how its task ended, and the worker's
@@ -977,7 +1014,7 @@ fn short_hex() -> String {
 }
 
 /// A task that could not run its turn: failed with `exception`.
-fn failed(exception: ErrorRecord, context: Option<&Metadata>) -> TaskEnd {
+pub(super) fn failed(exception: ErrorRecord, context: Option<&Metadata>) -> TaskEnd {
     let failure = Failure {
         message: exception.message.clone(),
         reason: None,
@@ -988,7 +1025,7 @@ fn failed(exception: ErrorRecord, context: Option<&Metadata>) -> TaskEnd {
 }
 
 /// A kit error as the failure of a task, under its Python class.
-fn kit_failure(error: &RoomKitError) -> ErrorRecord {
+pub(super) fn kit_failure(error: &RoomKitError) -> ErrorRecord {
     ErrorRecord::new(error.class_name(), error.to_string())
 }
 
@@ -1115,7 +1152,24 @@ fn round_half_even(value: f64) -> i64 {
 /// The task's outcome from what the child room's agents answered (RFC
 /// §23.3 step 6): the delegated agent's answer, its failure, and each
 /// responder's turn entry.
-fn task_outcome(
+pub(super) fn task_outcome(answers: &[DelegatedAnswer], agent_id: &ChannelId) -> TurnOutcome {
+    let (response, failure, turns) = outcome_parts(answers, agent_id);
+    TurnOutcome {
+        response,
+        failure,
+        turns,
+    }
+}
+
+/// What one delegated turn came to: the agent's answer, its failure, and
+/// each responder's turn entry.
+pub(super) struct TurnOutcome {
+    pub(super) response: Option<String>,
+    pub(super) failure: Option<Failure>,
+    pub(super) turns: Metadata,
+}
+
+fn outcome_parts(
     answers: &[DelegatedAnswer],
     agent_id: &ChannelId,
 ) -> (Option<String>, Option<Failure>, Metadata) {

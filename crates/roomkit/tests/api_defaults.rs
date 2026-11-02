@@ -473,6 +473,10 @@ fn delegate_options_defaults_as_python() {
     assert!(defaults.on_complete.is_none());
     // roomkit.RoomKit.delegate(post_status) = True
     assert!(defaults.post_status);
+    // roomkit.RoomKit.delegate(require_structured_result) = False
+    assert!(!defaults.require_structured_result);
+    // roomkit.RoomKit.delegate(max_result_retries) = 3
+    assert_eq!(defaults.max_result_retries, 3);
     // roomkit.RoomKit.delegate(brief) = None
     assert!(defaults.brief.is_none());
     // roomkit.RoomKit.delegate(conversation) = 0

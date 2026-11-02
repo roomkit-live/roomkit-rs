@@ -5,12 +5,14 @@
 //! The owner keeps them by channel, beside the channel, never on it: each
 //! turn of the channel lists them in its request, its executor declares
 //! them beside the channel's own tools, and a call to one crosses back to
-//! the owner, whose handler runs in the room of the call.
+//! the owner, whose handler runs in the room of the call. A tool set up for
+//! one room alone (a delegation's result tool, RFC §23.3) is listed and
+//! served in that room's turns only.
 
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
 
-use roomkit_core::model::ChannelId;
+use roomkit_core::model::{ChannelId, RoomId};
 use serde_json::Value;
 
 use crate::RoomKit;
@@ -39,15 +41,22 @@ impl<S> OwnerToolEntry<S> {
     }
 }
 
-/// The tools the kit set up for each of its channels, by channel id.
+/// The tools set up for one channel in one room, by the channel and the
+/// room.
+type InRooms<S> = HashMap<(ChannelId, RoomId), Vec<OwnerToolEntry<S>>>;
+
+/// The tools the kit set up for each of its channels, by channel id, in
+/// every room or in one.
 pub(crate) struct OwnerToolStore<S> {
     by_channel: RwLock<HashMap<ChannelId, Vec<OwnerToolEntry<S>>>>,
+    in_rooms: RwLock<InRooms<S>>,
 }
 
 impl<S> Default for OwnerToolStore<S> {
     fn default() -> Self {
         Self {
             by_channel: RwLock::new(HashMap::new()),
+            in_rooms: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -62,9 +71,15 @@ impl<S> std::fmt::Debug for OwnerToolStore<S> {
             .iter()
             .map(|(channel, entries)| (channel, entries.iter().map(OwnerToolEntry::name).collect()))
             .collect();
+        let in_rooms = self.in_rooms.read().unwrap_or_else(PoisonError::into_inner);
+        let in_rooms: HashMap<&(ChannelId, RoomId), Vec<&str>> = in_rooms
+            .iter()
+            .map(|(scope, entries)| (scope, entries.iter().map(OwnerToolEntry::name).collect()))
+            .collect();
         formatter
             .debug_struct("OwnerToolStore")
             .field("by_channel", &names)
+            .field("in_rooms", &in_rooms)
             .finish()
     }
 }
@@ -101,31 +116,94 @@ impl<S> OwnerToolStore<S> {
         Ok(())
     }
 
-    /// The tools the owner serves the turns of `channel_id`, as a turn's
-    /// request lists them, in the order they were set up.
-    pub(crate) fn declared(&self, channel_id: &ChannelId) -> Vec<OwnerTool> {
-        self.read()
-            .get(channel_id)
-            .map(|entries| {
-                entries
-                    .iter()
-                    .map(|entry| OwnerTool {
-                        tool: entry.definition.clone(),
-                        waits_by_design: false,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+    /// Sets up `entry` for `channel_id` in `room_id` alone, as Python's
+    /// registry's `register(entry, room_id=...)`: refused, with what serves
+    /// its name already, when the owner serves the channel that name in
+    /// every room or in that room.
+    pub(crate) fn register_in_room(
+        &self,
+        channel_id: &ChannelId,
+        room_id: &RoomId,
+        entry: OwnerToolEntry<S>,
+    ) -> Result<(), String> {
+        if self.serves(channel_id, entry.name()) {
+            return Err("served by the channel".to_owned());
+        }
+        let mut in_rooms = self
+            .in_rooms
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let held = in_rooms
+            .entry((channel_id.clone(), room_id.clone()))
+            .or_default();
+        if held.iter().any(|served| served.name() == entry.name()) {
+            return Err(format!("served in room '{}'", room_id.as_str()));
+        }
+        held.push(entry);
+        Ok(())
     }
 
-    /// What serves `channel_id`'s calls to `name`, if the owner serves it.
-    pub(crate) fn lookup(&self, channel_id: &ChannelId, name: &str) -> Option<OwnerServe<S>> {
-        self.read().get(channel_id).and_then(|entries| {
+    /// Stops serving `channel_id` the tool `name` set up for `room_id`.
+    pub(crate) fn unregister_in_room(&self, channel_id: &ChannelId, room_id: &RoomId, name: &str) {
+        let mut in_rooms = self
+            .in_rooms
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let key = (channel_id.clone(), room_id.clone());
+        if let Some(held) = in_rooms.get_mut(&key) {
+            held.retain(|entry| entry.name() != name);
+            if held.is_empty() {
+                in_rooms.remove(&key);
+            }
+        }
+    }
+
+    /// The tools the owner serves the turns of `channel_id` in `room_id`,
+    /// as a turn's request lists them: those of every room in the order they
+    /// were set up, then the room's own.
+    pub(crate) fn declared(&self, channel_id: &ChannelId, room_id: &RoomId) -> Vec<OwnerTool> {
+        let listed = |entries: &[OwnerToolEntry<S>]| -> Vec<OwnerTool> {
+            entries
+                .iter()
+                .map(|entry| OwnerTool {
+                    tool: entry.definition.clone(),
+                    waits_by_design: false,
+                })
+                .collect()
+        };
+        let mut declared = self
+            .read()
+            .get(channel_id)
+            .map(|entries| listed(entries))
+            .unwrap_or_default();
+        let in_rooms = self.in_rooms.read().unwrap_or_else(PoisonError::into_inner);
+        if let Some(entries) = in_rooms.get(&(channel_id.clone(), room_id.clone())) {
+            declared.extend(listed(entries));
+        }
+        declared
+    }
+
+    /// What serves `channel_id`'s calls to `name` in `room_id`, if the
+    /// owner serves it there.
+    pub(crate) fn lookup(
+        &self,
+        channel_id: &ChannelId,
+        room_id: &RoomId,
+        name: &str,
+    ) -> Option<OwnerServe<S>> {
+        let find = |entries: &Vec<OwnerToolEntry<S>>| {
             entries
                 .iter()
                 .find(|entry| entry.name() == name)
                 .map(|entry| Arc::clone(&entry.serve))
-        })
+        };
+        let in_room = {
+            let in_rooms = self.in_rooms.read().unwrap_or_else(PoisonError::into_inner);
+            in_rooms
+                .get(&(channel_id.clone(), room_id.clone()))
+                .and_then(find)
+        };
+        in_room.or_else(|| self.read().get(channel_id).and_then(find))
     }
 
     fn read(&self) -> std::sync::RwLockReadGuard<'_, HashMap<ChannelId, Vec<OwnerToolEntry<S>>>> {
@@ -148,6 +226,41 @@ mod tests {
             definition: json!({ "name": name }),
             serve: Arc::new(|_, _| Box::pin(async { OwnerToolAnswer::Served(json!("ok")) })),
         }
+    }
+
+    // Python: tests/tasks/test_structured_result.py::TestStructuredResultGuard::test_returns_structured_payload_when_worker_submits
+    // (the result tool declared in the child room only, and removed afterwards)
+    #[test]
+    fn a_room_s_tool_is_declared_and_served_in_that_room_alone() {
+        let store = OwnerToolStore::default();
+        let agent = ChannelId::new("worker").unwrap();
+        let (child, other) = (RoomId::new("r::task-1").unwrap(), RoomId::new("r").unwrap());
+        store
+            .register_in_room(&agent, &child, entry("submit_result"))
+            .unwrap();
+        let again = store.register_in_room(&agent, &child, entry("submit_result"));
+        let names = |room: &RoomId| -> Vec<Value> {
+            store
+                .declared(&agent, room)
+                .into_iter()
+                .map(|tool| tool.tool["name"].clone())
+                .collect()
+        };
+        let declared = (names(&child), names(&other));
+        let served = (
+            store.lookup(&agent, &child, "submit_result").is_some(),
+            store.lookup(&agent, &other, "submit_result").is_some(),
+        );
+        store.unregister_in_room(&agent, &child, "submit_result");
+        assert_eq!(
+            (declared, served, again, names(&child)),
+            (
+                (vec![json!("submit_result")], vec![]),
+                (true, false),
+                Err("served in room 'r::task-1'".to_owned()),
+                vec![]
+            )
+        );
     }
 
     // Python: tests/tasks/test_cancel_task.py::test_setup_task_tools_sets_up_both_tools_or_neither

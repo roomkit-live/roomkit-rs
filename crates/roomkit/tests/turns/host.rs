@@ -337,3 +337,47 @@ async fn a_verb_that_needs_its_turn_is_refused_after_it() {
 
     assert_eq!(refused.await.unwrap(), "RuntimeError: true");
 }
+
+/// A turn's host delegates in the background, with data only: an inline
+/// run's options are refused before anything crosses to the owner, as
+/// Python's `Delegate` record refuses a keyword it does not carry.
+// Python: src/roomkit/turns/host.py Delegate (wait, on_complete, require_structured_result, max_result_retries)
+#[tokio::test(start_paused = true)]
+async fn a_host_s_delegation_refuses_an_inline_run_s_options() {
+    let read: Arc<Mutex<Vec<bool>>> = Arc::default();
+    let noted = Arc::clone(&read);
+    let kit = kit(move |_call, _context| {
+        let noted = Arc::clone(&noted);
+        async move {
+            let turn = current_turn_host().unwrap();
+            let inline = [
+                roomkit::DelegateOptions {
+                    wait: true,
+                    ..roomkit::DelegateOptions::default()
+                },
+                roomkit::DelegateOptions {
+                    require_structured_result: true,
+                    ..roomkit::DelegateOptions::default()
+                },
+                roomkit::DelegateOptions {
+                    max_result_retries: 1,
+                    ..roomkit::DelegateOptions::default()
+                },
+            ];
+            for options in inline {
+                let delegated = turn
+                    .delegate(&room(), &channel("ai"), "More.", options)
+                    .await;
+                let refused = matches!(delegated, Err(RoomKitError::Value(_)));
+                noted.lock().unwrap().push(refused);
+            }
+            Ok(ToolResult::Text("42".to_owned()))
+        }
+    })
+    .await;
+
+    asks(&kit, "What is it?").await;
+    roomkit::testing::idle(&kit).await;
+
+    assert_eq!(read.lock().unwrap().clone(), vec![true, true, true]);
+}

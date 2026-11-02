@@ -311,7 +311,8 @@ impl TurnHost {
     /// [`wait_task`](Self::wait_task) waits for. Python's
     /// `TurnHost.delegate(room_id, agent_id, task, **options)`, its options
     /// those of a background delegation that are data: `wait`,
-    /// `on_complete` and `organization_id` are refused.
+    /// `on_complete`, `organization_id` and an inline run's
+    /// `require_structured_result` and `max_result_retries` are refused.
     ///
     /// # Errors
     ///
@@ -325,7 +326,14 @@ impl TurnHost {
         task: impl Into<String>,
         options: DelegateOptions,
     ) -> Result<String, RoomKitError> {
-        if options.wait || options.on_complete.is_some() || options.organization_id.is_some() {
+        let defaults = DelegateOptions::default();
+        let inline_only = options.require_structured_result
+            || options.max_result_retries != defaults.max_result_retries;
+        if options.wait
+            || options.on_complete.is_some()
+            || options.organization_id.is_some()
+            || inline_only
+        {
             return Err(RoomKitError::Value(
                 "The arguments of verb \"delegate\" are not valid: a turn's host delegates in \
                  the background, with data only"
@@ -1111,9 +1119,13 @@ pub(crate) struct OwnerCall {
 }
 
 pub(crate) trait TurnKit: Send + Sync {
-    /// The tools the owner serves the turns of `channel_id` (RFC §10.6.5),
-    /// as a turn's request lists them.
-    fn owner_tools(&self, channel_id: &ChannelId) -> Vec<crate::turns::wire::OwnerTool>;
+    /// The tools the owner serves the turns of `channel_id` in `room_id`
+    /// (RFC §10.6.5), as a turn's request lists them.
+    fn owner_tools(
+        &self,
+        channel_id: &ChannelId,
+        room_id: &RoomId,
+    ) -> Vec<crate::turns::wire::OwnerTool>;
 
     /// Serves `call` of the owner's tool `name`: its handler's answer.
     fn serve_owner_tool(
@@ -1229,9 +1241,13 @@ pub(crate) trait TurnKit: Send + Sync {
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
-    fn owner_tools(&self, channel_id: &ChannelId) -> Vec<crate::turns::wire::OwnerTool> {
+    fn owner_tools(
+        &self,
+        channel_id: &ChannelId,
+        room_id: &RoomId,
+    ) -> Vec<crate::turns::wire::OwnerTool> {
         self.upgrade()
-            .map(|inner| inner.owner_tools.declared(channel_id))
+            .map(|inner| inner.owner_tools.declared(channel_id, room_id))
             .unwrap_or_default()
     }
 
@@ -1248,7 +1264,11 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
                     message: "the kit is closed".to_owned(),
                 };
             };
-            let Some(serve) = kit.inner.owner_tools.lookup(&call.channel_id, &name) else {
+            let served = kit
+                .inner
+                .owner_tools
+                .lookup(&call.channel_id, &call.room_id, &name);
+            let Some(serve) = served else {
                 return OwnerToolAnswer::Unserved(format!(
                     "No tool {name:?} is served by the room owner"
                 ));

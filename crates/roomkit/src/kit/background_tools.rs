@@ -150,10 +150,19 @@ impl<S: ConversationStore> RoomKit<S> {
         self.register_owner_tools(agent, entries)
     }
 
-    /// Refuses an agent the kit does not hold.
+    /// Refuses an agent the kit does not hold, or one whose turns never
+    /// declare the tools the room's owner serves (RFC §10.6.5): a tool set
+    /// up for it would never be seen. Python's `owner_tools_of`.
     fn registered_agent(&self, agent: &ChannelId) -> Result<(), RoomKitError> {
-        if self.inner.channel(agent).is_none() {
+        let Some(channel) = self.inner.channel(agent) else {
             return Err(RoomKitError::ChannelNotRegistered(agent.clone()));
+        };
+        if !channel.declaration().takes_owner_tools {
+            return Err(RoomKitError::Value(format!(
+                "Channel '{}' does not take the tools its room owner serves (RFC §10.6.5): its \
+                 turns would never declare them",
+                agent.as_str()
+            )));
         }
         Ok(())
     }
@@ -201,7 +210,7 @@ impl<S: ConversationStore> RoomKit<S> {
 
 /// The refusal of a tool under a name `clash` already takes on `agent`:
 /// Python's `ToolNameCollisionError`, in its words.
-fn collision(name: &str, clash: &str, agent: &ChannelId) -> RoomKitError {
+pub(super) fn collision(name: &str, clash: &str, agent: &ChannelId) -> RoomKitError {
     RoomKitError::ToolNameCollision(format!(
         "Tool '{name}' is already {clash} on channel '{}': rename one of them (RFC §21.1)",
         agent.as_str()
@@ -628,26 +637,90 @@ pub fn cancel_task_definition() -> Value {
 mod tests {
     use pretty_assertions::assert_eq;
 
+    use std::future::{Future, ready};
+
+    use roomkit_core::model::{
+        ChannelBinding, ChannelCategory, ChannelOutput, ChannelType, InboundMessage, RoomContext,
+        RoomEvent,
+    };
+
     use super::*;
     use crate::testing::{EchoAgent, EchoAgentOptions};
-    use crate::{CreateRoomOptions, RoomKitOptions};
+    use crate::{Channel, ChannelDeclaration, ChannelError, CreateRoomOptions, RoomKitOptions};
 
     fn channel(id: &str) -> ChannelId {
         ChannelId::new(id).unwrap()
+    }
+
+    /// An agent whose turns declare the tools the room's owner serves, as
+    /// an AI channel's do.
+    struct Speaker;
+
+    impl Channel for Speaker {
+        fn channel_id(&self) -> ChannelId {
+            channel("speaker")
+        }
+
+        fn channel_type(&self) -> ChannelType {
+            ChannelType::AI
+        }
+
+        fn category(&self) -> ChannelCategory {
+            ChannelCategory::Intelligence
+        }
+
+        fn declaration(&self) -> ChannelDeclaration {
+            ChannelDeclaration::new(self.channel_id())
+        }
+
+        fn handle_inbound(
+            &self,
+            _message: InboundMessage,
+            _context: RoomContext,
+        ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+            ready(Err("an agent is sent no message".into()))
+        }
+
+        fn deliver(
+            &self,
+            _event: RoomEvent,
+            _binding: ChannelBinding,
+            _context: RoomContext,
+        ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+            ready(Ok(ChannelOutput::empty()))
+        }
+    }
+
+    // Python: tests/test_declared_strategies.py::test_no_owner_tool_is_set_up_for_a_channel_that_takes_none
+    #[test]
+    fn no_owner_tool_is_set_up_for_a_channel_that_takes_none() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let agent = EchoAgent::new(channel("echo"), "ok", EchoAgentOptions::default());
+        kit.register_channel(agent).unwrap();
+        let refused = |outcome: Result<(), RoomKitError>| match outcome {
+            Err(RoomKitError::Value(message)) => message.contains("does not take the tools"),
+            _ => false,
+        };
+        assert_eq!(
+            (
+                refused(kit.setup_task_tools(&channel("echo"))),
+                refused(kit.setup_background(&channel("echo"), SetupBackgroundOptions::default()))
+            ),
+            (true, true)
+        );
     }
 
     // Python: tests/tasks/test_background_tasks.py::test_setup_declares_the_tool_on_the_agent
     #[tokio::test]
     async fn setup_background_declares_the_tool_once() {
         let kit = RoomKit::new(RoomKitOptions::default());
-        let agent = EchoAgent::new(channel("speaker"), "ok", EchoAgentOptions::default());
-        kit.register_channel(agent).unwrap();
+        kit.register_channel(Speaker).unwrap();
         let first = kit.setup_background(&channel("speaker"), SetupBackgroundOptions::default());
         let again = kit.setup_background(&channel("speaker"), SetupBackgroundOptions::default());
         let declared: Vec<Value> = kit
             .inner
             .owner_tools
-            .declared(&channel("speaker"))
+            .declared(&channel("speaker"), &RoomId::new("r").unwrap())
             .into_iter()
             .map(|owned| owned.tool["name"].clone())
             .collect();

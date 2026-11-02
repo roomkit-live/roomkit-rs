@@ -50,6 +50,10 @@ pub struct ChannelDeclaration {
     /// What it can do: an AI channel's by default, text, rich content and
     /// media.
     pub capabilities: ChannelCapabilities,
+    /// Whether its turns declare the tools the room's owner serves (RFC
+    /// §10.6.5): `true` by default; a channel's own declaration says
+    /// `false`, an AI channel's `true`.
+    pub takes_owner_tools: bool,
     /// How many of the room's latest events its turn reads: 50 by default.
     pub recent_events_window: usize,
     /// Whether its turns in a room run one after the other, in the order
@@ -72,6 +76,7 @@ impl ChannelDeclaration {
             channel_type: ChannelType::AI,
             category: ChannelCategory::Intelligence,
             capabilities: ai_channel_capabilities(),
+            takes_owner_tools: true,
             recent_events_window: 50,
             serializes_room_turns: false,
             steers_room_turns: false,
@@ -316,13 +321,15 @@ pub trait Channel: Send + Sync + 'static {
 
     /// What the room's owner knows of the channel (RFC §10.6.2): its id,
     /// type, category, capabilities, history window and how it takes a
-    /// room's turns.
+    /// room's turns; it takes no tool the owner serves, as Python's base
+    /// channel declares.
     fn declaration(&self) -> ChannelDeclaration {
         ChannelDeclaration {
             channel_id: self.channel_id(),
             channel_type: self.channel_type(),
             category: self.category(),
             capabilities: self.capabilities(),
+            takes_owner_tools: false,
             recent_events_window: self.recent_events_window(),
             serializes_room_turns: self.serializes_room_turns(),
             steers_room_turns: self.steers_room_turns(),
@@ -504,6 +511,8 @@ pub(crate) trait DynChannel: Send + Sync {
 
     fn own_tool_names(&self) -> Vec<String>;
 
+    fn declaration(&self) -> ChannelDeclaration;
+
     fn serializes_room_turns(&self) -> bool;
 
     fn steers_room_turns(&self) -> bool;
@@ -570,6 +579,10 @@ impl<C: Channel> DynChannel for C {
 
     fn own_tool_names(&self) -> Vec<String> {
         Channel::own_tool_names(self)
+    }
+
+    fn declaration(&self) -> ChannelDeclaration {
+        Channel::declaration(self)
     }
 
     fn serializes_room_turns(&self) -> bool {
