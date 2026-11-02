@@ -98,10 +98,16 @@ impl TurnError {
 
     /// The error a turn's failure is recorded as on the owner: a link's
     /// under [`TURN_LINK_ERROR`], its message as Python's `TurnLinkError`
-    /// says it (RMK-1106); another under its kind.
+    /// says it (RMK-1106), its reason among its attributes as Python's
+    /// `error_record` keeps it; another under its kind.
     pub(crate) fn to_record(&self) -> ErrorRecord {
         if is_link_reason(&self.kind) {
-            return ErrorRecord::new(TURN_LINK_ERROR, self.message.clone());
+            let mut attributes = Metadata::new();
+            attributes.insert("reason".to_owned(), Value::from(self.kind.clone()));
+            return ErrorRecord {
+                attributes: Box::new(attributes),
+                ..ErrorRecord::new(TURN_LINK_ERROR, self.message.clone())
+            };
         }
         ErrorRecord::new(self.kind.clone(), self.message.clone())
     }
@@ -465,7 +471,7 @@ mod tests {
     #[test]
     fn a_link_failure_is_recorded_in_python_s_words() {
         use crate::turns::pipe::LinkFailure;
-        let records: Vec<(String, String)> = [
+        let records: Vec<(String, String, Option<Value>)> = [
             TurnError::link_reason("backend_closed"),
             TurnError::link_reason("cancelled"),
             TurnError::link(&LinkFailure::Closed),
@@ -478,18 +484,33 @@ mod tests {
         .iter()
         .map(|error| {
             let record = error.to_record();
-            (record.error_type, record.message)
+            let reason = record.attributes.get("reason").cloned();
+            (record.error_type, record.message, reason)
         })
         .collect();
-        let link = |message: &str| (TURN_LINK_ERROR.to_owned(), message.to_owned());
+        // Its reason among its attributes, as Python's `error_record`
+        // keeps a `TurnLinkError`'s (RMK-1239).
+        let link = |message: &str, reason: &str| {
+            (
+                TURN_LINK_ERROR.to_owned(),
+                message.to_owned(),
+                Some(Value::from(reason)),
+            )
+        };
         assert_eq!(
             records,
             [
-                link("The turn ended: its turn backend closed"),
-                link("The turn ended without its executor: cancelled"),
-                link("The turn ended: its turn backend closed"),
-                link("Message 4 of the turn was lost"),
-                link("The turn's frames could not be read: no kind"),
+                link("The turn ended: its turn backend closed", "backend_closed"),
+                link(
+                    "The turn ended without its executor: cancelled",
+                    "cancelled"
+                ),
+                link("The turn ended: its turn backend closed", "backend_closed"),
+                link("Message 4 of the turn was lost", "frame_lost"),
+                link(
+                    "The turn's frames could not be read: no kind",
+                    "frame_invalid"
+                ),
             ]
         );
     }

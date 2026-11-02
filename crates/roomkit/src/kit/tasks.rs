@@ -1225,8 +1225,15 @@ fn outcome_parts(
     }
     if let Some(reason) = end.filter(|end| end != "completed") {
         let message = format!("The worker's turn ended {reason} before its answer");
+        // Its attributes, Python's `TaskCutShortError(reason, narration)`'s.
+        let mut attributes = Metadata::new();
+        attributes.insert("reason".to_owned(), Value::from(reason.clone()));
+        attributes.insert("narration".to_owned(), Value::from(text.clone()));
         let failure = Failure {
-            exception: ErrorRecord::new(TASK_CUT_SHORT, message.clone()),
+            exception: ErrorRecord {
+                attributes: Box::new(attributes),
+                ..ErrorRecord::new(TASK_CUT_SHORT, message.clone())
+            },
             message,
             reason: Some(reason),
             narration: text,
