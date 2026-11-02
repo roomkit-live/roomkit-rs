@@ -200,17 +200,11 @@ impl<P: AiProvider> Loop<P> {
             let read = self.generate(&messages, asked, reading).await;
             let mut generation = match read {
                 Ok(generation) => generation,
-                Err(Failed {
-                    error,
-                    streamed,
-                    delivered,
-                }) => {
-                    self.refused(round == 0 && !streamed, &error);
-                    // What the room saw of the failed round stays its own.
-                    spent.segments.push(delivered);
+                Err(failure) => {
+                    self.refused(round == 0 && !failure.streamed, &failure.error);
                     let ending = (&limits, &steering, &out);
                     let failed = (had_tool_round, tool_rounds, spent);
-                    return self.failed(failed, error, ending).await;
+                    return self.failed(failed, failure, ending).await;
                 }
             };
             self.take_intents(&mut generation.calls);
@@ -312,18 +306,23 @@ impl<P: AiProvider> Loop<P> {
         }
     }
 
-    /// The provider failed with `error`: after a round of calls, the loop
+    /// The provider failed with `failure`: after a round of calls, the loop
     /// ends `error`, its rounds kept (RFC §6.4 "A turn cut short"), and the
-    /// turn is reported; then the error. `failed` is whether a round ran,
-    /// the rounds of calls and what the turn spent.
+    /// turn is reported, the text the failed round handed the room its last
+    /// segment; then the error. `failed` is whether a round ran, the rounds
+    /// of calls and what the turn spent.
     async fn failed(
         &self,
-        (after_round, rounds, spent): (bool, u32, Spent),
-        error: ProviderError,
+        (after_round, rounds, mut spent): (bool, u32, Spent),
+        failure: Failed,
         ending: Ending<'_>,
     ) {
         let (limits, steering, out) = ending;
         steering.close();
+        let Failed {
+            error, delivered, ..
+        } = failure;
+        spent.segments.push(delivered);
         if after_round {
             let end = LoopEndMarker {
                 usage: spent.usage.clone(),
