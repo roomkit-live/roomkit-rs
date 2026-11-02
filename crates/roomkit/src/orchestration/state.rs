@@ -74,6 +74,18 @@ impl PartialEq<ConversationPhase> for &str {
     }
 }
 
+impl PartialEq<String> for ConversationPhase {
+    fn eq(&self, text: &String) -> bool {
+        self.text() == text
+    }
+}
+
+impl PartialEq<&str> for ConversationPhase {
+    fn eq(&self, text: &&str) -> bool {
+        self.text() == *text
+    }
+}
+
 /// The record of one phase change (RFC §19.2).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PhaseTransition {

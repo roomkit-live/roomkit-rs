@@ -61,6 +61,8 @@ fn built_in_phases_are_strings() {
     for (phase, text) in phases {
         assert_eq!(String::from(phase), text);
         assert_eq!(text, phase);
+        assert_eq!(phase, text);
+        assert_eq!(phase, String::from(text));
         assert_eq!(json!(phase), json!(text));
     }
 }
