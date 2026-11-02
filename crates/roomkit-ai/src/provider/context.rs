@@ -332,13 +332,24 @@ impl AiToolResultPart {
 /// them all, as Python's `_execute_round_tools` and `_tool_history._round`
 /// build it.
 pub(crate) fn ai_messages(messages: &[Message]) -> Vec<AiMessage> {
+    ai_messages_with(messages, &HashMap::new())
+}
+
+/// [`ai_messages`], the result at each index of `kept` being the one kept
+/// there: a result of parts a call of the turn answered, which its
+/// transcript message holds as its text. By index, never by call id: an id
+/// is free again after its round (RFC §12.4).
+pub(crate) fn ai_messages_with(
+    messages: &[Message],
+    kept: &HashMap<usize, ToolResult>,
+) -> Vec<AiMessage> {
     let mut tools: HashMap<&str, &str> = HashMap::new();
     let mut read: Vec<AiMessage> = Vec::with_capacity(messages.len());
-    for message in messages {
+    for (index, message) in messages.iter().enumerate() {
         for call in &message.tool_calls {
             tools.insert(&call.id, &call.name);
         }
-        let content = content(message, &tools);
+        let content = content(message, &tools, kept.get(&index));
         if message.tool_call_id.is_some()
             && let Some(results) = read.last_mut().filter(|last| last.role == AiRole::Tool)
             && let (AiMessageContent::Parts(parts), AiMessageContent::Parts(more)) =
@@ -368,13 +379,19 @@ fn role(role: Role) -> AiRole {
 }
 
 /// What `message` says, a result's tool read in `tools`.
-fn content(message: &Message, tools: &HashMap<&str, &str>) -> AiMessageContent {
+fn content(
+    message: &Message,
+    tools: &HashMap<&str, &str>,
+    kept: Option<&ToolResult>,
+) -> AiMessageContent {
     if let Some(call_id) = &message.tool_call_id {
         let name = tools.get(call_id.as_str()).copied().unwrap_or_default();
         return AiMessageContent::Parts(vec![AiContentPart::ToolResult(AiToolResultPart {
             tool_call_id: call_id.clone(),
             name: name.to_owned(),
-            result: ToolResult::Text(message.text.clone()),
+            result: kept
+                .cloned()
+                .unwrap_or_else(|| ToolResult::Text(message.text.clone())),
             is_error: message.is_error,
         })]);
     }

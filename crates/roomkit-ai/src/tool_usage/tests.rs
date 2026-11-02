@@ -69,7 +69,9 @@ fn only_a_request_that_replays_images_carries_them() {
         AiContentPart::Image(AiImagePart::new(PNG)),
     ]);
     media.place(&asked);
-    assert!(carries_turn_images(&media.applied(asked.clone())));
+    assert!(carries_turn_images(
+        &media.with_turn_images(asked.clone(), asked.len())
+    ));
     assert!(!carries_turn_images(&asked));
 }
 
@@ -83,7 +85,7 @@ fn a_text_input_s_notes_are_a_part_of_their_own_before_the_images() {
     let header = AiContentPart::Text(AiTextPart::new(TURN_IMAGES_HEADER));
     let mut media = TurnMedia::replaying(vec![header.clone()]);
     media.place(std::slice::from_ref(&input));
-    let applied = media.applied(vec![input]);
+    let applied = media.with_turn_images(vec![input], 1);
     let AiMessageContent::Parts(parts) = &applied[0].content else {
         panic!("parts");
     };
@@ -103,7 +105,7 @@ fn images_after_an_assistant_s_message_are_a_user_message_of_their_own() {
     let image = AiContentPart::Image(AiImagePart::new(PNG));
     let mut media = TurnMedia::replaying(vec![image.clone()]);
     media.place(&shown);
-    let applied = media.applied(shown);
+    let applied = media.with_turn_images(shown, 1);
     assert_eq!(applied.len(), 2);
     assert_eq!(applied[1], AiMessage::new(AiRole::User, vec![image]));
 }

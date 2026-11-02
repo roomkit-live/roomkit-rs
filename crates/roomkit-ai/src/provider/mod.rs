@@ -11,11 +11,11 @@ use std::pin::Pin;
 
 use futures_core::Stream;
 
-pub(crate) use self::context::ai_messages;
 pub use self::context::{
     AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiRole, AiTextPart,
     AiToolCallPart, AiToolResultPart,
 };
+pub(crate) use self::context::{ai_messages, ai_messages_with};
 pub use self::error::{ProviderError, ProviderErrorOptions, is_context_overflow_message};
 pub use self::response::{
     AiResponse, AiToolCall, StreamDone, StreamEvent, StreamTextDelta, StreamToolCall,

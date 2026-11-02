@@ -192,12 +192,13 @@ pub(crate) fn carries_turn_images(messages: &[AiMessage]) -> bool {
 }
 
 /// What a turn's requests carry beyond its transcript: the results of
-/// parts its calls answered, by call, and the images it replays at its
-/// input.
+/// parts its calls answered, by their message's place in the turn's
+/// conversation, and the images it replays at its input.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TurnMedia {
-    /// Each call of the turn that answered parts, by id.
-    results: HashMap<String, ToolResult>,
+    /// Each result of parts the turn's calls answered, by the index of its
+    /// message in the conversation the loop extends.
+    results: HashMap<usize, ToolResult>,
     /// The images the turn's input replays, their header and labels.
     replayed: Vec<AiContentPart>,
     /// Where the turn's input sits among the messages its first round
@@ -229,57 +230,49 @@ impl TurnMedia {
         &self.replayed
     }
 
-    /// Keeps each of a round's `results` that is parts: the next rounds
-    /// hand it to the model as such.
-    pub(crate) fn keep_results(&mut self, results: &[AiToolResultPart]) {
-        for result in results {
+    /// Keeps each of a round's `results` that is parts, the round's results
+    /// being the messages after its calls' message at `at`: the next rounds
+    /// hand them to the model as such.
+    pub(crate) fn keep_results(&mut self, at: usize, results: &[AiToolResultPart]) {
+        for (offset, result) in results.iter().enumerate() {
             if let ToolResult::Parts(_) = result.result {
-                let kept = result.result.clone();
-                self.results.insert(result.tool_call_id.clone(), kept);
+                self.results.insert(at + 1 + offset, result.result.clone());
             }
         }
     }
 
-    /// `shown`, the messages a round shows, with each result of parts as
-    /// its call answered it and the replayed images at the turn's input:
-    /// after its words and notes, the input's text and its notes then
-    /// apart, or as a user message of their own when the conversation did
-    /// not end on one (Python's `with_turn_images`).
-    pub(crate) fn applied(&self, mut shown: Vec<AiMessage>) -> Vec<AiMessage> {
-        if !self.results.is_empty() {
-            for message in &mut shown {
-                self.restore_results(message);
-            }
-        }
-        match self.input {
-            Some((at, true)) => {
-                if let Some(input) = shown.get_mut(at) {
-                    let mut parts = own_parts(&input.content);
-                    parts.extend(self.replayed.iter().cloned());
-                    input.content = AiMessageContent::Parts(parts);
-                }
-            }
-            Some((at, false)) if at <= shown.len() => {
-                let images = AiMessage::new(AiRole::User, self.replayed.clone());
-                shown.insert(at, images);
-            }
-            _ => {}
-        }
-        shown
+    /// The results of parts the turn's calls answered, by message index.
+    pub(crate) fn results(&self) -> &HashMap<usize, ToolResult> {
+        &self.results
     }
 
-    /// `message` with each result of parts the turn kept as it is.
-    fn restore_results(&self, message: &mut AiMessage) {
-        let AiMessageContent::Parts(parts) = &mut message.content else {
-            return;
+    /// `asked`, a round's messages, which end on the `shown` messages of
+    /// the conversation (a memory's only before them, its text joined to
+    /// the first), with the replayed images at the turn's input: after its
+    /// words and notes, the input's text and its notes then apart, or as a
+    /// user message of their own when the conversation did not end on one
+    /// (Python's `with_turn_images`, after the memory's messages joined).
+    pub(crate) fn with_turn_images(
+        &self,
+        mut asked: Vec<AiMessage>,
+        shown: usize,
+    ) -> Vec<AiMessage> {
+        let Some((at, joins)) = self.input else {
+            return asked;
         };
-        for part in parts {
-            if let AiContentPart::ToolResult(result) = part
-                && let Some(kept) = self.results.get(&result.tool_call_id)
-            {
-                result.result = kept.clone();
+        let Some(at) = (asked.len() + at).checked_sub(shown) else {
+            return asked;
+        };
+        if joins {
+            if let Some(input) = asked.get_mut(at) {
+                let mut parts = own_parts(&input.content);
+                parts.extend(self.replayed.iter().cloned());
+                input.content = AiMessageContent::Parts(parts);
             }
+        } else if at <= asked.len() {
+            asked.insert(at, AiMessage::new(AiRole::User, self.replayed.clone()));
         }
+        asked
     }
 }
 

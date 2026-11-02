@@ -48,6 +48,7 @@ use crate::loop_events::DeclaredTool;
 use crate::memory::after_memory;
 use crate::provider::{
     AiContext, AiMessage, AiProvider, AiToolCall, AiToolResultPart, ProviderError, ai_messages,
+    ai_messages_with,
 };
 use crate::steering::{Loops, Steering};
 use crate::stream::{Items, Yielder, items, join_all};
@@ -264,8 +265,9 @@ impl<P: AiProvider> Loop<P> {
                 prefix.clone_from(&generation.text);
             }
             let (read, ran) = self.round_of_calls(generation, &steering, &out).await;
+            let at = messages.len();
             messages.extend(read);
-            self.media.keep_results(&ran.results);
+            self.media.keep_results(at, &ran.results);
             // A round counts once its calls ran (Python's `_run_announced_calls`).
             spent.calls += u32::try_from(ran.calls.len()).unwrap_or(u32::MAX);
             tool_rounds += u32::from(!ran.calls.is_empty());
@@ -361,12 +363,17 @@ impl<P: AiProvider> Loop<P> {
     fn round_context(&self, messages: &[Message], system_prompt: Option<String>) -> AiContext {
         let shown = self.shown(messages);
         let asked = match &self.adopted.messages {
+            // What the hooks or a compaction left holds the replayed images.
             Some((given, replaced)) => given
                 .iter()
                 .cloned()
                 .chain(shown.into_iter().skip(*replaced))
                 .collect(),
-            None => after_memory(&self.remembered, shown),
+            None => {
+                let conversation = shown.len();
+                let asked = after_memory(&self.remembered, shown);
+                self.media.with_turn_images(asked, conversation)
+            }
         };
         AiContext {
             messages: asked,
@@ -387,11 +394,9 @@ impl<P: AiProvider> Loop<P> {
 
     /// `messages` as a round shows them to the provider: each call's
     /// intent as the model wrote it, a round's results one message, a
-    /// result of parts as its call answered it, the replayed images at the
-    /// turn's input (RFC §6.4).
+    /// result of parts as its call answered it (RFC §6.4).
     pub(crate) fn shown(&self, messages: &[Message]) -> Vec<AiMessage> {
-        self.media
-            .applied(ai_messages(&self.shown_messages(messages)))
+        ai_messages_with(&self.shown_messages(messages), self.media.results())
     }
 
     /// The end of the loop for `reason` after `rounds` rounds of calls, the
