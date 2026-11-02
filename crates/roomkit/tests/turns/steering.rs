@@ -362,3 +362,96 @@ async fn a_call_a_steering_cancel_left_open_ends_cancelled() {
     );
     kit.close().await.unwrap();
 }
+
+/// An intelligence channel that takes a room's turns one at a time and
+/// answers beside a stream, which nobody would read.
+struct Buffered;
+
+impl Channel for Buffered {
+    fn channel_id(&self) -> roomkit::model::ChannelId {
+        channel("ai")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn serializes_room_turns(&self) -> bool {
+        true
+    }
+
+    fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Err("no inbound".into()))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let answer = RoomEvent::new(
+            event.room_id.clone(),
+            roomkit::model::EventSource::new(channel("ai"), ChannelType::AI),
+            TextContent::new("buffered"),
+        );
+        std::future::ready(Ok(ChannelOutput {
+            responded: true,
+            response_events: vec![answer],
+            ..ChannelOutput::empty()
+        }))
+    }
+}
+
+// Python: tests/test_room_turns_in_order.py::test_a_turn_that_waited_its_place_and_answers_beside_its_stream_fails
+#[tokio::test]
+async fn a_turn_that_waited_its_place_and_answers_beside_its_stream_fails() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    kit.register_channel(Buffered).unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["sms", "ai"] {
+        kit.attach_channel(&room(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let message = InboundMessage::new(channel("sms"), "+15550000001", TextContent::new("go"));
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    };
+
+    let result = kit.process_inbound(message, options).await.unwrap();
+
+    let error = result.error.map(|error| error.error_type);
+    assert_eq!(error.as_deref(), Some("TypeError"));
+    assert_eq!(agent_rows(&kit).await.0, Vec::<String>::new());
+    kit.close().await.unwrap();
+}

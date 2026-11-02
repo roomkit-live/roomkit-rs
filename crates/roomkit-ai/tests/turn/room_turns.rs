@@ -502,3 +502,52 @@ fn an_agent_that_steers_its_room_turns_declares_them_serialized() {
         (false, false)
     );
 }
+
+// Python: tests/test_room_turns_in_order.py::test_an_agent_asked_again_in_the_same_delivery_is_not_held_by_its_first_turn
+#[tokio::test]
+async fn an_agent_asked_again_in_the_same_delivery_is_not_held_by_its_first_turn() {
+    use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
+    // One message asks both agents; the planner's answer asks the writer
+    // again, a turn read in the same delivery once its first turn is over.
+    let writer = AiChannel::new(
+        channel("assistant"),
+        ScriptedProvider::new([
+            ScriptedRound::answering("drafted"),
+            ScriptedRound::answering("redrafted"),
+        ]),
+        AiChannelOptions {
+            serialize_room_turns: true,
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
+    let planner = AiChannel::new(
+        channel("planner"),
+        ScriptedProvider::new([ScriptedRound::answering("plan")]),
+        AiChannelOptions::default(),
+    )
+    .unwrap();
+    let room = Room::with_agent(writer).await;
+    room.kit.register_channel(planner).unwrap();
+    room.kit
+        .attach_channel(
+            &room_id(),
+            &channel("planner"),
+            roomkit::AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+
+    let result = tokio::time::timeout(WAIT, room.says("go")).await;
+
+    assert!(
+        result.is_ok(),
+        "the writer's second turn waited on its first"
+    );
+    let written = said(&room.kit, "assistant").await;
+    assert_eq!(
+        written.get(..2),
+        Some(&strings(&["drafted", "redrafted"])[..])
+    );
+    room.kit.close().await.unwrap();
+}
