@@ -333,7 +333,7 @@ fn preview(text: &str) -> String {
 /// Whether `c` separates words as the reference implementation's preview
 /// splits them (Python's `str.split()`): Unicode's white space, and the
 /// four information separators.
-fn is_python_space(c: char) -> bool {
+pub(super) fn is_python_space(c: char) -> bool {
     c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }
 

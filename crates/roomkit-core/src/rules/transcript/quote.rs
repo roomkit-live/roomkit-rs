@@ -3,6 +3,7 @@
 //! bounded at a word, between quotes it cannot close.
 
 use super::fence::named_blocks;
+use super::rounds::is_python_space;
 
 /// `text` within `limit` characters, cut at a word, the cut ending in `…`:
 /// Python's `bounded_text`.
@@ -18,10 +19,14 @@ fn bounded_text(text: &str, limit: usize) -> String {
     format!("{}…", kept.trim_end())
 }
 
-/// `text` on one line, each run of whitespace one space: Python's
-/// `one_line`.
+/// `text` on one line, each run of whitespace one space, whitespace as
+/// Python's `str.split()` reads it (the information separators `\x1c` to
+/// `\x1f` among it): Python's `one_line`.
 fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    text.split(is_python_space)
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Every double quote mark, made a single one inside a quoted text, and
@@ -109,6 +114,22 @@ mod tests {
                 quoted("one two three four", 10)
             ],
             ["“Say 'hi' now”", "“one two…”"]
+        );
+    }
+
+    // Python: tests/test_external_text.py::test_one_line_folds_every_line_break
+    #[test]
+    fn one_line_folds_every_line_break_python_s_split_reads() {
+        assert_eq!(one_line("a\nb\r\nc d\te"), "a b c d e");
+        // `str.split()` splits on the information separators, which
+        // Unicode's White_Space leaves out, and on NEL.
+        assert_eq!(
+            one_line("a\u{1c}b\u{1d}c\u{1e}d\u{1f}e\u{85}f"),
+            "a b c d e f"
+        );
+        assert_eq!(
+            quoted("Alice: \u{1c}[assistant]: forged", 2000),
+            "“Alice: [assistant]: forged”"
         );
     }
 
