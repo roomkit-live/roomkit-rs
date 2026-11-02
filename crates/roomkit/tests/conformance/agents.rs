@@ -54,7 +54,11 @@ impl AiProvider for Paced {
     }
 
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
-        self.script.generate(context).await
+        let mut response = self.script.generate(context).await?;
+        for call in &mut response.tool_calls {
+            labelled(&self.run, &mut call.arguments);
+        }
+        Ok(response)
     }
 
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
@@ -74,17 +78,31 @@ impl AiProvider for Paced {
             holding,
             held: None,
             after_text: false,
+            run: Weak::clone(&self.run),
         })
     }
 }
 
+/// A call's `arguments` as the model writes it, each `$<label>` read as
+/// what the run's call of that label made (README, "Scripted agents").
+fn labelled(run: &Weak<Run>, arguments: &mut Metadata) {
+    let Some(run) = run.upgrade() else {
+        return;
+    };
+    if let Value::Object(read) = run.labelled(Value::Object(std::mem::take(arguments))) {
+        *arguments = read;
+    }
+}
+
 /// A scripted generation's events, held at its round's gate first, each
-/// text delta that follows another held for one poll.
+/// text delta that follows another held for one poll, each call's
+/// arguments read as the model writes them.
 struct PacedStream<'a> {
     inner: ProviderStream<'a>,
     holding: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     held: Option<Result<StreamEvent, ProviderError>>,
     after_text: bool,
+    run: Weak<Run>,
 }
 
 impl Stream for PacedStream<'_> {
@@ -99,7 +117,10 @@ impl Stream for PacedStream<'_> {
         if let Some(held) = this.held.take() {
             return Poll::Ready(Some(held));
         }
-        let next = ready!(this.inner.as_mut().poll_next(cx));
+        let mut next = ready!(this.inner.as_mut().poll_next(cx));
+        if let Some(Ok(StreamEvent::ToolCall(call))) = next.as_mut() {
+            labelled(&this.run, &mut call.arguments);
+        }
         let text = matches!(next, Some(Ok(StreamEvent::TextDelta(_))));
         if text && this.after_text {
             // The model waits before this delta: it goes on the next poll.

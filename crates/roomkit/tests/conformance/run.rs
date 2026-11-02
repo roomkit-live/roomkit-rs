@@ -180,6 +180,30 @@ impl Run {
         lock(&self.labels).insert(label, Some(value));
     }
 
+    /// `value` with each `$<label>` a call's `as` named read as what it
+    /// names: a scripted model's call arguments, as the model writes the
+    /// call (README, "Scripted agents").
+    pub(crate) fn labelled(&self, value: Value) -> Value {
+        match value {
+            Value::Object(object) => Value::Object(
+                object
+                    .into_iter()
+                    .map(|(key, item)| (key, self.labelled(item)))
+                    .collect(),
+            ),
+            Value::Array(items) => {
+                Value::Array(items.into_iter().map(|item| self.labelled(item)).collect())
+            }
+            Value::String(text) => {
+                let named = text
+                    .strip_prefix('$')
+                    .and_then(|label| lock(&self.labels).get(label).cloned().flatten());
+                Value::String(named.unwrap_or(text))
+            }
+            scalar @ (Value::Null | Value::Bool(_) | Value::Number(_)) => scalar,
+        }
+    }
+
     pub(crate) fn problem(&self, problem: String) {
         lock(&self.problems).push(problem);
     }
