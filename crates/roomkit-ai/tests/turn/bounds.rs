@@ -314,3 +314,23 @@ fn a_tool_s_own_bound_of_zero_is_refused() {
         ]
     );
 }
+
+// Python: tests/test_channels/test_turn_budget.py::test_a_budget_is_a_positive_number
+#[test]
+fn a_token_budget_of_zero_is_refused() {
+    let built = |turn_budget_tokens| {
+        AiChannel::new(
+            channel("assistant"),
+            ScriptedProvider::new([]),
+            AiChannelOptions {
+                turn_budget_tokens,
+                ..AiChannelOptions::default()
+            },
+        )
+        .err()
+    };
+    assert_eq!(
+        [built(Some(0)), built(Some(1200)), built(None)],
+        [Some(AiError::TurnBudgetTokens), None, None]
+    );
+}

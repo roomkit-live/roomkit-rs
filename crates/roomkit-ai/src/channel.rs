@@ -91,6 +91,11 @@ pub struct AiChannelOptions {
     /// bound (a person's answer), more than zero; `None` leaves that tool
     /// unbounded (RFC §21.6). Python's `tool_timeouts`.
     pub tool_timeouts: BTreeMap<String, Option<Duration>>,
+    /// The turn's budget of billed tokens (its input, output and cache
+    /// tokens, as its generations report them), more than zero: past it,
+    /// the loop ends `budget_exceeded` at its next round boundary (RFC
+    /// §6.4). Python's `turn_budget_tokens`; `None` sets none.
+    pub turn_budget_tokens: Option<u64>,
     /// The skills the channel serves (RFC §24).
     pub skills: Option<SkillRegistry>,
     /// Whether the system prompt lists the skills; without, the host lists
@@ -144,6 +149,7 @@ impl Default for AiChannelOptions {
             max_empty_retries: 1,
             tool_timeout: Some(Duration::from_secs(30)),
             tool_timeouts: BTreeMap::new(),
+            turn_budget_tokens: None,
             skills: None,
             skills_in_prompt: true,
             tool_policy: None,
@@ -316,6 +322,7 @@ impl<P: AiProvider> AiChannel<P> {
             max_empty_retries,
             tool_timeout,
             tool_timeouts,
+            turn_budget_tokens,
             skills,
             skills_in_prompt,
             tool_policy,
@@ -327,15 +334,7 @@ impl<P: AiProvider> AiChannel<P> {
             steer_room_turns,
             human_input_handler,
         } = options;
-        if tool_timeout.is_some_and(|bound| bound.is_zero()) {
-            return Err(AiError::ToolTimeout);
-        }
-        if let Some((name, _)) = tool_timeouts
-            .iter()
-            .find(|(_, bound)| bound.is_some_and(|bound| bound.is_zero()))
-        {
-            return Err(AiError::ToolTimeoutOf { name: name.clone() });
-        }
+        refuse_zero_bounds(tool_timeout, &tool_timeouts, turn_budget_tokens)?;
         let policy = tool_policy.unwrap_or_default();
         refuse_bracketed(&policy)?;
         let mut instructions = ServerInstructions::default();
@@ -383,6 +382,7 @@ impl<P: AiProvider> AiChannel<P> {
                 max_empty_retries,
                 tool_timeout,
                 tool_timeouts,
+                turn_budget_tokens,
             },
             system_prompt: Arc::new(RwLock::new(
                 system_prompt.filter(|prompt| !prompt.is_empty()),
@@ -729,6 +729,29 @@ fn reserve_skill_names(toolbox: &Toolbox) -> Result<(), AiError> {
         }),
         None => Ok(()),
     }
+}
+
+/// Refuses a bound of zero: a call's (`tool_timeout`), a tool's own
+/// (`tool_timeouts`, RFC §21.6), a turn's budget of tokens (RFC §6.4), as
+/// Python's constructor raises `ValueError` for each.
+fn refuse_zero_bounds(
+    tool_timeout: Option<Duration>,
+    tool_timeouts: &BTreeMap<String, Option<Duration>>,
+    turn_budget_tokens: Option<u64>,
+) -> Result<(), AiError> {
+    if tool_timeout.is_some_and(|bound| bound.is_zero()) {
+        return Err(AiError::ToolTimeout);
+    }
+    if let Some((name, _)) = tool_timeouts
+        .iter()
+        .find(|(_, bound)| bound.is_some_and(|bound| bound.is_zero()))
+    {
+        return Err(AiError::ToolTimeoutOf { name: name.clone() });
+    }
+    if turn_budget_tokens == Some(0) {
+        return Err(AiError::TurnBudgetTokens);
+    }
+    Ok(())
 }
 
 /// Refuses a pattern of `policy` holding a bracket, which a pattern reads

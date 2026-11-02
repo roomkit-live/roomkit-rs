@@ -48,6 +48,8 @@ fn ai_channel_options_defaults_as_python() {
     assert!(defaults.max_tokens.is_none());
     // roomkit.AIChannel.__init__(max_tool_rounds) = 50
     assert_eq!(defaults.max_tool_rounds, 50);
+    // roomkit.AIChannel.__init__(turn_budget_tokens) = None
+    assert!(defaults.turn_budget_tokens.is_none());
     // roomkit.AIChannel.__init__(tool_timeouts) = None
     assert!(defaults.tool_timeouts.is_empty());
     // roomkit.AIChannel.__init__(memory) = None

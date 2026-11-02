@@ -104,6 +104,8 @@ pub(crate) struct Bounds {
     pub(crate) tool_timeout: Option<Duration>,
     /// A bound per tool name, above `tool_timeout` and a tool's own.
     pub(crate) tool_timeouts: BTreeMap<String, Option<Duration>>,
+    /// The turn's budget of billed tokens (RFC §6.4); `None` sets none.
+    pub(crate) turn_budget_tokens: Option<u64>,
 }
 
 impl Bounds {
@@ -200,6 +202,7 @@ impl<P: AiProvider> Loop<P> {
             };
             self.take_intents(&mut generation.calls);
             spent.count(&generation.done.usage);
+            limits.count(&generation.done.usage);
             spent.segments.push(generation.text.clone());
             let ending = (&limits, &steering, &out);
             // A stop that came after the model's last event counts as one
@@ -340,6 +343,7 @@ impl<P: AiProvider> Loop<P> {
             rounds,
             max_rounds: Some(self.bounds.max_rounds),
             timeout,
+            budget_tokens: self.bounds.turn_budget_tokens,
             model: Some(self.provider.model_name().to_owned()),
             provider: Some(self.provider.name().to_owned()),
             ..LoopEndMarker::new(reason)
@@ -540,6 +544,7 @@ mod tests {
             warn_after: 25,
             max_empty_retries: 1,
             tool_timeout: default.map(Duration::from_secs),
+            turn_budget_tokens: None,
             tool_timeouts: own
                 .iter()
                 .map(|(name, bound)| ((*name).to_owned(), bound.map(Duration::from_secs)))

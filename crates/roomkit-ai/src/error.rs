@@ -81,6 +81,10 @@ pub enum AiError {
         /// The tool's name.
         name: String,
     },
+    /// A turn's token budget is zero (RFC §6.4): Python's `ValueError`, a
+    /// budget being a positive number.
+    #[error("turn_budget_tokens must be a positive number, got 0")]
+    TurnBudgetTokens,
 }
 
 /// `names` as Python writes a set of strings' items.

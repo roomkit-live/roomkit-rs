@@ -47,7 +47,20 @@ pub(super) struct Limits {
     warn_after: u32,
     max_empty_retries: u32,
     empty_retries: u32,
+    /// The turn's budget of billed tokens, if it has one (RFC §6.4).
+    budget_tokens: Option<u64>,
+    /// The tokens its generations billed so far.
+    billed: u64,
 }
+
+/// The counters a generation's usage bills, which a token budget counts
+/// (Python's `BILLED_USAGE_COUNTERS`).
+const BILLED_COUNTERS: [&str; 4] = [
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+];
 
 impl Limits {
     /// The limits of a loop starting now under `bounds`.
@@ -58,27 +71,53 @@ impl Limits {
             warn_after: bounds.warn_after,
             max_empty_retries: bounds.max_empty_retries,
             empty_retries: 0,
+            budget_tokens: bounds.turn_budget_tokens,
+            billed: 0,
         }
     }
 
-    /// The limit of the loop's own the turn has passed: its deadline.
+    /// Counts what one generation's `usage` billed against the turn's
+    /// budget (Python's `_ToolLoopState.count`).
+    pub(super) fn count(&mut self, usage: &roomkit::model::Metadata) {
+        let billed: u64 = BILLED_COUNTERS
+            .iter()
+            .filter_map(|counter| usage.get(*counter).and_then(serde_json::Value::as_u64))
+            .sum();
+        self.billed = self.billed.saturating_add(billed);
+    }
+
+    /// The limit of the loop's own the turn has passed: its deadline, then
+    /// its budget (RFC §6.4, Python's `limit_passed`).
     pub(super) fn passed(&self) -> Option<LoopEndReason> {
-        self.deadline
-            .filter(|deadline| Instant::now() >= *deadline)
-            .map(|_| LoopEndReason::Timeout)
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Some(LoopEndReason::Timeout);
+        }
+        self.budget_tokens
+            .filter(|budget| self.billed >= *budget)
+            .map(|_| LoopEndReason::BudgetExceeded)
     }
 
     /// The limit passed at a round boundary, after `rounds` rounds of calls
     /// ran, logged: the round's calls do not run.
     pub(super) fn reached(&self, rounds: u32) -> Option<LoopEndReason> {
         let limit = self.passed();
-        if limit.is_some() {
-            tracing::warn!(
+        match limit {
+            Some(LoopEndReason::Timeout) => tracing::warn!(
                 target: "roomkit::ai",
                 rounds,
                 timeout = ?self.timeout,
                 "the tool loop passed its deadline"
-            );
+            ),
+            Some(_) => tracing::warn!(
+                target: "roomkit::ai",
+                rounds,
+                billed = self.billed,
+                "the tool loop reached the turn's budget"
+            ),
+            None => {}
         }
         limit
     }
