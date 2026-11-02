@@ -569,7 +569,10 @@ pub(crate) fn register_channel(
     } else if channel.get("model").is_some() {
         let (agent, models) = agents::scripted_agent(channel, run)?;
         crate::run::lock(&run.models).extend(models);
-        run.kit().register_channel(agent)
+        match agent {
+            agents::Scripted::Channel(agent) => run.kit().register_channel(*agent),
+            agents::Scripted::Agent(agent) => run.kit().register_channel(*agent),
+        }
     } else {
         run.kit()
             .register_channel(ScriptedChannel::new(channel, run)?)

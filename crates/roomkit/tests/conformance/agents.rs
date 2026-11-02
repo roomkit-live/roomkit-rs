@@ -19,8 +19,8 @@ use roomkit_ai::tasks::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContentPart, AiContext, AiImagePart, AiMessageContent,
-    AiProvider, AiResponse, AiRole, AiTextPart, AiTool, HumanInputToolHandler,
+    Agent, AgentOptions, AiChannel, AiChannelOptions, AiContentPart, AiContext, AiImagePart,
+    AiMessageContent, AiProvider, AiResponse, AiRole, AiTextPart, AiTool, HumanInputToolHandler,
     HumanInputToolHandlerOptions, ProviderError, ProviderStream, StreamEvent, Tool, ToolContext,
     ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolResult, ToolResultPart, Tools,
 };
@@ -139,10 +139,7 @@ pub(crate) type Models = Vec<(String, ScriptedProvider)>;
 
 /// The scripted agent `spec` describes, and its models; its gates are
 /// `run`'s.
-pub(crate) fn scripted_agent(
-    spec: &Value,
-    run: &Arc<Run>,
-) -> Result<(AiChannel<Paced>, Models), String> {
+pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, Models), String> {
     let id = ChannelId::new(spec["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
     let scripted = spec["model"]["rounds"].as_array().into_iter().flatten();
     let rounds = scripted.clone().map(round).collect::<Result<Vec<_>, _>>()?;
@@ -219,8 +216,31 @@ pub(crate) fn scripted_agent(
         run: Arc::downgrade(run),
         vision: spec["model"]["vision"] == true,
     };
-    let agent = AiChannel::new(id, paced, options).map_err(|e| e.to_string())?;
-    Ok((agent, models))
+    // An identity makes the scripted agent an Agent (README, "Scripted agents").
+    let Some(identity) = spec.get("agent") else {
+        let agent = AiChannel::new(id, paced, options).map_err(|e| e.to_string())?;
+        return Ok((Scripted::Channel(Box::new(agent)), models));
+    };
+    let text = |key: &str| identity[key].as_str().map(str::to_owned);
+    let agent_options = AgentOptions {
+        name: text("name"),
+        role: text("role"),
+        description: text("description"),
+        purpose: text("purpose"),
+        scope: text("scope"),
+        language: text("language"),
+        identity_in_prompt: identity["identity_in_prompt"] != false,
+        ai: options,
+        ..AgentOptions::default()
+    };
+    let agent = Agent::new(id, paced, agent_options).map_err(|e| e.to_string())?;
+    Ok((Scripted::Agent(Box::new(agent)), models))
+}
+
+/// A scripted agent: an AI channel, or an Agent when it has an identity.
+pub(crate) enum Scripted {
+    Channel(Box<AiChannel<Paced>>),
+    Agent(Box<Agent<Paced>>),
 }
 
 /// The tools the kit makes that a scripted agent is given as its own

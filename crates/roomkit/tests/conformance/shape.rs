@@ -95,8 +95,18 @@ const CHANNEL: &[&str] = &[
     "recent_events_window",
     "sender_is_participant",
     "memory",
+    "agent",
 ];
 const ADDRESSES: &[&str] = &["normalizes", "conversation_key"];
+const AGENT: &[&str] = &[
+    "name",
+    "role",
+    "description",
+    "purpose",
+    "scope",
+    "language",
+    "identity_in_prompt",
+];
 const HUMAN_INPUT: &[&str] = &["tool_names", "timeout_ms", "tools"];
 const HUMAN_TOOL: &[&str] = &["name", "description", "parameters"];
 const MODEL: &[&str] = &["rounds", "vision"];
@@ -555,6 +565,7 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
         &format!("{path}.addresses"),
         found,
     );
+    optional(&channel["agent"], AGENT, &format!("{path}.agent"), found);
     memory(&channel["memory"], &format!("{path}.memory"), found);
 }
 
