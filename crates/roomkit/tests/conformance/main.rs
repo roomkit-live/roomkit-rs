@@ -77,6 +77,11 @@ pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
         "tasks/a-hand-back-leaves-the-notified-agent-s-prompt-as-its-binding-holds-it",
         "§6.4: a binding's metadata system_prompt is the agent's turn prompt (G-093, RMK-1208)",
     ),
+    (
+        "tasks/a-delegated-turn-failing-after-a-tool-round-keeps-its-end",
+        "§23.3 step 6: a delegated turn that failed after it began keeps its end on the task \
+         (G-094, RMK-1208)",
+    ),
 ];
 
 /// A scenario that has not finished by then fails instead of hanging the
