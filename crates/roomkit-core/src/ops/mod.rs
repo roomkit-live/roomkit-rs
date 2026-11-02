@@ -68,9 +68,9 @@ pub use inbound::{
     default_inbound_event,
 };
 pub use lifecycle::{
-    ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom, DetachChannel, LifecycleChange,
-    LifecycleError, LifecyclePayload, PauseRoom, ReopenRoom, ResumeRoom, TimersChecked,
-    UpdateBinding, UpdateRoomMetadata,
+    AnnounceRoomCreated, ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom,
+    DetachChannel, LifecycleChange, LifecycleError, LifecyclePayload, PauseRoom, ReopenRoom,
+    ResumeRoom, TimersChecked, UpdateBinding, UpdateRoomMetadata,
 };
 pub use members::{ChangeMember, MemberChange, MemberError, Membered};
 pub use protocol::{

@@ -11,6 +11,7 @@
 //! the release: its framework event and its trigger's hooks, with the room
 //! as the change left it (gap G-027).
 
+mod announce;
 mod bindings;
 pub(crate) mod change;
 pub(crate) mod gate;
@@ -25,6 +26,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
+pub use self::announce::AnnounceRoomCreated;
 pub use self::bindings::{AttachChannel, DetachChannel, UpdateBinding};
 pub use self::metadata::UpdateRoomMetadata;
 pub use self::payload::{LifecycleChange, LifecyclePayload};
@@ -121,6 +123,9 @@ pub struct CreateRoom {
     creating: Option<EffectId>,
     observing: Option<EffectId>,
     started: bool,
+    /// Whether the operation announces the creation itself; otherwise its
+    /// caller does, with [`AnnounceRoomCreated`].
+    announces: bool,
 }
 
 impl CreateRoom {
@@ -133,7 +138,17 @@ impl CreateRoom {
             creating: None,
             observing: None,
             started: false,
+            announces: true,
         }
+    }
+
+    /// The same creation, which writes the room alone: its caller sets the
+    /// room up first (a strategy's install, RFC §19.7), then announces it
+    /// with [`AnnounceRoomCreated`].
+    #[must_use]
+    pub fn unannounced(mut self) -> Self {
+        self.announces = false;
+        self
     }
 
     /// The room is stored: its hooks run, awaited (gap G-050), its creation
@@ -146,6 +161,9 @@ impl CreateRoom {
     ) -> Option<Result<Room, LifecycleError>> {
         if let Err(error) = outcome.into_stored() {
             return Some(Err(LifecycleError::Store(error)));
+        }
+        if !self.announces {
+            return Some(Ok(self.room.clone()));
         }
         let context = RoomContext::new(self.room.clone());
         let mut cx = Cx {
