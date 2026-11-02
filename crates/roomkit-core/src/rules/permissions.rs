@@ -1265,6 +1265,7 @@ mod tests {
             assert_eq!(ids(&plan.agents), ["writer"]);
         }
 
+        // Python: tests/test_rfc_arbitrations.py::TestSupervisorAlwaysReceives::test_without_a_supervisor_nothing_is_solicited
         #[test]
         fn an_agent_s_unaddressed_output_solicits_no_agent_under_addressed_only() {
             let bindings = [agent("analyst"), agent("writer")];
