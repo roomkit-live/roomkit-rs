@@ -162,16 +162,15 @@ impl Machine {
         report: PassReport,
         origin: &PassOrigin,
     ) {
-        let context = match &report.result {
-            PassResult::Delivered { context, .. } | PassResult::Blocked { context, .. } => {
-                Some(&**context)
-            }
+        let (context, made_for) = match &report.result {
+            PassResult::Delivered { context, event, .. }
+            | PassResult::Blocked { context, event, .. } => (Some(&**context), Some(&**event)),
             PassResult::Refused { .. }
             | PassResult::Duplicate { .. }
-            | PassResult::EditRefused { .. } => None,
+            | PassResult::EditRefused { .. } => (None, None),
         };
         self.side_effects
-            .collect(report.tasks, report.observations, context);
+            .collect(report.tasks, report.observations, context, made_for);
         self.trigger.note_error(report.release_error);
         let injected = match &report.result {
             PassResult::Delivered { event, .. } | PassResult::Blocked { event, .. } => {
@@ -337,8 +336,12 @@ impl Machine {
             SetKind::Response | SetKind::Injected => false,
         };
         report::after_broadcast(cx, event, set.context(), &self.cascade.budget, processed);
-        self.side_effects
-            .collect(outcome.tasks, outcome.observations, Some(set.context()));
+        self.side_effects.collect(
+            outcome.tasks,
+            outcome.observations,
+            Some(set.context()),
+            Some(event),
+        );
         self.side_effects.update_metadata(outcome.metadata_updates);
         for agent in outcome.not_asked {
             let id = cx.env.new_event_id();

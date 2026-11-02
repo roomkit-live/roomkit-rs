@@ -1,11 +1,14 @@
 //! What the cascade reports as it goes: framework events (RFC §8.2) and the
 //! firing of observer hooks (RFC §9.3).
 
+use std::collections::HashMap;
+
 use super::delivery::SetOutcome;
 use super::pass::PassOrigin;
 use crate::model::{
-    ChannelBinding, ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType,
-    Metadata, RoomContext, RoomEvent, RoomStatus, SystemContent, Task,
+    ChannelBinding, ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventStatus,
+    EventType, Metadata, RoomContext, RoomEvent, RoomStatus, SystemContent, Task, TaskId,
+    Visibility,
 };
 use crate::ops::{ChainDepthData, Cx, FrameworkEvent, Notice, RefusedOperation};
 use crate::rules::chain_depth::ReentryBudget;
@@ -105,16 +108,54 @@ pub(super) fn target_changed(
 }
 
 /// Fires the `ON_TASK_CREATED` observers of each stored task (RFC §9.2),
-/// its payload a system event naming the task.
-pub(super) fn tasks_created(cx: &mut Cx<'_>, tasks: &[Task], context: &RoomContext) {
+/// its payload the task's event, as Python's `_persist_side_effects`
+/// builds it, for a task whose event `made_for` holds; a system event
+/// naming the task otherwise.
+pub(super) fn tasks_created(
+    cx: &mut Cx<'_>,
+    tasks: &[Task],
+    made_for: &HashMap<TaskId, RoomEvent>,
+    context: &RoomContext,
+) {
     for task in tasks {
-        let payload = task_payload(cx, task);
+        let payload = match made_for.get(&task.id) {
+            Some(event) => task_event(cx, task, event),
+            None => task_payload(cx, task),
+        };
         cx.fire_observers(HookTrigger::OnTaskCreated, &payload, context);
     }
 }
 
-/// The payload of `ON_TASK_CREATED`: a system event whose data names the
-/// task, as a lifecycle hook's names the change.
+/// The payload of `ON_TASK_CREATED` for `task`, made for `event`: an
+/// internal `task_created` event of the room, delivered, carrying the
+/// event's source and content, the task named in its metadata (Python's
+/// `RoomEvent(type=TASK_CREATED, source=event.source,
+/// content=event.content, status=DELIVERED, visibility=INTERNAL,
+/// metadata={"task_id", "task_title"})`).
+fn task_event(cx: &mut Cx<'_>, task: &Task, event: &RoomEvent) -> RoomEvent {
+    let now = cx.env.now();
+    let mut payload = RoomEvent::at(
+        cx.env.new_event_id(),
+        task.room_id.clone(),
+        EventType::TaskCreated,
+        event.source.clone(),
+        event.content.clone(),
+        now,
+    );
+    payload.status = EventStatus::Delivered;
+    payload.visibility = Visibility::Internal;
+    payload
+        .metadata
+        .insert("task_id".to_owned(), task.id.as_str().into());
+    payload
+        .metadata
+        .insert("task_title".to_owned(), task.title.clone().into());
+    payload
+}
+
+/// The payload of `ON_TASK_CREATED` for a task whose event the call does
+/// not hold (a streamed response's targets'): a system event whose data
+/// names the task, as a lifecycle hook's names the change.
 fn task_payload(cx: &mut Cx<'_>, task: &Task) -> RoomEvent {
     let source = EventSource {
         direction: EventDirection::Outbound,

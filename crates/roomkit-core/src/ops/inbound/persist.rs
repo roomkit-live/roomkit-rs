@@ -5,7 +5,9 @@
 //! observers run. Then the operation ends.
 
 use super::{Machine, Stage, report};
-use crate::model::{Metadata, Observation, RoomContext, RoomUpdates, Task};
+use std::collections::HashMap;
+
+use crate::model::{Metadata, Observation, RoomContext, RoomEvent, RoomUpdates, Task, TaskId};
 use crate::ops::Cx;
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 
@@ -20,22 +22,32 @@ pub(super) struct SideEffects {
     /// The room metadata updates the channels returned (RFC §6.1).
     metadata_updates: Metadata,
     task_context: Option<Box<RoomContext>>,
+    /// The event each task was made for, by the task: the one its
+    /// `ON_TASK_CREATED` event carries the source and content of.
+    made_for: HashMap<TaskId, RoomEvent>,
 }
 
 impl SideEffects {
-    /// Keeps the tasks and observations a pass or a set collected; the
-    /// room as `context` holds it is the one their tasks' observers read,
-    /// when it filed tasks and left a room.
+    /// Keeps the tasks and observations a pass or a set collected for
+    /// `made_for`, the event its step handled; the room as `context` holds
+    /// it is the one their tasks' observers read, when it filed tasks and
+    /// left a room.
     pub(super) fn collect(
         &mut self,
         tasks: Vec<Task>,
         observations: Vec<Observation>,
         context: Option<&RoomContext>,
+        made_for: Option<&RoomEvent>,
     ) {
         if !tasks.is_empty()
             && let Some(context) = context
         {
             self.task_context = Some(Box::new(context.clone()));
+        }
+        if let Some(event) = made_for {
+            for task in &tasks {
+                self.made_for.insert(task.id.clone(), event.clone());
+            }
         }
         self.tasks.extend(tasks);
         self.observations.extend(observations);
@@ -164,7 +176,7 @@ impl Machine {
         match outcome.into_persisted() {
             Ok(()) => {
                 if let Some(context) = self.side_effects.task_context() {
-                    report::tasks_created(cx, tasks, context);
+                    report::tasks_created(cx, tasks, &self.side_effects.made_for, context);
                 }
             }
             Err(error) => self.trigger.note_error(Some(error)),

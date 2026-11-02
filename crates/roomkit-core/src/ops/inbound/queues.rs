@@ -531,8 +531,10 @@ impl Machine {
         let (Some(output), Some(context)) = (end.output, end.context) else {
             return;
         };
+        // The streamed response the targets' tasks were made for is not
+        // held here: their observers read the system payload.
         self.side_effects
-            .collect(output.tasks, output.observations, Some(&context));
+            .collect(output.tasks, output.observations, Some(&context), None);
         self.side_effects
             .update_metadata(kept_metadata(&end.job.responder, output.metadata_updates));
         let Some(error) = output.error else {
