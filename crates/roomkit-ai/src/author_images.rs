@@ -819,6 +819,7 @@ mod tests {
         refused.add(&room(MAX_ROOMS), &keys);
         assert_eq!(refused.of(&room(0)), keys);
         assert!(refused.of(&room(1)).is_empty());
+        assert_eq!(refused.of(&room(2)), keys, "the oldest room kept");
         assert_eq!(refused.of(&room(MAX_ROOMS)), keys);
     }
 }
