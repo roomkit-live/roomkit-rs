@@ -6,6 +6,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Delegation and human input as Python's (RFC §9.3, §19.8, §23.3,
+  RMK-1192): `delegate` lets a store's failure to read the parent room
+  through, no longer `RoomNotFound`; a delegated agent's buffered answers
+  are kept in the child room as responses (one deeper, answering the
+  description, no idempotency key, an instruction dropped); a failure its
+  turn reported in the child room marks the result `error_reported`;
+  `user_input_required` names the request as the tool asked it, whatever a
+  hook's modify made of it; refusals quote names as Python's `!r`; a
+  run's task line keyed by its task goes last; a kit built outside a
+  runtime, whose bus does not subscribe at once, subscribes at its first
+  call; a delegation cut once the kit closed still ends `cancelled`.
 - `DeliveryHandle::cancel(CancelOptions { reason, timeout })`, Python's
   `DeliveryHandle.cancel` (RFC §10.1, RMK-1194): it cuts the call's turns
   and returns the call's result once they are over, the first reason kept;
