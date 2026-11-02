@@ -196,16 +196,11 @@ impl<P: AiProvider> Loop<P> {
                     .await;
             }
             if generation.calls.is_empty() {
-                let finish_reason = generation.done.finish_reason.as_deref();
-                if let Some(said) =
-                    limits.try_again(had_tool_round, &generation.text, finish_reason)
-                {
-                    // The round's text is a segment of its own: the next
-                    // round's never runs on from it (RFC §6.4).
-                    out.give(Ok(TurnItem::SegmentBreak)).await;
-                    messages.extend(said);
+                let tried = (had_tool_round, &generation);
+                if try_again(&mut limits, tried, &mut messages, &out).await {
                     continue;
                 }
+                let finish_reason = generation.done.finish_reason.as_deref();
                 let limit = limits.passed();
                 let reason =
                     final_round_reason(had_tool_round, &generation.text, finish_reason, limit);
@@ -363,6 +358,25 @@ impl<P: AiProvider> Loop<P> {
             duration: Duration::ZERO,
         }
     }
+}
+
+/// Whether the round `generation` read, which made no call to run after a
+/// round of calls or none (`had_tool_round`), is tried again under `limits`
+/// (Appendix A.9): its text then ends its segment (RFC §6.4), and
+/// `messages` take what the next generation reads after it.
+async fn try_again(
+    limits: &mut Limits,
+    (had_tool_round, generation): (bool, &Generation),
+    messages: &mut Vec<Message>,
+    out: &Yielder<Result<TurnItem, ProviderError>>,
+) -> bool {
+    let finish_reason = generation.done.finish_reason.as_deref();
+    let Some(said) = limits.try_again(had_tool_round, &generation.text, finish_reason) else {
+        return false;
+    };
+    out.give(Ok(TurnItem::SegmentBreak)).await;
+    messages.extend(said);
+    true
 }
 
 /// The provider failed: after a round of calls, the loop ends `error`, its
