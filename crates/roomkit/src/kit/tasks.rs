@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use super::RoomKit;
 use super::inline::Unstarted;
 use crate::context::ExecutionContext;
-use crate::error::RoomKitError;
+use crate::error::{RoomKitError, repr};
 use crate::orchestration::{PostOptions, StatusLevel};
 use crate::store::ConversationStore;
 use crate::store::{GetConversationOptions, PatchRoomMetadataOptions};
@@ -282,7 +282,8 @@ impl<S: ConversationStore> RoomKit<S> {
     /// # Errors
     ///
     /// [`RoomKitError::RoomNotFound`] for a parent room that is missing or
-    /// another organization's; [`RoomKitError::ChannelNotRegistered`] for an
+    /// another organization's, the store's error when it fails to read it;
+    /// [`RoomKitError::ChannelNotRegistered`] for an
     /// agent the kit does not hold; [`RoomKitError::Value`] for a hand-back
     /// the delegation cannot keep: an unknown one, or `post` for an inline
     /// task or a notified channel that is no intelligence channel attached
@@ -351,7 +352,9 @@ impl<S: ConversationStore> RoomKit<S> {
         submitted.map(|()| handle)
     }
 
-    /// The parent room, read for the organization the caller acts for.
+    /// The parent room, read for the organization the caller acts for: a
+    /// store that fails the read fails the delegation with its error, as
+    /// Python's `get_room` lets it through.
     async fn parent_room(
         &self,
         room_id: &RoomId,
@@ -360,16 +363,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let options = GetRoomOptions {
             organization_id: organization_id.map(str::to_owned),
         };
-        self.get_room(room_id, options).await.map_err(|error| {
-            if matches!(
-                error,
-                RoomKitError::Store(_) | RoomKitError::RoomNotFound(_)
-            ) {
-                RoomKitError::RoomNotFound(room_id.clone())
-            } else {
-                error
-            }
-        })
+        self.get_room(room_id, options).await
     }
 
     /// Refuses a hand-back the delegation cannot keep (RFC §23.3 step 8).
@@ -382,7 +376,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Result<(), RoomKitError> {
         if !HAND_BACKS.contains(&hand_back) {
             return Err(RoomKitError::Value(format!(
-                "hand_back must be one of ('relay', 'post'), not {hand_back:?}"
+                "hand_back must be one of ('relay', 'post'), not {}",
+                repr(hand_back)
             )));
         }
         if hand_back != "post" {
@@ -398,10 +393,10 @@ impl<S: ConversationStore> RoomKit<S> {
             && binding.is_some_and(|b| b.category == ChannelCategory::Intelligence);
         if !intelligence {
             return Err(RoomKitError::Value(format!(
-                "hand_back='post' posts as {:?}, which must be an intelligence channel attached \
-                 to room {:?}",
-                notify.as_str(),
-                room_id.as_str()
+                "hand_back='post' posts as {}, which must be an intelligence channel attached \
+                 to room {}",
+                repr(notify.as_str()),
+                repr(room_id.as_str())
             )));
         }
         Ok(())

@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use super::RoomKit;
 use super::start_task::StartTaskOptions;
-use crate::error::RoomKitError;
+use crate::error::{RoomKitError, repr};
 use crate::store::ConversationStore;
 use crate::tasks::json::{dumps_object, json as write_json, object};
 use crate::tasks::lines::{Line, ROOM_TASKS_WINDOW, room_lines};
@@ -104,7 +104,8 @@ impl<S: ConversationStore> RoomKit<S> {
         let SetupBackgroundOptions { worker, hand_back } = options;
         if !["relay", "post"].contains(&hand_back.as_str()) {
             return Err(RoomKitError::Value(format!(
-                "hand_back must be one of ('relay', 'post'), not {hand_back:?}"
+                "hand_back must be one of ('relay', 'post'), not {}",
+                repr(&hand_back)
             )));
         }
         self.registered_agent(agent)?;
@@ -241,7 +242,7 @@ pub(super) fn collision(name: &str, clash: &str, agent: &ChannelId) -> RoomKitEr
 /// `RuntimeError`.
 fn already_set_up(setup: &str, agent: &ChannelId) -> RoomKitError {
     RoomKitError::Runtime(format!(
-        "{setup}() already called for channel {:?}",
+        "{setup}() already called for channel '{}'",
         agent.as_str()
     ))
 }
@@ -747,10 +748,17 @@ mod tests {
         assert_eq!(
             (
                 first.is_ok(),
-                again.map_err(|error| matches!(error, RoomKitError::Runtime(_))),
+                again.map_err(|error| match error {
+                    RoomKitError::Runtime(message) => message,
+                    other => format!("not a RuntimeError: {other:?}"),
+                }),
                 declared
             ),
-            (true, Err(true), vec![json!(BACKGROUND_TOOL)])
+            (
+                true,
+                Err("setup_background() already called for channel 'speaker'".to_owned()),
+                vec![json!(BACKGROUND_TOOL)]
+            )
         );
     }
 
@@ -810,6 +818,34 @@ mod tests {
         };
         let answer = work_in_background(kit, call).await.unwrap();
         assert_eq!(answer, error_answer(NESTED));
+    }
+
+    // Python: tests/tasks/test_background_tasks.py::test_setup_refuses_an_unknown_hand_back
+    #[test]
+    fn setup_refuses_an_unknown_hand_back() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        kit.register_channel(Speaker).unwrap();
+        let options = SetupBackgroundOptions {
+            hand_back: "shout".to_owned(),
+            ..SetupBackgroundOptions::default()
+        };
+        let refused = kit.setup_background(&channel("speaker"), options);
+        let declared = kit
+            .inner
+            .owner_tools
+            .declared(&channel("speaker"), &RoomId::new("r").unwrap());
+        assert_eq!(
+            (refused.err().map(|error| error.to_string()), declared.len()),
+            (
+                Some(
+                    RoomKitError::Value(
+                        "hand_back must be one of ('relay', 'post'), not 'shout'".to_owned()
+                    )
+                    .to_string()
+                ),
+                0
+            )
+        );
     }
 
     // Python: tests/tasks/test_cancel_task.py::test_the_definition_asks_for_the_task_id

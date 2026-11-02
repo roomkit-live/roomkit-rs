@@ -12,7 +12,7 @@ use roomkit_core::model::{ChannelCategory, ChannelId, RoomId};
 use super::RoomKit;
 use super::tasks::DelegateOptions;
 use crate::GetRoomOptions;
-use crate::error::RoomKitError;
+use crate::error::{RoomKitError, repr};
 use crate::store::ConversationStore;
 use crate::tasks::DelegatedTask;
 use crate::tasks::brief::{BACKGROUND_CONVERSATION, worker_brief};
@@ -102,9 +102,9 @@ impl<S: ConversationStore> RoomKit<S> {
             return Ok(());
         }
         Err(RoomKitError::Value(format!(
-            "{:?} is not an agent of room {:?}",
-            agent_id.as_str(),
-            room_id.as_str()
+            "{} is not an agent of room {}",
+            repr(agent_id.as_str()),
+            repr(room_id.as_str())
         )))
     }
 }

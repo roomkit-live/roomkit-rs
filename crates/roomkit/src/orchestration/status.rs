@@ -15,7 +15,7 @@ use super::backend::{self, StatusBackend, StatusCallback};
 use super::memory::{InMemoryStatusBackend, InMemoryStatusBackendOptions};
 use crate::context::ExecutionContext;
 use crate::environment::SystemEnvironment;
-use crate::error::RoomKitError;
+use crate::error::{RoomKitError, repr};
 
 /// How many entries [`StatusBus::recent`] reads by default, Python's
 /// `n=10`.
@@ -79,7 +79,7 @@ impl FromStr for StatusLevel {
         ]
         .into_iter()
         .find(|level| level.as_str() == value)
-        .ok_or_else(|| RoomKitError::Value(format!("{value:?} is not a valid StatusLevel")))
+        .ok_or_else(|| RoomKitError::Value(format!("{} is not a valid StatusLevel", repr(value))))
     }
 }
 
@@ -451,10 +451,16 @@ mod tests {
     fn a_level_is_read_from_its_text_and_another_text_is_refused() {
         assert_eq!(
             (
-                "completed".parse::<StatusLevel>(),
-                "done".parse::<StatusLevel>().is_err()
+                "completed".parse::<StatusLevel>().ok(),
+                "done".parse::<StatusLevel>().err().map(|e| e.to_string())
             ),
-            (Ok(StatusLevel::Completed), true)
+            (
+                Some(StatusLevel::Completed),
+                // Python's enum, its value quoted as `!r` writes it.
+                Some(
+                    RoomKitError::Value("'done' is not a valid StatusLevel".to_owned()).to_string()
+                )
+            )
         );
     }
 

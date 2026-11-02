@@ -580,7 +580,7 @@ fn participant_not_found(
 /// implementation's messages quote their names with (`{name!r}`): in single
 /// quotes, double ones when it holds a single quote and no double one, its
 /// backslashes, its quote and its control characters escaped.
-fn repr(text: &str) -> String {
+pub(crate) fn repr(text: &str) -> String {
     let quote = if text.contains('\'') && !text.contains('"') {
         '"'
     } else {
