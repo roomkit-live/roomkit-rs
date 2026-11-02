@@ -41,8 +41,9 @@ use crate::ops::protocol::StoreRequest;
 use crate::rules::attachment;
 use crate::rules::lifecycle::Transition;
 
-/// Why a lifecycle operation failed. Nothing was changed, but by a detach
-/// its channel failed on ([`LifecycleError::ChannelFailed`]), which stands.
+/// Why a lifecycle operation failed. Nothing was changed, but for
+/// [`LifecycleError::ChannelFailed`]: a detach its channel failed on
+/// stands, and an attach whose undo failed may leave its binding.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum LifecycleError {
