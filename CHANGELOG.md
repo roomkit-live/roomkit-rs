@@ -35,6 +35,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`Channel 'ana' is not an intelligence channel`), nothing attached, as
   for an agent named by its id (RFC §19.7, RMK-1233): the transport was
   attached as the agent, taking its turns.
+- An AI channel registers on its person's handler when a kit registers
+  it, as Python's `_wire_ai_channel`, not when it is built (RMK-1201):
+  with one handler shared by two channels of one id, the one a kit
+  registered last owns the id's requests, and its kit's close settles
+  them.
 - A kit whose status bus does not subscribe at once subscribes at its
   first room activity, which awaits it, as Python's
   `_ensure_status_bus_subscribed` (RMK-1201): a status posted once that

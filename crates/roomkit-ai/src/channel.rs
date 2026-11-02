@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::{self, Future};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
@@ -267,8 +268,9 @@ pub struct AiChannel<P> {
     /// How it takes a room's turns (RFC §6.4).
     room_turns: RoomTurns,
     /// The tools that ask a person, and the token of the channel's
-    /// registration on their handler.
-    human_input: Option<(HumanInputToolHandler, u64)>,
+    /// registration on their handler, taken when a kit registers it; 0
+    /// before.
+    human_input: Option<(HumanInputToolHandler, Arc<AtomicU64>)>,
 }
 
 /// How an AI channel reads its authors' media and its tools' images (RFC
@@ -416,7 +418,7 @@ impl<P: AiProvider> AiChannel<P> {
             reserve_skill_names(&toolbox)?;
         }
         let human_input = match human_input_handler {
-            Some(human) => Some(serve_human_input(&mut toolbox, human, &channel_id)?),
+            Some(human) => Some(serve_human_input(&mut toolbox, human)?),
             None => None,
         };
         let skills = match skills.filter(SkillRegistry::has_entries) {
@@ -794,9 +796,9 @@ fn ai_channel_capabilities() -> ChannelCapabilities {
 }
 
 /// Serves the person's tools `human` defines, and the names it serves that
-/// `toolbox` declares already, before their own toolset (RFC §9.3), the
-/// channel `channel_id` registered on its handler: the token of the
-/// registration.
+/// `toolbox` declares already, before their own toolset (RFC §9.3): the
+/// tools, and the token of the channel's registration on their handler, 0
+/// until a kit registers the channel.
 ///
 /// # Errors
 ///
@@ -805,8 +807,7 @@ fn ai_channel_capabilities() -> ChannelCapabilities {
 fn serve_human_input(
     toolbox: &mut Toolbox,
     human: HumanInputToolHandler,
-    channel_id: &ChannelId,
-) -> Result<(HumanInputToolHandler, u64), AiError> {
+) -> Result<(HumanInputToolHandler, Arc<AtomicU64>), AiError> {
     let toolset = human.toolset();
     let defined = human.tools();
     let declared_elsewhere: Vec<String> = human
@@ -817,13 +818,7 @@ fn serve_human_input(
         .collect();
     toolbox.add_dyn(Arc::clone(&toolset), defined)?;
     toolbox.intercept(toolset, &declared_elsewhere);
-    // Only a handler already closed whole refuses a registration: its
-    // requests are then refused at each call.
-    let registration = human
-        .handler()
-        .register(channel_id.as_str())
-        .unwrap_or_default();
-    Ok((human, registration))
+    Ok((human, Arc::default()))
 }
 
 /// The handler that serves a call with the host's handler `host` holds at
@@ -1150,18 +1145,28 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         self.provider.close().await;
         self.memory.close().await;
         if let Some((human, registration)) = &self.human_input {
+            let registration = registration.load(Ordering::Acquire);
             let options = CloseOptions {
                 channel_id: Some(self.channel_id.to_string()),
-                registration: Some(*registration),
+                registration: (registration != 0).then_some(registration),
             };
             human.handler().close(options).await;
         }
     }
 
     /// The handler its person's tools keep their requests in, which the
-    /// kit wires at registration, as Python's `_wire_ai_channel`.
+    /// kit wires at registration, as Python's `_wire_ai_channel`: the
+    /// channel registers there as the owner of its id's requests, the one a
+    /// kit registered last owning them (RMK-1201). Only a handler already
+    /// closed whole refuses it: its requests are then refused at each call.
     fn human_input_handler(&self) -> Option<roomkit::human_input::HumanInputHandler> {
-        Some(self.human_input.as_ref()?.0.handler().clone())
+        let (human, registration) = self.human_input.as_ref()?;
+        let handler = human.handler();
+        let token = handler
+            .register(self.channel_id.as_str())
+            .unwrap_or_default();
+        registration.store(token, Ordering::Release);
+        Some(handler.clone())
     }
 }
 

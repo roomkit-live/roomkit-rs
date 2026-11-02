@@ -441,3 +441,52 @@ async fn a_shared_handler_s_requests_fire_the_hooks_of_their_channel_s_kit() {
     first_kit.close().await.unwrap();
     second_kit.close().await.unwrap();
 }
+
+/// An agent `ai` asking a person through `shared`.
+fn agent_asking_through(shared: &HumanInputHandler) -> roomkit_ai::AiChannel<ScriptedProvider> {
+    let options = HumanInputToolHandlerOptions {
+        handler: Some(shared.clone()),
+        ..HumanInputToolHandlerOptions::default()
+    };
+    let human = HumanInputToolHandler::new(["AskUser"], options).unwrap();
+    let options = AiChannelOptions {
+        human_input_handler: Some(human),
+        ..AiChannelOptions::default()
+    };
+    let model = ScriptedProvider::new([ScriptedRound::answering("Done.")]);
+    let id = roomkit::model::ChannelId::new("ai").unwrap();
+    roomkit_ai::AiChannel::new(id, model, options).unwrap()
+}
+
+// Python: turns/_wiring.py _wire_ai_channel (RMK-1201): an AI channel
+// registers on its handler when a kit registers it, the channel a kit
+// registered last owning its id's requests, whichever was built first: the
+// close of its kit settles them.
+#[tokio::test]
+async fn the_channel_a_kit_registered_last_owns_its_id_s_requests() {
+    use roomkit::human_input::CreateDetachedOptions;
+    use roomkit::{RoomKit, RoomKitOptions};
+
+    let shared = HumanInputHandler::default();
+    let built_first = agent_asking_through(&shared);
+    let built_second = agent_asking_through(&shared);
+    let other = RoomKit::new(RoomKitOptions::default());
+    other.register_channel(built_second).unwrap();
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(built_first).unwrap();
+    let options = CreateDetachedOptions {
+        room_id: "room-1".to_owned(),
+        channel_id: "ai".to_owned(),
+        ..CreateDetachedOptions::default()
+    };
+    let request = shared
+        .create_detached("AskUser", Metadata::new(), options)
+        .await
+        .unwrap();
+
+    kit.close().await.unwrap();
+
+    let settled = !shared.pending().contains_key(&request.pending_id);
+    other.close().await.unwrap();
+    assert!(settled);
+}
