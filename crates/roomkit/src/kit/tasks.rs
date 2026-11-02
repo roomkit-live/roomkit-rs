@@ -1123,7 +1123,9 @@ fn log_not_delivered(notify: &ChannelId, room_id: &RoomId, outcome: &DeliveryOut
         DeliveryOutcomeStatus::Blocked => "blocked",
         DeliveryOutcomeStatus::Unavailable => "unavailable",
         DeliveryOutcomeStatus::Failed => "failed",
-        _ => return,
+        DeliveryOutcomeStatus::Queued
+        | DeliveryOutcomeStatus::Sent
+        | DeliveryOutcomeStatus::Unknown => return,
     };
     // Python's `%s` of a reason it does not have.
     let reason = outcome.reason.as_deref().unwrap_or("None");

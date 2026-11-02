@@ -230,9 +230,7 @@ impl Stops {
         let read = async { self.read.wait_for(|stopped| *stopped).await.is_ok() };
         let kit = async { self.kit.wait_for(|cut| *cut).await.is_ok() };
         let task = async {
-            let Some(task) = self.task.as_mut() else {
-                return None;
-            };
+            let task = self.task.as_mut()?;
             task.wait_for(Option::is_some)
                 .await
                 .ok()
