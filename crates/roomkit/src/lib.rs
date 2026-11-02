@@ -157,6 +157,10 @@ pub use self::hooks::{
     HookError, HookFuture, HookHandler, HookOptions, HookPayload, HookRegistration, HookReturn,
     IntoHookReturn, SessionStartedEvent,
 };
+// For the AI channel's loop alone: the payloads of its triggers, which
+// roomkit-ai defines, and what their hooks came to.
+#[doc(hidden)]
+pub use self::hooks::TurnPayload;
 pub use self::host::{HostChannel, HostChannelOptions};
 pub use self::inbound::{DeliveryHandle, InboundResult};
 pub use self::kit::RejectInputOptions;
@@ -209,6 +213,8 @@ pub use self::tool_calls::ToolCallEvent;
 #[doc(hidden)]
 pub use self::tool_calls::ToolCallReport;
 pub use self::transport::{TransportChannel, TransportChannelOptions};
+#[doc(hidden)]
+pub use self::turn::TurnChain;
 pub use self::turn::{PostStatusOptions, ToolGate, TurnHost, WaitTaskOptions, current_turn_host};
 // For the AI channel's turn alone: the answer of a tool the owner serves.
 pub use self::tasks::result_tool::ResultTool;

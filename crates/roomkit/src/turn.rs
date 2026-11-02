@@ -22,7 +22,7 @@ use crate::channel::{BoxFuture, DynChannel};
 use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::events::FrameworkEvent;
-use crate::hooks::{self, HookHandler};
+use crate::hooks::{self, HookHandler, TurnHook};
 use crate::human_input::PendingInputEvent;
 use crate::kit::Inner;
 use crate::orchestration::{StatusEntry, StatusLevel};
@@ -40,6 +40,9 @@ use crate::turns::{HostLink, TurnError, send_event_arguments};
 use crate::{DelegateOptions, RoomKit, SendEventOptions, UpdateRoomMetadataOptions};
 
 mod inputs;
+mod loop_hooks;
+
+pub use self::loop_hooks::TurnChain;
 
 tokio::task_local! {
     static TURN: TurnHost;
@@ -1163,6 +1166,17 @@ pub(crate) trait TurnKit: Send + Sync {
         channel_type: &ChannelType,
     ) -> Vec<(HookSpec, Arc<dyn HookHandler<PendingInputEvent>>)>;
 
+    /// The hooks of `trigger`, an AI channel's loop trigger, that fire for
+    /// the agent `channel_id` of `channel_type` in the room `room_id`, the
+    /// kit's and the room's: its SYNC chain in chain order, then its
+    /// observers (RFC §6.4, §9.2).
+    fn turn_hooks(
+        &self,
+        trigger: HookTrigger,
+        agent: (&RoomId, &ChannelId),
+        channel_type: &ChannelType,
+    ) -> Vec<(HookSpec, TurnHook)>;
+
     /// The kit's clock, now.
     fn now(&self) -> Timestamp;
 
@@ -1309,6 +1323,17 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
     ) -> Vec<(HookSpec, Arc<dyn HookHandler<PendingInputEvent>>)> {
         self.upgrade()
             .map(|inner| inner.input_hooks(agent, channel_type))
+            .unwrap_or_default()
+    }
+
+    fn turn_hooks(
+        &self,
+        trigger: HookTrigger,
+        agent: (&RoomId, &ChannelId),
+        channel_type: &ChannelType,
+    ) -> Vec<(HookSpec, TurnHook)> {
+        self.upgrade()
+            .map(|inner| inner.turn_hooks(trigger, agent, channel_type))
             .unwrap_or_default()
     }
 

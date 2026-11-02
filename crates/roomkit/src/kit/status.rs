@@ -319,7 +319,8 @@ impl ObservedPayload for StatusEntry {
             | Kept::Session(_)
             | Kept::Status(_)
             | Kept::Observation(_)
-            | Kept::Input(_) => None,
+            | Kept::Input(_)
+            | Kept::Turn(_) => None,
         }
     }
 }
@@ -333,7 +334,8 @@ impl ObservedPayload for RoomEvent {
             | Kept::Session(_)
             | Kept::Status(_)
             | Kept::StatusEntry(_)
-            | Kept::Input(_) => None,
+            | Kept::Input(_)
+            | Kept::Turn(_) => None,
         }
     }
 }
@@ -347,7 +349,8 @@ impl ObservedPayload for Observation {
             | Kept::Session(_)
             | Kept::Status(_)
             | Kept::StatusEntry(_)
-            | Kept::Input(_) => None,
+            | Kept::Input(_)
+            | Kept::Turn(_) => None,
         }
     }
 }

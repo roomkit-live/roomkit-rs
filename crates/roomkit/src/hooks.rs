@@ -2,6 +2,7 @@
 //! registration takes beside its trigger and its handler, and the payloads
 //! a hook is handed.
 
+use std::any::Any;
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::future::Future;
@@ -294,6 +295,7 @@ impl HookRegistration {
             Kept::StatusEntry(_) => StatusEntry::accepts(self.trigger),
             Kept::Observation(_) => Observation::accepts(self.trigger),
             Kept::Input(_) => crate::human_input::PendingInputEvent::accepts(self.trigger),
+            Kept::Turn(ref hook) => hook.trigger == self.trigger,
         }
     }
 
@@ -379,6 +381,7 @@ mod sealed {
     impl Sealed for crate::orchestration::StatusEntry {}
     impl Sealed for roomkit_core::model::Observation {}
     impl Sealed for crate::human_input::PendingInputEvent {}
+    impl<T: super::TurnPayload> Sealed for T {}
 }
 
 /// What a trigger hands its hooks (RFC §9.2): a [`RoomEvent`] for the
@@ -410,6 +413,9 @@ impl HookPayload for RoomEvent {
                     | HookTrigger::OnStatusPosted
                     | HookTrigger::OnFeedback
                     | HookTrigger::OnUserInputRequired
+                    | HookTrigger::AfterToolRound
+                    | HookTrigger::BeforeAiGeneration
+                    | HookTrigger::OnAiResponse
             )
     }
 
@@ -478,6 +484,57 @@ impl HookPayload for crate::human_input::PendingInputEvent {
     }
 }
 
+/// The payload of a trigger a turn fires whose type a crate beside the kit
+/// defines: roomkit-ai's loop events, `AFTER_TOOL_ROUND`'s,
+/// `BEFORE_AI_GENERATION`'s and `ON_AI_RESPONSE`'s (RFC §6.4). Its hooks
+/// register as any hook's, and a turn runs them through its host.
+#[doc(hidden)]
+pub trait TurnPayload: Clone + Send + Sync + 'static {
+    /// The trigger that hands it.
+    const TRIGGER: HookTrigger;
+}
+
+impl<T: TurnPayload> HookPayload for T {
+    fn accepts(trigger: HookTrigger) -> bool {
+        trigger == T::TRIGGER
+    }
+
+    fn kept(handler: Arc<dyn HookHandler<Self>>) -> Kept {
+        Kept::Turn(TurnHook {
+            trigger: T::TRIGGER,
+            handler: Arc::new(handler),
+        })
+    }
+}
+
+/// The hook of a [`TurnPayload`], its handler kept whatever its payload's
+/// type, which the turn that runs it names again.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct TurnHook {
+    trigger: HookTrigger,
+    /// An `Arc<dyn HookHandler<P>>` of the payload `P` of `trigger`.
+    handler: Arc<dyn Any + Send + Sync>,
+}
+
+impl std::fmt::Debug for TurnHook {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TurnHook")
+            .field("trigger", &self.trigger)
+            .finish_non_exhaustive()
+    }
+}
+
+impl TurnHook {
+    /// Its handler, when its payload is `P`.
+    pub(crate) fn handler<P: TurnPayload>(&self) -> Option<Arc<dyn HookHandler<P>>> {
+        self.handler
+            .downcast_ref::<Arc<dyn HookHandler<P>>>()
+            .map(Arc::clone)
+    }
+}
+
 /// A hook's handler as the kit keeps it, by its payload.
 #[doc(hidden)]
 #[derive(Clone)]
@@ -496,6 +553,8 @@ pub enum Kept {
     Observation(Arc<dyn HookHandler<Observation>>),
     /// A human-input request's hook.
     Input(Arc<dyn HookHandler<crate::human_input::PendingInputEvent>>),
+    /// The hook of a trigger of an AI channel's loop.
+    Turn(TurnHook),
 }
 
 impl std::fmt::Debug for Kept {
@@ -508,6 +567,7 @@ impl std::fmt::Debug for Kept {
             Self::StatusEntry(_) => "Kept::StatusEntry",
             Self::Observation(_) => "Kept::Observation",
             Self::Input(_) => "Kept::Input",
+            Self::Turn(_) => "Kept::Turn",
         })
     }
 }
@@ -573,7 +633,7 @@ pub(crate) async fn run_kept(
             "HookError",
             "a delivery status's hook does not run on an event",
         )),
-        Kept::StatusEntry(_) | Kept::Observation(_) | Kept::Input(_) => {
+        Kept::StatusEntry(_) | Kept::Observation(_) | Kept::Input(_) | Kept::Turn(_) => {
             HookOutcome::Raised(ErrorRecord::new(
                 "HookError",
                 "a hook whose payload is no event does not run on an event",
