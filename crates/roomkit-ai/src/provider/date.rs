@@ -86,8 +86,9 @@ impl fmt::Display for Date {
 impl FromStr for Date {
     type Err = AiError;
 
-    /// Reads a day written `YYYY-MM-DD`, as Python's `date.fromisoformat`
-    /// reads its basic form.
+    /// Reads a day written `YYYY-MM-DD`, Python's `date.isoformat()` form;
+    /// the other forms `date.fromisoformat` takes (`YYYYMMDD`, week dates)
+    /// are refused.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let invalid = || AiError::Date {
             reason: format!("Invalid isoformat string: '{value}'"),

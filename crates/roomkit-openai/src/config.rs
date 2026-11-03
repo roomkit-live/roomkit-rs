@@ -84,7 +84,8 @@ pub struct OpenAiConfig {
     /// takes none, any other does.
     pub supports_custom_temperature: Option<bool>,
     /// How hard a reasoning model thinks (`reasoning_effort`), when set
-    /// (RFC §6.7). On OpenAI's own endpoint, `none` is sent as the least
+    /// (RFC §6.7), under the turn's own on Chat Completions. There, on
+    /// OpenAI's own endpoint, `none` is sent as the least
     /// effort the catalogue says the model takes (`minimal` on GPT-5,
     /// `low` on o3). On a Chat Completions turn with tools, a model the
     /// catalogue tags decides there (`none` for GPT-5.4 and later, sent
