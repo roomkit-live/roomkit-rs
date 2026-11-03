@@ -336,7 +336,6 @@ mod tests {
         );
     }
 
-    /// The run's line, keyed again by its task once its terminal entry names
     // Python: tests/orchestration/test_worker_run_task_line.py::test_an_entry_no_worker_run_posted_never_ends_a_task_s_line
     // (and the run's entry under its own action that does end it:
     // test_a_worker_cut_after_its_progress_leaves_its_line_ended[iteration]).
@@ -360,6 +359,7 @@ mod tests {
         assert_eq!(lines, vec![(json!("t1"), json!("worker"), json!("failed"))]);
     }
 
+    /// The run's line, keyed again by its task once its terminal entry names
     /// it, goes last, as Python's `tasks[task_id] = tasks.pop(by_agent)`
     /// moves it in the dict's order.
     #[test]

@@ -729,8 +729,6 @@ impl<S: ConversationStore> RoomKit<S> {
         self.inner.room_strategies.installs_ended.notify_waiters();
     }
 
-    /// Whether `room_id` holds a strategy recorded through this kit, its
-    /// install over or not.
     /// Claims `room_id` for the strategy at `owner` from its own install,
     /// or refuses: Python's `claim_room_strategy(room_id, self)` a built-in
     /// strategy's install calls first, which an install the kit runs passes
@@ -739,6 +737,8 @@ impl<S: ConversationStore> RoomKit<S> {
         check_claim_of(&self.inner.room_strategies.rooms(), room_id, owner)
     }
 
+    /// Whether `room_id` holds a strategy recorded through this kit, its
+    /// install over or not.
     pub(crate) fn holds_strategy_record(&self, room_id: &RoomId) -> bool {
         self.inner.room_strategies.rooms().contains_key(room_id)
     }
