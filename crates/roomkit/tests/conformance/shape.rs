@@ -99,6 +99,7 @@ const CHANNEL: &[&str] = &[
     "tool_timeout_ms",
     "tool_timeouts_ms",
     "turn_budget_tokens",
+    "reasoning_effort",
     "retry_policy",
     "fallback_model",
     "max_author_images",

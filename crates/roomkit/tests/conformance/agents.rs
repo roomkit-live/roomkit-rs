@@ -169,6 +169,13 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
         let budget = budget.as_u64().ok_or("turn_budget_tokens: not a count")?;
         options.turn_budget_tokens = Some(budget);
     }
+    if let Some(effort) = spec
+        .get("reasoning_effort")
+        .filter(|effort| !effort.is_null())
+    {
+        let effort = effort.as_str().ok_or("reasoning_effort: not a text")?;
+        options.reasoning_effort = Some(effort.to_owned());
+    }
     if let Some(bound) = spec.get("max_author_images") {
         options.max_author_images = if bound.is_null() {
             None
@@ -649,6 +656,7 @@ fn request(request: &AiContext) -> Value {
         "system_prompt": request.system_prompt,
         "temperature": request.temperature,
         "max_tokens": request.max_tokens,
+        "reasoning_effort": request.reasoning_effort,
         "tools": tools,
     })
 }
