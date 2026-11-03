@@ -225,6 +225,20 @@ mod tests {
         assert_eq!(published_tags(&other), Vec::<String>::new());
     }
 
+    // Python: tests/test_mcp_listing.py::test_a_tag_a_server_wrote_badly_costs_it_no_tool
+    #[test]
+    fn a_tag_a_server_wrote_badly_costs_it_no_tool() {
+        for (meta, tags) in [
+            (json!({ "fastmcp": { "tags": [1, "send"] } }), vec!["send"]),
+            (json!({ "fastmcp": { "tags": "send" } }), Vec::new()),
+            (json!({ "fastmcp": { "tags": null } }), Vec::new()),
+            (json!({ "fastmcp": "send" }), Vec::new()),
+            (json!({ "fastmcp": null }), Vec::new()),
+        ] {
+            assert_eq!(published_tags(&tool(&meta)), tags, "{meta}");
+        }
+    }
+
     // Python: tools/mcp.py's _definition(), which hands the tags to the AITool
     #[test]
     fn a_listed_tool_keeps_its_tags() {
