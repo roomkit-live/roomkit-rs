@@ -195,7 +195,7 @@ fn wire_message(message: &Message) -> WireMessage<'_> {
     }
 }
 
-/// A part of a user's message as the wire writes it: a text, or an
+/// A part of a message as the wire writes it: a text, or an
 /// image the provider can fetch; an image the host has not resolved, or a
 /// part the transcript adds later, is not sent.
 fn part_block(part: &Part) -> Option<Value> {
@@ -302,21 +302,14 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`OpenAiError::Answered`] when `body` is an error object in
-/// place of a completion (a gateway's 200, Python's `_completion_of`),
-/// [`OpenAiError::Malformed`] when it is no chat completion, saying why
-/// without `secret`, the API key.
+/// Returns [`OpenAiError::Malformed`] when `body` is no chat completion,
+/// saying why without `secret`, the API key.
 pub(crate) fn response(body: &[u8], secret: &str) -> Result<Whole, OpenAiError> {
     let malformed = |reason: String| OpenAiError::Malformed {
         reason: cleaned(&reason, secret, MESSAGE_LIMIT),
     };
-    let value: Value =
-        serde_json::from_slice(body).map_err(|error| malformed(error.to_string()))?;
-    if let Some(error) = value.get("error").filter(|error| truthy(error)) {
-        return Err(answered(error, secret));
-    }
     let completion: Completion =
-        serde_json::from_value(value).map_err(|error| malformed(error.to_string()))?;
+        serde_json::from_slice(body).map_err(|error| malformed(error.to_string()))?;
     let usage = completion.usage.map(usage_of).unwrap_or_default();
     let choice = completion
         .choices
@@ -434,12 +427,14 @@ impl Folding {
             reason: cleaned(&error.to_string(), secret, MESSAGE_LIMIT),
         })?;
         // An error member Python's client reads as true raises (`if
-        // data.get("error")`), with the status its object names.
+        // data.get("error")`), with the status its object names and the
+        // client's words when it gives none of its own.
         if let Some(error) = chunk.error.filter(truthy) {
             let message = error
                 .get("message")
                 .and_then(Value::as_str)
-                .map_or_else(|| error.to_string(), str::to_owned);
+                .filter(|message| !message.is_empty())
+                .unwrap_or(STREAM_ERROR);
             return Err(OpenAiError::StreamFailed {
                 message: cleaned(&message, secret, MESSAGE_LIMIT),
                 status: described_status(&error),
@@ -553,6 +548,10 @@ pub(crate) fn status_error(status: StatusCode, body: &[u8], secret: &str) -> Ope
     }
 }
 
+/// What Python's client says of an error inside a stream that brings no
+/// message of its own (`openai._streaming`).
+const STREAM_ERROR: &str = "An error occurred during streaming";
+
 /// The status an error object names, Python's `_ERROR_TYPE_STATUS`: where
 /// a server wrote the failure into its body rather than its status line (a
 /// stream already answered 200, a gateway answering 200), and the
@@ -645,6 +644,25 @@ fn truthy(value: &Value) -> bool {
         Value::Array(items) => !items.is_empty(),
         Value::Object(fields) => !fields.is_empty(),
     }
+}
+
+/// What a completion asked whole answers, as [`response`] reads it, or the
+/// failure an error object answered in its place stands for, as a gateway
+/// answers 200 (Python's `_completion_of`).
+///
+/// # Errors
+///
+/// [`OpenAiError::Answered`] for an error object, else as [`response`].
+pub(crate) fn completion(body: &[u8], secret: &str) -> Result<Whole, OpenAiError> {
+    let value: Option<Value> = serde_json::from_slice(body).ok();
+    if let Some(error) = value
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .filter(|error| truthy(error))
+    {
+        return Err(answered(error, secret));
+    }
+    response(body, secret)
 }
 
 /// The failure an error object answered in place of a completion stands

@@ -169,8 +169,9 @@ impl AiProvider for OpenAiAiProvider {
         true
     }
 
-    /// The whole answer to `context`: one completion not streamed, as
-    /// Python's `generate` sends it, read to its end.
+    /// The whole answer to `context`: on Chat Completions, one completion
+    /// not streamed, as Python's `generate` sends it; on Responses, its
+    /// stream read to its end.
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
         let events = match Request::of(context) {
             Ok(request) => stream::answer(self, request, false),

@@ -10,7 +10,7 @@ use pretty_assertions::assert_eq;
 use roomkit_ai::{
     AiContentPart, AiContext, AiMessage, AiProvider, AiRole, AiTextPart, ProviderError,
 };
-use roomkit_openai::{OpenAiAiProvider, OpenAiConfig};
+use roomkit_openai::{OpenAiAiProvider, OpenAiApi, OpenAiConfig};
 use serde_json::{Value, json};
 
 use super::fake::{FakeOpenAi, Reply};
@@ -19,9 +19,14 @@ use super::fake::{FakeOpenAi, Reply};
 const OVERLOAD: &str = "The server is overloaded, please try again later";
 
 async fn provider(replies: Vec<Reply>) -> (OpenAiAiProvider, FakeOpenAi) {
+    on(OpenAiApi::ChatCompletions, replies).await
+}
+
+async fn on(api: OpenAiApi, replies: Vec<Reply>) -> (OpenAiAiProvider, FakeOpenAi) {
     let fake = FakeOpenAi::start(replies).await;
     let config = OpenAiConfig {
         base_url: Some(fake.base_url().to_owned()),
+        api,
         ..OpenAiConfig::new("sk-test", "fake-model")
     };
     (OpenAiAiProvider::new(config).unwrap(), fake)
@@ -36,7 +41,11 @@ fn hello() -> AiContext {
 
 /// The error one generation fails with, `generate` or streamed.
 async fn failure(replies: Vec<Reply>, streamed: bool) -> ProviderError {
-    let (provider, _fake) = provider(replies).await;
+    failure_on(OpenAiApi::ChatCompletions, replies, streamed).await
+}
+
+async fn failure_on(api: OpenAiApi, replies: Vec<Reply>, streamed: bool) -> ProviderError {
+    let (provider, _fake) = on(api, replies).await;
     if !streamed {
         return provider.generate(&hello()).await.unwrap_err();
     }
@@ -108,23 +117,74 @@ async fn an_overload_reads_the_same_as_a_status_and_inside_a_200_stream() {
 }
 
 // Python: tests/text_conformance/test_failures.py::test_an_error_in_a_stream_that_names_no_status_is_final
-/// Without a status, an error inside a stream is final unless its words
-/// name a transient failure; one whose type alone names a status reads as
-/// that status (Python's `_ERROR_TYPE_STATUS`: `server_error` is 500).
+/// Without a status, an error inside a stream is final unless its own
+/// words name a transient failure: one that brings no message reads as
+/// Python's client words it, "An error occurred during streaming", never
+/// as its JSON (a bare `"rate limited"`, a `rate_limit` code no table
+/// names).
 #[tokio::test]
 async fn an_error_in_a_stream_that_names_no_status_is_final() {
     let unnamed = json!({ "error": { "message": "Failed to generate a reply" } });
+    let bare = json!({ "error": "rate limited" });
+    let coded = json!({ "error": { "code": "rate_limit" } });
+    let (unnamed, bare, coded) = (
+        failure(vec![Reply::events(&[unnamed])], true).await,
+        failure(vec![Reply::events(&[bare])], true).await,
+        failure(vec![Reply::events(&[coded])], true).await,
+    );
+    assert_eq!(
+        (read(&unnamed), read(&bare), read(&coded)),
+        ((false, None), (false, None), (false, None))
+    );
+}
+
+/// An error inside a stream whose object names a status, by its type alone
+/// or by digits, reads as that status (Python's `_ERROR_TYPE_STATUS`:
+/// `server_error` is 500, and `_status_in` reads `"429"`).
+#[tokio::test]
+async fn an_error_in_a_stream_reads_as_the_status_it_names() {
     let typed =
         json!({ "error": { "message": "Failed to generate a reply", "type": "server_error" } });
     let numbered = json!({ "error": { "message": "Failed", "code": "429" } });
-    let (unnamed, typed, numbered) = (
-        failure(vec![Reply::events(&[unnamed])], true).await,
+    let (typed, numbered) = (
         failure(vec![Reply::events(&[typed])], true).await,
         failure(vec![Reply::events(&[numbered])], true).await,
     );
     assert_eq!(
-        (read(&unnamed), read(&typed), read(&numbered)),
-        ((false, None), (true, Some(500)), (true, Some(429)))
+        (read(&typed), read(&numbered)),
+        ((true, Some(500)), (true, Some(429)))
+    );
+}
+
+/// A streamed request answered 200 with a JSON error object is final with
+/// no status, as Python's client, which reads server-sent events off the
+/// body, finds none in it: the status the object names decides only for a
+/// completion asked whole.
+#[tokio::test]
+async fn a_stream_answered_with_a_json_error_object_is_final() {
+    let body = json!({ "error": { "message": OVERLOAD, "type": "server_error", "code": 503 } });
+    let error = failure(vec![Reply::status(200, &body.to_string())], true).await;
+    assert_eq!(read(&error), (false, None));
+}
+
+/// A Responses stream that fails reads as the status its error's code
+/// names, as every provider reads one (RFC §6.7): `server_error` is a
+/// retried 500, a code no table names stays final.
+#[tokio::test]
+async fn a_failed_responses_stream_reads_as_the_status_its_code_names() {
+    let failed = |code: &str| {
+        Reply::events(&[
+            json!({ "type": "response.failed", "response": { "status": "failed",
+            "error": { "code": code, "message": "The server had an error." } } }),
+        ])
+    };
+    let (server, quota) = (
+        failure_on(OpenAiApi::Responses, vec![failed("server_error")], true).await,
+        failure_on(OpenAiApi::Responses, vec![failed("quota_exceeded")], true).await,
+    );
+    assert_eq!(
+        (read(&server), read(&quota)),
+        ((true, Some(500)), (false, None))
     );
 }
 
@@ -158,7 +218,6 @@ async fn sent(messages: Vec<AiMessage>) -> Vec<Value> {
         .clone()
 }
 
-// Python: tests/test_providers/test_openai.py::TestOpenAIAIProvider::test_generate_with_system_prompt
 /// A message of the conversation keeps its role, the system's included,
 /// and a message of parts goes as its blocks whatever its role (Python's
 /// `chat_request._rendered` and `_plain`, `{"role": message.role, ...}`).

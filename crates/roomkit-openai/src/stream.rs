@@ -165,6 +165,10 @@ impl<'a> Reading<'a> {
         }
         let body = read_body(response).await?;
         let whole = match self.provider.api() {
+            // A completion asked whole may be an error object in its place;
+            // a stream answered with JSON is read as before, its error
+            // object no completion (RMK-1087's review).
+            OpenAiApi::ChatCompletions if !self.streamed => wire::completion(&body, &self.secret)?,
             OpenAiApi::ChatCompletions => wire::response(&body, &self.secret)?,
             OpenAiApi::Responses => {
                 crate::responses::body(&body, &self.secret, self.provider.namespace())?
