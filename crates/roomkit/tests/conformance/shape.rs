@@ -493,7 +493,7 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
 /// uninstall (RFC §19.7).
 fn strategies(setup: &Value, found: &mut Vec<String>) {
     use crate::strategy_calls::{
-        LOOP, STRATEGY, STRATEGY_STEP, STRATEGY_UNINSTALL, SUPERVISOR, SWARM,
+        LOOP, PIPELINE, STRATEGY, STRATEGY_STEP, STRATEGY_UNINSTALL, SUPERVISOR, SWARM,
     };
     for (position, strategy) in items(&setup["strategies"]) {
         let path = format!("setup.strategies[{position}]");
@@ -502,6 +502,12 @@ fn strategies(setup: &Value, found: &mut Vec<String>) {
         let team = format!("{path}.supervisor");
         optional(&strategy["supervisor"], SUPERVISOR, &team, found);
         optional(&strategy["swarm"], SWARM, &format!("{path}.swarm"), found);
+        optional(
+            &strategy["pipeline"],
+            PIPELINE,
+            &format!("{path}.pipeline"),
+            found,
+        );
         for (member, known) in [
             ("install", STRATEGY_STEP),
             ("uninstall", STRATEGY_UNINSTALL),

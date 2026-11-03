@@ -5,13 +5,15 @@
 //! entry, its level, and the in-memory backend a bus uses by default;
 //! [`backend`] holds what another backend implements. The tool and session
 //! auditors (§15.8) record an agent's tool calls and a session's timeline.
-//! The handoff (§19.6) hands a room from one agent to another. [`strategies`]
-//! holds the strategies the kit builds in: the loop
-//! (§19.7.4), the supervisor (§19.7.3) and the swarm (§19.7).
+//! The handoff (§19.6) hands a room from one agent to another, along the stages
+//! of a [`ConversationPipeline`] (§19.5). [`strategies`] holds the strategies the kit builds
+//! in: the pipeline (§19.7.1), the loop (§19.7.4), the supervisor (§19.7.3) and
+//! the swarm (§19.7).
 
 mod agents;
 pub mod backend;
 mod background;
+mod conversation_pipeline;
 mod gather;
 pub(crate) mod handoff;
 mod handoff_end;
@@ -29,6 +31,15 @@ mod text;
 mod tool_audit;
 mod worker_run;
 
+/// What only a pipeline's install takes: [`InstallOptions`](pipeline::InstallOptions), named as
+/// the router's are.
+pub mod pipeline {
+    pub use super::conversation_pipeline::InstallOptions;
+}
+
+pub use self::conversation_pipeline::{
+    ConversationPipeline, ConversationPipelineOptions, PipelineStage,
+};
 pub use self::handoff::{
     HandoffHandler, HandoffHandlerOptions, HandoffRequest, HandoffResult, OnHandoffComplete,
 };
@@ -47,6 +58,9 @@ pub use self::status::{
     HasCompletedOptions, PostAsyncOptions, PostOptions, RecentOptions, StatusBus, StatusBusOptions,
     StatusEntry, StatusLevel,
 };
+#[doc(inline)]
+pub use self::strategies::pipeline::Pipeline;
+pub use self::strategies::pipeline::PipelineOptions;
 pub use self::strategies::review_loop::{Loop, LoopOptions};
 #[doc(inline)]
 pub use self::strategies::supervisor::Supervisor;

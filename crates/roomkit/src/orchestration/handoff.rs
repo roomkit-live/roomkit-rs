@@ -20,6 +20,7 @@ use crate::channel::BoxFuture;
 use crate::context::Section;
 use crate::error::RoomKitError;
 use crate::kit::{GetRoomOptions, RoomKit, WeakRoomKit};
+use crate::orchestration::agents::HeldAgent;
 use crate::orchestration::handoff_end::{accepted, moved_state, rejected};
 pub(crate) use crate::orchestration::handoff_tool::{HANDOFF_TOOL_NAME, handoff_tool_definition};
 use crate::orchestration::{
@@ -422,6 +423,45 @@ impl<S: ConversationStore> HandoffHandler<S> {
         }
         let definition = definition.unwrap_or_else(|| handoff_tool_definition(&[]));
         kit.serve_handoff(channel, self.entry(channel, definition, None), room_id)
+    }
+
+    /// Serves each of `handoffs`, an agent and its tool's definition, in
+    /// `room_id` for the install `owner`: all of them, or none when one is
+    /// refused. Python's `set_up_handoffs`.
+    pub(crate) fn serve_in_room(
+        &self,
+        kit: &RoomKit<S>,
+        handoffs: &[(ChannelId, Value)],
+        room_id: &RoomId,
+        owner: usize,
+    ) -> Result<(), RoomKitError> {
+        for (agent, _) in handoffs {
+            kit.check_room_tool(agent, room_id, HANDOFF_TOOL_NAME, owner)?;
+        }
+        for (agent, definition) in handoffs {
+            let entry = self.entry(agent, definition.clone(), Some(owner));
+            kit.register_room_tools(agent, room_id, vec![entry], owner)?;
+        }
+        Ok(())
+    }
+
+    /// Keeps the agents an install hands off between and their greetings,
+    /// as a strategy reads them.
+    pub(crate) fn keep_agents(&self, agents: &[StrategyAgent], held: &[HeldAgent]) {
+        self.set_greeting_map(
+            held.iter()
+                .filter_map(|agent| {
+                    let greeting = agent.greeting.clone()?;
+                    Some((agent.channel_id.clone(), greeting))
+                })
+                .collect(),
+        );
+        self.set_agents(
+            agents
+                .iter()
+                .map(|agent| (agent.channel_id().clone(), agent.clone()))
+                .collect(),
+        );
     }
 
     fn kit(&self) -> Result<RoomKit<S>, RoomKitError> {

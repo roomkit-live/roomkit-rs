@@ -36,8 +36,10 @@ pub(crate) const STRATEGY: &[&str] = &[
     "loop",
     "supervisor",
     "swarm",
+    "pipeline",
 ];
 pub(crate) const SWARM: &[&str] = &["agents", "entry"];
+pub(crate) const PIPELINE: &[&str] = &["agents", "supervisor_id"];
 pub(crate) const LOOP: &[&str] = &[
     "agent",
     "reviewer",
@@ -140,6 +142,15 @@ pub(crate) fn strategies(
             let agents = agents.into_iter().map(StrategyAgent::from).collect();
             let entry = crate::calls::optional::<ChannelId>(swarm, "entry")?;
             strategies.insert(id, Arc::new(roomkit::Swarm::new(agents, entry)));
+            continue;
+        }
+        if let Some(pipeline) = spec.get("pipeline") {
+            let agents = field::<Vec<ChannelId>>(pipeline, "agents")?;
+            let agents = agents.into_iter().map(StrategyAgent::from).collect();
+            let options = roomkit::orchestration::PipelineOptions {
+                supervisor_id: crate::calls::optional::<ChannelId>(pipeline, "supervisor_id")?,
+            };
+            strategies.insert(id, Arc::new(roomkit::Pipeline::new(agents, options)));
             continue;
         }
         let agents = crate::calls::optional::<Vec<ChannelId>>(spec, "agents")?.unwrap_or_default();

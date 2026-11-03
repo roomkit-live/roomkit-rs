@@ -3,16 +3,15 @@
 //! other agent, with no phase constraint; the router keeps the conversation
 //! with the agent that holds it until it hands off.
 
-use std::collections::HashMap;
-
 use roomkit_core::model::{ChannelId, RoomId};
+use serde_json::Value;
 
 use crate::error::RoomKitError;
 use crate::hooks::HookRegistration;
 use crate::kit::{RoomKit, strategy_address};
 use crate::orchestration::agents::{HeldAgent, held};
 use crate::orchestration::handoff::{
-    HANDOFF_TOOL_NAME, HandoffHandler, HandoffHandlerOptions, handoff_tool_definition,
+    HandoffHandler, HandoffHandlerOptions, handoff_tool_definition,
 };
 use crate::orchestration::{
     ConversationRouter, ConversationRouterOptions, ConversationState, Orchestration, StrategyAgent,
@@ -77,21 +76,7 @@ impl Swarm {
             ..ConversationRouterOptions::default()
         });
         let handler = HandoffHandler::new(kit, router.clone(), HandoffHandlerOptions::default());
-        handler.set_greeting_map(
-            agents
-                .iter()
-                .filter_map(|agent| {
-                    let greeting = agent.greeting.clone()?;
-                    Some((agent.channel_id.clone(), greeting))
-                })
-                .collect::<HashMap<_, _>>(),
-        );
-        handler.set_agents(
-            self.agents
-                .iter()
-                .map(|agent| (agent.channel_id().clone(), agent.clone()))
-                .collect(),
-        );
+        handler.keep_agents(&self.agents, &agents);
         let hook = HookRegistration {
             priority: -100,
             name: format!("swarm_router_{room_id}"),
@@ -102,38 +87,25 @@ impl Swarm {
             )
         };
         kit.hook_engine().replace_room_hook(room_id, hook)?;
-        set_up_handoffs(kit, &handler, &agents, room_id, owner)?;
+        // Each agent reaches all the others, in this room, with this
+        // install's handler.
+        let handoffs: Vec<(ChannelId, Value)> = agents
+            .iter()
+            .map(|agent| {
+                let targets: Vec<(String, Option<String>)> = agents
+                    .iter()
+                    .filter(|other| other.channel_id != agent.channel_id)
+                    .map(|other| (other.channel_id.to_string(), other.description.clone()))
+                    .collect();
+                (agent.channel_id.clone(), handoff_tool_definition(&targets))
+            })
+            .collect();
+        handler.serve_in_room(kit, &handoffs, room_id, owner)?;
         let mut state = ConversationState::new();
         "swarm".clone_into(&mut state.phase);
         state.active_agent_id.clone_from(&self.entry);
         save_conversation_state(kit.store(), room_id, &state).await
     }
-}
-
-/// Serves each agent's handoff in `room_id` for the install `owner`, each
-/// reaching all the others: all of them, or none when one is refused.
-/// Python's `set_up_handoffs`.
-fn set_up_handoffs<S: ConversationStore>(
-    kit: &RoomKit<S>,
-    handler: &HandoffHandler<S>,
-    agents: &[HeldAgent],
-    room_id: &RoomId,
-    owner: usize,
-) -> Result<(), RoomKitError> {
-    for agent in agents {
-        kit.check_room_tool(&agent.channel_id, room_id, HANDOFF_TOOL_NAME, owner)?;
-    }
-    for agent in agents {
-        let targets: Vec<(String, Option<String>)> = agents
-            .iter()
-            .filter(|other| other.channel_id != agent.channel_id)
-            .map(|other| (other.channel_id.to_string(), other.description.clone()))
-            .collect();
-        let definition = handoff_tool_definition(&targets);
-        let entry = handler.entry(&agent.channel_id, definition, Some(owner));
-        kit.register_room_tools(&agent.channel_id, room_id, vec![entry], owner)?;
-    }
-    Ok(())
 }
 
 impl<S: ConversationStore> Orchestration<S> for Swarm {

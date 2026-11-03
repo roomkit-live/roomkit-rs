@@ -537,6 +537,21 @@ params = ["async_delivery"]
 reason = "not in 0.x: the loop run in the background for a realtime voice session (left out of the orchestration lots with voice and realtime, HITL a9e5d1a3; RMK-1233)"
 
 [[missing]]
+python = "roomkit.Pipeline.__init__"
+params = ["voice_channel_id", "greet_on_handoff", "greeting_prompt", "farewell_prompt"]
+reason = "not in 0.x: a pipeline's voice channel, its voice map and its handoff greetings (left out of the orchestration lots with voice, HITL a9e5d1a3; RMK-1233)"
+
+[[missing]]
+python = "roomkit.Pipeline.__init__"
+params = ["routing"]
+reason = "not yet: keyword hints Python keeps and never reads (HITL 620292f5)"
+
+[[missing]]
+python = "roomkit.ConversationPipeline.install"
+params = ["voice_channel_id", "greet_on_handoff", "greeting_prompt", "farewell_prompt"]
+reason = "not in 0.x: a pipeline's voice channel, its voice map, a realtime channel's sessions and its handoff greetings (left out of the orchestration lots with voice and realtime, HITL a9e5d1a3; RMK-1233)"
+
+[[missing]]
 python = "roomkit.Supervisor.__init__"
 params = ["async_delivery"]
 reason = "not in 0.x: the team run in the background and handed back, and the realtime voice supervisor (left out of the orchestration lots with voice and async delivery, HITL a9e5d1a3; RMK-1233)"

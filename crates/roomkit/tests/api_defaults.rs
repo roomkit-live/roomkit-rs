@@ -1511,6 +1511,31 @@ fn handoff_handler_options_defaults_as_python() {
 }
 
 #[test]
+fn conversation_pipeline_options_defaults_as_python() {
+    let defaults = orchestration::ConversationPipelineOptions::default();
+    // roomkit.ConversationPipeline.__init__(default_phase) = None
+    assert!(defaults.default_phase.is_none());
+    // roomkit.ConversationPipeline.__init__(supervisor_id) = None
+    assert!(defaults.supervisor_id.is_none());
+}
+
+#[test]
+fn conversation_pipeline_install_options_defaults_as_python() {
+    let defaults = orchestration::pipeline::InstallOptions::default();
+    // roomkit.ConversationPipeline.install(agent_aliases) = None
+    assert!(defaults.agent_aliases.is_none());
+    // roomkit.ConversationPipeline.install(hook_priority) = -100
+    assert_eq!(defaults.hook_priority, -100);
+}
+
+#[test]
+fn pipeline_options_defaults_as_python() {
+    let defaults = orchestration::PipelineOptions::default();
+    // roomkit.Pipeline.__init__(supervisor_id) = None
+    assert!(defaults.supervisor_id.is_none());
+}
+
+#[test]
 fn conversation_router_install_options_defaults_as_python() {
     let defaults = orchestration::InstallOptions::default();
     // roomkit.ConversationRouter.install(agent_aliases) = None
