@@ -436,6 +436,10 @@ pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
         let deltas = deltas.as_array().ok_or("deltas: not a list")?;
         round = round.in_pieces(deltas.iter().filter_map(Value::as_str));
     }
+    if let Some(thinking) = spec.get("thinking") {
+        let thinking = thinking.as_array().ok_or("thinking: not a list")?;
+        round = round.reasoning(thinking.iter().filter_map(Value::as_str));
+    }
     if let Some(failure) = spec.get("fails") {
         round = round.failing(failure.as_str().ok_or("fails: not a text")?);
     }

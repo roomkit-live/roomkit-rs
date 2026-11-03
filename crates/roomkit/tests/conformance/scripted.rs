@@ -603,6 +603,10 @@ impl Channel for ScriptedChannel {
                         break;
                     }
                 }
+                Ok(StreamItem::Thinking(thinking)) => {
+                    let piece = json!({ "thinking": thinking });
+                    run.record_streamed(&room_id, channel_id, piece);
+                }
                 Ok(StreamItem::Row(row)) => {
                     let row = serde_json::to_value(&*row).unwrap_or_default();
                     run.record_streamed(&room_id, channel_id, json!({ "row": row }));

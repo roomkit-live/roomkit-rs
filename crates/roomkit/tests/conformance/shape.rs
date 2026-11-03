@@ -150,6 +150,7 @@ const MODEL: &[&str] = &["rounds", "vision", "pricing"];
 const MODEL_ROUND: &[&str] = &[
     "text",
     "deltas",
+    "thinking",
     "calls",
     "finish_reason",
     "usage",
