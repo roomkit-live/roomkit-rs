@@ -331,9 +331,6 @@ pub(crate) fn response(body: &[u8], secret: &str) -> Result<Whole, OpenAiError> 
             choice.message.reasoning.as_ref(),
         ),
     );
-    let text = Some(text)
-        .filter(|text| !text.trim().is_empty())
-        .unwrap_or_default();
     let calls = choice
         .message
         .tool_calls

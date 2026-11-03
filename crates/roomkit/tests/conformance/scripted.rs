@@ -604,8 +604,12 @@ impl Channel for ScriptedChannel {
                     }
                 }
                 Ok(StreamItem::Thinking(thinking)) => {
+                    let stops = stop_after == Some(thinking.as_str());
                     let piece = json!({ "thinking": thinking });
                     run.record_streamed(&room_id, channel_id, piece);
+                    if stops {
+                        break;
+                    }
                 }
                 Ok(StreamItem::Row(row)) => {
                     let row = serde_json::to_value(&*row).unwrap_or_default();

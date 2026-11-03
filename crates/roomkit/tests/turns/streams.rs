@@ -237,12 +237,119 @@ impl Stream for Items {
     }
 }
 
+/// Items written with a wait at every seventh: the deltas between two waits
+/// may cross as one.
+struct Waiting(VecDeque<ResponseItem>, usize);
+
+impl Stream for Waiting {
+    type Item = Result<ResponseItem, ChannelError>;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let items = self.get_mut();
+        items.1 += 1;
+        if items.1.is_multiple_of(7) {
+            context.waker().wake_by_ref();
+            return Poll::Pending;
+        }
+        Poll::Ready(items.0.pop_front().map(Ok))
+    }
+}
+
+/// Text with a piece of reasoning at every third delta, a break, text, a
+/// call's start, then text: as Python's
+/// `test_deltas_bursts_and_thinking_before_each_break_never_stall_the_stream`.
+fn interleaved(deltas: usize) -> VecDeque<ResponseItem> {
+    let mut items = VecDeque::new();
+    for at in 0..deltas {
+        items.push_back(ResponseItem::Text(format!("t{at} ")));
+        if at % 3 == 0 {
+            items.push_back(ResponseItem::Thinking("x".to_owned()));
+        }
+    }
+    items.push_back(ResponseItem::SegmentBreak);
+    items.extend((0..deltas).map(|at| ResponseItem::Text(format!("u{at} "))));
+    items.push_back(ResponseItem::ToolCallStart(ToolCallContent::new("t", "c")));
+    items.push_back(ResponseItem::Text("z".to_owned()));
+    items
+}
+
+// Python: tests/test_turns_pull.py::test_deltas_bursts_and_thinking_before_each_break_never_stall_the_stream
+/// The reader and the executor count the same items however the deltas
+/// cross, reasoning apart: every pull is honoured, nothing stalls.
+#[tokio::test]
+async fn deltas_bursts_and_thinking_before_each_break_never_stall_the_stream() {
+    for deltas in [1, 32, 33, 64, 65, 130] {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        kit.register_channel(roomkit::testing::RecordingTransport::new(
+            channel("sms"),
+            ChannelType::SMS,
+            roomkit::testing::RecordingTransportOptions::default(),
+        ))
+        .unwrap();
+        let target = Counting {
+            sizes: Arc::default(),
+            says: roomkit::model::Metadata::new(),
+            stalls: None,
+            lingers: None,
+        };
+        kit.register_channel(target.clone()).unwrap();
+        let writing = Writing {
+            cut: false,
+            interleaves: Some(deltas),
+        };
+        kit.register_channel(writing).unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        for id in ["sms", "ws", "ai"] {
+            kit.attach_channel(&room(), &channel(id), AttachChannelOptions::default())
+                .await
+                .unwrap();
+        }
+        let tap = TurnTap::on(&kit);
+        let wrote: usize = interleaved(deltas)
+            .iter()
+            .map(|item| {
+                if let ResponseItem::Text(text) = item {
+                    text.len()
+                } else {
+                    0
+                }
+            })
+            .sum();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            asks(&kit, "Count.").await;
+            roomkit::testing::idle(&kit).await;
+        })
+        .await
+        .unwrap();
+        let read: usize = target.sizes.lock().unwrap().iter().sum();
+        assert_eq!(read, wrote);
+        let thinking = tap
+            .messages()
+            .into_iter()
+            .filter(|message| message.family == "frame")
+            .filter(|message| {
+                let frame: Value = serde_json::from_str(&message.json).unwrap();
+                frame["message"]["item"]["kind"] == "thinking"
+            })
+            .count();
+        assert_eq!(thinking, deltas.div_ceil(3));
+        kit.close().await.unwrap();
+    }
+}
+
 /// An intelligence channel whose own stream writes text, a call's start,
 /// two deltas, the call's end, then text again, as `ResponseItem` lets a
 /// channel write it; the call carries its intent (RFC §6.4). One that is
 /// `cut` writes text, then its stream is cancelled.
 struct Writing {
     cut: bool,
+    /// Writes [`interleaved`] of this many deltas instead.
+    interleaves: Option<usize>,
 }
 
 impl Writing {
@@ -309,6 +416,7 @@ impl Channel for Writing {
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         let own = event.source.channel_id == channel("ai");
         let cut = self.cut;
+        let interleaves = self.interleaves;
         async move {
             if own {
                 return Ok(ChannelOutput::default());
@@ -319,6 +427,12 @@ impl Channel for Writing {
                 return Ok(current_turn_host()
                     .unwrap()
                     .respond_with_stream(Box::pin(Items(items, cancelled))));
+            }
+            if let Some(deltas) = interleaves {
+                let items = Waiting(interleaved(deltas), 0);
+                return Ok(current_turn_host()
+                    .unwrap()
+                    .respond_with_stream(Box::pin(items)));
             }
             let mut start = ToolCallContent::new("look", "c1");
             start.intent = Some("I look.".to_owned());
@@ -516,7 +630,11 @@ async fn text_written_inside_a_call_crosses_in_order() {
         read: Arc::default(),
     };
     kit.register_channel(target.clone()).unwrap();
-    kit.register_channel(Writing { cut: false }).unwrap();
+    kit.register_channel(Writing {
+        cut: false,
+        interleaves: None,
+    })
+    .unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room()),
         ..Default::default()
@@ -611,7 +729,11 @@ async fn a_stream_cancelled_after_it_wrote_ends_in_the_middle_of_its_stream() {
         roomkit::testing::RecordingTransportOptions::default(),
     ))
     .unwrap();
-    kit.register_channel(Writing { cut: true }).unwrap();
+    kit.register_channel(Writing {
+        cut: true,
+        interleaves: None,
+    })
+    .unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room()),
         ..Default::default()

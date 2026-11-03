@@ -363,6 +363,37 @@ mod tests {
 
     use super::*;
 
+    // Python: tests/test_providers/test_stream_adapter.py::test_a_wrapped_response_keeps_its_thinking_signature_and_call_metadata
+    // (its thinking): a response read whole reaches the loop as a stream,
+    // its reasoning first; none is no event.
+    #[test]
+    fn a_wrapped_response_hands_its_reasoning_first() {
+        let response = AiResponse {
+            thinking: Some("Weighing.".to_owned()),
+            ..AiResponse::new("42.")
+        };
+        let events = response_events(response);
+        assert_eq!(
+            events.first(),
+            Some(&StreamEvent::ThinkingDelta(StreamThinkingDelta::new(
+                "Weighing."
+            )))
+        );
+        assert_eq!(
+            events.get(1),
+            Some(&StreamEvent::TextDelta(StreamTextDelta::new("42.")))
+        );
+        let empty = AiResponse {
+            thinking: Some(String::new()),
+            ..AiResponse::new("42.")
+        };
+        assert!(
+            !response_events(empty)
+                .iter()
+                .any(|event| matches!(event, StreamEvent::ThinkingDelta(_)))
+        );
+    }
+
     fn read(calls: &[(&str, &str)], finish_reason: &str) -> Vec<(String, Value, bool, bool)> {
         let raw = calls
             .iter()

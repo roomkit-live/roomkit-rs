@@ -481,9 +481,10 @@ pub trait Channel: Send + Sync + 'static {
     /// Delivers a response as it is written (RFC §6.1 `deliver_stream`), for
     /// a channel that says it takes one in the room
     /// ([`supports_streaming_delivery_for`](Channel::supports_streaming_delivery_for)):
-    /// `text_stream` yields the response's text as it comes and each row
-    /// once the store holds it, with its id and its index; the channel is
-    /// never delivered those rows again. `event` is the empty event the
+    /// `text_stream` yields the response's text as it comes, each piece of
+    /// the model's reasoning as [`StreamItem::Thinking`], and each row once
+    /// the store holds it, with its id and its index; the channel is never
+    /// delivered those rows again. `event` is the empty event the
     /// response renders under: its source the agent, answering the event the
     /// response answers. The channel sets the pace: returning before the
     /// stream's end, or dropping it, stops the response, the text it was

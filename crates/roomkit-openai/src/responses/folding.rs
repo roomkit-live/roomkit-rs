@@ -44,12 +44,13 @@ impl Folding {
                 push_text(ready, delta.to_owned());
             }
             Some("response.reasoning_summary_text.delta" | "response.reasoning_text.delta") => {
-                let delta = value
-                    .get("delta")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| wire::malformed("Responses reasoning delta is not text"))?;
-                self.reasoned = true;
-                push_thinking(ready, delta.to_owned());
+                // Nothing to read in one that is no text or empty: the
+                // terminal response's reasoning then stands.
+                let delta = value.get("delta").and_then(Value::as_str);
+                if let Some(delta) = delta.filter(|delta| !delta.is_empty()) {
+                    self.reasoned = true;
+                    push_thinking(ready, delta.to_owned());
+                }
             }
             Some("response.completed" | "response.incomplete") => {
                 let mut response = value

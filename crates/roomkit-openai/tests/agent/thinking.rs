@@ -241,3 +241,41 @@ async fn a_responses_stream_s_reasoning_deltas_come_once() {
     let read = streamed(OpenAiApi::Responses, Reply::events(&events)).await;
     assert_eq!(read, [thinking("Weigh"), thinking("ing."), text("42.")]);
 }
+
+// Python: tests/text_conformance/test_responses.py::test_a_think_block_reads_the_same_streamed_or_not
+// (RMK-531): the same answer, spaces included, whole or streamed, a blank
+// answer included.
+#[tokio::test]
+async fn a_think_block_reads_the_same_streamed_or_not() {
+    for (content, reasoning, answer) in [
+        (
+            "<think> weighing it \n</think>\n\nThe answer.  ",
+            " weighing it \n",
+            "\n\nThe answer.  ",
+        ),
+        ("<think>x</think>\n\n", "x", "\n\n"),
+    ] {
+        let whole = generated(&json!({ "content": content })).await;
+        assert_eq!(whole, (Some(reasoning.to_owned()), answer.to_owned()));
+        let read = streamed(
+            OpenAiApi::ChatCompletions,
+            chunks(&[json!({ "content": content })]),
+        )
+        .await;
+        assert_eq!(read, [thinking(reasoning), text(answer)]);
+    }
+}
+
+/// A reasoning delta that is no text or empty reads as nothing, the
+/// terminal response's reasoning then standing.
+#[tokio::test]
+async fn a_responses_reasoning_delta_with_nothing_in_it_reads_as_none() {
+    for delta in [json!(""), json!(null)] {
+        let events = [
+            json!({ "type": "response.reasoning_summary_text.delta", "delta": delta }),
+            terminal(&[reasoning("Weighing."), said("42.")]),
+        ];
+        let read = streamed(OpenAiApi::Responses, Reply::events(&events)).await;
+        assert_eq!(read, [thinking("Weighing."), text("42.")]);
+    }
+}

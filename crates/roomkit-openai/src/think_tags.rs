@@ -248,8 +248,8 @@ mod tests {
         }
     }
 
-    // Python: channels' _partial_tag_len holds a multi-byte tail no tag starts
-    // at no char boundary; a text around a tag stays whole.
+    // Python: providers/ai/openai_dialect.py ThinkTagParser, which works on
+    // characters: a multi-byte text around a tag stays whole.
     #[test]
     fn a_multi_byte_text_splits_at_its_tags() {
         let read = read(&["<think>é", "è</think>ç<"]);
