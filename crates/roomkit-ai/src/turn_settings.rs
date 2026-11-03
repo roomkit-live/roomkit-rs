@@ -157,7 +157,12 @@ impl TurnSettings {
         }
         let (budget_level, budget) = source(bound_budget, levels.budget.0, levels.budget.1);
         let (off_level, enabled) = source(bound_switch, levels.enabled.0, levels.enabled.1);
-        let off = enabled == Some(false) && off_level < budget_level;
+        // Python compares the value as written (`enabled is False`), so a
+        // binding's `"off"` reads false and turns off no budget (a question
+        // to the maintainer, HITL e92720b1).
+        let stated_off = set(metadata, "enable_thinking")
+            .map_or(enabled == Some(false), |value| *value == Value::Bool(false));
+        let off = stated_off && off_level < budget_level;
         self.thinking_budget = budget.filter(|_| !off);
         self.enable_thinking = enabled;
     }
@@ -434,12 +439,12 @@ fn without_underscores(text: &str) -> Option<String> {
     Some(text.replace('_', ""))
 }
 
-/// `whole`, read from `value`, as a `u32`: Python's `int` has no bound, a
-/// Rust max tokens has u32's (HITL f89861c3), refused past them in
-/// pydantic's words for a bounded integer.
+/// `whole`, read from `value`, as an `i64`: Python's `int` has no bound, a
+/// Rust thinking budget has i64's, refused past them in pydantic's words
+/// for an integer too large (as max tokens, HITL f89861c3).
 fn within_i64(whole: i128, value: &Value) -> Result<i64, Refusal> {
     i64::try_from(whole).map_err(|_| {
-        let words = "Unable to parse input string as an integer, exceeding the maximum number size";
+        let words = "Unable to parse input string as an integer, exceeded maximum size";
         Refusal::new("int_parsing_size", words, value)
     })
 }
@@ -452,13 +457,21 @@ fn lax_bool(value: &Value) -> Result<bool, Refusal> {
     match value {
         Value::Bool(flag) => Ok(*flag),
         Value::Number(number) => {
-            let read = number.as_f64().unwrap_or(f64::NAN);
-            if read.abs() < f64::EPSILON {
-                Ok(false)
-            } else if (read - 1.0).abs() < f64::EPSILON {
-                Ok(true)
-            } else {
-                Err(unread())
+            let float = number.as_f64().unwrap_or(f64::NAN);
+            let whole = match (number.as_i64(), number.as_u64()) {
+                (Some(whole), _) => Ok(i128::from(whole)),
+                (None, Some(whole)) => Ok(i128::from(whole)),
+                (None, None) => float_int(float),
+            };
+            match whole {
+                Ok(0) => Ok(false),
+                Ok(1) => Ok(true),
+                Ok(_) => Err(unread()),
+                Err(_) => Err(Refusal::new(
+                    "bool_type",
+                    "Input should be a valid boolean",
+                    value,
+                )),
             }
         }
         Value::String(text) => match text.to_lowercase().as_str() {
@@ -474,6 +487,9 @@ fn lax_bool(value: &Value) -> Result<bool, Refusal> {
     }
 }
 
+/// `whole`, read from `value`, as a `u32`: Python's `int` has no bound, a
+/// Rust max tokens has u32's (HITL f89861c3), refused past them in
+/// pydantic's words for a bounded integer.
 fn within_u32(whole: i128, value: &Value) -> Result<u32, Refusal> {
     u32::try_from(whole).map_err(|_| {
         if whole < 0 {
@@ -780,6 +796,38 @@ mod tests {
                     "turn_budget_usd must be a positive number, got {shown}"
                 ))
             );
+        }
+    }
+
+    // Python: pydantic's lax bool, as AIContext(enable_thinking) reads a
+    // binding's value: its words whatever their case, 0 and 1 as any number,
+    // a number with a fractional part no bool at all.
+    #[test]
+    fn a_bool_reads_as_pydantic_reads_it() {
+        for (value, read) in [
+            (json!(false), false),
+            (json!(true), true),
+            (json!(0), false),
+            (json!(1), true),
+            (json!(0.0), false),
+            (json!(1.0), true),
+            (json!("OFF"), false),
+            (json!("yes"), true),
+        ] {
+            assert_eq!(lax_bool(&value).ok(), Some(read), "{value}");
+        }
+        for (value, kind) in [
+            (json!(2), "bool_parsing"),
+            (json!(-1), "bool_parsing"),
+            (json!(2.0), "bool_parsing"),
+            (json!("maybe"), "bool_parsing"),
+            (json!(0.5), "bool_type"),
+            (json!(1e-20), "bool_type"),
+            (json!(0.999_999_999_999_999_9), "bool_type"),
+            (json!(1e300), "bool_type"),
+            (json!([]), "bool_type"),
+        ] {
+            assert_eq!(lax_bool(&value).unwrap_err().kind, kind, "{value}");
         }
     }
 }

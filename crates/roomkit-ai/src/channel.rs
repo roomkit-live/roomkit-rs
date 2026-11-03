@@ -482,8 +482,6 @@ impl<P: AiProvider> AiChannel<P> {
             steer_room_turns,
             human_input_handler,
         } = options;
-        // The budgets first, as Python's constructor stores them before
-        // its tool bounds.
         // Python's ToolPolicy, RetryPolicy and AITool refuse as they are
         // built, before its constructor runs.
         let policy = tool_policy.unwrap_or_default();
@@ -1046,13 +1044,12 @@ fn turn_actor(event: &RoomEvent, participants: &[Participant]) -> Option<String>
 /// Refuses a tool `toolbox` serves under one of the names a channel given
 /// skills keeps for its own.
 fn reserve_skill_names(toolbox: &Toolbox) -> Result<(), AiError> {
-    match SkillTools::RESERVED_NAMES
+    match toolbox
+        .declared(&ToolPolicy::default())
         .into_iter()
-        .find(|name| toolbox.find(name).is_some())
+        .find(|tool| SkillTools::RESERVED_NAMES.contains(&tool.name.as_str()))
     {
-        Some(name) => Err(AiError::DuplicateTool {
-            name: name.to_owned(),
-        }),
+        Some(tool) => Err(AiError::DuplicateTool { name: tool.name }),
         None => Ok(()),
     }
 }
@@ -1102,13 +1099,14 @@ fn refuse_zero_bounds(
     Ok(())
 }
 
-/// Refuses a pattern of `policy` holding a bracket, which a pattern reads
-/// as itself (RFC §21.1): a rule written as a character class would cover
-/// none of the names it was written for.
+/// Refuses a tool definition whose name no vendor accepts (RFC §6.7), as
+/// Python's `AITool` refuses as it is built.
 fn refuse_tool_names(tools: &[ToolEntry]) -> Result<(), AiError> {
     tools.iter().try_for_each(|entry| match entry {
         ToolEntry::Definition(definition) => AiTool::checked(&definition.name),
-        ToolEntry::Tool(tool) => AiTool::checked(&tool.definition().name),
+        // Python reads a `Tool`'s definition in its constructor's tool
+        // surface, as `served_by` does here.
+        ToolEntry::Tool(_) => Ok(()),
     })
 }
 
@@ -1144,14 +1142,14 @@ fn tool_surface(
     if let Some(served) = served_by(serving, tools)? {
         toolbox.add_handler(served.0, served.1)?;
     }
-    // A registry given, an empty one too, reserves the skill tools'
-    // names, as Python's constructor does.
-    if skills.is_some() {
-        reserve_skill_names(&toolbox)?;
-    }
     let human_input = human_input_handler
         .map(|human| serve_human_input(&mut toolbox, human))
         .transpose()?;
+    // A registry given, an empty one too, reserves the skill tools' names
+    // against the host's tools and a person's, as Python's constructor does.
+    if skills.is_some() {
+        reserve_skill_names(&toolbox)?;
+    }
     let skills = serve_skills(&mut toolbox, skills, skills_in_prompt)?;
     Ok(ToolSurface {
         toolbox,
@@ -1161,6 +1159,9 @@ fn tool_surface(
     })
 }
 
+/// Refuses a pattern of `policy` holding a bracket, which a pattern reads
+/// as itself (RFC §21.1): a rule written as a character class would cover
+/// none of the names it was written for.
 fn refuse_bracketed(policy: &ToolPolicy) -> Result<(), AiError> {
     match policy
         .allow

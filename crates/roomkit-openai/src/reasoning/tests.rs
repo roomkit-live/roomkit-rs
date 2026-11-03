@@ -385,5 +385,13 @@ fn a_turn_s_context_states_off_on_the_wire() {
         let request = crate::request::Request::of(&context).unwrap();
         let body = provider.body(&request, false).unwrap();
         assert_eq!(body["reasoning_effort"], "minimal");
+        // On the Responses API too (RFC §6.7).
+        let responses = OpenAiAiProvider::new(OpenAiConfig {
+            api: crate::OpenAiApi::Responses,
+            ..OpenAiConfig::new("sk-test", "gpt-5")
+        })
+        .unwrap();
+        let body = responses.body(&request, false).unwrap();
+        assert_eq!(body["reasoning"]["effort"], "minimal");
     }
 }

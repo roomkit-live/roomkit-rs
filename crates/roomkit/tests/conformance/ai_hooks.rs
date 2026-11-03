@@ -63,6 +63,8 @@ impl Scripted for AiGenerationEvent {
                 "reasoning_effort" => {
                     context.reasoning_effort = value.as_str().map(str::to_owned);
                 }
+                "thinking_budget" => context.thinking_budget = value.as_i64(),
+                "enable_thinking" => context.enable_thinking = value.as_bool(),
                 "messages" => context.messages = patched_messages(value)?,
                 "tools" => {
                     let kept: Vec<&str> = value

@@ -12,7 +12,8 @@ use roomkit::testing::TurnTap;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiError, AiMessage, AiProvider, AiResponse, AiTool,
-    Date, DynAiProvider, ModelInfo, ModelPricing, ProviderError, ToolPolicy,
+    Date, DynAiProvider, HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo,
+    ModelPricing, ProviderError, SkillRegistry, ToolPolicy, ToolResult, Tools,
 };
 use serde_json::{Value, json};
 
@@ -554,7 +555,7 @@ fn a_channel_refuses_in_python_s_order() {
         parameters: json!({}),
     };
     let name = refused(AiChannelOptions {
-        tools: vec![named.into()],
+        tools: vec![named.clone().into()],
         ..zero_budget()
     });
     assert!(matches!(name, AiError::ToolName { .. }), "{name}");
@@ -569,6 +570,24 @@ fn a_channel_refuses_in_python_s_order() {
         ..AiChannelOptions::default()
     });
     assert!(matches!(label, AiError::ServerLabel { .. }), "{label}");
+    // A `Tool`'s definition is read in the constructor's tool surface, after
+    // the budgets; a person's is an `AITool`, refused as it is built.
+    let serving = Tools::new().tool(named.clone(), |_call, _context| async {
+        Ok(ToolResult::Text("served".to_owned()))
+    });
+    let served = refused(AiChannelOptions {
+        tools: serving.into(),
+        ..zero_budget()
+    });
+    assert!(matches!(served, AiError::TurnBudgetTokens), "{served}");
+    let person = HumanInputToolHandler::new(
+        ["no name!"],
+        HumanInputToolHandlerOptions {
+            tool_definitions: vec![named.clone()],
+            ..HumanInputToolHandlerOptions::default()
+        },
+    );
+    assert!(matches!(person.err(), Some(AiError::ToolName { .. })));
     let twice = || AiTool::new("twice", "Twice").unwrap().into();
     let timeout = refused(AiChannelOptions {
         tool_timeout: Some(Duration::ZERO),
@@ -576,4 +595,48 @@ fn a_channel_refuses_in_python_s_order() {
         ..AiChannelOptions::default()
     });
     assert!(matches!(timeout, AiError::ToolTimeout), "{timeout}");
+}
+
+// Python: channels/ai.py _init_tool_surface, _served_tools.py
+// refuse_host_tools: a registry reserves the skill tools' names against a
+// person's tools, and names the host's tool first as they are declared.
+#[test]
+fn a_registry_reserves_its_names_against_every_tool() {
+    let refused = |options: AiChannelOptions| {
+        AiChannel::new(channel("assistant"), ScriptedProvider::new([]), options)
+            .err()
+            .unwrap()
+    };
+    let reserved = AiTool::new("activate_skill", "Mine").unwrap();
+    let person = HumanInputToolHandler::new(
+        ["activate_skill"],
+        HumanInputToolHandlerOptions {
+            tool_definitions: vec![reserved],
+            ..HumanInputToolHandlerOptions::default()
+        },
+    )
+    .unwrap();
+    let skilled = refused(AiChannelOptions {
+        human_input_handler: Some(person),
+        skills: Some(SkillRegistry::new()),
+        ..AiChannelOptions::default()
+    });
+    assert_eq!(
+        skilled,
+        AiError::DuplicateTool {
+            name: "activate_skill".to_owned()
+        }
+    );
+    let host = |name: &str| AiTool::new(name, "Mine").unwrap().into();
+    let first = refused(AiChannelOptions {
+        tools: vec![host("read_skill_reference"), host("activate_skill")],
+        skills: Some(SkillRegistry::new()),
+        ..AiChannelOptions::default()
+    });
+    assert_eq!(
+        first,
+        AiError::DuplicateTool {
+            name: "read_skill_reference".to_owned()
+        }
+    );
 }

@@ -87,8 +87,10 @@ impl HumanInputToolHandler {
     ///
     /// # Errors
     ///
-    /// As Python's constructor raises `ValueError`:
-    /// [`AiError::HumanInputNames`] for no name, and
+    /// [`AiError::ToolName`] for a definition whose name no vendor accepts,
+    /// as Python's `AITool` refuses as it is built; then, as Python's
+    /// constructor raises `ValueError`: [`AiError::HumanInputNames`] for no
+    /// name, and
     /// [`AiError::HumanInputDefinition`] for a definition under a name not
     /// among them.
     pub fn new<I, N>(tool_names: I, options: HumanInputToolHandlerOptions) -> Result<Self, AiError>
@@ -96,6 +98,9 @@ impl HumanInputToolHandler {
         I: IntoIterator<Item = N>,
         N: Into<String>,
     {
+        for tool in &options.tool_definitions {
+            AiTool::checked(&tool.name)?;
+        }
         let tool_names: BTreeSet<String> = tool_names.into_iter().map(Into::into).collect();
         if tool_names.is_empty() {
             return Err(AiError::HumanInputNames);
