@@ -6,15 +6,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- The loop strategy (RFC §19.7.4), as Python's: `roomkit::Loop` and
-  `roomkit::orchestration::LoopOptions`, and `WorkerStrategy` in
-  `roomkit::orchestration::strategies::supervisor`. The producer's turns in
-  the room are the loop's: each message's text is delegated to it, each
-  reviewer reviews the output in a child room, sequentially or in
-  parallel, the feedback goes back for a revision, and the last output
-  answers the message with how the loop stopped; a producer cut short
-  answers nothing, its failure reaches the caller reported once, and an
-  uninstall gives the producer its turns back (RMK-1233).
 - The tool and session auditors (RFC §15.8), as Python's:
   `ToolAuditEntry`, `ToolAuditor`, `JsonlToolAuditor`, `ConsoleToolAuditor`,
   `SessionAuditEntry`, `SessionAuditor` (its `record_tool`, `tool_auditor`
