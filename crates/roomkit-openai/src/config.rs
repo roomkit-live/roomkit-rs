@@ -44,8 +44,8 @@ impl OpenAiApi {
 /// base_url=None, model, max_tokens=1024, timeout=30.0, connect_timeout=5.0,
 /// include_stream_usage=True, use_max_completion_tokens=False,
 /// supports_custom_temperature=True, reasoning_effort=None,
-/// supports_reasoning_effort_with_tools=None, default_headers=None,
-/// extra_body=None)`, built with
+/// default_headers=None, extra_body=None,
+/// supports_reasoning_effort_with_tools=None)`, built with
 /// [`OpenAiConfig::new`] and struct update.
 ///
 /// Its `Debug` never prints the API key, nor the base URL's user
@@ -84,9 +84,9 @@ pub struct OpenAiConfig {
     /// takes none, any other does.
     pub supports_custom_temperature: Option<bool>,
     /// How hard a reasoning model thinks (`reasoning_effort`), when set.
-    /// On a turn with tools behind a `base_url`, sent only where
-    /// `supports_reasoning_effort_with_tools` says the server takes it
-    /// there (RFC §6.7).
+    /// On a Chat Completions turn with tools behind a `base_url`, sent only
+    /// where `supports_reasoning_effort_with_tools` says the server takes
+    /// it there (RFC §6.7).
     pub reasoning_effort: Option<String>,
     /// Whether the server behind a `base_url` takes `reasoning_effort` on
     /// a Chat Completions turn with tools (RFC §6.7): `Some(true)` sends it
