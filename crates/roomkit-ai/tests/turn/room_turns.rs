@@ -159,6 +159,25 @@ async fn said(kit: &RoomKit, channel_id: &str) -> Vec<String> {
         .collect()
 }
 
+/// What `channel_id` said that was stored BLOCKED as a muted source's.
+async fn withheld(kit: &RoomKit, channel_id: &str) -> Vec<String> {
+    kit.store()
+        .list_events(&room_id(), super::support::every_row())
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.source.channel_id == channel(channel_id))
+        .filter(|event| event.blocked_by.as_deref() == Some("source_muted"))
+        .filter_map(|event| {
+            if let EventContent::Text(text) = event.content {
+                Some(text.body)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 fn strings(texts: &[&str]) -> Vec<String> {
     texts.iter().map(|text| (*text).to_owned()).collect()
 }
@@ -276,15 +295,13 @@ async fn a_turn_muted_while_it_waits_is_not_delivered() {
     delivered(&a).await;
     delivered(&b).await;
 
-    // B ran on the room it started in, its answer withheld. (A's answer,
-    // stored after the mute, is withheld too in roomkit-rs, where Python
-    // keeps it: a streamed answer's rows are judged at their commit,
-    // whatever the room's turns, RMK-1170.)
+    // B ran on the room it started in, its answer withheld; A's answer,
+    // stored after the mute, is withheld too (RFC §7.5 rule 2, RMK-1170).
     assert!(model.read("task B").is_some());
-    assert!(
-        !said(&room.kit, "assistant")
-            .await
-            .contains(&"answer to task B".to_owned())
+    assert_eq!(said(&room.kit, "assistant").await, Vec::<String>::new());
+    assert_eq!(
+        withheld(&room.kit, "assistant").await,
+        strings(&["answer to task A", "answer to task B"])
     );
     room.kit.close().await.unwrap();
 }
