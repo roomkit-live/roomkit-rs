@@ -9,13 +9,14 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use roomkit::model::{ChannelId, RoomId};
 use roomkit::orchestration::strategies::supervisor::WorkerStrategy;
-use roomkit::orchestration::{LoopOptions, StrategyAgent, StrategyFuture};
+use roomkit::orchestration::{LoopOptions, StrategyAgent, StrategyFuture, SupervisorOptions};
 use roomkit::{
     ClaimRoomStrategyOptions, InstallStrategyOptions, Loop, Orchestration, RoomKitError,
-    RoomStrategyOptions, UninstallStrategyOptions,
+    RoomStrategyOptions, Supervisor, UninstallStrategyOptions,
 };
 use serde_json::{Map, Value, json};
 
@@ -27,13 +28,22 @@ use crate::run::{Run, Scope};
 pub(crate) type Strategy = Arc<dyn Orchestration<crate::Store>>;
 
 /// The members of a scripted strategy, and of its install and uninstall.
-pub(crate) const STRATEGY: &[&str] = &["id", "agents", "install", "uninstall", "loop"];
+pub(crate) const STRATEGY: &[&str] =
+    &["id", "agents", "install", "uninstall", "loop", "supervisor"];
 pub(crate) const LOOP: &[&str] = &[
     "agent",
     "reviewer",
     "reviewers",
     "max_iterations",
     "strategy",
+];
+pub(crate) const SUPERVISOR: &[&str] = &[
+    "supervisor",
+    "workers",
+    "strategy",
+    "share_channels",
+    "task_timeout_ms",
+    "max_revisions",
 ];
 pub(crate) const STRATEGY_STEP: &[&str] = &["gate", "do", "refuse"];
 pub(crate) const STRATEGY_UNINSTALL: &[&str] = &["gate", "do"];
@@ -108,6 +118,10 @@ pub(crate) fn strategies(
             strategies.insert(id, review_loop(review)?);
             continue;
         }
+        if let Some(team) = spec.get("supervisor") {
+            strategies.insert(id, supervisor(team)?);
+            continue;
+        }
         let agents = crate::calls::optional::<Vec<ChannelId>>(spec, "agents")?.unwrap_or_default();
         let strategy: Strategy = Arc::new(ScriptedStrategy {
             agents,
@@ -153,6 +167,29 @@ fn review_loop(spec: &Value) -> Result<Strategy, Unreadable> {
     };
     let review = Loop::new(agent, options).map_err(|error| error.to_string())?;
     Ok(Arc::new(review))
+}
+
+/// The implementation's Supervisor a strategy's `supervisor` builds, its
+/// agents named by their channel ids, its task timeout in milliseconds.
+fn supervisor(spec: &Value) -> Result<Strategy, Unreadable> {
+    let lead = field::<ChannelId>(spec, "supervisor")?;
+    let workers = field::<Vec<ChannelId>>(spec, "workers")?;
+    let strategy = crate::calls::optional::<String>(spec, "strategy")?
+        .map(|name| name.parse::<WorkerStrategy>())
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let defaults = SupervisorOptions::default();
+    let options = SupervisorOptions {
+        strategy,
+        share_channels: crate::calls::optional::<Vec<ChannelId>>(spec, "share_channels")?,
+        task_timeout: crate::calls::optional::<u64>(spec, "task_timeout_ms")?
+            .map_or(defaults.task_timeout, Duration::from_millis),
+        max_revisions: crate::calls::optional::<u32>(spec, "max_revisions")?
+            .unwrap_or(defaults.max_revisions),
+    };
+    let workers = workers.into_iter().map(StrategyAgent::from).collect();
+    let team = Supervisor::new(lead, workers, options).map_err(|error| error.to_string())?;
+    Ok(Arc::new(team))
 }
 
 /// The strategy `name` names among the run's.
