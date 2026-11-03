@@ -14,6 +14,7 @@ use std::pin::Pin;
 
 use futures_core::Stream;
 
+pub(crate) use self::catalog::BILLED_USAGE_COUNTERS;
 pub use self::catalog::{ModelInfo, ModelPricing};
 pub use self::context::{
     AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiRole, AiTextPart,

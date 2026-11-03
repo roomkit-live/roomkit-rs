@@ -14,7 +14,7 @@ use roomkit::model::{
     EventDirection, EventSource, EventType, InboundMessage, Participant, RetryPolicy, RoomContext,
     RoomEvent, RoomId, SteeringDirective,
 };
-use roomkit::{Channel, ChannelDeclaration, ChannelError, current_turn_host};
+use roomkit::{Channel, ChannelDeclaration, ChannelError, ClassedError, current_turn_host};
 use roomkit_core::rules::edits::opens_no_turn;
 use roomkit_core::rules::transcript::{
     Message, TurnMemory, conversation_with_memory, people_taking_part, replayed_rounds,
@@ -45,7 +45,8 @@ use crate::tools::{
     DynToolset, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, served_by,
 };
 use crate::transcript_content::{Describer, TurnReader};
-use crate::turn_settings::TurnSettings;
+use crate::turn_budget::{TurnBudget, check_budgets, turn_budget};
+use crate::turn_settings::{TurnSettings, VALUE_ERROR};
 
 /// The metadata word of an instruction that stands alone (RFC §10.1.1
 /// rule 7), as the pipeline writes it.
@@ -115,11 +116,20 @@ pub struct AiChannelOptions {
     /// bound (a person's answer), more than zero; `None` leaves that tool
     /// unbounded (RFC §21.6). Python's `tool_timeouts`.
     pub tool_timeouts: BTreeMap<String, Option<Duration>>,
-    /// The turn's budget of billed tokens (its input, output and cache
-    /// tokens, as its generations report them), more than zero: past it,
-    /// the loop ends `budget_exceeded` at its next round boundary (RFC
-    /// §6.4). Python's `turn_budget_tokens`; `None` sets none.
+    /// The turn's budget of billed tokens (its input, output, cache and
+    /// image tokens, as its generations report them), more than zero: past
+    /// it, the loop ends `budget_exceeded` at its next round boundary (RFC
+    /// §6.4). Python's `turn_budget_tokens`, under the one a binding's
+    /// metadata sets; `None` sets none.
     pub turn_budget_tokens: Option<u64>,
+    /// The turn's cost budget, above 0: each generation's usage priced as
+    /// one response at the model's catalogue price
+    /// ([`ModelPricing::cost_for`](crate::ModelPricing::cost_for)), the
+    /// fallback's generations at the primary's; past it, the loop ends
+    /// `budget_exceeded` at its next round boundary (RFC §6.4). A model
+    /// with no price refuses it. Python's `turn_budget_usd`, under the one
+    /// a binding's metadata sets; `None` sets none.
+    pub turn_budget_usd: Option<f64>,
     /// How hard a reasoning model thinks on the agent's turns (RFC §6.7),
     /// under the effort a binding's metadata sets and over the provider's
     /// configured one: Python's `reasoning_effort`; `None` sets none.
@@ -195,6 +205,7 @@ impl Default for AiChannelOptions {
             tool_timeout: Some(Duration::from_secs(30)),
             tool_timeouts: BTreeMap::new(),
             turn_budget_tokens: None,
+            turn_budget_usd: None,
             reasoning_effort: None,
             describe_empty_event: None,
             max_author_images: Some(DEFAULT_MAX_AUTHOR_IMAGES),
@@ -276,6 +287,10 @@ pub struct AiChannel<P> {
     tool_handler: Arc<RwLock<Option<ToolHandler>>>,
     policy: ToolPolicy,
     bounds: Bounds,
+    /// The turn's budget of billed tokens, under its binding's.
+    turn_budget_tokens: Option<u64>,
+    /// The turn's cost budget, under its binding's.
+    turn_budget_usd: Option<f64>,
     resilience: Resilience,
     system_prompt: Arc<RwLock<Option<String>>>,
     temperature: f64,
@@ -359,6 +374,8 @@ impl<P> Clone for AiChannel<P> {
             tool_handler: Arc::clone(&self.tool_handler),
             policy: self.policy.clone(),
             bounds: self.bounds.clone(),
+            turn_budget_tokens: self.turn_budget_tokens,
+            turn_budget_usd: self.turn_budget_usd,
             resilience: self.resilience.clone(),
             system_prompt: Arc::clone(&self.system_prompt),
             temperature: self.temperature,
@@ -416,6 +433,7 @@ impl<P: AiProvider> AiChannel<P> {
             tool_timeout,
             tool_timeouts,
             turn_budget_tokens,
+            turn_budget_usd,
             describe_empty_event,
             max_author_images,
             skills,
@@ -430,6 +448,8 @@ impl<P: AiProvider> AiChannel<P> {
             human_input_handler,
         } = options;
         refuse_zero_bounds(tool_timeout, &tool_timeouts, turn_budget_tokens)?;
+        let fallback = fallback_provider.as_deref();
+        check_budgets(turn_budget_tokens, turn_budget_usd, &provider, fallback)?;
         let policy = tool_policy.unwrap_or_default();
         refuse_bracketed(&policy)?;
         let instructions = instructions_of(&server_instructions)?;
@@ -466,8 +486,9 @@ impl<P: AiProvider> AiChannel<P> {
                 max_empty_retries,
                 tool_timeout,
                 tool_timeouts,
-                turn_budget_tokens,
             },
+            turn_budget_tokens,
+            turn_budget_usd,
             resilience: Resilience::checked(retry_policy, fallback_provider)?,
             system_prompt: Arc::new(RwLock::new(
                 system_prompt.filter(|prompt| !prompt.is_empty()),
@@ -595,6 +616,20 @@ impl<P: AiProvider> AiChannel<P> {
     /// a message or an instruction, never one of its own (RFC §6.4).
     fn answers(&self, event: &RoomEvent) -> bool {
         event.source.channel_id != self.channel_id && !opens_no_turn(event)
+    }
+
+    /// What a turn with `settings` may spend, priced at the channel's
+    /// provider's rate (Python's `_turn_budget`).
+    ///
+    /// # Errors
+    ///
+    /// Python's `ValueError` for a cost budget on a model with no price,
+    /// before the turn reads anything.
+    fn budget_of(&self, settings: &TurnSettings) -> Result<Option<TurnBudget>, ChannelError> {
+        let fallback = self.resilience.fallback_provider.as_deref();
+        let (tokens, usd) = (settings.turn_budget_tokens, settings.turn_budget_usd);
+        turn_budget(tokens, usd, &*self.provider, fallback)
+            .map_err(|error| -> ChannelError { Box::new(ClassedError::new(VALUE_ERROR, error)) })
     }
 
     /// The system prompt of a turn in `context`'s room: its binding's
@@ -1075,9 +1110,10 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             &binding.metadata,
             self.temperature,
             self.max_tokens,
-            self.bounds.turn_budget_tokens,
+            (self.turn_budget_tokens, self.turn_budget_usd),
             self.reasoning_effort.as_deref(),
         )?;
+        let budget = self.budget_of(&settings)?;
         let stands_alone = stands_alone(&event);
         let turn = current_turn_host();
         let system_prompt = self.turn_system_prompt(&binding, &context, stands_alone);
@@ -1092,10 +1128,8 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             provider: Arc::clone(&self.provider),
             toolbox,
             policy: self.policy.clone(),
-            bounds: Bounds {
-                turn_budget_tokens: settings.turn_budget_tokens,
-                ..self.bounds.clone()
-            },
+            bounds: self.bounds.clone(),
+            budget,
             resilience: self.resilience.clone(),
             system_prompt,
             temperature: settings.temperature,
@@ -1264,6 +1298,8 @@ impl<P> fmt::Debug for AiChannel<P> {
             .field("toolbox", &self.toolbox)
             .field("policy", &self.policy)
             .field("bounds", &self.bounds)
+            .field("turn_budget_tokens", &self.turn_budget_tokens)
+            .field("turn_budget_usd", &self.turn_budget_usd)
             .field("skills", &self.skills.is_some())
             .field("tool_call_intents", &self.tool_call_intents)
             .finish_non_exhaustive()

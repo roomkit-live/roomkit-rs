@@ -1,11 +1,11 @@
 //! A turn's settings as its binding's metadata sets them over the
 //! channel's (RFC §6.4, Appendix A.9), read as Python reads them: the
 //! temperature and the max tokens as pydantic's lax mode reads
-//! `AIContext`'s `float` and `int` fields, the token budget as Python's
-//! `turn_budget` checks it (Python's `_turn_settings`, `_turn_budget`).
+//! `AIContext`'s `float` and `int` fields, the budgets as Python's
+//! `turn_budget` checks them (Python's `_turn_settings`, `_turn_budget`).
 //!
 //! A `null` there is not set, the channel's value standing. A value read
-//! otherwise fails the turn: the token budget with Python's `ValueError`,
+//! otherwise fails the turn: a budget with Python's `ValueError`,
 //! the context's fields with pydantic's `ValidationError`, in its words
 //! without the documentation link pydantic adds under each error.
 
@@ -21,8 +21,8 @@ use crate::memory::repr::repr;
 /// Python's class of a context's refused field.
 const VALIDATION_ERROR: &str = "pydantic_core:ValidationError";
 
-/// Python's class of a refused token budget.
-const VALUE_ERROR: &str = "builtins:ValueError";
+/// Python's class of a refused budget.
+pub(crate) const VALUE_ERROR: &str = "builtins:ValueError";
 
 /// The longest text pydantic reads as an integer.
 const MAX_INT_TEXT: usize = 4300;
@@ -37,6 +37,8 @@ pub(crate) struct TurnSettings {
     pub(crate) max_tokens: Option<u32>,
     /// The turn's budget of billed tokens; `None` sets none.
     pub(crate) turn_budget_tokens: Option<u64>,
+    /// The turn's cost budget; `None` sets none.
+    pub(crate) turn_budget_usd: Option<f64>,
     /// The effort the turn asks the model for (RFC §6.7); `None` sets
     /// none.
     pub(crate) reasoning_effort: Option<String>,
@@ -48,7 +50,7 @@ pub(crate) struct TurnSettings {
 impl TurnSettings {
     /// The settings `metadata`, a binding's, sets over the channel's own
     /// `temperature`, `max_tokens`, `turn_budget_tokens` and
-    /// `reasoning_effort`. A field the
+    /// `turn_budget_usd` (`budgets`), and `reasoning_effort`. A field the
     /// binding sets to a value pydantic refuses keeps the channel's, and
     /// [`Self::validated`] then fails the turn.
     ///
@@ -57,19 +59,21 @@ impl TurnSettings {
     /// A system prompt that is no text, with every field refused, as
     /// Python's `_turn_settings` reads it as `AIContext` does before the
     /// turn reads it as a text (RMK-1237); then a token budget that is not
-    /// a positive integer, as Python's `turn_budget` raises `ValueError`
-    /// before the turn reads anything.
+    /// a positive integer, then a cost budget that is not a positive
+    /// number, as Python's `turn_budget` raises `ValueError` before the
+    /// turn reads anything.
     pub(crate) fn read(
         metadata: &Metadata,
         temperature: f64,
         max_tokens: Option<u32>,
-        turn_budget_tokens: Option<u64>,
+        (turn_budget_tokens, turn_budget_usd): (Option<u64>, Option<f64>),
         reasoning_effort: Option<&str>,
     ) -> Result<Self, ChannelError> {
         let mut settings = Self {
             temperature,
             max_tokens,
             turn_budget_tokens,
+            turn_budget_usd,
             reasoning_effort: reasoning_effort.map(str::to_owned),
             refused: Vec::new(),
         };
@@ -96,6 +100,9 @@ impl TurnSettings {
         }
         if let Some(budget) = set(metadata, "turn_budget_tokens") {
             settings.turn_budget_tokens = Some(positive_budget(budget)?);
+        }
+        if let Some(budget) = set(metadata, "turn_budget_usd") {
+            settings.turn_budget_usd = Some(positive_usd(budget)?);
         }
         Ok(settings)
     }
@@ -150,6 +157,21 @@ fn positive_budget(value: &Value) -> Result<u64, ChannelError> {
             VALUE_ERROR,
             Refused(format!(
                 "turn_budget_tokens must be a positive number, got {}",
+                repr(value)
+            )),
+        ))),
+    }
+}
+
+/// `value` as Python's `turn_budget` takes a cost budget: a number, no
+/// boolean, above zero.
+fn positive_usd(value: &Value) -> Result<f64, ChannelError> {
+    match value.as_f64() {
+        Some(budget) if budget > 0.0 => Ok(budget),
+        _ => Err(Box::new(ClassedError::new(
+            VALUE_ERROR,
+            Refused(format!(
+                "turn_budget_usd must be a positive number, got {}",
                 repr(value)
             )),
         ))),
@@ -411,7 +433,8 @@ mod tests {
             return Err("no object".to_owned());
         };
         let metadata: Metadata = members.into_iter().collect();
-        TurnSettings::read(&metadata, 0.7, None, None, None).map_err(|error| error.to_string())
+        TurnSettings::read(&metadata, 0.7, None, (None, None), None)
+            .map_err(|error| error.to_string())
     }
 
     /// What the turn's context makes of `metadata`: its temperature and
@@ -610,6 +633,35 @@ mod tests {
                     .map(|settings| settings.turn_budget_tokens),
                 Err(format!(
                     "turn_budget_tokens must be a positive number, got {shown}"
+                ))
+            );
+        }
+    }
+
+    // Python: tests/test_channels/test_turn_budget.py::test_a_room_budget_the_model_cannot_price_fails_the_turn
+    // (channels/_turn_budget.py _check_positive, a cost budget an int or a float).
+    #[test]
+    fn a_binding_s_cost_budget_is_a_positive_number() {
+        for (budget, read_as) in [(json!(0.05), 0.05), (json!(2), 2.0)] {
+            assert_eq!(
+                read(json!({"turn_budget_usd": budget})).map(|settings| settings.turn_budget_usd),
+                Ok(Some(read_as))
+            );
+        }
+        assert_eq!(
+            read(json!({"turn_budget_usd": null})).map(|settings| settings.turn_budget_usd),
+            Ok(None)
+        );
+        for (budget, shown) in [
+            (json!("0.05"), "'0.05'"),
+            (json!(0), "0"),
+            (json!(-0.5), "-0.5"),
+            (json!(true), "True"),
+        ] {
+            assert_eq!(
+                read(json!({"turn_budget_usd": budget})).map(|settings| settings.turn_budget_usd),
+                Err(format!(
+                    "turn_budget_usd must be a positive number, got {shown}"
                 ))
             );
         }

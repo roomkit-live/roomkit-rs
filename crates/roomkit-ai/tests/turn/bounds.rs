@@ -10,8 +10,8 @@ use roomkit::model::{EventType, RoomEvent};
 use roomkit::testing::TurnTap;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContext, AiError, AiMessage, AiProvider, AiResponse,
-    ProviderError,
+    AiChannel, AiChannelOptions, AiContext, AiError, AiMessage, AiProvider, AiResponse, Date,
+    ModelInfo, ModelPricing, ProviderError,
 };
 use serde_json::{Value, json};
 
@@ -333,4 +333,93 @@ fn a_token_budget_of_zero_is_refused() {
         [built(Some(0)), built(Some(1200)), built(None)],
         [Some(AiError::TurnBudgetTokens), None, None]
     );
+}
+
+// Python: tests/test_channels/test_turn_budget.py::test_a_cost_budget_needs_a_priced_model
+// and test_a_budget_is_a_positive_number (turn_budget_usd=0).
+#[test]
+fn a_cost_budget_needs_a_priced_model_and_a_positive_number() {
+    // The scripted model has no catalogue price.
+    let built = |turn_budget_usd| {
+        AiChannel::new(
+            channel("assistant"),
+            ScriptedProvider::new([]),
+            AiChannelOptions {
+                turn_budget_usd,
+                ..AiChannelOptions::default()
+            },
+        )
+        .err()
+    };
+    let shown = |shown: &str| AiError::TurnBudgetUsd {
+        shown: shown.to_owned(),
+    };
+    assert_eq!(
+        [
+            built(Some(0.05)),
+            built(Some(0.0)),
+            built(Some(-1.0)),
+            built(Some(f64::NAN)),
+            built(None)
+        ],
+        [
+            Some(AiError::UnpricedModel {
+                model: "scripted".to_owned()
+            }),
+            Some(shown("0.0")),
+            Some(shown("-1.0")),
+            Some(shown("nan")),
+            None
+        ]
+    );
+    assert!(
+        AiError::UnpricedModel {
+            model: "scripted".to_owned()
+        }
+        .to_string()
+        .starts_with("turn_budget_usd needs a model with a known price")
+    );
+}
+
+/// A scripted model with a catalogue price.
+struct Priced(ScriptedProvider);
+
+impl AiProvider for Priced {
+    fn model_name(&self) -> &'static str {
+        "priced"
+    }
+
+    fn catalog_entry(&self) -> Option<ModelInfo> {
+        let verified = Date::new(2026, 9, 30).unwrap();
+        Some(ModelInfo {
+            pricing: Some(ModelPricing::new(10.0, 50.0, verified).unwrap()),
+            ..ModelInfo::new("priced")
+        })
+    }
+
+    async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
+        self.0.generate(context).await
+    }
+}
+
+/// RFC §6.4: a generation whose usage the cost budget's price cannot read
+/// fails the turn, as Python's `ModelPricing.cost_for` raises in its loop;
+/// Rust raises it as the provider's failure, the provider named.
+#[tokio::test]
+async fn a_usage_the_price_cannot_read_fails_the_turn() {
+    let usage = json!({"input_tokens": -1}).as_object().cloned().unwrap();
+    let model = ScriptedProvider::new([ScriptedRound::answering("Done.").with_usage(usage)]);
+    let options = AiChannelOptions {
+        turn_budget_usd: Some(1.0),
+        tools: served().into(),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(channel("assistant"), Priced(model), options).unwrap();
+    let room = Room::with_agent(agent).await;
+    let result = room.says("Order 1?").await;
+    assert_eq!(
+        result.error.map(|error| error.message),
+        Some("Priced: usage counter 'input_tokens' must be a non-negative integer".to_owned())
+    );
+    room.kit.close().await.unwrap();
 }

@@ -9,6 +9,19 @@ use serde_json::Value;
 use super::date::Date;
 use crate::AiError;
 
+/// The counters a response's usage bills, disjoint, a token counted under
+/// one of them only (RFC §6.7): Python's `BILLED_USAGE_COUNTERS`, which
+/// [`ModelPricing::cost_for`] prices and a turn's token budget sums (RFC
+/// §6.4). `reasoning_tokens` is the thinking share of `output_tokens`.
+pub(crate) const BILLED_USAGE_COUNTERS: [&str; 6] = [
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "input_image_tokens",
+    "output_image_tokens",
+];
+
 /// Metadata describing one model a provider offers: Python's
 /// `ModelInfo(*, id, display_name=None, context_window=None,
 /// supports_vision=None, deprecated=False, capabilities=[], pricing=None)`.
@@ -146,9 +159,7 @@ impl ModelPricing {
     /// price Python's pydantic would have refused.
     pub fn cost_for(&self, usage: &Metadata) -> Result<f64, AiError> {
         self.check()?;
-        // Python's BILLED_USAGE_COUNTERS, read in its order: disjoint, a
-        // token counted under one of them only (RFC §6.7);
-        // `reasoning_tokens` is the thinking share of `output_tokens`.
+        // BILLED_USAGE_COUNTERS, read in their order.
         let input_tokens = usage_counter(usage, "input_tokens")?;
         let output_tokens = usage_counter(usage, "output_tokens")?;
         let cache_read = usage_counter(usage, "cache_read_input_tokens")?;

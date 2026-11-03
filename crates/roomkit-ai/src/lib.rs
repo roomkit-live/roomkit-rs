@@ -93,6 +93,7 @@ mod tool_loop;
 mod tool_usage;
 mod tools;
 mod transcript_content;
+mod turn_budget;
 mod turn_settings;
 
 pub use self::agent::{Agent, AgentOptions, BuildIdentityBlockOptions};

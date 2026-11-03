@@ -10,7 +10,9 @@ use roomkit_core::rules::transcript::{Message, Role};
 use tokio::time::Instant;
 
 use super::Bounds;
+use crate::error::AiError;
 use crate::provider::ran_out_of_room;
+use crate::turn_budget::TurnBudget;
 
 /// What a model whose round of calls was followed by an empty answer is told
 /// (roomkit's `_EMPTY_RETRY_NUDGE`): the results are in its context, it only
@@ -47,43 +49,44 @@ pub(super) struct Limits {
     warn_after: u32,
     max_empty_retries: u32,
     empty_retries: u32,
-    /// The turn's budget of billed tokens, if it has one (RFC §6.4).
-    budget_tokens: Option<u64>,
+    /// What the turn may spend, if it has a budget (RFC §6.4).
+    budget: Option<TurnBudget>,
     /// The tokens its generations billed so far.
     billed: u64,
+    /// What its generations cost so far, at the model's price.
+    spent: f64,
 }
 
-/// The counters a generation's usage bills, which a token budget counts
-/// (Python's `BILLED_USAGE_COUNTERS`).
-const BILLED_COUNTERS: [&str; 4] = [
-    "input_tokens",
-    "output_tokens",
-    "cache_read_input_tokens",
-    "cache_creation_input_tokens",
-];
-
 impl Limits {
-    /// The limits of a loop starting now under `bounds`.
-    pub(super) fn starting(bounds: &Bounds) -> Self {
+    /// The limits of a loop starting now under `bounds`, spending at most
+    /// `budget`.
+    pub(super) fn starting(bounds: &Bounds, budget: Option<TurnBudget>) -> Self {
         Self {
             deadline: bounds.loop_timeout.map(|timeout| Instant::now() + timeout),
             timeout: bounds.loop_timeout,
             warn_after: bounds.warn_after,
             max_empty_retries: bounds.max_empty_retries,
             empty_retries: 0,
-            budget_tokens: bounds.turn_budget_tokens,
+            budget,
             billed: 0,
+            spent: 0.0,
         }
     }
 
-    /// Counts what one generation's `usage` billed against the turn's
-    /// budget (Python's `_ToolLoopState.count`).
-    pub(super) fn count(&mut self, usage: &roomkit::model::Metadata) {
-        let billed: u64 = BILLED_COUNTERS
-            .iter()
-            .filter_map(|counter| usage.get(*counter).and_then(serde_json::Value::as_u64))
-            .sum();
-        self.billed = self.billed.saturating_add(billed);
+    /// Counts what one generation's `usage` billed and cost against the
+    /// turn's budget (Python's `_ToolLoopState.count`).
+    ///
+    /// # Errors
+    ///
+    /// [`AiError::UsageCounter`] for a billed counter the price cannot
+    /// read, as Python's `ModelPricing.cost_for` raises it.
+    pub(super) fn count(&mut self, usage: &roomkit::model::Metadata) -> Result<(), AiError> {
+        let Some(budget) = &self.budget else {
+            return Ok(());
+        };
+        self.billed = self.billed.saturating_add(TurnBudget::tokens_of(usage));
+        self.spent += budget.cost_of(usage)?;
+        Ok(())
     }
 
     /// The limit of the loop's own the turn has passed: its deadline, then
@@ -95,8 +98,9 @@ impl Limits {
         {
             return Some(LoopEndReason::Timeout);
         }
-        self.budget_tokens
-            .filter(|budget| self.billed >= *budget)
+        self.budget
+            .as_ref()
+            .filter(|budget| budget.reached(self.billed, self.spent))
             .map(|_| LoopEndReason::BudgetExceeded)
     }
 
@@ -115,6 +119,7 @@ impl Limits {
                 target: "roomkit::ai",
                 rounds,
                 billed = self.billed,
+                spent = self.spent,
                 "the tool loop reached the turn's budget"
             ),
             None => {}

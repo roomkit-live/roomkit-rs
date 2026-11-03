@@ -159,7 +159,7 @@ pub(crate) fn repr(value: &Value) -> String {
 /// positional notation for an exponent from -4 to 15, `.0` on a whole
 /// number, else in scientific notation with a signed exponent of two
 /// digits at least (`1e+16`, `1e-05`).
-pub(super) fn float_repr(number: f64) -> String {
+pub(crate) fn float_repr(number: f64) -> String {
     if number.is_nan() {
         return "nan".to_owned();
     }

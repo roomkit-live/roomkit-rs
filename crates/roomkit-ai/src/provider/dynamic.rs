@@ -2,7 +2,7 @@
 //! where it takes a provider beside the channel's own, which a Rust trait
 //! with `async` methods cannot be.
 
-use super::{AiContext, AiProvider, ProviderStream};
+use super::{AiContext, AiProvider, ModelInfo, ProviderStream};
 
 /// An [`AiProvider`] as an object, which every provider is: what
 /// [`AiChannelOptions::fallback_provider`](crate::AiChannelOptions::fallback_provider)
@@ -18,6 +18,9 @@ pub trait DynAiProvider: Send + Sync + 'static {
     /// [`AiProvider::model_name`].
     fn dyn_model_name(&self) -> &str;
 
+    /// [`AiProvider::catalog_entry`].
+    fn dyn_catalog_entry(&self) -> Option<ModelInfo>;
+
     /// [`AiProvider::generate_structured_stream`].
     fn dyn_generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a>;
 }
@@ -29,6 +32,10 @@ impl<P: AiProvider> DynAiProvider for P {
 
     fn dyn_model_name(&self) -> &str {
         self.model_name()
+    }
+
+    fn dyn_catalog_entry(&self) -> Option<ModelInfo> {
+        self.catalog_entry()
     }
 
     fn dyn_generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {

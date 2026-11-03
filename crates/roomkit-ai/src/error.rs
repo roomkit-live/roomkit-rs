@@ -116,6 +116,23 @@ pub enum AiError {
         /// Python's words.
         reason: String,
     },
+    /// A turn's cost budget is not above 0 (RFC §6.4): Python's
+    /// `ValueError`, a budget being a positive number.
+    #[error("turn_budget_usd must be a positive number, got {shown}")]
+    TurnBudgetUsd {
+        /// The budget, as Python's `repr` writes it.
+        shown: String,
+    },
+    /// A cost budget set for a model with no catalogue price, whose cost
+    /// cannot be counted (RFC §6.4): Python's `ValueError`.
+    #[error(
+        "turn_budget_usd needs a model with a known price; '{model}' has none in the catalogue. \
+         Set turn_budget_tokens instead."
+    )]
+    UnpricedModel {
+        /// The model's name.
+        model: String,
+    },
 }
 
 /// `names` as Python writes a set of strings' items.

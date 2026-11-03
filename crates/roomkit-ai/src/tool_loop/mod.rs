@@ -52,8 +52,8 @@ use crate::author_images::refuses_content;
 use crate::loop_events::DeclaredTool;
 use crate::memory::after_memory;
 use crate::provider::{
-    AiContext, AiMessage, AiProvider, AiToolCall, AiToolResultPart, ProviderError, ai_messages,
-    ai_messages_with,
+    AiContext, AiMessage, AiProvider, AiToolCall, AiToolResultPart, ProviderError,
+    ProviderErrorOptions, ai_messages, ai_messages_with,
 };
 use crate::steering::{Loops, Steering};
 use crate::stream::{Items, Yielder, items, join_all};
@@ -62,6 +62,7 @@ use crate::tools::ToolContext;
 use crate::tools::ToolPolicy;
 use crate::tools::ToolResult;
 use crate::tools::toolbox::Toolbox;
+use crate::turn_budget::TurnBudget;
 
 /// One item of a turn's loop, in the order it happens.
 #[derive(Clone, Debug, PartialEq)]
@@ -116,8 +117,6 @@ pub(crate) struct Bounds {
     pub(crate) tool_timeout: Option<Duration>,
     /// A bound per tool name, above `tool_timeout` and a tool's own.
     pub(crate) tool_timeouts: BTreeMap<String, Option<Duration>>,
-    /// The turn's budget of billed tokens (RFC §6.4); `None` sets none.
-    pub(crate) turn_budget_tokens: Option<u64>,
 }
 
 impl Bounds {
@@ -140,6 +139,8 @@ pub(crate) struct Loop<P> {
     pub(crate) toolbox: Arc<Toolbox>,
     pub(crate) policy: ToolPolicy,
     pub(crate) bounds: Bounds,
+    /// What the turn may spend (RFC §6.4); `None` sets no budget.
+    pub(crate) budget: Option<TurnBudget>,
     /// How its generations recover from their provider's refusals.
     pub(crate) resilience: Resilience,
     pub(crate) system_prompt: Option<String>,
@@ -201,7 +202,7 @@ impl<P: AiProvider> Loop<P> {
         let mut had_tool_round = false;
         let mut tool_rounds = 0;
         let mut prefix = String::new();
-        let mut limits = Limits::starting(&self.bounds);
+        let mut limits = Limits::starting(&self.bounds, self.budget.clone());
         self.find_turn_input(&messages, system_prompt.clone());
         if steering.read(&mut messages, &mut system_prompt) {
             let ending = (&limits, &steering, &out);
@@ -217,6 +218,7 @@ impl<P: AiProvider> Loop<P> {
             let asked = (declared.clone(), system_prompt.clone());
             let reading = (&steering, &out, prefix.as_str());
             let read = self.generate(&messages, asked, reading).await;
+            let read = read.and_then(|read| self.counted(read, &mut spent, &mut limits));
             let mut generation = match read {
                 Ok(generation) => generation,
                 Err(failure) => {
@@ -227,8 +229,6 @@ impl<P: AiProvider> Loop<P> {
                 }
             };
             self.take_intents(&mut generation.calls);
-            spent.count(&generation);
-            limits.count(&generation.done.usage);
             // What the room saw (RFC §6.4, The turn's record).
             spent.segments.push(generation.delivered.clone());
             let ending = (&limits, &steering, &out);
@@ -335,6 +335,31 @@ impl<P: AiProvider> Loop<P> {
         }
     }
 
+    /// Counts what `generation` used into what the turn `spent` and
+    /// against its `limits`. A usage its turn's price cannot read fails the
+    /// generation, after it handed its text, as Python's
+    /// `ModelPricing.cost_for` raises in the loop.
+    fn counted(
+        &self,
+        generation: Generation,
+        spent: &mut Spent,
+        limits: &mut Limits,
+    ) -> Result<Generation, Failed> {
+        spent.count(&generation);
+        let Err(error) = limits.count(&generation.done.usage) else {
+            return Ok(generation);
+        };
+        let options = ProviderErrorOptions {
+            provider: self.provider.name().to_owned(),
+            ..ProviderErrorOptions::default()
+        };
+        Err(Failed {
+            error: ProviderError::new(error.to_string(), options).with_source(error),
+            streamed: true,
+            delivered: generation.delivered,
+        })
+    }
+
     /// The provider failed with `failure`: after a round of calls, the loop
     /// ends `error`, its rounds kept (RFC §6.4 "A turn cut short"), and the
     /// turn is reported, the text the failed round handed the room its last
@@ -432,7 +457,8 @@ impl<P: AiProvider> Loop<P> {
             rounds,
             max_rounds: Some(self.bounds.max_rounds),
             timeout,
-            budget_tokens: self.bounds.turn_budget_tokens,
+            budget_tokens: self.budget.as_ref().and_then(|budget| budget.tokens),
+            budget_usd: self.budget.as_ref().and_then(|budget| budget.usd),
             model: Some(model.to_owned()),
             provider: Some(provider.to_owned()),
             ..LoopEndMarker::new(reason)
@@ -639,7 +665,6 @@ mod tests {
             warn_after: 25,
             max_empty_retries: 1,
             tool_timeout: default.map(Duration::from_secs),
-            turn_budget_tokens: None,
             tool_timeouts: own
                 .iter()
                 .map(|(name, bound)| ((*name).to_owned(), bound.map(Duration::from_secs)))
