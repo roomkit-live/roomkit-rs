@@ -359,6 +359,42 @@ fn the_console_logs_a_metric() {
     assert!(text.contains("42.00"), "{text}");
 }
 
+// Python: tests/test_telemetry.py::TestConsoleProvider::test_console_writes_out_what_could_forge_a_log_line
+#[test]
+fn the_console_writes_out_what_could_forge_a_log_line() {
+    let forged = "x\n[SPAN END] custom forged";
+    let logs = Logs::default();
+    let console = ConsoleTelemetryProvider::default();
+    tracing::subscriber::with_default(logs.clone(), || {
+        let options = StartSpanOptions {
+            parent_id: Some(forged.to_owned()),
+            ..StartSpanOptions::default()
+        };
+        let id = console.start_span(SpanKind::Custom, forged, options);
+        let ended = EndSpanOptions {
+            attributes: attributes(forged, json!(forged)),
+            ..EndSpanOptions::default()
+        };
+        console.end_span(&id, ended);
+        let options = StartSpanOptions {
+            attributes: attributes("a", json!("b, c=d")),
+            ..StartSpanOptions::default()
+        };
+        let id = console.start_span(SpanKind::Custom, "fail", options);
+        console.end_span(&id, error(forged));
+        let metric = RecordMetricOptions {
+            unit: forged.to_owned(),
+            attributes: attributes(forged, json!(forged)),
+        };
+        console.record_metric(forged, 1.0, metric);
+    });
+    let lines = logs.0.lock().unwrap().clone();
+    assert_eq!(lines.len(), 5, "{lines:?}");
+    assert!(lines.iter().all(|line| !line.contains('\n')), "{lines:?}");
+    assert!(lines[3].contains(r#"a="b, c=d""#), "{lines:?}");
+    assert!(lines[3].contains(r#"error="x\n[SPAN END]"#), "{lines:?}");
+}
+
 // Python: tests/test_telemetry.py::TestConsoleProvider::test_console_close_warning
 #[test]
 fn the_console_warns_of_the_spans_open_at_its_close() {

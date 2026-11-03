@@ -66,19 +66,16 @@ impl Default for ConsoleTelemetryProvider {
     }
 }
 
-/// ` [k=v, k=v]`, or nothing for no attribute.
+/// ` [k=v, k=v]`, or nothing for no attribute: each value its JSON, which
+/// quotes and escapes a text, so that a value holding a delimiter or a line
+/// break forges no attribute and no log line, as Python's `repr`.
 fn listed(attributes: &Metadata) -> String {
     if attributes.is_empty() {
         return String::new();
     }
     let parts: Vec<String> = attributes
         .iter()
-        .map(|(key, value)| {
-            let Value::String(text) = value else {
-                return format!("{key}={value}");
-            };
-            format!("{key}={text}")
-        })
+        .map(|(key, value)| format!("{}={value}", key.escape_debug()))
         .collect();
     format!(" [{}]", parts.join(", "))
 }
@@ -99,9 +96,13 @@ impl TelemetryProvider for ConsoleTelemetryProvider {
             channel_id: options.channel_id,
             ..Span::default()
         };
-        let mut line = format!("[SPAN START] {kind} {name} (id={}", span.id);
+        let mut line = format!(
+            "[SPAN START] {kind} {} (id={}",
+            name.escape_debug(),
+            span.id
+        );
         if let Some(parent) = &span.parent_id {
-            let _ = write!(line, ", parent={parent}");
+            let _ = write!(line, ", parent={}", parent.escape_debug());
         }
         line.push(')');
         let id = span.id.clone();
@@ -121,17 +122,15 @@ impl TelemetryProvider for ConsoleTelemetryProvider {
             .map(|ms| format!(" {ms:.1}ms"))
             .unwrap_or_default();
         let attributes = listed(&span.attributes);
+        let name = span.name.escape_debug();
         let line = if options.status == "error" {
             let error = options.error_message.as_deref().unwrap_or("unknown");
             format!(
-                "[SPAN ERROR] {} {}{duration}{attributes} error={error}",
-                span.kind, span.name
+                "[SPAN ERROR] {} {name}{duration}{attributes} error={error:?}",
+                span.kind
             )
         } else {
-            format!(
-                "[SPAN END] {} {}{duration}{attributes}",
-                span.kind, span.name
-            )
+            format!("[SPAN END] {} {name}{duration}{attributes}", span.kind)
         };
         self.log(&line);
     }
@@ -146,9 +145,10 @@ impl TelemetryProvider for ConsoleTelemetryProvider {
         let unit = if options.unit.is_empty() {
             String::new()
         } else {
-            format!(" {}", options.unit)
+            format!(" {}", options.unit.escape_debug())
         };
         let attributes = listed(&options.attributes);
+        let name = name.escape_debug();
         self.log(&format!("[METRIC] {name} = {value:.2}{unit}{attributes}"));
     }
 
