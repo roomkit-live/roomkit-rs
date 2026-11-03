@@ -141,14 +141,13 @@ async fn delegate_in_background<S: ConversationStore>(
     worker_id: &ChannelId,
     task: &str,
 ) -> Result<String, RoomKitError> {
+    let notify = ChannelId::new(CALLER_HANDS_BACK).unwrap_or_else(|_| unreachable!());
     let key = (room_id.clone(), worker_id.clone());
     if !server.pending().insert(key.clone()) {
         return Ok(already_working(worker_id));
     }
     // Read in the call: the outcome continues its turn's chain (RFC §23.3).
     let chain_depth = ExecutionContext::current().turn_depth().unwrap_or(0);
-    let notify = ChannelId::new(CALLER_HANDS_BACK)
-        .map_err(|error| RoomKitError::Value(error.to_string()))?;
     let options = DelegateOptions {
         notify: Some(notify),
         // The background run follows it (RFC §23.3).

@@ -18,7 +18,7 @@ use crate::kit::{RoomKit, WeakRoomKit};
 use crate::orchestration::StatusLevel;
 use crate::store::ConversationStore;
 use crate::tasks::handback::{hand_back, not_handed_back};
-use crate::tasks::{Kind, Phase};
+use crate::tasks::{Kind, Marks, Phase};
 
 /// What a run's caller reads when its work raised: the framework's words,
 /// never the error's message (RFC §9.3), and nothing to fence. Python's
@@ -58,16 +58,6 @@ pub(crate) struct BackgroundRun<T> {
     pub(crate) release: Box<dyn FnOnce(bool) + Send>,
 }
 
-/// How a run's work ended.
-enum Worked<T> {
-    /// It returned.
-    Returned(T),
-    /// It failed: its error was logged and posted.
-    Failed,
-    /// The kit's close cut it: posted cancelled, nothing handed back.
-    Cut,
-}
-
 /// Starts `run` as a task the kit tracks until it ends, its outcome handed
 /// back at `chain_depth`, the depth of the turn whose call started it
 /// (RFC §23.3): Python's `start_background_run(kit, run_in_background(kit,
@@ -90,13 +80,17 @@ where
     let weak = kit.downgrade();
     kit.inner
         .tasks
-        .spawn(Kind::Turn, run_in_background(weak, run, chain_depth))
+        // A run of its own, apart from the call that started it, which
+        // ends before it.
+        .spawn_alone(Kind::Turn, run_in_background(weak, run, chain_depth))
         .map(drop)
         .ok_or(RoomKitError::KitClosed)
 }
 
 /// Runs `run`, frees its room, hands its outcome back, posts its terminal
-/// entry: Python's `run_in_background`.
+/// entry: Python's `run_in_background`. The kit's close cuts it wherever
+/// it is, its work or its hand-back under way, unless the close is called
+/// from within the run itself (its hand-back's own turn).
 async fn run_in_background<S, T>(kit: WeakRoomKit<S>, run: BackgroundRun<T>, chain_depth: u32)
 where
     S: ConversationStore,
@@ -111,121 +105,182 @@ where
         post,
         release,
     } = run;
+    let mut ending = Ending {
+        post,
+        release: Some(release),
+        posted: false,
+    };
     let Some(kit) = kit.upgrade() else {
         return;
     };
-    let outcome = match worked(&kit, &room_id, work, &*post).await {
-        Worked::Returned(outcome) => Some(outcome),
-        Worked::Failed => None,
-        Worked::Cut => {
-            release(false);
-            return;
+    // The run's own unit: a close called from within it spares it.
+    let marks = Marks::current();
+    let ran = tokio::select! {
+        biased;
+        () = cut_by_close(&kit, &marks) => None,
+        ran = work => Some(ran),
+    };
+    let outcome = match ran {
+        // Cut: posted cancelled and freed as the guard drops.
+        None => return,
+        Some(Ok(outcome)) => Some(outcome),
+        Some(Err(error)) => {
+            // For the logs and the status bus, never a model (RFC §9.3).
+            tracing::error!(target: "roomkit::orchestration", %error, "Background run in room {room_id} failed");
+            ending.post(StatusLevel::Failed, &error.to_string());
+            None
         }
     };
-    release(outcome.is_some());
+    ending.release(outcome.is_some());
     let text = told(outcome.as_ref());
-    // A close that begins while the outcome is handed back cuts it, as
-    // Python's cancels the hand-back under way.
-    let closing = kit.inner.tasks.is_closing();
-    let handed = hand_back(&kit, &room_id, &notify, text, chain_depth, Metadata::new()).await;
-    let cut = !closing && kit.inner.tasks.is_closing();
-    let missed = match &handed {
-        _ if cut => Some("cancelled".to_owned()),
-        Err(error) => {
+    let handing = hand_back(&kit, &room_id, &notify, text, chain_depth, Metadata::new());
+    let handed = tokio::select! {
+        biased;
+        () = cut_by_close(&kit, &marks) => None,
+        handed = handing => Some(handed),
+    };
+    let missed = match handed {
+        None => Some("cancelled".to_owned()),
+        Some(Err(error)) => {
             tracing::error!(target: "roomkit::orchestration", %error, "Handing back a background run in room {room_id} failed");
             Some(error.to_string())
         }
-        Ok(delivered) => not_handed_back(delivered.as_ref()),
+        Some(Ok(delivered)) => not_handed_back(delivered.as_ref()),
     };
     match (outcome, missed) {
         // Its work failed: posted so already.
         (None, _) => {}
-        (Some(_), Some(missed)) => post(StatusLevel::Failed, &missed),
+        (Some(_), Some(missed)) => ending.post(StatusLevel::Failed, &missed),
         (Some(outcome), None) => {
             let (level, detail) = ended(&outcome);
-            post(level, detail);
+            ending.post(level, detail);
         }
     }
 }
 
-/// The run's work, cut when the kit's close begins: a failure is logged and
-/// posted with its message (for the logs and the status bus, never a
-/// model); a cut is posted `cancelled`. On a kit already closing (a run
-/// held just before its close) the work never runs. Python's `_work`.
-async fn worked<S, T>(
-    kit: &RoomKit<S>,
-    room_id: &RoomId,
-    work: BoxFuture<'static, Result<T, RoomKitError>>,
-    post: &(dyn Fn(StatusLevel, &str) + Send + Sync),
-) -> Worked<T>
-where
-    S: ConversationStore,
-{
+/// Resolves once the kit's close began, at once on a kit already closing,
+/// unless the close was called from within `marks`, the run's own work,
+/// which it spares (RFC §12.10.4): Python's close cuts every background
+/// run but those it is called under.
+async fn cut_by_close<S: ConversationStore>(kit: &RoomKit<S>, marks: &Marks) {
     let mut phases = kit.inner.tasks.phases();
-    let closed = async move {
-        // A dropped sender is a kit gone: cut too.
-        drop(phases.wait_for(|phase| *phase >= Phase::Closing).await);
-    };
-    let ran = tokio::select! {
-        biased;
-        () = closed => None,
-        ran = work => Some(ran),
-    };
-    match ran {
-        None => {
-            post(StatusLevel::Failed, "cancelled");
-            Worked::Cut
+    // A dropped sender is a kit gone: cut too.
+    let closing = phases
+        .wait_for(|phase| *phase >= Phase::Closing)
+        .await
+        .map(drop);
+    if closing.is_ok() && kit.inner.tasks.spares(marks) {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// What ends a run however it ends: its room freed once, its terminal entry
+/// posted once. A run dropped before either, cut by the close or aborted
+/// with the kit's left work, frees its room and posts `cancelled`, as
+/// Python's `finally` and its cancelled run do.
+struct Ending {
+    post: PostEntry,
+    release: Option<Box<dyn FnOnce(bool) + Send>>,
+    posted: bool,
+}
+
+impl Ending {
+    fn release(&mut self, returned: bool) {
+        if let Some(release) = self.release.take() {
+            release(returned);
         }
-        Some(Ok(outcome)) => Worked::Returned(outcome),
-        Some(Err(error)) => {
-            tracing::error!(target: "roomkit::orchestration", %error, "Background run in room {room_id} failed");
-            post(StatusLevel::Failed, &error.to_string());
-            Worked::Failed
+    }
+
+    fn post(&mut self, level: StatusLevel, detail: &str) {
+        self.posted = true;
+        (self.post)(level, detail);
+    }
+}
+
+impl Drop for Ending {
+    fn drop(&mut self) {
+        if !self.posted {
+            self.post(StatusLevel::Failed, "cancelled");
         }
+        self.release(false);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, PoisonError};
 
     use roomkit_core::model::{ChannelId, RoomId};
 
     use super::{BackgroundRun, background_failure_text, start_background_run};
     use crate::error::RoomKitError;
     use crate::kit::{RoomKit, RoomKitOptions};
+    use crate::orchestration::StatusLevel;
+
+    /// What a test run did: its work, its releases, its posts.
+    #[derive(Clone, Default)]
+    struct Seen(Arc<Mutex<Vec<String>>>);
+
+    impl Seen {
+        fn note(&self, what: String) {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(what);
+        }
+
+        fn read(&self) -> Vec<String> {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        }
+    }
+
+    /// A run whose work, release and posts note what they do in `seen`.
+    fn run(seen: &Seen) -> BackgroundRun<()> {
+        let (work, post, release) = (seen.clone(), seen.clone(), seen.clone());
+        BackgroundRun {
+            room_id: RoomId::new("r").unwrap_or_else(|error| panic!("{error}")),
+            notify: ChannelId::new("boss").unwrap_or_else(|error| panic!("{error}")),
+            work: Box::pin(async move {
+                work.note("worked".to_owned());
+                Ok(())
+            }),
+            told: Box::new(|_| String::new()),
+            ended: |()| (StatusLevel::Completed, "completed"),
+            post: Box::new(move |level, detail| post.note(format!("{level:?} {detail}"))),
+            release: Box::new(move |returned| release.note(format!("released {returned}"))),
+        }
+    }
 
     // Python: tests/orchestration/test_background_close.py::test_a_run_asked_for_while_the_kit_closes_never_starts[per-worker]
     // (orchestration/_background.py start_background_run: check_open)
     #[tokio::test]
     async fn a_run_asked_for_once_the_kit_closes_never_starts() {
         let kit = RoomKit::new(RoomKitOptions::default());
-        kit.close().await.unwrap_or_else(|error| panic!("{error}"));
-        let (worked, released) = (
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
-        );
-        let (work, release) = (Arc::clone(&worked), Arc::clone(&released));
-        let run = BackgroundRun::<()> {
-            room_id: RoomId::new("r").unwrap_or_else(|error| panic!("{error}")),
-            notify: ChannelId::new("boss").unwrap_or_else(|error| panic!("{error}")),
-            work: Box::pin(async move {
-                work.store(true, Ordering::SeqCst);
-                Ok(())
-            }),
-            told: Box::new(|_| String::new()),
-            ended: |()| (crate::orchestration::StatusLevel::Completed, "completed"),
-            post: Box::new(|_, _| {}),
-            release: Box::new(move |_| release.store(true, Ordering::SeqCst)),
-        };
+        // The close begun, not over: the kit still spawns the work it spares.
+        kit.inner.tasks.close();
+        let seen = Seen::default();
 
-        let started = start_background_run(&kit, run, 0);
+        let started = start_background_run(&kit, run(&seen), 0);
         tokio::task::yield_now().await;
 
         assert!(matches!(started, Err(RoomKitError::KitClosed)));
-        assert!(!worked.load(Ordering::SeqCst));
-        assert!(!released.load(Ordering::SeqCst));
+        assert!(seen.read().is_empty(), "{:?}", seen.read());
+    }
+
+    // Python: tests/orchestration/test_background_close.py::test_a_run_held_as_the_kit_closes_ends_cancelled_without_its_work[per-worker]
+    #[tokio::test]
+    async fn a_run_the_close_finds_before_its_first_step_ends_cancelled_without_its_work() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let seen = Seen::default();
+
+        start_background_run(&kit, run(&seen), 0).unwrap_or_else(|error| panic!("{error}"));
+        kit.inner.tasks.close();
+        crate::testing::idle(&kit).await;
+
+        assert_eq!(seen.read(), ["Failed cancelled", "released false"]);
     }
 
     // Python: orchestration/_background.py background_failure_text, as

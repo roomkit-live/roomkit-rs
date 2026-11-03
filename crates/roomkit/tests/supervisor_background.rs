@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelId, ChannelType, InboundMessage, Metadata, RoomEvent, RoomId, TextContent,
+    ChannelId, ChannelType, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::orchestration::{RecentOptions, StatusLevel, StrategyAgent, SupervisorOptions};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions, idle};
@@ -178,7 +178,6 @@ fn record(kit: &RoomKit, trigger: HookTrigger, key: &'static str) -> Arc<Mutex<V
 }
 
 // Python: tests/orchestration/test_background_close.py::test_close_ends_a_background_run[per-worker]
-// Python: tests/orchestration/test_background_close.py::test_a_run_held_as_the_kit_closes_ends_cancelled_without_its_work[per-worker]
 #[tokio::test]
 async fn the_kit_s_close_ends_a_background_worker_s_run_cancelled() {
     let held = Held::new();
@@ -266,4 +265,52 @@ async fn a_worker_whose_task_the_runner_cancelled_is_free_and_told_not_completed
     assert!(told.contains("The task was cancelled."), "{told}");
     held.release.add_permits(1);
     kit.close().await.unwrap();
+}
+
+// Python: core/framework.py _cut_at_once, which cuts a background run at the
+// close's start wherever it is (tests/test_close_during_handback.py's
+// per-worker door holds the hand-back's turn; this holds its delivery).
+#[tokio::test]
+async fn the_kit_s_close_cuts_a_hand_back_under_way_at_once() {
+    let boss = model(vec![
+        calls("c1", "delegate_to_worker", "Write it."),
+        says("ok"),
+    ]);
+    let kit = kit_with(boss, model(vec![says("The draft.")])).await;
+    let reached = Arc::new(Notify::new());
+    let holding = Arc::clone(&reached);
+    // Holds the hand-back's delivery, never anything else.
+    let hold = move |event: RoomEvent, _context: RoomContext| {
+        let holding = Arc::clone(&holding);
+        let handed_back = format!("{:?}", event.content).contains("Your background task");
+        async move {
+            if handed_back {
+                holding.notify_one();
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    kit.hook(HookTrigger::BeforeDeliver, hold, HookOptions::default())
+        .unwrap();
+
+    ask(&kit, "Write me something.").await;
+    tokio::time::timeout(Duration::from_secs(5), reached.notified())
+        .await
+        .unwrap();
+    // Well within the close's grace of 5 seconds: the run does not wait
+    // its hand-back out.
+    tokio::time::timeout(Duration::from_secs(2), kit.close())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let entries = terminal_entries(&kit).await;
+    assert_eq!(
+        entries.last(),
+        Some(&(
+            "orchestration".to_owned(),
+            StatusLevel::Failed,
+            "cancelled".to_owned()
+        ))
+    );
 }

@@ -457,22 +457,6 @@ impl<S: ConversationStore> Drop for CutPost<'_, S> {
 
 #[cfg(test)]
 mod tests {
-    // Python: tests/tasks/test_cancelled_delegation.py::test_a_supervisor_reads_a_cancelled_task_as_cancelled
-    #[test]
-    fn a_cancelled_task_reads_as_cancelled() {
-        use roomkit_core::model::{ChannelId, RoomId, TaskStatus};
-
-        use super::task_output;
-        use crate::tasks::DelegatedTaskResult;
-        let room = |name: &str| RoomId::new(name).unwrap_or_else(|error| panic!("{error}"));
-        let worker = ChannelId::new("worker").unwrap_or_else(|error| panic!("{error}"));
-        let cancelled = DelegatedTaskResult {
-            status: TaskStatus::Cancelled,
-            ..DelegatedTaskResult::new("t", room("c"), room("p"), worker)
-        };
-        assert_eq!(task_output(Some(&cancelled)), "The task was cancelled.");
-    }
-
     // Python: orchestration/_worker_run.py `f"The task timed out after {timeout:g}s."`,
     // as tests/orchestration/test_worker_delegation_bound.py reads it.
     #[test]
@@ -655,6 +639,45 @@ mod tests {
         );
     }
 
+    /// A strategy's run of `worker_id` in `room`, its entries as `status`
+    /// says: inline, or following a task the runner runs in the background,
+    /// whose id is then given. Python's `_worker_run`.
+    async fn start_run(
+        kit: &RoomKit,
+        room: &RoomId,
+        worker_id: &ChannelId,
+        door: &str,
+        status: WorkerStatus,
+    ) -> (tokio::task::JoinHandle<()>, Option<String>) {
+        let (running, room, worker_id) = (kit.clone(), room.clone(), worker_id.clone());
+        if door == "inline" {
+            let run = tokio::spawn(async move {
+                let delegation = DelegateOptions::default();
+                let status = Some(status);
+                let ran = run_worker(
+                    &running, &room, &worker_id, "Count.", None, status, delegation,
+                );
+                drop(ran.await);
+            });
+            return (run, None);
+        }
+        let notify = ChannelId::new(CALLER_HANDS_BACK).unwrap_or_else(|error| panic!("{error}"));
+        let delegation = DelegateOptions {
+            notify: Some(notify),
+            post_status: false,
+            ..DelegateOptions::default()
+        };
+        let task = kit
+            .delegate(&room, &worker_id, "Count.", delegation)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        let task_id = task.id.clone();
+        let run = tokio::spawn(async move {
+            drop(follow_worker(&running, task, None, status).await);
+        });
+        (run, Some(task_id))
+    }
+
     // Python: tests/orchestration/test_worker_run_task_line.py::test_a_worker_cut_after_its_progress_leaves_its_line_ended
     // (both doors, cancelled, under each action; the timed-out cases are
     // the supervisor's bound runs, its scenarios).
@@ -685,34 +708,8 @@ mod tests {
                 action,
                 ended,
             };
-            let (running, worker_id) = (kit.clone(), worker.channel_id());
-            let mut background = None;
-            let run = if door == "inline" {
-                tokio::spawn(async move {
-                    let delegation = DelegateOptions::default();
-                    let status = Some(status);
-                    let ran = run_worker(
-                        &running, &room, &worker_id, "Count.", None, status, delegation,
-                    );
-                    drop(ran.await);
-                })
-            } else {
-                let notify =
-                    ChannelId::new(CALLER_HANDS_BACK).unwrap_or_else(|error| panic!("{error}"));
-                let delegation = DelegateOptions {
-                    notify: Some(notify),
-                    post_status: false,
-                    ..DelegateOptions::default()
-                };
-                let task = kit
-                    .delegate(&room, &worker_id, "Count.", delegation)
-                    .await
-                    .unwrap_or_else(|error| panic!("{error}"));
-                background = Some(task.id.clone());
-                tokio::spawn(async move {
-                    drop(follow_worker(&running, task, None, status).await);
-                })
-            };
+            let (run, background) =
+                start_run(&kit, &room, &worker.channel_id(), door, status).await;
             tokio::time::timeout(Duration::from_secs(5), worker.started.notified())
                 .await
                 .unwrap_or_else(|error| panic!("{error}"));
