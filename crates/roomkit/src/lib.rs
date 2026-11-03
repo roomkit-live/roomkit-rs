@@ -57,6 +57,7 @@ mod driver;
 mod environment;
 mod error;
 mod events;
+mod gaps;
 mod history;
 mod hooks;
 mod host;

@@ -56,6 +56,7 @@ use roomkit_core::ops::{EffectId, HoldOutcome, HoldRequest, Outcome};
 use tokio::time::Instant;
 
 use crate::context::{ExecutionContext, Lease, RunShared};
+use crate::gaps::ClaimHold;
 use crate::locks::{RoomGuard, RoomMutexes};
 use crate::queues::{Place, RoomLanes, RoomTickets, Ticket};
 
@@ -88,6 +89,9 @@ pub(super) enum Waited<'kit> {
     /// The place, by its room and event, comes back whether its turn came
     /// or not.
     Place((RoomId, EventId), Place<'kit>, bool),
+    /// The place, its turn come in its lane and from the room's cursor,
+    /// and the room's delivery claim held for it (RFC §13.5).
+    Claimed((RoomId, EventId), Place<'kit>, ClaimHold),
     /// The ticket comes back whether its turn came or not.
     Turn(RoomId, Ticket<'kit>, bool),
     /// A hold carried out at once, answered once the room's delivery cursor
@@ -135,6 +139,9 @@ pub(super) struct Held<'kit> {
     /// their turn waits for its end.
     leased: HashMap<(RoomId, EventId), Lease>,
     tickets: HashMap<RoomId, Ticket<'kit>>,
+    /// The rooms' delivery claims held for the places whose turn came, until
+    /// they leave (RFC §13.5).
+    claims: HashMap<(RoomId, EventId), ClaimHold>,
 }
 
 impl<'kit> Held<'kit> {
@@ -147,7 +154,14 @@ impl<'kit> Held<'kit> {
             running: HashSet::new(),
             leased: HashMap::new(),
             tickets: HashMap::new(),
+            claims: HashMap::new(),
         }
+    }
+
+    /// The delivery claim held for the place of `event_id` in `room_id`,
+    /// which leaves: the claim goes once the cursor moved past its index.
+    pub(super) fn take_claim(&mut self, room_id: &RoomId, event_id: &EventId) -> Option<ClaimHold> {
+        self.claims.remove(&(room_id.clone(), event_id.clone()))
     }
 
     /// Takes `guard`, `room_id`'s lock its caller's code handed the call (a
@@ -343,6 +357,11 @@ impl<'kit> Held<'kit> {
                 } else {
                     Outcome::DeadlinePassed
                 }
+            }
+            Waited::Claimed(key, place, claim) => {
+                self.claims.insert(key.clone(), claim);
+                self.places.insert(key, place);
+                HoldOutcome::LaneTurn.into()
             }
             Waited::Turn(room_id, ticket, admitted) => {
                 self.tickets.insert(room_id, ticket);

@@ -666,7 +666,7 @@ params = [
     "stt", "tts", "voice",
     "telemetry",
     "inbound_rate_limit", "persistence_policy",
-    "delivery_gap_timeout", "delivery_claim_lock_manager",
+    "delivery_claim_lock_manager",
     "turn_backend",
     "error_classes",
 ]

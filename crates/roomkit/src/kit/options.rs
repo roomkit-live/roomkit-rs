@@ -29,6 +29,9 @@ const PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
 /// Python's `identity_timeout=10.0` (RFC §11.5).
 pub(super) const IDENTITY_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Python's `delivery_gap_timeout=30.0`.
+const DELIVERY_GAP_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// What [`RoomKit::new`](crate::RoomKit::new) builds a kit with, Python's
 /// `RoomKit(store=None, identity_resolver=None, identity_channel_types=None,
 /// inbound_router=None, max_chain_depth=5, agent_response_policy=AGENT_CHAIN,
@@ -127,6 +130,13 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// is installed with, unless its creation names another or none (RFC
     /// §19.7, [`CreateRoomOptions::orchestration`]).
     pub orchestration: Option<Arc<dyn crate::Orchestration<S>>>,
+    /// Python `delivery_gap_timeout=30.0`: how long a delivery set waits on
+    /// a cursor hole no lane runs, an index committed by a process that
+    /// stopped before delivering it, while no lane holds the room's
+    /// delivery claim, before it skips the hole and the kit emits
+    /// `delivery_skipped` (RFC §13.5 "Delivery lanes across processes").
+    /// The skip never passes an index this process committed.
+    pub delivery_gap_timeout: Duration,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -159,6 +169,7 @@ impl<S> RoomKitOptions<S> {
             media_resolver: None,
             attached_media: None,
             orchestration: None,
+            delivery_gap_timeout: DELIVERY_GAP_TIMEOUT,
         }
     }
 }
@@ -178,6 +189,7 @@ impl<S> fmt::Debug for RoomKitOptions<S> {
             .field("identity_timeout", &self.identity_timeout)
             .field("task_runner", &self.task_runner.is_some())
             .field("orchestration", &self.orchestration.is_some())
+            .field("delivery_gap_timeout", &self.delivery_gap_timeout)
             .finish_non_exhaustive()
     }
 }

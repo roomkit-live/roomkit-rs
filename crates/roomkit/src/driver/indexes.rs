@@ -36,14 +36,28 @@ impl Indexes {
     }
 
     /// `effect` was answered `outcome`: a commit that succeeded waits for
-    /// its place, or for the release, with the index the store gave it.
-    pub(super) fn answered(&mut self, effect: EffectId, outcome: &Outcome) {
-        let Some((room_id, event_id, _planned)) = self.committing.remove(&effect) else {
-            return;
+    /// its place, or for the release, with the index the store gave it,
+    /// which it returns with its room.
+    pub(super) fn answered(
+        &mut self,
+        effect: EffectId,
+        outcome: &Outcome,
+    ) -> Option<(RoomId, u64)> {
+        let (room_id, event_id, _planned) = self.committing.remove(&effect)?;
+        let Outcome::Store(StoreOutcome::Committed(stored)) = outcome else {
+            return None;
         };
-        if let Outcome::Store(StoreOutcome::Committed(stored)) = outcome {
-            self.unplaced.push((room_id, event_id, stored.index));
-        }
+        self.unplaced
+            .push((room_id.clone(), event_id, stored.index));
+        Some((room_id, stored.index))
+    }
+
+    /// The index of the event whose place the run took in `room_id`'s
+    /// lane: `None` for an event the run did not commit (an instruction).
+    pub(super) fn placed_index(&self, room_id: &RoomId, event_id: &EventId) -> Option<u64> {
+        self.placed
+            .get(&(room_id.clone(), event_id.clone()))
+            .copied()
     }
 
     /// The event takes its place in the room's lane.

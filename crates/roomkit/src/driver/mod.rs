@@ -64,6 +64,7 @@ use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::RoomKitError;
+use crate::gaps::ClaimHold;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::tasks::{CUT_UNWIND, Kind, Marks, Phase};
@@ -950,6 +951,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             | HoldRequest::ReleaseTicket { .. } => Wait::Other,
         };
         let over = self.turns_over(&request);
+        let across = self.across_processes(&request);
+        let claim = if let HoldRequest::LeaveLane { room_id, event_id } = &request {
+            self.held.take_claim(room_id, event_id)
+        } else {
+            None
+        };
         match self.held.hold(rooms, &self.context, id, request, deadline) {
             Hold::Wait(_) if wait == Wait::Admission && self.cut_now => {
                 Some((id, Outcome::Failed(cut_by_close())))
@@ -961,10 +968,14 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 None
             }
             Hold::Wait(waiting) => {
+                let waiting = match across {
+                    Some((room_id, index)) => self.cursor_turn(waiting, room_id, index, deadline),
+                    None => waiting,
+                };
                 self.waits.push((id, wait, waiting));
                 None
             }
-            Hold::Now(outcome) => self.after_the_cursor(id, outcome, over),
+            Hold::Now(outcome) => self.after_the_cursor(id, outcome, over, claim),
             Hold::Refused(room_id) => {
                 tracing::warn!(
                     target: "roomkit::driver",
@@ -1019,6 +1030,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         id: EffectId,
         outcome: Outcome,
         over: Option<(RoomId, Vec<u64>)>,
+        claim: Option<ClaimHold>,
     ) -> Option<(EffectId, Outcome)> {
         let Some((room_id, indexes)) = over else {
             return Some((id, outcome));
@@ -1027,10 +1039,47 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         inner.cursors.over(&room_id, indexes);
         let caught_up = async move {
             inner.cursors.catch_up(&*inner.store, &room_id).await;
+            // The room's delivery claim goes once the cursor moved past the
+            // set's index (RFC §13.5).
+            drop(claim);
             (id, Waited::Answered(outcome))
         };
         self.waits.push((id, Wait::Other, Box::pin(caught_up)));
         None
+    }
+
+    /// The room and the index of the set whose lane turn `request` waits
+    /// for, when the run committed its event: its turn waits for the room's
+    /// cursor too (RFC §13.5 "Delivery lanes across processes").
+    fn across_processes(&self, request: &HoldRequest) -> Option<(RoomId, u64)> {
+        let HoldRequest::AwaitLane { room_id, event_id } = request else {
+            return None;
+        };
+        let index = self.indexes.placed_index(room_id, event_id)?;
+        Some((room_id.clone(), index))
+    }
+
+    /// `waiting`, the wait for a place's turn in its room's lane, then for
+    /// the turn the room's cursor gives the set of `index`, with the room's
+    /// delivery claim held for it, within `deadline` (`gaps`).
+    fn cursor_turn(
+        &self,
+        waiting: Waiting<'kit>,
+        room_id: RoomId,
+        index: u64,
+        deadline: Option<Instant>,
+    ) -> Waiting<'kit> {
+        let inner: &'kit Arc<Inner<S>> = self.inner;
+        Box::pin(async move {
+            let (effect, waited) = waiting.await;
+            let Waited::Place(key, place, true) = waited else {
+                return (effect, waited);
+            };
+            match within(deadline, crate::gaps::cursor_turn(inner, &room_id, index)).await {
+                Some(claim) => (effect, Waited::Claimed(key, place, claim)),
+                None => (effect, Waited::Place(key, place, false)),
+            }
+        })
     }
 
     /// Runs `call`, the call of `effect`, as a task within its execution
@@ -1145,7 +1194,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         self.call_of_effect.remove(&effect);
         self.written.extend(self.writing.remove(&effect));
         self.shared.answered(effect);
-        self.indexes.answered(effect, &outcome);
+        if let Some((room_id, index)) = self.indexes.answered(effect, &outcome) {
+            self.inner.cursors.committed(&room_id, index);
+        }
         Some((effect, outcome))
     }
 

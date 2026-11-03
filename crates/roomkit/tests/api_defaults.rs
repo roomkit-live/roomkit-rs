@@ -1136,6 +1136,8 @@ fn delivery_backend_options_defaults_as_python() {
     assert!(kit.delivery_strategy.is_none());
     // roomkit.RoomKit.__init__(delivery_backend) = None
     assert!(kit.delivery_backend.is_none());
+    // roomkit.RoomKit.__init__(delivery_gap_timeout) = 30.0
+    assert_eq!(kit.delivery_gap_timeout, Duration::from_secs(30));
 }
 
 #[test]

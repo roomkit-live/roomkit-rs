@@ -201,6 +201,11 @@ pub(crate) struct Inner<S> {
     /// The indexes whose turn in their room's lane is over, waiting for the
     /// room's delivery cursor (gap G-091).
     pub(crate) cursors: RoomCursors,
+    /// The rooms' delivery claims this process holds (RFC §13.5).
+    pub(crate) claims: crate::gaps::DeliveryClaims,
+    /// How long a delivery set waits on a cursor hole no lane runs before it
+    /// skips it (RFC §13.5).
+    pub(crate) delivery_gap_timeout: std::time::Duration,
     /// The tasks the kit runs in the background: observers, inbound runs.
     pub(crate) tasks: Arc<Tasks>,
     /// The clock and the ids every run reads: the system's, or a test's
@@ -310,6 +315,7 @@ impl<S: ConversationStore> RoomKit<S> {
             media_resolver,
             attached_media,
             orchestration,
+            delivery_gap_timeout,
         } = options;
         let mut config = KitConfig::new();
         config.max_chain_depth = max_chain_depth;
@@ -332,6 +338,8 @@ impl<S: ConversationStore> RoomKit<S> {
             lanes: RoomLanes::default(),
             tickets: RoomTickets::default(),
             cursors: RoomCursors::default(),
+            claims: crate::gaps::DeliveryClaims::default(),
+            delivery_gap_timeout,
             tasks: Arc::default(),
             environment,
             events: Handlers::default(),

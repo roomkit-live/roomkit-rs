@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Delivery lanes across processes (RFC §13.5), as Python's: a delivery
+  set waits for the room's cursor to pass the indexes before its own that
+  another process committed, runs under the room's delivery claim, and
+  skips a hole no lane runs after `RoomKitOptions::delivery_gap_timeout`
+  (30 s), the kit emitting `delivery_skipped` (RMK-1153).
 - A turn with tools behind a `base_url` sends `reasoning_effort` only where `OpenAiConfig::supports_reasoning_effort_with_tools` says the server takes it there, as Python's does: a server that refuses it on a tool turn no longer answers 400; set the switch to `Some(true)` where the server takes it (RFC §6.7, RMK-1088).
 - A generation's retries and its fallback provider (RFC §6.4), as Python's: `AiChannelOptions::retry_policy` tries a refusal worth another try again, before anything was handed, after a compacted replay of an overflow; `fallback_provider`, any provider as a `DynAiProvider`, is asked once the retries are spent, and its failure before it handed anything leaves the primary's error (RMK-1267).
 - The JSON the kit writes as Python's `json.dumps` (a tool's answer or
