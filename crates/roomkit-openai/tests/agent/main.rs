@@ -13,6 +13,7 @@ mod fake;
 mod generate;
 mod reasoning;
 mod responses;
+mod thinking;
 
 use std::time::Duration;
 

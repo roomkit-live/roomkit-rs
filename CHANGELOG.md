@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A model's reasoning in the stream a channel reads (RFC §6.1, §6.7), as Python's: `StreamEvent::ThinkingDelta(StreamThinkingDelta)`, `AiResponse::thinking`, `ResponseItem::Thinking` and `StreamItem::Thinking`, in arrival order among the text and the rows, never stored, and skipped by the default `deliver_stream`. `OpenAiAiProvider` reads `reasoning_content`, `reasoning` and `<think>` tags on Chat Completions, and a reasoning item's text on Responses (RMK-1052).
+- `OpenAiAiProvider` hands what it read before a stream's failure, a chunk of reasoning or text read in the same bytes as the error included, where it dropped it, reading the stream as never under way: a turn's author image is then no longer refused (RMK-1234).
 - A turn's own configuration (RFC Appendix A.9, per-turn settings), as Python's: `AiChannelOptions::config_provider` returns an `AiChannelTurnConfig` at the start of each turn, its system prompt, temperature, max tokens, reasoning effort and budgets under the binding's metadata and over the channel's (a `None` not set), its tools replacing the binding's, its `tool_handler` serving the host's tools for that turn alone; the tools a binding's metadata declares under `tools` are now declared, before the channel's own, served by its handler (RMK-1289).
 - A streamed answer asks every transport it reaches whether it streams in the
   room (`supports_streaming_delivery_for`), as Python's, where it asked only

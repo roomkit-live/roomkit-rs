@@ -17,7 +17,7 @@ use std::task::{Context, Poll};
 use futures_core::Stream;
 use roomkit_ai::{AiResponse, ProviderError, ProviderStream, StreamEvent, TextStream};
 
-use crate::request::{Request, push_end, push_text};
+use crate::request::{Request, push_end, push_text, push_thinking};
 
 use crate::config::OpenAiApi;
 use crate::error::OpenAiError;
@@ -45,6 +45,7 @@ pub(crate) fn answer(
         streamed,
         phase: Phase::Asking,
         ready: VecDeque::new(),
+        failure: None,
         secret: String::new(),
     };
     Box::pin(Answer {
@@ -109,6 +110,8 @@ struct Reading<'a> {
     phase: Phase,
     /// The events read and not handed yet, in order.
     ready: VecDeque<StreamEvent>,
+    /// The failure that ends the answer, once `ready` is handed.
+    failure: Option<OpenAiError>,
     /// Credential used for this response, independent of concurrent refreshes.
     secret: String,
 }
@@ -138,15 +141,20 @@ impl<'a> Reading<'a> {
             if let Some(event) = self.ready.pop_front() {
                 return Some((Ok(event), self));
             }
+            if let Some(error) = self.failure.take() {
+                return Some((Err(error.into()), self));
+            }
             let advanced = match std::mem::replace(&mut self.phase, Phase::Over) {
                 Phase::Over => return None,
                 Phase::Asking => self.ask().await,
                 Phase::Streaming(streamed) => self.read(*streamed).await,
             };
+            // What was read before the failure is handed first, whatever
+            // bytes it came in: a chunk of text or reasoning then its error
+            // read in one go is a stream under way, as Python's yields it.
             if let Err(error) = advanced {
                 self.phase = Phase::Over;
-                self.ready.clear();
-                return Some((Err(error.into()), self));
+                self.failure = Some(error);
             }
         }
     }
@@ -176,6 +184,7 @@ impl<'a> Reading<'a> {
                 crate::responses::body(&body, &self.secret, self.provider.namespace())?
             }
         };
+        push_thinking(&mut self.ready, whole.thinking.unwrap_or_default());
         push_text(&mut self.ready, whole.text);
         push_end(&mut self.ready, whole.calls, whole.done);
         Ok(())
@@ -231,6 +240,10 @@ pub(crate) async fn whole(mut events: ProviderStream<'_>) -> Result<AiResponse, 
     while let Some(event) = roomkit_next(&mut events).await {
         match event? {
             StreamEvent::TextDelta(delta) => response.content.push_str(&delta.text),
+            StreamEvent::ThinkingDelta(delta) => {
+                let thinking = response.thinking.get_or_insert_default();
+                thinking.push_str(&delta.thinking);
+            }
             StreamEvent::ToolCall(call) => response.tool_calls.push(call.into()),
             StreamEvent::Done(done) => {
                 response.finish_reason = done.finish_reason;
@@ -266,7 +279,9 @@ impl Stream for Texts<'_> {
                 Poll::Ready(Some(Ok(StreamEvent::TextDelta(delta)))) => {
                     return Poll::Ready(Some(Ok(delta.text)));
                 }
-                Poll::Ready(Some(Ok(StreamEvent::ToolCall(_) | StreamEvent::Done(_)))) => {}
+                Poll::Ready(Some(Ok(
+                    StreamEvent::ToolCall(_) | StreamEvent::Done(_) | StreamEvent::ThinkingDelta(_),
+                ))) => {}
             }
         }
     }

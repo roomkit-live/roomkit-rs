@@ -123,6 +123,7 @@ pub(super) fn response(value: &Value, secret: &str) -> Result<Whole, OpenAiError
         .and_then(Value::as_array)
         .ok_or_else(|| malformed("Responses answer has no output array"))?;
     let mut text = String::new();
+    let mut thinking = String::new();
     let mut calls = Vec::new();
     let mut replay = Vec::new();
     for item in output {
@@ -145,6 +146,7 @@ pub(super) fn response(value: &Value, secret: &str) -> Result<Whole, OpenAiError
                 calls.push(RawCall::new(id, name, arguments));
             }
             Some("reasoning") => {
+                reasoning_text(item, &mut thinking);
                 // A cut reasoning item is not replayable. A complete item needs
                 // its opaque payload; an id alone cannot be resolved with store=false.
                 if status == "incomplete"
@@ -177,7 +179,21 @@ pub(super) fn response(value: &Value, secret: &str) -> Result<Whole, OpenAiError
         done.metadata.insert("model".into(), model.into());
     }
     done.metadata.insert(OUTPUT.into(), replay.into());
-    Ok(Whole::new(text, calls, done))
+    let thinking = Some(thinking).filter(|thinking| !thinking.is_empty());
+    Ok(Whole::new(text, calls, done).with_thinking(thinking))
+}
+
+/// Adds to `thinking` what a reasoning item shows of the model's reasoning:
+/// its `summary` parts and its `content` parts, in order. Most items show
+/// none, the reasoning itself in their opaque payload.
+fn reasoning_text(item: &Value, thinking: &mut String) {
+    for member in ["summary", "content"] {
+        let parts = item.get(member).and_then(Value::as_array);
+        for part in parts.into_iter().flatten() {
+            let read = part.get("text").and_then(Value::as_str);
+            thinking.push_str(read.unwrap_or_default());
+        }
+    }
 }
 
 pub(super) fn message_text(message: &Value, text: &mut String) -> Result<(), OpenAiError> {

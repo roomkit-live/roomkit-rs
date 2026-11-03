@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::OpenAiError;
+use crate::think_tags::{
+    Segment, ThinkTagParser, extract_think_tags, field_reasoning, merge_thinking,
+};
 use roomkit_core::rules::transcript::{Message, Part, Role};
 
 /// The longest provider message an error keeps, in characters.
@@ -245,6 +248,10 @@ struct Choice {
 struct AnswerMessage {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<Value>,
+    #[serde(default)]
+    reasoning: Option<Value>,
     #[serde(default, deserialize_with = "nullable")]
     tool_calls: Vec<AnswerCall>,
 }
@@ -316,9 +323,15 @@ pub(crate) fn response(body: &[u8], secret: &str) -> Result<Whole, OpenAiError> 
         .into_iter()
         .next()
         .ok_or_else(|| malformed("it has no choice".to_owned()))?;
-    let text = choice
-        .message
-        .content
+    let (inline, text) = extract_think_tags(choice.message.content.as_deref().unwrap_or_default());
+    let thinking = merge_thinking(
+        inline,
+        field_reasoning(
+            choice.message.reasoning_content.as_ref(),
+            choice.message.reasoning.as_ref(),
+        ),
+    );
+    let text = Some(text)
         .filter(|text| !text.trim().is_empty())
         .unwrap_or_default();
     let calls = choice
@@ -337,11 +350,7 @@ pub(crate) fn response(body: &[u8], secret: &str) -> Result<Whole, OpenAiError> 
             RawCall::new(call.id, call.function.name, arguments)
         })
         .collect();
-    Ok(Whole::new(
-        text,
-        calls,
-        finished(choice.finish_reason, usage),
-    ))
+    Ok(Whole::new(text, calls, finished(choice.finish_reason, usage)).with_thinking(thinking))
 }
 
 /// One chunk of a streamed completion, as far as a turn reads it: its first
@@ -372,6 +381,10 @@ struct ChunkChoice {
 struct Delta {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<Value>,
+    #[serde(default)]
+    reasoning: Option<Value>,
     #[serde(default, deserialize_with = "nullable")]
     tool_calls: Vec<DeltaCall>,
 }
@@ -412,17 +425,22 @@ pub(crate) struct Folding {
     calls: std::collections::BTreeMap<u64, Folded>,
     finish_reason: Option<String>,
     usage: Metadata,
+    /// Sorts the text into reasoning and answer, a tag split across chunks
+    /// included.
+    tags: ThinkTagParser,
 }
 
 impl Folding {
-    /// Takes the chunk `data`: the text it adds, if any.
+    /// Takes the chunk `data`: the reasoning and the text it settles, in
+    /// order; each delta's reasoning field before its content, as Python's
+    /// `generate_structured_stream` reads them.
     ///
     /// # Errors
     ///
     /// [`OpenAiError::Malformed`] when `data` is no chunk,
     /// [`OpenAiError::StreamFailed`] when it reports the provider's error,
     /// each without `secret`, the API key.
-    pub(crate) fn take(&mut self, data: &str, secret: &str) -> Result<Option<String>, OpenAiError> {
+    pub(crate) fn take(&mut self, data: &str, secret: &str) -> Result<Vec<Segment>, OpenAiError> {
         let chunk: Chunk = serde_json::from_str(data).map_err(|error| OpenAiError::Malformed {
             reason: cleaned(&error.to_string(), secret, MESSAGE_LIMIT),
         })?;
@@ -443,7 +461,7 @@ impl Folding {
         if let Some(usage) = chunk.usage {
             self.usage = usage_of(usage);
         }
-        let mut text = String::new();
+        let mut segments = Vec::new();
         for choice in chunk.choices.into_iter().filter(|choice| choice.index == 0) {
             if let Some(reason) = choice.finish_reason {
                 self.finish_reason = Some(reason);
@@ -451,12 +469,20 @@ impl Folding {
             let Some(delta) = choice.delta else {
                 continue;
             };
-            text.push_str(delta.content.as_deref().unwrap_or_default());
             for call in delta.tool_calls {
                 self.fold(call);
             }
+            let reasoning =
+                field_reasoning(delta.reasoning_content.as_ref(), delta.reasoning.as_ref());
+            segments.extend(reasoning.map(Segment::Thinking));
+            segments.extend(self.tags.feed(delta.content.as_deref().unwrap_or_default()));
         }
-        Ok(Some(text).filter(|text| !text.is_empty()))
+        Ok(segments)
+    }
+
+    /// What the tags still hold once the stream is over.
+    pub(crate) fn flush(&mut self) -> Vec<Segment> {
+        self.tags.flush()
     }
 
     /// Adds a call's fragment to the call its index names: its id and name
@@ -912,12 +938,18 @@ mod tests {
             r#"{"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}"#,
             r#"{"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 4}}"#,
         ];
-        let text: Vec<String> = chunks
+        let text: Vec<Segment> = chunks
             .iter()
-            .filter_map(|chunk| folding.take(chunk, "sk-1").unwrap())
+            .flat_map(|chunk| folding.take(chunk, "sk-1").unwrap())
             .collect();
         let (calls, done) = folding.finish();
-        assert_eq!(text, ["Let me ", "check."]);
+        assert_eq!(
+            text,
+            [
+                Segment::Text("Let me ".to_owned()),
+                Segment::Text("check.".to_owned())
+            ]
+        );
         assert_eq!(
             calls,
             [

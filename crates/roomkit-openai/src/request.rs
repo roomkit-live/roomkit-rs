@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use roomkit::model::{Metadata, ToolCall};
 use roomkit_ai::{
     AiContentPart, AiContext, AiMessage, AiMessageContent, AiRole, AiTool, StreamDone, StreamEvent,
-    StreamTextDelta, read_tool_calls,
+    StreamTextDelta, StreamThinkingDelta, read_tool_calls,
 };
 use roomkit_core::rules::transcript::{Image, Message, Part, Role, parse_data_uri};
 
@@ -191,9 +191,11 @@ impl RawCall {
     }
 }
 
-/// A whole answer as the wire read it: its text, its calls, its end.
+/// A whole answer as the wire read it: its reasoning, its text, its calls,
+/// its end.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Whole {
+    pub(crate) thinking: Option<String>,
     pub(crate) text: String,
     pub(crate) calls: Vec<RawCall>,
     pub(crate) done: StreamDone,
@@ -202,10 +204,17 @@ pub(crate) struct Whole {
 impl Whole {
     pub(crate) fn new(text: impl Into<String>, calls: Vec<RawCall>, done: StreamDone) -> Self {
         Self {
+            thinking: None,
             text: text.into(),
             calls,
             done,
         }
+    }
+
+    /// The same answer, its reasoning `thinking`.
+    pub(crate) fn with_thinking(mut self, thinking: Option<String>) -> Self {
+        self.thinking = thinking;
+        self
     }
 }
 
@@ -216,6 +225,15 @@ pub(crate) fn done(finish_reason: Option<String>, usage: Metadata) -> StreamDone
         finish_reason,
         usage,
         metadata: Metadata::new(),
+    }
+}
+
+/// Queues `thinking`, when there is any, as a reasoning event.
+pub(crate) fn push_thinking(ready: &mut VecDeque<StreamEvent>, thinking: String) {
+    if !thinking.is_empty() {
+        ready.push_back(StreamEvent::ThinkingDelta(StreamThinkingDelta::new(
+            thinking,
+        )));
     }
 }
 

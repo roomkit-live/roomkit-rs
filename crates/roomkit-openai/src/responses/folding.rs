@@ -4,13 +4,16 @@ use super::wire;
 use crate::error::OpenAiError;
 use roomkit_ai::StreamEvent;
 
-use crate::request::{push_end, push_text};
+use crate::request::{push_end, push_text, push_thinking};
 use serde_json::Value;
 use std::collections::VecDeque;
 
 #[derive(Default)]
 pub(crate) struct Folding {
     text: String,
+    /// Whether the reasoning came as it was written: the terminal response
+    /// then has nothing to add of it.
+    reasoned: bool,
     items: super::items::Items,
     pub(crate) namespace: Option<String>,
 }
@@ -40,6 +43,14 @@ impl Folding {
                 self.text.push_str(delta);
                 push_text(ready, delta.to_owned());
             }
+            Some("response.reasoning_summary_text.delta" | "response.reasoning_text.delta") => {
+                let delta = value
+                    .get("delta")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| wire::malformed("Responses reasoning delta is not text"))?;
+                self.reasoned = true;
+                push_thinking(ready, delta.to_owned());
+            }
             Some("response.completed" | "response.incomplete") => {
                 let mut response = value
                     .get("response")
@@ -60,6 +71,9 @@ impl Folding {
                 let suffix = whole.text.strip_prefix(self.text.as_str()).ok_or_else(|| {
                     wire::malformed("Responses terminal text differs from its streamed text")
                 })?;
+                if !self.reasoned {
+                    push_thinking(ready, whole.thinking.clone().unwrap_or_default());
+                }
                 if !suffix.is_empty() {
                     push_text(ready, suffix.to_owned());
                 }

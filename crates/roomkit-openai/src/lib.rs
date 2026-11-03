@@ -66,6 +66,7 @@ mod request;
 mod responses;
 mod sse;
 mod stream;
+mod think_tags;
 mod wire;
 
 pub use self::config::{OpenAiApi, OpenAiConfig};
