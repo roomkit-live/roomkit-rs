@@ -82,6 +82,19 @@ pub(crate) enum OpenAiError {
         /// The provider's message: on one line, within 500 characters, the
         /// API key removed.
         message: String,
+        /// The HTTP status the error object names (Python's
+        /// `_described_status`), if it names one.
+        status: Option<u16>,
+    },
+    /// The provider answered a completion with an error object in its
+    /// place, as a gateway answers 200 (Python's `error_body_failure`).
+    #[error("the provider answered with an error: {message}")]
+    Answered {
+        /// The HTTP status the error object names, if it names one.
+        status: Option<u16>,
+        /// The error's message: on one line, within 500 characters, the
+        /// API key removed.
+        message: String,
     },
     /// An image part's `data:` URI does not read (Python's
     /// `image_part_payload`): checked before the request, which never goes.
@@ -229,7 +242,21 @@ impl From<OpenAiError> for ProviderError {
                 (code.as_deref() == Some("context_length_exceeded")).then_some(true),
             ),
             OpenAiError::Request { .. } => (true, None, None),
-            OpenAiError::StreamFailed { message } => (names_transient(message), None, None),
+            // An error object read inside a stream: the status it names
+            // decides, else its words (Python's `provider_error`).
+            OpenAiError::StreamFailed {
+                status: Some(status),
+                ..
+            } => (retryable_status(*status), Some(*status), None),
+            OpenAiError::StreamFailed {
+                message,
+                status: None,
+            } => (names_transient(message), None, None),
+            // An error object answered in place of a completion: only the
+            // status it names decides (Python's `error_body_failure`).
+            OpenAiError::Answered { status, .. } => {
+                (status.is_some_and(retryable_status), *status, None)
+            }
             OpenAiError::ToolName { .. } => (false, None, Some(false)),
             OpenAiError::Credential(_)
             | OpenAiError::Image(_)
@@ -310,10 +337,12 @@ mod tests {
                     reason: "x".to_owned()
                 }),
                 read(OpenAiError::StreamFailed {
-                    message: "Rate limit reached".to_owned()
+                    message: "Rate limit reached".to_owned(),
+                    status: None,
                 }),
                 read(OpenAiError::StreamFailed {
-                    message: "token limit".to_owned()
+                    message: "token limit".to_owned(),
+                    status: None,
                 }),
             ],
             [

@@ -74,10 +74,12 @@ impl OpenAiAiProvider {
     }
 
     /// Sends `request`: its body as the configured API writes it, the
-    /// bearer token the configuration gives, its headers.
+    /// bearer token the configuration gives, its headers; `streamed` false
+    /// asks Chat Completions for the completion whole.
     pub(crate) async fn ask(
         &self,
         request: &Request,
+        streamed: bool,
     ) -> Result<(reqwest::Response, String), OpenAiError> {
         crate::names::check(self.config.base_url(), &request.tools)?;
         let secret = match &self.config.token_source {
@@ -86,7 +88,7 @@ impl OpenAiAiProvider {
         };
         let body = match self.config.api {
             OpenAiApi::ChatCompletions => {
-                let completion = CompletionRequest::new(&self.config, request);
+                let completion = CompletionRequest::new(&self.config, request, streamed);
                 let mut value =
                     serde_json::to_value(completion).map_err(|_| OpenAiError::Malformed {
                         reason: "could not encode request".into(),
@@ -115,7 +117,13 @@ impl OpenAiAiProvider {
         let response = call.send().await.map_err(OpenAiError::request)?;
         let status = response.status();
         if !status.is_success() {
-            let body = read_body(response).await?;
+            // An error body past what a turn reads still keeps its status,
+            // as Python's client reads the status whatever the body.
+            let body = match read_body(response).await {
+                Ok(body) => body,
+                Err(OpenAiError::AnswerTooLong { .. }) => Vec::new(),
+                Err(error) => return Err(error),
+            };
             return Err(wire::status_error(status, &body, &secret));
         }
         Ok((response, secret))
@@ -161,10 +169,14 @@ impl AiProvider for OpenAiAiProvider {
         true
     }
 
-    /// The whole answer to `context`: its streamed events read to their
-    /// end.
+    /// The whole answer to `context`: one completion not streamed, as
+    /// Python's `generate` sends it, read to its end.
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
-        stream::whole(self.generate_structured_stream(context)).await
+        let events = match Request::of(context) {
+            Ok(request) => stream::answer(self, request, false),
+            Err(error) => stream::refused(error),
+        };
+        stream::whole(events).await
     }
 
     fn generate_stream<'a>(&'a self, context: &'a AiContext) -> TextStream<'a> {
@@ -173,7 +185,7 @@ impl AiProvider for OpenAiAiProvider {
 
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
         match Request::of(context) {
-            Ok(request) => stream::answer(self, request),
+            Ok(request) => stream::answer(self, request, true),
             Err(error) => stream::refused(error),
         }
     }

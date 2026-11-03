@@ -7,6 +7,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - The loop strategy (RFC §19.7.4), as Python's: `roomkit::Loop`, `orchestration::LoopOptions` and `orchestration::strategies::supervisor::WorkerStrategy` (RMK-1233).
+- `OpenAiAiProvider` reads a failure as Python's: `generate` sends one
+  completion, not streamed; an error object's `code`, `type` or `status`
+  gives the failure its status, inside a stream or answered with 200
+  (`server_error` is 500, retried); an error answer past 4 MiB keeps its
+  status; a conversation message keeps its role, the system's included,
+  and a message of parts goes as its blocks whatever its role (RFC §6.7,
+  RMK-1087, RMK-1097, RMK-1098).
 - The tool and session auditors (RFC §15.8), as Python's:
   `ToolAuditEntry`, `ToolAuditor`, `JsonlToolAuditor`, `ConsoleToolAuditor`,
   `SessionAuditEntry`, `SessionAuditor` (its `record_tool`, `tool_auditor`

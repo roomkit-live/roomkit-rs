@@ -19,15 +19,18 @@ const MESSAGE_LIMIT: usize = 500;
 const NAME_LIMIT: usize = 64;
 
 /// A Chat Completions request: one completion, streamed as server-sent
-/// events with its usage in the last chunk (`stream_options.include_usage`),
-/// declaring the round's tools when it has any, and neither `tool_choice`
-/// nor `parallel_tool_calls`.
+/// events with its usage in the last chunk (`stream_options.include_usage`)
+/// or answered whole, declaring the round's tools when it has any, and
+/// neither `tool_choice` nor `parallel_tool_calls`.
 #[derive(Debug, Serialize)]
 pub(crate) struct CompletionRequest<'a> {
     model: &'a str,
     messages: Vec<WireMessage<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<WireTool<'a>>,
+    /// Sent only when true: a completion answered whole names no `stream`,
+    /// as Python's `generate` sends none.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<StreamOptions>,
@@ -94,8 +97,9 @@ impl<'a> CompletionRequest<'a> {
     /// sampling keywords: the turn's temperature unless the model takes
     /// none, the turn's token bound over the configured one, under
     /// `max_completion_tokens` when the configuration says, the stream's
-    /// usage when it asks for it.
-    pub(crate) fn new(config: &'a OpenAiConfig, request: &'a Request) -> Self {
+    /// usage when it asks for it. `streamed` false asks for the completion
+    /// whole, as Python's `generate` does.
+    pub(crate) fn new(config: &'a OpenAiConfig, request: &'a Request, streamed: bool) -> Self {
         let model = config.model.as_str();
         let system = request
             .system_prompt
@@ -134,8 +138,8 @@ impl<'a> CompletionRequest<'a> {
             model,
             messages,
             tools,
-            stream: true,
-            stream_options: config.include_stream_usage.then_some(StreamOptions {
+            stream: streamed,
+            stream_options: (streamed && config.include_stream_usage).then_some(StreamOptions {
                 include_usage: true,
             }),
             temperature: request.temperature.filter(|_| config.takes_temperature()),
@@ -159,9 +163,10 @@ fn wire_message(message: &Message) -> WireMessage<'_> {
             },
         })
         .collect();
-    // An assistant's message that only calls has no text; a user's of
-    // parts sends them in order (Python's `chat_request._plain`).
-    let content = if message.role == Role::User && !message.parts.is_empty() {
+    // An assistant's message that only calls has no text; a message of
+    // parts sends them in order, whatever its role (Python's
+    // `chat_request._plain`).
+    let content = if !message.parts.is_empty() {
         Some(Value::Array(
             message.parts.iter().filter_map(part_block).collect(),
         ))
@@ -209,6 +214,7 @@ fn role(role: Role) -> &'static str {
     match role {
         Role::Assistant => "assistant",
         Role::Tool => "tool",
+        Role::System => "system",
         // A role this agent does not know yet reads as a user's: never as
         // the model's own words, nor as the system's.
         Role::User | _ => "user",
@@ -296,14 +302,21 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`OpenAiError::Malformed`] when `body` is no chat completion,
-/// saying why without `secret`, the API key.
+/// Returns [`OpenAiError::Answered`] when `body` is an error object in
+/// place of a completion (a gateway's 200, Python's `_completion_of`),
+/// [`OpenAiError::Malformed`] when it is no chat completion, saying why
+/// without `secret`, the API key.
 pub(crate) fn response(body: &[u8], secret: &str) -> Result<Whole, OpenAiError> {
     let malformed = |reason: String| OpenAiError::Malformed {
         reason: cleaned(&reason, secret, MESSAGE_LIMIT),
     };
-    let completion: Completion =
+    let value: Value =
         serde_json::from_slice(body).map_err(|error| malformed(error.to_string()))?;
+    if let Some(error) = value.get("error").filter(|error| truthy(error)) {
+        return Err(answered(error, secret));
+    }
+    let completion: Completion =
+        serde_json::from_value(value).map_err(|error| malformed(error.to_string()))?;
     let usage = completion.usage.map(usage_of).unwrap_or_default();
     let choice = completion
         .choices
@@ -420,13 +433,16 @@ impl Folding {
         let chunk: Chunk = serde_json::from_str(data).map_err(|error| OpenAiError::Malformed {
             reason: cleaned(&error.to_string(), secret, MESSAGE_LIMIT),
         })?;
-        if let Some(error) = chunk.error.filter(|error| !error.is_null()) {
+        // An error member Python's client reads as true raises (`if
+        // data.get("error")`), with the status its object names.
+        if let Some(error) = chunk.error.filter(truthy) {
             let message = error
                 .get("message")
                 .and_then(Value::as_str)
                 .map_or_else(|| error.to_string(), str::to_owned);
             return Err(OpenAiError::StreamFailed {
                 message: cleaned(&message, secret, MESSAGE_LIMIT),
+                status: described_status(&error),
             });
         }
         if let Some(usage) = chunk.usage {
@@ -537,6 +553,121 @@ pub(crate) fn status_error(status: StatusCode, body: &[u8], secret: &str) -> Ope
     }
 }
 
+/// The status an error object names, Python's `_ERROR_TYPE_STATUS`: where
+/// a server wrote the failure into its body rather than its status line (a
+/// stream already answered 200, a gateway answering 200), and the
+/// `google.rpc` codes a Google error body names in `status`.
+const ERROR_TYPE_STATUS: [(&str, u16); 21] = [
+    ("invalid_request_error", 400),
+    ("authentication_error", 401),
+    ("permission_error", 403),
+    ("not_found_error", 404),
+    ("request_too_large", 413),
+    ("rate_limit_error", 429),
+    ("rate_limit_exceeded", 429),
+    ("api_error", 500),
+    ("server_error", 500),
+    ("internal_error", 500),
+    ("service_unavailable", 503),
+    ("timeout_error", 504),
+    ("overloaded_error", 529),
+    ("INVALID_ARGUMENT", 400),
+    ("UNAUTHENTICATED", 401),
+    ("PERMISSION_DENIED", 403),
+    ("NOT_FOUND", 404),
+    ("RESOURCE_EXHAUSTED", 429),
+    ("INTERNAL", 500),
+    ("UNAVAILABLE", 503),
+    ("DEADLINE_EXCEEDED", 504),
+];
+
+/// The status an error body describes: its `code`, `type` or `status`, read
+/// on the innermost error object first, one nested under `error` or `data`
+/// (Python's `_described_status`); a body given as text is read as JSON.
+pub(crate) fn described_status(body: &Value) -> Option<u16> {
+    let parsed;
+    let body = if let Value::String(text) = body {
+        parsed = serde_json::from_str::<Value>(text).ok()?;
+        &parsed
+    } else {
+        body
+    };
+    error_objects(body, 3).into_iter().find_map(|item| {
+        ["code", "type", "status"]
+            .into_iter()
+            .find_map(|key| item.get(key).and_then(status_in))
+    })
+}
+
+/// The error objects of `body`: what it nests under `error` or `data`,
+/// innermost first, then itself (Python's `_error_objects`).
+fn error_objects(body: &Value, depth: usize) -> Vec<&serde_json::Map<String, Value>> {
+    let Some(fields) = body.as_object().filter(|_| depth > 0) else {
+        return Vec::new();
+    };
+    let mut found: Vec<_> = ["error", "data"]
+        .into_iter()
+        .filter_map(|key| fields.get(key))
+        .flat_map(|inner| error_objects(inner, depth - 1))
+        .collect();
+    found.push(fields);
+    found
+}
+
+/// `value` as an HTTP error status, if it is one (Python's `_status_in`): a
+/// number or its digits between 400 and 599, or a type the table names.
+fn status_in(value: &Value) -> Option<u16> {
+    let number = match value {
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) => {
+            text.parse().ok()
+        }
+        Value::String(text) => {
+            return ERROR_TYPE_STATUS
+                .iter()
+                .find(|(name, _)| name == text)
+                .map(|(_, status)| *status);
+        }
+        Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => None,
+    }?;
+    u16::try_from(number)
+        .ok()
+        .filter(|status| (400..=599).contains(status))
+}
+
+/// Whether `value` reads as true, as Python's `if error:` reads it.
+fn truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
+        Value::String(text) => !text.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(fields) => !fields.is_empty(),
+    }
+}
+
+/// The failure an error object answered in place of a completion stands
+/// for (Python's `error_body_failure`): the status it names, and the
+/// message of its innermost error object that has one, else the object.
+fn answered(error: &Value, secret: &str) -> OpenAiError {
+    let message = error_objects(error, 3)
+        .into_iter()
+        .find_map(|item| item.get("message").and_then(Value::as_str))
+        .map_or_else(
+            || {
+                error
+                    .as_str()
+                    .map_or_else(|| error.to_string(), str::to_owned)
+            },
+            str::to_owned,
+        );
+    OpenAiError::Answered {
+        status: described_status(error),
+        message: cleaned(&message, secret, MESSAGE_LIMIT),
+    }
+}
+
 /// `text` as an error carries it: `secret` removed wherever it appears,
 /// on one line, within `limit` characters.
 pub(crate) fn cleaned(text: &str, secret: &str, limit: usize) -> String {
@@ -585,7 +716,8 @@ mod tests {
                 temperature: None,
                 max_tokens: turn,
             };
-            let body = serde_json::to_value(CompletionRequest::new(&config, &request)).unwrap();
+            let body =
+                serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
             (
                 body.get("max_tokens").cloned(),
                 body.get("max_completion_tokens").cloned(),
@@ -623,7 +755,8 @@ mod tests {
                 supports_custom_temperature: switches.1,
                 ..OpenAiConfig::new("sk-1", model)
             };
-            let body = serde_json::to_value(CompletionRequest::new(&config, &request)).unwrap();
+            let body =
+                serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
             (
                 body.get("max_completion_tokens").is_some(),
                 body.get("temperature").is_some(),
@@ -788,7 +921,8 @@ mod tests {
         assert_eq!(
             failed,
             Err(OpenAiError::StreamFailed {
-                message: "overloaded, key [removed]".to_owned()
+                message: "overloaded, key [removed]".to_owned(),
+                status: None,
             })
         );
     }
@@ -836,7 +970,7 @@ mod image_tests {
             vision: true,
             ..OpenAiConfig::new("", "vision-fixture")
         };
-        let chat = serde_json::to_value(CompletionRequest::new(&config, &request)).unwrap();
+        let chat = serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
         assert_eq!(
             chat.pointer("/messages/0/content/0/text"),
             Some(&Value::String("Describe this image".into()))
@@ -884,7 +1018,7 @@ mod image_tests {
             vision: true,
             ..OpenAiConfig::new("", "vision-fixture")
         };
-        let chat = serde_json::to_value(CompletionRequest::new(&config, &request)).unwrap();
+        let chat = serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
         assert_eq!(
             chat.pointer("/messages/0/content"),
             Some(&serde_json::json!([

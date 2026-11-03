@@ -30,11 +30,18 @@ use folding::Folding;
 /// What a generation hands the loop next.
 type Item = Result<StreamEvent, ProviderError>;
 
-/// The generation answering `request`, through `provider`, as a stream.
-pub(crate) fn answer(provider: &OpenAiAiProvider, request: Request) -> ProviderStream<'_> {
+/// The generation answering `request`, through `provider`, as a stream;
+/// `streamed` false asks for the completion whole, its events then read
+/// off it.
+pub(crate) fn answer(
+    provider: &OpenAiAiProvider,
+    request: Request,
+    streamed: bool,
+) -> ProviderStream<'_> {
     let reading = Reading {
         provider,
         request,
+        streamed,
         phase: Phase::Asking,
         ready: VecDeque::new(),
         secret: String::new(),
@@ -96,6 +103,8 @@ impl Stream for Answer<'_> {
 struct Reading<'a> {
     provider: &'a OpenAiAiProvider,
     request: Request,
+    /// Whether the request asks for a streamed answer.
+    streamed: bool,
     phase: Phase,
     /// The events read and not handed yet, in order.
     ready: VecDeque<StreamEvent>,
@@ -144,7 +153,7 @@ impl<'a> Reading<'a> {
     /// Sends the request: a streamed answer is read as it arrives, a whole
     /// completion read whole.
     async fn ask(&mut self) -> Result<(), OpenAiError> {
-        let (response, secret) = self.provider.ask(&self.request).await?;
+        let (response, secret) = self.provider.ask(&self.request, self.streamed).await?;
         self.secret = secret;
         if !is_json(&response) {
             self.phase = Phase::Streaming(Box::new(Streamed {

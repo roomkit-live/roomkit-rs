@@ -94,6 +94,7 @@ pub(super) fn failed(value: &Value, secret: &str) -> OpenAiError {
         .unwrap_or("Responses generation failed");
     OpenAiError::StreamFailed {
         message: cleaned(&format!("{code}: {message}"), secret, 500),
+        status: crate::wire::described_status(error),
     }
 }
 

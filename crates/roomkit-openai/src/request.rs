@@ -155,13 +155,14 @@ fn read_image(url: &str, mime_type: &str) -> Result<Option<Image>, OpenAiError> 
     Ok(Image::from_bytes(&data, &kind))
 }
 
-/// The transcript's role of `role`; the system's reads as a user's, the
-/// system prompt being the request's own.
+/// The transcript's role of `role`: each keeps its own, the system's
+/// included, as Python sends `message.role` (`chat_request._rendered`).
 fn role(role: AiRole) -> Role {
     match role {
         AiRole::Assistant => Role::Assistant,
         AiRole::Tool => Role::Tool,
-        AiRole::User | AiRole::System => Role::User,
+        AiRole::User => Role::User,
+        AiRole::System => Role::System,
     }
 }
 

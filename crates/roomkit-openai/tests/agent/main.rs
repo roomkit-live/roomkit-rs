@@ -10,6 +10,7 @@
 
 mod credentials;
 mod fake;
+mod generate;
 mod responses;
 
 use std::time::Duration;
