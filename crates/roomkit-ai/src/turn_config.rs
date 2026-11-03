@@ -163,6 +163,11 @@ pub(crate) fn base_tools(
     metadata: &Metadata,
 ) -> Result<Vec<AiTool>, ChannelError> {
     if let Some(tools) = turn.and_then(|turn| turn.tools.as_ref()) {
+        for tool in tools {
+            if let Some(refusal) = name_refusal(&tool.name, &json!(tool.name)) {
+                return Err(validation_error("AITool", &[refusal]));
+            }
+        }
         return Ok(tools.clone());
     }
     match metadata.get("tools") {
@@ -187,7 +192,8 @@ const TYPE_ERROR: &str = "builtins:TypeError";
 
 /// A definition of the binding's metadata as Python's `AITool(name=
 /// t["name"], description=t.get("description", ""), parameters=
-/// t.get("parameters", {}))` reads it.
+/// t.get("parameters", {}))` reads it; its `tags`, which [`AiTool`] does
+/// not carry, are left unread.
 fn definition(tool: &Value) -> Result<AiTool, ChannelError> {
     let Value::Object(fields) = tool else {
         return Err(not_indexed(tool));
@@ -198,12 +204,7 @@ fn definition(tool: &Value) -> Result<AiTool, ChannelError> {
     let mut refusals = Vec::new();
     match name.as_str() {
         None => refusals.push(text_refused(name).of("name")),
-        Some(text) => {
-            if let Err(error) = AiTool::checked(text) {
-                let message = format!("Value error, {error}");
-                refusals.push(Refusal::new("value_error", message, name).of("name"));
-            }
-        }
+        Some(text) => refusals.extend(name_refusal(text, name)),
     }
     let description = fields.get("description");
     if let Some(value) = description.filter(|value| !value.is_string()) {
@@ -225,6 +226,14 @@ fn definition(tool: &Value) -> Result<AiTool, ChannelError> {
             .to_owned(),
         parameters: parameters.cloned().unwrap_or_else(|| json!({})),
     })
+}
+
+/// pydantic's refusal of `name`, written `value`, when no vendor accepts
+/// it, as Python's `AITool` checks it (RFC §6.7).
+fn name_refusal(name: &str, value: &Value) -> Option<Refusal> {
+    let error = AiTool::checked(name).err()?;
+    let message = format!("Value error, {error}");
+    Some(Refusal::new("value_error", message, value).of("name"))
 }
 
 /// pydantic's refusal of `value` as a text.
@@ -356,6 +365,18 @@ mod tests {
         );
         let (class, words) = refusal(json!([{ "name": "bad name!" }]));
         assert_eq!(class, "ValidationError");
+        // The same name in a turn's configuration, which Python's AITool
+        // refuses as it is built.
+        let config = AiChannelTurnConfig {
+            tools: Some(vec![AiTool {
+                name: "bad name!".to_owned(),
+                description: String::new(),
+                parameters: json!({}),
+            }]),
+            ..AiChannelTurnConfig::default()
+        };
+        let error = base_tools(Some(&config), &Metadata::new()).unwrap_err();
+        assert_eq!(error.to_string(), words);
         assert!(
             words.starts_with("1 validation error for AITool\nname\n  Value error, tool name 'bad name!' is accepted by no provider"),
             "{words}"
