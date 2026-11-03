@@ -52,7 +52,8 @@ pub(crate) use self::hooks::Adopted;
 use self::hooks::Ran;
 pub(crate) use self::resilience::Resilience;
 use self::rules::{Limits, final_round_reason};
-use self::thinking::{ThinkingCoalescer, ThinkingWindow};
+pub(crate) use self::thinking::ThinkingPublication;
+use self::thinking::ThinkingWindow;
 use crate::author_images::refuses_content;
 use crate::loop_events::DeclaredTool;
 use crate::memory::after_memory;
@@ -158,10 +159,8 @@ pub(crate) struct Loop<P> {
     /// The turn's reasoning effort, handed to the provider.
     pub(crate) thinking_budget: Option<i64>,
     pub(crate) enable_thinking: Option<bool>,
-    /// How long and how many characters a round's reasoning batches for.
-    pub(crate) thinking_coalesce: (f64, usize),
-    /// Whether the room's subscribers read a round's reasoning text.
-    pub(crate) publish_thinking_text: bool,
+    /// How a round's reasoning reaches the room's subscribers.
+    pub(crate) thinking_publication: ThinkingPublication,
     pub(crate) reasoning_effort: Option<String>,
     /// The kit's turn, whose hooks each call runs; `None` outside the kit.
     pub(crate) turn: Option<TurnHost>,
@@ -206,26 +205,23 @@ impl<P: AiProvider> Loop<P> {
             &str,
             u32,
         ),
-        spent: &mut Spent,
     ) -> Result<Generation, Failed> {
         let mut window = self.thinking_window(round);
         let reading = (steering, out, prefix, &mut window);
         let read = self.generate(messages, asked, reading).await;
-        spent.add_thinking(window.text());
-        read
+        read.map(|generation| Generation {
+            thinking: window.text(),
+            ..generation
+        })
     }
 
     /// The window of round `round`'s reasoning, for the turn's observers.
     fn thinking_window(&self, round: u32) -> ThinkingWindow {
-        let (flush_ms, flush_chars) = self.thinking_coalesce;
         ThinkingWindow::new(
             self.turn.as_ref(),
             (&self.context.room_id, &self.context.channel_id),
             round,
-            (
-                ThinkingCoalescer::new(flush_ms, flush_chars),
-                self.publish_thinking_text,
-            ),
+            self.thinking_publication,
         )
     }
 
@@ -273,7 +269,7 @@ impl<P: AiProvider> Loop<P> {
             }
             let asked = (declared.clone(), system_prompt.clone());
             let reading = (&steering, &out, prefix.as_str(), round);
-            let read = self.read_round(&messages, asked, reading, &mut spent).await;
+            let read = self.read_round(&messages, asked, reading).await;
             let read = read.and_then(|read| self.counted(read, &mut spent, &mut limits));
             let mut generation = match read {
                 Ok(generation) => generation,
@@ -420,6 +416,9 @@ impl<P: AiProvider> Loop<P> {
             span.generation_used(&generation.done.usage);
         }
         let Err(error) = limits.count(&generation.done.usage) else {
+            // A round that failed reports no reasoning, as Python keeps a
+            // round's once its generation returned.
+            spent.add_thinking(generation.thinking.clone());
             return Ok(generation);
         };
         let fallback = self.resilience.fallback_provider.as_ref();

@@ -12,7 +12,7 @@ use roomkit::human_input::CloseOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelId, ChannelOutput, ChannelType,
     EventDirection, EventSource, EventType, InboundMessage, Participant, RetryPolicy, RoomContext,
-    RoomEvent, RoomId, SteeringDirective,
+    RoomEvent, RoomId, SteeringDirective, Visibility,
 };
 use roomkit::{Channel, ChannelDeclaration, ChannelError, ClassedError, current_turn_host};
 use roomkit_core::rules::edits::opens_no_turn;
@@ -39,7 +39,7 @@ use crate::skills::SkillRegistry;
 use crate::skills::tools::{SkillTools, SkillTurn};
 use crate::steering::{Loops, SteerOptions};
 use crate::tool_loop::TurnTelemetry;
-use crate::tool_loop::{Adopted, Bounds, Loop, Resilience};
+use crate::tool_loop::{Adopted, Bounds, Loop, Resilience, ThinkingPublication};
 use crate::tool_usage::{ToolUsageMemory, TurnMedia};
 use crate::tools::toolbox::Toolbox;
 use crate::tools::{
@@ -1315,8 +1315,15 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             max_tokens: settings.max_tokens,
             thinking_budget: settings.thinking_budget,
             enable_thinking: settings.enable_thinking,
-            thinking_coalesce: self.thinking_coalesce,
-            publish_thinking_text: self.publish_thinking_text,
+            thinking_publication: ThinkingPublication {
+                coalesce_ms: self.thinking_coalesce.0,
+                coalesce_chars: self.thinking_coalesce.1,
+                publishes_text: self.publish_thinking_text,
+                answers_room: event
+                    .response_visibility
+                    .as_ref()
+                    .is_none_or(|scope| *scope == Visibility::All),
+            },
             reasoning_effort: settings.reasoning_effort.clone(),
             turn: turn.clone(),
             context: tools,

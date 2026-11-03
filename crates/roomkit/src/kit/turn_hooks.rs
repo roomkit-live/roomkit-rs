@@ -25,7 +25,9 @@ impl<S: ConversationStore> Inner<S> {
         let config = Arc::clone(&read(&self.config));
         let handlers = read(&self.hooks);
         let registry = &config.hooks;
-        let subject = HookSubject::of_channel(channel_id, channel_type).in_room(room_id);
+        let subject = HookSubject::of_channel(channel_id, channel_type)
+            .typed_for(trigger)
+            .in_room(room_id);
         registry
             .chain(trigger, subject)
             .into_iter()

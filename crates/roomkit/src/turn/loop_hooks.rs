@@ -64,17 +64,6 @@ impl TurnHost {
         self.observe_turn_with(&hooks, payload, Some(then));
     }
 
-    /// Publishes `event` to the room's subscribers, best-effort: roomkit-ai's
-    /// tool loop reports its reasoning so (RFC §6.7), as the Python
-    /// implementation's channel publishes on its kit's backend.
-    #[doc(hidden)]
-    pub async fn publish_ephemeral(&self, event: crate::realtime::EphemeralEvent) {
-        if let Some(realtime) = self.shared.kit.realtime() {
-            let room_id = event.room_id.clone();
-            realtime.publish_to_room(&room_id, event).await;
-        }
-    }
-
     /// Emits the framework event `event_type` with `data`, about the turn's
     /// room and agent (RFC §8.2): `before_ai_generation` and `ai_response`,
     /// as the Python implementation's executor emits them.

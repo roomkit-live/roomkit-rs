@@ -80,7 +80,11 @@ impl Room {
 
     /// The room, its agent `agent`, on any provider.
     pub(crate) async fn with_agent<P: AiProvider>(agent: AiChannel<P>) -> Self {
-        let kit = RoomKit::new(RoomKitOptions::default());
+        Self::on_kit(RoomKit::new(RoomKitOptions::default()), agent).await
+    }
+
+    /// The room on `kit`, its agent `agent`.
+    pub(crate) async fn on_kit<P: AiProvider>(kit: RoomKit, agent: AiChannel<P>) -> Self {
         let sms = RecordingTransport::new(
             channel("sms"),
             ChannelType::SMS,

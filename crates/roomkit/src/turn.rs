@@ -42,6 +42,7 @@ use crate::{DelegateOptions, RoomKit, SendEventOptions, UpdateRoomMetadataOption
 mod inputs;
 mod loop_hooks;
 mod media;
+mod publish;
 
 pub(crate) use self::inputs::InputNotification;
 pub use self::loop_hooks::TurnChain;
@@ -106,6 +107,8 @@ struct Shared {
     response_depth: u32,
     /// The calls the gate let run, until they are reported.
     calls: Mutex<Calls>,
+    /// The queue of what the turn publishes, once it published anything.
+    publisher: Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::realtime::EphemeralEvent>>>,
 }
 
 /// The calls of a turn its gate let run.
@@ -1209,6 +1212,11 @@ pub(crate) trait TurnKit: Send + Sync {
     /// finish; `false` once the kit is shut down.
     fn spawn_observer(&self, task: BoxFuture<'static, ()>) -> bool;
 
+    /// Runs `task`, a turn's publisher, in the background, tracked apart
+    /// from the turn's unit, which a cut does not abort and the kit's close
+    /// does: `false` once the kit is shut down.
+    fn spawn_publisher(&self, task: BoxFuture<'static, ()>) -> bool;
+
     /// The channel the kit registered under `channel_id`, live.
     fn channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn DynChannel>>;
 
@@ -1275,11 +1283,29 @@ pub(crate) trait TurnKit: Send + Sync {
     /// The backend the kit publishes its ephemeral events with; none once
     /// it is gone.
     fn realtime(&self) -> Option<Arc<dyn crate::realtime::RealtimeBackend>>;
+
+    /// Whether the channel's binding, as the room holds it now, lets its
+    /// answers reach every channel: it can write, its visibility is `all`
+    /// (RFC §7.3, §7.5, §8.4; Python's `binding_reaches_room`).
+    fn reaches_room(&self, room: &RoomId, channel: &ChannelId) -> BoxFuture<'static, bool>;
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
     fn realtime(&self) -> Option<Arc<dyn crate::realtime::RealtimeBackend>> {
         self.upgrade().map(|inner| Arc::clone(&inner.realtime))
+    }
+
+    fn reaches_room(&self, room: &RoomId, channel: &ChannelId) -> BoxFuture<'static, bool> {
+        let (kit, room, channel) = (Weak::clone(self), room.clone(), channel.clone());
+        Box::pin(async move {
+            let Some(inner) = kit.upgrade() else {
+                return false;
+            };
+            let bound = inner.store.get_binding(&room, &channel).await;
+            bound.ok().flatten().is_some_and(|binding| {
+                binding.can_write() && binding.visibility == crate::model::Visibility::All
+            })
+        })
     }
 
     fn media(&self) -> crate::media::KitMedia {
@@ -1387,6 +1413,12 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
     fn spawn_observer(&self, task: BoxFuture<'static, ()>) -> bool {
         self.upgrade()
             .and_then(|inner| inner.tasks.spawn_alone(Kind::Observer, task))
+            .is_some()
+    }
+
+    fn spawn_publisher(&self, task: BoxFuture<'static, ()>) -> bool {
+        self.upgrade()
+            .and_then(|inner| inner.tasks.spawn_alone(Kind::Turn, task))
             .is_some()
     }
 
@@ -1593,6 +1625,7 @@ pub(crate) fn host(
             link,
             response_depth,
             calls: Mutex::new(Calls::default()),
+            publisher: Mutex::new(None),
         }),
     }
 }

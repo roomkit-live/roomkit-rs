@@ -7,11 +7,14 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use futures_core::Stream;
 use pretty_assertions::assert_eq;
-use roomkit::SubscribeRoomOptions;
-use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
+use roomkit::realtime::{
+    EphemeralCallback, EphemeralEvent, EphemeralEventType, RealtimeBackend, RealtimeFuture,
+};
+use roomkit::{RoomKit, RoomKitOptions, SubscribeRoomOptions};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, ProviderError, ProviderStream,
     StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCall,
@@ -98,7 +101,6 @@ async fn blocks(events: Vec<StreamEvent>) -> Vec<String> {
 }
 
 // Python: tests/test_ai_streaming_thinking.py::test_each_thinking_end_carries_only_its_own_block_across_text
-// and test_no_tools_path_also_scopes_each_window_to_its_block.
 #[tokio::test]
 async fn each_thinking_end_carries_only_its_own_block_across_text() {
     let events = vec![
@@ -112,9 +114,24 @@ async fn each_thinking_end_carries_only_its_own_block_across_text() {
     assert_eq!(blocks(events).await, ["First block.", "Second block."]);
 }
 
-// Python: tests/test_ai_streaming_thinking.py::test_each_thinking_end_carries_only_its_own_block_across_a_tool_call
+// Python: tests/test_ai_streaming_thinking.py::test_the_tool_loop_end_of_round_close_also_scopes_its_block
+// and test_no_tools_path_also_scopes_each_window_to_its_block: the second
+// block closes at the end of the stream.
 #[tokio::test]
-async fn each_thinking_end_carries_only_its_own_block_across_a_tool_call() {
+async fn the_end_of_a_round_closes_its_last_block() {
+    let events = vec![
+        thinking("First."),
+        text("Some answer."),
+        thinking("Last."),
+        StreamEvent::Done(StreamDone::default()),
+    ];
+    assert_eq!(blocks(events).await, ["First.", "Last."]);
+}
+
+// Python: channels/_ai_stream_round.py stream: a whole call closes no window,
+// only a fragment (`StreamToolCallDelta`), which no provider here hands.
+#[tokio::test]
+async fn a_whole_call_closes_no_window() {
     let call = StreamToolCall::new("c1", "lookup");
     let events = vec![
         thinking("Before."),
@@ -122,5 +139,50 @@ async fn each_thinking_end_carries_only_its_own_block_across_a_tool_call() {
         thinking("After."),
         StreamEvent::Done(StreamDone::default()),
     ];
-    assert_eq!(blocks(events).await, ["Before.", "After."]);
+    assert_eq!(blocks(events).await, ["Before.After."]);
+}
+
+/// A realtime backend whose every publish never returns.
+struct Stuck;
+
+impl RealtimeBackend for Stuck {
+    fn publish<'a>(&'a self, _channel: &'a str, _event: EphemeralEvent) -> RealtimeFuture<'a, ()> {
+        Box::pin(std::future::pending())
+    }
+
+    fn subscribe<'a>(
+        &'a self,
+        _channel: &'a str,
+        _callback: EphemeralCallback,
+    ) -> RealtimeFuture<'a, String> {
+        Box::pin(std::future::ready(String::new()))
+    }
+
+    fn unsubscribe<'a>(&'a self, _subscription_id: &'a str) -> RealtimeFuture<'a, bool> {
+        Box::pin(std::future::ready(false))
+    }
+}
+
+// Python: turns/_owner_publish.py TurnPublisher: what a turn publishes never
+// stops the turn, whatever its backend does.
+#[tokio::test]
+async fn a_stuck_realtime_backend_stops_no_turn() {
+    let provider = Streams(Mutex::new(
+        vec![
+            thinking("Hm."),
+            text("Done."),
+            StreamEvent::Done(StreamDone::default()),
+        ]
+        .into(),
+    ));
+    let agent =
+        AiChannel::new(channel("assistant"), provider, AiChannelOptions::default()).unwrap();
+    let kit = RoomKit::new(RoomKitOptions {
+        realtime: Some(Arc::new(Stuck)),
+        ..RoomKitOptions::default()
+    });
+    let room = Room::on_kit(kit, agent).await;
+    let said = tokio::time::timeout(Duration::from_secs(5), room.says("Why?")).await;
+    assert!(said.is_ok(), "the turn waited on the backend");
+    // Not closed: the publisher stuck on it would take the close's grace.
 }

@@ -28,6 +28,8 @@ pub(super) struct Generation {
     pub(super) cancelled: bool,
     /// The fallback provider served it, not the channel's own (RFC §6.4).
     pub(super) by_fallback: bool,
+    /// The round's reasoning, once the read returned.
+    pub(super) thinking: String,
 }
 
 /// A call as the loop reads it.
@@ -93,13 +95,13 @@ impl Generation {
         let mut streamed = false;
         while let Some(event) = next(&mut stream).await {
             if steering.cancelled() {
-                window.end().await;
+                window.end();
                 return Ok(Self::cut(text, delivered));
             }
             let event = match event {
                 Ok(event) => event,
                 Err(error) => {
-                    window.end().await;
+                    window.end();
                     return Err(Failed {
                         error,
                         streamed,
@@ -110,15 +112,14 @@ impl Generation {
             streamed = true;
             match event {
                 StreamEvent::TextDelta(delta) => {
-                    window.end().await;
+                    window.end();
                     text.push_str(&delta.text);
                     let released = replayed.add(delta.text);
                     deliver(released, &mut delivered, out).await;
                 }
-                StreamEvent::ToolCall(call) => {
-                    window.end().await;
-                    calls.push(call);
-                }
+                // A whole call closes no window: a fragment would (Python's
+                // `StreamToolCallDelta`), which no provider here hands.
+                StreamEvent::ToolCall(call) => calls.push(call),
                 StreamEvent::Done(ended) => {
                     done = ended;
                     break;
@@ -126,13 +127,13 @@ impl Generation {
                 // A delta with a signature alone reads as nothing here.
                 StreamEvent::ThinkingDelta(delta) => {
                     if !delta.thinking.is_empty() {
-                        window.add(&delta.thinking).await;
+                        window.add(&delta.thinking);
                         out.give(Ok(TurnItem::Thinking(delta.thinking))).await;
                     }
                 }
             }
         }
-        window.end().await;
+        window.end();
         deliver(replayed.finish(), &mut delivered, out).await;
         Ok(Self {
             text,
@@ -141,6 +142,7 @@ impl Generation {
             done,
             cancelled: false,
             by_fallback: false,
+            thinking: String::new(),
         })
     }
 
@@ -154,6 +156,7 @@ impl Generation {
             done: StreamDone::default(),
             cancelled: true,
             by_fallback: false,
+            thinking: String::new(),
         }
     }
 }

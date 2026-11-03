@@ -272,6 +272,18 @@ impl HookTrigger {
     /// implementation's `TURN_TRIGGERS` lists them: `BEFORE_TOOL_USE`,
     /// `ON_TOOL_CALL`, `ON_USER_INPUT_REQUIRED` and an AI channel's loop
     /// triggers among the triggers this list holds.
+    /// Whether a turn trigger's payload carries the agent's channel type: a
+    /// tool call, an input request. Only there does a hook's `channel_types`
+    /// filter (RFC §9.1; Python's `TYPED_TURN_TRIGGERS`).
+    #[doc(hidden)]
+    pub fn carries_channel_type(self) -> bool {
+        !self.is_turn_trigger()
+            || matches!(
+                self,
+                Self::BeforeToolUse | Self::OnToolCall | Self::OnUserInputRequired
+            )
+    }
+
     #[doc(hidden)]
     pub fn is_turn_trigger(self) -> bool {
         match self {
@@ -386,6 +398,9 @@ pub struct HookSubject<'payload> {
     /// The room the payload is of, whose hooks fire beside the kit's; `None`
     /// fires the kit's alone.
     room_id: Option<&'payload RoomId>,
+    /// Whether the payload carries the channel's type: a hook's
+    /// `channel_types` filter only then (RFC §9.1).
+    typed: bool,
 }
 
 impl<'payload> HookSubject<'payload> {
@@ -401,6 +416,17 @@ impl<'payload> HookSubject<'payload> {
             direction: None,
             event_type: None,
             room_id: None,
+            typed: true,
+        }
+    }
+
+    /// The same subject, read with its channel's type only where `trigger`'s
+    /// payload carries it (RFC §9.1).
+    #[must_use]
+    pub fn typed_for(self, trigger: HookTrigger) -> Self {
+        Self {
+            typed: trigger.carries_channel_type(),
+            ..self
         }
     }
 
@@ -423,6 +449,7 @@ impl<'payload> From<&'payload RoomEvent> for HookSubject<'payload> {
             direction: Some(event.source.direction),
             event_type: Some(&event.r#type),
             room_id: Some(&event.room_id),
+            typed: true,
         }
     }
 }
@@ -436,6 +463,7 @@ impl<'payload> From<&'payload EventSource> for HookSubject<'payload> {
             direction: Some(source.direction),
             event_type: None,
             room_id: None,
+            typed: true,
         }
     }
 }
@@ -443,9 +471,11 @@ impl<'payload> From<&'payload EventSource> for HookSubject<'payload> {
 impl HookFilter {
     /// Whether `subject` passes the filter.
     pub fn admits(&self, subject: HookSubject<'_>) -> bool {
-        self.channel_types
-            .as_ref()
-            .is_none_or(|types| types.contains(subject.channel_type))
+        (!subject.typed
+            || self
+                .channel_types
+                .as_ref()
+                .is_none_or(|types| types.contains(subject.channel_type)))
             && self
                 .channel_ids
                 .as_ref()

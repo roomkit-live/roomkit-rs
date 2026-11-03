@@ -76,6 +76,20 @@ impl ThinkingCoalescer {
     }
 }
 
+/// How a turn's reasoning reaches the room's subscribers.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ThinkingPublication {
+    /// How long a publish batches for, in milliseconds.
+    pub(crate) coalesce_ms: f64,
+    /// How many characters a publish batches.
+    pub(crate) coalesce_chars: usize,
+    /// Whether they read the reasoning's text.
+    pub(crate) publishes_text: bool,
+    /// Whether the turn's trigger scopes its answers nowhere: only then may
+    /// it publish anything to them (RFC §8.4).
+    pub(crate) answers_room: bool,
+}
+
 /// Who observes a turn's reasoning, a turn run by a kit's.
 #[derive(Clone)]
 struct Observers {
@@ -84,11 +98,18 @@ struct Observers {
     channel_id: ChannelId,
     /// Whether the room's subscribers read the reasoning's text.
     publishes_text: bool,
+    /// Whether the turn's trigger scopes its answers nowhere.
+    answers_room: bool,
 }
 
 impl Observers {
-    /// Publishes `event_type` with `thinking`, best-effort.
-    async fn publish(&self, event_type: EphemeralEventType, thinking: &str, round: u32) {
+    /// Queues `event_type` with `thinking`'s length, its round and the
+    /// channel, and its text for a channel that opted in. A turn whose
+    /// trigger scopes its answers publishes nothing (RFC §8.4).
+    fn publish(&self, event_type: EphemeralEventType, thinking: &str, round: u32) {
+        if !self.answers_room {
+            return;
+        }
         let mut data = Metadata::new();
         if self.publishes_text {
             let preview: String = thinking.chars().take(THINKING_PREVIEW_LIMIT).collect();
@@ -112,12 +133,12 @@ impl Observers {
                 self.channel_id.to_string(),
             )
         };
-        self.turn.publish_ephemeral(event).await;
+        self.turn.publish_ephemeral(event);
     }
 }
 
 /// A round's reasoning, each block between what ends it a window of its own:
-/// the text, a call, the end of the generation, a failure, a stop. Each
+/// the text, the end of the generation, a failure, a stop. Each
 /// `THINKING_END` carries its own block; `text` is the round's whole.
 pub(super) struct ThinkingWindow {
     observers: Option<Observers>,
@@ -135,17 +156,18 @@ impl ThinkingWindow {
         turn: Option<&TurnHost>,
         (room_id, channel_id): (&RoomId, &ChannelId),
         round: u32,
-        (coalescer, publishes_text): (ThinkingCoalescer, bool),
+        publication: ThinkingPublication,
     ) -> Self {
         Self {
             observers: turn.map(|turn| Observers {
                 turn: turn.clone(),
                 room_id: room_id.clone(),
                 channel_id: channel_id.clone(),
-                publishes_text,
+                publishes_text: publication.publishes_text,
+                answers_room: publication.answers_room,
             }),
             round,
-            coalescer,
+            coalescer: ThinkingCoalescer::new(publication.coalesce_ms, publication.coalesce_chars),
             started: false,
             chunks: Vec::new(),
             published: 0,
@@ -154,9 +176,9 @@ impl ThinkingWindow {
 
     /// Adds a piece of reasoning, its window opening: `ON_AI_THINKING` and
     /// `THINKING_START`, then its deltas as the coalescer lets them go.
-    pub(super) async fn add(&mut self, thinking: &str) {
-        let Some(observers) = self.observers.clone() else {
-            self.chunks.push(thinking.to_owned());
+    pub(super) fn add(&mut self, thinking: &str) {
+        self.chunks.push(thinking.to_owned());
+        let Some(observers) = self.observers.as_ref() else {
             return;
         };
         if !self.started {
@@ -166,38 +188,18 @@ impl ThinkingWindow {
                 ..ThinkingEvent::new(observers.room_id.clone(), observers.channel_id.clone(), "")
             };
             observers.turn.observe_turn(&event, || {});
-            let start = EphemeralEventType::ThinkingStart;
-            observers.publish(start, "", self.round).await;
+            observers.publish(EphemeralEventType::ThinkingStart, "", self.round);
         }
-        self.chunks.push(thinking.to_owned());
         for delta in self.coalescer.add(thinking) {
-            let event_type = EphemeralEventType::ThinkingDelta;
-            observers.publish(event_type, &delta, self.round).await;
+            observers.publish(EphemeralEventType::ThinkingDelta, &delta, self.round);
         }
     }
 
     /// Closes the window: what the coalescer holds, then `THINKING_END`
     /// with its block. Nothing when none is open.
-    pub(super) async fn end(&mut self) {
-        let Some(observers) = self.observers.clone() else {
-            return;
-        };
-        let Some((deltas, block)) = self.closed() else {
-            return;
-        };
-        for delta in deltas {
-            let event_type = EphemeralEventType::ThinkingDelta;
-            observers.publish(event_type, &delta, self.round).await;
-        }
-        let end = EphemeralEventType::ThinkingEnd;
-        observers.publish(end, &block, self.round).await;
-    }
-
-    /// The deltas held and the block of the window open, which it closes;
-    /// `None` with none open.
-    fn closed(&mut self) -> Option<(Vec<String>, String)> {
+    pub(super) fn end(&mut self) {
         if !self.started || self.chunks.is_empty() {
-            return None;
+            return;
         }
         self.started = false;
         let block = self
@@ -206,7 +208,13 @@ impl ThinkingWindow {
             .unwrap_or_default()
             .concat();
         self.published = self.chunks.len();
-        Some((self.coalescer.flush(), block))
+        let Some(observers) = self.observers.as_ref() else {
+            return;
+        };
+        for delta in self.coalescer.flush() {
+            observers.publish(EphemeralEventType::ThinkingDelta, &delta, self.round);
+        }
+        observers.publish(EphemeralEventType::ThinkingEnd, &block, self.round);
     }
 
     /// The round's reasoning, every block's.
@@ -219,24 +227,7 @@ impl Drop for ThinkingWindow {
     /// A reader that stopped drops the round mid-window: its close goes out
     /// all the same (Python's `close`, on every abnormal exit of a round).
     fn drop(&mut self) {
-        let Some(observers) = self.observers.clone() else {
-            return;
-        };
-        let Some((deltas, block)) = self.closed() else {
-            return;
-        };
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        let round = self.round;
-        runtime.spawn(async move {
-            for delta in deltas {
-                let event_type = EphemeralEventType::ThinkingDelta;
-                observers.publish(event_type, &delta, round).await;
-            }
-            let end = EphemeralEventType::ThinkingEnd;
-            observers.publish(end, &block, round).await;
-        });
+        self.end();
     }
 }
 
