@@ -32,8 +32,10 @@ pub(crate) fn number(name: &'static str, value: f64) -> Result<(), ModelError> {
 /// `input_value=` shows: the shortest digits that read back, positional
 /// for an exponent from -4 to 15 (`0.0`, `-1.5`, `0.0001`), scientific
 /// otherwise with a sign and two digits at least (`1e-05`, `1e+16`), and
-/// `nan`, `inf`, `-inf`.
-pub(crate) fn python_float(value: f64) -> String {
+/// `nan`, `inf`, `-inf`. Also how Python's `json.dumps` writes a float,
+/// which the kit's JSON writers follow (RMK-1262).
+#[doc(hidden)]
+pub fn python_float(value: f64) -> String {
     if value.is_nan() {
         return "nan".to_owned();
     }

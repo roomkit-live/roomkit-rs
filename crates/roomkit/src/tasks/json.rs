@@ -5,6 +5,7 @@
 
 use std::fmt::Write as _;
 
+use roomkit_core::model::python_float;
 use serde_json::Value;
 
 /// `members`, an object in their order, as Python's `json.dumps` writes
@@ -55,6 +56,11 @@ pub(crate) fn json(written: &mut String, value: &Value, ensure_ascii: bool) {
             members.iter().map(|(name, value)| (name.as_str(), value)),
             ensure_ascii,
         ),
+        // A float as Python's `float.__repr__`, which `json.dumps` writes:
+        // `1e-05`, not `0.00001` (RMK-1262).
+        Value::Number(number) if number.is_f64() => {
+            written.push_str(&python_float(number.as_f64().unwrap_or_default()));
+        }
         Value::Null | Value::Bool(_) | Value::Number(_) => written.push_str(&value.to_string()),
     }
 }
@@ -93,6 +99,29 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// A float is written as Python's `json.dumps` writes it,
+    /// `float.__repr__`: scientific past the exponents -4 to 15, with a
+    /// signed exponent of two digits at least; an integer as itself
+    /// (RMK-1262).
+    #[test]
+    fn a_float_is_written_as_python_s_repr() {
+        let values = [
+            json!(1e-05),
+            json!(9.5e-05),
+            json!(0.0001),
+            json!(1.5),
+            json!(1e16),
+            json!(3),
+        ];
+        let members = ["a", "b", "c", "d", "e", "f"]
+            .into_iter()
+            .zip(values.iter());
+        assert_eq!(
+            dumps_object(members, true),
+            r#"{"a": 1e-05, "b": 9.5e-05, "c": 0.0001, "d": 1.5, "e": 1e+16, "f": 3}"#
+        );
+    }
 
     #[test]
     fn members_are_written_as_python_writes_them() {

@@ -5,6 +5,7 @@
 
 use std::fmt::Write as _;
 
+use roomkit_core::model::python_float;
 use serde_json::Value;
 
 /// The skills' preamble, before the manifest, with the note that no script
@@ -114,6 +115,11 @@ fn json(written: &mut String, value: &Value, ascii: bool) {
             let members = members.iter().map(|(name, value)| (name.as_str(), value));
             write_object(written, members, ascii);
         }
+        // A float as Python's `float.__repr__`, which `json.dumps` writes:
+        // `1e-05`, not `0.00001` (RMK-1262).
+        Value::Number(number) if number.is_f64() => {
+            written.push_str(&python_float(number.as_f64().unwrap_or_default()));
+        }
         Value::Null | Value::Bool(_) | Value::Number(_) => written.push_str(&value.to_string()),
     }
 }
@@ -197,6 +203,16 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// A float is written as Python's `json.dumps` writes it,
+    /// `float.__repr__` (RMK-1262).
+    #[test]
+    fn a_float_reads_as_python_writes_it() {
+        assert_eq!(
+            dumps(&json!({ "ms": 1e-05, "big": 1e16, "n": 3 })),
+            r#"{"ms": 1e-05, "big": 1e+16, "n": 3}"#
+        );
+    }
 
     #[test]
     fn an_object_reads_as_python_writes_it() {

@@ -7,6 +7,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - A generation's retries and its fallback provider (RFC §6.4), as Python's: `AiChannelOptions::retry_policy` tries a refusal worth another try again, before anything was handed, after a compacted replay of an overflow; `fallback_provider`, any provider as a `DynAiProvider`, is asked once the retries are spent, and its failure before it handed anything leaves the primary's error (RMK-1267).
+- The JSON the kit writes as Python's `json.dumps` (a tool's answer, an
+  MCP result of parts, the audits' JSONL lines) writes a float as
+  Python's `repr`, `1e-05` and `1e+16` (RMK-1262).
 - An agent whose turn fails with a kit error reports the error's class as
   `ON_ERROR`'s `error_type`, `ProviderDeliveryError` for a provider's
   refusal, its code still the delivery result's, as Python's
@@ -31,7 +34,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `roomkit::orchestration`, and `roomkit_ai::orchestration::audit_tool_handler`,
   which records each call `ok`, `failed`, `error` or `cancelled` and hands
   the channel the handler's answer unchanged; the JSONL lines and summaries
-  are Python's, a float under 1e-4 aside (RMK-1233, RMK-1262).
+  are Python's (RMK-1233).
 - A message steered into a running turn and the lines a summarizer reads
   tell nameless senders of one channel apart (`@sms`, then `@sms (2)`) and
   count speakers by source, as the conversation does, and a delegation's
