@@ -146,6 +146,12 @@ async fn delegate_in_background<S: ConversationStore>(
     if !server.pending().insert(key.clone()) {
         return Ok(already_working(worker_id));
     }
+    // A start refused (a kit closing) or cut (its call's turn cut) frees the
+    // worker: it is not stuck already running.
+    let mut starting = Starting {
+        server,
+        key: Some(key),
+    };
     // Read in the call: the outcome continues its turn's chain (RFC §23.3).
     let chain_depth = ExecutionContext::current().turn_depth().unwrap_or(0);
     let options = DelegateOptions {
@@ -154,20 +160,25 @@ async fn delegate_in_background<S: ConversationStore>(
         post_status: false,
         ..server.team.delegation()
     };
-    let started = match kit.delegate(room_id, worker_id, task, options).await {
-        Ok(delegated) => {
-            let run = background_run(kit, server, room_id, delegated.clone());
-            start_background_run(kit, run, chain_depth).map(|()| delegated)
-        }
-        Err(error) => Err(error),
-    };
-    // A start refused (a kit closing) frees the worker: it is not stuck
-    // already running; a task delegated is then the runner's to end.
-    match started {
-        Ok(delegated) => Ok(dispatched(worker_id, &delegated.id)),
-        Err(error) => {
-            server.pending().remove(&key);
-            Err(error)
+    let delegated = kit.delegate(room_id, worker_id, task, options).await?;
+    // Refused, a task delegated is the runner's to end.
+    let run = background_run(kit, server, room_id, delegated.clone());
+    start_background_run(kit, run, chain_depth)?;
+    starting.key = None;
+    Ok(dispatched(worker_id, &delegated.id))
+}
+
+/// A worker's background start under way: dropped before it went through,
+/// it frees the worker in its room (Python's `except BaseException`).
+struct Starting<'server> {
+    server: &'server PerWorker,
+    key: Option<(RoomId, ChannelId)>,
+}
+
+impl Drop for Starting<'_> {
+    fn drop(&mut self) {
+        if let Some(key) = self.key.take() {
+            self.server.pending().remove(&key);
         }
     }
 }
@@ -360,5 +371,70 @@ async fn delegate_and_wait<S: ConversationStore>(
             OwnerToolAnswer::Served(Value::String(answer))
         }
         Err(error) => delegation_failed(worker_id, &error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use roomkit_core::model::{ChannelId, ChannelType, RoomEvent, RoomId};
+
+    use super::{PerWorker, Team, delegate_in_background};
+    use crate::kit::{CreateRoomOptions, RoomKit, RoomKitOptions};
+    use crate::orchestration::agents::HeldAgent;
+    use crate::testing::{RecordingTransport, RecordingTransportOptions};
+    use crate::{HookOptions, HookTrigger};
+
+    fn agent(name: &str) -> HeldAgent {
+        HeldAgent {
+            channel_id: ChannelId::new(name).unwrap_or_else(|error| panic!("{error}")),
+            role: None,
+            description: None,
+            purpose: None,
+        }
+    }
+
+    // Python: orchestration/strategies/supervisor/_inject_per_worker.py
+    // _delegate_in_background, its `except BaseException` (no Python test
+    // cuts the start).
+    #[tokio::test]
+    async fn a_start_cut_short_frees_the_worker_in_its_room() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let room = RoomId::new("r").unwrap_or_else(|error| panic!("{error}"));
+        let created = CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..CreateRoomOptions::default()
+        };
+        kit.create_room(created)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        let worker = agent("worker");
+        let channel = RecordingTransport::new(
+            worker.channel_id.clone(),
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
+        kit.register_channel(channel)
+            .unwrap_or_else(|error| panic!("{error}"));
+        // Holds the delegation at its child room's creation.
+        let held = |_event: RoomEvent, _context| std::future::pending::<()>();
+        kit.hook(HookTrigger::OnRoomCreated, held, HookOptions::default())
+            .unwrap_or_else(|error| panic!("{error}"));
+        let team = Arc::new(Team {
+            supervisor: agent("boss"),
+            workers: vec![worker.clone()],
+            share_channels: Vec::new(),
+            task_timeout: Duration::from_secs(5),
+            max_revisions: 3,
+        });
+        let server = PerWorker::new(team, false);
+
+        let starting = delegate_in_background(&kit, &server, &room, &worker.channel_id, "Go.");
+        let cut = tokio::time::timeout(Duration::from_millis(20), starting).await;
+
+        assert!(cut.is_err(), "the delegation was not held");
+        assert!(server.pending().is_empty());
     }
 }

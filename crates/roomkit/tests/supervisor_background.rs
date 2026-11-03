@@ -6,9 +6,10 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
-use std::future::ready;
+use std::future::{Future, ready};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::task::Poll;
 use std::time::Duration;
 
 use roomkit::model::{
@@ -93,10 +94,11 @@ impl AiProvider for Held {
 /// A kit holding an SMS transport and room `r1` binding it, the room
 /// installed with a supervisor `boss` over `boss_model` that does not wait
 /// for its one worker, `worker`, over `worker_model`.
-async fn kit_with<P: AiProvider + Clone + 'static>(
-    boss_model: MockAiProvider,
-    worker_model: P,
-) -> RoomKit {
+async fn kit_with<B, P>(boss_model: B, worker_model: P) -> RoomKit
+where
+    B: AiProvider + Clone + 'static,
+    P: AiProvider + Clone + 'static,
+{
     let kit = RoomKit::new(RoomKitOptions::default());
     let sms = RecordingTransport::new(
         id("sms"),
@@ -221,6 +223,7 @@ async fn the_kit_s_close_ends_a_background_worker_s_run_cancelled() {
 }
 
 // Python: tests/tasks/test_cancelled_delegation.py::test_a_supervisors_worker_is_free_once_its_task_was_cancelled
+// Python: tests/tasks/test_cancelled_delegation.py::test_a_supervisor_reads_a_cancelled_task_as_cancelled
 // Python: tests/orchestration/test_supervisor_text_background.py::test_a_per_worker_background_task_is_the_task_runner_s
 #[tokio::test]
 async fn a_worker_whose_task_the_runner_cancelled_is_free_and_told_not_completed() {
@@ -313,4 +316,104 @@ async fn the_kit_s_close_cuts_a_hand_back_under_way_at_once() {
             "cancelled".to_owned()
         ))
     );
+}
+
+/// A supervisor's model that delegates at its first generation, lets its
+/// worker answer at its second, once it answered the call, closes the kit
+/// at its generation `close_at`, and says `ok` otherwise.
+#[derive(Clone)]
+struct ClosingBoss {
+    kit: Arc<OnceLock<RoomKit>>,
+    generations: Arc<AtomicUsize>,
+    close_at: usize,
+    closing: Arc<Notify>,
+    worker: Held,
+}
+
+impl ClosingBoss {
+    fn new(close_at: usize) -> Self {
+        Self {
+            kit: Arc::default(),
+            generations: Arc::default(),
+            close_at,
+            closing: Arc::default(),
+            worker: Held::new(),
+        }
+    }
+}
+
+impl AiProvider for ClosingBoss {
+    fn model_name(&self) -> &'static str {
+        "closing-boss"
+    }
+
+    async fn generate<'a>(&'a self, _context: &'a AiContext) -> Result<AiResponse, ProviderError> {
+        let generation = self.generations.fetch_add(1, Ordering::SeqCst);
+        if generation == 0 {
+            return Ok(calls("c1", "delegate_to_worker", "Write it."));
+        }
+        if generation == 1 && self.close_at != 1 {
+            self.worker.release.add_permits(1);
+        }
+        if generation == self.close_at {
+            let kit = self.kit.get().unwrap().clone();
+            let mut close = Box::pin(kit.close());
+            // Its first poll starts the close, from within this turn; only
+            // then may another close join it.
+            let first = std::future::poll_fn(|cx| Poll::Ready(close.as_mut().poll(cx))).await;
+            self.closing.notify_one();
+            if first.is_pending() {
+                drop(close.await);
+            }
+        }
+        Ok(says("ok"))
+    }
+}
+
+/// What the orchestration's entries say once `boss` closed the kit.
+async fn closed_by(boss: ClosingBoss) -> Vec<(StatusLevel, String)> {
+    let kit = kit_with(boss.clone(), boss.worker.clone()).await;
+    boss.kit.set(kit.clone()).ok().unwrap();
+    let asking = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            let message = InboundMessage::new(id("sms"), "u1", TextContent::new("Go."));
+            drop(
+                kit.process_inbound(message, ProcessInboundOptions::default())
+                    .await,
+            );
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), boss.closing.notified())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), kit.close())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(asking.await);
+    terminal_entries(&kit)
+        .await
+        .into_iter()
+        .filter(|(agent, _, _)| agent == "orchestration")
+        .map(|(_, level, detail)| (level, detail))
+        .collect()
+}
+
+// Python: core/framework.py _cut_at_once, its run held apart from the turn
+// that started it (no Python test closes from that turn; checked by a probe
+// on both).
+#[tokio::test]
+async fn a_close_from_the_turn_that_started_a_run_cuts_it() {
+    let entries = closed_by(ClosingBoss::new(1)).await;
+    assert_eq!(entries, [(StatusLevel::Failed, "cancelled".to_owned())]);
+}
+
+// Python: core/mixins/lane_execution.py _consume, which runs a delivery's
+// turn apart from the run that handed it back, so the close cuts that run
+// (no Python test closes from that turn; checked by a probe on both).
+#[tokio::test]
+async fn a_close_from_the_hand_back_s_own_turn_reads_cancelled() {
+    let entries = closed_by(ClosingBoss::new(2)).await;
+    assert_eq!(entries, [(StatusLevel::Failed, "cancelled".to_owned())]);
 }

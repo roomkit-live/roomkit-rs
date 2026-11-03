@@ -17,6 +17,7 @@ use crate::error::RoomKitError;
 use crate::kit::{RoomKit, WeakRoomKit};
 use crate::orchestration::StatusLevel;
 use crate::store::ConversationStore;
+use crate::stream::KIT_CLOSED;
 use crate::tasks::handback::{hand_back, not_handed_back};
 use crate::tasks::{Kind, Marks, Phase};
 
@@ -90,7 +91,10 @@ where
 /// Runs `run`, frees its room, hands its outcome back, posts its terminal
 /// entry: Python's `run_in_background`. The kit's close cuts it wherever
 /// it is, its work or its hand-back under way, unless the close is called
-/// from within the run itself (its hand-back's own turn).
+/// from within the run itself (a hook of its hand-back's delivery). A close
+/// called from its hand-back's own turn cuts Python's run, whose turn runs
+/// apart from it; here that turn runs within the run, which the close
+/// spares: its delivery then says `kit_closed`, and the run reads the same.
 async fn run_in_background<S, T>(kit: WeakRoomKit<S>, run: BackgroundRun<T>, chain_depth: u32)
 where
     S: ConversationStore,
@@ -145,7 +149,16 @@ where
             tracing::error!(target: "roomkit::orchestration", %error, "Handing back a background run in room {room_id} failed");
             Some(error.to_string())
         }
-        Some(Ok(delivered)) => not_handed_back(delivered.as_ref()),
+        Some(Ok(delivered)) => not_handed_back(delivered.as_ref()).map(|missed| {
+            let closed = delivered
+                .as_ref()
+                .is_some_and(|outcome| outcome.reason.as_deref() == Some(KIT_CLOSED));
+            if closed {
+                "cancelled".to_owned()
+            } else {
+                missed
+            }
+        }),
     };
     match (outcome, missed) {
         // Its work failed: posted so already.
