@@ -63,9 +63,12 @@ pub struct ScriptedRound {
     pub fails: Option<String>,
     /// The refusal the generation ends on, once its text is written,
     /// before its calls and its done event: the provider refuses the
-    /// request with this HTTP status and message, an error it does not
-    /// retry.
+    /// request with this HTTP status and message, an error not worth
+    /// another try unless it is [`retrying`](Self::retrying).
     pub refuses: Option<(u16, String)>,
+    /// Whether the provider says its refusal is worth another try
+    /// (`ProviderError::retryable`).
+    retryable: bool,
     /// How the provider classes its refusal: a context too long for the
     /// model, not one, or unclassed (`ProviderError::context_overflow`).
     context_overflow: Option<bool>,
@@ -91,6 +94,7 @@ impl ScriptedRound {
             },
             fails: None,
             refuses: None,
+            retryable: false,
             context_overflow: None,
             provider: String::new(),
             without_done: false,
@@ -127,6 +131,7 @@ impl ScriptedRound {
             },
             fails: None,
             refuses: None,
+            retryable: false,
             context_overflow: None,
             provider: String::new(),
             without_done: false,
@@ -144,11 +149,19 @@ impl ScriptedRound {
     }
 
     /// The same round, its provider refusing the request with the HTTP
-    /// `status` and `message` once its text is written, an error it does
-    /// not retry.
+    /// `status` and `message` once its text is written, an error not worth
+    /// another try unless the round is [`retrying`](Self::retrying).
     #[must_use]
     pub fn refusing(mut self, status: u16, message: impl Into<String>) -> Self {
         self.refuses = Some((status, message.into()));
+        self
+    }
+
+    /// The same round, its provider saying its refusal is worth another
+    /// try (`ProviderError::retryable`): a rate limit, an overload.
+    #[must_use]
+    pub fn retrying(mut self) -> Self {
+        self.retryable = true;
         self
     }
 
@@ -177,10 +190,10 @@ impl ScriptedRound {
         }
         self.refuses.as_ref().map(|(status, message)| {
             let options = ProviderErrorOptions {
+                retryable: self.retryable,
                 status_code: Some(*status),
                 context_overflow: self.context_overflow,
                 provider: self.provider.clone(),
-                ..ProviderErrorOptions::default()
             };
             ProviderError::new(message.clone(), options)
         })

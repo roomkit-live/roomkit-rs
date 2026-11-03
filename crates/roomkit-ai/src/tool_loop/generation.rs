@@ -6,9 +6,7 @@ use std::collections::{BTreeSet, HashSet};
 use roomkit::model::ToolCall;
 
 use super::TurnItem;
-use crate::provider::{
-    AiContext, AiProvider, ProviderError, StreamDone, StreamEvent, StreamToolCall,
-};
+use crate::provider::{ProviderError, ProviderStream, StreamDone, StreamEvent, StreamToolCall};
 use crate::steering::Steering;
 use crate::stream::{Yielder, next};
 
@@ -70,8 +68,8 @@ pub(super) enum Partial {
 }
 
 impl Generation {
-    /// Reads `provider`'s answer to `context`, handing its text to `out` as
-    /// it comes. A stream that ends without its done event is read whole
+    /// Reads a provider's answer from its `stream`, handing its text to
+    /// `out` as it comes. A stream that ends without its done event is read whole
     /// all the same, its calls kept, with no finish reason and no usage, as
     /// Python's stream round reads it. A `Cancel` `steering` received stops
     /// the read at the next event, which is dropped with the stream (RFC
@@ -81,14 +79,12 @@ impl Generation {
     ///
     /// Returns the provider's error, whether the stream had handed
     /// anything before it, and the text the room was handed.
-    pub(super) async fn read<P: AiProvider>(
-        provider: &P,
-        context: &AiContext,
+    pub(super) async fn read(
+        mut stream: ProviderStream<'_>,
         steering: &Steering,
         out: &Yielder<Result<TurnItem, ProviderError>>,
         prefix: &str,
     ) -> Result<Self, Failed> {
-        let mut stream = provider.generate_structured_stream(context);
         let mut text = String::new();
         let mut delivered = String::new();
         let mut replayed = Replayed::new(prefix);

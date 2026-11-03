@@ -844,6 +844,11 @@ approved = "2026-11-01"
 reason = "Python's `ToolResult` alias (`roomkit.channels.ai`, not exported) read by `as_tool_result`: a handler answers a text, any JSON value or content parts, and a Rust handler's return type names it (architecture: Tools)"
 
 [[exception]]
+rust = "roomkit_ai::DynAiProvider"
+approved = "2026-11-02"
+reason = "Python's `AIProvider` held as an object (AIChannel(fallback_provider=...)): `AiProvider`'s async methods make it no `dyn` trait, so every provider is also a `DynAiProvider` (HITL be4dae08, RMK-1267)"
+
+[[exception]]
 rust = "roomkit_ai::ToolFuture"
 approved = "2026-11-01"
 reason = "Python's `Awaitable[ToolResult]`, what a handler's call is: a boxed future (architecture: Tools)"
@@ -876,7 +881,7 @@ reason = "Python's `async with` (`__aenter__`, `__aexit__`): Rust has no async c
 python = "roomkit.AIChannel.__init__"
 params = [
     "continuation", "thinking_coalesce_ms", "thinking_coalesce_chars",
-    "retry_policy", "fallback_provider", "script_executor", "sandbox",
+    "script_executor", "sandbox",
     "external_tool_handler",
     "thinking_budget", "enable_thinking", "reasoning_effort",
     "response_schema", "evict_threshold_tokens", "enable_planning",
@@ -888,7 +893,7 @@ params = [
     "think_wait", "text_coalesce_ms", "text_coalesce_chars",
     "publish_text_deltas",
 ]
-reason = "not in 0.x: continuation, thinking, provider retry and fallback, scripts and sandbox, external and human tools, structured output, eviction, planning, tool search, budgets, speaking turns, the thinker and coalescing"
+reason = "not in 0.x: continuation, thinking, scripts and sandbox, external and human tools, structured output, eviction, planning, tool search, budgets, speaking turns, the thinker and coalescing"
 
 [[missing]]
 python = "roomkit.AIChannel"

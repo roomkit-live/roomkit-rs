@@ -9,8 +9,11 @@
 //!
 //! - this module: the items and the loop's rounds;
 //! - `generation`: one generation read from its provider, and its calls;
+//! - `resilience`: a generation its provider refused, replayed once
+//!   compacted, tried again, then handed to the fallback provider (RFC
+//!   §6.4);
 //! - `compaction`: a context the provider refused as too long, compacted
-//!   once and its call replayed (RFC §6.4 "A turn compacted");
+//!   for its replay (RFC §6.4 "A turn compacted");
 //! - `calls`: one call through its gate (RFC §21.1) and its tool, reported
 //!   to the kit's hooks (RFC §9.3).
 //!
@@ -27,6 +30,7 @@ mod footprint;
 mod generation;
 mod hooks;
 mod intents;
+mod resilience;
 mod rules;
 
 use std::collections::BTreeMap;
@@ -42,6 +46,7 @@ use tokio::time::Instant;
 use self::generation::{Failed, Generation};
 pub(crate) use self::hooks::Adopted;
 use self::hooks::Ran;
+pub(crate) use self::resilience::Resilience;
 use self::rules::{Limits, final_round_reason};
 use crate::author_images::refuses_content;
 use crate::loop_events::DeclaredTool;
@@ -135,6 +140,8 @@ pub(crate) struct Loop<P> {
     pub(crate) toolbox: Arc<Toolbox>,
     pub(crate) policy: ToolPolicy,
     pub(crate) bounds: Bounds,
+    /// How its generations recover from their provider's refusals.
+    pub(crate) resilience: Resilience,
     pub(crate) system_prompt: Option<String>,
     /// How freely the model samples, handed to the provider.
     pub(crate) temperature: f64,

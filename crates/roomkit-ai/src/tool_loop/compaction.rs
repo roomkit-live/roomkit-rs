@@ -1,7 +1,7 @@
 //! A turn's context compacted once when its provider refuses it as too
-//! long for the model, and the call replayed (RFC §6.4 "A turn
-//! compacted"): Python's `_generate_stream_with_retry`, `_compact_context`
-//! and `channels/_compaction.py`.
+//! long for the model, for the call's replay (RFC §6.4 "A turn
+//! compacted"): Python's `_compact_context` and `channels/_compaction.py`;
+//! `resilience` replays the call.
 //!
 //! The turn's input stays whole. When it falls in the older half of the
 //! messages, the history before it is summarized; otherwise the older half
@@ -15,23 +15,12 @@ use roomkit_core::rules::transcript::{
     COMPACTION_HEADER, FENCED_TAGS, Message, named_blocks, quoted,
 };
 
-use super::generation::{Failed, Generation};
-use super::{Loop, TurnItem};
+use super::Loop;
+use super::generation::Failed;
 use crate::provider::{
     AiContentPart, AiContext, AiMessage, AiMessageContent, AiProvider, AiRole, AiTextPart,
     ProviderError,
 };
-use crate::steering::Steering;
-use crate::stream::Yielder;
-use crate::tools::AiTool;
-
-/// What a round's generation is read with: the loop's steering, its
-/// reader, the text a round replays of the round before.
-pub(super) type Reading<'a> = (
-    &'a Steering,
-    &'a Yielder<Result<TurnItem, ProviderError>>,
-    &'a str,
-);
 
 /// How much of each summarized message the summary quotes.
 const SUMMARY_MESSAGE_CHARS: usize = 500;
@@ -53,31 +42,20 @@ impl<P: AiProvider> Loop<P> {
             .map(|_| first.len() - 1);
     }
 
-    /// Reads the round's generation, asked on `messages` with the `asked`
-    /// tools and system prompt, `reading` as [`Generation::read`] takes it.
-    /// A provider that refuses it as too long for the model before it
-    /// streamed anything gets one compacted replay; the turn's later rounds
-    /// build on the compacted context. A compaction that cannot make room
-    /// fails the call with its own error.
-    pub(super) async fn generate(
+    /// Compacts `context`, which the provider refused as too long for the
+    /// model, for its one replay, `messages` the round's conversation; the
+    /// turn's later rounds build on the compacted context.
+    ///
+    /// # Errors
+    ///
+    /// A compaction that cannot make room fails the call with its own
+    /// error, before anything streamed.
+    pub(super) fn compact(
         &mut self,
+        context: &mut AiContext,
         messages: &[Message],
-        (tools, system_prompt): (Vec<AiTool>, Option<String>),
-        (steering, out, prefix): Reading<'_>,
-    ) -> Result<Generation, Failed> {
-        let mut context = AiContext {
-            tools,
-            ..self.round_context(messages, system_prompt)
-        };
-        let read = Generation::read(&*self.provider, &context, steering, out, prefix).await;
-        let error = match read {
-            Err(Failed {
-                error,
-                streamed: false,
-                ..
-            }) if error.is_context_overflow() => error,
-            read => return read,
-        };
+        error: &ProviderError,
+    ) -> Result<(), Failed> {
         tracing::warn!(target: "roomkit::ai", %error, "context overflow: compacting and replaying");
         let (compacted, turn_input) = compacted(&context.messages, self.adopted.turn_input)
             .map_err(Failed::before_streaming)?;
@@ -86,7 +64,7 @@ impl<P: AiProvider> Loop<P> {
         self.adopted.messages = Some((compacted.clone(), shown));
         self.adopted.turn_input = turn_input;
         context.messages = compacted;
-        Generation::read(&*self.provider, &context, steering, out, prefix).await
+        Ok(())
     }
 }
 

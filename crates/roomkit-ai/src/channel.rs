@@ -11,8 +11,8 @@ use std::time::Duration;
 use roomkit::human_input::CloseOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelId, ChannelOutput, ChannelType,
-    EventDirection, EventSource, EventType, InboundMessage, Participant, RoomContext, RoomEvent,
-    RoomId, SteeringDirective,
+    EventDirection, EventSource, EventType, InboundMessage, Participant, RetryPolicy, RoomContext,
+    RoomEvent, RoomId, SteeringDirective,
 };
 use roomkit::{Channel, ChannelDeclaration, ChannelError, current_turn_host};
 use roomkit_core::rules::edits::opens_no_turn;
@@ -32,13 +32,13 @@ use crate::memory::{
     IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions, SlidingWindowMemory,
     SlidingWindowMemoryOptions, TurnFootprint, measured, runtime_or_cleaned,
 };
-use crate::provider::{AiContentPart, AiMessage, AiProvider};
+use crate::provider::{AiContentPart, AiMessage, AiProvider, DynAiProvider};
 use crate::rows;
 use crate::server_instructions::ServerInstructions;
 use crate::skills::SkillRegistry;
 use crate::skills::tools::{SkillTools, SkillTurn};
 use crate::steering::{Loops, SteerOptions};
-use crate::tool_loop::{Adopted, Bounds, Loop};
+use crate::tool_loop::{Adopted, Bounds, Loop, Resilience};
 use crate::tool_usage::{ToolUsageMemory, TurnMedia};
 use crate::tools::toolbox::Toolbox;
 use crate::tools::{
@@ -94,6 +94,18 @@ pub struct AiChannelOptions {
     /// run: an empty answer after a round of calls, or a call the provider
     /// could not hand over (RFC §6.4).
     pub max_empty_retries: u32,
+    /// How a generation its provider refused as worth another try
+    /// ([`ProviderError::retryable`](crate::ProviderError::retryable)),
+    /// before it handed anything, is tried again (RFC §6.4): Python's
+    /// `retry_policy`, its `retryable_errors` unread, as Python's AI channel
+    /// leaves it; `None` tries nothing again.
+    pub retry_policy: Option<RetryPolicy>,
+    /// The provider asked once a generation's retries are spent, nothing
+    /// handed yet (RFC §6.4): Python's `fallback_provider`, any provider,
+    /// `Some(Arc::new(provider))`. When it fails before it hands anything,
+    /// the turn's error is the primary's, the fallback's its
+    /// [`source`](std::error::Error::source).
+    pub fallback_provider: Option<Arc<dyn DynAiProvider>>,
     /// The longest a tool's call may take (RFC §21.6), more than zero;
     /// `None` bounds nothing.
     pub tool_timeout: Option<Duration>,
@@ -172,6 +184,8 @@ impl Default for AiChannelOptions {
             tool_loop_timeout: Some(Duration::from_secs(300)),
             tool_loop_warn_after: 25,
             max_empty_retries: 1,
+            retry_policy: None,
+            fallback_provider: None,
             tool_timeout: Some(Duration::from_secs(30)),
             tool_timeouts: BTreeMap::new(),
             turn_budget_tokens: None,
@@ -255,6 +269,7 @@ pub struct AiChannel<P> {
     tool_handler: Arc<RwLock<Option<ToolHandler>>>,
     policy: ToolPolicy,
     bounds: Bounds,
+    resilience: Resilience,
     system_prompt: Arc<RwLock<Option<String>>>,
     temperature: f64,
     max_tokens: Option<u32>,
@@ -336,6 +351,7 @@ impl<P> Clone for AiChannel<P> {
             tool_handler: Arc::clone(&self.tool_handler),
             policy: self.policy.clone(),
             bounds: self.bounds.clone(),
+            resilience: self.resilience.clone(),
             system_prompt: Arc::clone(&self.system_prompt),
             temperature: self.temperature,
             max_tokens: self.max_tokens,
@@ -385,6 +401,8 @@ impl<P: AiProvider> AiChannel<P> {
             tool_loop_timeout,
             tool_loop_warn_after,
             max_empty_retries,
+            retry_policy,
+            fallback_provider,
             tool_timeout,
             tool_timeouts,
             turn_budget_tokens,
@@ -420,10 +438,9 @@ impl<P: AiProvider> AiChannel<P> {
         if skills.is_some() {
             reserve_skill_names(&toolbox)?;
         }
-        let human_input = match human_input_handler {
-            Some(human) => Some(serve_human_input(&mut toolbox, human)?),
-            None => None,
-        };
+        let human_input = human_input_handler
+            .map(|human| serve_human_input(&mut toolbox, human))
+            .transpose()?;
         let skills = match skills.filter(SkillRegistry::has_entries) {
             Some(skills) => {
                 let skill_tools = Arc::new(SkillTools::new(skills, skills_in_prompt));
@@ -449,6 +466,7 @@ impl<P: AiProvider> AiChannel<P> {
                 tool_timeouts,
                 turn_budget_tokens,
             },
+            resilience: Resilience::checked(retry_policy, fallback_provider)?,
             system_prompt: Arc::new(RwLock::new(
                 system_prompt.filter(|prompt| !prompt.is_empty()),
             )),
@@ -1056,6 +1074,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
                 turn_budget_tokens: settings.turn_budget_tokens,
                 ..self.bounds.clone()
             },
+            resilience: self.resilience.clone(),
             system_prompt,
             temperature: settings.temperature,
             max_tokens: settings.max_tokens,

@@ -3,6 +3,7 @@
 //! it answers.
 
 mod context;
+mod dynamic;
 mod error;
 mod response;
 
@@ -16,6 +17,7 @@ pub use self::context::{
     AiToolCallPart, AiToolResultPart,
 };
 pub(crate) use self::context::{ai_messages, ai_messages_with};
+pub use self::dynamic::DynAiProvider;
 pub use self::error::{ProviderError, ProviderErrorOptions, is_context_overflow_message};
 pub use self::response::{
     AiResponse, AiToolCall, StreamDone, StreamEvent, StreamTextDelta, StreamToolCall,

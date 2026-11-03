@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A generation's retries and its fallback provider (RFC §6.4), as Python's: `AiChannelOptions::retry_policy` tries a refusal worth another try again, before anything was handed, after a compacted replay of an overflow; `fallback_provider`, any provider as a `DynAiProvider`, is asked once the retries are spent, and its failure before it handed anything leaves the primary's error (RMK-1267).
 - The loop strategy (RFC §19.7.4), as Python's: `roomkit::Loop`, `orchestration::LoopOptions` and `orchestration::strategies::supervisor::WorkerStrategy` (RMK-1233).
 - An MCP provider's `tool_filter` chooses among every tool the server
   lists before the 512-tool bound counts, as Python filters the listing it

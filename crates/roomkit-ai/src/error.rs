@@ -85,6 +85,13 @@ pub enum AiError {
     /// budget being a positive number.
     #[error("turn_budget_tokens must be a positive number, got 0")]
     TurnBudgetTokens,
+    /// A retry policy's delay or multiplier is not greater than 0, as
+    /// Python's `RetryPolicy` refuses it (`gt=0`): pydantic's words.
+    #[error("{reason}")]
+    RetryPolicy {
+        /// What the policy's check refused.
+        reason: String,
+    },
 }
 
 /// `names` as Python writes a set of strings' items.
