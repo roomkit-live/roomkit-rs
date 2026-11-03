@@ -33,6 +33,7 @@ use crate::kit::Inner;
 use crate::steering::{InjectMessage, SteeringDirective};
 use crate::store::ConversationStore;
 use crate::stream::{KeptStream, Stops};
+use crate::telemetry::{get_current_span, within_kit};
 use crate::turn::TurnKit;
 use crate::turns::{Answer, SteerAddress};
 
@@ -143,6 +144,9 @@ pub(crate) struct Queued {
     asked: RoomContext,
     /// How many of the room's latest messages the turn reads.
     window: usize,
+    /// The span of the broadcast that asked the turn, which it runs under
+    /// whenever it starts, as Python's `restored_span`.
+    span: Option<String>,
 }
 
 /// What a waiting turn's start came to.
@@ -170,6 +174,7 @@ impl Queued {
             event,
             asked,
             window,
+            span: get_current_span(),
         }
     }
 
@@ -188,6 +193,7 @@ impl Queued {
             event,
             asked,
             window,
+            span,
         } = self;
         tokio::select! {
             biased;
@@ -200,7 +206,11 @@ impl Queued {
         let context =
             history::turn_context_as_asked(&*inner.store, &binding, &event, context, window).await;
         let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
-        let run = inner.turns.run(&kit, &binding, event, context, |_| {});
+        let run = within_kit(
+            &inner.telemetry,
+            span,
+            inner.turns.run(&kit, &binding, event, context, |_| {}),
+        );
         let answered = tokio::select! {
             biased;
             _ = stops.stopped() => return Started::Answered(nothing()),

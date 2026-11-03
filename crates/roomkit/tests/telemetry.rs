@@ -18,6 +18,7 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, HookResult,
     InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
+use roomkit::tasks::WaitOptions;
 use roomkit::telemetry::{
     Attr, MockTelemetryProvider, Span, SpanKind, TelemetryConfig, TelemetryProvider,
     get_current_span,
@@ -25,7 +26,7 @@ use roomkit::telemetry::{
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
     AttachChannelOptions, CancelTaskOptions, Channel, ChannelError, CreateRoomOptions,
-    DelegateOptions, DetachChannelOptions, HookExecution, HookOptions, HookTrigger,
+    DelegateOptions, DetachChannelOptions, HookExecution, HookOptions, HookTrigger, PostOptions,
     ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions, TransportChannel,
     TransportChannelOptions,
 };
@@ -561,4 +562,180 @@ async fn a_cancelled_task_span_carries_how_long_it_ran() {
         "{span:?}"
     );
     kit.close().await.unwrap();
+}
+
+// Python: core/hooks.py (an async hook's return is never read)
+#[tokio::test]
+async fn an_async_hook_s_span_ends_ok_whatever_it_returns() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        |_: RoomEvent, _| ready(()),
+        HookOptions {
+            name: "after".to_owned(),
+            execution: HookExecution::Async,
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    inbound(&kit).await;
+    kit.close().await.unwrap();
+    let spans = mock.completed_spans();
+    let hook = named(&spans, "hook.async.after");
+    assert_eq!(hook.status, "ok", "{hook:?}");
+    assert_eq!(hook.error_message, None);
+}
+
+// Python: core/hooks.py (an async hook that raises reads `failed`, whatever it raised)
+#[tokio::test]
+async fn an_async_hook_that_raises_reads_failed_never_its_text() {
+    for sensitive in [false, true] {
+        let asks = TelemetryConfig {
+            record_sensitive_data: sensitive,
+            ..TelemetryConfig::default()
+        };
+        let (kit, mock, _) = kit_with_room(Some(asks)).await;
+        kit.hook(
+            HookTrigger::AfterBroadcast,
+            |_: RoomEvent, _| async {
+                let raised: Result<HookResult, roomkit::HookError> =
+                    Err("+15145550123 is refused".into());
+                raised
+            },
+            HookOptions {
+                name: "after".to_owned(),
+                execution: HookExecution::Async,
+                ..HookOptions::default()
+            },
+        )
+        .unwrap();
+        inbound(&kit).await;
+        kit.close().await.unwrap();
+        let spans = mock.completed_spans();
+        let hook = named(&spans, "hook.async.after");
+        assert_eq!(hook.status, "error");
+        assert_eq!(hook.error_message.as_deref(), Some("failed"));
+    }
+}
+
+// Python: the broadcast of a delegated turn (RFC §23.3), which ends with its counts
+#[tokio::test]
+async fn a_delegated_turn_s_broadcast_ends_ok_with_its_counts() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    let worker = EchoAgent::new(id("worker"), "Done.", EchoAgentOptions::default());
+    kit.register_channel(worker).unwrap();
+    let wait = DelegateOptions {
+        wait: true,
+        ..DelegateOptions::default()
+    };
+    kit.delegate(&room(), &id("worker"), "go", wait)
+        .await
+        .unwrap();
+    let spans = mock.get_spans(SpanKind::Broadcast);
+    assert!(!spans.is_empty());
+    for span in &spans {
+        assert_eq!(span.status, "ok", "{span:?}");
+        assert!(span.attributes.contains_key("target_count"), "{span:?}");
+    }
+    kit.close().await.unwrap();
+}
+
+// Python: core/mixins/delegation.py:799,835: the span ends before the task's callback
+#[tokio::test]
+async fn a_delegation_span_ends_before_the_task_s_callback() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    let worker = EchoAgent::new(id("worker"), "Done.", EchoAgentOptions::default());
+    kit.register_channel(worker).unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (reading, noted) = (Arc::clone(&mock), Arc::clone(&seen));
+    let wait = DelegateOptions {
+        wait: true,
+        on_complete: Some(Arc::new(move |_| {
+            let active = reading.get_active_spans();
+            let names = active.into_iter().map(|span| span.name);
+            noted
+                .lock()
+                .unwrap()
+                .extend(names.filter(|name| name.starts_with("delegation")));
+            Box::pin(async {})
+        })),
+        ..DelegateOptions::default()
+    };
+    kit.delegate(&room(), &id("worker"), "go", wait)
+        .await
+        .unwrap();
+    assert_eq!(seen.lock().unwrap().clone(), Vec::<String>::new());
+    kit.close().await.unwrap();
+}
+
+// Python: core/_host_post.py: `post()` is a framework.send_event, its broadcast under it
+#[tokio::test]
+async fn a_post_opens_a_span_over_its_broadcast() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    kit.post(&room(), TextContent::new("Bonjour"), PostOptions::default())
+        .await
+        .unwrap();
+    let spans = mock.completed_spans();
+    let post = named(&spans, "framework.send_event");
+    assert_eq!(post.parent_id, None);
+    assert_eq!(post.attributes["event_type"], json!("message"));
+    let broadcast = named(&spans, "framework.broadcast");
+    assert_eq!(broadcast.parent_id.as_deref(), Some(post.id.as_str()));
+    kit.close().await.unwrap();
+}
+
+// Python: core/mixins/inbound.py:311-336: a call its channel refuses opens no span
+#[tokio::test]
+async fn a_message_on_no_channel_opens_no_span() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    let lost = InboundMessage::new(id("nowhere"), "user1", TextContent::new("hello"));
+    let refused = kit
+        .process_inbound(lost, ProcessInboundOptions::default())
+        .await;
+    assert!(refused.is_err());
+    assert_eq!(mock.completed_spans(), vec![]);
+    kit.close().await.unwrap();
+}
+
+/// A background delegation from a hook: every span of the call, the task's
+/// and its broadcast's, stays under the inbound.
+// Python: asyncio.create_task copies the caller's span (tests/test_telemetry.py::
+// TestTelemetryPhase4::test_lane_side_spans_parent_to_inbound's shape, on a task).
+#[tokio::test]
+async fn a_background_task_s_spans_stay_in_the_call_s_trace() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    let worker = EchoAgent::new(id("worker"), "Done.", EchoAgentOptions::default());
+    kit.register_channel(worker).unwrap();
+    let started = Arc::new(Mutex::new(None));
+    let (hook_kit, handle) = (kit.clone(), Arc::clone(&started));
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |_: RoomEvent, _| {
+            let (kit, handle) = (hook_kit.clone(), Arc::clone(&handle));
+            async move {
+                let task = kit
+                    .delegate(&room(), &id("worker"), "go", DelegateOptions::default())
+                    .await
+                    .unwrap();
+                *handle.lock().unwrap() = Some(task);
+                HookResult::allow(AllowOptions::default())
+            }
+        },
+        HookOptions {
+            name: "delegates".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    inbound(&kit).await;
+    let task = started.lock().unwrap().take().unwrap();
+    task.wait(WaitOptions::default()).await.unwrap();
+    kit.close().await.unwrap();
+    let spans = mock.completed_spans();
+    let roots: Vec<&str> = spans
+        .iter()
+        .filter(|span| span.parent_id.is_none())
+        .map(|span| span.name.as_str())
+        .collect();
+    assert_eq!(roots, ["framework.inbound"], "{:?}", names(&spans));
 }

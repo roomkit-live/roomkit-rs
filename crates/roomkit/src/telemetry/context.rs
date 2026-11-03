@@ -38,7 +38,18 @@ impl fmt::Debug for Current {
 }
 
 tokio::task_local! {
-    static CURRENT: Current;
+    // `None` where a task spawned under no span runs: every scope below is
+    // this one type, with no future around the work, which an `async` block
+    // would hold twice, doubling at each scope a call goes through.
+    static CURRENT: Option<Current>;
+}
+
+/// What is current here, if anything.
+fn read<T>(with: impl FnOnce(&Current) -> Option<T>) -> Option<T> {
+    CURRENT
+        .try_with(|current| current.as_ref().and_then(with))
+        .ok()
+        .flatten()
 }
 
 /// Python `get_current_span()`: the id of the span the current code runs
@@ -46,10 +57,7 @@ tokio::task_local! {
 /// kit's work.
 #[must_use]
 pub fn get_current_span() -> Option<String> {
-    CURRENT
-        .try_with(|current| current.span_id.clone())
-        .ok()
-        .flatten()
+    read(|current| current.span_id.clone())
 }
 
 /// The provider of the span the current code runs under: the kit's, for
@@ -58,9 +66,12 @@ pub fn get_current_span() -> Option<String> {
 #[doc(hidden)]
 #[must_use]
 pub fn current_telemetry() -> Option<Arc<dyn TelemetryProvider>> {
-    CURRENT
-        .try_with(|current| Arc::clone(&current.telemetry.provider))
-        .ok()
+    read(|current| Some(Arc::clone(&current.telemetry.provider)))
+}
+
+/// The telemetry of the kit whose call this is.
+pub(crate) fn current_kit_telemetry() -> Option<KitTelemetry> {
+    read(|current| Some(current.telemetry.clone()))
 }
 
 /// Whether the kit whose call this is records what can hold personal data
@@ -68,27 +79,21 @@ pub fn current_telemetry() -> Option<Arc<dyn TelemetryProvider>> {
 #[doc(hidden)]
 #[must_use]
 pub fn current_records_sensitive_data() -> bool {
-    CURRENT
-        .try_with(|current| current.telemetry.sensitive)
-        .unwrap_or(false)
+    read(|current| Some(current.telemetry.sensitive)).unwrap_or(false)
 }
 
 /// The provider's own context of the current span, Python's
 /// `get_current_telemetry_ctx()`.
 #[cfg(feature = "opentelemetry")]
 pub(crate) fn current_span_context() -> Option<Arc<dyn Any + Send + Sync>> {
-    CURRENT
-        .try_with(|current| current.context.clone())
-        .ok()
-        .flatten()
+    read(|current| current.context.clone())
 }
 
 /// Runs `work` under the span `span_id` of another process, `context` what
 /// [`TelemetryProvider::extract_context`] read of it: Python's
-/// `restored_span(span_id, telemetry_ctx=...)`. Hidden: for the turn
-/// executors to come.
-#[doc(hidden)]
-pub fn within_extracted_span<F: Future>(
+/// `restored_span(span_id, telemetry_ctx=...)`.
+#[cfg(all(test, feature = "opentelemetry"))]
+pub(crate) fn within_extracted_span<F: Future>(
     provider: Arc<dyn TelemetryProvider>,
     span_id: String,
     context: Option<Arc<dyn Any + Send + Sync>>,
@@ -98,11 +103,12 @@ pub fn within_extracted_span<F: Future>(
         telemetry: KitTelemetry {
             provider,
             sensitive: false,
+            suppressed: Arc::default(),
         },
         span_id: Some(span_id),
         context,
     };
-    CURRENT.scope(current, work)
+    CURRENT.scope(Some(current), work)
 }
 
 /// `work` with `telemetry` the current one, under `span_id` if any.
@@ -119,7 +125,7 @@ pub(crate) fn within_optional_span<F: Future>(
         span_id,
         context,
     };
-    CURRENT.scope(current, work)
+    CURRENT.scope(Some(current), work)
 }
 
 /// `future` under the current span, if any: what
@@ -127,13 +133,8 @@ pub(crate) fn within_optional_span<F: Future>(
 /// carry into a spawned task. It reads the span when called, in the task
 /// that spawns.
 pub(crate) fn within_current_span<F: Future>(future: F) -> impl Future<Output = F::Output> {
-    let current = CURRENT.try_with(Current::clone).ok();
-    async move {
-        match current {
-            Some(current) => CURRENT.scope(current, future).await,
-            None => future.await,
-        }
-    }
+    let current = CURRENT.try_with(Option::clone).ok().flatten();
+    CURRENT.scope(current, future)
 }
 
 #[cfg(test)]
@@ -154,6 +155,7 @@ mod tests {
         let telemetry = KitTelemetry {
             provider: Arc::new(MockTelemetryProvider::default()),
             sensitive: false,
+            suppressed: Arc::default(),
         };
         let read = within_optional_span(&telemetry, Some("s1".to_owned()), async {
             let spawned = tokio::spawn(crate::keep_context(async { get_current_span() }));

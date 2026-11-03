@@ -1,13 +1,8 @@
 //! The kit's telemetry: Python's `RoomKit(telemetry=…)`, `kit.telemetry`.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use roomkit_core::model::{
-    ChannelId, DirectEvent, IdentityResult, InboundMessage, Metadata, RoomId,
-};
-use roomkit_core::rules::hook_chain::HookOutcome;
-use roomkit_core::rules::hook_registry::HookTrigger;
+use roomkit_core::model::{ChannelId, EventType, IdentityResult, InboundMessage, Metadata, RoomId};
 use serde_json::Value;
 
 use super::{Inner, RoomKit};
@@ -26,36 +21,6 @@ impl<S> RoomKit<S> {
     #[must_use]
     pub fn telemetry(&self) -> Arc<dyn TelemetryProvider> {
         Arc::clone(&self.inner.telemetry.provider)
-    }
-}
-
-/// A hook trigger's value, as Python's `str(trigger)`.
-fn trigger_name(trigger: HookTrigger) -> String {
-    serde_json::to_value(trigger)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_default()
-}
-
-/// Ends a sync hook's span as its `outcome` reads: `ok` with the action it
-/// returned; `error` with what it raised, `timeout`, or
-/// `invalid return type`.
-pub(crate) fn end_hook_span<P>(span: Option<OpenSpan>, outcome: &HookOutcome<P>) {
-    let Some(span) = span else {
-        return;
-    };
-    match outcome {
-        HookOutcome::Returned(result) => {
-            let mut attributes = Metadata::new();
-            let action = serde_json::to_value(result.action).unwrap_or_default();
-            attributes.insert(Attr::HOOK_RESULT.to_owned(), action);
-            span.end(attributes);
-        }
-        HookOutcome::Raised(error) => {
-            span.fail_error(&error.error_type, &error.message, Metadata::new());
-        }
-        HookOutcome::TimedOut => span.fail("timeout", Metadata::new()),
-        HookOutcome::Invalid { .. } => span.fail("invalid return type", Metadata::new()),
     }
 }
 
@@ -97,25 +62,8 @@ pub(super) fn end_inbound_span(
     }
 }
 
-/// Ends an async hook's span as its `outcome` reads: as a sync hook's, the
-/// action left out, as Python's.
-pub(crate) fn end_observer_span<P>(span: Option<OpenSpan>, outcome: &HookOutcome<P>) {
-    let Some(span) = span else {
-        return;
-    };
-    match outcome {
-        HookOutcome::Returned(_) => span.end(Metadata::new()),
-        HookOutcome::Raised(error) => {
-            span.fail_error(&error.error_type, &error.message, Metadata::new());
-        }
-        HookOutcome::TimedOut => span.fail("timeout", Metadata::new()),
-        HookOutcome::Invalid { .. } => span.fail("invalid return type", Metadata::new()),
-    }
-}
-
-/// The kit's telemetry of `config`, its metadata handed to its provider, and
-/// the hook triggers that open no span.
-pub(super) fn telemetry_of(config: Option<TelemetryConfig>) -> (KitTelemetry, BTreeSet<String>) {
+/// The kit's telemetry of `config`, its metadata handed to its provider.
+pub(super) fn telemetry_of(config: Option<TelemetryConfig>) -> KitTelemetry {
     let config = config.unwrap_or_default();
     let provider = config
         .provider
@@ -123,45 +71,14 @@ pub(super) fn telemetry_of(config: Option<TelemetryConfig>) -> (KitTelemetry, BT
     if !config.metadata.is_empty() {
         provider.set_metadata(config.metadata);
     }
-    let telemetry = KitTelemetry {
+    KitTelemetry {
         provider,
         sensitive: config.record_sensitive_data,
-    };
-    (telemetry, config.suppressed_hook_triggers)
+        suppressed: Arc::new(config.suppressed_hook_triggers),
+    }
 }
 
 impl<S> Inner<S> {
-    /// The span of the hook `name` on `trigger` in `room_id`, Python's
-    /// `hook.sync.<name>` and `hook.async.<name>`; `None` for a trigger the
-    /// telemetry's config suppresses.
-    pub(crate) fn hook_span(
-        &self,
-        kind: SpanKind,
-        name: &str,
-        trigger: HookTrigger,
-        room_id: &RoomId,
-    ) -> Option<OpenSpan> {
-        let trigger = trigger_name(trigger);
-        if self.suppressed_hook_triggers.contains(&trigger) {
-            return None;
-        }
-        let name = if name.is_empty() { "unnamed" } else { name };
-        let mut attributes = Metadata::new();
-        attributes.insert(Attr::HOOK_NAME.to_owned(), Value::from(name));
-        attributes.insert(Attr::HOOK_TRIGGER.to_owned(), Value::from(trigger));
-        let options = StartSpanOptions {
-            room_id: Some(room_id.to_string()),
-            attributes,
-            ..StartSpanOptions::default()
-        };
-        Some(OpenSpan::start(
-            &self.telemetry,
-            kind,
-            &format!("{kind}.{name}"),
-            options,
-        ))
-    }
-
     /// A span's `sender_id`, an address: none unless the kit records what
     /// can hold personal data (Python's `sensitive`).
     fn sender_attributes(&self, sender_id: &str) -> Metadata {
@@ -178,9 +95,10 @@ impl<S> Inner<S> {
     pub(crate) fn inbound_span(
         &self,
         message: &InboundMessage,
+        sender_id: &str,
         room_id: Option<&RoomId>,
     ) -> OpenSpan {
-        let mut attributes = self.sender_attributes(&message.sender_id);
+        let mut attributes = self.sender_attributes(sender_id);
         if let Some(session) = message.metadata.get("voice_session_id") {
             attributes.insert(Attr::SESSION_ID.to_owned(), session.clone());
         }
@@ -196,11 +114,8 @@ impl<S> Inner<S> {
             },
         );
         if let Some(room_id) = room_id {
-            let route = self.route_span_under(
-                Some(span.id().to_owned()),
-                &message.channel_id,
-                &message.sender_id,
-            );
+            let route =
+                self.route_span_under(Some(span.id().to_owned()), &message.channel_id, sender_id);
             end_route_span(route, Some(room_id));
         }
         span
@@ -247,9 +162,14 @@ impl<S> Inner<S> {
     }
 
     /// The span of an injected event, Python's `framework.send_event`.
-    pub(crate) fn send_event_span(&self, room_id: &RoomId, event: &DirectEvent) -> OpenSpan {
+    pub(crate) fn send_event_span(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+        event_type: EventType,
+    ) -> OpenSpan {
         let mut attributes = Metadata::new();
-        let event_type = serde_json::to_value(event.event_type).unwrap_or_default();
+        let event_type = serde_json::to_value(event_type).unwrap_or_default();
         attributes.insert("event_type".to_owned(), event_type);
         OpenSpan::start(
             &self.telemetry,
@@ -257,7 +177,7 @@ impl<S> Inner<S> {
             "framework.send_event",
             StartSpanOptions {
                 room_id: Some(room_id.to_string()),
-                channel_id: Some(event.channel_id.to_string()),
+                channel_id: Some(channel_id.to_string()),
                 attributes,
                 ..StartSpanOptions::default()
             },

@@ -93,11 +93,11 @@ impl TurnHost {
             .iter()
             .filter(|(spec, _)| spec.execution == HookExecution::Sync)
         {
-            let ran = hooks::run(
+            let ran = hooks::run_traced(
+                spec,
                 Arc::clone(handler),
                 chain.payload.clone(),
                 self.shared.context.clone(),
-                spec.timeout,
                 |_| None,
             )
             .await;
@@ -165,12 +165,11 @@ impl TurnHost {
             then: Mutex::new(then),
         });
         for (spec, handler) in observers {
-            let observing = hooks::run(
+            let observing = hooks::observe_traced(
+                spec.clone(),
                 Arc::clone(handler),
                 payload.clone(),
                 self.shared.context.clone(),
-                spec.timeout,
-                |_| None,
             );
             let (host, spec, done) = (self.clone(), spec.clone(), Arc::clone(&ended));
             let bounded = async move {

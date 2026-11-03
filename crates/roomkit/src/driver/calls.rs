@@ -30,7 +30,7 @@ use crate::error::RoomKitError;
 use crate::events::Handled;
 use crate::hooks;
 use crate::kit::{
-    Inner, end_hook_span, end_identity_span, end_observer_span, end_route_span, run_identity_hooks,
+    Inner, end_identity_span, end_route_span, run_identity_hooks,
     verification_inbound as verification,
 };
 use crate::room_turns::{self, Queued, Started};
@@ -42,7 +42,7 @@ use crate::store::{
 };
 use crate::stream::{self, KeptStream, Stops};
 use crate::tasks::{Kind, Marks, TaskCut};
-use crate::telemetry::{SpanKind, within_current_span};
+use crate::telemetry::{SpanKind, end_hook_span, end_observer_span};
 use crate::turn::TurnKit;
 use crate::turn_runners::{Answering, FirstPass, Next, Passes, Taken, TurnRunner};
 use crate::turns::{self, Answer};
@@ -738,7 +738,10 @@ pub(super) async fn hook<S: ConversationStore>(
             timeout,
         } => {
             let span = inner.hook_with_spec(hook).and_then(|(_, spec)| {
-                inner.hook_span(SpanKind::HookSync, &spec.name, trigger, &event.room_id)
+                let room_id = &event.room_id;
+                inner
+                    .telemetry
+                    .hook_span(SpanKind::HookSync, &spec.name, trigger, room_id)
             });
             let outcome = match inner.kept_hook(hook) {
                 Some(kept) => hooks::run_kept(kept, *event, *context, timeout).await,
@@ -1005,9 +1008,6 @@ pub(super) fn perform<S: ConversationStore>(
                         handled.wait().await;
                     }
                 };
-                // Under the span of the call that fired it, as a task Python
-                // creates copies its context.
-                let observing = within_current_span(observing);
                 // Nothing waits for an observer: a close one calls spares it
                 // alone; the kit's close gives it its grace, then cuts it.
                 if inner.tasks.spawn_alone(Kind::Observer, observing).is_none() {
@@ -1175,7 +1175,9 @@ fn observe<S: ConversationStore>(
     let (event, context) = (event.clone(), context.clone());
     Some(async move {
         let room_id = event.room_id.clone();
-        let span = inner.hook_span(SpanKind::HookAsync, &spec.name, trigger, &room_id);
+        let span = inner
+            .telemetry
+            .hook_span(SpanKind::HookAsync, &spec.name, trigger, &room_id);
         let outcome = hooks::run_kept(kept, event, context, spec.timeout).await;
         end_observer_span(span, &outcome);
         inner.report_observer(&spec, trigger, room_id, &outcome);

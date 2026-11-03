@@ -54,7 +54,7 @@ mod structured;
 mod task_cancel;
 mod tasks;
 mod telemetry;
-pub(crate) use telemetry::{end_hook_span, end_identity_span, end_observer_span, end_route_span};
+pub(crate) use telemetry::{end_identity_span, end_route_span};
 #[cfg(test)]
 mod tests;
 mod timeline;
@@ -224,8 +224,6 @@ pub(crate) struct Inner<S> {
     pub(crate) delivery_gap_timeout: std::time::Duration,
     /// Where the kit reports its spans and metrics.
     pub(crate) telemetry: crate::telemetry::KitTelemetry,
-    /// The hook triggers whose hooks open no span.
-    pub(crate) suppressed_hook_triggers: std::collections::BTreeSet<String>,
     /// The tasks the kit runs in the background: observers, inbound runs.
     pub(crate) tasks: Arc<Tasks>,
     /// The clock and the ids every run reads: the system's, or a test's
@@ -340,7 +338,7 @@ impl<S: ConversationStore> RoomKit<S> {
             delivery_claim_lock_manager,
             telemetry,
         } = options;
-        let (telemetry, suppressed_hook_triggers) = telemetry::telemetry_of(telemetry);
+        let telemetry = telemetry::telemetry_of(telemetry);
         let lock_manager: Arc<dyn RoomLockManager> =
             lock_manager.unwrap_or_else(|| Arc::new(InMemoryLockManager::default()));
         let claim_base = delivery_claim_lock_manager
@@ -376,7 +374,6 @@ impl<S: ConversationStore> RoomKit<S> {
             verification_locks: KitLocks::new(key_space(&lock_manager, VERIFICATION_KIND)),
             delivery_gap_timeout,
             telemetry,
-            suppressed_hook_triggers,
             tasks: Arc::default(),
             environment,
             events: Handlers::default(),
@@ -567,8 +564,21 @@ impl<S: ConversationStore> RoomKit<S> {
         options: ProcessInboundOptions,
         publication: Option<String>,
     ) -> Result<InboundResult, RoomKitError> {
+        // A channel that refuses the call opens no span: Python opens it once
+        // the channel is known, for the sender as the channel writes it.
+        let is_host = self
+            .config()
+            .channel(&message.channel_id)
+            .is_some_and(|channel| channel.channel_type == ChannelType::HOST);
+        let channel = self.inner.channel(&message.channel_id);
+        let (Some(channel), false) = (channel, is_host) else {
+            return Box::pin(self.traced_message(message, options, publication)).await;
+        };
+        let sender = channel.normalize_address(&message.sender_id);
         let deferred = options.defer_delivery;
-        let span = self.inner.inbound_span(&message, options.room_id.as_ref());
+        let span = self
+            .inner
+            .inbound_span(&message, &sender, options.room_id.as_ref());
         let work = Box::pin(self.traced_message(message, options, publication));
         let result = span.within(work).await;
         telemetry::end_inbound_span(span, &result, deferred);

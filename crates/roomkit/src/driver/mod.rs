@@ -1322,6 +1322,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// The operation's output, or the refusal of a wait on what the run's
     /// own context holds.
     fn finish<T>(mut self, output: T) -> Result<T, Stop> {
+        self.spans.over();
         match self.refused.take() {
             Some(room_id) => Err(RoomKitError::ReentrantCall { room_id }.into()),
             None => Ok(output),

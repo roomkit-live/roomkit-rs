@@ -527,11 +527,11 @@ impl TurnHost {
             .iter()
             .filter(|(spec, _)| spec.execution == HookExecution::Sync)
         {
-            let ran = hooks::run(
+            let ran = hooks::run_traced(
+                spec,
                 Arc::clone(handler),
                 chain.current.clone(),
                 self.shared.context.clone(),
-                spec.timeout,
                 |_| None,
             )
             .await;
@@ -650,11 +650,11 @@ impl TurnHost {
             .iter()
             .filter(|(spec, _)| spec.execution == HookExecution::Sync)
         {
-            let ran = hooks::run(
+            let ran = hooks::run_traced(
+                spec,
                 Arc::clone(handler),
                 chain.current.clone(),
                 self.shared.context.clone(),
-                spec.timeout,
                 |_| None,
             )
             .await;
@@ -748,12 +748,11 @@ impl TurnHost {
             .iter()
             .filter(|(spec, _)| spec.execution == HookExecution::Async)
         {
-            let observing = hooks::run(
+            let observing = hooks::observe_traced(
+                spec.clone(),
                 Arc::clone(handler),
                 event.clone(),
                 self.shared.context.clone(),
-                spec.timeout,
-                |_| None,
             );
             let (host, spec) = (self.clone(), spec.clone());
             let bounded = async move {

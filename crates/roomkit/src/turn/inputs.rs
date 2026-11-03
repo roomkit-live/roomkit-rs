@@ -130,11 +130,11 @@ impl InputNotification {
             .iter()
             .filter(|(spec, _)| spec.execution == HookExecution::Sync)
         {
-            let ran = hooks::run(
+            let ran = hooks::run_traced(
+                spec,
                 Arc::clone(handler),
                 event.clone(),
                 context.clone(),
-                spec.timeout,
                 |_| None,
             )
             .await;
@@ -170,12 +170,11 @@ impl InputNotification {
             .iter()
             .filter(|(spec, _)| spec.execution == HookExecution::Async)
         {
-            let observing = hooks::run(
+            let observing = hooks::observe_traced(
+                spec.clone(),
                 Arc::clone(handler),
                 event.clone(),
                 context.clone(),
-                spec.timeout,
-                |_| None,
             );
             let (kit, ids, spec) = (Arc::clone(&self.kit), self.ids.clone(), spec.clone());
             let bounded = async move {

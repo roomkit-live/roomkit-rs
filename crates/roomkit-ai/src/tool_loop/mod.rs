@@ -290,7 +290,7 @@ impl<P: AiProvider> Loop<P> {
             self.media.keep_results(messages.len(), &ran.results);
             messages.extend(read);
             // A round counts once its calls ran (Python's `_run_announced_calls`).
-            spent.calls += u32::try_from(ran.calls.len()).unwrap_or(u32::MAX);
+            self.count_calls(&mut spent, ran.calls.len());
             tool_rounds += u32::from(!ran.calls.is_empty());
             let withdrawn = self.adopted.withdrawn.len();
             messages.extend(self.after_tool_round(round, ran).await);
@@ -318,7 +318,7 @@ impl<P: AiProvider> Loop<P> {
         let (limits, steering, out) = ending;
         steering.close();
         if let Some(span) = &self.turn_span {
-            span.ended(reason, spent.calls, &spent.usage);
+            span.ended(reason);
         }
         let end = LoopEndMarker {
             usage: spent.usage.clone(),
@@ -348,6 +348,16 @@ impl<P: AiProvider> Loop<P> {
         }
         if let Some(sent) = &self.sent_images {
             sent.refused_by(error);
+        }
+    }
+
+    /// Counts the `calls` of a round into what the turn `spent` and on its
+    /// span.
+    fn count_calls(&self, spent: &mut Spent, calls: usize) {
+        let calls = u32::try_from(calls).unwrap_or(u32::MAX);
+        spent.calls += calls;
+        if let Some(span) = &self.turn_span {
+            span.calls_ran(calls);
         }
     }
 
@@ -403,7 +413,7 @@ impl<P: AiProvider> Loop<P> {
         } = failure;
         spent.segments.push(delivered);
         if let Some(span) = &self.turn_span {
-            span.failed(error.to_string(), spent.calls, &spent.usage);
+            span.failed(error.to_string());
         }
         if after_round {
             let end = LoopEndMarker {

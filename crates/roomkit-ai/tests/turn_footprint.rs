@@ -268,7 +268,7 @@ async fn the_footprint_measures_the_tools_own_schemas_when_intents_are_on() {
         tool_call_intents: true,
         ..AiChannelOptions::default()
     };
-    let (footprints, model) = measured(options).await;
+    let (footprints, model) = Box::pin(measured(options)).await;
 
     let own: usize = declared.iter().map(tool_tokens).sum();
     let shown: usize = model.requests()[0].tools.iter().map(tool_tokens).sum();

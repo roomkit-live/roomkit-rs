@@ -84,11 +84,32 @@ impl Tracer {
     }
 }
 
+/// A running span: its context, and what it was written so far, for an
+/// attribute written again with its value not to show twice: the SDK adds, where
+/// Python's overwrites.
+struct Active {
+    context: Context,
+    written: HashMap<String, opentelemetry::Value>,
+}
+
+impl Active {
+    /// Writes `key`, `value` unless it holds it already.
+    fn write(&mut self, key: &str, value: opentelemetry::Value) {
+        let key = format!("roomkit.{key}");
+        if self.written.get(&key) != Some(&value) {
+            self.context
+                .span()
+                .set_attribute(KeyValue::new(key.clone(), value.clone()));
+            self.written.insert(key, value);
+        }
+    }
+}
+
 /// The spans a provider holds: those running, and the latest ended, as
 /// their contexts alone.
 #[derive(Default)]
 struct Spans {
-    active: HashMap<String, Context>,
+    active: HashMap<String, Active>,
     ended: HashMap<String, Context>,
     ended_order: VecDeque<String>,
 }
@@ -97,6 +118,7 @@ impl Spans {
     fn parent(&self, span_id: &str) -> Option<Context> {
         self.active
             .get(span_id)
+            .map(|active| &active.context)
             .or_else(|| self.ended.get(span_id))
             .cloned()
     }
@@ -211,11 +233,18 @@ impl OpenTelemetryProvider {
         carried.unwrap_or_else(Context::current)
     }
 
-    fn attributes(&self, kind: SpanKind, options: &StartSpanOptions) -> Vec<KeyValue> {
-        let mut attributes = vec![KeyValue::new("roomkit.span_kind", kind.as_str())];
+    /// What a span named by `options` starts with, each key once, the last
+    /// writing it, as Python's dict.
+    fn attributes(
+        &self,
+        kind: SpanKind,
+        options: &StartSpanOptions,
+    ) -> HashMap<String, opentelemetry::Value> {
+        let mut attributes = HashMap::new();
+        attributes.insert("roomkit.span_kind".to_owned(), kind.as_str().into());
         let metadata = self.metadata.lock().unwrap_or_else(PoisonError::into_inner);
         for (key, value) in metadata.iter() {
-            attributes.push(KeyValue::new(format!("roomkit.{key}"), value.clone()));
+            attributes.insert(format!("roomkit.{key}"), value.clone().into());
         }
         drop(metadata);
         for (key, value) in [
@@ -224,12 +253,12 @@ impl OpenTelemetryProvider {
             ("channel_id", &options.channel_id),
         ] {
             if let Some(value) = value.as_ref().filter(|value| !value.is_empty()) {
-                attributes.push(KeyValue::new(format!("roomkit.{key}"), value.clone()));
+                attributes.insert(format!("roomkit.{key}"), value.clone().into());
             }
         }
         for (key, value) in &options.attributes {
             if let Some(value) = scalar(value) {
-                attributes.push(KeyValue::new(format!("roomkit.{key}"), value));
+                attributes.insert(format!("roomkit.{key}"), value);
             }
         }
         attributes
@@ -304,28 +333,33 @@ impl TelemetryProvider for OpenTelemetryProvider {
             Some(parent_id) if !parent_id.is_empty() => self.parent_context(parent_id, name),
             _ => Context::current(),
         };
-        let attributes = self.attributes(kind, &options);
+        let written = self.attributes(kind, &options);
+        let attributes = written
+            .iter()
+            .map(|(key, value)| KeyValue::new(key.clone(), value.clone()))
+            .collect();
         let context = self
             .tracer
             .start(format!("roomkit.{name}"), &parent, attributes);
         let span_id = span_id_of(&context);
-        self.spans().active.insert(span_id.clone(), context);
+        let active = Active { context, written };
+        self.spans().active.insert(span_id.clone(), active);
         span_id
     }
 
     fn end_span(&self, span_id: &str, options: EndSpanOptions) {
         let mut spans = self.spans();
-        let Some(context) = spans.active.remove(span_id) else {
+        let Some(mut active) = spans.active.remove(span_id) else {
             return;
         };
-        spans.keep_ended(span_id.to_owned(), &context);
+        spans.keep_ended(span_id.to_owned(), &active.context);
         drop(spans);
-        let span = context.span();
         for (key, value) in &options.attributes {
             if let Some(value) = coerced(value) {
-                span.set_attribute(KeyValue::new(format!("roomkit.{key}"), value));
+                active.write(key, value);
             }
         }
+        let span = active.context.span();
         if options.status == "error" {
             let message = options.error_message.unwrap_or_default();
             if !message.is_empty() {
@@ -339,11 +373,9 @@ impl TelemetryProvider for OpenTelemetryProvider {
     }
 
     fn set_attribute(&self, span_id: &str, key: &str, value: Value) {
-        let spans = self.spans();
-        if let (Some(context), Some(value)) = (spans.active.get(span_id), coerced(&value)) {
-            context
-                .span()
-                .set_attribute(KeyValue::new(format!("roomkit.{key}"), value));
+        let mut spans = self.spans();
+        if let (Some(active), Some(value)) = (spans.active.get_mut(span_id), coerced(&value)) {
+            active.write(key, value);
         }
     }
 

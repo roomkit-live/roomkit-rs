@@ -102,13 +102,17 @@ impl<S: ConversationStore> RoomKit<S> {
         // before anything is read, as Python's model refuses it when built,
         // and one kept is written as its constructor writes it.
         event.content.check()?;
-        let span = self.inner.send_event_span(room_id, &event);
+        let span = self
+            .inner
+            .send_event_span(room_id, &event.channel_id, event.event_type);
         let entry = Entry::Direct {
             room_id: room_id.clone(),
             organization_id,
             event: Box::new(event),
         };
-        let injected = span.within(self.enter(entry, SEND_EVENT, false)).await;
+        let injected = span
+            .within(Box::pin(self.enter(entry, SEND_EVENT, false)))
+            .await;
         let result = injected.and_then(|entered| event_of(entered.result));
         match &result {
             Ok(_) => span.end(Metadata::new()),

@@ -23,11 +23,10 @@ use super::strategy::{DeliveryContext, DeliveryStrategy};
 use crate::driver;
 use crate::error::RoomKitError;
 use crate::hooks::{self, Kept};
-use crate::kit::end_observer_span;
 use crate::kit::{HookEngine, Inner, RoomKit};
 use crate::store::{ConversationStore, InMemoryStore};
 use crate::tasks::Kind;
-use crate::telemetry::SpanKind;
+use crate::telemetry::{SpanKind, end_hook_span, end_observer_span};
 
 /// What [`execute_delivery`] takes beside the kit and the item: Python's
 /// `execute_delivery(kit, item, *, strategy=None, hook_engine=None)`.
@@ -371,6 +370,10 @@ async fn run_chain<S: ConversationStore>(
         let Some((Kept::Event(handler), spec)) = inner.hook_with_spec(hook) else {
             continue;
         };
+        let room_id = &context.room.id;
+        let span = inner
+            .telemetry
+            .hook_span(SpanKind::HookSync, &spec.name, trigger, room_id);
         let ran = hooks::run(
             handler,
             current.clone(),
@@ -379,6 +382,7 @@ async fn run_chain<S: ConversationStore>(
             hooks::refused_content,
         )
         .await;
+        end_hook_span(span, &ran);
         let problem = match ran {
             HookOutcome::Returned(result) => match (result.action, result.event) {
                 (HookAction::Block, _) => {
@@ -449,7 +453,10 @@ fn start_observers<S: ConversationStore>(
         let (event, context) = (event.clone(), context.clone());
         let observing = async move {
             let room_id = event.room_id.clone();
-            let span = observer.hook_span(SpanKind::HookAsync, &spec.name, trigger, &room_id);
+            let span =
+                observer
+                    .telemetry
+                    .hook_span(SpanKind::HookAsync, &spec.name, trigger, &room_id);
             let outcome = hooks::run_kept(kept, event, context, spec.timeout).await;
             end_observer_span(span, &outcome);
             observer.report_observer(&spec, trigger, room_id, &outcome);

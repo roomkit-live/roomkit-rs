@@ -209,6 +209,21 @@ fn a_guard_dropped_ends_its_span_by_how_the_thread_goes() {
     );
 }
 
+/// A guard crosses an `.await`, as Python's `with` in a coroutine.
+#[tokio::test]
+async fn a_guard_is_held_across_an_await_in_a_task() {
+    let mock = Arc::new(MockTelemetryProvider::default());
+    let held = Arc::clone(&mock);
+    tokio::spawn(async move {
+        let span = held.span(SpanKind::Custom, "x", StartSpanOptions::default());
+        tokio::task::yield_now().await;
+        span.end();
+    })
+    .await
+    .unwrap();
+    assert_eq!(mock.spans()[0].name, "x");
+}
+
 /// A provider held as an object starts a guard too.
 #[test]
 fn a_provider_held_as_an_object_starts_a_guard() {

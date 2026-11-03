@@ -12,8 +12,12 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use opentelemetry::KeyValue;
-use opentelemetry::trace::{SpanId, Status, TraceContextExt};
+use opentelemetry::trace::{Status, TraceContextExt};
 use opentelemetry_sdk::error::OTelSdkResult;
+use opentelemetry_sdk::metrics::data::{
+    AggregatedMetrics, MetricData, ResourceMetrics, ScopeMetrics,
+};
+use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
 use opentelemetry_sdk::trace::{
     BatchConfigBuilder, BatchSpanProcessor, InMemorySpanExporter, SdkTracerProvider, SpanData,
     SpanExporter,
@@ -141,13 +145,70 @@ fn ending_a_span_it_does_not_know_does_nothing() {
 // Python: tests/test_opentelemetry.py::TestOpenTelemetryProvider::test_record_metric_counter, test_record_metric_histogram
 #[test]
 fn a_metric_goes_to_the_meter_as_python_chooses_its_instrument() {
-    let (provider, _) = provider();
+    let metrics = InMemoryMetricExporter::default();
+    let meter_provider = SdkMeterProvider::builder()
+        .with_periodic_exporter(metrics.clone())
+        .build();
+    let provider = OpenTelemetryProvider::new(OpenTelemetryProviderOptions {
+        meter_provider: Some(meter_provider.clone()),
+        ..OpenTelemetryProviderOptions::default()
+    });
     provider.record_metric("messages.count", 1.0, RecordMetricOptions::default());
     let options = RecordMetricOptions {
         unit: "ms".to_owned(),
         ..RecordMetricOptions::default()
     };
     provider.record_metric("stt.duration", 42.5, options);
+    meter_provider.force_flush().unwrap();
+    let exported = metrics.get_finished_metrics().unwrap();
+    let mut kinds = BTreeMap::new();
+    for metric in exported
+        .iter()
+        .flat_map(ResourceMetrics::scope_metrics)
+        .flat_map(ScopeMetrics::metrics)
+    {
+        let kind = match metric.data() {
+            AggregatedMetrics::F64(MetricData::Histogram(_)) => "histogram",
+            AggregatedMetrics::F64(MetricData::Sum(_)) => "counter",
+            AggregatedMetrics::F64(_) | AggregatedMetrics::I64(_) | AggregatedMetrics::U64(_) => {
+                "other"
+            }
+        };
+        kinds.insert(metric.name().to_owned(), kind);
+    }
+    assert_eq!(kinds["messages.count"], "counter");
+    assert_eq!(kinds["stt.duration"], "histogram");
+}
+
+/// A key written twice exports once, as Python's dict and `set_attribute`
+/// overwrite it; the SDK alone would export it twice.
+#[test]
+fn a_key_written_twice_exports_once() {
+    let (provider, exporter) = provider();
+    let options = StartSpanOptions {
+        room_id: Some("r1".to_owned()),
+        channel_id: Some("sms".to_owned()),
+        attributes: [("channel_id".to_owned(), json!("sms"))]
+            .into_iter()
+            .collect(),
+        ..StartSpanOptions::default()
+    };
+    let id = provider.start_span(SpanKind::Custom, "twice", options);
+    provider.set_attribute(&id, "room_id", json!("r1"));
+    let ended = EndSpanOptions {
+        attributes: [("room_id".to_owned(), json!("r1"))].into_iter().collect(),
+        ..EndSpanOptions::default()
+    };
+    provider.end_span(&id, ended);
+    let span = finished(&exporter, "roomkit.twice");
+    for key in ["roomkit.room_id", "roomkit.channel_id"] {
+        let written = span
+            .attributes
+            .iter()
+            .filter(|attribute| attribute.key.as_str() == key)
+            .count();
+        assert_eq!(written, 1, "{key} in {:?}", span.attributes);
+    }
 }
 
 // Python: tests/test_opentelemetry.py::TestOpenTelemetryProvider::test_close_ends_active_spans
@@ -302,7 +363,6 @@ fn a_carrier_that_names_no_span_gives_no_context() {
     assert!(provider.inject_context("0123456789abcdef").is_empty());
     let carrier = BTreeMap::from([("span_id".to_owned(), "0123456789abcdef".to_owned())]);
     assert!(provider.extract_context(&carrier).is_none());
-    assert_ne!(SpanId::INVALID.to_string(), "0123456789abcdef");
 }
 
 /// A collector that accepts a batch once released, at most `delay` after

@@ -565,13 +565,8 @@ impl<S: ConversationStore> Inner<S> {
                 let Some(handler) = P::handler(&kept) else {
                     continue;
                 };
-                let body = hooks::run(
-                    handler,
-                    payload.clone(),
-                    context.clone(),
-                    spec.timeout,
-                    |_| None,
-                );
+                let body =
+                    hooks::observe_traced(spec.clone(), handler, payload.clone(), context.clone());
                 let within = ExecutionContext::current().scope(body);
                 running.spawn(async move { (spec, within.await) });
             }

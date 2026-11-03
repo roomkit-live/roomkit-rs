@@ -19,6 +19,7 @@ use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookFilter, HookSpec, HookTrigger};
 
 use crate::orchestration::StatusEntry;
+use crate::telemetry::{SpanKind, current_kit_telemetry, end_hook_span, end_observer_span};
 use crate::tool_calls::ToolCallEvent;
 
 /// What a hook's handler failed with. A SYNC hook that fails lets the event
@@ -575,6 +576,41 @@ impl std::fmt::Debug for Kept {
 /// The unusable result a hook that returned nothing gave, as Python
 /// reports one that returned `None`.
 const NO_RESULT: &str = "expected HookResult, got NoneType";
+
+/// A sync hook's [`run`] under its span, Python's `hook.sync.<name>`, for a
+/// hook a turn's host runs without the driver, in the kit's call.
+pub(crate) async fn run_traced<P: Send + 'static>(
+    spec: &HookSpec,
+    handler: Arc<dyn HookHandler<P>>,
+    payload: P,
+    context: RoomContext,
+    check: impl FnOnce(&mut HookResult<P>) -> Option<String>,
+) -> HookOutcome<P> {
+    let room_id = context.room.id.clone();
+    let span = current_kit_telemetry().and_then(|telemetry| {
+        telemetry.hook_span(SpanKind::HookSync, &spec.name, spec.trigger, &room_id)
+    });
+    let ran = run(handler, payload, context, spec.timeout, check).await;
+    end_hook_span(span, &ran);
+    ran
+}
+
+/// An observer's [`run`] under its span, Python's `hook.async.<name>`, for a
+/// hook a turn's host or a task runs without the driver, in the kit's call.
+pub(crate) async fn observe_traced<P: Send + 'static>(
+    spec: HookSpec,
+    handler: Arc<dyn HookHandler<P>>,
+    payload: P,
+    context: RoomContext,
+) -> HookOutcome<P> {
+    let room_id = context.room.id.clone();
+    let span = current_kit_telemetry().and_then(|telemetry| {
+        telemetry.hook_span(SpanKind::HookAsync, &spec.name, spec.trigger, &room_id)
+    });
+    let ran = run(handler, payload, context, spec.timeout, |_| None).await;
+    end_observer_span(span, &ran);
+    ran
+}
 
 /// Runs `handler` within `timeout` and reads what it produced as the core
 /// takes it.

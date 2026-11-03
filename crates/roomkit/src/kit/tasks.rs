@@ -578,6 +578,7 @@ impl<S: ConversationStore> RoomKit<S> {
         result: DelegatedTaskResult,
         options: &DelegateOptions,
     ) {
+        task.end_span(&result);
         self.inner
             .room_tasks
             .end(&task.id, &status_name(result.status));
@@ -709,6 +710,7 @@ impl<S: ConversationStore> RoomKit<S> {
         on_complete: Option<&OnCompleteCallback>,
     ) {
         let result = ended.into_result(task);
+        task.end_span(&result);
         self.record_task_end(&result).await;
         if let Some(on_complete) = on_complete {
             on_complete(result.clone()).await;

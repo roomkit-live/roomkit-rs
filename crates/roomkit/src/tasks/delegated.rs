@@ -273,7 +273,7 @@ impl DelegatedTask {
     /// Ends the delegation's span with `result`, Python's `_DelegationSpan`:
     /// `ok` completed, `error` failed, `cancelled` cancelled; its status and
     /// how long it ran on its end.
-    fn end_span(&self, result: &DelegatedTaskResult) {
+    pub(crate) fn end_span(&self, result: &DelegatedTaskResult) {
         let Some(span) = lock_span(&self.state.span).take() else {
             return;
         };

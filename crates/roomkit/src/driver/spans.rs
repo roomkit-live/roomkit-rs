@@ -135,6 +135,16 @@ impl RunSpans {
         );
     }
 
+    /// The run is over: ends the spans of the sets that hold no place in a
+    /// lane, a delegated turn's, or whose place could not be taken, which no
+    /// `LeaveLane` ends. A run dropped before this ends them `cancelled`.
+    pub(super) fn over(&mut self) {
+        let open: Vec<EventId> = self.open.keys().cloned().collect();
+        for event_id in open {
+            self.left(&event_id);
+        }
+    }
+
     /// Counts the answer to the call of `effect`, if it is a set's.
     pub(super) fn answered(&mut self, effect: EffectId, outcome: &Outcome) {
         let Some((event_id, call)) = self.calls.remove(&effect) else {
@@ -176,10 +186,16 @@ impl RunSpans {
     }
 }
 
-/// Whether `outcome` is a provider's refusal or a channel's raise.
+/// Whether `outcome` is a provider's refusal, a channel's raise, or an output
+/// that says it failed.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "any other answer is no failure of the target"
+)]
 fn is_refused(outcome: &Outcome) -> bool {
-    matches!(
-        outcome,
-        Outcome::Channel(ChannelOutcome::ProviderDelivery(_) | ChannelOutcome::Raised(_))
-    )
+    match outcome {
+        Outcome::Channel(ChannelOutcome::ProviderDelivery(_) | ChannelOutcome::Raised(_)) => true,
+        Outcome::Channel(ChannelOutcome::Output(output)) => output.error.is_some(),
+        _ => false,
+    }
 }

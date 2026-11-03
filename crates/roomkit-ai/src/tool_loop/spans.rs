@@ -4,8 +4,8 @@
 //! another task.
 
 use std::any::type_name;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit::model::{ChannelId, Metadata, RoomId};
 use roomkit::telemetry::{
@@ -52,7 +52,11 @@ impl TurnTelemetry {
         channel_id: &ChannelId,
     ) -> Option<TurnSpan> {
         let provider = self.provider.clone()?;
-        let name = type_name::<P>().rsplit("::").next().unwrap_or_default();
+        let name = type_name::<P>()
+            .split('<')
+            .next()
+            .and_then(|path| path.rsplit("::").next())
+            .unwrap_or_default();
         let mut attributes = Metadata::new();
         attributes.insert(Attr::PROVIDER.to_owned(), Value::from(name));
         attributes.insert(Attr::LLM_STREAMING.to_owned(), Value::from(true));
@@ -69,6 +73,7 @@ impl TurnTelemetry {
             id,
             channel_id: channel_id.to_string(),
             sensitive: self.sensitive,
+            used: Mutex::default(),
             ended: AtomicBool::new(false),
         })
     }
@@ -81,12 +86,38 @@ pub(crate) struct TurnSpan {
     id: String,
     channel_id: String,
     sensitive: bool,
+    /// What its rounds used so far, which its end reports whenever it comes.
+    used: Mutex<Used>,
     ended: AtomicBool,
 }
 
+/// A turn's calls and tokens so far.
+#[derive(Default)]
+struct Used {
+    calls: u32,
+    input_tokens: u64,
+    output_tokens: u64,
+}
+
 impl TurnSpan {
+    fn used(&self) -> MutexGuard<'_, Used> {
+        self.used.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Counts the `calls` a round ran.
+    pub(super) fn calls_ran(&self, calls: u32) {
+        let mut used = self.used();
+        used.calls = used.calls.saturating_add(calls);
+    }
+
     /// Records what a generation used, Python's `roomkit.llm.<counter>`.
     pub(super) fn generation_used(&self, usage: &Metadata) {
+        {
+            let token = |counter: &str| usage.get(counter).and_then(Value::as_u64).unwrap_or(0);
+            let mut used = self.used();
+            used.input_tokens = used.input_tokens.saturating_add(token("input_tokens"));
+            used.output_tokens = used.output_tokens.saturating_add(token("output_tokens"));
+        }
         for counter in ["input_tokens", "output_tokens"] {
             let used = usage.get(counter).and_then(Value::as_f64).unwrap_or(0.0);
             let mut attributes = Metadata::new();
@@ -103,9 +134,9 @@ impl TurnSpan {
         }
     }
 
-    /// Ends it as the loop ended for `reason`, with what its rounds used:
-    /// `cancelled` and `error` as themselves, any other `ok`.
-    pub(super) fn ended(&self, reason: LoopEndReason, calls: u32, usage: &Metadata) {
+    /// Ends it as the loop ended for `reason`: `cancelled` and `error` as
+    /// themselves, any other `ok`.
+    pub(super) fn ended(&self, reason: LoopEndReason) {
         let status = if reason == LoopEndReason::Cancelled {
             "cancelled"
         } else if reason == LoopEndReason::Error {
@@ -113,32 +144,37 @@ impl TurnSpan {
         } else {
             "ok"
         };
-        self.finish(status, None, calls, usage);
+        self.finish(status, None);
     }
 
     /// Ends it `error`, the provider's failure saying `text`: the class's
     /// name alone, unless the kit records what can hold personal data.
-    pub(super) fn failed(&self, text: String, calls: u32, usage: &Metadata) {
-        let message = if self.sensitive {
+    pub(super) fn failed(&self, text: String) {
+        let message = if self.sensitive && !text.is_empty() {
             text
         } else {
             "ProviderError".to_owned()
         };
-        self.finish("error", Some(message), calls, usage);
+        self.finish("error", Some(message));
     }
 
-    fn finish(&self, status: &str, error: Option<String>, calls: u32, usage: &Metadata) {
+    /// Ends it, what its rounds used on it, whether or not the turn reached
+    /// its end, as Python's `_turn_span_attributes`.
+    fn finish(&self, status: &str, error: Option<String>) {
         if self.ended.swap(true, Ordering::AcqRel) {
             return;
         }
         let mut attributes = Metadata::new();
-        attributes.insert(Attr::LLM_TOOL_COUNT.to_owned(), json!(calls));
-        let token = |counter: &str| usage.get(counter).and_then(Value::as_u64).unwrap_or(0);
-        let (input, output) = (token("input_tokens"), token("output_tokens"));
-        if input > 0 || output > 0 {
-            attributes.insert(Attr::LLM_INPUT_TOKENS.to_owned(), json!(input));
-            attributes.insert(Attr::LLM_OUTPUT_TOKENS.to_owned(), json!(output));
+        let used = self.used();
+        attributes.insert(Attr::LLM_TOOL_COUNT.to_owned(), json!(used.calls));
+        if used.input_tokens > 0 || used.output_tokens > 0 {
+            attributes.insert(Attr::LLM_INPUT_TOKENS.to_owned(), json!(used.input_tokens));
+            attributes.insert(
+                Attr::LLM_OUTPUT_TOKENS.to_owned(),
+                json!(used.output_tokens),
+            );
         }
+        drop(used);
         let options = EndSpanOptions {
             status: status.to_owned(),
             error_message: error,
@@ -171,7 +207,7 @@ impl TurnSpan {
 
 impl Drop for TurnSpan {
     fn drop(&mut self) {
-        self.finish("cancelled", None, 0, &Metadata::new());
+        self.finish("cancelled", None);
     }
 }
 
@@ -191,7 +227,7 @@ impl CallSpan {
         let options = match error {
             Some(text) => EndSpanOptions {
                 status: "error".to_owned(),
-                error_message: Some(if self.sensitive {
+                error_message: Some(if self.sensitive && !text.is_empty() {
                     text
                 } else {
                     "ToolError".to_owned()
@@ -223,7 +259,7 @@ mod tests {
     use roomkit::model::{ChannelId, Metadata, RoomId};
     use roomkit::telemetry::{MockTelemetryProvider, SpanKind, TelemetryProvider};
 
-    use super::{LoopEndReason, TurnSpan, TurnTelemetry};
+    use super::{Attr, LoopEndReason, TurnSpan, TurnTelemetry, json};
 
     fn started(mock: &Arc<MockTelemetryProvider>) -> TurnSpan {
         let cloned = Arc::clone(mock);
@@ -246,10 +282,9 @@ mod tests {
     #[test]
     fn a_turn_s_span_ends_as_its_loop_ended() {
         let mock = Arc::new(MockTelemetryProvider::default());
-        let none = Metadata::new();
-        started(&mock).ended(LoopEndReason::Completed, 0, &none);
-        started(&mock).ended(LoopEndReason::Cancelled, 0, &none);
-        started(&mock).ended(LoopEndReason::Error, 0, &none);
+        started(&mock).ended(LoopEndReason::Completed);
+        started(&mock).ended(LoopEndReason::Cancelled);
+        started(&mock).ended(LoopEndReason::Error);
         // A reader that stopped reading drops it.
         drop(started(&mock));
         let statuses: Vec<String> = mock
@@ -261,7 +296,24 @@ mod tests {
     }
 
     // Python: tests/test_turn_that_did_not_complete.py::test_a_barge_in_keeps_what_the_rounds_used_on_the_span
-    // (a call cut when the turn is cut ends cancelled)
+    #[test]
+    fn a_turn_cut_short_keeps_what_its_rounds_used_on_its_span() {
+        let mock = Arc::new(MockTelemetryProvider::default());
+        let turn = started(&mock);
+        let mut usage = Metadata::new();
+        usage.insert("input_tokens".to_owned(), json!(10));
+        usage.insert("output_tokens".to_owned(), json!(5));
+        turn.generation_used(&usage);
+        turn.calls_ran(1);
+        drop(turn);
+        let [span] = mock.get_spans(SpanKind::LlmGenerate).try_into().unwrap();
+        assert_eq!(span.status, "cancelled");
+        assert_eq!(span.attributes[Attr::LLM_INPUT_TOKENS], json!(10));
+        assert_eq!(span.attributes[Attr::LLM_OUTPUT_TOKENS], json!(5));
+        assert_eq!(span.attributes[Attr::LLM_TOOL_COUNT], json!(1));
+    }
+
+    // A call cut with its turn ends cancelled.
     #[test]
     fn a_call_dropped_ends_cancelled() {
         let mock = Arc::new(MockTelemetryProvider::default());
@@ -269,6 +321,6 @@ mod tests {
         drop(turn.start_call("lookup", "c1"));
         let [span] = mock.get_spans(SpanKind::LlmToolCall).try_into().unwrap();
         assert_eq!(span.status, "cancelled");
-        turn.ended(LoopEndReason::Completed, 1, &Metadata::new());
+        turn.ended(LoopEndReason::Completed);
     }
 }

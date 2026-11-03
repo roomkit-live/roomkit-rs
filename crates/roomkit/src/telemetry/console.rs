@@ -124,7 +124,11 @@ impl TelemetryProvider for ConsoleTelemetryProvider {
         let attributes = listed(&span.attributes);
         let name = span.name.escape_debug();
         let line = if options.status == "error" {
-            let error = options.error_message.as_deref().unwrap_or("unknown");
+            let error = options
+                .error_message
+                .as_deref()
+                .filter(|error| !error.is_empty())
+                .unwrap_or("unknown");
             format!(
                 "[SPAN ERROR] {} {name}{duration}{attributes} error={error:?}",
                 span.kind

@@ -215,7 +215,7 @@ impl fmt::Debug for dyn TelemetryProvider {
 #[must_use = "a guard dropped at once ends its span at once"]
 pub struct SpanGuard<'a> {
     span_id: String,
-    end: Option<Box<dyn FnOnce(EndSpanOptions) + 'a>>,
+    end: Option<Box<dyn FnOnce(EndSpanOptions) + Send + 'a>>,
 }
 
 impl SpanGuard<'_> {

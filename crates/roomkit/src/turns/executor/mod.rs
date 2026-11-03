@@ -43,7 +43,6 @@ use super::wire::{ContextRest, Control, Frame, RequestRest, TurnRequest};
 use super::{CarriedRequest, MemoryTurn, Turns, lock};
 use crate::channel::DynChannel;
 use crate::steering::SteeringDirective;
-use crate::telemetry::within_current_span;
 use crate::turn::{self, TurnHost, TurnKit};
 use tokio::task::AbortHandle;
 use tokio::time::{Instant, MissedTickBehavior};
@@ -68,10 +67,7 @@ pub(super) fn take(
         turn,
         kit: Arc::clone(kit),
     };
-    // The turn runs under the span of the call that asked it, as a request's
-    // trace names it to Python's executor (RFC §10.6.9).
-    let run = within_current_span(executor.run(controls, carried));
-    kit.spawn(Box::pin(run))
+    kit.spawn(Box::pin(executor.run(controls, carried)))
 }
 
 /// What one turn's task runs with.

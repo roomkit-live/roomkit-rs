@@ -1,6 +1,6 @@
 //! A turn's spans and metrics, read from a `MockTelemetryProvider`: Python's
 //! `tests/test_telemetry.py::TestLLMTelemetry`, and the span tests of
-//! `tests/test_ai_streaming_tool_loop.py`, `test_unified_tool_call.py`.
+//! `tests/test_ai_streaming_tool_loop.py`.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
@@ -11,13 +11,17 @@ use std::task::{Context, Poll};
 
 use futures_core::Stream;
 use pretty_assertions::assert_eq;
+use roomkit::model::HookResult;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, Metadata, RoomId, TextContent};
 use roomkit::telemetry::{
     Attr, MockTelemetryProvider, Span, SpanKind, TelemetryConfig, TelemetryProvider,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    AttachChannelOptions, CreateRoomOptions, HookExecution, HookOptions, HookTrigger,
+    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions, ToolCallEvent,
+    current_turn_host,
 };
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiTool, AiToolCall,
@@ -247,7 +251,8 @@ async fn a_tool_that_fails_ends_its_span_in_error() {
     kit.close().await.unwrap();
 }
 
-// Python: tests/test_unified_tool_call.py::test_a_refused_call_does_not_trace_as_a_served_one
+// Python: channels/_ai_tools.py::_serve_gated_call: a call its gate refuses
+// never reaches `_judged_call`, which opens the span.
 #[tokio::test]
 async fn a_refused_call_opens_no_call_span() {
     let script = vec![
@@ -312,4 +317,199 @@ async fn each_generation_records_its_tokens() {
         ]
     );
     kit.close().await.unwrap();
+}
+
+/// The hooks of a tool call and of a turn open their spans, the sync ones and
+/// the observers, each under the turn's call.
+// Python: core/hooks.py runs each of them through its engine: hook.sync.<name>
+// and hook.async.<name>, whichever door fires them.
+#[tokio::test]
+async fn the_hooks_of_a_tool_call_open_their_spans() {
+    let mock = Arc::new(MockTelemetryProvider::default());
+    let kit = RoomKit::new(RoomKitOptions {
+        telemetry: Some(Arc::clone(&mock).into()),
+        ..RoomKitOptions::default()
+    });
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let lookup = AiTool {
+        parameters: json!({ "type": "object", "properties": {} }),
+        ..AiTool::new("lookup", "Look it up.").unwrap()
+    };
+    let tools = Tools::new().tool(lookup, |_call, _context| async {
+        Ok(ToolResult::Text("42".to_owned()))
+    });
+    let options = AiChannelOptions {
+        tools: tools.into(),
+        ..AiChannelOptions::default()
+    };
+    let script = vec![
+        Round::Says("Checking.", Some("lookup")),
+        Round::Says("42.", None),
+    ];
+    let agent = AiChannel::new(id("ai"), Scripted::new(script), options).unwrap();
+    kit.register_channel(agent).unwrap();
+    for (trigger, execution, name) in [
+        (HookTrigger::BeforeToolUse, HookExecution::Sync, "gate"),
+        (HookTrigger::OnToolCall, HookExecution::Sync, "judge"),
+        (HookTrigger::OnToolCall, HookExecution::Async, "watch"),
+    ] {
+        let hook_options = HookOptions {
+            name: name.to_owned(),
+            execution,
+            ..HookOptions::default()
+        };
+        kit.hook(
+            trigger,
+            |_: ToolCallEvent, _| ready(HookResult::allow(AllowOptions::default())),
+            hook_options,
+        )
+        .unwrap();
+    }
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    for channel in ["sms", "ai"] {
+        kit.attach_channel(&room(), &id(channel), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let message = InboundMessage::new(id("sms"), "+15550000001", TextContent::new("Hello"));
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..ProcessInboundOptions::default()
+    };
+    kit.process_inbound(message, options).await.unwrap();
+    kit.close().await.unwrap();
+    let spans = mock.completed_spans();
+    for name in ["hook.sync.gate", "hook.sync.judge", "hook.async.watch"] {
+        let found: Vec<&Span> = spans.iter().filter(|span| span.name == name).collect();
+        assert_eq!(found.len(), 1, "{name} in {spans:?}");
+        assert_eq!(found[0].status, "ok", "{:?}", found[0]);
+        assert!(found[0].parent_id.is_some(), "{:?}", found[0]);
+    }
+}
+
+/// A turn in a room whose channel serializes its turns runs under the
+/// broadcast that asked it, whenever it starts.
+// Python: core/_room_turns.py: `restored_span(span_id, ...)` around the turn.
+#[tokio::test]
+async fn a_serialized_turn_s_generation_is_a_child_of_its_broadcast() {
+    let mock = Arc::new(MockTelemetryProvider::default());
+    let kit = RoomKit::new(RoomKitOptions {
+        telemetry: Some(Arc::clone(&mock).into()),
+        ..RoomKitOptions::default()
+    });
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let options = AiChannelOptions {
+        serialize_room_turns: true,
+        ..AiChannelOptions::default()
+    };
+    let script = vec![Round::Says("Hi.", None)];
+    let agent = AiChannel::new(id("ai"), Scripted::new(script), options).unwrap();
+    kit.register_channel(agent).unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    for channel in ["sms", "ai"] {
+        kit.attach_channel(&room(), &id(channel), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let message = InboundMessage::new(id("sms"), "+15550000001", TextContent::new("Hello"));
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..ProcessInboundOptions::default()
+    };
+    kit.process_inbound(message, options).await.unwrap();
+    kit.close().await.unwrap();
+    let generate = one(mock.get_spans(SpanKind::LlmGenerate));
+    let broadcasts = mock.get_spans(SpanKind::Broadcast);
+    assert!(
+        broadcasts
+            .iter()
+            .any(|broadcast| Some(&broadcast.id) == generate.parent_id.as_ref()),
+        "{generate:?} under {broadcasts:?}"
+    );
+}
+
+/// A turn's host calling the kit stays in the turn's trace.
+// Python: tests/test_opentelemetry.py::TestTraceContinuity's shape: one root.
+#[tokio::test]
+async fn a_turn_host_s_send_event_stays_in_the_trace() {
+    let mock = Arc::new(MockTelemetryProvider::default());
+    let kit = RoomKit::new(RoomKitOptions {
+        telemetry: Some(Arc::clone(&mock).into()),
+        ..RoomKitOptions::default()
+    });
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let lookup = AiTool {
+        parameters: json!({ "type": "object", "properties": {} }),
+        ..AiTool::new("lookup", "Look it up.").unwrap()
+    };
+    let tools = Tools::new().tool(lookup, |_call, context| async move {
+        let turn = current_turn_host().unwrap();
+        turn.send_event(
+            &context.room_id,
+            &id("ai"),
+            TextContent::new("(looking it up)"),
+            SendEventOptions::default(),
+        )
+        .await
+        .unwrap();
+        Ok(ToolResult::Text("42".to_owned()))
+    });
+    let options = AiChannelOptions {
+        tools: tools.into(),
+        ..AiChannelOptions::default()
+    };
+    let script = vec![
+        Round::Says("Checking.", Some("lookup")),
+        Round::Says("42.", None),
+    ];
+    let agent = AiChannel::new(id("ai"), Scripted::new(script), options).unwrap();
+    kit.register_channel(agent).unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    for channel in ["sms", "ai"] {
+        kit.attach_channel(&room(), &id(channel), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let message = InboundMessage::new(id("sms"), "+15550000001", TextContent::new("Hello"));
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..ProcessInboundOptions::default()
+    };
+    kit.process_inbound(message, options).await.unwrap();
+    kit.close().await.unwrap();
+    let spans = mock.completed_spans();
+    let roots: Vec<&str> = spans
+        .iter()
+        .filter(|span| span.parent_id.is_none())
+        .map(|span| span.name.as_str())
+        .collect();
+    assert_eq!(roots, ["framework.inbound"], "{spans:?}");
+    assert!(spans.iter().any(|span| span.name == "framework.send_event"));
 }

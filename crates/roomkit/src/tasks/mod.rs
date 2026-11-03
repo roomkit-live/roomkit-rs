@@ -61,6 +61,8 @@ use tokio::sync::{Notify, watch};
 use tokio::task::{self, AbortHandle, JoinHandle};
 use tokio::time::Instant;
 
+use crate::telemetry::within_current_span;
+
 pub(crate) use self::marks::{Marks, Unit};
 
 /// How long the kit's close lets the work it cut unwind, a run reporting
@@ -287,6 +289,8 @@ impl Tasks {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
+        // Under the current span, as a task Python creates copies its context.
+        let future = within_current_span(future);
         let key = {
             let mut state = self.state();
             let phase = *self.phase.borrow();

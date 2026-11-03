@@ -1,13 +1,17 @@
 //! A span the kit opened: Python's pair of `start_span` and `end_span`
 //! around a piece of its work, with the span made current for that work.
 
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::Arc;
 
-use roomkit_core::model::Metadata;
+use roomkit_core::model::{Metadata, RoomId};
+use roomkit_core::rules::hook_chain::HookOutcome;
+use roomkit_core::rules::hook_registry::HookTrigger;
+use serde_json::Value;
 
 use super::context::{get_current_span, within_optional_span};
-use super::{EndSpanOptions, SpanKind, StartSpanOptions, TelemetryProvider};
+use super::{Attr, EndSpanOptions, SpanKind, StartSpanOptions, TelemetryProvider};
 
 /// The kit's telemetry: its provider, and whether its spans carry what can
 /// hold personal data (`TelemetryConfig::record_sensitive_data`).
@@ -15,6 +19,83 @@ use super::{EndSpanOptions, SpanKind, StartSpanOptions, TelemetryProvider};
 pub(crate) struct KitTelemetry {
     pub(crate) provider: Arc<dyn TelemetryProvider>,
     pub(crate) sensitive: bool,
+    /// The hook triggers whose hooks open no span.
+    pub(crate) suppressed: Arc<BTreeSet<String>>,
+}
+
+impl KitTelemetry {
+    /// The span of the hook `name` on `trigger` in `room_id`, Python's
+    /// `hook.sync.<name>` and `hook.async.<name>`; `None` for a trigger the
+    /// telemetry's config suppresses.
+    pub(crate) fn hook_span(
+        &self,
+        kind: SpanKind,
+        name: &str,
+        trigger: HookTrigger,
+        room_id: &RoomId,
+    ) -> Option<OpenSpan> {
+        let trigger = serde_json::to_value(trigger)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        if self.suppressed.contains(&trigger) {
+            return None;
+        }
+        let name = if name.is_empty() { "unnamed" } else { name };
+        let mut attributes = Metadata::new();
+        attributes.insert(Attr::HOOK_NAME.to_owned(), Value::from(name));
+        attributes.insert(Attr::HOOK_TRIGGER.to_owned(), Value::from(trigger));
+        let options = StartSpanOptions {
+            room_id: Some(room_id.to_string()),
+            attributes,
+            ..StartSpanOptions::default()
+        };
+        Some(OpenSpan::start(
+            self,
+            kind,
+            &format!("{kind}.{name}"),
+            options,
+        ))
+    }
+}
+
+/// Ends a sync hook's span as its `outcome` reads: `ok` with the action it
+/// returned; `error` with what it raised, `timeout`, or
+/// `invalid return type`.
+pub(crate) fn end_hook_span<P>(span: Option<OpenSpan>, outcome: &HookOutcome<P>) {
+    let Some(span) = span else {
+        return;
+    };
+    match outcome {
+        HookOutcome::Returned(result) => {
+            let mut attributes = Metadata::new();
+            let action = serde_json::to_value(result.action).unwrap_or_default();
+            attributes.insert(Attr::HOOK_RESULT.to_owned(), action);
+            span.end(attributes);
+        }
+        HookOutcome::Raised(error) => {
+            span.fail_error(&error.error_type, &error.message, Metadata::new());
+        }
+        HookOutcome::TimedOut => span.fail("timeout", Metadata::new()),
+        HookOutcome::Invalid { .. } => span.fail("invalid return type", Metadata::new()),
+    }
+}
+
+/// Ends an async hook's span as its `outcome` reads, as Python's, which never
+/// reads what an async hook returns: `ok`; `error` with `timeout`, `capped`
+/// for a loop its cascade's cap stopped, or `failed`, never what it raised.
+pub(crate) fn end_observer_span<P>(span: Option<OpenSpan>, outcome: &HookOutcome<P>) {
+    let Some(span) = span else {
+        return;
+    };
+    match outcome {
+        HookOutcome::Returned(_) | HookOutcome::Invalid { .. } => span.end(Metadata::new()),
+        HookOutcome::TimedOut => span.fail("timeout", Metadata::new()),
+        HookOutcome::Raised(error) if error.error_type == "ReentryLoopCapError" => {
+            span.fail("capped", Metadata::new());
+        }
+        HookOutcome::Raised(_) => span.fail("failed", Metadata::new()),
+    }
 }
 
 /// A span the kit started, a child of the current span unless it names
@@ -81,8 +162,9 @@ impl OpenSpan {
         text: impl Into<String>,
         attributes: Metadata,
     ) {
-        let message = if self.telemetry.sensitive {
-            text.into()
+        let text = text.into();
+        let message = if self.telemetry.sensitive && !text.is_empty() {
+            text
         } else {
             class.into()
         };
