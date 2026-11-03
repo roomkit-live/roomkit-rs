@@ -248,10 +248,12 @@ async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
                 "{path}: {waiters} calls never waited for {room_id}'s lock"
             ));
         }
-    } else if step.get("lock_releases").is_some() {
-        // The kit takes no lock manager yet (RMK-1153): a release cannot
-        // be made to fail.
-        run.problem(format!("{path}: the kit has no lock manager to fail"));
+    } else if let Some(releases) = step["lock_releases"].as_str() {
+        if !crate::locks::set_lock_releases(run.kit(), releases) {
+            run.problem(format!(
+                "{path}: a lock_releases step needs setup.kit.lock_manager"
+            ));
+        }
     } else if let Some(gate) = step["open"].as_str() {
         run.gates.open(gate);
     } else if step.get("idle").is_some() {
