@@ -845,7 +845,7 @@ reason = "Python's `ToolResult` alias (`roomkit.channels.ai`, not exported) read
 
 [[exception]]
 rust = "roomkit_ai::DynAiProvider"
-approved = "2026-11-02"
+approved = "2026-11-03"
 reason = "Python's `AIProvider` held as an object (AIChannel(fallback_provider=...)): `AiProvider`'s async methods make it no `dyn` trait, so every provider is also a `DynAiProvider` (HITL be4dae08, RMK-1267)"
 
 [[exception]]
