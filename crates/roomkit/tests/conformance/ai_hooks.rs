@@ -51,8 +51,8 @@ impl Scripted for AiGenerationEvent {
         })
     }
 
-    /// The replacement event: its context's `system_prompt`, `messages`
-    /// and `reasoning_effort` the patch's, its `tools` those of the context the patch names, and
+    /// The replacement event: its context's `system_prompt`, `messages`,
+    /// `reasoning_effort`, `thinking_budget` and `enable_thinking` the patch's, its `tools` those of the context the patch names, and
     /// each tool `define` gives in place of the tool of its name, or after
     /// them.
     fn patched(mut self, patch: &Value) -> Result<Self, String> {

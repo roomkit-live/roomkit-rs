@@ -639,4 +639,25 @@ fn a_registry_reserves_its_names_against_every_tool() {
             name: "read_skill_reference".to_owned()
         }
     );
+    // The host's tools are refused before a person's are read.
+    let person = HumanInputToolHandler::new(
+        ["x"],
+        HumanInputToolHandlerOptions {
+            tool_definitions: vec![AiTool::new("x", "Mine").unwrap()],
+            ..HumanInputToolHandlerOptions::default()
+        },
+    )
+    .unwrap();
+    let before = refused(AiChannelOptions {
+        tools: vec![host("activate_skill"), host("x")],
+        human_input_handler: Some(person),
+        skills: Some(SkillRegistry::new()),
+        ..AiChannelOptions::default()
+    });
+    assert_eq!(
+        before,
+        AiError::DuplicateTool {
+            name: "activate_skill".to_owned()
+        }
+    );
 }

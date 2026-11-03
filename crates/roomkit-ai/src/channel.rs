@@ -1142,11 +1142,14 @@ fn tool_surface(
     if let Some(served) = served_by(serving, tools)? {
         toolbox.add_handler(served.0, served.1)?;
     }
+    // A registry given, an empty one too, reserves the skill tools' names
+    // against the host's tools, then a person's, as Python's constructor does.
+    if skills.is_some() {
+        reserve_skill_names(&toolbox)?;
+    }
     let human_input = human_input_handler
         .map(|human| serve_human_input(&mut toolbox, human))
         .transpose()?;
-    // A registry given, an empty one too, reserves the skill tools' names
-    // against the host's tools and a person's, as Python's constructor does.
     if skills.is_some() {
         reserve_skill_names(&toolbox)?;
     }

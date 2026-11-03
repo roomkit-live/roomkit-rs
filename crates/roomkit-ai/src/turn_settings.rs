@@ -457,17 +457,18 @@ fn lax_bool(value: &Value) -> Result<bool, Refusal> {
     match value {
         Value::Bool(flag) => Ok(*flag),
         Value::Number(number) => {
-            let float = number.as_f64().unwrap_or(f64::NAN);
-            let whole = match (number.as_i64(), number.as_u64()) {
-                (Some(whole), _) => Ok(i128::from(whole)),
-                (None, Some(whole)) => Ok(i128::from(whole)),
-                (None, None) => float_int(float),
+            // An integer past i64's bound is no bool at all, as pydantic reads
+            // one.
+            let whole = match number.as_i64() {
+                Some(whole) => Some(i128::from(whole)),
+                None if number.is_f64() => float_int(number.as_f64().unwrap_or(f64::NAN)).ok(),
+                None => None,
             };
             match whole {
-                Ok(0) => Ok(false),
-                Ok(1) => Ok(true),
-                Ok(_) => Err(unread()),
-                Err(_) => Err(Refusal::new(
+                Some(0) => Ok(false),
+                Some(1) => Ok(true),
+                Some(_) => Err(unread()),
+                None => Err(Refusal::new(
                     "bool_type",
                     "Input should be a valid boolean",
                     value,
@@ -825,6 +826,8 @@ mod tests {
             (json!(1e-20), "bool_type"),
             (json!(0.999_999_999_999_999_9), "bool_type"),
             (json!(1e300), "bool_type"),
+            (json!(i64::MAX), "bool_parsing"),
+            (json!(u64::MAX), "bool_type"),
             (json!([]), "bool_type"),
         ] {
             assert_eq!(lax_bool(&value).unwrap_err().kind, kind, "{value}");
