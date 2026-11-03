@@ -93,11 +93,22 @@ impl FirstPass {
     }
 }
 
+/// The channel's own turn on `event`, standing in for `asked`: its
+/// history the room's as it was when `asked` came.
+#[derive(Debug)]
+pub(crate) struct Answering {
+    pub(crate) event: RoomEvent,
+    pub(crate) binding: ChannelBinding,
+    pub(crate) context: RoomContext,
+    pub(crate) asked: RoomEvent,
+}
+
 /// What follows a first pass whose turn did not fail.
 #[derive(Debug)]
 pub(crate) enum Next {
-    /// The channel's own turn on this event: its answer is the room's.
-    Own(Box<(RoomEvent, ChannelBinding, RoomContext)>),
+    /// The channel's own turn on an event standing in for the one asked:
+    /// its answer is the room's.
+    Own(Box<Answering>),
     /// The first pass's own output answers, carrying its record.
     FirstStands,
     /// The channel's fallback text answers, carrying this record (Python's

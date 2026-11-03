@@ -27,7 +27,7 @@ use crate::error::RoomKitError;
 use crate::kit::RoomKit;
 use crate::orchestration::worker_run::task_input;
 use crate::store::ConversationStore;
-use crate::turn_runners::{FirstPass, Next, Passes, Taken, Then, TurnRunner};
+use crate::turn_runners::{Answering, FirstPass, Next, Passes, Taken, Then, TurnRunner};
 
 /// The binding metadata key of the instruction the first pass carries,
 /// which roomkit-ai's channel writes after the turn's prompt: Python's
@@ -116,7 +116,12 @@ impl<S: ConversationStore> Asked<S> {
         let results =
             run_workers(&self.kit, &self.room_id, &self.team, self.strategy, task).await?;
         let stand_in = results_event(&self.event, present(&results));
-        Ok(Next::Own(Box::new((stand_in, self.binding, self.context))))
+        Ok(Next::Own(Box::new(Answering {
+            event: stand_in,
+            binding: self.binding,
+            context: self.context,
+            asked: self.event,
+        })))
     }
 }
 
@@ -126,7 +131,11 @@ impl<S: ConversationStore> Asked<S> {
 /// (Python's `_formulate_task`, `_two_pass_delegate`).
 fn two_passes<S: ConversationStore>(asked: Asked<S>, instruction: Option<&str>) -> Taken {
     let mut first = asked.binding.clone();
-    let instruction = instruction.unwrap_or(PASS1_INSTRUCTION);
+    // Python's `instruction or _build_pass1_instruction()`: an empty one
+    // is none.
+    let instruction = instruction
+        .filter(|instruction| !instruction.is_empty())
+        .unwrap_or(PASS1_INSTRUCTION);
     first
         .metadata
         .insert(TURN_INSTRUCTION.to_owned(), json!(instruction));

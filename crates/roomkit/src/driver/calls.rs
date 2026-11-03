@@ -40,7 +40,7 @@ use crate::store::{
 use crate::stream::{self, KeptStream, Stops};
 use crate::tasks::{Kind, Marks, TaskCut};
 use crate::turn::TurnKit;
-use crate::turn_runners::{FirstPass, Next, Passes, Taken, TurnRunner};
+use crate::turn_runners::{Answering, FirstPass, Next, Passes, Taken, TurnRunner};
 use crate::turns::{self, Answer};
 use crate::unwind::{self, unwinding};
 
@@ -537,6 +537,41 @@ async fn take_turn<S: ConversationStore>(
 ) -> Outcome {
     let context = crate::history::turn_context(&*inner.store, &binding, &event, context, window);
     let context = context.await;
+    run_turn(inner, shared, effect, binding, event, context).await
+}
+
+/// The channel's own turn on an event standing in for the one asked, for
+/// the call `effect`: its history the room's as it was when that event
+/// came (Python's turn handed the context loaded for it), its own tool
+/// rows the latest (RFC §19.7.3).
+async fn answer_in_place<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    shared: &RunShared,
+    effect: EffectId,
+    answering: Answering,
+    window: usize,
+) -> Outcome {
+    let Answering {
+        event,
+        binding,
+        context,
+        asked,
+    } = answering;
+    let context = crate::history::turn_context(&*inner.store, &binding, &asked, context, window);
+    let context = context.await;
+    run_turn(inner, shared, effect, binding, event, context).await
+}
+
+/// The turn of `binding`'s channel on `event` in `context`, its history
+/// read, for the call `effect`.
+async fn run_turn<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    shared: &RunShared,
+    effect: EffectId,
+    binding: ChannelBinding,
+    event: RoomEvent,
+    context: RoomContext,
+) -> Outcome {
     let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
     let cut = |turn| shared.turn_submitted(effect, turn);
     let answered = inner.turns.run(&kit, &binding, event, context, cut).await;
@@ -578,9 +613,8 @@ async fn strategy_turn<S: ConversationStore>(
         }
         Taken::Passes(passes) => first_pass(inner, shared, effect, passes, window).await,
         Taken::Later(work) => match work.await {
-            Ok(Next::Own(own)) => {
-                let (event, binding, context) = *own;
-                take_turn(inner, shared, effect, binding, event, context, window).await
+            Ok(Next::Own(answering)) => {
+                answer_in_place(inner, shared, effect, *answering, window).await
             }
             Ok(Next::FirstStands | Next::Fallback(..)) => {
                 ChannelOutcome::Output(Box::default()).into()
@@ -630,9 +664,8 @@ async fn first_pass<S: ConversationStore>(
         return checked_output(output);
     }
     match (then.0)(FirstPass::answered(&output)).await {
-        Ok(Next::Own(own)) => {
-            let (event, binding, context) = *own;
-            take_turn(inner, shared, effect, binding, event, context, window).await
+        Ok(Next::Own(answering)) => {
+            answer_in_place(inner, shared, effect, *answering, window).await
         }
         Ok(Next::FirstStands | Next::Fallback(..)) => checked_output(output),
         Err(error) => channel_output(Err(error.into())),

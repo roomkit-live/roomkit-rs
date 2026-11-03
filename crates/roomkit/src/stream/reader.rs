@@ -379,7 +379,7 @@ struct Producer {
     /// What a read in flight when the reader stopped gave.
     in_flight: Option<Read>,
     /// For a strategy's first pass, whose text is kept out of the room: the
-    /// text it wrote since its last call (Python's `_ToolRowsOnly`).
+    /// last text segment it wrote (Python's `_ToolRowsOnly`).
     kept_out: Option<String>,
 }
 
@@ -740,15 +740,14 @@ impl Producer {
     /// delivery skips the target, which is handed it once stored, if it
     /// still reads.
     async fn commit_as(&mut self, row: RoomEvent, streamed: bool) {
-        if let Some(kept_out) = self.kept_out.as_mut() {
-            if row.r#type == EventType::Message {
-                if let EventContent::Text(text) = &row.content {
-                    text.body.clone_into(kept_out);
-                }
-                return;
+        if let Some(kept_out) = self.kept_out.as_mut()
+            && row.r#type == EventType::Message
+        {
+            // The pass hands on its last text (Python's `_last_text`).
+            if let EventContent::Text(text) = &row.content {
+                text.body.clone_into(kept_out);
             }
-            // A call's row: the text before it was no answer.
-            kept_out.clear();
+            return;
         }
         let entry = Entry::Row {
             room_id: self.room_id.clone(),

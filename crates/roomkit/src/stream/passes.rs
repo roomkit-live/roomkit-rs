@@ -12,9 +12,7 @@
 
 use std::sync::Arc;
 
-use roomkit_core::model::{
-    ChannelBinding, ErrorRecord, EventDirection, EventSource, Metadata, RoomContext, RoomEvent,
-};
+use roomkit_core::model::{ErrorRecord, EventDirection, EventSource, Metadata, RoomEvent};
 use roomkit_core::ops::{ChannelOutcome, Entry, Outcome};
 
 use super::Stops;
@@ -24,7 +22,7 @@ use crate::context;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::turn::TurnKit;
-use crate::turn_runners::{Next, Then};
+use crate::turn_runners::{Answering, Next, Then};
 use crate::turns::Answer;
 
 /// Reads `kept`, a strategy's first pass, then what `then` makes of it:
@@ -52,7 +50,8 @@ pub(super) async fn read<S: ConversationStore>(
     // Python's cancelled turn cancels its delegation; nothing more answers.
     let mut watching = stops.clone();
     let next = tokio::select! {
-        next = (then.0)(pass) => next,
+        // A stop already given wins over the work it would start.
+        biased;
         reason = watching.stopped() => {
             tracing::debug!(
                 target: "roomkit::driver",
@@ -62,6 +61,7 @@ pub(super) async fn read<S: ConversationStore>(
             );
             return ChannelOutcome::Output(Box::new(first)).into();
         }
+        next = (then.0)(pass) => next,
     };
     match next {
         Ok(Next::FirstStands) => ChannelOutcome::Output(Box::new(first)).into(),
@@ -69,7 +69,7 @@ pub(super) async fn read<S: ConversationStore>(
             commit_fallback(&read, &text, record).await;
             ChannelOutcome::Output(Box::new(first)).into()
         }
-        Ok(Next::Own(own)) => second_pass(inner, *own, stops, read).await,
+        Ok(Next::Own(answering)) => second_pass(inner, *answering, stops, read).await,
         Err(error) => {
             first.error = Some(ErrorRecord::new(error.class_name(), error.to_string()));
             ChannelOutcome::Output(Box::new(first)).into()
@@ -79,15 +79,23 @@ pub(super) async fn read<S: ConversationStore>(
 
 /// The agent's own turn on the event the strategy hands it, read as the
 /// operation's turn is: its rows the room's, answering the operation's
-/// event, through its streaming target.
+/// event, through its streaming target; its history the room's as it was
+/// when that event came, its own tool rows the latest (the first pass's
+/// among them).
 async fn second_pass<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
-    (event, binding, context): (RoomEvent, ChannelBinding, RoomContext),
+    answering: Answering,
     stops: Stops,
     read: StreamRead,
 ) -> Outcome {
+    let Answering {
+        event,
+        binding,
+        context,
+        asked,
+    } = answering;
     let window = inner.config().recent_events_limit(&context.bindings);
-    let context = crate::history::turn_context(&*inner.store, &binding, &event, context, window);
+    let context = crate::history::turn_context(&*inner.store, &binding, &asked, context, window);
     let context = context.await;
     let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
     let read = StreamRead {
@@ -121,7 +129,9 @@ async fn commit_fallback(read: &StreamRead, text: &str, record: Metadata) {
     let mut segments = Segments::new(source, read.answers.clone(), read.correlation_id.clone());
     segments.text(text);
     segments.end_turn(record);
-    if let Some(row) = segments.last_text(false) {
+    if let Some(mut row) = segments.last_text(false) {
+        // The fallback is no row of the pass's response (Python's has none).
+        row.correlation_id = None;
         commit(row).await;
     }
 }
