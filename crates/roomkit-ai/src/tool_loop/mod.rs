@@ -338,7 +338,8 @@ impl<P: AiProvider> Loop<P> {
     /// Counts what `generation` used into what the turn `spent` and
     /// against its `limits`. A usage its turn's price cannot read fails the
     /// generation, after it handed its text, as Python's
-    /// `ModelPricing.cost_for` raises in the loop.
+    /// `ModelPricing.cost_for` raises in the loop: the failure of the
+    /// provider that served it, the fallback's when it did.
     fn counted(
         &self,
         generation: Generation,
@@ -349,8 +350,13 @@ impl<P: AiProvider> Loop<P> {
         let Err(error) = limits.count(&generation.done.usage) else {
             return Ok(generation);
         };
+        let fallback = self.resilience.fallback_provider.as_ref();
+        let provider = match fallback.filter(|_| generation.by_fallback) {
+            Some(fallback) => fallback.dyn_name(),
+            None => self.provider.name(),
+        };
         let options = ProviderErrorOptions {
-            provider: self.provider.name().to_owned(),
+            provider: provider.to_owned(),
             ..ProviderErrorOptions::default()
         };
         Err(Failed {

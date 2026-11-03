@@ -447,9 +447,11 @@ impl<P: AiProvider> AiChannel<P> {
             steer_room_turns,
             human_input_handler,
         } = options;
-        refuse_zero_bounds(tool_timeout, &tool_timeouts, turn_budget_tokens)?;
+        // The budgets first, as Python's constructor stores them before
+        // its tool bounds.
         let fallback = fallback_provider.as_deref();
         check_budgets(turn_budget_tokens, turn_budget_usd, &provider, fallback)?;
+        refuse_zero_bounds(tool_timeout, &tool_timeouts)?;
         let policy = tool_policy.unwrap_or_default();
         refuse_bracketed(&policy)?;
         let instructions = instructions_of(&server_instructions)?;
@@ -984,12 +986,11 @@ fn serve_skills(
 }
 
 /// Refuses a bound of zero: a call's (`tool_timeout`), a tool's own
-/// (`tool_timeouts`, RFC §21.6), a turn's budget of tokens (RFC §6.4), as
-/// Python's constructor raises `ValueError` for each.
+/// (`tool_timeouts`, RFC §21.6), as Python's constructor raises
+/// `ValueError` for each.
 fn refuse_zero_bounds(
     tool_timeout: Option<Duration>,
     tool_timeouts: &BTreeMap<String, Option<Duration>>,
-    turn_budget_tokens: Option<u64>,
 ) -> Result<(), AiError> {
     if tool_timeout.is_some_and(|bound| bound.is_zero()) {
         return Err(AiError::ToolTimeout);
@@ -999,9 +1000,6 @@ fn refuse_zero_bounds(
         .find(|(_, bound)| bound.is_some_and(|bound| bound.is_zero()))
     {
         return Err(AiError::ToolTimeoutOf { name: name.clone() });
-    }
-    if turn_budget_tokens == Some(0) {
-        return Err(AiError::TurnBudgetTokens);
     }
     Ok(())
 }

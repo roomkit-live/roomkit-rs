@@ -31,7 +31,9 @@ pub(crate) struct TurnBudget {
 
 impl TurnBudget {
     /// The tokens one generation's `usage` bills: its billed counters
-    /// summed, one that is no count read as none.
+    /// summed, one that is no count read as none (where Python's
+    /// `int(...)` would coerce a text of digits or a float: only a
+    /// provider's own malformed usage holds one).
     pub(crate) fn tokens_of(usage: &Metadata) -> u64 {
         BILLED_USAGE_COUNTERS
             .iter()
@@ -99,18 +101,23 @@ pub(crate) fn turn_budget(
 }
 
 /// Refuses the budgets a channel is built with as Python's constructor
-/// does: a cost budget not above 0 (`NaN` too, infinity not), then one on
-/// a model with no price; a fallback priced otherwise is logged.
+/// does: a token budget of 0, then a cost budget not above 0 (`NaN` too,
+/// infinity not), then one on a model with no price; a fallback priced
+/// otherwise is logged.
 ///
 /// # Errors
 ///
-/// [`AiError::TurnBudgetUsd`] naming the budget, then [`turn_budget`]'s.
+/// [`AiError::TurnBudgetTokens`], [`AiError::TurnBudgetUsd`] naming the
+/// budget, then [`turn_budget`]'s.
 pub(crate) fn check_budgets(
     tokens: Option<u64>,
     usd: Option<f64>,
     provider: &dyn DynAiProvider,
     fallback: Option<&dyn DynAiProvider>,
 ) -> Result<(), AiError> {
+    if tokens == Some(0) {
+        return Err(AiError::TurnBudgetTokens);
+    }
     let refused = usd.filter(|budget| budget.partial_cmp(&0.0) != Some(Ordering::Greater));
     if let Some(budget) = refused {
         return Err(AiError::TurnBudgetUsd {

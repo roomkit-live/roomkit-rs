@@ -3,6 +3,7 @@
 //! implementation applies them (`tasks/probes/step5-lot5/py_loop_bounds.py`
 //! on roomkit 38ef0625).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
@@ -11,7 +12,7 @@ use roomkit::testing::TurnTap;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiError, AiMessage, AiProvider, AiResponse, Date,
-    ModelInfo, ModelPricing, ProviderError,
+    DynAiProvider, ModelInfo, ModelPricing, ProviderError,
 };
 use serde_json::{Value, json};
 
@@ -404,22 +405,113 @@ impl AiProvider for Priced {
 
 /// RFC §6.4: a generation whose usage the cost budget's price cannot read
 /// fails the turn, as Python's `ModelPricing.cost_for` raises in its loop;
-/// Rust raises it as the provider's failure, the provider named.
+/// Rust raises it as the failure of the provider that served it, the
+/// fallback's when it did (HITL 5a287312).
 #[tokio::test]
 async fn a_usage_the_price_cannot_read_fails_the_turn() {
-    let usage = json!({"input_tokens": -1}).as_object().cloned().unwrap();
-    let model = ScriptedProvider::new([ScriptedRound::answering("Done.").with_usage(usage)]);
-    let options = AiChannelOptions {
-        turn_budget_usd: Some(1.0),
-        tools: served().into(),
-        ..AiChannelOptions::default()
+    let unreadable = || {
+        let usage = json!({"input_tokens": -1}).as_object().cloned().unwrap();
+        ScriptedRound::answering("Done.").with_usage(usage)
     };
-    let agent = AiChannel::new(channel("assistant"), Priced(model), options).unwrap();
-    let room = Room::with_agent(agent).await;
-    let result = room.says("Order 1?").await;
+    let busy = ScriptedRound::answering("")
+        .refusing(503, "busy")
+        .retrying();
+    let cases = [
+        (ScriptedProvider::new([unreadable()]), None, "Priced"),
+        (
+            ScriptedProvider::new([busy]),
+            Some(ScriptedProvider::new([unreadable()])),
+            "scripted",
+        ),
+    ];
+    for (primary, fallback, named) in cases {
+        let fallback: Option<Arc<dyn DynAiProvider>> = match fallback {
+            Some(fallback) => Some(Arc::new(fallback)),
+            None => None,
+        };
+        let options = AiChannelOptions {
+            turn_budget_usd: Some(1.0),
+            fallback_provider: fallback,
+            tools: served().into(),
+            ..AiChannelOptions::default()
+        };
+        let agent = AiChannel::new(channel("assistant"), Priced(primary), options).unwrap();
+        let room = Room::with_agent(agent).await;
+        let result = room.says("Order 1?").await;
+        assert_eq!(
+            result.error.map(|error| error.message),
+            Some(format!(
+                "{named}: usage counter 'input_tokens' must be a non-negative integer"
+            ))
+        );
+        room.kit.close().await.unwrap();
+    }
+}
+
+/// The budgets the loop's end states, as the turn's wire carries them.
+fn loop_end_budgets(tap: &TurnTap) -> (Value, Value) {
+    tap.messages()
+        .into_iter()
+        .filter_map(|message| serde_json::from_str::<Value>(&message.json).ok())
+        .find_map(|message| {
+            let item = message.pointer("/message/item")?;
+            (item["kind"] == "loop_end")
+                .then(|| (item["budget_tokens"].clone(), item["budget_usd"].clone()))
+        })
+        .unwrap()
+}
+
+// Python: tests/test_channels/test_loop_end_marker_limits.py::test_every_exit_states_the_limits_the_turn_ran_under
+// (its budget_tokens and budget_usd).
+#[tokio::test]
+async fn the_loop_s_end_states_the_budgets_the_turn_ran_under() {
+    for (usd, stated) in [(None, json!(null)), (Some(0.5), json!(0.5))] {
+        let model = ScriptedProvider::new([ScriptedRound::answering("Done.")]);
+        let options = AiChannelOptions {
+            turn_budget_tokens: Some(500),
+            turn_budget_usd: usd,
+            tools: served().into(),
+            ..AiChannelOptions::default()
+        };
+        let agent = AiChannel::new(channel("assistant"), Priced(model), options).unwrap();
+        let room = Room::with_agent(agent).await;
+        let tap = TurnTap::on(&room.kit);
+        room.says("Order 1?").await;
+        assert_eq!(loop_end_budgets(&tap), (json!(500), stated));
+        room.kit.close().await.unwrap();
+    }
+}
+
+// Python: tests/test_channels/test_turn_budget.py::test_a_budget_is_a_positive_number
+// (the budgets checked before the tool bounds, as Python's constructor
+// stores them first).
+#[test]
+fn the_budgets_are_checked_before_the_tool_bounds() {
+    let built = |turn_budget_tokens, turn_budget_usd| {
+        AiChannel::new(
+            channel("assistant"),
+            ScriptedProvider::new([]),
+            AiChannelOptions {
+                tool_timeout: Some(Duration::ZERO),
+                turn_budget_tokens,
+                turn_budget_usd,
+                ..AiChannelOptions::default()
+            },
+        )
+        .err()
+    };
     assert_eq!(
-        result.error.map(|error| error.message),
-        Some("Priced: usage counter 'input_tokens' must be a non-negative integer".to_owned())
+        [
+            built(Some(0), None),
+            built(None, Some(0.0)),
+            built(None, None)
+        ],
+        [
+            Some(AiError::TurnBudgetTokens),
+            Some(AiError::TurnBudgetUsd {
+                shown: "0.0".to_owned()
+            }),
+            Some(AiError::ToolTimeout)
+        ]
     );
-    room.kit.close().await.unwrap();
 }
