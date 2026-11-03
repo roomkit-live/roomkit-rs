@@ -179,6 +179,33 @@ mod timers {
         );
     }
 
+    // Python: tests/test_resilience.py::TestRoomTimers::test_check_all_timers_goes_on_past_a_room_id_holding_nul
+    #[tokio::test]
+    async fn a_sweep_goes_on_past_a_room_id_holding_nul() {
+        let clock = Clock::new();
+        let (kit, _sms) = timed_room(&clock).await;
+        let mut stored = roomkit::model::Room::new(RoomId::new("\0__delivery__:r1").unwrap());
+        stored.timers = RoomTimers {
+            inactive_after_seconds: Some(60),
+            last_activity_at: Some(Timestamp::from_unix_millis(START_MILLIS).unwrap()),
+            ..RoomTimers::default()
+        };
+        kit.store().create_room(stored).await.unwrap();
+        clock.advance(90);
+        let (warnings, guard) = Warnings::capture();
+        let paused = kit
+            .check_all_timers(CheckAllTimersOptions::default())
+            .await
+            .unwrap();
+        drop(guard);
+        assert_eq!(statuses(&paused), vec![RoomStatus::Paused]);
+        assert_eq!(paused[0].id, room_id());
+        assert_eq!(
+            warnings.containing("checking a room's timers failed").len(),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn a_late_check_closes_the_room_at_the_instant_its_close_fell_due() {
         let clock = Clock::new();
