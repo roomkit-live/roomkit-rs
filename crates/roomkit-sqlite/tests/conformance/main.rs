@@ -71,7 +71,16 @@ use crate::support::TempFile;
 
 /// Scenario id → the rule this implementation breaks on this store: the
 /// in-memory store's (crates/roomkit/tests/conformance), none beyond.
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
+    (
+        "greeting/an-agent-greets-the-room-a-first-message-creates",
+        "an Agent's greeting and auto_greet are declared only (RMK-1264)",
+    ),
+    (
+        "greeting/send-greeting-stores-the-agent-s-greeting-and-delivers-it",
+        "RoomKit has no send_greeting yet (RMK-1264)",
+    ),
+];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.
