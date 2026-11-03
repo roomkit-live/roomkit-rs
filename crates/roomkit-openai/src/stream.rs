@@ -6,7 +6,8 @@
 //! The stream is pulled: the answer is read only as the loop reads it, and
 //! dropping the stream closes the connection. An endpoint that answers a
 //! whole completion (`application/json`) is read whole, as a completion
-//! not streamed.
+//! not streamed; only a completion asked whole reads an error object in
+//! its place as the status it names.
 
 use std::collections::VecDeque;
 use std::future::Future;
@@ -165,9 +166,10 @@ impl<'a> Reading<'a> {
         }
         let body = read_body(response).await?;
         let whole = match self.provider.api() {
-            // A completion asked whole may be an error object in its place;
-            // a stream answered with JSON is read as before, its error
-            // object no completion (RMK-1087's review).
+            // A completion asked whole may be an error object in its place,
+            // which Python's client reads as its status; a stream answered
+            // with JSON holds no event for Python's client, and an error
+            // object there is no completion.
             OpenAiApi::ChatCompletions if !self.streamed => wire::completion(&body, &self.secret)?,
             OpenAiApi::ChatCompletions => wire::response(&body, &self.secret)?,
             OpenAiApi::Responses => {

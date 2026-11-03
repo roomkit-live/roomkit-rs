@@ -11,7 +11,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lists before the 512-tool bound counts, as Python filters the listing it
   reads (RFC §21.2, RMK-1099).
 - `OpenAiAiProvider` reads a failure as Python's: `generate` sends one
-  completion, not streamed; an error object's `code`, `type` or `status`
+  completion, not streamed, on Chat Completions; an error object's `code`, `type` or `status`
   gives the failure its status, inside a stream, a failed Responses
   stream's included, or answered with 200 to a completion asked whole
   (`server_error` is 500, retried), and an error inside a stream with no

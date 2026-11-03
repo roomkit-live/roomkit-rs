@@ -18,7 +18,9 @@ pub(crate) const ANSWER_LIMIT: usize = 4 * 1024 * 1024;
 
 /// A model behind an OpenAI-compatible endpoint (RFC §6.7): Python's
 /// `OpenAIAIProvider(config)`. A generation is one streamed completion,
-/// read as it arrives; [`generate`](AiProvider::generate) reads it whole.
+/// read as it arrives; [`generate`](AiProvider::generate) asks Chat
+/// Completions for one completion whole, as Python's does, and reads a
+/// Responses stream to its end.
 /// Each request declares the turn's tools, their names checked against
 /// OpenAI's rule when the endpoint is OpenAI's own, and fails before
 /// anything is sent for one it refuses.
