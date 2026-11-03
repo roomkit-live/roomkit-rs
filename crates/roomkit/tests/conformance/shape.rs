@@ -118,6 +118,12 @@ const CHANNEL: &[&str] = &[
     "steer_room_turns",
     "human_input",
     "kit_tools",
+    "tool_search",
+    "tool_search_pinned",
+    "tool_search_threshold",
+    "tool_search_threshold_pct",
+    "tool_search_miss_hint",
+    "tool_search_threshold_tokens",
     "audit",
     "addresses",
     "streams_in",
@@ -153,7 +159,7 @@ const TURN_CONFIG: &[&str] = &[
 ];
 const TURN_TOOL: &[&str] = &["name", "description", "parameters"];
 const HUMAN_TOOL: &[&str] = &["name", "description", "parameters"];
-const MODEL: &[&str] = &["rounds", "vision", "pricing"];
+const MODEL: &[&str] = &["rounds", "vision", "pricing", "context_window"];
 const MODEL_ROUND: &[&str] = &[
     "text",
     "deltas",
@@ -172,6 +178,7 @@ const TOOL: &[&str] = &[
     "name",
     "description",
     "parameters",
+    "tags",
     "returns",
     "raises",
     "fails",

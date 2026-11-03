@@ -1,8 +1,8 @@
 //! How a scenario's expectation matches what a run produced: roomkit-specs
 //! `conformance/README.md`, "Matching". An object names the members it
 //! checks, a list matches element by element, and a few operators
-//! (`"$any"`, `$unordered`, `$absent`, `$present`, `$contains`) loosen a
-//! member.
+//! (`"$any"`, `$unordered`, `$absent`, `$present`, `$contains`, `$lacks`)
+//! loosen a member.
 
 use serde_json::{Map, Value};
 
@@ -71,6 +71,12 @@ fn object_mismatches(
             vec![format!("{path}: absent")]
         } else {
             Vec::new()
+        };
+    }
+    if let Some(Value::String(needle)) = expected.get("$lacks") {
+        return match actual {
+            Some(Value::String(text)) if !text.contains(needle.as_str()) => Vec::new(),
+            other => vec![format!("{path}: {} contains {needle:?}", shown(other))],
         };
     }
     if let Some(Value::String(needle)) = expected.get("$contains") {

@@ -48,6 +48,8 @@ pub(crate) struct Paced {
     vision: bool,
     /// The model's catalogue price (README: `model.pricing`).
     pricing: Option<ModelPricing>,
+    /// The model's context window (README: `model.context_window`).
+    context_window: Option<u64>,
 }
 
 impl AiProvider for Paced {
@@ -59,12 +61,15 @@ impl AiProvider for Paced {
         self.vision
     }
 
-    /// The model's catalogue entry, with the price the scenario gives it;
-    /// none for a model the scenario gives no price.
+    /// The model's catalogue entry, with the price and the context window
+    /// the scenario gives it; none for a model the scenario gives neither.
     fn catalog_entry(&self) -> Option<ModelInfo> {
-        let pricing = self.pricing.clone()?;
+        if self.pricing.is_none() && self.context_window.is_none() {
+            return None;
+        }
         Some(ModelInfo {
-            pricing: Some(pricing),
+            pricing: self.pricing.clone(),
+            context_window: self.context_window,
             ..ModelInfo::new(self.model_name())
         })
     }
@@ -177,6 +182,7 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
         options.reasoning_effort = Some(effort.to_owned());
     }
     agent_settings(spec, &mut options)?;
+    tool_search_settings(spec, &mut options)?;
     if let Some(by_room) = spec.get("config_provider") {
         options.config_provider = Some(config_provider(by_room, run)?);
     }
@@ -295,6 +301,7 @@ fn scripted_model(spec: &Value, run: &Arc<Run>) -> Result<(ScriptedProvider, Pac
         run: Arc::downgrade(run),
         vision: spec["vision"] == true,
         pricing,
+        context_window: spec["context_window"].as_u64(),
     };
     Ok((model, paced))
 }
@@ -510,6 +517,28 @@ fn scripted_handler(tools: Vec<Value>, run: &Arc<Run>) -> ToolHandler {
 
 /// A scripted agent's own `system_prompt`, `temperature` and `max_tokens`
 /// (README, "Scripted agents").
+fn tool_search_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), String> {
+    options.tool_search = spec["tool_search"].as_bool();
+    options.tool_search_pinned = spec["tool_search_pinned"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    if let Some(threshold) = spec["tool_search_threshold"].as_u64() {
+        options.tool_search_threshold = usize::try_from(threshold).map_err(|e| e.to_string())?;
+    }
+    if let Some(share) = spec["tool_search_threshold_pct"].as_f64() {
+        options.tool_search_threshold_pct = share;
+    }
+    options.tool_search_miss_hint = spec["tool_search_miss_hint"].as_str().map(str::to_owned);
+    if let Some(cap) = spec.get("tool_search_threshold_tokens") {
+        options.tool_search_threshold_tokens = cap.as_u64();
+    }
+    Ok(())
+}
+
 fn agent_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), String> {
     if let Some(prompt) = spec.get("system_prompt") {
         let prompt = prompt.as_str().ok_or("system_prompt: not a text")?;
@@ -589,6 +618,7 @@ fn turn_config(spec: &Value, run: &Arc<Run>) -> Result<AiChannelTurnConfig, Stri
                 name: tool["name"].as_str().unwrap_or_default().to_owned(),
                 description: tool["description"].as_str().unwrap_or_default().to_owned(),
                 parameters: tool.get("parameters").cloned().unwrap_or_else(|| json!({})),
+                tags: Vec::new(),
             })
             .collect()
     });
@@ -623,6 +653,13 @@ fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
                     .get("parameters")
                     .cloned()
                     .unwrap_or_else(|| json!({ "type": "object" })),
+                tags: tool["tags"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect(),
                 ..AiTool::new(
                     tool["name"].as_str().unwrap_or_default(),
                     tool["description"].as_str().unwrap_or_default(),
