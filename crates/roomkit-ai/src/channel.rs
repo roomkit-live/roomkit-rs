@@ -15,6 +15,7 @@ use roomkit::model::{
     RoomId, SteeringDirective,
 };
 use roomkit::{Channel, ChannelDeclaration, ChannelError, current_turn_host};
+use roomkit_core::rules::edits::opens_no_turn;
 use roomkit_core::rules::transcript::{
     Message, TurnMemory, conversation_with_memory, people_taking_part, replayed_rounds,
 };
@@ -569,11 +570,10 @@ impl<P: AiProvider> AiChannel<P> {
         self.loops.steer(&directive.into(), options)
     }
 
-    /// Whether the channel takes a turn on `event`: a message or an
-    /// instruction, never one of its own (RFC §6.4).
+    /// Whether the channel takes a turn on `event`: one that opens a turn,
+    /// a message or an instruction, never one of its own (RFC §6.4).
     fn answers(&self, event: &RoomEvent) -> bool {
-        event.source.channel_id != self.channel_id
-            && (event.r#type == EventType::Message || event.r#type == EventType::Instruction)
+        event.source.channel_id != self.channel_id && !opens_no_turn(event)
     }
 
     /// The system prompt of a turn in `context`'s room: its binding's

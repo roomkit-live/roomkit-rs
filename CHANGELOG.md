@@ -22,6 +22,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   blank turns as speakers (RFC §6.4, RMK-1221).
 - An edit or a delete is not steered into a running turn: it waits its
   place, for no turn (RFC §10.3, RMK-1226).
+- A notice, a reaction or a participant's arrival is not steered into a
+  running turn either: it waits its place, for no turn, and past the depth
+  limit it gets no record of an agent not asked, nor does a change (RFC
+  §6.4, §8.3, RMK-1257).
 - A sender's routing stamps are dropped, as Python's now are: a message
   that arrived with `_routed_to` or `_always_process` in its metadata chose
   the agent that answered it, or added one to its address; the kit drops

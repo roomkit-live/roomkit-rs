@@ -674,11 +674,12 @@ async fn a_message_while_the_model_answers_is_answered_by_the_same_turn() {
     room.kit.close().await.unwrap();
 }
 
-/// A change of the turn's message, sent while the model answers: steered,
-/// it returns at once; waiting its place, once the turn ends. The model's
-/// requests once both are over.
-async fn a_change_while_the_model_answers(
-    change: impl FnOnce(EventId) -> roomkit::model::InboundMessage,
+/// An event that opens no turn (RFC §6.4), a change of the turn's message
+/// or a notice, sent while the model answers: it is not handed to the
+/// running turn, which would return it at once, and waits its place until
+/// the turn ends. The model's requests once both are over.
+async fn what_opens_no_turn_while_the_model_answers(
+    message_of: impl FnOnce(EventId) -> roomkit::model::InboundMessage,
 ) -> Vec<AiContext> {
     let model = Gated::new(
         [
@@ -699,7 +700,7 @@ async fn a_change_while_the_model_answers(
         .id;
     let mut sent = {
         let room = Arc::clone(&room);
-        let message = change(target);
+        let message = message_of(target);
         tokio::spawn(async move {
             let options = roomkit::ProcessInboundOptions {
                 room_id: Some(room_id()),
@@ -709,21 +710,19 @@ async fn a_change_while_the_model_answers(
         })
     };
     let early = tokio::time::timeout(std::time::Duration::from_millis(50), &mut sent).await;
+    assert!(early.is_err(), "handed to the running turn");
     model.release();
     turn.await.unwrap();
-    let result = match early {
-        Ok(joined) => joined.unwrap(),
-        Err(_) => sent.await.unwrap(),
-    };
+    let result = sent.await.unwrap();
     assert!(!result.blocked, "{:?}", result.reason);
     room.kit.close().await.unwrap();
     model.requests()
 }
 
-// Python: tests/test_steering_during_turn.py::test_an_edit_or_a_delete_while_the_model_answers_is_not_steered
+// Python: tests/test_steering_during_turn.py::test_what_opens_no_turn_while_the_model_answers_is_not_steered
 #[tokio::test]
 async fn an_edit_while_the_model_answers_is_not_steered() {
-    let requests = a_change_while_the_model_answers(|target| {
+    let requests = what_opens_no_turn_while_the_model_answers(|target| {
         let edit = EditContent::new(
             target,
             roomkit::model::TextContent::new("List the .py files."),
@@ -736,13 +735,26 @@ async fn an_edit_while_the_model_answers_is_not_steered() {
     assert_eq!(requests.len(), 1);
 }
 
-// Python: tests/test_steering_during_turn.py::test_an_edit_or_a_delete_while_the_model_answers_is_not_steered
+// Python: tests/test_steering_during_turn.py::test_what_opens_no_turn_while_the_model_answers_is_not_steered
 #[tokio::test]
 async fn a_delete_while_the_model_answers_is_not_steered() {
-    let requests = a_change_while_the_model_answers(|target| {
+    let requests = what_opens_no_turn_while_the_model_answers(|target| {
         let delete = DeleteContent::new(target);
         let mut message = roomkit::model::InboundMessage::new(channel("sms"), "+15550001", delete);
         message.event_type = EventType::Delete;
+        message
+    })
+    .await;
+    assert_eq!(requests.len(), 1);
+}
+
+// Python: tests/test_steering_during_turn.py::test_what_opens_no_turn_while_the_model_answers_is_not_steered
+#[tokio::test]
+async fn a_notice_while_the_model_answers_is_not_steered() {
+    let requests = what_opens_no_turn_while_the_model_answers(|_| {
+        let notice = roomkit::model::TextContent::new("The order shipped");
+        let mut message = roomkit::model::InboundMessage::new(channel("sms"), "+15550001", notice);
+        message.event_type = EventType::System;
         message
     })
     .await;

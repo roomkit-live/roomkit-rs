@@ -31,6 +31,9 @@
 //! an edit writes its new content and `metadata.edited = true`, a delete
 //! `metadata.deleted = true`. The change reaches no one who could not see
 //! its target (`visibility_within`).
+//!
+//! A change is no message a turn may answer: [`opens_no_turn`] says which
+//! events, a change among them, no agent takes a turn on (RFC §6.4).
 
 use serde_json::Value;
 
@@ -186,6 +189,15 @@ pub(crate) fn holds_change(content: &EventContent) -> bool {
         | EventContent::Template(_)
         | EventContent::ToolCall(_) => false,
     }
+}
+
+/// Whether no agent takes a turn on `event` (RFC §6.4): an agent answers a
+/// message or an instruction, never a change (§10.3). A notice, a
+/// reaction, a participant's arrival or a tool call's record is stored,
+/// and answered by no turn. Python's `opens_no_turn`.
+pub fn opens_no_turn(event: &RoomEvent) -> bool {
+    !matches!(event.r#type, EventType::Message | EventType::Instruction)
+        || holds_change(&event.content)
 }
 
 /// Whether `event`, making `mutation`, may change `target`, the event the

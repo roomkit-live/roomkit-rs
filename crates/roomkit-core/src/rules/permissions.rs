@@ -298,7 +298,8 @@ pub(crate) struct TransportTarget {
 ///   none.
 ///
 /// A solicited channel whose response would reach `max_chain_depth` is not
-/// asked (RFC §8.3).
+/// asked (RFC §8.3), and is recorded as not asked unless the event opens
+/// no turn (RFC §6.4), which no agent answers.
 pub(crate) fn plan_delivery(
     event: &RoomEvent,
     bindings: &[ChannelBinding],
@@ -325,15 +326,17 @@ pub(crate) fn plan_delivery(
                 delivers: reader.direction.sends(),
             }),
             ChannelCategory::Intelligence => {
-                // A tool-call row is an activity record no agent answers,
-                // which gets no record at the limit either (RFC §8.3).
+                // A tool-call row is an activity record no agent reads.
                 if is_tool_call_row(event) || !solicits(event, reader, from_agent, policy) {
                     continue;
                 }
-                if at_limit {
-                    plan.not_asked.push(reader.clone());
-                } else {
+                if !at_limit {
                     plan.agents.push(reader.clone());
+                } else if !edits::opens_no_turn(event) {
+                    // Only an event a turn would answer is recorded as not
+                    // asked: a notice or a change, which no agent answers,
+                    // gets no record at the limit (RFC §6.4, §8.3).
+                    plan.not_asked.push(reader.clone());
                 }
             }
         }
@@ -1339,6 +1342,26 @@ mod tests {
                     below.transports.len()
                 ),
                 (vec![], vec![], 1)
+            );
+        }
+
+        // Python: tests/test_streamed_chain_depth.py::test_what_opens_no_turn_at_the_limit_leaves_no_record
+        #[test]
+        fn what_opens_no_turn_at_the_limit_leaves_no_record() {
+            let bindings = [transport("sms"), agent("writer")];
+            let mut notice = event_from(&bindings[0]);
+            notice.r#type = EventType::System;
+            let below = plan(&notice, &bindings);
+            notice.chain_depth = 4;
+            let at_limit = plan(&notice, &bindings);
+            // Below the limit the agent reads the notice, taking no turn.
+            assert_eq!(
+                (
+                    ids(&below.agents),
+                    ids(&at_limit.agents),
+                    ids(&at_limit.not_asked)
+                ),
+                (vec!["writer"], vec![], vec![])
             );
         }
 

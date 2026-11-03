@@ -285,7 +285,8 @@ fn nothing() -> Outcome {
 /// speaker's label when the room has several speakers, which the turn's
 /// loop reached. A message that reads as no text, or that no loop takes
 /// (not reachable yet, or reading its queue no more), waits a turn of its
-/// own.
+/// own; so does an event that opens no turn (a notice, a change: RFC
+/// §6.4), never handed to the running one.
 pub(crate) async fn steered<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     binding: &ChannelBinding,

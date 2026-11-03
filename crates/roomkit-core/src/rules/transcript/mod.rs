@@ -77,7 +77,7 @@ use self::rounds::{ToolRound, tool_rounds};
 use self::speakers::{Speaker, labelled_lines, labels_turns, speaker, tell_apart};
 pub use self::speakers::{people_note, people_taking_part};
 use super::authors::Authors;
-use super::edits::is_deleted;
+use super::edits::{is_deleted, opens_no_turn};
 use super::instructions::is_standalone;
 use super::transcoding::text_of;
 use crate::model::{ChannelId, EventStatus, EventType, RoomContext, RoomEvent, ToolCall};
@@ -658,17 +658,17 @@ pub fn turn_sources<'a>(
 /// content's text form (§6.6), each of its lines under its speaker's label
 /// when the room has several speakers, as the turn's history labels them;
 /// `None` for an event that reads as no text, which waits a turn of its
-/// own, and for an edit or a delete, no message a turn may answer (RFC
-/// §10.3), whose own turn the agent does not take. Python's
-/// `steered_message`: its speakers are the context's events' and
-/// `event`'s, nameless ones told apart and counted by source, as the
-/// conversation counts them.
+/// own, and for an event that opens no turn (a notice, a reaction: RFC
+/// §6.4; an edit or a delete: RFC §10.3), whose own turn the agent does
+/// not take. Python's `steered_message`: its speakers are the context's
+/// events' and `event`'s, nameless ones told apart and counted by source,
+/// as the conversation counts them.
 pub fn steered_text(
     event: &RoomEvent,
     context: &RoomContext,
     channel_id: &ChannelId,
 ) -> Option<String> {
-    if matches!(event.r#type, EventType::Edit | EventType::Delete) {
+    if opens_no_turn(event) {
         return None;
     }
     let text = text_of(&event.content);

@@ -20,7 +20,7 @@
 //! | [`hook_chain`] | §9.3, §9.4: how a chain of SYNC hook outcomes decides |
 //! | [`lifecycle`] | §5.1: which status each room transition leaves from, and what it writes |
 //! | [`timers`] | §5.1: which timer transition falls due, and when |
-//! | [`edits`] | §10.1 step 8a, §10.3: whether an edit or a delete may change its target, and what the commit writes on it |
+//! | [`edits`] | §10.1 step 8a, §10.3, §6.4: whether an edit or a delete may change its target, what the commit writes on it, and which events, a change among them, open no agent turn |
 //! | [`idempotency`] | §13.4: a blank idempotency key is no key |
 //! | `host` | §10.5: who a post of the host's own voice may speak as |
 //! | [`instructions`] | §10.1.1: what an instruction must be before anything is read, what a modify keeps of it, what its turn reads, and its responses' fingerprint |
