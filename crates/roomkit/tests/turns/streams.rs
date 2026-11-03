@@ -39,6 +39,8 @@ struct Counting {
     says: roomkit::model::Metadata,
     stalls: Option<Arc<tokio::sync::Notify>>,
     lingers: Option<Arc<tokio::sync::Notify>>,
+    /// Whether the reader waits at every fifth item, as Python's test reads.
+    pauses: bool,
 }
 
 impl Counting {
@@ -111,9 +113,14 @@ impl Channel for Counting {
             stalls.notify_one();
             std::future::pending::<()>().await;
         }
+        let mut read = 0_u32;
         while let Some(item) = stream.next().await {
             if let Ok(StreamItem::Text(text)) = item {
                 self.sizes.lock().unwrap().push(text.len());
+            }
+            read += 1;
+            if self.pauses && read.is_multiple_of(5) {
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
         }
         if let Some(lingers) = &self.lingers {
@@ -165,6 +172,7 @@ async fn deltas_yielded_together_cross_as_one_item() {
         says: roomkit::model::Metadata::new(),
         stalls: None,
         lingers: None,
+        pauses: false,
     };
     kit.register_channel(target.clone()).unwrap();
     let words: Vec<String> = (0..200).map(|n| format!("w{n} ")).collect();
@@ -237,21 +245,28 @@ impl Stream for Items {
     }
 }
 
-/// Items written with a wait at every seventh: the deltas between two waits
-/// may cross as one.
-struct Waiting(VecDeque<ResponseItem>, usize);
+/// Items written with a wait at every seventh until the first break, as
+/// Python's test writes them: what follows it may cross as one joined item,
+/// at the edge of the pull window.
+struct Waiting {
+    items: VecDeque<ResponseItem>,
+    polls: usize,
+    broke: bool,
+}
 
 impl Stream for Waiting {
     type Item = Result<ResponseItem, ChannelError>;
 
     fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let items = self.get_mut();
-        items.1 += 1;
-        if items.1.is_multiple_of(7) {
+        let this = self.get_mut();
+        this.polls += 1;
+        if !this.broke && this.polls.is_multiple_of(7) {
             context.waker().wake_by_ref();
             return Poll::Pending;
         }
-        Poll::Ready(items.0.pop_front().map(Ok))
+        let item = this.items.pop_front();
+        this.broke |= matches!(item, Some(ResponseItem::SegmentBreak));
+        Poll::Ready(item.map(Ok))
     }
 }
 
@@ -291,6 +306,7 @@ async fn deltas_bursts_and_thinking_before_each_break_never_stall_the_stream() {
             says: roomkit::model::Metadata::new(),
             stalls: None,
             lingers: None,
+            pauses: true,
         };
         kit.register_channel(target.clone()).unwrap();
         let writing = Writing {
@@ -429,7 +445,11 @@ impl Channel for Writing {
                     .respond_with_stream(Box::pin(Items(items, cancelled))));
             }
             if let Some(deltas) = interleaves {
-                let items = Waiting(interleaved(deltas), 0);
+                let items = Waiting {
+                    items: interleaved(deltas),
+                    polls: 0,
+                    broke: false,
+                };
                 return Ok(current_turn_host()
                     .unwrap()
                     .respond_with_stream(Box::pin(items)));
@@ -790,6 +810,7 @@ async fn a_streaming_target_s_own_turns_never_reach_the_caller() {
         says,
         stalls: None,
         lingers: None,
+        pauses: false,
     };
     kit.register_channel(target).unwrap();
     let model = ScriptedProvider::new([ScriptedRound::writing(["The answer."])]);
@@ -832,6 +853,7 @@ async fn a_cancel_does_not_wait_for_a_streaming_target_that_reads_nothing() {
         says: roomkit::model::Metadata::new(),
         stalls: Some(Arc::clone(&stalled)),
         lingers: None,
+        pauses: false,
     };
     kit.register_channel(target).unwrap();
     let model = ScriptedProvider::new([ScriptedRound::writing(["Working."])]);
@@ -884,6 +906,7 @@ async fn a_close_does_not_wait_for_a_target_whose_read_was_stopped() {
         says: roomkit::model::Metadata::new(),
         stalls: None,
         lingers: Some(Arc::clone(&ended)),
+        pauses: false,
     };
     kit.register_channel(target).unwrap();
     let waiting = Arc::new(tokio::sync::Notify::new());

@@ -111,8 +111,9 @@ pub(crate) async fn next_item(
 type Pulled = Option<Result<StreamItem, ChannelError>>;
 
 /// The stream a streaming channel's `deliver_stream` reads (RFC §6.1,
-/// step 4 decision 9): the response's text as it is written and each row
-/// once the store holds it, in index order; the response's failure, if it
+/// step 4 decision 9): the response's text as it is written, each piece of
+/// the model's reasoning, and each row once the store holds it, in index
+/// order; the response's failure, if it
 /// fails, as its last item. Each read pulls the response one item further:
 /// nothing runs past what was read. Dropping it, or returning from
 /// `deliver_stream` before its end, stops the response: the text it was
