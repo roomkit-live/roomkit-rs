@@ -12,7 +12,9 @@ use std::time::Duration;
 use futures_core::Stream;
 
 use roomkit::model::hook::AllowOptions;
-use roomkit::model::{ChannelId, HookAction, HookResult, Metadata, RoomContext, ToolCall};
+use roomkit::model::{
+    ChannelId, HookAction, HookResult, Metadata, RetryPolicy, RoomContext, ToolCall,
+};
 use roomkit::{HookError, ToolCallEvent};
 use roomkit_ai::tasks::{
     CancelTaskTool, CancelTaskToolOptions, TaskStatusTool, TaskStatusToolOptions,
@@ -134,19 +136,15 @@ impl Stream for PacedStream<'_> {
 }
 
 /// A scripted agent's models by the name `expect.models` gives them: its
-/// own under its id, its memory's summarizer under `<id>/summarizer`.
+/// own under its id, its memory's summarizer under `<id>/summarizer`, its
+/// fallback under `<id>/fallback`.
 pub(crate) type Models = Vec<(String, ScriptedProvider)>;
 
 /// The scripted agent `spec` describes, and its models; its gates are
 /// `run`'s.
 pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, Models), String> {
     let id = ChannelId::new(spec["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
-    let scripted = spec["model"]["rounds"].as_array().into_iter().flatten();
-    let rounds = scripted.clone().map(round).collect::<Result<Vec<_>, _>>()?;
-    let gates = scripted
-        .map(|round| round["gate"].as_str().map(str::to_owned))
-        .collect();
-    let model = ScriptedProvider::new(rounds);
+    let (model, paced) = scripted_model(&spec["model"], run)?;
     let mut options = AiChannelOptions {
         tools: tools(spec, run).into(),
         serialize_room_turns: spec["serialize_room_turns"] == true,
@@ -187,7 +185,15 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
         let bound = milliseconds(bound, "tool_timeouts_ms")?;
         options.tool_timeouts.insert(name.clone(), bound);
     }
-    let mut models = vec![(id.to_string(), model.clone())];
+    if let Some(policy) = spec.get("retry_policy") {
+        options.retry_policy = Some(retry_policy(policy)?);
+    }
+    let mut models = vec![(id.to_string(), model)];
+    if let Some(fallback) = spec.get("fallback_model") {
+        let (fallback, paced) = scripted_model(fallback, run)?;
+        models.push((format!("{id}/fallback"), fallback));
+        options.fallback_provider = Some(Arc::new(paced));
+    }
     if let Some(memory) = spec.get("memory") {
         let summarizer = match memory.get("summarizer") {
             Some(summarizer) => {
@@ -211,12 +217,6 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
         options.human_input_handler = Some(human_input(human)?);
     }
     options.tools.extend(kit_tools(spec, run)?);
-    let paced = Paced {
-        script: model.clone(),
-        gates,
-        run: Arc::downgrade(run),
-        vision: spec["model"]["vision"] == true,
-    };
     // An identity makes the scripted agent an Agent (README, "Scripted agents").
     let Some(identity) = spec.get("agent") else {
         let agent = AiChannel::new(id, paced, options).map_err(|e| e.to_string())?;
@@ -236,6 +236,58 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
     };
     let agent = Agent::new(id, paced, agent_options).map_err(|e| e.to_string())?;
     Ok((Scripted::Agent(Box::new(agent)), models))
+}
+
+/// The scripted model `spec` describes, and the provider reading it, its
+/// gates `run`'s.
+fn scripted_model(spec: &Value, run: &Arc<Run>) -> Result<(ScriptedProvider, Paced), String> {
+    let scripted = spec["rounds"].as_array().into_iter().flatten();
+    let rounds = scripted.clone().map(round).collect::<Result<Vec<_>, _>>()?;
+    let gates = scripted
+        .map(|round| round["gate"].as_str().map(str::to_owned))
+        .collect();
+    let model = ScriptedProvider::new(rounds);
+    let paced = Paced {
+        script: model.clone(),
+        gates,
+        run: Arc::downgrade(run),
+        vision: spec["vision"] == true,
+    };
+    Ok((model, paced))
+}
+
+/// A scripted agent's retry policy, its delays given in milliseconds
+/// (README, "Scripted agents").
+fn retry_policy(spec: &Value) -> Result<RetryPolicy, String> {
+    let defaults = RetryPolicy::default();
+    let seconds = |key: &str, default: f64| match spec.get(key) {
+        Some(value) => value
+            .as_f64()
+            .map(|milliseconds| milliseconds / 1000.0)
+            .ok_or(format!("retry_policy.{key}: not a number")),
+        None => Ok(default),
+    };
+    let max_retries = match spec.get("max_retries") {
+        Some(count) => {
+            let count = count
+                .as_u64()
+                .ok_or("retry_policy.max_retries: not a count")?;
+            u32::try_from(count).map_err(|e| e.to_string())?
+        }
+        None => defaults.max_retries,
+    };
+    Ok(RetryPolicy {
+        max_retries,
+        base_delay_seconds: seconds("base_delay_ms", defaults.base_delay_seconds)?,
+        max_delay_seconds: seconds("max_delay_ms", defaults.max_delay_seconds)?,
+        exponential_base: match spec.get("exponential_base") {
+            Some(base) => base
+                .as_f64()
+                .ok_or("retry_policy.exponential_base: not a number")?,
+            None => defaults.exponential_base,
+        },
+        ..defaults
+    })
 }
 
 /// A scripted agent: an AI channel, or an Agent when it has an identity.
@@ -358,6 +410,9 @@ pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
         }
         if let Some(provider) = refusal["provider"].as_str() {
             round = round.refused_by(provider);
+        }
+        if refusal["retryable"] == true {
+            round = round.retrying();
         }
     }
     if spec.get("done") == Some(&Value::Bool(false)) {

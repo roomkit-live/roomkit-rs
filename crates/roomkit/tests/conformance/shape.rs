@@ -44,7 +44,19 @@ const KIT: &[&str] = &[
 ];
 const MEDIA_RESOLVER: &[&str] = &["media"];
 const ATTACHED_MEDIA: &[&str] = &["key"];
-const REFUSES: &[&str] = &["status", "message", "context_overflow", "provider"];
+const REFUSES: &[&str] = &[
+    "status",
+    "message",
+    "context_overflow",
+    "provider",
+    "retryable",
+];
+const RETRY_POLICY: &[&str] = &[
+    "max_retries",
+    "base_delay_ms",
+    "max_delay_ms",
+    "exponential_base",
+];
 const RESOLVER: &[&str] = &["answers"];
 const RESOLVER_ANSWER: &[&str] = &["when", "repeat", "gate", "fail", "result"];
 const RESOLVER_WHEN: &[&str] = &["sender_id", "channel_id", "room_id", "text"];
@@ -85,6 +97,8 @@ const CHANNEL: &[&str] = &[
     "tool_timeout_ms",
     "tool_timeouts_ms",
     "turn_budget_tokens",
+    "retry_policy",
+    "fallback_model",
     "max_author_images",
     "describe_empty_event",
     "serialize_room_turns",
@@ -530,26 +544,15 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
             self::reaction(reaction, &format!("{path}.{kind}[{index}]"), found);
         }
     }
-    let model = &channel["model"];
-    optional(model, MODEL, &format!("{path}.model"), found);
-    for (index, round) in items(&model["rounds"]) {
-        let round_path = format!("{path}.model.rounds[{index}]");
-        members(round, MODEL_ROUND, &round_path, found);
-        optional(
-            &round["refuses"],
-            REFUSES,
-            &format!("{round_path}.refuses"),
-            found,
-        );
-        for (position, call) in items(&round["calls"]) {
-            members(
-                call,
-                MODEL_CALL,
-                &format!("{round_path}.calls[{position}]"),
-                found,
-            );
-        }
+    for kind in ["model", "fallback_model"] {
+        scripted_model(&channel[kind], &format!("{path}.{kind}"), found);
     }
+    optional(
+        &channel["retry_policy"],
+        RETRY_POLICY,
+        &format!("{path}.retry_policy"),
+        found,
+    );
     for (index, tool) in items(&channel["tools"]) {
         let tool_path = format!("{path}.tools[{index}]");
         members(tool, TOOL, &tool_path, found);
@@ -777,5 +780,28 @@ fn outcome(outcome: &Value, path: &str, found: &mut Vec<String>) {
     members(outcome, OUTCOME, path, found);
     if outcome["error"].is_object() {
         members(&outcome["error"], ERROR, &format!("{path}.error"), found);
+    }
+}
+
+/// A scripted model's members, at `path`, and its rounds'.
+fn scripted_model(model: &Value, path: &str, found: &mut Vec<String>) {
+    optional(model, MODEL, path, found);
+    for (index, round) in items(&model["rounds"]) {
+        let round_path = format!("{path}.rounds[{index}]");
+        members(round, MODEL_ROUND, &round_path, found);
+        optional(
+            &round["refuses"],
+            REFUSES,
+            &format!("{round_path}.refuses"),
+            found,
+        );
+        for (position, call) in items(&round["calls"]) {
+            members(
+                call,
+                MODEL_CALL,
+                &format!("{round_path}.calls[{position}]"),
+                found,
+            );
+        }
     }
 }
