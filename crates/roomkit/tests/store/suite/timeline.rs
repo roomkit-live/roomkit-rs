@@ -24,6 +24,20 @@ async fn page(store: &Store, query: ListEventsOptions) -> Vec<u64> {
         .collect()
 }
 
+/// Python: `tests/test_store_memory.py::TestEventOperations::test_list_events_newest_first_short_room`:
+/// the newest page of a room shorter than its limit holds every event, in
+/// ascending order.
+#[tokio::test]
+async fn the_newest_page_of_a_room_shorter_than_its_limit_holds_every_event() {
+    let store = with_events((0..2).map(event).collect()).await;
+    let newest = ListEventsOptions {
+        newest_first: true,
+        limit: 100,
+        ..ListEventsOptions::default()
+    };
+    assert_eq!(page(&store, newest).await, [0, 1]);
+}
+
 /// RFC §14.1: the window is chosen from its end, the page always rendered
 /// ascending; `offset` counts back from the newest end under
 /// `newest_first`, and a cursor ignores both.

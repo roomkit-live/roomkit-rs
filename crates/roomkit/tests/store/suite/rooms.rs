@@ -213,6 +213,46 @@ async fn a_room_s_deletion_takes_what_it_holds() {
     );
 }
 
+/// Python: `tests/test_store_memory.py::TestObservationOperations::test_list_by_room`:
+/// a room lists its own observations, not another room's.
+#[tokio::test]
+async fn a_room_lists_its_own_observations() {
+    let store = with_room().await;
+    let other = RoomId::new("room_2").unwrap();
+    store.create_room(Room::new(other.clone())).await.unwrap();
+    for (id, room) in [("obs1", room_id()), ("obs2", other.clone())] {
+        let observation =
+            roomkit::model::Observation::new(id.parse().unwrap(), room, super::channel("ai1"), id);
+        store.add_observation(observation).await.unwrap();
+    }
+    let listed = async |room: &RoomId| {
+        let observations = store.list_observations(room).await.unwrap();
+        observations
+            .into_iter()
+            .map(|observation| observation.id.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        (listed(&room_id()).await, listed(&other).await),
+        (vec!["obs1".to_owned()], vec!["obs2".to_owned()])
+    );
+}
+
+/// Python: `tests/test_store_memory.py::TestFindRooms::test_find_no_match`:
+/// a status no room has finds none.
+#[tokio::test]
+async fn finding_rooms_of_a_status_no_room_has_finds_none() {
+    let store = with_room().await;
+    let closed = FindRoomsOptions {
+        status: Some(RoomStatus::Closed),
+        ..FindRoomsOptions::default()
+    };
+    assert_eq!(
+        store.find_rooms(closed).await.map(|rooms| rooms.len()),
+        Ok(0)
+    );
+}
+
 /// Python: `tests/test_store_memory.py::TestDeleteRoomCleanup::test_tasks_cleaned_on_delete`
 /// and `test_observations_cleaned_on_delete`: a room's deletion takes its
 /// tasks and observations, a task read by its id included.

@@ -264,6 +264,34 @@ async fn a_conversation_holds_the_latest_messages_only() {
     );
 }
 
+/// Python's `get_conversation` below its limit, and from a cursor: every
+/// message of a room shorter than the limit; the first `limit` after the
+/// cursor, never the newest.
+// Python: tests/test_store_activity.py::TestConversationRecency::test_get_conversation_returns_everything_below_the_limit
+// Python: tests/test_store_activity.py::TestConversationRecency::test_get_conversation_with_cursor_reads_forward
+#[tokio::test]
+async fn a_conversation_below_its_limit_or_after_a_cursor_reads_forward() {
+    let short = with_events((0..3).map(event).collect()).await;
+    let long = with_events((0..10).map(event).collect()).await;
+    let indexes =
+        |events: Vec<RoomEvent>| events.iter().map(|event| event.index).collect::<Vec<_>>();
+    let below = GetConversationOptions {
+        limit: 50,
+        after_index: None,
+    };
+    let after = GetConversationOptions {
+        limit: 3,
+        after_index: Some(5),
+    };
+    assert_eq!(
+        (
+            indexes(short.get_conversation(&room_id(), below).await.unwrap()),
+            indexes(long.get_conversation(&room_id(), after).await.unwrap()),
+        ),
+        (vec![0, 1, 2], vec![6, 7, 8])
+    );
+}
+
 /// RFC §14.1 `get_event_by_idempotency_key`, §13.4, §22.1: a key is
 /// looked up from its channel, or within the whole room for none.
 #[tokio::test]

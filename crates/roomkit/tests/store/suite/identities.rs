@@ -239,6 +239,108 @@ async fn unlinking_from_an_identity_of_another_organization_is_refused() {
     );
 }
 
+// Python: tests/test_store_memory.py::TestIdentityOperations::test_get_nonexistent
+#[tokio::test]
+async fn an_unknown_identity_reads_as_none() {
+    let store = crate::store().await;
+    assert_eq!(store.get_identity(&id("nope")).await, Ok(None));
+}
+
+// Python: tests/test_store_memory.py::TestIdentityOperations::test_multiple_addresses_same_channel
+#[tokio::test]
+async fn two_addresses_on_one_channel_resolve_to_their_identity() {
+    let mut created = Identity::new(id("id1"));
+    created.link(ChannelType::SMS, "+15551111111");
+    created.link(ChannelType::SMS, "+15552222222");
+    let store = holding(vec![created]).await;
+    let mut found = Vec::new();
+    for address in ["+15551111111", "+15552222222"] {
+        let identity = store
+            .resolve_identity(
+                &ChannelType::SMS,
+                address,
+                roomkit::store::ResolveIdentityOptions::default(),
+            )
+            .await
+            .unwrap();
+        found.push(identity.map(|identity| identity.id.to_string()));
+    }
+    assert_eq!(found, [Some("id1".to_owned()), Some("id1".to_owned())]);
+}
+
+// Python: tests/test_store_identity_scoping.py::TestOneIdentityPerAddress::test_an_unknown_identity_is_refused
+#[tokio::test]
+async fn linking_to_an_unknown_identity_is_refused_and_links_nothing() {
+    let store = crate::store().await;
+    let linked = store
+        .link_address(
+            &id("id_ghost"),
+            &ChannelType::SMS,
+            ALICE,
+            roomkit::store::LinkAddressOptions {
+                organization_id: Some("acme".to_owned()),
+            },
+        )
+        .await;
+    assert_eq!(
+        (linked, resolved(&store, Some("acme")).await),
+        (Err(StoreError::IdentityNotFound(id("id_ghost"))), None)
+    );
+}
+
+// Python: tests/test_store_identity_scoping.py::TestUnlinkingAnAddress::test_the_conversations_that_named_the_address_stay_as_they_are
+#[tokio::test]
+async fn unlinking_an_address_leaves_the_conversations_that_named_it() {
+    use roomkit::model::{ChannelBinding, Participant, ParticipantId, Room, RoomId, Timestamp};
+
+    let store = holding(vec![identity("id_jean", Some("acme"))]).await;
+    let room = RoomId::new("room_1").unwrap();
+    store
+        .create_room(Room {
+            organization_id: Some("acme".to_owned()),
+            ..Room::new(room.clone())
+        })
+        .await
+        .unwrap();
+    let sms = roomkit::model::ChannelId::new("sms").unwrap();
+    let binding = ChannelBinding {
+        attached_at: Timestamp::UNIX_EPOCH,
+        participant_id: Some(ParticipantId::new(ALICE).unwrap()),
+        ..ChannelBinding::new(sms.clone(), room.clone(), ChannelType::SMS)
+    };
+    let member = Participant {
+        joined_at: Timestamp::UNIX_EPOCH,
+        identity_id: Some(id("id_jean")),
+        ..Participant::new(
+            ParticipantId::new(ALICE).unwrap(),
+            room.clone(),
+            sms.clone(),
+        )
+    };
+    let binding = store.add_binding(binding).await.unwrap();
+    let member = store.add_participant(member).await.unwrap();
+    store
+        .unlink_address(
+            &id("id_jean"),
+            &ChannelType::SMS,
+            ALICE,
+            roomkit::store::UnlinkAddressOptions {
+                organization_id: Some("acme".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            store.get_binding(&room, &sms).await,
+            store
+                .get_participant(&room, &ParticipantId::new(ALICE).unwrap())
+                .await,
+        ),
+        (Ok(Some(binding)), Ok(Some(member)))
+    );
+}
+
 #[tokio::test]
 async fn unlinking_from_an_unknown_identity_is_refused() {
     let store = crate::store().await;
