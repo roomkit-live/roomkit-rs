@@ -52,6 +52,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::providers::sms" = ["roomkit.providers.sms"]
 "roomkit::delivery" = ["roomkit.delivery", "roomkit"]
 "roomkit::orchestration" = ["roomkit.orchestration"]
+"roomkit::orchestration::strategies::supervisor" = ["roomkit.orchestration.strategies.supervisor"]
 "roomkit::identity" = ["roomkit.identity"]
 "roomkit::tasks" = ["roomkit.tasks"]
 "roomkit_ai::tasks" = ["roomkit.tasks"]
@@ -511,6 +512,11 @@ reason = "not in 0.x: the thinker"
 python = "roomkit.Agent"
 members = ["extra_tools", "thinks_while_listening", "is_config_only"]
 reason = "not in 0.x: tools added at run time, the thinker, and the config-only agent, which serves the realtime voice channel (left out of the orchestration lots, HITL a9e5d1a3)"
+
+[[missing]]
+python = "roomkit.Loop.__init__"
+params = ["async_delivery"]
+reason = "not in 0.x: the loop run in the background for a realtime voice session (left out of the orchestration lots with voice and realtime, HITL a9e5d1a3; RMK-1233)"
 
 [[missing]]
 python = "roomkit.ConversationRouter"
