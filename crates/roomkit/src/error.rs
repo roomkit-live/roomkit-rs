@@ -2,7 +2,7 @@
 //! implementation's `RoomKitError`, each variant one of its exception
 //! classes (step 5, decision 9).
 
-use std::fmt::{self, Write as _};
+use std::fmt;
 
 use roomkit_core::model::{
     ChannelId, ChannelType, DeliveryError, ErrorRecord, EventId, IdentityId, ModelError,
@@ -14,6 +14,9 @@ use roomkit_core::ops::{
 };
 use roomkit_core::rules::hook_registry::RegistrationError;
 use roomkit_core::rules::lifecycle::Transition;
+/// A name as Python's `repr` of a `str` writes it, which the Python
+/// implementation's messages quote their names with (`{name!r}`).
+pub(crate) use roomkit_core::rules::python_repr as repr;
 use thiserror::Error;
 
 use crate::store::{StoreError, StoreFailure};
@@ -601,39 +604,6 @@ fn participant_not_found(
     )
 }
 
-/// `text` as Python's `repr` of a `str` writes it, which the Python
-/// implementation's messages quote their names with (`{name!r}`): in single
-/// quotes, double ones when it holds a single quote and no double one, its
-/// backslashes, its quote and its control characters escaped.
-pub(crate) fn repr(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut written = String::with_capacity(text.len() + 2);
-    written.push(quote);
-    for character in text.chars() {
-        match character {
-            '\\' => written.push_str("\\\\"),
-            '\n' => written.push_str("\\n"),
-            '\r' => written.push_str("\\r"),
-            '\t' => written.push_str("\\t"),
-            _ if character == quote => {
-                written.push('\\');
-                written.push(character);
-            }
-            _ if character.is_ascii_control() => {
-                // Writing to a `String` does not fail.
-                let _ = write!(written, "\\x{:02x}", u32::from(character));
-            }
-            _ => written.push(character),
-        }
-    }
-    written.push(quote);
-    written
-}
-
 #[doc(hidden)]
 impl From<MemberError> for RoomKitError {
     fn from(error: MemberError) -> Self {
@@ -1081,24 +1051,6 @@ mod tests {
                  off-lock hook or a parse) cannot be adopted: name the room to send into it",
                 linked,
                 linked
-            ]
-        );
-    }
-
-    /// A name the Python implementation quotes with `!r`, as Python's
-    /// `repr` writes it (`python3 -c "print(repr(...))"`).
-    #[test]
-    fn a_name_is_quoted_as_python_s_repr_writes_it() {
-        let names = ["ws", "it's", "a'b\"c", "a\\b", "tab\there", "del\u{7f}"];
-        assert_eq!(
-            names.map(repr),
-            [
-                "'ws'",
-                "\"it's\"",
-                "'a\\'b\"c'",
-                "'a\\\\b'",
-                "'tab\\there'",
-                "'del\\x7f'"
             ]
         );
     }

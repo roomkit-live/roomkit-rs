@@ -6,6 +6,8 @@
 use std::fmt::Write as _;
 
 use roomkit_core::model::python_float;
+/// A name written for a message as Python's `repr` of a `str` writes it.
+pub(crate) use roomkit_core::rules::python_repr as quoted_name;
 use serde_json::Value;
 
 /// The skills' preamble, before the manifest, with the note that no script
@@ -149,37 +151,6 @@ fn string(written: &mut String, text: &str, ascii: bool) {
     written.push('"');
 }
 
-/// `text` written for a message as Python's `repr` writes a text: in
-/// single quotes (double ones when it holds a single quote and no double
-/// one), its backslashes, its quote and its control characters escaped.
-pub(crate) fn quoted_name(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut written = String::with_capacity(text.len() + 2);
-    written.push(quote);
-    for character in text.chars() {
-        match character {
-            '\\' => written.push_str("\\\\"),
-            '\n' => written.push_str("\\n"),
-            '\r' => written.push_str("\\r"),
-            '\t' => written.push_str("\\t"),
-            c if c == quote => {
-                written.push('\\');
-                written.push(c);
-            }
-            c if c.is_control() => {
-                let _infallible = write!(written, "\\x{:02x}", u32::from(c));
-            }
-            c => written.push(c),
-        }
-    }
-    written.push(quote);
-    written
-}
-
 /// `text` escaped as an XML element's text or attribute, as Python's
 /// `html.escape` does.
 pub(crate) fn escaped(text: &str) -> String {
@@ -224,19 +195,6 @@ mod tests {
                 ("emoji", json!("\u{1f600}")),
             ]),
             r#"{"ok": true, "note": "already \u2014 active \"x\"\n", "references": ["a.md", "b.md"], "emoji": "\ud83d\ude00"}"#
-        );
-    }
-
-    #[test]
-    fn a_name_is_quoted_as_python_s_repr_quotes_it() {
-        assert_eq!(
-            [
-                quoted_name("nope"),
-                quoted_name("it's"),
-                quoted_name("C:\\x.md"),
-                quoted_name("a\u{1}b")
-            ],
-            ["'nope'", "\"it's\"", "'C:\\\\x.md'", "'a\\x01b'"]
         );
     }
 

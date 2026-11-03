@@ -13,6 +13,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `delivery_skipped`, and a set whose index another lane skipped is
   dropped, `delivery_stale`. The room's delivery claim holds within the
   process until the kit takes a lock manager (RMK-1153).
+- A name the kit quotes as Python's `repr` (a rename's record, an error's
+  text, a skill's or a memory's message) escapes every character Python's
+  `str.isprintable` refuses, as Python does: `'Bob\xa0Smith'` and
+  `'\u202e'`, where it wrote the no-break space and the right-to-left
+  override raw; one helper over a table generated from Python's Unicode
+  data replaces four copies (RMK-1163, RMK-1255).
 - A turn with tools behind a `base_url` sends `reasoning_effort` only where `OpenAiConfig::supports_reasoning_effort_with_tools` says the server takes it there, as Python's does: a server that refuses it on a tool turn no longer answers 400; set the switch to `Some(true)` where the server takes it (RFC §6.7, RMK-1088).
 - A generation's retries and its fallback provider (RFC §6.4), as Python's: `AiChannelOptions::retry_policy` tries a refusal worth another try again, before anything was handed, after a compacted replay of an overflow; `fallback_provider`, any provider as a `DynAiProvider`, is asked once the retries are spent, and its failure before it handed anything leaves the primary's error (RMK-1267).
 - The JSON the kit writes as Python's `json.dumps` (a tool's answer or

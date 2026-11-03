@@ -1,12 +1,11 @@
 //! What a delivery to a channel produced (RFC §5.13).
 
-use std::fmt::Write as _;
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::positive::python_float;
 use super::{ChannelId, ErrorRecord, Metadata, Timestamp};
+use crate::rules::python_repr as python_repr_str;
 
 /// Where a delivery stands (RFC §5.13): the Python implementation's
 /// `Literal["sent", "queued", "failed"]` of `DeliveryResult.status`, named
@@ -190,7 +189,7 @@ fn python_repr(value: &Value) -> String {
             (None, None, Some(float)) => python_float(float),
             (None, None, None) => number.to_string(),
         },
-        Value::String(text) => repr_str(text),
+        Value::String(text) => python_repr_str(text),
         Value::Array(items) => {
             let items: Vec<String> = items.iter().map(python_repr).collect();
             format!("[{}]", items.join(", "))
@@ -198,42 +197,11 @@ fn python_repr(value: &Value) -> String {
         Value::Object(fields) => {
             let fields: Vec<String> = fields
                 .iter()
-                .map(|(key, value)| format!("{}: {}", repr_str(key), python_repr(value)))
+                .map(|(key, value)| format!("{}: {}", python_repr_str(key), python_repr(value)))
                 .collect();
             format!("{{{}}}", fields.join(", "))
         }
     }
-}
-
-/// `text` as Python's `repr()` of a `str` writes it: in single quotes,
-/// double ones when it holds a single quote and no double one, its
-/// backslashes, its quote and its control characters escaped.
-fn repr_str(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut written = String::from(quote);
-    for character in text.chars() {
-        match character {
-            '\\' => written.push_str("\\\\"),
-            '\n' => written.push_str("\\n"),
-            '\r' => written.push_str("\\r"),
-            '\t' => written.push_str("\\t"),
-            _ if character == quote => {
-                written.push('\\');
-                written.push(character);
-            }
-            _ if character.is_ascii_control() => {
-                // Writing to a `String` does not fail.
-                let _ = write!(written, "\\x{:02x}", u32::from(character));
-            }
-            _ => written.push(character),
-        }
-    }
-    written.push(quote);
-    written
 }
 
 fn retryable_by_default() -> bool {

@@ -16,6 +16,7 @@ use crate::model::{
     ParticipantStatus, RoomId, SystemContent, Timestamp, Visibility,
 };
 use crate::rules::lifecycle::Transition;
+use crate::rules::python_repr;
 
 /// A change a lifecycle record marks.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -416,40 +417,6 @@ fn participant_status_name(status: ParticipantStatus) -> &'static str {
         ParticipantStatus::Left => "left",
         ParticipantStatus::Banned => "banned",
     }
-}
-
-/// `text` as Python's `repr` of a `str` writes it, which the Python
-/// implementation's record of a rename quotes the name with (`{name!r}`):
-/// in single quotes, double ones when it holds a single quote and no double
-/// one, its backslashes, its quote and its control characters escaped.
-fn python_repr(text: &str) -> String {
-    use std::fmt::Write as _;
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut written = String::with_capacity(text.len() + 2);
-    written.push(quote);
-    for character in text.chars() {
-        match character {
-            '\\' => written.push_str("\\\\"),
-            '\n' => written.push_str("\\n"),
-            '\r' => written.push_str("\\r"),
-            '\t' => written.push_str("\\t"),
-            _ if character == quote => {
-                written.push('\\');
-                written.push(character);
-            }
-            _ if character.is_ascii_control() => {
-                // Writing to a `String` does not fail.
-                let _ = write!(written, "\\x{:02x}", u32::from(character));
-            }
-            _ => written.push(character),
-        }
-    }
-    written.push(quote);
-    written
 }
 
 #[cfg(test)]

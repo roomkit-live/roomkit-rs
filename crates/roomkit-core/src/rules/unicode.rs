@@ -2,17 +2,19 @@
 //! reads them (RFC §6.4, §10.1 step 12, gap G-089): canonical composition
 //! (NFC), the combining marks, the characters `str.isalnum()` accepts, the
 //! characters a person's name keeps, those a name's letters are read past,
-//! what each character reads as in a name and in a phrase, and the opening
-//! and closing punctuation.
+//! what each character reads as in a name and in a phrase, the opening
+//! and closing punctuation, and the characters `str.isprintable()` accepts,
+//! which Python's `repr` of a `str` writes as they are.
 //! The tables are generated from roomkit and the Unicode data of its
 //! Python (`unicode_data`), so that both implementations read a name alike,
 //! whatever Unicode version Rust's standard library carries.
 
 use std::cmp::Ordering;
+use std::fmt::Write as _;
 
 use super::unicode_data::{
     ALNUM, CLOSING, COMBINING_CLASSES, COMPOSITIONS, DECOMPOSITIONS, JOINT, MARKS, NAME_CHARS,
-    OPENING, PHRASE_GAPS, PHRASE_READS, READS,
+    OPENING, PHRASE_GAPS, PHRASE_READS, PRINTABLE, READS,
 };
 
 /// Whether `ranges`, inclusive and sorted, holds `c`.
@@ -89,6 +91,57 @@ pub(crate) fn phrase_reads(c: char) -> Option<&'static str> {
 /// its words as markup (`|`).
 pub(crate) fn is_phrase_gap(c: char) -> bool {
     within(PHRASE_GAPS, c)
+}
+
+/// Whether Python's `str.isprintable()` accepts `c`: not a control, a
+/// format, a separator other than the space, a private-use, a surrogate or
+/// an unassigned character.
+fn is_printable(c: char) -> bool {
+    within(PRINTABLE, c)
+}
+
+/// `text` as Python's `repr` of a `str` writes it, which the Python
+/// implementation quotes a name with (`{name!r}`) in a record or an error's
+/// text: in single quotes, double ones when it holds a single quote and no
+/// double one; its backslashes and its quote escaped, `\t`, `\n` and `\r`
+/// as such, and every other character `str.isprintable()` refuses as
+/// `\xNN` under U+0100, `\uNNNN` under U+10000, `\UNNNNNNNN` past it (a
+/// no-break space as `\xa0`, a right-to-left override as `\u202e`).
+#[doc(hidden)]
+pub fn python_repr(text: &str) -> String {
+    let quote = if text.contains('\'') && !text.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut written = String::with_capacity(text.len() + 2);
+    written.push(quote);
+    for character in text.chars() {
+        match character {
+            '\\' => written.push_str("\\\\"),
+            '\t' => written.push_str("\\t"),
+            '\n' => written.push_str("\\n"),
+            '\r' => written.push_str("\\r"),
+            _ if character == quote => {
+                written.push('\\');
+                written.push(character);
+            }
+            _ if is_printable(character) => written.push(character),
+            _ => {
+                let code = u32::from(character);
+                // Writing to a `String` does not fail.
+                let _ = if code < 0x100 {
+                    write!(written, "\\x{code:02x}")
+                } else if code < 0x1_0000 {
+                    write!(written, "\\u{code:04x}")
+                } else {
+                    write!(written, "\\U{code:08x}")
+                };
+            }
+        }
+    }
+    written.push(quote);
+    written
 }
 
 /// The canonical combining class of `c`, 0 for a starter.
@@ -237,6 +290,32 @@ mod tests {
         let normalized: Vec<String> = cases.iter().map(|(text, _)| nfc(text)).collect();
         let expected: Vec<String> = cases.iter().map(|(_, nfc)| (*nfc).to_owned()).collect();
         assert_eq!(normalized, expected);
+    }
+
+    /// Values Python 3.13 gives (`print(repr(...))`).
+    #[test]
+    fn a_text_is_written_as_python_s_repr_writes_it() {
+        let cases = [
+            ("Bob\u{a0}Smith", "'Bob\\xa0Smith'"),
+            ("a\u{200b}b", "'a\\u200bb'"),
+            ("x\u{202e}y", "'x\\u202ey'"),
+            ("l1\u{2028}l2", "'l1\\u2028l2'"),
+            ("c1\u{85}", "'c1\\x85'"),
+            ("\u{ad}", "'\\xad'"),
+            ("pu\u{f0000}", "'pu\\U000f0000'"),
+            ("t\u{e0001}", "'t\\U000e0001'"),
+            (
+                "caf\u{e9} \u{4e2d} \u{1f600}",
+                "'caf\u{e9} \u{4e2d} \u{1f600}'",
+            ),
+            ("it's", "\"it's\""),
+            ("say \"hi\" it's", "'say \"hi\" it\\'s'"),
+            ("\u{0}\u{1f}\u{7f}\\", "'\\x00\\x1f\\x7f\\\\'"),
+            ("tab\tline\nend\r", "'tab\\tline\\nend\\r'"),
+        ];
+        let written: Vec<String> = cases.iter().map(|(text, _)| python_repr(text)).collect();
+        let expected: Vec<String> = cases.iter().map(|(_, repr)| (*repr).to_owned()).collect();
+        assert_eq!(written, expected);
     }
 
     #[test]
