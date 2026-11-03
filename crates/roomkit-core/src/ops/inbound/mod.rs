@@ -249,12 +249,14 @@ impl Inbound {
     }
 
     /// The pipeline for the greeting `text` of the agent `agent_id` in
-    /// `room_id` (RFC §19.1), with no bound on its wait for the room lock: it
-    /// is committed under that lock, the room's due timers applied, with no
-    /// hook and no check of its source's right to write (RFC §7.5 rule 2), and
-    /// runs as a direct injection from there, its delivery on the room's lane
-    /// and the answers to it re-entering. Unlike one, it draws on no reentry
-    /// budget.
+    /// `room_id` (RFC §19.1), under no deadline, though a caller gone before
+    /// its commit takes it along: it is committed under the room's lock, the
+    /// room's due timers applied, with no hook and no check of its source's
+    /// right to write (RFC §7.5 rule 2), and runs as a direct injection from
+    /// there, its delivery on the room's lane and the answers to it
+    /// re-entering. It draws on no reentry budget of the work that made it,
+    /// and what answers it has a budget of its own; an entry the work adopted
+    /// shares its operation's cascade, so what answers it draws on that.
     ///
     /// Its output is a message's: a room whose status refuses events leaves
     /// the result `blocked`, nothing stored and nothing announced; a room that

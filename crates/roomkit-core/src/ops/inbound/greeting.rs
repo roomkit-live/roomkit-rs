@@ -20,6 +20,7 @@ use crate::model::{
 };
 use crate::ops::Cx;
 use crate::ops::io::Bound;
+use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::permissions::{self, DeliveryPlan};
 
 /// The metadata key that marks a greeting among the agent's events.
@@ -105,8 +106,11 @@ pub(super) fn log_refused(event: &RoomEvent) {
 }
 
 impl Machine {
-    /// Starts a greeting's pass, with no deadline and drawing on no budget:
-    /// Python's `_commit_and_deliver` bounds neither.
+    /// Starts a greeting's pass, under no deadline, as Python's
+    /// `_commit_and_deliver`, though within the call: a caller gone before
+    /// its commit takes it along (`Bound::Call`). It draws on no budget of the
+    /// work that made it, and what answers it has a budget of its own: a
+    /// fresh cascade's, wherever it is made.
     pub(super) fn begin_greeting(
         &mut self,
         cx: &mut Cx<'_>,
@@ -116,9 +120,12 @@ impl Machine {
     ) {
         self.call.channel_id = Some(agent_id.clone());
         self.call.room_id = Some(room_id.clone());
-        self.call.bound = Bound::Unbounded;
+        let within_its_caller = Bound::Call(None);
+        self.call.bound = within_its_caller;
+        self.cascade
+            .draw_on_its_own(ReentryBudget::new(cx.config.max_chain_depth));
         let event = event(cx, room_id, agent_id, text);
-        let pass = CommitPass::trigger(event, Bound::Unbounded, None).greeting();
+        let pass = CommitPass::trigger(event, within_its_caller, None).greeting();
         self.cascade
             .lead(Job::Pass(Box::new(pass), PassOrigin::Trigger));
         self.stage.enter(Stage::Cascade);

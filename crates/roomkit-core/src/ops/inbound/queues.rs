@@ -152,6 +152,14 @@ impl Cascade {
         self.drawn = Some(draw);
     }
 
+    /// Draws on `budget` alone, whatever the call was made within: a
+    /// greeting's cascade is its own (RFC §19.1).
+    pub(super) fn draw_on_its_own(&mut self, budget: ReentryBudget) {
+        self.budget = budget;
+        self.drawn = None;
+        self.from_delivery = None;
+    }
+
     /// The budget of the cascade whose delivery or hook's body made the
     /// call, when it draws on one, as the call's trigger is charged on it
     /// as it starts.

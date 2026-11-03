@@ -369,8 +369,9 @@ impl Machine {
     }
 
     /// A greeting made in the room's own work goes through its pass, drawing
-    /// on no budget: it is the agent's first words, not a call that may loop
-    /// (RFC §19.1).
+    /// no pass of the budget it joins: it is the agent's first words, not a
+    /// call that may loop (RFC §19.1). What answers it draws on that budget,
+    /// the operation's one cascade.
     fn greet_within(
         &mut self,
         cx: &mut Cx<'_>,
