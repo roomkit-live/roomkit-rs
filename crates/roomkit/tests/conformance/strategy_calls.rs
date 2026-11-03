@@ -2,16 +2,19 @@
 //! `conformance/README.md`, "Setup"; RFC §19.7): a host's own strategy, the
 //! agents it names by their channel ids, what its install does (a gate,
 //! kit calls made as a reaction's, then a refusal of the room) and what its
-//! own uninstall step does. One object stands for each id, whatever the
-//! room it is installed in.
+//! own uninstall step does. A strategy with a `loop` is the
+//! implementation's Loop instead (RFC §19.7.4), its agents named by their
+//! ids. One object stands for each id, whatever the room it is installed
+//! in.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use roomkit::model::{ChannelId, RoomId};
-use roomkit::orchestration::{StrategyAgent, StrategyFuture};
+use roomkit::orchestration::strategies::supervisor::WorkerStrategy;
+use roomkit::orchestration::{LoopOptions, StrategyAgent, StrategyFuture};
 use roomkit::{
-    ClaimRoomStrategyOptions, InstallStrategyOptions, Orchestration, RoomKitError,
+    ClaimRoomStrategyOptions, InstallStrategyOptions, Loop, Orchestration, RoomKitError,
     RoomStrategyOptions, UninstallStrategyOptions,
 };
 use serde_json::{Map, Value, json};
@@ -24,7 +27,14 @@ use crate::run::{Run, Scope};
 pub(crate) type Strategy = Arc<dyn Orchestration<crate::Store>>;
 
 /// The members of a scripted strategy, and of its install and uninstall.
-pub(crate) const STRATEGY: &[&str] = &["id", "agents", "install", "uninstall"];
+pub(crate) const STRATEGY: &[&str] = &["id", "agents", "install", "uninstall", "loop"];
+pub(crate) const LOOP: &[&str] = &[
+    "agent",
+    "reviewer",
+    "reviewers",
+    "max_iterations",
+    "strategy",
+];
 pub(crate) const STRATEGY_STEP: &[&str] = &["gate", "do", "refuse"];
 pub(crate) const STRATEGY_UNINSTALL: &[&str] = &["gate", "do"];
 
@@ -94,6 +104,10 @@ pub(crate) fn strategies(
     let mut strategies = HashMap::new();
     for spec in setup["strategies"].as_array().into_iter().flatten() {
         let id = field::<String>(spec, "id")?;
+        if let Some(review) = spec.get("loop") {
+            strategies.insert(id, review_loop(review)?);
+            continue;
+        }
         let agents = crate::calls::optional::<Vec<ChannelId>>(spec, "agents")?.unwrap_or_default();
         let strategy: Strategy = Arc::new(ScriptedStrategy {
             agents,
@@ -114,6 +128,31 @@ pub(crate) fn strategies(
         }
     };
     Ok((strategies, default))
+}
+
+/// The implementation's Loop a strategy's `loop` builds, its agents named
+/// by their channel ids.
+fn review_loop(spec: &Value) -> Result<Strategy, Unreadable> {
+    let agent = field::<ChannelId>(spec, "agent")?;
+    let named = |key| crate::calls::optional::<Vec<ChannelId>>(spec, key);
+    let strategy = crate::calls::optional::<String>(spec, "strategy")?
+        .map(|name| name.parse::<WorkerStrategy>())
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let defaults = LoopOptions::default();
+    let options = LoopOptions {
+        reviewers: named("reviewers")?
+            .unwrap_or_default()
+            .into_iter()
+            .map(StrategyAgent::from)
+            .collect(),
+        reviewer: crate::calls::optional::<ChannelId>(spec, "reviewer")?.map(StrategyAgent::from),
+        max_iterations: crate::calls::optional::<u32>(spec, "max_iterations")?
+            .unwrap_or(defaults.max_iterations),
+        strategy,
+    };
+    let review = Loop::new(agent, options).map_err(|error| error.to_string())?;
+    Ok(Arc::new(review))
 }
 
 /// The strategy `name` names among the run's.
