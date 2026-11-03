@@ -44,7 +44,8 @@ impl OpenAiApi {
 /// base_url=None, model, max_tokens=1024, timeout=30.0, connect_timeout=5.0,
 /// include_stream_usage=True, use_max_completion_tokens=False,
 /// supports_custom_temperature=True, reasoning_effort=None,
-/// default_headers=None, extra_body=None)`, built with
+/// supports_reasoning_effort_with_tools=None, default_headers=None,
+/// extra_body=None)`, built with
 /// [`OpenAiConfig::new`] and struct update.
 ///
 /// Its `Debug` never prints the API key, nor the base URL's user
@@ -88,10 +89,12 @@ pub struct OpenAiConfig {
     /// there (RFC §6.7).
     pub reasoning_effort: Option<String>,
     /// Whether the server behind a `base_url` takes `reasoning_effort` on
-    /// a turn with tools (RFC §6.7): `Some(true)` sends it as on any turn,
-    /// `Some(false)` leaves it out, `None` leaves it out with one warning.
-    /// Python's `supports_reasoning_effort_with_tools`. On OpenAI's own
-    /// endpoint the configured effort goes as on any turn.
+    /// a Chat Completions turn with tools (RFC §6.7): `Some(true)` sends it
+    /// as on any turn, `Some(false)` and `None` leave it out (Python also
+    /// warns once of `None`; roomkit-openai logs nothing). Python's
+    /// `supports_reasoning_effort_with_tools`. On OpenAI's own endpoint,
+    /// and on the Responses API, which Python's OpenAI text provider does
+    /// not speak, the configured effort goes as on any turn.
     pub supports_reasoning_effort_with_tools: Option<bool>,
     /// Headers every request carries; an `Authorization` among them
     /// replaces the key's bearer, as Python's client sends it.

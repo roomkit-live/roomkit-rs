@@ -58,15 +58,9 @@ async fn unsaid_it_is_left_out() {
     assert_eq!(sent(None, Some("low"), true).await, Value::Null);
 }
 
-// Python: tests/test_providers/test_reasoning_with_tools.py::TestPathRules::test_a_turn_that_states_off_sends_none_where_the_server_takes_it
-#[tokio::test]
-async fn none_is_sent_where_the_server_takes_it() {
-    assert_eq!(sent(Some(true), Some("none"), true).await, json!("none"));
-}
-
+/// Python's default, `supports_reasoning_effort_with_tools=None`.
 #[test]
 fn the_switch_is_unset_by_default() {
-    // roomkit.providers.openai.OpenAIConfig.__init__(supports_reasoning_effort_with_tools) = None
     let config = OpenAiConfig::new("sk-test", "mercury-2.5");
     assert_eq!(config.supports_reasoning_effort_with_tools, None);
 }

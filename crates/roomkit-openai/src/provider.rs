@@ -287,6 +287,46 @@ mod tests {
 
     use super::*;
 
+    /// The effort a turn with tools sends, `base_url` the endpoint and
+    /// `stated` the switch.
+    fn tool_turn_effort(base_url: Option<&str>, stated: Option<bool>) -> Option<String> {
+        let config = OpenAiConfig {
+            base_url: base_url.map(str::to_owned),
+            reasoning_effort: Some("low".to_owned()),
+            supports_reasoning_effort_with_tools: stated,
+            ..OpenAiConfig::new("sk-test", "gpt-5")
+        };
+        OpenAiAiProvider::new(config)
+            .unwrap()
+            .reasoning_effort(true)
+    }
+
+    /// On OpenAI's own endpoint, however written, the switch does not
+    /// decide: the catalogue does in Python, which roomkit-rs does not
+    /// carry yet, so the configured effort goes; a base URL carrying
+    /// credentials is another endpoint, which the switch decides.
+    #[test]
+    fn on_openai_s_own_endpoint_a_tool_turn_keeps_its_effort() {
+        let low = Some("low".to_owned());
+        for base_url in [
+            None,
+            Some("https://api.openai.com/v1"),
+            Some("https://api.openai.com/v1/"),
+        ] {
+            for stated in [None, Some(false)] {
+                assert_eq!(
+                    tool_turn_effort(base_url, stated),
+                    low,
+                    "{base_url:?} {stated:?}"
+                );
+            }
+        }
+        assert_eq!(
+            tool_turn_effort(Some("https://user:key@api.openai.com/v1"), None),
+            None
+        );
+    }
+
     #[test]
     fn the_endpoint_is_the_base_url_s_chat_completions() {
         assert_eq!(
