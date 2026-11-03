@@ -55,7 +55,7 @@ impl Failing {
     /// The configuration the kit keeps of the channel.
     fn config(&self) -> ChannelConfig {
         let (channel_type, category) = match self.id {
-            "raising" | "erring" | "agent_value" | "agent_cancelled" => {
+            "raising" | "erring" | "agent_value" | "agent_cancelled" | "agent_kit_closed" => {
                 (ChannelType::AI, ChannelCategory::Intelligence)
             }
             "sms_refused" | "sms_no_recipient" => (ChannelType::SMS, ChannelCategory::Transport),
@@ -140,6 +140,7 @@ impl Channel for Failing {
                 "socket gone".into()
             }),
             "agent_value" => Err(RoomKitError::Value("v".to_owned()).into()),
+            "agent_kit_closed" => Err(RoomKitError::KitClosed.into()),
             "agent_cancelled" => Err(RoomKitError::Cancelled.into()),
             "erring" => Ok(ChannelOutput {
                 error: Some(ErrorRecord::new("RuntimeError", "output error")),
@@ -182,7 +183,7 @@ impl Channel for Failing {
 }
 
 /// The targets of the probe's room, each named for how it fails.
-const TARGETS: [&str; 13] = [
+const TARGETS: [&str; 14] = [
     "on_event_refused",
     "on_event_plain",
     "deliver_refused",
@@ -196,6 +197,7 @@ const TARGETS: [&str; 13] = [
     "erring",
     "agent_value",
     "agent_cancelled",
+    "agent_kit_closed",
 ];
 
 /// What `delivery_results` holds of each of [`TARGETS`] once a message
@@ -240,6 +242,7 @@ async fn reported() -> (Vec<Option<DeliveryResult>>, Option<Vec<ChannelId>>) {
         channel("erring"),
         channel("agent_value"),
         channel("agent_cancelled"),
+        channel("agent_kit_closed"),
     ]);
     let routed = ProcessInboundOptions {
         room_id: Some(room_id()),
@@ -377,6 +380,13 @@ async fn each_failed_target_is_reported_as_python_reports_it() {
         failed(
             "agent_cancelled",
             ("TurnLinkError", "The turn ended before its output", true),
+            None,
+            None,
+        ),
+        // A kit error crosses under its class, its code kept (RMK-1128).
+        failed(
+            "agent_kit_closed",
+            ("kit_closed", &RoomKitError::KitClosed.to_string(), true),
             None,
             None,
         ),

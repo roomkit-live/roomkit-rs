@@ -723,10 +723,13 @@ fn closed_at_its_end(
 }
 
 /// Whether `error` is the kit's close ending the work that met it: a call
-/// it cut or refused, `kit_closed`, or a turn it cut or refused, the turn
-/// link's.
+/// it cut or refused, `kit_closed`, an agent's turn that met it, crossed
+/// under its class, `KitClosedError` (RMK-1128), or a turn it cut or
+/// refused, the turn link's.
 fn by_close(error: &ErrorRecord) -> bool {
-    error.error_type == KIT_CLOSED || error.error_type == TURN_LINK_ERROR
+    error.error_type == KIT_CLOSED
+        || error.error_type == TURN_LINK_ERROR
+        || error.error_type == RoomKitError::KitClosed.class_name()
 }
 
 /// `inbound`, a call into `room_id` or routed, as `context` places it, the
@@ -832,5 +835,21 @@ pub(crate) fn ended(
         Err(failure) if failure.is_panic() => std::panic::resume_unwind(failure.into_panic()),
         Err(aborted) if tasks.ended_by_close(aborted.id()) => Ok(Ok(record.aborted())),
         Err(_cancelled) => Err(RoomKitError::Cancelled),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An agent's turn that met the kit's close crosses under its class,
+    /// `KitClosedError`: the close ended it, as a `kit_closed` call and a
+    /// cut turn's link, and the caller reads no error (RMK-1128's review;
+    /// Python's cascade drops its errors once the close cut it).
+    #[test]
+    fn a_turn_that_met_the_close_is_the_close_s() {
+        let ended = [KIT_CLOSED, "KitClosedError", TURN_LINK_ERROR, "ValueError"]
+            .map(|error_type| by_close(&ErrorRecord::new(error_type, "m")));
+        assert_eq!(ended, [true, true, true, false]);
     }
 }
