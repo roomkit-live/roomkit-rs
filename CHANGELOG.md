@@ -39,8 +39,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   verifications' keys led by a NUL character, as Python's, and
   `create_room` refuses a room id holding one with `RoomKitError::Value`;
   a room the kit did not make (written to the store straight) takes no
-  room lock under such an id, the lock failing as Python's `ValueError`
-  (RMK-1281).
+  room lock under such an id, whatever the manager, the call failing with
+  `RoomKitError::Value`, as a manager's own `Value` now does (RMK-1281).
 - A room id takes no identity's verification lock (RFC §13.5), as
   Python's: the verification locks are mutexes of their own, apart from
   the room locks, so a section of the room `verification::alice` no longer

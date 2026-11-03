@@ -146,8 +146,8 @@ mod tests {
     /// A room no `create_room` made, written to the store straight, whose id
     /// holds a NUL character: in a shared manager its lock would be another
     /// lock's key, `\0__delivery__:r1` r1's delivery claim (security review
-    /// of RMK-1281, HITL 5c17ea1c). Its lock raises `ValueError`, which the
-    /// kit reports as the lock's failure, as Python raises it from the lock.
+    /// of RMK-1281, HITL 5c17ea1c). Every path reports Python's `ValueError`
+    /// as `RoomKitError::Value`, the driver's as the kit's own.
     // Python: tests/test_lanes_multiworker.py::test_a_stored_room_whose_id_holds_nul_takes_no_room_lock
     #[tokio::test]
     async fn a_stored_room_whose_id_holds_nul_takes_no_room_lock() {
@@ -173,7 +173,7 @@ mod tests {
             .attach_channel(&nul_room, &src, AttachChannelOptions::default())
             .await
             .unwrap_err();
-        assert_eq!(refused.class_name(), "ValueError", "{refused:?}");
+        assert!(matches!(refused, RoomKitError::Value(_)), "{refused:?}");
         let binding = ChannelBinding::new(src.clone(), nul_room.clone(), ChannelType::SMS);
         kit.store().add_binding(binding).await.unwrap();
         let refused = kit
@@ -185,7 +185,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(refused.class_name(), "ValueError", "{refused:?}");
+        assert!(matches!(refused, RoomKitError::Value(_)), "{refused:?}");
         let asked = asked.lock().unwrap().clone();
         assert!(!asked.contains(&nul_room.to_string()), "{asked:?}");
         kit.close().await.unwrap();

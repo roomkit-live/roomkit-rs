@@ -484,6 +484,20 @@ fn store_failure(record: ErrorRecord) -> RoomKitError {
     RoomKitError::Store(StoreFailure::new(Recorded(record)))
 }
 
+/// A lock failure the core recorded: a lock's `ValueError` as itself, as
+/// Python propagates it, the room lock's refusal of a NUL room id among
+/// them, any other as the lock's failure.
+fn lock_failure(record: ErrorRecord) -> RoomKitError {
+    if record.error_type == LOCK_VALUE {
+        return RoomKitError::Value(record.message);
+    }
+    RoomKitError::Lock(record)
+}
+
+/// The record name of a lock manager's `ValueError`
+/// ([`RoomKitError::Value`], `class_name`).
+const LOCK_VALUE: &str = "ValueError";
+
 /// The record name of a store's `ValueError` ([`StoreError::Value`]).
 const STORE_VALUE: &str = "Value";
 
@@ -556,7 +570,8 @@ impl From<InboundError> for RoomKitError {
                 Self::Channel { channel_id, error }
             }
             InboundError::Store(error) => store_failure(error),
-            InboundError::Lock(error) | InboundError::Ticket(error) => Self::Lock(error),
+            InboundError::Lock(error) => lock_failure(error),
+            InboundError::Ticket(error) => Self::Lock(error),
             other => Self::Internal(other.to_string()),
         }
     }
@@ -620,7 +635,7 @@ impl From<MemberError> for RoomKitError {
             },
             MemberError::IdentityNotFound(identity_id) => Self::IdentityNotFound(identity_id),
             MemberError::Store(error) => store_failure(error),
-            MemberError::Lock(error) => Self::Lock(error),
+            MemberError::Lock(error) => lock_failure(error),
             other => Self::Internal(other.to_string()),
         }
     }
@@ -650,7 +665,7 @@ impl From<LifecycleError> for RoomKitError {
                 transition: transition_name(transition),
             },
             LifecycleError::Store(error) => store_failure(error),
-            LifecycleError::Lock(error) => Self::Lock(error),
+            LifecycleError::Lock(error) => lock_failure(error),
             LifecycleError::ChannelFailed { channel_id, error } => {
                 Self::Channel { channel_id, error }
             }
@@ -669,7 +684,7 @@ impl From<MutationError> for RoomKitError {
             )),
             MutationError::Refused { room_id, .. } => Self::RoomClosed { room_id },
             MutationError::Store(error) => store_failure(error),
-            MutationError::Lock(error) => Self::Lock(error),
+            MutationError::Lock(error) => lock_failure(error),
             MutationError::ReentryLoopCap(room_id) => Self::ReentryLoopCap(room_id),
             other => Self::Internal(other.to_string()),
         }
