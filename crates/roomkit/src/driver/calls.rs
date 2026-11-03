@@ -106,6 +106,11 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
         } => persist_side_effects(store, tasks, observations)
             .await
             .map(|()| StoreOutcome::Persisted),
+        // A room the pipeline creates for its router's id is refused one
+        // holding a NUL character, as `create_room` refuses it (RFC §13.5).
+        StoreRequest::CreateRoom { room } if room.id.as_str().contains('\0') => Err(
+            StoreError::Value("A room id holds no NUL character".to_owned()),
+        ),
         StoreRequest::CreateRoom { room } => {
             store.create_room(room).await.map(|_| StoreOutcome::Stored)
         }

@@ -39,7 +39,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// # Errors
     ///
     /// Returns [`RoomKitError::RoomAlreadyExists`] when the room exists
-    /// already, nothing written, as Python raises `RoomAlreadyExistsError`.
+    /// already, nothing written, as Python raises `RoomAlreadyExistsError`;
+    /// [`RoomKitError::Value`] for a room id holding a NUL character, which
+    /// leads the keys of the kit's other locks in a shared lock manager
+    /// (RFC §13.5), as Python's `ValueError`.
     /// With a strategy (`options.orchestration`, or the kit's), the room is
     /// written, then installed, then announced, as Python's: its
     /// `ON_ROOM_CREATED` hooks see what the install set up (RFC §19.7). An

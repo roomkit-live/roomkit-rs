@@ -352,7 +352,7 @@ async fn read_cursor<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lock_manager::{InMemoryLockManager, RoomLockManager, key_space};
+    use crate::lock_manager::{InMemoryLockManager, RoomLockManager, SharedLockManager, key_space};
     use crate::{RoomKit, RoomKitOptions};
 
     fn room_id() -> RoomId {
@@ -423,14 +423,22 @@ mod tests {
     /// A room id is the integrator's or a sender's: the room named
     /// `__delivery__:room_1` takes its own lock, never `room_1`'s claim
     /// (security review of RMK-1153).
+    // Python: tests/test_lanes_multiworker.py::test_a_room_named_like_a_delivery_claim_holds_no_claim,
+    // with the in-memory manager and one shared across processes.
     #[tokio::test]
     async fn a_room_named_like_a_claim_shares_no_lock_with_it() {
-        let kit = RoomKit::new(RoomKitOptions::default());
-        let named = RoomId::new(format!("__delivery__:{}", room_id())).unwrap();
-        let section = kit.inner.locks.lock(&named).await.unwrap();
-        let claim = held_at_once(&kit.inner.claims, &room_id()).await;
-        drop((claim, section));
-        kit.close().await.unwrap();
+        let shared: Arc<dyn RoomLockManager> = Arc::new(SharedLockManager::default());
+        for lock_manager in [None, Some(shared)] {
+            let kit = RoomKit::new(RoomKitOptions {
+                lock_manager,
+                ..RoomKitOptions::default()
+            });
+            let named = RoomId::new(format!("__delivery__:{}", room_id())).unwrap();
+            let section = kit.inner.locks.lock(&named).await.unwrap();
+            let claim = held_at_once(&kit.inner.claims, &room_id()).await;
+            drop((claim, section));
+            kit.close().await.unwrap();
+        }
     }
 
     /// A room's claim never takes the room's own lock, whatever its id

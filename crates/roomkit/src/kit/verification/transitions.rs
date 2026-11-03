@@ -413,16 +413,30 @@ impl<S: ConversationStore> RoomKit<S> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use roomkit_core::model::{ChannelId, IdentityId, RoomId};
+
+    use crate::lock_manager::{RoomLockManager, SharedLockManager};
 
     use crate::{CreateRoomOptions, RequestVerificationOptions, RoomKit, RoomKitOptions};
 
     // Python: tests/test_identity_verification.py::test_a_room_named_like_a_verification_key_holds_no_verification
     #[tokio::test]
     async fn a_room_named_like_a_verification_key_holds_no_verification() {
-        let kit = RoomKit::new(RoomKitOptions::default());
+        let shared: Arc<dyn RoomLockManager> = Arc::new(SharedLockManager::default());
+        for lock_manager in [None, Some(shared)] {
+            held_by_no_room(RoomKit::new(RoomKitOptions {
+                lock_manager,
+                ..RoomKitOptions::default()
+            }))
+            .await;
+        }
+    }
+
+    /// Alice's verification waits on no lock of the room named like its key.
+    async fn held_by_no_room(kit: RoomKit) {
         let room = RoomId::new("r1").unwrap();
         let create = CreateRoomOptions {
             room_id: Some(room.clone()),

@@ -167,7 +167,8 @@ impl RoomLock for MemoryLock {
 }
 
 /// `manager`'s locks of `kind`: an in-memory manager's map of their own;
-/// any other manager itself, under the kind's own keys.
+/// any other manager itself, each key led by a NUL character, which no room
+/// id holds (`create_room` refuses one), as Python's `_key_space`.
 pub(crate) fn key_space(
     manager: &Arc<dyn RoomLockManager>,
     kind: &'static str,
@@ -175,7 +176,39 @@ pub(crate) fn key_space(
     let any: &dyn Any = &**manager;
     match any.downcast_ref::<InMemoryLockManager>() {
         Some(memory) => memory.key_space(kind),
-        None => Arc::clone(manager),
+        None => Arc::new(NulLedKeys(Arc::clone(manager))),
+    }
+}
+
+/// What leads the key of a lock of another kind than a room's in a shared
+/// manager: no room id holds it.
+const OTHER_KIND: char = '\0';
+
+/// A shared manager's locks of a kind other than its rooms': the same
+/// manager, each key led by a NUL character (`\0__delivery__:r1`,
+/// `\0verification:org-a:alice`), as Python's `_NulLedKeys`. The kit
+/// closes the manager itself.
+struct NulLedKeys(Arc<dyn RoomLockManager>);
+
+impl RoomLockManager for NulLedKeys {
+    fn locked<'a>(&'a self, room_id: &'a RoomId) -> LockFuture<'a, Box<dyn RoomLock>> {
+        Box::pin(async move {
+            let key = RoomId::new(format!("{OTHER_KIND}{room_id}"))?;
+            self.0.locked(&key).await
+        })
+    }
+}
+
+/// A lock manager of no in-memory kind, as one shared across processes,
+/// for the tests: the in-memory locks behind a type of its own.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct SharedLockManager(InMemoryLockManager);
+
+#[cfg(test)]
+impl RoomLockManager for SharedLockManager {
+    fn locked<'a>(&'a self, room_id: &'a RoomId) -> LockFuture<'a, Box<dyn RoomLock>> {
+        self.0.locked(room_id)
     }
 }
 

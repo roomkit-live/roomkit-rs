@@ -34,8 +34,10 @@ impl<S> Inner<S> {
 mod tests {
     use std::sync::Arc;
 
+    use roomkit_core::model::RoomId;
+
     use crate::lock_manager::{InMemoryLockManager, RoomLockManager};
-    use crate::{RoomKit, RoomKitOptions};
+    use crate::{CreateRoomOptions, RoomKit, RoomKitError, RoomKitOptions};
 
     // Python: tests/test_lock_release.py::TestTheKitsHold::test_the_kit_s_lock_manager_is_the_one_given
     #[tokio::test]
@@ -46,6 +48,19 @@ mod tests {
             ..RoomKitOptions::default()
         });
         assert!(Arc::ptr_eq(&kit.lock_manager(), &given));
+        kit.close().await.unwrap();
+    }
+
+    // Python: tests/test_locks.py::test_a_room_id_with_a_nul_character_is_refused
+    #[tokio::test]
+    async fn a_room_id_with_a_nul_character_is_refused() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let create = CreateRoomOptions {
+            room_id: Some(RoomId::new("\0__delivery__:r1").unwrap()),
+            ..CreateRoomOptions::default()
+        };
+        let refused = kit.create_room(create).await.unwrap_err();
+        assert!(matches!(refused, RoomKitError::Value(_)), "{refused:?}");
         kit.close().await.unwrap();
     }
 }
