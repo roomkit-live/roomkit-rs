@@ -21,6 +21,10 @@ pub struct AiContext {
     /// The most tokens the generation writes; `None` leaves it to the
     /// provider's configuration.
     pub max_tokens: Option<u32>,
+    /// How hard a reasoning model thinks this turn (RFC §6.7), over the
+    /// provider's configured effort; `None` leaves it to the provider's
+    /// configuration. Python's `reasoning_effort`.
+    pub reasoning_effort: Option<String>,
     /// The tools the model may call, in the toolset's order.
     pub tools: Vec<AiTool>,
     /// The turn's data for the provider.
@@ -34,6 +38,7 @@ impl Default for AiContext {
             system_prompt: None,
             temperature: 0.7,
             max_tokens: None,
+            reasoning_effort: None,
             tools: Vec::new(),
             metadata: Metadata::new(),
         }

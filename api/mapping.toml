@@ -736,10 +736,10 @@ reason = "not in 0.x: vision"
 [[missing]]
 python = "roomkit.providers.ai.AIContext.__init__"
 params = [
-    "thinking_budget", "enable_thinking", "reasoning_effort", "response_schema",
+    "thinking_budget", "enable_thinking", "response_schema",
     "room", "target_capabilities", "target_media_types", "response_metadata",
 ]
-reason = "not in 0.x: thinking, response schemas, the context's room and its targets' capabilities; the reasoning effort is the OpenAI provider's configuration"
+reason = "not in 0.x: thinking, response schemas, the context's room and its targets' capabilities"
 
 [[missing]]
 python = "roomkit.providers.ai.AIContext"
@@ -894,7 +894,7 @@ params = [
     "continuation", "thinking_coalesce_ms", "thinking_coalesce_chars",
     "script_executor", "sandbox",
     "external_tool_handler",
-    "thinking_budget", "enable_thinking", "reasoning_effort",
+    "thinking_budget", "enable_thinking",
     "response_schema", "evict_threshold_tokens", "enable_planning",
     "config_provider", "tool_search", "tool_search_pinned",
     "tool_search_threshold", "tool_search_threshold_pct",

@@ -120,6 +120,10 @@ pub struct AiChannelOptions {
     /// the loop ends `budget_exceeded` at its next round boundary (RFC
     /// §6.4). Python's `turn_budget_tokens`; `None` sets none.
     pub turn_budget_tokens: Option<u64>,
+    /// How hard a reasoning model thinks on the agent's turns (RFC §6.7),
+    /// under the effort a binding's metadata sets and over the provider's
+    /// configured one: Python's `reasoning_effort`; `None` sets none.
+    pub reasoning_effort: Option<String>,
     /// What the turn's transcript says of an event whose content reads as
     /// nothing in it (a captionless upload that is no image, for a model
     /// that does not see; an empty text): a text, or `None` to leave the
@@ -191,6 +195,7 @@ impl Default for AiChannelOptions {
             tool_timeout: Some(Duration::from_secs(30)),
             tool_timeouts: BTreeMap::new(),
             turn_budget_tokens: None,
+            reasoning_effort: None,
             describe_empty_event: None,
             max_author_images: Some(DEFAULT_MAX_AUTHOR_IMAGES),
             skills: None,
@@ -275,6 +280,7 @@ pub struct AiChannel<P> {
     system_prompt: Arc<RwLock<Option<String>>>,
     temperature: f64,
     max_tokens: Option<u32>,
+    reasoning_effort: Option<String>,
     server_instructions: ServerInstructions,
     memory: Arc<dyn MemoryProvider>,
     /// How its turns read their authors' media (RFC §6.4).
@@ -357,6 +363,7 @@ impl<P> Clone for AiChannel<P> {
             system_prompt: Arc::clone(&self.system_prompt),
             temperature: self.temperature,
             max_tokens: self.max_tokens,
+            reasoning_effort: self.reasoning_effort.clone(),
             server_instructions: self.server_instructions.clone(),
             memory: Arc::clone(&self.memory),
             media: self.media.clone(),
@@ -395,6 +402,7 @@ impl<P: AiProvider> AiChannel<P> {
             system_prompt,
             temperature,
             max_tokens,
+            reasoning_effort,
             max_context_events,
             memory,
             tool_handler,
@@ -443,15 +451,7 @@ impl<P: AiProvider> AiChannel<P> {
         let human_input = human_input_handler
             .map(|human| serve_human_input(&mut toolbox, human))
             .transpose()?;
-        let skills = match skills.filter(SkillRegistry::has_entries) {
-            Some(skills) => {
-                let skill_tools = Arc::new(SkillTools::new(skills, skills_in_prompt));
-                let own: Arc<dyn DynToolset> = Arc::<SkillTools>::clone(&skill_tools);
-                toolbox.add_own(own, SkillTools::definitions())?;
-                Some(skill_tools)
-            }
-            None => None,
-        };
+        let skills = serve_skills(&mut toolbox, skills, skills_in_prompt)?;
         Ok(Self {
             capabilities: ai_channel_capabilities(),
             channel_id,
@@ -474,6 +474,7 @@ impl<P: AiProvider> AiChannel<P> {
             )),
             temperature,
             max_tokens,
+            reasoning_effort,
             server_instructions: instructions,
             memory: memory.unwrap_or_else(|| {
                 Arc::new(SlidingWindowMemory::new(SlidingWindowMemoryOptions {
@@ -929,6 +930,22 @@ fn instructions_of(servers: &[(String, Option<String>)]) -> Result<ServerInstruc
     Ok(instructions)
 }
 
+/// The skill tools a registry with entries serves, added to `toolbox`;
+/// none for a registry without any (Python's constructor).
+fn serve_skills(
+    toolbox: &mut Toolbox,
+    skills: Option<SkillRegistry>,
+    in_prompt: bool,
+) -> Result<Option<Arc<SkillTools>>, AiError> {
+    let Some(skills) = skills.filter(SkillRegistry::has_entries) else {
+        return Ok(None);
+    };
+    let skill_tools = Arc::new(SkillTools::new(skills, in_prompt));
+    let own: Arc<dyn DynToolset> = Arc::<SkillTools>::clone(&skill_tools);
+    toolbox.add_own(own, SkillTools::definitions())?;
+    Ok(Some(skill_tools))
+}
+
 /// Refuses a bound of zero: a call's (`tool_timeout`), a tool's own
 /// (`tool_timeouts`, RFC §21.6), a turn's budget of tokens (RFC §6.4), as
 /// Python's constructor raises `ValueError` for each.
@@ -1057,6 +1074,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             self.temperature,
             self.max_tokens,
             self.bounds.turn_budget_tokens,
+            self.reasoning_effort.as_deref(),
         )?;
         let stands_alone = stands_alone(&event);
         let turn = current_turn_host();
@@ -1080,6 +1098,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             system_prompt,
             temperature: settings.temperature,
             max_tokens: settings.max_tokens,
+            reasoning_effort: settings.reasoning_effort.clone(),
             turn: turn.clone(),
             context: tools,
             intents: self.tool_call_intents,

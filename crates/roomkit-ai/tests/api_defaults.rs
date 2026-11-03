@@ -78,6 +78,8 @@ fn ai_channel_options_defaults_as_python() {
     assert_eq!(defaults.max_tool_rounds, 50);
     // roomkit.AIChannel.__init__(turn_budget_tokens) = None
     assert!(defaults.turn_budget_tokens.is_none());
+    // roomkit.AIChannel.__init__(reasoning_effort) = None
+    assert!(defaults.reasoning_effort.is_none());
     // roomkit.AIChannel.__init__(retry_policy) = None
     assert!(defaults.retry_policy.is_none());
     // roomkit.AIChannel.__init__(fallback_provider) = None

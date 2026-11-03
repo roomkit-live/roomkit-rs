@@ -37,6 +37,9 @@ pub(crate) struct TurnSettings {
     pub(crate) max_tokens: Option<u32>,
     /// The turn's budget of billed tokens; `None` sets none.
     pub(crate) turn_budget_tokens: Option<u64>,
+    /// The effort the turn asks the model for (RFC §6.7); `None` sets
+    /// none.
+    pub(crate) reasoning_effort: Option<String>,
     /// The context's fields the binding sets to a value pydantic refuses,
     /// in `AIContext`'s order: the turn fails once its context is built.
     refused: Vec<Refusal>,
@@ -44,7 +47,8 @@ pub(crate) struct TurnSettings {
 
 impl TurnSettings {
     /// The settings `metadata`, a binding's, sets over the channel's own
-    /// `temperature`, `max_tokens` and `turn_budget_tokens`. A field the
+    /// `temperature`, `max_tokens`, `turn_budget_tokens` and
+    /// `reasoning_effort`. A field the
     /// binding sets to a value pydantic refuses keeps the channel's, and
     /// [`Self::validated`] then fails the turn.
     ///
@@ -60,11 +64,13 @@ impl TurnSettings {
         temperature: f64,
         max_tokens: Option<u32>,
         turn_budget_tokens: Option<u64>,
+        reasoning_effort: Option<&str>,
     ) -> Result<Self, ChannelError> {
         let mut settings = Self {
             temperature,
             max_tokens,
             turn_budget_tokens,
+            reasoning_effort: reasoning_effort.map(str::to_owned),
             refused: Vec::new(),
         };
         let prompt = set(metadata, "system_prompt").filter(|prompt| !prompt.is_string());
@@ -84,6 +90,7 @@ impl TurnSettings {
                 Err(refusal) => settings.refused.push(refusal.of("max_tokens")),
             }
         }
+        settings.read_effort(metadata);
         if prompt.is_some() {
             settings.validated()?;
         }
@@ -91,6 +98,21 @@ impl TurnSettings {
             settings.turn_budget_tokens = Some(positive_budget(budget)?);
         }
         Ok(settings)
+    }
+
+    /// The effort `metadata` sets over the channel's: a text, as pydantic
+    /// reads `AIContext`'s `reasoning_effort: str | None`, any other value
+    /// refused.
+    fn read_effort(&mut self, metadata: &Metadata) {
+        let Some(value) = set(metadata, "reasoning_effort") else {
+            return;
+        };
+        if let Some(effort) = value.as_str() {
+            self.reasoning_effort = Some(effort.to_owned());
+        } else {
+            let refusal = Refusal::new("string_type", "Input should be a valid string", value);
+            self.refused.push(refusal.of("reasoning_effort"));
+        }
     }
 
     /// Whether the turn's context takes the settings, as Python builds
@@ -389,7 +411,7 @@ mod tests {
             return Err("no object".to_owned());
         };
         let metadata: Metadata = members.into_iter().collect();
-        TurnSettings::read(&metadata, 0.7, None, None).map_err(|error| error.to_string())
+        TurnSettings::read(&metadata, 0.7, None, None, None).map_err(|error| error.to_string())
     }
 
     /// What the turn's context makes of `metadata`: its temperature and
