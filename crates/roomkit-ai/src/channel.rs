@@ -687,29 +687,31 @@ impl<P: AiProvider> AiChannel<P> {
     }
 
     /// The tools of a turn on `binding` (RFC Appendix A.9): `configured`'s,
-    /// else those its binding's metadata declares, before the channel's
-    /// own, the host's served by `configured`'s handler, else the
-    /// channel's (Python's `_turn_base_tools`).
+    /// else those its binding's metadata declares, before `toolbox`'s, the
+    /// channel's own and its room's owner's, the host's served by
+    /// `configured`'s handler, else the channel's (Python's
+    /// `_turn_base_tools`).
     ///
     /// # Errors
     ///
     /// A binding's `tools` that is no list of definitions.
     fn turn_toolbox(
         &self,
+        toolbox: &Arc<Toolbox>,
         configured: Option<&AiChannelTurnConfig>,
         binding: &ChannelBinding,
     ) -> Result<Arc<Toolbox>, ChannelError> {
         let base = base_tools(configured, &binding.metadata)?;
         let handler = configured.and_then(|turn| turn.tool_handler.clone());
         if base.is_empty() && handler.is_none() {
-            return Ok(Arc::clone(&self.toolbox));
+            return Ok(Arc::clone(toolbox));
         }
         let handler = match handler {
             None => None,
             Some(handler) => served_by(Some(handler), Vec::new())?.map(|(toolset, _)| toolset),
         };
         let collisions = (self.channel_id.as_str(), self.turn_configs.collisions());
-        Ok(Arc::new(self.toolbox.for_turn(base, handler, collisions)))
+        Ok(Arc::new(toolbox.for_turn(base, handler, collisions)))
     }
 
     /// The system prompt of a turn in `context`'s room: its binding's
@@ -1184,21 +1186,23 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         if !self.answers(&event) {
             return Ok(ChannelOutput::default());
         }
+        let turn = current_turn_host();
+        // The tools the room's owner serves this turn join the agent's own
+        // (RFC §10.6.5), before the turn's own, none of which is declared
+        // under their names (RFC §21.1).
+        let owned = crate::tools::owner::with_owner_tools(&self.toolbox, turn.as_ref())?;
         let configured = self.turn_configs.resolve(&binding, &context).await?;
         let configured = configured.as_ref();
-        let settings = self.turn_settings(&binding, configured)?;
-        let own_tools = self.turn_toolbox(configured, &binding)?;
+        let mut settings = self.turn_settings(&binding, configured)?;
+        let toolbox = self.turn_toolbox(&owned, configured, &binding)?;
+        settings.read_budgets(&binding.metadata)?;
         let budget = self.budget_of(&settings)?;
         let stands_alone = stands_alone(&event);
-        let turn = current_turn_host();
         let system_prompt = self.turn_system_prompt(&binding, configured, &context, stands_alone);
         let tools = ToolContext::new(context.room.id.clone(), self.channel_id.clone())
             .within(turn.clone())
             .standing_alone(stands_alone)
             .acting_for(turn_actor(&event, &context.participants));
-        // The tools the room's owner serves this turn join the agent's own
-        // (RFC §10.6.5).
-        let toolbox = crate::tools::owner::with_owner_tools(&own_tools, turn.as_ref())?;
         let mut looped = Loop {
             provider: Arc::clone(&self.provider),
             toolbox,

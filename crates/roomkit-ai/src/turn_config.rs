@@ -15,6 +15,7 @@ use roomkit::{ChannelError, ClassedError};
 use serde_json::{Value, json};
 
 use crate::tools::{AiTool, ToolHandler};
+use crate::turn_settings::{Refusal, type_name, validation_error};
 
 /// One turn's configuration, which an AI channel's
 /// [`config_provider`](crate::AiChannelOptions::config_provider) returns
@@ -152,9 +153,11 @@ impl Collisions {
 ///
 /// # Errors
 ///
-/// A metadata `tools` that is no list of definitions fails the turn:
-/// Python's `KeyError` for a definition with no `name`, its `TypeError`
-/// for one that is no mapping or a `tools` that is no list.
+/// A metadata `tools` that is no list of definitions fails the turn as
+/// Python's reading of it raises: its `TypeError` for a value it cannot
+/// iterate or a definition it cannot index by name, its `KeyError` for a
+/// definition with no `name`, and pydantic's `ValidationError` for one
+/// `AITool` refuses.
 pub(crate) fn base_tools(
     turn: Option<&AiChannelTurnConfig>,
     metadata: &Metadata,
@@ -162,13 +165,18 @@ pub(crate) fn base_tools(
     if let Some(tools) = turn.and_then(|turn| turn.tools.as_ref()) {
         return Ok(tools.clone());
     }
-    let declared = match metadata.get("tools") {
-        None | Some(Value::Null) => return Ok(Vec::new()),
-        Some(Value::Array(declared)) => declared,
-        Some(other) if is_falsy(other) => return Ok(Vec::new()),
-        Some(_) => return Err(refused(TYPE_ERROR, "the binding's tools is no list")),
-    };
-    declared.iter().map(definition).collect()
+    match metadata.get("tools") {
+        None => Ok(Vec::new()),
+        Some(declared) if is_falsy(declared) => Ok(Vec::new()),
+        Some(Value::Array(declared)) => declared.iter().map(definition).collect(),
+        // Iterated, a text gives its characters and a mapping its keys,
+        // each a text indexed by "name".
+        Some(Value::String(_) | Value::Object(_)) => Err(not_indexed(&json!(""))),
+        Some(other) => Err(refused(
+            TYPE_ERROR,
+            format!("'{}' object is not iterable", type_name(other)),
+        )),
+    }
 }
 
 /// Python's class of a definition with no name.
@@ -177,30 +185,63 @@ const KEY_ERROR: &str = "builtins:KeyError";
 /// Python's class of a value read as a mapping or a list it is not.
 const TYPE_ERROR: &str = "builtins:TypeError";
 
-/// A definition of the binding's metadata as Python's `AITool` reads it:
-/// a `description` of `""` and `parameters` of `{}` when absent.
+/// A definition of the binding's metadata as Python's `AITool(name=
+/// t["name"], description=t.get("description", ""), parameters=
+/// t.get("parameters", {}))` reads it.
 fn definition(tool: &Value) -> Result<AiTool, ChannelError> {
     let Value::Object(fields) = tool else {
-        return Err(refused(TYPE_ERROR, "a binding's tool is no mapping"));
+        return Err(not_indexed(tool));
     };
     let Some(name) = fields.get("name") else {
-        return Err(refused(KEY_ERROR, "'name'"));
+        return Err(refused(KEY_ERROR, "'name'".to_owned()));
     };
-    let Some(name) = name.as_str() else {
-        return Err(refused(TYPE_ERROR, "a binding's tool name is no text"));
-    };
+    let mut refusals = Vec::new();
+    match name.as_str() {
+        None => refusals.push(text_refused(name).of("name")),
+        Some(text) => {
+            if let Err(error) = AiTool::checked(text) {
+                let message = format!("Value error, {error}");
+                refusals.push(Refusal::new("value_error", message, name).of("name"));
+            }
+        }
+    }
+    let description = fields.get("description");
+    if let Some(value) = description.filter(|value| !value.is_string()) {
+        refusals.push(text_refused(value).of("description"));
+    }
+    let parameters = fields.get("parameters");
+    if let Some(value) = parameters.filter(|value| !value.is_object()) {
+        let refusal = Refusal::new("dict_type", "Input should be a valid dictionary", value);
+        refusals.push(refusal.of("parameters"));
+    }
+    if !refusals.is_empty() {
+        return Err(validation_error("AITool", &refusals));
+    }
     Ok(AiTool {
-        name: name.to_owned(),
-        description: fields
-            .get("description")
+        name: name.as_str().unwrap_or_default().to_owned(),
+        description: description
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned(),
-        parameters: fields
-            .get("parameters")
-            .cloned()
-            .unwrap_or_else(|| json!({})),
+        parameters: parameters.cloned().unwrap_or_else(|| json!({})),
     })
+}
+
+/// pydantic's refusal of `value` as a text.
+fn text_refused(value: &Value) -> Refusal {
+    Refusal::new("string_type", "Input should be a valid string", value)
+}
+
+/// Python's `TypeError` for `value["name"]`, `value` no mapping.
+fn not_indexed(value: &Value) -> ChannelError {
+    let words = match value {
+        Value::String(_) => "string indices must be integers, not 'str'".to_owned(),
+        Value::Array(_) => "list indices must be integers or slices, not str".to_owned(),
+        other @ (Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_)) => {
+            format!("'{}' object is not subscriptable", type_name(other))
+        }
+    };
+    refused(TYPE_ERROR, words)
 }
 
 /// Whether Python reads `value` as false: `binding.metadata.get("tools")
@@ -216,8 +257,8 @@ fn is_falsy(value: &Value) -> bool {
     }
 }
 
-fn refused(class: &'static str, words: &str) -> ChannelError {
-    Box::new(ClassedError::new(class, Refused(words.to_owned())))
+fn refused(class: &'static str, words: String) -> ChannelError {
+    Box::new(ClassedError::new(class, Refused(words)))
 }
 
 /// A binding's toolset refused, in Python's words.
@@ -251,7 +292,7 @@ mod tests {
     // Python: channels/_ai_context.py _turn_base_tools reads a binding's
     // tools as `AITool(name=t["name"], description=t.get("description",
     // ""), parameters=t.get("parameters", {}))`, `or []` for a falsy one;
-    // no Python test pins its errors.
+    // no Python test pins its errors, read here from Python's own.
     #[test]
     fn a_binding_s_tools_read_as_python_reads_them() {
         let metadata = Metadata::from_iter([("tools".to_owned(), json!([{ "name": "outlook" }]))]);
@@ -264,12 +305,60 @@ mod tests {
                 parameters: json!({}),
             }]
         );
-        for falsy in [json!(null), json!(false), json!(""), json!({}), json!([])] {
+        for falsy in [
+            json!(null),
+            json!(false),
+            json!(0),
+            json!(""),
+            json!({}),
+            json!([]),
+        ] {
             let metadata = Metadata::from_iter([("tools".to_owned(), falsy)]);
             assert_eq!(base_tools(None, &metadata).unwrap(), []);
         }
-        assert_eq!(refusal(json!([{ "description": "mail" }])).0, "KeyError");
-        assert_eq!(refusal(json!(["outlook"])).0, "TypeError");
-        assert_eq!(refusal(json!({ "name": "outlook" })).0, "TypeError");
+        let indices = "string indices must be integers, not 'str'";
+        let refused = [
+            (json!([{ "description": "mail" }]), ("KeyError", "'name'")),
+            (json!(["outlook"]), ("TypeError", indices)),
+            (json!("abc"), ("TypeError", indices)),
+            (json!({ "name": "outlook" }), ("TypeError", indices)),
+            (json!(5), ("TypeError", "'int' object is not iterable")),
+            (
+                json!([5]),
+                ("TypeError", "'int' object is not subscriptable"),
+            ),
+            (
+                json!([["outlook"]]),
+                (
+                    "TypeError",
+                    "list indices must be integers or slices, not str",
+                ),
+            ),
+        ];
+        for (tools, (class, words)) in refused {
+            assert_eq!(refusal(tools), (class.to_owned(), words.to_owned()));
+        }
+    }
+
+    // Python: AITool's fields as pydantic reads them, its name checked by
+    // `_a_name_some_vendor_accepts` (RFC §6.7), every refusal named.
+    #[test]
+    fn a_binding_s_tool_that_aitool_refuses_fails_the_turn() {
+        let (class, words) =
+            refusal(json!([{ "name": 5, "description": null, "parameters": null }]));
+        assert_eq!(class, "ValidationError");
+        assert_eq!(
+            words,
+            "3 validation errors for AITool\n\
+             name\n  Input should be a valid string [type=string_type, input_value=5, input_type=int]\n\
+             description\n  Input should be a valid string [type=string_type, input_value=None, input_type=NoneType]\n\
+             parameters\n  Input should be a valid dictionary [type=dict_type, input_value=None, input_type=NoneType]"
+        );
+        let (class, words) = refusal(json!([{ "name": "bad name!" }]));
+        assert_eq!(class, "ValidationError");
+        assert!(
+            words.starts_with("1 validation error for AITool\nname\n  Value error, tool name 'bad name!' is accepted by no provider"),
+            "{words}"
+        );
     }
 }

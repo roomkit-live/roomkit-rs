@@ -188,16 +188,10 @@ async fn budgets_under(
             .unwrap();
     }
     let tap = TurnTap::on(&room.kit);
-    room.says("Order 1?").await;
-    let ended = tap
-        .messages()
-        .iter()
-        .any(|message| message.json.contains("\"loop_end\""));
-    let budgets = if ended {
-        Ok(loop_end_budgets(&tap))
-    } else {
-        let timeline = room.timeline().await;
-        Err(format!("{} rows, no loop end", timeline.len()))
+    let result = room.says("Order 1?").await;
+    let budgets = match result.error {
+        None => Ok(loop_end_budgets(&tap)),
+        Some(error) => Err(error.message),
     };
     room.kit.close().await.unwrap();
     budgets
@@ -230,5 +224,18 @@ async fn a_turn_config_s_budgets_sit_between_the_binding_s_and_the_channel_s() {
         turn_budget_tokens: Some(0),
         ..AiChannelTurnConfig::default()
     };
-    assert!(budgets_under(zero, json!(null)).await.is_err());
+    assert_eq!(
+        budgets_under(zero, json!(null)).await,
+        Err("turn_budget_tokens must be a positive number, got 0".to_owned())
+    );
+}
+
+// Python: channels/_ai_context.py _build_context reads the binding's tools
+// (`_turn_base_tools`) before its budgets (`_turn_budget`): a turn whose
+// binding gets both wrong fails on its tools.
+#[tokio::test]
+async fn a_binding_s_tools_are_read_before_its_budgets() {
+    let room = json!({ "tools": [{ "description": "x" }], "turn_budget_tokens": 0 });
+    let read = budgets_under(AiChannelTurnConfig::default(), room).await;
+    assert_eq!(read, Err("'name'".to_owned()));
 }

@@ -58,10 +58,8 @@ impl TurnSettings {
     ///
     /// A system prompt that is no text, with every field refused, as
     /// Python's `_turn_settings` reads it as `AIContext` does before the
-    /// turn reads it as a text (RMK-1237); then a token budget that is not
-    /// a positive integer, then a cost budget that is not a positive
-    /// number, as Python's `turn_budget` raises `ValueError` before the
-    /// turn reads anything.
+    /// turn reads it as a text (RMK-1237). The binding's budgets are read
+    /// apart ([`Self::read_budgets`]).
     pub(crate) fn read(
         metadata: &Metadata,
         temperature: f64,
@@ -98,13 +96,25 @@ impl TurnSettings {
         if prompt.is_some() {
             settings.validated()?;
         }
+        Ok(settings)
+    }
+
+    /// The budgets `metadata`, a binding's, sets over those the settings
+    /// were read with, once the turn's tools are read, as Python's
+    /// `_turn_budget` reads them after `_turn_base_tools`.
+    ///
+    /// # Errors
+    ///
+    /// A token budget that is not a positive integer, then a cost budget
+    /// that is not a positive number: Python's `ValueError`.
+    pub(crate) fn read_budgets(&mut self, metadata: &Metadata) -> Result<(), ChannelError> {
         if let Some(budget) = set(metadata, "turn_budget_tokens") {
-            settings.turn_budget_tokens = Some(positive_budget(budget)?);
+            self.turn_budget_tokens = Some(positive_budget(budget)?);
         }
         if let Some(budget) = set(metadata, "turn_budget_usd") {
-            settings.turn_budget_usd = Some(positive_usd(budget)?);
+            self.turn_budget_usd = Some(positive_usd(budget)?);
         }
-        Ok(settings)
+        Ok(())
     }
 
     /// The effort `metadata` sets over the channel's: a text, as pydantic
@@ -132,14 +142,20 @@ impl TurnSettings {
         if self.refused.is_empty() {
             return Ok(());
         }
-        let count = self.refused.len();
-        let plural = if count == 1 { "" } else { "s" };
-        let mut text = format!("{count} validation error{plural} for AIContext");
-        for refusal in &self.refused {
-            let _infallible = write!(text, "\n{refusal}");
-        }
-        Err(Box::new(ClassedError::new(VALIDATION_ERROR, Refused(text))))
+        Err(validation_error("AIContext", &self.refused))
     }
+}
+
+/// pydantic's `ValidationError` for the fields of `model` it refused, each
+/// named, in its words without the documentation link it adds under each.
+pub(crate) fn validation_error(model: &str, refused: &[Refusal]) -> ChannelError {
+    let count = refused.len();
+    let plural = if count == 1 { "" } else { "s" };
+    let mut text = format!("{count} validation error{plural} for {model}");
+    for refusal in refused {
+        let _infallible = write!(text, "\n{refusal}");
+    }
+    Box::new(ClassedError::new(VALIDATION_ERROR, Refused(text)))
 }
 
 /// What `metadata` sets `key` to: `None` for a `null` there, not set at
@@ -181,7 +197,7 @@ fn positive_usd(value: &Value) -> Result<f64, ChannelError> {
 /// A field's value pydantic refuses: its error type, its words and the
 /// value.
 #[derive(Clone, Debug, PartialEq)]
-struct Refusal {
+pub(crate) struct Refusal {
     field: &'static str,
     kind: &'static str,
     message: String,
@@ -190,7 +206,7 @@ struct Refusal {
 
 impl Refusal {
     /// The refusal of `value` under `kind`, in pydantic's `message`.
-    fn new(kind: &'static str, message: impl Into<String>, value: &Value) -> Self {
+    pub(crate) fn new(kind: &'static str, message: impl Into<String>, value: &Value) -> Self {
         Self {
             field: "",
             kind,
@@ -200,7 +216,7 @@ impl Refusal {
     }
 
     /// The same refusal, of the field `field`.
-    fn of(mut self, field: &'static str) -> Self {
+    pub(crate) fn of(mut self, field: &'static str) -> Self {
         self.field = field;
         self
     }
@@ -407,7 +423,7 @@ fn truncated(written: &str) -> String {
 }
 
 /// The name of the Python type `value` reads as.
-fn type_name(value: &Value) -> &'static str {
+pub(crate) fn type_name(value: &Value) -> &'static str {
     match value {
         Value::Null => "NoneType",
         Value::Bool(_) => "bool",
@@ -433,8 +449,12 @@ mod tests {
             return Err("no object".to_owned());
         };
         let metadata: Metadata = members.into_iter().collect();
-        TurnSettings::read(&metadata, 0.7, None, (None, None), None)
-            .map_err(|error| error.to_string())
+        let mut settings = TurnSettings::read(&metadata, 0.7, None, (None, None), None)
+            .map_err(|error| error.to_string())?;
+        settings
+            .read_budgets(&metadata)
+            .map_err(|error| error.to_string())?;
+        Ok(settings)
     }
 
     /// What the turn's context makes of `metadata`: its temperature and
