@@ -401,8 +401,11 @@ impl<P: AiProvider> AiChannel<P> {
     ///
     /// # Errors
     ///
-    /// Returns, as Python's constructor raises `ValueError`:
-    /// [`AiError::DuplicateTool`] for a tool given twice, or one under a
+    /// Returns, as Python's constructor raises `ValueError`: first
+    /// [`AiError::TurnBudgetTokens`] for a token budget of zero,
+    /// [`AiError::TurnBudgetUsd`] for a cost budget not above zero and
+    /// [`AiError::UnpricedModel`] for one on a model with no catalogue
+    /// price (RFC §6.4); [`AiError::DuplicateTool`] for a tool given twice, or one under a
     /// skill tool's name (RFC §21.1); [`AiError::ToolName`] for a tool whose
     /// name no vendor accepts (RFC §6.7); [`AiError::ToolPattern`] for a
     /// policy pattern holding a bracket (RFC §21.1); [`AiError::ServerLabel`]
