@@ -137,13 +137,17 @@ impl fmt::Debug for OpenAiEndpoint {
 /// What the fake answers a completion with: a text, or a text and calls.
 /// Asked to stream (`stream: true`), it sends the text word by word as
 /// server-sent events, each call's arguments in two fragments, then the
-/// completion's end and its usage; otherwise the whole completion.
+/// completion's end and its usage; otherwise the whole completion. A
+/// [`refusing`](Self::refusing) reply answers an HTTP error instead.
 #[derive(Clone, Debug)]
 pub struct Reply {
     text: String,
     calls: Vec<(String, String, String)>,
     /// How long it waits between two words of a streamed text.
     pause: Duration,
+    /// The HTTP status it refuses the request with, its text the error's
+    /// message.
+    refuses: Option<u16>,
 }
 
 impl Reply {
@@ -160,6 +164,16 @@ impl Reply {
                 .map(|(id, name, arguments)| (id.to_owned(), name.to_owned(), arguments.to_owned()))
                 .collect(),
             pause: Duration::ZERO,
+            refuses: None,
+        }
+    }
+
+    /// A refusal of the request: the HTTP `status`, with an OpenAI error
+    /// body whose message is `message`.
+    pub fn refusing(status: u16, message: &str) -> Self {
+        Self {
+            refuses: Some(status),
+            ..Self::from(message)
         }
     }
 
@@ -310,6 +324,17 @@ async fn serve(listener: TcpListener, replies: Vec<Reply>, requests: Log<Value>)
         let streams = request.get("stream") == Some(&Value::Bool(true));
         requests.push(request);
         let reply = reply.unwrap_or_else(|| Reply::from(""));
+        if let Some(status) = reply.refuses {
+            let error = json!({"error": {"message": reply.text, "type": "server_error"}});
+            let error = error.to_string();
+            let answer = format!(
+                "HTTP/1.1 {status} Refused\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{error}",
+                error.len()
+            );
+            let _sent = stream.write_all(answer.as_bytes()).await;
+            continue;
+        }
         // A client gone meanwhile reports it itself; the connection closes as
         // the stream is dropped.
         if streams {
