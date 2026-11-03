@@ -15,9 +15,12 @@ use roomkit::model::{
 use roomkit::{
     AttachChannelOptions, CloseRoomOptions, CommitEventOptions, ConversationStore, GetRoomOptions,
     HookOptions, HookTrigger, InMemoryStore, ListBindingsOptions, RoomKit, SendEventOptions,
+    SendGreetingOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiTool, ToolResult, Tools};
+use roomkit_ai::{
+    Agent, AgentOptions, AiTool, MockAiProvider, MockAiProviderOptions, ToolResult, Tools,
+};
 use serde_json::json;
 use tokio::sync::Notify;
 
@@ -80,6 +83,12 @@ fn locking_hook(kit: &RoomKit, entered: &Arc<Notify>, release: &Arc<Notify>, nee
     .unwrap();
 }
 
+/// An agent the room does not bind, for `send_greeting` to name.
+fn greeter() -> Agent<MockAiProvider> {
+    let model = MockAiProvider::new(MockAiProviderOptions::default());
+    Agent::new(channel("greeter"), model, AgentOptions::default()).unwrap()
+}
+
 /// What a call through `door` into `r` came to: a message's
 /// `(blocked, reason, cancellation_reason)`, any other's error.
 async fn waiting_call(kit: &RoomKit, door: &str) -> String {
@@ -106,6 +115,14 @@ async fn waiting_call(kit: &RoomKit, door: &str) -> String {
             .attach_channel(&r, &channel("late"), AttachChannelOptions::default())
             .await
             .map(drop),
+        "send_greeting" => {
+            let options = SendGreetingOptions {
+                agent_id: Some(channel("greeter")),
+                greeting: Some("waiter".to_owned()),
+                ..SendGreetingOptions::default()
+            };
+            kit.send_greeting(&r, options).await
+        }
         "close_room" => kit
             .close_room(&r, CloseRoomOptions::default())
             .await
@@ -129,11 +146,13 @@ async fn a_call_waiting_for_its_room_lock_is_cut_at_once() {
         "send_event",
         "commit_event",
         "attach_channel",
+        "send_greeting",
         "close_room",
     ] {
         let held = Holding::new("ws", []);
         let kit = kit_of(InMemoryStore::default(), &[&held], &["r"]).await;
         kit.register_channel(Holding::new("late", [])).unwrap();
+        kit.register_channel(greeter()).unwrap();
         let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
         locking_hook(&kit, &entered, &release, true);
         let locker = spawn_said(&kit, "locker", "r");
@@ -196,6 +215,7 @@ async fn a_call_waiting_for_its_room_lock_is_cut_at_once() {
             row("send_event", refused()),
             row("commit_event", refused()),
             row("attach_channel", refused()),
+            row("send_greeting", refused()),
             row("close_room", refused()),
         ]
     );

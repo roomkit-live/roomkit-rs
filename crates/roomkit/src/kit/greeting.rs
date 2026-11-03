@@ -6,7 +6,7 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit_core::model::{ChannelCategory, ChannelId, HookResult, RoomContext, RoomId};
-use roomkit_core::ops::{ChannelConfig, Entry};
+use roomkit_core::ops::{ChannelConfig, Entry, InboundResult, KIT_CLOSED};
 use roomkit_core::rules::hook_registry::{HookExecution, HookTrigger};
 
 use super::RoomKit;
@@ -53,12 +53,14 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// Returns once its delivery is over; called under the room's lock or
     /// from a delivery in the room, once it is committed, its delivery
-    /// following in the room's lane (RFC §13.5, §10.1 step 18).
+    /// following in the room's lane (RFC §13.5, §10.1 step 18). Dropped before
+    /// its commit, nothing of it is stored; dropped after, its delivery goes
+    /// on.
     ///
     /// # Errors
     ///
-    /// [`RoomKitError::KitClosed`] once the kit's close started (RFC
-    /// §12.10.4); [`RoomKitError::RoomNotFound`] for a room `organization_id`
+    /// [`RoomKitError::KitClosed`] once the kit's close started, or when it
+    /// cut the call before its commit (RFC §12.10.4); [`RoomKitError::RoomNotFound`] for a room `organization_id`
     /// does not reach, missing or another's (RFC §17.2); or the store's or
     /// the room lock's failure.
     pub async fn send_greeting(
@@ -87,7 +89,8 @@ impl<S: ConversationStore> RoomKit<S> {
             text,
         };
         match self.enter(entry, SEND_GREETING, false).await {
-            Ok(_) | Err(RoomKitError::RoomNotFound(_)) => Ok(()),
+            Ok(entered) => cut_by_the_close(&entered.result),
+            Err(RoomKitError::RoomNotFound(_)) => Ok(()),
             Err(error) => Err(error),
         }
     }
@@ -175,6 +178,16 @@ impl<S: ConversationStore> RoomKit<S> {
         };
         self.send_greeting(room_id, options).await
     }
+}
+
+/// What a greeting's call came to: the kit's close cut it before its commit,
+/// nothing of it stored, as [`send_event`](RoomKit::send_event) reads it (RFC
+/// §12.10.4); a greeting a room's status refused fails no one.
+fn cut_by_the_close(result: &InboundResult) -> Result<(), RoomKitError> {
+    if result.event.is_none() && result.cancellation_reason.as_deref() == Some(KIT_CLOSED) {
+        return Err(RoomKitError::KitClosed);
+    }
+    Ok(())
 }
 
 /// The agent `channel`, registering as `config` declares it, that greets on a
