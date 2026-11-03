@@ -27,6 +27,8 @@ mod harness;
 mod identity;
 #[path = "../../../roomkit/tests/conformance/input_calls.rs"]
 mod input_calls;
+#[path = "../../../roomkit/tests/conformance/locks.rs"]
+mod locks;
 #[path = "../../../roomkit/tests/conformance/matching.rs"]
 mod matching;
 #[path = "../../../roomkit/tests/conformance/media.rs"]
@@ -69,7 +71,24 @@ use crate::support::TempFile;
 
 /// Scenario id → the rule this implementation breaks on this store: the
 /// in-memory store's (crates/roomkit/tests/conformance), none beyond.
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
+    (
+        "locks/a-failed-release-keeps-a-refusal",
+        "the kit takes no lock manager yet (RMK-1153)",
+    ),
+    (
+        "locks/a-failed-release-keeps-the-committed-event-and-is-its-error",
+        "the kit takes no lock manager yet (RMK-1153)",
+    ),
+    (
+        "locks/a-lifecycle-change-stands-though-its-release-fails",
+        "the kit takes no lock manager yet (RMK-1153)",
+    ),
+    (
+        "locks/the-section-after-a-failed-release-takes-the-lock-again",
+        "the kit takes no lock manager yet (RMK-1153)",
+    ),
+];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.
