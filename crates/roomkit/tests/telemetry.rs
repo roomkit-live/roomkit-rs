@@ -632,7 +632,7 @@ async fn a_delegated_turn_s_broadcast_ends_ok_with_its_counts() {
         .await
         .unwrap();
     let spans = mock.get_spans(SpanKind::Broadcast);
-    assert!(!spans.is_empty());
+    assert_ne!(spans, vec![]);
     for span in &spans {
         assert_eq!(span.status, "ok", "{span:?}");
         assert!(span.attributes.contains_key("target_count"), "{span:?}");
