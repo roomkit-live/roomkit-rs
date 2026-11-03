@@ -109,7 +109,8 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
             &slot,
         );
         let options = crate::verification_calls::kit_options(options, &setup["kit"]);
-        let mut options = crate::media::kit_options(options, &setup["kit"], &slot);
+        let options = crate::media::kit_options(options, &setup["kit"], &slot);
+        let mut options = crate::locks::kit_options(options, &setup["kit"]);
         if let Some(backend) = queue {
             options.delivery_backend = Some(Arc::new(backend));
         }

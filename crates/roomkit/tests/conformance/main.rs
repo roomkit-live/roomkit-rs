@@ -25,6 +25,7 @@ mod errors;
 mod harness;
 mod identity;
 mod input_calls;
+mod locks;
 mod matching;
 mod media;
 mod member_calls;

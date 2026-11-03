@@ -144,6 +144,7 @@ impl Run {
             .chain(&crate::input_calls::INPUT_EVENTS)
             .chain(&crate::verification_calls::VERIFICATION_EVENTS)
             .chain(&crate::ai_hooks::AI_EVENTS)
+            .chain(&crate::locks::LOCK_EVENTS)
             .copied()
             .collect();
         let events = EventTap::on(&kit, &tapped);

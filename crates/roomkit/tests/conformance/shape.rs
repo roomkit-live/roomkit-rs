@@ -41,6 +41,7 @@ const KIT: &[&str] = &[
     "media_resolver",
     "attached_media",
     "orchestration",
+    "delivery_gap_timeout_ms",
 ];
 const MEDIA_RESOLVER: &[&str] = &["media"];
 const ATTACHED_MEDIA: &[&str] = &["key"];

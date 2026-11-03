@@ -171,6 +171,11 @@ impl Normalizer {
         if key == "index" && object.contains_key("source") {
             return room_of("room_id").map(|room| Value::from(self.index(room, raw)));
         }
+        // The indexes a delivery set skipped (RFC §8.2), read as an event's.
+        let skipped = object.get("event").and_then(Value::as_str) == Some("delivery_skipped");
+        if skipped && matches!(key, "from_index" | "to_index") {
+            return room_of("room_id").map(|room| Value::from(self.index(room, raw)));
+        }
         if !(object.contains_key("event_count") && object.contains_key("status")) {
             return None;
         }
