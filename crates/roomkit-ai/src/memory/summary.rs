@@ -229,6 +229,8 @@ mod tests {
     }
 
     // Python: tests/test_people_taking_part.py::TestEveryReaderCountsSources::test_one_sender_under_two_names_is_one_speaker[memory summary]
+    // (there a recorded author and a renamed participant; here the
+    // sender's stamped name changes, the same one source under two names)
     #[test]
     fn one_sender_under_two_names_leaves_the_summary_lines_unlabelled() {
         let context = context();
@@ -245,7 +247,7 @@ mod tests {
             kept: Vec::new(),
         };
         let read = lines.lines(&[said("Hi", "e1", "Alice"), said("Still me", "e2", "Alicia")]);
-        assert!(!read[0].starts_with("Alice"), "{read:?}");
-        assert!(!read[1].starts_with("Alicia"), "{read:?}");
+        assert!(read[0].starts_with("[user]: "), "{read:?}");
+        assert!(read[1].starts_with("[user]: "), "{read:?}");
     }
 }
