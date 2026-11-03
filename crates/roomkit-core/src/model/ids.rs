@@ -184,7 +184,8 @@ impl RoomId {
     }
 
     /// This room id led by `prefix`: a lock manager's key for a lock of
-    /// another kind than the room's (its delivery claim). It cannot fail: a
+    /// another kind than a room's (a delivery claim, a shared manager's
+    /// NUL-led claim or verification key). It cannot fail: a
     /// room id is never empty. Hidden: the Python implementation writes
     /// the key with an f-string.
     #[doc(hidden)]
