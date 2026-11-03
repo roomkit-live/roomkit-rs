@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelOutput, ChannelType, RoomContext, RoomEvent, RoomId,
+    ChannelBinding, ChannelOutput, ChannelType, Metadata, RoomContext, RoomEvent, RoomId,
 };
 use roomkit_core::rules::edits::mutation;
 use serde_json::json;
@@ -169,12 +169,14 @@ impl Loop {
         let mut state = ConversationState::new();
         state.phase = producer.channel_id.to_string();
         state.active_agent_id = Some(producer.channel_id);
-        state.context = serde_json::from_value(json!({
-            "_loop_iteration": 0,
-            "_loop_approved": false,
-            "_loop_max_iterations": self.max_iterations,
-        }))
-        .unwrap_or_default();
+        state.context = Metadata::from_iter([
+            ("_loop_iteration".to_owned(), json!(0)),
+            ("_loop_approved".to_owned(), json!(false)),
+            (
+                "_loop_max_iterations".to_owned(),
+                json!(self.max_iterations),
+            ),
+        ]);
         save_conversation_state(kit.store(), room_id, &state).await
     }
 }

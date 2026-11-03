@@ -3,6 +3,7 @@
 //! [`roomkit::orchestration`](crate::orchestration), and what it shares
 //! with the supervisor (§19.7.3).
 
+mod loop_review;
 mod loop_run;
 pub(super) mod review_loop;
 pub mod supervisor;
