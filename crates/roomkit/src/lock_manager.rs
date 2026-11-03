@@ -56,8 +56,10 @@ pub trait RoomLockManager: Any + Send + Sync {
 /// it too (a section cancelled before its release).
 pub trait RoomLock: Send + Sync {
     /// Releases the lock. A release that fails (a lease lost) changes
-    /// nothing the section decided or wrote: the kit logs it and reports it
-    /// on the operation's result (RFC §13.5).
+    /// nothing the section decided or wrote: the kit logs it, and reports
+    /// it on the operation's result where the operation's pipeline holds
+    /// the lock (RFC §13.5). The kit calls it for every lock it took, a
+    /// lock dropped unreleased (a section cancelled) included.
     fn release(
         self: Box<Self>,
     ) -> Pin<Box<dyn Future<Output = Result<(), RoomKitError>> + Send + 'static>>;
@@ -69,9 +71,9 @@ const MAX_LOCKS: usize = 1024;
 /// Python `InMemoryLockManager(max_locks=1024)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InMemoryLockManagerOptions {
-    /// Python `max_locks=1024`: the most locks kept that nobody holds or
-    /// waits for. This manager keeps none: a room's lock goes once its last
-    /// holder or waiter lets it go, so the bound always holds.
+    /// Python `max_locks=1024`: past this many locks kept, those nobody
+    /// holds or waits for are dropped, the least recently asked for first;
+    /// a held one stays, the bound passed meanwhile.
     pub max_locks: usize,
 }
 
@@ -100,13 +102,12 @@ impl InMemoryLockManager {
     pub fn new(options: InMemoryLockManagerOptions) -> Self {
         Self {
             options,
-            rooms: RoomMutexes::default(),
+            rooms: RoomMutexes::retaining(options.max_locks),
             key_spaces: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Python `size`: how many rooms' locks the manager keeps now, those
-    /// held or waited for.
+    /// Python `size`: how many rooms' locks the manager keeps now.
     #[must_use]
     pub fn size(&self) -> usize {
         self.rooms.size()
@@ -264,25 +265,35 @@ mod tests {
         second.release().await.unwrap();
     }
 
-    // Python: tests/test_locks.py::TestInMemoryLockManager::test_lru_eviction,
-    // test_held_lock_not_evicted: a lock nobody holds goes at once, a held
-    // one stays.
+    async fn lock_and_release(manager: &InMemoryLockManager, rooms: &[&str]) {
+        for id in rooms {
+            let lock = manager.locked(&room(id)).await.unwrap();
+            lock.release().await.unwrap();
+        }
+    }
+
+    // Python: tests/test_locks.py::TestInMemoryLockManager::test_lru_eviction
+    #[tokio::test]
+    async fn test_lru_eviction() {
+        let manager = InMemoryLockManager::new(InMemoryLockManagerOptions { max_locks: 2 });
+        lock_and_release(&manager, &["r1"]).await;
+        assert_eq!(manager.size(), 1);
+        lock_and_release(&manager, &["r2", "r3"]).await;
+        assert_eq!(manager.size(), 2);
+    }
+
+    // Python: tests/test_locks.py::TestInMemoryLockManager::test_held_lock_not_evicted
     #[tokio::test]
     async fn test_held_lock_not_evicted() {
         let manager = InMemoryLockManager::new(InMemoryLockManagerOptions { max_locks: 2 });
         let held = manager.locked(&room("r1")).await.unwrap();
-        for other in ["r2", "r3"] {
-            manager
-                .locked(&room(other))
-                .await
-                .unwrap()
-                .release()
-                .await
-                .unwrap();
-        }
-        assert_eq!(manager.size(), 1);
-        drop(held);
-        assert_eq!(manager.size(), 0);
+        lock_and_release(&manager, &["r2", "r3"]).await;
+        assert_eq!(manager.size(), 2);
+        // r1 is still the one held: a second ask for it waits.
+        let r1 = room("r1");
+        let again = tokio::time::timeout(Duration::from_millis(20), manager.locked(&r1));
+        assert!(again.await.is_err(), "r1's lock is still held");
+        held.release().await.unwrap();
     }
 
     // Python: tests/test_locks.py::test_reentrance_is_scoped_to_manager

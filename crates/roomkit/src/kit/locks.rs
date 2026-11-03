@@ -34,10 +34,16 @@ impl<S> Inner<S> {
 mod tests {
     use std::sync::Arc;
 
-    use roomkit_core::model::RoomId;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Mutex;
 
-    use crate::lock_manager::{InMemoryLockManager, RoomLockManager};
-    use crate::{CreateRoomOptions, RoomKit, RoomKitError, RoomKitOptions};
+    use roomkit_core::model::{ChannelId, IdentityId, RoomId};
+
+    use crate::lock_manager::{InMemoryLockManager, RoomLock, RoomLockManager};
+    use crate::{
+        CreateRoomOptions, RequestVerificationOptions, RoomKit, RoomKitError, RoomKitOptions,
+    };
 
     // Python: tests/test_lock_release.py::TestTheKitsHold::test_the_kit_s_lock_manager_is_the_one_given
     #[tokio::test]
@@ -48,6 +54,72 @@ mod tests {
             ..RoomKitOptions::default()
         });
         assert!(Arc::ptr_eq(&kit.lock_manager(), &given));
+        kit.close().await.unwrap();
+    }
+
+    /// A manager recording the key of each lock released through it.
+    #[derive(Default)]
+    struct Recording {
+        inner: InMemoryLockManager,
+        released: Arc<Mutex<Vec<String>>>,
+    }
+
+    struct Recorded {
+        lock: Box<dyn RoomLock>,
+        key: String,
+        released: Arc<Mutex<Vec<String>>>,
+    }
+
+    type Answer<'a, T> = Pin<Box<dyn Future<Output = Result<T, RoomKitError>> + Send + 'a>>;
+
+    impl RoomLockManager for Recording {
+        fn locked<'a>(&'a self, room_id: &'a RoomId) -> Answer<'a, Box<dyn RoomLock>> {
+            Box::pin(async move {
+                let lock: Box<dyn RoomLock> = Box::new(Recorded {
+                    lock: self.inner.locked(room_id).await?,
+                    key: room_id.to_string(),
+                    released: Arc::clone(&self.released),
+                });
+                Ok(lock)
+            })
+        }
+    }
+
+    impl RoomLock for Recorded {
+        fn release(self: Box<Self>) -> Answer<'static, ()> {
+            self.released.lock().unwrap().push(self.key.clone());
+            self.lock.release()
+        }
+    }
+
+    // Python: tests/test_lock_release.py (a release is the manager's on every
+    // path): a lock the kit lets go of unreleased, an identity's, is
+    // released through its manager all the same.
+    #[tokio::test]
+    async fn a_lock_the_kit_lets_go_of_is_released_through_its_manager() {
+        let locks = Arc::new(Recording::default());
+        let released = Arc::clone(&locks.released);
+        let kit = RoomKit::new(RoomKitOptions {
+            lock_manager: Some(locks),
+            ..RoomKitOptions::default()
+        });
+        let room = RoomId::new("r1").unwrap();
+        let create = CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..CreateRoomOptions::default()
+        };
+        kit.create_room(create).await.unwrap();
+        let alice = IdentityId::new("alice").unwrap();
+        let sms = ChannelId::new("sms").unwrap();
+        let options = RequestVerificationOptions::default();
+        kit.request_verification(&alice, &room, &sms, options)
+            .await
+            .unwrap();
+        let keys = released.lock().unwrap().clone();
+        assert!(
+            keys.contains(&"\0verification::alice".to_owned()),
+            "{keys:?}"
+        );
         kit.close().await.unwrap();
     }
 

@@ -155,10 +155,12 @@ impl DeliveryClaims {
 }
 
 impl DeliveryClaims {
-    /// The claim manager's lock of `room_id`'s claim, asked again after a
-    /// pause while the manager fails to grant it: the set's own deadline
-    /// bounds the wait, as Python's next lane round asks again.
+    /// The claim manager's lock of `room_id`'s claim, asked again while
+    /// the manager fails to grant it, after a pause doubled from
+    /// [`GAP_BACKOFF_INITIAL`] up to [`GAP_BACKOFF_MAX`], as Python's lane
+    /// asks again at its next round: the kit's close cuts the wait.
     async fn take(&self, room_id: &RoomId) -> HeldLock {
+        let mut pause = GAP_BACKOFF_INITIAL;
         loop {
             let taken = match claim_key(room_id) {
                 Ok(key) => self.locks.lock(&key).await,
@@ -168,7 +170,8 @@ impl DeliveryClaims {
                 Ok(lock) => return lock,
                 Err(error) => {
                     tracing::warn!(target: "roomkit::lanes", room_id = %room_id, %error, "taking the room's delivery claim failed; asking again");
-                    tokio::time::sleep(GAP_BACKOFF_MAX).await;
+                    tokio::time::sleep(pause).await;
+                    pause = (pause * 2).min(GAP_BACKOFF_MAX);
                 }
             }
         }

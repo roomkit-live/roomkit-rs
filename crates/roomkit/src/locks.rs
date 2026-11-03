@@ -7,6 +7,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::task::{Context, Poll, Waker};
 
 use roomkit_core::model::RoomId;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
@@ -30,6 +31,41 @@ pub(crate) struct RoomMutexes {
 struct Rooms {
     mutexes: HashMap<RoomId, Arc<AsyncMutex<()>>>,
     waiting: HashMap<RoomId, usize>,
+    /// How many mutexes nobody holds or waits for are kept, the least
+    /// recently asked for dropped first past it, as Python's
+    /// `InMemoryLockManager(max_locks)`; none kept at 0.
+    retained: usize,
+    /// When each room's mutex was last asked for, by a count of asks.
+    asked: HashMap<RoomId, u64>,
+    asks: u64,
+}
+
+impl Rooms {
+    /// Drops the mutexes nobody holds or waits for, the least recently
+    /// asked for first, while more than `retained` are kept, as Python's
+    /// `_evict`: a held one stays, the bound passed meanwhile.
+    fn evict(&mut self) {
+        if self.mutexes.len() <= self.retained {
+            return;
+        }
+        let mut unused: Vec<(u64, RoomId)> = self
+            .mutexes
+            .iter()
+            .filter(|(_, mutex)| Arc::strong_count(mutex) == 1)
+            .map(|(room_id, _)| {
+                (
+                    self.asked.get(room_id).copied().unwrap_or(0),
+                    room_id.clone(),
+                )
+            })
+            .collect();
+        unused.sort_unstable();
+        let over = self.mutexes.len() - self.retained;
+        for (_, room_id) in unused.into_iter().take(over) {
+            self.mutexes.remove(&room_id);
+            self.asked.remove(&room_id);
+        }
+    }
 }
 
 /// A held room mutex; dropping it releases the mutex.
@@ -60,7 +96,15 @@ impl RoomMutexes {
         let mutex = {
             let mut rooms = lock(&self.rooms);
             *rooms.waiting.entry(room_id.clone()).or_default() += 1;
-            Arc::clone(rooms.mutexes.entry(room_id.clone()).or_default())
+            rooms.asks += 1;
+            let asks = rooms.asks;
+            rooms.asked.insert(room_id.clone(), asks);
+            let created = !rooms.mutexes.contains_key(room_id);
+            let mutex = Arc::clone(rooms.mutexes.entry(room_id.clone()).or_default());
+            if created {
+                rooms.evict();
+            }
+            mutex
         };
         let mut guard = RoomGuard {
             guard: None,
@@ -84,7 +128,19 @@ impl RoomMutexes {
         lock(&self.rooms).waiting.get(room_id).copied().unwrap_or(0)
     }
 
-    /// How many rooms' mutexes are kept now: those held or waited for.
+    /// Mutexes that keep up to `retained` of those nobody holds or waits
+    /// for, as Python's `InMemoryLockManager(max_locks)`.
+    pub(crate) fn retaining(retained: usize) -> Self {
+        Self {
+            rooms: Arc::new(Mutex::new(Rooms {
+                retained,
+                ..Rooms::default()
+            })),
+        }
+    }
+
+    /// How many rooms' mutexes are kept now: those held or waited for, and
+    /// those retained.
     pub(crate) fn size(&self) -> usize {
         lock(&self.rooms).mutexes.len()
     }
@@ -120,7 +176,11 @@ impl KitLocks {
     /// holds the lock counts as a waiter no more.
     pub(crate) async fn lock(&self, key: &RoomId) -> Result<HeldLock, RoomKitError> {
         let _waiter = Waiter::new(&self.waiting, key);
-        self.manager.locked(key).await.map(HeldLock)
+        let lock = self.manager.locked(key).await?;
+        Ok(HeldLock {
+            lock: Some(lock),
+            key: key.clone(),
+        })
     }
 
     /// How many callers wait for `key`'s lock now. Outside the kit's work:
@@ -137,13 +197,55 @@ impl fmt::Debug for KitLocks {
 }
 
 /// A lock the kit holds from its lock manager: released by
-/// [`release`](Self::release), or by its drop.
-pub(crate) struct HeldLock(Box<dyn RoomLock>);
+/// [`release`](Self::release), whose failure its caller reports, or by its
+/// drop, which releases it through the manager all the same and logs a
+/// failure, as Python's `ReleaseTolerantLockManager` logs every one.
+pub(crate) struct HeldLock {
+    lock: Option<Box<dyn RoomLock>>,
+    key: RoomId,
+}
 
 impl HeldLock {
     /// Releases the lock; the future answers whether the release failed.
-    pub(crate) fn release(self) -> Pin<Box<dyn Future<Output = Result<(), RoomKitError>> + Send>> {
-        self.0.release()
+    pub(crate) fn release(
+        mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), RoomKitError>> + Send>> {
+        match self.lock.take() {
+            Some(lock) => lock.release(),
+            None => Box::pin(std::future::ready(Ok(()))),
+        }
+    }
+}
+
+impl Drop for HeldLock {
+    fn drop(&mut self) {
+        let Some(lock) = self.lock.take() else {
+            return;
+        };
+        // A release over at once (the in-memory lock's) is over before the
+        // drop returns, as the lock's own drop was; one that waits on I/O
+        // goes on in a task of its own.
+        let mut release = lock.release();
+        let key = self.key.clone();
+        match release
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+        {
+            Poll::Ready(result) => log_failed_release(&key, result),
+            Poll::Pending => {
+                if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                    drop(runtime.spawn(async move { log_failed_release(&key, release.await) }));
+                }
+            }
+        }
+    }
+}
+
+/// Logs a release that failed: what the section decided stands (RFC
+/// §13.5), as Python's `_log_failed_release`.
+fn log_failed_release(key: &RoomId, released: Result<(), RoomKitError>) {
+    if let Err(error) = released {
+        tracing::warn!(target: "roomkit::locks", key = %key, %error, "releasing the lock failed");
     }
 }
 
@@ -215,8 +317,9 @@ impl Drop for RoomGuard<'_> {
             .mutexes
             .get(&self.room_id)
             .is_some_and(|mutex| Arc::strong_count(mutex) == 1);
-        if unused {
+        if unused && rooms.retained == 0 {
             rooms.mutexes.remove(&self.room_id);
+            rooms.asked.remove(&self.room_id);
         }
     }
 }
