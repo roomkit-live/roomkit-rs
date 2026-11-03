@@ -111,6 +111,13 @@ pub(crate) enum OpenAiError {
         /// The names the vendor accepts, as a pattern matched whole.
         rule: String,
     },
+    /// OpenAI's endpoint refuses the model this turn, as its catalogue
+    /// states it (RFC §6.7): checked before the request, which never goes.
+    #[error("{reason}")]
+    ModelRefused {
+        /// Python's words.
+        reason: String,
+    },
 }
 
 impl OpenAiError {
@@ -257,7 +264,9 @@ impl From<OpenAiError> for ProviderError {
             OpenAiError::Answered { status, .. } => {
                 (status.is_some_and(retryable_status), *status, None)
             }
-            OpenAiError::ToolName { .. } => (false, None, Some(false)),
+            OpenAiError::ToolName { .. } | OpenAiError::ModelRefused { .. } => {
+                (false, None, Some(false))
+            }
             OpenAiError::Credential(_)
             | OpenAiError::Image(_)
             | OpenAiError::BaseUrl { .. }

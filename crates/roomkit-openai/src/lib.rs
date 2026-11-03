@@ -61,6 +61,7 @@ mod error;
 mod models;
 mod names;
 mod provider;
+mod reasoning;
 mod request;
 mod responses;
 mod sse;

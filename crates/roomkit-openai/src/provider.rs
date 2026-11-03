@@ -3,6 +3,7 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use roomkit_ai::{
     AiContext, AiProvider, AiResponse, ModelInfo, ProviderError, ProviderStream, TextStream,
@@ -10,6 +11,7 @@ use roomkit_ai::{
 
 use crate::config::{OpenAiApi, OpenAiConfig};
 use crate::error::OpenAiError;
+use crate::reasoning;
 use crate::request::Request;
 use crate::stream;
 use crate::wire::{self, CompletionRequest};
@@ -33,6 +35,9 @@ pub struct OpenAiAiProvider {
     config: Arc<OpenAiConfig>,
     endpoint: reqwest::Url,
     client: reqwest::Client,
+    /// Whether the provider warned of an effort a turn with tools left out
+    /// unsaid, which it does once (Python's `_reasoning_left_out_logged`).
+    left_out_warned: Arc<AtomicBool>,
 }
 
 impl OpenAiAiProvider {
@@ -63,23 +68,85 @@ impl OpenAiAiProvider {
             config: Arc::new(config),
             endpoint,
             client,
+            left_out_warned: Arc::new(AtomicBool::new(false)),
         })
     }
 
-    /// The `reasoning_effort` a Chat Completions request carries, a turn
-    /// with tools when `tools` (RFC §6.7, Python's `_tool_turn_setting`):
-    /// behind a `base_url`, a turn with tools carries it only where
-    /// `supports_reasoning_effort_with_tools` says the server takes it
-    /// there. On OpenAI's own endpoint it goes as on any turn, the
-    /// catalogue that decides there in Python not carried yet. Python
-    /// warns once of an effort left out unsaid; roomkit-openai logs
-    /// nothing.
-    fn reasoning_effort(&self, tools: bool) -> Option<String> {
-        let effort = self.config.reasoning_effort.clone()?;
-        if !tools || crate::names::is_openai_endpoint(self.config.base_url()) {
-            return Some(effort);
+    /// The catalogue's entry for the configured model where the endpoint
+    /// is OpenAI's own, which the catalogue speaks for: behind a base URL
+    /// the server decides what its model takes (RFC §6.7).
+    fn official_entry(&self) -> Option<&'static ModelInfo> {
+        if crate::names::is_openai_endpoint(self.config.base_url()) {
+            crate::models::entry(&self.config.model)
+        } else {
+            None
         }
-        (self.config.supports_reasoning_effort_with_tools == Some(true)).then_some(effort)
+    }
+
+    /// The `reasoning_effort` a Chat Completions request carries, a turn
+    /// with tools when `tools` (RFC §6.7, Python's `_apply_sampling_kwargs`):
+    /// the configured effort, the model's floor where it states off
+    /// (`none`) and the catalogue knows the model's least effort; then, on
+    /// a turn with tools, what the endpoint accepts there
+    /// ([`Self::tool_turn_effort`]).
+    pub(crate) fn reasoning_effort(&self, tools: bool) -> Option<String> {
+        let entry = self.official_entry();
+        let configured = self.config.reasoning_effort.as_deref();
+        let effort = reasoning::floored_effort(None, configured, reasoning::reasoning_floor(entry));
+        if tools {
+            self.tool_turn_effort(entry, effort)
+        } else {
+            effort
+        }
+    }
+
+    /// The effort a turn with tools sends (Python's `_tool_turn_effort`):
+    /// on OpenAI's own endpoint, a model the catalogue tags
+    /// `tools_reasoning_none` takes function tools only with `none`, sent
+    /// even unset, and one tagged `tools_reasoning_effort` takes `effort`;
+    /// any other model, and any behind a base URL, sends what the config
+    /// states of the server ([`Self::tool_turn_setting`]).
+    fn tool_turn_effort(
+        &self,
+        entry: Option<&ModelInfo>,
+        effort: Option<String>,
+    ) -> Option<String> {
+        if reasoning::tagged(entry, reasoning::TOOLS_REASONING_NONE) {
+            return Some("none".to_owned());
+        }
+        if reasoning::tagged(entry, reasoning::TOOLS_REASONING_EFFORT) {
+            return effort;
+        }
+        self.tool_turn_setting(effort)
+    }
+
+    /// The setting a turn with tools carries where no catalogue speaks for
+    /// the model (Python's `_tool_turn_setting`): kept where
+    /// `supports_reasoning_effort_with_tools` says the server takes it,
+    /// else left out, an unsaid one warned of once per provider.
+    fn tool_turn_setting(&self, setting: Option<String>) -> Option<String> {
+        let stated = self.config.supports_reasoning_effort_with_tools;
+        if let (None, Some(setting)) = (stated, &setting) {
+            self.warn_reasoning_left_out(setting);
+        }
+        setting.filter(|_| stated == Some(true))
+    }
+
+    /// Warns, once per provider, that a turn with tools left out `setting`
+    /// because the config does not say the server takes it there (Python's
+    /// `_warn_reasoning_left_out`).
+    fn warn_reasoning_left_out(&self, setting: &str) {
+        if self.left_out_warned.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        tracing::warn!(
+            target: "roomkit::openai",
+            "openai: reasoning setting '{setting}' left out of a turn with tools, since \
+             nothing says the server behind model '{}' takes it there; set \
+             supports_reasoning_effort_with_tools to Some(true) on the config if it \
+             does, or Some(false) to leave it out without this warning (RFC 6.7)",
+            self.config.model,
+        );
     }
 
     pub(crate) fn api(&self) -> OpenAiApi {
@@ -102,6 +169,13 @@ impl OpenAiAiProvider {
         streamed: bool,
     ) -> Result<(reqwest::Response, String), OpenAiError> {
         crate::names::check(self.config.base_url(), &request.tools)?;
+        if self.config.api == OpenAiApi::ChatCompletions {
+            reasoning::check_model_serves(
+                &self.config.model,
+                self.official_entry(),
+                !request.tools.is_empty(),
+            )?;
+        }
         let secret = match &self.config.token_source {
             Some(source) => source.token().await?,
             None => self.config.api_key.clone(),
@@ -313,9 +387,9 @@ mod tests {
     }
 
     /// On OpenAI's own endpoint, however written, the switch does not
-    /// decide: the catalogue does in Python, which roomkit-rs does not
-    /// carry yet, so the configured effort goes; a base URL carrying
-    /// credentials is another endpoint, which the switch decides.
+    /// decide for a model the catalogue tags: GPT-5's
+    /// `tools_reasoning_effort` keeps the configured effort; a base URL
+    /// carrying credentials is another endpoint, which the switch decides.
     #[test]
     fn on_openai_s_own_endpoint_a_tool_turn_keeps_its_effort() {
         let low = Some("low".to_owned());

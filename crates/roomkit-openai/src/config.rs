@@ -83,18 +83,22 @@ pub struct OpenAiConfig {
     /// own endpoint, a model it names (`gpt-5`, `gpt-6`, `o1`, `o3`, `o4`)
     /// takes none, any other does.
     pub supports_custom_temperature: Option<bool>,
-    /// How hard a reasoning model thinks (`reasoning_effort`), when set.
-    /// On a Chat Completions turn with tools behind a `base_url`, sent only
-    /// where `supports_reasoning_effort_with_tools` says the server takes
-    /// it there (RFC §6.7).
+    /// How hard a reasoning model thinks (`reasoning_effort`), when set
+    /// (RFC §6.7). On OpenAI's own endpoint, `none` is sent as the least
+    /// effort the catalogue says the model takes (`minimal` on GPT-5,
+    /// `low` on o3). On a Chat Completions turn with tools, a model the
+    /// catalogue tags decides there (`none` for GPT-5.4 and later, sent
+    /// even unset); any other model, and any behind a `base_url`, sends it
+    /// only where `supports_reasoning_effort_with_tools` says the server
+    /// takes it there.
     pub reasoning_effort: Option<String>,
-    /// Whether the server behind a `base_url` takes `reasoning_effort` on
-    /// a Chat Completions turn with tools (RFC §6.7): `Some(true)` sends it
-    /// as on any turn, `Some(false)` and `None` leave it out (Python also
-    /// warns once of `None`; roomkit-openai logs nothing). Python's
-    /// `supports_reasoning_effort_with_tools`. On OpenAI's own endpoint,
-    /// and on the Responses API, which Python's OpenAI text provider does
-    /// not speak, the configured effort goes as on any turn.
+    /// Whether the server takes `reasoning_effort` on a Chat Completions
+    /// turn with tools, where OpenAI's catalogue does not tag the model
+    /// (RFC §6.7): `Some(true)` sends it as on any turn, `Some(false)`
+    /// leaves it out, and `None` leaves it out with one warning per
+    /// provider. Python's `supports_reasoning_effort_with_tools`. On the
+    /// Responses API, which Python's OpenAI text provider does not speak,
+    /// the configured effort goes as on any turn.
     pub supports_reasoning_effort_with_tools: Option<bool>,
     /// Headers every request carries; an `Authorization` among them
     /// replaces the key's bearer, as Python's client sends it.

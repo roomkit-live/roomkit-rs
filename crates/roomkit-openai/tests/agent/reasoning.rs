@@ -5,7 +5,10 @@
 //! `true` sending the effort as on any turn, `false` leaving it out, unset
 //! leaving it out.
 
-use pretty_assertions::assert_eq;
+use std::pin::Pin;
+
+use futures_core::Stream;
+use pretty_assertions::{assert_eq, assert_ne};
 use roomkit_ai::{AiContext, AiMessage, AiProvider, AiRole, AiTool};
 use roomkit_openai::{OpenAiAiProvider, OpenAiConfig};
 use serde_json::{Value, json};
@@ -63,4 +66,67 @@ async fn unsaid_it_is_left_out() {
 fn the_switch_is_unset_by_default() {
     let config = OpenAiConfig::new("sk-test", "mercury-2.5");
     assert_eq!(config.supports_reasoning_effort_with_tools, None);
+}
+
+/// The body a turn with a tool sends behind a `base_url` for `model`,
+/// streamed when `streamed`, the effort `low` and the switch on.
+async fn tool_turn_body(model: &str, streamed: bool) -> Value {
+    let reply = if streamed {
+        let chunk =
+            json!({"choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}]});
+        Reply::events(&[chunk])
+    } else {
+        Reply::completion("ok")
+    };
+    let fake = FakeOpenAi::start(vec![reply]).await;
+    let config = OpenAiConfig {
+        base_url: Some(fake.base_url().to_owned()),
+        reasoning_effort: Some("low".to_owned()),
+        supports_reasoning_effort_with_tools: Some(true),
+        ..OpenAiConfig::new("sk-test", model)
+    };
+    let provider = OpenAiAiProvider::new(config).unwrap();
+    let context = AiContext {
+        messages: vec![AiMessage::new(AiRole::User, "Hi")],
+        tools: vec![AiTool::new("lookup", "x").unwrap()],
+        ..AiContext::default()
+    };
+    if streamed {
+        let mut events = provider.generate_structured_stream(&context);
+        while let Some(event) = std::future::poll_fn(|cx| Pin::new(&mut events).poll_next(cx)).await
+        {
+            event.unwrap();
+        }
+    } else {
+        provider.generate(&context).await.unwrap();
+    }
+    fake.requests()[0].body.clone()
+}
+
+// Python: tests/test_providers/test_reasoning_with_tools.py::TestOnTheWire::test_generate
+#[tokio::test]
+async fn on_the_wire_generate() {
+    let body = tool_turn_body("mercury-2.5", false).await;
+    assert_eq!(body["reasoning_effort"], json!("low"));
+    assert_ne!(body["tools"], Value::Null);
+}
+
+// Python: tests/test_providers/test_reasoning_with_tools.py::TestOnTheWire::test_stream
+#[tokio::test]
+async fn on_the_wire_stream() {
+    let body = tool_turn_body("mercury-2.5", true).await;
+    assert_eq!(body["reasoning_effort"], json!("low"));
+    assert_ne!(body["tools"], Value::Null);
+}
+
+// Python: tests/test_providers/test_request_refusals.py::TestOpenAIModelsChatRefuses::test_a_server_behind_a_base_url_decides
+#[tokio::test]
+async fn a_server_behind_a_base_url_decides() {
+    // A model OpenAI's catalogue refuses tools on Chat Completions is asked
+    // behind a base URL, whose server decides; nor does its catalogue tag
+    // decide its effort there.
+    let body = tool_turn_body("gpt-6-astra", false).await;
+    assert_eq!(body["reasoning_effort"], json!("low"));
+    let body = tool_turn_body("gpt-6-luna", false).await;
+    assert_eq!(body["reasoning_effort"], json!("low"));
 }
