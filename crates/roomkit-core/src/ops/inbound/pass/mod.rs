@@ -138,6 +138,14 @@ pub(super) enum PassResult {
         /// Why.
         refusal: EditRefusal,
     },
+    /// Committed with nothing to deliver from: the greeting of an agent the
+    /// room does not bind (RFC §19.1).
+    Stored {
+        /// The committed event.
+        event: Box<RoomEvent>,
+        /// The room's context at the commit.
+        context: Box<RoomContext>,
+    },
 }
 
 impl PassResult {
@@ -162,7 +170,7 @@ impl PassResult {
                 super::commit::join_newest(&mut context.recent_events, &stored);
                 **event = stored;
             }
-            Self::Blocked { event, .. } => **event = stored,
+            Self::Blocked { event, .. } | Self::Stored { event, .. } => **event = stored,
             Self::Refused { .. } | Self::Duplicate { .. } | Self::EditRefused { .. } => {}
         }
     }
@@ -170,7 +178,9 @@ impl PassResult {
     /// The room's context at the commit, for a pass that committed.
     pub(super) fn context(&self) -> Option<&RoomContext> {
         match self {
-            Self::Delivered { context, .. } | Self::Blocked { context, .. } => Some(context),
+            Self::Delivered { context, .. }
+            | Self::Blocked { context, .. }
+            | Self::Stored { context, .. } => Some(context),
             Self::Refused { .. } | Self::Duplicate { .. } | Self::EditRefused { .. } => None,
         }
     }
@@ -202,6 +212,8 @@ pub(super) struct PassReport {
     pub(super) placement: Placement,
     /// Whose cascade the pass belongs to.
     pub(super) lineage: Lineage,
+    /// Whether the pass was an agent's greeting (RFC §19.1).
+    pub(super) greeting: bool,
 }
 
 /// The ASYNC hooks of `BEFORE_BROADCAST` observing the event its chain
@@ -281,6 +293,10 @@ pub(super) struct CommitPass {
     /// let the event through, as identity resolution left them (RFC §10.1
     /// step 5).
     participation: Option<Box<Participation>>,
+    /// Whether the event is an agent's greeting, committed by a path of its
+    /// own: no hook, no check of its source's right to write, and a refusal
+    /// of its room's status only logged (RFC §7.5 rule 2, §19.1).
+    greeting: bool,
 }
 
 /// What the hooks decided, which the pass applies once it has read the room
@@ -445,6 +461,7 @@ impl CommitPass {
             timer_hooks: TimerHooks::default(),
             observed: None,
             participation: None,
+            greeting: false,
         }
     }
 
@@ -474,6 +491,14 @@ impl CommitPass {
     pub(super) fn participating(self, participation: Option<Participation>) -> Self {
         Self {
             participation: participation.map(Box::new),
+            ..self
+        }
+    }
+
+    /// The pass of `self`'s event as an agent's greeting (RFC §19.1).
+    pub(super) fn greeting(self) -> Self {
+        Self {
+            greeting: true,
             ..self
         }
     }
@@ -577,6 +602,7 @@ impl CommitPass {
             release_error: self.release_error.take(),
             placement: self.placement,
             lineage: self.lineage,
+            greeting: self.greeting,
         }))
     }
 

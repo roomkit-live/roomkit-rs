@@ -1985,6 +1985,7 @@ fn entry_name(entry: &Entry) -> String {
         Entry::Row { room_id, event, .. } => {
             format!("row {room_id} {:?}", text_of(&event.content))
         }
+        Entry::Greeting { room_id, text, .. } => format!("send_greeting {room_id} {text:?}"),
     }
 }
 

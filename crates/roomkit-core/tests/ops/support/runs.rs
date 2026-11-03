@@ -504,6 +504,11 @@ impl Sim {
                 organization_id,
                 post,
             } => Inbound::post(config, room_id, organization_id, *post),
+            Entry::Greeting {
+                room_id,
+                agent_id,
+                text,
+            } => Inbound::greeting(config, room_id, agent_id, text),
             // No scripted channel streams: no stream's row is handed back.
             Entry::Row { .. } => unreachable!("the simulated driver reads no stream"),
         };

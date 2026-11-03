@@ -42,6 +42,11 @@ impl Machine {
                 event_id,
                 floor,
             } => self.begin_rerun(cx, room_id, event_id, floor),
+            Call::Greeting {
+                room_id,
+                agent_id,
+                text,
+            } => self.begin_greeting(cx, room_id, agent_id, text),
         }
     }
 

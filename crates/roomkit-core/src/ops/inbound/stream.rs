@@ -82,7 +82,7 @@ impl StreamJob {
             answers_within: answers.response_visibility.clone(),
             answers,
             lineage,
-            chained: kind == SetKind::Response,
+            chained: matches!(kind, SetKind::Response | SetKind::Greeting),
             bindings,
             correlation_id: None,
         }

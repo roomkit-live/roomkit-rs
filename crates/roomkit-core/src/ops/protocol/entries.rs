@@ -13,7 +13,7 @@
 //! its delivery.
 
 use super::{InboundError, InboundResult};
-use crate::model::{DirectEvent, InboundMessage, Post, RoomEvent, RoomId};
+use crate::model::{ChannelId, DirectEvent, InboundMessage, Post, RoomEvent, RoomId};
 use crate::ops::inbound::MessageAnswers;
 
 /// Identifies an adopted entry within its operation.
@@ -89,6 +89,17 @@ pub enum Entry {
         /// never handed one row twice (RFC §12.2 step 14s).
         streamed: bool,
     },
+    /// `send_greeting(room_id, ...)`'s text path (RFC §19.1): the words of the
+    /// agent `agent_id`, committed by a path of their own, with no hook and no
+    /// check of its right to write (RFC §7.5 rule 2).
+    Greeting {
+        /// The room it greets.
+        room_id: RoomId,
+        /// The agent that greets.
+        agent_id: ChannelId,
+        /// What it says.
+        text: String,
+    },
 }
 
 impl Entry {
@@ -98,7 +109,8 @@ impl Entry {
             Self::Message { room_id, .. }
             | Self::Direct { room_id, .. }
             | Self::Post { room_id, .. }
-            | Self::Row { room_id, .. } => room_id,
+            | Self::Row { room_id, .. }
+            | Self::Greeting { room_id, .. } => room_id,
         }
     }
 }

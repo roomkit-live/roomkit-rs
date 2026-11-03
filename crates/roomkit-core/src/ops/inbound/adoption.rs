@@ -48,6 +48,7 @@ use super::arrival::{self, Arrival};
 use super::cascade::{self, entry_result, replay_result};
 use super::deadline::Stopped;
 use super::direct::{self, DirectCall};
+use super::greeting;
 use super::host_post::HostPost;
 use super::identity::{Held, Identified, Participation};
 use super::pass::{CommitPass, PassOrigin, PassReport, PassResult};
@@ -55,7 +56,7 @@ use super::queues::Lineage;
 use super::record::{RecordPass, RecordReport};
 use super::work_read::{Read, WorkRead};
 use super::{InboundError, InboundResult, Machine, MessageAnswers, result};
-use crate::model::{InboundMessage, InjectedEvent, Post, RoomEvent, RoomId};
+use crate::model::{ChannelId, InboundMessage, InjectedEvent, Post, RoomEvent, RoomId};
 use crate::ops::io::{Bound, Io};
 use crate::ops::protocol::{EffectId, Entry, EntryId, Outcome};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
@@ -355,11 +356,36 @@ impl Machine {
                 organization_id,
                 post,
             } => self.post(cx, adopted, room_id, organization_id, *post),
+            Entry::Greeting {
+                room_id,
+                agent_id,
+                text,
+            } => self.greet_within(cx, adopted, room_id, agent_id, text),
             // A row is taken by its stream's read as it is adopted.
             Entry::Row { .. } => {
                 debug_assert!(false, "a row is never started as an adopted entry");
             }
         }
+    }
+
+    /// A greeting made in the room's own work goes through its pass, drawing
+    /// on no budget: it is the agent's first words, not a call that may loop
+    /// (RFC §19.1).
+    fn greet_within(
+        &mut self,
+        cx: &mut Cx<'_>,
+        adopted: Adopted,
+        room_id: RoomId,
+        agent_id: ChannelId,
+        text: String,
+    ) {
+        let event = greeting::event(cx, room_id, agent_id, text);
+        let mut pass = Box::new(CommitPass::new(PassOrigin::Adopted(adopted.id), event).greeting());
+        within(cx, &adopted, |cx| pass.start(cx));
+        self.adopted.running.push(AdoptedRun {
+            entry: adopted,
+            state: RunState::Passing(pass),
+        });
     }
 
     /// A post's way to its injection (RFC §10.5): its room read, its speaker

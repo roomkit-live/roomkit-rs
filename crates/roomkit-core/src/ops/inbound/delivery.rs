@@ -61,6 +61,10 @@ pub(super) enum SetKind {
     /// A stored event handed to the room's agents again (RFC §11.7.6): its
     /// answers are the call's, its deliveries not reported again.
     Rerun,
+    /// An agent's greeting (RFC §19.1), the call's own or an adopted entry's:
+    /// it is no message nor injection, so its deliveries are not reported and
+    /// no `event_processed` follows it (RFC §8.2).
+    Greeting,
 }
 
 /// The responses one target returned.
@@ -291,6 +295,17 @@ impl DeliverySet {
     }
 
     /// The kind of event the set broadcasts.
+    /// The adopted entry whose caller's completion handle waits for this set,
+    /// when one does (RFC §10.1 step 18).
+    pub(super) fn entry_waiting(&self) -> Option<EntryId> {
+        match (self.kind, self.lineage) {
+            (SetKind::Adopted(entry), _) | (SetKind::Greeting, Lineage::Entry(entry)) => {
+                Some(entry)
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn kind(&self) -> SetKind {
         self.kind
     }

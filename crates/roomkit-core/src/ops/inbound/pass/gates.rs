@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use super::{CommitPass, PassOrigin, PassResult, State};
 use crate::model::RoomContext;
 use crate::ops::inbound::direct::DirectCall;
-use crate::ops::inbound::identity;
+use crate::ops::inbound::{greeting, identity};
 use crate::ops::lifecycle::gate::{self, Gate};
 use crate::ops::lifecycle::record;
 use crate::ops::protocol::{KeyHeld, Outcome, StoreRequest};
@@ -74,7 +74,11 @@ impl CommitPass {
         }
         let status = context.room.status;
         if !status.accepts_events() {
-            super::super::report::room_refused(cx, &self.event, &self.origin, status);
+            if self.greeting {
+                greeting::log_refused(&self.event);
+            } else {
+                super::super::report::room_refused(cx, &self.event, &self.origin, status);
+            }
             return self.release(cx, Ok(PassResult::Refused { status }));
         }
         let mut context = context;

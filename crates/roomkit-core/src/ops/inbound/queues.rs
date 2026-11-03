@@ -161,7 +161,7 @@ impl Cascade {
 
     /// Queues `job` at the head of the passes, ahead of what the sets of
     /// the adopted entries queued meanwhile: the trigger's pass or record.
-    fn lead(&mut self, job: Job) {
+    pub(super) fn lead(&mut self, job: Job) {
         self.passes.push_front(job);
     }
 

@@ -15,6 +15,7 @@
 use super::super::cascade::entry_result;
 use super::super::commit::{self, Committing};
 use super::super::delivery::Placement;
+use super::super::greeting;
 use super::super::queues::Lineage;
 use super::super::stamp;
 use super::{CommitPass, Observed, PassOrigin, PassResult, State, Verdict};
@@ -44,6 +45,12 @@ impl CommitPass {
     /// that need the lock, its outcome applied first (RFC §9.5.1); with no
     /// check, the whole chain runs here.
     pub(super) fn start_hooks(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
+        if self.greeting {
+            // No hook sees a greeting: it is committed by a path of its own
+            // (RFC §7.5 rule 2).
+            let event = self.event.clone();
+            return self.decide(cx, event, context);
+        }
         let run = match self.checked.take() {
             Some(chain) => HookRun::new(cx.config.hooks.locked_chain(&self.event), *chain),
             None => HookRun::of(
@@ -404,6 +411,9 @@ impl CommitPass {
         event: &mut RoomEvent,
         context: &RoomContext,
     ) -> Result<DeliveryPlan, WriteRefusal> {
+        if self.greeting {
+            return Ok(greeting::plan(cx, event, context));
+        }
         let bindings = &context.bindings;
         // An injected event is the hook's, not a channel's: it takes no source
         // check and reaches the transport targets its visibility admits only
@@ -485,6 +495,11 @@ impl CommitPass {
     /// (RFC §10.1 step 12), with no deadline: it is the room's already. A
     /// record stored blocked has no delivery set, and no place.
     fn place(&mut self, cx: &mut Cx<'_>, result: PassResult) -> State {
+        let result = if self.greeting {
+            greeting::stored_when_unbound(result)
+        } else {
+            result
+        };
         let PassResult::Delivered { event, .. } = &result else {
             return self.release(cx, Ok(result));
         };

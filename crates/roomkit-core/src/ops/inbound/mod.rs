@@ -74,6 +74,7 @@ mod delivery;
 mod direct;
 mod edits;
 mod entry;
+mod greeting;
 mod holds;
 mod host_post;
 mod identity;
@@ -247,6 +248,31 @@ impl Inbound {
         Self::calling(config, call)
     }
 
+    /// The pipeline for the greeting `text` of the agent `agent_id` in
+    /// `room_id` (RFC §19.1), with no bound on its wait for the room lock: it
+    /// is committed under that lock, the room's due timers applied, with no
+    /// hook and no check of its source's right to write (RFC §7.5 rule 2), and
+    /// runs as a direct injection from there, its delivery on the room's lane
+    /// and the answers to it re-entering. Unlike one, it draws on no reentry
+    /// budget.
+    ///
+    /// Its output is a message's: a room whose status refuses events leaves
+    /// the result `blocked`, nothing stored and nothing announced; a room that
+    /// does not exist fails it with [`InboundError::RoomNotFound`].
+    pub fn greeting(
+        config: Arc<KitConfig>,
+        room_id: RoomId,
+        agent_id: ChannelId,
+        text: String,
+    ) -> Self {
+        let call = Call::Greeting {
+            room_id,
+            agent_id,
+            text,
+        };
+        Self::calling(config, call)
+    }
+
     /// The pipeline for `responses`, the answers of turns the caller asked
     /// itself on an event it committed outside the pipeline: a delegated
     /// turn's, in a child room a transport is shared into (RFC §23.3 step
@@ -366,6 +392,7 @@ impl Inbound {
             Call::Message { .. } | Call::Rerun { .. } => EntryKind::Message,
             Call::Direct { .. } | Call::Post { .. } => EntryKind::Direct,
             Call::Responses { .. } => EntryKind::Responses,
+            Call::Greeting { .. } => EntryKind::Greeting,
         };
         Self {
             config,
@@ -477,6 +504,12 @@ enum Call {
         event_id: EventId,
         floor: u32,
     },
+    /// An agent's greeting (RFC §19.1).
+    Greeting {
+        room_id: RoomId,
+        agent_id: ChannelId,
+        text: String,
+    },
 }
 
 /// The kind of the call's own entry.
@@ -489,6 +522,9 @@ enum EntryKind {
     /// The answers to an event committed outside the pipeline (RFC §23.3
     /// step 5): no entry of the call's own.
     Responses,
+    /// An agent's greeting (RFC §19.1), which a room's refusal does nothing
+    /// to and fails no one for.
+    Greeting,
 }
 
 /// One call's state, grouped by what owns it: the facts the call learns

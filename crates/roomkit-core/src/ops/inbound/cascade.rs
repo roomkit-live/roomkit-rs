@@ -127,7 +127,9 @@ impl Machine {
             // §10.1.1 rule 5).
             let decided = matches!(
                 report.result,
-                PassResult::Delivered { .. } | PassResult::Blocked { .. }
+                PassResult::Delivered { .. }
+                    | PassResult::Blocked { .. }
+                    | PassResult::Stored { .. }
             );
             self.trigger.settle(entry_result(&report.result), decided);
         }
@@ -175,7 +177,8 @@ impl Machine {
     ) {
         let (context, made_for) = match &report.result {
             PassResult::Delivered { context, event, .. }
-            | PassResult::Blocked { context, event, .. } => (Some(&**context), Some(&**event)),
+            | PassResult::Blocked { context, event, .. }
+            | PassResult::Stored { context, event } => (Some(&**context), Some(&**event)),
             PassResult::Refused { .. }
             | PassResult::Duplicate { .. }
             | PassResult::EditRefused { .. } => (None, None),
@@ -184,7 +187,9 @@ impl Machine {
             .collect(report.tasks, report.observations, context, made_for);
         self.trigger.note_error(report.release_error);
         let injected = match &report.result {
-            PassResult::Delivered { event, .. } | PassResult::Blocked { event, .. } => {
+            PassResult::Delivered { event, .. }
+            | PassResult::Blocked { event, .. }
+            | PassResult::Stored { event, .. } => {
                 self.injected(cx, report.injected_events, event, report.lineage)
             }
             PassResult::Refused { .. }
@@ -219,6 +224,7 @@ impl Machine {
             );
         }
         let kind = match origin {
+            PassOrigin::Trigger | PassOrigin::Adopted(_) if report.greeting => SetKind::Greeting,
             PassOrigin::Trigger => SetKind::Root,
             PassOrigin::Adopted(entry) => SetKind::Adopted(*entry),
             PassOrigin::Response { .. } => SetKind::Response,
@@ -348,6 +354,13 @@ impl Machine {
                 self.settle_rerun(&outcome);
                 false
             }
+            SetKind::Greeting => {
+                if let Some(entry) = set.entry_waiting() {
+                    self.adopted_deliveries
+                        .insert(entry, delivered(set, &outcome));
+                }
+                false
+            }
             SetKind::Response | SetKind::Injected => false,
         };
         // A rerun repeats nothing of its event's first pass (RFC §11.7.6).
@@ -387,7 +400,7 @@ impl Machine {
             cancellation_reason: Some(reason.to_owned()),
             ..InboundResult::default()
         };
-        if let SetKind::Adopted(entry) = set.kind() {
+        if let Some(entry) = set.entry_waiting() {
             return cx.io.delivered(entry, cancelled);
         }
         if set.lineage() == Lineage::Call {
@@ -622,6 +635,10 @@ pub(super) fn entry_result(result: &PassResult) -> InboundResult {
         PassResult::EditRefused { refusal } => InboundResult {
             blocked: true,
             reason: Some(refusal.reason().to_owned()),
+            ..InboundResult::default()
+        },
+        PassResult::Stored { event, .. } => InboundResult {
+            event: Some((**event).clone()),
             ..InboundResult::default()
         },
         PassResult::Duplicate { event: Some(event) } => replay_result(event),

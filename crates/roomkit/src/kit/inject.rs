@@ -216,13 +216,18 @@ impl<S: ConversationStore> RoomKit<S> {
         defer: bool,
         named: Option<NamedGuard>,
     ) -> Result<Entered, RoomKitError> {
+        // A greeting starts at the room's first hop, as Python's, wherever it
+        // is made.
         let chain_depth = match &mut entry {
-            Entry::Message { message, .. } => &mut message.chain_depth,
-            Entry::Direct { event, .. } => &mut event.chain_depth,
-            Entry::Row { event, .. } => &mut event.chain_depth,
-            Entry::Post { post, .. } => &mut post.chain_depth,
+            Entry::Message { message, .. } => Some(&mut message.chain_depth),
+            Entry::Direct { event, .. } => Some(&mut event.chain_depth),
+            Entry::Row { event, .. } => Some(&mut event.chain_depth),
+            Entry::Post { post, .. } => Some(&mut post.chain_depth),
+            Entry::Greeting { .. } => None,
         };
-        context::as_deep_as_its_turn(chain_depth);
+        if let Some(chain_depth) = chain_depth {
+            context::as_deep_as_its_turn(chain_depth);
+        }
         self.inner.open()?;
         self.inner.subscribed().await;
         self.reached_from_its_work(&entry).await?;
@@ -298,7 +303,7 @@ impl<S: ConversationStore> RoomKit<S> {
             | Entry::Post {
                 organization_id, ..
             } => organization_id.as_deref(),
-            Entry::Row { .. } => None,
+            Entry::Row { .. } | Entry::Greeting { .. } => None,
         };
         let room_id = entry.room_id();
         if organization_id.is_none() || !ExecutionContext::current().works_in_room(room_id) {
@@ -338,6 +343,11 @@ impl<S: ConversationStore> RoomKit<S> {
                 organization_id,
                 post,
             } => Inbound::post(self.config(), room_id, organization_id, *post),
+            Entry::Greeting {
+                room_id,
+                agent_id,
+                text,
+            } => Inbound::greeting(self.config(), room_id, agent_id, text),
             // A stream's row goes to the run that reads the stream, never
             // through a kit's call: one here is a defect of this crate.
             Entry::Row { .. } => {
@@ -414,7 +424,7 @@ fn refusal_of(entry: &Entry) -> impl FnOnce(InboundError) -> RoomKitError + use<
             room_id.clone(),
             post.channel_id.clone().unwrap_or_else(ChannelId::host),
         )),
-        Entry::Message { .. } | Entry::Row { .. } => None,
+        Entry::Message { .. } | Entry::Row { .. } | Entry::Greeting { .. } => None,
     };
     move |error| match source {
         Some((room_id, channel_id)) => RoomKitError::of_entry(error, &room_id, &channel_id),
