@@ -26,6 +26,8 @@ pub(super) struct Generation {
     pub(super) done: StreamDone,
     /// A `Cancel` stopped it before its end (RFC §21.3).
     pub(super) cancelled: bool,
+    /// The fallback provider served it, not the channel's own (RFC §6.4).
+    pub(super) by_fallback: bool,
 }
 
 /// A call as the loop reads it.
@@ -126,6 +128,7 @@ impl Generation {
             calls: read_calls(calls),
             done,
             cancelled: false,
+            by_fallback: false,
         })
     }
 
@@ -138,6 +141,7 @@ impl Generation {
             calls: Vec::new(),
             done: StreamDone::default(),
             cancelled: true,
+            by_fallback: false,
         }
     }
 }

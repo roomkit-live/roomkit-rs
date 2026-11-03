@@ -10,6 +10,7 @@ mod inputs;
 mod intents;
 mod mock;
 mod prompt;
+mod resilience;
 mod room_turns;
 mod servers;
 mod steering;

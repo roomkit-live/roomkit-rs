@@ -225,7 +225,7 @@ impl<P: AiProvider> Loop<P> {
                 }
             };
             self.take_intents(&mut generation.calls);
-            spent.count(&generation.done.usage);
+            spent.count(&generation);
             limits.count(&generation.done.usage);
             // What the room saw (RFC §6.4, The turn's record).
             spent.segments.push(generation.delivered.clone());
@@ -306,7 +306,7 @@ impl<P: AiProvider> Loop<P> {
             usage: spent.usage.clone(),
             last_usage: Some(spent.last.clone()),
             usage_complete: Some(spent.complete),
-            ..self.end_of(reason, rounds, limits.timeout)
+            ..self.end_of(reason, rounds, limits.timeout, spent.by_fallback)
         };
         out.give(Ok(TurnItem::End(end))).await;
         // Once the reader read past the end, as Python's turn reports it
@@ -354,7 +354,12 @@ impl<P: AiProvider> Loop<P> {
             let end = LoopEndMarker {
                 usage: spent.usage.clone(),
                 usage_complete: Some(false),
-                ..self.end_of(LoopEndReason::Error, rounds, limits.timeout)
+                ..self.end_of(
+                    LoopEndReason::Error,
+                    rounds,
+                    limits.timeout,
+                    spent.by_fallback,
+                )
             };
             out.give(Ok(TurnItem::End(end))).await;
             self.report(LoopEndReason::Error, rounds, &spent);
@@ -405,21 +410,28 @@ impl<P: AiProvider> Loop<P> {
     }
 
     /// The end of the loop for `reason` after `rounds` rounds of calls, the
-    /// round bound and the deadline it ran under, its model and provider;
-    /// no usage yet.
+    /// round bound and the deadline it ran under, and the model and
+    /// provider of its last generation, the fallback's when it served it
+    /// (`by_fallback`); no usage yet.
     fn end_of(
         &self,
         reason: LoopEndReason,
         rounds: u32,
         timeout: Option<Duration>,
+        by_fallback: bool,
     ) -> LoopEndMarker {
+        let fallback = self.resilience.fallback_provider.as_ref();
+        let (model, provider) = match fallback.filter(|_| by_fallback) {
+            Some(fallback) => (fallback.dyn_model_name(), fallback.dyn_name()),
+            None => (self.provider.model_name(), self.provider.name()),
+        };
         LoopEndMarker {
             rounds,
             max_rounds: Some(self.bounds.max_rounds),
             timeout,
             budget_tokens: self.bounds.turn_budget_tokens,
-            model: Some(self.provider.model_name().to_owned()),
-            provider: Some(self.provider.name().to_owned()),
+            model: Some(model.to_owned()),
+            provider: Some(provider.to_owned()),
             ..LoopEndMarker::new(reason)
         }
     }
@@ -558,6 +570,8 @@ fn ai_tool_call(call: &ToolCall) -> AiToolCall {
 struct Spent {
     usage: Metadata,
     last: Metadata,
+    /// The fallback provider served the last generation (RFC §6.4).
+    by_fallback: bool,
     complete: bool,
     segments: Vec<String>,
     calls: u32,
@@ -572,6 +586,7 @@ impl Spent {
         Self {
             usage: Metadata::new(),
             last: Metadata::new(),
+            by_fallback: false,
             complete: true,
             segments: Vec::new(),
             calls: 0,
@@ -580,8 +595,11 @@ impl Spent {
         }
     }
 
-    /// Counts one generation's `used` counters.
-    fn count(&mut self, used: &Metadata) {
+    /// Counts one generation's usage counters, and which provider served
+    /// it.
+    fn count(&mut self, generation: &Generation) {
+        let used = &generation.done.usage;
+        self.by_fallback = generation.by_fallback;
         add_usage(&mut self.usage, used);
         self.complete &= ["input_tokens", "output_tokens"]
             .iter()

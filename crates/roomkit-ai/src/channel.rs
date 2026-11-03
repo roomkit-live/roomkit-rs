@@ -100,11 +100,13 @@ pub struct AiChannelOptions {
     /// `retry_policy`, its `retryable_errors` unread, as Python's AI channel
     /// leaves it; `None` tries nothing again.
     pub retry_policy: Option<RetryPolicy>,
-    /// The provider asked once a generation's retries are spent, nothing
-    /// handed yet (RFC §6.4): Python's `fallback_provider`, any provider,
+    /// The provider asked once a generation's retries are spent on refusals
+    /// worth another try, nothing handed yet (RFC §6.4); a refusal not worth
+    /// one never reaches it. Python's `fallback_provider`, any provider,
     /// `Some(Arc::new(provider))`. When it fails before it hands anything,
     /// the turn's error is the primary's, the fallback's its
-    /// [`source`](std::error::Error::source).
+    /// [`source`](std::error::Error::source); the record of a turn it
+    /// answered names its model and provider.
     pub fallback_provider: Option<Arc<dyn DynAiProvider>>,
     /// The longest a tool's call may take (RFC §21.6), more than zero;
     /// `None` bounds nothing.

@@ -174,7 +174,11 @@ async fn fall_back(
                 ..primary
             })
         }
-        read => read,
+        Ok(generation) => Ok(Generation {
+            by_fallback: true,
+            ..generation
+        }),
+        Err(failure) => Err(failure),
     }
 }
 
