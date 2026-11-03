@@ -95,8 +95,6 @@ pub(super) struct SetOutcome {
     /// The agents whose channel was not registered when their turn came:
     /// the turn they were owed was never taken (gap G-048).
     pub(super) unreached: Vec<ChannelId>,
-    /// How many targets the set had.
-    pub(super) targets: usize,
     /// The merged response metadata of the intelligence targets (RFC §10.1).
     pub(super) response_metadata: Metadata,
     /// The room metadata updates the targets returned, merged in the order
@@ -206,7 +204,6 @@ impl DeliverySet {
         let targets = targets_of(&plan, &event, &context);
         let outcome = SetOutcome {
             not_asked: plan.not_asked,
-            targets: targets.len(),
             ..SetOutcome::default()
         };
         Self {
@@ -840,7 +837,6 @@ impl DeliverySet {
                     channel_id = %channel_id,
                     "the transport is not registered; it is skipped"
                 );
-                self.outcome.targets = self.outcome.targets.saturating_sub(1);
             }
             Role::Agent => {
                 tracing::warn!(

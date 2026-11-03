@@ -951,8 +951,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   key a parse sets is none, and a message a turn sends is at least as deep
   as the turn's answer whatever depth its parse set (RMK-1083); the
   framework's own message is no other sender for routing (RMK-1100); a
-  partial failure's `total` counts the deliveries alone, not an agent's
-  turn (RMK-1095); a turn whose frames end or repeat before its output or
+  partial failure's `total` counts the deliveries and the failures, not an
+  agent's turn that did not fail (RMK-1095); a turn whose frames end or repeat before its output or
   in its stream reads as a lost executor, as Python's (RMK-1106).
 - An agent whose turn fails with its provider's explicit refusal reports
   the refusal's code and `retryable` across the turn backend, as Python's
