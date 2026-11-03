@@ -144,8 +144,7 @@ impl Channel for Screen {
                     println!("  screen: #{} {:?} {text:?}", row.index, row.r#type);
                     self.read.push(Read::Row(row.r#type, row.index, text));
                 }
-                // This screen shows no reasoning, which this model writes none of.
-                StreamItem::Thinking(_) => {}
+                StreamItem::Thinking(reasoning) => println!("  screen: thinking {reasoning:?}"),
                 _ => {}
             }
         }
