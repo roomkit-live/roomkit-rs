@@ -670,7 +670,7 @@ params = [
     "turn_backend",
     "error_classes",
 ]
-reason = "not in 0.x: a keyword for a feature Rust lacks (lot 1's list: identity, locks across processes, voice, delivery backends, orchestration, telemetry, the turn backend, the gap skip)"
+reason = "not in 0.x: a keyword for a feature Rust lacks (lot 1's list: identity, locks across processes, voice, delivery backends, orchestration, telemetry, the turn backend)"
 
 [[missing]]
 python = "roomkit.RoomKit.create_room"
