@@ -1142,6 +1142,8 @@ fn delivery_backend_options_defaults_as_python() {
     assert!(kit.lock_manager.is_none());
     // roomkit.RoomKit.__init__(delivery_claim_lock_manager) = None
     assert!(kit.delivery_claim_lock_manager.is_none());
+    // roomkit.RoomKit.__init__(telemetry) = None
+    assert!(kit.telemetry.is_none());
 }
 
 #[test]
@@ -1431,4 +1433,62 @@ fn console_tool_auditor_options_defaults_as_python() {
     let defaults = orchestration::ConsoleToolAuditorOptions::default();
     // roomkit.orchestration.ConsoleToolAuditor.__init__(level) = 20
     assert_eq!(defaults.level, tracing::Level::INFO);
+}
+
+#[test]
+fn console_telemetry_provider_options_defaults_as_python() {
+    let defaults = roomkit::telemetry::ConsoleTelemetryProviderOptions::default();
+    // roomkit.telemetry.ConsoleTelemetryProvider.__init__(level) = 20
+    assert_eq!(defaults.level, tracing::Level::INFO);
+}
+
+#[test]
+fn start_span_options_defaults_as_python() {
+    let defaults = roomkit::telemetry::StartSpanOptions::default();
+    // roomkit.telemetry.TelemetryProvider.start_span(parent_id) = None
+    assert!(defaults.parent_id.is_none());
+    // roomkit.telemetry.TelemetryProvider.start_span(attributes) = None
+    assert!(defaults.attributes.is_empty());
+    // roomkit.telemetry.TelemetryProvider.start_span(room_id) = None
+    assert!(defaults.room_id.is_none());
+    // roomkit.telemetry.TelemetryProvider.start_span(session_id) = None
+    assert!(defaults.session_id.is_none());
+    // roomkit.telemetry.TelemetryProvider.start_span(channel_id) = None
+    assert!(defaults.channel_id.is_none());
+}
+
+#[test]
+fn end_span_options_defaults_as_python() {
+    let defaults = roomkit::telemetry::EndSpanOptions::default();
+    // roomkit.telemetry.TelemetryProvider.end_span(status) = 'ok'
+    assert_eq!(defaults.status, "ok");
+    // roomkit.telemetry.TelemetryProvider.end_span(error_message) = None
+    assert!(defaults.error_message.is_none());
+    // roomkit.telemetry.TelemetryProvider.end_span(attributes) = None
+    assert!(defaults.attributes.is_empty());
+}
+
+#[test]
+fn record_metric_options_defaults_as_python() {
+    let defaults = roomkit::telemetry::RecordMetricOptions::default();
+    // roomkit.telemetry.TelemetryProvider.record_metric(unit) = ''
+    assert_eq!(defaults.unit, "");
+    // roomkit.telemetry.TelemetryProvider.record_metric(attributes) = None
+    assert!(defaults.attributes.is_empty());
+}
+
+#[cfg(feature = "opentelemetry")]
+#[test]
+fn open_telemetry_provider_options_defaults_as_python() {
+    let defaults = roomkit::telemetry::OpenTelemetryProviderOptions::default();
+    // roomkit.telemetry.OpenTelemetryProvider.__init__(tracer_provider) = None
+    assert!(defaults.tracer_provider.is_none());
+    // roomkit.telemetry.OpenTelemetryProvider.__init__(meter_provider) = None
+    assert!(defaults.meter_provider.is_none());
+    // roomkit.telemetry.OpenTelemetryProvider.__init__(service_name) = 'roomkit'
+    assert_eq!(defaults.service_name, "roomkit");
+    // roomkit.telemetry.OpenTelemetryProvider.__init__(metadata) = None
+    assert!(defaults.metadata.is_empty());
+    // roomkit.telemetry.OpenTelemetryProvider.__init__(shutdown_flush_timeout) = 4.0
+    assert_eq!(defaults.shutdown_flush_timeout, Duration::from_secs(4));
 }

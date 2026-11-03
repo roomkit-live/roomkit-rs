@@ -56,6 +56,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::orchestration::strategies::supervisor" = ["roomkit.orchestration.strategies.supervisor"]
 "roomkit::identity" = ["roomkit.identity"]
 "roomkit::tasks" = ["roomkit.tasks"]
+"roomkit::telemetry" = ["roomkit.telemetry"]
 "roomkit_ai::tasks" = ["roomkit.tasks"]
 "roomkit_ai::orchestration" = ["roomkit.orchestration"]
 
@@ -187,6 +188,13 @@ rust = "roomkit::StoreError"
 python = "roomkit.RoomKitError"
 py_spec = "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
 reason = "Python's stores raise RoomKitError's classes, which Rust's store error names by its variants (lot 2's rule, decision 14)"
+
+[[map]]
+rust = "roomkit::telemetry::TelemetryProvider::span"
+python = "roomkit.telemetry.TelemetryProvider.span"
+params = { options = "kwargs" }
+py_spec = "sha256:30e213f1511fa8a622a6cfe3080264ae63e5e90abe309672300469052de0cd86"
+reason = "Python's **kwargs, which go to start_span's keywords: StartSpanOptions (HITL 1f3000f6, RMK-1213)"
 
 [[map]]
 rust = "roomkit_ai::Agent::new"
@@ -643,9 +651,9 @@ reason = "the delivery path's own fields, held private: no channel of 0.x plays 
 [[missing]]
 python = "roomkit.RoomKit"
 members = [
-    "set_agent_response_policy", "set_room_timers", "telemetry",
+    "set_agent_response_policy", "set_room_timers",
 ]
-reason = "not in 0.x: the kit's other reads and setters, and telemetry"
+reason = "not in 0.x: the kit's other reads and setters"
 
 [[missing]]
 python = "roomkit.RoomKit"
@@ -661,12 +669,11 @@ reason = "not in 0.x: voice and video"
 python = "roomkit.RoomKit.__init__"
 params = [
     "stt", "tts", "voice",
-    "telemetry",
     "inbound_rate_limit", "persistence_policy",
     "turn_backend",
     "error_classes",
 ]
-reason = "not in 0.x: a keyword for a feature Rust lacks (lot 1's list: identity, locks across processes, voice, delivery backends, orchestration, telemetry, the turn backend)"
+reason = "not in 0.x: a keyword for a feature Rust lacks (lot 1's list: identity, locks across processes, voice, delivery backends, orchestration, the turn backend)"
 
 [[missing]]
 python = "roomkit.RoomKit.create_room"
@@ -975,3 +982,31 @@ reason = "what a tool handler raises, one enum for a handler's Result: Python's 
 rust = "roomkit::RoomKit::start"
 approved = "2026-11-01"
 reason = "Python's `async with RoomKit(...)` entering the kit, which starts its delivery backend: Rust has no async context manager (architecture: the kit's start, decided by the maintainer on 2026-11-01, RMK-1133)"
+
+[[exception]]
+rust = "roomkit::telemetry::SpanGuard"
+approved = "2026-11-03"
+reason = "Python's `with provider.span(kind, name) as span_id:`: Rust has no context manager and no exception the guard could see; end() ends the span ok, fail(message) in error, a drop ok, or in error while the thread panics (HITL 1f3000f6, RMK-1213)"
+
+[[exception]]
+rust = "roomkit::telemetry::MockTelemetryProvider"
+members = ["completed_spans", "metrics"]
+approved = "2026-11-03"
+reason = "Python's instance attributes completed_spans and metrics, which the snapshot lists no attribute of: methods of the same names, a metric a tuple (HITL 1f3000f6, RMK-1213)"
+
+[[exception]]
+rust = "roomkit::telemetry::Attr"
+members = [
+    "PROVIDER", "MODEL", "ROOM_ID", "SESSION_ID", "CHANNEL_ID", "TTFB_MS", "DURATION_MS",
+    "STT_TEXT", "STT_TEXT_LENGTH", "STT_CONFIDENCE", "STT_IS_FINAL", "STT_MODE", "TTS_VOICE",
+    "TTS_CHAR_COUNT", "TTS_TEXT_LENGTH", "LLM_INPUT_TOKENS", "LLM_OUTPUT_TOKENS",
+    "LLM_TOOL_COUNT", "LLM_STREAMING", "HOOK_NAME", "HOOK_TRIGGER", "HOOK_RESULT",
+    "PIPELINE_FRAME_COUNT", "PIPELINE_BYTES_PROCESSED", "PIPELINE_STAGES", "PIPELINE_FRAMES",
+    "REALTIME_PROVIDER", "REALTIME_TOOL_NAME", "REALTIME_TOOL_DENIED", "DELIVERY_CHANNEL_TYPE",
+    "DELIVERY_RECIPIENT", "DELIVERY_SUCCESS", "DELIVERY_ERROR", "DELIVERY_MESSAGE_ID",
+    "STORE_OPERATION", "STORE_TABLE", "BACKEND_TYPE", "DELEGATION_TASK_ID",
+    "DELEGATION_WORKER_ID", "DELEGATION_CHILD_ROOM_ID", "DELEGATION_PARENT_ROOM_ID",
+    "DELEGATION_STATUS", "DELEGATION_MODE",
+]
+approved = "2026-11-03"
+reason = "Python's class attributes, which the snapshot does not list: associated constants of the same names and values (HITL dddf8dc0, RMK-1213)"

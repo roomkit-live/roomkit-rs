@@ -147,6 +147,12 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// claim is held for a whole delivery set, provider round trips
     /// included: a manager of its own keeps it off the room locks' pool.
     pub delivery_claim_lock_manager: Option<Arc<dyn crate::RoomLockManager>>,
+    /// Python `telemetry=None`: where the kit reports its spans and metrics,
+    /// a [`TelemetryConfig`](crate::telemetry::TelemetryConfig), which a
+    /// provider converts into (`Some(provider.into())`); a
+    /// [`NoopTelemetryProvider`](crate::telemetry::NoopTelemetryProvider)
+    /// by default.
+    pub telemetry: Option<crate::telemetry::TelemetryConfig>,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -182,6 +188,7 @@ impl<S> RoomKitOptions<S> {
             delivery_gap_timeout: DELIVERY_GAP_TIMEOUT,
             lock_manager: None,
             delivery_claim_lock_manager: None,
+            telemetry: None,
         }
     }
 }
@@ -207,6 +214,7 @@ impl<S> fmt::Debug for RoomKitOptions<S> {
                 "delivery_claim_lock_manager",
                 &self.delivery_claim_lock_manager.is_some(),
             )
+            .field("telemetry", &self.telemetry)
             .finish_non_exhaustive()
     }
 }

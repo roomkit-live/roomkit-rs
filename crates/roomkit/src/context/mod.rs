@@ -430,8 +430,11 @@ impl ExecutionContext {
     }
 
     /// Runs `future` within this context.
-    pub(crate) async fn scope<F: Future>(self, future: F) -> F::Output {
-        CONTEXT.scope(self, future).await
+    ///
+    /// It carries the span current where it is called (Python's context
+    /// copied into a task), which a call spawned so runs under.
+    pub(crate) fn scope<F: Future>(self, future: F) -> impl Future<Output = F::Output> {
+        crate::telemetry::within_current_span(CONTEXT.scope(self, future))
     }
 
     /// A live lease on `room_id`'s lock, which a call of this context runs
@@ -665,6 +668,7 @@ where
     // The tool call a handler runs within rides along, as Python's
     // `create_task` copies its `ContextVar` (RFC §21.4).
     let future = crate::tool_call_scope::within_current_tool_call(future);
+    let future = crate::telemetry::within_current_span(future);
     CONTEXT.scope(
         ExecutionContext::current(),
         Marks::current().scoped(crate::turn::within_current_turn(future)),

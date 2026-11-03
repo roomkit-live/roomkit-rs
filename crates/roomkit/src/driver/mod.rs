@@ -34,6 +34,7 @@ mod holds;
 mod in_flight;
 mod inbound;
 mod indexes;
+mod spans;
 
 use std::collections::HashMap;
 use std::future::poll_fn;
@@ -68,6 +69,7 @@ use crate::gaps::{CursorTurn, Turned};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::tasks::{CUT_UNWIND, Kind, Marks, Phase};
+use crate::telemetry::within_kit;
 use crate::turns::Canceller;
 
 /// The kit's clock and the runtime's, read together at a run's start: a
@@ -335,6 +337,7 @@ async fn drive<S: ConversationStore, O: Operation>(
     let driver = Driver {
         calls: JoinSet::new(),
         waits: Vec::new(),
+        spans: spans::RunSpans::new(Arc::clone(&inner.telemetry)),
         inner,
         call,
         context: ExecutionContext::current(),
@@ -381,6 +384,8 @@ struct Driver<'kit, S> {
     calls: JoinSet<Outcome>,
     /// The waits the run polls, each by its effect, with what it waits for.
     waits: Vec<(EffectId, Wait, Waiting<'kit>)>,
+    /// The `framework.broadcast` spans of the run's delivery sets.
+    spans: spans::RunSpans,
     inner: &'kit Arc<Inner<S>>,
     /// The kit's call the run serves, which an error names.
     call: &'static str,
@@ -863,7 +868,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         if let Request::Store(StoreRequest::Commit { event, .. }) = &request {
             commit = Some(((**event).clone(), answers.map(|of| (of, (**event).clone()))));
             self.indexes.committing(id, event);
+            self.spans.committing(event);
         }
+        let span = self.spans.requested(id, &request);
         if self.cut_now && !matches!(&request, Request::Hold(_) | Request::Store(_)) {
             // A run the close cut past its decision calls nothing more; a
             // write it asks is refused at its spawn, the grace run out.
@@ -882,24 +889,24 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 if self.caller.is_some() {
                     self.writing.insert(id, went_on);
                 }
-                self.spawn(id, work, deadline, writing);
+                self.spawn(id, work, deadline, None, writing);
             }
-            Request::Store(request) => self.spawn(id, work, deadline, async move {
+            Request::Store(request) => self.spawn(id, work, deadline, None, async move {
                 calls::store(&*inner.store, request).await
             }),
             Request::Channel(request) => {
                 let shared = Arc::clone(&self.shared);
-                self.spawn(id, work, deadline, async move {
+                self.spawn(id, work, deadline, span, async move {
                     Box::pin(calls::channel(&inner, &shared, id, request)).await
                 });
             }
-            Request::Hook(request) => self.spawn(id, work, deadline, async move {
+            Request::Hook(request) => self.spawn(id, work, deadline, None, async move {
                 calls::hook(&inner, request).await
             }),
-            Request::Route { query } => self.spawn(id, work, deadline, async move {
+            Request::Route { query } => self.spawn(id, work, deadline, None, async move {
                 calls::route(&inner, &query).await
             }),
-            Request::Identity(request) => self.spawn(id, work, deadline, async move {
+            Request::Identity(request) => self.spawn(id, work, deadline, None, async move {
                 calls::identity(&inner, request).await
             }),
         }
@@ -1116,18 +1123,21 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         effect: EffectId,
         work: Work,
         deadline: Option<Instant>,
+        span: Option<String>,
         call: impl Future<Output = Outcome> + Send + 'static,
     ) {
         let frame = Frame::new(&self.shared, effect, work);
         self.shared.calling(effect);
         let context = self.context.within(frame);
+        let telemetry = &self.inner.telemetry;
+        let call = within_kit(telemetry, span, async move {
+            within(deadline, call)
+                .await
+                .unwrap_or(Outcome::DeadlinePassed)
+        });
         let task = self
             .calls
-            .spawn(self.marks.clone().scoped(context.scope(async move {
-                within(deadline, call)
-                    .await
-                    .unwrap_or(Outcome::DeadlinePassed)
-            })));
+            .spawn(self.marks.clone().scoped(context.scope(call)));
         self.effect_of_task.insert(task.id(), effect);
         self.call_of_effect.insert(effect, task);
     }
@@ -1216,6 +1226,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
         };
         let effect = self.effect_of_task.remove(&task)?;
+        self.spans.answered(effect, &outcome);
         self.locate(&outcome);
         self.call_of_effect.remove(&effect);
         self.written.extend(self.writing.remove(&effect));

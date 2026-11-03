@@ -53,6 +53,8 @@ mod strategy_tools;
 mod structured;
 mod task_cancel;
 mod tasks;
+mod telemetry;
+pub(crate) use telemetry::{end_hook_span, end_identity_span, end_observer_span, end_route_span};
 #[cfg(test)]
 mod tests;
 mod timeline;
@@ -220,6 +222,10 @@ pub(crate) struct Inner<S> {
     /// How long a delivery set waits on a cursor hole no lane runs before it
     /// skips it (RFC §13.5).
     pub(crate) delivery_gap_timeout: std::time::Duration,
+    /// Where the kit reports its spans and metrics.
+    pub(crate) telemetry: Arc<dyn crate::telemetry::TelemetryProvider>,
+    /// The hook triggers whose hooks open no span.
+    pub(crate) suppressed_hook_triggers: std::collections::BTreeSet<String>,
     /// The tasks the kit runs in the background: observers, inbound runs.
     pub(crate) tasks: Arc<Tasks>,
     /// The clock and the ids every run reads: the system's, or a test's
@@ -332,7 +338,9 @@ impl<S: ConversationStore> RoomKit<S> {
             delivery_gap_timeout,
             lock_manager,
             delivery_claim_lock_manager,
+            telemetry,
         } = options;
+        let (telemetry, suppressed_hook_triggers) = telemetry::telemetry_of(telemetry);
         let lock_manager: Arc<dyn RoomLockManager> =
             lock_manager.unwrap_or_else(|| Arc::new(InMemoryLockManager::default()));
         let claim_base = delivery_claim_lock_manager
@@ -367,6 +375,8 @@ impl<S: ConversationStore> RoomKit<S> {
             ))),
             verification_locks: KitLocks::new(key_space(&lock_manager, VERIFICATION_KIND)),
             delivery_gap_timeout,
+            telemetry,
+            suppressed_hook_triggers,
             tasks: Arc::default(),
             environment,
             events: Handlers::default(),
@@ -552,6 +562,21 @@ impl<S: ConversationStore> RoomKit<S> {
     /// publishes it under, the one key of the framework's publication
     /// namespace its event keeps (RFC §22.1).
     pub(crate) async fn run_message(
+        &self,
+        message: InboundMessage,
+        options: ProcessInboundOptions,
+        publication: Option<String>,
+    ) -> Result<InboundResult, RoomKitError> {
+        let deferred = options.defer_delivery;
+        let span = self.inner.inbound_span(&message, options.room_id.as_ref());
+        let work = Box::pin(self.traced_message(message, options, publication));
+        let result = span.within(work).await;
+        telemetry::end_inbound_span(span, &result, deferred);
+        result
+    }
+
+    /// The inbound pipeline under its `framework.inbound` span.
+    async fn traced_message(
         &self,
         mut message: InboundMessage,
         options: ProcessInboundOptions,

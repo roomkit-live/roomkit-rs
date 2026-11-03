@@ -33,6 +33,12 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+
+# Python's extra `roomkit[opentelemetry]`: `telemetry::OpenTelemetryProvider`.
+[features]
+opentelemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk"]
 
 [dev-dependencies]
 pretty_assertions.workspace = true
@@ -42,6 +48,8 @@ roomkit-ai.workspace = true
 sha2.workspace = true
 # The turn backend's liveness, tested on tokio's paused clock.
 tokio = { workspace = true, features = ["test-util"] }
+# The in-memory exporter the `opentelemetry` feature's tests read.
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

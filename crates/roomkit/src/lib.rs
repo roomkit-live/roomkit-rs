@@ -80,6 +80,7 @@ mod steering;
 pub mod store;
 mod stream;
 pub mod tasks;
+pub mod telemetry;
 pub mod testing;
 mod tool_call_scope;
 mod tool_calls;

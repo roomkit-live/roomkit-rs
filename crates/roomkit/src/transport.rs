@@ -14,6 +14,7 @@ use roomkit_core::rules::addresses::{
 use serde_json::Value;
 
 use crate::channel::{Channel, ChannelError};
+use crate::telemetry::{Attr, OpenSpan, SpanKind, StartSpanOptions, current_telemetry};
 
 /// A transport channel of any type, driven by configuration rather than a
 /// type of its own: Python's `TransportChannel(channel_id, channel_type, *,
@@ -214,6 +215,7 @@ impl Channel for TransportChannel {
         message: InboundMessage,
         context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        let span = self.handle_inbound_span(&context);
         let channel_type = if self.channel_type == ChannelType::SMS && has_media(&message.content) {
             ChannelType::MMS
         } else {
@@ -231,6 +233,9 @@ impl Channel for TransportChannel {
         event.channel_data = channel_data(provider, message.external_id, message.thread_id);
         event.idempotency_key = message.idempotency_key;
         event.metadata = message.metadata;
+        if let Some(span) = span {
+            span.end(Metadata::new());
+        }
         ready(Ok(event))
     }
 
@@ -248,6 +253,33 @@ impl Channel for TransportChannel {
             "no provider configured: the delivery is skipped"
         );
         ready(Ok(ChannelOutput::empty()))
+    }
+}
+
+impl TransportChannel {
+    /// The span of a message's parse, Python's `channel.handle_inbound`,
+    /// under the kit whose call this is.
+    fn handle_inbound_span(&self, context: &RoomContext) -> Option<OpenSpan> {
+        let telemetry = current_telemetry()?;
+        let channel_id = self.channel_id.to_string();
+        let mut attributes = Metadata::new();
+        attributes.insert(
+            Attr::CHANNEL_ID.to_owned(),
+            Value::from(channel_id.as_str()),
+        );
+        let channel_type = serde_json::to_value(&self.channel_type).unwrap_or_default();
+        attributes.insert("channel_type".to_owned(), channel_type);
+        Some(OpenSpan::start(
+            &telemetry,
+            SpanKind::InboundPipeline,
+            "channel.handle_inbound",
+            StartSpanOptions {
+                room_id: Some(context.room.id.to_string()),
+                channel_id: Some(channel_id),
+                attributes,
+                ..StartSpanOptions::default()
+            },
+        ))
     }
 }
 

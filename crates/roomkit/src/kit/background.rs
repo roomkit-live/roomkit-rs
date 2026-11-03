@@ -192,6 +192,9 @@ impl<S: ConversationStore> RoomKit<S> {
         self.inner.close_lock_managers().await;
         // Then the status bus, as the Python implementation's close.
         self.inner.status_bus.close().await;
+        // Then the telemetry, which ends its active spans and exports them,
+        // as the Python implementation's close.
+        self.inner.close_telemetry().await;
         failures
     }
 

@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use roomkit_core::model::{ChannelId, DirectEvent, EventContent, RoomEvent, RoomId};
+use roomkit_core::model::{ChannelId, DirectEvent, EventContent, Metadata, RoomEvent, RoomId};
 use roomkit_core::ops::{
     CommitRecord, Entry, Inbound, InboundError, InboundResult, InboundTarget, KIT_CLOSED,
 };
@@ -102,13 +102,19 @@ impl<S: ConversationStore> RoomKit<S> {
         // before anything is read, as Python's model refuses it when built,
         // and one kept is written as its constructor writes it.
         event.content.check()?;
+        let span = self.inner.send_event_span(room_id, &event);
         let entry = Entry::Direct {
             room_id: room_id.clone(),
             organization_id,
             event: Box::new(event),
         };
-        let entered = self.enter(entry, SEND_EVENT, false).await?;
-        event_of(entered.result)
+        let injected = span.within(self.enter(entry, SEND_EVENT, false)).await;
+        let result = injected.and_then(|entered| event_of(entered.result));
+        match &result {
+            Ok(_) => span.end(Metadata::new()),
+            Err(error) => span.fail(error.to_string(), Metadata::new()),
+        }
+        result
     }
 
     /// Commits `event` to the room `room_id` outside the pipeline (RFC

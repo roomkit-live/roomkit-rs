@@ -29,7 +29,10 @@ use crate::context::{ExecutionContext, HookBody, RunShared};
 use crate::error::RoomKitError;
 use crate::events::Handled;
 use crate::hooks;
-use crate::kit::{Inner, run_identity_hooks, verification_inbound as verification};
+use crate::kit::{
+    Inner, end_hook_span, end_identity_span, end_observer_span, end_route_span, run_identity_hooks,
+    verification_inbound as verification,
+};
 use crate::room_turns::{self, Queued, Started};
 use crate::router;
 use crate::sends::CIRCUIT_OPEN;
@@ -39,6 +42,7 @@ use crate::store::{
 };
 use crate::stream::{self, KeptStream, Stops};
 use crate::tasks::{Kind, Marks, TaskCut};
+use crate::telemetry::SpanKind;
 use crate::turn::TurnKit;
 use crate::turn_runners::{Answering, FirstPass, Next, Passes, Taken, TurnRunner};
 use crate::turns::{self, Answer};
@@ -198,13 +202,25 @@ async fn resolve_sender<S>(
         let unknown = IdentityResult::new(IdentificationStatus::Unknown);
         return IdentityAnswer::Resolved(Box::new(unknown)).into();
     };
+    let span = inner.identity_span(&context.room.id, &message.channel_id);
     let answered = unwinding(resolver.resolve(message, context));
     match tokio::time::timeout(timeout, answered).await {
-        Err(_) => IdentityAnswer::TimedOut.into(),
-        Ok(Ok(Ok(result))) => IdentityAnswer::Resolved(Box::new(result)).into(),
-        Ok(Ok(Err(error))) => Outcome::Failed(ErrorRecord::new(IDENTITY_ERROR, error.to_string())),
+        Err(_) => {
+            span.fail("timeout", Metadata::new());
+            IdentityAnswer::TimedOut.into()
+        }
+        Ok(Ok(Ok(result))) => {
+            end_identity_span(span, &result);
+            IdentityAnswer::Resolved(Box::new(result)).into()
+        }
+        Ok(Ok(Err(error))) => {
+            span.fail(error.to_string(), Metadata::new());
+            Outcome::Failed(ErrorRecord::new(IDENTITY_ERROR, error.to_string()))
+        }
         Ok(Err(panic)) => {
-            Outcome::Failed(ErrorRecord::new(IDENTITY_ERROR, unwind::message(&*panic)))
+            let message = unwind::message(&*panic);
+            span.fail(message.clone(), Metadata::new());
+            Outcome::Failed(ErrorRecord::new(IDENTITY_ERROR, message))
         }
     }
 }
@@ -716,17 +732,21 @@ pub(super) async fn hook<S: ConversationStore>(
     match request {
         HookRequest::RunHook {
             hook,
+            trigger,
             event,
             context,
             timeout,
-            ..
         } => {
+            let span = inner.hook_with_spec(hook).and_then(|(_, spec)| {
+                inner.hook_span(SpanKind::HookSync, &spec.name, trigger, &event.room_id)
+            });
             let outcome = match inner.kept_hook(hook) {
                 Some(kept) => hooks::run_kept(kept, *event, *context, timeout).await,
                 None => {
                     HookOutcome::Raised(ErrorRecord::new("HookError", "the hook has no handler"))
                 }
             };
+            end_hook_span(span, &outcome);
             HookAnswer::Ran(Box::new(outcome)).into()
         }
         HookRequest::RunObservers {
@@ -748,13 +768,20 @@ pub(super) async fn route<S: ConversationStore>(
     query: &RouteQuery,
 ) -> Outcome {
     let options = router::options_of(query);
+    let span = inner.route_span(&query.channel_id, &query.sender_id);
     let routed = inner
         .router()
         .route(&query.channel_id, &query.channel_type, options)
         .await;
     match routed {
-        Ok(room_id) => Outcome::Routed(room_id),
-        Err(error) => Outcome::Failed(ErrorRecord::new("RouterError", error.to_string())),
+        Ok(room_id) => {
+            end_route_span(span, room_id.as_ref());
+            Outcome::Routed(room_id)
+        }
+        Err(error) => {
+            span.fail(error.to_string(), Metadata::new());
+            Outcome::Failed(ErrorRecord::new("RouterError", error.to_string()))
+        }
     }
 }
 
@@ -1145,7 +1172,9 @@ fn observe<S: ConversationStore>(
     let (event, context) = (event.clone(), context.clone());
     Some(async move {
         let room_id = event.room_id.clone();
+        let span = inner.hook_span(SpanKind::HookAsync, &spec.name, trigger, &room_id);
         let outcome = hooks::run_kept(kept, event, context, spec.timeout).await;
+        end_observer_span(span, &outcome);
         inner.report_observer(&spec, trigger, room_id, &outcome);
     })
 }
