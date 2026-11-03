@@ -18,6 +18,7 @@
 
 mod agents;
 mod ai_hooks;
+mod audits;
 mod calls;
 mod compare;
 mod errors;

@@ -143,6 +143,7 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
 }
 
 async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
+    run.auditors.set_up(&setup["session_auditor"], run.kit())?;
     for channel in setup["channels"].as_array().into_iter().flatten() {
         calls::register_channel(run, channel)?
             .map_err(|error| format!("register {channel}: {error}"))?;
@@ -287,6 +288,9 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
         .iter()
         .map(|(channel, model)| (channel.clone(), crate::agents::requests(model)))
         .collect();
+    let mut problems = Vec::new();
+    (observed.tool_audit, observed.session_audit) = run.auditors.observe(&mut problems);
+    lock(&run.problems).extend(problems);
     for ((room_key, timeline), room) in timelines.into_iter().zip(&rooms) {
         observed.timelines.insert(room_key.clone(), timeline);
         observed.rooms.insert(

@@ -65,6 +65,9 @@ pub(crate) struct Observed {
     /// The human-input requests the run showed, in the order it first
     /// showed them: `$p1`, `$p2`...
     pub(crate) requests: Vec<String>,
+    /// The run's tool auditor's entries, and its session auditor's.
+    pub(crate) tool_audit: Vec<Value>,
+    pub(crate) session_audit: Vec<Value>,
 }
 
 impl Observed {

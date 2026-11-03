@@ -131,6 +131,8 @@ pub(crate) struct Run {
     pub(crate) backend: Mutex<Option<roomkit::InMemoryDeliveryBackend>>,
     /// The scenario's scripted strategies, by id (README, "Setup").
     pub(crate) strategies: Mutex<HashMap<String, crate::strategy_calls::Strategy>>,
+    /// The run's tool and session auditors (README, "Setup").
+    pub(crate) auditors: crate::audits::Auditors,
 }
 
 impl Run {
@@ -170,6 +172,7 @@ impl Run {
             models: Mutex::default(),
             backend: Mutex::default(),
             strategies: Mutex::default(),
+            auditors: crate::audits::Auditors::default(),
         }
     }
 

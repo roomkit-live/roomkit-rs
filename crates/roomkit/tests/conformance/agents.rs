@@ -206,6 +206,7 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
         )?);
     }
     options.tool_handler = undeclared_tools(spec, run);
+    crate::audits::audit_tools(spec, run, &mut options);
     if let Some(human) = spec.get("human_input") {
         options.human_input_handler = Some(human_input(human)?);
     }
@@ -433,7 +434,7 @@ fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
 }
 
 /// What a scripted tool answers.
-async fn answer(tool: &Value) -> Result<ToolResult, ToolError> {
+pub(crate) async fn answer(tool: &Value) -> Result<ToolResult, ToolError> {
     let words = |key: &str| tool[key].as_str().map(str::to_owned);
     if let Some(text) = words("returns") {
         return Ok(ToolResult::Text(text));

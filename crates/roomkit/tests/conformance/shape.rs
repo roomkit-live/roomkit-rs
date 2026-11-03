@@ -27,6 +27,7 @@ const SETUP: &[&str] = &[
     "identity_hooks",
     "identities",
     "strategies",
+    "session_auditor",
 ];
 const KIT: &[&str] = &[
     "max_chain_depth",
@@ -90,6 +91,7 @@ const CHANNEL: &[&str] = &[
     "steer_room_turns",
     "human_input",
     "kit_tools",
+    "audit",
     "addresses",
     "streams_in",
     "recent_events_window",
@@ -269,6 +271,8 @@ const EXPECT: &[&str] = &[
     "participants",
     "resolver",
     "media_resolver",
+    "tool_audit",
+    "session_audit",
 ];
 const NEW_ROOM: &[&str] = &["id", "organization_id", "metadata", "timers"];
 const STEPS: &[(&str, &[&str])] = &[

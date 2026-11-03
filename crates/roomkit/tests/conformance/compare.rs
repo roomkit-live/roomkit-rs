@@ -190,6 +190,14 @@ impl Comparison<'_> {
             let calls = Value::Array(self.observed.media_resolver.clone());
             self.check(expected, Some(&calls), "media_resolver");
         }
+        for (kind, entries) in [
+            ("tool_audit", &self.observed.tool_audit),
+            ("session_audit", &self.observed.session_audit),
+        ] {
+            if let Some(expected) = expect.get(kind) {
+                self.check(expected, Some(&Value::Array(entries.clone())), kind);
+            }
+        }
         for (channel, expected) in expect["models"].as_object().into_iter().flatten() {
             let requests = self
                 .observed
