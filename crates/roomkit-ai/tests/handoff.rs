@@ -178,6 +178,35 @@ async fn a_summary_is_read_as_python_s_str_and_a_bad_state_is_the_caller_s_error
         .unwrap();
     assert!(text(&result.messages[0]).contains("<conversation_summary>\n7\n"));
 
+    // What Python's truth test refuses hands nothing on; `True` reads as its str.
+    for (summary, handed) in [
+        (json!(0), None),
+        (json!(0.0), None),
+        (json!([]), None),
+        (json!({}), None),
+        (json!(""), None),
+        (json!(false), None),
+        (json!(true), Some("True")),
+    ] {
+        let mut state = ConversationState::new();
+        state.context.insert("handoff_summary".to_owned(), summary);
+        state.context.insert("handoff_from".to_owned(), json!("a"));
+        let room = set_conversation_state(&Room::new(room_id()), &state);
+        let result = provider
+            .retrieve(
+                &room_id(),
+                &event(),
+                &RoomContext::new(room),
+                RetrieveOptions::default(),
+            )
+            .await
+            .unwrap();
+        match handed {
+            Some(word) => assert!(text(&result.messages[0]).contains(word)),
+            None => assert_eq!(result.messages.len(), 1),
+        }
+    }
+
     let mut broken = Room::new(room_id());
     broken
         .metadata

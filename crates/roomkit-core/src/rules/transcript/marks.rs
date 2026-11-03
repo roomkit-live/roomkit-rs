@@ -140,7 +140,7 @@ const PHRASES: &[Phrase] = &[
         text: PEOPLE_NOTE_OPENING,
         bracketed: true,
         replacement: COPIED_MARK,
-        short: false,
+        short: true,
     },
     Phrase {
         text: "[Context compacted",
@@ -342,11 +342,11 @@ fn short_mark_at(chars: &[char], start: usize, first: usize, last: usize, text: 
 }
 
 /// Whether `c` may sit between a phrase's words as Python's `_PHRASE_SPACE`
-/// says: spacing, an invisible character, a combining mark or markup.
+/// says: spacing, an invisible character, a combining mark of the Latin
+/// range (both `is_joint`) or markup.
 fn is_phrase_space(c: char) -> bool {
     c.is_whitespace()
         || unicode::is_joint(c)
-        || unicode::is_mark(c)
         || matches!(c, '*' | '_' | '~' | '`' | '-' | '/' | '|' | '\\')
 }
 
@@ -702,6 +702,10 @@ mod tests {
             "[?] handoff",
             "[#handoff",
             "[con text from previousagent",
+            "[\u{1dc0}Handoff",
+            "[context\u{5b0}from previous agent",
+            "- [ ] people taking part besides you",
+            "(people taking part besides you)",
         ] {
             assert_eq!(cleaned(prose), prose);
         }
