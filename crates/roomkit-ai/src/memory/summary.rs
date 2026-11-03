@@ -227,4 +227,25 @@ mod tests {
         assert!(read[0].starts_with("@ch-1: "), "{read:?}");
         assert!(read[1].starts_with("@ch-1 (2): "), "{read:?}");
     }
+
+    // Python: tests/test_people_taking_part.py::TestEveryReaderCountsSources::test_one_sender_under_two_names_is_one_speaker[memory summary]
+    #[test]
+    fn one_sender_under_two_names_leaves_the_summary_lines_unlabelled() {
+        let context = context();
+        let said = |body: &str, id: &str, name: &str| {
+            let mut turn = event(body, id);
+            turn.source.participant_id = Some(ParticipantId::new("u-alice").unwrap());
+            turn.metadata.insert("sender_name".to_owned(), name.into());
+            turn
+        };
+        let lines = SummaryLines {
+            context: &context,
+            current: None,
+            channel_id: None,
+            kept: Vec::new(),
+        };
+        let read = lines.lines(&[said("Hi", "e1", "Alice"), said("Still me", "e2", "Alicia")]);
+        assert!(!read[0].starts_with("Alice"), "{read:?}");
+        assert!(!read[1].starts_with("Alicia"), "{read:?}");
+    }
 }
