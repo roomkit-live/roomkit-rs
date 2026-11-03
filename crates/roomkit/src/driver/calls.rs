@@ -804,7 +804,7 @@ pub(super) fn write<S: ConversationStore>(
 /// kit's close caused, a write it refused, is expected, and noted at debug
 /// (RFC §12.10.4).
 pub(super) fn log_left_failed(error: &ErrorRecord) {
-    if error.error_type == KIT_CLOSED || error.error_type == RoomKitError::KitClosed.class_name() {
+    if error.error_type == KIT_CLOSED {
         tracing::debug!(
             target: "roomkit::driver",
             error_type = %error.error_type,
