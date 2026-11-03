@@ -6,22 +6,19 @@
 //! `execution.py`'s `_run_parallel`.
 
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
-use std::task::Poll;
 use std::time::Duration;
 
 use roomkit_core::model::{Metadata, RoomId};
 use serde_json::{Value, json};
-use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use super::results::{WorkerResult, format_supervisor_review, worker_roles_csv};
 use super::supervised::run_supervised_sequential;
 use super::{Team, WorkerStrategy};
-use crate::context::keep_context;
 use crate::error::RoomKitError;
 use crate::kit::RoomKit;
+use crate::orchestration::gather::gather_or_cut;
 use crate::orchestration::worker_run::{WorkerStatus, completed_or_failed, run_worker};
 use crate::store::ConversationStore;
 use crate::tasks::json::dumps_object;
@@ -214,7 +211,8 @@ fn subtask_refusal() -> String {
 /// # Errors
 ///
 /// The first error a delegation fails with, as soon as it fails: the other
-/// workers are left running, as Python's `asyncio.gather` leaves them.
+/// workers are cut, each posting its end (Python's `gather_or_cut`,
+/// RMK-1279).
 pub(super) async fn run_parallel<S: ConversationStore>(
     kit: &RoomKit<S>,
     room_id: &RoomId,
@@ -233,7 +231,7 @@ pub(super) async fn run_parallel<S: ConversationStore>(
         let (kit, room_id, team) = (kit.clone(), room_id.clone(), Arc::clone(team));
         let (channel_id, task, status) =
             (worker.channel_id.clone(), task.to_owned(), status.clone());
-        tokio::spawn(keep_context(async move {
+        async move {
             let (timeout, delegation) = (Some(team.task_timeout), team.delegation());
             let status = Some(status);
             let outcome = run_worker(
@@ -251,71 +249,9 @@ pub(super) async fn run_parallel<S: ConversationStore>(
                 output: outcome.output,
                 completed: outcome.completed,
             })
-        }))
+        }
     });
-    gather(runs.collect()).await
-}
-
-/// The outputs of `runs` in their order once all succeeded, or the first
-/// error as soon as one fails, the runs still going cut and awaited to
-/// their end first (Python's `gather_or_cut`, RMK-1279). Cut before then,
-/// it cuts every run, as a cancelled gather cancels its children.
-async fn gather<T>(runs: Vec<JoinHandle<Result<T, RoomKitError>>>) -> Result<Vec<T>, RoomKitError> {
-    let mut running = Running(runs.into_iter().map(Some).collect());
-    let mut outputs: Vec<Option<T>> = running.0.iter().map(|_| None).collect();
-    let failed = std::future::poll_fn(|context| {
-        let mut pending = false;
-        for (slot, output) in running.0.iter_mut().zip(outputs.iter_mut()) {
-            let Some(run) = slot else {
-                continue;
-            };
-            let Poll::Ready(joined) = Pin::new(run).poll(context) else {
-                pending = true;
-                continue;
-            };
-            *slot = None;
-            match joined {
-                Ok(Ok(done)) => *output = Some(done),
-                Ok(Err(error)) => return Poll::Ready(Some(error)),
-                Err(join) if join.is_panic() => std::panic::resume_unwind(join.into_panic()),
-                Err(_aborted) => return Poll::Ready(Some(RoomKitError::Cancelled)),
-            }
-        }
-        if pending {
-            Poll::Pending
-        } else {
-            Poll::Ready(None)
-        }
-    })
-    .await;
-    if let Some(error) = failed {
-        // The runs still going are cut, each posting its end, and awaited.
-        let going: Vec<JoinHandle<_>> = running.0.drain(..).flatten().collect();
-        for run in &going {
-            run.abort();
-        }
-        for run in going {
-            if let Err(join) = run.await
-                && join.is_panic()
-            {
-                std::panic::resume_unwind(join.into_panic());
-            }
-        }
-        return Err(error);
-    }
-    Ok(outputs.into_iter().flatten().collect())
-}
-
-/// The runs of a gather still going: dropped before the gather ended, it
-/// cuts them.
-struct Running<T>(Vec<Option<JoinHandle<T>>>);
-
-impl<T> Drop for Running<T> {
-    fn drop(&mut self) {
-        for run in self.0.iter().flatten() {
-            run.abort();
-        }
-    }
+    gather_or_cut(runs.collect()).await
 }
 
 #[cfg(test)]
@@ -362,39 +298,6 @@ mod tests {
             "{\"error\": \"delegate_workers is unavailable here: you are already running inside a \
              delegated step. Respond directly to the instruction with the requested text \\u2014 do \
              not call delegate_workers.\"}"
-        );
-    }
-
-    /// Sets its flag once dropped: a run cut where it waits.
-    struct Cut(Arc<std::sync::atomic::AtomicBool>);
-
-    impl Drop for Cut {
-        fn drop(&mut self) {
-            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
-    // Python: tests/orchestration/test_supervisor_strategy.py::TestParallelWorkerFailure::test_the_first_error_cuts_the_other_workers
-    #[tokio::test]
-    async fn the_first_error_cuts_the_other_workers() {
-        let cut = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let waiting = Cut(Arc::clone(&cut));
-        let slow = tokio::spawn(async move {
-            let _waiting = waiting;
-            std::future::pending::<Result<(), crate::error::RoomKitError>>().await
-        });
-        let gone = tokio::spawn(async {
-            Err::<(), _>(crate::error::RoomKitError::Value(
-                "parallel boom".to_owned(),
-            ))
-        });
-        let failed = super::gather(vec![slow, gone]).await;
-        assert!(
-            matches!(failed, Err(crate::error::RoomKitError::Value(message)) if message == "parallel boom")
-        );
-        assert!(
-            cut.load(std::sync::atomic::Ordering::SeqCst),
-            "the slow worker was left running"
         );
     }
 }

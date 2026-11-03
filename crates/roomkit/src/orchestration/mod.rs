@@ -10,6 +10,7 @@
 
 mod agents;
 pub mod backend;
+mod gather;
 pub(crate) mod lifecycle;
 mod memory;
 mod router;
