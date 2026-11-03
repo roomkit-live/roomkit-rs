@@ -10,6 +10,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A turn's own reasoning effort (RFC §6.7), as Python's: `AiChannelOptions::reasoning_effort` and `AiContext::reasoning_effort`, a binding's metadata `reasoning_effort` over the channel's (a `null` keeps it, a value that is no text fails the turn with pydantic's `ValidationError`); `OpenAiAiProvider` sends the turn's effort over its configured one (RMK-1088).
 - On OpenAI's own endpoint, a Chat Completions request reads the effort from the catalogue, as Python's: a turn with tools sends `none` to a model tagged `tools_reasoning_none` (GPT-5.4 and later), even unset, and the effort to one tagged `tools_reasoning_effort`, the switch deciding for the rest; an effort of `none` goes as the model's least (`minimal` on GPT-5, `low` on o3); a model Chat Completions does not serve, or tools for one that takes none there, fail before the request; an effort a tool turn leaves out unsaid is warned of once (RFC §6.7, RMK-1088).
 - The model catalogue (RFC §6.7), as Python's: `ModelInfo`, `ModelPricing` and its `cost_for(usage)`, `Date`, and `AiProvider::available_models`, `catalog_entry` and `context_window`; `OpenAiAiProvider` embeds Python's OpenAI catalogue, copied by `make models-sync` from one roomkit commit, which `make models-check` holds it to (RMK-1088).
+- `post()` speaks as the own record a speaker's id names on the host
+  channel (RFC §10.5, §11.2), as Python's reads it through
+  `People.named_on`, where it refused it as naming nobody (RMK-1163).
 - A change's mutation trigger and a delivery set read the room as Python's
   `committed_in` holds it: the window the pass read and the committed
   event after it, 51 events for a window of 50 where the trigger read 50,
