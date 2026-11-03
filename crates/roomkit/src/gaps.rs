@@ -5,10 +5,12 @@
 //! Across processes sharing a store, the room's delivery cursor orders the
 //! sets: a set runs once the cursor passed every index before its own that
 //! this process did not commit, and the sets of one room run under
-//! its delivery claim, a lock on a key of its own, held by the process
-//! while one of its sets runs and until the cursor moved past it, never
-//! with the room lock. Until the kit takes a lock manager, the claim is a
-//! key of the kit's room mutexes: it holds within the process (RMK-1153).
+//! its delivery claim, held by the process while one of its sets runs and
+//! until the cursor moved past it, never with the room lock. The claims are
+//! mutexes of their own, apart from the room locks, so that no room id, a
+//! room named `__delivery__:r1` among them, takes another room's claim:
+//! until the kit takes a lock manager, the claim holds within the process
+//! (RMK-1153).
 //!
 //! An index before a set's own that no lane runs (its process stopped
 //! between the commit and the delivery, or it was committed straight to the
@@ -31,12 +33,8 @@ use tokio::time::Instant;
 
 use crate::events::{FrameworkEvent, Handled};
 use crate::kit::Inner;
-use crate::locks::RoomGuard;
+use crate::locks::{RoomGuard, RoomMutexes};
 use crate::store::{AdvanceDeliveredIndexOptions, ConversationStore};
-
-/// The prefix of a room's delivery claim key, apart from the room locks'
-/// keys, as Python's `DELIVERY_CLAIM_PREFIX`.
-const DELIVERY_CLAIM_PREFIX: &str = "__delivery__:";
 
 /// How long a set first waits between two reads of a cursor held by a hole,
 /// doubled after each read up to [`GAP_BACKOFF_MAX`], as Python's
@@ -51,6 +49,9 @@ const GAP_BACKOFF_MAX: Duration = Duration::from_millis(250);
 #[derive(Debug, Default)]
 pub(crate) struct DeliveryClaims {
     rooms: Arc<Mutex<HashMap<RoomId, Arc<RoomClaim>>>>,
+    /// The claims' own mutexes, by room id: apart from the room locks, so
+    /// that a room's claim and any room's lock never share a key.
+    locks: RoomMutexes,
 }
 
 /// One room's claim: how many of the process's sets hold it, the lock that
@@ -97,8 +98,8 @@ impl RoomClaim {
 
 impl DeliveryClaims {
     /// Holds `room_id`'s delivery claim: at once when one of the process's
-    /// sets holds it, else once the lock manager grants its key.
-    pub(crate) async fn hold<S>(&self, inner: &Inner<S>, room_id: &RoomId) -> ClaimHold {
+    /// sets holds it, else once its mutex is free.
+    pub(crate) async fn hold(&self, room_id: &RoomId) -> ClaimHold {
         let mut hold = ClaimHold {
             room_id: room_id.clone(),
             claim: Arc::clone(rooms(&self.rooms).entry(room_id.clone()).or_default()),
@@ -113,7 +114,7 @@ impl DeliveryClaims {
         // its drop forgets the room's claim nobody else refers to.
         let taking = hold.claim.taking.lock().await;
         if !hold.claim.join() {
-            let lock = inner.locks.lock_owned(&claim_key(room_id)).await;
+            let lock = self.locks.lock_owned(room_id).await;
             let mut state = hold.claim.held();
             state.holders = 1;
             state.lock = Some(lock);
@@ -149,12 +150,6 @@ fn rooms(
     rooms: &Mutex<HashMap<RoomId, Arc<RoomClaim>>>,
 ) -> MutexGuard<'_, HashMap<RoomId, Arc<RoomClaim>>> {
     rooms.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// The lock manager's key for `room_id`'s delivery claim, as Python's
-/// `delivery_claim_key`.
-fn claim_key(room_id: &RoomId) -> RoomId {
-    RoomId::new(format!("{DELIVERY_CLAIM_PREFIX}{room_id}")).unwrap_or_else(|_| room_id.clone())
 }
 
 /// A set's turn from the room's cursor.
@@ -207,7 +202,7 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
             return CursorTurn::Stale;
         }
         if !inner.cursors.foreign_before(room_id, cursor, index) {
-            let claim = inner.claims.hold(inner, room_id).await;
+            let claim = inner.claims.hold(room_id).await;
             return CursorTurn::Turn(Turned { claim, skipped });
         }
         // The gap clock runs while the cursor does not move.
@@ -220,7 +215,7 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
         }
         .elapsed();
         if since >= inner.delivery_gap_timeout {
-            let claim = inner.claims.hold(inner, room_id).await;
+            let claim = inner.claims.hold(room_id).await;
             let skip = skip_gap(inner, room_id, index).await;
             drop(claim);
             if let Some(handled) = skip {
@@ -311,55 +306,76 @@ mod tests {
         rooms(&claims.rooms).len()
     }
 
+    /// Holds `room_id`'s claim, or fails the test when it waits.
+    async fn held_at_once(claims: &DeliveryClaims, room_id: &RoomId) -> ClaimHold {
+        tokio::time::timeout(Duration::from_secs(5), claims.hold(room_id))
+            .await
+            .expect("the claim is held at once")
+    }
+
     #[tokio::test]
     async fn a_hold_cancelled_while_it_waits_leaves_nothing_behind() {
-        let kit = RoomKit::new(RoomKitOptions::default());
-        let inner = Arc::clone(&kit.inner);
+        let claims = Arc::new(DeliveryClaims::default());
         // Another process holds the room's claim.
-        let other = inner.locks.lock_owned(&claim_key(&room_id())).await;
+        let other = claims.locks.lock_owned(&room_id()).await;
         let waiting = {
-            let inner = Arc::clone(&inner);
+            let claims = Arc::clone(&claims);
             tokio::spawn(async move {
-                drop(inner.claims.hold(&inner, &room_id()).await);
+                drop(claims.hold(&room_id()).await);
             })
         };
-        while inner.locks.waiting(&claim_key(&room_id())) == 0 {
+        while claims.locks.waiting(&room_id()) == 0 {
             tokio::task::yield_now().await;
         }
         waiting.abort();
         assert!(waiting.await.unwrap_err().is_cancelled());
         assert_eq!(
-            rooms_held(&inner.claims),
+            rooms_held(&claims),
             0,
             "the cancelled hold forgets the room"
         );
         drop(other);
-        kit.close().await.unwrap();
     }
 
     #[tokio::test]
     async fn the_process_s_sets_share_the_room_s_claim() {
-        let kit = RoomKit::new(RoomKitOptions::default());
-        let inner = Arc::clone(&kit.inner);
-        let first = inner.claims.hold(&inner, &room_id()).await;
-        let second = tokio::time::timeout(
-            Duration::from_secs(5),
-            inner.claims.hold(&inner, &room_id()),
-        )
-        .await
-        .expect("a set of the process holding the claim joins it");
+        let claims = DeliveryClaims::default();
+        let first = claims.hold(&room_id()).await;
+        let second = held_at_once(&claims, &room_id()).await;
         drop(first);
         assert_eq!(
-            inner.locks.waiting(&claim_key(&room_id())),
+            claims.locks.waiting(&room_id()),
             0,
             "nobody waits for the claim"
         );
         drop(second);
-        assert_eq!(
-            rooms_held(&inner.claims),
-            0,
-            "the last hold forgets the room"
-        );
+        assert_eq!(rooms_held(&claims), 0, "the last hold forgets the room");
+    }
+
+    /// A room id is the integrator's or a sender's: the room named
+    /// `__delivery__:room_1` takes its own lock, never `room_1`'s claim
+    /// (security review of RMK-1153).
+    #[tokio::test]
+    async fn a_room_named_like_a_claim_shares_no_lock_with_it() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let named = RoomId::new(format!("__delivery__:{}", room_id())).unwrap();
+        let section = kit.inner.locks.lock_owned(&named).await;
+        let claim = held_at_once(&kit.inner.claims, &room_id()).await;
+        drop((claim, section));
+        kit.close().await.unwrap();
+    }
+
+    /// A room's claim never takes the room's own lock, whatever its id
+    /// (security review of RMK-1153).
+    #[tokio::test]
+    async fn a_room_s_claim_is_never_its_own_lock() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let long = RoomId::new("r".repeat(4096)).unwrap();
+        for room in [room_id(), long] {
+            let section = kit.inner.locks.lock_owned(&room).await;
+            let claim = held_at_once(&kit.inner.claims, &room).await;
+            drop((claim, section));
+        }
         kit.close().await.unwrap();
     }
 }
