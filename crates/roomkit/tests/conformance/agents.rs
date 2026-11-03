@@ -23,8 +23,9 @@ use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     Agent, AgentOptions, AiChannel, AiChannelOptions, AiContentPart, AiContext, AiImagePart,
     AiMessageContent, AiProvider, AiResponse, AiRole, AiTextPart, AiTool, HumanInputToolHandler,
-    HumanInputToolHandlerOptions, ProviderError, ProviderStream, StreamEvent, Tool, ToolContext,
-    ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolResult, ToolResultPart, Tools,
+    HumanInputToolHandlerOptions, ModelInfo, ModelPricing, ProviderError, ProviderStream,
+    StreamEvent, Tool, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolResult,
+    ToolResultPart, Tools,
 };
 use serde_json::{Value, json};
 
@@ -44,6 +45,8 @@ pub(crate) struct Paced {
     run: Weak<Run>,
     /// Whether the model sees images (README: `model.vision`).
     vision: bool,
+    /// The model's catalogue price (README: `model.pricing`).
+    pricing: Option<ModelPricing>,
 }
 
 impl AiProvider for Paced {
@@ -53,6 +56,16 @@ impl AiProvider for Paced {
 
     fn supports_vision(&self) -> bool {
         self.vision
+    }
+
+    /// The model's catalogue entry, with the price the scenario gives it;
+    /// none for a model the scenario gives no price.
+    fn catalog_entry(&self) -> Option<ModelInfo> {
+        let pricing = self.pricing.clone()?;
+        Some(ModelInfo {
+            pricing: Some(pricing),
+            ..ModelInfo::new(self.model_name())
+        })
     }
 
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
@@ -154,21 +167,7 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
     if let Some(policy) = spec.get("tool_policy") {
         options.tool_policy = Some(tool_policy(policy));
     }
-    if let Some(rounds) = spec.get("max_tool_rounds") {
-        let rounds = rounds.as_u64().ok_or("max_tool_rounds: not a count")?;
-        options.max_tool_rounds = u32::try_from(rounds).map_err(|e| e.to_string())?;
-    }
-    if let Some(window) = spec.get("max_context_events") {
-        let window = window.as_u64().ok_or("max_context_events: not a count")?;
-        options.max_context_events = usize::try_from(window).map_err(|e| e.to_string())?;
-    }
-    if let Some(bound) = spec.get("tool_timeout_ms") {
-        options.tool_timeout = milliseconds(bound, "tool_timeout_ms")?;
-    }
-    if let Some(budget) = spec.get("turn_budget_tokens") {
-        let budget = budget.as_u64().ok_or("turn_budget_tokens: not a count")?;
-        options.turn_budget_tokens = Some(budget);
-    }
+    bounds(spec, &mut options)?;
     if let Some(effort) = spec
         .get("reasoning_effort")
         .filter(|effort| !effort.is_null())
@@ -245,6 +244,30 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
     Ok((Scripted::Agent(Box::new(agent)), models))
 }
 
+/// A scripted agent's bounds and budgets (README, "Scripted agents").
+fn bounds(spec: &Value, options: &mut AiChannelOptions) -> Result<(), String> {
+    if let Some(rounds) = spec.get("max_tool_rounds") {
+        let rounds = rounds.as_u64().ok_or("max_tool_rounds: not a count")?;
+        options.max_tool_rounds = u32::try_from(rounds).map_err(|e| e.to_string())?;
+    }
+    if let Some(window) = spec.get("max_context_events") {
+        let window = window.as_u64().ok_or("max_context_events: not a count")?;
+        options.max_context_events = usize::try_from(window).map_err(|e| e.to_string())?;
+    }
+    if let Some(bound) = spec.get("tool_timeout_ms") {
+        options.tool_timeout = milliseconds(bound, "tool_timeout_ms")?;
+    }
+    if let Some(budget) = spec.get("turn_budget_tokens") {
+        let budget = budget.as_u64().ok_or("turn_budget_tokens: not a count")?;
+        options.turn_budget_tokens = Some(budget);
+    }
+    if let Some(budget) = spec.get("turn_budget_usd") {
+        let budget = budget.as_f64().ok_or("turn_budget_usd: not a number")?;
+        options.turn_budget_usd = Some(budget);
+    }
+    Ok(())
+}
+
 /// The scripted model `spec` describes, and the provider reading it, its
 /// gates `run`'s.
 fn scripted_model(spec: &Value, run: &Arc<Run>) -> Result<(ScriptedProvider, Paced), String> {
@@ -253,12 +276,18 @@ fn scripted_model(spec: &Value, run: &Arc<Run>) -> Result<(ScriptedProvider, Pac
     let gates = scripted
         .map(|round| round["gate"].as_str().map(str::to_owned))
         .collect();
+    let pricing = spec
+        .get("pricing")
+        .map(|pricing| serde_json::from_value(pricing.clone()))
+        .transpose()
+        .map_err(|e| format!("model.pricing: {e}"))?;
     let model = ScriptedProvider::new(rounds);
     let paced = Paced {
         script: model.clone(),
         gates,
         run: Arc::downgrade(run),
         vision: spec["vision"] == true,
+        pricing,
     };
     Ok((model, paced))
 }

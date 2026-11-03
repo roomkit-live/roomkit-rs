@@ -100,6 +100,7 @@ const CHANNEL: &[&str] = &[
     "tool_timeouts_ms",
     "turn_budget_tokens",
     "reasoning_effort",
+    "turn_budget_usd",
     "retry_policy",
     "fallback_model",
     "max_author_images",
@@ -128,7 +129,7 @@ const AGENT: &[&str] = &[
 ];
 const HUMAN_INPUT: &[&str] = &["tool_names", "timeout_ms", "tools"];
 const HUMAN_TOOL: &[&str] = &["name", "description", "parameters"];
-const MODEL: &[&str] = &["rounds", "vision"];
+const MODEL: &[&str] = &["rounds", "vision", "pricing"];
 const MODEL_ROUND: &[&str] = &[
     "text",
     "deltas",
