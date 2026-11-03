@@ -192,6 +192,71 @@ pub(crate) fn report_awaited(
     }))
 }
 
+/// What a session's start has left to do once the hooks it awaits are over:
+/// the other hooks of its trigger, with the payload the awaited ones read.
+#[derive(Debug)]
+pub(crate) struct SessionStarted {
+    trigger: HookTrigger,
+    others: Vec<HookId>,
+    payload: RoomEvent,
+}
+
+impl SessionStarted {
+    /// Emits the change's framework event, then fires the other hooks in the
+    /// background, so that a slow one holds no message.
+    pub(crate) fn finish(self, cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomContext) {
+        announce(cx, reported, &context.room.id);
+        if !self.others.is_empty() {
+            cx.io.notify(Notice::AsyncHooks {
+                trigger: self.trigger,
+                hooks: self.others,
+                event: Box::new(self.payload),
+                context: Box::new(context.clone()),
+                after_delivery: None,
+                then: None,
+            });
+        }
+    }
+}
+
+/// Reports a session's start as Python's `_fire_text_session_started` does
+/// (RFC §10.1 step 2): the hooks whose name starts with `_`, an agent's
+/// greeting among them, are run and awaited before its message goes on, the
+/// effect returned to wait for, with what is left to do once they are over.
+/// With none, all of it is done at once and `None` returned.
+pub(crate) fn report_session_started(
+    cx: &mut Cx<'_>,
+    reported: Reported<'_>,
+    context: &RoomContext,
+) -> Option<(EffectId, SessionStarted)> {
+    let Some(Observers {
+        trigger,
+        hooks,
+        payload,
+    }) = observers(cx, reported, context)
+    else {
+        announce(cx, reported, &context.room.id);
+        return None;
+    };
+    let (own, others) = cx.config.hooks.split_own_hooks(hooks);
+    let started = SessionStarted {
+        trigger,
+        others,
+        payload,
+    };
+    if own.is_empty() {
+        started.finish(cx, reported, context);
+        return None;
+    }
+    let effect = cx.io.issue(HookRequest::RunObservers {
+        trigger,
+        hooks: own,
+        event: Box::new(started.payload.clone()),
+        context: Box::new(context.clone()),
+    });
+    Some((effect, started))
+}
+
 /// Emits the framework event of a change to the room `room_id`, if it has
 /// one: at once for a change whose hooks run after the fact, once its
 /// awaited hooks are over for a creation ([`report_awaited`]).

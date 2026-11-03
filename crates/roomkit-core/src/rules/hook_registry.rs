@@ -940,6 +940,18 @@ impl HookRegistry {
         observers.into_iter().map(|hook| hook.id).collect()
     }
 
+    /// `hooks` split by name, keeping their order: those a name starting
+    /// with `_` marks as the framework's own, which a session's start awaits
+    /// before its message goes on, and the others, which it runs in the
+    /// background, as Python's `_fire_text_session_started` does (RFC §10.1
+    /// step 2). A hook no longer held goes with the others.
+    pub fn split_own_hooks(&self, hooks: Vec<HookId>) -> (Vec<HookId>, Vec<HookId>) {
+        hooks.into_iter().partition(|hook| {
+            self.get(*hook)
+                .is_some_and(|spec| spec.name.starts_with('_'))
+        })
+    }
+
     /// The hooks of `trigger` whose filter admits `subject`, the kit's and
     /// those of the subject's room; the hooks of a session's start, a
     /// delivery status, a status posted and a feedback read no filter, as

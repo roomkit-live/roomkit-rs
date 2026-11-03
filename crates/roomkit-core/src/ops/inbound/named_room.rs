@@ -51,7 +51,7 @@ use super::arrival_change::{ArrivalChange, Recorded, SenderRecord};
 use crate::model::{ChannelBinding, ChannelType, ErrorRecord, Room, RoomContext, RoomId};
 use crate::ops::io::Bound;
 use crate::ops::lifecycle::locked::{LockedSection, SectionError, SectionResult};
-use crate::ops::lifecycle::report::{self, Reported};
+use crate::ops::lifecycle::report::{self, Reported, SessionStarted};
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 use crate::ops::{ChannelConfig, Cx, Progress};
 use crate::rules::chain_depth::Draw;
@@ -132,6 +132,12 @@ enum State {
         /// Whether step 2 created the room.
         created: bool,
     },
+    /// The `ON_SESSION_STARTED` hooks that hold the message run.
+    Starting {
+        effect: EffectId,
+        started: Box<SessionStarted>,
+        context: Box<RoomContext>,
+    },
     Done,
 }
 
@@ -201,6 +207,9 @@ impl NamedRoom {
             }
             | State::Rereading {
                 effect: awaited, ..
+            }
+            | State::Starting {
+                effect: awaited, ..
             } => *awaited == effect,
             State::Changing { section, .. } => section.awaits(effect),
             State::Start | State::Done => false,
@@ -264,12 +273,18 @@ impl NamedRoom {
                 }
                 Progress::Done(changed) => self.on_changed(cx, changed.result, created),
             },
+            State::Starting {
+                effect: expected,
+                started,
+                context,
+            } if expected == effect => self.on_session_hooks(cx, *started, context, outcome),
             state @ (State::Start
             | State::Reading(_)
             | State::Creating { .. }
             | State::Rereading { .. }
             | State::Observing(_)
             | State::Changing { .. }
+            | State::Starting { .. }
             | State::Done) => {
                 debug_assert!(false, "step 2 received {effect:?} in {state:?}");
                 self.state = state;
@@ -455,15 +470,52 @@ impl NamedRoom {
             Ok(recorded) => recorded.into_context(),
             Err(error) => return Progress::Done(Named::Failed(change_failure(error))),
         };
-        if created && starts_session(&self.channel.channel_type) {
-            let started = Reported::SessionStarted {
-                channel_id: &self.channel.channel_id,
-                channel_type: &self.channel.channel_type,
-                participant_id: &self.sender_id,
-            };
-            report::report(cx, started, &context);
+        if !created || !starts_session(&self.channel.channel_type) {
+            return Progress::Done(Named::Arrived(context));
         }
+        match report::report_session_started(cx, self.session_started(), &context) {
+            Some((effect, started)) => {
+                self.state = State::Starting {
+                    effect,
+                    started: Box::new(started),
+                    context,
+                };
+                Progress::Waiting
+            }
+            None => Progress::Done(Named::Arrived(context)),
+        }
+    }
+
+    /// The hooks that hold the message are over, what they raised the
+    /// driver's to log: `session_started` is emitted, and the others go on
+    /// in the background (RFC §10.1 step 2).
+    fn on_session_hooks(
+        &mut self,
+        cx: &mut Cx<'_>,
+        started: SessionStarted,
+        context: Box<RoomContext>,
+        outcome: Outcome,
+    ) -> Progress<Named> {
+        if let Err(error) = outcome.into_observed() {
+            tracing::warn!(
+                target: "roomkit::core::inbound",
+                room_id = %self.room_id,
+                error_type = %error.error_type,
+                message = %error.message,
+                "the ON_SESSION_STARTED hooks could not be run; the message goes on all the same"
+            );
+        }
+        started.finish(cx, self.session_started(), &context);
         Progress::Done(Named::Arrived(context))
+    }
+
+    /// The session the message starts on its channel.
+    fn session_started(&self) -> Reported<'_> {
+        Reported::SessionStarted {
+            channel_id: &self.channel.channel_id,
+            channel_type: &self.channel.channel_type,
+            participant_id: &self.sender_id,
+        }
     }
 }
 
