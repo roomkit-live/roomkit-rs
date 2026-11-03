@@ -278,10 +278,9 @@ fn modified(event: RoomEvent) -> HookResult {
     HookResult::modify(event, ModifyOptions::default())
 }
 
-/// A router's install: its hook, a handler over its settings, and the
-/// handoff on every agent, all of them or none. Python's
-/// `ConversationRouter.install(kit, agents, *, agent_aliases=None,
-/// phase_map=None, hook_priority=-100)`.
+/// What [`ConversationRouter::install`] takes beside the kit and the agents:
+/// Python's `install(kit, agents, *, agent_aliases=None, phase_map=None,
+/// hook_priority=-100)`.
 #[derive(Clone, Debug)]
 pub struct InstallOptions {
     /// Each alias's agent id.
@@ -306,12 +305,16 @@ impl ConversationRouter {
     /// Wires routing and handoff in one call: this router's hook on every
     /// `BEFORE_BROADCAST` of the kit, a [`HandoffHandler`], and the generic
     /// handoff tool on every agent, each live or named by the id of one the
-    /// kit holds. Python's `install`.
+    /// kit holds, a live one registered once every one was read, since it
+    /// is given to the kit (`docs/architecture.md`).
     ///
     /// # Errors
     ///
-    /// [`RoomKitError::ChannelNotRegistered`] for an id naming no channel of
-    /// the kit, nothing installed; what registering the hook fails with.
+    /// Before anything is installed, [`RoomKitError::ChannelNotRegistered`]
+    /// for an id naming no channel of the kit, and [`RoomKitError::Value`] or
+    /// [`RoomKitError::Type`] for an agent that takes no handoff; afterwards,
+    /// what registering the hook or a tool fails with, what came before it
+    /// left in place: a second install's.
     pub fn install<S: ConversationStore>(
         &self,
         kit: &RoomKit<S>,
@@ -319,10 +322,11 @@ impl ConversationRouter {
         options: InstallOptions,
     ) -> Result<HandoffHandler<S>, RoomKitError> {
         // Every agent read before anything is installed.
-        kit.register_strategy_agents(agents)?;
         for agent in agents {
             held(kit, agent)?;
+            kit.takes_handoff(agent)?;
         }
+        kit.register_strategy_agents(agents)?;
         kit.install_router_hook(self, options.hook_priority)?;
         let handler = HandoffHandler::new(
             kit,

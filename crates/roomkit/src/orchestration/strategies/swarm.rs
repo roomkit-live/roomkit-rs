@@ -120,7 +120,10 @@ fn set_up_handoffs<S: ConversationStore>(
     room_id: &RoomId,
     owner: usize,
 ) -> Result<(), RoomKitError> {
-    for (index, agent) in agents.iter().enumerate() {
+    for agent in agents {
+        kit.check_room_tool(&agent.channel_id, room_id, HANDOFF_TOOL_NAME, owner)?;
+    }
+    for agent in agents {
         let targets: Vec<(String, Option<String>)> = agents
             .iter()
             .filter(|other| other.channel_id != agent.channel_id)
@@ -128,18 +131,7 @@ fn set_up_handoffs<S: ConversationStore>(
             .collect();
         let definition = handoff_tool_definition(&targets);
         let entry = handler.entry(&agent.channel_id, definition, Some(owner));
-        let served = kit.register_room_tools(&agent.channel_id, room_id, vec![entry], owner);
-        if let Err(error) = served {
-            let done = agents.get(..index).unwrap_or_default();
-            for agent in done {
-                kit.inner.owner_tools.unregister_in_room(
-                    &agent.channel_id,
-                    room_id,
-                    HANDOFF_TOOL_NAME,
-                );
-            }
-            return Err(error);
-        }
+        kit.register_room_tools(&agent.channel_id, room_id, vec![entry], owner)?;
     }
     Ok(())
 }

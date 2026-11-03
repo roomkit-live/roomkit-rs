@@ -107,7 +107,7 @@ impl<S> OwnerToolStore<S> {
         &self,
         channel_id: &ChannelId,
         entries: Vec<OwnerToolEntry<S>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), (String, String)> {
         let mut by_channel = self
             .by_channel
             .write()
@@ -116,12 +116,51 @@ impl<S> OwnerToolStore<S> {
         let mut names: Vec<&str> = held.iter().map(OwnerToolEntry::name).collect();
         for entry in &entries {
             if names.contains(&entry.name()) {
-                return Err(entry.name().to_owned());
+                return Err((entry.name().to_owned(), "served by the channel".to_owned()));
+            }
+            if let Some(room_id) = self.room_serving(channel_id, entry.name()) {
+                let clash = format!("served in room '{room_id}'");
+                return Err((entry.name().to_owned(), clash));
             }
             names.push(entry.name());
         }
         held.extend(entries);
         Ok(())
+    }
+
+    /// The first room, by its id, whose tools for `channel_id` hold `name`.
+    fn room_serving(&self, channel_id: &ChannelId, name: &str) -> Option<RoomId> {
+        let in_rooms = self.in_rooms.read().unwrap_or_else(PoisonError::into_inner);
+        in_rooms
+            .iter()
+            .filter(|((channel, _), entries)| {
+                channel == channel_id && entries.iter().any(|entry| entry.name() == name)
+            })
+            .map(|((_, room_id), _)| room_id.clone())
+            .min()
+    }
+
+    /// Why `name` cannot be set up for `channel_id` in `room_id` for the
+    /// install `owner`: what [`register_all_in_room`](Self::register_all_in_room)
+    /// would refuse it with, nothing set up. Python's registry's `check`.
+    pub(crate) fn clash_in_room(
+        &self,
+        channel_id: &ChannelId,
+        room_id: &RoomId,
+        name: &str,
+        owner: usize,
+    ) -> Option<String> {
+        if self.serves(channel_id, name) {
+            return Some("served by the channel".to_owned());
+        }
+        let in_rooms = self.in_rooms.read().unwrap_or_else(PoisonError::into_inner);
+        let clashes = in_rooms
+            .get(&(channel_id.clone(), room_id.clone()))
+            .is_some_and(|held| {
+                held.iter()
+                    .any(|served| served.name() == name && served.owner != Some(owner))
+            });
+        clashes.then(|| format!("served in room '{}'", room_id.as_str()))
     }
 
     /// Sets up `entry` for `channel_id` in `room_id` alone, as Python's
@@ -354,7 +393,10 @@ mod tests {
         let refused = store.register_all(&agent, vec![entry("task_status"), entry("cancel_task")]);
         assert_eq!(
             (refused, store.serves(&agent, "task_status")),
-            (Err("cancel_task".to_owned()), false)
+            (
+                Err(("cancel_task".to_owned(), "served by the channel".to_owned())),
+                false
+            )
         );
     }
 }

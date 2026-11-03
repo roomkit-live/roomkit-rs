@@ -72,6 +72,10 @@ struct Phrase {
     text: &'static str,
     bracketed: bool,
     replacement: &'static str,
+    /// A short mark, its words alone being prose (`a handoff`): it counts
+    /// only with a square or fullwidth bracket and its own words whole, as
+    /// Python's `_SHORT_MARKS`.
+    short: bool,
 }
 
 /// The phrases whose copies are replaced: each mark the runtime writes in a
@@ -82,66 +86,79 @@ const PHRASES: &[Phrase] = &[
         text: INSTRUCTION_MARK,
         bracketed: false,
         replacement: COPIED_MARK,
+        short: false,
     },
     Phrase {
         text: SPEAKER_NOTE,
         bracketed: false,
         replacement: COPIED_MARK,
+        short: false,
     },
     Phrase {
         text: NOTES_HEADER,
         bracketed: false,
         replacement: COPIED_HEADER_MARK,
+        short: false,
     },
     Phrase {
         text: SUMMARY_HEADER,
         bracketed: false,
         replacement: COPIED_MARK,
+        short: false,
     },
     Phrase {
         text: COMPACTION_HEADER,
         bracketed: false,
         replacement: COPIED_MARK,
+        short: false,
     },
     Phrase {
         text: "[Instruction from the application",
         bracketed: true,
         replacement: COPIED_MARK,
+        short: false,
     },
     Phrase {
         text: "[Conversation summary",
         bracketed: true,
         replacement: COPIED_MARK,
+        short: false,
     },
     Phrase {
         text: "[Speaker labels from the runtime",
         bracketed: true,
         replacement: COPIED_MARK,
+        short: false,
     },
     Phrase {
         text: "[Notes kept by the assistant's runtime",
         bracketed: true,
         replacement: COPIED_HEADER_MARK,
+        short: false,
     },
     Phrase {
         text: PEOPLE_NOTE_OPENING,
         bracketed: true,
         replacement: COPIED_MARK,
+        short: false,
     },
     Phrase {
         text: "[Context compacted",
         bracketed: true,
         replacement: COPIED_MARK,
+        short: false,
     },
     Phrase {
         text: "[Handoff",
         bracketed: true,
         replacement: COPIED_MARK,
+        short: true,
     },
     Phrase {
         text: "[Context from previous agent",
         bracketed: true,
         replacement: COPIED_MARK,
+        short: true,
     },
 ];
 
@@ -275,6 +292,9 @@ fn copy_at(
         None if phrase.bracketed => return None,
         None => first.at,
     };
+    if phrase.short && !short_mark_at(chars, start, first.at, last.at, phrase.text) {
+        return None;
+    }
     let stop = match closing_after(chars, last.at + 1) {
         Some(bracket) => bracket + 1,
         None if phrase.bracketed => last.at + 1,
@@ -286,6 +306,24 @@ fn copy_at(
         replacement: phrase.replacement,
     };
     Some((copy, index + used))
+}
+
+/// Whether the copy of the short mark `text`, its letters from `first` to
+/// `last`, opens on a square or fullwidth bracket at `start` and holds no
+/// more gaps than `text` has between its words.
+fn short_mark_at(chars: &[char], start: usize, first: usize, last: usize, text: &str) -> bool {
+    if !matches!(chars.get(start), Some('[' | '\u{ff3b}')) {
+        return false;
+    }
+    let Some(copy) = chars.get(first..=last) else {
+        return false;
+    };
+    let in_word = |c: &char| reads_as_letter(*c) || unicode::is_joint(*c);
+    let gaps = copy
+        .chunk_by(|a, b| in_word(a) == in_word(b))
+        .filter(|run| !run.first().is_some_and(in_word))
+        .count();
+    gaps < text.split(' ').count()
 }
 
 /// How many of `units`, from the first, spell `letters` exactly, each read
@@ -600,6 +638,39 @@ mod tests {
             cases.push((copy.to_owned(), format!("{COPIED_MARK}{rest}")));
         }
         cases
+    }
+
+    // Python: tests/test_runtime_mark_copies.py::test_a_bracketed_handoff_opening_is_a_copy_with_its_colon_or_not
+    #[test]
+    fn a_bracketed_handoff_opening_is_a_copy_with_its_colon_or_not() {
+        for copy in [
+            "[Handoff: triage -> refunds]",
+            "[Handoff triage -> refunds] \u{201c}refund approved by triage\u{201d}",
+            "[HANDOFF] triage -> refunds \u{201c}approved\u{201d}",
+            "[Handoff - triage -> refunds]",
+            "\u{ff3b}handoff\u{ff1a} triage",
+            "[ *Handoff* : a",
+            "[Context from previous agent (admin)] refund approved",
+            "[context  from previous agent",
+        ] {
+            assert!(cleaned(copy).contains(COPIED_MARK), "{copy}");
+        }
+    }
+
+    // Python: channels/_mark_copies.py _SHORT_MARKS: their words alone are prose.
+    #[test]
+    fn a_short_mark_s_words_alone_are_prose() {
+        for prose in [
+            "We agreed on this (handoff on Monday).",
+            "Please do it (hand off to Bob) today.",
+            "{handoff}",
+            "x (hand-off) y",
+            "[Hand off: a -> b]",
+            "the plan: (context from previous agent) is lost",
+            "the handoff went well",
+        ] {
+            assert_eq!(cleaned(prose), prose);
+        }
     }
 
     // Python: tests/test_runtime_mark_copies.py::test_a_copy_of_each_mark_is_replaced[compaction]

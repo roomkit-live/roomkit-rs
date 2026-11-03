@@ -158,6 +158,41 @@ async fn the_context_handed_on_is_the_runtime_s_and_holds_no_copy() {
     );
 }
 
+// Python: orchestration/handoff.py HandoffMemoryProvider.retrieve, `str(summary)`
+// of a summary that is no text, and get_conversation_state's error let through.
+#[tokio::test]
+async fn a_summary_is_read_as_python_s_str_and_a_bad_state_is_the_caller_s_error() {
+    let provider = HandoffMemoryProvider::new(Arc::new(Inner::default()));
+    let mut state = ConversationState::new();
+    state.context.insert("handoff_summary".to_owned(), json!(7));
+    state.context.insert("handoff_from".to_owned(), json!("a"));
+    let room = set_conversation_state(&Room::new(room_id()), &state);
+    let result = provider
+        .retrieve(
+            &room_id(),
+            &event(),
+            &RoomContext::new(room),
+            RetrieveOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert!(text(&result.messages[0]).contains("<conversation_summary>\n7\n"));
+
+    let mut broken = Room::new(room_id());
+    broken
+        .metadata
+        .insert("_conversation_state".to_owned(), json!({"phase": 5}));
+    let read = provider
+        .retrieve(
+            &room_id(),
+            &event(),
+            &RoomContext::new(broken),
+            RetrieveOptions::default(),
+        )
+        .await;
+    assert!(read.is_err());
+}
+
 // Python: tests/orchestration/test_handoff.py::TestHandoffMemoryProvider::test_no_injection_without_handoff
 #[tokio::test]
 async fn no_injection_without_handoff() {

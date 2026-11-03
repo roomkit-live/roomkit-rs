@@ -167,7 +167,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// intelligence channel, or one whose turns never declare the tools
     /// the room's owner serves (RFC §10.6.5): a tool set up for it would
     /// never be seen. Python's `owner_tools_of`, through `held_agent`.
-    fn registered_agent(&self, agent: &ChannelId) -> Result<(), RoomKitError> {
+    pub(super) fn registered_agent(&self, agent: &ChannelId) -> Result<(), RoomKitError> {
         let Some(channel) = self.inner.channel(agent) else {
             return Err(RoomKitError::ChannelNotRegistered {
                 channel_id: agent.clone(),
@@ -221,7 +221,7 @@ impl<S: ConversationStore> RoomKit<S> {
         self.inner
             .owner_tools
             .register_all(agent, entries)
-            .map_err(|name| collision(&name, "served by the channel", agent))
+            .map_err(|(name, clash)| collision(&name, &clash, agent))
     }
 
     /// How `agent`'s background tasks run: its setup, or the default.

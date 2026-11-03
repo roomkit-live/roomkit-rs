@@ -31,6 +31,40 @@ impl<S: ConversationStore> RoomKit<S> {
         entries: Vec<OwnerToolEntry<S>>,
         owner: usize,
     ) -> Result<(), RoomKitError> {
+        for entry in &entries {
+            self.check_own_tool(agent, entry.name())?;
+        }
+        self.inner
+            .owner_tools
+            .register_all_in_room(agent, room_id, entries, owner)
+            .map_err(|(name, clash)| collision(&name, &clash, agent))
+    }
+
+    /// Refuses what [`register_room_tools`](Self::register_room_tools) would
+    /// refuse of a tool `name`, nothing set up: all of a strategy's agents
+    /// checked before any is served (Python's registry's `check`).
+    pub(crate) fn check_room_tool(
+        &self,
+        agent: &ChannelId,
+        room_id: &RoomId,
+        name: &str,
+        owner: usize,
+    ) -> Result<(), RoomKitError> {
+        self.check_own_tool(agent, name)?;
+        match self
+            .inner
+            .owner_tools
+            .clash_in_room(agent, room_id, name, owner)
+        {
+            Some(clash) => Err(collision(name, &clash, agent)),
+            None => Ok(()),
+        }
+    }
+
+    /// Refuses a channel the kit does not hold, one whose turns never
+    /// declare the tools their owner serves (RFC §10.6.5), and a name one of
+    /// its own tools takes.
+    fn check_own_tool(&self, agent: &ChannelId, name: &str) -> Result<(), RoomKitError> {
         let channel =
             self.inner
                 .channel(agent)
@@ -44,20 +78,9 @@ impl<S: ConversationStore> RoomKit<S> {
                  its turns would never declare them"
             )));
         }
-        let own = channel.own_tool_names();
-        if let Some(entry) = entries
-            .iter()
-            .find(|entry| own.iter().any(|name| name == entry.name()))
-        {
-            return Err(collision(
-                entry.name(),
-                "one of the channel's own tools",
-                agent,
-            ));
+        if channel.own_tool_names().iter().any(|own| own == name) {
+            return Err(collision(name, "one of the channel's own tools", agent));
         }
-        self.inner
-            .owner_tools
-            .register_all_in_room(agent, room_id, entries, owner)
-            .map_err(|(name, clash)| collision(&name, &clash, agent))
+        Ok(())
     }
 }

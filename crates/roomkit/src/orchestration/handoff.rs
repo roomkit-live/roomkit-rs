@@ -17,9 +17,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::channel::BoxFuture;
+use crate::context::Section;
 use crate::error::RoomKitError;
 use crate::kit::{GetRoomOptions, RoomKit, WeakRoomKit};
-use crate::orchestration::agents::held;
 use crate::orchestration::handoff_end::{accepted, moved_state, rejected};
 pub(crate) use crate::orchestration::handoff_tool::{HANDOFF_TOOL_NAME, handoff_tool_definition};
 use crate::orchestration::{
@@ -35,14 +35,19 @@ pub struct HandoffRequest {
     /// The agent the conversation goes to, read through the aliases.
     pub target_agent_id: String,
     /// Why the handoff is needed.
+    #[serde(default)]
     pub reason: String,
     /// What the next agent needs to know.
+    #[serde(default)]
     pub summary: String,
     /// The call's arguments.
+    #[serde(default)]
     pub context: Metadata,
     /// The channel to escalate to, `same` keeping the current one.
+    #[serde(default)]
     pub channel_escalation: Option<String>,
     /// Whether the handoff is urgent.
+    #[serde(default)]
     pub urgent: bool,
 }
 
@@ -62,6 +67,7 @@ impl HandoffRequest {
 
 /// What the calling agent is answered: Python's `HandoffResult`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct HandoffResult {
     /// Whether the handoff went through.
     pub accepted: bool,
@@ -153,7 +159,8 @@ impl<S> std::fmt::Debug for HandoffHandler<S> {
 
 struct Inner<S> {
     kit: WeakRoomKit<S>,
-    router: ConversationRouter,
+    /// Kept as Python's handler keeps it: nothing reads it.
+    _router: ConversationRouter,
     aliases: HashMap<String, String>,
     phase_map: HashMap<String, String>,
     allowed_transitions: Option<HashMap<String, HashSet<String>>>,
@@ -193,7 +200,7 @@ impl<S: ConversationStore> HandoffHandler<S> {
         Self {
             inner: Arc::new(Inner {
                 kit: kit.downgrade(),
-                router,
+                _router: router,
                 aliases: agent_aliases.unwrap_or_default(),
                 phase_map: phase_map.unwrap_or_default(),
                 allowed_transitions,
@@ -209,11 +216,6 @@ impl<S: ConversationStore> HandoffHandler<S> {
     /// The channel a handoff's record is sent from, when not the caller's.
     pub(super) fn event_channel(&self) -> Option<&ChannelId> {
         self.inner.event_channel_id.as_ref()
-    }
-
-    /// The router the handler was built with.
-    pub fn router(&self) -> &ConversationRouter {
-        &self.inner.router
     }
 
     /// Each agent's greeting: Python's `greeting_map`.
@@ -267,13 +269,18 @@ impl<S: ConversationStore> HandoffHandler<S> {
             return Ok(Some(language.to_owned()));
         }
         let agent = agent_id.and_then(|id| read(&self.inner.agents).get(id).cloned());
-        let Some(agent) = agent else {
-            return Ok(None);
-        };
-        let Some(kit) = self.inner.kit.upgrade() else {
-            return Ok(None);
-        };
-        Ok(held(&kit, &agent)?.language)
+        Ok(agent.and_then(|agent| self.agent_language(&agent)))
+    }
+
+    /// `agent`'s own language: a live one's, or the one its id names on the
+    /// kit declares; none for an id nothing holds.
+    fn agent_language(&self, agent: &StrategyAgent) -> Option<String> {
+        if let Some(live) = agent.live() {
+            return live.channel.declaration().identity?.language;
+        }
+        let kit = self.inner.kit.upgrade()?;
+        let channel = kit.inner.channel(agent.channel_id())?;
+        channel.declaration().identity?.language
     }
 
     /// Processes a handoff `calling_agent_id` asked in `room_id`, with the
@@ -282,9 +289,10 @@ impl<S: ConversationStore> HandoffHandler<S> {
     ///
     /// # Errors
     ///
-    /// [`RoomKitError::KitClosed`] once the kit is gone or closing,
-    /// [`RoomKitError::Value`] for an argument that is no text, what reading
-    /// the room, saving its state or recording the handoff fails with.
+    /// [`RoomKitError::KitClosed`] once the kit is gone, what reading the room,
+    /// saving its state or recording the handoff fails with, which a closing
+    /// kit's send refuses; [`RoomKitError::Value`] for an argument that is no
+    /// text.
     pub async fn handle(
         &self,
         room_id: &RoomId,
@@ -325,21 +333,25 @@ impl<S: ConversationStore> HandoffHandler<S> {
     ///
     /// # Errors
     ///
-    /// [`RoomKitError::KitClosed`] once the kit is gone or closing, what
-    /// reading the room or saving its state fails with.
+    /// [`RoomKitError::KitClosed`] once the kit is gone, what reading the room
+    /// or saving its state fails with.
     pub async fn set_language(
         &self,
         room_id: &RoomId,
         language: impl Into<String>,
     ) -> Result<(), RoomKitError> {
         let kit = self.kit()?;
-        let _lock = kit.inner.locks.lock(room_id).await?;
-        let room = kit.get_room(room_id, GetRoomOptions::default()).await?;
-        let mut state = get_conversation_state(&room)?;
-        state
-            .context
-            .insert("language".to_owned(), Value::String(language.into()));
-        save_conversation_state(kit.store(), room_id, &state).await
+        let section = Section::enter(&kit.inner.locks, room_id).await?;
+        section
+            .scope(async {
+                let room = kit.get_room(room_id, GetRoomOptions::default()).await?;
+                let mut state = get_conversation_state(&room)?;
+                state
+                    .context
+                    .insert("language".to_owned(), Value::String(language.into()));
+                save_conversation_state(kit.store(), room_id, &state).await
+            })
+            .await
     }
 
     /// The handoff tool `agent` serves with this handler, in the room of each
@@ -377,15 +389,21 @@ impl<S: ConversationStore> HandoffHandler<S> {
     }
 
     /// Serves the handoff tool on `agent`, in every room or in `room_id`'s
-    /// only: what `roomkit_ai::setup_handoff` and the router's install call.
-    /// Hidden: Python's `setup_handoff` is public, `roomkit_ai` holds its
-    /// `AiTool`.
+    /// only, the agent read as Python's `owner_tools_of` does, live or by the
+    /// id of a channel the kit holds; a live one is given to the kit, which
+    /// registers it. What `roomkit_ai::setup_handoff` and the
+    /// router's install call. Hidden: Python's `setup_handoff` is public,
+    /// `roomkit_ai` holds its `AiTool`.
     ///
     /// # Errors
     ///
     /// [`RoomKitError::Runtime`] when it is set up already where it would be
     /// declared; [`RoomKitError::ChannelNotRegistered`] for an id naming no
-    /// channel of the kit; [`RoomKitError::KitClosed`] once the kit is gone.
+    /// channel of the kit; [`RoomKitError::Value`] for a channel that is no
+    /// intelligence channel, or whose turns never declare what its room's
+    /// owner serves; [`RoomKitError::ToolNameCollision`] for a name its own
+    /// tools take, or a room's handoff under a kit-wide one;
+    /// [`RoomKitError::KitClosed`] once the kit is gone.
     #[doc(hidden)]
     pub fn serve_tool(
         &self,
@@ -394,21 +412,20 @@ impl<S: ConversationStore> HandoffHandler<S> {
         room_id: Option<&RoomId>,
     ) -> Result<(), RoomKitError> {
         let kit = self.kit()?;
+        kit.takes_handoff(agent)?;
         kit.register_strategy_agents(std::slice::from_ref(agent))?;
-        let held = held(&kit, agent)?.channel_id;
-        if kit.serves_handoff(&held, room_id) {
+        let channel = agent.channel_id();
+        if kit.serves_handoff(channel, room_id) {
             return Err(RoomKitError::Runtime(format!(
-                "setup_handoff() already called for channel '{held}'"
+                "setup_handoff() already called for channel '{channel}'"
             )));
         }
         let definition = definition.unwrap_or_else(|| handoff_tool_definition(&[]));
-        kit.serve_handoff(&held, self.entry(&held, definition, None), room_id)
+        kit.serve_handoff(channel, self.entry(channel, definition, None), room_id)
     }
 
     fn kit(&self) -> Result<RoomKit<S>, RoomKitError> {
-        let kit = self.inner.kit.upgrade().ok_or(RoomKitError::KitClosed)?;
-        kit.inner.open()?;
-        Ok(kit)
+        self.inner.kit.upgrade().ok_or(RoomKitError::KitClosed)
     }
 
     /// The call's request: `target` through the aliases, `channel_escalation`
@@ -416,6 +433,14 @@ impl<S: ConversationStore> HandoffHandler<S> {
     fn request(&self, arguments: Metadata) -> Result<HandoffRequest, RoomKitError> {
         let target = text(&arguments, "target")?;
         let target_agent_id = self.inner.aliases.get(&target).cloned().unwrap_or(target);
+        if let Some(phase) = arguments.get("next_phase")
+            && !phase.is_string()
+            && truthy(phase)
+        {
+            return Err(RoomKitError::Value(format!(
+                "next_phase: Input should be a valid string, not {phase}"
+            )));
+        }
         let channel_escalation = match arguments.get("channel_escalation") {
             None => Some("same".to_owned()),
             Some(Value::Null) => None,
@@ -440,8 +465,23 @@ impl<S: ConversationStore> HandoffHandler<S> {
         calling_agent_id: &ChannelId,
         request: &HandoffRequest,
     ) -> Result<Decided, RoomKitError> {
+        let section = Section::enter(&kit.inner.locks, room_id).await?;
+        section
+            .scope(self.decide_locked(kit, room_id, calling_agent_id, request))
+            .await
+    }
+
+    /// [`decide`](Self::decide), under the room's lock. The state is patched
+    /// into the room, which moves its `updated_at` where Python's
+    /// `update_room` of the whole room does not.
+    async fn decide_locked(
+        &self,
+        kit: &RoomKit<S>,
+        room_id: &RoomId,
+        calling_agent_id: &ChannelId,
+        request: &HandoffRequest,
+    ) -> Result<Decided, RoomKitError> {
         let target = request.target_agent_id.as_str();
-        let _lock = kit.inner.locks.lock(room_id).await?;
         let room = kit.get_room(room_id, GetRoomOptions::default()).await?;
         if !self.finds(kit, room_id, target).await? {
             tracing::warn!(target: "roomkit::orchestration", "Handoff rejected: agent {target} not in room {room_id}");
@@ -449,15 +489,7 @@ impl<S: ConversationStore> HandoffHandler<S> {
                 "Agent {target} not found in room"
             ))));
         }
-        let phase = request
-            .context
-            .get("next_phase")
-            .and_then(Value::as_str)
-            .filter(|phase| !phase.is_empty())
-            .or_else(|| self.inner.phase_map.get(target).map(String::as_str))
-            .filter(|phase| !phase.is_empty())
-            .unwrap_or("handling")
-            .to_owned();
+        let phase = self.phase_of(request);
         let state = get_conversation_state(&room)?;
         if let Some(allowed) = &self.inner.allowed_transitions
             && !allowed
@@ -474,6 +506,21 @@ impl<S: ConversationStore> HandoffHandler<S> {
         let moved = moved_state(&state, &phase, agent.as_deref(), calling_agent_id, request)?;
         save_conversation_state(kit.store(), room_id, &moved).await?;
         Ok(Decided::Accepted { phase, agent })
+    }
+
+    /// The phase a handoff leads to: the call's `next_phase`, else the phase
+    /// map's for its target, else `handling`, an empty one read as none.
+    fn phase_of(&self, request: &HandoffRequest) -> String {
+        let given = request.context.get("next_phase").and_then(Value::as_str);
+        let mapped = || {
+            let mapped = self.inner.phase_map.get(&request.target_agent_id);
+            mapped.map(String::as_str).filter(|phase| !phase.is_empty())
+        };
+        given
+            .filter(|phase| !phase.is_empty())
+            .or_else(mapped)
+            .unwrap_or("handling")
+            .to_owned()
     }
 
     /// Whether `target` is a handoff's: bound in the room, a human, or known.
@@ -513,6 +560,18 @@ fn text(arguments: &Metadata, key: &str) -> Result<String, RoomKitError> {
         Some(other) => Err(RoomKitError::Value(format!(
             "{key}: Input should be a valid string, not {other}"
         ))),
+    }
+}
+
+/// Python's `bool(value)` of a JSON value.
+fn truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64() != Some(0.0),
+        Value::String(text) => !text.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(members) => !members.is_empty(),
     }
 }
 

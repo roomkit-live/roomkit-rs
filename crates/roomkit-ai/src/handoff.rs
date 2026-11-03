@@ -116,24 +116,43 @@ impl std::fmt::Debug for HandoffMemoryProvider {
 /// The message handing `context`'s room's handoff on, if its state holds
 /// one: a model wrote the summary, set apart, a copy of a mark in it
 /// replaced, since this message keeps its own (RFC §6.4).
-fn handed_on(context: &RoomContext) -> Option<AiMessage> {
-    let state = get_conversation_state(&context.room).ok()?;
-    let summary = state.context.get("handoff_summary").and_then(Value::as_str);
-    let from = state.context.get("handoff_from").and_then(Value::as_str);
-    let (summary, from) = (
-        summary.filter(|summary| !summary.is_empty())?,
-        from.filter(|from| !from.is_empty())?,
-    );
+fn handed_on(context: &RoomContext) -> Result<Option<AiMessage>, ChannelError> {
+    let state = get_conversation_state(&context.room).map_err(ChannelError::from)?;
+    let summary = state
+        .context
+        .get("handoff_summary")
+        .and_then(said)
+        .filter(|summary| !summary.is_empty());
+    let from = state
+        .context
+        .get("handoff_from")
+        .and_then(Value::as_str)
+        .filter(|from| !from.is_empty());
+    let (Some(summary), Some(from)) = (summary, from) else {
+        return Ok(None);
+    };
     let text = format!(
         "{HANDED_ON_CONTEXT} ({})]\n{}",
         identifier(from, "agent"),
-        fence(CONVERSATION_SUMMARY_TAG, &without_mark_copies(summary))
+        fence(CONVERSATION_SUMMARY_TAG, &without_mark_copies(&summary))
     );
     let mut message = AiMessage::new(AiRole::User, text);
     message
         .metadata
         .insert(RUNTIME_RECORD.to_owned(), json!("handed_on_context"));
-    Some(message)
+    Ok(Some(message))
+}
+
+/// `value` as Python's `str(value)` reads a summary a model handed on: none
+/// for what Python's truth test refuses.
+fn said(value: &Value) -> Option<String> {
+    match value {
+        Value::Null | Value::Bool(false) => None,
+        Value::String(text) => Some(text.clone()),
+        Value::Bool(true) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
+            Some(value.to_string())
+        }
+    }
 }
 
 impl MemoryProvider for HandoffMemoryProvider {
@@ -157,7 +176,7 @@ impl MemoryProvider for HandoffMemoryProvider {
                 .inner
                 .retrieve(room_id, current_event, context, options)
                 .await?;
-            if let Some(message) = handed_on(context) {
+            if let Some(message) = handed_on(context)? {
                 result.messages.insert(0, message);
             }
             Ok(result)

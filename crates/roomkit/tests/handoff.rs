@@ -1,25 +1,34 @@
 //! The handoff (RFC §19.6) driven through the public API: what the shared
 //! scenarios (roomkit-specs `conformance/scenarios/orchestration/`, the
-//! handoff's) cannot say, a host's callback, a live agent, and what a
-//! second setup is refused.
+//! handoff's) cannot say: a host's callback, live agents, a call under the
+//! room's lock, and what a setup refuses.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::collections::HashMap;
+use std::future::{Future, ready};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use roomkit::model::{ChannelId, ChannelType, Metadata, RoomId};
+use roomkit::model::{
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, InboundMessage,
+    Metadata, RoomContext, RoomEvent, RoomId, TextContent,
+};
 use roomkit::orchestration::{
     ConversationRouterOptions, ConversationState, HandoffHandlerOptions, InstallOptions,
-    OnHandoffComplete, StrategyAgent, get_conversation_state, set_conversation_state,
+    OnHandoffComplete, StrategyAgent, StrategyFuture, get_conversation_state,
+    set_conversation_state,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, ConversationRouter, CreateRoomOptions, GetRoomOptions, HandoffHandler,
-    HandoffRequest, HandoffResult, RoomKit, RoomKitError, RoomKitOptions,
+    AgentIdentity, AttachChannelOptions, Channel, ChannelDeclaration, ChannelError,
+    ConversationRouter, CreateRoomOptions, GetRoomOptions, GetTimelineOptions, HandoffHandler,
+    HandoffRequest, HandoffResult, HookExecution, HookOptions, HookTrigger, InstallStrategyOptions,
+    Orchestration, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, Swarm,
 };
 use roomkit_ai::{
-    Agent, AgentOptions, MockAiProvider, MockAiProviderOptions, SetupHandoffOptions, setup_handoff,
+    Agent, AgentOptions, AiChannel, AiChannelOptions, MockAiProvider, MockAiProviderOptions,
+    SetupHandoffOptions, setup_handoff,
 };
 use serde_json::json;
 
@@ -219,22 +228,374 @@ fn a_request_and_a_result_have_python_s_defaults() {
     assert!(result.message.is_empty() && result.reason.is_empty());
 }
 
-// Python: tests/orchestration/test_handoff.py::TestSetupHandoff::test_handoff_tool_call_dispatched
-// (the state's stored form, read back through the kit's room)
+// Python: orchestration/handoff.py HandoffRequest, a pydantic model: an
+// argument that is no text is refused, nothing written.
 #[tokio::test]
 async fn an_argument_that_is_no_text_refuses_the_handoff_as_validation_does() {
     let kit = kit_with_room().await;
     let handler = HandoffHandler::new(&kit, router(), HandoffHandlerOptions::default());
-    let mut asked = arguments("b");
-    asked.insert("reason".to_owned(), json!(42));
+    for (key, value) in [("reason", json!(42)), ("next_phase", json!(5))] {
+        let mut asked = arguments("b");
+        asked.insert(key.to_owned(), value);
 
-    let refused = handler.handle(&room(), &id("a"), asked).await;
+        let refused = handler.handle(&room(), &id("a"), asked).await;
 
-    assert!(matches!(refused, Err(RoomKitError::Value(_))));
+        assert!(matches!(refused, Err(RoomKitError::Value(_))), "{key}");
+    }
     let room_now = kit
         .get_room(&room(), GetRoomOptions::default())
         .await
         .unwrap();
     assert_eq!(get_conversation_state(&room_now).unwrap().handoff_count, 0);
+    kit.close().await.unwrap();
+}
+
+/// An agent of the kit whose turns take no tool of the owner, as an ACP
+/// agent's: Python's `ChannelDeclaration(takes_owner_tools=False)`.
+struct NoOwnerTools;
+
+impl Channel for NoOwnerTools {
+    fn channel_id(&self) -> ChannelId {
+        id("acp")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn declaration(&self) -> ChannelDeclaration {
+        let mut declaration = ChannelDeclaration::new(self.channel_id());
+        declaration.takes_owner_tools = false;
+        declaration.identity = Some(AgentIdentity::default());
+        declaration
+    }
+
+    fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Err("no inbound".into()))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
+}
+
+/// A host's strategy whose install keeps a language for the room.
+struct SetsLanguage;
+
+impl Orchestration for SetsLanguage {
+    fn agents(&self) -> Vec<StrategyAgent> {
+        Vec::new()
+    }
+
+    fn install<'call>(
+        &'call self,
+        kit: &'call RoomKit,
+        room_id: &'call RoomId,
+    ) -> StrategyFuture<'call> {
+        Box::pin(async move {
+            let handler = HandoffHandler::new(kit, router(), HandoffHandlerOptions::default());
+            handler.set_language(room_id, "French").await
+        })
+    }
+}
+
+async fn state_of(kit: &RoomKit) -> ConversationState {
+    let room_now = kit
+        .get_room(&room(), GetRoomOptions::default())
+        .await
+        .unwrap();
+    get_conversation_state(&room_now).unwrap()
+}
+
+// Python: core/locks.py's lock is reentrant (RFC §13.5), so a hook, which runs
+// under the room's lock, hands off and sets the language at once; tests/orchestration
+// has no case, the review's probe ran both.
+#[tokio::test]
+async fn a_hook_under_the_room_s_lock_hands_off_and_sets_the_language() {
+    let kit = kit_with_room().await;
+    let handler = HandoffHandler::new(&kit, router(), HandoffHandlerOptions::default());
+    let hook = {
+        let handler = handler.clone();
+        move |event: RoomEvent, _context: RoomContext| {
+            let handler = handler.clone();
+            async move {
+                if event.r#type != roomkit::model::EventType::Message {
+                    return;
+                }
+                handler.set_language(&room(), "French").await.unwrap();
+                handler
+                    .handle(&room(), &id("a"), arguments("b"))
+                    .await
+                    .unwrap();
+            }
+        }
+    };
+    let options = HookOptions {
+        execution: HookExecution::Sync,
+        ..HookOptions::default()
+    };
+    kit.hook(HookTrigger::BeforeBroadcast, hook, options)
+        .unwrap();
+    let message = InboundMessage::new(id("sms"), "u1", TextContent::new("Hi."));
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        kit.process_inbound(message, ProcessInboundOptions::default()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert!(!result.blocked, "{result:?}");
+    let state = state_of(&kit).await;
+    assert_eq!(state.active_agent_id, Some(id("b")));
+    assert_eq!(state.context["language"], json!("French"));
+    kit.close().await.unwrap();
+}
+
+// Python: tests/orchestration/test_handoff.py::TestSetLanguage::test_set_language_stores_in_state,
+// from a strategy's install, which holds the room's lock.
+#[tokio::test]
+async fn an_install_sets_the_language_under_its_own_lock() {
+    let kit = kit_with_room().await;
+
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        kit.install_strategy(
+            &room(),
+            Arc::new(SetsLanguage),
+            InstallStrategyOptions::default(),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(state_of(&kit).await.context["language"], json!("French"));
+    kit.close().await.unwrap();
+}
+
+// Python: orchestration/_registry.py register, its refusal of a tool a room
+// serves ("Tool 'handoff_conversation' is already served in room 'r1' ..."): the
+// agent would declare it twice there, and its turn fail.
+#[tokio::test]
+async fn a_kit_wide_handoff_over_a_room_s_is_refused() {
+    let kit = kit_with_room().await;
+    let handler = HandoffHandler::new(&kit, router(), HandoffHandlerOptions::default());
+    let in_room = SetupHandoffOptions {
+        room_id: Some(room()),
+        ..SetupHandoffOptions::default()
+    };
+    setup_handoff(id("a"), &handler, in_room).unwrap();
+
+    let refused = setup_handoff(id("a"), &handler, SetupHandoffOptions::default());
+
+    let message = refused.unwrap_err().to_string();
+    assert!(message.contains("served in room 'r1'"), "{message}");
+    kit.close().await.unwrap();
+}
+
+// Python: tests/test_declared_strategies.py::test_no_owner_tool_is_set_up_for_a_channel_that_takes_none
+// (setup_handoff, and the router's install, nothing installed).
+#[tokio::test]
+async fn a_channel_that_takes_no_owner_tool_serves_no_handoff() {
+    let kit = kit_with_room().await;
+    kit.register_channel(NoOwnerTools).unwrap();
+    let handler = HandoffHandler::new(&kit, router(), HandoffHandlerOptions::default());
+
+    let refused = setup_handoff(id("acp"), &handler, SetupHandoffOptions::default());
+    assert!(matches!(refused, Err(RoomKitError::Value(_))));
+
+    let agents = [StrategyAgent::from(id("a")), StrategyAgent::from(id("acp"))];
+    let refused = router().install(&kit, &agents, InstallOptions::default());
+    assert!(matches!(refused, Err(RoomKitError::Value(_))));
+    // Nothing was installed for "a": its handoff is still free to set up.
+    setup_handoff(id("a"), &handler, SetupHandoffOptions::default()).unwrap();
+    kit.close().await.unwrap();
+}
+
+// Python: orchestration/handoff.py setup_handoff reads the channel through
+// owner_tools_of, no Agent asked of it; router.py install reads each through
+// held, which is.
+#[tokio::test]
+async fn setup_handoff_takes_a_plain_ai_channel_where_the_install_does_not() {
+    let kit = kit_with_room().await;
+    let model = MockAiProvider::new(MockAiProviderOptions::default());
+    let plain = AiChannel::new(id("plain"), model, AiChannelOptions::default()).unwrap();
+    kit.register_channel(plain).unwrap();
+    let handler = HandoffHandler::new(&kit, router(), HandoffHandlerOptions::default());
+
+    let agents = [StrategyAgent::from(id("plain"))];
+    let refused = router().install(&kit, &agents, InstallOptions::default());
+    assert!(matches!(refused, Err(RoomKitError::Type(_))));
+
+    setup_handoff(id("plain"), &handler, SetupHandoffOptions::default()).unwrap();
+    kit.close().await.unwrap();
+}
+
+// Python: router.py install reads every agent before anything is installed. A
+// live agent is given to the kit, which registers it, where Python's stays the
+// host's to register (an `Agent` is not `Clone`: HITL e865d4e0).
+#[tokio::test]
+async fn a_live_agent_is_registered_once_every_agent_was_read() {
+    let kit = kit_with_room().await;
+    let agents = [
+        StrategyAgent::channel(agent("live", None)),
+        StrategyAgent::from(id("nobody")),
+    ];
+    let refused = router().install(&kit, &agents, InstallOptions::default());
+    assert!(matches!(
+        refused,
+        Err(RoomKitError::ChannelNotRegistered { .. })
+    ));
+    assert!(kit.get_channel(&id("live")).is_none());
+
+    let agents = [StrategyAgent::channel(agent("live", None))];
+    let handler = router()
+        .install(&kit, &agents, InstallOptions::default())
+        .unwrap();
+    assert!(kit.get_channel(&id("live")).is_some());
+    let in_room = SetupHandoffOptions {
+        room_id: Some(room()),
+        ..SetupHandoffOptions::default()
+    };
+    setup_handoff(
+        StrategyAgent::channel(agent("another", None)),
+        &handler,
+        in_room,
+    )
+    .unwrap();
+    assert!(kit.get_channel(&id("another")).is_some());
+    kit.close().await.unwrap();
+}
+
+// Python: tests/orchestration/test_handoff.py::test_a_handler_without_a_realtime_channel_takes_a_declared_agent
+// (its event_channel_id: the record's source).
+#[tokio::test]
+async fn the_handler_s_event_channel_sends_the_record() {
+    let kit = kit_with_room().await;
+    let options = HandoffHandlerOptions {
+        event_channel_id: Some(id("sms")),
+        ..HandoffHandlerOptions::default()
+    };
+    let handler = HandoffHandler::new(&kit, router(), options);
+
+    handler
+        .handle(&room(), &id("a"), arguments("b"))
+        .await
+        .unwrap();
+
+    let timeline = kit
+        .get_timeline(&room(), GetTimelineOptions::default())
+        .await
+        .unwrap();
+    let record = timeline
+        .iter()
+        .find(|event| event.metadata.contains_key("handoff"))
+        .unwrap();
+    assert_eq!(record.source.channel_id, id("sms"));
+    kit.close().await.unwrap();
+}
+
+// Python: orchestration/handoff.py set_up_handoffs checks every agent before it
+// registers any: a refused install leaves what an earlier one served.
+#[tokio::test]
+async fn a_swarm_refused_on_one_agent_leaves_the_others_their_tools() {
+    let kit = kit_with_room().await;
+    kit.register_channel(agent("c", None)).unwrap();
+    let swarm = Swarm::new(vec![id("a").into(), id("b").into(), id("c").into()], None);
+    Orchestration::<roomkit::store::InMemoryStore>::install(&swarm, &kit, &room())
+        .await
+        .unwrap();
+    // "c" leaves the kit and comes back, handed a room's handoff of its own.
+    kit.unregister_channel(&id("c")).unwrap();
+    kit.register_channel(agent("c", None)).unwrap();
+    let other = HandoffHandler::new(&kit, router(), HandoffHandlerOptions::default());
+    let in_room = || SetupHandoffOptions {
+        room_id: Some(room()),
+        ..SetupHandoffOptions::default()
+    };
+    setup_handoff(id("c"), &other, in_room()).unwrap();
+
+    let again =
+        Orchestration::<roomkit::store::InMemoryStore>::install(&swarm, &kit, &room()).await;
+
+    assert!(
+        matches!(again, Err(RoomKitError::ToolNameCollision { .. })),
+        "{again:?}"
+    );
+    // "a" keeps the handoff its first install served.
+    assert!(matches!(
+        setup_handoff(id("a"), &other, in_room()),
+        Err(RoomKitError::Runtime(_))
+    ));
+    kit.close().await.unwrap();
+}
+
+// Python: tests/orchestration/test_strategy_install.py::test_a_swarm_installed_on_a_live_room_reaches_the_agent_it_hands_off_to,
+// with live agents.
+#[tokio::test]
+async fn a_swarm_of_live_agents_is_installed_and_holds_them() {
+    let kit = kit_with_room().await;
+    let room_id = RoomId::new("r2").unwrap();
+    let options = CreateRoomOptions {
+        room_id: Some(room_id.clone()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(options).await.unwrap();
+    let swarm = Swarm::new(
+        vec![
+            StrategyAgent::channel(agent("left", None)),
+            StrategyAgent::channel(agent("right", None)),
+        ],
+        None,
+    );
+
+    kit.install_strategy(&room_id, Arc::new(swarm), InstallStrategyOptions::default())
+        .await
+        .unwrap();
+
+    assert!(kit.get_channel(&id("left")).is_some());
+    let room_now = kit
+        .get_room(&room_id, GetRoomOptions::default())
+        .await
+        .unwrap();
+    let state = get_conversation_state(&room_now).unwrap();
+    assert_eq!(
+        (state.phase.as_str(), state.active_agent_id),
+        ("swarm", Some(id("left")))
+    );
+    kit.close().await.unwrap();
+}
+
+// Python: orchestration/handoff.py handle, its state updated under the room's
+// lock "to prevent lost updates".
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_handoffs_lose_nothing() {
+    let kit = kit_with_room().await;
+    let handler = HandoffHandler::new(&kit, router(), HandoffHandlerOptions::default());
+    let calls: Vec<_> = (0..20)
+        .map(|_| {
+            let handler = handler.clone();
+            tokio::spawn(async move { handler.handle(&room(), &id("a"), arguments("b")).await })
+        })
+        .collect();
+    for call in calls {
+        assert!(call.await.unwrap().unwrap().accepted);
+    }
+    assert_eq!(state_of(&kit).await.phase_history.len(), 20);
     kit.close().await.unwrap();
 }

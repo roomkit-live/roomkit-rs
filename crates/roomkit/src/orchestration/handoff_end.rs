@@ -206,7 +206,9 @@ fn hook_event<S: ConversationStore>(
 fn handoff_line(calling_agent_id: &ChannelId, request: &HandoffRequest) -> String {
     let source = identifier(calling_agent_id.as_str(), "agent");
     let target = identifier(&request.target_agent_id, "agent");
-    let reason = if request.reason.trim().is_empty() {
+    // Python's `str.strip`, which also takes the separators U+001C to U+001F.
+    let blank = |c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c);
+    let reason = if request.reason.trim_matches(blank).is_empty() {
         String::new()
     } else {
         format!(
