@@ -13,15 +13,20 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, ChannelType, EventSource, InboundMessage, RoomEvent, RoomId, TextContent,
+    ChannelId, ChannelType, EventSource, EventType, InboundMessage, RoomEvent, RoomId, TextContent,
 };
-use roomkit::store::{AdvanceDeliveredIndexOptions, CommitEventOptions};
-use roomkit::testing::{EventTap, RecordingTransport, RecordingTransportOptions};
+use roomkit::store::{AdvanceDeliveredIndexOptions, CommitEventOptions, ListEventsOptions};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, EventTap, RecordingTransport, RecordingTransportOptions,
+};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, InMemoryStore,
-    ProcessInboundOptions, RoomKit, RoomKitOptions,
+    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions,
 };
 
 fn channel(id: &str) -> ChannelId {
@@ -142,4 +147,195 @@ async fn a_hole_no_lane_runs_is_skipped_after_the_gap_timeout() {
         (Some(hole), Some(hole))
     );
     kit.close().await.unwrap();
+}
+
+// Python: tests/test_lanes.py::test_gap_skips_after_timeout_and_emits_delivery_skipped,
+// its handlers run as Python's lane runs them, never holding the room's
+// delivery behind them.
+#[tokio::test(start_paused = true)]
+async fn a_skip_handler_that_sends_into_the_room_holds_no_delivery() {
+    let store = Arc::new(InMemoryStore::new());
+    let (kit, recorder) = worker(&store, Duration::from_millis(50));
+    room(&kit).await;
+    let handler_kit = kit.clone();
+    kit.on("delivery_skipped", move |_event| {
+        let kit = handler_kit.clone();
+        async move {
+            let options = SendEventOptions::default();
+            let notice = TextContent::new("notice: messages lost");
+            kit.send_event(&room_id(), &channel("src"), notice, options)
+                .await
+                .unwrap();
+        }
+    })
+    .unwrap();
+    lost(&store, "lost").await;
+    let sending = kit.process_inbound(message("src", "after"), ProcessInboundOptions::default());
+    tokio::time::timeout(Duration::from_secs(60), sending)
+        .await
+        .expect("the inbound call returns")
+        .unwrap();
+    roomkit::testing::idle(&kit).await;
+    assert_eq!(recorder.texts(), ["after", "notice: messages lost"]);
+    kit.close().await.unwrap();
+}
+
+// Python: tests/test_lanes.py::test_stale_plan_is_dropped_when_cursor_already_passed_it
+#[tokio::test(start_paused = true)]
+async fn a_set_whose_index_another_lane_skipped_is_dropped() {
+    let store = Arc::new(InMemoryStore::new());
+    let (kit, recorder) = worker(&store, Duration::from_secs(10));
+    room(&kit).await;
+    let hole = lost(&store, "lost").await;
+    let sending = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            kit.process_inbound(message("src", "mine"), ProcessInboundOptions::default())
+                .await
+                .unwrap()
+        })
+    };
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    // Another process's lane skips the hole and this set's own index.
+    let options = AdvanceDeliveredIndexOptions { force: true };
+    assert!(
+        store
+            .advance_delivered_index(&room_id(), hole + 1, options)
+            .await
+            .unwrap()
+    );
+    let result = sending.await.unwrap();
+    assert_eq!(
+        recorder.texts(),
+        Vec::<String>::new(),
+        "the stale set is dropped"
+    );
+    assert_eq!(
+        result.cancellation_reason.as_deref(),
+        Some("delivery_stale")
+    );
+    kit.close().await.unwrap();
+}
+
+// Python: tests/test_lanes.py::test_unindexed_entries_run_at_their_anchor_without_moving_cursor
+#[tokio::test(start_paused = true)]
+async fn an_instruction_s_set_waits_for_the_hole_before_it() {
+    let store = Arc::new(InMemoryStore::new());
+    let (kit, _recorder) = worker(&store, Duration::from_secs(10));
+    let agent = EchoAgent::new(channel("ai"), "answer", EchoAgentOptions::default());
+    kit.register_channel(agent).unwrap();
+    room(&kit).await;
+    kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let skipped = EventTap::on(&kit, &["delivery_skipped"]);
+    let hole = lost(&store, "lost").await;
+    let sending = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            let mut instruction = message("src", "Introduce yourself.");
+            instruction.event_type = EventType::Instruction;
+            instruction.addressed_to = Some(vec![channel("ai")]);
+            kit.process_inbound(instruction, ProcessInboundOptions::default())
+                .await
+                .unwrap()
+        })
+    };
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        answers(&store).await,
+        0,
+        "the instruction waits for the hole"
+    );
+    sending.await.unwrap();
+    assert_eq!(
+        answers(&store).await,
+        1,
+        "the agent answered once the hole was skipped"
+    );
+    let events = skipped.events();
+    assert_eq!(events.len(), 1, "one skip: {:?}", skipped.types());
+    assert_eq!(events[0].data["from_index"].as_u64(), Some(hole));
+    kit.close().await.unwrap();
+}
+
+/// How many events the agent `ai` stored in `r1`.
+async fn answers(store: &InMemoryStore) -> usize {
+    let options = ListEventsOptions {
+        limit: u64::MAX,
+        ..Default::default()
+    };
+    let events = store.list_events(&room_id(), options).await.unwrap();
+    events
+        .iter()
+        .filter(|event| event.source.channel_id == channel("ai"))
+        .count()
+}
+
+// Python: tests/test_lanes_multiworker.py::test_two_kits_interleaved_deliveries_follow_index_order
+#[tokio::test(start_paused = true)]
+async fn two_kits_interleaved_deliveries_follow_index_order() {
+    let store = Arc::new(InMemoryStore::new());
+    let log: Arc<Mutex<Vec<(&'static str, String)>>> = Arc::default();
+    let kits: Vec<RoomKit> = ["A", "B"]
+        .into_iter()
+        .map(|tag| {
+            let (kit, _recorder) = worker(&store, Duration::from_secs(30));
+            let log = Arc::clone(&log);
+            kit.on("delivery_succeeded", move |event| {
+                let log = Arc::clone(&log);
+                async move {
+                    if event.channel_id == Some(channel("recorder")) {
+                        let id = event.event_id.map(|id| id.to_string()).unwrap_or_default();
+                        log.lock().unwrap().push((tag, id));
+                    }
+                }
+            })
+            .unwrap();
+            kit
+        })
+        .collect();
+    room(&kits[0]).await;
+    let sends: Vec<_> = (0..10)
+        .map(|i| {
+            let kit = kits[i % 2].clone();
+            tokio::spawn(async move {
+                let text = format!("m{i}");
+                kit.process_inbound(message("src", &text), ProcessInboundOptions::default())
+                    .await
+                    .unwrap()
+            })
+        })
+        .collect();
+    for send in sends {
+        send.await.unwrap();
+    }
+    for kit in &kits {
+        roomkit::testing::idle(kit).await;
+    }
+    let options = ListEventsOptions {
+        limit: u64::MAX,
+        ..Default::default()
+    };
+    let indexes: HashMap<String, u64> = store
+        .list_events(&room_id(), options)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|event| (event.id.to_string(), event.index))
+        .collect();
+    let log = log.lock().unwrap().clone();
+    let delivered: Vec<u64> = log.iter().map(|(_, id)| indexes[id]).collect();
+    let mut sorted = delivered.clone();
+    sorted.sort_unstable();
+    assert_eq!(delivered, sorted, "the deliveries follow the index order");
+    assert_eq!(delivered.len(), 10);
+    let tags: std::collections::BTreeSet<_> = log.iter().map(|(tag, _)| *tag).collect();
+    assert_eq!(tags.len(), 2, "both kits delivered");
+    let room = store.get_room(&room_id()).await.unwrap().unwrap();
+    let cursor = store.get_delivered_index(&room_id()).await.unwrap();
+    assert_eq!(Some(u64::try_from(cursor).unwrap()), room.latest_index);
+    for kit in kits {
+        kit.close().await.unwrap();
+    }
 }

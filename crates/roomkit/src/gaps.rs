@@ -4,18 +4,22 @@
 //! Within the process, a set's turn comes in its room's lane (`queues`).
 //! Across processes sharing a store, the room's delivery cursor orders the
 //! sets: a set runs once the cursor passed every index before its own that
-//! this process did not commit, and the sets of one room run under its
-//! delivery claim, a lock of the kit's lock manager on a key of its own,
-//! held by the process while one of its sets runs and until the cursor
-//! moved past it, never with the room lock.
+//! this process did not commit (an instruction's set, which has no index,
+//! every index up to the room's latest), and the sets of one room run under
+//! its delivery claim, a lock on a key of its own, held by the process
+//! while one of its sets runs and until the cursor moved past it, never
+//! with the room lock. Until the kit takes a lock manager, the claim is a
+//! key of the kit's room mutexes: it holds within the process (RMK-1153).
 //!
 //! An index before a set's own that no lane runs (its process stopped
 //! between the commit and the delivery, or it was committed straight to the
-//! store) holds the cursor. Once the set has waited on it for the kit's
-//! `delivery_gap_timeout`, the set takes the claim, which a lane that runs
-//! the hole's set holds, reads the cursor again, forces it past the indexes
-//! that are not this process's, never past one that is, and the kit emits
-//! `delivery_skipped` with the indexes skipped (RFC §8.2).
+//! store) holds the cursor. Once the cursor has stood still on it for the
+//! kit's `delivery_gap_timeout`, the set takes the claim, which a lane that
+//! runs the hole's set holds, reads the cursor again, forces it past the
+//! indexes that are not this process's, never past one that is, and the
+//! kit emits `delivery_skipped` with the indexes skipped (RFC §8.2). A set
+//! whose own index another process's lane skipped is dropped, as
+//! `delivery_stale`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -26,7 +30,7 @@ use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::Instant;
 
-use crate::events::FrameworkEvent;
+use crate::events::{FrameworkEvent, Handled};
 use crate::kit::Inner;
 use crate::locks::RoomGuard;
 use crate::store::{AdvanceDeliveredIndexOptions, ConversationStore};
@@ -96,29 +100,27 @@ impl DeliveryClaims {
     /// Holds `room_id`'s delivery claim: at once when one of the process's
     /// sets holds it, else once the lock manager grants its key.
     pub(crate) async fn hold<S>(&self, inner: &Inner<S>, room_id: &RoomId) -> ClaimHold {
-        let claim = Arc::clone(rooms(&self.rooms).entry(room_id.clone()).or_default());
         let mut hold = ClaimHold {
             room_id: room_id.clone(),
-            claim: Arc::clone(&claim),
+            claim: Arc::clone(rooms(&self.rooms).entry(room_id.clone()).or_default()),
             claims: Arc::clone(&self.rooms),
             holds: false,
         };
-        hold.holds = claim.join();
-        if hold.holds {
+        if hold.claim.join() {
+            hold.holds = true;
             return hold;
         }
-        let taking = claim.taking.lock().await;
-        hold.holds = claim.join();
-        if hold.holds {
-            return hold;
+        // Cancelled while it waits, the hold counts among no holders, and
+        // its drop forgets the room's claim nobody else refers to.
+        let taking = hold.claim.taking.lock().await;
+        if !hold.claim.join() {
+            let lock = inner.locks.lock_owned(&claim_key(room_id)).await;
+            let mut state = hold.claim.held();
+            state.holders = 1;
+            state.lock = Some(lock);
         }
-        let lock = inner.locks.lock_owned(&claim_key(room_id)).await;
-        let mut state = claim.held();
-        state.holders = 1;
-        state.lock = Some(lock);
-        hold.holds = true;
-        drop(state);
         drop(taking);
+        hold.holds = true;
         hold
     }
 }
@@ -156,28 +158,73 @@ fn claim_key(room_id: &RoomId) -> RoomId {
     RoomId::new(format!("{DELIVERY_CLAIM_PREFIX}{room_id}")).unwrap_or_else(|_| room_id.clone())
 }
 
-/// Waits for the turn the room's cursor gives the set of `index`, which
-/// this process committed in `room_id`, and holds the room's delivery
-/// claim for it: once the cursor passed every index before `index` that
-/// is not this process's, skipping those no lane ran within the kit's
-/// `delivery_gap_timeout`.
+/// A set's turn from the room's cursor.
+pub(crate) enum CursorTurn {
+    /// The set runs, under the room's delivery claim, once the handlers of
+    /// the `delivery_skipped` its wait emitted are over.
+    Turn(Turned),
+    /// The cursor passed the set's own index: another process's lane
+    /// skipped it, and the set is dropped.
+    Stale,
+}
+
+/// The room's delivery claim held for a set, and the handlers of the
+/// skips its wait emitted, which the set waits for once it left its place:
+/// a handler that calls into the room is not held behind the set.
+pub(crate) struct Turned {
+    pub(crate) claim: ClaimHold,
+    pub(crate) skipped: Vec<Handled>,
+}
+
+/// Which indexes a set waits for the cursor to pass.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Awaited {
+    /// The indexes before `index`, the set's own, which this process
+    /// committed.
+    Indexed(u64),
+    /// Every index up to the room's latest when the set's turn came in the
+    /// process's lane: an instruction's set, which has no index (RFC §10.1.1).
+    Anchored,
+}
+
+/// Waits for the turn the room's cursor gives a set of `room_id`, and holds
+/// the room's delivery claim for it: once the cursor passed every index the
+/// set waits for (`awaited`) that is not this process's, skipping those no
+/// lane ran within the kit's `delivery_gap_timeout`.
 ///
-/// A store that fails the cursor's read is logged, and the set takes its
-/// turn: the cursor orders sets across processes, and within one the lane
-/// orders them already.
+/// The gap clock runs while the cursor does not move. A store that fails
+/// the cursor's read is logged and read again after the same wait as a
+/// hole, as Python's lane retries a round that failed.
 pub(crate) async fn cursor_turn<S: ConversationStore>(
     inner: &Inner<S>,
     room_id: &RoomId,
-    index: u64,
-) -> ClaimHold {
+    awaited: Awaited,
+) -> CursorTurn {
+    let until = match awaited {
+        Awaited::Indexed(index) => index,
+        Awaited::Anchored => match latest_index(inner, room_id).await {
+            Some(latest) => latest + 1,
+            None => 0,
+        },
+    };
+    let mut skipped = Vec::new();
     let mut waited_since: Option<(i64, Instant)> = None;
     let mut backoff = GAP_BACKOFF_INITIAL;
     loop {
         let Some(cursor) = read_cursor(inner, room_id).await else {
-            return inner.claims.hold(inner, room_id).await;
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(GAP_BACKOFF_MAX);
+            continue;
         };
-        if !inner.cursors.foreign_before(room_id, cursor, index) {
-            return inner.claims.hold(inner, room_id).await;
+        if let Awaited::Indexed(index) = awaited
+            && cursor >= i64::try_from(index).unwrap_or(i64::MAX)
+        {
+            tracing::warn!(target: "roomkit::cursor", room_id = %room_id, index, "delivery dropped (delivery_stale): another lane skipped its index");
+            return CursorTurn::Stale;
+        }
+        if !inner.cursors.foreign_before(room_id, cursor, until) {
+            let claim = inner.claims.hold(inner, room_id).await;
+            return CursorTurn::Turn(Turned { claim, skipped });
         }
         // The gap clock runs while the cursor does not move.
         let since = match waited_since {
@@ -190,9 +237,10 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
         .elapsed();
         if since >= inner.delivery_gap_timeout {
             let claim = inner.claims.hold(inner, room_id).await;
-            let skipped = skip_gap(inner, room_id, index).await;
+            let skip = skip_gap(inner, room_id, until).await;
             drop(claim);
-            if skipped {
+            if let Some(handled) = skip {
+                skipped.extend(handled);
                 continue;
             }
         }
@@ -202,20 +250,21 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
 }
 
 /// Under the room's delivery claim, which a lane running the hole's set
-/// holds: reads the cursor again, and forces it past the indexes after it
-/// that are not this process's, up to the first that is, then has the
-/// indexes this process's sets ended past them move it on: whether the
-/// cursor moved.
-async fn skip_gap<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId, index: u64) -> bool {
-    let Some(cursor) = read_cursor(inner, room_id).await else {
-        return false;
-    };
-    let target = inner.cursors.skip_target(room_id, cursor, index);
-    let Ok(to) = u64::try_from(target) else {
-        return false;
-    };
+/// holds: reads the cursor again, and forces it past the indexes before
+/// `until` that are not this process's, up to the first that is, then has
+/// the indexes this process's sets ended past them move it on. `None` when
+/// the cursor did not move; else the handlers of the `delivery_skipped` the
+/// kit emitted, when it has any.
+async fn skip_gap<S: ConversationStore>(
+    inner: &Inner<S>,
+    room_id: &RoomId,
+    until: u64,
+) -> Option<Option<Handled>> {
+    let cursor = read_cursor(inner, room_id).await?;
+    let target = inner.cursors.skip_target(room_id, cursor, until);
+    let to = u64::try_from(target).ok()?;
     if target <= cursor {
-        return false;
+        return None;
     }
     let options = AdvanceDeliveredIndexOptions { force: true };
     match inner
@@ -224,10 +273,10 @@ async fn skip_gap<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId, inde
         .await
     {
         Ok(true) => {}
-        Ok(false) => return false,
+        Ok(false) => return None,
         Err(error) => {
             tracing::warn!(target: "roomkit::cursor", room_id = %room_id, %error, "the room's delivery gap could not be skipped");
-            return false;
+            return None;
         }
     }
     let from = cursor + 1;
@@ -249,11 +298,9 @@ async fn skip_gap<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId, inde
         timestamp: inner.environment().now(),
         data,
     };
-    if let Some(handled) = inner.events.emit(&inner.tasks, event) {
-        handled.wait().await;
-    }
+    let handled = inner.events.emit(&inner.tasks, event);
     inner.cursors.catch_up(&*inner.store, room_id).await;
-    true
+    Some(handled)
 }
 
 /// The room's cursor, `None` when the store fails its read.
@@ -261,8 +308,86 @@ async fn read_cursor<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId) -
     match inner.store.get_delivered_index(room_id).await {
         Ok(cursor) => Some(cursor),
         Err(error) => {
-            tracing::warn!(target: "roomkit::cursor", room_id = %room_id, %error, "the room's delivery cursor could not be read; the delivery goes on");
+            tracing::warn!(target: "roomkit::cursor", room_id = %room_id, %error, "the room's delivery cursor could not be read; it is read again");
             None
         }
+    }
+}
+
+/// The room's latest index; `None` when it has no event, the store lacks
+/// it or fails its read (logged): the set then waits for no index.
+async fn latest_index<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId) -> Option<u64> {
+    match inner.store.get_room(room_id).await {
+        Ok(room) => room?.latest_index,
+        Err(error) => {
+            tracing::warn!(target: "roomkit::cursor", room_id = %room_id, %error, "the room's latest index could not be read; its instruction waits for no index");
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{RoomKit, RoomKitOptions};
+
+    fn room_id() -> RoomId {
+        RoomId::new("room_1").unwrap()
+    }
+
+    fn rooms_held(claims: &DeliveryClaims) -> usize {
+        rooms(&claims.rooms).len()
+    }
+
+    #[tokio::test]
+    async fn a_hold_cancelled_while_it_waits_leaves_nothing_behind() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let inner = Arc::clone(&kit.inner);
+        // Another process holds the room's claim.
+        let other = inner.locks.lock_owned(&claim_key(&room_id())).await;
+        let waiting = {
+            let inner = Arc::clone(&inner);
+            tokio::spawn(async move {
+                drop(inner.claims.hold(&inner, &room_id()).await);
+            })
+        };
+        while inner.locks.waiting(&claim_key(&room_id())) == 0 {
+            tokio::task::yield_now().await;
+        }
+        waiting.abort();
+        assert!(waiting.await.unwrap_err().is_cancelled());
+        assert_eq!(
+            rooms_held(&inner.claims),
+            0,
+            "the cancelled hold forgets the room"
+        );
+        drop(other);
+        kit.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_process_s_sets_share_the_room_s_claim() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let inner = Arc::clone(&kit.inner);
+        let first = inner.claims.hold(&inner, &room_id()).await;
+        let second = tokio::time::timeout(
+            Duration::from_secs(5),
+            inner.claims.hold(&inner, &room_id()),
+        )
+        .await
+        .expect("a set of the process holding the claim joins it");
+        drop(first);
+        assert_eq!(
+            inner.locks.waiting(&claim_key(&room_id())),
+            0,
+            "nobody waits for the claim"
+        );
+        drop(second);
+        assert_eq!(
+            rooms_held(&inner.claims),
+            0,
+            "the last hold forgets the room"
+        );
+        kit.close().await.unwrap();
     }
 }

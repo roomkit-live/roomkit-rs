@@ -620,6 +620,12 @@ pub enum HoldOutcome {
     Admitted,
     /// The room's admission ticket is released.
     TicketReleased,
+    /// The room's delivery cursor passed the event's index before its set
+    /// ran, another process's lane having skipped it as a hole (RFC §13.5
+    /// "Delivery lanes across processes"): the set is dropped, since
+    /// running it then would break the room's order, its cascade cancelled
+    /// `delivery_stale`, as Python's lane drops it; it leaves its place.
+    LaneSkipped,
 }
 
 /// The driver's answer to a [`StoreRequest`].

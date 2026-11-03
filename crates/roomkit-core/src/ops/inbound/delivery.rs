@@ -38,6 +38,10 @@ use crate::rules::permissions::{self, DeliveryPlan};
 use crate::rules::transcoding;
 use crate::rules::{addresses, attachment};
 
+/// The cancellation reason of a set whose index another process's lane
+/// skipped before it ran (RFC §13.5), Python's `delivery_stale`.
+const DELIVERY_STALE: &str = "delivery_stale";
+
 /// Which event a delivery set broadcasts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SetKind {
@@ -405,10 +409,17 @@ impl DeliverySet {
     /// the event delivered all the same (RFC §13.6). A lane that takes no
     /// more turn, the kit closing, drops the set before it delivers: it
     /// delivers nothing, its cascade cancelled [`KIT_CLOSED`], and leaves
-    /// its place (RFC §12.10.4).
+    /// its place (RFC §12.10.4); so does a set whose index another
+    /// process's lane skipped, its cascade cancelled [`DELIVERY_STALE`]
+    /// (RFC §13.5).
     fn on_turn(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<SetOutcome> {
         if outcome == Outcome::Hold(HoldOutcome::LaneClosed) {
             self.outcome.cancelled = Some(KIT_CLOSED);
+            self.place = Place::Turn;
+            return self.progress(cx);
+        }
+        if outcome == Outcome::Hold(HoldOutcome::LaneSkipped) {
+            self.outcome.cancelled = Some(DELIVERY_STALE);
             self.place = Place::Turn;
             return self.progress(cx);
         }

@@ -137,7 +137,7 @@ impl RequestKind {
             Self::AcquireLock => "Locked",
             Self::ReleaseLock => "Released",
             Self::EnterLane => "Entered",
-            Self::AwaitLane => "LaneTurn or LaneClosed",
+            Self::AwaitLane => "LaneTurn, LaneClosed or LaneSkipped",
             Self::LeaveLane => "Left",
             Self::TakeTicket => "Ticketed",
             Self::AwaitTicket => "Admitted",
@@ -176,7 +176,9 @@ impl RequestKind {
             ),
             Self::AwaitLane => matches!(
                 outcome,
-                Outcome::Hold(HoldOutcome::LaneTurn | HoldOutcome::LaneClosed)
+                Outcome::Hold(
+                    HoldOutcome::LaneTurn | HoldOutcome::LaneClosed | HoldOutcome::LaneSkipped
+                )
             ),
             Self::LeaveLane => matches!(outcome, Outcome::Hold(HoldOutcome::Left)),
             Self::TakeTicket => matches!(outcome, Outcome::Hold(HoldOutcome::Ticketed)),
@@ -518,6 +520,7 @@ impl Outcome {
                 HoldOutcome::Ticketed => "Ticketed",
                 HoldOutcome::Admitted => "Admitted",
                 HoldOutcome::TicketReleased => "TicketReleased",
+                HoldOutcome::LaneSkipped => "LaneSkipped",
             },
             Self::Store(outcome) => match outcome {
                 StoreOutcome::Context(_) => "Context",

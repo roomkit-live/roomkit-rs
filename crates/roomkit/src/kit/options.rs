@@ -132,10 +132,12 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     pub orchestration: Option<Arc<dyn crate::Orchestration<S>>>,
     /// Python `delivery_gap_timeout=30.0`: how long a delivery set waits on
     /// a cursor hole no lane runs, an index committed by a process that
-    /// stopped before delivering it, while no lane holds the room's
-    /// delivery claim, before it skips the hole and the kit emits
+    /// stopped before delivering it, the cursor standing still, before it
+    /// skips the hole under the room's delivery claim and the kit emits
     /// `delivery_skipped` (RFC §13.5 "Delivery lanes across processes").
-    /// The skip never passes an index this process committed.
+    /// The skip never passes an index this process committed. Until the
+    /// kit takes a lock manager, the claim holds within the process only
+    /// (RMK-1153).
     pub delivery_gap_timeout: Duration,
 }
 
