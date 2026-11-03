@@ -260,7 +260,7 @@ MODELS := crates/roomkit-openai/catalog
 MODELS_EXPORT = tmp=$$(mktemp -d "$${TMPDIR:-/tmp}/models.XXXXXX") && \
 	{ git -C "$$ROOMKIT_DIR" archive --format=tar "$$commit" src/roomkit | tar -x -C "$$tmp" && \
 	PYTHONDONTWRITEBYTECODE=1 "$$ROOMKIT_DIR/.venv/bin/python" -I $(MODELS)/export.py "$$tmp/src" > "$$out"; \
-	status=$$?; rm -rf "$$tmp"; [ $$status -eq 0 ]; }
+	status=$$?; rm -rf "$$tmp"; [ $$status -eq 0 ] || { rm -f "$$out"; false; }; }
 
 models-sync:
 	@commit=$$(git -C "$$ROOMKIT_DIR" rev-parse --verify "$${ROOMKIT_REF}^{commit}") && \
@@ -281,8 +281,8 @@ models-sync:
 # names; with a roomkit checkout and its venv, its commit is on roomkit's
 # origin/main and the copy is what that commit's catalogue exports, so a copy
 # that drifted from Python's fails here. Without them, as in CI, only the
-# fingerprint is checked; a catalogue roomkit's origin/main changed since the
-# commit only warns: sync it.
+# fingerprint is checked; a catalogue roomkit's origin/main exports otherwise
+# than the commit only warns: sync it.
 models-check:
 	@fingerprint=$$(sha256sum $(MODELS)/models.json | cut -c1-64) && \
 	if [ "$$fingerprint" != "$$(cat $(MODELS)/MODELS_SHA256)" ]; then \
@@ -307,11 +307,13 @@ models-check:
 		echo "models-check: $(MODELS)/models.json is not roomkit $$commit's catalogue: it is never edited, run make models-sync"; \
 		exit 1; \
 	fi && \
-	rm -f "$$out" && \
-	if ! git -C "$$ROOMKIT_DIR" diff --quiet "$$commit" origin/main -- src/roomkit/providers/openai/models.py; then \
-		echo "warning: roomkit's OpenAI catalogue changed on origin/main since $$commit: run make models-sync"; \
+	pinned=$$commit && commit=$$(git -C "$$ROOMKIT_DIR" rev-parse --verify origin/main) && \
+	$(MODELS_EXPORT) && \
+	if ! cmp -s "$$out" $(MODELS)/models.json; then \
+		echo "warning: roomkit's origin/main exports another catalogue than $$pinned's: run make models-sync"; \
 	fi && \
-	echo "models-check: the catalogue is roomkit $$commit's"
+	rm -f "$$out" && \
+	echo "models-check: the catalogue is roomkit $$pinned's"
 
 # The tests of the reader and of the report, on fixtures: no build needed.
 api-test:
