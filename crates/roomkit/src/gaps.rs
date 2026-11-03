@@ -4,8 +4,7 @@
 //! Within the process, a set's turn comes in its room's lane (`queues`).
 //! Across processes sharing a store, the room's delivery cursor orders the
 //! sets: a set runs once the cursor passed every index before its own that
-//! this process did not commit (an instruction's set, which has no index,
-//! every index up to the room's latest), and the sets of one room run under
+//! this process did not commit, and the sets of one room run under
 //! its delivery claim, a lock on a key of its own, held by the process
 //! while one of its sets runs and until the cursor moved past it, never
 //! with the room lock. Until the kit takes a lock manager, the claim is a
@@ -176,21 +175,15 @@ pub(crate) struct Turned {
     pub(crate) skipped: Vec<Handled>,
 }
 
-/// Which indexes a set waits for the cursor to pass.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum Awaited {
-    /// The indexes before `index`, the set's own, which this process
-    /// committed.
-    Indexed(u64),
-    /// Every index up to the room's latest when the set's turn came in the
-    /// process's lane: an instruction's set, which has no index (RFC §10.1.1).
-    Anchored,
-}
-
-/// Waits for the turn the room's cursor gives a set of `room_id`, and holds
-/// the room's delivery claim for it: once the cursor passed every index the
-/// set waits for (`awaited`) that is not this process's, skipping those no
-/// lane ran within the kit's `delivery_gap_timeout`.
+/// Waits for the turn the room's cursor gives the set of `index`, which
+/// this process committed in `room_id`, and holds the room's delivery claim
+/// for it: once the cursor passed every index before `index` that is not
+/// this process's, skipping those no lane ran within the kit's
+/// `delivery_gap_timeout`.
+///
+/// An instruction's set, which has no index, takes no turn here: Python
+/// anchors it at the room's latest index when its plan is made, which the
+/// driver does not see (RMK-1153).
 ///
 /// The gap clock runs while the cursor does not move. A store that fails
 /// the cursor's read is logged and read again after the same wait as a
@@ -198,15 +191,8 @@ pub(crate) enum Awaited {
 pub(crate) async fn cursor_turn<S: ConversationStore>(
     inner: &Inner<S>,
     room_id: &RoomId,
-    awaited: Awaited,
+    index: u64,
 ) -> CursorTurn {
-    let until = match awaited {
-        Awaited::Indexed(index) => index,
-        Awaited::Anchored => match latest_index(inner, room_id).await {
-            Some(latest) => latest + 1,
-            None => 0,
-        },
-    };
     let mut skipped = Vec::new();
     let mut waited_since: Option<(i64, Instant)> = None;
     let mut backoff = GAP_BACKOFF_INITIAL;
@@ -216,13 +202,11 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
             backoff = (backoff * 2).min(GAP_BACKOFF_MAX);
             continue;
         };
-        if let Awaited::Indexed(index) = awaited
-            && cursor >= i64::try_from(index).unwrap_or(i64::MAX)
-        {
+        if cursor >= i64::try_from(index).unwrap_or(i64::MAX) {
             tracing::warn!(target: "roomkit::cursor", room_id = %room_id, index, "delivery dropped (delivery_stale): another lane skipped its index");
             return CursorTurn::Stale;
         }
-        if !inner.cursors.foreign_before(room_id, cursor, until) {
+        if !inner.cursors.foreign_before(room_id, cursor, index) {
             let claim = inner.claims.hold(inner, room_id).await;
             return CursorTurn::Turn(Turned { claim, skipped });
         }
@@ -237,7 +221,7 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
         .elapsed();
         if since >= inner.delivery_gap_timeout {
             let claim = inner.claims.hold(inner, room_id).await;
-            let skip = skip_gap(inner, room_id, until).await;
+            let skip = skip_gap(inner, room_id, index).await;
             drop(claim);
             if let Some(handled) = skip {
                 skipped.extend(handled);
@@ -251,17 +235,17 @@ pub(crate) async fn cursor_turn<S: ConversationStore>(
 
 /// Under the room's delivery claim, which a lane running the hole's set
 /// holds: reads the cursor again, and forces it past the indexes before
-/// `until` that are not this process's, up to the first that is, then has
-/// the indexes this process's sets ended past them move it on. `None` when
-/// the cursor did not move; else the handlers of the `delivery_skipped` the
-/// kit emitted, when it has any.
+/// `index`, the set's own, that are not this process's, up to the first
+/// that is, then has the indexes this process's sets ended past them move
+/// it on. `None` when the cursor did not move; else the handlers of the
+/// `delivery_skipped` the kit emitted, when it has any.
 async fn skip_gap<S: ConversationStore>(
     inner: &Inner<S>,
     room_id: &RoomId,
-    until: u64,
+    index: u64,
 ) -> Option<Option<Handled>> {
     let cursor = read_cursor(inner, room_id).await?;
-    let target = inner.cursors.skip_target(room_id, cursor, until);
+    let target = inner.cursors.skip_target(room_id, cursor, index);
     let to = u64::try_from(target).ok()?;
     if target <= cursor {
         return None;
@@ -309,18 +293,6 @@ async fn read_cursor<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId) -
         Ok(cursor) => Some(cursor),
         Err(error) => {
             tracing::warn!(target: "roomkit::cursor", room_id = %room_id, %error, "the room's delivery cursor could not be read; it is read again");
-            None
-        }
-    }
-}
-
-/// The room's latest index; `None` when it has no event, the store lacks
-/// it or fails its read (logged): the set then waits for no index.
-async fn latest_index<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId) -> Option<u64> {
-    match inner.store.get_room(room_id).await {
-        Ok(room) => room?.latest_index,
-        Err(error) => {
-            tracing::warn!(target: "roomkit::cursor", room_id = %room_id, %error, "the room's latest index could not be read; its instruction waits for no index");
             None
         }
     }

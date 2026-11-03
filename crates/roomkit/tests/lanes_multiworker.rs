@@ -150,8 +150,10 @@ async fn a_hole_no_lane_runs_is_skipped_after_the_gap_timeout() {
 }
 
 // Python: tests/test_lanes.py::test_gap_skips_after_timeout_and_emits_delivery_skipped,
-// its handlers run as Python's lane runs them, never holding the room's
-// delivery behind them.
+// with a handler that sends into the room: its call is not held behind the
+// set that emitted the skip, which waits for the handlers once it left its
+// place (Python's lane awaits them before it runs the set, the handler's
+// call into the room not waiting for its delivery there).
 #[tokio::test(start_paused = true)]
 async fn a_skip_handler_that_sends_into_the_room_holds_no_delivery() {
     let store = Arc::new(InMemoryStore::new());
@@ -217,59 +219,77 @@ async fn a_set_whose_index_another_lane_skipped_is_dropped() {
     kit.close().await.unwrap();
 }
 
-// Python: tests/test_lanes.py::test_unindexed_entries_run_at_their_anchor_without_moving_cursor
-#[tokio::test(start_paused = true)]
-async fn an_instruction_s_set_waits_for_the_hole_before_it() {
-    let store = Arc::new(InMemoryStore::new());
-    let (kit, _recorder) = worker(&store, Duration::from_secs(10));
-    let agent = EchoAgent::new(channel("ai"), "answer", EchoAgentOptions::default());
-    kit.register_channel(agent).unwrap();
-    room(&kit).await;
-    kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
-        .await
-        .unwrap();
-    let skipped = EventTap::on(&kit, &["delivery_skipped"]);
-    let hole = lost(&store, "lost").await;
-    let sending = {
-        let kit = kit.clone();
-        tokio::spawn(async move {
-            let mut instruction = message("src", "Introduce yourself.");
-            instruction.event_type = EventType::Instruction;
-            instruction.addressed_to = Some(vec![channel("ai")]);
-            kit.process_inbound(instruction, ProcessInboundOptions::default())
-                .await
-                .unwrap()
-        })
-    };
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    assert_eq!(
-        answers(&store).await,
-        0,
-        "the instruction waits for the hole"
-    );
-    sending.await.unwrap();
-    assert_eq!(
-        answers(&store).await,
-        1,
-        "the agent answered once the hole was skipped"
-    );
-    let events = skipped.events();
-    assert_eq!(events.len(), 1, "one skip: {:?}", skipped.types());
-    assert_eq!(events[0].data["from_index"].as_u64(), Some(hole));
-    kit.close().await.unwrap();
+/// Starts `text`'s inbound call into `r1` through `kit`, as an instruction
+/// to the agent `ai` when `instruction` is set.
+fn send(
+    kit: &RoomKit,
+    text: &str,
+    instruction: bool,
+) -> tokio::task::JoinHandle<roomkit::InboundResult> {
+    let kit = kit.clone();
+    let mut inbound = message("src", text);
+    if instruction {
+        inbound.event_type = EventType::Instruction;
+        inbound.addressed_to = Some(vec![channel("ai")]);
+    }
+    tokio::spawn(async move {
+        kit.process_inbound(inbound, ProcessInboundOptions::default())
+            .await
+            .unwrap()
+    })
 }
 
-/// How many events the agent `ai` stored in `r1`.
-async fn answers(store: &InMemoryStore) -> usize {
-    let options = ListEventsOptions {
-        limit: u64::MAX,
-        ..Default::default()
-    };
-    let events = store.list_events(&room_id(), options).await.unwrap();
-    events
-        .iter()
-        .filter(|event| event.source.channel_id == channel("ai"))
-        .count()
+/// An instruction's set takes no turn from the cursor: had it waited for
+/// the indexes up to the room's latest when its turn came, a set of
+/// another process committed after it would hold the set behind it in its
+/// lane, until that process skipped the set as lost (review of RMK-1153).
+#[tokio::test(start_paused = true)]
+async fn an_instruction_holds_no_later_set_behind_another_process() {
+    let store = Arc::new(InMemoryStore::new());
+    let (a, recorder) = worker(&store, Duration::from_secs(600));
+    let (b, _) = worker(&store, Duration::from_secs(5));
+    for kit in [&a, &b] {
+        let agent = EchoAgent::new(channel("ai"), "answer", EchoAgentOptions::default());
+        kit.register_channel(agent).unwrap();
+    }
+    room(&a).await;
+    let skipped = [
+        EventTap::on(&a, &["delivery_skipped"]),
+        EventTap::on(&b, &["delivery_skipped"]),
+    ];
+    let hole = lost(&store, "lost").await;
+    let step = Duration::from_millis(200);
+    let first = send(&a, "m1", false);
+    tokio::time::sleep(step).await;
+    a.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let instruction = send(&a, "Introduce yourself.", true);
+    tokio::time::sleep(step).await;
+    let second = send(&a, "m2", false);
+    tokio::time::sleep(step).await;
+    let other = send(&b, "m3", false);
+    tokio::time::sleep(step).await;
+    let options = AdvanceDeliveredIndexOptions::default();
+    assert!(
+        store
+            .advance_delivered_index(&room_id(), hole, options)
+            .await
+            .unwrap()
+    );
+    for call in [first, instruction, other] {
+        call.await.unwrap();
+    }
+    let second = second.await.unwrap();
+    assert_eq!(second.cancellation_reason, None, "A's m2 is delivered");
+    assert!(recorder.texts().contains(&"m2".to_owned()));
+    assert_eq!(
+        skipped.iter().map(|tap| tap.events().len()).sum::<usize>(),
+        0,
+        "no live index is skipped"
+    );
+    a.close().await.unwrap();
+    b.close().await.unwrap();
 }
 
 // Python: tests/test_lanes_multiworker.py::test_two_kits_interleaved_deliveries_follow_index_order

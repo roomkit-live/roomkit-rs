@@ -64,7 +64,7 @@ use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::RoomKitError;
-use crate::gaps::{Awaited, CursorTurn, Turned};
+use crate::gaps::{CursorTurn, Turned};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::tasks::{CUT_UNWIND, Kind, Marks, Phase};
@@ -969,9 +969,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
             Hold::Wait(waiting) => {
                 let waiting = match across {
-                    Some((room_id, awaited)) => {
-                        self.cursor_turn(waiting, room_id, awaited, deadline)
-                    }
+                    Some((room_id, index)) => self.cursor_turn(waiting, room_id, index, deadline),
                     None => waiting,
                 };
                 self.waits.push((id, wait, waiting));
@@ -1064,20 +1062,16 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         None
     }
 
-    /// The room of the set whose lane turn `request` waits for, and which
-    /// indexes its turn waits for the room's cursor to pass too (RFC §13.5
-    /// "Delivery lanes across processes"): those before its own when the
-    /// run committed its event, else, an instruction's or a rerun's, those
-    /// up to the room's latest.
-    fn across_processes(&self, request: &HoldRequest) -> Option<(RoomId, Awaited)> {
+    /// The room and the index of the set whose lane turn `request` waits
+    /// for, when the run committed its event: its turn waits for the room's
+    /// cursor too (RFC §13.5 "Delivery lanes across processes"). An
+    /// instruction's set, or a rerun's, has none.
+    fn across_processes(&self, request: &HoldRequest) -> Option<(RoomId, u64)> {
         let HoldRequest::AwaitLane { room_id, event_id } = request else {
             return None;
         };
-        let awaited = self
-            .indexes
-            .placed_index(room_id, event_id)
-            .map_or(Awaited::Anchored, Awaited::Indexed);
-        Some((room_id.clone(), awaited))
+        let index = self.indexes.placed_index(room_id, event_id)?;
+        Some((room_id.clone(), index))
     }
 
     /// `waiting`, the wait for a place's turn in its room's lane, then for
@@ -1087,7 +1081,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         &self,
         waiting: Waiting<'kit>,
         room_id: RoomId,
-        awaited: Awaited,
+        index: u64,
         deadline: Option<Instant>,
     ) -> Waiting<'kit> {
         let inner: &'kit Arc<Inner<S>> = self.inner;
@@ -1096,7 +1090,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             let Waited::Place(key, place, true) = waited else {
                 return (effect, waited);
             };
-            match within(deadline, crate::gaps::cursor_turn(inner, &room_id, awaited)).await {
+            match within(deadline, crate::gaps::cursor_turn(inner, &room_id, index)).await {
                 Some(CursorTurn::Turn(turned)) => (effect, Waited::Claimed(key, place, turned)),
                 Some(CursorTurn::Stale) => (effect, Waited::Stale(key, place)),
                 None => (effect, Waited::Place(key, place, false)),

@@ -8,8 +8,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Delivery lanes across processes (RFC §13.5), as Python's: a delivery
   set waits for the room's cursor to pass the indexes before its own that
-  another process committed, an instruction's those up to the room's
-  latest; a hole no lane runs is skipped after
+  another process committed; a hole no lane runs is skipped after
   `RoomKitOptions::delivery_gap_timeout` (30 s), the kit emitting
   `delivery_skipped`, and a set whose index another lane skipped is
   dropped, `delivery_stale`. The room's delivery claim holds within the
