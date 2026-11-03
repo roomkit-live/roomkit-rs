@@ -218,6 +218,7 @@ Agents:
 
 - `openai_agent`: an AI agent answers through an OpenAI-compatible endpoint, reading the conversation labelled by speaker; a local fake of the OpenAI wire stands in unless `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `OPENAI_MODEL` are set.
 - `agent_tools`: five tool calls in one round, one served, one the tool policy refuses, one an approval hook blocks, one that fails, one cut at its bound.
+- `agent_tool_search`: a large catalogue behind `find_tools`: the model searches, the next round declares the match, the call runs, and the next turn still declares it.
 - `close_from_a_tool`: an agent's tool closes the kit from inside its own turn: the close cuts that turn and lets the tool's call run on, returns at once with every channel closed, and the service's own close joins the same shutdown.
 - `agent_tool_history`: a booking made through a tool, then a follow-up the model answers from the earlier call's result, which the next turn's history replays as the assistant's call and the tool's result.
 - `tool_call_intent`: a call whose model wrote its intent for the person: the tool receives its own arguments, the hooks and both rows read the intent apart, and the next request reads the call with it.

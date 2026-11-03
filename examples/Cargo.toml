@@ -160,6 +160,10 @@ name = "agent_tools"
 path = "agent_tools.rs"
 
 [[example]]
+name = "agent_tool_search"
+path = "agent_tool_search.rs"
+
+[[example]]
 name = "close_from_a_tool"
 path = "close_from_a_tool.rs"
 
