@@ -14,6 +14,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ON_ERROR`'s `error_type`, `ProviderDeliveryError` for a provider's
   refusal, its code still the delivery result's, as Python's
   `error_type_name` names it (RFC §10.6.8, RMK-1128).
+- The JSON the kit writes as Python's `json.dumps` (a tool's answer or
+  JSON result, an MCP result of parts, a structured payload, the audits'
+  JSONL lines, a session's transcript) writes a float as Python's `repr`:
+  `1e-05` and `2.5e-07`, where it wrote `0.00001` and `2.5e-7`
+  (RMK-1262).
+- An agent whose turn fails with a kit error that crosses its turn
+  backend reports the error's class as `ON_ERROR`'s `error_type`,
+  `ProviderDeliveryError` for a provider's refusal, its code still the
+  delivery result's, as Python's `error_type_name` names it, and one that
+  met the kit's close is still the close's (RFC §10.6.8, RMK-1128).
 - The loop strategy (RFC §19.7.4), as Python's: `roomkit::Loop`, `orchestration::LoopOptions` and `orchestration::strategies::supervisor::WorkerStrategy` (RMK-1233).
 - An MCP provider's `tool_filter` chooses among every tool the server
   lists before the 512-tool bound counts, as Python filters the listing it
@@ -952,8 +962,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as the turn's answer whatever depth its parse set (RMK-1083); the
   framework's own message is no other sender for routing (RMK-1100); a
   partial failure's `total` counts the deliveries and the failures, not an
-  agent's turn that did not fail (RMK-1095); a turn whose frames end or repeat before its output or
-  in its stream reads as a lost executor, as Python's (RMK-1106).
+  agent's turn that did not fail (RMK-1095); a turn whose frames end or
+  repeat before its output or in its stream reads as a lost executor, as
+  Python's (RMK-1106).
 - An agent whose turn fails with its provider's explicit refusal reports
   the refusal's code and `retryable` across the turn backend, as Python's
   does (RMK-1085): a refusal declared not retryable reads so.
