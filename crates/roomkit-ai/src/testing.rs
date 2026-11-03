@@ -9,7 +9,7 @@ use roomkit::model::Metadata;
 
 use crate::provider::{
     AiContext, AiProvider, AiResponse, ProviderError, ProviderErrorOptions, ProviderStream,
-    StreamDone, StreamEvent, StreamTextDelta, read_tool_calls,
+    StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, read_tool_calls,
 };
 use crate::stream::{Yielder, items};
 
@@ -53,6 +53,8 @@ pub struct ScriptedRound {
     /// The pieces it writes its text in, one text event each; none writes
     /// the text in one.
     pub deltas: Vec<String>,
+    /// The pieces of its reasoning, each an event before its text.
+    pub thinking: Vec<String>,
     /// The calls it makes, each an id, a tool's name and its argument
     /// text, which the provider reads as a provider reads its wire.
     calls: Vec<(String, String, String)>,
@@ -87,6 +89,7 @@ impl ScriptedRound {
         Self {
             text: text.into(),
             deltas: Vec::new(),
+            thinking: Vec::new(),
             calls: Vec::new(),
             done: StreamDone {
                 finish_reason: Some("stop".to_owned()),
@@ -121,6 +124,7 @@ impl ScriptedRound {
         Self {
             text: text.into(),
             deltas: Vec::new(),
+            thinking: Vec::new(),
             calls: calls
                 .into_iter()
                 .map(|(id, name, arguments)| (id.to_owned(), name.to_owned(), arguments.to_owned()))
@@ -145,6 +149,14 @@ impl ScriptedRound {
     pub fn in_pieces<'a>(mut self, deltas: impl IntoIterator<Item = &'a str>) -> Self {
         self.deltas = deltas.into_iter().map(str::to_owned).collect();
         self.text = self.deltas.concat();
+        self
+    }
+
+    /// The same round, its reasoning streamed in the pieces `thinking`
+    /// before its text.
+    #[must_use]
+    pub fn reasoning<'a>(mut self, thinking: impl IntoIterator<Item = &'a str>) -> Self {
+        self.thinking = thinking.into_iter().map(str::to_owned).collect();
         self
     }
 
@@ -279,8 +291,8 @@ impl AiProvider for ScriptedProvider {
     ) -> impl Future<Output = Result<AiResponse, ProviderError>> + Send + 'a {
         std::future::ready(self.whole(context))
     }
-    /// The next round, as a stream: its text in its pieces, then its calls
-    /// and its end (none for a round [`ScriptedRound::without_done`]), or
+    /// The next round, as a stream: its reasoning, its text in its pieces,
+    /// then its calls and its end (none for a round [`ScriptedRound::without_done`]), or
     /// its failure once its text is written, or once its calls are for a
     /// round [`ScriptedRound::failing_after_calls`].
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
@@ -291,6 +303,10 @@ impl AiProvider for ScriptedProvider {
                     Ok(round) => round,
                     Err(error) => return out.give(Err(error)).await,
                 };
+                for thinking in &round.thinking {
+                    let delta = StreamThinkingDelta::new(thinking.as_str());
+                    out.give(Ok(StreamEvent::ThinkingDelta(delta))).await;
+                }
                 for text in round.pieces() {
                     out.give(Ok(StreamEvent::TextDelta(StreamTextDelta { text })))
                         .await;
@@ -332,6 +348,7 @@ impl ScriptedProvider {
             usage: round.done.usage,
             metadata: round.done.metadata,
             tool_calls: calls,
+            thinking: Some(round.thinking.concat()).filter(|thinking| !thinking.is_empty()),
             ..AiResponse::new(round.text)
         })
     }

@@ -35,6 +35,8 @@ pub struct AiResponse {
     pub metadata: Metadata,
     /// The calls it made, in order.
     pub tool_calls: Vec<AiToolCall>,
+    /// The model's reasoning (RFC §6.7), none when it showed none.
+    pub thinking: Option<String>,
 }
 
 impl AiResponse {
@@ -46,6 +48,7 @@ impl AiResponse {
             usage: Metadata::new(),
             metadata: Metadata::new(),
             tool_calls: Vec::new(),
+            thinking: None,
         }
     }
 }
@@ -190,6 +193,35 @@ pub enum StreamEvent {
     ToolCall(StreamToolCall),
     /// The generation ended.
     Done(StreamDone),
+    /// A piece of the model's reasoning, before its text (RFC §6.7).
+    ThinkingDelta(StreamThinkingDelta),
+}
+
+/// A piece of a model's reasoning: Python's `StreamThinkingDelta(*, thinking,
+/// signature=None, block=None, redacted=None)`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StreamThinkingDelta {
+    /// The reasoning text; empty for a delta that only carries a signature.
+    pub thinking: String,
+    /// The vendor's opaque token for the block, which it wants back with
+    /// the block when a round is replayed.
+    pub signature: Option<String>,
+    /// The reasoning block the delta belongs to, for a vendor whose
+    /// reasoning comes in blocks each with its own signature; `None` for a
+    /// single block per round.
+    pub block: Option<u32>,
+    /// A block the vendor redacted: its opaque data, replayed as received.
+    pub redacted: Option<String>,
+}
+
+impl StreamThinkingDelta {
+    /// The delta `thinking`.
+    pub fn new(thinking: impl Into<String>) -> Self {
+        Self {
+            thinking: thinking.into(),
+            ..Self::default()
+        }
+    }
 }
 
 /// Text the model wrote: Python's `StreamTextDelta(*, text)`.
@@ -300,8 +332,14 @@ pub(crate) fn response_events(response: AiResponse) -> Vec<StreamEvent> {
         usage,
         metadata,
         tool_calls,
+        thinking,
     } = response;
     let mut events = Vec::new();
+    if let Some(thinking) = thinking.filter(|thinking| !thinking.is_empty()) {
+        events.push(StreamEvent::ThinkingDelta(StreamThinkingDelta::new(
+            thinking,
+        )));
+    }
     if !content.is_empty() {
         events.push(StreamEvent::TextDelta(StreamTextDelta { text: content }));
     }

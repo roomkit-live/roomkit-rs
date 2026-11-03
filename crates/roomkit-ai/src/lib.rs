@@ -112,8 +112,8 @@ pub use self::provider::{
     AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse,
     AiRole, AiTextPart, AiToolCall, AiToolCallPart, AiToolResultPart, Date, DynAiProvider,
     ModelInfo, ModelPricing, ProviderError, ProviderErrorOptions, ProviderStream, StreamDone,
-    StreamEvent, StreamTextDelta, StreamToolCall, TextStream, is_context_overflow_message,
-    tool_arguments,
+    StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCall, TextStream,
+    is_context_overflow_message, tool_arguments,
 };
 #[doc(hidden)]
 pub use self::skills::dumps;

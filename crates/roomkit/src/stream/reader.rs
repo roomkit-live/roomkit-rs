@@ -502,7 +502,7 @@ impl Producer {
     fn hand(&mut self, pull: oneshot::Sender<Pulled>, item: Pulled) -> bool {
         let text = match &item {
             Some(Ok(StreamItem::Text(text))) => Some(text.clone()),
-            Some(Ok(StreamItem::Row(_)) | Err(_)) | None => None,
+            Some(Ok(StreamItem::Row(_) | StreamItem::Thinking(_)) | Err(_)) | None => None,
         };
         let ends = matches!(item, None | Some(Err(_)));
         if pull.send(item).is_err() {
@@ -543,6 +543,12 @@ impl Producer {
                     self.segments.handed();
                     self.segments.text(&delta);
                 }
+            },
+            // The target reads the reasoning as it comes; the store holds
+            // none of it, and a turn nobody reads began all the same.
+            Some(Ok(RemoteItem::Item(ResponseItem::Thinking(delta)))) => match self.reads {
+                Reads::Target => self.ready.push_back(Ok(StreamItem::Thinking(delta))),
+                Reads::Nobody | Reads::Lost => self.segments.handed(),
             },
             Some(Ok(RemoteItem::Item(ResponseItem::ToolCallStart(start)))) => {
                 let rows = self.segments.start(start);
@@ -698,6 +704,7 @@ impl Producer {
                     Some(Ok(
                         RemoteItem::Item(
                             ResponseItem::Text(_)
+                            | ResponseItem::Thinking(_)
                             | ResponseItem::LoopEnd(_)
                             | ResponseItem::SegmentBreak,
                         )

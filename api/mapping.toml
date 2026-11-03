@@ -96,7 +96,8 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 # `deliver_stream`'s `text_stream`, an `AsyncIterator[str]` whose items are
 # the text and the response's rows, which its annotation does not name, and
 # `ChannelOutput.response_stream`, an `AsyncIterator` of text and markers,
-# `ResponseItem`'s `Text` and `LoopEnd(LoopEndMarker)`, Python's private
+# `ResponseItem`'s `Text`, `Thinking` (`roomkit.models.ThinkingDeltaMarker`,
+# as `StreamItem`'s) and `LoopEnd(LoopEndMarker)`, Python's private
 # tool markers hidden. Rust names the stream types and their items;
 # `next()` is `__anext__`.
 "roomkit::DeliveryStream" = { python = "AsyncIterator", members = ["next"] }
@@ -741,8 +742,8 @@ reason = "language: AiContext is Clone and built by struct update, Python's mode
 
 [[missing]]
 python = "roomkit.providers.ai.AIResponse.__init__"
-params = ["thinking", "thinking_signature", "thinking_parts", "tasks", "observations"]
-reason = "not in 0.x: thinking, and a response's tasks and observations"
+params = ["thinking_signature", "thinking_parts", "tasks", "observations"]
+reason = "not in 0.x: a thinking block's signature and parts, and a response's tasks and observations"
 
 [[missing]]
 python = "roomkit.providers.ai.AIToolCall.__init__"

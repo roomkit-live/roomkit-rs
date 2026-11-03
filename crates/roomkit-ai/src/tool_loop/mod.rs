@@ -79,6 +79,8 @@ pub(crate) enum TurnItem {
     /// The loop asks the model again after it answered: the text before is
     /// a segment of its own.
     SegmentBreak,
+    /// A piece of the model's reasoning, as it came (RFC §6.7).
+    Thinking(String),
 }
 
 /// How a call ended.

@@ -187,7 +187,7 @@ impl Pump<'_> {
         let mut gate = lock(&self.flow.gate);
         gate.end_read();
         match &read {
-            Some(Ok(ResponseItem::Text(_))) => gate.read_deltas(1),
+            Some(Ok(ResponseItem::Text(_) | ResponseItem::Thinking(_))) => gate.read_deltas(1),
             Some(Ok(_)) | None => gate.read_other(),
             Some(Err(_)) => {}
         }
@@ -216,6 +216,12 @@ impl Pump<'_> {
                 self.host.forget_ran_with(&end.tool_id);
                 self.sender.send_end(end)
             }
+            Some(Ok(ResponseItem::Thinking(thinking))) => self
+                .sender
+                .send(&Frame::Item {
+                    item: Item::Thinking { thinking },
+                })
+                .map(drop),
             Some(Ok(ResponseItem::SegmentBreak)) => self
                 .sender
                 .send(&Frame::Item {

@@ -119,6 +119,12 @@ impl Generation {
                     done = ended;
                     break;
                 }
+                // A delta with a signature alone reads as nothing here.
+                StreamEvent::ThinkingDelta(delta) => {
+                    if !delta.thinking.is_empty() {
+                        out.give(Ok(TurnItem::Thinking(delta.thinking))).await;
+                    }
+                }
             }
         }
         deliver(replayed.finish(), &mut delivered, out).await;

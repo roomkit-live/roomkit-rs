@@ -78,6 +78,8 @@ impl Rows<'_> {
                 self.record(&end);
             }
             TurnItem::SegmentBreak => self.end_segment(),
+            // Nothing stores a model's reasoning.
+            TurnItem::Thinking(_) => {}
         }
     }
 
@@ -208,6 +210,7 @@ fn response_item(item: TurnItem) -> ResponseItem {
         TurnItem::ToolEnd(end) => ResponseItem::ToolCallEnd(end_row(end)),
         TurnItem::End(end) => ResponseItem::LoopEnd(end),
         TurnItem::SegmentBreak => ResponseItem::SegmentBreak,
+        TurnItem::Thinking(delta) => ResponseItem::Thinking(delta),
     }
 }
 

@@ -25,8 +25,8 @@ pub use self::date::Date;
 pub use self::dynamic::DynAiProvider;
 pub use self::error::{ProviderError, ProviderErrorOptions, is_context_overflow_message};
 pub use self::response::{
-    AiResponse, AiToolCall, StreamDone, StreamEvent, StreamTextDelta, StreamToolCall,
-    read_tool_calls, tool_arguments,
+    AiResponse, AiToolCall, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta,
+    StreamToolCall, read_tool_calls, tool_arguments,
 };
 pub(crate) use self::response::{ran_out_of_room, response_events};
 use crate::stream::{Yielder, items, next};

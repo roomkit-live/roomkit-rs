@@ -219,9 +219,9 @@ impl OwnerTurn {
                 self.window.read_deltas(deltas);
                 Read::Item(RemoteItem::Item(ResponseItem::Text(text)))
             }
-            Item::Thinking { .. } => {
+            Item::Thinking { thinking } => {
                 self.window.read_deltas(1);
-                Read::Skipped
+                Read::Item(RemoteItem::Item(ResponseItem::Thinking(thinking)))
             }
             Item::ToolStart {
                 tool_name,

@@ -144,6 +144,7 @@ impl Channel for Screen {
                     println!("  screen: #{} {:?} {text:?}", row.index, row.r#type);
                     self.read.push(Read::Row(row.r#type, row.index, text));
                 }
+                StreamItem::Thinking(reasoning) => println!("  screen: thinking {reasoning:?}"),
                 _ => {}
             }
         }

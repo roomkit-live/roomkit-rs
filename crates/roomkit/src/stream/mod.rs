@@ -70,6 +70,9 @@ pub enum ResponseItem {
     /// `SegmentBreakMarker`, which roomkit-ai writes.
     #[doc(hidden)]
     SegmentBreak,
+    /// A piece of the model's reasoning, as it is written: Python's
+    /// `ThinkingDeltaMarker` (RFC §6.1 `deliver_stream`, §6.7). Never stored.
+    Thinking(String),
 }
 
 /// A turn's response as its channel writes it: a stream ended by its last
@@ -89,6 +92,10 @@ pub enum StreamItem {
     /// index: the text segment the deltas before it join to, a call's start
     /// or end.
     Row(Box<RoomEvent>),
+    /// A piece of the model's reasoning, in its order among the text and
+    /// the rows: Python's `ThinkingDeltaMarker`. Never stored; the default
+    /// `deliver_stream` skips it.
+    Thinking(String),
 }
 
 /// The next item of a turn's response, as its executor reads it; `None` at
