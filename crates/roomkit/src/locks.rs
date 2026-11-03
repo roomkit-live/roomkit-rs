@@ -172,6 +172,9 @@ impl RoomMutexes {
 pub(crate) struct KitLocks {
     manager: Arc<dyn RoomLockManager>,
     waiting: Arc<Mutex<HashMap<RoomId, usize>>>,
+    /// Whether the keys are room ids, which hold no NUL character: one
+    /// leads the keys of the kit's other locks in a shared manager.
+    rooms: bool,
 }
 
 impl KitLocks {
@@ -179,6 +182,18 @@ impl KitLocks {
         Self {
             manager,
             waiting: Arc::default(),
+            rooms: false,
+        }
+    }
+
+    /// The kit's hold on its rooms' locks, Python's `RoomLocks`: a room id
+    /// holding a NUL character takes none, wherever it came from (a room
+    /// written to the store straight), as `create_room` refuses it (RFC
+    /// §13.5).
+    pub(crate) fn rooms(manager: Arc<dyn RoomLockManager>) -> Self {
+        Self {
+            rooms: true,
+            ..Self::new(manager)
         }
     }
 
@@ -188,8 +203,15 @@ impl KitLocks {
     }
 
     /// Waits for `key`'s lock from the manager. A wait dropped before it
-    /// holds the lock counts as a waiter no more.
+    /// holds the lock counts as a waiter no more. A room's lock is refused,
+    /// the manager never asked, for a room id holding a NUL character, as
+    /// Python's `ValueError`.
     pub(crate) async fn lock(&self, key: &RoomId) -> Result<HeldLock, RoomKitError> {
+        if self.rooms && key.as_str().contains('\0') {
+            return Err(RoomKitError::Value(
+                "A room id holds no NUL character".to_owned(),
+            ));
+        }
         let _waiter = Waiter::new(&self.waiting, key);
         let lock = self.manager.locked(key).await?;
         Ok(HeldLock {

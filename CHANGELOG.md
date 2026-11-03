@@ -37,7 +37,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   manager by default, so kits sharing one share their claims (RMK-1153).
   A manager other than the in-memory one gets the claims' and the
   verifications' keys led by a NUL character, as Python's, and
-  `create_room` refuses a room id holding one with `RoomKitError::Value`
+  `create_room` refuses a room id holding one with `RoomKitError::Value`;
+  a room the kit did not make (written to the store straight) takes no
+  room lock under such an id, the lock failing as Python's `ValueError`
   (RMK-1281).
 - A room id takes no identity's verification lock (RFC §13.5), as
   Python's: the verification locks are mutexes of their own, apart from

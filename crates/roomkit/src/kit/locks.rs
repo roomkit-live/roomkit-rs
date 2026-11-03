@@ -38,11 +38,16 @@ mod tests {
     use std::pin::Pin;
     use std::sync::Mutex;
 
-    use roomkit_core::model::{ChannelId, IdentityId, RoomId};
+    use roomkit_core::model::{
+        ChannelBinding, ChannelId, ChannelType, IdentityId, Room, RoomId, TextContent,
+    };
 
     use crate::lock_manager::{InMemoryLockManager, RoomLock, RoomLockManager};
+    use crate::store::ConversationStore;
+    use crate::testing::{RecordingTransport, RecordingTransportOptions};
     use crate::{
-        CreateRoomOptions, RequestVerificationOptions, RoomKit, RoomKitError, RoomKitOptions,
+        AttachChannelOptions, CreateRoomOptions, RequestVerificationOptions, RoomKit, RoomKitError,
+        RoomKitOptions, SendEventOptions,
     };
 
     // Python: tests/test_lock_release.py::TestTheKitsHold::test_the_kit_s_lock_manager_is_the_one_given
@@ -61,6 +66,7 @@ mod tests {
     #[derive(Default)]
     struct Recording {
         inner: InMemoryLockManager,
+        asked: Arc<Mutex<Vec<String>>>,
         released: Arc<Mutex<Vec<String>>>,
     }
 
@@ -75,6 +81,7 @@ mod tests {
     impl RoomLockManager for Recording {
         fn locked<'a>(&'a self, room_id: &'a RoomId) -> Answer<'a, Box<dyn RoomLock>> {
             Box::pin(async move {
+                self.asked.lock().unwrap().push(room_id.to_string());
                 let lock: Box<dyn RoomLock> = Box::new(Recorded {
                     lock: self.inner.locked(room_id).await?,
                     key: room_id.to_string(),
@@ -133,6 +140,54 @@ mod tests {
         };
         let refused = kit.create_room(create).await.unwrap_err();
         assert!(matches!(refused, RoomKitError::Value(_)), "{refused:?}");
+        kit.close().await.unwrap();
+    }
+
+    /// A room no `create_room` made, written to the store straight, whose id
+    /// holds a NUL character: in a shared manager its lock would be another
+    /// lock's key, `\0__delivery__:r1` r1's delivery claim (security review
+    /// of RMK-1281, HITL 5c17ea1c). Its lock raises `ValueError`, which the
+    /// kit reports as the lock's failure, as Python raises it from the lock.
+    // Python: tests/test_lanes_multiworker.py::test_a_stored_room_whose_id_holds_nul_takes_no_room_lock
+    #[tokio::test]
+    async fn a_stored_room_whose_id_holds_nul_takes_no_room_lock() {
+        let locks = Arc::new(Recording::default());
+        let asked = Arc::clone(&locks.asked);
+        let kit = RoomKit::new(RoomKitOptions {
+            lock_manager: Some(locks),
+            ..RoomKitOptions::default()
+        });
+        let src = ChannelId::new("src").unwrap();
+        kit.register_channel(RecordingTransport::new(
+            src.clone(),
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        ))
+        .unwrap();
+        let nul_room = RoomId::new("\0__delivery__:r1").unwrap();
+        kit.store()
+            .create_room(Room::new(nul_room.clone()))
+            .await
+            .unwrap();
+        let refused = kit
+            .attach_channel(&nul_room, &src, AttachChannelOptions::default())
+            .await
+            .unwrap_err();
+        assert_eq!(refused.class_name(), "ValueError", "{refused:?}");
+        let binding = ChannelBinding::new(src.clone(), nul_room.clone(), ChannelType::SMS);
+        kit.store().add_binding(binding).await.unwrap();
+        let refused = kit
+            .send_event(
+                &nul_room,
+                &src,
+                TextContent::new("hi"),
+                SendEventOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(refused.class_name(), "ValueError", "{refused:?}");
+        let asked = asked.lock().unwrap().clone();
+        assert!(!asked.contains(&nul_room.to_string()), "{asked:?}");
         kit.close().await.unwrap();
     }
 }

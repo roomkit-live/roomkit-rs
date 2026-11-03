@@ -355,7 +355,7 @@ impl<S: ConversationStore> RoomKit<S> {
             retired_hooks: RwLock::new(Vec::new()),
             router: inbound_router.unwrap_or_else(|| default_router(&store, kit)),
             store,
-            locks: KitLocks::new(Arc::clone(&lock_manager)),
+            locks: KitLocks::rooms(Arc::clone(&lock_manager)),
             claim_manager: delivery_claim_lock_manager
                 .filter(|claims| !Arc::ptr_eq(claims, &lock_manager)),
             lanes: RoomLanes::default(),
