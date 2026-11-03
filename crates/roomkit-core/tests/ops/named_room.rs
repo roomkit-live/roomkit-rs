@@ -81,6 +81,37 @@ mod a_missing_room {
         );
     }
 
+    // Python: tests/test_session_started.py::TestGreetingGate::test_gate_blocks_ai_until_greeting_stored
+    /// RFC §10.1 step 2: a session's hooks named with an underscore, an
+    /// agent's greeting among them, are over before the message goes on; the
+    /// others run in the background.
+    #[test]
+    fn a_session_s_hooks_named_with_an_underscore_hold_the_message() {
+        let mut sim = no_room_yet();
+        sim.observer("_own", HookTrigger::OnSessionStarted);
+        sim.observer("audit", HookTrigger::OnSessionStarted);
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        let attached = sim
+            .journal
+            .iter()
+            .position(|line| line == "emit room_channel_attached")
+            .unwrap();
+        let until_parse = sim
+            .journal
+            .iter()
+            .position(|line| line == "handle_inbound sms")
+            .unwrap();
+        assert_eq!(
+            sim.journal[attached + 1..=until_parse],
+            [
+                "await on_session_started _own",
+                "emit session_started",
+                "fire on_session_started",
+                "handle_inbound sms",
+            ]
+        );
+    }
+
     /// RFC §10.1 step 2, §13.6, gap G-076: a caller that stops waiting
     /// while the room's hooks are due expires the call, and the room is
     /// completed all the same: its hooks run, its channel is attached and
