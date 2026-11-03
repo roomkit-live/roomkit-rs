@@ -15,7 +15,7 @@ use tokio::sync::{Mutex, OnceCell};
 
 use crate::command::McpCommand;
 use crate::error::{McpError, stderr_ending};
-use crate::listing;
+use crate::listing::{self, ToolFilter};
 use crate::process::{ServerProcess, Started, Stderr};
 use crate::texts::bounded_message;
 
@@ -81,6 +81,7 @@ impl McpServer {
     pub(crate) async fn connect(
         command: McpCommand,
         cancelled: impl Future<Output = ()> + Send,
+        filter: Option<ToolFilter>,
     ) -> Result<Self, McpError> {
         let program = command.program();
         let Started {
@@ -89,7 +90,7 @@ impl McpServer {
             stdout,
             stderr,
         } = ServerProcess::start(&command)?;
-        let connecting = handshake(stdout, stdin, &program);
+        let connecting = handshake(stdout, stdin, &program, filter.as_ref());
         let connected = tokio::select! {
             biased;
             () = cancelled => Err(McpError::Cancelled),
@@ -257,6 +258,7 @@ async fn handshake<R, W>(
     output: R,
     input: W,
     program: &str,
+    filter: Option<&ToolFilter>,
 ) -> Result<(RunningService<RoleClient, ()>, Vec<AiTool>), McpError>
 where
     R: AsyncRead + Send + Unpin + 'static,
@@ -277,7 +279,7 @@ where
         .peer()
         .set_response_cache_config(ClientCacheConfig::disabled())
         .await;
-    match listing::tools(service.peer(), program).await {
+    match listing::tools(service.peer(), program, filter).await {
         Ok(tools) => Ok((service, tools)),
         Err(error) => {
             let _ended = service.cancel().await;
@@ -400,7 +402,7 @@ mod tests {
         let listings = Arc::new(AtomicUsize::new(0));
         tokio::spawn(fresh_for_a_day(server, Arc::clone(&listings)));
         let (read, write) = tokio::io::split(client);
-        let (service, tools) = handshake(read, write, "fresh").await.unwrap();
+        let (service, tools) = handshake(read, write, "fresh", None).await.unwrap();
         let again = service.peer().list_tools(None).await.unwrap();
         let _ended = service.cancel().await;
         assert_eq!(

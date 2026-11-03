@@ -7,6 +7,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - The loop strategy (RFC §19.7.4), as Python's: `roomkit::Loop`, `orchestration::LoopOptions` and `orchestration::strategies::supervisor::WorkerStrategy` (RMK-1233).
+- An MCP provider's `tool_filter` chooses among every tool the server
+  lists before the 512-tool bound counts, as Python filters the listing it
+  reads (RFC §21.2, RMK-1099).
 - `OpenAiAiProvider` reads a failure as Python's: `generate` sends one
   completion, not streamed; an error object's `code`, `type` or `status`
   gives the failure its status, inside a stream or answered with 200

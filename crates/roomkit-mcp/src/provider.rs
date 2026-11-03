@@ -16,11 +16,9 @@ use tokio::sync::RwLock;
 
 use crate::command::McpCommand;
 use crate::error::McpError;
+use crate::listing::ToolFilter;
 use crate::results;
 use crate::server::{McpServer, check_label};
-
-/// Which tools of the server a provider keeps, by name.
-type ToolFilter = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// What [`McpToolProvider::from_command`] takes beside the command:
 /// Python's `args=(), *, env=None, cwd=None, tool_filter=None, label=None,
@@ -300,9 +298,18 @@ impl McpToolProvider {
             return Err(McpError::AlreadyConnected);
         }
         let server = match &self.inner.target {
-            Target::Command(command) => command.clone().connect_until(cancelled).await?,
+            Target::Command(command) => {
+                command
+                    .clone()
+                    .connect_until(cancelled, self.inner.tool_filter.clone())
+                    .await?
+            }
             #[cfg(feature = "http")]
-            Target::Url(http) => http.clone().connect_until(cancelled).await?,
+            Target::Url(http) => {
+                http.clone()
+                    .connect_until(cancelled, self.inner.tool_filter.clone())
+                    .await?
+            }
         };
         *held = Some(server);
         Ok(())

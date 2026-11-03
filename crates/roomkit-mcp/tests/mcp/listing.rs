@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 
-use super::support::connected;
+use super::support::{connected, fake};
 
 async fn names(mode: &str) -> Vec<String> {
     let server = connected(mode).await;
@@ -56,6 +56,21 @@ async fn a_listing_keeps_at_most_512_tools() {
         ),
         (512, 512, Some("t511"))
     );
+}
+
+/// A tool filter chooses among every tool the server lists, the 512 kept
+/// counting only those it admits: tools past the 512th that the filter
+/// selects are kept, as Python filters the listing it reads (RMK-1099).
+#[tokio::test]
+async fn a_tool_filter_chooses_before_the_listing_s_bound() {
+    let server = fake("many")
+        .tools(&["t3", "t520", "t599"])
+        .connect()
+        .await
+        .unwrap();
+    let names = server.tool_names().unwrap();
+    server.close().await;
+    assert_eq!(names, ["t3", "t520", "t599"]);
 }
 
 /// RFC §6.7: a tool whose name no vendor accepts, or longer than 128

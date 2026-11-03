@@ -31,16 +31,25 @@ pub(crate) const DESCRIPTION_LIMIT: usize = 4096;
 /// larger one is left out.
 pub(crate) const SCHEMA_LIMIT: usize = 32 * 1024;
 
-/// Every tool the server lists, following its cursor (RFC §21.2), each one
-/// a definition, in the order listed. The reading stops where it stands,
-/// with a warning naming the server, at a page that brings nothing new (an
-/// empty page that still carries a cursor, a cursor handed out twice), past
-/// [`PAGE_LIMIT`] pages, or once [`TOOL_LIMIT`] tools are kept.
+/// Which tools of the server a provider keeps, by name.
+pub(crate) type ToolFilter = std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// Every tool the server lists that `filter` admits, following its cursor
+/// (RFC §21.2), each one a definition, in the order listed: the filter
+/// chooses before the bound counts, as Python filters the listing it reads.
+/// The reading stops where it stands, with a warning naming the server, at
+/// a page that brings nothing new (an empty page that still carries a
+/// cursor, a cursor handed out twice), past [`PAGE_LIMIT`] pages, or once
+/// [`TOOL_LIMIT`] tools are kept.
 ///
 /// # Errors
 ///
 /// Returns [`McpError::Listing`] when a page's request fails.
-pub(crate) async fn tools(peer: &Peer<RoleClient>, program: &str) -> Result<Vec<AiTool>, McpError> {
+pub(crate) async fn tools(
+    peer: &Peer<RoleClient>,
+    program: &str,
+    filter: Option<&ToolFilter>,
+) -> Result<Vec<AiTool>, McpError> {
     let mut kept = Catalogue::new(program);
     let mut seen: HashSet<String> = HashSet::new();
     let mut params: Option<PaginatedRequestParams> = None;
@@ -53,7 +62,11 @@ pub(crate) async fn tools(peer: &Peer<RoleClient>, program: &str) -> Result<Vec<
                 message: bounded_message(&error.to_string()),
             })?;
         let brought = !page.tools.is_empty();
-        for tool in &page.tools {
+        let admitted = page
+            .tools
+            .iter()
+            .filter(|tool| filter.is_none_or(|admits| admits(tool.name.as_ref())));
+        for tool in admitted {
             if !kept.take(tool) {
                 return Ok(kept.tools);
             }

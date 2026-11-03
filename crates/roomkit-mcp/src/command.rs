@@ -8,6 +8,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use crate::error::McpError;
+use crate::listing::ToolFilter;
 use crate::server::McpServer;
 
 /// How long connecting may take by default: the handshake and the listing
@@ -141,8 +142,9 @@ impl McpCommand {
     pub(crate) async fn connect_until(
         self,
         cancelled: impl Future<Output = ()> + Send,
+        filter: Option<ToolFilter>,
     ) -> Result<McpServer, McpError> {
-        McpServer::connect(self, cancelled).await
+        McpServer::connect(self, cancelled, filter).await
     }
 
     /// The program, as errors and logs name the server: never its

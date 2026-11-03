@@ -3,7 +3,7 @@ mod client;
 mod sse;
 
 use crate::error::McpError;
-use crate::listing;
+use crate::listing::{self, ToolFilter};
 use crate::server::{MESSAGE_LIMIT, McpServer};
 use reqwest::{
     Url,
@@ -130,6 +130,7 @@ impl McpHttp {
     pub(crate) async fn connect_until(
         self,
         cancelled: impl Future<Output = ()> + Send,
+        filter: Option<ToolFilter>,
     ) -> Result<McpServer, McpError> {
         let (client, finished, failure) = client::Client::new()?;
         let config = StreamableHttpClientTransportConfig::with_uri(self.url.as_str())
@@ -148,7 +149,7 @@ impl McpHttp {
                 .peer()
                 .set_response_cache_config(ClientCacheConfig::disabled())
                 .await;
-            if let Ok(tools) = listing::tools(service.peer(), "http").await {
+            if let Ok(tools) = listing::tools(service.peer(), "http", filter.as_ref()).await {
                 Ok((service, tools))
             } else {
                 let error = failure.error("MCP tool discovery failed");
