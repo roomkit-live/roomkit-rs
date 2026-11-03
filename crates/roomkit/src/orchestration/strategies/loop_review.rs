@@ -150,7 +150,7 @@ fn review_ended(reviewed: &WorkerOutcome) -> WorkerEnd {
 
 /// Every one of `futures`, run together in this task, its context kept
 /// (Python's `asyncio.gather`): their outputs in order, once all are over.
-pub(super) async fn join_all<F: Future>(futures: Vec<F>) -> Vec<F::Output> {
+async fn join_all<F: Future>(futures: Vec<F>) -> Vec<F::Output> {
     let mut futures: Vec<Pin<Box<F>>> = futures.into_iter().map(Box::pin).collect();
     let mut outputs: Vec<Option<F::Output>> = futures.iter().map(|_| None).collect();
     std::future::poll_fn(|context| {

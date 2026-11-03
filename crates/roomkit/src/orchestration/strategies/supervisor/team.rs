@@ -6,19 +6,22 @@
 //! `execution.py`'s `_run_parallel`.
 
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::task::Poll;
 use std::time::Duration;
 
 use roomkit_core::model::{Metadata, RoomId};
 use serde_json::{Value, json};
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use super::results::{WorkerResult, format_supervisor_review, worker_roles_csv};
 use super::supervised::run_supervised_sequential;
 use super::{Team, WorkerStrategy};
+use crate::context::keep_context;
 use crate::error::RoomKitError;
 use crate::kit::RoomKit;
-use crate::orchestration::strategies::loop_review::join_all;
 use crate::orchestration::worker_run::{WorkerStatus, completed_or_failed, run_worker};
 use crate::store::ConversationStore;
 use crate::tasks::json::dumps_object;
@@ -210,12 +213,12 @@ fn subtask_refusal() -> String {
 ///
 /// # Errors
 ///
-/// The first error a delegation fails with, by the workers' order, once
-/// all are over.
+/// The first error a delegation fails with, as soon as it fails: the other
+/// workers are left running, as Python's `asyncio.gather` leaves them.
 pub(super) async fn run_parallel<S: ConversationStore>(
     kit: &RoomKit<S>,
     room_id: &RoomId,
-    team: &Team,
+    team: &Arc<Team>,
     task: &str,
 ) -> Result<Vec<WorkerResult>, RoomKitError> {
     let status = WorkerStatus {
@@ -227,21 +230,82 @@ pub(super) async fn run_parallel<S: ConversationStore>(
         ended: completed_or_failed,
     };
     let runs = team.workers.iter().map(|worker| {
-        let status = Some(status.clone());
-        let timeout = Some(team.task_timeout);
-        async move {
-            let channel_id = &worker.channel_id;
-            let delegation = team.delegation();
-            let outcome =
-                run_worker(kit, room_id, channel_id, task, timeout, status, delegation).await?;
+        let (kit, room_id, team) = (kit.clone(), room_id.clone(), Arc::clone(team));
+        let (channel_id, task, status) =
+            (worker.channel_id.clone(), task.to_owned(), status.clone());
+        tokio::spawn(keep_context(async move {
+            let (timeout, delegation) = (Some(team.task_timeout), team.delegation());
+            let status = Some(status);
+            let outcome = run_worker(
+                &kit,
+                &room_id,
+                &channel_id,
+                &task,
+                timeout,
+                status,
+                delegation,
+            )
+            .await?;
             Ok(WorkerResult {
-                worker: channel_id.clone(),
+                worker: channel_id,
                 output: outcome.output,
                 completed: outcome.completed,
             })
-        }
+        }))
     });
-    join_all(runs.collect()).await.into_iter().collect()
+    gather(runs.collect()).await
+}
+
+/// The outputs of `runs` in their order once all succeeded, or the first
+/// error as soon as one fails, the runs still going left running (Python's
+/// `asyncio.gather` without `return_exceptions`). Cut before then, it cuts
+/// every run, as a cancelled gather cancels its children.
+async fn gather<T>(runs: Vec<JoinHandle<Result<T, RoomKitError>>>) -> Result<Vec<T>, RoomKitError> {
+    let mut running = Running(runs.into_iter().map(Some).collect());
+    let mut outputs: Vec<Option<T>> = running.0.iter().map(|_| None).collect();
+    let failed = std::future::poll_fn(|context| {
+        let mut pending = false;
+        for (slot, output) in running.0.iter_mut().zip(outputs.iter_mut()) {
+            let Some(run) = slot else {
+                continue;
+            };
+            let Poll::Ready(joined) = Pin::new(run).poll(context) else {
+                pending = true;
+                continue;
+            };
+            *slot = None;
+            match joined {
+                Ok(Ok(done)) => *output = Some(done),
+                Ok(Err(error)) => return Poll::Ready(Some(error)),
+                Err(join) if join.is_panic() => std::panic::resume_unwind(join.into_panic()),
+                Err(_aborted) => return Poll::Ready(Some(RoomKitError::Cancelled)),
+            }
+        }
+        if pending {
+            Poll::Pending
+        } else {
+            Poll::Ready(None)
+        }
+    })
+    .await;
+    if let Some(error) = failed {
+        // The runs still going are left to end on their own.
+        running.0.clear();
+        return Err(error);
+    }
+    Ok(outputs.into_iter().flatten().collect())
+}
+
+/// The runs of a gather still going: dropped before the gather ended, it
+/// cuts them.
+struct Running<T>(Vec<Option<JoinHandle<T>>>);
+
+impl<T> Drop for Running<T> {
+    fn drop(&mut self) {
+        for run in self.0.iter().flatten() {
+            run.abort();
+        }
+    }
 }
 
 #[cfg(test)]
