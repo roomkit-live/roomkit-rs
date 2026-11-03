@@ -35,6 +35,7 @@ use crate::orchestration::backend::StatusCallback;
 use crate::orchestration::{StatusBus, StatusEntry};
 use crate::store::ConversationStore;
 use crate::tasks::Kind;
+use crate::telemetry::within_kit;
 
 /// What [`RoomKit::update_room_metadata`] takes beside the room and the
 /// keys: Python's `update_room_metadata(room_id, metadata, *,
@@ -580,6 +581,8 @@ impl<S: ConversationStore> Inner<S> {
             }
             then.await;
         };
+        // Under the kit's telemetry, whoever fired it: its hooks report there.
+        let observing = within_kit(&self.telemetry, None, observing);
         let task = ExecutionContext::default().at_least(floor).scope(observing);
         if self.tasks.spawn_alone(Kind::Observer, task).is_none() {
             tracing::debug!(target: "roomkit::hooks", "the kit is shut down: an observer is not run");

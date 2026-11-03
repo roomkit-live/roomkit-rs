@@ -216,7 +216,9 @@ async fn a_guard_is_held_across_an_await_in_a_task() {
     let held = Arc::clone(&mock);
     tokio::spawn(async move {
         let span = held.span(SpanKind::Custom, "x", StartSpanOptions::default());
+        let borrowed = &span;
         tokio::task::yield_now().await;
+        assert_eq!(borrowed.id().len(), 16);
         span.end();
     })
     .await

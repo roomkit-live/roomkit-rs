@@ -15,6 +15,7 @@ use crate::error::RoomKitError;
 use crate::hooks::{HookHandler, Kept};
 use crate::human_input::{HumanInputHandler, PendingInputEvent};
 use crate::store::ConversationStore;
+use crate::telemetry::within_kit;
 use crate::turn::{InputNotification, TurnKit};
 
 impl<S: ConversationStore> RoomKit<S> {
@@ -105,14 +106,13 @@ impl<S: ConversationStore> Inner<S> {
     ) {
         let kit = Arc::downgrade(self);
         let registered = channel_id.clone();
+        let telemetry = self.telemetry.clone();
         handler.set_on_input_required(
             channel_id.as_str(),
             Arc::new(move |event| -> BoxFuture<'static, bool> {
-                Box::pin(user_input_required(
-                    Weak::clone(&kit),
-                    registered.clone(),
-                    event,
-                ))
+                let required = user_input_required(Weak::clone(&kit), registered.clone(), event);
+                // Outside a turn, under the kit's telemetry all the same.
+                Box::pin(within_kit(&telemetry, None, required))
             }),
         );
     }

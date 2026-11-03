@@ -24,9 +24,9 @@ use roomkit::{
     current_turn_host,
 };
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiTool, AiToolCall,
-    ProviderError, ProviderErrorOptions, ProviderStream, StreamDone, StreamEvent, StreamTextDelta,
-    ToolError, ToolResult, Tools, tool_arguments,
+    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiResponseEvent, AiTool,
+    AiToolCall, ProviderError, ProviderErrorOptions, ProviderStream, StreamDone, StreamEvent,
+    StreamTextDelta, ToolError, ToolResult, Tools, tool_arguments,
 };
 use serde_json::{Value, json};
 
@@ -370,6 +370,17 @@ async fn the_hooks_of_a_tool_call_open_their_spans() {
         )
         .unwrap();
     }
+    let response = HookOptions {
+        name: "heard".to_owned(),
+        execution: HookExecution::Async,
+        ..HookOptions::default()
+    };
+    kit.hook(
+        HookTrigger::OnAiResponse,
+        |_: AiResponseEvent, _| ready(()),
+        response,
+    )
+    .unwrap();
     let create = CreateRoomOptions {
         room_id: Some(room()),
         ..CreateRoomOptions::default()
@@ -388,7 +399,12 @@ async fn the_hooks_of_a_tool_call_open_their_spans() {
     kit.process_inbound(message, options).await.unwrap();
     kit.close().await.unwrap();
     let spans = mock.completed_spans();
-    for name in ["hook.sync.gate", "hook.sync.judge", "hook.async.watch"] {
+    for name in [
+        "hook.sync.gate",
+        "hook.sync.judge",
+        "hook.async.watch",
+        "hook.async.heard",
+    ] {
         let found: Vec<&Span> = spans.iter().filter(|span| span.name == name).collect();
         assert_eq!(found.len(), 1, "{name} in {spans:?}");
         assert_eq!(found[0].status, "ok", "{:?}", found[0]);

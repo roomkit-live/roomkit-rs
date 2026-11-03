@@ -577,6 +577,16 @@ impl std::fmt::Debug for Kept {
 /// reports one that returned `None`.
 const NO_RESULT: &str = "expected HookResult, got NoneType";
 
+/// What a hook raised: a kit's error by its Python class (a loop its cascade's
+/// cap stopped reads `ReentryLoopCapError`), as Python's `type(exc).__name__`;
+/// any other `HookError`, a boxed error having no class name.
+fn raised(error: &(dyn Error + Send + Sync + 'static)) -> ErrorRecord {
+    let class = error
+        .downcast_ref::<crate::RoomKitError>()
+        .map_or_else(|| "HookError".to_owned(), crate::RoomKitError::class_name);
+    ErrorRecord::new(class, error.to_string())
+}
+
 /// A sync hook's [`run`] under its span, Python's `hook.sync.<name>`, for a
 /// hook a turn's host runs without the driver, in the kit's call.
 pub(crate) async fn run_traced<P: Send + 'static>(
@@ -630,7 +640,7 @@ pub(crate) async fn run<P: Send + 'static>(
             None => HookOutcome::Returned(result),
         },
         Ok(Ok(None)) => HookOutcome::invalid(NO_RESULT),
-        Ok(Err(error)) => HookOutcome::Raised(ErrorRecord::new("HookError", error.to_string())),
+        Ok(Err(error)) => HookOutcome::Raised(raised(&*error)),
         Err(_elapsed) => HookOutcome::TimedOut,
     }
 }

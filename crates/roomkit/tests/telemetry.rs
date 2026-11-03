@@ -26,9 +26,9 @@ use roomkit::telemetry::{
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
     AttachChannelOptions, CancelTaskOptions, Channel, ChannelError, CreateRoomOptions,
-    DelegateOptions, DetachChannelOptions, HookExecution, HookOptions, HookTrigger, PostOptions,
-    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions, TransportChannel,
-    TransportChannelOptions,
+    DelegateOptions, DeliverOptions, DetachChannelOptions, HookExecution, HookOptions, HookTrigger,
+    PostOptions, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, SendEventOptions,
+    TransportChannel, TransportChannelOptions,
 };
 use serde_json::json;
 
@@ -635,7 +635,7 @@ async fn a_delegated_turn_s_broadcast_ends_ok_with_its_counts() {
     assert_ne!(spans, vec![]);
     for span in &spans {
         assert_eq!(span.status, "ok", "{span:?}");
-        assert!(span.attributes.contains_key("target_count"), "{span:?}");
+        assert_eq!(span.attributes["target_count"], json!(1), "{span:?}");
     }
     kit.close().await.unwrap();
 }
@@ -694,6 +694,16 @@ async fn a_message_on_no_channel_opens_no_span() {
         .await;
     assert!(refused.is_err());
     assert_eq!(mock.completed_spans(), vec![]);
+    kit.post(&room(), TextContent::new("Bonjour"), PostOptions::default())
+        .await
+        .unwrap();
+    mock.reset();
+    let lost = InboundMessage::new(ChannelId::host(), "user1", TextContent::new("hello"));
+    let refused = kit
+        .process_inbound(lost, ProcessInboundOptions::default())
+        .await;
+    assert!(refused.is_err(), "the host channel receives no message");
+    assert_eq!(mock.completed_spans(), vec![]);
     kit.close().await.unwrap();
 }
 
@@ -738,4 +748,104 @@ async fn a_background_task_s_spans_stay_in_the_call_s_trace() {
         .map(|span| span.name.as_str())
         .collect();
     assert_eq!(roots, ["framework.inbound"], "{:?}", names(&spans));
+}
+
+// Python: core/hooks.py: an async hook its cascade's cap stopped reads `capped`
+#[tokio::test]
+async fn an_async_hook_a_cap_stopped_reads_capped() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        |event: RoomEvent, _| async move {
+            let capped = RoomKitError::ReentryLoopCap(event.room_id);
+            let raised: Result<HookResult, roomkit::HookError> = Err(Box::new(capped));
+            raised
+        },
+        HookOptions {
+            name: "looped".to_owned(),
+            execution: HookExecution::Async,
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    inbound(&kit).await;
+    kit.close().await.unwrap();
+    let spans = mock.completed_spans();
+    let hook = named(&spans, "hook.async.looped");
+    assert_eq!(hook.error_message.as_deref(), Some("capped"));
+}
+
+/// A hook a plain call fires reports its span: the call need not run under a
+/// kit's span.
+// Python: core/mixins/delegation.py:643, whose engine always holds the kit's telemetry
+#[tokio::test]
+async fn a_task_s_hook_a_plain_call_fires_opens_its_span() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    let worker = EchoAgent::new(id("worker"), "Done.", EchoAgentOptions::default());
+    kit.register_channel(worker).unwrap();
+    kit.hook(
+        HookTrigger::OnTaskDelegated,
+        |_: RoomEvent, _| ready(()),
+        HookOptions {
+            name: "delegated".to_owned(),
+            execution: HookExecution::Async,
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    let wait = DelegateOptions {
+        wait: true,
+        ..DelegateOptions::default()
+    };
+    kit.delegate(&room(), &id("worker"), "go", wait)
+        .await
+        .unwrap();
+    kit.close().await.unwrap();
+    let spans = mock.completed_spans();
+    assert_eq!(named(&spans, "hook.async.delegated").status, "ok");
+}
+
+// Python: core/delivery.py: BEFORE_DELIVER runs through the engine
+#[tokio::test]
+async fn a_delivery_s_hook_opens_its_span() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    allow_hook(
+        &kit,
+        HookTrigger::BeforeDeliver,
+        "before",
+        HookExecution::Sync,
+    );
+    kit.deliver(&room(), "result", DeliverOptions::default())
+        .await
+        .unwrap();
+    let spans = mock.completed_spans();
+    assert_eq!(named(&spans, "hook.sync.before").status, "ok");
+    kit.close().await.unwrap();
+}
+
+// Python: core/hooks.py and telemetry.base.span_error: an error with no text reads its class
+#[tokio::test]
+async fn a_hook_raising_no_text_reads_its_class_even_recording() {
+    let asks = TelemetryConfig {
+        record_sensitive_data: true,
+        ..TelemetryConfig::default()
+    };
+    let (kit, mock, _) = kit_with_room(Some(asks)).await;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |_: RoomEvent, _| async {
+            let raised: Result<HookResult, roomkit::HookError> = Err("".into());
+            raised
+        },
+        HookOptions {
+            name: "mute".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    inbound(&kit).await;
+    let spans = mock.completed_spans();
+    let hook = named(&spans, "hook.sync.mute");
+    assert_eq!(hook.error_message.as_deref(), Some("HookError"));
+    kit.close().await.unwrap();
 }

@@ -86,7 +86,8 @@ impl Tracer {
 
 /// A running span: its context, and what it was written so far, for an
 /// attribute written again with its value not to show twice: the SDK adds, where
-/// Python's overwrites.
+/// Python's overwrites. One written again with another value is exported twice,
+/// the last the one that stands: the SDK has no way to replace it.
 struct Active {
     context: Context,
     written: HashMap<String, opentelemetry::Value>,
