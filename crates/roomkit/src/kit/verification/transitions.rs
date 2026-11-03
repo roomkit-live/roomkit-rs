@@ -16,7 +16,7 @@ use super::state::{
 use super::{later, refused};
 use crate::error::RoomKitError;
 use crate::kit::RoomKit;
-use crate::locks::RoomGuard;
+use crate::locks::HeldLock;
 use crate::store::{ConversationStore, GetVerificationOptions};
 
 /// An attempt's outcome, the request as it left it, and the identity's
@@ -369,9 +369,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// verification locks (RFC §13.5): apart from the room locks, so that a
     /// room named like the key never holds it, as Python's
     /// `self._verification_locks.locked(_lock_key(...))`.
-    pub(super) async fn lock_identity(&self, key: &str) -> Result<RoomGuard<'_>, RoomKitError> {
+    pub(super) async fn lock_identity(&self, key: &str) -> Result<HeldLock, RoomKitError> {
         let key = RoomId::new(key)?;
-        Ok(self.inner.verification_locks.lock(&key).await)
+        self.inner.verification_locks.lock(&key).await
     }
 
     /// The identity's stored verification, UNVERIFIED when it has none.
@@ -431,7 +431,7 @@ mod tests {
         kit.create_room(create).await.unwrap();
         let alice = IdentityId::new("alice").unwrap();
         let named = RoomId::new(super::lock_key(&alice, None)).unwrap();
-        let section = kit.inner.locks.lock_owned(&named).await;
+        let section = kit.inner.locks.lock(&named).await.unwrap();
         let sms = ChannelId::new("sms").unwrap();
         let request =
             kit.request_verification(&alice, &room, &sms, RequestVerificationOptions::default());

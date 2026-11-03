@@ -135,10 +135,18 @@ pub struct RoomKitOptions<S = InMemoryStore> {
     /// stopped before delivering it, the cursor standing still, before it
     /// skips the hole under the room's delivery claim and the kit emits
     /// `delivery_skipped` (RFC §13.5 "Delivery lanes across processes").
-    /// The skip never passes an index this process committed. Until the
-    /// kit takes a lock manager, the claim holds within the process only
-    /// (RMK-1153).
+    /// The skip never passes an index this process committed.
     pub delivery_gap_timeout: Duration,
+    /// Python `lock_manager=None`: where the kit takes each room's lock
+    /// (RFC §13.5), an [`InMemoryLockManager`](crate::InMemoryLockManager)
+    /// of its own by default. Two kits sharing a store across processes
+    /// need a manager whose locks hold across them.
+    pub lock_manager: Option<Arc<dyn crate::RoomLockManager>>,
+    /// Python `delivery_claim_lock_manager=None`: where the kit takes the
+    /// rooms' delivery claims (RFC §13.5), `lock_manager` by default. A
+    /// claim is held for a whole delivery set, provider round trips
+    /// included: a manager of its own keeps it off the room locks' pool.
+    pub delivery_claim_lock_manager: Option<Arc<dyn crate::RoomLockManager>>,
 }
 
 /// Python's defaults, over a new in-memory store. Defined for the in-memory
@@ -172,6 +180,8 @@ impl<S> RoomKitOptions<S> {
             attached_media: None,
             orchestration: None,
             delivery_gap_timeout: DELIVERY_GAP_TIMEOUT,
+            lock_manager: None,
+            delivery_claim_lock_manager: None,
         }
     }
 }
@@ -192,6 +202,11 @@ impl<S> fmt::Debug for RoomKitOptions<S> {
             .field("task_runner", &self.task_runner.is_some())
             .field("orchestration", &self.orchestration.is_some())
             .field("delivery_gap_timeout", &self.delivery_gap_timeout)
+            .field("lock_manager", &self.lock_manager.is_some())
+            .field(
+                "delivery_claim_lock_manager",
+                &self.delivery_claim_lock_manager.is_some(),
+            )
             .finish_non_exhaustive()
     }
 }

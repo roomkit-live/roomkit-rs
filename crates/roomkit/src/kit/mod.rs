@@ -35,6 +35,7 @@ mod identity;
 mod inject;
 mod inline;
 mod inputs;
+mod locks;
 mod members;
 mod options;
 mod output;
@@ -129,7 +130,12 @@ use crate::events::{FrameworkEvent, Handled, Handler, Handlers};
 use crate::hooks::{HookHandler, Kept};
 use crate::identity::IdentityResolver;
 use crate::inbound::InboundResult;
-use crate::locks::RoomMutexes;
+use crate::lock_manager::{InMemoryLockManager, RoomLockManager, key_space};
+use crate::locks::KitLocks;
+
+/// The kind of the verification locks, the lock manager's key space of
+/// their own (Python's `_key_space("verification")`).
+const VERIFICATION_KIND: &str = "verification";
 use crate::queues::{RoomLanes, RoomTickets};
 use crate::registered::{Registered, RegisteredChannel};
 use crate::router::{
@@ -195,7 +201,11 @@ pub(crate) struct Inner<S> {
     /// The routing strategy (RFC §10.4), fixed at the kit's construction.
     router: Arc<dyn InboundRoomRouter>,
     pub(crate) store: Arc<S>,
-    pub(crate) locks: RoomMutexes,
+    /// The room locks, from the kit's lock manager (RFC §13.5).
+    pub(crate) locks: KitLocks,
+    /// The delivery claim manager the host handed, closed with the kit when
+    /// it is not the lock manager.
+    claim_manager: Option<Arc<dyn RoomLockManager>>,
     pub(crate) lanes: RoomLanes,
     pub(crate) tickets: RoomTickets,
     /// The indexes whose turn in their room's lane is over, waiting for the
@@ -203,10 +213,10 @@ pub(crate) struct Inner<S> {
     pub(crate) cursors: RoomCursors,
     /// The rooms' delivery claims this process holds (RFC §13.5).
     pub(crate) claims: crate::gaps::DeliveryClaims,
-    /// The identities' verification locks, by identity key: mutexes of
-    /// their own, apart from the room locks, so that no room id takes an
-    /// identity's verification (RFC §11.7, §13.5).
-    pub(crate) verification_locks: RoomMutexes,
+    /// The identities' verification locks, by identity key: from the lock
+    /// manager's own key space, apart from the room locks, so that no room
+    /// id takes an identity's verification (RFC §11.7, §13.5).
+    pub(crate) verification_locks: KitLocks,
     /// How long a delivery set waits on a cursor hole no lane runs before it
     /// skips it (RFC §13.5).
     pub(crate) delivery_gap_timeout: std::time::Duration,
@@ -320,7 +330,14 @@ impl<S: ConversationStore> RoomKit<S> {
             attached_media,
             orchestration,
             delivery_gap_timeout,
+            lock_manager,
+            delivery_claim_lock_manager,
         } = options;
+        let lock_manager: Arc<dyn RoomLockManager> =
+            lock_manager.unwrap_or_else(|| Arc::new(InMemoryLockManager::default()));
+        let claim_base = delivery_claim_lock_manager
+            .clone()
+            .unwrap_or_else(|| Arc::clone(&lock_manager));
         let mut config = KitConfig::new();
         config.max_chain_depth = max_chain_depth;
         config.agent_response_policy = agent_response_policy;
@@ -338,12 +355,17 @@ impl<S: ConversationStore> RoomKit<S> {
             retired_hooks: RwLock::new(Vec::new()),
             router: inbound_router.unwrap_or_else(|| default_router(&store, kit)),
             store,
-            locks: RoomMutexes::default(),
+            locks: KitLocks::new(Arc::clone(&lock_manager)),
+            claim_manager: delivery_claim_lock_manager
+                .filter(|claims| !Arc::ptr_eq(claims, &lock_manager)),
             lanes: RoomLanes::default(),
             tickets: RoomTickets::default(),
             cursors: RoomCursors::default(),
-            claims: crate::gaps::DeliveryClaims::default(),
-            verification_locks: RoomMutexes::default(),
+            claims: crate::gaps::DeliveryClaims::new(KitLocks::new(key_space(
+                &claim_base,
+                crate::gaps::DELIVERY_KIND,
+            ))),
+            verification_locks: KitLocks::new(key_space(&lock_manager, VERIFICATION_KIND)),
             delivery_gap_timeout,
             tasks: Arc::default(),
             environment,

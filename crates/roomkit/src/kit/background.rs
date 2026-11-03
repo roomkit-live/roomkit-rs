@@ -187,6 +187,9 @@ impl<S: ConversationStore> RoomKit<S> {
         // §12.10.4).
         self.inner.store_released.store(true, Ordering::Release);
         self.inner.store.close().await;
+        // Then its lock managers (an advisory lock's pool), as the Python
+        // implementation's close.
+        self.inner.close_lock_managers().await;
         // Then the status bus, as the Python implementation's close.
         self.inner.status_bus.close().await;
         failures

@@ -65,6 +65,7 @@ pub mod human_input;
 pub mod identity;
 mod inbound;
 mod kit;
+mod lock_manager;
 mod locks;
 mod media;
 pub mod orchestration;
@@ -167,6 +168,9 @@ pub use self::events::FrameworkEvent;
 pub use self::hooks::{
     HookError, HookFuture, HookHandler, HookOptions, HookPayload, HookRegistration, HookReturn,
     IntoHookReturn, SessionStartedEvent,
+};
+pub use self::lock_manager::{
+    InMemoryLockManager, InMemoryLockManagerOptions, RoomLock, RoomLockManager,
 };
 // For the AI channel's loop alone: the payloads of its triggers, which
 // roomkit-ai defines, and what their hooks came to.

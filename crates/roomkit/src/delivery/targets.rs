@@ -21,7 +21,7 @@ use crate::driver;
 use crate::error::RoomKitError;
 use crate::inbound::{DeliveryHandle, InboundResult};
 use crate::kit::RoomKit;
-use crate::locks::RoomGuard;
+use crate::locks::HeldLock;
 use crate::store::ConversationStore;
 
 /// The reason a call `process_timeout` stopped is refused with (RFC §13.6).
@@ -208,7 +208,7 @@ impl<S: ConversationStore> RoomKit<S> {
         request: &DeliveryContext<S>,
         channel_id: ChannelId,
     ) -> Result<DeliveryOutcome, RoomKitError> {
-        let section = match self.publication_section(request).await {
+        let section = match self.publication_section(request).await? {
             Ok(section) => section,
             Err(refused) => return Ok(*refused),
         };
@@ -248,24 +248,24 @@ impl<S: ConversationStore> RoomKit<S> {
     /// whatever work of the room its caller runs in: `None` for any other
     /// request, and for a caller that holds the lock already, a locked
     /// hook, whose section adopts the publication. Past the timeout, the
-    /// refusal.
+    /// refusal; the lock manager's failure, the call's error.
     async fn publication_section(
         &self,
         request: &DeliveryContext<S>,
-    ) -> Result<Option<RoomGuard<'static>>, Box<DeliveryOutcome>> {
+    ) -> Result<Result<Option<HeldLock>, Box<DeliveryOutcome>>, RoomKitError> {
         let room_id = &request.room_id;
         if !request.keyed_publication() || ExecutionContext::current().lease(room_id).is_some() {
-            return Ok(None);
+            return Ok(Ok(None));
         }
-        let locking = self.inner.locks.lock_owned(room_id);
+        let locking = self.inner.locks.lock(room_id);
         let Some(timeout) = self.inner.config().process_timeout else {
-            return Ok(Some(locking.await));
+            return Ok(Ok(Some(locking.await?)));
         };
         match tokio::time::timeout(timeout, locking).await {
-            Ok(guard) => Ok(Some(guard)),
-            Err(_elapsed) => Err(Box::new(text_outcome(
+            Ok(guard) => Ok(Ok(Some(guard?))),
+            Err(_elapsed) => Ok(Err(Box::new(text_outcome(
                 self.refuse_on_timeout(room_id, timeout).await,
-            ))),
+            )))),
         }
     }
 
@@ -294,7 +294,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// among others, leaves it here, released once the call returns.
     async fn publish_within(
         &self,
-        section: Option<RoomGuard<'static>>,
+        section: Option<HeldLock>,
         message: InboundMessage,
         room_id: &RoomId,
         publishing: Option<String>,

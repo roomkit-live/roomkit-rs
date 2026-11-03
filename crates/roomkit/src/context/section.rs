@@ -21,7 +21,8 @@ use roomkit_core::model::RoomId;
 use roomkit_core::ops::EffectId;
 
 use super::{ExecutionContext, Frame, RunShared, Work};
-use crate::locks::{RoomGuard, RoomMutexes};
+use crate::error::RoomKitError;
+use crate::locks::{HeldLock, KitLocks};
 use crate::tasks::{Marks, Unit};
 
 /// A room's lock held by the host's code, and the frame its calls run in.
@@ -41,18 +42,18 @@ struct Held {
     frame: Frame,
     /// Dropped after the run let its tenure go: no lease outlives the lock.
     #[expect(dead_code, reason = "held for its drop, which releases the lock")]
-    guard: RoomGuard<'static>,
+    guard: HeldLock,
 }
 
 impl Section {
     /// Takes `room_id`'s lock for the current code, waiting for it as any
     /// caller does, unless the code runs under a live lease on it.
-    pub(crate) async fn enter(locks: &RoomMutexes, room_id: &RoomId) -> Self {
+    pub(crate) async fn enter(locks: &KitLocks, room_id: &RoomId) -> Result<Self, RoomKitError> {
         let unit = Unit::new();
         if ExecutionContext::current().lease(room_id).is_some() {
-            return Self { held: None, unit };
+            return Ok(Self { held: None, unit });
         }
-        let guard = locks.lock_owned(room_id).await;
+        let guard = locks.lock(room_id).await?;
         let (run, _adoptions) = RunShared::new();
         run.locked(room_id.clone());
         let effect = EffectId::of_host_section();
@@ -68,10 +69,10 @@ impl Section {
             frame,
             guard,
         };
-        Self {
+        Ok(Self {
             held: Some(held),
             unit,
-        }
+        })
     }
 
     /// The unit of the kit's work the section's calls run within.

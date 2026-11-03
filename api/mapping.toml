@@ -647,7 +647,7 @@ reason = "the delivery path's own fields, held private: no channel of 0.x plays 
 [[missing]]
 python = "roomkit.RoomKit"
 members = [
-    "lock_manager", "set_agent_response_policy", "set_room_timers", "telemetry",
+    "set_agent_response_policy", "set_room_timers", "telemetry",
 ]
 reason = "not in 0.x: the kit's other reads and setters, and telemetry"
 
@@ -664,11 +664,9 @@ reason = "not in 0.x: voice and video"
 [[missing]]
 python = "roomkit.RoomKit.__init__"
 params = [
-    "lock_manager",
     "stt", "tts", "voice",
     "telemetry",
     "inbound_rate_limit", "persistence_policy",
-    "delivery_claim_lock_manager",
     "turn_backend",
     "error_classes",
 ]
@@ -858,6 +856,11 @@ reason = "Python's `ToolResult` alias (`roomkit.channels.ai`, not exported) read
 rust = "roomkit_ai::DynAiProvider"
 approved = "2026-11-03"
 reason = "Python's `AIProvider` held as an object (AIChannel(fallback_provider=...)): `AiProvider`'s async methods make it no `dyn` trait, so every provider is also a `DynAiProvider` (HITL be4dae08, RMK-1267)"
+
+[[exception]]
+rust = "roomkit::RoomLock"
+approved = "2026-11-03"
+reason = "Python's `async with manager.locked(room_id):` block: a guard released by `release()` or by its drop, Rust having no async context manager (HITL 4a2e6ece; architecture: the names table, RoomLockManager)"
 
 [[exception]]
 rust = "roomkit_ai::ToolFuture"

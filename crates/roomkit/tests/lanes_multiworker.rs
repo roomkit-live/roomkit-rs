@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::{ChannelBinding, ChannelCapabilities, ChannelOutput, RoomContext};
 use roomkit::model::{
     ChannelId, ChannelType, EventSource, EventType, InboundMessage, RoomEvent, RoomId, TextContent,
 };
@@ -25,8 +26,9 @@ use roomkit::testing::{
     EchoAgent, EchoAgentOptions, EventTap, RecordingTransport, RecordingTransportOptions,
 };
 use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, InMemoryStore,
-    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
+    InMemoryLockManager, InMemoryStore, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    RoomLockManager, SendEventOptions,
 };
 
 fn channel(id: &str) -> ChannelId {
@@ -356,6 +358,111 @@ async fn two_kits_interleaved_deliveries_follow_index_order() {
     let cursor = store.get_delivered_index(&room_id()).await.unwrap();
     assert_eq!(Some(u64::try_from(cursor).unwrap()), room.latest_index);
     for kit in kits {
+        kit.close().await.unwrap();
+    }
+}
+
+/// A transport whose deliveries wait for `gate`, `started` notified as the
+/// first one starts: a long provider round trip.
+struct Slow {
+    inner: RecordingTransport,
+    started: Arc<tokio::sync::Notify>,
+    gate: Arc<tokio::sync::Semaphore>,
+}
+
+impl Channel for Slow {
+    fn channel_id(&self) -> ChannelId {
+        self.inner.channel_id().clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        Channel::channel_type(&self.inner)
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        self.inner.capabilities()
+    }
+
+    async fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> Result<RoomEvent, ChannelError> {
+        self.inner.handle_inbound(message, context).await
+    }
+
+    async fn deliver(
+        &self,
+        event: RoomEvent,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        self.started.notify_one();
+        drop(self.gate.acquire().await);
+        self.inner.deliver(event, binding, context).await
+    }
+}
+
+// Python: tests/test_lanes.py::test_claim_blocks_gap_clock_while_owner_is_executing
+#[tokio::test(start_paused = true)]
+async fn the_claim_blocks_the_gap_clock_while_its_owner_delivers() {
+    let store = Arc::new(InMemoryStore::new());
+    let locks: Arc<dyn RoomLockManager> = Arc::new(InMemoryLockManager::default());
+    let kit = |gap| {
+        RoomKit::new(RoomKitOptions {
+            store: Arc::clone(&store),
+            delivery_gap_timeout: gap,
+            lock_manager: Some(Arc::clone(&locks)),
+            ..Default::default()
+        })
+    };
+    // B's gap timeout is shorter than A's delivery: without the claim
+    // shared through the lock manager, B would skip the index A delivers.
+    let (a, b) = (kit(Duration::from_secs(30)), kit(Duration::from_millis(20)));
+    let (started, gate) = (Arc::default(), Arc::new(tokio::sync::Semaphore::new(0)));
+    let options = RecordingTransportOptions::default;
+    let slow = Slow {
+        inner: RecordingTransport::new(channel("recorder"), ChannelType::WEBSOCKET, options()),
+        started: Arc::clone(&started),
+        gate: Arc::clone(&gate),
+    };
+    let recorder = RecordingTransport::new(channel("recorder"), ChannelType::WEBSOCKET, options());
+    let source = || RecordingTransport::new(channel("src"), ChannelType::SMS, options());
+    a.register_channel(source()).unwrap();
+    a.register_channel(slow).unwrap();
+    b.register_channel(source()).unwrap();
+    b.register_channel(recorder.clone()).unwrap();
+    let skips = EventTap::on(&b, &["delivery_skipped"]);
+    room(&a).await;
+    let first = {
+        let a = a.clone();
+        tokio::spawn(async move {
+            a.process_inbound(message("src", "m0"), ProcessInboundOptions::default())
+                .await
+                .unwrap()
+        })
+    };
+    // A delivers index 0, its claim held.
+    started.notified().await;
+    let second = {
+        let b = b.clone();
+        tokio::spawn(async move {
+            b.process_inbound(message("src", "m1"), ProcessInboundOptions::default())
+                .await
+                .unwrap()
+        })
+    };
+    // Five times B's gap timeout.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    gate.add_permits(1);
+    first.await.unwrap();
+    second.await.unwrap();
+    for kit in [&a, &b] {
+        roomkit::testing::idle(kit).await;
+    }
+    assert_eq!(skips.types(), Vec::<String>::new());
+    assert_eq!(recorder.texts(), ["m1"]);
+    for kit in [a, b] {
         kit.close().await.unwrap();
     }
 }

@@ -59,7 +59,14 @@ async fn write_held_cancellation<S: ConversationStore>(
     let Some(inner) = kit.upgrade() else {
         return;
     };
-    let _lock = inner.locks.lock(&room_id).await;
+    // Released at its drop, once the mark is written.
+    let _lock = match inner.locks.lock(&room_id).await {
+        Ok(lock) => lock,
+        Err(error) => {
+            log_failed(&event_id, &error);
+            return;
+        }
+    };
     let current = match inner.store.get_event(&event_id).await {
         Ok(Some(current)) if current.room_id == room_id => current,
         // Released already, or deleted.

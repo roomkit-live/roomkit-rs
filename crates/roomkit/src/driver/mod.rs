@@ -53,7 +53,7 @@ use tokio::time::Instant;
 pub(crate) use self::calls::cut_by_close;
 pub(crate) use self::calls::load_context;
 use self::calls::{WentOn, Written};
-use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
+use self::holds::{Answer, Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::in_flight::InFlight;
 use self::inbound::Caller;
 pub(crate) use self::inbound::{
@@ -975,7 +975,10 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 self.waits.push((id, wait, waiting));
                 None
             }
-            Hold::Now(outcome) => self.after_the_cursor(id, outcome, over, turned),
+            Hold::Now(outcome) => self.after_the_cursor(id, Answer::Now(outcome), over, turned),
+            Hold::Releasing(release) => {
+                self.after_the_cursor(id, Answer::Release(release), over, turned)
+            }
             Hold::Refused(room_id) => {
                 tracing::warn!(
                     target: "roomkit::driver",
@@ -1028,7 +1031,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     fn after_the_cursor(
         &mut self,
         id: EffectId,
-        outcome: Outcome,
+        answer: Answer,
         over: Option<(RoomId, Vec<u64>)>,
         turned: Option<Turned>,
     ) -> Option<(EffectId, Outcome)> {
@@ -1036,7 +1039,13 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             .as_ref()
             .is_some_and(|turned| !turned.skipped.is_empty());
         if over.is_none() && !skipped {
-            return Some((id, outcome));
+            let answer = match answer {
+                Answer::Now(outcome) => return Some((id, outcome)),
+                release @ Answer::Release(_) => release,
+            };
+            let released = async move { (id, Waited::Answered(answer.outcome().await)) };
+            self.waits.push((id, Wait::Other, Box::pin(released)));
+            return None;
         }
         let inner: &'kit Arc<Inner<S>> = self.inner;
         let room_id = over.map(|(room_id, indexes)| {
@@ -1044,6 +1053,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             room_id
         });
         let caught_up = async move {
+            let outcome = answer.outcome().await;
             if let Some(room_id) = room_id {
                 inner.cursors.catch_up(&*inner.store, &room_id).await;
             }

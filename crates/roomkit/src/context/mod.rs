@@ -94,7 +94,7 @@ use roomkit_core::rules::chain_depth::{self, Draw, ReentryBudget};
 pub(crate) use self::adoption::{Adopting, Adoption, Completion, Reply, adopt, adopt_by_own_run};
 pub(crate) use self::run::{Lease, RunShared, Written};
 pub(crate) use self::section::Section;
-use crate::locks::RoomGuard;
+use crate::locks::HeldLock;
 use crate::tasks::Marks;
 
 tokio::task_local! {
@@ -155,13 +155,13 @@ pub(crate) struct ExecutionContext {
 #[derive(Clone, Debug)]
 pub(crate) struct Hand {
     room_id: RoomId,
-    guard: Arc<Mutex<Option<RoomGuard<'static>>>>,
+    guard: Arc<Mutex<Option<HeldLock>>>,
 }
 
 impl Hand {
     /// The lock, unless the run took it: its holder releases it by dropping
     /// it, once the call returned.
-    pub(crate) fn take_back(&self) -> Option<RoomGuard<'static>> {
+    pub(crate) fn take_back(&self) -> Option<HeldLock> {
         self.guard
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -358,7 +358,7 @@ impl ExecutionContext {
     /// This context, handing `guard`, the lock of `room_id` its code holds,
     /// to the run of the call it makes ([`Hand`]); the hand, through which
     /// the code takes back what the run did not take.
-    pub(crate) fn handing(mut self, room_id: RoomId, guard: RoomGuard<'static>) -> (Self, Hand) {
+    pub(crate) fn handing(mut self, room_id: RoomId, guard: HeldLock) -> (Self, Hand) {
         let hand = Hand {
             room_id,
             guard: Arc::new(Mutex::new(Some(guard))),
@@ -403,7 +403,7 @@ impl ExecutionContext {
 
     /// The room's lock this context hands the run it starts, taken, with
     /// its room: the run holds it from its start.
-    pub(crate) fn take_hand(&self) -> Option<(RoomId, RoomGuard<'static>)> {
+    pub(crate) fn take_hand(&self) -> Option<(RoomId, HeldLock)> {
         let hand = self.hand.as_ref()?;
         Some((hand.room_id.clone(), hand.take_back()?))
     }

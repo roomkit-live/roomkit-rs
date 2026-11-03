@@ -1,19 +1,25 @@
-//! Per-room mutual exclusion, in one process (RFC §13.5).
+//! Per-room mutual exclusion (RFC §13.5): the in-memory lock manager's
+//! mutexes, and the kit's hold on its lock manager.
 
 use std::collections::HashMap;
+use std::fmt;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::RoomId;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
+use crate::error::RoomKitError;
+use crate::lock_manager::{RoomLock, RoomLockManager};
+
 /// One asynchronous mutex per room, created on first use and dropped once
 /// nobody holds or waits for it, so rooms that come and go (or ids that name
 /// no room) leave nothing behind.
 ///
-/// The kit keeps them as the room locks the operations ask for through
-/// `AcquireLock`. They hold within one process only; a store shared across
-/// processes needs a distributed lock (RFC §13.5).
+/// The `InMemoryLockManager`'s locks. They hold within one process only; a
+/// store shared across processes needs a distributed lock (RFC §13.5).
 #[derive(Debug, Default)]
 pub(crate) struct RoomMutexes {
     rooms: Arc<Mutex<Rooms>>,
@@ -44,14 +50,8 @@ pub(crate) struct RoomGuard<'mutexes> {
 }
 
 impl RoomMutexes {
-    /// Waits for the room's mutex and returns its guard.
-    pub(crate) async fn lock(&self, room_id: &RoomId) -> RoomGuard<'_> {
-        self.acquire(room_id).await
-    }
-
-    /// [`lock`](Self::lock), its guard owned: code that hands the lock it
-    /// holds to a run of the driver (a keyed delivery's section, RFC
-    /// §22.1).
+    /// Waits for the room's mutex and returns its guard, owned: the
+    /// in-memory lock manager's lock.
     pub(crate) async fn lock_owned(&self, room_id: &RoomId) -> RoomGuard<'static> {
         self.acquire(room_id).await
     }
@@ -78,16 +78,111 @@ impl RoomMutexes {
         guard
     }
 
-    /// How many callers wait for the room's mutex now. Outside the kit's
-    /// work: the conformance runner's `wait_for_lock` step.
+    /// How many callers wait for the room's mutex now.
+    #[cfg(test)]
     pub(crate) fn waiting(&self, room_id: &RoomId) -> usize {
         lock(&self.rooms).waiting.get(room_id).copied().unwrap_or(0)
+    }
+
+    /// How many rooms' mutexes are kept now: those held or waited for.
+    pub(crate) fn size(&self) -> usize {
+        lock(&self.rooms).mutexes.len()
     }
 
     #[cfg(test)]
     fn rooms(&self) -> MutexGuard<'_, Rooms> {
         lock(&self.rooms)
     }
+}
+
+/// The kit's hold on a lock manager's locks of one kind (RFC §13.5): it
+/// counts the callers waiting for each key, whatever the manager, for the
+/// conformance runner's `wait_for_lock` step.
+pub(crate) struct KitLocks {
+    manager: Arc<dyn RoomLockManager>,
+    waiting: Arc<Mutex<HashMap<RoomId, usize>>>,
+}
+
+impl KitLocks {
+    pub(crate) fn new(manager: Arc<dyn RoomLockManager>) -> Self {
+        Self {
+            manager,
+            waiting: Arc::default(),
+        }
+    }
+
+    /// The manager the locks are taken from.
+    pub(crate) fn manager(&self) -> &Arc<dyn RoomLockManager> {
+        &self.manager
+    }
+
+    /// Waits for `key`'s lock from the manager. A wait dropped before it
+    /// holds the lock counts as a waiter no more.
+    pub(crate) async fn lock(&self, key: &RoomId) -> Result<HeldLock, RoomKitError> {
+        let _waiter = Waiter::new(&self.waiting, key);
+        self.manager.locked(key).await.map(HeldLock)
+    }
+
+    /// How many callers wait for `key`'s lock now. Outside the kit's work:
+    /// the conformance runner's `wait_for_lock` step.
+    pub(crate) fn waiting(&self, key: &RoomId) -> usize {
+        waiters(&self.waiting).get(key).copied().unwrap_or(0)
+    }
+}
+
+impl fmt::Debug for KitLocks {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("KitLocks").finish_non_exhaustive()
+    }
+}
+
+/// A lock the kit holds from its lock manager: released by
+/// [`release`](Self::release), or by its drop.
+pub(crate) struct HeldLock(Box<dyn RoomLock>);
+
+impl HeldLock {
+    /// Releases the lock; the future answers whether the release failed.
+    pub(crate) fn release(self) -> Pin<Box<dyn Future<Output = Result<(), RoomKitError>> + Send>> {
+        self.0.release()
+    }
+}
+
+impl fmt::Debug for HeldLock {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("HeldLock").finish_non_exhaustive()
+    }
+}
+
+/// One caller counted among a key's waiters until its drop.
+struct Waiter {
+    waiting: Arc<Mutex<HashMap<RoomId, usize>>>,
+    key: RoomId,
+}
+
+impl Waiter {
+    fn new(waiting: &Arc<Mutex<HashMap<RoomId, usize>>>, key: &RoomId) -> Self {
+        *waiters(waiting).entry(key.clone()).or_default() += 1;
+        Self {
+            waiting: Arc::clone(waiting),
+            key: key.clone(),
+        }
+    }
+}
+
+impl Drop for Waiter {
+    fn drop(&mut self) {
+        let mut waiting = waiters(&self.waiting);
+        if let Some(count) = waiting.get_mut(&self.key) {
+            *count -= 1;
+            if *count == 0 {
+                waiting.remove(&self.key);
+            }
+        }
+    }
+}
+
+fn waiters(waiting: &Mutex<HashMap<RoomId, usize>>) -> MutexGuard<'_, HashMap<RoomId, usize>> {
+    waiting.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn lock(rooms: &Mutex<Rooms>) -> MutexGuard<'_, Rooms> {
@@ -137,7 +232,7 @@ mod tests {
     #[tokio::test]
     async fn a_released_mutex_leaves_nothing_behind() {
         let mutexes = RoomMutexes::default();
-        drop(mutexes.lock(&room_id()).await);
+        drop(mutexes.lock_owned(&room_id()).await);
         assert!(
             mutexes.rooms().mutexes.is_empty(),
             "the room's mutex should be gone"
@@ -147,11 +242,11 @@ mod tests {
     #[tokio::test]
     async fn the_last_holder_removes_a_mutex_another_task_waited_for() {
         let mutexes = Arc::new(RoomMutexes::default());
-        let held = mutexes.lock(&room_id()).await;
+        let held = mutexes.lock_owned(&room_id()).await;
         let waiter = {
             let mutexes = Arc::clone(&mutexes);
             tokio::spawn(async move {
-                drop(mutexes.lock(&room_id()).await);
+                drop(mutexes.lock_owned(&room_id()).await);
             })
         };
         // Let the waiter clone the mutex and start waiting.
@@ -171,11 +266,11 @@ mod tests {
     #[tokio::test]
     async fn a_waiter_cancelled_before_it_holds_the_mutex_leaves_nothing_behind() {
         let mutexes = Arc::new(RoomMutexes::default());
-        let held = mutexes.lock(&room_id()).await;
+        let held = mutexes.lock_owned(&room_id()).await;
         let waiter = {
             let mutexes = Arc::clone(&mutexes);
             tokio::spawn(async move {
-                drop(mutexes.lock(&room_id()).await);
+                drop(mutexes.lock_owned(&room_id()).await);
             })
         };
         // Let the waiter clone the mutex and start waiting.
@@ -197,10 +292,10 @@ mod tests {
     #[tokio::test]
     async fn a_held_mutex_excludes_a_second_holder() {
         let mutexes = RoomMutexes::default();
-        let _held = mutexes.lock(&room_id()).await;
+        let _held = mutexes.lock_owned(&room_id()).await;
         let second = tokio::time::timeout(
             std::time::Duration::from_millis(20),
-            mutexes.lock(&room_id()),
+            mutexes.lock_owned(&room_id()),
         )
         .await;
         assert!(second.is_err(), "the second lock should wait");

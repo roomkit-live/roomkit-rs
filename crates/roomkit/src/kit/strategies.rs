@@ -287,7 +287,14 @@ impl<S: ConversationStore> RoomKit<S> {
             section: None,
             armed: true,
         };
-        let section = Arc::new(Section::enter(&self.inner.locks, room_id).await);
+        let section = match Section::enter(&self.inner.locks, room_id).await {
+            Ok(section) => Arc::new(section),
+            Err(error) => {
+                guard.armed = false;
+                self.drop_record(room_id, &strategy);
+                return Err(error);
+            }
+        };
         guard.section = Some(Arc::clone(&section));
         let before = match section.scope(self.snapshot(room_id)).await {
             Ok(before) => before,

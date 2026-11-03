@@ -23,6 +23,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   where it registered the channel with no owner of its requests
   (RMK-1255).
 - A parallel team's first error cuts the other workers (RFC §19.7.3, §19.7.4), as Python's: a `Supervisor` with the parallel strategy, and a `Loop`'s parallel reviews, whose delegation raises answer with that error without waiting for the other delegations, each started then cut, posting its end; the Loop's parallel reviews waited for every reviewer (RMK-1279).
+- A lock manager (RFC §13.5), as Python's: `RoomKitOptions::lock_manager`
+  takes any `RoomLockManager` (`locked(&room_id)` a `RoomLock` guard,
+  released by `release().await` or its drop), `InMemoryLockManager` by
+  default, `kit.lock_manager()` the one given; a release that fails leaves
+  what the section committed, reported on the result's `error`.
+  `delivery_claim_lock_manager` takes the rooms' delivery claims, the lock
+  manager by default, so kits sharing one share their claims (RMK-1153).
 - A room id takes no identity's verification lock (RFC §13.5), as
   Python's: the verification locks are mutexes of their own, apart from
   the room locks, so a section of the room `verification::alice` no longer
@@ -32,8 +39,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   another process committed; a hole no lane runs is skipped after
   `RoomKitOptions::delivery_gap_timeout` (30 s), the kit emitting
   `delivery_skipped`, and a set whose index another lane skipped is
-  dropped, `delivery_stale`. The room's delivery claim holds within the
-  process until the kit takes a lock manager (RMK-1153).
+  dropped, `delivery_stale` (RMK-1153).
 - A name the kit quotes as Python's `repr` (a rename's record, an error's
   text, a skill's or a memory's message) escapes every character Python's
   `str.isprintable` refuses, as Python does: `'Bob\xa0Smith'` and

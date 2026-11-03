@@ -45,7 +45,7 @@ use crate::context::{ExecutionContext, Lease};
 use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::{RoomKitError, with_causes};
 use crate::kit::Inner;
-use crate::locks::RoomGuard;
+use crate::locks::HeldLock;
 use crate::store::ConversationStore;
 use crate::tasks::{Kind, Marks, Tasks};
 use crate::turns::Canceller;
@@ -312,7 +312,7 @@ pub(super) struct Caller {
 pub(super) enum Under {
     /// The lock the caller's code handed the call: a keyed publication's
     /// section (RFC §22.1).
-    Hand(RoomId, RoomGuard<'static>),
+    Hand(RoomId, HeldLock),
     /// The lock held by a run that did not adopt the call, granted on the
     /// lease of the code under it that made the call: a channel told of a
     /// lifecycle change under the room's lock (RFC §6.1, §9.5.1), as the

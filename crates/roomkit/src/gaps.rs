@@ -7,10 +7,11 @@
 //! this process did not commit, and the sets of one room run under
 //! its delivery claim, held by the process while one of its sets runs and
 //! until the cursor moved past it, never with the room lock. The claims are
-//! mutexes of their own, apart from the room locks, so that no room id, a
-//! room named `__delivery__:r1` among them, takes another room's claim:
-//! until the kit takes a lock manager, the claim holds within the process
-//! (RMK-1153).
+//! taken from the claim manager (`RoomKitOptions::delivery_claim_lock_manager`,
+//! the lock manager by default), an in-memory manager keeping them in a map
+//! of their own, apart from the room locks, so that no room id, a room
+//! named `__delivery__:r1` among them, takes another room's claim; kits
+//! sharing a manager share their claims (RMK-1153, RMK-1281).
 //!
 //! An index before a set's own that no lane runs (its process stopped
 //! between the commit and the delivery, or it was committed straight to the
@@ -23,6 +24,7 @@
 //! `delivery_stale`.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -31,9 +33,10 @@ use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::Instant;
 
+use crate::error::RoomKitError;
 use crate::events::{FrameworkEvent, Handled};
 use crate::kit::Inner;
-use crate::locks::{RoomGuard, RoomMutexes};
+use crate::locks::{HeldLock, KitLocks};
 use crate::store::{AdvanceDeliveredIndexOptions, ConversationStore};
 
 /// How long a set first waits between two reads of a cursor held by a hole,
@@ -46,13 +49,22 @@ const GAP_BACKOFF_MAX: Duration = Duration::from_millis(250);
 
 /// The rooms' delivery claims this process holds, each while one of its
 /// sets of the room runs and until the cursor moved past it.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct DeliveryClaims {
     rooms: Arc<Mutex<HashMap<RoomId, Arc<RoomClaim>>>>,
-    /// The claims' own mutexes, by room id: apart from the room locks, so
-    /// that a room's claim and any room's lock never share a key.
-    locks: RoomMutexes,
+    /// The claims' locks, from the claim manager's key space of its own:
+    /// apart from the room locks, so that a room's claim and any room's
+    /// lock never share a key.
+    locks: KitLocks,
 }
+
+/// The kind of the delivery claims' locks, the lock manager's key space of
+/// their own (Python's `_key_space("delivery")`).
+pub(crate) const DELIVERY_KIND: &str = "delivery";
+
+/// The prefix of a room's delivery claim key, as Python's
+/// `DELIVERY_CLAIM_PREFIX`.
+const DELIVERY_CLAIM_PREFIX: &str = "__delivery__:";
 
 /// One room's claim: how many of the process's sets hold it, the lock that
 /// holds it once one does, and the one taking it.
@@ -62,10 +74,20 @@ struct RoomClaim {
     taking: AsyncMutex<()>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Held {
     holders: usize,
-    lock: Option<RoomGuard<'static>>,
+    lock: Option<HeldLock>,
+}
+
+impl fmt::Debug for Held {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Held")
+            .field("holders", &self.holders)
+            .field("lock", &self.lock.is_some())
+            .finish()
+    }
 }
 
 /// A set's hold on its room's delivery claim; dropping the last one lets
@@ -97,8 +119,15 @@ impl RoomClaim {
 }
 
 impl DeliveryClaims {
+    pub(crate) fn new(locks: KitLocks) -> Self {
+        Self {
+            rooms: Arc::default(),
+            locks,
+        }
+    }
+
     /// Holds `room_id`'s delivery claim: at once when one of the process's
-    /// sets holds it, else once its mutex is free.
+    /// sets holds it, else once the claim manager grants its key.
     pub(crate) async fn hold(&self, room_id: &RoomId) -> ClaimHold {
         let mut hold = ClaimHold {
             room_id: room_id.clone(),
@@ -114,7 +143,7 @@ impl DeliveryClaims {
         // its drop forgets the room's claim nobody else refers to.
         let taking = hold.claim.taking.lock().await;
         if !hold.claim.join() {
-            let lock = self.locks.lock_owned(room_id).await;
+            let lock = self.take(room_id).await;
             let mut state = hold.claim.held();
             state.holders = 1;
             state.lock = Some(lock);
@@ -123,6 +152,33 @@ impl DeliveryClaims {
         hold.holds = true;
         hold
     }
+}
+
+impl DeliveryClaims {
+    /// The claim manager's lock of `room_id`'s claim, asked again after a
+    /// pause while the manager fails to grant it: the set's own deadline
+    /// bounds the wait, as Python's next lane round asks again.
+    async fn take(&self, room_id: &RoomId) -> HeldLock {
+        loop {
+            let taken = match claim_key(room_id) {
+                Ok(key) => self.locks.lock(&key).await,
+                Err(error) => Err(error),
+            };
+            match taken {
+                Ok(lock) => return lock,
+                Err(error) => {
+                    tracing::warn!(target: "roomkit::lanes", room_id = %room_id, %error, "taking the room's delivery claim failed; asking again");
+                    tokio::time::sleep(GAP_BACKOFF_MAX).await;
+                }
+            }
+        }
+    }
+}
+
+/// The lock manager's key for `room_id`'s delivery claim, as Python's
+/// `delivery_claim_key`, never the room's own.
+fn claim_key(room_id: &RoomId) -> Result<RoomId, RoomKitError> {
+    Ok(RoomId::new(format!("{DELIVERY_CLAIM_PREFIX}{room_id}"))?)
 }
 
 impl Drop for ClaimHold {
@@ -296,10 +352,22 @@ async fn read_cursor<S: ConversationStore>(inner: &Inner<S>, room_id: &RoomId) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lock_manager::{InMemoryLockManager, RoomLockManager, key_space};
     use crate::{RoomKit, RoomKitOptions};
 
     fn room_id() -> RoomId {
         RoomId::new("room_1").unwrap()
+    }
+
+    /// The claims of a kit whose lock manager is its own in-memory one.
+    fn in_memory() -> DeliveryClaims {
+        let manager: Arc<dyn RoomLockManager> = Arc::new(InMemoryLockManager::default());
+        DeliveryClaims::new(KitLocks::new(key_space(&manager, DELIVERY_KIND)))
+    }
+
+    /// The claim manager's key of `room_id()`'s claim.
+    fn key() -> RoomId {
+        claim_key(&room_id()).unwrap()
     }
 
     fn rooms_held(claims: &DeliveryClaims) -> usize {
@@ -315,16 +383,16 @@ mod tests {
 
     #[tokio::test]
     async fn a_hold_cancelled_while_it_waits_leaves_nothing_behind() {
-        let claims = Arc::new(DeliveryClaims::default());
+        let claims = Arc::new(in_memory());
         // Another process holds the room's claim.
-        let other = claims.locks.lock_owned(&room_id()).await;
+        let other = claims.locks.lock(&key()).await.unwrap();
         let waiting = {
             let claims = Arc::clone(&claims);
             tokio::spawn(async move {
                 drop(claims.hold(&room_id()).await);
             })
         };
-        while claims.locks.waiting(&room_id()) == 0 {
+        while claims.locks.waiting(&key()) == 0 {
             tokio::task::yield_now().await;
         }
         waiting.abort();
@@ -339,7 +407,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_process_s_sets_share_the_room_s_claim() {
-        let claims = DeliveryClaims::default();
+        let claims = in_memory();
         let first = claims.hold(&room_id()).await;
         let second = held_at_once(&claims, &room_id()).await;
         drop(first);
@@ -359,7 +427,7 @@ mod tests {
     async fn a_room_named_like_a_claim_shares_no_lock_with_it() {
         let kit = RoomKit::new(RoomKitOptions::default());
         let named = RoomId::new(format!("__delivery__:{}", room_id())).unwrap();
-        let section = kit.inner.locks.lock_owned(&named).await;
+        let section = kit.inner.locks.lock(&named).await.unwrap();
         let claim = held_at_once(&kit.inner.claims, &room_id()).await;
         drop((claim, section));
         kit.close().await.unwrap();
@@ -372,7 +440,7 @@ mod tests {
         let kit = RoomKit::new(RoomKitOptions::default());
         let long = RoomId::new("r".repeat(4096)).unwrap();
         for room in [room_id(), long] {
-            let section = kit.inner.locks.lock_owned(&room).await;
+            let section = kit.inner.locks.lock(&room).await.unwrap();
             let claim = held_at_once(&kit.inner.claims, &room).await;
             drop((claim, section));
         }

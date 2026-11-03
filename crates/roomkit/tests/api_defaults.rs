@@ -1138,6 +1138,17 @@ fn delivery_backend_options_defaults_as_python() {
     assert!(kit.delivery_backend.is_none());
     // roomkit.RoomKit.__init__(delivery_gap_timeout) = 30.0
     assert_eq!(kit.delivery_gap_timeout, Duration::from_secs(30));
+    // roomkit.RoomKit.__init__(lock_manager) = None
+    assert!(kit.lock_manager.is_none());
+    // roomkit.RoomKit.__init__(delivery_claim_lock_manager) = None
+    assert!(kit.delivery_claim_lock_manager.is_none());
+}
+
+#[test]
+fn in_memory_lock_manager_options_defaults_as_python() {
+    let defaults = roomkit::InMemoryLockManagerOptions::default();
+    // roomkit.InMemoryLockManager.__init__(max_locks) = 1024
+    assert_eq!(defaults.max_locks, 1024);
 }
 
 #[test]

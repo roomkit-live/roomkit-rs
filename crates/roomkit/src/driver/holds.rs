@@ -50,20 +50,22 @@
 use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
 
 use roomkit_core::model::{ErrorRecord, EventId, RoomId};
 use roomkit_core::ops::{EffectId, HoldOutcome, HoldRequest, Outcome};
 use tokio::time::Instant;
 
 use crate::context::{ExecutionContext, Lease, RunShared};
+use crate::error::RoomKitError;
 use crate::gaps::Turned;
-use crate::locks::{RoomGuard, RoomMutexes};
+use crate::locks::{HeldLock, KitLocks};
 use crate::queues::{Place, RoomLanes, RoomTickets, Ticket};
 
 /// The kit's room locks, delivery lanes and admission tickets.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Rooms<'kit> {
-    pub(super) locks: &'kit RoomMutexes,
+    pub(super) locks: &'kit KitLocks,
     pub(super) lanes: &'kit RoomLanes,
     pub(super) tickets: &'kit RoomTickets,
 }
@@ -85,7 +87,7 @@ pub(super) type Waiting<'kit> =
 
 /// What a wait came to: what it took, nothing once its deadline passed.
 pub(super) enum Waited<'kit> {
-    Lock(RoomId, Option<RoomGuard<'kit>>),
+    Lock(RoomId, Option<Result<HeldLock, RoomKitError>>),
     /// The place, by its room and event, comes back whether its turn came
     /// or not.
     Place((RoomId, EventId), Place<'kit>, bool),
@@ -115,14 +117,57 @@ pub(super) enum Hold<'kit> {
     /// Refused at once: what it waits for is held by the call this one runs
     /// within, which waits for this one.
     Refused(RoomId),
+    /// A room lock's release the lock manager carries out: answered once it
+    /// is over, a failure as the effect's (RFC §13.5, gap G-025).
+    Releasing(Release),
+}
+
+/// A lock manager's release of a room lock, under way.
+pub(super) type Release = Pin<Box<dyn Future<Output = Result<(), RoomKitError>> + Send>>;
+
+/// The answer to a room lock's release: a failure is the effect's, which
+/// changes nothing the section decided (gap G-025).
+pub(super) fn released(release: Result<(), RoomKitError>) -> Outcome {
+    match release {
+        Ok(()) => HoldOutcome::Released.into(),
+        Err(error) => Outcome::Failed(lock_failure(error)),
+    }
+}
+
+/// The record of a lock manager's failure: the one it raised, as Python's
+/// exception propagates.
+fn lock_failure(error: RoomKitError) -> ErrorRecord {
+    if let RoomKitError::Lock(record) = error {
+        return record;
+    }
+    ErrorRecord::new(error.class_name(), error.to_string())
+}
+
+/// What a hold carried out at once answers: its outcome, or the release
+/// the lock manager carries out.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "an answer is moved once, to the run that asked: it carries its outcome whole"
+)]
+pub(super) enum Answer {
+    Now(Outcome),
+    Release(Release),
+}
+
+impl Answer {
+    /// The outcome, once the release is over.
+    pub(super) async fn outcome(self) -> Outcome {
+        match self {
+            Self::Now(outcome) => outcome,
+            Self::Release(release) => released(release.await),
+        }
+    }
 }
 
 /// How the run holds a room's lock.
-enum LockHold<'kit> {
-    /// The lock itself.
-    Own(
-        #[expect(dead_code, reason = "held for its drop, which releases the lock")] RoomGuard<'kit>,
-    ),
+enum LockHold {
+    /// The lock itself, from the kit's lock manager.
+    Own(HeldLock),
     /// Granted on its context's lease.
     Granted(Lease),
 }
@@ -132,7 +177,7 @@ enum LockHold<'kit> {
 pub(super) struct Held<'kit> {
     shared: Arc<RunShared>,
     leases: Leases,
-    locks: HashMap<RoomId, LockHold<'kit>>,
+    locks: HashMap<RoomId, LockHold>,
     places: HashMap<(RoomId, EventId), Place<'kit>>,
     /// The places taken first in their room's lane, the lane idle: their
     /// sets run from their placement, which the kit's close does not drop
@@ -172,7 +217,7 @@ impl<'kit> Held<'kit> {
     /// start, a tenure of its own, so that the calls its operation makes
     /// under it (`Inbound::under_lock`), a parse among them, hold a lease on
     /// it, until the operation releases it.
-    pub(super) fn take_hand(&mut self, room_id: RoomId, guard: RoomGuard<'static>) {
+    pub(super) fn take_hand(&mut self, room_id: RoomId, guard: HeldLock) {
         self.shared.locked(room_id.clone());
         self.locks.insert(room_id, LockHold::Own(guard));
     }
@@ -211,9 +256,21 @@ impl<'kit> Held<'kit> {
                 self.acquire(rooms, context, effect, room_id, deadline)
             }
             HoldRequest::ReleaseLock { room_id } => {
-                self.locks.remove(&room_id);
+                let held = self.locks.remove(&room_id);
                 self.shared.released(&room_id);
-                Hold::Now(HoldOutcome::Released.into())
+                let Some(LockHold::Own(lock)) = held else {
+                    return Hold::Now(HoldOutcome::Released.into());
+                };
+                // A release over at once (the in-memory lock's) is answered
+                // at once, as the lock's drop was.
+                let mut release = lock.release();
+                match release
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                {
+                    Poll::Ready(result) => Hold::Now(released(result)),
+                    Poll::Pending => Hold::Releasing(release),
+                }
             }
             HoldRequest::EnterLane { room_id, event_id } => {
                 let place = rooms.lanes.take(&room_id, event_id.clone());
@@ -347,11 +404,12 @@ impl<'kit> Held<'kit> {
     /// Takes what a wait came to, and answers its effect.
     pub(super) fn settle(&mut self, waited: Waited<'kit>) -> Outcome {
         match waited {
-            Waited::Lock(room_id, Some(guard)) => {
+            Waited::Lock(room_id, Some(Ok(guard))) => {
                 self.shared.locked(room_id.clone());
                 self.locks.insert(room_id, LockHold::Own(guard));
                 HoldOutcome::Locked.into()
             }
+            Waited::Lock(_, Some(Err(error))) => Outcome::Failed(lock_failure(error)),
             Waited::Lock(_, None) => Outcome::DeadlinePassed,
             Waited::Place(key, place, came) => {
                 self.places.insert(key, place);
