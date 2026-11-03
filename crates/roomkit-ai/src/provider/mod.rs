@@ -2,7 +2,9 @@
 //! `roomkit.providers.ai.AIProvider`, what one generation is asked and what
 //! it answers.
 
+mod catalog;
 mod context;
+mod date;
 mod dynamic;
 mod error;
 mod response;
@@ -12,11 +14,13 @@ use std::pin::Pin;
 
 use futures_core::Stream;
 
+pub use self::catalog::{ModelInfo, ModelPricing};
 pub use self::context::{
     AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiRole, AiTextPart,
     AiToolCallPart, AiToolResultPart,
 };
 pub(crate) use self::context::{ai_messages, ai_messages_with};
+pub use self::date::Date;
 pub use self::dynamic::DynAiProvider;
 pub use self::error::{ProviderError, ProviderErrorOptions, is_context_overflow_message};
 pub use self::response::{
@@ -56,6 +60,33 @@ pub trait AiProvider: Send + Sync + 'static {
     /// Whether the configured model takes images (RFC §6.4).
     fn supports_vision(&self) -> bool {
         false
+    }
+
+    /// The provider's curated catalogue: what it knows of its models
+    /// before any request, without a key (Python's classmethod
+    /// `available_models()`). Not what the provider offers today, which
+    /// only its endpoint can say; a model absent from it is ordinary. None
+    /// by default.
+    fn available_models() -> Vec<ModelInfo> {
+        Vec::new()
+    }
+
+    /// The catalogue's entry for the configured model (Python's
+    /// `catalog_entry()`), `None` for a model the catalogue does not carry,
+    /// a custom or local one behind a base URL, or one newer than the
+    /// catalogue.
+    fn catalog_entry(&self) -> Option<ModelInfo> {
+        let model = self.model_name();
+        Self::available_models()
+            .into_iter()
+            .find(|entry| entry.id == model)
+    }
+
+    /// The configured model's input context window, in tokens, from the
+    /// catalogue (Python's `context_window`): `None` for a model it does
+    /// not carry, which a caller degrades on rather than assume one.
+    fn context_window(&self) -> Option<u64> {
+        self.catalog_entry().and_then(|entry| entry.context_window)
     }
 
     /// Whether [`generate_stream`](Self::generate_stream) streams.

@@ -81,6 +81,8 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::CountryCode" = { python = "str", members = ["new", "as_str"] }
 "roomkit::model::ChannelSet" = { python = "str", members = ["new", "contains", "iter"] }
 "roomkit::model::Timestamp" = { python = "datetime", members = ["from_unix_millis", "as_unix_millis", "checked_add", "duration_since", "UNIX_EPOCH"] }
+# A model price's day, Python's `datetime.date` (HITL 656a0dca).
+"roomkit_ai::Date" = { python = "date", members = ["new", "year", "month", "day"] }
 "roomkit::model::Metadata" = { python = "dict" }
 "roomkit::model::Confidence" = { python = "float", members = ["new", "value", "FULL"] }
 "roomkit::model::Latitude" = { python = "float", members = ["new", "degrees"] }
@@ -792,11 +794,11 @@ reason = "language: a part's `type` tag is the AiContentPart variant that holds 
 [[missing]]
 python = "roomkit.providers.ai.AIProvider"
 members = [
-    "available_models", "catalog_entry", "context_window", "list_models",
+    "list_models",
     "supports_deferred_tools", "supports_response_schema",
     "supports_response_schema_with_tools",
 ]
-reason = "not in 0.x: the model catalogue, vision and response schemas"
+reason = "not in 0.x: the live model listing, deferred tools and response schemas"
 
 [[missing]]
 python = "roomkit.providers.openai.OpenAIConfig.__init__"

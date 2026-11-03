@@ -108,9 +108,10 @@ pub use self::mock::{MockAiProvider, MockAiProviderOptions};
 pub use self::provider::read_tool_calls;
 pub use self::provider::{
     AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse,
-    AiRole, AiTextPart, AiToolCall, AiToolCallPart, AiToolResultPart, DynAiProvider, ProviderError,
-    ProviderErrorOptions, ProviderStream, StreamDone, StreamEvent, StreamTextDelta, StreamToolCall,
-    TextStream, is_context_overflow_message, tool_arguments,
+    AiRole, AiTextPart, AiToolCall, AiToolCallPart, AiToolResultPart, Date, DynAiProvider,
+    ModelInfo, ModelPricing, ProviderError, ProviderErrorOptions, ProviderStream, StreamDone,
+    StreamEvent, StreamTextDelta, StreamToolCall, TextStream, is_context_overflow_message,
+    tool_arguments,
 };
 #[doc(hidden)]
 pub use self::skills::dumps;

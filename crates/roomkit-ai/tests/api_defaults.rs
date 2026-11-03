@@ -261,3 +261,38 @@ fn task_tool_options_defaults_as_python() {
     // roomkit.tasks.CancelTaskTool.__init__(window) = 500
     assert_eq!(cancel.window, 500);
 }
+
+#[test]
+fn model_catalogue_defaults_as_python() {
+    let entry = roomkit_ai::ModelInfo::new("m");
+    // roomkit.providers.ai.ModelInfo.__init__(display_name) = None
+    assert_eq!(entry.display_name, None);
+    // roomkit.providers.ai.ModelInfo.__init__(context_window) = None
+    assert_eq!(entry.context_window, None);
+    // roomkit.providers.ai.ModelInfo.__init__(supports_vision) = None
+    assert_eq!(entry.supports_vision, None);
+    // roomkit.providers.ai.ModelInfo.__init__(deprecated) = False
+    assert!(!entry.deprecated);
+    // roomkit.providers.ai.ModelInfo.__init__(capabilities) = <factory>
+    assert_eq!(entry.capabilities, Vec::<String>::new());
+    // roomkit.providers.ai.ModelInfo.__init__(pricing) = None
+    assert_eq!(entry.pricing, None);
+    let day = roomkit_ai::Date::new(2026, 8, 5).unwrap();
+    let pricing = roomkit_ai::ModelPricing::new(1.0, 2.0, day).unwrap();
+    // roomkit.ModelPricing.__init__(cache_read_per_million) = None
+    assert_eq!(pricing.cache_read_per_million, None);
+    // roomkit.ModelPricing.__init__(cache_write_per_million) = None
+    assert_eq!(pricing.cache_write_per_million, None);
+    // roomkit.ModelPricing.__init__(image_input_per_million) = None
+    assert_eq!(pricing.image_input_per_million, None);
+    // roomkit.ModelPricing.__init__(image_output_per_million) = None
+    assert_eq!(pricing.image_output_per_million, None);
+    // roomkit.ModelPricing.__init__(long_context_threshold_tokens) = None
+    assert_eq!(pricing.long_context_threshold_tokens, None);
+    // roomkit.ModelPricing.__init__(long_context_input_multiplier) = 1.0
+    assert!((pricing.long_context_input_multiplier - 1.0).abs() < f64::EPSILON);
+    // roomkit.ModelPricing.__init__(long_context_output_multiplier) = 1.0
+    assert!((pricing.long_context_output_multiplier - 1.0).abs() < f64::EPSILON);
+    // roomkit.ModelPricing.__init__(currency) = 'USD'
+    assert_eq!(pricing.currency, "USD");
+}

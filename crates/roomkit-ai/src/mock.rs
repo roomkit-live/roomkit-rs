@@ -8,8 +8,8 @@ use roomkit::model::Metadata;
 use serde_json::Value;
 
 use crate::provider::{
-    AiContext, AiProvider, AiResponse, ProviderError, ProviderStream, StreamEvent, TextStream,
-    response_events,
+    AiContext, AiProvider, AiResponse, ModelInfo, ProviderError, ProviderStream, StreamEvent,
+    TextStream, response_events,
 };
 use crate::stream::{Yielder, items};
 
@@ -123,6 +123,20 @@ impl AiProvider for MockAiProvider {
 
     fn model_name(&self) -> &'static str {
         "mock"
+    }
+
+    /// Python's two entries, for code that reads a catalogue.
+    fn available_models() -> Vec<ModelInfo> {
+        let entry = |id: &str, name: &str, vision: bool| ModelInfo {
+            display_name: Some(name.to_owned()),
+            context_window: Some(8192),
+            supports_vision: Some(vision),
+            ..ModelInfo::new(id)
+        };
+        vec![
+            entry("mock", "Mock", false),
+            entry("mock-vision", "Mock Vision", true),
+        ]
     }
 
     fn supports_vision(&self) -> bool {
