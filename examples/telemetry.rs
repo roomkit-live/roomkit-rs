@@ -63,17 +63,17 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
             span.name, span.kind, span.parent_id, span.status
         );
     }
-    let root = spans.iter().find(|span| span.name == "framework.inbound");
+    let inbound = spans.iter().find(|span| span.name == "framework.inbound");
     let broadcast = spans.iter().find(|span| span.name == "framework.broadcast");
-    let (Some(root), Some(broadcast)) = (root, broadcast) else {
+    let (Some(inbound), Some(broadcast)) = (inbound, broadcast) else {
         println!("FAIL the message opened a framework.inbound and a framework.broadcast span");
         return Ok(ExitCode::FAILURE);
     };
-    if broadcast.parent_id.as_ref() != Some(&root.id) {
+    if broadcast.parent_id.as_ref() != Some(&inbound.id) {
         println!("FAIL the broadcast sits under the inbound");
         return Ok(ExitCode::FAILURE);
     }
-    if root.attributes.contains_key("sender_id") {
+    if inbound.attributes.contains_key("sender_id") {
         println!("FAIL a span holds no address by default");
         return Ok(ExitCode::FAILURE);
     }
