@@ -32,6 +32,7 @@ mod hooks;
 mod intents;
 mod resilience;
 mod rules;
+mod spans;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -41,6 +42,8 @@ use roomkit::model::{LoopEndMarker, LoopEndReason, Metadata, ToolCall, ToolCallO
 use roomkit::{ToolCallReport, TurnHost};
 use roomkit_core::rules::transcript::{Message, Role};
 use serde_json::Value;
+use spans::TurnSpan;
+pub(crate) use spans::TurnTelemetry;
 use tokio::time::Instant;
 
 use self::generation::{Failed, Generation};
@@ -176,6 +179,10 @@ pub(crate) struct Loop<P> {
     /// The results of parts the turn's calls answered and the images its
     /// input replays, which each request carries.
     pub(crate) media: TurnMedia,
+    /// Where the turn reports its spans and metrics.
+    pub(crate) telemetry: TurnTelemetry,
+    /// The turn's `llm.generate` span, once it runs.
+    pub(crate) turn_span: Option<TurnSpan>,
 }
 
 impl<P: AiProvider> Loop<P> {
@@ -194,6 +201,8 @@ impl<P: AiProvider> Loop<P> {
         mut messages: Vec<Message>,
         out: Yielder<Result<TurnItem, ProviderError>>,
     ) {
+        let (room_id, channel_id) = (&self.context.room_id, &self.context.channel_id);
+        self.turn_span = self.telemetry.start_turn::<P>(room_id, channel_id);
         let turn_id = self.turn.as_ref().map(|turn| turn.turn_id().to_owned());
         let steering = self
             .loops
@@ -306,6 +315,9 @@ impl<P: AiProvider> Loop<P> {
     async fn end(&self, reason: LoopEndReason, rounds: u32, spent: Spent, ending: Ending<'_>) {
         let (limits, steering, out) = ending;
         steering.close();
+        if let Some(span) = &self.turn_span {
+            span.ended(reason, spent.calls, &spent.usage);
+        }
         let end = LoopEndMarker {
             usage: spent.usage.clone(),
             last_usage: Some(spent.last.clone()),
@@ -349,6 +361,9 @@ impl<P: AiProvider> Loop<P> {
         limits: &mut Limits,
     ) -> Result<Generation, Failed> {
         spent.count(&generation);
+        if let Some(span) = &self.turn_span {
+            span.generation_used(&generation.done.usage);
+        }
         let Err(error) = limits.count(&generation.done.usage) else {
             return Ok(generation);
         };
@@ -385,6 +400,9 @@ impl<P: AiProvider> Loop<P> {
             error, delivered, ..
         } = failure;
         spent.segments.push(delivered);
+        if let Some(span) = &self.turn_span {
+            span.failed(error.to_string(), spent.calls, &spent.usage);
+        }
         if after_round {
             let end = LoopEndMarker {
                 usage: spent.usage.clone(),

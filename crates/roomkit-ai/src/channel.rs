@@ -38,6 +38,7 @@ use crate::server_instructions::ServerInstructions;
 use crate::skills::SkillRegistry;
 use crate::skills::tools::{SkillTools, SkillTurn};
 use crate::steering::{Loops, SteerOptions};
+use crate::tool_loop::TurnTelemetry;
 use crate::tool_loop::{Adopted, Bounds, Loop, Resilience};
 use crate::tool_usage::{ToolUsageMemory, TurnMedia};
 use crate::tools::toolbox::Toolbox;
@@ -1224,6 +1225,8 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             sent_images: None,
             tool_usage: Arc::clone(&self.media.tool_usage),
             media: TurnMedia::replaying(self.turn_images(&context.room.id, stands_alone)),
+            telemetry: TurnTelemetry::current(),
+            turn_span: None,
         };
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).

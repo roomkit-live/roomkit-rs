@@ -19,7 +19,10 @@ struct Current {
     span_id: Option<String>,
     #[cfg_attr(
         not(feature = "opentelemetry"),
-        expect(dead_code, reason = "only OpenTelemetryProvider reads its context back")
+        expect(
+            dead_code,
+            reason = "only OpenTelemetryProvider reads its context back"
+        )
     )]
     context: Option<Arc<dyn Any + Send + Sync>>,
 }

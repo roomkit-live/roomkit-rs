@@ -33,14 +33,24 @@ impl<P: AiProvider> Loop<P> {
     /// reads it.
     pub(super) async fn serve(&self, called: &Called) -> ToolEnd {
         let started = Instant::now();
+        let mut span = None;
         let (ended, asked) = match self.gate(called).await {
-            Gated::Runs { call, asked } => (self.execute(call).await, Some(asked)),
+            Gated::Runs { call, asked } => {
+                span = self
+                    .turn_span
+                    .as_ref()
+                    .map(|turn| turn.start_call(&call.name, &call.id));
+                (self.execute(call).await, Some(asked))
+            }
             Gated::Refused(refused) => (refused, None),
         };
         let ended = match &self.turn {
             Some(turn) => turn.on_tool_call(ended).await,
             None => ended,
         };
+        if let Some(span) = span {
+            span.end(raised_of(&ended));
+        }
         let result = self.for_model(read_tool_result(&ended.result));
         let outcome = ended.outcome.unwrap_or(ToolCallOutcome::Failed);
         let reported = ended.ended(outcome, result.clone().into_value());
@@ -217,6 +227,16 @@ impl<P: AiProvider> Loop<P> {
             Err(bound) => timed_out(call, bound),
         }
     }
+}
+
+/// What the tool raised, for its span, when the call ended `Failed`.
+fn raised_of(ended: &ToolCallReport) -> Option<String> {
+    (ended.outcome == Some(ToolCallOutcome::Failed)).then(|| {
+        ended
+            .error_detail
+            .clone()
+            .unwrap_or_else(|| read_tool_result(&ended.result).as_text())
+    })
 }
 
 /// `call`, served with `output`, a text, JSON or parts as its hooks read
