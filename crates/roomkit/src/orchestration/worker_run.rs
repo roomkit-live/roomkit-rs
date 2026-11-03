@@ -2,12 +2,14 @@
 //! for, and followed on the status bus (RFC §19.7.3, §19.7.4, §23.3):
 //! Python's `orchestration/_worker_run.py`.
 //!
-//! One sequence for a loop's producer and reviewers: the worker is posted
-//! pending, its task delegated and waited for, then one terminal entry is
-//! posted however the delegation ends: completed, failed, raised or
-//! cancelled.
+//! One sequence for the supervisor's workers (sequential, parallel,
+//! supervised, per-worker) and a loop's producer and reviewers: the worker
+//! is posted pending, its task delegated and waited for within the
+//! strategy's bound, then one terminal entry is posted however the
+//! delegation ends: completed, failed, timed out, raised or cancelled.
 
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use roomkit_core::model::{ChannelId, EventContent, Metadata, RoomEvent, RoomId, TaskStatus};
 use serde_json::{Value, json};
@@ -18,7 +20,9 @@ use crate::orchestration::StatusLevel;
 use crate::orchestration::lifecycle::post_agent_lifecycle;
 use crate::store::ConversationStore;
 use crate::tasks::lines::RUN_ENTRY;
-use crate::tasks::{DelegatedTask, DelegatedTaskResult, OnCompleteCallback, task_work};
+use crate::tasks::{
+    DelegatedTask, DelegatedTaskResult, OnCompleteCallback, WaitOptions, task_work,
+};
 
 /// The text a strategy's tasks carry for `event`: a plain text's body,
 /// else the empty string. A message it is empty for (a media, a composite,
@@ -62,19 +66,75 @@ pub(crate) fn task_output(result: Option<&DelegatedTaskResult>) -> String {
 /// How a worker's delegation ended: Python's `WorkerOutcome`.
 #[derive(Clone, Debug)]
 pub(crate) struct WorkerOutcome {
-    /// What the strategy reads of it: the task's work, or that it failed
-    /// or was cancelled (never an error's message).
+    /// What the strategy reads of it: the task's work, or that it failed,
+    /// was cancelled or timed out (never an error's message).
     pub(crate) output: String,
     /// Whether the task completed.
     pub(crate) completed: bool,
-    /// The delegated task.
-    pub(crate) task: DelegatedTask,
+    /// The delegated task; `None` when it timed out.
+    pub(crate) task: Option<DelegatedTask>,
 }
 
 impl WorkerOutcome {
-    /// The task's result.
+    /// The task's result; `None` when it timed out.
     pub(crate) fn result(&self) -> Option<DelegatedTaskResult> {
-        self.task.result()
+        self.task.as_ref().and_then(DelegatedTask::result)
+    }
+}
+
+/// A worker's terminal entry: completed or failed, with its output
+/// (Python's `_completed_or_failed`, `WorkerStatus`'s default `ended`).
+pub(crate) fn completed_or_failed(outcome: &WorkerOutcome) -> WorkerEnd {
+    let level = if outcome.completed {
+        StatusLevel::Completed
+    } else {
+        StatusLevel::Failed
+    };
+    WorkerEnd {
+        level,
+        detail: outcome.output.clone(),
+        metadata: Metadata::new(),
+    }
+}
+
+/// What a worker past its bound reads as (Python's `f"The task timed out
+/// after {timeout:g}s."`).
+pub(crate) fn timed_out_text(timeout: Duration) -> String {
+    format!(
+        "The task timed out after {}s.",
+        general(timeout.as_secs_f64())
+    )
+}
+
+/// `value` as Python's `format(value, "g")` writes it: six significant
+/// digits, trailing zeros dropped, in exponent form below 1e-4 or from
+/// 1e6.
+fn general(value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_owned();
+    }
+    let scientific = format!("{value:.5e}");
+    let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
+    let exponent: i32 = exponent.parse().unwrap_or_default();
+    if (-4..6).contains(&exponent) {
+        let decimals = usize::try_from(5 - exponent).unwrap_or_default();
+        return without_trailing_zeros(&format!("{value:.decimals$}")).to_owned();
+    }
+    let sign = if exponent < 0 { '-' } else { '+' };
+    format!(
+        "{}e{sign}{:02}",
+        without_trailing_zeros(mantissa),
+        exponent.unsigned_abs()
+    )
+}
+
+/// A decimal's text without the zeros ending its fraction, nor a point
+/// left alone.
+fn without_trailing_zeros(text: &str) -> &str {
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        text
     }
 }
 
@@ -101,10 +161,13 @@ pub(crate) struct WorkerStatus {
 }
 
 /// Delegates `task` to `worker_id` from `room_id` inline and waits for it,
-/// posted on the status bus as `status` says: pending, then one terminal
-/// entry whatever ends it. `delegation` goes to [`RoomKit::delegate`];
-/// the run posts the task's entries itself. Python's `run_worker(kit,
-/// room_id, worker_id, task, *, timeout=None, status, **delegation)`.
+/// within `timeout` (`None`: unbounded): a task past it is cancelled and
+/// its delegation reads as timed out, the call answering once the task
+/// ended. Posted on the status bus as `status` says: pending, then one
+/// terminal entry whatever ends it; nothing without one (a supervisor's
+/// own pass). `delegation` goes to [`RoomKit::delegate`]; the run posts
+/// the task's entries itself. Python's `run_worker(kit, room_id,
+/// worker_id, task, *, timeout, status=None, **delegation)`.
 ///
 /// # Errors
 ///
@@ -114,7 +177,8 @@ pub(crate) async fn run_worker<S: ConversationStore>(
     room_id: &RoomId,
     worker_id: &ChannelId,
     task: &str,
-    status: WorkerStatus,
+    timeout: Option<Duration>,
+    status: Option<WorkerStatus>,
     mut delegation: DelegateOptions,
 ) -> Result<WorkerOutcome, RoomKitError> {
     let posts = Posts {
@@ -133,10 +197,22 @@ pub(crate) async fn run_worker<S: ConversationStore>(
         posts: &posts,
         armed: true,
     };
-    let opened = || posts.run().opened = true;
-    let delegated = kit
-        .delegate_watched(room_id, worker_id, task.to_owned(), delegation, &opened)
-        .await;
+    let opened = |task: &DelegatedTask| {
+        let mut run = posts.run();
+        run.opened = true;
+        run.task = Some(task.clone());
+    };
+    let delegating = kit.delegate_watched(room_id, worker_id, task.to_owned(), delegation, &opened);
+    let delegated = match timeout {
+        Some(bound) => match tokio::time::timeout(bound, delegating).await {
+            Ok(delegated) => delegated,
+            Err(_elapsed) => {
+                cut.armed = false;
+                return Ok(posts.timed_out(bound).await);
+            }
+        },
+        None => delegating.await,
+    };
     cut.armed = false;
     let task = match delegated {
         Ok(task) => task,
@@ -154,10 +230,9 @@ pub(crate) async fn run_worker<S: ConversationStore>(
     let outcome = WorkerOutcome {
         output: task_output(result.as_ref()),
         completed: result.is_some_and(|result| result.status == TaskStatus::Completed),
-        task,
+        task: Some(task),
     };
-    let end = (posts.status.ended)(&outcome);
-    posts.post(end.level, &end.detail, Some(&outcome.task), end.metadata);
+    posts.ended(&outcome);
     Ok(outcome)
 }
 
@@ -166,7 +241,7 @@ pub(crate) async fn run_worker<S: ConversationStore>(
 struct Posts<S> {
     kit: RoomKit<S>,
     worker_id: ChannelId,
-    status: WorkerStatus,
+    status: Option<WorkerStatus>,
     run: Arc<Mutex<Run>>,
 }
 
@@ -183,11 +258,12 @@ impl<S> Clone for Posts<S> {
 
 /// What the run knows of its delegation: the task it ended, whether the
 /// task ends however the delegation ends (its completion then names it),
-/// and whether the run was cut before it returned.
+/// the task it opened, and whether the run was cut before it returned.
 #[derive(Default)]
 struct Run {
     task_id: Option<String>,
     opened: bool,
+    task: Option<DelegatedTask>,
     cut: bool,
 }
 
@@ -215,6 +291,37 @@ impl<S: ConversationStore> Posts<S> {
                 None => Box::pin(async {}),
             }
         })
+    }
+
+    /// The outcome of a delegation past its bound, `bound`, once its task
+    /// ended: the delegation's future dropped cut the task, which ends
+    /// cancelled on a run of its own, waited for here as Python's bound
+    /// waits for the cancelled delegation; its terminal entry then names
+    /// it. A delegation cut before it opened its task names none.
+    async fn timed_out(&self, bound: Duration) -> WorkerOutcome {
+        let opened = self.run().task.clone();
+        if let Some(task) = opened {
+            // Its end is the cut's, whatever it says: the outcome is the
+            // bound's.
+            drop(task.wait(WaitOptions::default()).await);
+        }
+        let outcome = WorkerOutcome {
+            output: timed_out_text(bound),
+            completed: false,
+            task: None,
+        };
+        self.ended(&outcome);
+        outcome
+    }
+
+    /// Posts the terminal entry of a delegation that returned, from its
+    /// outcome.
+    fn ended(&self, outcome: &WorkerOutcome) {
+        let Some(status) = &self.status else {
+            return;
+        };
+        let end = (status.ended)(outcome);
+        self.post(end.level, &end.detail, outcome.task.as_ref(), end.metadata);
     }
 
     /// The run's terminal entry once it was cut: it names the task, the cut
@@ -247,13 +354,16 @@ impl<S: ConversationStore> Posts<S> {
         task_id: Option<String>,
         added: Metadata,
     ) {
-        let mut metadata = self.status.metadata.clone();
+        let Some(status) = &self.status else {
+            return;
+        };
+        let mut metadata = status.metadata.clone();
         metadata.extend(added);
         metadata.insert(RUN_ENTRY.to_owned(), json!(true));
         if let Some(task_id) = task_id {
             metadata.insert("task_id".to_owned(), Value::String(task_id));
         }
-        let action = self.status.action;
+        let action = status.action;
         post_agent_lifecycle(&self.kit, &self.worker_id, level, action, detail, metadata);
     }
 }
@@ -291,6 +401,27 @@ impl<S: ConversationStore> Drop for CutPost<'_, S> {
 
 #[cfg(test)]
 mod tests {
+    // Python: orchestration/_worker_run.py `f"The task timed out after {timeout:g}s."`,
+    // as tests/orchestration/test_worker_delegation_bound.py reads it.
+    #[test]
+    fn a_timeout_is_written_as_python_s_general_format() {
+        use std::time::Duration;
+
+        use super::{general, timed_out_text};
+        assert_eq!(
+            timed_out_text(Duration::from_millis(50)),
+            "The task timed out after 0.05s."
+        );
+        assert_eq!(
+            timed_out_text(Duration::from_secs(120)),
+            "The task timed out after 120s."
+        );
+        assert_eq!(general(1.5), "1.5");
+        assert_eq!(general(0.000_01), "1e-05");
+        assert_eq!(general(1_234_567.0), "1.23457e+06");
+        assert_eq!(general(0.123_456_789), "0.123457");
+    }
+
     use std::future::{Future, pending, ready};
     use std::sync::Arc;
     use std::time::Duration;
@@ -397,7 +528,11 @@ mod tests {
             let (running, worker_id) = (kit.clone(), worker.channel_id());
             let run = tokio::spawn(async move {
                 let delegation = DelegateOptions::default();
-                drop(run_worker(&running, &room, &worker_id, "Count.", status, delegation).await);
+                let status = Some(status);
+                let ran = run_worker(
+                    &running, &room, &worker_id, "Count.", None, status, delegation,
+                );
+                drop(ran.await);
             });
             tokio::time::timeout(Duration::from_secs(5), worker.started.notified())
                 .await

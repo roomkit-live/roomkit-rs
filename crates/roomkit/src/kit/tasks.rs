@@ -293,7 +293,7 @@ impl<S: ConversationStore> RoomKit<S> {
         task: impl Into<String>,
         options: DelegateOptions,
     ) -> Result<DelegatedTask, RoomKitError> {
-        self.delegate_watched(room_id, agent_id, task.into(), options, &|| {})
+        self.delegate_watched(room_id, agent_id, task.into(), options, &|_| {})
             .await
     }
 
@@ -307,7 +307,7 @@ impl<S: ConversationStore> RoomKit<S> {
         agent_id: &ChannelId,
         task: String,
         options: DelegateOptions,
-        opened: &(dyn Fn() + Send + Sync),
+        opened: &(dyn Fn(&DelegatedTask) + Send + Sync),
     ) -> Result<DelegatedTask, RoomKitError> {
         self.inner.open()?;
         let parent = self
@@ -346,7 +346,7 @@ impl<S: ConversationStore> RoomKit<S> {
         // From here the task ends however this call ends: a caller cut
         // before its run started ends it cancelled (Python's `started`).
         let unstarted = Unstarted::new(self, &handle, &options);
-        opened();
+        opened(&handle);
         if self.inner.tasks.is_closing() {
             // The close began while the task was set up: it ends as the
             // close ends a running one, on both doors.

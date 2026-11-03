@@ -255,7 +255,8 @@ async fn produce<S: ConversationStore>(
         room_id,
         worker,
         task,
-        status,
+        None,
+        Some(status),
         DelegateOptions::default(),
     );
     Ok(produced.await?.result())
