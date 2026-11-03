@@ -523,8 +523,8 @@ reason = "not in 0.x: the loop run in the background for a realtime voice sessio
 
 [[missing]]
 python = "roomkit.Supervisor.__init__"
-params = ["auto_delegate", "refine_task", "refine_instruction", "delegation_message", "wait_for_result"]
-reason = "not yet: the framework-driven delegation (one pass, two passes) and the per-worker tools run in the background, stream I's lot 5b (RMK-1233)"
+params = ["wait_for_result"]
+reason = "not yet: the per-worker tools run in the background, their outcome handed back to the supervisor, stream I's next lot (RMK-1233)"
 
 [[missing]]
 python = "roomkit.Supervisor.__init__"

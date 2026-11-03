@@ -201,6 +201,11 @@ impl Segments {
         self.last_message = Some(row.clone());
     }
 
+    /// The turn's record, once its end was read or its reader stopped it.
+    pub(super) fn record(&self) -> Option<&Metadata> {
+        self.record.as_ref()
+    }
+
     /// The turn's entry under its caller's `turns`, once its end was read
     /// or its reader stopped it: its end and usage (Python's
     /// `stream_turn_entry`, RFC §6.4).

@@ -1389,6 +1389,17 @@ fn supervisor_options_defaults_as_python() {
     assert_eq!(defaults.task_timeout, Duration::from_secs(120));
     // roomkit.Supervisor.__init__(max_revisions) = 3
     assert_eq!(defaults.max_revisions, 3);
+    // roomkit.Supervisor.__init__(auto_delegate) = False
+    assert!(!defaults.auto_delegate);
+    // roomkit.Supervisor.__init__(refine_task) = True
+    assert!(defaults.refine_task);
+    // roomkit.Supervisor.__init__(refine_instruction) = None
+    assert!(defaults.refine_instruction.is_none());
+    // roomkit.Supervisor.__init__(delegation_message) = "I'm dispatching my team to work on this."
+    assert_eq!(
+        defaults.delegation_message.as_deref(),
+        Some("I'm dispatching my team to work on this.")
+    );
 }
 
 #[test]

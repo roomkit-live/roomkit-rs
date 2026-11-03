@@ -208,7 +208,7 @@ impl Queued {
         };
         match answered {
             Ok(Answer::Streamed(output, turn)) if answers_nothing_beside(&output) => {
-                Started::Turn(KeptStream { turn }, place)
+                Started::Turn(KeptStream { turn, then: None }, place)
             }
             Ok(Answer::Output(output)) if answers_nothing_beside(&output) => {
                 Started::Answered(nothing())

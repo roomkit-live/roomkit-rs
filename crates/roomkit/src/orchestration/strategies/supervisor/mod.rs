@@ -4,6 +4,7 @@
 //! child rooms (§23.3), registered on the kit and never attached to the
 //! room; and the `WorkerStrategy` it shares with the loop.
 
+mod auto;
 mod per_worker;
 mod prompts;
 mod results;
@@ -88,6 +89,21 @@ mod tests {
             .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(team.options.strategy, Some(WorkerStrategy::Parallel));
         assert_eq!(team.workers().len(), 1);
+    }
+
+    // Python: tests/test_supervisor.py::TestSupervisorConstructor::test_auto_delegate_without_strategy_raises
+    #[test]
+    fn auto_delegate_needs_a_strategy() {
+        let options = SupervisorOptions {
+            auto_delegate: true,
+            ..SupervisorOptions::default()
+        };
+        let refused = Supervisor::new(id("sup"), vec![id("w1").into()], options);
+        assert!(matches!(
+            refused,
+            Err(crate::error::RoomKitError::Value(message))
+                if message == "auto_delegate=True requires strategy to be set"
+        ));
     }
 
     // Python: tests/orchestration/test_strategy_supervisor.py::TestSupervisorAgents::test_agents_returns_only_supervisor

@@ -40,7 +40,7 @@ use crate::store::{
 use crate::stream::{self, KeptStream, Stops};
 use crate::tasks::{Kind, Marks, TaskCut};
 use crate::turn::TurnKit;
-use crate::turn_runners::{Taken, TurnRunner};
+use crate::turn_runners::{FirstPass, Next, Passes, Taken, TurnRunner};
 use crate::turns::{self, Answer};
 use crate::unwind::{self, unwinding};
 
@@ -543,7 +543,7 @@ async fn take_turn<S: ConversationStore>(
     let outcome = match answered {
         Ok(Answer::Output(output)) => checked_output(output),
         Ok(Answer::Streamed(output, turn)) => {
-            shared.keep_stream(effect, KeptStream { turn });
+            shared.keep_stream(effect, KeptStream { turn, then: None });
             ChannelOutcome::Streamed(output).into()
         }
         Err(failure) => failure.into_outcome(),
@@ -576,6 +576,66 @@ async fn strategy_turn<S: ConversationStore>(
             let (event, binding, context) = *own;
             take_turn(inner, shared, effect, binding, event, context, window).await
         }
+        Taken::Passes(passes) => first_pass(inner, shared, effect, passes, window).await,
+        Taken::Later(work) => match work.await {
+            Ok(Next::Own(own)) => {
+                let (event, binding, context) = *own;
+                take_turn(inner, shared, effect, binding, event, context, window).await
+            }
+            Ok(Next::FirstStands | Next::Fallback(..)) => {
+                ChannelOutcome::Output(Box::default()).into()
+            }
+            Err(error) => channel_output(Err(error.into())),
+        },
+    }
+}
+
+/// A strategy's first pass of its channel's own turn, for the call
+/// `effect` (RFC §19.7.3): a pass that streams is read by the operation's
+/// `ReadStream`, its text kept out of the room, then what follows it
+/// ([`stream::read`]); one that answers at once is handed on here.
+async fn first_pass<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    shared: &RunShared,
+    effect: EffectId,
+    Passes { first, then }: Passes,
+    window: usize,
+) -> Outcome {
+    let (event, binding, context) = *first;
+    let context = crate::history::turn_context(&*inner.store, &binding, &event, context, window);
+    let context = context.await;
+    let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
+    let cut = |turn| shared.turn_submitted(effect, turn);
+    let answered = inner.turns.run(&kit, &binding, event, context, cut).await;
+    let output = match answered {
+        Ok(Answer::Streamed(output, turn)) => {
+            shared.keep_stream(
+                effect,
+                KeptStream {
+                    turn,
+                    then: Some(then),
+                },
+            );
+            shared.turn_answered(effect);
+            return ChannelOutcome::Streamed(output).into();
+        }
+        Ok(Answer::Output(output)) => output,
+        Err(failure) => {
+            shared.turn_answered(effect);
+            return failure.into_outcome();
+        }
+    };
+    shared.turn_answered(effect);
+    if output.error.is_some() {
+        return checked_output(output);
+    }
+    match (then.0)(FirstPass::answered(&output)).await {
+        Ok(Next::Own(own)) => {
+            let (event, binding, context) = *own;
+            take_turn(inner, shared, effect, binding, event, context, window).await
+        }
+        Ok(Next::FirstStands | Next::Fallback(..)) => checked_output(output),
+        Err(error) => channel_output(Err(error.into())),
     }
 }
 

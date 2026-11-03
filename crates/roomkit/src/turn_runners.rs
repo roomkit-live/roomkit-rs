@@ -10,7 +10,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, ChannelOutput, RoomContext, RoomEvent, RoomId,
+    ChannelBinding, ChannelId, ChannelOutput, EventContent, Metadata, RoomContext, RoomEvent,
+    RoomId,
 };
 
 use crate::channel::{BoxFuture, ChannelError};
@@ -24,6 +25,84 @@ pub(crate) enum Taken {
     Own(Box<(RoomEvent, ChannelBinding, RoomContext)>),
     /// The runner's answer, once it is over, or what it failed with.
     Answered(BoxFuture<'static, Result<ChannelOutput, ChannelError>>),
+    /// A first pass of the channel's own turn, read as a streamed turn
+    /// whose calls are the room's rows and whose text is kept out of the
+    /// room, then what the runner makes of it (Python's supervisor reading
+    /// its first pass through `persist_tool_calls`, RFC §19.7.3).
+    Passes(Passes),
+    /// The runner's work before the channel's own turn, then that turn on
+    /// the event it gives ([`Next::Own`]), or what the work failed with.
+    Later(BoxFuture<'static, Result<Next, RoomKitError>>),
+}
+
+/// A first pass of a channel's own turn, and what follows it.
+pub(crate) struct Passes {
+    /// The first pass: the channel's own turn on this event and binding.
+    pub(crate) first: Box<(RoomEvent, ChannelBinding, RoomContext)>,
+    /// What follows it, handed what it gave.
+    pub(crate) then: Then,
+}
+
+/// What follows a first pass, once it was read.
+pub(crate) struct Then(
+    pub(crate) Box<dyn FnOnce(FirstPass) -> BoxFuture<'static, Result<Next, RoomKitError>> + Send>,
+);
+
+impl std::fmt::Debug for Then {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Then")
+    }
+}
+
+/// What a first pass gave: its answer, how its turn ended and its record
+/// (Python's `_Pass1`).
+#[derive(Debug, Default)]
+pub(crate) struct FirstPass {
+    /// Its final answer: the text it ended on when it completed, else
+    /// nothing (RFC §6.4).
+    pub(crate) answer: String,
+    /// How its turn ended, when its record says: `completed`,
+    /// `max_rounds`, `cancelled`...
+    pub(crate) end: Option<String>,
+    /// Its turn's record.
+    pub(crate) record: Metadata,
+}
+
+impl FirstPass {
+    /// A first pass that answered at once, with no stream: the text of its
+    /// first response event that says something, and no record (Python's
+    /// `_extract_output_text`).
+    pub(crate) fn answered(output: &ChannelOutput) -> Self {
+        let answer = output
+            .response_events
+            .iter()
+            .filter_map(|event| {
+                if let EventContent::Text(text) = &event.content {
+                    Some(&text.body)
+                } else {
+                    None
+                }
+            })
+            .find(|body| !body.is_empty())
+            .cloned()
+            .unwrap_or_default();
+        Self {
+            answer,
+            ..Self::default()
+        }
+    }
+}
+
+/// What follows a first pass whose turn did not fail.
+#[derive(Debug)]
+pub(crate) enum Next {
+    /// The channel's own turn on this event: its answer is the room's.
+    Own(Box<(RoomEvent, ChannelBinding, RoomContext)>),
+    /// The first pass's own output answers, carrying its record.
+    FirstStands,
+    /// The channel's fallback text answers, carrying this record (Python's
+    /// `_pass1_answer`).
+    Fallback(String, Metadata),
 }
 
 /// What takes a channel's turns in a room in place of the channel's own
@@ -123,5 +202,45 @@ impl<S> TurnRunners<S> {
             .filter(|(held_room, _)| held_room == room_id)
             .map(|(_, channel_id)| channel_id.clone())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use roomkit_core::model::{
+        ChannelId, ChannelOutput, ChannelType, EventSource, MediaContent, RoomEvent, RoomId,
+        TextContent,
+    };
+
+    use super::FirstPass;
+
+    fn answered(events: Vec<RoomEvent>) -> String {
+        let output = ChannelOutput {
+            responded: true,
+            response_events: events,
+            ..ChannelOutput::default()
+        };
+        FirstPass::answered(&output).answer
+    }
+
+    fn event(content: impl Into<roomkit_core::model::EventContent>) -> RoomEvent {
+        let room = RoomId::new("r1").unwrap_or_else(|error| panic!("{error}"));
+        let channel = ChannelId::new("ch").unwrap_or_else(|error| panic!("{error}"));
+        RoomEvent::new(room, EventSource::new(channel, ChannelType::AI), content)
+    }
+
+    // Python: tests/test_supervisor.py::TestExtractOutputText::test_from_response_events
+    // Python: tests/test_supervisor.py::TestExtractOutputText::test_empty_output
+    // Python: tests/test_supervisor.py::TestExtractOutputText::test_non_text_events_skipped
+    #[test]
+    fn a_pass_answered_at_once_hands_on_its_first_text() {
+        assert_eq!(
+            answered(vec![event(TextContent::new("Response text"))]),
+            "Response text"
+        );
+        assert_eq!(answered(Vec::new()), "");
+        let image = MediaContent::new("https://example.com/img.png", "image/png")
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(answered(vec![event(image)]), "");
     }
 }

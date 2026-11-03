@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use roomkit_core::model::{ChannelId, RoomId};
 
+use super::auto::DelegatingTurns;
 use super::{WorkerStrategy, per_worker, team};
 use crate::error::RoomKitError;
 use crate::hooks::HookRegistration;
@@ -17,11 +18,14 @@ use crate::orchestration::{
     StrategyFuture, save_conversation_state,
 };
 use crate::store::ConversationStore;
+use crate::turn_runners::TurnRunner;
 use crate::{HookExecution, HookTrigger};
 
 /// What [`Supervisor::new`] takes beside its agents: Python's
-/// `Supervisor(supervisor, workers, *, strategy=None, ..., share_channels=None,
-/// task_timeout=120.0, max_revisions=3)`.
+/// `Supervisor(supervisor, workers, *, strategy=None, auto_delegate=False,
+/// refine_task=True, refine_instruction=None,
+/// delegation_message="I'm dispatching my team to work on this.", ...,
+/// share_channels=None, task_timeout=120.0, max_revisions=3)`.
 #[derive(Clone, Debug)]
 pub struct SupervisorOptions {
     /// How the team runs: [`WorkerStrategy::Sequential`], the supervisor
@@ -41,6 +45,21 @@ pub struct SupervisorOptions {
     /// default, so two reworks; 0 reviews it once, as 1 does. A step still
     /// rejected then stops the chain, flagged unvalidated.
     pub max_revisions: u32,
+    /// Whether the framework delegates each message itself, no tool
+    /// needed: `false` by default. The supervisor's turns in the room run
+    /// the team, then the supervisor answers from their results. It needs
+    /// a `strategy`.
+    pub auto_delegate: bool,
+    /// With `auto_delegate`, whether a first pass of the supervisor's own
+    /// turn turns the message into the team's task: `true` by default; else
+    /// the team is handed the message's text.
+    pub refine_task: bool,
+    /// The instruction that first pass is given after the supervisor's
+    /// prompt, when not the implementation's own.
+    pub refine_instruction: Option<String>,
+    /// The message meant for a delegation run in the background, which no
+    /// delegation of this implementation posts yet: kept as given.
+    pub delegation_message: Option<String>,
 }
 
 impl Default for SupervisorOptions {
@@ -50,6 +69,10 @@ impl Default for SupervisorOptions {
             share_channels: None,
             task_timeout: Duration::from_secs(120),
             max_revisions: 3,
+            auto_delegate: false,
+            refine_task: true,
+            refine_instruction: None,
+            delegation_message: Some("I'm dispatching my team to work on this.".to_owned()),
         }
     }
 }
@@ -64,6 +87,10 @@ impl Default for SupervisorOptions {
 /// supervised: the supervisor frames the first task, judges each step
 /// through `submit_verdict` and frames the next one, a rejected step
 /// reworked with its feedback. The call answers once the workers did.
+/// With `auto_delegate`, no tool: the supervisor's turns in the room run
+/// the team on each message, a first pass of its own turn turning the
+/// message into the team's task unless `refine_task` is off, then the
+/// supervisor answers the message from the workers' results.
 ///
 /// Its agents are each given live or named by the id of an agent the kit
 /// holds. Elsewhere, the supervisor answers as itself.
@@ -124,13 +151,18 @@ impl Supervisor {
     ///
     /// # Errors
     ///
-    /// None yet: [`RoomKitError::Value`], Python's `ValueError`, is kept for
-    /// a combination of options a supervisor refuses.
+    /// [`RoomKitError::Value`], Python's `ValueError`, for `auto_delegate`
+    /// with no `strategy`.
     pub fn new(
         supervisor: impl Into<StrategyAgent>,
         workers: Vec<StrategyAgent>,
         options: SupervisorOptions,
     ) -> Result<Self, RoomKitError> {
+        if options.auto_delegate && options.strategy.is_none() {
+            return Err(RoomKitError::Value(
+                "auto_delegate=True requires strategy to be set".to_owned(),
+            ));
+        }
         Ok(Self {
             named: std::iter::once(supervisor.into()).chain(workers).collect(),
             options,
@@ -167,11 +199,29 @@ impl Supervisor {
             task_timeout: self.options.task_timeout,
             max_revisions: self.options.max_revisions,
         });
-        let entries = match self.options.strategy {
-            Some(strategy) => vec![team::entry(team, strategy)],
-            None => per_worker::entries(&team),
-        };
-        kit.register_room_tools(&supervisor.channel_id, room_id, entries, owner)?;
+        match self.options.strategy {
+            Some(strategy) if self.options.auto_delegate => {
+                // Kept by the room's owner, never on the shared supervisor
+                // (RFC §10.6.1): it answers as itself in every other room.
+                let turns: Arc<dyn TurnRunner<S>> = Arc::new(DelegatingTurns {
+                    team,
+                    strategy,
+                    refine: self.options.refine_task,
+                    instruction: self.options.refine_instruction.clone(),
+                });
+                kit.inner
+                    .turn_runners
+                    .take(room_id, &supervisor.channel_id, turns, owner)?;
+            }
+            Some(strategy) => {
+                let entries = vec![team::entry(team, strategy)];
+                kit.register_room_tools(&supervisor.channel_id, room_id, entries, owner)?;
+            }
+            None => {
+                let entries = per_worker::entries(&team);
+                kit.register_room_tools(&supervisor.channel_id, room_id, entries, owner)?;
+            }
+        }
         let mut state = ConversationState::new();
         "supervisor".clone_into(&mut state.phase);
         state.active_agent_id = Some(supervisor.channel_id);

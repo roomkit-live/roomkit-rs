@@ -27,6 +27,7 @@
 //! shown (RFC §6.4: a streamed segment, once delivered, is not taken back).
 
 mod loop_end;
+mod passes;
 mod reader;
 mod segments;
 

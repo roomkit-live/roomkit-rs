@@ -35,8 +35,8 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, EventDirection, EventId, EventSource,
-    EventUpdates, Metadata, RoomEvent, RoomId,
+    ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, EventContent, EventDirection, EventId,
+    EventSource, EventType, EventUpdates, Metadata, RoomEvent, RoomId,
 };
 use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, ROW_HIDDEN, ROW_WITHHELD, StreamTarget};
 use serde_json::Value;
@@ -49,6 +49,7 @@ use crate::channel::ChannelError;
 use crate::context::{self, Adopting};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
+use crate::turn_runners::{FirstPass, Then};
 use crate::turns::{OwnerTurn, RemoteItem, record_of};
 
 /// The error of a call a stream's reader stopped before it ended.
@@ -67,6 +68,9 @@ const ROUND_FAILED: &str = "tool round failed";
 #[derive(Debug)]
 pub(crate) struct KeptStream {
     pub(crate) turn: OwnerTurn,
+    /// What follows the turn when it is a strategy's first pass, read with
+    /// its text kept out of the room ([`Taken::Passes`](crate::turn_runners::Taken::Passes)).
+    pub(crate) then: Option<Then>,
 }
 
 /// What a read of the turn's response gave.
@@ -129,16 +133,36 @@ pub(crate) async fn read<S: ConversationStore>(
     stops: Stops,
     read: StreamRead,
 ) -> Outcome {
+    let Some(mut kept) = kept else {
+        let error = ErrorRecord::new("ChannelError", "the turn's stream is gone");
+        return Outcome::Failed(error);
+    };
+    if let Some(then) = kept.then.take() {
+        return super::passes::read(inner, kept, then, stops, read).await;
+    }
+    let (output, _) = Box::pin(read_kept(inner, kept, stops, read, false)).await;
+    ChannelOutcome::Output(Box::new(output)).into()
+}
+
+/// Reads `kept` as [`read`] does: its output, and, for a strategy's first
+/// pass (`first_pass`), what the pass gave. A first pass has no target,
+/// its text is kept out of the room, its calls stored as any turn's, and
+/// its record is written on no message (Python's `persist_tool_calls`,
+/// RFC §19.7.3).
+pub(super) async fn read_kept<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    kept: KeptStream,
+    stops: Stops,
+    read: StreamRead,
+    first_pass: bool,
+) -> (ChannelOutput, Option<FirstPass>) {
     let StreamRead {
         responder,
         answers,
         target,
         correlation_id,
     } = read;
-    let Some(kept) = kept else {
-        let error = ErrorRecord::new("ChannelError", "the turn's stream is gone");
-        return Outcome::Failed(error);
-    };
+    let target = target.filter(|_| !first_pass);
     let (pulls, pulled) = mpsc::unbounded_channel();
     let delivery = DeliveryStream::new(pulls);
     let channel = target
@@ -160,6 +184,7 @@ pub(crate) async fn read<S: ConversationStore>(
         over: None,
         read_through: false,
         in_flight: None,
+        kept_out: first_pass.then(String::new),
     };
     let placeholder = producer.segments.placeholder();
     let (done, reader_done) = oneshot::channel::<()>();
@@ -185,10 +210,52 @@ pub(crate) async fn read<S: ConversationStore>(
     if let Some(entry) = producer.segments.turn_entry() {
         add_turn(&mut output.response_metadata, &responder.channel_id, entry);
     }
+    if let Some(answer) = producer.kept_out.take() {
+        let pass = first_pass_of(
+            answer,
+            producer.segments.record(),
+            &responder,
+            &producer.room_id,
+        );
+        return (output, Some(pass));
+    }
     if let Some((event_id, metadata)) = producer.segments.owed_record() {
         write_record(inner, &producer.room_id, &event_id, metadata).await;
     }
-    ChannelOutcome::Output(Box::new(output)).into()
+    (output, None)
+}
+
+/// What a first pass gave: its answer only when its turn completed, the
+/// text it ended on; a turn its round cap, deadline or budget cut short
+/// has none, its narration no answer, which is logged unless someone
+/// stopped it (Python's `_handed_on`, RFC §6.4).
+fn first_pass_of(
+    answer: String,
+    record: Option<&Metadata>,
+    responder: &ChannelBinding,
+    room_id: &RoomId,
+) -> FirstPass {
+    let record = record.cloned().unwrap_or_default();
+    let end = record
+        .get("loop_end_reason")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let completed = end.as_deref().is_none_or(|end| end == "completed");
+    if !completed && end.as_deref() != Some(CANCELLED) {
+        tracing::warn!(
+            target: "roomkit::tasks",
+            channel_id = %responder.channel_id,
+            room_id = %room_id,
+            "Turn of {} in room {room_id} ended {}: no answer to hand on",
+            responder.channel_id,
+            end.as_deref().unwrap_or_default()
+        );
+    }
+    FirstPass {
+        answer: if completed { answer } else { String::new() },
+        end,
+        record,
+    }
 }
 
 /// Puts `channel_id`'s turn `entry` under `record`'s `turns`, beside the
@@ -228,7 +295,7 @@ where
 /// What stops a read from outside: the operation's stop of this read, the
 /// kit's close, which cuts every turn as it starts, and the cut of the
 /// held task whose work the read runs within (RFC §23.3).
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Stops {
     /// `true` once the operation stops the read.
     pub(crate) read: watch::Receiver<bool>,
@@ -311,6 +378,9 @@ struct Producer {
     read_through: bool,
     /// What a read in flight when the reader stopped gave.
     in_flight: Option<Read>,
+    /// For a strategy's first pass, whose text is kept out of the room: the
+    /// text it wrote since its last call (Python's `_ToolRowsOnly`).
+    kept_out: Option<String>,
 }
 
 impl Producer {
@@ -670,6 +740,16 @@ impl Producer {
     /// delivery skips the target, which is handed it once stored, if it
     /// still reads.
     async fn commit_as(&mut self, row: RoomEvent, streamed: bool) {
+        if let Some(kept_out) = self.kept_out.as_mut() {
+            if row.r#type == EventType::Message {
+                if let EventContent::Text(text) = &row.content {
+                    text.body.clone_into(kept_out);
+                }
+                return;
+            }
+            // A call's row: the text before it was no answer.
+            kept_out.clear();
+        }
         let entry = Entry::Row {
             room_id: self.room_id.clone(),
             event: Box::new(row),
