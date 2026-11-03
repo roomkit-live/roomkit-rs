@@ -1373,3 +1373,10 @@ fn transition_options_defaults_as_python() {
     // roomkit.ConversationState.transition(metadata) = None
     assert!(defaults.metadata.is_empty());
 }
+
+#[test]
+fn console_tool_auditor_options_defaults_as_python() {
+    let defaults = orchestration::ConsoleToolAuditorOptions::default();
+    // roomkit.orchestration.ConsoleToolAuditor.__init__(level) = 20
+    assert_eq!(defaults.level, tracing::Level::INFO);
+}

@@ -23,7 +23,7 @@
 
 [rules]
 # Rust's casing of an acronym in a type's name (rust-lang RFC 430).
-acronyms = { Ai = "AI", OpenAi = "OpenAI", Mcp = "MCP", Sqlite = "SQLite" }
+acronyms = { Ai = "AI", OpenAi = "OpenAI", Mcp = "MCP", Sqlite = "SQLite", Jsonl = "JSONL" }
 # What a `Duration` drops from a Python name (decision 3).
 duration_suffix = "_seconds"
 # The error variants a Python builtin exception stands for (convention 5),

@@ -891,9 +891,11 @@ dependencies = [
  "defmt",
  "jiff-core",
  "jiff-static",
+ "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "windows-link",
 ]
 
 [[package]]
@@ -1336,6 +1338,7 @@ version = "0.1.0"
 dependencies = [
  "futures-core",
  "getrandom 0.4.3",
+ "jiff",
  "pretty_assertions",
  "roomkit-ai",
  "roomkit-core",

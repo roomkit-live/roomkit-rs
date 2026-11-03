@@ -24,6 +24,10 @@ serde_json.workspace = true
 # A verification request's secret and its hash (RFC §11.7.7), as the
 # Python implementation draws and hashes them.
 getrandom.workspace = true
+# A session audit's transcript shows each instant in the machine's time
+# zone, as Python's `astimezone()` (RFC §15.8.2): the zone of `TZ` or of
+# /etc/localtime, read from the system's zoneinfo.
+jiff = { workspace = true, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 scrypt.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
