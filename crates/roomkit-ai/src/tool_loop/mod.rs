@@ -33,6 +33,7 @@ mod intents;
 mod resilience;
 mod rules;
 mod spans;
+mod thinking;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -51,6 +52,7 @@ pub(crate) use self::hooks::Adopted;
 use self::hooks::Ran;
 pub(crate) use self::resilience::Resilience;
 use self::rules::{Limits, final_round_reason};
+use self::thinking::{ThinkingCoalescer, ThinkingWindow};
 use crate::author_images::refuses_content;
 use crate::loop_events::DeclaredTool;
 use crate::memory::after_memory;
@@ -156,6 +158,8 @@ pub(crate) struct Loop<P> {
     /// The turn's reasoning effort, handed to the provider.
     pub(crate) thinking_budget: Option<i64>,
     pub(crate) enable_thinking: Option<bool>,
+    /// How long and how many characters a round's reasoning batches for.
+    pub(crate) thinking_coalesce: (f64, usize),
     pub(crate) reasoning_effort: Option<String>,
     /// The kit's turn, whose hooks each call runs; `None` outside the kit.
     pub(crate) turn: Option<TurnHost>,
@@ -188,6 +192,38 @@ pub(crate) struct Loop<P> {
 }
 
 impl<P: AiProvider> Loop<P> {
+    /// Round `round`'s generation, its reasoning observed and kept in
+    /// `spent`.
+    async fn read_round(
+        &mut self,
+        messages: &[Message],
+        asked: (Vec<crate::tools::AiTool>, Option<String>),
+        (steering, out, prefix, round): (
+            &Steering,
+            &Yielder<Result<TurnItem, ProviderError>>,
+            &str,
+            u32,
+        ),
+        spent: &mut Spent,
+    ) -> Result<Generation, Failed> {
+        let mut window = self.thinking_window(round);
+        let reading = (steering, out, prefix, &mut window);
+        let read = self.generate(messages, asked, reading).await;
+        spent.add_thinking(window.text());
+        read
+    }
+
+    /// The window of round `round`'s reasoning, for the turn's observers.
+    fn thinking_window(&self, round: u32) -> ThinkingWindow {
+        let (flush_ms, flush_chars) = self.thinking_coalesce;
+        ThinkingWindow::new(
+            self.turn.as_ref(),
+            (&self.context.room_id, &self.context.channel_id),
+            round,
+            ThinkingCoalescer::new(flush_ms, flush_chars),
+        )
+    }
+
     /// The loop's items on `conversation`, as its reader pulls them.
     pub(crate) fn run(mut self, conversation: Vec<Message>) -> TurnItems<'static> {
         items(move |out| {
@@ -231,8 +267,8 @@ impl<P: AiProvider> Loop<P> {
                     .await;
             }
             let asked = (declared.clone(), system_prompt.clone());
-            let reading = (&steering, &out, prefix.as_str());
-            let read = self.generate(&messages, asked, reading).await;
+            let reading = (&steering, &out, prefix.as_str(), round);
+            let read = self.read_round(&messages, asked, reading, &mut spent).await;
             let read = read.and_then(|read| self.counted(read, &mut spent, &mut limits));
             let mut generation = match read {
                 Ok(generation) => generation,
@@ -648,6 +684,8 @@ struct Spent {
     calls: u32,
     declared: Vec<DeclaredTool>,
     started: Instant,
+    /// Each round's reasoning, those that reasoned.
+    thinking: Vec<String>,
 }
 
 impl Spent {
@@ -663,6 +701,14 @@ impl Spent {
             calls: 0,
             declared,
             started: Instant::now(),
+            thinking: Vec::new(),
+        }
+    }
+
+    /// Keeps a round's reasoning, when it reasoned.
+    fn add_thinking(&mut self, thinking: String) {
+        if !thinking.is_empty() {
+            self.thinking.push(thinking);
         }
     }
 

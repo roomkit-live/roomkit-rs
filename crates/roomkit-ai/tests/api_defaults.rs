@@ -86,6 +86,10 @@ fn ai_channel_options_defaults_as_python() {
     assert!(defaults.thinking_budget.is_none());
     // roomkit.AIChannel.__init__(enable_thinking) = None
     assert!(defaults.enable_thinking.is_none());
+    // roomkit.AIChannel.__init__(thinking_coalesce_ms) = 80.0
+    assert!((defaults.thinking_coalesce_ms - 80.0).abs() < f64::EPSILON);
+    // roomkit.AIChannel.__init__(thinking_coalesce_chars) = 256
+    assert_eq!(defaults.thinking_coalesce_chars, 256);
     // roomkit.AIChannel.__init__(config_provider) = None
     assert!(defaults.config_provider.is_none());
     // roomkit.AIChannel.__init__(retry_policy) = None

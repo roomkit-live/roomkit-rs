@@ -15,6 +15,7 @@ use roomkit::model::RetryPolicy;
 use roomkit_core::rules::transcript::Message;
 
 use super::generation::{Failed, Generation};
+use super::thinking::ThinkingWindow;
 use super::{Loop, TurnItem};
 use crate::error::AiError;
 use crate::provider::{AiContext, AiProvider, DynAiProvider, ProviderError};
@@ -23,11 +24,13 @@ use crate::stream::Yielder;
 use crate::tools::AiTool;
 
 /// What a round's generation is read with: the loop's steering, its
-/// reader, the text a round replays of the round before.
+/// reader, the text a round replays of the round before, its reasoning's
+/// window.
 pub(super) type Reading<'a> = (
     &'a Steering,
     &'a Yielder<Result<TurnItem, ProviderError>>,
     &'a str,
+    &'a mut ThinkingWindow,
 );
 
 /// How a channel's generations recover from their provider's refusals:
@@ -101,7 +104,7 @@ impl<P: AiProvider> Loop<P> {
         (tools, system_prompt): (Vec<AiTool>, Option<String>),
         reading: Reading<'_>,
     ) -> Result<Generation, Failed> {
-        let (steering, out, prefix) = reading;
+        let (steering, out, prefix, window) = reading;
         let mut context = AiContext {
             tools,
             ..self.round_context(messages, system_prompt)
@@ -114,7 +117,8 @@ impl<P: AiProvider> Loop<P> {
         let mut attempt = 0;
         let last = loop {
             let stream = self.provider.generate_structured_stream(&context);
-            let failure = match Generation::read(stream, steering, out, prefix).await {
+            let reading = (steering, out, prefix, &mut *window);
+            let failure = match Generation::read(stream, reading).await {
                 Ok(generation) => return Ok(generation),
                 Err(failure) => failure,
             };
@@ -147,7 +151,10 @@ impl<P: AiProvider> Loop<P> {
             attempt += 1;
         };
         match self.resilience.fallback_provider.clone() {
-            Some(fallback) => fall_back(&*fallback, &context, last, reading).await,
+            Some(fallback) => {
+                let reading = (steering, out, prefix, window);
+                fall_back(&*fallback, &context, last, reading).await
+            }
             None => Err(last),
         }
     }
@@ -162,11 +169,11 @@ async fn fall_back(
     fallback: &dyn DynAiProvider,
     context: &AiContext,
     primary: Failed,
-    (steering, out, prefix): Reading<'_>,
+    reading: Reading<'_>,
 ) -> Result<Generation, Failed> {
     tracing::warn!(target: "roomkit::ai", provider = fallback.dyn_name(), "trying the fallback provider");
     let stream = fallback.dyn_generate_structured_stream(context);
-    match Generation::read(stream, steering, out, prefix).await {
+    match Generation::read(stream, reading).await {
         Err(failure) if !failure.streamed => {
             tracing::error!(target: "roomkit::ai", error = %failure.error, "the fallback provider failed too");
             Err(Failed {

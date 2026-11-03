@@ -1,0 +1,279 @@
+//! A round's reasoning as the room's observers read it (RFC §6.7, §9.2):
+//! `THINKING_START`, `THINKING_DELTA` and `THINKING_END` ephemeral events,
+//! and `ON_AI_THINKING`. Python's `_StreamRound._add_thinking`,
+//! `_end_thinking`, `_close_thinking_window`, `_publish_thinking_event` and
+//! `_ThinkingCoalescer`.
+
+use roomkit::TurnHost;
+use roomkit::model::{ChannelId, Metadata, RoomId};
+use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
+use serde_json::Value;
+use tokio::time::Instant;
+
+use crate::ThinkingEvent;
+
+/// The most of a reasoning an ephemeral event carries: a flush past it goes
+/// in several, a close cuts its block there. Python's
+/// `THINKING_PREVIEW_LIMIT`.
+const THINKING_PREVIEW_LIMIT: usize = 1000;
+
+/// Batches a model's reasoning deltas into one publish per window, of time
+/// or of size; a window of 0 ms publishes each as it comes. Python's
+/// `_ThinkingCoalescer`.
+#[derive(Debug)]
+pub(crate) struct ThinkingCoalescer {
+    flush_ms: f64,
+    flush_chars: usize,
+    pending: String,
+    pending_chars: usize,
+    last_publish: Instant,
+}
+
+impl ThinkingCoalescer {
+    pub(crate) fn new(flush_ms: f64, flush_chars: usize) -> Self {
+        Self {
+            flush_ms,
+            flush_chars,
+            pending: String::new(),
+            pending_chars: 0,
+            last_publish: Instant::now(),
+        }
+    }
+
+    /// Keeps `delta`; what to publish now, nothing while the window holds.
+    pub(crate) fn add(&mut self, delta: &str) -> Vec<String> {
+        self.pending.push_str(delta);
+        self.pending_chars += delta.chars().count();
+        let elapsed_ms = self.last_publish.elapsed().as_secs_f64() * 1000.0;
+        if self.flush_ms <= 0.0
+            || self.pending_chars >= self.flush_chars
+            || elapsed_ms >= self.flush_ms
+        {
+            return self.flush();
+        }
+        Vec::new()
+    }
+
+    /// What is kept, cut at the preview limit so that no publish truncates
+    /// it, and a fresh window.
+    pub(crate) fn flush(&mut self) -> Vec<String> {
+        if self.pending.is_empty() {
+            return Vec::new();
+        }
+        let text = std::mem::take(&mut self.pending);
+        self.pending_chars = 0;
+        self.last_publish = Instant::now();
+        let chars: Vec<char> = text.chars().collect();
+        chars
+            .chunks(THINKING_PREVIEW_LIMIT)
+            .map(|piece| piece.iter().collect())
+            .collect()
+    }
+}
+
+/// Who observes a turn's reasoning, a turn run by a kit's.
+#[derive(Clone)]
+struct Observers {
+    turn: TurnHost,
+    room_id: RoomId,
+    channel_id: ChannelId,
+}
+
+impl Observers {
+    /// Publishes `event_type` with `thinking`, best-effort.
+    async fn publish(&self, event_type: EphemeralEventType, thinking: &str, round: u32) {
+        let preview: String = thinking.chars().take(THINKING_PREVIEW_LIMIT).collect();
+        let mut data = Metadata::new();
+        data.insert("thinking".to_owned(), Value::from(preview));
+        data.insert(
+            "thinking_length".to_owned(),
+            Value::from(thinking.chars().count()),
+        );
+        data.insert("round".to_owned(), Value::from(round));
+        data.insert(
+            "channel_id".to_owned(),
+            Value::from(self.channel_id.to_string()),
+        );
+        let event = EphemeralEvent {
+            channel_id: Some(self.channel_id.clone()),
+            data,
+            ..EphemeralEvent::new(
+                self.room_id.clone(),
+                event_type,
+                self.channel_id.to_string(),
+            )
+        };
+        self.turn.publish_ephemeral(event).await;
+    }
+}
+
+/// A round's reasoning, each block between what ends it a window of its own:
+/// the text, a call, the end of the generation, a failure, a stop. Each
+/// `THINKING_END` carries its own block; `text` is the round's whole.
+pub(super) struct ThinkingWindow {
+    observers: Option<Observers>,
+    round: u32,
+    coalescer: ThinkingCoalescer,
+    started: bool,
+    chunks: Vec<String>,
+    published: usize,
+}
+
+impl ThinkingWindow {
+    /// The window of round `round` of a turn in `room_id`, on `turn`'s kit,
+    /// none observing outside a kit.
+    pub(super) fn new(
+        turn: Option<&TurnHost>,
+        (room_id, channel_id): (&RoomId, &ChannelId),
+        round: u32,
+        coalescer: ThinkingCoalescer,
+    ) -> Self {
+        Self {
+            observers: turn.map(|turn| Observers {
+                turn: turn.clone(),
+                room_id: room_id.clone(),
+                channel_id: channel_id.clone(),
+            }),
+            round,
+            coalescer,
+            started: false,
+            chunks: Vec::new(),
+            published: 0,
+        }
+    }
+
+    /// Adds a piece of reasoning, its window opening: `ON_AI_THINKING` and
+    /// `THINKING_START`, then its deltas as the coalescer lets them go.
+    pub(super) async fn add(&mut self, thinking: &str) {
+        let Some(observers) = self.observers.clone() else {
+            self.chunks.push(thinking.to_owned());
+            return;
+        };
+        if !self.started {
+            self.started = true;
+            let event = ThinkingEvent {
+                round_index: self.round,
+                ..ThinkingEvent::new(observers.room_id.clone(), observers.channel_id.clone(), "")
+            };
+            observers.turn.observe_turn(&event, || {});
+            let start = EphemeralEventType::ThinkingStart;
+            observers.publish(start, "", self.round).await;
+        }
+        self.chunks.push(thinking.to_owned());
+        for delta in self.coalescer.add(thinking) {
+            let event_type = EphemeralEventType::ThinkingDelta;
+            observers.publish(event_type, &delta, self.round).await;
+        }
+    }
+
+    /// Closes the window: what the coalescer holds, then `THINKING_END`
+    /// with its block. Nothing when none is open.
+    pub(super) async fn end(&mut self) {
+        let Some(observers) = self.observers.clone() else {
+            return;
+        };
+        let Some((deltas, block)) = self.closed() else {
+            return;
+        };
+        for delta in deltas {
+            let event_type = EphemeralEventType::ThinkingDelta;
+            observers.publish(event_type, &delta, self.round).await;
+        }
+        let end = EphemeralEventType::ThinkingEnd;
+        observers.publish(end, &block, self.round).await;
+    }
+
+    /// The deltas held and the block of the window open, which it closes;
+    /// `None` with none open.
+    fn closed(&mut self) -> Option<(Vec<String>, String)> {
+        if !self.started || self.chunks.is_empty() {
+            return None;
+        }
+        self.started = false;
+        let block = self
+            .chunks
+            .get(self.published..)
+            .unwrap_or_default()
+            .concat();
+        self.published = self.chunks.len();
+        Some((self.coalescer.flush(), block))
+    }
+
+    /// The round's reasoning, every block's.
+    pub(super) fn text(&self) -> String {
+        self.chunks.concat()
+    }
+}
+
+impl Drop for ThinkingWindow {
+    /// A reader that stopped drops the round mid-window: its close goes out
+    /// all the same (Python's `close`, on every abnormal exit of a round).
+    fn drop(&mut self) {
+        let Some(observers) = self.observers.clone() else {
+            return;
+        };
+        let Some((deltas, block)) = self.closed() else {
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let round = self.round;
+        runtime.spawn(async move {
+            for delta in deltas {
+                let event_type = EphemeralEventType::ThinkingDelta;
+                observers.publish(event_type, &delta, round).await;
+            }
+            let end = EphemeralEventType::ThinkingEnd;
+            observers.publish(end, &block, round).await;
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    // Python: tests/test_ai_streaming_thinking.py::test_thinking_coalescer_batches_by_size_without_loss
+    #[test]
+    fn thinking_coalescer_batches_by_size_without_loss() {
+        let mut coalescer = ThinkingCoalescer::new(1e9, 16);
+        let mut published = Vec::new();
+        for _ in 0..10 {
+            published.extend(coalescer.add("aaaa"));
+        }
+        published.extend(coalescer.flush());
+        assert_eq!(published.len(), 3);
+        assert_eq!(published.concat(), "a".repeat(40));
+    }
+
+    // Python: tests/test_ai_streaming_thinking.py::test_thinking_coalescer_disabled_publishes_each_delta
+    #[test]
+    fn thinking_coalescer_disabled_publishes_each_delta() {
+        let mut coalescer = ThinkingCoalescer::new(0.0, 256);
+        assert_eq!(coalescer.add("a"), ["a"]);
+        assert_eq!(coalescer.add("b"), ["b"]);
+        assert_eq!(coalescer.flush(), Vec::<String>::new());
+    }
+
+    // Python: tests/test_ai_streaming_thinking.py::test_thinking_coalescer_flush_splits_at_preview_limit
+    #[test]
+    fn thinking_coalescer_flush_splits_at_preview_limit() {
+        let mut coalescer = ThinkingCoalescer::new(60_000.0, 1_000_000);
+        let text = "é".repeat(THINKING_PREVIEW_LIMIT * 2 + 7);
+        assert_eq!(coalescer.add(&text), Vec::<String>::new());
+        let published = coalescer.flush();
+        let sizes: Vec<usize> = published.iter().map(|p| p.chars().count()).collect();
+        assert_eq!(sizes, [THINKING_PREVIEW_LIMIT, THINKING_PREVIEW_LIMIT, 7]);
+        assert_eq!(published.concat(), text);
+    }
+
+    // Python: tests/test_ai_streaming_thinking.py::test_thinking_coalescer_flush_empty_is_noop
+    #[test]
+    fn thinking_coalescer_flush_empty_is_noop() {
+        let mut coalescer = ThinkingCoalescer::new(80.0, 256);
+        assert_eq!(coalescer.flush(), Vec::<String>::new());
+    }
+}

@@ -16,6 +16,7 @@ mod room_turns;
 mod servers;
 mod steering;
 mod support;
+mod thinking;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

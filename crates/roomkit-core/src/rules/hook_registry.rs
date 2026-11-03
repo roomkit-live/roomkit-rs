@@ -162,6 +162,10 @@ pub enum HookTrigger {
     /// A handoff moved the room's phase (RFC §19.6): its payload is as
     /// `OnHandoff`'s; a phase saved by other means fires it not.
     OnPhaseTransition,
+    /// An AI channel's model began to reason (RFC §6.7, §9.2): its payload
+    /// is a `ThinkingEvent`, observed. A turn fires it, on the turn executor
+    /// hosting the channel.
+    OnAiThinking,
 }
 
 impl HookTrigger {
@@ -210,7 +214,8 @@ impl HookTrigger {
             | Self::OnParticipantUpdated
             | Self::OnVerificationCompleted
             | Self::OnVerificationEnded
-            | Self::OnAiResponse => HookExecution::Async,
+            | Self::OnAiResponse
+            | Self::OnAiThinking => HookExecution::Async,
         }
     }
 
@@ -257,6 +262,7 @@ impl HookTrigger {
             | Self::AfterToolRound
             | Self::BeforeAiGeneration
             | Self::OnAiResponse
+            | Self::OnAiThinking
             | Self::OnVerificationRequired => false,
         }
     }
@@ -274,7 +280,8 @@ impl HookTrigger {
             | Self::OnUserInputRequired
             | Self::AfterToolRound
             | Self::BeforeAiGeneration
-            | Self::OnAiResponse => true,
+            | Self::OnAiResponse
+            | Self::OnAiThinking => true,
             Self::BeforeBroadcast
             | Self::AfterBroadcast
             | Self::OnEventUpdated
@@ -1015,6 +1022,8 @@ fn payload_of(trigger: HookTrigger) -> &'static str {
         "an AIGenerationEvent"
     } else if trigger == HookTrigger::OnAiResponse {
         "an AIResponseEvent"
+    } else if trigger == HookTrigger::OnAiThinking {
+        "a ThinkingEvent"
     } else {
         "a RoomEvent"
     }

@@ -105,7 +105,7 @@ pub use self::handoff::{SetupHandoffOptions, setup_handoff};
 pub use self::human_input::{AskOptions, HumanInputToolHandler, HumanInputToolHandlerOptions};
 pub use self::loop_events::{
     AiGenerationEvent, AiResponseEvent, DeclaredTool, FromToolOptions, GenerationPurpose,
-    ToolDeclarationOrigin, ToolRoundEvent, response_transcript,
+    ThinkingEvent, ToolDeclarationOrigin, ToolRoundEvent, response_transcript,
 };
 pub use self::mock::{MockAiProvider, MockAiProviderOptions};
 #[doc(hidden)]

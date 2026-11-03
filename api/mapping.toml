@@ -599,7 +599,7 @@ python = "roomkit.HookTrigger"
 members = [
     "AFTER_TTS",
     "BEFORE_BRIDGE_AUDIO", "BEFORE_BRIDGE_VIDEO",
-    "ON_ACTIVE_SPEAKER_CHANGED", "ON_AI_THINKING",
+    "ON_ACTIVE_SPEAKER_CHANGED",
     "ON_BACKCHANNEL", "ON_BARGE_IN", "ON_CONFERENCE_PARTICIPANT_JOINED",
     "ON_CONFERENCE_PARTICIPANT_LEFT", "ON_CONFERENCE_TRACK_MUTED",
     "ON_CONFERENCE_TRACK_PUBLISHED", "ON_CONFERENCE_TRACK_UNMUTED",
@@ -941,7 +941,7 @@ reason = "Python's `async with` (`__aenter__`, `__aexit__`): Rust has no async c
 [[missing]]
 python = "roomkit.AIChannel.__init__"
 params = [
-    "continuation", "thinking_coalesce_ms", "thinking_coalesce_chars",
+    "continuation",
     "script_executor", "sandbox",
     "external_tool_handler",
     "response_schema", "evict_threshold_tokens", "enable_planning",

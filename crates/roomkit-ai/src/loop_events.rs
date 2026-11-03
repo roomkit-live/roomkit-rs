@@ -346,6 +346,43 @@ impl TurnPayload for AiResponseEvent {
     const TRIGGER: HookTrigger = HookTrigger::OnAiResponse;
 }
 
+/// An AI channel's model began to reason (RFC §6.7, §9.2): what
+/// `ON_AI_THINKING` hands, Python's `ThinkingEvent(room_id, channel_id,
+/// thinking, round_index=0, timestamp=<factory>)`. The same reasoning goes
+/// out as ephemeral events for live screens; the hook observes it with no
+/// realtime backend.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ThinkingEvent {
+    /// The room whose turn is reasoning.
+    pub room_id: RoomId,
+    /// The channel doing the reasoning.
+    pub channel_id: ChannelId,
+    /// The reasoning text; empty when the model only began.
+    pub thinking: String,
+    /// The tool-loop round this reasoning belongs to.
+    pub round_index: u32,
+    /// When the reasoning was observed.
+    pub timestamp: Timestamp,
+}
+
+impl ThinkingEvent {
+    /// The reasoning `thinking` of `channel_id` in `room_id`, in its first
+    /// round, now; other fields by struct update.
+    pub fn new(room_id: RoomId, channel_id: ChannelId, thinking: impl Into<String>) -> Self {
+        Self {
+            room_id,
+            channel_id,
+            thinking: thinking.into(),
+            round_index: 0,
+            timestamp: SystemEnvironment.now(),
+        }
+    }
+}
+
+impl TurnPayload for ThinkingEvent {
+    const TRIGGER: HookTrigger = HookTrigger::OnAiThinking;
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;

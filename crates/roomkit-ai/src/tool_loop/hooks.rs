@@ -179,6 +179,7 @@ impl<P: AiProvider> Loop<P> {
             streaming: true,
             segments,
             declared_tools: spent.declared.clone(),
+            thinking: spent.thinking.join("\n\n"),
             ..AiResponseEvent::new(self.context.channel_id.clone(), content)
         };
         let mut data = Metadata::new();

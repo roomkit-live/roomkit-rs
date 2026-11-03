@@ -1271,9 +1271,17 @@ pub(crate) trait TurnKit: Send + Sync {
     /// The application's readers of an author's media the kit was built
     /// with, which its AI channels read (RFC §6.4).
     fn media(&self) -> crate::media::KitMedia;
+
+    /// The backend the kit publishes its ephemeral events with; none once
+    /// it is gone.
+    fn realtime(&self) -> Option<Arc<dyn crate::realtime::RealtimeBackend>>;
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
+    fn realtime(&self) -> Option<Arc<dyn crate::realtime::RealtimeBackend>> {
+        self.upgrade().map(|inner| Arc::clone(&inner.realtime))
+    }
+
     fn media(&self) -> crate::media::KitMedia {
         self.upgrade()
             .map(|inner| inner.media.clone())

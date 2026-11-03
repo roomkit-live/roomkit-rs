@@ -6,8 +6,8 @@ use std::collections::{BTreeSet, HashSet};
 use roomkit::model::ToolCall;
 
 use super::TurnItem;
+use super::resilience::Reading;
 use crate::provider::{ProviderError, ProviderStream, StreamDone, StreamEvent, StreamToolCall};
-use crate::steering::Steering;
 use crate::stream::{Yielder, next};
 
 /// The most calls one generation's round runs: far above a model's
@@ -83,9 +83,7 @@ impl Generation {
     /// anything before it, and the text the room was handed.
     pub(super) async fn read(
         mut stream: ProviderStream<'_>,
-        steering: &Steering,
-        out: &Yielder<Result<TurnItem, ProviderError>>,
-        prefix: &str,
+        (steering, out, prefix, window): Reading<'_>,
     ) -> Result<Self, Failed> {
         let mut text = String::new();
         let mut delivered = String::new();
@@ -95,11 +93,13 @@ impl Generation {
         let mut streamed = false;
         while let Some(event) = next(&mut stream).await {
             if steering.cancelled() {
+                window.end().await;
                 return Ok(Self::cut(text, delivered));
             }
             let event = match event {
                 Ok(event) => event,
                 Err(error) => {
+                    window.end().await;
                     return Err(Failed {
                         error,
                         streamed,
@@ -110,11 +110,15 @@ impl Generation {
             streamed = true;
             match event {
                 StreamEvent::TextDelta(delta) => {
+                    window.end().await;
                     text.push_str(&delta.text);
                     let released = replayed.add(delta.text);
                     deliver(released, &mut delivered, out).await;
                 }
-                StreamEvent::ToolCall(call) => calls.push(call),
+                StreamEvent::ToolCall(call) => {
+                    window.end().await;
+                    calls.push(call);
+                }
                 StreamEvent::Done(ended) => {
                     done = ended;
                     break;
@@ -122,11 +126,13 @@ impl Generation {
                 // A delta with a signature alone reads as nothing here.
                 StreamEvent::ThinkingDelta(delta) => {
                     if !delta.thinking.is_empty() {
+                        window.add(&delta.thinking).await;
                         out.give(Ok(TurnItem::Thinking(delta.thinking))).await;
                     }
                 }
             }
         }
+        window.end().await;
         deliver(replayed.finish(), &mut delivered, out).await;
         Ok(Self {
             text,
