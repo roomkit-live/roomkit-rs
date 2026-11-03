@@ -1364,6 +1364,19 @@ fn conversation_router_options_defaults_as_python() {
 }
 
 #[test]
+fn loop_options_defaults_as_python() {
+    let defaults = orchestration::LoopOptions::default();
+    // roomkit.Loop.__init__(reviewers) = None
+    assert!(defaults.reviewers.is_empty());
+    // roomkit.Loop.__init__(reviewer) = None
+    assert!(defaults.reviewer.is_none());
+    // roomkit.Loop.__init__(max_iterations) = 3
+    assert_eq!(defaults.max_iterations, 3);
+    // roomkit.Loop.__init__(strategy) = None
+    assert!(defaults.strategy.is_none());
+}
+
+#[test]
 fn transition_options_defaults_as_python() {
     let defaults = orchestration::TransitionOptions::default();
     // roomkit.ConversationState.transition(to_agent) = None
