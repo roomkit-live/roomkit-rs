@@ -448,11 +448,9 @@ impl Channel for ScriptedChannel {
     }
 
     fn supports_streaming_delivery_for(&self, room_id: &RoomId) -> bool {
+        // Asked whatever the channel declares (README, `streams_in`).
         match &self.streams_in {
-            Some(rooms) => {
-                self.declaration.supports_streaming_delivery
-                    && rooms.iter().any(|room| room == room_id.as_str())
-            }
+            Some(rooms) => rooms.iter().any(|room| room == room_id.as_str()),
             None => self.declaration.supports_streaming_delivery,
         }
     }

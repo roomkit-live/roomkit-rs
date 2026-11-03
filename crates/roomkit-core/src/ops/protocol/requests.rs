@@ -382,7 +382,7 @@ pub enum ChannelRequest {
         /// Python implementation's `correlation_id`, one per read.
         correlation_id: String,
     },
-    /// Ask which of `channel_ids`, transports that declare they stream,
+    /// Ask which of `channel_ids`, the transports a response's rows reach,
     /// take a streamed response in `room_id` (RFC §6.1
     /// `supports_streaming_delivery_for`): a channel may hold streaming
     /// clients for one room and none for another. Answer

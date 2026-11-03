@@ -11,8 +11,9 @@
 //! stream draws none.
 //!
 //! The room is read again for the stream: its first transport that the
-//! response's rows reach and that streams (`supports_streaming_delivery`)
-//! reads it as it is written, the one streaming target of the response; no
+//! response's rows reach and that streams in the room
+//! (`supports_streaming_delivery_for`, asked of every such transport at
+//! each stream, whatever it declared) reads it as it is written, the one streaming target of the response; no
 //! target when the agent cannot write (RFC §7.5 rule 2). The driver hands
 //! each row the stream ends back as an [`Entry::Row`](crate::ops::Entry::Row),
 //! which commits as a response, through `BEFORE_BROADCAST` once (RFC
@@ -251,8 +252,8 @@ impl StreamRead {
         }
     }
 
-    /// Asks the transports the response's rows reach that declare they
-    /// stream whether they stream in the room as `context` holds it (RFC
+    /// Asks the transports the response's rows reach whether they stream
+    /// in the room as `context` holds it (RFC
     /// §6.1 `supports_streaming_delivery_for`); with none, reads the stream
     /// at once, with no target.
     fn ask(&mut self, cx: &mut Cx<'_>, budget: &ReentryBudget, context: Box<RoomContext>) {
@@ -383,21 +384,17 @@ impl StreamRead {
 
 /// The transports `job`'s response's rows reach in the room as `context`
 /// holds it, as a text answer from the agent plans (RFC §10.2 steps 2 and
-/// 3d), whose channels declare they stream, in plan order; none when the
-/// agent cannot write (RFC §7.5 rule 2) or is no longer bound.
+/// 3d), in plan order, each asked whether it streams in the room whatever
+/// it declared at registration, as Python asks every one (a WebSocket
+/// channel streams once a client connects); none when the agent cannot
+/// write (RFC §7.5 rule 2) or is no longer bound.
 fn candidates(cx: &Cx<'_>, job: &StreamJob, context: &RoomContext) -> Vec<ChannelId> {
     let Some(plan) = answer_plan(cx, job, context) else {
         return Vec::new();
     };
     plan.transports
         .into_iter()
-        .filter(|transport| {
-            transport.delivers
-                && cx
-                    .config
-                    .channel(&transport.binding.channel_id)
-                    .is_some_and(|declaration| declaration.supports_streaming_delivery)
-        })
+        .filter(|transport| transport.delivers)
         .map(|transport| transport.binding.channel_id)
         .collect()
 }

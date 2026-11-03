@@ -1197,7 +1197,13 @@ impl Sim {
             }
             // A channel that declares it streams streams in every room.
             Request::Channel(ChannelRequest::StreamsIn { channel_ids, .. }) => {
-                Outcome::Channel(ChannelOutcome::StreamsIn(channel_ids))
+                let streams = |id: &ChannelId| {
+                    self.config
+                        .channel(id)
+                        .is_some_and(|declaration| declaration.supports_streaming_delivery)
+                };
+                let streaming = channel_ids.into_iter().filter(streams).collect();
+                Outcome::Channel(ChannelOutcome::StreamsIn(streaming))
             }
             Request::Channel(
                 ChannelRequest::RoomAttached { .. } | ChannelRequest::RoomDetached { .. },
