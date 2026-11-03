@@ -48,7 +48,7 @@ pub(super) async fn run_reviewers<S: ConversationStore>(
     let reviews = reviewers
         .iter()
         .map(|reviewer| review(kit, room_id, reviewer, &prompt, WorkerStrategy::Parallel));
-    join_all(reviews.collect()).await.into_iter().collect()
+    try_join_all(reviews.collect()).await
 }
 
 /// What a reviewer is asked: to judge `output`, set apart as data.
@@ -148,11 +148,16 @@ fn review_ended(reviewed: &WorkerOutcome) -> WorkerEnd {
     }
 }
 
-/// Every one of `futures`, run together in this task, its context kept
-/// (Python's `asyncio.gather`): their outputs in order, once all are over.
-async fn join_all<F: Future>(futures: Vec<F>) -> Vec<F::Output> {
+/// Every one of `futures`, run together in this task, its context kept:
+/// their outputs in order once all succeeded, or the first error as soon as
+/// one fails, the others dropped, which cuts them, each posting its end
+/// (Python's `gather_or_cut`, RMK-1279).
+async fn try_join_all<T, F>(futures: Vec<F>) -> Result<Vec<T>, RoomKitError>
+where
+    F: Future<Output = Result<T, RoomKitError>>,
+{
     let mut futures: Vec<Pin<Box<F>>> = futures.into_iter().map(Box::pin).collect();
-    let mut outputs: Vec<Option<F::Output>> = futures.iter().map(|_| None).collect();
+    let mut outputs: Vec<Option<T>> = futures.iter().map(|_| None).collect();
     std::future::poll_fn(|context| {
         let mut pending = false;
         for (future, output) in futures.iter_mut().zip(outputs.iter_mut()) {
@@ -160,23 +165,25 @@ async fn join_all<F: Future>(futures: Vec<F>) -> Vec<F::Output> {
                 continue;
             }
             match future.as_mut().poll(context) {
-                Poll::Ready(done) => *output = Some(done),
+                Poll::Ready(Ok(done)) => *output = Some(done),
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 Poll::Pending => pending = true,
             }
         }
         if pending {
             Poll::Pending
         } else {
-            Poll::Ready(())
+            Poll::Ready(Ok(()))
         }
     })
-    .await;
-    outputs.into_iter().flatten().collect()
+    .await?;
+    Ok(outputs.into_iter().flatten().collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::approves;
+    use crate::error::RoomKitError;
 
     // Python: loop.py _approves, as tests/orchestration/test_loop_strategy.py reads reviews:
     // TestRunReviewers::test_sequential_single_reviewer ("APPROVED"),
@@ -187,5 +194,38 @@ mod tests {
         assert!(approves("approved, nice"));
         assert!(!approves("Needs work."));
         assert!(!approves(""));
+    }
+
+    /// Sets its flag once dropped: a run cut where it waits.
+    struct Cut(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for Cut {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    // Python: tests/orchestration/test_loop_strategy.py::TestReviewParallel::test_the_first_error_cuts_the_other_reviewers
+    #[tokio::test]
+    async fn the_first_error_cuts_the_other_reviewers() {
+        let cut = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let waiting = Cut(std::sync::Arc::clone(&cut));
+        let slow: std::pin::Pin<Box<dyn Future<Output = Result<(), RoomKitError>>>> =
+            Box::pin(async move {
+                let _waiting = waiting;
+                std::future::pending::<Result<(), RoomKitError>>().await
+            });
+        let gone: std::pin::Pin<Box<dyn Future<Output = Result<(), RoomKitError>>>> =
+            Box::pin(async { Err(RoomKitError::Value("review boom".to_owned())) });
+        // Bounded: reviews that waited for every one would never end.
+        let reviews = super::try_join_all(vec![slow, gone]);
+        let failed = tokio::time::timeout(std::time::Duration::from_secs(5), reviews)
+            .await
+            .unwrap_or_else(|_| panic!("the reviews waited for the slow one"));
+        assert!(matches!(failed, Err(RoomKitError::Value(message)) if message == "review boom"));
+        assert!(
+            cut.load(std::sync::atomic::Ordering::SeqCst),
+            "the slow review was left running"
+        );
     }
 }

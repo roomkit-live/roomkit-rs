@@ -257,9 +257,9 @@ pub(super) async fn run_parallel<S: ConversationStore>(
 }
 
 /// The outputs of `runs` in their order once all succeeded, or the first
-/// error as soon as one fails, the runs still going left running (Python's
-/// `asyncio.gather` without `return_exceptions`). Cut before then, it cuts
-/// every run, as a cancelled gather cancels its children.
+/// error as soon as one fails, the runs still going cut and awaited to
+/// their end first (Python's `gather_or_cut`, RMK-1279). Cut before then,
+/// it cuts every run, as a cancelled gather cancels its children.
 async fn gather<T>(runs: Vec<JoinHandle<Result<T, RoomKitError>>>) -> Result<Vec<T>, RoomKitError> {
     let mut running = Running(runs.into_iter().map(Some).collect());
     let mut outputs: Vec<Option<T>> = running.0.iter().map(|_| None).collect();
@@ -289,8 +289,18 @@ async fn gather<T>(runs: Vec<JoinHandle<Result<T, RoomKitError>>>) -> Result<Vec
     })
     .await;
     if let Some(error) = failed {
-        // The runs still going are left to end on their own.
-        running.0.clear();
+        // The runs still going are cut, each posting its end, and awaited.
+        let going: Vec<JoinHandle<_>> = running.0.drain(..).flatten().collect();
+        for run in &going {
+            run.abort();
+        }
+        for run in going {
+            if let Err(join) = run.await
+                && join.is_panic()
+            {
+                std::panic::resume_unwind(join.into_panic());
+            }
+        }
         return Err(error);
     }
     Ok(outputs.into_iter().flatten().collect())
@@ -352,6 +362,39 @@ mod tests {
             "{\"error\": \"delegate_workers is unavailable here: you are already running inside a \
              delegated step. Respond directly to the instruction with the requested text \\u2014 do \
              not call delegate_workers.\"}"
+        );
+    }
+
+    /// Sets its flag once dropped: a run cut where it waits.
+    struct Cut(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for Cut {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    // Python: tests/orchestration/test_supervisor_strategy.py::TestParallelWorkerFailure::test_the_first_error_cuts_the_other_workers
+    #[tokio::test]
+    async fn the_first_error_cuts_the_other_workers() {
+        let cut = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let waiting = Cut(Arc::clone(&cut));
+        let slow = tokio::spawn(async move {
+            let _waiting = waiting;
+            std::future::pending::<Result<(), crate::error::RoomKitError>>().await
+        });
+        let gone = tokio::spawn(async {
+            Err::<(), _>(crate::error::RoomKitError::Value(
+                "parallel boom".to_owned(),
+            ))
+        });
+        let failed = super::gather(vec![slow, gone]).await;
+        assert!(
+            matches!(failed, Err(crate::error::RoomKitError::Value(message)) if message == "parallel boom")
+        );
+        assert!(
+            cut.load(std::sync::atomic::Ordering::SeqCst),
+            "the slow worker was left running"
         );
     }
 }

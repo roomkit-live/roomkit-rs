@@ -21,6 +21,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fails with the handler's `RoomKitError::Runtime`, as Python's raises,
   where it registered the channel with no owner of its requests
   (RMK-1255).
+- A parallel team's first error cuts the other workers (RFC §19.7.3, §19.7.4), as Python's: a `Supervisor` with the parallel strategy, and a `Loop`'s parallel reviews, whose delegation raises answer with that error at once, the other delegations cut and awaited to their end first; the Loop's parallel reviews waited for every reviewer (RMK-1279).
 - Delivery lanes across processes (RFC §13.5), as Python's: a delivery
   set waits for the room's cursor to pass the indexes before its own that
   another process committed; a hole no lane runs is skipped after
