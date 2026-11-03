@@ -4,7 +4,9 @@
 use std::fmt;
 use std::sync::Arc;
 
-use roomkit_ai::{AiContext, AiProvider, AiResponse, ProviderError, ProviderStream, TextStream};
+use roomkit_ai::{
+    AiContext, AiProvider, AiResponse, ModelInfo, ProviderError, ProviderStream, TextStream,
+};
 
 use crate::config::{OpenAiApi, OpenAiConfig};
 use crate::error::OpenAiError;
@@ -177,6 +179,15 @@ impl AiProvider for OpenAiAiProvider {
 
     fn supports_vision(&self) -> bool {
         self.config.vision
+    }
+
+    /// OpenAI's curated catalogue, Python's (`catalog/models.json`).
+    fn available_models() -> Vec<ModelInfo> {
+        crate::models::models().to_vec()
+    }
+
+    fn catalog_entry(&self) -> Option<ModelInfo> {
+        crate::models::entry(&self.config.model).cloned()
     }
 
     fn supports_streaming(&self) -> bool {

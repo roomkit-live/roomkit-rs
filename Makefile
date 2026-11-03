@@ -7,9 +7,9 @@ MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"$$/\1/p' Cargo.toml).0
 # The examples: every file of examples/, each declared in examples/Cargo.toml.
 EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
-.PHONY: all fmt fmt-check clippy test test-core doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture api-sync api-check-pin api-test api-parity
+.PHONY: all fmt fmt-check clippy test test-core doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture api-sync api-check-pin api-test api-parity models-sync models-check
 
-all: conformance-check api-check-pin api-test fmt-check clippy test test-core doc api-parity deny check-core-deps examples
+all: conformance-check api-check-pin models-check api-test fmt-check clippy test test-core doc api-parity deny check-core-deps examples
 
 fmt:
 	$(CARGO) fmt --all
@@ -244,6 +244,74 @@ api-check-pin:
 			exit 1; \
 		fi; \
 	done
+
+# The OpenAI model catalogue roomkit-openai embeds (HITL e7768b18): the
+# Python implementation's `OpenAIAIProvider.available_models()` at one commit
+# of roomkit's origin/main, written as JSON by
+# crates/roomkit-openai/catalog/export.py, with the interpreter of a roomkit
+# checkout (ROOMKIT_DIR), on that commit's source extracted apart, into
+# catalog/models.json; the commit recorded in catalog/ROOMKIT_COMMIT and the
+# file's fingerprint in catalog/MODELS_SHA256. The copy is never edited here:
+# change the catalogue in roomkit, push it, fetch, and sync again. ROOMKIT_REF
+# names the commit; ALLOW_UNPUSHED=1 takes one origin/main does not hold yet,
+# for a copy synced again before it is pushed.
+MODELS := crates/roomkit-openai/catalog
+# Writes roomkit's catalogue at the recipe's $$commit to its $$out.
+MODELS_EXPORT = tmp=$$(mktemp -d "$${TMPDIR:-/tmp}/models.XXXXXX") && \
+	{ git -C "$$ROOMKIT_DIR" archive --format=tar "$$commit" src/roomkit | tar -x -C "$$tmp" && \
+	PYTHONDONTWRITEBYTECODE=1 "$$ROOMKIT_DIR/.venv/bin/python" -I $(MODELS)/export.py "$$tmp/src" > "$$out"; \
+	status=$$?; rm -rf "$$tmp"; [ $$status -eq 0 ]; }
+
+models-sync:
+	@commit=$$(git -C "$$ROOMKIT_DIR" rev-parse --verify "$${ROOMKIT_REF}^{commit}") && \
+	if ! git -C "$$ROOMKIT_DIR" merge-base --is-ancestor "$$commit" origin/main; then \
+		if [ "$${ALLOW_UNPUSHED:-}" = 1 ]; then \
+			echo "warning: roomkit $$commit is not on origin/main: sync again once it is"; \
+		else \
+			echo "roomkit $$commit is not on origin/main: push it and fetch first"; exit 1; \
+		fi; \
+	fi && \
+	out=$(MODELS)/models.json.new && $(MODELS_EXPORT) && \
+	mv "$$out" $(MODELS)/models.json && \
+	echo "$$commit" > $(MODELS)/ROOMKIT_COMMIT && \
+	sha256sum $(MODELS)/models.json | cut -c1-64 > $(MODELS)/MODELS_SHA256 && \
+	echo "models synced from roomkit $$commit"
+
+# A local gate, which `make all` runs: the copy is the one its fingerprint
+# names; with a roomkit checkout and its venv, its commit is on roomkit's
+# origin/main and the copy is what that commit's catalogue exports, so a copy
+# that drifted from Python's fails here. Without them, as in CI, only the
+# fingerprint is checked; a catalogue roomkit's origin/main changed since the
+# commit only warns: sync it.
+models-check:
+	@fingerprint=$$(sha256sum $(MODELS)/models.json | cut -c1-64) && \
+	if [ "$$fingerprint" != "$$(cat $(MODELS)/MODELS_SHA256)" ]; then \
+		echo "models-check: $(MODELS)/models.json differs from MODELS_SHA256: it is never edited, run make models-sync"; \
+		exit 1; \
+	fi
+	@commit=$$(cat $(MODELS)/ROOMKIT_COMMIT) && \
+	if ! git -C "$$ROOMKIT_DIR" rev-parse --git-dir >/dev/null 2>&1 || [ ! -x "$$ROOMKIT_DIR/.venv/bin/python" ]; then \
+		echo "models-check: no roomkit checkout with its venv at $$ROOMKIT_DIR, the export's check skipped"; exit 0; \
+	fi && \
+	if git -C "$$ROOMKIT_DIR" merge-base --is-ancestor "$$commit" origin/main 2>/dev/null; then \
+		:; \
+	elif [ "$${ALLOW_UNPUSHED:-}" = 1 ]; then \
+		echo "warning: roomkit $$commit is not on origin/main: sync again once it is"; \
+	else \
+		echo "models-check: roomkit $$commit is not on origin/main: push it, fetch, and run make models-sync"; \
+		exit 1; \
+	fi && \
+	out=$$(mktemp "$${TMPDIR:-/tmp}/models.XXXXXX") && $(MODELS_EXPORT) && \
+	if ! cmp -s "$$out" $(MODELS)/models.json; then \
+		rm -f "$$out"; \
+		echo "models-check: $(MODELS)/models.json is not roomkit $$commit's catalogue: it is never edited, run make models-sync"; \
+		exit 1; \
+	fi && \
+	rm -f "$$out" && \
+	if ! git -C "$$ROOMKIT_DIR" diff --quiet "$$commit" origin/main -- src/roomkit/providers/openai/models.py; then \
+		echo "warning: roomkit's OpenAI catalogue changed on origin/main since $$commit: run make models-sync"; \
+	fi && \
+	echo "models-check: the catalogue is roomkit $$commit's"
 
 # The tests of the reader and of the report, on fixtures: no build needed.
 api-test:

@@ -58,6 +58,7 @@
 mod config;
 mod credentials;
 mod error;
+mod models;
 mod names;
 mod provider;
 mod request;

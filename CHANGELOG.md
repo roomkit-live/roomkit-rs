@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The model catalogue (RFC §6.7), as Python's: `ModelInfo`, `ModelPricing` and its `cost_for(usage)`, `Date`, and `AiProvider::available_models`, `catalog_entry` and `context_window`; `OpenAiAiProvider` embeds Python's OpenAI catalogue, copied by `make models-sync` from one roomkit commit, which `make models-check` holds it to (RMK-1088).
 - Delivery lanes across processes (RFC §13.5), as Python's: a delivery
   set waits for the room's cursor to pass the indexes before its own that
   another process committed; a hole no lane runs is skipped after
