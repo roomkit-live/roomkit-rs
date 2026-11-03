@@ -118,8 +118,9 @@ fn off_sends_the_model_s_floor() {
         ("o3", "low"),
         ("o4-mini", "low"),
     ];
-    // Off stated by the turn over a configured effort, as Python's test
-    // states it, and by the configuration alone.
+    // Off stated by the turn over a configured effort (Python's test
+    // states it on the turn, nothing configured), and by the configuration
+    // alone.
     for (model, floor) in floors {
         for tools in [false, true] {
             let provider = official(model, Some("high"), None);
