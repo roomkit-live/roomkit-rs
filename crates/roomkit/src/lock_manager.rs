@@ -183,7 +183,7 @@ pub(crate) fn key_space(
 
 /// What leads the key of a lock of another kind than a room's in a shared
 /// manager: no room id holds it.
-const OTHER_KIND: char = '\0';
+const OTHER_KIND: &str = "\0";
 
 /// A shared manager's locks of a kind other than its rooms': the same
 /// manager, each key led by a NUL character (`\0__delivery__:r1`,
@@ -193,10 +193,7 @@ struct NulLedKeys(Arc<dyn RoomLockManager>);
 
 impl RoomLockManager for NulLedKeys {
     fn locked<'a>(&'a self, room_id: &'a RoomId) -> LockFuture<'a, Box<dyn RoomLock>> {
-        Box::pin(async move {
-            let key = RoomId::new(format!("{OTHER_KIND}{room_id}"))?;
-            self.0.locked(&key).await
-        })
+        Box::pin(async move { self.0.locked(&room_id.prefixed(OTHER_KIND)).await })
     }
 }
 

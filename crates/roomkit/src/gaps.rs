@@ -33,7 +33,6 @@ use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::Instant;
 
-use crate::error::RoomKitError;
 use crate::events::{FrameworkEvent, Handled};
 use crate::kit::Inner;
 use crate::locks::{HeldLock, KitLocks};
@@ -158,15 +157,13 @@ impl DeliveryClaims {
     /// The claim manager's lock of `room_id`'s claim, asked again while
     /// the manager fails to grant it, after a pause doubled from
     /// [`GAP_BACKOFF_INITIAL`] up to [`GAP_BACKOFF_MAX`], as Python's lane
-    /// asks again at its next round: the kit's close cuts the wait.
+    /// asks again at its next round: the kit's close cuts the wait. Only
+    /// the manager's error is asked again: the claim's key cannot fail.
     async fn take(&self, room_id: &RoomId) -> HeldLock {
+        let key = claim_key(room_id);
         let mut pause = GAP_BACKOFF_INITIAL;
         loop {
-            let taken = match claim_key(room_id) {
-                Ok(key) => self.locks.lock(&key).await,
-                Err(error) => Err(error),
-            };
-            match taken {
+            match self.locks.lock(&key).await {
                 Ok(lock) => return lock,
                 Err(error) => {
                     tracing::warn!(target: "roomkit::lanes", room_id = %room_id, %error, "taking the room's delivery claim failed; asking again");
@@ -179,9 +176,10 @@ impl DeliveryClaims {
 }
 
 /// The lock manager's key for `room_id`'s delivery claim, as Python's
-/// `delivery_claim_key`, never the room's own.
-fn claim_key(room_id: &RoomId) -> Result<RoomId, RoomKitError> {
-    Ok(RoomId::new(format!("{DELIVERY_CLAIM_PREFIX}{room_id}"))?)
+/// `delivery_claim_key`, never the room's own. It cannot fail, as
+/// Python's f-string cannot.
+fn claim_key(room_id: &RoomId) -> RoomId {
+    room_id.prefixed(DELIVERY_CLAIM_PREFIX)
 }
 
 impl Drop for ClaimHold {
@@ -370,7 +368,7 @@ mod tests {
 
     /// The claim manager's key of `room_id()`'s claim.
     fn key() -> RoomId {
-        claim_key(&room_id()).unwrap()
+        claim_key(&room_id())
     }
 
     fn rooms_held(claims: &DeliveryClaims) -> usize {

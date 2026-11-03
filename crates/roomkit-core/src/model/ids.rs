@@ -182,6 +182,16 @@ impl RoomId {
         debug_assert!(!value.is_empty(), "generated an empty room id");
         Self(value)
     }
+
+    /// This room id led by `prefix`: a lock manager's key for a lock of
+    /// another kind than the room's (its delivery claim). It cannot fail: a
+    /// room id is never empty. Hidden: the Python implementation writes
+    /// the key with an f-string.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn prefixed(&self, prefix: &str) -> Self {
+        Self(format!("{prefix}{}", self.0))
+    }
 }
 
 impl EventId {
