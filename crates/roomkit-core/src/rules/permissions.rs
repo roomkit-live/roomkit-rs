@@ -327,7 +327,10 @@ pub(crate) fn plan_delivery(
             }),
             ChannelCategory::Intelligence => {
                 // A tool-call row is an activity record no agent reads.
-                if is_tool_call_row(event) || !solicits(event, reader, from_agent, policy) {
+                if is_tool_call_row(event)
+                    || orchestration_internal(event)
+                    || !solicits(event, reader, from_agent, policy)
+                {
                     continue;
                 }
                 if !at_limit {
@@ -447,6 +450,19 @@ fn solicits(
     match event.metadata.get(ROUTED_TO) {
         None | Some(serde_json::Value::Null) => true,
         Some(routed) => routed.as_str() == Some(agent.channel_id.as_str()) || always,
+    }
+}
+
+/// Whether `event` is the orchestration's own record, a handoff's, which
+/// asks no agent (RFC §19.6): Python's `bool(metadata.get(...))`.
+fn orchestration_internal(event: &RoomEvent) -> bool {
+    match event.metadata.get("_orchestration_internal") {
+        None | Some(serde_json::Value::Null | serde_json::Value::Bool(false)) => false,
+        Some(serde_json::Value::Number(number)) => number.as_f64() != Some(0.0),
+        Some(serde_json::Value::String(text)) => !text.is_empty(),
+        Some(serde_json::Value::Array(items)) => !items.is_empty(),
+        Some(serde_json::Value::Object(members)) => !members.is_empty(),
+        Some(serde_json::Value::Bool(true)) => true,
     }
 }
 

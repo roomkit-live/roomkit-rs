@@ -154,6 +154,14 @@ pub enum HookTrigger {
     ///
     /// [`HookResult::allow_unverified`]: crate::model::HookResult::allow_unverified
     OnVerificationRequired,
+    /// A handoff went through (RFC §19.6): its payload is an internal
+    /// system event of the room, never stored, naming both agents.
+    OnHandoff,
+    /// A handoff was refused (RFC §19.6): its payload is as `OnHandoff`'s.
+    OnHandoffRejected,
+    /// A handoff moved the room's phase (RFC §19.6): its payload is as
+    /// `OnHandoff`'s; a phase saved by other means fires it not.
+    OnPhaseTransition,
 }
 
 impl HookTrigger {
@@ -193,6 +201,9 @@ impl HookTrigger {
             | Self::AfterDeliver
             | Self::OnTaskDelegated
             | Self::OnTaskCompleted
+            | Self::OnHandoff
+            | Self::OnHandoffRejected
+            | Self::OnPhaseTransition
             | Self::OnParticipantIdentified
             | Self::OnParticipantJoined
             | Self::OnParticipantLeft
@@ -233,6 +244,9 @@ impl HookTrigger {
             | Self::AfterDeliver
             | Self::OnTaskDelegated
             | Self::OnTaskCompleted
+            | Self::OnHandoff
+            | Self::OnHandoffRejected
+            | Self::OnPhaseTransition
             | Self::OnParticipantIdentified
             | Self::OnParticipantJoined
             | Self::OnParticipantLeft
@@ -286,6 +300,9 @@ impl HookTrigger {
             | Self::AfterDeliver
             | Self::OnTaskDelegated
             | Self::OnTaskCompleted
+            | Self::OnHandoff
+            | Self::OnHandoffRejected
+            | Self::OnPhaseTransition
             | Self::OnParticipantIdentified
             | Self::OnParticipantJoined
             | Self::OnParticipantLeft

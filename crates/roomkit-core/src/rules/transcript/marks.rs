@@ -133,6 +133,16 @@ const PHRASES: &[Phrase] = &[
         bracketed: true,
         replacement: COPIED_MARK,
     },
+    Phrase {
+        text: "[Handoff",
+        bracketed: true,
+        replacement: COPIED_MARK,
+    },
+    Phrase {
+        text: "[Context from previous agent",
+        bracketed: true,
+        replacement: COPIED_MARK,
+    },
 ];
 
 /// A character of a text that reads as letters: its position, each run of
