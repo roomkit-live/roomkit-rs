@@ -62,8 +62,9 @@ pub fn default_inbound_event(
 /// records, whoever wrote it (gap G-065), nor a runtime record, which says
 /// which text the runtime wrote (RFC §6.4), nor the mark of a message held
 /// for verification, whose release would otherwise hand a sender's message
-/// to the agents as another's (RFC §11.7.3), as Python's
-/// `_without_runtime_keys` drops them.
+/// to the agents as another's (RFC §11.7.3), nor the orchestration's internal
+/// mark, with which a sender would silence the room's agents (RFC §19.6), as
+/// Python's `_without_runtime_keys` drops them.
 pub(crate) fn stamp_trigger(
     mut event: RoomEvent,
     message: &InboundMessage,
@@ -83,6 +84,20 @@ pub(crate) fn stamp_trigger(
     event.metadata.shift_remove(RUNTIME_RECORD);
     // Which message the runtime holds for verification (RFC §11.7.3).
     event.metadata.shift_remove(HELD_KEY);
+    // Which event is the orchestration's own and asks no agent (RFC §19.6).
+    if event
+        .metadata
+        .shift_remove(permissions::ORCHESTRATION_INTERNAL)
+        .is_some()
+    {
+        tracing::warn!(
+            target: "roomkit::routing",
+            room_id = %event.room_id,
+            event_id = %event.id,
+            "an event arrived with {}, which only the runtime writes: dropped",
+            permissions::ORCHESTRATION_INTERNAL
+        );
+    }
     reset_commit_fields(event)
 }
 

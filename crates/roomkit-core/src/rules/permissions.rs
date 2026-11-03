@@ -453,10 +453,16 @@ fn solicits(
     }
 }
 
-/// Whether `event` is the orchestration's own record, a handoff's, which
-/// asks no agent (RFC §19.6): Python's `bool(metadata.get(...))`.
+/// The metadata key marking an event as the orchestration's own record, a
+/// handoff's, which asks no agent (RFC §19.6). Only the runtime and code the
+/// host runs write it: a sender who wrote it into its message would silence
+/// the room's agents, so it is dropped at the door (RFC §10.1).
+pub(crate) const ORCHESTRATION_INTERNAL: &str = "_orchestration_internal";
+
+/// Whether `event` is the orchestration's own record: Python's
+/// `bool(metadata.get(...))`.
 fn orchestration_internal(event: &RoomEvent) -> bool {
-    match event.metadata.get("_orchestration_internal") {
+    match event.metadata.get(ORCHESTRATION_INTERNAL) {
         None | Some(serde_json::Value::Null | serde_json::Value::Bool(false)) => false,
         Some(serde_json::Value::Number(number)) => number.as_f64() != Some(0.0),
         Some(serde_json::Value::String(text)) => !text.is_empty(),
