@@ -81,7 +81,7 @@ pub fn audit_tool_handler(
                 polled.unwrap_or_else(|payload| {
                     // A panic is the handler's error, as an exception is
                     // Python's: recorded with its message, then let through.
-                    record.outcome = Some(("error", panic_message(payload.as_ref())));
+                    record.ends("error", panic_message(payload.as_ref()));
                     panic::resume_unwind(payload)
                 })
             })
@@ -102,6 +102,15 @@ struct Record {
     started: Instant,
     /// The status and the text recorded, once the handler answered.
     outcome: Option<(&'static str, String)>,
+}
+
+impl Record {
+    /// Sets what the call records once it is dropped, the unwind of a
+    /// panic included: a method, so that no compiler reads the assignment
+    /// as lost to the unwind that follows it (Rust 1.92 did).
+    fn ends(&mut self, status: &'static str, text: String) {
+        self.outcome = Some((status, text));
+    }
 }
 
 impl Drop for Record {
