@@ -158,12 +158,7 @@ impl TurnSettings {
         }
         let (budget_level, budget) = source(bound_budget, levels.budget.0, levels.budget.1);
         let (off_level, enabled) = source(bound_switch, levels.enabled.0, levels.enabled.1);
-        // Python compares the value as written (`enabled is False`), so a
-        // binding's `"off"` reads false and turns off no budget (a question
-        // to the maintainer, HITL e92720b1).
-        let stated_off = set(metadata, "enable_thinking")
-            .map_or(enabled == Some(false), |value| *value == Value::Bool(false));
-        let off = stated_off && off_level < budget_level;
+        let off = enabled == Some(false) && off_level < budget_level;
         self.thinking_budget = budget.filter(|_| !off);
         self.enable_thinking = enabled;
     }
