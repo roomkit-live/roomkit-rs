@@ -48,6 +48,7 @@ pub(crate) const SUPERVISOR: &[&str] = &[
     "refine_task",
     "refine_instruction",
     "delegation_message",
+    "wait_for_result",
 ];
 pub(crate) const STRATEGY_STEP: &[&str] = &["gate", "do", "refuse"];
 pub(crate) const STRATEGY_UNINSTALL: &[&str] = &["gate", "do"];
@@ -200,6 +201,8 @@ fn supervisor(spec: &Value) -> Result<Strategy, Unreadable> {
             None => defaults.delegation_message,
             Some(_) => crate::calls::optional::<String>(spec, "delegation_message")?,
         },
+        wait_for_result: crate::calls::optional::<bool>(spec, "wait_for_result")?
+            .unwrap_or(defaults.wait_for_result),
     };
     let workers = workers.into_iter().map(StrategyAgent::from).collect();
     let team = Supervisor::new(lead, workers, options).map_err(|error| error.to_string())?;

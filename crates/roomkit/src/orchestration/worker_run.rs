@@ -233,6 +233,62 @@ pub(crate) async fn run_worker<S: ConversationStore>(
     Ok(outcome)
 }
 
+/// Waits for `task`, a delegation the kit's task runner runs in the
+/// background, within `timeout` (`None`: unbounded), past which the runner
+/// cancels it and it reads as timed out; posted on the status bus as
+/// [`run_worker`] posts, its pending entry naming the task, its terminal
+/// entry posted however the wait ends, a cut one `cancelled`. Python's
+/// `follow_worker(kit, task, *, timeout, status)`.
+pub(crate) async fn follow_worker<S: ConversationStore>(
+    kit: &RoomKit<S>,
+    task: DelegatedTask,
+    timeout: Option<Duration>,
+    status: WorkerStatus,
+) -> WorkerOutcome {
+    let posts = Posts {
+        kit: kit.clone(),
+        worker_id: task.agent_id.clone(),
+        status: Some(status),
+        run: Arc::new(Mutex::new(Run {
+            task_id: Some(task.id.clone()),
+            ..Run::default()
+        })),
+    };
+    posts.post(StatusLevel::Pending, &task.task, None, Metadata::new());
+    let mut cut = CutPost {
+        posts: &posts,
+        armed: true,
+    };
+    let waited = match timeout {
+        Some(bound) => tokio::time::timeout(bound, task.wait(WaitOptions::default()))
+            .await
+            .map_err(|_elapsed| bound),
+        None => Ok(task.wait(WaitOptions::default()).await),
+    };
+    let outcome = match waited {
+        Ok(ended) => {
+            let result = ended.ok();
+            WorkerOutcome {
+                output: task_output(result.as_ref()),
+                completed: result.is_some_and(|result| result.status == TaskStatus::Completed),
+                task: Some(task),
+            }
+        }
+        Err(bound) => {
+            // The runner ends it cancelled; the outcome is the bound's.
+            kit.task_runner().cancel(&task.id).await;
+            WorkerOutcome {
+                output: timed_out_text(bound),
+                completed: false,
+                task: Some(task),
+            }
+        }
+    };
+    cut.armed = false;
+    posts.ended(&outcome);
+    outcome
+}
+
 /// A worker delegation's entries on the status bus, each naming the task
 /// once the run knows it (RFC §19.7.3).
 struct Posts<S> {
@@ -401,6 +457,22 @@ impl<S: ConversationStore> Drop for CutPost<'_, S> {
 
 #[cfg(test)]
 mod tests {
+    // Python: tests/tasks/test_cancelled_delegation.py::test_a_supervisor_reads_a_cancelled_task_as_cancelled
+    #[test]
+    fn a_cancelled_task_reads_as_cancelled() {
+        use roomkit_core::model::{ChannelId, RoomId, TaskStatus};
+
+        use super::task_output;
+        use crate::tasks::DelegatedTaskResult;
+        let room = |name: &str| RoomId::new(name).unwrap_or_else(|error| panic!("{error}"));
+        let worker = ChannelId::new("worker").unwrap_or_else(|error| panic!("{error}"));
+        let cancelled = DelegatedTaskResult {
+            status: TaskStatus::Cancelled,
+            ..DelegatedTaskResult::new("t", room("c"), room("p"), worker)
+        };
+        assert_eq!(task_output(Some(&cancelled)), "The task was cancelled.");
+    }
+
     // Python: orchestration/_worker_run.py `f"The task timed out after {timeout:g}s."`,
     // as tests/orchestration/test_worker_delegation_bound.py reads it.
     #[test]
@@ -433,12 +505,13 @@ mod tests {
     use serde_json::json;
     use tokio::sync::Notify;
 
-    use super::{WorkerEnd, WorkerOutcome, WorkerStatus, run_worker};
+    use super::{WorkerEnd, WorkerOutcome, WorkerStatus, follow_worker, run_worker};
     use crate::channel::{Channel, ChannelError};
     use crate::kit::{CreateRoomOptions, DelegateOptions, RoomKit, RoomKitOptions};
     use crate::orchestration::StatusLevel;
     use crate::orchestration::lifecycle::post_agent_lifecycle;
     use crate::store::{ConversationStore, ListRoomsOptions};
+    use crate::tasks::handback::CALLER_HANDS_BACK;
     use crate::tasks::lines::room_task_lines;
 
     /// A worker whose turn starts and never ends.
@@ -583,11 +656,15 @@ mod tests {
     }
 
     // Python: tests/orchestration/test_worker_run_task_line.py::test_a_worker_cut_after_its_progress_leaves_its_line_ended
-    // (the inline door, cancelled, under each action; the timed-out cases
-    // and the background door come with the supervisor's bound runs).
+    // (both doors, cancelled, under each action; the timed-out cases are
+    // the supervisor's bound runs, its scenarios).
     #[tokio::test]
     async fn a_worker_cut_after_its_progress_leaves_its_line_ended() {
-        for action in ["task", "iteration"] {
+        let doors = [("inline", "task"), ("inline", "iteration")];
+        let doors = doors
+            .into_iter()
+            .chain([("background", "task"), ("background", "iteration")]);
+        for (door, action) in doors {
             let kit = RoomKit::new(RoomKitOptions::default());
             let worker = Endless::default();
             kit.register_channel(worker.clone())
@@ -609,14 +686,33 @@ mod tests {
                 ended,
             };
             let (running, worker_id) = (kit.clone(), worker.channel_id());
-            let run = tokio::spawn(async move {
-                let delegation = DelegateOptions::default();
-                let status = Some(status);
-                let ran = run_worker(
-                    &running, &room, &worker_id, "Count.", None, status, delegation,
-                );
-                drop(ran.await);
-            });
+            let mut background = None;
+            let run = if door == "inline" {
+                tokio::spawn(async move {
+                    let delegation = DelegateOptions::default();
+                    let status = Some(status);
+                    let ran = run_worker(
+                        &running, &room, &worker_id, "Count.", None, status, delegation,
+                    );
+                    drop(ran.await);
+                })
+            } else {
+                let notify =
+                    ChannelId::new(CALLER_HANDS_BACK).unwrap_or_else(|error| panic!("{error}"));
+                let delegation = DelegateOptions {
+                    notify: Some(notify),
+                    post_status: false,
+                    ..DelegateOptions::default()
+                };
+                let task = kit
+                    .delegate(&room, &worker_id, "Count.", delegation)
+                    .await
+                    .unwrap_or_else(|error| panic!("{error}"));
+                background = Some(task.id.clone());
+                tokio::spawn(async move {
+                    drop(follow_worker(&running, task, None, status).await);
+                })
+            };
             tokio::time::timeout(Duration::from_secs(5), worker.started.notified())
                 .await
                 .unwrap_or_else(|error| panic!("{error}"));
@@ -645,6 +741,11 @@ mod tests {
 
             run.abort();
             drop(run.await);
+            if let Some(task_id) = background {
+                // The task the cut run followed runs on: its runner ends it,
+                // as Python's close does after the lines are read.
+                kit.task_runner().cancel(&task_id).await;
+            }
             crate::testing::idle(&kit).await;
             let lines = room_task_lines(kit.status_bus(), "r", 50).await;
             kit.close().await.unwrap_or_else(|error| panic!("{error}"));

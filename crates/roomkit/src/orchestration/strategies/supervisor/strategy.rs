@@ -24,8 +24,9 @@ use crate::{HookExecution, HookTrigger};
 /// What [`Supervisor::new`] takes beside its agents: Python's
 /// `Supervisor(supervisor, workers, *, strategy=None, auto_delegate=False,
 /// refine_task=True, refine_instruction=None,
-/// delegation_message="I'm dispatching my team to work on this.", ...,
-/// share_channels=None, task_timeout=120.0, max_revisions=3)`.
+/// delegation_message="I'm dispatching my team to work on this.",
+/// wait_for_result=True, share_channels=None, task_timeout=120.0,
+/// max_revisions=3)`, but `async_delivery`.
 #[derive(Clone, Debug)]
 pub struct SupervisorOptions {
     /// How the team runs: [`WorkerStrategy::Sequential`], the supervisor
@@ -60,6 +61,13 @@ pub struct SupervisorOptions {
     /// The message meant for a delegation run in the background, which no
     /// delegation of this implementation posts yet: kept as given.
     pub delegation_message: Option<String>,
+    /// With no `strategy`, whether a `delegate_to_<worker>` call waits for
+    /// its worker and answers with its result: `true` by default. Else the
+    /// call answers at once, the worker started in the background, and the
+    /// worker's outcome is handed back to the supervisor once it ended, an
+    /// instruction addressed to it; a second call for a worker still on
+    /// the room's task answers `already_running`.
+    pub wait_for_result: bool,
 }
 
 impl Default for SupervisorOptions {
@@ -73,6 +81,7 @@ impl Default for SupervisorOptions {
             refine_task: true,
             refine_instruction: None,
             delegation_message: Some("I'm dispatching my team to work on this.".to_owned()),
+            wait_for_result: true,
         }
     }
 }
@@ -218,7 +227,8 @@ impl Supervisor {
                 kit.register_room_tools(&supervisor.channel_id, room_id, entries, owner)?;
             }
             None => {
-                let entries = per_worker::entries(&team);
+                let server = per_worker::PerWorker::new(team, self.options.wait_for_result);
+                let entries = per_worker::entries(&server);
                 kit.register_room_tools(&supervisor.channel_id, room_id, entries, owner)?;
             }
         }

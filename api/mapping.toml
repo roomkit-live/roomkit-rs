@@ -523,11 +523,6 @@ reason = "not in 0.x: the loop run in the background for a realtime voice sessio
 
 [[missing]]
 python = "roomkit.Supervisor.__init__"
-params = ["wait_for_result"]
-reason = "not yet: the per-worker tools run in the background, their outcome handed back to the supervisor, stream I's next lot (RMK-1233)"
-
-[[missing]]
-python = "roomkit.Supervisor.__init__"
 params = ["async_delivery"]
 reason = "not in 0.x: the team run in the background and handed back, and the realtime voice supervisor (left out of the orchestration lots with voice and async delivery, HITL a9e5d1a3; RMK-1233)"
 

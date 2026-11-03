@@ -24,20 +24,20 @@ use serde_json::{Value, json};
 use super::RoomKit;
 use super::inline::Unstarted;
 use crate::context::ExecutionContext;
-use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
 use crate::error::{RoomKitError, repr};
 use crate::orchestration::StatusLevel;
 use crate::orchestration::lifecycle::post_agent_lifecycle;
 use crate::store::ConversationStore;
 use crate::store::{GetConversationOptions, PatchRoomMetadataOptions};
 use crate::tasks::brief::{conversation_block, worker_description};
+use crate::tasks::handback::{CALLER_HANDS_BACK, bounded, hand_back};
 use crate::tasks::text::{bounded_text, identifier, one_line, quoted};
 use crate::tasks::{
     DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, OnCompleteCallback, ResultTool,
     SubmitOptions, TaskReach, TaskRunner, cut_short_message, task_work,
 };
 use crate::{
-    AttachChannelOptions, CreateRoomOptions, DeliverOptions, GetRoomOptions, SendEventOptions,
+    AttachChannelOptions, CreateRoomOptions, GetRoomOptions, SendEventOptions,
     UpdateBindingMetadataOptions, driver,
 };
 
@@ -58,9 +58,6 @@ const TASK_ACTION: &str = "task";
 /// How much of what was asked a hand-back names.
 const TASK_NAME_CHARS: usize = 200;
 
-/// The share of one worker's output a hand-back carries.
-const MAX_RESULT_CHARS: usize = 4_000;
-
 /// The key of each responder's turn entry in a task's metadata (RFC §6.4).
 const TURNS_KEY: &str = "turns";
 
@@ -74,12 +71,6 @@ const LOOP_END_REASON: &str = "loop_end_reason";
 /// The metadata key of a task whose failure its worker's turn reported
 /// (RFC §23.3 step 6): Python's `error_reported`.
 const ERROR_REPORTED: &str = "error_reported";
-
-/// What closes an intelligence channel's hand-back, whose turn gives the
-/// result only: Python's `RESULT_TURN_NOTE`.
-const RESULT_TURN_NOTE: &str = "This turn only gives this task's result: give it, without \
-answering anything else that was said; another reply of yours is taking care of that. Say it in \
-the language the conversation is in, whatever the result's.";
 
 /// What [`RoomKit::delegate`] takes beside the room, the agent and the
 /// task: Python's `delegate(..., *, wait=False, context=None,
@@ -656,7 +647,9 @@ impl<S: ConversationStore> RoomKit<S> {
                 if post_status {
                     kit.post_task_ended(&result);
                 }
-                if kit.cancelled_by_notified(&result, &notify) {
+                if notify.as_str() == CALLER_HANDS_BACK {
+                    // Its caller hands the result back itself.
+                } else if kit.cancelled_by_notified(&result, &notify) {
                     tracing::debug!(target: "roomkit::tasks", task = %result.task_id, "the notified channel cancelled the task: its cancellation is not handed back");
                 } else if hand_back == "post" {
                     kit.post_result(&result, &notify, chain_depth, &asked).await;
@@ -909,45 +902,11 @@ impl<S: ConversationStore> RoomKit<S> {
         {
             return;
         }
-        if self.inner.tasks.is_closing() {
-            return;
-        }
-        let bound = self
-            .store()
-            .get_binding(&result.parent_room_id, notify)
-            .await;
-        if !matches!(bound, Ok(Some(_))) {
-            tracing::info!(target: "roomkit::tasks", task = %result.task_id, "the result is not handed back: the notified channel is not attached");
-            return;
-        }
         let text = delegation_result_text(result, task);
-        let intelligence = self.registers_intelligence(notify);
-        let options = if intelligence {
-            DeliverOptions {
-                addressed_to: Some(vec![notify.clone()]),
-                instruction: true,
-                chain_depth,
-                metadata: hand_back_metadata(result, task),
-                ..DeliverOptions::default()
-            }
-        } else {
-            DeliverOptions {
-                channel_id: Some(notify.clone()),
-                chain_depth,
-                metadata: hand_back_metadata(result, task),
-                ..DeliverOptions::default()
-            }
-        };
-        let text = if intelligence {
-            format!("{text}\n{RESULT_TURN_NOTE}")
-        } else {
-            text
-        };
-        match self.deliver(&result.parent_room_id, text, options).await {
-            Ok(outcome) => log_not_delivered(notify, &result.parent_room_id, &outcome),
-            Err(error) => {
-                tracing::warn!(target: "roomkit::tasks", task = %result.task_id, %error, "the result was not handed back");
-            }
+        let metadata = hand_back_metadata(result, task);
+        let room_id = &result.parent_room_id;
+        if let Err(error) = hand_back(self, room_id, notify, text, chain_depth, metadata).await {
+            tracing::warn!(target: "roomkit::tasks", task = %result.task_id, %error, "the result was not handed back");
         }
     }
 
@@ -1117,40 +1076,6 @@ fn posted_text(result: &DelegatedTaskResult, task: &str) -> Option<String> {
         return Some(format!("The task{named} was cancelled."));
     }
     Some(format!("The task{named} failed."))
-}
-
-/// Logs a hand-back that reached nobody, as Python's `_log_not_delivered`:
-/// a warning, unless the notified agent's turn failed, which was logged
-/// where it failed and is only noted here (RFC §15.2).
-fn log_not_delivered(notify: &ChannelId, room_id: &RoomId, outcome: &DeliveryOutcome) {
-    let status = match outcome.status {
-        DeliveryOutcomeStatus::Blocked => "blocked",
-        DeliveryOutcomeStatus::Unavailable => "unavailable",
-        DeliveryOutcomeStatus::Failed => "failed",
-        DeliveryOutcomeStatus::Queued
-        | DeliveryOutcomeStatus::Sent
-        | DeliveryOutcomeStatus::Unknown => return,
-    };
-    // Python's `%s` of a reason it does not have.
-    let reason = outcome.reason.as_deref().unwrap_or("None");
-    let turn_failed = outcome
-        .inbound
-        .as_ref()
-        .is_some_and(|inbound| inbound.error.is_some());
-    if turn_failed {
-        tracing::debug!(target: "roomkit::tasks", "Result for {notify} in room {room_id} not delivered: {status} ({reason})");
-    } else {
-        tracing::warn!(target: "roomkit::tasks", "Result for {notify} in room {room_id} not delivered: {status} ({reason})");
-    }
-}
-
-/// `output`, cut to the share a hand-back carries.
-fn bounded(output: &str) -> String {
-    if output.chars().count() <= MAX_RESULT_CHARS {
-        return output.to_owned();
-    }
-    let kept: String = output.chars().take(MAX_RESULT_CHARS).collect();
-    format!("{kept}\n[...truncated]")
 }
 
 /// `value` rounded half to even, as Python's `round`.

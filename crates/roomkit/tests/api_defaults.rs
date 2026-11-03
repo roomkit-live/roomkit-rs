@@ -1411,6 +1411,8 @@ fn supervisor_options_defaults_as_python() {
         defaults.delegation_message.as_deref(),
         Some("I'm dispatching my team to work on this.")
     );
+    // roomkit.Supervisor.__init__(wait_for_result) = True
+    assert!(defaults.wait_for_result);
 }
 
 #[test]
