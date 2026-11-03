@@ -600,7 +600,8 @@ impl<P: AiProvider> AiChannel<P> {
     /// The system prompt of a turn in `context`'s room: its binding's
     /// `system_prompt`, else the channel's own (Python's `_turn_settings`,
     /// binding metadata first; a `null` there, or a value that is no text,
-    /// is not set), then the MCP
+    /// is not set), then the instruction a strategy gives this one turn
+    /// ([`with_turn_instruction`]), then the MCP
     /// servers' instructions (RFC §21.2), then what its skills add (RFC
     /// §6.4, §24.4).
     fn turn_system_prompt(
@@ -619,6 +620,7 @@ impl<P: AiProvider> AiChannel<P> {
             Some(bound) => Some(bound.to_owned()).filter(|bound| !bound.is_empty()),
             None => self.system_prompt(),
         };
+        let own = with_turn_instruction(own, binding);
         let prompt = self.server_instructions.after(own.as_deref());
         let prompt = match &self.skills {
             None => prompt,
@@ -1268,6 +1270,28 @@ impl<P> fmt::Debug for AiChannel<P> {
     }
 }
 
+/// The binding metadata key of an instruction a strategy gives one turn of
+/// the channel: the supervisor's task-formulation pass (RFC §19.7.3).
+/// Python's `TURN_INSTRUCTION`, which roomkit's supervisor writes.
+const TURN_INSTRUCTION: &str = "_turn_instruction";
+
+/// `prompt`, then the instruction `binding` carries for its turn, a blank
+/// line between them (Python's `with_turn_instruction`).
+fn with_turn_instruction(prompt: Option<String>, binding: &ChannelBinding) -> Option<String> {
+    let Some(instruction) = binding
+        .metadata
+        .get(TURN_INSTRUCTION)
+        .and_then(Value::as_str)
+        .filter(|instruction| !instruction.is_empty())
+    else {
+        return prompt;
+    };
+    Some(match prompt.filter(|prompt| !prompt.is_empty()) {
+        Some(prompt) => format!("{prompt}\n\n{instruction}"),
+        None => instruction.to_owned(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -1279,6 +1303,29 @@ mod tests {
     use crate::provider::AiImagePart;
     use crate::testing::ScriptedProvider;
     use crate::{ToolResult, ToolResultPart};
+
+    // Python: tests/orchestration/test_turn_instruction_isolation.py::test_the_instruction_follows_the_prompt_the_turn_would_have_had
+    // Python: tests/orchestration/test_turn_instruction_isolation.py::test_two_rooms_in_parallel_never_share_the_instruction
+    // (the instruction rides one turn's binding, never the channel)
+    #[test]
+    fn a_turn_s_instruction_follows_the_prompt_it_would_have_had() {
+        let room = RoomId::new("r1").unwrap_or_else(|error| panic!("{error}"));
+        let channel = ChannelId::new("sup").unwrap_or_else(|error| panic!("{error}"));
+        let mut binding = ChannelBinding::new(channel, room, ChannelType::AI);
+        let prompt = Some("Per-room persona.".to_owned());
+        assert_eq!(with_turn_instruction(prompt.clone(), &binding), prompt);
+        binding
+            .metadata
+            .insert(TURN_INSTRUCTION.to_owned(), Value::from("Name the topic."));
+        assert_eq!(
+            with_turn_instruction(prompt, &binding).as_deref(),
+            Some("Per-room persona.\n\nName the topic.")
+        );
+        assert_eq!(
+            with_turn_instruction(None, &binding).as_deref(),
+            Some("Name the topic.")
+        );
+    }
 
     /// RFC §6.4, §10.6.3: a detach alone, as an executor discarding a stale
     /// room calls it, drops the room's refused images, its tools' images
