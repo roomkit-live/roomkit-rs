@@ -51,8 +51,8 @@ impl Scripted for AiGenerationEvent {
         })
     }
 
-    /// The replacement event: its context's `system_prompt` and `messages`
-    /// the patch's, its `tools` those of the context the patch names, and
+    /// The replacement event: its context's `system_prompt`, `messages`
+    /// and `reasoning_effort` the patch's, its `tools` those of the context the patch names, and
     /// each tool `define` gives in place of the tool of its name, or after
     /// them.
     fn patched(mut self, patch: &Value) -> Result<Self, String> {
@@ -60,6 +60,9 @@ impl Scripted for AiGenerationEvent {
             let context = &mut self.ai_context;
             match member.as_str() {
                 "system_prompt" => context.system_prompt = value.as_str().map(str::to_owned),
+                "reasoning_effort" => {
+                    context.reasoning_effort = value.as_str().map(str::to_owned);
+                }
                 "messages" => context.messages = patched_messages(value)?,
                 "tools" => {
                     let kept: Vec<&str> = value
