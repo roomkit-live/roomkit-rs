@@ -84,10 +84,10 @@ pub struct OpenAiConfig {
     /// takes none, any other does.
     pub supports_custom_temperature: Option<bool>,
     /// How hard a reasoning model thinks (`reasoning_effort`), when set
-    /// (RFC §6.7), under the turn's own on Chat Completions. There, on
-    /// OpenAI's own endpoint, `none` is sent as the least
-    /// effort the catalogue says the model takes (`minimal` on GPT-5,
-    /// `low` on o3). On a Chat Completions turn with tools, a model the
+    /// (RFC §6.7), under the turn's own. On OpenAI's own endpoint, `none`
+    /// is sent as the least effort the catalogue says the model takes
+    /// (`minimal` on GPT-5, `low` on o3), on either API. On a Chat
+    /// Completions turn with tools, a model the
     /// catalogue tags decides there (`none` for GPT-5.4 and later, sent
     /// even unset); any other model, and any behind a `base_url`, sends it
     /// only where `supports_reasoning_effort_with_tools` says the server
@@ -99,7 +99,8 @@ pub struct OpenAiConfig {
     /// leaves it out, and `None` leaves it out with one warning per
     /// provider. Python's `supports_reasoning_effort_with_tools`. On the
     /// Responses API, which Python's OpenAI text provider does not speak,
-    /// the configured effort goes as on any turn.
+    /// a turn with tools sends its effort as any turn does: the rule was
+    /// measured on Chat Completions (HITL 78d888bf).
     pub supports_reasoning_effort_with_tools: Option<bool>,
     /// Headers every request carries; an `Authorization` among them
     /// replaces the key's bearer, as Python's client sends it.

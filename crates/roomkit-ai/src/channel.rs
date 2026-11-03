@@ -121,9 +121,8 @@ pub struct AiChannelOptions {
     /// §6.4). Python's `turn_budget_tokens`; `None` sets none.
     pub turn_budget_tokens: Option<u64>,
     /// How hard a reasoning model thinks on the agent's turns (RFC §6.7),
-    /// under the effort a binding's metadata sets; a provider prefers it
-    /// over its configured one (`OpenAiAiProvider` on Chat Completions):
-    /// Python's `reasoning_effort`; `None` sets none.
+    /// under the effort a binding's metadata sets and over the provider's
+    /// configured one: Python's `reasoning_effort`; `None` sets none.
     pub reasoning_effort: Option<String>,
     /// What the turn's transcript says of an event whose content reads as
     /// nothing in it (a captionless upload that is no image, for a model

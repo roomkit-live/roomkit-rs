@@ -57,13 +57,11 @@ pub(crate) fn request(config: &OpenAiConfig, request: &Request) -> Result<Value,
     };
     let mut body = json!({ "model": config.model, "input": input, "stream": true, "store": false,
         "include": ["reasoning.encrypted_content"], "tools": tools });
-    if let Some(fields) = body.as_object_mut() {
-        if let Some(prompt) = &request.system_prompt {
-            fields.insert("instructions".into(), prompt.clone().into());
-        }
-        if let Some(effort) = &config.reasoning_effort {
-            fields.insert("reasoning".into(), json!({ "effort": effort }));
-        }
+    // The reasoning effort is the provider's to write (`OpenAiAiProvider::body`).
+    if let Some(fields) = body.as_object_mut()
+        && let Some(prompt) = &request.system_prompt
+    {
+        fields.insert("instructions".into(), prompt.clone().into());
     }
     Ok(body)
 }

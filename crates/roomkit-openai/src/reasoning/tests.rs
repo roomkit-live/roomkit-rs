@@ -287,3 +287,42 @@ async fn a_refused_model_is_named_before_a_refused_tool_name() {
         "{error}"
     );
 }
+
+/// On the Responses API the turn's effort stands over the configured one
+/// and an effort of `none` goes as the model's floor, but the tool-turn
+/// locks, measured on Chat Completions, do not apply (HITL 78d888bf,
+/// option 1).
+#[test]
+fn on_the_responses_api_the_floor_applies_and_the_tool_turn_locks_do_not() {
+    let responses = |model: &str, effort: Option<&str>| {
+        let config = OpenAiConfig {
+            api: crate::OpenAiApi::Responses,
+            reasoning_effort: effort.map(str::to_owned),
+            ..OpenAiConfig::new("sk-test", model)
+        };
+        OpenAiAiProvider::new(config).unwrap()
+    };
+    let sent = |provider: &OpenAiAiProvider, turn: Option<&str>, tools: bool| {
+        let mut asked = context(tools);
+        asked.reasoning_effort = turn.map(str::to_owned);
+        let request = crate::request::Request::of(&asked).unwrap();
+        provider.body(&request, true).unwrap()["reasoning"]["effort"].clone()
+    };
+    let effort = |value: &str| serde_json::Value::from(value);
+    assert_eq!(
+        sent(&responses("gpt-5", Some("none")), None, false),
+        effort("minimal")
+    );
+    assert_eq!(
+        sent(&responses("gpt-6-luna", Some("high")), None, true),
+        effort("high")
+    );
+    assert_eq!(
+        sent(&responses("gpt-5-mini", Some("high")), Some("low"), true),
+        effort("low")
+    );
+    assert_eq!(
+        sent(&responses("gpt-5", None), None, false),
+        serde_json::Value::Null
+    );
+}

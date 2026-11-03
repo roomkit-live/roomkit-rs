@@ -90,14 +90,24 @@ impl OpenAiAiProvider {
     /// catalogue knows the model's least effort; then, on a turn with
     /// tools, what the endpoint accepts there ([`Self::tool_turn_effort`]).
     pub(crate) fn reasoning_effort(&self, turn: Option<&str>, tools: bool) -> Option<String> {
-        let entry = self.official_entry();
-        let configured = self.config.reasoning_effort.as_deref();
-        let effort = reasoning::floored_effort(turn, configured, reasoning::reasoning_floor(entry));
+        let effort = self.floored_effort(turn);
         if tools {
-            self.tool_turn_effort(entry, effort)
+            self.tool_turn_effort(self.official_entry(), effort)
         } else {
             effort
         }
+    }
+
+    /// The effort a request asks for before any tool-turn rule: the turn's
+    /// `turn` over the configured one, and the model's floor where it
+    /// states off (`none`) and OpenAI's catalogue knows the model's least
+    /// effort (Python's `_turn_effort`). The Responses API sends it as it
+    /// is: the tool-turn rule was measured on Chat Completions (HITL
+    /// 78d888bf, option 1).
+    fn floored_effort(&self, turn: Option<&str>) -> Option<String> {
+        let configured = self.config.reasoning_effort.as_deref();
+        let floor = reasoning::reasoning_floor(self.official_entry());
+        reasoning::floored_effort(turn, configured, floor)
     }
 
     /// The effort a turn with tools sends (Python's `_tool_turn_effort`):
@@ -165,9 +175,19 @@ impl OpenAiAiProvider {
     /// Completions, refused first for a model OpenAI's endpoint does not
     /// serve so (Python's `_check_model_serves`), then carrying the effort
     /// the turn sends ([`Self::reasoning_effort`]).
-    fn body(&self, request: &Request, streamed: bool) -> Result<serde_json::Value, OpenAiError> {
+    pub(crate) fn body(
+        &self,
+        request: &Request,
+        streamed: bool,
+    ) -> Result<serde_json::Value, OpenAiError> {
         if self.config.api == OpenAiApi::Responses {
-            return crate::responses::request(&self.config, request);
+            let mut value = crate::responses::request(&self.config, request)?;
+            if let Some(effort) = self.floored_effort(request.reasoning_effort.as_deref())
+                && let Some(fields) = value.as_object_mut()
+            {
+                fields.insert("reasoning".into(), serde_json::json!({ "effort": effort }));
+            }
+            return Ok(value);
         }
         let tools = !request.tools.is_empty();
         reasoning::check_model_serves(&self.config.model, self.official_entry(), tools)?;

@@ -22,8 +22,8 @@ pub struct AiContext {
     /// provider's configuration.
     pub max_tokens: Option<u32>,
     /// How hard a reasoning model thinks this turn (RFC §6.7), which a
-    /// provider prefers over its configured effort (`OpenAiAiProvider` on
-    /// Chat Completions); `None` leaves it to the provider's configuration.
+    /// provider prefers over its configured effort; `None` leaves it to the
+    /// provider's configuration.
     /// Python's `reasoning_effort`.
     pub reasoning_effort: Option<String>,
     /// The tools the model may call, in the toolset's order.
