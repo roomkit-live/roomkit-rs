@@ -109,6 +109,7 @@ const CHANNEL: &[&str] = &[
     "enable_thinking",
     "thinking_coalesce_ms",
     "thinking_coalesce_chars",
+    "publish_thinking_text",
     "retry_policy",
     "fallback_model",
     "max_author_images",

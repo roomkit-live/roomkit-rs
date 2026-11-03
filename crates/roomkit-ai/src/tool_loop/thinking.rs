@@ -3,6 +3,11 @@
 //! and `ON_AI_THINKING`. Python's `_StreamRound._add_thinking`,
 //! `_end_thinking`, `_close_thinking_window`, `_publish_thinking_event` and
 //! `_ThinkingCoalescer`.
+//!
+//! The reasoning repeats what the model read, and a room's realtime channel
+//! has no visibility gate: its events carry its length, its round and the
+//! channel, its text only for a channel that opted in
+//! ([`AiChannelOptions::publish_thinking_text`](crate::AiChannelOptions::publish_thinking_text)).
 
 use roomkit::TurnHost;
 use roomkit::model::{ChannelId, Metadata, RoomId};
@@ -77,14 +82,18 @@ struct Observers {
     turn: TurnHost,
     room_id: RoomId,
     channel_id: ChannelId,
+    /// Whether the room's subscribers read the reasoning's text.
+    publishes_text: bool,
 }
 
 impl Observers {
     /// Publishes `event_type` with `thinking`, best-effort.
     async fn publish(&self, event_type: EphemeralEventType, thinking: &str, round: u32) {
-        let preview: String = thinking.chars().take(THINKING_PREVIEW_LIMIT).collect();
         let mut data = Metadata::new();
-        data.insert("thinking".to_owned(), Value::from(preview));
+        if self.publishes_text {
+            let preview: String = thinking.chars().take(THINKING_PREVIEW_LIMIT).collect();
+            data.insert("thinking".to_owned(), Value::from(preview));
+        }
         data.insert(
             "thinking_length".to_owned(),
             Value::from(thinking.chars().count()),
@@ -126,13 +135,14 @@ impl ThinkingWindow {
         turn: Option<&TurnHost>,
         (room_id, channel_id): (&RoomId, &ChannelId),
         round: u32,
-        coalescer: ThinkingCoalescer,
+        (coalescer, publishes_text): (ThinkingCoalescer, bool),
     ) -> Self {
         Self {
             observers: turn.map(|turn| Observers {
                 turn: turn.clone(),
                 room_id: room_id.clone(),
                 channel_id: channel_id.clone(),
+                publishes_text,
             }),
             round,
             coalescer,

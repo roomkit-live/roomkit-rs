@@ -65,6 +65,7 @@ async fn blocks(events: Vec<StreamEvent>) -> Vec<String> {
     let provider = Streams(Mutex::new(events.into()));
     let options = AiChannelOptions {
         thinking_coalesce_ms: 60_000.0,
+        publish_thinking_text: true,
         ..AiChannelOptions::default()
     };
     let agent = AiChannel::new(channel("assistant"), provider, options).unwrap();

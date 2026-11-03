@@ -89,6 +89,11 @@ pub struct AiChannelOptions {
     /// How many characters batch into one `THINKING_DELTA` publish. Python's
     /// `thinking_coalesce_chars`, 256 by default.
     pub thinking_coalesce_chars: usize,
+    /// Whether a room's realtime subscribers read the model's reasoning text.
+    /// It repeats what the model read and the channel has no visibility gate:
+    /// by default they read its length and its round alone. Python's
+    /// `publish_thinking_text`.
+    pub publish_thinking_text: bool,
     /// The window of the default memory: how many of the room's latest
     /// events a turn reads, its own among them (RFC §20.3).
     pub max_context_events: usize,
@@ -223,6 +228,7 @@ impl Default for AiChannelOptions {
             enable_thinking: None,
             thinking_coalesce_ms: 80.0,
             thinking_coalesce_chars: 256,
+            publish_thinking_text: false,
             max_context_events: 50,
             memory: None,
             tool_handler: None,
@@ -329,6 +335,7 @@ pub struct AiChannel<P> {
     max_tokens: Option<u32>,
     thinking: (Option<i64>, Option<bool>),
     thinking_coalesce: (f64, usize),
+    publish_thinking_text: bool,
     reasoning_effort: Option<String>,
     /// What configures each turn (RFC Appendix A.9).
     turn_configs: TurnConfigs,
@@ -418,6 +425,7 @@ impl<P> Clone for AiChannel<P> {
             max_tokens: self.max_tokens,
             thinking: self.thinking,
             thinking_coalesce: self.thinking_coalesce,
+            publish_thinking_text: self.publish_thinking_text,
             reasoning_effort: self.reasoning_effort.clone(),
             turn_configs: self.turn_configs.clone(),
             server_instructions: self.server_instructions.clone(),
@@ -466,6 +474,7 @@ impl<P: AiProvider> AiChannel<P> {
             enable_thinking,
             thinking_coalesce_ms,
             thinking_coalesce_chars,
+            publish_thinking_text,
             reasoning_effort,
             config_provider,
             max_context_events,
@@ -533,6 +542,7 @@ impl<P: AiProvider> AiChannel<P> {
             max_tokens,
             thinking: (thinking_budget, enable_thinking),
             thinking_coalesce: (thinking_coalesce_ms, thinking_coalesce_chars),
+            publish_thinking_text,
             reasoning_effort,
             turn_configs: TurnConfigs::new(config_provider),
             server_instructions: instructions,
@@ -1306,6 +1316,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             thinking_budget: settings.thinking_budget,
             enable_thinking: settings.enable_thinking,
             thinking_coalesce: self.thinking_coalesce,
+            publish_thinking_text: self.publish_thinking_text,
             reasoning_effort: settings.reasoning_effort.clone(),
             turn: turn.clone(),
             context: tools,

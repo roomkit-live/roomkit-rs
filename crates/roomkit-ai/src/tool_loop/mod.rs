@@ -160,6 +160,8 @@ pub(crate) struct Loop<P> {
     pub(crate) enable_thinking: Option<bool>,
     /// How long and how many characters a round's reasoning batches for.
     pub(crate) thinking_coalesce: (f64, usize),
+    /// Whether the room's subscribers read a round's reasoning text.
+    pub(crate) publish_thinking_text: bool,
     pub(crate) reasoning_effort: Option<String>,
     /// The kit's turn, whose hooks each call runs; `None` outside the kit.
     pub(crate) turn: Option<TurnHost>,
@@ -220,7 +222,10 @@ impl<P: AiProvider> Loop<P> {
             self.turn.as_ref(),
             (&self.context.room_id, &self.context.channel_id),
             round,
-            ThinkingCoalescer::new(flush_ms, flush_chars),
+            (
+                ThinkingCoalescer::new(flush_ms, flush_chars),
+                self.publish_thinking_text,
+            ),
         )
     }
 

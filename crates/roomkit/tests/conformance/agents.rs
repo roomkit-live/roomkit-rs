@@ -531,6 +531,7 @@ fn agent_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), St
             .ok_or("thinking_coalesce_chars: not a count")?;
         options.thinking_coalesce_chars = usize::try_from(flush).map_err(|e| e.to_string())?;
     }
+    options.publish_thinking_text = spec["publish_thinking_text"] == true;
     if let Some(budget) = spec.get("thinking_budget") {
         options.thinking_budget = Some(budget.as_i64().ok_or("thinking_budget: not a count")?);
     }
