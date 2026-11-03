@@ -41,11 +41,11 @@ fn warned(logs: &Warnings) -> Vec<String> {
 }
 
 /// RFC §12.10.4: a turn streaming as the kit closes is cut, what it said
-/// stored marked `cancelled`, its caller reading no error, and nothing is
-/// logged as a warning: a failure the close causes is no failure (Python's
-/// `test_a_room_turn_returns_cancelled_to_its_caller`, whose caller reads
-/// the turn's record in its result's `response_metadata`, which Rust's has
-/// not).
+/// stored marked `cancelled`, its caller reading no error and the turn's
+/// end, `cancelled`, in its result's `response_metadata["turns"]`, and
+/// nothing is logged as a warning: a failure the close causes is no
+/// failure (Python's `test_a_room_turn_returns_cancelled_to_its_caller`,
+/// RMK-1037).
 /// The call is awaited, deferred, or a `send_event`.
 #[tokio::test(start_paused = true)]
 async fn a_room_turn_returns_cancelled_to_its_caller() {
@@ -61,7 +61,7 @@ async fn a_room_turn_returns_cancelled_to_its_caller() {
                     let (content, sms) = (TextContent::new("Go."), channel("sms"));
                     let options = SendEventOptions::default();
                     let sent = kit.send_event(&room("r"), &sms, content, options).await;
-                    return (sent.is_ok(), None);
+                    return (sent.is_ok(), None, None);
                 }
                 let options = ProcessInboundOptions {
                     defer_delivery: door == "deferred",
@@ -71,7 +71,10 @@ async fn a_room_turn_returns_cancelled_to_its_caller() {
                 if let Some(delivery) = result.delivery.take() {
                     result = delivery.wait().await.unwrap();
                 }
-                (true, result.error.map(|error| error.error_type))
+                let ended = result.response_metadata["turns"]["agent"]["loop_end_reason"]
+                    .as_str()
+                    .map(str::to_owned);
+                (true, result.error.map(|error| error.error_type), ended)
             }
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -86,8 +89,16 @@ async fn a_room_turn_returns_cancelled_to_its_caller() {
         let cancelled = cancelled(&kit).await;
         rows.push((door, ended, cancelled, warned(&logs)));
     }
-    let row = |door| (door, (true, None), true, vec![]);
-    assert_eq!(rows, [row("awaited"), row("deferred"), row("send_event")]);
+    let row =
+        |door, ended: Option<&str>| (door, (true, None, ended.map(str::to_owned)), true, vec![]);
+    assert_eq!(
+        rows,
+        [
+            row("awaited", Some("cancelled")),
+            row("deferred", Some("cancelled")),
+            row("send_event", None)
+        ]
+    );
 }
 
 /// The tool-call end rows `r` stores, each with its status and error.
