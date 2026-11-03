@@ -3,6 +3,7 @@
 //! and scripted tools, and the hooks on the tool triggers, which register
 //! through the kit's typed registrations.
 
+use std::collections::HashMap;
 use std::future::{Future, pending};
 use std::pin::Pin;
 use std::sync::{Arc, Weak};
@@ -13,19 +14,19 @@ use futures_core::Stream;
 
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
-    ChannelId, HookAction, HookResult, Metadata, RetryPolicy, RoomContext, ToolCall,
+    ChannelBinding, ChannelId, HookAction, HookResult, Metadata, RetryPolicy, RoomContext, ToolCall,
 };
-use roomkit::{HookError, ToolCallEvent};
+use roomkit::{ChannelError, HookError, ToolCallEvent};
 use roomkit_ai::tasks::{
     CancelTaskTool, CancelTaskToolOptions, TaskStatusTool, TaskStatusToolOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    Agent, AgentOptions, AiChannel, AiChannelOptions, AiContentPart, AiContext, AiImagePart,
-    AiMessageContent, AiProvider, AiResponse, AiRole, AiTextPart, AiTool, HumanInputToolHandler,
-    HumanInputToolHandlerOptions, ModelInfo, ModelPricing, ProviderError, ProviderStream,
-    StreamEvent, Tool, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, ToolResult,
-    ToolResultPart, Tools,
+    Agent, AgentOptions, AiChannel, AiChannelOptions, AiChannelTurnConfig, AiContentPart,
+    AiContext, AiImagePart, AiMessageContent, AiProvider, AiResponse, AiRole, AiTextPart, AiTool,
+    HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo, ModelPricing, ProviderError,
+    ProviderStream, StreamEvent, Tool, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy,
+    ToolResult, ToolResultPart, Tools,
 };
 use serde_json::{Value, json};
 
@@ -174,6 +175,10 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
     {
         let effort = effort.as_str().ok_or("reasoning_effort: not a text")?;
         options.reasoning_effort = Some(effort.to_owned());
+    }
+    agent_settings(spec, &mut options)?;
+    if let Some(by_room) = spec.get("config_provider") {
+        options.config_provider = Some(config_provider(by_room, run)?);
     }
     if let Some(bound) = spec.get("max_author_images") {
         options.max_author_images = if bound.is_null() {
@@ -474,9 +479,16 @@ fn undeclared_tools(spec: &Value, run: &Arc<Run>) -> Option<ToolHandler> {
     if undeclared.is_empty() {
         return None;
     }
+    Some(scripted_handler(undeclared, run))
+}
+
+/// A handler serving `tools`, scripted tools, each answering every call
+/// one way, held at its `gate` first, `run`'s; a name it does not hold is
+/// unserved.
+fn scripted_handler(tools: Vec<Value>, run: &Arc<Run>) -> ToolHandler {
     let run = Arc::downgrade(run);
-    Some(ToolHandler::new(move |name, _arguments| {
-        let behaviour = undeclared.iter().find(|tool| tool["name"] == name).cloned();
+    ToolHandler::new(move |name, _arguments| {
+        let behaviour = tools.iter().find(|tool| tool["name"] == name).cloned();
         let run = Weak::clone(&run);
         async move {
             let Some(behaviour) = behaviour else {
@@ -487,7 +499,90 @@ fn undeclared_tools(spec: &Value, run: &Arc<Run>) -> Option<ToolHandler> {
             }
             answer(&behaviour).await
         }
-    }))
+    })
+}
+
+/// A scripted agent's own `system_prompt`, `temperature` and `max_tokens`
+/// (README, "Scripted agents").
+fn agent_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), String> {
+    if let Some(prompt) = spec.get("system_prompt") {
+        let prompt = prompt.as_str().ok_or("system_prompt: not a text")?;
+        options.system_prompt = Some(prompt.to_owned());
+    }
+    if let Some(temperature) = spec.get("temperature") {
+        options.temperature = temperature.as_f64().ok_or("temperature: not a number")?;
+    }
+    if let Some(bound) = spec.get("max_tokens") {
+        let bound = bound.as_u64().ok_or("max_tokens: not a count")?;
+        options.max_tokens = Some(u32::try_from(bound).map_err(|e| e.to_string())?);
+    }
+    Ok(())
+}
+
+/// What a scripted agent's `config_provider` answers a turn.
+type TurnConfigFuture =
+    Pin<Box<dyn Future<Output = Result<Option<AiChannelTurnConfig>, ChannelError>> + Send>>;
+
+/// A scripted agent's per-turn configuration (README, "Scripted agents"):
+/// the one `by_room` gives the binding's room, none for a room it does
+/// not name; called with a context of another room, the turn fails.
+fn config_provider(
+    by_room: &Value,
+    run: &Arc<Run>,
+) -> Result<Arc<dyn Fn(ChannelBinding, RoomContext) -> TurnConfigFuture + Send + Sync>, String> {
+    let mut configs: HashMap<String, Option<AiChannelTurnConfig>> = HashMap::new();
+    for (room, spec) in by_room
+        .as_object()
+        .ok_or("config_provider: not an object")?
+    {
+        let config = if spec.is_null() {
+            None
+        } else {
+            Some(turn_config(spec, run)?)
+        };
+        configs.insert(room.clone(), config);
+    }
+    Ok(Arc::new(
+        move |binding: ChannelBinding, context: RoomContext| {
+            let config = configs.get(binding.room_id.as_str()).cloned().flatten();
+            Box::pin(async move {
+                if context.room.id != binding.room_id {
+                    let called = format!("called for {} in {}", binding.room_id, context.room.id);
+                    return Err(called.into());
+                }
+                Ok(config)
+            })
+        },
+    ))
+}
+
+/// One turn's configuration a scenario's `config_provider` gives (README,
+/// "Scripted agents"), its handler's tools held at their gates, `run`'s.
+fn turn_config(spec: &Value, run: &Arc<Run>) -> Result<AiChannelTurnConfig, String> {
+    let text = |key: &str| spec[key].as_str().map(str::to_owned);
+    let tools = spec["tools"].as_array().map(|tools| {
+        tools
+            .iter()
+            .map(|tool| AiTool {
+                name: tool["name"].as_str().unwrap_or_default().to_owned(),
+                description: tool["description"].as_str().unwrap_or_default().to_owned(),
+                parameters: tool.get("parameters").cloned().unwrap_or_else(|| json!({})),
+            })
+            .collect()
+    });
+    let max_tokens = spec["max_tokens"].as_u64().map(u32::try_from).transpose();
+    Ok(AiChannelTurnConfig {
+        system_prompt: text("system_prompt"),
+        tools,
+        temperature: spec["temperature"].as_f64(),
+        max_tokens: max_tokens.map_err(|e| e.to_string())?,
+        reasoning_effort: text("reasoning_effort"),
+        turn_budget_tokens: spec["turn_budget_tokens"].as_u64(),
+        turn_budget_usd: spec["turn_budget_usd"].as_f64(),
+        tool_handler: spec["tool_handler"]
+            .as_array()
+            .map(|tools| scripted_handler(tools.clone(), run)),
+    })
 }
 
 /// The scripted tools of `spec` the agent declares, each answering every

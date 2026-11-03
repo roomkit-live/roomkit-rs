@@ -101,6 +101,10 @@ const CHANNEL: &[&str] = &[
     "turn_budget_tokens",
     "reasoning_effort",
     "turn_budget_usd",
+    "system_prompt",
+    "temperature",
+    "max_tokens",
+    "config_provider",
     "retry_policy",
     "fallback_model",
     "max_author_images",
@@ -128,6 +132,17 @@ const AGENT: &[&str] = &[
     "identity_in_prompt",
 ];
 const HUMAN_INPUT: &[&str] = &["tool_names", "timeout_ms", "tools"];
+const TURN_CONFIG: &[&str] = &[
+    "system_prompt",
+    "tools",
+    "temperature",
+    "max_tokens",
+    "reasoning_effort",
+    "turn_budget_tokens",
+    "turn_budget_usd",
+    "tool_handler",
+];
+const TURN_TOOL: &[&str] = &["name", "description", "parameters"];
 const HUMAN_TOOL: &[&str] = &["name", "description", "parameters"];
 const MODEL: &[&str] = &["rounds", "vision", "pricing"];
 const MODEL_ROUND: &[&str] = &[
@@ -584,6 +599,19 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     );
     optional(&channel["agent"], AGENT, &format!("{path}.agent"), found);
     memory(&channel["memory"], &format!("{path}.memory"), found);
+    for (room, config) in channel["config_provider"].as_object().into_iter().flatten() {
+        turn_config(config, &format!("{path}.config_provider.{room}"), found);
+    }
+}
+
+fn turn_config(config: &Value, path: &str, found: &mut Vec<String>) {
+    optional(config, TURN_CONFIG, path, found);
+    for (index, tool) in items(&config["tools"]) {
+        members(tool, TURN_TOOL, &format!("{path}.tools[{index}]"), found);
+    }
+    for (index, tool) in items(&config["tool_handler"]) {
+        members(tool, TOOL, &format!("{path}.tool_handler[{index}]"), found);
+    }
 }
 
 fn memory(memory: &Value, path: &str, found: &mut Vec<String>) {
