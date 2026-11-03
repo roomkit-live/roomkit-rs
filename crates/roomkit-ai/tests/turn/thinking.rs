@@ -3,6 +3,7 @@
 //! again after its text or a call, which a scripted round does not write.
 
 use std::collections::VecDeque;
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
@@ -27,8 +28,11 @@ impl AiProvider for Streams {
         "streams"
     }
 
-    async fn generate(&self, _context: &AiContext) -> Result<AiResponse, ProviderError> {
-        Ok(AiResponse::new(""))
+    fn generate<'a>(
+        &'a self,
+        _context: &'a AiContext,
+    ) -> impl Future<Output = Result<AiResponse, ProviderError>> + Send + 'a {
+        std::future::ready(Ok(AiResponse::new("")))
     }
 
     fn generate_structured_stream<'a>(&'a self, _context: &'a AiContext) -> ProviderStream<'a> {
@@ -89,8 +93,7 @@ async fn blocks(events: Vec<StreamEvent>) -> Vec<String> {
         tokio::task::yield_now().await;
     }
     room.kit.close().await.unwrap();
-    let read = ended.lock().unwrap_or_else(PoisonError::into_inner).clone();
-    read
+    ended.lock().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
 // Python: tests/test_ai_streaming_thinking.py::test_each_thinking_end_carries_only_its_own_block_across_text
