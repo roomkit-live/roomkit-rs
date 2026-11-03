@@ -239,6 +239,8 @@ pub use self::orchestration::Loop;
 #[doc(inline)]
 pub use self::orchestration::Orchestration;
 #[doc(inline)]
+pub use self::orchestration::Supervisor;
+#[doc(inline)]
 pub use self::orchestration::{
     ConversationPhase, ConversationRouter, ConversationState, RoutingConditions, RoutingRule,
     get_conversation_state, save_conversation_state, set_conversation_state,

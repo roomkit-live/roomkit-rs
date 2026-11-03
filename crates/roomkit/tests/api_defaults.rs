@@ -1377,6 +1377,19 @@ fn loop_options_defaults_as_python() {
 }
 
 #[test]
+fn supervisor_options_defaults_as_python() {
+    let defaults = orchestration::SupervisorOptions::default();
+    // roomkit.Supervisor.__init__(strategy) = None
+    assert!(defaults.strategy.is_none());
+    // roomkit.Supervisor.__init__(share_channels) = None
+    assert!(defaults.share_channels.is_none());
+    // roomkit.Supervisor.__init__(task_timeout) = 120.0
+    assert_eq!(defaults.task_timeout, Duration::from_secs(120));
+    // roomkit.Supervisor.__init__(max_revisions) = 3
+    assert_eq!(defaults.max_revisions, 3);
+}
+
+#[test]
 fn transition_options_defaults_as_python() {
     let defaults = orchestration::TransitionOptions::default();
     // roomkit.ConversationState.transition(to_agent) = None

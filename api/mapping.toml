@@ -520,6 +520,16 @@ params = ["async_delivery"]
 reason = "not in 0.x: the loop run in the background for a realtime voice session (left out of the orchestration lots with voice and realtime, HITL a9e5d1a3; RMK-1233)"
 
 [[missing]]
+python = "roomkit.Supervisor.__init__"
+params = ["auto_delegate", "refine_task", "refine_instruction", "delegation_message", "wait_for_result"]
+reason = "not yet: the framework-driven delegation (one pass, two passes) and the per-worker tools run in the background, stream I's lot 5b (RMK-1233)"
+
+[[missing]]
+python = "roomkit.Supervisor.__init__"
+params = ["async_delivery"]
+reason = "not in 0.x: the team run in the background and handed back, and the realtime voice supervisor (left out of the orchestration lots with voice and async delivery, HITL a9e5d1a3; RMK-1233)"
+
+[[missing]]
 python = "roomkit.ConversationRouter"
 members = ["install"]
 reason = "not yet: the router's install wires the handoff, which comes with stream I's lot 6 (HandoffHandler, setup_handoff; RMK-1233)"

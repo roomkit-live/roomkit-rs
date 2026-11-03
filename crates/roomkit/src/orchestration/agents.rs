@@ -10,12 +10,15 @@ use crate::kit::RoomKit;
 use crate::orchestration::StrategyAgent;
 use crate::store::ConversationStore;
 
-/// A strategy's agent as it reads it: its channel id, and the role its
-/// identity gives it, Python's `HeldAgent`.
+/// A strategy's agent as it reads it: its channel id, and the role, the
+/// description and the purpose its identity gives it, Python's
+/// `HeldAgent`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HeldAgent {
     pub(crate) channel_id: ChannelId,
-    role: Option<String>,
+    pub(crate) role: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) purpose: Option<String>,
 }
 
 impl HeldAgent {
@@ -45,12 +48,8 @@ pub(crate) fn held<S: ConversationStore>(
 ) -> Result<HeldAgent, RoomKitError> {
     let channel_id = agent.channel_id().clone();
     if let Some(live) = agent.live() {
-        let role = live
-            .channel
-            .declaration()
-            .identity
-            .and_then(|identity| identity.role);
-        return Ok(HeldAgent { channel_id, role });
+        let identity = live.channel.declaration().identity.unwrap_or_default();
+        return Ok(HeldAgent::of(channel_id, identity));
     }
     let declaration = kit
         .inner
@@ -74,10 +73,19 @@ pub(crate) fn held<S: ConversationStore>(
              its id only then"
         )));
     };
-    Ok(HeldAgent {
-        channel_id,
-        role: identity.role,
-    })
+    Ok(HeldAgent::of(channel_id, identity))
+}
+
+impl HeldAgent {
+    /// The agent `channel_id` as its `identity` describes it.
+    fn of(channel_id: ChannelId, identity: crate::channel::AgentIdentity) -> Self {
+        Self {
+            channel_id,
+            role: identity.role,
+            description: identity.description,
+            purpose: identity.purpose,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -91,6 +99,8 @@ pub(crate) mod tests {
         HeldAgent {
             channel_id: ChannelId::new(name).unwrap_or_else(|error| panic!("{error}")),
             role: None,
+            description: None,
+            purpose: None,
         }
     }
 
