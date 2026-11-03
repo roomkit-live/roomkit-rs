@@ -212,6 +212,18 @@ impl<'a> People<'a> {
     }
 }
 
+/// The record `participant_id` names on `channel_id` among `participants`
+/// (RFC §5.5, §11.2), as Python's `People.named_on` reads it: the record of
+/// that id, else of that identity, reached through the channel, else the
+/// sender's own record the id names there.
+pub(crate) fn named_on<'a>(
+    participants: &'a [Participant],
+    participant_id: &str,
+    channel_id: &str,
+) -> Option<&'a Participant> {
+    People::new(participants).named_on(Some(participant_id), channel_id)
+}
+
 /// Whether the room reached `record`'s participant through `channel`.
 fn reached(record: &Participant, channel: &str) -> bool {
     record

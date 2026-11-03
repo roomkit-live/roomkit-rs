@@ -1,6 +1,7 @@
 //! The host's own voice (RFC §10.5): who a post may speak as.
 
 use crate::model::{ChannelCategory, ChannelId, ChannelType, Participant, ParticipantId};
+use crate::rules::authors;
 
 /// Whom a post's `participant_id` names, as a turn's sender is read (RFC
 /// §5.5): an id names its participant only on the channels the room
@@ -18,26 +19,17 @@ pub(crate) enum Speaker {
 
 /// Whom `participant_id` names among `participants`, for a post from the
 /// host channel `channel_id` (RFC §10.5): a participant whose id, or whose
-/// identity's, it is, reached through that channel (`connected_via`). An
-/// id that is a participant's own, reached through other channels only,
-/// names them elsewhere; an identity's id names nobody unless the host
-/// channel reaches its participant, as Python's post reads it.
+/// identity's, it is, reached through that channel (`connected_via`), or
+/// the sender's own record the id names there, as Python's post reads it
+/// through `People.named_on`. An id that is a participant's own, reached
+/// through other channels only, names them elsewhere; an identity's id
+/// names nobody unless the host channel reaches its participant.
 pub(crate) fn speaker(
     participants: &[Participant],
     participant_id: &ParticipantId,
     channel_id: &ChannelId,
 ) -> Speaker {
-    let by_identity = |participant: &Participant| {
-        participant
-            .identity_id
-            .as_ref()
-            .is_some_and(|identity| identity.as_str() == participant_id.as_str())
-    };
-    let reached = participants.iter().any(|participant| {
-        (&participant.id == participant_id || by_identity(participant))
-            && participant.connected_via.contains(channel_id)
-    });
-    if reached {
+    if authors::named_on(participants, participant_id.as_str(), channel_id.as_str()).is_some() {
         return Speaker::Reached;
     }
     if participants
@@ -94,7 +86,8 @@ mod tests {
 
     /// RFC §10.5, §5.5: a member added on the host channel, by their id or
     /// their identity's; an SMS member added on it too; one reached through
-    /// SMS only, by their id, elsewhere, by their identity's, nobody; nobody.
+    /// SMS only, by their id, elsewhere, by their identity's, nobody; the
+    /// own record an id names on the host channel; nobody.
     #[test]
     fn a_speaker_is_a_participant_the_host_channel_reaches() {
         let mut desk = on("desk", "host");
@@ -103,13 +96,17 @@ mod tests {
         both.connected_via.push(channel("host"));
         let mut sms_only = on("+15550100002", "sms");
         sms_only.identity_id = Some(IdentityId::new("id-marie").unwrap());
-        let room = [desk, both, sms_only];
+        // The own record the id "kiosk" names on the host channel (RFC
+        // §11.2), as Python's People.named_on reads it (RMK-1163).
+        let own = on(&authors::own_record_id("host", "kiosk"), "host");
+        let room = [desk, both, sms_only, own];
         let read = [
             "desk",
             "id-desk",
             "+15550100001",
             "+15550100002",
             "id-marie",
+            "kiosk",
             "ghost",
         ]
         .map(|named| speaker(&room, &id(named), &channel("host")));
@@ -121,6 +118,7 @@ mod tests {
                 Speaker::Reached,
                 Speaker::ReachedElsewhere,
                 Speaker::Nobody,
+                Speaker::Reached,
                 Speaker::Nobody
             ]
         );
