@@ -18,7 +18,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `str.isprintable` refuses, as Python does: `'Bob\xa0Smith'` and
   `'\u202e'`, where it wrote the no-break space and the right-to-left
   override raw; one helper over a table generated from Python's Unicode
-  data replaces four copies (RMK-1163, RMK-1255).
+  data replaces four copies (RMK-1163, RMK-1255). A call for a tool no
+  handler serves is declined naming it so too, `tool 'x' is not served
+  here` (a person's tools, an MCP provider, a channel's handler, the task
+  tools), where it wrote `"x"` from the `Debug` form.
 - A turn with tools behind a `base_url` sends `reasoning_effort` only where `OpenAiConfig::supports_reasoning_effort_with_tools` says the server takes it there, as Python's does: a server that refuses it on a tool turn no longer answers 400; set the switch to `Some(true)` where the server takes it (RFC §6.7, RMK-1088).
 - A generation's retries and its fallback provider (RFC §6.4), as Python's: `AiChannelOptions::retry_policy` tries a refusal worth another try again, before anything was handed, after a compacted replay of an overflow; `fallback_provider`, any provider as a `DynAiProvider`, is asked once the retries are spent, and its failure before it handed anything leaves the primary's error (RMK-1267).
 - The JSON the kit writes as Python's `json.dumps` (a tool's answer or

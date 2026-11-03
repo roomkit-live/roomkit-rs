@@ -8,6 +8,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use roomkit::model::{ChannelId, Metadata, RoomId};
+use roomkit_core::rules::python_repr;
 use serde_json::Value;
 
 use roomkit::model::ToolCall;
@@ -294,11 +295,42 @@ impl DynToolset for ServedBy {
         Box::pin(within_call(within, actor_id, async move {
             match handler.call(call.name.clone(), call.arguments).await {
                 Ok(answer) if is_unknown_tool_answer(&answer) => Err(ToolError::unserved(format!(
-                    "tool '{}' is not served here",
-                    call.name
+                    "tool {} is not served here",
+                    python_repr(&call.name)
                 ))),
                 answered => answered,
             }
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::*;
+
+    /// Python's `raise_if_unknown_tool` (`tools/result.py`): a handler's
+    /// unknown-tool answer declines the call,
+    /// `UnservedToolCallError(f"tool {name!r} is not served here")`.
+    #[tokio::test]
+    async fn a_call_its_handler_does_not_know_is_declined_naming_it_as_python_s_repr() {
+        let handler = ToolHandler::new(|name, _| async move {
+            Ok(ToolResult::Text(
+                json!({ "error": format!("Unknown tool: {name}") }).to_string(),
+            ))
+        });
+        let (toolset, _) = served_by(Some(handler), Vec::new()).unwrap().unwrap();
+        let context = ToolContext::new(RoomId::new("r").unwrap(), ChannelId::new("ai").unwrap());
+        let answer = toolset
+            .call(ToolCall::new("c1", "o'k", Metadata::new()), context)
+            .await;
+        assert_eq!(
+            answer,
+            Err(ToolError::unserved(
+                "tool \"o'k\" is not served here".to_owned()
+            ))
+        );
     }
 }

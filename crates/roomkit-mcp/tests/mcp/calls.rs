@@ -256,11 +256,24 @@ async fn a_labelled_handler_serves_its_aliases_and_its_tools_alone() {
             Ok(ToolResult::Text(name.to_owned()))
         );
     }
-    for name in ["mcp__right__echo", "mcp__left__fails", "fails"] {
-        let declined = call(&left, name, &json!({})).await;
-        assert!(
-            matches!(declined, Err(ToolError::UnservedToolCall(_))),
-            "{name}: {declined:?}"
+    // Python's `UnservedToolCallError`, the name as its `repr` writes it.
+    let declines = [
+        (
+            "mcp__right__echo",
+            "tool 'mcp__right__echo' names another server",
+        ),
+        (
+            "mcp__left__fails",
+            "tool 'mcp__left__fails' is not served here",
+        ),
+        ("fails", "tool 'fails' is not served here"),
+    ];
+    for (name, text) in declines {
+        let answer = call(&left, name, &json!({})).await;
+        assert_eq!(
+            answer,
+            Err(ToolError::UnservedToolCall(text.to_owned())),
+            "{name}"
         );
     }
     let ungated = left

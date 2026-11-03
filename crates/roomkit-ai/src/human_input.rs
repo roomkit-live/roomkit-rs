@@ -10,6 +10,7 @@ use std::time::Duration;
 use roomkit::RoomKitError;
 use roomkit::human_input::{CreateOptions, HumanInputHandler, WaitOptions};
 use roomkit::model::{ChannelType, Metadata, ToolCall};
+use roomkit_core::rules::python_repr;
 
 use crate::error::AiError;
 use crate::texts::error_envelope;
@@ -181,7 +182,8 @@ impl HumanInputToolHandler {
     ) -> Result<String, ToolError> {
         if !self.tool_names.contains(name) {
             return Err(ToolError::unserved(format!(
-                "tool {name:?} is not served here"
+                "tool {} is not served here",
+                python_repr(name)
             )));
         }
         let waited = match self.handler.create(name, arguments, request).await {
@@ -291,7 +293,11 @@ mod tests {
         let answer = human
             .ask("other", Metadata::new(), AskOptions::default())
             .await;
-        assert!(matches!(answer, Err(ToolError::UnservedToolCall(_))));
+        // Python's `UnservedToolCallError(f"tool {name!r} is not served here")`.
+        assert!(
+            matches!(&answer, Err(ToolError::UnservedToolCall(text)) if text == "tool 'other' is not served here"),
+            "{answer:?}"
+        );
     }
 
     // Python: tests/test_human_input.py::test_tool_handler_blocks_and_resolves

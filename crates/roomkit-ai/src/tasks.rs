@@ -8,6 +8,7 @@
 use roomkit::model::Metadata;
 use roomkit::tasks::{TaskToolWindow, cancel_task_definition, task_status_definition};
 use roomkit::{ConversationStore, RoomKit, RoomKitError, WeakRoomKit};
+use roomkit_core::rules::python_repr;
 use serde_json::Value;
 
 use crate::tools::{AiTool, Tool, ToolError, ToolFuture, ToolResult, current_tool_call};
@@ -214,7 +215,7 @@ fn definition(written: &Value) -> AiTool {
 /// The decline of a call for another tool: Python's
 /// `UnservedToolCallError(f"tool {name!r} is not served here")`.
 fn not_served(name: &str) -> ToolError {
-    ToolError::UnservedToolCall(format!("tool '{name}' is not served here"))
+    ToolError::UnservedToolCall(format!("tool {} is not served here", python_repr(name)))
 }
 
 /// The answer of a call made outside any conversation: Python's
@@ -710,5 +711,15 @@ mod tests {
             .unwrap();
         room.kit.close().await.unwrap();
         assert_eq!((cancelled, room.handed_back()), (true, 1));
+    }
+
+    /// Python's `UnservedToolCallError(f"tool {name!r} is not served here")`:
+    /// the name as Python's `repr` writes it.
+    #[test]
+    fn another_tool_s_call_is_declined_naming_it_as_python_s_repr() {
+        assert_eq!(
+            not_served("o'k").to_string(),
+            ToolError::UnservedToolCall("tool \"o'k\" is not served here".to_owned()).to_string()
+        );
     }
 }

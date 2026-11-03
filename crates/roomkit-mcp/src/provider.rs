@@ -12,6 +12,7 @@ use std::time::Duration;
 use rmcp::model::CallToolResult;
 use roomkit::model::Metadata;
 use roomkit_ai::{AiTool, ToolError, ToolHandler, ToolResult, alias_server, served_tool_name};
+use roomkit_core::rules::python_repr;
 use tokio::sync::RwLock;
 
 use crate::command::McpCommand;
@@ -474,13 +475,15 @@ impl McpToolProvider {
             && server != label
         {
             return Err(ToolError::unserved(format!(
-                "tool {name:?} names another server"
+                "tool {} names another server",
+                python_repr(name)
             )));
         }
         let lookup = served_tool_name(name);
         if options.gate_discovery && !self.listed(lookup) {
             return Err(ToolError::unserved(format!(
-                "tool {name:?} is not served here"
+                "tool {} is not served here",
+                python_repr(name)
             )));
         }
         let timeout = CallToolOptions::default().timeout;
