@@ -393,6 +393,8 @@ mod tests {
             role: None,
             description: None,
             purpose: None,
+            greeting: None,
+            language: None,
         }
     }
 

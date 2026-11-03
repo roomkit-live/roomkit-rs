@@ -28,8 +28,16 @@ use crate::run::{Run, Scope};
 pub(crate) type Strategy = Arc<dyn Orchestration<crate::Store>>;
 
 /// The members of a scripted strategy, and of its install and uninstall.
-pub(crate) const STRATEGY: &[&str] =
-    &["id", "agents", "install", "uninstall", "loop", "supervisor"];
+pub(crate) const STRATEGY: &[&str] = &[
+    "id",
+    "agents",
+    "install",
+    "uninstall",
+    "loop",
+    "supervisor",
+    "swarm",
+];
+pub(crate) const SWARM: &[&str] = &["agents", "entry"];
 pub(crate) const LOOP: &[&str] = &[
     "agent",
     "reviewer",
@@ -125,6 +133,13 @@ pub(crate) fn strategies(
         }
         if let Some(team) = spec.get("supervisor") {
             strategies.insert(id, supervisor(team)?);
+            continue;
+        }
+        if let Some(swarm) = spec.get("swarm") {
+            let agents = field::<Vec<ChannelId>>(swarm, "agents")?;
+            let agents = agents.into_iter().map(StrategyAgent::from).collect();
+            let entry = crate::calls::optional::<ChannelId>(swarm, "entry")?;
+            strategies.insert(id, Arc::new(roomkit::Swarm::new(agents, entry)));
             continue;
         }
         let agents = crate::calls::optional::<Vec<ChannelId>>(spec, "agents")?.unwrap_or_default();

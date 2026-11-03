@@ -4,7 +4,7 @@
 //! event's metadata, which the broadcast reads to ask that agent alone,
 //! beside the router's supervisor.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::future::{Ready, ready};
 use std::sync::Arc;
@@ -16,8 +16,14 @@ use roomkit_core::model::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::agents::held;
+use super::handoff::{HandoffHandler, HandoffHandlerOptions};
 use super::state::{ConversationState, get_conversation_state};
+use crate::error::RoomKitError;
 use crate::hooks::HookError;
+use crate::kit::RoomKit;
+use crate::orchestration::StrategyAgent;
+use crate::store::ConversationStore;
 
 /// The metadata key the router stamps the agent it selected under.
 const ROUTED_TO: &str = "_routed_to";
@@ -270,4 +276,66 @@ fn stamped<const N: usize>(mut event: RoomEvent, marks: [(&str, Value); N]) -> R
 /// The result that modifies the event into `event`.
 fn modified(event: RoomEvent) -> HookResult {
     HookResult::modify(event, ModifyOptions::default())
+}
+
+/// A router's install: its hook, a handler over its settings, and the
+/// handoff on every agent, all of them or none. Python's
+/// `ConversationRouter.install(kit, agents, *, agent_aliases=None,
+/// phase_map=None, hook_priority=-100)`.
+#[derive(Clone, Debug)]
+pub struct InstallOptions {
+    /// Each alias's agent id.
+    pub agent_aliases: Option<HashMap<String, String>>,
+    /// The phase each target leads to.
+    pub phase_map: Option<HashMap<String, String>>,
+    /// The priority of the router's hook.
+    pub hook_priority: i32,
+}
+
+impl Default for InstallOptions {
+    fn default() -> Self {
+        Self {
+            agent_aliases: None,
+            phase_map: None,
+            hook_priority: -100,
+        }
+    }
+}
+
+impl ConversationRouter {
+    /// Wires routing and handoff in one call: this router's hook on every
+    /// `BEFORE_BROADCAST` of the kit, a [`HandoffHandler`], and the generic
+    /// handoff tool on every agent, each live or named by the id of one the
+    /// kit holds. Python's `install`.
+    ///
+    /// # Errors
+    ///
+    /// [`RoomKitError::ChannelNotRegistered`] for an id naming no channel of
+    /// the kit, nothing installed; what registering the hook fails with.
+    pub fn install<S: ConversationStore>(
+        &self,
+        kit: &RoomKit<S>,
+        agents: &[StrategyAgent],
+        options: InstallOptions,
+    ) -> Result<HandoffHandler<S>, RoomKitError> {
+        // Every agent read before anything is installed.
+        kit.register_strategy_agents(agents)?;
+        for agent in agents {
+            held(kit, agent)?;
+        }
+        kit.install_router_hook(self, options.hook_priority)?;
+        let handler = HandoffHandler::new(
+            kit,
+            self.clone(),
+            HandoffHandlerOptions {
+                agent_aliases: options.agent_aliases,
+                phase_map: options.phase_map,
+                ..HandoffHandlerOptions::default()
+            },
+        );
+        for agent in agents {
+            handler.serve_tool(agent, None, None)?;
+        }
+        Ok(handler)
+    }
 }

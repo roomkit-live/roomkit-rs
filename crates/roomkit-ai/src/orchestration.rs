@@ -1,7 +1,9 @@
 //! The audit of a tool handler's calls (RFC §15.8.1): Python's
 //! `audit_tool_handler`, of `roomkit.orchestration`. The auditors and their
 //! entries are `roomkit::orchestration`'s; the wrapper is here, beside the
-//! [`ToolHandler`] it wraps.
+//! [`ToolHandler`] it wraps. The handoff's tool and memory provider too
+//! (RFC §19.6): the handler is `roomkit::orchestration`'s, which cannot name
+//! an [`AiTool`](crate::AiTool).
 
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
@@ -14,6 +16,7 @@ use roomkit_core::ops::{Environment, SystemEnvironment};
 use serde_json::Value;
 use tokio::time::Instant;
 
+pub use crate::handoff::{HANDOFF_TOOL, HandoffMemoryProvider, build_handoff_tool};
 use crate::tools::{ToolError, ToolHandler, ToolResult};
 
 /// The longest result an entry records, in characters.

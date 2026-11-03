@@ -81,6 +81,7 @@ pub mod orchestration;
 mod provider;
 pub mod tasks;
 pub use author_images::ImageResolver;
+mod handoff;
 mod rows;
 mod server_instructions;
 mod skills;
@@ -100,6 +101,7 @@ mod turn_settings;
 pub use self::agent::{Agent, AgentOptions, BuildIdentityBlockOptions};
 pub use self::channel::{AiChannel, AiChannelOptions};
 pub use self::error::AiError;
+pub use self::handoff::{SetupHandoffOptions, setup_handoff};
 pub use self::human_input::{AskOptions, HumanInputToolHandler, HumanInputToolHandlerOptions};
 pub use self::loop_events::{
     AiGenerationEvent, AiResponseEvent, DeclaredTool, FromToolOptions, GenerationPurpose,

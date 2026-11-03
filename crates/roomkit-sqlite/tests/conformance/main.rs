@@ -21,6 +21,8 @@ mod calls;
 mod compare;
 #[path = "../../../roomkit/tests/conformance/errors.rs"]
 mod errors;
+#[path = "../../../roomkit/tests/conformance/handoff_calls.rs"]
+mod handoff_calls;
 #[path = "../../../roomkit/tests/conformance/harness.rs"]
 mod harness;
 #[path = "../../../roomkit/tests/conformance/identity.rs"]

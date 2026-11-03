@@ -5,13 +5,17 @@
 //! entry, its level, and the in-memory backend a bus uses by default;
 //! [`backend`] holds what another backend implements. The tool and session
 //! auditors (§15.8) record an agent's tool calls and a session's timeline.
-//! [`strategies`] holds the strategies the kit builds in: the loop
-//! (§19.7.4) and the supervisor (§19.7.3).
+//! The handoff (§19.6) hands a room from one agent to another. [`strategies`]
+//! holds the strategies the kit builds in: the loop
+//! (§19.7.4), the supervisor (§19.7.3) and the swarm (§19.7).
 
 mod agents;
 pub mod backend;
 mod background;
 mod gather;
+pub(crate) mod handoff;
+mod handoff_end;
+mod handoff_tool;
 pub(crate) mod lifecycle;
 mod memory;
 mod router;
@@ -25,9 +29,14 @@ mod text;
 mod tool_audit;
 mod worker_run;
 
+pub use self::handoff::{
+    HandoffHandler, HandoffHandlerOptions, HandoffRequest, HandoffResult, OnHandoffComplete,
+};
+#[doc(hidden)]
+pub use self::handoff_tool::handoff_tool_definition;
 pub use self::memory::{InMemoryStatusBackend, InMemoryStatusBackendOptions};
 pub use self::router::{
-    ConversationRouter, ConversationRouterOptions, RoutingConditions, RoutingRule,
+    ConversationRouter, ConversationRouterOptions, InstallOptions, RoutingConditions, RoutingRule,
 };
 pub use self::session_audit::{JsonlSessionAuditor, SessionAuditEntry, SessionAuditor};
 pub use self::state::{
@@ -42,6 +51,8 @@ pub use self::strategies::review_loop::{Loop, LoopOptions};
 #[doc(inline)]
 pub use self::strategies::supervisor::Supervisor;
 pub use self::strategies::supervisor::strategy::SupervisorOptions;
+#[doc(inline)]
+pub use self::strategies::swarm::Swarm;
 pub use self::strategy::{Orchestration, StrategyAgent, StrategyFuture};
 pub use self::text::RecentTextOptions;
 pub use self::tool_audit::{

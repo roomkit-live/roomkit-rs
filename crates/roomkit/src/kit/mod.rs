@@ -31,6 +31,7 @@ mod delivery_keys;
 mod engine;
 mod ephemeral;
 mod events;
+mod handoff;
 mod identity;
 mod inject;
 mod inline;

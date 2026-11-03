@@ -207,7 +207,7 @@ pub(crate) async fn call(
         "delivery.cancel" | "delivery.wait" => (handle_call(run, name, spec).await?, None),
         // An Agent's greeting is declared only (RMK-1264).
         "send_greeting" => return Err("send_greeting: roomkit-rs does not greet yet".into()),
-        _ => (lifecycle_call(run, name, spec).await?, None),
+        _ => (other_call(run, name, spec).await?, None),
     })
 }
 
@@ -277,6 +277,18 @@ async fn cancel_or_steer(
     }
     let cancelled = run.kit().cancel_delivery(&key, options).await;
     Ok(Ok(json!(cancelled)))
+}
+
+/// A handoff's call, or a call of the room's lifecycle.
+async fn other_call(
+    run: &std::sync::Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<Called, Unreadable> {
+    if crate::handoff_calls::arguments(name).is_some() {
+        return crate::handoff_calls::call(run, name, spec).await;
+    }
+    lifecycle_call(run, name, spec).await
 }
 
 async fn lifecycle_call(

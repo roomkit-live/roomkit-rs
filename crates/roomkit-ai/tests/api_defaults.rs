@@ -306,3 +306,12 @@ fn model_catalogue_defaults_as_python() {
     // roomkit.ModelPricing.__init__(currency) = 'USD'
     assert_eq!(pricing.currency, "USD");
 }
+
+#[test]
+fn setup_handoff_options_defaults_as_python() {
+    let defaults = roomkit_ai::SetupHandoffOptions::default();
+    // roomkit.setup_handoff(tool) = None
+    assert!(defaults.tool.is_none());
+    // roomkit.setup_handoff(room_id) = None
+    assert!(defaults.room_id.is_none());
+}

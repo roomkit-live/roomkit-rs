@@ -19,6 +19,8 @@ pub(crate) struct HeldAgent {
     pub(crate) role: Option<String>,
     pub(crate) description: Option<String>,
     pub(crate) purpose: Option<String>,
+    pub(crate) greeting: Option<String>,
+    pub(crate) language: Option<String>,
 }
 
 impl HeldAgent {
@@ -84,6 +86,8 @@ impl HeldAgent {
             role: identity.role,
             description: identity.description,
             purpose: identity.purpose,
+            greeting: identity.greeting,
+            language: identity.language,
         }
     }
 }
@@ -101,6 +105,8 @@ pub(crate) mod tests {
             role: None,
             description: None,
             purpose: None,
+            greeting: None,
+            language: None,
         }
     }
 

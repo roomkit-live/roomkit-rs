@@ -43,6 +43,7 @@ KINDS = {
     "functions": ("fn", "Function"),
     "types": ("type", "Type Alias"),
     "constants": ("constant", "Constant"),
+    "statics": ("static", "Static"),
 }
 
 # The structural sections an item's page may hold. Another one (methods

@@ -275,6 +275,8 @@ mod tests {
             role: role.map(str::to_owned),
             description: description.map(str::to_owned),
             purpose: None,
+            greeting: None,
+            language: None,
         }
     }
 

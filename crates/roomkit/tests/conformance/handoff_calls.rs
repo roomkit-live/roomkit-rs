@@ -1,0 +1,132 @@
+//! The handoff (roomkit-specs `conformance/README.md`, "Calls"; RFC §19.6):
+//! `handoff_handler` builds the implementation's `HandoffHandler`,
+//! `install_router` the one a router's `install` returns, each under a name
+//! the later calls use; `setup_handoff` serves the tool on an agent;
+//! `handoff.handle` and `handoff.set_language` are the handler's own calls.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use roomkit::model::{ChannelId, Metadata, RoomId};
+use roomkit::orchestration::{HandoffHandlerOptions, InstallOptions, StrategyAgent};
+use roomkit::{HandoffHandler, RoomKitError};
+use roomkit_ai::orchestration::build_handoff_tool;
+use roomkit_ai::{SetupHandoffOptions, setup_handoff};
+use serde_json::Value;
+
+use crate::calls::{Called, Unreadable, field, finish, optional};
+use crate::run::{Run, lock};
+
+/// The arguments of the handoff calls, for the shape check.
+pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
+    match name {
+        "handoff_handler" => Some(&[
+            "handler",
+            "router",
+            "agent_aliases",
+            "phase_map",
+            "allowed_transitions",
+            "known_agents",
+        ]),
+        "install_router" => Some(&[
+            "handler",
+            "router",
+            "agents",
+            "agent_aliases",
+            "phase_map",
+            "hook_priority",
+        ]),
+        "setup_handoff" => Some(&["agent_id", "handler", "targets", "room_id"]),
+        "handoff.handle" => Some(&["handler", "room_id", "calling_agent_id", "arguments"]),
+        "handoff.set_language" => Some(&["handler", "room_id", "language"]),
+        _ => None,
+    }
+}
+
+/// The handler the run keeps under the name the call's `handler` gives.
+fn handler(run: &Run, spec: &Value) -> Result<HandoffHandler<crate::Store>, Unreadable> {
+    let name = field::<String>(spec, "handler")?;
+    lock(&run.handoff_handlers)
+        .get(&name)
+        .cloned()
+        .ok_or_else(|| format!("no handoff handler {name:?}"))
+}
+
+/// Keeps `built` under the call's `handler`, on success.
+fn keep(
+    run: &Run,
+    name: &str,
+    spec: &Value,
+    built: Result<HandoffHandler<crate::Store>, RoomKitError>,
+) -> Result<Called, Unreadable> {
+    let named = field::<String>(spec, "handler")?;
+    Ok(finish(run, name, built, |handler| {
+        lock(&run.handoff_handlers).insert(named, handler.clone());
+        Value::Null
+    }))
+}
+
+/// Makes the handoff call `name`.
+pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+    match name {
+        "handoff_handler" => {
+            let allowed: Option<HashMap<String, HashSet<String>>> =
+                optional(spec, "allowed_transitions")?;
+            let options = HandoffHandlerOptions {
+                agent_aliases: optional(spec, "agent_aliases")?,
+                phase_map: optional(spec, "phase_map")?,
+                allowed_transitions: allowed,
+                known_agents: optional(spec, "known_agents")?,
+                ..HandoffHandlerOptions::default()
+            };
+            let router = crate::routing_calls::router(&spec["router"])?;
+            keep(
+                run,
+                name,
+                spec,
+                Ok(HandoffHandler::new(run.kit(), router, options)),
+            )
+        }
+        "install_router" => {
+            let agents = field::<Vec<ChannelId>>(spec, "agents")?;
+            let agents: Vec<StrategyAgent> = agents.into_iter().map(StrategyAgent::from).collect();
+            let defaults = InstallOptions::default();
+            let options = InstallOptions {
+                agent_aliases: optional(spec, "agent_aliases")?,
+                phase_map: optional(spec, "phase_map")?,
+                hook_priority: optional(spec, "hook_priority")?.unwrap_or(defaults.hook_priority),
+            };
+            let router = crate::routing_calls::router(&spec["router"])?;
+            let installed = router.install(run.kit(), &agents, options);
+            keep(run, name, spec, installed)
+        }
+        "setup_handoff" => {
+            let agent = field::<ChannelId>(spec, "agent_id")?;
+            let targets: Option<Vec<(String, Option<String>)>> = optional(spec, "targets")?;
+            let options = SetupHandoffOptions {
+                tool: targets.map(|targets| build_handoff_tool(&targets)),
+                room_id: optional(spec, "room_id")?,
+            };
+            let set_up = setup_handoff(agent, &handler(run, spec)?, options);
+            Ok(finish(run, name, set_up, |()| Value::Null))
+        }
+        "handoff.handle" => {
+            let room_id = field::<RoomId>(spec, "room_id")?;
+            let calling = field::<ChannelId>(spec, "calling_agent_id")?;
+            let arguments = field::<Metadata>(spec, "arguments")?;
+            let result = handler(run, spec)?
+                .handle(&room_id, &calling, arguments)
+                .await;
+            Ok(finish(run, name, result, |result| {
+                serde_json::to_value(result).unwrap_or(Value::Null)
+            }))
+        }
+        "handoff.set_language" => {
+            let room_id = field::<RoomId>(spec, "room_id")?;
+            let language = field::<String>(spec, "language")?;
+            let set = handler(run, spec)?.set_language(&room_id, language).await;
+            Ok(finish(run, name, set, |()| Value::Null))
+        }
+        other => Err(format!("no handoff call {other:?}")),
+    }
+}

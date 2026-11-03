@@ -131,6 +131,8 @@ pub(crate) struct Run {
     pub(crate) backend: Mutex<Option<roomkit::InMemoryDeliveryBackend>>,
     /// The scenario's scripted strategies, by id (README, "Setup").
     pub(crate) strategies: Mutex<HashMap<String, crate::strategy_calls::Strategy>>,
+    /// The handoff handlers the run built, by the name its calls give them.
+    pub(crate) handoff_handlers: Mutex<HashMap<String, roomkit::HandoffHandler<crate::Store>>>,
     /// The run's tool and session auditors (README, "Setup").
     pub(crate) auditors: crate::audits::Auditors,
 }
@@ -173,6 +175,7 @@ impl Run {
             models: Mutex::default(),
             backend: Mutex::default(),
             strategies: Mutex::default(),
+            handoff_handlers: Mutex::default(),
             auditors: crate::audits::Auditors::default(),
         }
     }

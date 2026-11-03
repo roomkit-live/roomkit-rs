@@ -405,7 +405,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
                 .or_else(|| crate::input_calls::arguments(other))
                 .or_else(|| crate::verification_calls::arguments(other))
                 .or_else(|| crate::strategy_calls::arguments(other))
-                .or_else(|| crate::routing_calls::arguments(other));
+                .or_else(|| crate::routing_calls::arguments(other))
+                .or_else(|| crate::handoff_calls::arguments(other));
         }
     })
 }
@@ -477,13 +478,16 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
 /// The members of the scripted strategies, and of their install and
 /// uninstall (RFC §19.7).
 fn strategies(setup: &Value, found: &mut Vec<String>) {
-    use crate::strategy_calls::{LOOP, STRATEGY, STRATEGY_STEP, STRATEGY_UNINSTALL, SUPERVISOR};
+    use crate::strategy_calls::{
+        LOOP, STRATEGY, STRATEGY_STEP, STRATEGY_UNINSTALL, SUPERVISOR, SWARM,
+    };
     for (position, strategy) in items(&setup["strategies"]) {
         let path = format!("setup.strategies[{position}]");
         members(strategy, STRATEGY, &path, found);
         optional(&strategy["loop"], LOOP, &format!("{path}.loop"), found);
         let team = format!("{path}.supervisor");
         optional(&strategy["supervisor"], SUPERVISOR, &team, found);
+        optional(&strategy["swarm"], SWARM, &format!("{path}.swarm"), found);
         for (member, known) in [
             ("install", STRATEGY_STEP),
             ("uninstall", STRATEGY_UNINSTALL),

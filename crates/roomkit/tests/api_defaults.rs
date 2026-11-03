@@ -1492,3 +1492,31 @@ fn open_telemetry_provider_options_defaults_as_python() {
     // roomkit.telemetry.OpenTelemetryProvider.__init__(shutdown_flush_timeout) = 4.0
     assert_eq!(defaults.shutdown_flush_timeout, Duration::from_secs(4));
 }
+
+#[test]
+fn handoff_handler_options_defaults_as_python() {
+    let defaults = orchestration::HandoffHandlerOptions::default();
+    // roomkit.HandoffHandler.__init__(agent_aliases) = None
+    assert!(defaults.agent_aliases.is_none());
+    // roomkit.HandoffHandler.__init__(phase_map) = None
+    assert!(defaults.phase_map.is_none());
+    // roomkit.HandoffHandler.__init__(allowed_transitions) = None
+    assert!(defaults.allowed_transitions.is_none());
+    // roomkit.HandoffHandler.__init__(known_agents) = None
+    assert!(defaults.known_agents.is_none());
+    // roomkit.HandoffHandler.__init__(on_handoff_complete) = None
+    assert!(defaults.on_handoff_complete.is_none());
+    // roomkit.HandoffHandler.__init__(event_channel_id) = None
+    assert!(defaults.event_channel_id.is_none());
+}
+
+#[test]
+fn conversation_router_install_options_defaults_as_python() {
+    let defaults = orchestration::InstallOptions::default();
+    // roomkit.ConversationRouter.install(agent_aliases) = None
+    assert!(defaults.agent_aliases.is_none());
+    // roomkit.ConversationRouter.install(phase_map) = None
+    assert!(defaults.phase_map.is_none());
+    // roomkit.ConversationRouter.install(hook_priority) = -100
+    assert_eq!(defaults.hook_priority, -100);
+}

@@ -22,6 +22,7 @@ mod audits;
 mod calls;
 mod compare;
 mod errors;
+mod handoff_calls;
 mod harness;
 mod identity;
 mod input_calls;
