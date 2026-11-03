@@ -44,6 +44,10 @@ pub(crate) const SUPERVISOR: &[&str] = &[
     "share_channels",
     "task_timeout_ms",
     "max_revisions",
+    "auto_delegate",
+    "refine_task",
+    "refine_instruction",
+    "delegation_message",
 ];
 pub(crate) const STRATEGY_STEP: &[&str] = &["gate", "do", "refuse"];
 pub(crate) const STRATEGY_UNINSTALL: &[&str] = &["gate", "do"];
@@ -186,6 +190,16 @@ fn supervisor(spec: &Value) -> Result<Strategy, Unreadable> {
             .map_or(defaults.task_timeout, Duration::from_millis),
         max_revisions: crate::calls::optional::<u32>(spec, "max_revisions")?
             .unwrap_or(defaults.max_revisions),
+        auto_delegate: crate::calls::optional::<bool>(spec, "auto_delegate")?
+            .unwrap_or(defaults.auto_delegate),
+        refine_task: crate::calls::optional::<bool>(spec, "refine_task")?
+            .unwrap_or(defaults.refine_task),
+        refine_instruction: crate::calls::optional::<String>(spec, "refine_instruction")?,
+        // A null names none, an absent one the implementation's own.
+        delegation_message: match spec.get("delegation_message") {
+            None => defaults.delegation_message,
+            Some(_) => crate::calls::optional::<String>(spec, "delegation_message")?,
+        },
     };
     let workers = workers.into_iter().map(StrategyAgent::from).collect();
     let team = Supervisor::new(lead, workers, options).map_err(|error| error.to_string())?;
