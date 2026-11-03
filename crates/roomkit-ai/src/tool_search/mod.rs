@@ -99,21 +99,23 @@ impl ToolSearch {
         room: &RoomId,
         (memory, stands_alone): (&Arc<ToolUsageMemory>, bool),
     ) -> Arc<TurnSearch> {
-        let catalogue = toolbox.deferrable();
-        let active = self.hides(&catalogue, window);
+        let active = self.hides(&toolbox.deferrable(), window);
         let mut never = toolbox.never_hidden();
         never.extend(TOOL_SEARCH_INFRA_TOOL_NAMES.map(str::to_owned));
         let mut sticky = HashSet::new();
         if active {
+            let names = toolbox.names();
+            let held = names
+                .iter()
+                .filter(|name| never.contains(*name) || self.pinned.contains(*name));
             tracing::info!(
                 target: "roomkit::ai",
-                deferred = catalogue.len(),
-                pinned = catalogue.iter().filter(|t| self.pinned.contains(&t.name)).count(),
-                window = ?window,
+                deferred = names.len(),
+                pinned = held.count(),
+                window = window.map_or_else(|| "unknown".to_owned(), |window| window.to_string()),
                 "Tool Search active: tools deferred behind find_tools/list_tools"
             );
             if !stands_alone {
-                let names = toolbox.names();
                 sticky.extend(
                     memory
                         .tool_names(room)
