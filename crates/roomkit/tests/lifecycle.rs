@@ -190,6 +190,8 @@ mod timers {
             last_activity_at: Some(Timestamp::from_unix_millis(START_MILLIS).unwrap()),
             ..RoomTimers::default()
         };
+        // Older than the good room: the sweep meets it first.
+        stored.created_at = Timestamp::from_unix_millis(START_MILLIS - 1).unwrap();
         kit.store().create_room(stored).await.unwrap();
         clock.advance(90);
         let (warnings, guard) = Warnings::capture();
@@ -200,10 +202,7 @@ mod timers {
         drop(guard);
         assert_eq!(statuses(&paused), vec![RoomStatus::Paused]);
         assert_eq!(paused[0].id, room_id());
-        assert_eq!(
-            warnings.containing("checking a room's timers failed").len(),
-            1
-        );
+        assert_eq!(warnings.containing("NUL").len(), 1);
     }
 
     #[tokio::test]
