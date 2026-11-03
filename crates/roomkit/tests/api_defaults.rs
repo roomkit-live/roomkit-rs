@@ -40,6 +40,7 @@ use roomkit::ResumeRoomOptions;
 use roomkit::RoomKitOptions;
 use roomkit::RouteOptions;
 use roomkit::SendEventOptions;
+use roomkit::SendGreetingOptions;
 use roomkit::SetAccessOptions;
 use roomkit::SetVisibilityOptions;
 use roomkit::SubmitFeedbackOptions;
@@ -576,6 +577,19 @@ fn route_options_defaults_as_python() {
     assert!(defaults.organization_id.is_none());
     // roomkit.InboundRoomRouter.route(participant_id) = None
     assert!(defaults.participant_id.is_none());
+}
+
+#[test]
+fn send_greeting_options_defaults_as_python() {
+    let defaults = SendGreetingOptions::default();
+    // roomkit.RoomKit.send_greeting(agent_id) = None
+    assert!(defaults.agent_id.is_none());
+    // roomkit.RoomKit.send_greeting(channel_id) = None
+    assert!(defaults.channel_id.is_none());
+    // roomkit.RoomKit.send_greeting(greeting) = None
+    assert!(defaults.greeting.is_none());
+    // roomkit.RoomKit.send_greeting(organization_id) = None
+    assert!(defaults.organization_id.is_none());
 }
 
 #[test]

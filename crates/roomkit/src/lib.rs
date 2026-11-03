@@ -192,8 +192,9 @@ pub use self::kit::{
     GetTimelineOptions, HasHooksOptions, HookEngine, IdentityHookOptions, ListBindingsOptions,
     ListMembersOptions, MuteOptions, MuteOutputOptions, PauseRoomOptions, PostOptions,
     ProcessInboundOptions, RemoveRoomHookOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit,
-    RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
-    UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
+    RoomKitOptions, SendEventOptions, SendGreetingOptions, SetAccessOptions, SetVisibilityOptions,
+    UnmuteOptions, UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions,
+    WeakRoomKit,
 };
 pub use self::kit::{
     CancelDeliveryOptions, CancelTaskOptions, SetupBackgroundOptions, StartTaskOptions,

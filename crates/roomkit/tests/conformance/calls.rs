@@ -21,8 +21,8 @@ use roomkit::{
     DeliverOptions, DeliveryStrategy, DetachChannelOptions, HookOptions, HookTrigger, HostChannel,
     Immediate, InboundResult, MuteOptions, MuteOutputOptions, PostOptions,
     ProcessDeliveryStatusOptions, ProcessInboundOptions, ProcessWebhookOptions, Queued,
-    RemoveRoomHookOptions, RoomKitError, SendEventOptions, SetAccessOptions, SetVisibilityOptions,
-    UnmuteOptions, UnmuteOutputOptions, UpdateEventOptions, WaitForIdle,
+    RemoveRoomHookOptions, RoomKitError, SendEventOptions, SendGreetingOptions, SetAccessOptions,
+    SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions, UpdateEventOptions, WaitForIdle,
 };
 use roomkit_ai::{AiGenerationEvent, AiResponseEvent, ThinkingEvent, ToolRoundEvent};
 use serde::de::DeserializeOwned;
@@ -205,10 +205,26 @@ pub(crate) async fn call(
         }
         "save_conversation_state" => (crate::routing_calls::call(run, name, spec).await?, None),
         "delivery.cancel" | "delivery.wait" => (handle_call(run, name, spec).await?, None),
-        // An Agent's greeting is declared only (RMK-1264).
-        "send_greeting" => return Err("send_greeting: roomkit-rs does not greet yet".into()),
+        "send_greeting" => (send_greeting(run, name, spec).await?, None),
         _ => (other_call(run, name, spec).await?, None),
     })
+}
+
+/// `send_greeting`: an agent's greeting (§19.1).
+async fn send_greeting(
+    run: &std::sync::Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<Called, Unreadable> {
+    let room = room_id(spec)?;
+    let options = SendGreetingOptions {
+        channel_id: optional::<ChannelId>(spec, "channel_id")?,
+        agent_id: optional::<ChannelId>(spec, "agent_id")?,
+        greeting: optional::<String>(spec, "greeting")?,
+        organization_id: organization_id(spec),
+    };
+    let outcome = run.kit().send_greeting(&room, options).await;
+    Ok(finish(run, name, outcome, dump))
 }
 
 /// `cancel_delivery`, or `steer`: a directive to an agent's running turns.

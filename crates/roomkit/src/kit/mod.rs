@@ -31,6 +31,7 @@ mod delivery_keys;
 mod engine;
 mod ephemeral;
 mod events;
+mod greeting;
 mod handoff;
 mod identity;
 mod inject;
@@ -85,6 +86,7 @@ pub use self::ephemeral::{
     PublishPresenceOptions, PublishReactionOptions, PublishReadReceiptOptions,
     PublishToolCallOptions, PublishTypingOptions, SubscribeRoomOptions,
 };
+pub use self::greeting::SendGreetingOptions;
 pub use self::identity::IdentityHookOptions;
 pub(crate) use self::identity::run_identity_hooks;
 use self::inject::Entered;

@@ -9,7 +9,7 @@ use roomkit_core::model::{ChannelId, RoomContext};
 use roomkit_core::ops::FrameworkEvent as CoreEvent;
 use roomkit_core::rules::hook_registry::HookTrigger;
 
-use super::{RoomKit, read, write};
+use super::{RoomKit, greeting, read, write};
 use crate::channel::{Channel, DynChannel, config_of};
 use crate::error::{RoomKitError, repr};
 use crate::hooks::{Closure, HookHandler, HookOptions, HookPayload, IntoHookReturn};
@@ -54,6 +54,7 @@ impl<S: ConversationStore> RoomKit<S> {
             declaration.channel_type.clone(),
         );
         let channel_id = declaration.channel_id.clone();
+        let auto_greeting = greeting::auto_greeting_agent(&declaration, channel.as_ref());
         let human_input =
             human_input.map(|handler| (channel_id.clone(), handler, Arc::clone(&channel)));
         self.inner.try_change_config(|config| {
@@ -64,6 +65,9 @@ impl<S: ConversationStore> RoomKit<S> {
             write(&self.inner.channels).insert(channel_id, channel);
             Ok::<(), RoomKitError>(())
         })?;
+        if let Some(agent_id) = auto_greeting {
+            self.register_auto_greet_hook(agent_id)?;
+        }
         if let Some((channel_id, handler, channel)) = human_input {
             // Registered on its handler once the kit holds it, the channel
             // a kit registered last owning its id's requests (RMK-1201).
@@ -116,6 +120,7 @@ impl<S: ConversationStore> RoomKit<S> {
             return Ok(None);
         };
         self.inner.forget_owner_tools(channel_id);
+        self.forget_auto_greet(channel_id);
         drop(self.inner.emit(CoreEvent::channel_unregistered(
             unregistered.declaration.channel_id.clone(),
             unregistered.declaration.channel_type.clone(),

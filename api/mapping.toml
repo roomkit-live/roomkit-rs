@@ -719,11 +719,16 @@ reason = "not in 0.x: the kit's other reads and setters"
 python = "roomkit.RoomKit"
 members = [
     "bind_voice_session", "connect_video", "connect_voice", "disconnect_video",
-    "disconnect_voice", "join", "leave", "listen_only", "send_greeting",
+    "disconnect_voice", "join", "leave", "listen_only",
     "speak_queue", "stt", "synthesize", "talk_again", "transcribe",
     "tts", "voice",
 ]
 reason = "not in 0.x: voice and video"
+
+[[missing]]
+python = "roomkit.RoomKit.send_greeting"
+params = ["session", "channel_type"]
+reason = "not in 0.x: a voice or realtime session's greeting comes with voice"
 
 [[missing]]
 python = "roomkit.RoomKit.__init__"
