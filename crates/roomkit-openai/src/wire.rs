@@ -436,7 +436,7 @@ impl Folding {
                 .filter(|message| !message.is_empty())
                 .unwrap_or(STREAM_ERROR);
             return Err(OpenAiError::StreamFailed {
-                message: cleaned(&message, secret, MESSAGE_LIMIT),
+                message: cleaned(message, secret, MESSAGE_LIMIT),
                 status: described_status(&error),
             });
         }
