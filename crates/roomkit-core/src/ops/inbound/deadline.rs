@@ -3,8 +3,8 @@
 //! what the call does once it passed.
 //!
 //! `process_timeout` bounds a call from its start to its decision: its step
-//! 2 (the identity read, the router, routing's wait for the lock), the
-//! event's parse, its off-lock check and the wait for its admission ticket,
+//! 2 (the identity read, the router, routing's wait for the lock, the
+//! `ON_SESSION_STARTED` hooks the message waits for), the event's parse, its off-lock check and the wait for its admission ticket,
 //! the wait for the room lock and the locked section up to the commit. The
 //! room's delivery lane comes after the commit, and nothing of it is
 //! bounded. The driver gives up on a request past the deadline and answers
@@ -19,7 +19,8 @@
 //! are never bounded (RFC §13.6), nor are the creation of a room by step 2
 //! and what completes it, its `ON_ROOM_CREATED` hooks (each bounded by its
 //! own timeout) and its attach, so a room step 2 creates is attached
-//! whatever comes next.
+//! whatever comes next. A hook is no write: a session's hooks the deadline
+//! cuts leave what they wrote, and what they did not.
 
 use super::{InboundError, InboundResult, Machine};
 use crate::model::{EventId, Timestamp};

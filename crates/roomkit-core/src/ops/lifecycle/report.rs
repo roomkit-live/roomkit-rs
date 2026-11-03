@@ -8,6 +8,7 @@ use crate::model::{
     ChannelBinding, ChannelId, ChannelType, EventContent, EventSource, EventStatus, EventType,
     Metadata, RoomContext, RoomEvent, RoomId, SystemContent, Timestamp, Visibility,
 };
+use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, HookRequest};
 use crate::ops::{Cx, FrameworkEvent, Notice, TransitionReason};
 use crate::rules::chain_depth::Draw;
@@ -221,13 +222,15 @@ impl SessionStarted {
 
 /// Reports a session's start as Python's `_fire_text_session_started` does
 /// (RFC §10.1 step 2): the hooks whose name starts with `_`, an agent's
-/// greeting among them, are run and awaited before its message goes on, the
-/// effect returned to wait for, with what is left to do once they are over.
-/// With none, all of it is done at once and `None` returned.
+/// greeting among them, are run and awaited before its message goes on,
+/// within `bound`, the message's deadline (RFC §13.6), the effect returned to
+/// wait for, with what is left to do once they are over. With none, all of it
+/// is done at once and `None` returned.
 pub(crate) fn report_session_started(
     cx: &mut Cx<'_>,
     reported: Reported<'_>,
     context: &RoomContext,
+    bound: Bound,
 ) -> Option<(EffectId, SessionStarted)> {
     let Some(Observers {
         trigger,
@@ -248,13 +251,13 @@ pub(crate) fn report_session_started(
         started.finish(cx, reported, context);
         return None;
     }
-    let effect = cx.io.issue(HookRequest::RunObservers {
+    let request = HookRequest::RunObservers {
         trigger,
         hooks: own,
         event: Box::new(started.payload.clone()),
         context: Box::new(context.clone()),
-    });
-    Some((effect, started))
+    };
+    Some((cx.io.issue_within(request, bound), started))
 }
 
 /// Emits the framework event of a change to the room `room_id`, if it has

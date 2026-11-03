@@ -41,7 +41,10 @@
 //! the room lock, routing's among them (RFC §10.4, §13.6): past it, step 2
 //! stops with nothing written. A room step 2 creates is attached whatever
 //! the deadline, its creation hooks bounded by their own timeouts: the
-//! creation is a write, and a room created is completed (gap G-068).
+//! creation is a write, and a room created is completed (gap G-068). The
+//! session it starts is the message's: the hooks the message waits for run
+//! within the deadline, and past it they are cut, the others not fired,
+//! `session_started` not emitted and the message refused.
 
 use std::convert::Infallible;
 use std::mem;
@@ -104,7 +107,8 @@ pub(super) enum Named {
     Rerouted,
     /// Why the message fails.
     Failed(InboundError),
-    /// The call's deadline passed: nothing was written (RFC §13.6).
+    /// The call's deadline passed: nothing of the message was written (RFC
+    /// §13.6).
     Expired,
     /// The room would be created past the reentry budget the room's work
     /// that routed the message draws on: nothing was written (gap G-070).
@@ -247,8 +251,9 @@ impl NamedRoom {
         outcome: Outcome,
     ) -> Progress<Named> {
         if outcome == Outcome::DeadlinePassed {
-            // Only a read and the wait for the lock carry the deadline: no
-            // lock is held, nothing was written.
+            // A read, the wait for the lock and the hooks of the session the
+            // message starts carry the deadline: no lock is held, and nothing
+            // of the message was written; a room step 2 created stands.
             self.state = State::Done;
             return Progress::Done(Named::Expired);
         }
@@ -473,7 +478,7 @@ impl NamedRoom {
         if !created || !starts_session(&self.channel.channel_type) {
             return Progress::Done(Named::Arrived(context));
         }
-        match report::report_session_started(cx, self.session_started(), &context) {
+        match report::report_session_started(cx, self.session_started(), &context, self.bound) {
             Some((effect, started)) => {
                 self.state = State::Starting {
                     effect,
