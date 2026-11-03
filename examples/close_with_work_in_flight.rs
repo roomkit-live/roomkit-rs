@@ -421,8 +421,13 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     println!("close() returned after {:.1} s", took.as_secs_f64());
     println!("The send that never ends: {}", summary(&calls.cut_send));
     println!("The message queued behind it: {}", summary(&calls.queued));
-    let ended = calls.answer.response_metadata["turns"]["agent"]["loop_end_reason"]
-        .as_str()
+    let ended = calls
+        .answer
+        .response_metadata
+        .get("turns")
+        .and_then(|turns| turns.get("agent"))
+        .and_then(|turn| turn.get("loop_end_reason"))
+        .and_then(serde_json::Value::as_str)
         .map_or_else(|| "None".to_owned(), |reason| format!("'{reason}'"));
     println!(
         "The streaming turn: {}, its turn ended {ended}",
