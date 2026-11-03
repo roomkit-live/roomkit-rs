@@ -8,7 +8,7 @@ use std::sync::Arc;
 use roomkit_core::model::{
     ChannelBinding, ChannelOutput, ChannelType, Metadata, RoomContext, RoomEvent, RoomId,
 };
-use roomkit_core::rules::edits::mutation;
+use roomkit_core::rules::edits::opens_no_turn;
 use serde_json::json;
 
 use super::loop_run::{LoopRun, run_loop};
@@ -213,13 +213,13 @@ impl<S: ConversationStore> TurnRunner<S> for LoopTurns {
         if &event.source.channel_id == producer {
             return Taken::Answered(Box::pin(async { Ok(ChannelOutput::empty()) }));
         }
-        // An agent's or the system's event, or an edit or a delete, which
-        // is no task (RFC §10.3), or a message the loop's tasks cannot
-        // carry: the producer's own channel reads it (RFC §19.7.4).
+        // An agent's or the system's event, or one that opens no turn (a
+        // notice, an edit or a delete: RFC §6.4, §10.3), is no task, nor a
+        // message the loop's tasks cannot carry: the producer's own channel
+        // reads it (RFC §19.7.4).
         let source = &event.source.channel_type;
         let from_agents = *source == ChannelType::AI || *source == ChannelType::SYSTEM;
-        let changes = !matches!(mutation(&event), Ok(None));
-        if from_agents || changes || task_input(&event).is_empty() {
+        if from_agents || opens_no_turn(&event) || task_input(&event).is_empty() {
             return Taken::Own(Box::new((event, binding, context)));
         }
         let run = Arc::clone(&self.run);
