@@ -525,3 +525,23 @@ async fn a_registration_that_never_lands_owns_no_request() {
     ));
     assert!(settled);
 }
+
+// Python: core/mixins/channel_ops.py register_channel, through
+// turns/_wiring.py and HumanInputHandler._set_on_input_required (RMK-1255
+// item 6): an agent whose person's handler closed whole is refused at its
+// registration with the handler's RuntimeError.
+#[tokio::test]
+async fn an_agent_whose_handler_closed_whole_is_refused_at_its_registration() {
+    use roomkit::human_input::CloseOptions;
+    use roomkit::{RoomKit, RoomKitOptions};
+
+    let shared = HumanInputHandler::default();
+    shared.close(CloseOptions::default()).await;
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let refused = kit.register_channel(agent_asking_through(&shared));
+    assert!(
+        matches!(&refused, Err(RoomKitError::Runtime(text)) if text == "Human input handler is closed"),
+        "{refused:?}"
+    );
+    kit.close().await.unwrap();
+}

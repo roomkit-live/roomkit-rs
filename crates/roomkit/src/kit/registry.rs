@@ -28,7 +28,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// but does not serialize them (RFC §6.4); then
     /// [`RoomKitError::ChannelAlreadyRegistered`] when a channel with its id
     /// is registered already, and [`RoomKitError::Value`] for a channel
-    /// claiming the type `system` (RFC §5.3).
+    /// claiming the type `system` (RFC §5.3); [`RoomKitError::Runtime`] for
+    /// an agent whose human-input handler is closed whole, the kit then
+    /// holding the channel unannounced, as Python's does.
     pub fn register_channel(&self, channel: impl Channel) -> Result<(), RoomKitError> {
         let declaration = config_of(&channel);
         let human_input = channel.human_input_handler();
@@ -65,9 +67,10 @@ impl<S: ConversationStore> RoomKit<S> {
         if let Some((channel_id, handler, channel)) = human_input {
             // Registered on its handler once the kit holds it, the channel
             // a kit registered last owning its id's requests (RMK-1201).
-            // Only a handler closed whole refuses it: its requests are
-            // then refused at each call.
-            let registration = handler.register(channel_id.as_str()).unwrap_or_default();
+            // A handler closed whole refuses it, and the call fails with its
+            // RuntimeError, the kit holding the channel unannounced, as
+            // Python's register_channel raises once it holds it (RMK-1255).
+            let registration = handler.register(channel_id.as_str())?;
             channel.human_input_registered(registration);
             self.inner.wire_human_input(&channel_id, &handler);
         }

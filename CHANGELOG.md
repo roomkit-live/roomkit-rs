@@ -14,6 +14,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `committed_in` holds it: the window the pass read and the committed
   event after it, 51 events for a window of 50 where the trigger read 50,
   at most 2000 where a delivery set at the ceiling held 2001 (RMK-1130).
+- `register_channel` of an agent whose human-input handler is closed whole
+  fails with the handler's `RoomKitError::Runtime`, as Python's raises,
+  where it registered the channel with no owner of its requests
+  (RMK-1255).
 - Delivery lanes across processes (RFC §13.5), as Python's: a delivery
   set waits for the room's cursor to pass the indexes before its own that
   another process committed; a hole no lane runs is skipped after
