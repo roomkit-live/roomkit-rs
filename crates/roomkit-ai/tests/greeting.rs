@@ -5,11 +5,13 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, HookResult, InboundMessage, RoomEvent, TextContent,
+    Access, ChannelId, ChannelType, EventContent, HookResult, InboundMessage, RoomEvent,
+    TextContent,
 };
 use roomkit::store::{ConversationStore, ListEventsOptions};
 use roomkit::testing::{
@@ -192,4 +194,109 @@ async fn a_greeting_dropped_before_its_commit_stores_nothing() {
     let said: Vec<String> = timeline.iter().filter_map(text).collect();
     assert!(said.contains(&"Hi".to_owned()), "{said:?}");
     assert!(!said.contains(&"Welcome!".to_owned()), "{said:?}");
+}
+
+/// How many greetings a hook on `trigger` that greets on every answer of
+/// `other` makes, the hook giving up at `GIVES_UP`, once the kit is idle.
+async fn greetings_of_a_hook_on_every_answer(
+    trigger: HookTrigger,
+    execution: HookExecution,
+) -> usize {
+    const GIVES_UP: usize = 200;
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let model = MockAiProvider::new(MockAiProviderOptions::default());
+    let options = AgentOptions {
+        greeting: Some("Welcome!".to_owned()),
+        auto_greet: false,
+        ..AgentOptions::default()
+    };
+    kit.register_channel(Agent::new(id("agent"), model, options).unwrap())
+        .unwrap();
+    kit.register_channel(EchoAgent::new(
+        id("other"),
+        "Noted",
+        EchoAgentOptions::default(),
+    ))
+    .unwrap();
+    let room_id = kit
+        .create_room(CreateRoomOptions::default())
+        .await
+        .unwrap()
+        .id;
+    let write_only = AttachChannelOptions {
+        access: Access::WriteOnly,
+        ..AttachChannelOptions::default()
+    };
+    kit.attach_channel(&room_id, &id("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    kit.attach_channel(&room_id, &id("agent"), write_only)
+        .await
+        .unwrap();
+    kit.attach_channel(&room_id, &id("other"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let made = Arc::new(AtomicUsize::new(0));
+    let (greeting, counted) = (kit.downgrade(), Arc::clone(&made));
+    kit.hook(
+        trigger,
+        move |event: RoomEvent, _context| {
+            let (kit, counted) = (greeting.upgrade(), Arc::clone(&counted));
+            let an_answer = event.source.channel_id == id("other");
+            async move {
+                if an_answer && counted.fetch_add(1, Ordering::SeqCst) < GIVES_UP {
+                    let kit = kit.expect("the kit runs its hook");
+                    let _greeted = kit
+                        .send_greeting(&event.room_id, SendGreetingOptions::default())
+                        .await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        HookOptions {
+            execution,
+            name: "greets_on_every_answer".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+
+    kit.send_greeting(&room_id, SendGreetingOptions::default())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(30), roomkit::testing::idle(&kit))
+        .await
+        .expect("the kit goes idle");
+    made.load(Ordering::SeqCst)
+}
+
+/// RFC §8.3: a hook that greets on every answer is stopped at the limit: a
+/// greeting made in a cascade's work keeps that cascade's budget and depth, as
+/// `send_event` from the same place does, on the deepest and the widest of its
+/// limits: the chain's depth from an ASYNC body, which runs one deeper than
+/// its event, the reentry budget of the cascade's 50 passes under the lock.
+/// Python's greeting takes a fresh budget at depth 0 and never stops; that
+/// question is the maintainer's, so no shared scenario holds it yet.
+#[tokio::test]
+async fn a_hook_that_greets_on_every_answer_is_stopped_at_the_limit() {
+    let mut made = Vec::new();
+    for (trigger, execution, at_most) in [
+        (HookTrigger::BeforeBroadcast, HookExecution::Sync, 50),
+        (HookTrigger::BeforeBroadcast, HookExecution::Async, 6),
+        (HookTrigger::AfterBroadcast, HookExecution::Async, 6),
+    ] {
+        let greetings = greetings_of_a_hook_on_every_answer(trigger, execution).await;
+        made.push((trigger, execution, greetings, at_most));
+    }
+    assert!(
+        made.iter()
+            .all(|(_, _, greetings, at_most)| (1..=*at_most).contains(greetings)),
+        "{made:?}"
+    );
 }

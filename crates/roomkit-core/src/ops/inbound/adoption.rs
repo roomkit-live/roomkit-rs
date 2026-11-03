@@ -56,7 +56,7 @@ use super::queues::Lineage;
 use super::record::{RecordPass, RecordReport};
 use super::work_read::{Read, WorkRead};
 use super::{InboundError, InboundResult, Machine, MessageAnswers, result};
-use crate::model::{ChannelId, InboundMessage, InjectedEvent, Post, RoomEvent, RoomId};
+use crate::model::{InboundMessage, InjectedEvent, Post, RoomEvent, RoomId};
 use crate::ops::io::{Bound, Io};
 use crate::ops::protocol::{EffectId, Entry, EntryId, Outcome};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
@@ -360,7 +360,11 @@ impl Machine {
                 room_id,
                 agent_id,
                 text,
-            } => self.greet_within(cx, adopted, room_id, agent_id, text),
+                chain_depth,
+            } => {
+                let event = greeting::event(cx, room_id, agent_id, text, chain_depth);
+                self.greet_within(cx, adopted, event);
+            }
             // A row is taken by its stream's read as it is adopted.
             Entry::Row { .. } => {
                 debug_assert!(false, "a row is never started as an adopted entry");
@@ -369,18 +373,9 @@ impl Machine {
     }
 
     /// A greeting made in the room's own work goes through its pass, drawing
-    /// no pass of the budget it joins: it is the agent's first words, not a
-    /// call that may loop (RFC §19.1). What answers it draws on that budget,
-    /// the operation's one cascade.
-    fn greet_within(
-        &mut self,
-        cx: &mut Cx<'_>,
-        adopted: Adopted,
-        room_id: RoomId,
-        agent_id: ChannelId,
-        text: String,
-    ) {
-        let event = greeting::event(cx, room_id, agent_id, text);
+    /// no pass of the budget it joins: what answers it draws on that budget,
+    /// the operation's one cascade (RFC §8.3, §19.1).
+    fn greet_within(&mut self, cx: &mut Cx<'_>, adopted: Adopted, event: RoomEvent) {
         let mut pass = Box::new(CommitPass::new(PassOrigin::Adopted(adopted.id), event).greeting());
         within(cx, &adopted, |cx| pass.start(cx));
         self.adopted.running.push(AdoptedRun {

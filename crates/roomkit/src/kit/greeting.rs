@@ -51,6 +51,11 @@ impl<S: ConversationStore> RoomKit<S> {
     /// has it stored with no delivery set at all. A room missing, or whose
     /// status refuses events (RFC §5.1), takes nothing, and nothing fails.
     ///
+    /// Made in the room's own work, a hook's body or a delivery, the greeting
+    /// is at least as deep as that work, and what answers it draws on that
+    /// work's reentry budget, so that a hook greeting on every answer stops
+    /// at the limit (RFC §8.3); its own commit draws nothing.
+    ///
     /// Returns once its delivery is over; called under the room's lock or
     /// from a delivery in the room, once it is committed, its delivery
     /// following in the room's lane (RFC §13.5, §10.1 step 18). Dropped before
@@ -87,6 +92,7 @@ impl<S: ConversationStore> RoomKit<S> {
             room_id: room_id.clone(),
             agent_id,
             text,
+            chain_depth: 0,
         };
         match self.enter(entry, SEND_GREETING, false).await {
             Ok(entered) => cut_by_the_close(&entered.result),

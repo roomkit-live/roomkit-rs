@@ -216,18 +216,14 @@ impl<S: ConversationStore> RoomKit<S> {
         defer: bool,
         named: Option<NamedGuard>,
     ) -> Result<Entered, RoomKitError> {
-        // A greeting starts at the room's first hop, as Python's, wherever it
-        // is made.
         let chain_depth = match &mut entry {
-            Entry::Message { message, .. } => Some(&mut message.chain_depth),
-            Entry::Direct { event, .. } => Some(&mut event.chain_depth),
-            Entry::Row { event, .. } => Some(&mut event.chain_depth),
-            Entry::Post { post, .. } => Some(&mut post.chain_depth),
-            Entry::Greeting { .. } => None,
+            Entry::Message { message, .. } => &mut message.chain_depth,
+            Entry::Direct { event, .. } => &mut event.chain_depth,
+            Entry::Row { event, .. } => &mut event.chain_depth,
+            Entry::Post { post, .. } => &mut post.chain_depth,
+            Entry::Greeting { chain_depth, .. } => chain_depth,
         };
-        if let Some(chain_depth) = chain_depth {
-            context::as_deep_as_its_turn(chain_depth);
-        }
+        context::as_deep_as_its_turn(chain_depth);
         self.inner.open()?;
         self.inner.subscribed().await;
         self.reached_from_its_work(&entry).await?;
@@ -347,7 +343,8 @@ impl<S: ConversationStore> RoomKit<S> {
                 room_id,
                 agent_id,
                 text,
-            } => Inbound::greeting(self.config(), room_id, agent_id, text),
+                chain_depth,
+            } => Inbound::greeting(self.config(), room_id, agent_id, text, chain_depth),
             // A stream's row goes to the run that reads the stream, never
             // through a kit's call: one here is a defect of this crate.
             Entry::Row { .. } => {

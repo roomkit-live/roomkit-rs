@@ -99,6 +99,9 @@ pub enum Entry {
         agent_id: ChannelId,
         /// What it says.
         text: String,
+        /// The depth it runs at: 0, or at least the depth of the room's work
+        /// that makes it (RFC §8.3).
+        chain_depth: u32,
     },
 }
 

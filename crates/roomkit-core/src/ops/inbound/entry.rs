@@ -46,7 +46,8 @@ impl Machine {
                 room_id,
                 agent_id,
                 text,
-            } => self.begin_greeting(cx, room_id, agent_id, text),
+                chain_depth,
+            } => self.begin_greeting(cx, room_id, agent_id, text, chain_depth),
         }
     }
 

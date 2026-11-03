@@ -508,7 +508,8 @@ impl Sim {
                 room_id,
                 agent_id,
                 text,
-            } => Inbound::greeting(config, room_id, agent_id, text),
+                chain_depth,
+            } => Inbound::greeting(config, room_id, agent_id, text, chain_depth),
             // No scripted channel streams: no stream's row is handed back.
             Entry::Row { .. } => unreachable!("the simulated driver reads no stream"),
         };

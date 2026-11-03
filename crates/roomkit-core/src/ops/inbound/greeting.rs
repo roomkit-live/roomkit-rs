@@ -20,20 +20,20 @@ use crate::model::{
 };
 use crate::ops::Cx;
 use crate::ops::io::Bound;
-use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::permissions::{self, DeliveryPlan};
 
 /// The metadata key that marks a greeting among the agent's events.
 const AUTO_GREETING: &str = "auto_greeting";
 
-/// The greeting `text` of `agent_id` in `room_id`, as Python's
-/// `_make_greeting_event` writes it: a message of an AI channel, outbound,
-/// whatever the agent's channel type.
+/// The greeting `text` of `agent_id` in `room_id` at `chain_depth`, as
+/// Python's `_make_greeting_event` writes it: a message of an AI channel,
+/// outbound, whatever the agent's channel type.
 pub(super) fn event(
     cx: &mut Cx<'_>,
     room_id: RoomId,
     agent_id: ChannelId,
     text: String,
+    chain_depth: u32,
 ) -> RoomEvent {
     let source = EventSource {
         direction: EventDirection::Outbound,
@@ -44,6 +44,7 @@ pub(super) fn event(
     let content = EventContent::Text(TextContent::new(text));
     let mut event = RoomEvent::at(id, room_id, EventType::Message, source, content, now);
     event.status = EventStatus::Delivered;
+    event.chain_depth = chain_depth;
     event
         .metadata
         .insert(AUTO_GREETING.to_owned(), serde_json::Value::Bool(true));
@@ -108,23 +109,23 @@ pub(super) fn log_refused(event: &RoomEvent) {
 impl Machine {
     /// Starts a greeting's pass, under no deadline, as Python's
     /// `_commit_and_deliver`, though within the call: a caller gone before
-    /// its commit takes it along (`Bound::Call`). It draws on no budget of the
-    /// work that made it, and what answers it has a budget of its own: a
-    /// fresh cascade's, wherever it is made.
+    /// its commit takes it along (`Bound::Call`). Its own commit draws no
+    /// pass; the cascade keeps the budget the call was made within, so that
+    /// what answers a greeting made in a cascade's work draws on that cascade
+    /// (RFC §8.3).
     pub(super) fn begin_greeting(
         &mut self,
         cx: &mut Cx<'_>,
         room_id: RoomId,
         agent_id: ChannelId,
         text: String,
+        chain_depth: u32,
     ) {
         self.call.channel_id = Some(agent_id.clone());
         self.call.room_id = Some(room_id.clone());
         let within_its_caller = Bound::Call(None);
         self.call.bound = within_its_caller;
-        self.cascade
-            .draw_on_its_own(ReentryBudget::new(cx.config.max_chain_depth));
-        let event = event(cx, room_id, agent_id, text);
+        let event = event(cx, room_id, agent_id, text, chain_depth);
         let pass = CommitPass::trigger(event, within_its_caller, None).greeting();
         self.cascade
             .lead(Job::Pass(Box::new(pass), PassOrigin::Trigger));
