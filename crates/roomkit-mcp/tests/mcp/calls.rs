@@ -2,9 +2,13 @@
 //! a note for what is not text, the server's words when it says it failed,
 //! within a bound.
 
+use std::sync::Arc;
+
 use pretty_assertions::assert_eq;
 use roomkit::model::Metadata;
-use roomkit_ai::{AiImagePart, AiTextPart, ToolError, ToolResult, ToolResultPart};
+use roomkit::orchestration::{ConsoleToolAuditor, ConsoleToolAuditorOptions, ToolAuditor};
+use roomkit_ai::orchestration::audit_tool_handler;
+use roomkit_ai::{AiImagePart, AiTextPart, ToolError, ToolHandler, ToolResult, ToolResultPart};
 use roomkit_mcp::{AsToolHandlerOptions, CallToolOptions, McpError, McpToolProvider};
 use serde_json::{Value, json};
 
@@ -297,4 +301,48 @@ async fn a_bad_label_is_refused_and_providers_close_apart() {
     assert_eq!((left.connected(), right.connected()), (false, true));
     right.close().await;
     assert_eq!(left.process_id(), None);
+}
+
+/// RFC §15.8.1: an MCP `isError` is a failed call whichever wrapper serves
+/// it, `as_tool_handler` failing it and `call_tool` answering its envelope:
+/// the audit records `failed` for both.
+// Python: tests/test_tool_failed_error.py::test_an_mcp_is_error_audits_alike_through_both_wrappers
+#[tokio::test]
+async fn an_mcp_is_error_audits_alike_through_both_wrappers() {
+    let server = Arc::new(connected("normal").await);
+    let auditor = Arc::new(ConsoleToolAuditor::new(ConsoleToolAuditorOptions::default()));
+    let handler = server
+        .as_tool_handler(AsToolHandlerOptions::default())
+        .unwrap();
+    let raised = audit_tool_handler(handler, Arc::<ConsoleToolAuditor>::clone(&auditor), "agent");
+    let provider = Arc::clone(&server);
+    let call_tool = ToolHandler::new(move |name, arguments| {
+        let provider = Arc::clone(&provider);
+        async move {
+            let rendered = provider
+                .call_tool(&name, arguments, CallToolOptions::default())
+                .await;
+            rendered
+                .map(ToolResult::Text)
+                .map_err(|error| ToolError::raised(&error))
+        }
+    });
+    let rendered = audit_tool_handler(
+        call_tool,
+        Arc::<ConsoleToolAuditor>::clone(&auditor),
+        "agent",
+    );
+
+    let failed = raised.call("fails".to_owned(), Metadata::new()).await;
+    let answered = rendered.call("fails".to_owned(), Metadata::new()).await;
+    server.close().await;
+
+    assert!(matches!(failed, Err(ToolError::Failed(_))), "{failed:?}");
+    assert!(answered.is_ok(), "{answered:?}");
+    let statuses: Vec<String> = auditor
+        .entries()
+        .into_iter()
+        .map(|entry| entry.status)
+        .collect();
+    assert_eq!(statuses, ["failed", "failed"]);
 }

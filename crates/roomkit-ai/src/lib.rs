@@ -77,6 +77,7 @@ pub mod knowledge;
 mod loop_events;
 pub mod memory;
 mod mock;
+pub mod orchestration;
 mod provider;
 pub mod tasks;
 pub use author_images::ImageResolver;
