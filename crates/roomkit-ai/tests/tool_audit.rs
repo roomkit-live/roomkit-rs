@@ -230,3 +230,41 @@ async fn a_call_dropped_before_it_ran_records_nothing() {
     drop(wrapped.call("tool".to_owned(), Metadata::new()));
     assert_eq!(auditor.entries(), []);
 }
+
+/// A panic of the handler is its error, recorded with its message and let
+/// through, as Python records an exception; a sibling call the panic
+/// unwinds, run in the same task as a round's calls are, was cancelled.
+#[tokio::test]
+async fn a_panic_is_its_handler_s_error_and_cancels_its_sibling() {
+    let auditor = Arc::new(ConsoleToolAuditor::new(ConsoleToolAuditorOptions::default()));
+    let handler = ToolHandler::new(|name: String, _arguments| async move {
+        assert!(name != "boom", "the disk caught fire");
+        std::future::pending::<Result<ToolResult, ToolError>>().await
+    });
+    let wrapped = audit_tool_handler(handler, Arc::<ConsoleToolAuditor>::clone(&auditor), "a");
+    let round = tokio::spawn(async move {
+        tokio::join!(
+            wrapped.call("slow".to_owned(), Metadata::new()),
+            wrapped.call("boom".to_owned(), Metadata::new()),
+        )
+    });
+
+    assert!(round.await.unwrap_err().is_panic());
+    let mut recorded: Vec<(String, String, String)> = auditor
+        .entries()
+        .into_iter()
+        .map(|entry| (entry.tool_name, entry.status, entry.result))
+        .collect();
+    recorded.sort();
+    assert_eq!(
+        recorded,
+        [
+            (
+                "boom".to_owned(),
+                "error".to_owned(),
+                "the disk caught fire".to_owned()
+            ),
+            ("slow".to_owned(), "cancelled".to_owned(), String::new()),
+        ]
+    );
+}

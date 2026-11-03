@@ -3,13 +3,15 @@
 //! entries are `roomkit::orchestration`'s; the wrapper is here, beside the
 //! [`ToolHandler`] it wraps.
 
+use std::any::Any;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
-use tokio::time::Instant;
 
 use roomkit::model::Metadata;
 use roomkit::orchestration::{ToolAuditEntry, ToolAuditor};
 use roomkit_core::ops::{Environment, SystemEnvironment};
 use serde_json::Value;
+use tokio::time::Instant;
 
 use crate::tools::{ToolError, ToolHandler, ToolResult};
 
@@ -25,9 +27,10 @@ const MAX_RESULT_LEN: usize = 500;
 /// failure envelope (`{"status": "failed"}`, `{"error": ...}`,
 /// `{"success": false}`), `ok` otherwise; a refusal, a failure in the
 /// handler's words or a decline records `failed` with its words, an error
-/// the handler raised `error` with its message, and a call dropped before
-/// its handler answered, its turn ended or the channel's per-call bound
-/// cut (RFC §21.6), `cancelled`.
+/// the handler raised, or a panic of the handler, `error` with its message,
+/// the panic then let through; and a call dropped before its handler
+/// answered, its turn ended, the channel's per-call bound cut it (RFC
+/// §21.6) or a sibling call's panic unwound it, `cancelled`.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -60,7 +63,17 @@ pub fn audit_tool_handler(
                 started: Instant::now(),
                 outcome: None,
             };
-            let answer = handler.call(name, arguments).await;
+            let mut call = handler.call(name, arguments);
+            let answer = std::future::poll_fn(|context| {
+                let polled = panic::catch_unwind(AssertUnwindSafe(|| call.as_mut().poll(context)));
+                polled.unwrap_or_else(|payload| {
+                    // A panic is the handler's error, as an exception is
+                    // Python's: recorded with its message, then let through.
+                    record.outcome = Some(("error", panic_message(payload.as_ref())));
+                    panic::resume_unwind(payload)
+                })
+            })
+            .await;
             record.outcome = Some(outcome(&answer));
             answer
         }
@@ -81,15 +94,12 @@ struct Record {
 
 impl Drop for Record {
     fn drop(&mut self) {
-        let (status, recorded) = self.outcome.take().unwrap_or_else(|| {
-            // A panic unwinding the call is the handler's error; a call
-            // dropped otherwise was cancelled.
-            if std::thread::panicking() {
-                ("error", "the tool handler panicked".to_owned())
-            } else {
-                ("cancelled", String::new())
-            }
-        });
+        // A call dropped before its handler answered was cancelled, a
+        // sibling call's panic unwinding it included.
+        let (status, recorded) = self
+            .outcome
+            .take()
+            .unwrap_or_else(|| ("cancelled", String::new()));
         let duration_ms = self.started.elapsed().as_secs_f64() * 1000.0;
         self.auditor.record(ToolAuditEntry::new(
             SystemEnvironment.now().to_iso_offset(),
@@ -119,6 +129,15 @@ fn outcome(answer: &Result<ToolResult, ToolError>) -> (&'static str, String) {
         ) => ("failed", words.clone()),
         Err(ToolError::Raised { message, .. }) => ("error", message.clone()),
     }
+}
+
+/// What a panic's `payload` says: its message, as Python's `str(exc)`.
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "the tool handler panicked".to_owned())
 }
 
 /// `text`'s first 500 characters.
