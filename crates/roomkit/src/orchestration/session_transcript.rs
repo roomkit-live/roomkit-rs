@@ -196,19 +196,32 @@ impl Figures {
 }
 
 /// The seconds from `first` to `last`, both instants with an offset or
-/// both without; `None` otherwise, as Python's subtraction refuses them.
+/// both without; `None` otherwise, as Python's subtraction refuses an
+/// aware and a naive one.
 fn seconds_between(first: &str, last: &str) -> Option<f64> {
-    if let (Ok(first), Ok(last)) = (
-        first.parse::<jiff::Timestamp>(),
-        last.parse::<jiff::Timestamp>(),
-    ) {
-        return Some(last.duration_since(first).as_secs_f64());
+    let elapsed = match (Instant::read(first)?, Instant::read(last)?) {
+        (Instant::Aware(first), Instant::Aware(last)) => last.duration_since(first),
+        (Instant::Naive(first), Instant::Naive(last)) => last.duration_since(first),
+        _ => return None,
+    };
+    Some(elapsed.as_secs_f64())
+}
+
+/// An entry's instant as Python's `fromisoformat` reads it: with an
+/// offset, or naive.
+enum Instant {
+    Aware(jiff::Timestamp),
+    Naive(DateTime),
+}
+
+impl Instant {
+    /// `ts` read with its offset first: the civil reading ignores one.
+    fn read(ts: &str) -> Option<Self> {
+        if let Ok(instant) = ts.parse::<jiff::Timestamp>() {
+            return Some(Self::Aware(instant));
+        }
+        ts.parse::<DateTime>().ok().map(Self::Naive)
     }
-    let (first, last) = (
-        first.parse::<DateTime>().ok()?,
-        last.parse::<DateTime>().ok()?,
-    );
-    Some(last.duration_since(first).as_secs_f64())
 }
 
 /// `seconds` for a person to read: Python's `_format_duration`.

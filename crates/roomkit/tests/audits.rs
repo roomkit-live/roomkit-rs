@@ -252,12 +252,12 @@ fn summary_empty() {
 }
 
 // Python: tests/orchestration/test_session_audit.py::test_summary_full_conversation
-// and test_summary_duration_formatting
 #[test]
 fn summary_full_conversation() {
     let dir = Dir::new();
     let path = dir.join("s.jsonl");
     let auditor = JsonlSessionAuditor::new(&path).unwrap();
+    let vision = format!("Chrome browser\n{}", "g".repeat(150));
     auditor.record(session_entry(
         "2026-03-20T12:00:00+00:00",
         "session",
@@ -270,6 +270,12 @@ fn summary_full_conversation() {
         "user",
         "Open Chrome",
     ));
+    auditor.record(session_entry(
+        "2026-03-20T12:00:07+00:00",
+        "speech",
+        "assistant",
+        "Let me check.",
+    ));
     let arguments = json!({ "q": "é" }).as_object().cloned().unwrap();
     auditor.record_tool(ToolAuditEntry::new(
         "2026-03-20T12:00:08+00:00",
@@ -281,23 +287,72 @@ fn summary_full_conversation() {
         5886.0,
     ));
     auditor.record(session_entry(
-        "2026-03-20T13:03:42+00:00",
+        "2026-03-20T12:00:14+00:00",
+        "vision",
+        "system",
+        &vision,
+    ));
+    auditor.record(session_entry(
+        "2026-03-20T12:00:20+00:00",
         "barge_in",
         "user",
         "User interrupted",
     ));
+    auditor.record(session_entry(
+        "2026-03-20T13:03:42+00:00",
+        "speech",
+        "user",
+        "Never mind",
+    ));
 
     let at = |ts: &str| local_time(ts);
-    let expected = format!(
-        "\nSession Audit ({})\n{}\n  [{}] SESSION Session started\n  [{}] USER: \"Open Chrome\"\n  [{}] TOOL describe_screen {{\"q\": \"\\u00e9\"}} → OK (5886ms)\n           Chrome with Google open\n  [{}] BARGE-IN User interrupted\n\n  Duration: 1h 3m 42s | Turns: 1 user, 0 assistant | Tool calls: 1 (5886ms) | Interruptions: 1\n  Tools: describe_screen(1)",
-        path.display(),
+    let expected = [
+        format!("\nSession Audit ({})", path.display()),
         "=".repeat(60),
-        at("2026-03-20T12:00:00+00:00"),
-        at("2026-03-20T12:00:05+00:00"),
-        at("2026-03-20T12:00:08+00:00"),
-        at("2026-03-20T13:03:42+00:00"),
+        format!("  [{}] SESSION Session started", at("2026-03-20T12:00:00+00:00")),
+        format!("  [{}] USER: \"Open Chrome\"", at("2026-03-20T12:00:05+00:00")),
+        format!("  [{}] ASSISTANT: \"Let me check.\"", at("2026-03-20T12:00:07+00:00")),
+        format!(
+            "  [{}] TOOL describe_screen {{\"q\": \"\\u00e9\"}} → OK (5886ms)\n           Chrome with Google open",
+            at("2026-03-20T12:00:08+00:00")
+        ),
+        format!(
+            "  [{}] VISION Chrome browser {}...",
+            at("2026-03-20T12:00:14+00:00"),
+            "g".repeat(135)
+        ),
+        format!("  [{}] BARGE-IN User interrupted", at("2026-03-20T12:00:20+00:00")),
+        format!("  [{}] USER: \"Never mind\"", at("2026-03-20T13:03:42+00:00")),
+        String::new(),
+        "  Duration: 1h 3m 42s | Turns: 2 user, 1 assistant | Tool calls: 1 (5886ms) | Vision: 1 | Interruptions: 1".to_owned(),
+        "  Tools: describe_screen(1)".to_owned(),
+    ];
+    assert_eq!(auditor.summary(), expected.join("\n"));
+}
+
+/// An instant with an offset and one without have no duration between
+/// them, as Python's subtraction refuses them: the transcript says `?`.
+#[test]
+fn a_mixed_pair_of_instants_has_no_duration() {
+    let dir = Dir::new();
+    let auditor = JsonlSessionAuditor::new(dir.join("s.jsonl")).unwrap();
+    auditor.record(session_entry(
+        "2026-03-20T12:00:00+00:00",
+        "session",
+        "system",
+        "started",
+    ));
+    auditor.record(session_entry(
+        "2026-03-20T12:00:05",
+        "speech",
+        "user",
+        "done",
+    ));
+    assert!(
+        auditor
+            .summary()
+            .contains("  Duration: ? | Turns: 1 user, 0 assistant")
     );
-    assert_eq!(auditor.summary(), expected);
 }
 
 // Python: tests/orchestration/test_session_audit.py::test_summary_duration_formatting
