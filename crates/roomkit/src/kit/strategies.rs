@@ -108,6 +108,7 @@ struct Installed<S> {
 #[derive(Clone, Debug, Default)]
 struct Added {
     hooks: Vec<String>,
+    runners: Vec<ChannelId>,
     attached: Vec<ChannelId>,
     keys: Vec<String>,
 }
@@ -116,6 +117,7 @@ struct Added {
 #[derive(Clone)]
 struct Snapshot {
     hooks: BTreeSet<String>,
+    runners: BTreeSet<ChannelId>,
     bindings: BTreeSet<ChannelId>,
     keys: BTreeSet<String>,
 }
@@ -125,6 +127,7 @@ impl Snapshot {
     fn added(&self, after: &Self) -> Added {
         Added {
             hooks: after.hooks.difference(&self.hooks).cloned().collect(),
+            runners: after.runners.difference(&self.runners).cloned().collect(),
             attached: after.bindings.difference(&self.bindings).cloned().collect(),
             keys: after.keys.difference(&self.keys).cloned().collect(),
         }
@@ -374,11 +377,13 @@ impl<S: ConversationStore> RoomKit<S> {
                     "what an install added could not be read whole"
                 );
                 let hooks = self.hook_engine().room_hook_names(room_id);
+                let runners = self.inner.turn_runners.channels(room_id);
                 let added = Added {
                     hooks: hooks
                         .into_iter()
                         .filter(|name| !before.hooks.contains(name))
                         .collect(),
+                    runners: runners.difference(&before.runners).cloned().collect(),
                     ..Added::default()
                 };
                 (added, Some(error))
@@ -478,7 +483,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// yet: all of them, or none when an agent named by its id, or given
     /// live under the id of a channel the kit holds, is no intelligence
     /// channel the kit holds.
-    fn register_strategy_agents(&self, agents: &[StrategyAgent]) -> Result<(), RoomKitError> {
+    pub(crate) fn register_strategy_agents(
+        &self,
+        agents: &[StrategyAgent],
+    ) -> Result<(), RoomKitError> {
         for agent in agents {
             let held = self.inner.channel(agent.channel_id());
             // A live agent the kit holds no channel for is registered below;
@@ -531,6 +539,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 .room_hook_names(room_id)
                 .into_iter()
                 .collect(),
+            runners: self.inner.turn_runners.channels(room_id),
             bindings: self.bound(room_id).await?,
             keys: room
                 .map(|room| room.metadata.keys().cloned().collect())
@@ -592,7 +601,13 @@ impl<S: ConversationStore> RoomKit<S> {
         for name in &added.hooks {
             engine.remove_room_hook(room_id, name);
         }
-        self.update_record(room_id, strategy, |record| record.hooks.clear());
+        for channel_id in &added.runners {
+            self.inner.turn_runners.release(room_id, channel_id);
+        }
+        self.update_record(room_id, strategy, |record| {
+            record.hooks.clear();
+            record.runners.clear();
+        });
         let stayed = self.detach_agents(room_id, &added.attached).await;
         self.update_record(room_id, strategy, |record| {
             record.attached.clone_from(&stayed);
@@ -712,6 +727,14 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// Whether `room_id` holds a strategy recorded through this kit, its
     /// install over or not.
+    /// Claims `room_id` for the strategy at `owner` from its own install,
+    /// or refuses: Python's `claim_room_strategy(room_id, self)` a built-in
+    /// strategy's install calls first, which an install the kit runs passes
+    /// and a direct one claims nothing by (RFC §19.7).
+    pub(crate) fn claim_for(&self, room_id: &RoomId, owner: usize) -> Result<(), RoomKitError> {
+        check_claim_of(&self.inner.room_strategies.rooms(), room_id, owner)
+    }
+
     pub(crate) fn holds_strategy_record(&self, room_id: &RoomId) -> bool {
         self.inner.room_strategies.rooms().contains_key(room_id)
     }
@@ -769,12 +792,29 @@ fn check_claim<S>(
     room_id: &RoomId,
     strategy: &Arc<dyn Orchestration<S>>,
 ) -> Result<(), RoomKitError> {
+    check_claim_of(rooms, room_id, strategy_address(strategy.as_ref()))
+}
+
+/// Refuses the strategy at `owner` a room holding another strategy.
+fn check_claim_of<S>(
+    rooms: &HashMap<RoomId, Installed<S>>,
+    room_id: &RoomId,
+    owner: usize,
+) -> Result<(), RoomKitError> {
     match rooms.get(room_id) {
-        Some(installed) if !Arc::ptr_eq(&installed.strategy, strategy) => Err(RoomKitError::Value(
-            format!("Room {room_id} holds a strategy already: uninstall_strategy() first"),
-        )),
+        Some(installed) if strategy_address(installed.strategy.as_ref()) != owner => {
+            Err(RoomKitError::Value(format!(
+                "Room {room_id} holds a strategy already: uninstall_strategy() first"
+            )))
+        }
         _ => Ok(()),
     }
+}
+
+/// The address of `strategy`'s object: what tells one strategy from
+/// another, as Python's `is`.
+pub(crate) fn strategy_address<S>(strategy: &dyn Orchestration<S>) -> usize {
+    std::ptr::from_ref(strategy).cast::<()>() as usize
 }
 
 fn still_binds(room_id: &RoomId, stayed: &[ChannelId]) -> RoomKitError {

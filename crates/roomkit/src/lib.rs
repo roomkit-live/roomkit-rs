@@ -83,6 +83,7 @@ mod tool_call_scope;
 mod tool_calls;
 mod transport;
 mod turn;
+mod turn_runners;
 mod turns;
 mod unwind;
 
@@ -233,6 +234,8 @@ pub use self::turn::{PostStatusOptions, ToolGate, TurnHost, WaitTaskOptions, cur
 pub use self::kit::{
     ClaimRoomStrategyOptions, InstallStrategyOptions, RoomStrategyOptions, UninstallStrategyOptions,
 };
+#[doc(inline)]
+pub use self::orchestration::Loop;
 #[doc(inline)]
 pub use self::orchestration::Orchestration;
 #[doc(inline)]

@@ -5,17 +5,23 @@
 //! entry, its level, and the in-memory backend a bus uses by default;
 //! [`backend`] holds what another backend implements. The tool and session
 //! auditors (§15.8) record an agent's tool calls and a session's timeline.
+//! [`strategies`] holds the strategies the kit builds in: the loop
+//! (§19.7.4).
 
+mod agents;
 pub mod backend;
+pub(crate) mod lifecycle;
 mod memory;
 mod router;
 mod session_audit;
 mod session_transcript;
 mod state;
 mod status;
+pub mod strategies;
 mod strategy;
 mod text;
 mod tool_audit;
+mod worker_run;
 
 pub use self::memory::{InMemoryStatusBackend, InMemoryStatusBackendOptions};
 pub use self::router::{
@@ -30,6 +36,7 @@ pub use self::status::{
     HasCompletedOptions, PostAsyncOptions, PostOptions, RecentOptions, StatusBus, StatusBusOptions,
     StatusEntry, StatusLevel,
 };
+pub use self::strategies::review_loop::{Loop, LoopOptions};
 pub use self::strategy::{Orchestration, StrategyAgent, StrategyFuture};
 pub use self::text::RecentTextOptions;
 pub use self::tool_audit::{

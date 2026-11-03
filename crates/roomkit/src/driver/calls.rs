@@ -40,6 +40,7 @@ use crate::store::{
 use crate::stream::{self, KeptStream, Stops};
 use crate::tasks::{Kind, Marks, TaskCut};
 use crate::turn::TurnKit;
+use crate::turn_runners::{Taken, TurnRunner};
 use crate::turns::{self, Answer};
 use crate::unwind::{self, unwinding};
 
@@ -439,6 +440,13 @@ pub(super) async fn channel<S: ConversationStore>(
                 return channel_output(channel.on_event(event, binding, *context).await);
             }
             let window = inner.config().recent_events_limit(&context.bindings);
+            if let Some(runner) = inner
+                .turn_runners
+                .get(&context.room.id, &binding.channel_id)
+            {
+                let asked = (binding, event, *context);
+                return strategy_turn(inner, shared, effect, &*runner, asked, window).await;
+            }
             if serializes(&*channel, &binding) {
                 let asked = (&*channel, binding);
                 return ask_in_line(inner, shared, effect, asked, event, *context, window).await;
@@ -545,6 +553,30 @@ async fn take_turn<S: ConversationStore>(
     // running.
     shared.turn_answered(effect);
     outcome
+}
+
+/// The turn of `binding`'s channel on `event` that a strategy's runner
+/// takes in the room (RFC §10.6.1, §19.7): its answer, or the channel's own
+/// turn, which never waits its place in the room, as the strategy orders
+/// its turns itself (Python's `_serializes`).
+async fn strategy_turn<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    shared: &RunShared,
+    effect: EffectId,
+    runner: &dyn TurnRunner<S>,
+    (binding, event, context): (ChannelBinding, RoomEvent, RoomContext),
+    window: usize,
+) -> Outcome {
+    let kit = crate::kit::RoomKit {
+        inner: Arc::clone(inner),
+    };
+    match runner.take(kit, event, binding, context) {
+        Taken::Answered(answer) => channel_output(answer.await),
+        Taken::Own(own) => {
+            let (event, binding, context) = *own;
+            take_turn(inner, shared, effect, binding, event, context, window).await
+        }
+    }
 }
 
 /// Whether `channel`'s turn waits its place in the room (RFC §6.4): an

@@ -105,6 +105,7 @@ pub use self::status::{
     ListObservationsOptions, ListTasksOptions, SubmitFeedbackOptions, UpdateRoomMetadataOptions,
 };
 pub use self::steering::SteerOptions;
+pub(crate) use self::strategies::strategy_address;
 pub use self::strategies::{
     ClaimRoomStrategyOptions, InstallStrategyOptions, RoomStrategyOptions, UninstallStrategyOptions,
 };
@@ -267,6 +268,9 @@ pub(crate) struct Inner<S> {
     pub(crate) default_orchestration: Option<Arc<dyn crate::Orchestration<S>>>,
     /// The strategies installed through the kit, by room (RFC §19.7).
     pub(crate) room_strategies: strategies::RoomStrategies<S>,
+    /// The strategies' runners of their agents' turns, kept by the owner
+    /// (RFC §10.6.1).
+    pub(crate) turn_runners: crate::turn_runners::TurnRunners<S>,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -360,6 +364,7 @@ impl<S: ConversationStore> RoomKit<S> {
             delivery_keys: Arc::default(),
             default_orchestration: orchestration,
             room_strategies: strategies::RoomStrategies::default(),
+            turn_runners: crate::turn_runners::TurnRunners::default(),
         });
         inner.subscribe_status_bus();
         inner.name_held_deliveries();

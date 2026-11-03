@@ -258,6 +258,31 @@ impl DelegatedTask {
     }
 }
 
+/// The work a delegated task hands back: its output, unless it failed. A
+/// failed task hands none, whatever its output keeps (a worker cut short
+/// keeps its narration there, RFC §23.3): Python's `task_work`.
+pub(crate) fn task_work(result: &DelegatedTaskResult) -> &str {
+    if result.status == TaskStatus::Failed {
+        return "";
+    }
+    result.output.as_deref().unwrap_or("")
+}
+
+/// The error a task cut short by `reason` carries: Python's
+/// `TaskCutShortError.message_for(reason)`.
+pub(crate) fn cut_short_message(reason: &str) -> String {
+    format!("The worker's turn ended {reason} before its answer")
+}
+
+/// How a failed task's turn was cut short (its round cap, deadline or
+/// budget, a stop), when a cut ended it: `None` for a task that completed,
+/// or that failed with an error, even one raised after its turn began and
+/// named on its `loop_end_reason` (RFC §23.3). Python's `task_cut_reason`.
+pub(crate) fn task_cut_reason(result: &DelegatedTaskResult) -> Option<&str> {
+    let reason = result.metadata.get("loop_end_reason")?.as_str()?;
+    (result.error.as_deref() == Some(cut_short_message(reason).as_str())).then_some(reason)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

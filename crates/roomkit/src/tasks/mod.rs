@@ -24,6 +24,7 @@
 pub(crate) mod brief;
 mod cut;
 mod delegated;
+pub(crate) mod handback;
 mod held;
 mod hosted;
 pub(crate) mod json;
@@ -36,6 +37,7 @@ pub(crate) mod text;
 
 pub(crate) use self::cut::{TaskCut, TaskCuts};
 pub use self::delegated::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, WaitOptions};
+pub(crate) use self::delegated::{cut_short_message, task_cut_reason, task_work};
 pub(crate) use self::held::{Claim, HeldTasks, spawn_apart, until_ended};
 pub(crate) use self::hosted::HostTasks;
 #[cfg(test)]

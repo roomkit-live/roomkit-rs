@@ -11,7 +11,7 @@ use crate::orchestration::{RecentOptions, StatusBus, StatusEntry, StatusLevel};
 const TASK_ACTION: &str = "task";
 
 /// The metadata key of a strategy run's own entries.
-const RUN_ENTRY: &str = "task_run";
+pub(crate) const RUN_ENTRY: &str = "task_run";
 
 /// How many of the bus's latest entries a room's tasks are read from.
 pub(crate) const ROOM_TASKS_WINDOW: usize = 500;
@@ -337,6 +337,29 @@ mod tests {
     }
 
     /// The run's line, keyed again by its task once its terminal entry names
+    // Python: tests/orchestration/test_worker_run_task_line.py::test_an_entry_no_worker_run_posted_never_ends_a_task_s_line
+    // (and the run's entry under its own action that does end it:
+    // test_a_worker_cut_after_its_progress_leaves_its_line_ended[iteration]).
+    #[test]
+    fn an_entry_no_worker_run_posted_never_ends_a_task_s_line() {
+        let mut foreign = entry("worker", StatusLevel::Failed, "", Some("t1"));
+        foreign.action = "iteration".to_owned();
+        let mut run = foreign.clone();
+        run.metadata.insert(RUN_ENTRY.to_owned(), json!(true));
+        let running = entry("worker", StatusLevel::Pending, "Count.", Some("t1"));
+
+        let read_by_lines = |entries: [StatusEntry; 2]| {
+            read(&room_tasks(entries.iter().filter(|entry| of_a_task(entry))))
+        };
+        let lines = read_by_lines([running.clone(), foreign]);
+        assert_eq!(
+            lines,
+            vec![(json!("t1"), json!("worker"), json!("running"))]
+        );
+        let lines = read_by_lines([running, run]);
+        assert_eq!(lines, vec![(json!("t1"), json!("worker"), json!("failed"))]);
+    }
+
     /// it, goes last, as Python's `tasks[task_id] = tasks.pop(by_agent)`
     /// moves it in the dict's order.
     #[test]

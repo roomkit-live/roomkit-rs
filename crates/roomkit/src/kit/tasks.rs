@@ -26,14 +26,15 @@ use super::inline::Unstarted;
 use crate::context::ExecutionContext;
 use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
 use crate::error::{RoomKitError, repr};
-use crate::orchestration::{PostOptions, StatusLevel};
+use crate::orchestration::StatusLevel;
+use crate::orchestration::lifecycle::post_agent_lifecycle;
 use crate::store::ConversationStore;
 use crate::store::{GetConversationOptions, PatchRoomMetadataOptions};
 use crate::tasks::brief::{conversation_block, worker_description};
 use crate::tasks::text::{bounded_text, identifier, one_line, quoted};
 use crate::tasks::{
     DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, OnCompleteCallback, ResultTool,
-    SubmitOptions, TaskReach, TaskRunner,
+    SubmitOptions, TaskReach, TaskRunner, cut_short_message, task_work,
 };
 use crate::{
     AttachChannelOptions, CreateRoomOptions, DeliverOptions, GetRoomOptions, SendEventOptions,
@@ -53,11 +54,6 @@ const HAND_BACKS: [&str; 2] = ["relay", "post"];
 
 /// The action a task's entries carry on the status bus.
 const TASK_ACTION: &str = "task";
-
-/// How much of an entry's detail the bus keeps, and of a completed one's
-/// result under `result` when the detail was cut (RFC §19.8).
-const DETAIL_LIMIT: usize = 200;
-const RESULT_LIMIT: usize = 4_000;
 
 /// How much of what was asked a hand-back names.
 const TASK_NAME_CHARS: usize = 200;
@@ -874,20 +870,9 @@ impl<S: ConversationStore> RoomKit<S> {
         agent_id: &ChannelId,
         level: StatusLevel,
         detail: &str,
-        mut metadata: Metadata,
+        metadata: Metadata,
     ) {
-        let summary = bounded_text(detail, DETAIL_LIMIT);
-        if level == StatusLevel::Completed && summary != detail {
-            metadata
-                .entry("result")
-                .or_insert_with(|| json!(bounded_text(detail, RESULT_LIMIT)));
-        }
-        let options = PostOptions {
-            detail: summary,
-            metadata: Some(metadata),
-        };
-        self.status_bus()
-            .post(agent_id.as_str(), TASK_ACTION, level, options);
+        post_agent_lifecycle(self, agent_id, level, TASK_ACTION, detail, metadata);
     }
 
     /// Hands a background task's result back to `notify` in its parent
@@ -1143,14 +1128,6 @@ fn log_not_delivered(notify: &ChannelId, room_id: &RoomId, outcome: &DeliveryOut
     }
 }
 
-/// The work a task hands back: its output, unless it failed.
-fn task_work(result: &DelegatedTaskResult) -> &str {
-    if result.status == TaskStatus::Failed {
-        return "";
-    }
-    result.output.as_deref().unwrap_or("")
-}
-
 /// `output`, cut to the share a hand-back carries.
 fn bounded(output: &str) -> String {
     if output.chars().count() <= MAX_RESULT_CHARS {
@@ -1224,7 +1201,7 @@ fn outcome_parts(
         return (None, Some(failure), turns);
     }
     if let Some(reason) = end.filter(|end| end != "completed") {
-        let message = format!("The worker's turn ended {reason} before its answer");
+        let message = cut_short_message(&reason);
         // Its attributes, Python's `TaskCutShortError(reason, narration)`'s.
         let mut attributes = Metadata::new();
         attributes.insert("reason".to_owned(), Value::from(reason.clone()));
