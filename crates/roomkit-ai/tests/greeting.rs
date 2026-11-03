@@ -251,8 +251,8 @@ async fn greetings_of_a_hook_on_every_answer(
             let an_answer = event.source.channel_id == id("other");
             async move {
                 if an_answer && counted.fetch_add(1, Ordering::SeqCst) < GIVES_UP {
-                    let kit = kit.expect("the kit runs its hook");
                     let _greeted = kit
+                        .unwrap()
                         .send_greeting(&event.room_id, SendGreetingOptions::default())
                         .await;
                 }
@@ -272,7 +272,7 @@ async fn greetings_of_a_hook_on_every_answer(
         .unwrap();
     tokio::time::timeout(Duration::from_secs(30), roomkit::testing::idle(&kit))
         .await
-        .expect("the kit goes idle");
+        .unwrap();
     made.load(Ordering::SeqCst)
 }
 
