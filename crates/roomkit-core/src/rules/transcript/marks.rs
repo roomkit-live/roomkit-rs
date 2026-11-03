@@ -312,7 +312,8 @@ fn copy_at(
 /// `last`, is one as Python's `phrase_pattern(text, bracketed=True)` reads
 /// it: a square or fullwidth bracket at `start`, nothing but phrase space
 /// from it to the first letter, and phrase space inside the copy only
-/// between `text`'s words.
+/// between `text`'s words; a combining mark, which no reader sees, is read
+/// past anywhere, where Python's reads the Latin range's alone.
 fn short_mark_at(chars: &[char], start: usize, first: usize, last: usize, text: &str) -> bool {
     if !matches!(chars.get(start), Some('[' | '\u{ff3b}')) {
         return false;
@@ -334,7 +335,10 @@ fn short_mark_at(chars: &[char], start: usize, first: usize, last: usize, text: 
         if reads_as_letter(c) {
             let run = unicode::phrase_reads(c).and_then(|reads| reads.split(' ').next());
             read += run.map_or(1, |run| run.chars().count());
-        } else if !unicode::is_joint(c) && (!is_phrase_space(c) || !boundaries.contains(&read)) {
+        } else if !unicode::is_joint(c)
+            && !unicode::is_mark(c)
+            && (!is_phrase_space(c) || !boundaries.contains(&read))
+        {
             return false;
         }
     }
@@ -700,6 +704,9 @@ mod tests {
             "[\u{1dc0}People taking part besides you",
             "[Handoff\u{5b0}: a -> b]",
             "[context\u{5b0}from previous agent (admin)]",
+            "[Hand\u{5b0}off: a -> b]",
+            "[Han\u{1dc0}doff",
+            "[Context fr\u{5b0}om previous agent",
         ] {
             assert!(cleaned(copy).contains(COPIED_MARK), "{copy}");
         }
