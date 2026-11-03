@@ -147,7 +147,7 @@ impl PassResult {
     /// implementation's pipeline goes on with the event `commit_event`
     /// returns. A delivered event joins its delivery set's context as its
     /// newest event, after the window read before its commit, as Python's
-    /// broadcast context holds it.
+    /// broadcast context holds it (`committed_in`).
     pub(super) fn adopt(&mut self, stored: RoomEvent) {
         match self {
             Self::Delivered {
@@ -159,10 +159,7 @@ impl PassResult {
                 if let Some(changed) = changed {
                     super::commit::adopt(&mut changed.context, &stored);
                 }
-                context
-                    .recent_events
-                    .retain(|recent| recent.id != stored.id);
-                context.recent_events.push(stored.clone());
+                super::commit::join_newest(&mut context.recent_events, &stored);
                 **event = stored;
             }
             Self::Blocked { event, .. } => **event = stored,

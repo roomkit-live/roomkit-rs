@@ -12,7 +12,7 @@ use crate::model::{
     EventStatus, EventType, Metadata, RoomContext, RoomEvent, Timestamp, Visibility,
 };
 use crate::ops::protocol::{EffectId, StoreRequest};
-use crate::ops::{Cx, FrameworkEvent, Notice};
+use crate::ops::{Cx, FrameworkEvent, Notice, RECENT_EVENTS_LIMIT};
 use crate::rules::authors::AUTHOR;
 use crate::rules::lifecycle::{self, Transition};
 use crate::rules::permissions::{self, DeliveryPlan};
@@ -68,12 +68,7 @@ pub(super) fn delivered(
             let target = Box::new(changed.clone());
             let changed = Changed {
                 target: changed,
-                context: committed(
-                    &context,
-                    &event,
-                    now,
-                    cx.config.recent_events_limit(&context.bindings),
-                ),
+                context: committed(&context, &event, now),
             };
             (Some(target), Some(Box::new(changed)))
         }
@@ -101,25 +96,30 @@ pub(super) fn delivered(
 /// The room of `context` as the commit of `event`, the room's activity at
 /// `now`, leaves it (RFC §10.3 "Mutation triggers", gap G-062): one more
 /// index given out, `event`'s the latest, its activity moved, and `event`
-/// the newest event of its history, at its index, the oldest dropped past
-/// `window`, as a read of the room would hold it.
-fn committed(
-    context: &RoomContext,
-    event: &RoomEvent,
-    now: Timestamp,
-    window: usize,
-) -> RoomContext {
+/// the newest event of its history ([`join_newest`]).
+fn committed(context: &RoomContext, event: &RoomEvent, now: Timestamp) -> RoomContext {
     let mut committed = context.clone();
     let room = &mut committed.room;
     room.event_count = room.event_count.saturating_add(1);
     room.latest_index = Some(event.index);
     room.timers.last_activity_at = Some(now);
-    let history = &mut committed.recent_events;
-    history.retain(|recent| recent.id != event.id);
-    history.push(event.clone());
-    let excess = history.len().saturating_sub(window);
-    history.drain(..excess);
+    join_newest(&mut committed.recent_events, event);
     committed
+}
+
+/// `history`, the room's events its pass read, with `event`, as committed,
+/// its newest in place of a copy it holds, the oldest dropped past
+/// [`RECENT_EVENTS_LIMIT`]: the Python implementation's `committed_in`,
+/// which a delivery set's context and a change's mutation trigger read
+/// (RFC §10.2, §10.3). The window the pass read is not the cap: a window of
+/// 50 holds 51 events once `event` joins it.
+pub(super) fn join_newest(history: &mut Vec<RoomEvent>, event: &RoomEvent) {
+    history.retain(|recent| recent.id != event.id);
+    let excess = history
+        .len()
+        .saturating_sub(RECENT_EVENTS_LIMIT.saturating_sub(1));
+    history.drain(..excess);
+    history.push(event.clone());
 }
 
 /// Commits `event` blocked by `blocked_by` (RFC §10.1 steps 10 and 11): the
@@ -205,4 +205,58 @@ pub(super) fn adopt(context: &mut RoomContext, stored: &RoomEvent) {
     copy.clone_from(stored);
     context.room.latest_index = Some(stored.index);
     context.room.event_count = context.room.event_count.max(stored.index.saturating_add(1));
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+    use crate::model::{ChannelId, ChannelType, EventId, EventSource, RoomId, TextContent};
+
+    fn events(count: usize) -> Vec<RoomEvent> {
+        (0..count)
+            .map(|index| {
+                RoomEvent::at(
+                    EventId::new(format!("evt_{index}")).unwrap(),
+                    RoomId::new("r").unwrap(),
+                    EventType::Message,
+                    EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS),
+                    TextContent::new("hi"),
+                    Timestamp::UNIX_EPOCH,
+                )
+            })
+            .collect()
+    }
+
+    fn ids(history: &[RoomEvent]) -> (usize, Option<String>, Option<String>) {
+        (
+            history.len(),
+            history.first().map(|event| event.id.to_string()),
+            history.last().map(|event| event.id.to_string()),
+        )
+    }
+
+    /// Python's `committed_in` (`core/mixins/inbound_locked.py`): a window
+    /// under the ceiling keeps every event it read, the committed one after
+    /// them; at the ceiling the oldest gives way (RMK-1130).
+    #[test]
+    fn a_committed_event_joins_its_context_as_python_s_committed_in_holds_it() {
+        let mut window = events(50);
+        let mut ceiling = events(RECENT_EVENTS_LIMIT);
+        let newest = events(RECENT_EVENTS_LIMIT + 1).pop().unwrap();
+        join_newest(&mut window, &newest);
+        join_newest(&mut ceiling, &newest);
+        let mut again = events(3);
+        let copy = again[1].clone();
+        join_newest(&mut again, &copy);
+        assert_eq!(
+            [ids(&window), ids(&ceiling), ids(&again)],
+            [
+                (51, Some("evt_0".into()), Some("evt_2000".into())),
+                (2000, Some("evt_1".into()), Some("evt_2000".into())),
+                (3, Some("evt_0".into()), Some("evt_1".into())),
+            ]
+        );
+    }
 }

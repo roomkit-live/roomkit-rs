@@ -491,6 +491,39 @@ mod an_edit {
         );
     }
 
+    /// The trigger reads the room as the edit left it: the window its pass
+    /// read, 50 events, and the edit after them, as Python's
+    /// `committed_in` holds it (RMK-1130).
+    #[tokio::test]
+    async fn its_trigger_reads_the_window_its_pass_read_and_the_edit() {
+        let room = room().await;
+        for n in 0..50 {
+            say(&room.kit, CUSTOMER, &format!("m{n}")).await;
+        }
+        let (seen, mut counted) = mpsc::unbounded_channel();
+        room.kit
+            .hook(
+                HookTrigger::OnEventUpdated,
+                move |_: RoomEvent, context: RoomContext| {
+                    let seen = seen.clone();
+                    async move {
+                        seen.send(context.recent_events.len()).unwrap();
+                    }
+                },
+                HookOptions {
+                    execution: HookExecution::Async,
+                    name: "counter".to_owned(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        send(&room.kit, edit_from(CUSTOMER, "I need 50000$")).await;
+        let read = tokio::time::timeout(Duration::from_secs(1), counted.recv())
+            .await
+            .unwrap();
+        assert_eq!(read, Some(51));
+    }
+
     #[tokio::test]
     async fn fires_on_event_updated_with_the_edited_target() {
         let room = room().await;
