@@ -308,8 +308,9 @@ models-check:
 		exit 1; \
 	fi && \
 	pinned=$$commit && commit=$$(git -C "$$ROOMKIT_DIR" rev-parse --verify origin/main) && \
-	$(MODELS_EXPORT) && \
-	if ! cmp -s "$$out" $(MODELS)/models.json; then \
+	if ! { $(MODELS_EXPORT); }; then \
+		echo "warning: roomkit's origin/main catalogue could not be exported"; \
+	elif ! cmp -s "$$out" $(MODELS)/models.json; then \
 		echo "warning: roomkit's origin/main exports another catalogue than $$pinned's: run make models-sync"; \
 	fi && \
 	rm -f "$$out" && \
