@@ -203,6 +203,10 @@ pub(crate) struct Inner<S> {
     pub(crate) cursors: RoomCursors,
     /// The rooms' delivery claims this process holds (RFC §13.5).
     pub(crate) claims: crate::gaps::DeliveryClaims,
+    /// The identities' verification locks, by identity key: mutexes of
+    /// their own, apart from the room locks, so that no room id takes an
+    /// identity's verification (RFC §11.7, §13.5).
+    pub(crate) verification_locks: RoomMutexes,
     /// How long a delivery set waits on a cursor hole no lane runs before it
     /// skips it (RFC §13.5).
     pub(crate) delivery_gap_timeout: std::time::Duration,
@@ -339,6 +343,7 @@ impl<S: ConversationStore> RoomKit<S> {
             tickets: RoomTickets::default(),
             cursors: RoomCursors::default(),
             claims: crate::gaps::DeliveryClaims::default(),
+            verification_locks: RoomMutexes::default(),
             delivery_gap_timeout,
             tasks: Arc::default(),
             environment,

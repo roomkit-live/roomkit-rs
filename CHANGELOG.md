@@ -23,6 +23,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   where it registered the channel with no owner of its requests
   (RMK-1255).
 - A parallel team's first error cuts the other workers (RFC §19.7.3, §19.7.4), as Python's: a `Supervisor` with the parallel strategy, and a `Loop`'s parallel reviews, whose delegation raises answer with that error without waiting for the other delegations, each started then cut, posting its end; the Loop's parallel reviews waited for every reviewer (RMK-1279).
+- A room id takes no identity's verification lock (RFC §13.5), as
+  Python's: the verification locks are mutexes of their own, apart from
+  the room locks, so a section of the room `verification::alice` no longer
+  holds alice's verification (RMK-1281).
 - Delivery lanes across processes (RFC §13.5), as Python's: a delivery
   set waits for the room's cursor to pass the indexes before its own that
   another process committed; a hole no lane runs is skipped after

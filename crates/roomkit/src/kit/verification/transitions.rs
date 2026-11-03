@@ -365,14 +365,13 @@ impl<S: ConversationStore> RoomKit<S> {
             .map_err(|error| self.read_failed(error))
     }
 
-    /// Waits for the lock of `key`, one identity's, from the kit's lock
-    /// manager, which serializes its rooms (RFC §13.5): an identity's
-    /// transitions are serialized wherever its rooms' are, as Python's
-    /// `self._lock_manager.locked(_lock_key(...))` (its default per process,
-    /// a lock manager shared by processes across them).
+    /// Waits for the lock of `key`, one identity's, among the kit's
+    /// verification locks (RFC §13.5): apart from the room locks, so that a
+    /// room named like the key never holds it, as Python's
+    /// `self._verification_locks.locked(_lock_key(...))`.
     pub(super) async fn lock_identity(&self, key: &str) -> Result<RoomGuard<'_>, RoomKitError> {
         let key = RoomId::new(key)?;
-        Ok(self.inner.locks.lock(&key).await)
+        Ok(self.inner.verification_locks.lock(&key).await)
     }
 
     /// The identity's stored verification, UNVERIFIED when it has none.
@@ -409,5 +408,39 @@ impl<S: ConversationStore> RoomKit<S> {
             .await
             .map(drop)
             .map_err(|error| self.read_failed(error))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use roomkit_core::model::{ChannelId, IdentityId, RoomId};
+
+    use crate::{CreateRoomOptions, RequestVerificationOptions, RoomKit, RoomKitOptions};
+
+    // Python: tests/test_identity_verification.py::test_a_room_named_like_a_verification_key_holds_no_verification
+    #[tokio::test]
+    async fn a_room_named_like_a_verification_key_holds_no_verification() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let room = RoomId::new("r1").unwrap();
+        let create = CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..CreateRoomOptions::default()
+        };
+        kit.create_room(create).await.unwrap();
+        let alice = IdentityId::new("alice").unwrap();
+        let named = RoomId::new(super::lock_key(&alice, None)).unwrap();
+        let section = kit.inner.locks.lock_owned(&named).await;
+        let sms = ChannelId::new("sms").unwrap();
+        let request =
+            kit.request_verification(&alice, &room, &sms, RequestVerificationOptions::default());
+        let (request, _) = tokio::time::timeout(Duration::from_secs(5), request)
+            .await
+            .expect("alice's verification waits on no room's lock")
+            .unwrap();
+        drop(section);
+        assert_eq!(request.identity_id, alice);
+        kit.close().await.unwrap();
     }
 }

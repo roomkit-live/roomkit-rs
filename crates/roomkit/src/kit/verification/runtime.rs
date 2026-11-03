@@ -1,7 +1,8 @@
 //! What the kit holds for identity verification (RFC §11.7): its policy and
 //! the timers that end verifications and requests when their time runs out
 //! (RFC §11.7.5). One identity's transitions are serialized by the kit's
-//! lock manager, under the identity's key (`transitions::lock_identity`).
+//! verification locks, apart from its room locks, under the identity's key
+//! (`transitions::lock_identity`).
 
 use std::collections::HashMap;
 use std::future::Future;
