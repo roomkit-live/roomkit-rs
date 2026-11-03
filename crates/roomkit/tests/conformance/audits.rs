@@ -29,10 +29,14 @@ impl Auditors {
         static RUNS: AtomicUsize = AtomicUsize::new(0);
         let directory = self.directory.get_or_init(|| {
             let run = RUNS.fetch_add(1, Ordering::Relaxed);
-            std::env::temp_dir().join(format!(
+            let directory = std::env::temp_dir().join(format!(
                 "roomkit-conformance-audit-{}-{run}",
                 std::process::id()
-            ))
+            ));
+            // A directory a killed run left under a reused pid holds none of
+            // this run's lines.
+            drop(std::fs::remove_dir_all(&directory));
+            directory
         });
         directory.join(name)
     }

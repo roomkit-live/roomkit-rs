@@ -456,7 +456,10 @@ pub(crate) async fn answer(tool: &Value) -> Result<ToolResult, ToolError> {
         return Err(ToolError::refused(refusal));
     }
     if tool["declines"].as_bool() == Some(true) {
-        return Err(ToolError::unserved("the call is not this tool's"));
+        return Err(ToolError::unserved(format!(
+            "{} is not this handler's",
+            tool["name"].as_str().unwrap_or_default()
+        )));
     }
     pending().await
 }
