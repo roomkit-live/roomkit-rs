@@ -206,10 +206,7 @@ pub(crate) async fn run_worker<S: ConversationStore>(
     let delegated = match timeout {
         Some(bound) => match tokio::time::timeout(bound, delegating).await {
             Ok(delegated) => delegated,
-            Err(_elapsed) => {
-                cut.armed = false;
-                return Ok(posts.timed_out(bound).await);
-            }
+            Err(_elapsed) => return Ok(posts.timed_out(bound, &mut cut).await),
         },
         None => delegating.await,
     };
@@ -297,14 +294,17 @@ impl<S: ConversationStore> Posts<S> {
     /// ended: the delegation's future dropped cut the task, which ends
     /// cancelled on a run of its own, waited for here as Python's bound
     /// waits for the cancelled delegation; its terminal entry then names
-    /// it. A delegation cut before it opened its task names none.
-    async fn timed_out(&self, bound: Duration) -> WorkerOutcome {
+    /// it. A delegation cut before it opened its task names none. The run
+    /// cut while it waits, `cut` still armed, posts its end `cancelled`, as
+    /// Python's unwinding bound does.
+    async fn timed_out(&self, bound: Duration, cut: &mut CutPost<'_, S>) -> WorkerOutcome {
         let opened = self.run().task.clone();
         if let Some(task) = opened {
             // Its end is the cut's, whatever it says: the outcome is the
             // bound's.
             drop(task.wait(WaitOptions::default()).await);
         }
+        cut.armed = false;
         let outcome = WorkerOutcome {
             output: timed_out_text(bound),
             completed: false,
@@ -497,6 +497,89 @@ mod tests {
             detail: outcome.output.clone(),
             metadata: Metadata::new(),
         }
+    }
+
+    // Python: tests/orchestration/test_worker_delegation_bound.py (a run past its bound, then
+    // cut by its caller while its task ends: _posted posts failed "cancelled", one terminal
+    // entry however the delegation ends; review of stream I lot 5a)
+    #[tokio::test]
+    async fn a_timed_out_run_cut_while_its_task_ends_still_posts_its_end() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let worker = Endless::default();
+        kit.register_channel(worker.clone())
+            .unwrap_or_else(|error| panic!("{error}"));
+        let room = RoomId::new("r").unwrap_or_else(|error| panic!("{error}"));
+        let options = CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..CreateRoomOptions::default()
+        };
+        kit.create_room(options)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        // The task's end holds in its completion callback until the test
+        // lets it go: the timed-out run waits for that end meanwhile.
+        let (reached, gate) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let (entered, held) = (Arc::clone(&reached), Arc::clone(&gate));
+        let on_complete: crate::tasks::OnCompleteCallback = Arc::new(move |_result| {
+            let (entered, held) = (Arc::clone(&entered), Arc::clone(&held));
+            Box::pin(async move {
+                entered.notify_one();
+                held.notified().await;
+            })
+        });
+        let status = WorkerStatus {
+            metadata: Metadata::from_iter([("room_id".to_owned(), json!("r"))]),
+            action: "task",
+            ended,
+        };
+        let (running, worker_id) = (kit.clone(), worker.channel_id());
+        let run = tokio::spawn(async move {
+            let delegation = DelegateOptions {
+                on_complete: Some(on_complete),
+                ..DelegateOptions::default()
+            };
+            let bound = Some(Duration::from_millis(20));
+            let ran = run_worker(
+                &running,
+                &room,
+                &worker_id,
+                "Count.",
+                bound,
+                Some(status),
+                delegation,
+            );
+            drop(ran.await);
+        });
+        tokio::time::timeout(Duration::from_secs(5), reached.notified())
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+
+        run.abort();
+        drop(run.await);
+        gate.notify_one();
+        crate::testing::idle(&kit).await;
+        let options = crate::orchestration::RecentOptions {
+            n: 10,
+            agent_id: Some("worker".to_owned()),
+            ..crate::orchestration::RecentOptions::default()
+        };
+        let entries = kit.status_bus().recent(options).await;
+        kit.close().await.unwrap_or_else(|error| panic!("{error}"));
+
+        let read: Vec<(StatusLevel, String, bool)> = entries
+            .iter()
+            .map(|entry| {
+                let named = entry.metadata.contains_key("task_id");
+                (entry.status, entry.detail.clone(), named)
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (StatusLevel::Pending, "Count.".to_owned(), false),
+                (StatusLevel::Failed, "cancelled".to_owned(), true),
+            ]
+        );
     }
 
     // Python: tests/orchestration/test_worker_run_task_line.py::test_a_worker_cut_after_its_progress_leaves_its_line_ended
