@@ -115,6 +115,8 @@ impl<S: ConversationStore> RoomKit<S> {
         let entry = OwnerToolEntry {
             definition: background_definition(),
             serve: serve_with(work_in_background),
+            waits: false,
+            owner: None,
         };
         self.register_owner_tools(agent, vec![entry])?;
         self.inner
@@ -148,10 +150,14 @@ impl<S: ConversationStore> RoomKit<S> {
             OwnerToolEntry {
                 definition: task_status_definition(),
                 serve: serve_with(task_status),
+                waits: false,
+                owner: None,
             },
             OwnerToolEntry {
                 definition: cancel_task_definition(),
                 serve: serve_with(cancel_task),
+                waits: false,
+                owner: None,
             },
         ];
         self.register_owner_tools(agent, entries)

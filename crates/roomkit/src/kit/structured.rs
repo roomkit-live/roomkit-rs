@@ -243,6 +243,8 @@ impl<'kit, S: ConversationStore> ServedResult<'kit, S> {
             serve: Arc::new(|_kit, _call| {
                 Box::pin(async { OwnerToolAnswer::Served(Value::String(received())) })
             }),
+            waits: false,
+            owner: None,
         };
         kit.inner
             .owner_tools

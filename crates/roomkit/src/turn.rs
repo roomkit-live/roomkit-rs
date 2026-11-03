@@ -417,6 +417,15 @@ impl TurnHost {
         self.shared.link.owner_tools()
     }
 
+    /// The names of the tools the room's owner serves this turn whose
+    /// calls wait by design, a strategy's (RFC §21.6): the channel's bound
+    /// per call does not apply to them, a bound the channel names for one
+    /// of them does. For an AI channel's turn, not a public verb.
+    #[doc(hidden)]
+    pub fn owner_tools_waiting(&self) -> Vec<String> {
+        self.shared.link.owner_tools_waiting()
+    }
+
     /// Runs the call `tool_call_id` of the owner's tool `name` with
     /// `arguments` on the room's owner, at least as deep as the turn's
     /// response (RFC §10.6.5): the handler's answer, or how it did not

@@ -10,7 +10,7 @@
 //! Recording what changed, rather than asking each strategy what it set up,
 //! holds for the host's own strategies too.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::pin::pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -108,6 +108,8 @@ struct Installed<S> {
 #[derive(Clone, Debug, Default)]
 struct Added {
     hooks: Vec<String>,
+    /// The tools set up for the room alone, by channel and name.
+    tools: Vec<(ChannelId, String)>,
     runners: Vec<ChannelId>,
     attached: Vec<ChannelId>,
     keys: Vec<String>,
@@ -117,6 +119,7 @@ struct Added {
 #[derive(Clone)]
 struct Snapshot {
     hooks: BTreeSet<String>,
+    tools: BTreeMap<ChannelId, BTreeSet<String>>,
     runners: BTreeSet<ChannelId>,
     bindings: BTreeSet<ChannelId>,
     keys: BTreeSet<String>,
@@ -127,6 +130,7 @@ impl Snapshot {
     fn added(&self, after: &Self) -> Added {
         Added {
             hooks: after.hooks.difference(&self.hooks).cloned().collect(),
+            tools: added_tools(&self.tools, &after.tools),
             runners: after.runners.difference(&self.runners).cloned().collect(),
             attached: after.bindings.difference(&self.bindings).cloned().collect(),
             keys: after.keys.difference(&self.keys).cloned().collect(),
@@ -378,11 +382,13 @@ impl<S: ConversationStore> RoomKit<S> {
                 );
                 let hooks = self.hook_engine().room_hook_names(room_id);
                 let runners = self.inner.turn_runners.channels(room_id);
+                let tools = self.inner.owner_tools.room_names(room_id);
                 let added = Added {
                     hooks: hooks
                         .into_iter()
                         .filter(|name| !before.hooks.contains(name))
                         .collect(),
+                    tools: added_tools(&before.tools, &tools),
                     runners: runners.difference(&before.runners).cloned().collect(),
                     ..Added::default()
                 };
@@ -418,11 +424,17 @@ impl<S: ConversationStore> RoomKit<S> {
         };
         strategy.uninstall(self, room_id).await?;
         // The room's bindings and metadata are the new room's; what the
-        // install set up in this process, its hooks and its turn runners,
-        // is the old one's (Python's `_forget_strategy`).
-        let Added { hooks, runners, .. } = self.recorded_added(room_id, &strategy);
+        // install set up in this process, its hooks, its tools and its turn
+        // runners, is the old one's (Python's `_forget_strategy`).
+        let Added {
+            hooks,
+            tools,
+            runners,
+            ..
+        } = self.recorded_added(room_id, &strategy);
         let added = Added {
             hooks,
+            tools,
             runners,
             ..Added::default()
         };
@@ -543,6 +555,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 .room_hook_names(room_id)
                 .into_iter()
                 .collect(),
+            tools: self.inner.owner_tools.room_names(room_id),
             runners: self.inner.turn_runners.channels(room_id),
             bindings: self.bound(room_id).await?,
             keys: room
@@ -605,11 +618,17 @@ impl<S: ConversationStore> RoomKit<S> {
         for name in &added.hooks {
             engine.remove_room_hook(room_id, name);
         }
+        for (channel_id, name) in &added.tools {
+            self.inner
+                .owner_tools
+                .unregister_in_room(channel_id, room_id, name);
+        }
         for channel_id in &added.runners {
             self.inner.turn_runners.release(room_id, channel_id);
         }
         self.update_record(room_id, strategy, |record| {
             record.hooks.clear();
+            record.tools.clear();
             record.runners.clear();
         });
         let stayed = self.detach_agents(room_id, &added.attached).await;
@@ -817,6 +836,24 @@ fn check_claim_of<S>(
 
 /// The address of `strategy`'s object: what tells one strategy from
 /// another, as Python's `is`.
+/// The tools `after` holds for a room that `before` did not, by channel
+/// and name.
+fn added_tools(
+    before: &BTreeMap<ChannelId, BTreeSet<String>>,
+    after: &BTreeMap<ChannelId, BTreeSet<String>>,
+) -> Vec<(ChannelId, String)> {
+    after
+        .iter()
+        .flat_map(|(channel_id, names)| {
+            let held = before.get(channel_id);
+            names
+                .iter()
+                .filter(move |name| !held.is_some_and(|held| held.contains(*name)))
+                .map(move |name| (channel_id.clone(), name.clone()))
+        })
+        .collect()
+}
+
 pub(crate) fn strategy_address<S>(strategy: &dyn Orchestration<S>) -> usize {
     std::ptr::from_ref(strategy).cast::<()>() as usize
 }

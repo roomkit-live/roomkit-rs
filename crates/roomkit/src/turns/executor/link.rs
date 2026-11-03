@@ -289,6 +289,16 @@ impl HostLink {
             .collect()
     }
 
+    /// The names of the owner's tools whose calls wait by design: the
+    /// channel's bound per call does not apply to them (RFC §21.6).
+    pub(crate) fn owner_tools_waiting(&self) -> Vec<String> {
+        self.owner_tools
+            .iter()
+            .filter(|owned| owned.waits_by_design)
+            .filter_map(|owned| owned.tool.get("name")?.as_str().map(str::to_owned))
+            .collect()
+    }
+
     /// Runs the call `tool_call_id` of the owner's tool `name` with
     /// `arguments` on the owner, the turn's work at least `floor` deep
     /// (RFC §10.6.5): the handler's answer, or how it did not answer. A

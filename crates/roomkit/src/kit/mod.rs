@@ -48,6 +48,7 @@ mod start_task;
 mod status;
 mod steering;
 mod strategies;
+mod strategy_tools;
 mod structured;
 mod task_cancel;
 mod tasks;

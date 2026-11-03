@@ -9,7 +9,7 @@
 //! one room alone (a delegation's result tool, RFC §23.3) is listed and
 //! served in that room's turns only.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use roomkit_core::model::{ChannelId, RoomId};
@@ -30,6 +30,14 @@ pub(crate) struct OwnerToolEntry<S> {
     /// `{name, description, parameters}`, as a turn's request carries it.
     pub(crate) definition: Value,
     pub(crate) serve: OwnerServe<S>,
+    /// Whether its call waits by design, the channel's bound per call not
+    /// applying to it (RFC §21.6): a strategy's tool, Python's
+    /// `orchestration_tool(..., waits=True)`.
+    pub(crate) waits: bool,
+    /// The install that set it up for a room, by its address: the same
+    /// install setting it up again replaces its own (Python's registry's
+    /// `owner`).
+    pub(crate) owner: Option<usize>,
 }
 
 impl<S> OwnerToolEntry<S> {
@@ -143,6 +151,62 @@ impl<S> OwnerToolStore<S> {
         Ok(())
     }
 
+    /// Sets up `entries` for `channel_id` in `room_id` alone, all of them or
+    /// none, as Python's registry's `register_all(entries, room_id=...,
+    /// owner=...)`: a name the owner serves the channel in every room is
+    /// refused, and one served in the room unless `owner` set it up, which
+    /// it then replaces; the first refused name's clash is the error.
+    pub(crate) fn register_all_in_room(
+        &self,
+        channel_id: &ChannelId,
+        room_id: &RoomId,
+        entries: Vec<OwnerToolEntry<S>>,
+        owner: usize,
+    ) -> Result<(), (String, String)> {
+        let mut in_rooms = self
+            .in_rooms
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let scope = (channel_id.clone(), room_id.clone());
+        let held = in_rooms.get(&scope).map(Vec::as_slice).unwrap_or_default();
+        for entry in &entries {
+            let name = entry.name();
+            if self.serves(channel_id, name) {
+                return Err((name.to_owned(), "served by the channel".to_owned()));
+            }
+            let clashes = held
+                .iter()
+                .any(|served| served.name() == name && served.owner != Some(owner));
+            if clashes {
+                let clash = format!("served in room '{}'", room_id.as_str());
+                return Err((name.to_owned(), clash));
+            }
+        }
+        let held = in_rooms.entry(scope).or_default();
+        for entry in entries {
+            held.retain(|served| served.name() != entry.name());
+            held.push(OwnerToolEntry {
+                owner: Some(owner),
+                ..entry
+            });
+        }
+        Ok(())
+    }
+
+    /// The names of the tools set up for one room alone, by channel: what
+    /// an install added there, which an uninstall takes back.
+    pub(crate) fn room_names(&self, room_id: &RoomId) -> BTreeMap<ChannelId, BTreeSet<String>> {
+        let in_rooms = self.in_rooms.read().unwrap_or_else(PoisonError::into_inner);
+        in_rooms
+            .iter()
+            .filter(|((_, room), _)| room == room_id)
+            .map(|((channel, _), entries)| {
+                let names = entries.iter().map(|entry| entry.name().to_owned());
+                (channel.clone(), names.collect())
+            })
+            .collect()
+    }
+
     /// Drops every tool set up for `channel_id`, in every room and in one:
     /// the channel left the kit, and one registered again under its id
     /// gets its own setup (Python's `OwnerToolStore.forget`).
@@ -181,7 +245,7 @@ impl<S> OwnerToolStore<S> {
                 .iter()
                 .map(|entry| OwnerTool {
                     tool: entry.definition.clone(),
-                    waits_by_design: false,
+                    waits_by_design: entry.waits,
                 })
                 .collect()
         };
@@ -239,6 +303,8 @@ mod tests {
         OwnerToolEntry {
             definition: json!({ "name": name }),
             serve: Arc::new(|_, _| Box::pin(async { OwnerToolAnswer::Served(json!("ok")) })),
+            waits: false,
+            owner: None,
         }
     }
 
