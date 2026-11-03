@@ -13,9 +13,11 @@ use super::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolResult};
 use crate::error::AiError;
 
 /// What serves the owner's tools of one turn: its host, which carries each
-/// call to the owner.
+/// call to the owner; those whose calls wait by design (a strategy's, RFC
+/// §21.6) apart, the channel's bound per call not applying to them.
 struct OwnerToolset {
     turn: TurnHost,
+    waits: bool,
 }
 
 impl DynToolset for OwnerToolset {
@@ -41,6 +43,10 @@ impl DynToolset for OwnerToolset {
                 }
             }
         })
+    }
+
+    fn bounds_itself(&self) -> bool {
+        self.waits
     }
 }
 
@@ -81,8 +87,20 @@ pub(crate) fn with_owner_tools(
     if declared.is_empty() {
         return Ok(Arc::clone(toolbox));
     }
+    let waiting = turn.owner_tools_waiting();
+    let (waits, bounded): (Vec<AiTool>, Vec<AiTool>) = declared
+        .into_iter()
+        .partition(|tool| waiting.contains(&tool.name));
     let mut extended = Toolbox::clone(toolbox);
-    let served = Arc::new(OwnerToolset { turn: turn.clone() });
-    extended.add_dyn(served, declared)?;
+    for (waits, tools) in [(false, bounded), (true, waits)] {
+        if tools.is_empty() {
+            continue;
+        }
+        let served = Arc::new(OwnerToolset {
+            turn: turn.clone(),
+            waits,
+        });
+        extended.add_dyn(served, tools)?;
+    }
     Ok(Arc::new(extended))
 }
