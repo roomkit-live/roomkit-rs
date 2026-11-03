@@ -638,8 +638,8 @@ mod tests {
         }
     }
 
-    // Python: tests/test_channels/test_turn_budget.py::test_a_room_budget_the_model_cannot_price_fails_the_turn
-    // (channels/_turn_budget.py _check_positive, a cost budget an int or a float).
+    // Python: channels/_turn_budget.py turn_budget, _check_positive: a
+    // binding's cost budget an int or a float, above zero.
     #[test]
     fn a_binding_s_cost_budget_is_a_positive_number() {
         for (budget, read_as) in [(json!(0.05), 0.05), (json!(2), 2.0)] {
