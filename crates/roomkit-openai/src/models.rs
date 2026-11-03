@@ -11,9 +11,17 @@ use roomkit_ai::ModelInfo;
 /// The catalogue as Python writes it.
 const CATALOG: &str = include_str!("../catalog/models.json");
 
-/// The catalogue, read once. The copy is checked to read whole
-/// (`the_catalogue_reads_whole`): a copy that did not would read empty.
-static MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| read().unwrap_or_default());
+/// The catalogue, read once. An empty one would quietly lift the floors,
+/// the tool-turn tags and the model refusals: a copy that does not read
+/// is a defect of this crate, which `the_catalogue_reads_whole` and
+/// `make models-check` keep from being built.
+static MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+    #[expect(
+        clippy::expect_used,
+        reason = "the embedded copy is checked to read whole by the_catalogue_reads_whole"
+    )]
+    read().expect("the embedded OpenAI catalogue reads")
+});
 
 /// Reads the catalogue's copy.
 pub(crate) fn read() -> Result<Vec<ModelInfo>, serde_json::Error> {

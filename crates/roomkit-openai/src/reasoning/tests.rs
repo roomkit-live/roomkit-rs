@@ -118,13 +118,21 @@ fn off_sends_the_model_s_floor() {
         ("o3", "low"),
         ("o4-mini", "low"),
     ];
+    // Off stated by the turn over a configured effort, as Python's test
+    // states it, and by the configuration alone.
     for (model, floor) in floors {
         for tools in [false, true] {
-            let provider = official(model, Some("none"), None);
+            let provider = official(model, Some("high"), None);
             assert_eq!(
-                provider.reasoning_effort(None, tools).as_deref(),
+                provider.reasoning_effort(Some("none"), tools).as_deref(),
                 Some(floor),
                 "{model} tools={tools}"
+            );
+            let configured = official(model, Some("none"), None);
+            assert_eq!(
+                configured.reasoning_effort(None, tools).as_deref(),
+                Some(floor),
+                "{model} tools={tools}, configured"
             );
         }
     }
@@ -159,6 +167,9 @@ fn context(tools: bool) -> AiContext {
 }
 
 // Python: tests/test_providers/test_request_refusals.py::TestOpenAIModelsChatRefuses::test_tools_for_a_model_that_takes_none_fail_before_the_request
+// OpenAI's own endpoint cannot be pointed at the fake server: the refusal
+// is read from the error, which no request could have answered; the
+// request a refusal leaves alone is a_server_behind_a_base_url_decides's.
 #[tokio::test]
 async fn tools_for_a_model_that_takes_none_fail_before_the_request() {
     for model in ["gpt-6-astra", "gpt-6.1-sol"] {
@@ -257,15 +268,21 @@ fn a_turn_that_states_off_sends_none_where_the_server_takes_it() {
     );
 }
 
-// Python: tests/test_providers/test_reasoning_settings.py::test_off_sends_the_model_s_floor (its effort_none form, stated by the turn)
-#[test]
-fn a_turn_s_off_sends_the_model_s_floor() {
-    let provider = official("gpt-5", Some("high"), None);
-    for tools in [false, true] {
-        assert_eq!(
-            provider.reasoning_effort(Some("none"), tools).as_deref(),
-            Some("minimal"),
-            "tools={tools}"
-        );
-    }
+/// Python's order of the checks before a request: the model's refusal
+/// first, before a tool name OpenAI refuses (`_check_model_serves`, then
+/// `_apply_sampling_kwargs`, then `_declare_tools`).
+#[tokio::test]
+async fn a_refused_model_is_named_before_a_refused_tool_name() {
+    let context = AiContext {
+        tools: vec![AiTool::new("ns.lookup", "d").unwrap()],
+        ..context(false)
+    };
+    let error = official("gpt-6-astra", None, None)
+        .generate(&context)
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("takes no function tools"),
+        "{error}"
+    );
 }

@@ -160,6 +160,30 @@ impl OpenAiAiProvider {
             .map(|(name, _)| name.as_str())
     }
 
+    /// The body of `request` as the configured API writes it, `streamed`
+    /// false asking Chat Completions for the completion whole: on Chat
+    /// Completions, refused first for a model OpenAI's endpoint does not
+    /// serve so (Python's `_check_model_serves`), then carrying the effort
+    /// the turn sends ([`Self::reasoning_effort`]).
+    fn body(&self, request: &Request, streamed: bool) -> Result<serde_json::Value, OpenAiError> {
+        if self.config.api == OpenAiApi::Responses {
+            return crate::responses::request(&self.config, request);
+        }
+        let tools = !request.tools.is_empty();
+        reasoning::check_model_serves(&self.config.model, self.official_entry(), tools)?;
+        let completion = CompletionRequest::new(&self.config, request, streamed);
+        let mut value = serde_json::to_value(completion).map_err(|_| OpenAiError::Malformed {
+            reason: "could not encode request".into(),
+        })?;
+        let turn = request.reasoning_effort.as_deref();
+        if let Some(effort) = self.reasoning_effort(turn, tools)
+            && let Some(fields) = value.as_object_mut()
+        {
+            fields.insert("reasoning_effort".into(), effort.into());
+        }
+        Ok(value)
+    }
+
     /// Sends `request`: its body as the configured API writes it, the
     /// bearer token the configuration gives, its headers; `streamed` false
     /// asks Chat Completions for the completion whole.
@@ -168,34 +192,13 @@ impl OpenAiAiProvider {
         request: &Request,
         streamed: bool,
     ) -> Result<(reqwest::Response, String), OpenAiError> {
+        // Python's order: the model's refusal, then the effort (and its
+        // one warning), then the tools' names.
+        let body = self.body(request, streamed)?;
         crate::names::check(self.config.base_url(), &request.tools)?;
-        if self.config.api == OpenAiApi::ChatCompletions {
-            reasoning::check_model_serves(
-                &self.config.model,
-                self.official_entry(),
-                !request.tools.is_empty(),
-            )?;
-        }
         let secret = match &self.config.token_source {
             Some(source) => source.token().await?,
             None => self.config.api_key.clone(),
-        };
-        let body = match self.config.api {
-            OpenAiApi::ChatCompletions => {
-                let completion = CompletionRequest::new(&self.config, request, streamed);
-                let mut value =
-                    serde_json::to_value(completion).map_err(|_| OpenAiError::Malformed {
-                        reason: "could not encode request".into(),
-                    })?;
-                let turn = request.reasoning_effort.as_deref();
-                if let Some(effort) = self.reasoning_effort(turn, !request.tools.is_empty())
-                    && let Some(fields) = value.as_object_mut()
-                {
-                    fields.insert("reasoning_effort".into(), effort.into());
-                }
-                value
-            }
-            OpenAiApi::Responses => crate::responses::request(&self.config, request)?,
         };
         let body = with_extra_body(body, self.config.extra_body.as_ref());
         let mut call = self.client.post(self.endpoint.clone()).json(&body);
