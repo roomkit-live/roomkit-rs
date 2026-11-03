@@ -64,6 +64,22 @@ impl OpenAiAiProvider {
         })
     }
 
+    /// The `reasoning_effort` a Chat Completions request carries, a turn
+    /// with tools when `tools` (RFC §6.7, Python's `_tool_turn_setting`):
+    /// behind a `base_url`, a turn with tools carries it only where
+    /// `supports_reasoning_effort_with_tools` says the server takes it
+    /// there. On OpenAI's own endpoint it goes as on any turn, the
+    /// catalogue that decides there in Python not carried yet. Python
+    /// warns once of an effort left out unsaid; roomkit-openai logs
+    /// nothing.
+    fn reasoning_effort(&self, tools: bool) -> Option<String> {
+        let effort = self.config.reasoning_effort.clone()?;
+        if !tools || crate::names::is_openai_endpoint(self.config.base_url()) {
+            return Some(effort);
+        }
+        (self.config.supports_reasoning_effort_with_tools == Some(true)).then_some(effort)
+    }
+
     pub(crate) fn api(&self) -> OpenAiApi {
         self.config.api
     }
@@ -95,10 +111,10 @@ impl OpenAiAiProvider {
                     serde_json::to_value(completion).map_err(|_| OpenAiError::Malformed {
                         reason: "could not encode request".into(),
                     })?;
-                if let Some(effort) = &self.config.reasoning_effort
+                if let Some(effort) = self.reasoning_effort(!request.tools.is_empty())
                     && let Some(fields) = value.as_object_mut()
                 {
-                    fields.insert("reasoning_effort".into(), effort.clone().into());
+                    fields.insert("reasoning_effort".into(), effort.into());
                 }
                 value
             }

@@ -11,6 +11,7 @@
 mod credentials;
 mod fake;
 mod generate;
+mod reasoning;
 mod responses;
 
 use std::time::Duration;

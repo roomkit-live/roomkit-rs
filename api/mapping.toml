@@ -793,9 +793,8 @@ python = "roomkit.providers.openai.OpenAIConfig.__init__"
 params = [
     "max_retries", "supports_response_schema",
     "supports_response_schema_with_tools",
-    "supports_reasoning_effort_with_tools",
 ]
-reason = "not in 0.x: retries and response schemas of OpenAIConfig"
+reason = "not in 0.x: the SDK's own retries and response schemas of OpenAIConfig"
 
 [[missing]]
 python = "roomkit.TransportChannel.__init__"

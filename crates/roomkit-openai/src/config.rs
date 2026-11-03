@@ -83,7 +83,16 @@ pub struct OpenAiConfig {
     /// takes none, any other does.
     pub supports_custom_temperature: Option<bool>,
     /// How hard a reasoning model thinks (`reasoning_effort`), when set.
+    /// On a turn with tools behind a `base_url`, sent only where
+    /// `supports_reasoning_effort_with_tools` says the server takes it
+    /// there (RFC §6.7).
     pub reasoning_effort: Option<String>,
+    /// Whether the server behind a `base_url` takes `reasoning_effort` on
+    /// a turn with tools (RFC §6.7): `Some(true)` sends it as on any turn,
+    /// `Some(false)` leaves it out, `None` leaves it out with one warning.
+    /// Python's `supports_reasoning_effort_with_tools`. On OpenAI's own
+    /// endpoint the configured effort goes as on any turn.
+    pub supports_reasoning_effort_with_tools: Option<bool>,
     /// Headers every request carries; an `Authorization` among them
     /// replaces the key's bearer, as Python's client sends it.
     pub default_headers: Option<BTreeMap<String, String>>,
@@ -117,6 +126,7 @@ impl OpenAiConfig {
             use_max_completion_tokens: None,
             supports_custom_temperature: None,
             reasoning_effort: None,
+            supports_reasoning_effort_with_tools: None,
             default_headers: None,
             extra_body: None,
             token_source: None,
@@ -179,6 +189,10 @@ impl fmt::Debug for OpenAiConfig {
             .field("vision", &self.vision)
             .field("tool_namespace", &self.tool_namespace)
             .field("reasoning_effort", &self.reasoning_effort)
+            .field(
+                "supports_reasoning_effort_with_tools",
+                &self.supports_reasoning_effort_with_tools,
+            )
             .field("default_headers", &headers)
             .finish_non_exhaustive()
     }
