@@ -34,10 +34,12 @@ pub struct SupervisorOptions {
     /// so that a worker's events reach them.
     pub share_channels: Option<Vec<ChannelId>>,
     /// Each worker's delegation budget: 120 seconds by default. A worker
-    /// past it is cut, read as failed, and the team goes on.
+    /// past it is cut and read as timed out: a parallel team's others go
+    /// on, a supervised step stops the chain there.
     pub task_timeout: Duration,
-    /// A sequential team's reworks of one step at most: 3 by default. A step
-    /// still rejected then stops the chain, flagged unvalidated.
+    /// How many times a sequential team's step is reviewed at most: 3 by
+    /// default, so two reworks; 0 reviews it once, as 1 does. A step still
+    /// rejected then stops the chain, flagged unvalidated.
     pub max_revisions: u32,
 }
 

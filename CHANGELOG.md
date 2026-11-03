@@ -18,7 +18,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ProviderDeliveryError` for a provider's refusal, its code still the
   delivery result's, as Python's `error_type_name` names it, and one that
   met the kit's close is still the close's (RFC §10.6.8, RMK-1128).
-- The supervisor strategy (RFC §19.7.3), as Python's: `roomkit::Supervisor` and `orchestration::SupervisorOptions`, its per-worker tools and its `delegate_workers` team, supervised when sequential; a strategy's delegation tool is not cut by its channel's default bound per call (RMK-1233).
+- The supervisor strategy (RFC §19.7.3): `roomkit::Supervisor` and `orchestration::SupervisorOptions`, its per-worker tools waiting for their worker and its `delegate_workers` team, supervised when sequential, as Python's; not yet its framework-driven delegation (`auto_delegate`, `refine_task`, `refine_instruction`, `delegation_message`), its background per-worker tools (`wait_for_result=False`) nor `async_delivery`. A strategy's delegation tool is not cut by its channel's default bound per call (RMK-1233).
 - The loop strategy (RFC §19.7.4), as Python's: `roomkit::Loop`, `orchestration::LoopOptions` and `orchestration::strategies::supervisor::WorkerStrategy` (RMK-1233).
 - An MCP provider's `tool_filter` chooses among every tool the server
   lists before the 512-tool bound counts, as Python filters the listing it
