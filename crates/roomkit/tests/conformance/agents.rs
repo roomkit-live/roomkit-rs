@@ -242,6 +242,8 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
         scope: text("scope"),
         language: text("language"),
         identity_in_prompt: identity["identity_in_prompt"] != false,
+        greeting: text("greeting"),
+        auto_greet: identity["auto_greet"] != false,
         ai: options,
         ..AgentOptions::default()
     };

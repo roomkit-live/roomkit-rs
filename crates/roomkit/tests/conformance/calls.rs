@@ -205,6 +205,8 @@ pub(crate) async fn call(
         }
         "save_conversation_state" => (crate::routing_calls::call(run, name, spec).await?, None),
         "delivery.cancel" | "delivery.wait" => (handle_call(run, name, spec).await?, None),
+        // An Agent's greeting is declared only (RMK-1264).
+        "send_greeting" => return Err("send_greeting: roomkit-rs does not greet yet".into()),
         _ => (lifecycle_call(run, name, spec).await?, None),
     })
 }

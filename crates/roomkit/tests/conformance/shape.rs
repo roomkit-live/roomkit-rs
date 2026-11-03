@@ -130,6 +130,8 @@ const AGENT: &[&str] = &[
     "scope",
     "language",
     "identity_in_prompt",
+    "greeting",
+    "auto_greet",
 ];
 const HUMAN_INPUT: &[&str] = &["tool_names", "timeout_ms", "tools"];
 const TURN_CONFIG: &[&str] = &[
@@ -369,6 +371,7 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "set_access" => &["room_id", "channel_id", "access"],
         "set_visibility" => &["room_id", "channel_id", "visibility"],
         "close_room" | "archive_room" | "check_timers" => &["room_id"],
+        "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],
         "register_channel" => &["channel"],
         "unregister_channel" => &["channel_id"],
         "register_hook" => &["hook"],
