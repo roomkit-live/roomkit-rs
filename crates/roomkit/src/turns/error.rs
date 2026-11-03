@@ -202,11 +202,12 @@ pub(crate) fn stream_failure(error: &(dyn Error + Send + Sync + 'static)) -> Wir
     failure(error, ENDED_IN_ITS_STREAM)
 }
 
-/// `error` as it crosses: a kit error under its code or its Python class's
-/// name, as a transport's failure reads (`RoomKitError::Value` as
-/// `ValueError`), the `code` and `retryable` it declares among its
-/// attributes, as Python's error crosses with its JSON attributes
-/// (RMK-1085); a cancel as Python's `TurnLinkError`, saying `cancelled`,
+/// `error` as it crosses: a kit error under its Python class's name, as
+/// a transport's failure reads (`RoomKitError::Value` as `ValueError`, a
+/// provider's refusal as `ProviderDeliveryError`), which `ON_ERROR` names
+/// as its `error_type` as Python's `error_type_name` does (RMK-1128), the
+/// `code` and `retryable` it declares among its attributes, as Python's
+/// error crosses with its JSON attributes (RMK-1085); a cancel as Python's `TurnLinkError`, saying `cancelled`,
 /// its reason `executor_lost`; any other as a channel's.
 fn failure(error: &(dyn Error + Send + Sync + 'static), cancelled: &str) -> WireError {
     match error.downcast_ref::<RoomKitError>() {
@@ -218,10 +219,7 @@ fn failure(error: &(dyn Error + Send + Sync + 'static), cancelled: &str) -> Wire
             crossed
         }
         Some(kit_error) => {
-            let mut crossed = one(
-                kit_error.code().unwrap_or_else(|| kit_error.class_name()),
-                error.to_string(),
-            );
+            let mut crossed = one(kit_error.class_name(), error.to_string());
             if let (Some(code), Some(retryable)) = (kit_error.code(), kit_error.retryable()) {
                 crossed
                     .attributes
