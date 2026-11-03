@@ -293,7 +293,22 @@ impl<S: ConversationStore> RoomKit<S> {
         task: impl Into<String>,
         options: DelegateOptions,
     ) -> Result<DelegatedTask, RoomKitError> {
-        let task = task.into();
+        self.delegate_watched(room_id, agent_id, task.into(), options, &|| {})
+            .await
+    }
+
+    /// [`delegate`](Self::delegate), calling `opened` once the task ends
+    /// however the call ends: from then on, a caller cut ends the task
+    /// cancelled and runs its completion, as Python's `started` guard
+    /// does. A strategy's worker run reads it to post its cut (RFC §19.7.4).
+    pub(crate) async fn delegate_watched(
+        &self,
+        room_id: &RoomId,
+        agent_id: &ChannelId,
+        task: String,
+        options: DelegateOptions,
+        opened: &(dyn Fn() + Send + Sync),
+    ) -> Result<DelegatedTask, RoomKitError> {
         self.inner.open()?;
         let parent = self
             .parent_room(room_id, options.organization_id.as_deref())
@@ -331,6 +346,7 @@ impl<S: ConversationStore> RoomKit<S> {
         // From here the task ends however this call ends: a caller cut
         // before its run started ends it cancelled (Python's `started`).
         let unstarted = Unstarted::new(self, &handle, &options);
+        opened();
         if self.inner.tasks.is_closing() {
             // The close began while the task was set up: it ends as the
             // close ends a running one, on both doors.
