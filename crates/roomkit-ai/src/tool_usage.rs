@@ -84,6 +84,15 @@ impl RoomMemory {
     }
 }
 
+/// Puts `room`'s `memory` last, the latest, the oldest room dropped past the
+/// bound: the one way a record enters the rooms a channel keeps.
+fn keep_latest(by_room: &mut VecDeque<(RoomId, RoomMemory)>, room: RoomId, memory: RoomMemory) {
+    by_room.push_back((room, memory));
+    while by_room.len() > MAX_ROOMS {
+        by_room.pop_front();
+    }
+}
+
 /// What a channel's tool calls left, per room: Python's `ToolUsageMemory`, the
 /// images they returned and the tools they used.
 #[derive(Debug, Default)]
@@ -104,10 +113,7 @@ impl ToolUsageMemory {
             .map(|(_, memory)| memory)
             .unwrap_or_default();
         write(&mut memory);
-        by_room.push_back((room.clone(), memory));
-        while by_room.len() > MAX_ROOMS {
-            by_room.pop_front();
-        }
+        keep_latest(&mut by_room, room.clone(), memory);
     }
 
     /// Records the call of `name` with the model's `arguments` in `room`,
@@ -165,21 +171,23 @@ impl ToolUsageMemory {
     /// Reads `room`'s tools from its stored rows `used`, oldest first, the
     /// first time this process serves the room: what the rows say outlives
     /// the channel, and never replaces what a live call recorded. Only a tool
-    /// read makes the room the latest: one that keeps talking without calling
-    /// ages out. Python's `needs_hydration()` and `seed()`, no image replayed.
+    /// read makes a known room the latest: one that keeps talking without
+    /// calling ages out. A room new to the channel enters under the rooms'
+    /// bound, whatever its rows hold. Python's `needs_hydration()` and `seed()`,
+    /// no image replayed.
     pub(crate) fn hydrate<'a>(&self, room: &RoomId, used: impl Iterator<Item = &'a str>) {
         {
             let mut by_room = self.by_room.lock().unwrap_or_else(PoisonError::into_inner);
             match by_room.iter_mut().find(|(at, _)| at == room) {
                 Some((_, memory)) if memory.hydrated || !memory.tools.is_empty() => return,
                 Some((_, memory)) => memory.hydrated = true,
-                None => by_room.push_back((
-                    room.clone(),
-                    RoomMemory {
+                None => {
+                    let memory = RoomMemory {
                         hydrated: true,
                         ..RoomMemory::default()
-                    },
-                )),
+                    };
+                    keep_latest(&mut by_room, room.clone(), memory);
+                }
             }
         }
         let used: Vec<&str> = used.collect();

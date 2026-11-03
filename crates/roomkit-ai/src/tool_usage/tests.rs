@@ -174,3 +174,17 @@ fn a_room_that_talks_without_a_call_ages_out() {
     assert_eq!(memory.tool_names(&room()), Vec::<String>::new());
     assert_eq!(memory.tool_names(&last), ["used"]);
 }
+
+// The bound of channels/_tool_usage.py's _MAX_ROOMS across the rooms a shared
+// channel serves, a room with no stored rows counted too. Python's seed() leaves it
+// to the next record, holding 150 rooms here until then.
+#[test]
+fn hydrating_rooms_from_nothing_stays_under_the_rooms_bound() {
+    let memory = ToolUsageMemory::default();
+    for at in 0..MAX_ROOMS + 50 {
+        let room = RoomId::new(format!("room-{at}")).unwrap();
+        memory.hydrate(&room, std::iter::empty());
+    }
+    let kept = memory.by_room.lock().unwrap().len();
+    assert_eq!(kept, MAX_ROOMS);
+}
