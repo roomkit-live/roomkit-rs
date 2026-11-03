@@ -595,7 +595,7 @@ reason = "the callback's type, Python's Callable[[str, HandoffResult], Awaitable
 [[missing]]
 python = "roomkit.HandoffHandler"
 members = ["send_greeting"]
-reason = "not yet: a handoff's greeting says through RoomKit.send_greeting, which roomkit-rs lacks (RMK-1264)"
+reason = "not yet: a handoff's greeting says through RoomKit.send_greeting, its text path ported since (RMK-1314)"
 
 [[missing]]
 python = "roomkit.HandoffHandler.set_language"
