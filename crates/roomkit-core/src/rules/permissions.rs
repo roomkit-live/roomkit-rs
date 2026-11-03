@@ -1363,6 +1363,9 @@ mod tests {
                 ),
                 (vec!["writer"], vec![], vec![])
             );
+            // Nor does a change get one.
+            notice.r#type = EventType::Edit;
+            assert_eq!(ids(&plan(&notice, &bindings).not_asked), Vec::<&str>::new());
         }
 
         #[test]
