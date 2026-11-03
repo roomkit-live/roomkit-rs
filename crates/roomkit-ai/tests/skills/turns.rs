@@ -4,6 +4,9 @@
 //! answered with the reference implementation's words
 //! (`tasks/probes/step4-m8/skills_m8_probe.out`).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use pretty_assertions::assert_eq;
 use roomkit::model::HookResult;
 use roomkit::model::hook::{AllowOptions, BlockOptions};
@@ -13,7 +16,7 @@ use roomkit::model::{
 use roomkit::{HookOptions, HookTrigger, ProcessInboundOptions, SendEventOptions, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiChannelOptions, AiError, AiTool, DiscoverOptions, HumanInputToolHandler,
+    AiChannelOptions, AiChannelTurnConfig, AiError, AiTool, DiscoverOptions, HumanInputToolHandler,
     HumanInputToolHandlerOptions, SkillRegistry, ToolEntry, ToolPolicy, ToolResult, Tools,
 };
 use serde_json::json;
@@ -310,7 +313,7 @@ async fn an_activation_withheld_by_a_hook_is_not_recorded() {
         .hook(
             HookTrigger::OnToolCall,
             move |_event: ToolCallEvent, _context| {
-                let first = !withheld.swap(true, std::sync::atomic::Ordering::SeqCst);
+                let first = !withheld.swap(true, Ordering::SeqCst);
                 async move {
                     Ok(if first {
                         HookResult::block("withheld by the host", BlockOptions::default())
@@ -789,4 +792,95 @@ async fn tool_search_s_preamble_follows_the_instructions_and_the_skills() {
         positions.iter().all(Option::is_some) && positions.is_sorted(),
         "{prompt}"
     );
+}
+
+// Python: channels/_ai_tools.py's _reveal(), which records whatever the turn's mode
+/// RFC §24.4: a hint served on a turn that hides nothing is remembered, and
+/// declares its tools on the room's first turn that does hide its catalogue.
+#[tokio::test]
+async fn a_hint_served_where_nothing_is_hidden_is_remembered() {
+    let tree = TempDir::new();
+    let model = ScriptedProvider::new([
+        activating("c1", "spotify"),
+        ScriptedRound::answering("Done."),
+        ScriptedRound::answering("Next."),
+    ]);
+    let turns = Arc::new(AtomicUsize::new(0));
+    let room = Room::new(model.clone(), skills(&tree), |options| AiChannelOptions {
+        tool_search_threshold: 5,
+        config_provider: Some(Arc::new(move |_binding, _context| {
+            let turn = turns.fetch_add(1, Ordering::SeqCst);
+            let count = if turn == 0 { 0 } else { 30 };
+            let tools: Vec<AiTool> = ["spotify_play", "spotify_search"]
+                .into_iter()
+                .map(str::to_owned)
+                .chain((0..count).map(|at| format!("x{at}")))
+                .map(|name| AiTool::new(name, "Does a thing").unwrap())
+                .collect();
+            Box::pin(async move {
+                Ok(Some(AiChannelTurnConfig {
+                    tools: Some(tools),
+                    ..AiChannelTurnConfig::default()
+                }))
+            })
+        })),
+        ..options
+    })
+    .await;
+    room.says("Play something").await;
+    room.says("Again").await;
+    assert!(!declares(&model, 1, "find_tools"));
+    assert!(declares(&model, 2, "find_tools"));
+    assert!(declares(&model, 2, "spotify_play"));
+    assert!(!declares(&model, 2, "x0"));
+}
+
+// Python: tests/test_toolset_edges.py::test_a_hint_naming_only_a_pinned_tool_reconfigures_nothing
+/// RFC §24.4: a hint naming only what is never hidden reveals nothing: the
+/// window stays as a search left it.
+#[tokio::test]
+async fn a_hint_naming_only_a_pinned_tool_keeps_the_window() {
+    let tree = TempDir::new();
+    let found = json!({ "query": "x0" }).to_string();
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("c1", "find_tools", found.as_str())]),
+        activating("c2", "pinned_tool"),
+        ScriptedRound::answering("Done."),
+    ]);
+    let room = Room::new(model.clone(), skills(&tree), |options| AiChannelOptions {
+        tools: [
+            spotify(),
+            vec![ToolEntry::Definition(
+                AiTool::new("pinned_tool", "Does a thing").unwrap(),
+            )],
+        ]
+        .concat(),
+        tool_search: Some(true),
+        tool_search_pinned: vec!["pinned_tool".to_owned()],
+        ..options
+    })
+    .await;
+    room.says("Go").await;
+    assert!(tool_results(&model)[2][1].contains("tools_hint"));
+    assert!(declares(&model, 2, "x0"));
+    assert!(declares(&model, 2, "pinned_tool"));
+}
+
+// Python: channels/_ai_context.py's _never_hidden()
+/// RFC §21.1: the channel's own tools are no part of the catalogue whose size
+/// decides: the skills' two leave the host's two at the count.
+#[tokio::test]
+async fn the_skill_tools_do_not_count_toward_the_catalogue() {
+    let tree = TempDir::new();
+    let model = ScriptedProvider::new([ScriptedRound::answering("Done.")]);
+    let room = Room::new(model.clone(), skills(&tree), |options| AiChannelOptions {
+        tools: spotify().into_iter().take(2).collect(),
+        tool_search_threshold: 2,
+        ..options
+    })
+    .await;
+    room.says("Go").await;
+    assert!(declares(&model, 0, "spotify_play"));
+    assert!(declares(&model, 0, "activate_skill"));
+    assert!(!declares(&model, 0, "find_tools"));
 }

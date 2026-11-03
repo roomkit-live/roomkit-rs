@@ -2,11 +2,7 @@
 //! that is never built. Its behaviour is in the conformance suite's
 //! `tool-search/` scenarios.
 
-#![expect(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "a test fails on a broken fixture"
-)]
+#![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use roomkit::Channel;
 use roomkit::model::{
@@ -63,7 +59,7 @@ fn a_host_tool_under_a_discovery_name_is_refused_unless_tool_search_is_off() {
         assert_eq!(
             refused.to_string(),
             format!(
-                "tool \"{name}\" is a tool the channel serves itself: rename it or set \
+                "Tool '{name}' is a tool channel 'ai1' serves itself: rename it or set \
                  tool_search to Some(false) (RFC §21.1)"
             )
         );
@@ -87,7 +83,7 @@ fn a_person_s_tool_under_a_discovery_name_is_refused() {
     };
     assert!(matches!(
         build(options),
-        Err(AiError::ToolSearchName { name }) if name == "list_tools"
+        Err(AiError::ToolSearchName { name, .. }) if name == "list_tools"
     ));
 }
 

@@ -247,11 +247,12 @@ fn tags_of(tags: Option<&Value>, refusals: &mut Vec<Refusal>) -> Vec<String> {
         return Vec::new();
     };
     tags.iter()
-        .filter_map(|tag| {
+        .enumerate()
+        .filter_map(|(at, tag)| {
             if tag.is_string() {
                 tag.as_str().map(str::to_owned)
             } else {
-                refusals.push(text_refused(tag).of("tags"));
+                refusals.push(text_refused(tag).of(format!("tags.{at}")));
                 None
             }
         })
@@ -382,6 +383,44 @@ mod tests {
 
     // Python: AITool's fields as pydantic reads them, its name checked by
     // `_a_name_some_vendor_accepts` (RFC §6.7), every refusal named.
+    // Python: pydantic's refusal of AITool(tags=["a", 2]), which names the place
+    #[test]
+    fn a_refused_tag_names_its_place_in_the_list() {
+        let (class, words) = refusal(json!([{ "name": "lookup", "tags": ["a", 2] }]));
+        assert!(class.contains("ValidationError"), "{class}");
+        assert!(
+            words.contains("\ntags.1\n  Input should be a valid string"),
+            "{words}"
+        );
+    }
+
+    // Python: AITool(tags=...) reads a list of texts, and _turn_base_tools what is false as none
+    #[test]
+    fn a_binding_s_tool_reads_its_tags() {
+        let metadata = |tags: Value| {
+            let mut metadata = Metadata::new();
+            metadata.insert(
+                "tools".to_owned(),
+                json!([{ "name": "lookup", "tags": tags }]),
+            );
+            metadata
+        };
+        for (tags, read) in [
+            (json!(["send", "sms"]), vec!["send", "sms"]),
+            (json!([]), Vec::new()),
+            (json!(null), Vec::new()),
+            (json!(""), Vec::new()),
+        ] {
+            let tools = base_tools(None, &metadata(tags)).unwrap();
+            assert_eq!(tools[0].tags, read);
+        }
+        assert!(
+            refusal(json!([{ "name": "lookup", "tags": "send" }]))
+                .1
+                .contains("tags\n")
+        );
+    }
+
     #[test]
     fn a_binding_s_tool_that_aitool_refuses_fails_the_turn() {
         let (class, words) =

@@ -156,3 +156,21 @@ fn a_room_is_hydrated_once_even_from_nothing() {
     memory.hydrate(&room(), ["read_again"].into_iter());
     assert_eq!(memory.tool_names(&room()), ["read_again"]);
 }
+
+// Python: channels/_tool_usage.py's needs_hydration(), which moves no room, and
+// _MAX_ROOMS: only a record makes a room the latest
+#[test]
+fn a_room_that_talks_without_a_call_ages_out() {
+    let memory = ToolUsageMemory::default();
+    let result = ToolResult::Text("ok".to_owned());
+    memory.record(&room(), "used", &Metadata::new(), &result);
+    for at in 0..MAX_ROOMS - 1 {
+        let other = RoomId::new(format!("other-{at}")).unwrap();
+        memory.record(&other, "used", &Metadata::new(), &result);
+    }
+    memory.hydrate(&room(), std::iter::empty());
+    let last = RoomId::new("last").unwrap();
+    memory.record(&last, "used", &Metadata::new(), &result);
+    assert_eq!(memory.tool_names(&room()), Vec::<String>::new());
+    assert_eq!(memory.tool_names(&last), ["used"]);
+}

@@ -56,71 +56,78 @@ pub(crate) struct ToolSearch {
     threshold_tokens: Option<u64>,
 }
 
-/// The channel's `tool_search*` options, as they are given.
-pub(crate) struct ToolSearchOptions {
-    pub(crate) mode: Option<bool>,
-    pub(crate) pinned: Vec<String>,
-    pub(crate) threshold: usize,
-    pub(crate) threshold_pct: f64,
-    pub(crate) miss_hint: Option<String>,
-    pub(crate) threshold_tokens: Option<u64>,
-}
-
 impl ToolSearch {
-    /// The options as a channel holds them.
+    /// The channel's `tool_search*` options as it holds them, its thresholds
+    /// the tool count, the share of the window and the token cap.
     ///
     /// # Errors
     ///
     /// [`AiError::ToolSearchThresholdTokens`] for a token cap of zero, as
     /// Python's `checked_threshold_tokens` raises `ValueError`.
-    pub(crate) fn checked(options: ToolSearchOptions) -> Result<Self, AiError> {
-        if options.threshold_tokens == Some(0) {
+    pub(crate) fn checked(
+        mode: Option<bool>,
+        pinned: Vec<String>,
+        (threshold, threshold_pct, threshold_tokens): (usize, f64, Option<u64>),
+        miss_hint: Option<String>,
+    ) -> Result<Self, AiError> {
+        if threshold_tokens == Some(0) {
             return Err(AiError::ToolSearchThresholdTokens);
         }
         Ok(Self {
-            mode: options.mode,
-            pinned: options.pinned.into_iter().collect(),
-            threshold: options.threshold,
-            threshold_pct: options.threshold_pct,
-            miss_hint: options.miss_hint,
-            threshold_tokens: options.threshold_tokens,
+            mode,
+            pinned: pinned.into_iter().collect(),
+            threshold,
+            threshold_pct,
+            miss_hint,
+            threshold_tokens,
         })
     }
 
     /// Whether the channel may serve the discovery tools, whose names no host
-    /// tool may then take (RFC §21.1): unless `tool_search` is `false`.
+    /// tool may then take (RFC §21.1): unless `tool_search` is `Some(false)`.
     pub(crate) fn reserves_names(&self) -> bool {
         self.mode != Some(false)
     }
 
     /// The Tool Search of a turn on `toolbox`, on a model of `window` tokens,
-    /// in `room`; `None` when it hides nothing. A turn that stands alone reads
-    /// none of the room's memory of the tools it used (RFC §10.1.1).
+    /// in `room`, active when it hides the catalogue. A turn that stands alone
+    /// reads none of the room's memory of the tools it used (RFC §10.1.1).
     pub(crate) fn open(
         self: &Arc<Self>,
         toolbox: &Toolbox,
         window: Option<u64>,
         room: &RoomId,
         (memory, stands_alone): (&Arc<ToolUsageMemory>, bool),
-    ) -> Option<Arc<TurnSearch>> {
-        if !self.hides(&toolbox.deferrable(), window) {
-            return None;
-        }
-        let names = toolbox.names();
-        let used: Vec<String> = if stands_alone {
-            Vec::new()
-        } else {
-            memory.tool_names(room)
-        };
-        let sticky = used.into_iter().filter(|name| names.contains(name));
+    ) -> Arc<TurnSearch> {
+        let catalogue = toolbox.deferrable();
+        let active = self.hides(&catalogue, window);
         let mut never = toolbox.never_hidden();
         never.extend(TOOL_SEARCH_INFRA_TOOL_NAMES.map(str::to_owned));
-        Some(Arc::new(TurnSearch::new(
+        let mut sticky = HashSet::new();
+        if active {
+            tracing::info!(
+                target: "roomkit::ai",
+                deferred = catalogue.len(),
+                pinned = catalogue.iter().filter(|t| self.pinned.contains(&t.name)).count(),
+                window = ?window,
+                "Tool Search active: tools deferred behind find_tools/list_tools"
+            );
+            if !stands_alone {
+                let names = toolbox.names();
+                sticky.extend(
+                    memory
+                        .tool_names(room)
+                        .into_iter()
+                        .filter(|name| names.contains(name)),
+                );
+            }
+        }
+        Arc::new(TurnSearch::new(
             Arc::clone(self),
-            room.clone(),
-            Arc::clone(memory),
-            (never, sticky.collect()),
-        )))
+            (room.clone(), Arc::clone(memory)),
+            active,
+            (never, sticky),
+        ))
     }
 
     /// Whether a catalogue of `catalogue`, what Tool Search may hide, is hidden

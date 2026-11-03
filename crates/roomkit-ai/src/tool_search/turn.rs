@@ -1,8 +1,8 @@
 //! A turn's Tool Search (RFC §6.4): what it keeps declared from round to
 //! round, and the two tools it serves. Python's reveal window, on its
 //! `_ToolLoopContext`, and `_handle_find_tools`, `_handle_list_tools`,
-//! `_reveal`, `_settle_served_call`, `_settle_recovery`,
-//! `_retain_called_tool`, `_declaration_origin`.
+//! `_reveal`, `_settle_served_call`, `_retain_called_tool`,
+//! `_declaration_origin`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -21,11 +21,15 @@ use crate::skills::dumps;
 use crate::tool_usage::ToolUsageMemory;
 use crate::tools::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolResult};
 
-/// A turn's Tool Search, shared by its loop and the tools it serves.
+/// A turn's Tool Search, shared by its loop and the tools it serves. A turn that
+/// hides nothing has one too: an activation's hint reveals into the room's
+/// memory whatever the turn's mode (RFC §24.4).
 pub(crate) struct TurnSearch {
     config: Arc<ToolSearch>,
     room: RoomId,
     memory: Arc<ToolUsageMemory>,
+    /// Whether the turn hides its catalogue.
+    active: bool,
     window: Mutex<RevealWindow>,
 }
 
@@ -37,10 +41,8 @@ struct RevealWindow {
     /// What Tool Search never hides: the channel's own tools, a person's, what
     /// orchestration injected, what a hook added.
     never_hidden: HashSet<String>,
-    /// What the last search revealed, and what recoveries did.
+    /// What the last search revealed.
     revealed: HashSet<String>,
-    /// The tools a served recovery revealed: used, so a search keeps them.
-    recovered: HashSet<String>,
     /// The tools the room used or found, and those this turn called: they stay
     /// declared whatever a search reveals.
     sticky: HashSet<String>,
@@ -49,25 +51,26 @@ struct RevealWindow {
     revealed_in_round: Option<u32>,
     /// The rounds of calls that ended.
     round: u32,
-    /// What a `find_tools` call matched, until it is served.
+    /// What a `find_tools` call matched or an activation's hint named, until
+    /// the call is served.
     pending_reveals: HashMap<String, Vec<String>>,
-    /// The hidden tool a call named, until the tool answers it.
-    pending_recoveries: HashMap<String, String>,
 }
 
 impl TurnSearch {
-    /// The turn's search under `config` in `room`, what is `never` hidden and
-    /// what stays `sticky` from the room's earlier turns as it starts.
+    /// The turn's search under `config` in `room`, `active` or not, what is
+    /// `never` hidden and what stays `sticky` from the room's earlier turns as
+    /// it starts.
     pub(super) fn new(
         config: Arc<ToolSearch>,
-        room: RoomId,
-        memory: Arc<ToolUsageMemory>,
+        (room, memory): (RoomId, Arc<ToolUsageMemory>),
+        active: bool,
         (never, sticky): (HashSet<String>, HashSet<String>),
     ) -> Self {
         Self {
             config,
             room,
             memory,
+            active,
             window: Mutex::new(RevealWindow {
                 never_hidden: never,
                 sticky,
@@ -78,6 +81,11 @@ impl TurnSearch {
 
     fn window(&self) -> MutexGuard<'_, RevealWindow> {
         self.window.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether the turn hides its catalogue.
+    pub(crate) fn active(&self) -> bool {
+        self.active
     }
 
     /// Whether `name` is declared this round, were it reachable.
@@ -97,16 +105,18 @@ impl TurnSearch {
     /// as this round declares it, which the search reads from now on. Python's
     /// `_apply_tool_filters`.
     pub(crate) fn round_declaration(&self, reachable: Vec<AiTool>) -> Vec<AiTool> {
-        let mut window = self.window();
-        window.catalogue.clone_from(&reachable);
-        reachable
-            .into_iter()
-            .filter(|tool| self.keeps(&window, &tool.name))
-            .collect()
+        if !self.active {
+            return reachable;
+        }
+        self.window().catalogue.clone_from(&reachable);
+        self.collapsed(reachable)
     }
 
-    /// `tools` as the first round would declare them, nothing read from them.
+    /// `tools` as a round would declare them, nothing read from them.
     pub(crate) fn collapsed(&self, tools: Vec<AiTool>) -> Vec<AiTool> {
+        if !self.active {
+            return tools;
+        }
         let window = self.window();
         tools
             .into_iter()
@@ -123,6 +133,9 @@ impl TurnSearch {
     /// Why `name` is in the declaration, the earliest reason winning (RFC
     /// §6.4). Python's `_declaration_origin`.
     pub(crate) fn origin(&self, name: &str) -> ToolDeclarationOrigin {
+        if !self.active {
+            return ToolDeclarationOrigin::Always;
+        }
         let window = self.window();
         if self.config.pinned.contains(name) {
             ToolDeclarationOrigin::Pinned
@@ -137,17 +150,13 @@ impl TurnSearch {
         }
     }
 
-    /// A call `call_id` to `name`, which the policy admits: when the tool is
-    /// hidden, the search applied at call time, a tool a small model saw and
-    /// called without searching. It joins the window once the tool answered.
-    /// Python's `_recover_deferred_tool`.
-    pub(crate) fn recover(&self, call_id: &str, name: &str) {
-        let mut window = self.window();
-        if !self.keeps(&window, name) {
+    /// Says a call names a tool the round hid, which the policy admits: a
+    /// search applied at call time, a tool a small model saw and called without
+    /// searching. Python's `_recover_deferred_tool`: what it holds for later is
+    /// `settle`'s here, a tool that answered staying declared either way.
+    pub(crate) fn note_recovery(&self, name: &str) {
+        if self.active && !self.keeps(&self.window(), name) {
             tracing::info!(target: "roomkit::ai", tool = %name, "recovered a hidden catalogue tool at call time");
-            window
-                .pending_recoveries
-                .insert(call_id.to_owned(), name.to_owned());
         }
     }
 
@@ -157,7 +166,7 @@ impl TurnSearch {
     /// `_retain_called_tool`.
     pub(crate) fn retain(&self, name: &str) {
         let mut window = self.window();
-        if !self.never_deferred(&window, name) {
+        if self.active && !self.never_deferred(&window, name) {
             window.sticky.insert(name.to_owned());
         }
     }
@@ -170,17 +179,12 @@ impl TurnSearch {
             .insert(call_id.to_owned(), names);
     }
 
-    /// A call a gate refused: it reveals nothing, and touches no other call's
-    /// reveal (RFC §6.4).
-    pub(crate) fn settle_refused(&self, call_id: &str) {
-        self.window().pending_recoveries.remove(call_id);
-    }
-
     /// The call `call_id` to `name`, which ran, ended `outcome`: a served
     /// search reveals its matches, whatever a hook replaced its result with;
-    /// a tool that answered, served, failed or withheld, stays declared.
-    /// Python's `_settle_served_call`, `_settle_recovery`,
-    /// `_retain_called_tool`.
+    /// a tool that answered, served, failed or withheld, stays declared for
+    /// the rest of the turn (RFC §6.4). A call a gate refused, or that nothing
+    /// served, leaves everything as it was. Python's `_settle_served_call`,
+    /// `_settle_recovery`, `_retain_called_tool`.
     pub(crate) fn settle(&self, call_id: &str, name: &str, outcome: ToolCallOutcome) {
         let mut window = self.window();
         let found = window.pending_reveals.remove(call_id);
@@ -191,24 +195,16 @@ impl TurnSearch {
             outcome,
             ToolCallOutcome::Served | ToolCallOutcome::Failed | ToolCallOutcome::Blocked
         );
-        let recovered = window.pending_recoveries.remove(call_id);
-        if !answered {
-            return;
-        }
-        if let Some(recovered) = recovered {
-            window.recovered.insert(recovered.clone());
-            window.revealed.insert(recovered);
-        }
-        if !self.never_deferred(&window, name) {
+        if answered && self.active && !self.never_deferred(&window, name) {
             window.sticky.insert(name.to_owned());
         }
     }
 
     /// Reveals `names` as `find_tools` does: the window swapped, what is never
-    /// hidden left out, a tool a served recovery revealed kept, and for the
-    /// room's later turns. Two searches of one round each told the model its
-    /// matches come next round, so the second adds to what the first swapped.
-    /// Python's `_reveal`.
+    /// hidden left out, and for the room's later turns. A tool a served call
+    /// used keeps its place, being sticky. Two searches of one round each told
+    /// the model its matches come next round, so the second adds to what the
+    /// first swapped. Python's `_reveal`.
     fn reveal(&self, window: &mut RevealWindow, names: Vec<String>) {
         let revealed: Vec<String> = names
             .into_iter()
@@ -218,7 +214,7 @@ impl TurnSearch {
             return;
         }
         if window.revealed_in_round != Some(window.round) {
-            window.revealed.clone_from(&window.recovered);
+            window.revealed.clear();
             window.revealed_in_round = Some(window.round);
         }
         window.revealed.extend(revealed.iter().cloned());
@@ -232,21 +228,17 @@ impl TurnSearch {
 
     /// What `find_tools` answers. Python's `_handle_find_tools`.
     fn find(&self, call: &ToolCall) -> String {
-        let query = strip(
-            call.arguments
-                .get("query")
-                .and_then(|query| query.as_str())
-                .unwrap_or(""),
-        );
+        let query = call.arguments.get("query").and_then(|query| query.as_str());
+        let query = strip(query.unwrap_or_default());
         if query.is_empty() {
             return dumps(&json!({
                 "error": "query is required",
                 "hint": "Pass a short natural-language description.",
             }));
         }
-        let mut window = self.window();
         let max_results =
             normalize_max_results(call.arguments.get("max_results"), self.config.threshold);
+        let mut window = self.window();
         let mut exclude = window.never_hidden.clone();
         exclude.extend(self.config.pinned.iter().cloned());
         let matches = search_catalogue(&window.catalogue, query, max_results, &exclude);
@@ -278,6 +270,7 @@ impl std::fmt::Debug for TurnSearch {
         formatter
             .debug_struct("TurnSearch")
             .field("room", &self.room)
+            .field("active", &self.active)
             .finish_non_exhaustive()
     }
 }

@@ -191,8 +191,8 @@ pub(crate) struct Loop<P> {
     pub(crate) telemetry: TurnTelemetry,
     /// The turn's `llm.generate` span, once it runs.
     pub(crate) turn_span: Option<TurnSpan>,
-    /// The turn's Tool Search, when it hides its catalogue (RFC §6.4).
-    pub(crate) search: Option<Arc<TurnSearch>>,
+    /// The turn's Tool Search, which reads its reveals (RFC §6.4).
+    pub(crate) search: Arc<TurnSearch>,
 }
 
 impl<P: AiProvider> Loop<P> {
@@ -253,7 +253,6 @@ impl<P: AiProvider> Loop<P> {
             .start(Some(self.context.room_id.clone()), turn_id);
         let mut system_prompt = self.system_prompt.clone();
         let mut spent = Spent::starting();
-        let mut declared = self.round_tools(&mut spent);
         let mut had_tool_round = false;
         let mut tool_rounds = 0;
         let mut prefix = String::new();
@@ -270,7 +269,9 @@ impl<P: AiProvider> Loop<P> {
                     .end(LoopEndReason::Cancelled, tool_rounds, spent, ending)
                     .await;
             }
-            let asked = (declared.clone(), system_prompt.clone());
+            // Declared as the provider is about to be asked, nothing reported
+            // of a round a cancel kept from running (RFC §6.4).
+            let asked = (self.round_tools(&mut spent), system_prompt.clone());
             let reading = (&steering, &out, prefix.as_str(), round);
             let read = self.read_round(&messages, asked, reading).await;
             let read = read.and_then(|read| self.counted(read, &mut spent, &mut limits));
@@ -334,11 +335,7 @@ impl<P: AiProvider> Loop<P> {
             // A round counts once its calls ran (Python's `_run_announced_calls`).
             self.count_calls(&mut spent, ran.calls.len());
             tool_rounds += u32::from(!ran.calls.is_empty());
-            let withdrawn = self.adopted.withdrawn.len();
             messages.extend(self.after_tool_round(round, ran).await);
-            if self.declaration_changes(withdrawn) {
-                declared = self.round_tools(&mut spent);
-            }
             if steering.read(&mut messages, &mut system_prompt) {
                 let ending = (&limits, &steering, &out);
                 return self
@@ -614,6 +611,7 @@ impl<P: AiProvider> Loop<P> {
             read.push(result);
             out.give(Ok(TurnItem::ToolEnd(end))).await;
         }
+        self.search.next_round();
         (read, ran)
     }
 }

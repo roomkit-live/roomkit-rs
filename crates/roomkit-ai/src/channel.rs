@@ -43,7 +43,7 @@ use crate::tool_loop::{Adopted, Bounds, Loop, Resilience, ThinkingPublication};
 use crate::tool_search::{
     DEFAULT_TOOL_SEARCH_THRESHOLD, DEFAULT_TOOL_SEARCH_THRESHOLD_PCT,
     DEFAULT_TOOL_SEARCH_THRESHOLD_TOKENS, TOOL_SEARCH_INFRA_TOOL_NAMES, TOOL_SEARCH_PREAMBLE,
-    ToolSearch, ToolSearchOptions, TurnSearch,
+    ToolSearch, TurnSearch,
 };
 use crate::tool_usage::{ToolUsageMemory, TurnMedia, used_tools};
 use crate::tools::toolbox::Toolbox;
@@ -548,12 +548,12 @@ impl<P: AiProvider> AiChannel<P> {
             serialize_room_turns,
             steer_room_turns,
             human_input_handler,
-            tool_search,
-            tool_search_pinned,
-            tool_search_threshold,
-            tool_search_threshold_pct,
-            tool_search_miss_hint,
-            tool_search_threshold_tokens,
+            tool_search: mode,
+            tool_search_pinned: pinned,
+            tool_search_threshold: count,
+            tool_search_threshold_pct: share,
+            tool_search_miss_hint: miss_hint,
+            tool_search_threshold_tokens: tokens,
         } = options;
         // Python's ToolPolicy, RetryPolicy and AITool refuse as they are
         // built, before its constructor runs.
@@ -566,16 +566,10 @@ impl<P: AiProvider> AiChannel<P> {
         check_budgets(turn_budget_tokens, turn_budget_usd, &provider, fallback)?;
         let instructions = instructions_of(&server_instructions)?;
         refuse_zero_bounds(tool_timeout, &tool_timeouts)?;
-        let search = ToolSearch::checked(ToolSearchOptions {
-            mode: tool_search,
-            pinned: tool_search_pinned,
-            threshold: tool_search_threshold,
-            threshold_pct: tool_search_threshold_pct,
-            miss_hint: tool_search_miss_hint,
-            threshold_tokens: tool_search_threshold_tokens,
-        })?;
+        let search = ToolSearch::checked(mode, pinned, (count, share, tokens), miss_hint)?;
         let skilled = (skills, skills_in_prompt);
-        let surface = tool_surface(&search, tool_handler, tools, human_input_handler, skilled)?;
+        let setup = (&channel_id, &search);
+        let surface = tool_surface(setup, tool_handler, tools, human_input_handler, skilled)?;
         Ok(Self {
             capabilities: ai_channel_capabilities(),
             channel_id,
@@ -605,11 +599,7 @@ impl<P: AiProvider> AiChannel<P> {
             reasoning_effort,
             turn_configs: TurnConfigs::new(config_provider),
             server_instructions: instructions,
-            memory: memory.unwrap_or_else(|| {
-                Arc::new(SlidingWindowMemory::new(SlidingWindowMemoryOptions {
-                    max_events: max_context_events,
-                }))
-            }),
+            memory: memory.unwrap_or_else(|| sliding_window(max_context_events)),
             media: MediaReading {
                 resolver: image_resolver,
                 max_author_images,
@@ -812,15 +802,16 @@ impl<P: AiProvider> AiChannel<P> {
         Ok(Arc::new(toolbox.for_turn(base, handler, collisions)))
     }
 
-    /// The turn's toolbox and its Tool Search, when it hides its catalogue on
-    /// `toolbox` (RFC §6.4): the tools the room used, read from its stored rows
-    /// the first time, stay declared unless the turn stands alone.
+    /// The turn's toolbox and its Tool Search on `toolbox` (RFC §6.4), the
+    /// tools it serves among the toolbox's when it hides the catalogue: the
+    /// tools the room used, read from its stored rows the first time, stay
+    /// declared unless the turn stands alone.
     fn turn_search(
         &self,
         toolbox: Arc<Toolbox>,
         context: &RoomContext,
         stands_alone: bool,
-    ) -> Result<(Arc<Toolbox>, Option<Arc<TurnSearch>>), AiError> {
+    ) -> Result<(Arc<Toolbox>, Arc<TurnSearch>), AiError> {
         let memory = &self.media.tool_usage;
         let rows = context
             .recent_events
@@ -829,15 +820,16 @@ impl<P: AiProvider> AiChannel<P> {
         let used = used_tools(rows).filter(|name| self.toolbox.in_tool_memory(name));
         memory.hydrate(&context.room.id, used);
         let window = self.provider.context_window();
-        let opened =
-            self.tool_search
-                .open(&toolbox, window, &context.room.id, (memory, stands_alone));
-        let Some(search) = opened else {
-            return Ok((toolbox, None));
-        };
+        let room = &context.room.id;
+        let search = self
+            .tool_search
+            .open(&toolbox, window, room, (memory, stands_alone));
+        if !search.active() {
+            return Ok((toolbox, search));
+        }
         let own: Arc<dyn DynToolset> = Arc::<TurnSearch>::clone(&search);
         let with_tools = toolbox.with_discovery(own)?;
-        Ok((Arc::new(with_tools), Some(search)))
+        Ok((Arc::new(with_tools), search))
     }
 
     /// The system prompt of a turn in `context`'s room: its binding's
@@ -1182,6 +1174,13 @@ fn instructions_of(servers: &[(String, Option<String>)]) -> Result<ServerInstruc
     Ok(instructions)
 }
 
+/// The default memory: a window of the room's `max_events` latest events.
+fn sliding_window(max_events: usize) -> Arc<dyn MemoryProvider> {
+    Arc::new(SlidingWindowMemory::new(SlidingWindowMemoryOptions {
+        max_events,
+    }))
+}
+
 /// The skill tools a registry with entries serves, added to `toolbox`;
 /// none for a registry without any (Python's constructor).
 fn serve_skills(
@@ -1246,7 +1245,7 @@ struct ToolSurface {
 /// the channel serves itself, [`AiError::ToolSearchName`] for one under a name
 /// Tool Search keeps (RFC §21.1).
 fn tool_surface(
-    search: &ToolSearch,
+    (channel_id, search): (&ChannelId, &ToolSearch),
     tool_handler: Option<ToolHandler>,
     tools: Vec<ToolEntry>,
     human_input_handler: Option<HumanInputToolHandler>,
@@ -1255,7 +1254,8 @@ fn tool_surface(
     let mut toolbox = Toolbox::default();
     // The names Tool Search keeps for itself, before any tool takes one.
     if search.reserves_names() {
-        toolbox.reserve(TOOL_SEARCH_INFRA_TOOL_NAMES.map(str::to_owned));
+        let names = TOOL_SEARCH_INFRA_TOOL_NAMES.map(str::to_owned);
+        toolbox.reserve(channel_id.as_str(), names);
     }
     // The host's handler is read at each call, so that a handler set
     // later serves the next calls (Python's `tool_handler` setter).
@@ -1403,7 +1403,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             &binding,
             configured,
             &context,
-            (stands_alone, search.is_some()),
+            (stands_alone, search.active()),
         );
         let tools = ToolContext::new(context.room.id.clone(), self.channel_id.clone())
             .within(turn.clone())

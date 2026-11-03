@@ -294,7 +294,7 @@ async fn under_tool_search_the_footprint_counts_what_the_first_round_declares() 
         tool_search_pinned: vec!["tool_0".to_owned()],
         ..AiChannelOptions::default()
     };
-    let (footprints, model) = measured(options).await;
+    let (footprints, model) = Box::pin(measured(options)).await;
 
     let sent = model.requests().remove(0);
     assert_eq!(

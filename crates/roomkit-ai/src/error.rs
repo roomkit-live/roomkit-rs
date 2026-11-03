@@ -88,12 +88,14 @@ pub enum AiError {
     /// A tool under a name Tool Search serves, `find_tools` or `list_tools`
     /// (RFC §21.1): Python's `ValueError`, which turning Tool Search off frees.
     #[error(
-        "tool {name:?} is a tool the channel serves itself: rename it or set tool_search to \
-         Some(false) (RFC §21.1)"
+        "Tool '{name}' is a tool channel '{channel}' serves itself: rename it or set tool_search \
+         to Some(false) (RFC §21.1)"
     )]
     ToolSearchName {
         /// The name.
         name: String,
+        /// The channel.
+        channel: String,
     },
     /// A token cap of zero (RFC §6.4): Python's `ValueError`, a cap being a
     /// positive number or none.

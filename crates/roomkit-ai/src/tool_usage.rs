@@ -164,19 +164,32 @@ impl ToolUsageMemory {
 
     /// Reads `room`'s tools from its stored rows `used`, oldest first, the
     /// first time this process serves the room: what the rows say outlives
-    /// the channel, and never replaces what a live call recorded. Python's
-    /// `needs_hydration()` and `seed()`, no image replayed.
+    /// the channel, and never replaces what a live call recorded. Only a tool
+    /// read makes the room the latest: one that keeps talking without calling
+    /// ages out. Python's `needs_hydration()` and `seed()`, no image replayed.
     pub(crate) fn hydrate<'a>(&self, room: &RoomId, used: impl Iterator<Item = &'a str>) {
-        self.writing(room, |memory| {
-            if memory.hydrated || !memory.tools.is_empty() {
-                memory.hydrated = true;
-                return;
+        {
+            let mut by_room = self.by_room.lock().unwrap_or_else(PoisonError::into_inner);
+            match by_room.iter_mut().find(|(at, _)| at == room) {
+                Some((_, memory)) if memory.hydrated || !memory.tools.is_empty() => return,
+                Some((_, memory)) => memory.hydrated = true,
+                None => by_room.push_back((
+                    room.clone(),
+                    RoomMemory {
+                        hydrated: true,
+                        ..RoomMemory::default()
+                    },
+                )),
             }
-            memory.hydrated = true;
-            for name in used {
-                memory.touch(name);
-            }
-        });
+        }
+        let used: Vec<&str> = used.collect();
+        if !used.is_empty() {
+            self.writing(room, |memory| {
+                for name in used {
+                    memory.touch(name);
+                }
+            });
+        }
     }
 
     /// Drops `room`'s record: its next turns replay none of the images its

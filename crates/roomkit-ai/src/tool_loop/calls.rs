@@ -1,6 +1,7 @@
 //! One call of a round: its gate, its tool, its hooks (RFC §9.3, §21.1,
 //! §21.6).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit::model::{Metadata, ToolCall, ToolCallOutcome};
@@ -43,12 +44,7 @@ impl<P: AiProvider> Loop<P> {
                     .map(|turn| turn.start_call(&call.name, &call.id));
                 (self.execute(call).await, Some(asked))
             }
-            Gated::Refused(refused) => {
-                if let Some(search) = &self.search {
-                    search.settle_refused(&called.call.id);
-                }
-                (refused, None)
-            }
+            Gated::Refused(refused) => (refused, None),
         };
         let ended = match &self.turn {
             Some(turn) => turn.on_tool_call(ended).await,
@@ -65,9 +61,8 @@ impl<P: AiProvider> Loop<P> {
             turn.report_tool_call(&reported);
         }
         if let Some(asked) = asked {
-            if let Some(search) = &self.search {
-                search.settle(&reported.call.id, &reported.call.name, outcome);
-            }
+            self.search
+                .settle(&reported.call.id, &reported.call.name, outcome);
             self.remember(&reported.call.name, &asked, outcome, &result);
         }
         ToolEnd {
@@ -138,9 +133,10 @@ impl<P: AiProvider> Loop<P> {
         let Some((tool, _)) = self.toolbox.find(&model_call.name) else {
             // While a catalogue is hidden, a name no tool carries may be a
             // tool the model misspelled: it can search (RFC §21.1).
-            return refuse(match self.search {
-                Some(_) => texts::no_such_tool(&model_call.name),
-                None => texts::not_declared(&model_call.name),
+            return refuse(if self.search.active() {
+                texts::no_such_tool(&model_call.name)
+            } else {
+                texts::not_declared(&model_call.name)
             });
         };
         if !self.toolbox.permits(&self.policy, &model_call.name) {
@@ -148,16 +144,12 @@ impl<P: AiProvider> Loop<P> {
         }
         // A hidden tool the model named: a search applied at call time, every
         // guard after this one still standing (RFC §6.4).
-        if let Some(search) = &self.search {
-            search.recover(&model_call.id, &model_call.name);
-        }
+        self.search.note_recovery(&model_call.name);
         let call = match self.repaired(model_call, &tool.parameters) {
             Ok(call) => call,
             Err(refused) => {
                 // Its next attempt needs the schema on the wire (RFC §6.4).
-                if let Some(search) = &self.search {
-                    search.retain(&model_call.name);
-                }
+                self.search.retain(&model_call.name);
                 return Gated::Refused(*refused);
             }
         };
@@ -229,7 +221,7 @@ impl<P: AiProvider> Loop<P> {
     fn call_context(&self, call: &ToolCall) -> ToolContext {
         let mut context = self.context.clone();
         if call.name == ACTIVATE_SKILL {
-            context.search.clone_from(&self.search);
+            context.search = Some(Arc::clone(&self.search));
             context.hintable = self
                 .declared()
                 .into_iter()

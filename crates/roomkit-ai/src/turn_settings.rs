@@ -9,6 +9,7 @@
 //! the context's fields with pydantic's `ValidationError`, in its words
 //! without the documentation link pydantic adds under each error.
 
+use std::borrow::Cow;
 use std::fmt::{self, Write as _};
 use std::num::IntErrorKind;
 
@@ -258,26 +259,26 @@ fn positive_usd(value: &Value) -> Result<f64, ChannelError> {
 /// value.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Refusal {
-    field: &'static str,
+    field: Cow<'static, str>,
     kind: &'static str,
     message: String,
-    value: Value,
+    value: Box<Value>,
 }
 
 impl Refusal {
     /// The refusal of `value` under `kind`, in pydantic's `message`.
     pub(crate) fn new(kind: &'static str, message: impl Into<String>, value: &Value) -> Self {
         Self {
-            field: "",
+            field: Cow::Borrowed(""),
             kind,
             message: message.into(),
-            value: value.clone(),
+            value: Box::new(value.clone()),
         }
     }
 
     /// The same refusal, of the field `field`.
-    pub(crate) fn of(mut self, field: &'static str) -> Self {
-        self.field = field;
+    pub(crate) fn of(mut self, field: impl Into<Cow<'static, str>>) -> Self {
+        self.field = field.into();
         self
     }
 }

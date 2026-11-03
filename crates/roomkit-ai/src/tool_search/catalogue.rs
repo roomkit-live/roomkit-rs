@@ -2,7 +2,7 @@
 //! payloads, pure functions of the tools they read. Python's
 //! `_tool_search.py`.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 
 use serde_json::{Map, Value, json};
 
@@ -104,19 +104,14 @@ fn folded(text: &str) -> HashSet<String> {
     tokenize(text).iter().map(|word| fold(word)).collect()
 }
 
-/// `raw`, a model's `max_results`, as a count between 1 and `threshold`:
-/// nothing, or what is no number, asks for the default. Python's
-/// `normalize_max_results()`.
+/// `raw`, a model's `max_results`, as a count between 1 and `threshold`: the
+/// call's schema admits a number or nothing, nothing asking for the default.
+/// Python's `normalize_max_results()`.
 pub(crate) fn normalize_max_results(raw: Option<&Value>, threshold: usize) -> usize {
-    let value = match raw {
-        Some(Value::Number(number)) => number
-            .as_i64()
-            .or_else(|| number.as_f64().map(truncated))
-            .unwrap_or(DEFAULT_FIND_TOOLS_LIMIT),
-        Some(Value::Bool(flag)) => i64::from(*flag),
-        Some(Value::String(text)) => text.trim().parse().unwrap_or(DEFAULT_FIND_TOOLS_LIMIT),
-        _ => DEFAULT_FIND_TOOLS_LIMIT,
-    };
+    let value = raw
+        .and_then(Value::as_number)
+        .and_then(|number| number.as_i64().or_else(|| number.as_f64().map(truncated)))
+        .unwrap_or(DEFAULT_FIND_TOOLS_LIMIT);
     usize::try_from(value).map_or(1, |value| value.min(threshold).max(1))
 }
 
@@ -156,32 +151,28 @@ impl<'a> Candidate<'a> {
     }
 
     /// Its relevance: each query word once, from the strongest of name and
-    /// tags that holds it, its description adding on top. Python's
-    /// `_score_tool()`.
-    fn score(&self, weights: &HashMap<&str, f64>) -> f64 {
-        weights
-            .iter()
-            .map(|(word, weight)| {
-                let strongest = if self.name_words.contains(*word) {
-                    NAME_WEIGHT
-                } else if self.tag_words.contains(*word) {
-                    TAGS_WEIGHT
-                } else {
-                    0.0
-                };
-                let described = if self.description_words.contains(*word) {
-                    1.0
-                } else {
-                    0.0
-                };
-                (strongest + described) * weight
-            })
-            .sum()
+    /// tags that holds it, its description adding on top. Added up term by term
+    /// as Python's `_score_tool()`: a tool at exactly half of the best is kept
+    /// or cut on the last bit of the sum.
+    fn score(&self, weights: &[(&str, f64)]) -> f64 {
+        let mut score = 0.0;
+        for (word, weight) in weights {
+            if self.name_words.contains(*word) {
+                score += NAME_WEIGHT * weight;
+            } else if self.tag_words.contains(*word) {
+                score += TAGS_WEIGHT * weight;
+            }
+            if self.description_words.contains(*word) {
+                score += weight;
+            }
+        }
+        score
     }
 }
 
-/// How rare each query word is among `candidates`: a word in nearly every tool
-/// weighs little, one no tool carries nothing. Python's `_word_weights()`.
+/// How rare each query word is among `candidates`, in the words' order: a word
+/// in nearly every tool weighs little, one no tool carries nothing. Python's
+/// `_word_weights()`.
 #[expect(
     clippy::cast_precision_loss,
     reason = "a catalogue's size, far under f64's exact integers"
@@ -189,7 +180,7 @@ impl<'a> Candidate<'a> {
 fn word_weights<'q>(
     candidates: &[Candidate<'_>],
     query: &'q BTreeSet<String>,
-) -> HashMap<&'q str, f64> {
+) -> Vec<(&'q str, f64)> {
     let n = candidates.len() as f64;
     query
         .iter()

@@ -224,4 +224,13 @@ mod tests {
         let other = tool(&json!({ "other": { "tags": ["send"] } }));
         assert_eq!(published_tags(&other), Vec::<String>::new());
     }
+
+    // Python: tools/mcp.py's _definition(), which hands the tags to the AITool
+    #[test]
+    fn a_listed_tool_keeps_its_tags() {
+        let catalogue = Catalogue::new("server");
+        let tagged = tool(&json!({ "fastmcp": { "tags": ["send"] } }));
+        let definition = catalogue.definition(&tagged).unwrap();
+        assert_eq!(definition.tags, ["send"]);
+    }
 }

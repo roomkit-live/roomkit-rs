@@ -515,8 +515,7 @@ fn scripted_handler(tools: Vec<Value>, run: &Arc<Run>) -> ToolHandler {
     })
 }
 
-/// A scripted agent's own `system_prompt`, `temperature` and `max_tokens`
-/// (README, "Scripted agents").
+/// A scripted agent's Tool Search (README, "Scripted agents").
 fn tool_search_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), String> {
     options.tool_search = spec["tool_search"].as_bool();
     options.tool_search_pinned = spec["tool_search_pinned"]
@@ -539,6 +538,8 @@ fn tool_search_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<
     Ok(())
 }
 
+/// A scripted agent's own `system_prompt`, `temperature` and `max_tokens`
+/// (README, "Scripted agents").
 fn agent_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), String> {
     if let Some(prompt) = spec.get("system_prompt") {
         let prompt = prompt.as_str().ok_or("system_prompt: not a text")?;

@@ -28,6 +28,8 @@ pub(crate) struct Toolbox {
     /// The names of the tools the agent may serve itself in a turn, which no
     /// other tool may take (RFC §21.1): Tool Search's.
     reserved: HashSet<String>,
+    /// The agent, which a refusal of one of those names names.
+    agent: String,
     /// The tools that ask a person (RFC §9.3).
     person_tools: HashSet<String>,
     /// The tools orchestration injected for the turn (RFC §21.1).
@@ -102,9 +104,10 @@ impl Toolbox {
         Ok(())
     }
 
-    /// Keeps `names` for the agent to serve in a turn: no other tool may take
+    /// Keeps `names` for `agent` to serve in a turn: no other tool may take
     /// one (RFC §21.1). Before any tool is added.
-    pub(crate) fn reserve(&mut self, names: impl IntoIterator<Item = String>) {
+    pub(crate) fn reserve(&mut self, agent: &str, names: impl IntoIterator<Item = String>) {
+        agent.clone_into(&mut self.agent);
         self.reserved.extend(names);
     }
 
@@ -279,6 +282,7 @@ impl Toolbox {
             if !exempt && self.reserved.contains(&tool.name) {
                 return Err(AiError::ToolSearchName {
                     name: tool.name.clone(),
+                    channel: self.agent.clone(),
                 });
             }
             if self.served.contains_key(&tool.name) || names.contains(&tool.name.as_str()) {
