@@ -759,3 +759,34 @@ async fn an_activation_named_after_a_tool_is_served_where_nothing_is_hidden() {
     let outcomes: Vec<_> = room.ends().await.iter().map(|row| row.outcome).collect();
     assert_eq!(outcomes, [Some(ToolCallOutcome::Served)]);
 }
+
+// Python: tests/test_mcp_server_instructions.py::test_tool_search_leaves_them_in_the_prompt
+/// RFC §6.4: Tool Search's preamble follows what the channel's own features
+/// write in the prompt, a server's instructions and the skills.
+#[tokio::test]
+async fn tool_search_s_preamble_follows_the_instructions_and_the_skills() {
+    let tree = TempDir::new();
+    let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
+    let room = Room::new(model.clone(), skills(&tree), |options| AiChannelOptions {
+        server_instructions: vec![(
+            "orders".to_owned(),
+            Some("Call lookup_order first.".to_owned()),
+        )],
+        tools: spotify(),
+        tool_search: Some(true),
+        ..options
+    })
+    .await;
+    room.says("Hello").await;
+    let prompt = model.requests().remove(0).system_prompt.unwrap();
+    let positions = [
+        prompt.find("Base."),
+        prompt.find("Call lookup_order first."),
+        prompt.find(PREAMBLE),
+        prompt.find("IMPORTANT — your visible tools"),
+    ];
+    assert!(
+        positions.iter().all(Option::is_some) && positions.is_sorted(),
+        "{prompt}"
+    );
+}

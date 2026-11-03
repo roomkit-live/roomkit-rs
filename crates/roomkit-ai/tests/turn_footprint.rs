@@ -281,6 +281,35 @@ async fn the_footprint_measures_the_tools_own_schemas_when_intents_are_on() {
     );
 }
 
+// Python: tests/test_turn_footprint.py::test_the_footprint_is_the_turn_as_round_0_sends_it
+/// Under Tool Search the measure is the collapse the first round declares,
+/// with the preamble its prompt carries, not the catalogue.
+#[tokio::test]
+async fn under_tool_search_the_footprint_counts_what_the_first_round_declares() {
+    let handler = ToolHandler::new(|_name, _arguments| async { Ok(ToolResult::Text("ok".into())) });
+    let options = AiChannelOptions {
+        tools: (0..30).map(|n| tool(&format!("tool_{n}")).into()).collect(),
+        tool_handler: Some(handler),
+        tool_search: Some(true),
+        tool_search_pinned: vec!["tool_0".to_owned()],
+        ..AiChannelOptions::default()
+    };
+    let (footprints, model) = measured(options).await;
+
+    let sent = model.requests().remove(0);
+    assert_eq!(
+        sent.tools.len(),
+        3,
+        "the pinned tool and the discovery tools"
+    );
+    let tools: usize = sent.tools.iter().map(tool_tokens).sum();
+    let prompt = estimate_tokens(sent.system_prompt.as_deref().unwrap_or(""));
+    assert_eq!(
+        footprints,
+        vec![Some(TurnFootprint::new(prompt + tools + NOTES_ROOM, 0))]
+    );
+}
+
 // Python: tests/test_people_taking_part.py::TestTheAgentKnowsWhoIsThere::test_the_turn_s_measure_counts_the_note
 #[tokio::test]
 async fn the_turn_s_measure_counts_the_people_note() {
