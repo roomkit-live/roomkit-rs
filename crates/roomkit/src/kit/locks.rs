@@ -39,15 +39,16 @@ mod tests {
     use std::sync::Mutex;
 
     use roomkit_core::model::{
-        ChannelBinding, ChannelId, ChannelType, IdentityId, Room, RoomId, TextContent,
+        ChannelBinding, ChannelId, ChannelType, EventId, IdentityId, ParticipantId, Room, RoomId,
+        TextContent,
     };
 
     use crate::lock_manager::{InMemoryLockManager, RoomLock, RoomLockManager};
     use crate::store::ConversationStore;
     use crate::testing::{RecordingTransport, RecordingTransportOptions};
     use crate::{
-        AttachChannelOptions, CreateRoomOptions, RequestVerificationOptions, RoomKit, RoomKitError,
-        RoomKitOptions, SendEventOptions,
+        AddMemberOptions, AttachChannelOptions, CreateRoomOptions, RequestVerificationOptions,
+        RoomKit, RoomKitError, RoomKitOptions, SendEventOptions, UpdateEventOptions,
     };
 
     // Python: tests/test_lock_release.py::TestTheKitsHold::test_the_kit_s_lock_manager_is_the_one_given
@@ -173,7 +174,7 @@ mod tests {
             .attach_channel(&nul_room, &src, AttachChannelOptions::default())
             .await
             .unwrap_err();
-        assert!(matches!(refused, RoomKitError::Value(_)), "{refused:?}");
+        assert_refused(&refused);
         let binding = ChannelBinding::new(src.clone(), nul_room.clone(), ChannelType::SMS);
         kit.store().add_binding(binding).await.unwrap();
         let refused = kit
@@ -185,9 +186,29 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(refused, RoomKitError::Value(_)), "{refused:?}");
+        assert_refused(&refused);
+        let alice = ParticipantId::new("alice").unwrap();
+        let refused = kit
+            .add_member(&nul_room, &src, &alice, AddMemberOptions::default())
+            .await
+            .unwrap_err();
+        assert_refused(&refused);
+        let event = EventId::new("e1").unwrap();
+        let refused = kit
+            .update_event(&nul_room, &event, UpdateEventOptions::default())
+            .await
+            .unwrap_err();
+        assert_refused(&refused);
         let asked = asked.lock().unwrap().clone();
         assert!(!asked.contains(&nul_room.to_string()), "{asked:?}");
         kit.close().await.unwrap();
+    }
+
+    /// The room lock's refusal, in Python's words, whichever operation met it.
+    fn assert_refused(refused: &RoomKitError) {
+        assert!(
+            matches!(refused, RoomKitError::Value(message) if message.contains("NUL")),
+            "{refused:?}"
+        );
     }
 }
