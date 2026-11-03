@@ -9,6 +9,7 @@ use std::sync::Arc;
 use roomkit_core::model::{ChannelId, DeliveryStatus, Metadata, RoomContext, RoomId};
 use roomkit_core::rules::hook_registry::{HookExecution, HookSubject, HookTrigger};
 
+use super::end_observer_span;
 use super::options::{GetRoomOptions, ProcessInboundOptions};
 use super::{Inner, RoomKit, read};
 use crate::context::ExecutionContext;
@@ -22,6 +23,7 @@ use crate::hooks::{self, HookOptions, Kept};
 use crate::providers::sms::WebhookMeta;
 use crate::store::{ConversationStore, InMemoryStore};
 use crate::tasks::Kind;
+use crate::telemetry::SpanKind;
 use crate::{DeliveryBackend, DeliveryItem, DeliveryStrategy, Immediate};
 
 /// What [`RoomKit::deliver`] takes beside the room and the content:
@@ -487,7 +489,9 @@ impl<S: ConversationStore> Inner<S> {
             let (inner, room_id) = (Arc::clone(self), room_id.clone());
             let (status, context) = (status.clone(), context.clone());
             let observing = async move {
+                let span = inner.hook_span(SpanKind::HookAsync, &spec.name, trigger, &room_id);
                 let outcome = hooks::run(handler, status, context, spec.timeout, |_| None).await;
+                end_observer_span(span, &outcome);
                 inner.report_observer(&spec, trigger, room_id, &outcome);
             };
             if self.tasks.spawn_alone(Kind::Observer, observing).is_none() {

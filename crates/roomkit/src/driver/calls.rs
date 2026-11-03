@@ -42,7 +42,7 @@ use crate::store::{
 };
 use crate::stream::{self, KeptStream, Stops};
 use crate::tasks::{Kind, Marks, TaskCut};
-use crate::telemetry::SpanKind;
+use crate::telemetry::{SpanKind, within_current_span};
 use crate::turn::TurnKit;
 use crate::turn_runners::{Answering, FirstPass, Next, Passes, Taken, TurnRunner};
 use crate::turns::{self, Answer};
@@ -1005,6 +1005,9 @@ pub(super) fn perform<S: ConversationStore>(
                         handled.wait().await;
                     }
                 };
+                // Under the span of the call that fired it, as a task Python
+                // creates copies its context.
+                let observing = within_current_span(observing);
                 // Nothing waits for an observer: a close one calls spares it
                 // alone; the kit's close gives it its grace, then cuts it.
                 if inner.tasks.spawn_alone(Kind::Observer, observing).is_none() {

@@ -23,9 +23,11 @@ use super::strategy::{DeliveryContext, DeliveryStrategy};
 use crate::driver;
 use crate::error::RoomKitError;
 use crate::hooks::{self, Kept};
+use crate::kit::end_observer_span;
 use crate::kit::{HookEngine, Inner, RoomKit};
 use crate::store::{ConversationStore, InMemoryStore};
 use crate::tasks::Kind;
+use crate::telemetry::SpanKind;
 
 /// What [`execute_delivery`] takes beside the kit and the item: Python's
 /// `execute_delivery(kit, item, *, strategy=None, hook_engine=None)`.
@@ -447,7 +449,9 @@ fn start_observers<S: ConversationStore>(
         let (event, context) = (event.clone(), context.clone());
         let observing = async move {
             let room_id = event.room_id.clone();
+            let span = observer.hook_span(SpanKind::HookAsync, &spec.name, trigger, &room_id);
             let outcome = hooks::run_kept(kept, event, context, spec.timeout).await;
+            end_observer_span(span, &outcome);
             observer.report_observer(&spec, trigger, room_id, &outcome);
         };
         if inner.tasks.spawn_alone(Kind::Observer, observing).is_none() {
