@@ -144,14 +144,16 @@ fn handed_on(context: &RoomContext) -> Result<Option<AiMessage>, ChannelError> {
 }
 
 /// `value` as Python's `str(value)` reads a summary a model handed on: none
-/// for what Python's truth test refuses.
+/// for what Python's truth test refuses. A list or a map is written as JSON,
+/// where Python writes its `repr`.
 fn said(value: &Value) -> Option<String> {
     match value {
         Value::Null | Value::Bool(false) => None,
+        Value::Bool(true) => Some("True".to_owned()),
         Value::String(text) => Some(text.clone()),
-        Value::Bool(true) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
-            Some(value.to_string())
-        }
+        Value::Number(number) => (number.as_f64() != Some(0.0)).then(|| number.to_string()),
+        Value::Array(items) => (!items.is_empty()).then(|| value.to_string()),
+        Value::Object(members) => (!members.is_empty()).then(|| value.to_string()),
     }
 }
 

@@ -202,6 +202,13 @@ impl<S> OwnerToolStore<S> {
         entries: Vec<OwnerToolEntry<S>>,
         owner: usize,
     ) -> Result<(), (String, String)> {
+        // One order for the two locks: `by_channel`, then `in_rooms`, as
+        // `register_all` takes them.
+        let by_channel = self.read();
+        let everywhere = by_channel
+            .get(channel_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let mut in_rooms = self
             .in_rooms
             .write()
@@ -210,7 +217,7 @@ impl<S> OwnerToolStore<S> {
         let held = in_rooms.get(&scope).map(Vec::as_slice).unwrap_or_default();
         for entry in &entries {
             let name = entry.name();
-            if self.serves(channel_id, name) {
+            if everywhere.iter().any(|served| served.name() == name) {
                 return Err((name.to_owned(), "served by the channel".to_owned()));
             }
             let clashes = held
@@ -398,5 +405,37 @@ mod tests {
                 false
             )
         );
+    }
+
+    // The two locks in one order: a kit-wide setup and a room's, on two
+    // threads, each wait for neither (the review's probe hung at once).
+    #[test]
+    fn a_kit_wide_setup_and_a_room_s_never_wait_for_each_other() {
+        const ROUNDS: usize = 3_000;
+        let store = Arc::new(OwnerToolStore::<InMemoryStore>::default());
+        let (done, finished) = std::sync::mpsc::channel();
+        let widely = Arc::clone(&store);
+        let sent = done.clone();
+        std::thread::spawn(move || {
+            for round in 0..ROUNDS {
+                let channel = ChannelId::new(format!("c{round}")).unwrap();
+                drop(widely.register_all(&channel, vec![entry("cancel_task")]));
+            }
+            sent.send(()).unwrap();
+        });
+        let in_rooms = Arc::clone(&store);
+        std::thread::spawn(move || {
+            let channel = ChannelId::new("speaker").unwrap();
+            for round in 0..ROUNDS {
+                let room = RoomId::new(format!("r{round}")).unwrap();
+                drop(in_rooms.register_all_in_room(&channel, &room, vec![entry("cancel_task")], 1));
+            }
+            done.send(()).unwrap();
+        });
+        for _ in 0..2 {
+            finished
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .expect("the two setups wait for each other");
+        }
     }
 }

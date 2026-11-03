@@ -242,6 +242,23 @@ async fn an_argument_that_is_no_text_refuses_the_handoff_as_validation_does() {
 
         assert!(matches!(refused, Err(RoomKitError::Value(_))), "{key}");
     }
+    // Refused first as Python's: it validates the model last.
+    let mut asked = arguments("nobody");
+    asked.insert("next_phase".to_owned(), json!(5));
+    let result = handler.handle(&room(), &id("a"), asked).await.unwrap();
+    assert_eq!(result.reason, "Agent nobody not found in room");
+    let options = HandoffHandlerOptions {
+        allowed_transitions: Some(HashMap::new()),
+        ..HandoffHandlerOptions::default()
+    };
+    let bound = HandoffHandler::new(&kit, router(), options);
+    let mut asked = arguments("b");
+    asked.insert("next_phase".to_owned(), json!(5));
+    let result = bound.handle(&room(), &id("a"), asked).await.unwrap();
+    assert_eq!(
+        result.reason,
+        "Transition from 'intake' to '5' is not allowed"
+    );
     let room_now = kit
         .get_room(&room(), GetRoomOptions::default())
         .await
@@ -542,6 +559,31 @@ async fn a_swarm_refused_on_one_agent_leaves_the_others_their_tools() {
         setup_handoff(id("a"), &other, in_room()),
         Err(RoomKitError::Runtime(_))
     ));
+    kit.close().await.unwrap();
+}
+
+// Python: orchestration/handoff.py set_up_handoffs: all of them, or none.
+#[tokio::test]
+async fn a_swarm_refused_on_one_agent_serves_none() {
+    let kit = kit_with_room().await;
+    kit.register_channel(agent("c", None)).unwrap();
+    let other = HandoffHandler::new(&kit, router(), HandoffHandlerOptions::default());
+    let in_room = || SetupHandoffOptions {
+        room_id: Some(room()),
+        ..SetupHandoffOptions::default()
+    };
+    setup_handoff(id("c"), &other, in_room()).unwrap();
+    let swarm = Swarm::new(vec![id("a").into(), id("c").into()], None);
+
+    let room_id = room();
+    let refused = Orchestration::<roomkit::store::InMemoryStore>::install(&swarm, &kit, &room_id);
+
+    assert!(matches!(
+        refused.await,
+        Err(RoomKitError::ToolNameCollision { .. })
+    ));
+    // "a" came first and was left with nothing: its handoff is free to set up.
+    setup_handoff(id("a"), &other, in_room()).unwrap();
     kit.close().await.unwrap();
 }
 

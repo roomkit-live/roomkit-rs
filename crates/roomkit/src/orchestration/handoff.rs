@@ -433,14 +433,6 @@ impl<S: ConversationStore> HandoffHandler<S> {
     fn request(&self, arguments: Metadata) -> Result<HandoffRequest, RoomKitError> {
         let target = text(&arguments, "target")?;
         let target_agent_id = self.inner.aliases.get(&target).cloned().unwrap_or(target);
-        if let Some(phase) = arguments.get("next_phase")
-            && !phase.is_string()
-            && truthy(phase)
-        {
-            return Err(RoomKitError::Value(format!(
-                "next_phase: Input should be a valid string, not {phase}"
-            )));
-        }
         let channel_escalation = match arguments.get("channel_escalation") {
             None => Some("same".to_owned()),
             Some(Value::Null) => None,
@@ -502,6 +494,14 @@ impl<S: ConversationStore> HandoffHandler<S> {
                 state.phase
             ))));
         }
+        if let Some(phase) = request.context.get("next_phase")
+            && !phase.is_string()
+            && truthy(phase)
+        {
+            return Err(RoomKitError::Value(format!(
+                "next_phase: Input should be a valid string, not {phase}"
+            )));
+        }
         let agent = (target != HUMAN).then(|| target.to_owned());
         let moved = moved_state(&state, &phase, agent.as_deref(), calling_agent_id, request)?;
         save_conversation_state(kit.store(), room_id, &moved).await?;
@@ -509,18 +509,20 @@ impl<S: ConversationStore> HandoffHandler<S> {
     }
 
     /// The phase a handoff leads to: the call's `next_phase`, else the phase
-    /// map's for its target, else `handling`, an empty one read as none.
+    /// map's for its target, else `handling`, one Python's truth test refuses
+    /// read as none. A `next_phase` that is no text reads as written, for the
+    /// refusal of a transition; the state refuses it further on.
     fn phase_of(&self, request: &HandoffRequest) -> String {
-        let given = request.context.get("next_phase").and_then(Value::as_str);
-        let mapped = || {
-            let mapped = self.inner.phase_map.get(&request.target_agent_id);
-            mapped.map(String::as_str).filter(|phase| !phase.is_empty())
-        };
-        given
+        match request.context.get("next_phase") {
+            Some(Value::String(given)) if !given.is_empty() => return given.clone(),
+            Some(given) if !given.is_string() && truthy(given) => return given.to_string(),
+            _ => {}
+        }
+        self.inner
+            .phase_map
+            .get(&request.target_agent_id)
             .filter(|phase| !phase.is_empty())
-            .or_else(mapped)
-            .unwrap_or("handling")
-            .to_owned()
+            .map_or_else(|| "handling".to_owned(), Clone::clone)
     }
 
     /// Whether `target` is a handoff's: bound in the room, a human, or known.
