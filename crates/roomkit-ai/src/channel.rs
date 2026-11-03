@@ -415,6 +415,22 @@ struct MediaReading {
     tool_usage: Arc<ToolUsageMemory>,
 }
 
+impl MediaReading {
+    /// What the channel's options say, nothing refused or returned yet.
+    fn new(
+        resolver: Option<Arc<dyn ImageResolver>>,
+        max_author_images: Option<usize>,
+        describer: Option<Describer>,
+    ) -> Self {
+        Self {
+            resolver,
+            max_author_images,
+            describer,
+            ..Self::default()
+        }
+    }
+}
+
 /// The kit's readers of an author's media a turn reads (RFC §6.4), none
 /// outside the kit: what Python's kit wires into the channel.
 #[derive(Default)]
@@ -600,12 +616,7 @@ impl<P: AiProvider> AiChannel<P> {
             turn_configs: TurnConfigs::new(config_provider),
             server_instructions: instructions,
             memory: memory.unwrap_or_else(|| sliding_window(max_context_events)),
-            media: MediaReading {
-                resolver: image_resolver,
-                max_author_images,
-                describer: describe_empty_event,
-                ..MediaReading::default()
-            },
+            media: MediaReading::new(image_resolver, max_author_images, describe_empty_event),
             skills: surface.skills,
             tool_call_intents,
             tool_call_intents_required,
@@ -800,6 +811,19 @@ impl<P: AiProvider> AiChannel<P> {
         };
         let collisions = (self.channel_id.as_str(), self.turn_configs.collisions());
         Ok(Arc::new(toolbox.for_turn(base, handler, collisions)))
+    }
+
+    /// How a turn answering `event` publishes its model's reasoning.
+    fn thinking_publication(&self, event: &RoomEvent) -> ThinkingPublication {
+        ThinkingPublication {
+            coalesce_ms: self.thinking_coalesce.0,
+            coalesce_chars: self.thinking_coalesce.1,
+            publishes_text: self.publish_thinking_text,
+            answers_room: event
+                .response_visibility
+                .as_ref()
+                .is_none_or(|scope| *scope == Visibility::All),
+        }
     }
 
     /// The turn's toolbox and its Tool Search on `toolbox` (RFC §6.4), the
@@ -1425,15 +1449,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             max_tokens: settings.max_tokens,
             thinking_budget: settings.thinking_budget,
             enable_thinking: settings.enable_thinking,
-            thinking_publication: ThinkingPublication {
-                coalesce_ms: self.thinking_coalesce.0,
-                coalesce_chars: self.thinking_coalesce.1,
-                publishes_text: self.publish_thinking_text,
-                answers_room: event
-                    .response_visibility
-                    .as_ref()
-                    .is_none_or(|scope| *scope == Visibility::All),
-            },
+            thinking_publication: self.thinking_publication(&event),
             reasoning_effort: settings.reasoning_effort.clone(),
             turn: turn.clone(),
             context: tools,
