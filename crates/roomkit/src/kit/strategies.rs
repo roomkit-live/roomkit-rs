@@ -417,9 +417,13 @@ impl<S: ConversationStore> RoomKit<S> {
             return Ok(());
         };
         strategy.uninstall(self, room_id).await?;
-        let Added { hooks, .. } = self.recorded_added(room_id, &strategy);
+        // The room's bindings and metadata are the new room's; what the
+        // install set up in this process, its hooks and its turn runners,
+        // is the old one's (Python's `_forget_strategy`).
+        let Added { hooks, runners, .. } = self.recorded_added(room_id, &strategy);
         let added = Added {
             hooks,
+            runners,
             ..Added::default()
         };
         self.take_back(room_id, added, &strategy).await?;
