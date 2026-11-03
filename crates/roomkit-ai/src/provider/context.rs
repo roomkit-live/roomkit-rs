@@ -21,6 +21,14 @@ pub struct AiContext {
     /// The most tokens the generation writes; `None` leaves it to the
     /// provider's configuration.
     pub max_tokens: Option<u32>,
+    /// The tokens the model may reason with this turn (RFC §6.7): 0 states
+    /// off, above 0 on; `None` leaves it to `enable_thinking`. Python's
+    /// `thinking_budget`.
+    pub thinking_budget: Option<i64>,
+    /// Whether the model reasons this turn (RFC §6.7), for a provider that
+    /// exposes the switch; `None` defers to its configuration, then to the
+    /// model's default. Python's `enable_thinking`.
+    pub enable_thinking: Option<bool>,
     /// How hard a reasoning model thinks this turn (RFC §6.7), which a
     /// provider prefers over its configured effort; `None` leaves it to the
     /// provider's configuration.
@@ -39,6 +47,8 @@ impl Default for AiContext {
             system_prompt: None,
             temperature: 0.7,
             max_tokens: None,
+            thinking_budget: None,
+            enable_thinking: None,
             reasoning_effort: None,
             tools: Vec::new(),
             metadata: Metadata::new(),

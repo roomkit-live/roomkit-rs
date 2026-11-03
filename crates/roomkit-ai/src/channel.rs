@@ -43,12 +43,12 @@ use crate::tool_loop::{Adopted, Bounds, Loop, Resilience};
 use crate::tool_usage::{ToolUsageMemory, TurnMedia};
 use crate::tools::toolbox::Toolbox;
 use crate::tools::{
-    DynToolset, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, served_by,
+    AiTool, DynToolset, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, served_by,
 };
 use crate::transcript_content::{Describer, TurnReader};
 use crate::turn_budget::{TurnBudget, check_budgets, refuse_unpositive, turn_budget};
 use crate::turn_config::{AiChannelTurnConfig, TurnConfigFuture, TurnConfigs, base_tools};
-use crate::turn_settings::{TurnSettings, VALUE_ERROR};
+use crate::turn_settings::{ReasoningLevels, TurnSettings, VALUE_ERROR};
 
 /// The metadata word of an instruction that stands alone (RFC §10.1.1
 /// rule 7), as the pipeline writes it.
@@ -73,6 +73,15 @@ pub struct AiChannelOptions {
     /// The most tokens a generation writes; `None` leaves it to the
     /// provider's configuration.
     pub max_tokens: Option<u32>,
+    /// The tokens the model may reason with (RFC §6.7), 0 stating off, under
+    /// the one a binding's metadata or the turn's configuration sets:
+    /// Python's `thinking_budget`; `None` sets none.
+    pub thinking_budget: Option<i64>,
+    /// Whether the model reasons (RFC §6.7), under the one a binding's
+    /// metadata or the turn's configuration sets, a false turning off a
+    /// budget a less specific level set: Python's `enable_thinking`; `None`
+    /// sets none.
+    pub enable_thinking: Option<bool>,
     /// The window of the default memory: how many of the room's latest
     /// events a turn reads, its own among them (RFC §20.3).
     pub max_context_events: usize,
@@ -203,6 +212,8 @@ impl Default for AiChannelOptions {
             system_prompt: None,
             temperature: 0.7,
             max_tokens: None,
+            thinking_budget: None,
+            enable_thinking: None,
             max_context_events: 50,
             memory: None,
             tool_handler: None,
@@ -307,6 +318,7 @@ pub struct AiChannel<P> {
     system_prompt: Arc<RwLock<Option<String>>>,
     temperature: f64,
     max_tokens: Option<u32>,
+    thinking: (Option<i64>, Option<bool>),
     reasoning_effort: Option<String>,
     /// What configures each turn (RFC Appendix A.9).
     turn_configs: TurnConfigs,
@@ -394,6 +406,7 @@ impl<P> Clone for AiChannel<P> {
             system_prompt: Arc::clone(&self.system_prompt),
             temperature: self.temperature,
             max_tokens: self.max_tokens,
+            thinking: self.thinking,
             reasoning_effort: self.reasoning_effort.clone(),
             turn_configs: self.turn_configs.clone(),
             server_instructions: self.server_instructions.clone(),
@@ -416,18 +429,19 @@ impl<P: AiProvider> AiChannel<P> {
     ///
     /// # Errors
     ///
-    /// Returns, as Python's constructor raises `ValueError`: first
-    /// [`AiError::TurnBudgetTokens`] for a token budget of zero,
-    /// [`AiError::TurnBudgetUsd`] for a cost budget not above zero and
-    /// [`AiError::UnpricedModel`] for one on a model with no catalogue
-    /// price (RFC §6.4); [`AiError::DuplicateTool`] for a tool given twice, or one under a
-    /// skill tool's name (RFC §21.1); [`AiError::ToolName`] for a tool whose
-    /// name no vendor accepts (RFC §6.7); [`AiError::ToolPattern`] for a
-    /// policy pattern holding a bracket (RFC §21.1); [`AiError::ServerLabel`]
-    /// for a server label that is no identifier and
-    /// [`AiError::DuplicateServer`] for one given twice;
-    /// [`AiError::ToolTimeout`] for a tool's call bounded by zero (RFC
-    /// §21.6).
+    /// Returns, in Python's order: what its `ToolPolicy`, `RetryPolicy` and
+    /// `AITool` refuse as they are built, before its constructor runs,
+    /// [`AiError::ToolPattern`] for a policy pattern holding a bracket (RFC
+    /// §21.1), [`AiError::RetryPolicy`], and [`AiError::ToolName`] for a tool
+    /// whose name no vendor accepts (RFC §6.7); then what its constructor
+    /// raises `ValueError` for: [`AiError::TurnBudgetTokens`] for a token
+    /// budget of zero, [`AiError::TurnBudgetUsd`] for a cost budget not above
+    /// zero and [`AiError::UnpricedModel`] for one on a model with no
+    /// catalogue price (RFC §6.4); [`AiError::ServerLabel`] for a server
+    /// label that is no identifier and [`AiError::DuplicateServer`] for one
+    /// given twice; [`AiError::ToolTimeout`] for a tool's call bounded by zero
+    /// (RFC §21.6); [`AiError::DuplicateTool`] for a tool given twice, or one
+    /// under a skill tool's name (RFC §21.1).
     pub fn new(
         channel_id: ChannelId,
         provider: P,
@@ -437,6 +451,8 @@ impl<P: AiProvider> AiChannel<P> {
             system_prompt,
             temperature,
             max_tokens,
+            thinking_budget,
+            enable_thinking,
             reasoning_effort,
             config_provider,
             max_context_events,
@@ -468,37 +484,25 @@ impl<P: AiProvider> AiChannel<P> {
         } = options;
         // The budgets first, as Python's constructor stores them before
         // its tool bounds.
-        let fallback = fallback_provider.as_deref();
-        check_budgets(turn_budget_tokens, turn_budget_usd, &provider, fallback)?;
-        refuse_zero_bounds(tool_timeout, &tool_timeouts)?;
+        // Python's ToolPolicy, RetryPolicy and AITool refuse as they are
+        // built, before its constructor runs.
         let policy = tool_policy.unwrap_or_default();
         refuse_bracketed(&policy)?;
+        let resilience = Resilience::checked(retry_policy, fallback_provider)?;
+        refuse_tool_names(&tools)?;
+        // Then in the order Python's constructor stores them.
+        let fallback = resilience.fallback_provider.as_deref();
+        check_budgets(turn_budget_tokens, turn_budget_usd, &provider, fallback)?;
         let instructions = instructions_of(&server_instructions)?;
-        let mut toolbox = Toolbox::default();
-        // The host's handler is read at each call, so that a handler set
-        // later serves the next calls (Python's `tool_handler` setter).
-        let tool_handler = Arc::new(RwLock::new(tool_handler));
-        // Always a slot for the host's handler: it serves the tools a
-        // generation hook adds, a handler set later included (RFC §6.4).
-        let serving = Some(host_handler(&tool_handler));
-        if let Some(served) = served_by(serving, tools)? {
-            toolbox.add_handler(served.0, served.1)?;
-        }
-        // A registry given, an empty one too, reserves the skill tools'
-        // names, as Python's constructor does.
-        if skills.is_some() {
-            reserve_skill_names(&toolbox)?;
-        }
-        let human_input = human_input_handler
-            .map(|human| serve_human_input(&mut toolbox, human))
-            .transpose()?;
-        let skills = serve_skills(&mut toolbox, skills, skills_in_prompt)?;
+        refuse_zero_bounds(tool_timeout, &tool_timeouts)?;
+        let skilled = (skills, skills_in_prompt);
+        let surface = tool_surface(tool_handler, tools, human_input_handler, skilled)?;
         Ok(Self {
             capabilities: ai_channel_capabilities(),
             channel_id,
             provider: Arc::new(provider),
-            toolbox: Arc::new(toolbox),
-            tool_handler,
+            toolbox: Arc::new(surface.toolbox),
+            tool_handler: surface.tool_handler,
             policy,
             bounds: Bounds {
                 max_rounds: max_tool_rounds,
@@ -510,12 +514,13 @@ impl<P: AiProvider> AiChannel<P> {
             },
             turn_budget_tokens,
             turn_budget_usd,
-            resilience: Resilience::checked(retry_policy, fallback_provider)?,
+            resilience,
             system_prompt: Arc::new(RwLock::new(
                 system_prompt.filter(|prompt| !prompt.is_empty()),
             )),
             temperature,
             max_tokens,
+            thinking: (thinking_budget, enable_thinking),
             reasoning_effort,
             turn_configs: TurnConfigs::new(config_provider),
             server_instructions: instructions,
@@ -530,7 +535,7 @@ impl<P: AiProvider> AiChannel<P> {
                 describer: describe_empty_event,
                 ..MediaReading::default()
             },
-            skills,
+            skills: surface.skills,
             tool_call_intents,
             tool_call_intents_required,
             loops: Arc::default(),
@@ -538,7 +543,7 @@ impl<P: AiProvider> AiChannel<P> {
                 serialized: serialize_room_turns || steer_room_turns,
                 steered: steer_room_turns,
             },
-            human_input,
+            human_input: surface.human_input,
             identity: None,
         })
     }
@@ -684,6 +689,16 @@ impl<P: AiProvider> AiChannel<P> {
             configured
                 .and_then(|turn| turn.reasoning_effort.as_deref())
                 .or(self.reasoning_effort.as_deref()),
+            ReasoningLevels {
+                budget: (
+                    configured.and_then(|turn| turn.thinking_budget),
+                    self.thinking.0,
+                ),
+                enabled: (
+                    configured.and_then(|turn| turn.enable_thinking),
+                    self.thinking.1,
+                ),
+            },
         )
     }
 
@@ -1090,6 +1105,62 @@ fn refuse_zero_bounds(
 /// Refuses a pattern of `policy` holding a bracket, which a pattern reads
 /// as itself (RFC §21.1): a rule written as a character class would cover
 /// none of the names it was written for.
+fn refuse_tool_names(tools: &[ToolEntry]) -> Result<(), AiError> {
+    tools.iter().try_for_each(|entry| match entry {
+        ToolEntry::Definition(definition) => AiTool::checked(&definition.name),
+        ToolEntry::Tool(tool) => AiTool::checked(&tool.definition().name),
+    })
+}
+
+/// What an AI channel declares and what serves it: Python's
+/// `_init_tool_surface`.
+struct ToolSurface {
+    toolbox: Toolbox,
+    tool_handler: Arc<RwLock<Option<ToolHandler>>>,
+    human_input: Option<(HumanInputToolHandler, Arc<AtomicU64>)>,
+    skills: Option<Arc<SkillTools>>,
+}
+
+/// The channel's tool surface, the host's tools first, then a person's and
+/// the skills'.
+///
+/// # Errors
+///
+/// [`AiError::DuplicateTool`] for a tool given twice, or one under a tool
+/// the channel serves itself (RFC §21.1).
+fn tool_surface(
+    tool_handler: Option<ToolHandler>,
+    tools: Vec<ToolEntry>,
+    human_input_handler: Option<HumanInputToolHandler>,
+    (skills, skills_in_prompt): (Option<SkillRegistry>, bool),
+) -> Result<ToolSurface, AiError> {
+    let mut toolbox = Toolbox::default();
+    // The host's handler is read at each call, so that a handler set
+    // later serves the next calls (Python's `tool_handler` setter).
+    let tool_handler = Arc::new(RwLock::new(tool_handler));
+    // Always a slot for the host's handler: it serves the tools a
+    // generation hook adds, a handler set later included (RFC §6.4).
+    let serving = Some(host_handler(&tool_handler));
+    if let Some(served) = served_by(serving, tools)? {
+        toolbox.add_handler(served.0, served.1)?;
+    }
+    // A registry given, an empty one too, reserves the skill tools'
+    // names, as Python's constructor does.
+    if skills.is_some() {
+        reserve_skill_names(&toolbox)?;
+    }
+    let human_input = human_input_handler
+        .map(|human| serve_human_input(&mut toolbox, human))
+        .transpose()?;
+    let skills = serve_skills(&mut toolbox, skills, skills_in_prompt)?;
+    Ok(ToolSurface {
+        toolbox,
+        tool_handler,
+        human_input,
+        skills,
+    })
+}
+
 fn refuse_bracketed(policy: &ToolPolicy) -> Result<(), AiError> {
     match policy
         .allow
@@ -1214,6 +1285,8 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             system_prompt,
             temperature: settings.temperature,
             max_tokens: settings.max_tokens,
+            thinking_budget: settings.thinking_budget,
+            enable_thinking: settings.enable_thinking,
             reasoning_effort: settings.reasoning_effort.clone(),
             turn: turn.clone(),
             context: tools,

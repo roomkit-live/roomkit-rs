@@ -45,9 +45,11 @@ fn behind_base_url(effort: Option<&str>, stated: Option<bool>) -> OpenAiAiProvid
 fn a_tagged_model_follows_the_catalogue_whatever_the_config_states() {
     let (warnings, _capturing) = Warnings::capture();
     for stated in [None, Some(true), Some(false)] {
-        let before_5_4 = official("gpt-5-mini", Some("low"), stated).reasoning_effort(None, true);
-        let unset = official("gpt-6-luna", None, stated).reasoning_effort(None, true);
-        let from_5_4 = official("gpt-6-luna", Some("low"), stated).reasoning_effort(None, true);
+        let before_5_4 =
+            official("gpt-5-mini", Some("low"), stated).reasoning_effort(None, false, true);
+        let unset = official("gpt-6-luna", None, stated).reasoning_effort(None, false, true);
+        let from_5_4 =
+            official("gpt-6-luna", Some("low"), stated).reasoning_effort(None, false, true);
         assert_eq!(before_5_4, Some("low".to_owned()), "{stated:?}");
         assert_eq!(unset, Some("none".to_owned()), "{stated:?}");
         assert_eq!(from_5_4, Some("none".to_owned()), "{stated:?}");
@@ -60,7 +62,11 @@ fn a_tagged_model_follows_the_catalogue_whatever_the_config_states() {
 fn the_config_decides_for_a_model_the_catalogue_does_not_tag() {
     for (stated, expected) in [(true, Some("low".to_owned())), (false, None)] {
         let provider = official("gpt-7-preview", Some("low"), Some(stated));
-        assert_eq!(provider.reasoning_effort(None, true), expected, "{stated}");
+        assert_eq!(
+            provider.reasoning_effort(None, false, true),
+            expected,
+            "{stated}"
+        );
     }
 }
 
@@ -69,7 +75,7 @@ fn the_config_decides_for_a_model_the_catalogue_does_not_tag() {
 fn a_model_the_catalogue_does_not_tag_is_left_out_with_a_warning() {
     let (warnings, _capturing) = Warnings::capture();
     let provider = official("gpt-7-preview", Some("low"), None);
-    assert_eq!(provider.reasoning_effort(None, true), None);
+    assert_eq!(provider.reasoning_effort(None, false, true), None);
     assert_eq!(warnings.containing(FLAG).len(), 1);
 }
 
@@ -78,8 +84,8 @@ fn a_model_the_catalogue_does_not_tag_is_left_out_with_a_warning() {
 fn it_is_left_out_with_one_warning_naming_the_field() {
     let (warnings, _capturing) = Warnings::capture();
     let provider = behind_base_url(Some("low"), None);
-    assert_eq!(provider.reasoning_effort(None, true), None);
-    assert_eq!(provider.reasoning_effort(None, true), None);
+    assert_eq!(provider.reasoning_effort(None, false, true), None);
+    assert_eq!(provider.reasoning_effort(None, false, true), None);
     let warned = warnings.containing(FLAG);
     assert_eq!(warned.len(), 1);
     assert!(warned[0].contains("'low'") && warned[0].contains("'mercury-2.5'"));
@@ -90,7 +96,7 @@ fn it_is_left_out_with_one_warning_naming_the_field() {
 fn nothing_stated_warns_of_nothing() {
     let (warnings, _capturing) = Warnings::capture();
     assert_eq!(
-        behind_base_url(None, None).reasoning_effort(None, true),
+        behind_base_url(None, None).reasoning_effort(None, false, true),
         None
     );
     assert_eq!(warnings.containing(FLAG), Vec::<String>::new());
@@ -101,7 +107,7 @@ fn nothing_stated_warns_of_nothing() {
 fn a_server_said_not_to_take_it_gets_no_warning() {
     let (warnings, _capturing) = Warnings::capture();
     assert_eq!(
-        behind_base_url(Some("low"), Some(false)).reasoning_effort(None, true),
+        behind_base_url(Some("low"), Some(false)).reasoning_effort(None, false, true),
         None
     );
     assert_eq!(warnings.containing(FLAG), Vec::<String>::new());
@@ -125,15 +131,24 @@ fn off_sends_the_model_s_floor() {
         for tools in [false, true] {
             let provider = official(model, Some("high"), None);
             assert_eq!(
-                provider.reasoning_effort(Some("none"), tools).as_deref(),
+                provider
+                    .reasoning_effort(Some("none"), false, tools)
+                    .as_deref(),
                 Some(floor),
                 "{model} tools={tools}"
             );
             let configured = official(model, Some("none"), None);
             assert_eq!(
-                configured.reasoning_effort(None, tools).as_deref(),
+                configured.reasoning_effort(None, false, tools).as_deref(),
                 Some(floor),
                 "{model} tools={tools}, configured"
+            );
+            // Off stated by the turn's budget of 0 or its switch.
+            let unset = official(model, None, None);
+            assert_eq!(
+                unset.reasoning_effort(None, true, tools).as_deref(),
+                Some(floor),
+                "{model} tools={tools}, off"
             );
         }
     }
@@ -150,7 +165,7 @@ fn behind_a_base_url_an_effort_of_none_has_no_floor() {
     })
     .unwrap();
     assert_eq!(
-        provider.reasoning_effort(None, false),
+        provider.reasoning_effort(None, false, false),
         Some("none".to_owned())
     );
 }
@@ -211,18 +226,18 @@ async fn a_responses_only_model_fails_before_the_request() {
 #[test]
 fn a_turn_value_outranks_the_configured_one_even_when_falsy() {
     assert_eq!(
-        floored_effort(Some(""), Some("high"), None).as_deref(),
+        floored_effort(Some(""), Some("high"), None, false).as_deref(),
         Some("")
     );
     assert_eq!(
-        floored_effort(None, Some("high"), None).as_deref(),
+        floored_effort(None, Some("high"), None, false).as_deref(),
         Some("high")
     );
     assert_eq!(
-        floored_effort(Some("low"), Some("high"), None).as_deref(),
+        floored_effort(Some("low"), Some("high"), None, false).as_deref(),
         Some("low")
     );
-    assert_eq!(floored_effort(None, None, None), None);
+    assert_eq!(floored_effort(None, None, None, false), None);
 }
 
 // Python: tests/test_providers/test_reasoning_settings.py::test_the_turn_effort_outranks_the_configured_one
@@ -230,11 +245,13 @@ fn a_turn_value_outranks_the_configured_one_even_when_falsy() {
 fn the_turn_effort_outranks_the_configured_one() {
     let provider = official("gpt-5-mini", Some("high"), None);
     assert_eq!(
-        provider.reasoning_effort(Some("low"), false).as_deref(),
+        provider
+            .reasoning_effort(Some("low"), false, false)
+            .as_deref(),
         Some("low")
     );
     assert_eq!(
-        provider.reasoning_effort(None, false).as_deref(),
+        provider.reasoning_effort(None, false, false).as_deref(),
         Some("high")
     );
 }
@@ -244,7 +261,9 @@ fn the_turn_effort_outranks_the_configured_one() {
 fn a_tool_turn_carries_the_effort_as_a_turn_without_does() {
     let provider = official("gpt-5-mini", Some("high"), None);
     assert_eq!(
-        provider.reasoning_effort(Some("low"), true).as_deref(),
+        provider
+            .reasoning_effort(Some("low"), false, true)
+            .as_deref(),
         Some("low")
     );
 }
@@ -254,7 +273,9 @@ fn a_tool_turn_carries_the_effort_as_a_turn_without_does() {
 fn the_turn_effort_outranks_the_config_there() {
     let provider = behind_base_url(Some("high"), Some(true));
     assert_eq!(
-        provider.reasoning_effort(Some("minimal"), true).as_deref(),
+        provider
+            .reasoning_effort(Some("minimal"), false, true)
+            .as_deref(),
         Some("minimal")
     );
 }
@@ -264,7 +285,9 @@ fn the_turn_effort_outranks_the_config_there() {
 fn a_turn_that_states_off_sends_none_where_the_server_takes_it() {
     let provider = behind_base_url(Some("low"), Some(true));
     assert_eq!(
-        provider.reasoning_effort(Some("none"), true).as_deref(),
+        provider
+            .reasoning_effort(Some("none"), false, true)
+            .as_deref(),
         Some("none")
     );
 }
@@ -325,4 +348,42 @@ fn on_the_responses_api_the_floor_applies_and_the_tool_turn_locks_do_not() {
         sent(&responses("gpt-5", None), None, false),
         serde_json::Value::Null
     );
+}
+
+// Python: tests/test_providers/test_reasoning_settings.py::test_the_switch_reads_the_budget_then_enable_thinking_then_an_effort_of_none
+#[test]
+fn the_switch_reads_the_budget_then_enable_thinking_then_an_effort_of_none() {
+    assert_eq!(thinking_switch(Some(0), Some(true), None), Some(false));
+    assert_eq!(thinking_switch(Some(512), None, Some("none")), Some(true));
+    assert_eq!(thinking_switch(None, Some(true), Some("none")), Some(true));
+    assert_eq!(thinking_switch(None, None, Some("none")), Some(false));
+    assert_eq!(thinking_switch(Some(-1), None, None), Some(false));
+    assert_eq!(thinking_switch(None, None, Some("low")), None);
+}
+
+// Python: tests/test_providers/test_reasoning_settings.py::test_a_model_that_does_not_reason_is_sent_no_off_value
+#[test]
+fn a_model_that_does_not_reason_is_sent_no_off_value() {
+    let plain = official("gpt-4.1", None, None);
+    assert_eq!(plain.reasoning_effort(None, true, false), None);
+    let proxied = behind_base_url(None, None);
+    assert_eq!(proxied.reasoning_effort(None, true, false), None);
+}
+
+// Python: tests/test_providers/test_reasoning_settings.py::test_off_sends_the_model_s_floor
+// (budget_0, enable_thinking_false, read from the turn's context).
+#[test]
+fn a_turn_s_context_states_off_on_the_wire() {
+    let provider = official("gpt-5", None, None);
+    for (thinking_budget, enable_thinking) in [(Some(0), None), (None, Some(false))] {
+        let context = AiContext {
+            messages: vec![AiMessage::new(AiRole::User, "Hi")],
+            thinking_budget,
+            enable_thinking,
+            ..AiContext::default()
+        };
+        let request = crate::request::Request::of(&context).unwrap();
+        let body = provider.body(&request, false).unwrap();
+        assert_eq!(body["reasoning_effort"], "minimal");
+    }
 }

@@ -35,19 +35,38 @@ pub(crate) fn reasoning_floor(entry: Option<&ModelInfo>) -> Option<&str> {
         .find_map(|tag| tag.strip_prefix(FLOOR_TAG))
 }
 
+/// Whether the model reasons on a turn, as the turn states it: its
+/// `thinking_budget` first (0 or a negative one off, above 0 on), then
+/// `enable_thinking`, and a `reasoning_effort` of `none` states off; `None`
+/// when nothing states it (Python's `thinking_switch`).
+pub(crate) fn thinking_switch(
+    thinking_budget: Option<i64>,
+    enable_thinking: Option<bool>,
+    reasoning_effort: Option<&str>,
+) -> Option<bool> {
+    if let Some(budget) = thinking_budget {
+        return Some(budget > 0);
+    }
+    if enable_thinking.is_some() {
+        return enable_thinking;
+    }
+    (reasoning_effort == Some("none")).then_some(false)
+}
+
 /// The effort a turn sends a model whose least effort is `floor`: the
 /// turn's over the configured one, and `floor` where the turn states off
-/// (an effort of `none`), the model's off value or, on one that cannot stop
-/// reasoning, its lowest level. Without a floor the effort goes as stated
-/// (Python's `floored_effort`).
+/// (`off`, its budget or its switch, or an effort of `none`), the model's
+/// off value or, on one that cannot stop reasoning, its lowest level.
+/// Without a floor the effort goes as stated (Python's `floored_effort`).
 pub(crate) fn floored_effort(
     turn: Option<&str>,
     configured: Option<&str>,
     floor: Option<&str>,
+    off: bool,
 ) -> Option<String> {
     let effort = turn.or(configured);
     match floor {
-        Some(floor) if effort == Some("none") => Some(floor.to_owned()),
+        Some(floor) if off || effort == Some("none") => Some(floor.to_owned()),
         _ => effort.map(str::to_owned),
     }
 }

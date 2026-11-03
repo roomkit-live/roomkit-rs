@@ -35,6 +35,11 @@ pub struct AiChannelTurnConfig {
     pub temperature: Option<f64>,
     /// The most tokens a generation writes.
     pub max_tokens: Option<u32>,
+    /// The tokens the model may reason with (RFC §6.7), 0 stating off.
+    pub thinking_budget: Option<i64>,
+    /// Whether the model reasons (RFC §6.7): a false turns off a budget a
+    /// less specific level set.
+    pub enable_thinking: Option<bool>,
     /// How hard a reasoning model thinks (RFC §6.7).
     pub reasoning_effort: Option<String>,
     /// The turn's budget of billed tokens (RFC §6.4), more than zero.
@@ -57,6 +62,8 @@ impl fmt::Debug for AiChannelTurnConfig {
             .field("tools", &self.tools)
             .field("temperature", &self.temperature)
             .field("max_tokens", &self.max_tokens)
+            .field("thinking_budget", &self.thinking_budget)
+            .field("enable_thinking", &self.enable_thinking)
             .field("reasoning_effort", &self.reasoning_effort)
             .field("turn_budget_tokens", &self.turn_budget_tokens)
             .field("turn_budget_usd", &self.turn_budget_usd)

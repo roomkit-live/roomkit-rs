@@ -89,8 +89,13 @@ impl OpenAiAiProvider {
     /// one, the model's floor where it states off (`none`) and the
     /// catalogue knows the model's least effort; then, on a turn with
     /// tools, what the endpoint accepts there ([`Self::tool_turn_effort`]).
-    pub(crate) fn reasoning_effort(&self, turn: Option<&str>, tools: bool) -> Option<String> {
-        let effort = self.floored_effort(turn);
+    pub(crate) fn reasoning_effort(
+        &self,
+        turn: Option<&str>,
+        off: bool,
+        tools: bool,
+    ) -> Option<String> {
+        let effort = self.floored_effort(turn, off);
         if tools {
             self.tool_turn_effort(self.official_entry(), effort)
         } else {
@@ -104,10 +109,10 @@ impl OpenAiAiProvider {
     /// effort (Python's `_turn_effort`). The Responses API sends it as it
     /// is: the tool-turn rule was measured on Chat Completions (HITL
     /// 78d888bf, option 1).
-    fn floored_effort(&self, turn: Option<&str>) -> Option<String> {
+    fn floored_effort(&self, turn: Option<&str>, off: bool) -> Option<String> {
         let configured = self.config.reasoning_effort.as_deref();
         let floor = reasoning::reasoning_floor(self.official_entry());
-        reasoning::floored_effort(turn, configured, floor)
+        reasoning::floored_effort(turn, configured, floor, off)
     }
 
     /// The effort a turn with tools sends (Python's `_tool_turn_effort`):
@@ -182,7 +187,8 @@ impl OpenAiAiProvider {
     ) -> Result<serde_json::Value, OpenAiError> {
         if self.config.api == OpenAiApi::Responses {
             let mut value = crate::responses::request(&self.config, request)?;
-            if let Some(effort) = self.floored_effort(request.reasoning_effort.as_deref())
+            let turn = request.reasoning_effort.as_deref();
+            if let Some(effort) = self.floored_effort(turn, request.thinking_off)
                 && let Some(fields) = value.as_object_mut()
             {
                 fields.insert("reasoning".into(), serde_json::json!({ "effort": effort }));
@@ -196,7 +202,7 @@ impl OpenAiAiProvider {
             reason: "could not encode request".into(),
         })?;
         let turn = request.reasoning_effort.as_deref();
-        if let Some(effort) = self.reasoning_effort(turn, tools)
+        if let Some(effort) = self.reasoning_effort(turn, request.thinking_off, tools)
             && let Some(fields) = value.as_object_mut()
         {
             fields.insert("reasoning_effort".into(), effort.into());
@@ -407,7 +413,7 @@ mod tests {
         };
         OpenAiAiProvider::new(config)
             .unwrap()
-            .reasoning_effort(None, true)
+            .reasoning_effort(None, false, true)
     }
 
     /// On OpenAI's own endpoint, however written, the switch does not

@@ -154,6 +154,8 @@ pub(crate) struct Loop<P> {
     /// The most tokens a generation writes, handed to the provider.
     pub(crate) max_tokens: Option<u32>,
     /// The turn's reasoning effort, handed to the provider.
+    pub(crate) thinking_budget: Option<i64>,
+    pub(crate) enable_thinking: Option<bool>,
     pub(crate) reasoning_effort: Option<String>,
     /// The kit's turn, whose hooks each call runs; `None` outside the kit.
     pub(crate) turn: Option<TurnHost>,
@@ -455,6 +457,8 @@ impl<P: AiProvider> Loop<P> {
             system_prompt,
             temperature: self.temperature,
             max_tokens: self.max_tokens,
+            thinking_budget: self.thinking_budget,
+            enable_thinking: self.enable_thinking,
             reasoning_effort: self.reasoning_effort.clone(),
             tools: Vec::new(),
             metadata: self.adopted.metadata.clone(),

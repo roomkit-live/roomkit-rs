@@ -27,6 +27,14 @@ pub(crate) const VALUE_ERROR: &str = "builtins:ValueError";
 /// The longest text pydantic reads as an integer.
 const MAX_INT_TEXT: usize = 4300;
 
+/// A turn's reasoning settings below its binding's: its configuration's,
+/// then its channel's.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ReasoningLevels {
+    pub(crate) budget: (Option<i64>, Option<i64>),
+    pub(crate) enabled: (Option<bool>, Option<bool>),
+}
+
 /// The settings one turn runs with, each its binding's over its channel's.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TurnSettings {
@@ -35,6 +43,11 @@ pub(crate) struct TurnSettings {
     /// The most tokens a generation writes; `None` leaves it to the
     /// provider.
     pub(crate) max_tokens: Option<u32>,
+    /// The tokens the model may reason with (RFC §6.7), `None` for none or
+    /// turned off by a more specific `enable_thinking` of false.
+    pub(crate) thinking_budget: Option<i64>,
+    /// Whether the model reasons (RFC §6.7); `None` sets none.
+    pub(crate) enable_thinking: Option<bool>,
     /// The turn's budget of billed tokens; `None` sets none.
     pub(crate) turn_budget_tokens: Option<u64>,
     /// The turn's cost budget; `None` sets none.
@@ -66,10 +79,13 @@ impl TurnSettings {
         max_tokens: Option<u32>,
         (turn_budget_tokens, turn_budget_usd): (Option<u64>, Option<f64>),
         reasoning_effort: Option<&str>,
+        reasoning: ReasoningLevels,
     ) -> Result<Self, ChannelError> {
         let mut settings = Self {
             temperature,
             max_tokens,
+            thinking_budget: None,
+            enable_thinking: None,
             turn_budget_tokens,
             turn_budget_usd,
             reasoning_effort: reasoning_effort.map(str::to_owned),
@@ -92,6 +108,7 @@ impl TurnSettings {
                 Err(refusal) => settings.refused.push(refusal.of("max_tokens")),
             }
         }
+        settings.read_reasoning(metadata, reasoning);
         settings.read_effort(metadata);
         if prompt.is_some() {
             settings.validated()?;
@@ -115,6 +132,34 @@ impl TurnSettings {
             self.turn_budget_usd = Some(positive_usd(budget)?);
         }
         Ok(())
+    }
+
+    /// The thinking budget and the switch, each `metadata`'s, else the turn's
+    /// configuration's, else the channel's; an `enable_thinking` of false
+    /// turns off a budget a less specific level set, a budget at the same
+    /// level or a more specific one still deciding (RFC §6.7, Appendix A.9;
+    /// Python's `_thinking_turned_off`). A binding's value pydantic refuses
+    /// fails the turn with its context, every setting refused named.
+    fn read_reasoning(&mut self, metadata: &Metadata, levels: ReasoningLevels) {
+        let mut bound_budget = None;
+        if let Some(value) = set(metadata, "thinking_budget") {
+            match lax_int(value).and_then(|whole| within_i64(whole, value)) {
+                Ok(read) => bound_budget = Some(read),
+                Err(refusal) => self.refused.push(refusal.of("thinking_budget")),
+            }
+        }
+        let mut bound_switch = None;
+        if let Some(value) = set(metadata, "enable_thinking") {
+            match lax_bool(value) {
+                Ok(read) => bound_switch = Some(read),
+                Err(refusal) => self.refused.push(refusal.of("enable_thinking")),
+            }
+        }
+        let (budget_level, budget) = source(bound_budget, levels.budget.0, levels.budget.1);
+        let (off_level, enabled) = source(bound_switch, levels.enabled.0, levels.enabled.1);
+        let off = enabled == Some(false) && off_level < budget_level;
+        self.thinking_budget = budget.filter(|_| !off);
+        self.enable_thinking = enabled;
     }
 
     /// The effort `metadata` sets over the channel's: a text, as pydantic
@@ -143,6 +188,16 @@ impl TurnSettings {
             return Ok(());
         }
         Err(validation_error("AIContext", &self.refused))
+    }
+}
+
+/// The first level that sets a value, and the value: the binding's (0), the
+/// turn's configuration's (1), the channel's (2). Python's `_turn_source`.
+fn source<T>(binding: Option<T>, turn: Option<T>, channel: Option<T>) -> (u8, Option<T>) {
+    match (binding, turn) {
+        (Some(value), _) => (0, Some(value)),
+        (None, Some(value)) => (1, Some(value)),
+        (None, None) => (2, channel),
     }
 }
 
@@ -382,6 +437,43 @@ fn without_underscores(text: &str) -> Option<String> {
 /// `whole`, read from `value`, as a `u32`: Python's `int` has no bound, a
 /// Rust max tokens has u32's (HITL f89861c3), refused past them in
 /// pydantic's words for a bounded integer.
+fn within_i64(whole: i128, value: &Value) -> Result<i64, Refusal> {
+    i64::try_from(whole).map_err(|_| {
+        let words = "Unable to parse input string as an integer, exceeding the maximum number size";
+        Refusal::new("int_parsing_size", words, value)
+    })
+}
+
+/// `value` as pydantic's lax mode reads a `bool`: a boolean, 0 or 1 as a
+/// number, or one of its words for either, whatever their case.
+fn lax_bool(value: &Value) -> Result<bool, Refusal> {
+    const UNREAD: &str = "Input should be a valid boolean, unable to interpret input";
+    let unread = || Refusal::new("bool_parsing", UNREAD, value);
+    match value {
+        Value::Bool(flag) => Ok(*flag),
+        Value::Number(number) => {
+            let read = number.as_f64().unwrap_or(f64::NAN);
+            if read.abs() < f64::EPSILON {
+                Ok(false)
+            } else if (read - 1.0).abs() < f64::EPSILON {
+                Ok(true)
+            } else {
+                Err(unread())
+            }
+        }
+        Value::String(text) => match text.to_lowercase().as_str() {
+            "0" | "off" | "f" | "n" | "no" | "false" => Ok(false),
+            "1" | "on" | "t" | "y" | "yes" | "true" => Ok(true),
+            _ => Err(unread()),
+        },
+        Value::Null | Value::Array(_) | Value::Object(_) => Err(Refusal::new(
+            "bool_type",
+            "Input should be a valid boolean",
+            value,
+        )),
+    }
+}
+
 fn within_u32(whole: i128, value: &Value) -> Result<u32, Refusal> {
     u32::try_from(whole).map_err(|_| {
         if whole < 0 {
@@ -449,7 +541,11 @@ mod tests {
             return Err("no object".to_owned());
         };
         let metadata: Metadata = members.into_iter().collect();
-        let mut settings = TurnSettings::read(&metadata, 0.7, None, (None, None), None)
+        let levels = ReasoningLevels {
+            budget: (None, None),
+            enabled: (None, None),
+        };
+        let mut settings = TurnSettings::read(&metadata, 0.7, None, (None, None), None, levels)
             .map_err(|error| error.to_string())?;
         settings
             .read_budgets(&metadata)

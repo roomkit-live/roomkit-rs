@@ -7,12 +7,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{EventType, RoomEvent};
+use roomkit::model::{EventType, RetryPolicy, RoomEvent};
 use roomkit::testing::TurnTap;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContext, AiError, AiMessage, AiProvider, AiResponse, Date,
-    DynAiProvider, ModelInfo, ModelPricing, ProviderError,
+    AiChannel, AiChannelOptions, AiContext, AiError, AiMessage, AiProvider, AiResponse, AiTool,
+    Date, DynAiProvider, ModelInfo, ModelPricing, ProviderError, ToolPolicy,
 };
 use serde_json::{Value, json};
 
@@ -514,4 +514,66 @@ fn the_budgets_are_checked_before_the_tool_bounds() {
             Some(AiError::ToolTimeout)
         ]
     );
+}
+
+// Python: channels/ai.py AIChannel.__init__'s order (RMK-1290): ToolPolicy,
+// RetryPolicy and AITool refuse as they are built, before it runs; then
+// _store_turn_budget, _store_prompt_sources, _store_tool_bounds and
+// _init_tool_surface.
+#[test]
+fn a_channel_refuses_in_python_s_order() {
+    let refused = |options: AiChannelOptions| {
+        AiChannel::new(channel("assistant"), ScriptedProvider::new([]), options)
+            .err()
+            .unwrap()
+    };
+    let zero_budget = || AiChannelOptions {
+        turn_budget_tokens: Some(0),
+        ..AiChannelOptions::default()
+    };
+    let bad_label = || vec![("no identifier!".to_owned(), None)];
+    let policy = refused(AiChannelOptions {
+        tool_policy: Some(ToolPolicy {
+            allow: vec!["[a]".to_owned()],
+            deny: Vec::new(),
+        }),
+        ..zero_budget()
+    });
+    assert!(matches!(policy, AiError::ToolPattern { .. }), "{policy}");
+    let retry = refused(AiChannelOptions {
+        retry_policy: Some(RetryPolicy {
+            base_delay_seconds: 0.0,
+            ..RetryPolicy::default()
+        }),
+        ..zero_budget()
+    });
+    assert!(matches!(retry, AiError::RetryPolicy { .. }), "{retry}");
+    let named = AiTool {
+        name: "no name!".to_owned(),
+        description: String::new(),
+        parameters: json!({}),
+    };
+    let name = refused(AiChannelOptions {
+        tools: vec![named.into()],
+        ..zero_budget()
+    });
+    assert!(matches!(name, AiError::ToolName { .. }), "{name}");
+    let budget = refused(AiChannelOptions {
+        server_instructions: bad_label(),
+        ..zero_budget()
+    });
+    assert!(matches!(budget, AiError::TurnBudgetTokens), "{budget}");
+    let label = refused(AiChannelOptions {
+        server_instructions: bad_label(),
+        tool_timeout: Some(Duration::ZERO),
+        ..AiChannelOptions::default()
+    });
+    assert!(matches!(label, AiError::ServerLabel { .. }), "{label}");
+    let twice = || AiTool::new("twice", "Twice").unwrap().into();
+    let timeout = refused(AiChannelOptions {
+        tool_timeout: Some(Duration::ZERO),
+        tools: vec![twice(), twice()],
+        ..AiChannelOptions::default()
+    });
+    assert!(matches!(timeout, AiError::ToolTimeout), "{timeout}");
 }

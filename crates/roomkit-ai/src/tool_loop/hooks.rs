@@ -108,6 +108,8 @@ impl<P: AiProvider> Loop<P> {
         self.system_prompt = left.system_prompt;
         self.temperature = left.temperature;
         self.max_tokens = left.max_tokens;
+        self.thinking_budget = left.thinking_budget;
+        self.enable_thinking = left.enable_thinking;
         self.reasoning_effort = left.reasoning_effort;
         self.adopted.metadata = left.metadata;
         if left.tools != built.tools {

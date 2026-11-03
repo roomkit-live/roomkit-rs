@@ -11,6 +11,7 @@ use roomkit_ai::{
 use roomkit_core::rules::transcript::{Image, Message, Part, Role, parse_data_uri};
 
 use crate::error::OpenAiError;
+use crate::reasoning::thinking_switch;
 
 /// What one generation asks: the system prompt, the conversation as the
 /// transcript writes it, the tools.
@@ -25,6 +26,8 @@ pub(crate) struct Request {
     pub(crate) max_tokens: Option<u32>,
     /// The turn's reasoning effort, over the configured one (RFC §6.7).
     pub(crate) reasoning_effort: Option<String>,
+    /// Whether the turn states off (RFC §6.7), its budget or its switch.
+    pub(crate) thinking_off: bool,
 }
 
 impl Request {
@@ -46,6 +49,11 @@ impl Request {
             temperature: Some(context.temperature),
             max_tokens: context.max_tokens,
             reasoning_effort: context.reasoning_effort.clone(),
+            thinking_off: thinking_switch(
+                context.thinking_budget,
+                context.enable_thinking,
+                context.reasoning_effort.as_deref(),
+            ) == Some(false),
         })
     }
 }

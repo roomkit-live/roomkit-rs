@@ -757,6 +757,7 @@ mod tests {
                 temperature: None,
                 max_tokens: turn,
                 reasoning_effort: None,
+                thinking_off: false,
             };
             let body =
                 serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
@@ -790,6 +791,7 @@ mod tests {
             temperature: Some(0.7),
             max_tokens: None,
             reasoning_effort: None,
+            thinking_off: false,
         };
         let set = |base_url: Option<&str>, model: &str, switches: (Option<bool>, Option<bool>)| {
             let config = OpenAiConfig {
@@ -1014,6 +1016,7 @@ mod image_tests {
             temperature: None,
             max_tokens: None,
             reasoning_effort: None,
+            thinking_off: false,
         };
         let config = OpenAiConfig {
             base_url: Some("http://localhost/v1".into()),
