@@ -13,7 +13,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `roomkit::orchestration`, and `roomkit_ai::orchestration::audit_tool_handler`,
   which records each call `ok`, `failed`, `error` or `cancelled` and hands
   the channel the handler's answer unchanged; the JSONL lines and summaries
-  are Python's (RMK-1233).
+  are Python's, a float under 1e-4 aside (RMK-1233, RMK-1262).
 - A message steered into a running turn and the lines a summarizer reads
   tell nameless senders of one channel apart (`@sms`, then `@sms (2)`) and
   count speakers by source, as the conversation does, and a delegation's

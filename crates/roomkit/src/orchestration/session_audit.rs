@@ -97,8 +97,10 @@ pub trait SessionAuditor: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::KitClosed`] once the kit's close started, as
-    /// [`RoomKit::hook`].
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started, and
+    /// [`RoomKitError::Value`] when this auditor is attached to the kit
+    /// already, its hook's name taken, as [`RoomKit::hook`] and Python's
+    /// second `attach`.
     fn attach<S: ConversationStore>(self: Arc<Self>, kit: &RoomKit<S>) -> Result<(), RoomKitError>
     where
         Self: Sized,
