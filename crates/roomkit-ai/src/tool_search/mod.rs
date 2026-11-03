@@ -112,7 +112,9 @@ impl ToolSearch {
                 target: "roomkit::ai",
                 deferred = names.len(),
                 pinned = held.count(),
-                window = window.map_or_else(|| "unknown".to_owned(), |window| window.to_string()),
+                window = window
+                    .filter(|window| *window != 0)
+                    .map_or_else(|| "unknown".to_owned(), |window| window.to_string()),
                 "Tool Search active: tools deferred behind find_tools/list_tools"
             );
             if !stands_alone {

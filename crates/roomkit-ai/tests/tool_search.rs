@@ -6,8 +6,8 @@
 
 use roomkit::Channel;
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelId, ChannelType, EventContent, EventSource,
-    Room as RoomRecord, RoomContext, RoomEvent, RoomId, TextContent,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelType, EventContent, EventSource, EventType,
+    Room as RoomRecord, RoomContext, RoomEvent, RoomId, TextContent, ToolCallContent,
 };
 use roomkit::tool_intent::INTENT_PROPERTY;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
@@ -144,4 +144,51 @@ async fn a_discovery_tool_takes_a_call_s_intent_as_any_tool() {
             .contains(&json!(INTENT_PROPERTY))
     );
     assert!(requests[1].tools.iter().any(|tool| tool.name == "send_sms"));
+}
+
+// Python: channels/_ai_context.py's _hydrate_room_memories(), which returns with no
+// _tool_usage_loader: only a kit gives one
+/// A channel driven outside a kit reads no stored row, whatever its context
+/// holds: a tool it called in an earlier process stays hidden.
+#[tokio::test]
+async fn a_channel_driven_outside_a_kit_reads_no_stored_row() {
+    let model = ScriptedProvider::new([ScriptedRound::answering("Done.")]);
+    let options = AiChannelOptions {
+        tools: host_tool("send_sms"),
+        tool_search: Some(true),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(ChannelId::new("ai1").unwrap(), model.clone(), options).unwrap();
+    let room = RoomId::new("r1").unwrap();
+    let mut end = RoomEvent::new(
+        room.clone(),
+        EventSource::new(ChannelId::new("ai1").unwrap(), ChannelType::AI),
+        EventContent::ToolCall(ToolCallContent::new("send_sms", "t1")),
+    );
+    end.r#type = EventType::ToolCallEnd;
+    let event = RoomEvent::new(
+        room.clone(),
+        EventSource::new(ChannelId::new("member").unwrap(), ChannelType::WEBSOCKET),
+        EventContent::Text(TextContent::new("Send it.")),
+    );
+    let binding = ChannelBinding {
+        category: ChannelCategory::Intelligence,
+        ..ChannelBinding::new(
+            ChannelId::new("ai1").unwrap(),
+            room.clone(),
+            ChannelType::AI,
+        )
+    };
+    let context = RoomContext {
+        recent_events: vec![end],
+        ..RoomContext::new(RoomRecord::new(room))
+    };
+    agent.on_event(event, binding, context).await.unwrap();
+
+    let names: Vec<String> = model.requests()[0]
+        .tools
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect();
+    assert_eq!(names, TOOL_SEARCH_INFRA_TOOL_NAMES);
 }

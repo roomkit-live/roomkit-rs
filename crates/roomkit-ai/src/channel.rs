@@ -804,21 +804,24 @@ impl<P: AiProvider> AiChannel<P> {
 
     /// The turn's toolbox and its Tool Search on `toolbox` (RFC §6.4), the
     /// tools it serves among the toolbox's when it hides the catalogue: the
-    /// tools the room used, read from its stored rows the first time, stay
-    /// declared unless the turn stands alone.
+    /// tools the room used stay declared unless the turn stands alone. Within a
+    /// kit they are read from the room's stored rows the first time; a channel
+    /// driven directly has no store to read, as Python's has no loader.
     fn turn_search(
         &self,
         toolbox: Arc<Toolbox>,
         context: &RoomContext,
-        stands_alone: bool,
+        (stands_alone, in_kit): (bool, bool),
     ) -> Result<(Arc<Toolbox>, Arc<TurnSearch>), AiError> {
         let memory = &self.media.tool_usage;
-        let rows = context
-            .recent_events
-            .iter()
-            .filter(|past| self.is_own_tool_row(past));
-        let used = used_tools(rows).filter(|name| self.toolbox.in_tool_memory(name));
-        memory.hydrate(&context.room.id, used);
+        if in_kit {
+            let rows = context
+                .recent_events
+                .iter()
+                .filter(|past| self.is_own_tool_row(past));
+            let used = used_tools(rows).filter(|name| self.toolbox.in_tool_memory(name));
+            memory.hydrate(&context.room.id, used);
+        }
         let window = self.provider.context_window();
         let room = &context.room.id;
         let search = self
@@ -1398,7 +1401,8 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         settings.read_budgets(&binding.metadata)?;
         let budget = self.budget_of(&settings)?;
         let stands_alone = stands_alone(&event);
-        let (toolbox, search) = self.turn_search(toolbox, &context, stands_alone)?;
+        let in_kit = turn.is_some();
+        let (toolbox, search) = self.turn_search(toolbox, &context, (stands_alone, in_kit))?;
         let system_prompt = self.turn_system_prompt(
             &binding,
             configured,
