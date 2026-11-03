@@ -82,6 +82,8 @@ fn ai_channel_options_defaults_as_python() {
     assert!(defaults.turn_budget_usd.is_none());
     // roomkit.AIChannel.__init__(reasoning_effort) = None
     assert!(defaults.reasoning_effort.is_none());
+    // roomkit.AIChannel.__init__(config_provider) = None
+    assert!(defaults.config_provider.is_none());
     // roomkit.AIChannel.__init__(retry_policy) = None
     assert!(defaults.retry_policy.is_none());
     // roomkit.AIChannel.__init__(fallback_provider) = None

@@ -94,6 +94,7 @@ mod tool_usage;
 mod tools;
 mod transcript_content;
 mod turn_budget;
+mod turn_config;
 mod turn_settings;
 
 pub use self::agent::{Agent, AgentOptions, BuildIdentityBlockOptions};
@@ -124,3 +125,4 @@ pub use self::tools::{
 };
 #[doc(hidden)]
 pub use self::tools::{ToolContext, Tools, alias_server, arguments, served_tool_name};
+pub use self::turn_config::AiChannelTurnConfig;

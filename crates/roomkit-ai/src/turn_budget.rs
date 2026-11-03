@@ -100,21 +100,15 @@ pub(crate) fn turn_budget(
     }))
 }
 
-/// Refuses the budgets a channel is built with as Python's constructor
-/// does: a token budget of 0, then a cost budget not above 0 (`NaN` too,
-/// infinity not), then one on a model with no price; a fallback priced
-/// otherwise is logged.
+/// Refuses a token budget of 0, then a cost budget not above 0 (`NaN`
+/// too, infinity not), as Python's `turn_budget` checks each budget
+/// positive, a turn's configuration's included.
 ///
 /// # Errors
 ///
-/// [`AiError::TurnBudgetTokens`], [`AiError::TurnBudgetUsd`] naming the
-/// budget, then [`turn_budget`]'s.
-pub(crate) fn check_budgets(
-    tokens: Option<u64>,
-    usd: Option<f64>,
-    provider: &dyn DynAiProvider,
-    fallback: Option<&dyn DynAiProvider>,
-) -> Result<(), AiError> {
+/// [`AiError::TurnBudgetTokens`], then [`AiError::TurnBudgetUsd`] naming
+/// the budget.
+pub(crate) fn refuse_unpositive(tokens: Option<u64>, usd: Option<f64>) -> Result<(), AiError> {
     if tokens == Some(0) {
         return Err(AiError::TurnBudgetTokens);
     }
@@ -124,6 +118,23 @@ pub(crate) fn check_budgets(
             shown: float_repr(budget),
         });
     }
+    Ok(())
+}
+
+/// Refuses the budgets a channel is built with as Python's constructor
+/// does: [`refuse_unpositive`]'s, then one on a model with no price; a
+/// fallback priced otherwise is logged.
+///
+/// # Errors
+///
+/// [`refuse_unpositive`]'s, then [`turn_budget`]'s.
+pub(crate) fn check_budgets(
+    tokens: Option<u64>,
+    usd: Option<f64>,
+    provider: &dyn DynAiProvider,
+    fallback: Option<&dyn DynAiProvider>,
+) -> Result<(), AiError> {
+    refuse_unpositive(tokens, usd)?;
     turn_budget(tokens, usd, provider, fallback).map(|_| ())
 }
 

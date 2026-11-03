@@ -45,7 +45,8 @@ use crate::tools::{
     DynToolset, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, served_by,
 };
 use crate::transcript_content::{Describer, TurnReader};
-use crate::turn_budget::{TurnBudget, check_budgets, turn_budget};
+use crate::turn_budget::{TurnBudget, check_budgets, refuse_unpositive, turn_budget};
+use crate::turn_config::{AiChannelTurnConfig, TurnConfigFuture, TurnConfigs, base_tools};
 use crate::turn_settings::{TurnSettings, VALUE_ERROR};
 
 /// The metadata word of an instruction that stands alone (RFC §10.1.1
@@ -134,6 +135,15 @@ pub struct AiChannelOptions {
     /// under the effort a binding's metadata sets and over the provider's
     /// configured one: Python's `reasoning_effort`; `None` sets none.
     pub reasoning_effort: Option<String>,
+    /// What configures each turn (RFC Appendix A.9, per-turn settings):
+    /// called with the turn's binding and room context at the start of
+    /// every turn, its [`AiChannelTurnConfig`]'s settings sit under the
+    /// binding's metadata and over the channel's own, its tools replace
+    /// those the binding's metadata declares, and its handler serves the
+    /// host's tools for that turn; `None` from it configures nothing, and
+    /// its error fails the turn. Python's `config_provider`.
+    pub config_provider:
+        Option<Arc<dyn Fn(ChannelBinding, RoomContext) -> TurnConfigFuture + Send + Sync>>,
     /// What the turn's transcript says of an event whose content reads as
     /// nothing in it (a captionless upload that is no image, for a model
     /// that does not see; an empty text): a text, or `None` to leave the
@@ -207,6 +217,7 @@ impl Default for AiChannelOptions {
             turn_budget_tokens: None,
             turn_budget_usd: None,
             reasoning_effort: None,
+            config_provider: None,
             describe_empty_event: None,
             max_author_images: Some(DEFAULT_MAX_AUTHOR_IMAGES),
             skills: None,
@@ -296,6 +307,8 @@ pub struct AiChannel<P> {
     temperature: f64,
     max_tokens: Option<u32>,
     reasoning_effort: Option<String>,
+    /// What configures each turn (RFC Appendix A.9).
+    turn_configs: TurnConfigs,
     server_instructions: ServerInstructions,
     memory: Arc<dyn MemoryProvider>,
     /// How its turns read their authors' media (RFC §6.4).
@@ -381,6 +394,7 @@ impl<P> Clone for AiChannel<P> {
             temperature: self.temperature,
             max_tokens: self.max_tokens,
             reasoning_effort: self.reasoning_effort.clone(),
+            turn_configs: self.turn_configs.clone(),
             server_instructions: self.server_instructions.clone(),
             memory: Arc::clone(&self.memory),
             media: self.media.clone(),
@@ -423,6 +437,7 @@ impl<P: AiProvider> AiChannel<P> {
             temperature,
             max_tokens,
             reasoning_effort,
+            config_provider,
             max_context_events,
             memory,
             tool_handler,
@@ -501,6 +516,7 @@ impl<P: AiProvider> AiChannel<P> {
             temperature,
             max_tokens,
             reasoning_effort,
+            turn_configs: TurnConfigs::new(config_provider),
             server_instructions: instructions,
             memory: memory.unwrap_or_else(|| {
                 Arc::new(SlidingWindowMemory::new(SlidingWindowMemoryOptions {
@@ -633,31 +649,92 @@ impl<P: AiProvider> AiChannel<P> {
     fn budget_of(&self, settings: &TurnSettings) -> Result<Option<TurnBudget>, ChannelError> {
         let fallback = self.resilience.fallback_provider.as_deref();
         let (tokens, usd) = (settings.turn_budget_tokens, settings.turn_budget_usd);
-        turn_budget(tokens, usd, &*self.provider, fallback)
+        refuse_unpositive(tokens, usd)
+            .and_then(|()| turn_budget(tokens, usd, &*self.provider, fallback))
             .map_err(|error| -> ChannelError { Box::new(ClassedError::new(VALUE_ERROR, error)) })
     }
 
+    /// The settings of a turn on `binding`: each its binding's metadata's,
+    /// else `configured`'s, else the channel's own (Python's
+    /// `_turn_settings`, `_turn_source`).
+    ///
+    /// # Errors
+    ///
+    /// As [`TurnSettings::read`].
+    fn turn_settings(
+        &self,
+        binding: &ChannelBinding,
+        configured: Option<&AiChannelTurnConfig>,
+    ) -> Result<TurnSettings, ChannelError> {
+        let tokens = configured.and_then(|turn| turn.turn_budget_tokens);
+        let usd = configured.and_then(|turn| turn.turn_budget_usd);
+        TurnSettings::read(
+            &binding.metadata,
+            configured
+                .and_then(|turn| turn.temperature)
+                .unwrap_or(self.temperature),
+            configured
+                .and_then(|turn| turn.max_tokens)
+                .or(self.max_tokens),
+            (
+                tokens.or(self.turn_budget_tokens),
+                usd.or(self.turn_budget_usd),
+            ),
+            configured
+                .and_then(|turn| turn.reasoning_effort.as_deref())
+                .or(self.reasoning_effort.as_deref()),
+        )
+    }
+
+    /// The tools of a turn on `binding` (RFC Appendix A.9): `configured`'s,
+    /// else those its binding's metadata declares, before the channel's
+    /// own, the host's served by `configured`'s handler, else the
+    /// channel's (Python's `_turn_base_tools`).
+    ///
+    /// # Errors
+    ///
+    /// A binding's `tools` that is no list of definitions.
+    fn turn_toolbox(
+        &self,
+        configured: Option<&AiChannelTurnConfig>,
+        binding: &ChannelBinding,
+    ) -> Result<Arc<Toolbox>, ChannelError> {
+        let base = base_tools(configured, &binding.metadata)?;
+        let handler = configured.and_then(|turn| turn.tool_handler.clone());
+        if base.is_empty() && handler.is_none() {
+            return Ok(Arc::clone(&self.toolbox));
+        }
+        let handler = match handler {
+            None => None,
+            Some(handler) => served_by(Some(handler), Vec::new())?.map(|(toolset, _)| toolset),
+        };
+        let collisions = (self.channel_id.as_str(), self.turn_configs.collisions());
+        Ok(Arc::new(self.toolbox.for_turn(base, handler, collisions)))
+    }
+
     /// The system prompt of a turn in `context`'s room: its binding's
-    /// `system_prompt`, else the channel's own (Python's `_turn_settings`,
-    /// binding metadata first; a `null` there, or a value that is no text,
-    /// is not set), then the instruction a strategy gives this one turn
+    /// `system_prompt`, else `configured`'s, else the channel's own
+    /// (Python's `_turn_settings`, binding metadata first; a `null` there,
+    /// or a value that is no text, is not set), then the instruction a strategy gives this one turn
     /// ([`with_turn_instruction`]), then the MCP
     /// servers' instructions (RFC §21.2), then what its skills add (RFC
     /// §6.4, §24.4).
     fn turn_system_prompt(
         &self,
         binding: &ChannelBinding,
+        configured: Option<&AiChannelTurnConfig>,
         context: &RoomContext,
         stands_alone: bool,
     ) -> Option<String> {
         // An empty one lifts the channel's prompt for the room (RFC
         // Appendix A.9), the turn then sending none.
-        let own = match binding
+        let set = binding
             .metadata
             .get("system_prompt")
             .and_then(Value::as_str)
-        {
-            Some(bound) => Some(bound.to_owned()).filter(|bound| !bound.is_empty()),
+            .or_else(|| configured.and_then(|turn| turn.system_prompt.as_deref()));
+        let own = match set {
+            Some(set) => Some(set.to_owned()).filter(|set| !set.is_empty()),
             None => self.system_prompt(),
         };
         let own = with_turn_instruction(own, binding);
@@ -1107,24 +1184,21 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         if !self.answers(&event) {
             return Ok(ChannelOutput::default());
         }
-        let settings = TurnSettings::read(
-            &binding.metadata,
-            self.temperature,
-            self.max_tokens,
-            (self.turn_budget_tokens, self.turn_budget_usd),
-            self.reasoning_effort.as_deref(),
-        )?;
+        let configured = self.turn_configs.resolve(&binding, &context).await?;
+        let configured = configured.as_ref();
+        let settings = self.turn_settings(&binding, configured)?;
+        let own_tools = self.turn_toolbox(configured, &binding)?;
         let budget = self.budget_of(&settings)?;
         let stands_alone = stands_alone(&event);
         let turn = current_turn_host();
-        let system_prompt = self.turn_system_prompt(&binding, &context, stands_alone);
+        let system_prompt = self.turn_system_prompt(&binding, configured, &context, stands_alone);
         let tools = ToolContext::new(context.room.id.clone(), self.channel_id.clone())
             .within(turn.clone())
             .standing_alone(stands_alone)
             .acting_for(turn_actor(&event, &context.participants));
         // The tools the room's owner serves this turn join the agent's own
         // (RFC §10.6.5).
-        let toolbox = crate::tools::owner::with_owner_tools(&self.toolbox, turn.as_ref())?;
+        let toolbox = crate::tools::owner::with_owner_tools(&own_tools, turn.as_ref())?;
         let mut looped = Loop {
             provider: Arc::clone(&self.provider),
             toolbox,

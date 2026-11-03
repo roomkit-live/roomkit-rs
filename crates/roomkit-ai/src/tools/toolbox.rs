@@ -8,6 +8,7 @@ use roomkit::model::{ToolCall, ToolCallOutcome};
 
 use super::{AiTool, DynToolset, ToolContext, ToolPolicy};
 use crate::error::AiError;
+use crate::turn_config::Collisions;
 
 /// The toolsets an agent took, and the tools they declare, in the order
 /// they were given: each name served by one toolset.
@@ -109,6 +110,50 @@ impl Toolbox {
             }
         }
         adopted
+    }
+
+    /// The toolbox of one turn (RFC Appendix A.9, per-turn settings):
+    /// `base`, the turn's configuration's tools or its binding's, declared
+    /// before the agent's own and served by the host's handler, and
+    /// `handler`, the turn's own, serving the host's tools in place of the
+    /// agent's handler and its tools serving themselves. A base tool under
+    /// a name the agent declares already is not declared, the agent's
+    /// standing at its place, and a name given twice keeps the later
+    /// (Python's `_turn_base_tools`, `declared_once`). Never installed on
+    /// the agent: the turn reads its own copy.
+    pub(crate) fn for_turn(
+        &self,
+        base: Vec<AiTool>,
+        handler: Option<Arc<dyn DynToolset>>,
+        (channel, collisions): (&str, &Collisions),
+    ) -> Self {
+        let mut turn = self.clone();
+        let Some(at) = self.handler else {
+            return turn;
+        };
+        if let (Some(handler), Some(slot)) = (handler, turn.toolsets.get_mut(at)) {
+            *slot = handler;
+        }
+        let mut kept: Vec<AiTool> = Vec::with_capacity(base.len());
+        for tool in base {
+            match self.served.get(&tool.name) {
+                Some(&served) if served == at => collisions.duplicate(channel, &tool.name),
+                Some(_) => collisions.served(channel, &tool.name),
+                None => {
+                    if let Some(earlier) = kept.iter().position(|kept| kept.name == tool.name) {
+                        collisions.duplicate(channel, &tool.name);
+                        kept.remove(earlier);
+                    }
+                    kept.push(tool);
+                }
+            }
+        }
+        for tool in &kept {
+            turn.served.insert(tool.name.clone(), at);
+        }
+        turn.tools
+            .splice(0..0, kept.into_iter().map(|tool| (tool, at)));
+        turn
     }
 
     pub(crate) fn add_own(

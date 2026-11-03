@@ -383,7 +383,7 @@ fn a_cost_budget_needs_a_priced_model_and_a_positive_number() {
 }
 
 /// A scripted model with a catalogue price.
-struct Priced(ScriptedProvider);
+pub(super) struct Priced(pub(super) ScriptedProvider);
 
 impl AiProvider for Priced {
     fn model_name(&self) -> &'static str {
@@ -449,7 +449,7 @@ async fn a_usage_the_price_cannot_read_fails_the_turn() {
 }
 
 /// The budgets the loop's end states, as the turn's wire carries them.
-fn loop_end_budgets(tap: &TurnTap) -> (Value, Value) {
+pub(super) fn loop_end_budgets(tap: &TurnTap) -> (Value, Value) {
     tap.messages()
         .into_iter()
         .filter_map(|message| serde_json::from_str::<Value>(&message.json).ok())
