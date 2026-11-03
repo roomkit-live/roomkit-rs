@@ -183,6 +183,7 @@ The RFC's Appendix B flows:
 - `new_conversation`: B.1, two senders on one number, a room each.
 - `block_and_inject`: B.2, a hook blocks a message and injects notices.
 - `agent_chain`: B.4, two agents answer each other up to the chain-depth limit.
+- `telemetry`: a message's spans, read from a recording provider; the feature `opentelemetry` hands them to an OpenTelemetry SDK.
 - `advisor_joins`: B.5, mute an agent, make it whisper to an advisor, unmute it.
 - `edit_delete_messages`: B.6 and B.7, an edit and a delete, native or as text.
 

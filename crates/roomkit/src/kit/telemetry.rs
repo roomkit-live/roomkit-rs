@@ -15,8 +15,8 @@ use crate::error::RoomKitError;
 use crate::inbound::InboundResult;
 use crate::tasks::DelegatedTask;
 use crate::telemetry::{
-    Attr, NoopTelemetryProvider, OpenSpan, SpanKind, StartSpanOptions, TelemetryConfig,
-    TelemetryProvider,
+    Attr, KitTelemetry, NoopTelemetryProvider, OpenSpan, SpanKind, StartSpanOptions,
+    TelemetryConfig, TelemetryProvider,
 };
 
 impl<S> RoomKit<S> {
@@ -25,7 +25,7 @@ impl<S> RoomKit<S> {
     /// gave, else a [`NoopTelemetryProvider`].
     #[must_use]
     pub fn telemetry(&self) -> Arc<dyn TelemetryProvider> {
-        Arc::clone(&self.inner.telemetry)
+        Arc::clone(&self.inner.telemetry.provider)
     }
 }
 
@@ -51,7 +51,9 @@ pub(crate) fn end_hook_span<P>(span: Option<OpenSpan>, outcome: &HookOutcome<P>)
             attributes.insert(Attr::HOOK_RESULT.to_owned(), action);
             span.end(attributes);
         }
-        HookOutcome::Raised(error) => span.fail(error.message.clone(), Metadata::new()),
+        HookOutcome::Raised(error) => {
+            span.fail_error(&error.error_type, &error.message, Metadata::new());
+        }
         HookOutcome::TimedOut => span.fail("timeout", Metadata::new()),
         HookOutcome::Invalid { .. } => span.fail("invalid return type", Metadata::new()),
     }
@@ -91,7 +93,7 @@ pub(super) fn end_inbound_span(
             }
             span.end(attributes);
         }
-        Err(error) => span.fail(error.to_string(), attributes),
+        Err(error) => span.fail_error(error.class_name(), error.to_string(), attributes),
     }
 }
 
@@ -103,17 +105,17 @@ pub(crate) fn end_observer_span<P>(span: Option<OpenSpan>, outcome: &HookOutcome
     };
     match outcome {
         HookOutcome::Returned(_) => span.end(Metadata::new()),
-        HookOutcome::Raised(error) => span.fail(error.message.clone(), Metadata::new()),
+        HookOutcome::Raised(error) => {
+            span.fail_error(&error.error_type, &error.message, Metadata::new());
+        }
         HookOutcome::TimedOut => span.fail("timeout", Metadata::new()),
         HookOutcome::Invalid { .. } => span.fail("invalid return type", Metadata::new()),
     }
 }
 
-/// The provider of `config`, its metadata handed to it, and the hook
-/// triggers that open no span.
-pub(super) fn telemetry_of(
-    config: Option<TelemetryConfig>,
-) -> (Arc<dyn TelemetryProvider>, BTreeSet<String>) {
+/// The kit's telemetry of `config`, its metadata handed to its provider, and
+/// the hook triggers that open no span.
+pub(super) fn telemetry_of(config: Option<TelemetryConfig>) -> (KitTelemetry, BTreeSet<String>) {
     let config = config.unwrap_or_default();
     let provider = config
         .provider
@@ -121,7 +123,11 @@ pub(super) fn telemetry_of(
     if !config.metadata.is_empty() {
         provider.set_metadata(config.metadata);
     }
-    (provider, config.suppressed_hook_triggers)
+    let telemetry = KitTelemetry {
+        provider,
+        sensitive: config.record_sensitive_data,
+    };
+    (telemetry, config.suppressed_hook_triggers)
 }
 
 impl<S> Inner<S> {
@@ -156,6 +162,16 @@ impl<S> Inner<S> {
         ))
     }
 
+    /// A span's `sender_id`, an address: none unless the kit records what
+    /// can hold personal data (Python's `sensitive`).
+    fn sender_attributes(&self, sender_id: &str) -> Metadata {
+        let mut attributes = Metadata::new();
+        if self.telemetry.sensitive {
+            attributes.insert("sender_id".to_owned(), Value::from(sender_id));
+        }
+        attributes
+    }
+
     /// The span of a call to `process_inbound`, Python's `framework.inbound`,
     /// and, for a call that names its room, its `framework.route` read: the
     /// router's own runs in the driver (`route_span`).
@@ -164,9 +180,7 @@ impl<S> Inner<S> {
         message: &InboundMessage,
         room_id: Option<&RoomId>,
     ) -> OpenSpan {
-        let sender = Value::from(message.sender_id.as_str());
-        let mut attributes = Metadata::new();
-        attributes.insert("sender_id".to_owned(), sender);
+        let mut attributes = self.sender_attributes(&message.sender_id);
         if let Some(session) = message.metadata.get("voice_session_id") {
             attributes.insert(Attr::SESSION_ID.to_owned(), session.clone());
         }
@@ -203,8 +217,7 @@ impl<S> Inner<S> {
         channel_id: &ChannelId,
         sender_id: &str,
     ) -> OpenSpan {
-        let mut attributes = Metadata::new();
-        attributes.insert("sender_id".to_owned(), Value::from(sender_id));
+        let attributes = self.sender_attributes(sender_id);
         OpenSpan::start(
             &self.telemetry,
             SpanKind::InboundPipeline,
@@ -285,7 +298,7 @@ impl<S> Inner<S> {
     /// thread of the runtime's, a provider's export being bounded by itself
     /// and never run on the kit's tasks.
     pub(super) async fn close_telemetry(&self) {
-        let telemetry = Arc::clone(&self.telemetry);
+        let telemetry = Arc::clone(&self.telemetry.provider);
         if let Err(error) = tokio::task::spawn_blocking(move || telemetry.close()).await {
             tracing::warn!(target: "roomkit::telemetry", %error, "closing the telemetry provider failed");
         }

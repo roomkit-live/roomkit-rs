@@ -337,7 +337,7 @@ async fn drive<S: ConversationStore, O: Operation>(
     let driver = Driver {
         calls: JoinSet::new(),
         waits: Vec::new(),
-        spans: spans::RunSpans::new(Arc::clone(&inner.telemetry)),
+        spans: spans::RunSpans::new(inner.telemetry.clone()),
         inner,
         call,
         context: ExecutionContext::current(),

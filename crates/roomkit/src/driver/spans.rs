@@ -3,13 +3,12 @@
 //! lane, as Python's `EventRouter.broadcast` opens one around a set.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use roomkit_core::model::{EventId, Metadata, RoomEvent};
 use roomkit_core::ops::{ChannelOutcome, ChannelRequest, EffectId, HoldRequest, Outcome, Request};
 use serde_json::Value;
 
-use crate::telemetry::{Attr, OpenSpan, SpanKind, StartSpanOptions, TelemetryProvider};
+use crate::telemetry::{Attr, KitTelemetry, OpenSpan, SpanKind, StartSpanOptions};
 
 /// A delivery set's span, and what its end reports.
 struct Broadcast {
@@ -27,7 +26,7 @@ enum Call {
 }
 
 pub(super) struct RunSpans {
-    telemetry: Arc<dyn TelemetryProvider>,
+    telemetry: KitTelemetry,
     /// The events the run committed, until their set is over: what a set's
     /// span reads of its event.
     committed: HashMap<EventId, (String, String, Option<String>)>,
@@ -44,7 +43,7 @@ fn voice_session(metadata: &Metadata) -> Option<String> {
 }
 
 impl RunSpans {
-    pub(super) fn new(telemetry: Arc<dyn TelemetryProvider>) -> Self {
+    pub(super) fn new(telemetry: KitTelemetry) -> Self {
         Self {
             telemetry,
             committed: HashMap::new(),

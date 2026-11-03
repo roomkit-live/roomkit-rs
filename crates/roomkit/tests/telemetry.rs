@@ -167,7 +167,6 @@ async fn an_inbound_opens_a_span_with_its_steps_under_it() {
     assert_eq!(root.parent_id, None);
     assert_eq!(root.room_id.as_deref(), Some("r1"));
     assert_eq!(root.channel_id.as_deref(), Some("src"));
-    assert_eq!(root.attributes["sender_id"], json!("user1"));
     assert_eq!(root.attributes["blocked"], json!(false));
     assert_eq!(root.attributes["deferred"], json!(false));
     let route = named(&spans, "framework.route");
@@ -223,11 +222,75 @@ async fn a_hook_that_fails_ends_its_span_in_error() {
     let spans = mock.get_spans(SpanKind::HookSync);
     let hook = named(&spans, "hook.sync.bad_hook");
     assert_eq!(hook.status, "error");
-    assert!(
-        hook.error_message
-            .as_deref()
-            .unwrap()
-            .contains("the scanner is down")
+    assert_eq!(hook.error_message.as_deref(), Some("HookError"));
+    kit.close().await.unwrap();
+}
+
+/// A kit whose hook raises a text quoting an address, sent a message from
+/// that address, under `config`.
+async fn a_raising_hook(config: Option<TelemetryConfig>) -> (RoomKit, Arc<MockTelemetryProvider>) {
+    let (kit, mock, _) = kit_with_room(config).await;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |_: RoomEvent, _| async {
+            let raised: Result<HookResult, roomkit::HookError> =
+                Err("+15145550123 is refused".into());
+            raised
+        },
+        HookOptions {
+            name: "scan".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    let message = InboundMessage::new(id("src"), "+15145550123", TextContent::new("hi"));
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..ProcessInboundOptions::default()
+    };
+    kit.process_inbound(message, options).await.unwrap();
+    (kit, mock)
+}
+
+// Python: tests/test_telemetry.py::TestSensitiveData::test_a_span_holds_no_address_and_no_error_text_by_default
+#[tokio::test]
+async fn a_span_holds_no_address_and_no_error_text_by_default() {
+    let (kit, mock) = a_raising_hook(None).await;
+    let spans = mock.completed_spans();
+    let recorded = format!(
+        "{:?}",
+        spans
+            .iter()
+            .map(|span| (&span.attributes, &span.error_message))
+            .collect::<Vec<_>>()
+    );
+    assert!(!recorded.contains("+15145550123"), "{recorded}");
+    let hook = named(&spans, "hook.sync.scan");
+    assert_eq!(hook.error_message.as_deref(), Some("HookError"));
+    kit.close().await.unwrap();
+}
+
+// Python: tests/test_telemetry.py::TestSensitiveData::test_the_config_records_them_when_it_asks
+#[tokio::test]
+async fn the_config_records_them_when_it_asks() {
+    let asks = TelemetryConfig {
+        record_sensitive_data: true,
+        ..TelemetryConfig::default()
+    };
+    let (kit, mock) = a_raising_hook(Some(asks)).await;
+    let spans = mock.completed_spans();
+    for name in ["framework.inbound", "framework.route"] {
+        let span = named(&spans, name);
+        assert_eq!(
+            span.attributes["sender_id"],
+            json!("+15145550123"),
+            "{name}"
+        );
+    }
+    let hook = named(&spans, "hook.sync.scan");
+    assert_eq!(
+        hook.error_message.as_deref(),
+        Some("+15145550123 is refused")
     );
     kit.close().await.unwrap();
 }

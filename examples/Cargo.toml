@@ -66,6 +66,10 @@ name = "agent_steered_turn"
 path = "agent_steered_turn.rs"
 
 [[example]]
+name = "telemetry"
+path = "telemetry.rs"
+
+[[example]]
 name = "agent_chain"
 path = "agent_chain.rs"
 

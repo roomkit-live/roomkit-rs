@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use roomkit::model::{ChannelId, Metadata, RoomId};
 use roomkit::telemetry::{
     Attr, EndSpanOptions, RecordMetricOptions, SpanKind, StartSpanOptions, TelemetryProvider,
-    current_telemetry, get_current_span,
+    current_records_sensitive_data, current_telemetry, get_current_span,
 };
 use serde_json::{Value, json};
 
@@ -22,6 +22,7 @@ use roomkit::model::LoopEndReason;
 pub(crate) struct TurnTelemetry {
     provider: Option<Arc<dyn TelemetryProvider>>,
     parent: Option<String>,
+    sensitive: bool,
 }
 
 impl std::fmt::Debug for TurnTelemetry {
@@ -39,6 +40,7 @@ impl TurnTelemetry {
         Self {
             provider: current_telemetry(),
             parent: get_current_span(),
+            sensitive: current_records_sensitive_data(),
         }
     }
 
@@ -66,6 +68,7 @@ impl TurnTelemetry {
             provider,
             id,
             channel_id: channel_id.to_string(),
+            sensitive: self.sensitive,
             ended: AtomicBool::new(false),
         })
     }
@@ -77,6 +80,7 @@ pub(crate) struct TurnSpan {
     provider: Arc<dyn TelemetryProvider>,
     id: String,
     channel_id: String,
+    sensitive: bool,
     ended: AtomicBool,
 }
 
@@ -112,8 +116,14 @@ impl TurnSpan {
         self.finish(status, None, calls, usage);
     }
 
-    /// Ends it `error`, `message` what failed.
-    pub(super) fn failed(&self, message: String, calls: u32, usage: &Metadata) {
+    /// Ends it `error`, the provider's failure saying `text`: the class's
+    /// name alone, unless the kit records what can hold personal data.
+    pub(super) fn failed(&self, text: String, calls: u32, usage: &Metadata) {
+        let message = if self.sensitive {
+            text
+        } else {
+            "ProviderError".to_owned()
+        };
         self.finish("error", Some(message), calls, usage);
     }
 
@@ -153,6 +163,7 @@ impl TurnSpan {
         CallSpan {
             provider: Arc::clone(&self.provider),
             id: span,
+            sensitive: self.sensitive,
             ended: false,
         }
     }
@@ -168,17 +179,23 @@ impl Drop for TurnSpan {
 pub(crate) struct CallSpan {
     provider: Arc<dyn TelemetryProvider>,
     id: String,
+    sensitive: bool,
     ended: bool,
 }
 
 impl CallSpan {
-    /// Ends it `ok`, or `error` with what the tool raised.
+    /// Ends it `ok`, or `error` with what the tool raised: its class's name
+    /// alone, unless the kit records what can hold personal data.
     pub(super) fn end(mut self, error: Option<String>) {
         self.ended = true;
         let options = match error {
-            Some(message) => EndSpanOptions {
+            Some(text) => EndSpanOptions {
                 status: "error".to_owned(),
-                error_message: Some(message),
+                error_message: Some(if self.sensitive {
+                    text
+                } else {
+                    "ToolError".to_owned()
+                }),
                 ..EndSpanOptions::default()
             },
             None => EndSpanOptions::default(),
@@ -214,6 +231,7 @@ mod tests {
         let telemetry = TurnTelemetry {
             provider: Some(provider),
             parent: None,
+            sensitive: false,
         };
         let room = RoomId::new("r1").unwrap();
         let channel = ChannelId::new("ai").unwrap();

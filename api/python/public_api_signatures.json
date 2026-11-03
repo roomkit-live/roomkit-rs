@@ -101,7 +101,7 @@
     "update_binding": ["def", "room_id", "binding"]
   },
   "roomkit.AIChannelTurnConfig": {
-    "__init__": ["def", "system_prompt=None", "tools=None", "temperature=None", "max_tokens=None", "thinking_budget=None", "enable_thinking=None", "reasoning_effort=None", "response_schema=None", "turn_budget_tokens=None", "turn_budget_usd=None", "tool_handler=None"]
+    "__init__": ["def", "system_prompt=None", "tools=None", "temperature=None", "max_tokens=None", "thinking_budget=None", "enable_thinking=None", "reasoning_effort=None", "response_schema=None", "turn_budget_tokens=None", "turn_budget_usd=None", "tool_handler=None", "skills=None"]
   },
   "roomkit.AIGenerationEvent": {
     "__init__": ["def", "ai_context", "channel_id", "room_id=None", "provider_name=None", "timestamp=<factory>", "trigger=None", "purpose='answer'"]
@@ -5422,7 +5422,7 @@
     "VOICE_SESSION": ["member", "'voice.session'"]
   },
   "roomkit.telemetry.TelemetryConfig": {
-    "__init__": ["def", "provider=None", "sample_rate=1.0", "enabled_spans=None", "metadata=<factory>", "suppressed_hook_triggers=<factory>"]
+    "__init__": ["def", "provider=None", "sample_rate=1.0", "enabled_spans=None", "metadata=<factory>", "record_sensitive_data=False", "suppressed_hook_triggers=<factory>"]
   },
   "roomkit.telemetry.TelemetryProvider": {
     "close": ["def"],

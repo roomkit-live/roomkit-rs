@@ -339,7 +339,7 @@ impl<S: ConversationStore> RoomKit<S> {
             Err(error) => Err(error),
         };
         if let Err(error) = announced {
-            handle.fail_span(error.to_string());
+            handle.fail_span(&error);
             return Err(error);
         }
         // From here the task ends however this call ends: a caller cut

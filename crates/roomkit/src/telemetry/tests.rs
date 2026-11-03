@@ -413,6 +413,7 @@ fn a_config_s_defaults_are_python_s() {
     assert!(config.provider.is_none());
     assert_eq!(config.sample_rate, 1.0);
     assert!(config.enabled_spans.is_none());
+    assert!(!config.record_sensitive_data);
     assert!(
         config
             .suppressed_hook_triggers

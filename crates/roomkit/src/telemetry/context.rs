@@ -10,12 +10,13 @@ use std::future::Future;
 use std::sync::Arc;
 
 use super::TelemetryProvider;
+use super::open::KitTelemetry;
 
 /// The current span: its id, the provider that started it, and the
 /// provider's own context for it.
 #[derive(Clone)]
 struct Current {
-    provider: Arc<dyn TelemetryProvider>,
+    telemetry: KitTelemetry,
     span_id: Option<String>,
     #[cfg_attr(
         not(feature = "opentelemetry"),
@@ -58,8 +59,18 @@ pub fn get_current_span() -> Option<String> {
 #[must_use]
 pub fn current_telemetry() -> Option<Arc<dyn TelemetryProvider>> {
     CURRENT
-        .try_with(|current| Arc::clone(&current.provider))
+        .try_with(|current| Arc::clone(&current.telemetry.provider))
         .ok()
+}
+
+/// Whether the kit whose call this is records what can hold personal data
+/// on its spans. Hidden: for the crates beside this one.
+#[doc(hidden)]
+#[must_use]
+pub fn current_records_sensitive_data() -> bool {
+    CURRENT
+        .try_with(|current| current.telemetry.sensitive)
+        .unwrap_or(false)
 }
 
 /// The provider's own context of the current span, Python's
@@ -70,18 +81,6 @@ pub(crate) fn current_span_context() -> Option<Arc<dyn Any + Send + Sync>> {
         .try_with(|current| current.context.clone())
         .ok()
         .flatten()
-}
-
-/// Runs `work` under the span `span_id` of `provider`, Python's
-/// `restored_span`: [`get_current_span`] reads it there. Hidden: for the
-/// crates beside this one.
-#[doc(hidden)]
-pub fn within_span<F: Future>(
-    provider: Arc<dyn TelemetryProvider>,
-    span_id: String,
-    work: F,
-) -> impl Future<Output = F::Output> {
-    within_optional_span(provider, Some(span_id), work)
 }
 
 /// Runs `work` under the span `span_id` of another process, `context` what
@@ -96,24 +95,27 @@ pub fn within_extracted_span<F: Future>(
     work: F,
 ) -> impl Future<Output = F::Output> {
     let current = Current {
-        provider,
+        telemetry: KitTelemetry {
+            provider,
+            sensitive: false,
+        },
         span_id: Some(span_id),
         context,
     };
     CURRENT.scope(current, work)
 }
 
-/// `work` with `provider` the current one, under `span_id` if any.
+/// `work` with `telemetry` the current one, under `span_id` if any.
 pub(crate) fn within_optional_span<F: Future>(
-    provider: Arc<dyn TelemetryProvider>,
+    telemetry: &KitTelemetry,
     span_id: Option<String>,
     work: F,
-) -> impl Future<Output = F::Output> {
+) -> impl Future<Output = F::Output> + use<F> {
     let context = span_id
         .as_deref()
-        .and_then(|span_id| provider.get_span_context(span_id));
+        .and_then(|span_id| telemetry.provider.get_span_context(span_id));
     let current = Current {
-        provider,
+        telemetry: telemetry.clone(),
         span_id,
         context,
     };
@@ -149,8 +151,11 @@ mod tests {
     // Python: tests/test_telemetry.py::TestTelemetryContextPropagation::test_telemetry_context_set_and_retrieved
     #[tokio::test]
     async fn a_span_is_current_within_its_work_and_a_kept_task_s() {
-        let provider: Arc<dyn TelemetryProvider> = Arc::new(MockTelemetryProvider::default());
-        let read = within_span(Arc::clone(&provider), "s1".to_owned(), async {
+        let telemetry = KitTelemetry {
+            provider: Arc::new(MockTelemetryProvider::default()),
+            sensitive: false,
+        };
+        let read = within_optional_span(&telemetry, Some("s1".to_owned()), async {
             let spawned = tokio::spawn(crate::keep_context(async { get_current_span() }));
             let plain = tokio::spawn(async { get_current_span() });
             (

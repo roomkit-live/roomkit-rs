@@ -30,11 +30,11 @@ pub use console::{ConsoleTelemetryProvider, ConsoleTelemetryProviderOptions};
 pub use context::get_current_span;
 pub(crate) use context::within_current_span;
 #[doc(hidden)]
-pub use context::{current_telemetry, within_extracted_span, within_span};
+pub use context::{current_records_sensitive_data, current_telemetry, within_extracted_span};
 pub use kinds::{Attr, SpanKind};
 pub use mock::MockTelemetryProvider;
 pub use noop::NoopTelemetryProvider;
-pub(crate) use open::{OpenSpan, within_kit};
+pub(crate) use open::{KitTelemetry, OpenSpan, within_kit};
 #[cfg(feature = "opentelemetry")]
 pub use otel::{OpenTelemetryProvider, OpenTelemetryProviderOptions};
 pub use provider::{

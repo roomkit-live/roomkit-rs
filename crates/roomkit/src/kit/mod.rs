@@ -223,7 +223,7 @@ pub(crate) struct Inner<S> {
     /// skips it (RFC §13.5).
     pub(crate) delivery_gap_timeout: std::time::Duration,
     /// Where the kit reports its spans and metrics.
-    pub(crate) telemetry: Arc<dyn crate::telemetry::TelemetryProvider>,
+    pub(crate) telemetry: crate::telemetry::KitTelemetry,
     /// The hook triggers whose hooks open no span.
     pub(crate) suppressed_hook_triggers: std::collections::BTreeSet<String>,
     /// The tasks the kit runs in the background: observers, inbound runs.

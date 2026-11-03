@@ -291,7 +291,8 @@ impl DelegatedTask {
         match result.status {
             TaskStatus::Completed => span.end(attributes),
             TaskStatus::Failed => {
-                span.fail(result.error.clone().unwrap_or_default(), attributes);
+                let text = result.error.clone().unwrap_or_default();
+                span.fail_error("task_failed", text, attributes);
             }
             // Whatever else, as Python's `.get(result.status, "cancelled")`.
             _ => span.cancel(attributes),
@@ -299,10 +300,10 @@ impl DelegatedTask {
     }
 
     /// Ends the delegation's span for a task that failed before it was
-    /// announced with `message`: it ends no other way.
-    pub(crate) fn fail_span(&self, message: String) {
+    /// announced with `error`: it ends no other way.
+    pub(crate) fn fail_span(&self, error: &RoomKitError) {
         if let Some(span) = lock_span(&self.state.span).take() {
-            span.fail(message, Metadata::new());
+            span.fail_error(error.class_name(), error.to_string(), Metadata::new());
         }
     }
 }

@@ -14,7 +14,10 @@ use roomkit_core::rules::addresses::{
 use serde_json::Value;
 
 use crate::channel::{Channel, ChannelError};
-use crate::telemetry::{Attr, OpenSpan, SpanKind, StartSpanOptions, current_telemetry};
+use crate::telemetry::{
+    Attr, KitTelemetry, OpenSpan, SpanKind, StartSpanOptions, current_records_sensitive_data,
+    current_telemetry,
+};
 
 /// A transport channel of any type, driven by configuration rather than a
 /// type of its own: Python's `TransportChannel(channel_id, channel_type, *,
@@ -260,7 +263,10 @@ impl TransportChannel {
     /// The span of a message's parse, Python's `channel.handle_inbound`,
     /// under the kit whose call this is.
     fn handle_inbound_span(&self, context: &RoomContext) -> Option<OpenSpan> {
-        let telemetry = current_telemetry()?;
+        let telemetry = KitTelemetry {
+            provider: current_telemetry()?,
+            sensitive: current_records_sensitive_data(),
+        };
         let channel_id = self.channel_id.to_string();
         let mut attributes = Metadata::new();
         attributes.insert(

@@ -24,6 +24,11 @@ pub struct TelemetryConfig {
     /// Tags every span of a provider that keeps them carries
     /// (`roomkit.<key>` for OpenTelemetry).
     pub metadata: BTreeMap<String, String>,
+    /// Whether spans carry what can hold personal data: a sender's address
+    /// (`sender_id`), and the text of an error, which then reads its class's
+    /// name alone. Off by default: an exporter often stands outside the
+    /// application's production data (HITL a5171c2d).
+    pub record_sensitive_data: bool,
     /// The hook triggers whose hooks open no span: the audio levels by
     /// default, which fire many times a second.
     pub suppressed_hook_triggers: BTreeSet<String>,
@@ -36,6 +41,7 @@ impl Default for TelemetryConfig {
             sample_rate: 1.0,
             enabled_spans: None,
             metadata: BTreeMap::new(),
+            record_sensitive_data: false,
             suppressed_hook_triggers: [
                 "on_input_audio_level",
                 "on_output_audio_level",
@@ -62,6 +68,7 @@ impl fmt::Debug for TelemetryConfig {
             .field("sample_rate", &self.sample_rate)
             .field("enabled_spans", &self.enabled_spans)
             .field("metadata", &self.metadata)
+            .field("record_sensitive_data", &self.record_sensitive_data)
             .field("suppressed_hook_triggers", &self.suppressed_hook_triggers)
             .finish()
     }

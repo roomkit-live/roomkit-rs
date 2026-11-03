@@ -214,12 +214,12 @@ async fn resolve_sender<S>(
             IdentityAnswer::Resolved(Box::new(result)).into()
         }
         Ok(Ok(Err(error))) => {
-            span.fail(error.to_string(), Metadata::new());
+            span.fail_error(IDENTITY_ERROR, error.to_string(), Metadata::new());
             Outcome::Failed(ErrorRecord::new(IDENTITY_ERROR, error.to_string()))
         }
         Ok(Err(panic)) => {
             let message = unwind::message(&*panic);
-            span.fail(message.clone(), Metadata::new());
+            span.fail_error(IDENTITY_ERROR, message.clone(), Metadata::new());
             Outcome::Failed(ErrorRecord::new(IDENTITY_ERROR, message))
         }
     }
@@ -779,7 +779,7 @@ pub(super) async fn route<S: ConversationStore>(
             Outcome::Routed(room_id)
         }
         Err(error) => {
-            span.fail(error.to_string(), Metadata::new());
+            span.fail_error("RouterError", error.to_string(), Metadata::new());
             Outcome::Failed(ErrorRecord::new("RouterError", error.to_string()))
         }
     }

@@ -112,7 +112,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let result = injected.and_then(|entered| event_of(entered.result));
         match &result {
             Ok(_) => span.end(Metadata::new()),
-            Err(error) => span.fail(error.to_string(), Metadata::new()),
+            Err(error) => span.fail_error(error.class_name(), error.to_string(), Metadata::new()),
         }
         result
     }

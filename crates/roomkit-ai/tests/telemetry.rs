@@ -12,7 +12,9 @@ use std::task::{Context, Poll};
 use futures_core::Stream;
 use pretty_assertions::assert_eq;
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, Metadata, RoomId, TextContent};
-use roomkit::telemetry::{Attr, MockTelemetryProvider, Span, SpanKind};
+use roomkit::telemetry::{
+    Attr, MockTelemetryProvider, Span, SpanKind, TelemetryConfig, TelemetryProvider,
+};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
@@ -107,9 +109,23 @@ fn room() -> RoomId {
 /// A room of a transport and a scripted agent, with a tool `lookup` and one
 /// `broken` that fails, reporting to a mock; the first message sent.
 async fn turn_of(rounds: Vec<Round>) -> (RoomKit, Arc<MockTelemetryProvider>) {
+    turn_recording(false, rounds).await
+}
+
+/// As [`turn_of`], the kit recording what can hold personal data when
+/// `sensitive`.
+async fn turn_recording(
+    sensitive: bool,
+    rounds: Vec<Round>,
+) -> (RoomKit, Arc<MockTelemetryProvider>) {
     let mock = Arc::new(MockTelemetryProvider::default());
+    let provider: Arc<dyn TelemetryProvider> = Arc::<MockTelemetryProvider>::clone(&mock);
     let kit = RoomKit::new(RoomKitOptions {
-        telemetry: Some(Arc::clone(&mock).into()),
+        telemetry: Some(TelemetryConfig {
+            provider: Some(provider),
+            record_sensitive_data: sensitive,
+            ..TelemetryConfig::default()
+        }),
         ..RoomKitOptions::default()
     });
     let sms = RecordingTransport::new(
@@ -214,13 +230,19 @@ async fn a_tool_call_opens_a_span_and_a_turn_adds_up_its_rounds() {
 // Python: tests/test_telemetry.py::TestLLMTelemetry (a raising tool ends its span in error)
 #[tokio::test]
 async fn a_tool_that_fails_ends_its_span_in_error() {
-    let script = vec![
-        Round::Says("Checking.", Some("broken")),
-        Round::Says("Sorry.", None),
-    ];
-    let (kit, mock) = turn_of(script).await;
+    let script = || {
+        vec![
+            Round::Says("Checking.", Some("broken")),
+            Round::Says("Sorry.", None),
+        ]
+    };
+    let (kit, mock) = turn_of(script()).await;
     let call = one(mock.get_spans(SpanKind::LlmToolCall));
     assert_eq!(call.status, "error");
+    assert_eq!(call.error_message.as_deref(), Some("ToolError"));
+    kit.close().await.unwrap();
+    let (kit, mock) = turn_recording(true, script()).await;
+    let call = one(mock.get_spans(SpanKind::LlmToolCall));
     assert_eq!(call.error_message.as_deref(), Some("the database is down"));
     kit.close().await.unwrap();
 }
@@ -243,6 +265,10 @@ async fn a_provider_s_failure_ends_the_turn_s_span_in_error() {
     let (kit, mock) = turn_of(vec![Round::Fails("the model is down")]).await;
     let span = one(mock.get_spans(SpanKind::LlmGenerate));
     assert_eq!(span.status, "error");
+    assert_eq!(span.error_message.as_deref(), Some("ProviderError"));
+    kit.close().await.unwrap();
+    let (kit, mock) = turn_recording(true, vec![Round::Fails("the model is down")]).await;
+    let span = one(mock.get_spans(SpanKind::LlmGenerate));
     assert!(
         span.error_message
             .as_deref()
