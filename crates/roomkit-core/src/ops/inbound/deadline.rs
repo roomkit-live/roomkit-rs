@@ -4,14 +4,14 @@
 //!
 //! `process_timeout` bounds a call from its start to its decision: its step
 //! 2 (the identity read, the router, routing's wait for the lock, the
-//! `ON_SESSION_STARTED` hooks the message waits for), the event's parse, its off-lock check and the wait for its admission ticket,
-//! the wait for the room lock and the locked section up to the commit. The
-//! room's delivery lane comes after the commit, and nothing of it is
-//! bounded. The driver gives up on a request past the deadline and answers
-//! `DeadlinePassed`; the call then releases what it holds (the room lock,
-//! its ticket), emits `process_timeout`, and returns
-//! `InboundResult(blocked, process_timeout)`. Nothing of the event is
-//! written: the injected events, tasks and observations of the hooks that
+//! `ON_SESSION_STARTED` hooks the message waits for), the event's parse, its
+//! off-lock check and the wait for its admission ticket, the wait for the room
+//! lock and the locked section up to the commit. The room's delivery lane comes
+//! after the commit, and nothing of it is bounded. The driver gives up on a
+//! request past the deadline and answers `DeadlinePassed`; the call then
+//! releases what it holds (the room lock, its ticket), emits `process_timeout`,
+//! and returns `InboundResult(blocked, process_timeout)`. Nothing of the event
+//! is written: the injected events, tasks and observations of the hooks that
 //! ran before are dropped with it (gap G-068).
 //!
 //! No write carries the deadline, a commit least of all: giving up on one

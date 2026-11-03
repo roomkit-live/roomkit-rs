@@ -9,7 +9,8 @@
 //! write has an empty delivery set, and an agent the room does not bind has
 //! none at all: the greeting is then a record of the timeline only. A room
 //! whose status refuses events does nothing to it, and only logs: its caller
-//! never sees that as a failure, and no `room_refused_event` is emitted.
+//! never sees that as a failure, and within its budget no `room_refused_event`
+//! is emitted.
 //!
 //! Made in the room's own work, a hook's body or a delivery, it is that work's
 //! write as a direct injection is (RFC §8.3, §9.5.1): at the work's depth and

@@ -44,7 +44,8 @@ pub(crate) enum Bound {
     /// adopted among them.
     Unbounded,
     /// The call's bound, from its start to its decision: the deadline of
-    /// its `process_timeout`, `None` when the kit sets none. The request is
+    /// its `process_timeout`, `None` when the kit sets none or the call takes
+    /// none, a greeting's (RFC §19.1). The request is
     /// given up on past it, and when the call expires before it, its caller
     /// gone ([`Io::expire`]).
     Call(Option<Timestamp>),

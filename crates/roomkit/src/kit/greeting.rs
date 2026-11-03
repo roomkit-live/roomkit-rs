@@ -60,15 +60,17 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Returns once its delivery is over; called under the room's lock or
     /// from a delivery in the room, once it is committed, its delivery
     /// following in the room's lane (RFC §13.5, §10.1 step 18). Dropped before
-    /// its commit, nothing of it is stored; dropped after, its delivery goes
-    /// on.
+    /// its commit, nothing of it is stored, unless the room's work adopted the
+    /// call, which goes on as that work's own; dropped after, its delivery
+    /// goes on.
     ///
     /// # Errors
     ///
     /// [`RoomKitError::KitClosed`] once the kit's close started, or when it
-    /// cut the call before its commit (RFC §12.10.4); [`RoomKitError::RoomNotFound`] for a room `organization_id`
-    /// does not reach, missing or another's (RFC §17.2); or the store's or
-    /// the room lock's failure.
+    /// cut the call before its commit (RFC §12.10.4);
+    /// [`RoomKitError::RoomNotFound`] for a room `organization_id` does not
+    /// reach, missing or another's (RFC §17.2); or the store's or the room
+    /// lock's failure.
     pub async fn send_greeting(
         &self,
         room_id: &RoomId,

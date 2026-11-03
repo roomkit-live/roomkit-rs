@@ -115,7 +115,8 @@ mod a_missing_room {
     /// RFC §10.1 step 2, §13.6, gap G-076: a caller that stops waiting
     /// while the room's hooks are due expires the call, and the room is
     /// completed all the same: its hooks run, its channel is attached and
-    /// its session starts, none of it within the call's bound. The message
+    /// its session starts, none of it within the call's bound but a session's
+    /// hooks named with an underscore, which this room has none of. The message
     /// stops before its parse, nothing of it written.
     #[test]
     fn is_completed_when_its_caller_stops_waiting_before_its_hooks() {
