@@ -10,16 +10,23 @@
 //! none at all: the greeting is then a record of the timeline only. A room
 //! whose status refuses events does nothing to it, and only logs: its caller
 //! never sees that as a failure, and no `room_refused_event` is emitted.
+//!
+//! Made in the room's own work, a hook's body or a delivery, it is that work's
+//! write as a direct injection is (RFC §8.3, §9.5.1): at the work's depth and
+//! on its budget, so that a hook greeting on every answer, or on its own
+//! greeting, stops at the limit. A top-level caller's budget is its own.
 
-use super::job::Job;
+use super::job::{Job, RecordNote};
 use super::pass::{CommitPass, PassOrigin, PassResult};
+use super::record::RecordPass;
 use super::{Machine, Stage};
 use crate::model::{
     ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventStatus, EventType,
     RoomContext, RoomEvent, RoomId, TextContent,
 };
-use crate::ops::Cx;
 use crate::ops::io::Bound;
+use crate::ops::{Cx, RefusedOperation};
+use crate::rules::chain_depth;
 use crate::rules::permissions::{self, DeliveryPlan};
 
 /// The metadata key that marks a greeting among the agent's events.
@@ -109,10 +116,11 @@ pub(super) fn log_refused(event: &RoomEvent) {
 impl Machine {
     /// Starts a greeting's pass, under no deadline, as Python's
     /// `_commit_and_deliver`, though within the call: a caller gone before
-    /// its commit takes it along (`Bound::Call`). Its own commit draws no
-    /// pass; the cascade keeps the budget the call was made within, so that
-    /// what answers a greeting made in a cascade's work draws on that cascade
-    /// (RFC §8.3).
+    /// its commit takes it along (`Bound::Call`). Made in a cascade's work,
+    /// it is that work's write, as a direct injection is: it draws what the
+    /// call draws on that cascade's budget, and past it is stored `BLOCKED`
+    /// with `reentry_loop_cap`, no hook run and no delivery (RFC §8.3). What
+    /// answers it draws on the same budget.
     pub(super) fn begin_greeting(
         &mut self,
         cx: &mut Cx<'_>,
@@ -125,7 +133,15 @@ impl Machine {
         self.call.room_id = Some(room_id.clone());
         let within_its_caller = Bound::Call(None);
         self.call.bound = within_its_caller;
-        let event = event(cx, room_id, agent_id, text, chain_depth);
+        let mut event = event(cx, room_id, agent_id, text, chain_depth);
+        if self.cascade.drawn_on().is_some_and(|draw| !draw.take()) {
+            event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
+            let record = RecordPass::refusing(event, RefusedOperation::Inbound).deciding();
+            self.cascade
+                .lead(Job::Record(Box::new(record), RecordNote::Trigger));
+            self.stage.enter(Stage::Cascade);
+            return;
+        }
         let pass = CommitPass::trigger(event, within_its_caller, None).greeting();
         self.cascade
             .lead(Job::Pass(Box::new(pass), PassOrigin::Trigger));

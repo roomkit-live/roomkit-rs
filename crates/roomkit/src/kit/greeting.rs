@@ -52,9 +52,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// status refuses events (RFC §5.1), takes nothing, and nothing fails.
     ///
     /// Made in the room's own work, a hook's body or a delivery, the greeting
-    /// is at least as deep as that work, and what answers it draws on that
-    /// work's reentry budget, so that a hook greeting on every answer stops
-    /// at the limit (RFC §8.3); its own commit draws nothing.
+    /// is that work's write as `send_event`'s is: at least as deep as that
+    /// work and on its reentry budget, past which it is stored `BLOCKED` with
+    /// `reentry_loop_cap`, so that a hook greeting on every answer stops at
+    /// the limit (RFC §8.3).
     ///
     /// Returns once its delivery is over; called under the room's lock or
     /// from a delivery in the room, once it is committed, its delivery

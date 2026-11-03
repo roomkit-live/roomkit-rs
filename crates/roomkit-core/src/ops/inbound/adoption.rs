@@ -372,15 +372,24 @@ impl Machine {
         }
     }
 
-    /// A greeting made in the room's own work goes through its pass, drawing
-    /// no pass of the budget it joins: what answers it draws on that budget,
-    /// the operation's one cascade (RFC §8.3, §19.1).
-    fn greet_within(&mut self, cx: &mut Cx<'_>, adopted: Adopted, event: RoomEvent) {
-        let mut pass = Box::new(CommitPass::new(PassOrigin::Adopted(adopted.id), event).greeting());
-        within(cx, &adopted, |cx| pass.start(cx));
+    /// A greeting made in the room's own work is that work's write: it draws
+    /// a pass of the budget it joins, and past it is stored `BLOCKED`, no hook
+    /// run and no delivery (RFC §8.3, §19.1).
+    fn greet_within(&mut self, cx: &mut Cx<'_>, adopted: Adopted, mut event: RoomEvent) {
+        let state = if self.cascade.budget.take_pass() {
+            let mut pass =
+                Box::new(CommitPass::new(PassOrigin::Adopted(adopted.id), event).greeting());
+            within(cx, &adopted, |cx| pass.start(cx));
+            RunState::Passing(pass)
+        } else {
+            event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
+            let mut record = Box::new(RecordPass::refusing(event, RefusedOperation::Inbound));
+            within(cx, &adopted, |cx| record.start(cx));
+            RunState::Recording(record)
+        };
         self.adopted.running.push(AdoptedRun {
             entry: adopted,
-            state: RunState::Passing(pass),
+            state,
         });
     }
 

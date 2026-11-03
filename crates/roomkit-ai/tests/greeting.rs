@@ -276,18 +276,16 @@ async fn greetings_of_a_hook_on_every_answer(
     made.load(Ordering::SeqCst)
 }
 
+// Python: tests/test_session_started.py::TestGreetingInTheRoomsWork::test_a_hook_greeting_on_every_answer_stops_at_the_limit
 /// RFC §8.3: a hook that greets on every answer is stopped at the limit: a
-/// greeting made in a cascade's work keeps that cascade's budget and depth, as
-/// `send_event` from the same place does, on the deepest and the widest of its
-/// limits: the chain's depth from an ASYNC body, which runs one deeper than
-/// its event, the reentry budget of the cascade's 50 passes under the lock.
-/// Python's greeting takes a fresh budget at depth 0 and never stops; that
-/// question is the maintainer's, so no shared scenario holds it yet.
+/// greeting made in a cascade's work is that work's write as `send_event`'s
+/// is. An ASYNC body runs one deeper than its event, so the chain's depth
+/// stops it; a hook under the lock stays at depth 0, so the budget does.
 #[tokio::test]
 async fn a_hook_that_greets_on_every_answer_is_stopped_at_the_limit() {
     let mut made = Vec::new();
     for (trigger, execution, at_most) in [
-        (HookTrigger::BeforeBroadcast, HookExecution::Sync, 50),
+        (HookTrigger::BeforeBroadcast, HookExecution::Sync, 25),
         (HookTrigger::BeforeBroadcast, HookExecution::Async, 6),
         (HookTrigger::AfterBroadcast, HookExecution::Async, 6),
     ] {

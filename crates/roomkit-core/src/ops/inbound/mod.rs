@@ -256,10 +256,12 @@ impl Inbound {
     /// injection from there, its delivery on the room's lane and the answers
     /// to it re-entering.
     ///
-    /// Its own commit draws no pass. Made in a cascade's work
-    /// ([`drawing_on`](Self::drawing_on)), what answers it draws on that
-    /// cascade's budget, so that a hook greeting on every answer stops at the
-    /// limit (RFC §8.3); otherwise on a budget of its own.
+    /// Made in a cascade's work ([`drawing_on`](Self::drawing_on)), it is
+    /// that work's write as a direct injection is: it draws on that cascade's
+    /// budget, past which it is stored `BLOCKED` with `reentry_loop_cap`, and
+    /// what answers it draws on the same budget, so that a hook greeting on
+    /// every answer stops at the limit (RFC §8.3). A top-level caller's budget
+    /// is its own.
     ///
     /// Its output is a message's: a room whose status refuses events leaves
     /// the result `blocked`, nothing stored and nothing announced; a room that
