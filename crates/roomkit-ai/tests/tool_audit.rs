@@ -268,3 +268,24 @@ async fn a_panic_is_its_handler_s_error_and_cancels_its_sibling() {
         ]
     );
 }
+
+/// A handler that panics before its future is made, in its closure, is
+/// its error too, as Python's wrapper awaits the handler within its `try`.
+#[tokio::test]
+async fn a_handler_panicking_before_its_future_is_its_error() {
+    let auditor = Arc::new(ConsoleToolAuditor::new(ConsoleToolAuditorOptions::default()));
+    let handler = ToolHandler::new(|_name, arguments: Metadata| {
+        assert!(arguments.contains_key("q"), "a query is required");
+        async { Ok(ToolResult::Text("found".to_owned())) }
+    });
+    let wrapped = audit_tool_handler(handler, Arc::<ConsoleToolAuditor>::clone(&auditor), "a");
+
+    let call = tokio::spawn(wrapped.call("search".to_owned(), Metadata::new()));
+
+    assert!(call.await.unwrap_err().is_panic());
+    let entry = only(&auditor);
+    assert_eq!(
+        (entry.status.as_str(), entry.result.as_str()),
+        ("error", "a query is required")
+    );
+}

@@ -6,6 +6,7 @@
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
+use std::task::Poll;
 
 use roomkit::model::Metadata;
 use roomkit::orchestration::{ToolAuditEntry, ToolAuditor};
@@ -63,9 +64,20 @@ pub fn audit_tool_handler(
                 started: Instant::now(),
                 outcome: None,
             };
-            let mut call = handler.call(name, arguments);
+            // The handler is called within the caught region, as Python's
+            // `await handler(...)` is within its `try`: a handler may panic
+            // before its future, as it may within it.
+            let mut input = Some((name, arguments));
+            let mut call = None;
             let answer = std::future::poll_fn(|context| {
-                let polled = panic::catch_unwind(AssertUnwindSafe(|| call.as_mut().poll(context)));
+                let polled = panic::catch_unwind(AssertUnwindSafe(|| {
+                    if let Some((name, arguments)) = input.take() {
+                        call = Some(handler.call(name, arguments));
+                    }
+                    // The first poll made the call: it is always there.
+                    call.as_mut()
+                        .map_or(Poll::Pending, |call| call.as_mut().poll(context))
+                }));
                 polled.unwrap_or_else(|payload| {
                     // A panic is the handler's error, as an exception is
                     // Python's: recorded with its message, then let through.
