@@ -13,6 +13,7 @@ use super::{EndSpanOptions, SpanKind, StartSpanOptions, TelemetryProvider};
 /// another parent, ended once. Dropped unended, the work it measured was
 /// cancelled, and it ends `cancelled`; or the work panicked, and it ends
 /// `error`.
+#[derive(Debug)]
 pub(crate) struct OpenSpan {
     provider: Arc<dyn TelemetryProvider>,
     id: String,
@@ -49,6 +50,15 @@ impl OpenSpan {
     /// Ends it `ok`, `attributes` added.
     pub(crate) fn end(mut self, attributes: Metadata) {
         self.finish(EndSpanOptions {
+            attributes,
+            ..EndSpanOptions::default()
+        });
+    }
+
+    /// Ends it `cancelled`, `attributes` added.
+    pub(crate) fn cancel(mut self, attributes: Metadata) {
+        self.finish(EndSpanOptions {
+            status: "cancelled".to_owned(),
             attributes,
             ..EndSpanOptions::default()
         });

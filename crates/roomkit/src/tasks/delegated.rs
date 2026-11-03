@@ -1,15 +1,17 @@
 //! A delegated task's handle and its result (RFC §23.2): Python's
 //! `roomkit.tasks.DelegatedTask` and `DelegatedTaskResult`.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use roomkit_core::model::{ChannelId, ErrorRecord, Metadata, RoomId, TaskStatus};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::error::RoomKitError;
+use crate::telemetry::{Attr, OpenSpan};
 
 /// The result of a delegated task once it ended (RFC §23.2): Python's
 /// `DelegatedTaskResult`, a pydantic model of the same members.
@@ -145,6 +147,8 @@ struct State {
     status: Mutex<TaskStatus>,
     ended: watch::Sender<Option<DelegatedTaskResult>>,
     started: Instant,
+    /// The delegation's span, ended with the task (RFC §23.3).
+    span: Mutex<Option<OpenSpan>>,
 }
 
 impl DelegatedTask {
@@ -177,6 +181,7 @@ impl DelegatedTask {
             description,
             hand_back,
             state: Arc::new(State {
+                span: Mutex::new(None),
                 status: Mutex::new(TaskStatus::Pending),
                 ended: watch::Sender::new(None),
                 started: Instant::now(),
@@ -253,9 +258,57 @@ impl DelegatedTask {
 
     /// Ends the task with `result` and lets its waiters go.
     pub(crate) fn set_result(&self, result: DelegatedTaskResult) {
+        self.end_span(&result);
         self.set_status(result.status);
         self.state.ended.send_replace(Some(result));
     }
+}
+
+impl DelegatedTask {
+    /// Holds the delegation's `span` until the task ends.
+    pub(crate) fn hold_span(&self, span: OpenSpan) {
+        *lock_span(&self.state.span) = Some(span);
+    }
+
+    /// Ends the delegation's span with `result`, Python's `_DelegationSpan`:
+    /// `ok` completed, `error` failed, `cancelled` cancelled; its status and
+    /// how long it ran on its end.
+    fn end_span(&self, result: &DelegatedTaskResult) {
+        let Some(span) = lock_span(&self.state.span).take() else {
+            return;
+        };
+        let mut attributes = Metadata::new();
+        let status = serde_json::to_value(result.status).unwrap_or_default();
+        attributes.insert(Attr::DELEGATION_STATUS.to_owned(), status);
+        attributes.insert(
+            Attr::DURATION_MS.to_owned(),
+            Value::from(result.duration_ms),
+        );
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a span ends ok or error for two statuses, and cancelled for the rest"
+        )]
+        match result.status {
+            TaskStatus::Completed => span.end(attributes),
+            TaskStatus::Failed => {
+                span.fail(result.error.clone().unwrap_or_default(), attributes);
+            }
+            // Whatever else, as Python's `.get(result.status, "cancelled")`.
+            _ => span.cancel(attributes),
+        }
+    }
+
+    /// Ends the delegation's span for a task that failed before it was
+    /// announced with `message`: it ends no other way.
+    pub(crate) fn fail_span(&self, message: String) {
+        if let Some(span) = lock_span(&self.state.span).take() {
+            span.fail(message, Metadata::new());
+        }
+    }
+}
+
+fn lock_span(span: &Mutex<Option<OpenSpan>>) -> MutexGuard<'_, Option<OpenSpan>> {
+    span.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The work a delegated task hands back: its output, unless it failed. A

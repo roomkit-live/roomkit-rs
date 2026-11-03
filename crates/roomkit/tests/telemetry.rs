@@ -8,23 +8,26 @@
 )]
 
 use std::collections::BTreeSet;
-use std::future::{Future, ready};
+use std::future::{Future, pending, ready};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ChannelType, HookResult, InboundMessage, RoomContext,
-    RoomEvent, RoomId, TextContent,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, HookResult,
+    InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::telemetry::{
     Attr, MockTelemetryProvider, Span, SpanKind, TelemetryConfig, TelemetryProvider,
     get_current_span,
 };
+use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DetachChannelOptions,
-    HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions,
-    SendEventOptions, TransportChannel, TransportChannelOptions,
+    AttachChannelOptions, CancelTaskOptions, Channel, ChannelError, CreateRoomOptions,
+    DelegateOptions, DetachChannelOptions, HookExecution, HookOptions, HookTrigger,
+    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions, TransportChannel,
+    TransportChannelOptions,
 };
 use serde_json::json;
 
@@ -389,5 +392,110 @@ async fn send_event_opens_a_span_over_its_broadcast() {
     assert_eq!(send.attributes["event_type"], json!("message"));
     let broadcast = named(&spans, "framework.broadcast");
     assert_eq!(broadcast.parent_id.as_deref(), Some(send.id.as_str()));
+    kit.close().await.unwrap();
+}
+
+/// A worker that runs until the delegation is cancelled.
+#[derive(Clone)]
+struct Stuck(ChannelId);
+
+impl Channel for Stuck {
+    fn channel_id(&self) -> ChannelId {
+        self.0.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Err("a worker receives no message".into()))
+    }
+
+    fn on_event(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        pending()
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
+}
+
+/// `(name, status)` of each delegation span `mock` ended.
+fn delegations(mock: &MockTelemetryProvider) -> Vec<(String, String)> {
+    let spans = mock.get_spans(SpanKind::Delegation);
+    spans
+        .into_iter()
+        .map(|span| (span.name, span.status))
+        .collect()
+}
+
+// Python: tests/tasks/test_cancelled_delegation.py::test_a_delegation_span_ends_with_its_task_status
+#[tokio::test]
+async fn a_delegation_span_ends_with_its_task_status() {
+    for (reply, status) in [("Done.", "ok"), ("", "error")] {
+        let (kit, mock, _) = kit_with_room(None).await;
+        let worker = EchoAgent::new(id("worker"), reply, EchoAgentOptions::default());
+        kit.register_channel(worker).unwrap();
+        let wait = DelegateOptions {
+            wait: true,
+            ..DelegateOptions::default()
+        };
+        kit.delegate(&room(), &id("worker"), "go", wait)
+            .await
+            .unwrap();
+        assert_eq!(
+            delegations(&mock),
+            vec![("delegation.inline".to_owned(), status.to_owned())]
+        );
+        let [span] = mock.get_spans(SpanKind::Delegation).try_into().unwrap();
+        assert_eq!(span.room_id.as_deref(), Some("r1"));
+        assert_eq!(span.channel_id.as_deref(), Some("worker"));
+        assert_eq!(span.attributes[Attr::DELEGATION_MODE], json!("inline"));
+        assert_eq!(span.attributes[Attr::DELEGATION_WORKER_ID], json!("worker"));
+        kit.close().await.unwrap();
+    }
+}
+
+// Python: tests/tasks/test_cancelled_delegation.py::test_a_cancelled_task_span_carries_how_long_it_ran
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_task_span_carries_how_long_it_ran() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    kit.register_channel(Stuck(id("worker"))).unwrap();
+    let task = kit
+        .delegate(&room(), &id("worker"), "go", DelegateOptions::default())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let cancelled = kit
+        .cancel_task(&task.id, CancelTaskOptions::default())
+        .await;
+    assert!(cancelled);
+    let [span] = mock.get_spans(SpanKind::Delegation).try_into().unwrap();
+    assert_eq!(span.name, "delegation.background");
+    assert_eq!(span.status, "cancelled");
+    assert_eq!(span.attributes[Attr::DELEGATION_STATUS], json!("cancelled"));
+    assert!(
+        span.attributes[Attr::DURATION_MS].as_f64().unwrap() >= 40.0,
+        "{span:?}"
+    );
     kit.close().await.unwrap();
 }

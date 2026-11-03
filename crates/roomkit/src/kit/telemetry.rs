@@ -13,6 +13,7 @@ use serde_json::Value;
 use super::{Inner, RoomKit};
 use crate::error::RoomKitError;
 use crate::inbound::InboundResult;
+use crate::tasks::DelegatedTask;
 use crate::telemetry::{
     Attr, NoopTelemetryProvider, OpenSpan, SpanKind, StartSpanOptions, TelemetryConfig,
     TelemetryProvider,
@@ -244,6 +245,36 @@ impl<S> Inner<S> {
             StartSpanOptions {
                 room_id: Some(room_id.to_string()),
                 channel_id: Some(event.channel_id.to_string()),
+                attributes,
+                ..StartSpanOptions::default()
+            },
+        )
+    }
+
+    /// The span of a delegation, Python's `delegation.inline` and
+    /// `delegation.background`.
+    pub(crate) fn delegation_span(&self, task: &DelegatedTask, wait: bool) -> OpenSpan {
+        let mode = if wait { "inline" } else { "background" };
+        let mut attributes = Metadata::new();
+        for (key, value) in [
+            (Attr::DELEGATION_TASK_ID, task.id.as_str()),
+            (Attr::DELEGATION_WORKER_ID, task.agent_id.as_str()),
+            (Attr::DELEGATION_CHILD_ROOM_ID, task.child_room_id.as_str()),
+            (
+                Attr::DELEGATION_PARENT_ROOM_ID,
+                task.parent_room_id.as_str(),
+            ),
+            (Attr::DELEGATION_MODE, mode),
+        ] {
+            attributes.insert(key.to_owned(), Value::from(value));
+        }
+        OpenSpan::start(
+            &self.telemetry,
+            SpanKind::Delegation,
+            &format!("delegation.{mode}"),
+            StartSpanOptions {
+                room_id: Some(task.parent_room_id.to_string()),
+                channel_id: Some(task.agent_id.to_string()),
                 attributes,
                 ..StartSpanOptions::default()
             },

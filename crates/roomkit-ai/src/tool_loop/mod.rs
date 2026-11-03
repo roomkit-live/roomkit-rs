@@ -187,8 +187,12 @@ pub(crate) struct Loop<P> {
 
 impl<P: AiProvider> Loop<P> {
     /// The loop's items on `conversation`, as its reader pulls them.
-    pub(crate) fn run(self, conversation: Vec<Message>) -> TurnItems<'static> {
-        items(move |out| self.rounds(conversation, out))
+    pub(crate) fn run(mut self, conversation: Vec<Message>) -> TurnItems<'static> {
+        items(move |out| {
+            let (room_id, channel_id) = (&self.context.room_id, &self.context.channel_id);
+            self.turn_span = self.telemetry.start_turn::<P>(room_id, channel_id);
+            self.rounds(conversation, out)
+        })
     }
 
     /// Runs rounds until the model answers, the round bound or the deadline
@@ -201,8 +205,6 @@ impl<P: AiProvider> Loop<P> {
         mut messages: Vec<Message>,
         out: Yielder<Result<TurnItem, ProviderError>>,
     ) {
-        let (room_id, channel_id) = (&self.context.room_id, &self.context.channel_id);
-        self.turn_span = self.telemetry.start_turn::<P>(room_id, channel_id);
         let turn_id = self.turn.as_ref().map(|turn| turn.turn_id().to_owned());
         let steering = self
             .loops

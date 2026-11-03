@@ -102,10 +102,12 @@ impl TurnSpan {
     /// Ends it as the loop ended for `reason`, with what its rounds used:
     /// `cancelled` and `error` as themselves, any other `ok`.
     pub(super) fn ended(&self, reason: LoopEndReason, calls: u32, usage: &Metadata) {
-        let status = match reason {
-            LoopEndReason::Cancelled => "cancelled",
-            LoopEndReason::Error => "error",
-            _ => "ok",
+        let status = if reason == LoopEndReason::Cancelled {
+            "cancelled"
+        } else if reason == LoopEndReason::Error {
+            "error"
+        } else {
+            "ok"
         };
         self.finish(status, None, calls, usage);
     }
@@ -194,5 +196,61 @@ impl Drop for CallSpan {
             };
             self.provider.end_span(&self.id, options);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use roomkit::model::{ChannelId, Metadata, RoomId};
+    use roomkit::telemetry::{MockTelemetryProvider, SpanKind, TelemetryProvider};
+
+    use super::{LoopEndReason, TurnSpan, TurnTelemetry};
+
+    fn started(mock: &Arc<MockTelemetryProvider>) -> TurnSpan {
+        let cloned = Arc::clone(mock);
+        let provider: Arc<dyn TelemetryProvider> = cloned;
+        let telemetry = TurnTelemetry {
+            provider: Some(provider),
+            parent: None,
+        };
+        let room = RoomId::new("r1").unwrap();
+        let channel = ChannelId::new("ai").unwrap();
+        telemetry.start_turn::<u8>(&room, &channel).unwrap()
+    }
+
+    /// The status of a turn's span, by how its loop ended.
+    // Python: tests/test_turn_that_did_not_complete.py::
+    // test_a_steering_cancel_closes_its_span_cancelled,
+    // test_a_turn_cancelled_from_outside_closes_its_span, and
+    // tests/test_parallel_tool_cleanup.py::test_cancelling_tool_turn_closes_span
+    #[test]
+    fn a_turn_s_span_ends_as_its_loop_ended() {
+        let mock = Arc::new(MockTelemetryProvider::default());
+        let none = Metadata::new();
+        started(&mock).ended(LoopEndReason::Completed, 0, &none);
+        started(&mock).ended(LoopEndReason::Cancelled, 0, &none);
+        started(&mock).ended(LoopEndReason::Error, 0, &none);
+        // A reader that stopped reading drops it.
+        drop(started(&mock));
+        let statuses: Vec<String> = mock
+            .get_spans(SpanKind::LlmGenerate)
+            .into_iter()
+            .map(|span| span.status)
+            .collect();
+        assert_eq!(statuses, ["ok", "cancelled", "error", "cancelled"]);
+    }
+
+    // Python: tests/test_turn_that_did_not_complete.py::test_a_barge_in_keeps_what_the_rounds_used_on_the_span
+    // (a call cut when the turn is cut ends cancelled)
+    #[test]
+    fn a_call_dropped_ends_cancelled() {
+        let mock = Arc::new(MockTelemetryProvider::default());
+        let turn = started(&mock);
+        drop(turn.start_call("lookup", "c1"));
+        let [span] = mock.get_spans(SpanKind::LlmToolCall).try_into().unwrap();
+        assert_eq!(span.status, "cancelled");
+        turn.ended(LoopEndReason::Completed, 1, &Metadata::new());
     }
 }

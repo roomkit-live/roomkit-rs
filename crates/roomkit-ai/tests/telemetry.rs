@@ -2,11 +2,7 @@
 //! `tests/test_telemetry.py::TestLLMTelemetry`, and the span tests of
 //! `tests/test_ai_streaming_tool_loop.py`, `test_unified_tool_call.py`.
 
-#![expect(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "a test fails on a broken fixture"
-)]
+#![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::future::{Future, ready};
 use std::pin::Pin;

@@ -332,8 +332,16 @@ impl<S: ConversationStore> RoomKit<S> {
                 hand_back: options.hand_back.clone(),
             },
         );
-        self.open_child_room(&handle, &parent, &options).await?;
-        self.announce_task(&handle, options.post_status).await?;
+        handle.hold_span(self.inner.delegation_span(&handle, options.wait));
+        let opened_room = self.open_child_room(&handle, &parent, &options).await;
+        let announced = match opened_room {
+            Ok(()) => self.announce_task(&handle, options.post_status).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = announced {
+            handle.fail_span(error.to_string());
+            return Err(error);
+        }
         // From here the task ends however this call ends: a caller cut
         // before its run started ends it cancelled (Python's `started`).
         let unstarted = Unstarted::new(self, &handle, &options);
