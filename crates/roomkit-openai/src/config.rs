@@ -61,8 +61,10 @@ pub struct OpenAiConfig {
     /// `None` sends no bound, and the endpoint decides (Python's
     /// `max_tokens=None`).
     pub max_tokens: Option<u32>,
-    /// How long a request waits for the endpoint between two reads, and
-    /// for its writes (Python's `httpx.Timeout(timeout)`).
+    /// How long a request waits for the endpoint between two reads, the
+    /// whole answer unbounded, as Python's `httpx.Timeout(timeout)` bounds
+    /// each read; a request's writes are not bounded, which reqwest does
+    /// not offer.
     pub timeout: Duration,
     /// How long a request waits for its connection.
     pub connect_timeout: Duration,

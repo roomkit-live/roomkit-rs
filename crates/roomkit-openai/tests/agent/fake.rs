@@ -22,6 +22,9 @@ pub(crate) struct Reply {
     content_type: &'static str,
     /// What a body streamed past its own repeats, until the client stops.
     fill: Vec<u8>,
+    /// The wait before each server-sent event after the first, when the
+    /// body is sent event by event.
+    pace: Option<std::time::Duration>,
 }
 
 /// The length an answer's head declares.
@@ -58,6 +61,15 @@ impl Reply {
             silent: false,
             content_type: "application/json",
             fill: b" ".to_vec(),
+            pace: None,
+        }
+    }
+
+    /// A streamed completion whose events come `pace` apart, one by one.
+    pub(crate) fn paced(chunks: &[Value], pace: std::time::Duration) -> Self {
+        Self {
+            pace: Some(pace),
+            ..Self::events(chunks)
         }
     }
 
@@ -135,6 +147,7 @@ impl Reply {
             silent: false,
             content_type: "application/json",
             fill: b" ".to_vec(),
+            pace: None,
         }
     }
 
@@ -314,8 +327,18 @@ async fn answer(stream: &mut TcpStream, reply: &Reply) {
         "HTTP/1.1 {} Fake\r\nContent-Type: {}\r\n{length}{location}Connection: close\r\n\r\n",
         reply.status, reply.content_type
     );
-    let mut sent = stream.write_all(head.as_bytes()).await.is_ok()
-        && stream.write_all(reply.body.as_bytes()).await.is_ok();
+    let mut sent = stream.write_all(head.as_bytes()).await.is_ok();
+    if let Some(pace) = reply.pace {
+        for (at, event) in reply.body.split_inclusive("\n\n").enumerate() {
+            if at > 0 {
+                tokio::time::sleep(pace).await;
+            }
+            sent = sent && stream.write_all(event.as_bytes()).await.is_ok();
+            stream.flush().await.ok();
+        }
+    } else {
+        sent = sent && stream.write_all(reply.body.as_bytes()).await.is_ok();
+    }
     if let Length::Streamed(bytes) = reply.length {
         let whole = (64 * 1024 / reply.fill.len().max(1)).max(1) * reply.fill.len();
         let chunk: Vec<u8> = reply.fill.iter().copied().cycle().take(whole).collect();

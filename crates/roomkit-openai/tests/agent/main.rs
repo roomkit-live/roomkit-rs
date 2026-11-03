@@ -683,6 +683,29 @@ async fn a_completion_past_the_timeout_fails_the_turn() {
     );
 }
 
+/// The timeout bounds the wait between two reads, not the whole answer,
+/// as Python's `httpx.Timeout(timeout)` bounds each read: a stream whose
+/// events come 50 ms apart is read whole under a 150 ms timeout, though it
+/// lasts 250 ms (RMK-1103).
+#[tokio::test]
+async fn the_timeout_bounds_reads_not_the_stream() {
+    let mut chunks = vec![
+        chunk(&json!({ "role": "assistant", "content": "We " })),
+        chunk(&json!({ "content": "open " })),
+        chunk(&json!({ "content": "at nine." })),
+    ];
+    chunks.extend(ending("stop", 30, 6));
+    let paced = Reply::paced(&chunks, Duration::from_millis(50));
+    let room = Room::configured(vec![paced], API_KEY, |config| OpenAiConfig {
+        timeout: Duration::from_millis(150),
+        ..config
+    })
+    .await;
+    let result = room.says(&room.sms, "+15550001", "Alice", "When?").await;
+    assert_eq!(result.error, None);
+    assert_eq!(room.sms.texts(), ["We open at nine."]);
+}
+
 /// One chunk of a streamed completion, its first choice's `delta`.
 fn chunk(delta: &Value) -> Value {
     json!({ "object": "chat.completion.chunk", "choices": [{ "index": 0, "delta": delta }] })
