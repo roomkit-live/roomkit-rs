@@ -301,8 +301,10 @@ pub trait Channel: Send + Sync + 'static {
 
     /// Whether it takes one in `room_id`: as
     /// [`supports_streaming_delivery`](Channel::supports_streaming_delivery)
-    /// says by default. The kit asks it, for a channel that streams, as a
-    /// response streams in the room.
+    /// says by default. The kit asks it of every transport a response's rows
+    /// reach, at each stream in the room, whatever
+    /// [`supports_streaming_delivery`](Channel::supports_streaming_delivery)
+    /// says: a channel may stream once a client connects.
     fn supports_streaming_delivery_for(&self, _room_id: &RoomId) -> bool {
         self.supports_streaming_delivery()
     }
@@ -477,8 +479,8 @@ pub trait Channel: Send + Sync + 'static {
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send;
 
     /// Delivers a response as it is written (RFC §6.1 `deliver_stream`), for
-    /// a channel that
-    /// [`supports_streaming_delivery`](Channel::supports_streaming_delivery):
+    /// a channel that says it takes one in the room
+    /// ([`supports_streaming_delivery_for`](Channel::supports_streaming_delivery_for)):
     /// `text_stream` yields the response's text as it comes and each row
     /// once the store holds it, with its id and its index; the channel is
     /// never delivered those rows again. `event` is the empty event the

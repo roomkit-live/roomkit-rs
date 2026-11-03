@@ -418,8 +418,8 @@ pub enum ChannelRequest {
 }
 
 /// The channel that reads a turn's response as it is written (RFC §6.1
-/// `supports_streaming_delivery`, `deliver_stream`): a transport the
-/// response's rows reach, which declares it streams.
+/// `supports_streaming_delivery_for`, `deliver_stream`): a transport the
+/// response's rows reach, which says it streams in the room.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StreamTarget {
     /// The channel's binding.

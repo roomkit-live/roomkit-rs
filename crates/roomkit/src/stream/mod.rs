@@ -11,8 +11,8 @@
 //! kit's turn executor, its items crossing the turn backend as frames, a
 //! window of them at a time, as the kit's reader pulls them (RFC §10.6.4).
 //!
-//! The kit's reader is a transport that declares
-//! [`supports_streaming_delivery`](crate::ChannelDeclaration::supports_streaming_delivery):
+//! The kit's reader is a transport that streams in the room
+//! ([`supports_streaming_delivery_for`](crate::Channel::supports_streaming_delivery_for)):
 //! its [`deliver_stream`](crate::Channel::deliver_stream) reads a
 //! [`DeliveryStream`], one stream of [`StreamItem`]s, the text deltas and
 //! each row once the store holds it, in index order (step 4, decision 9). It

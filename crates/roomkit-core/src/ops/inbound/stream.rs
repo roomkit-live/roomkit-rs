@@ -13,8 +13,9 @@
 //! The room is read again for the stream: its first transport that the
 //! response's rows reach and that streams in the room
 //! (`supports_streaming_delivery_for`, asked of every such transport at
-//! each stream, whatever it declared) reads it as it is written, the one streaming target of the response; no
-//! target when the agent cannot write (RFC §7.5 rule 2). The driver hands
+//! each stream, whatever it declared) reads it as it is written, the one
+//! streaming target of the response; no target when the agent cannot write
+//! (RFC §7.5 rule 2). The driver hands
 //! each row the stream ends back as an [`Entry::Row`](crate::ops::Entry::Row),
 //! which commits as a response, through `BEFORE_BROADCAST` once (RFC
 //! §9.5), and is delivered to the others while the turn goes on; its
@@ -115,8 +116,8 @@ impl StreamJob {
 enum ReadStage {
     /// The room is read for the stream's target.
     Loading(EffectId),
-    /// The transports the rows reach that declare they stream are asked
-    /// whether they stream in the room (RFC §6.1
+    /// The transports the rows reach are asked whether they stream in the
+    /// room (RFC §6.1
     /// `supports_streaming_delivery_for`), the room as the read found it.
     Asking(EffectId),
     /// The stream is read, its rows committed as they come.

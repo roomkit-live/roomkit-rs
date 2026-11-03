@@ -62,12 +62,12 @@ pub struct ChannelConfig {
     /// carrying private chats and groups (WhatsApp Personal), a message
     /// without the key is addressed by its sender.
     pub chat_key: Option<String>,
-    /// Whether the channel, a transport, takes a streamed response as it is
-    /// written (RFC §6.1 `supports_streaming_delivery`): the first transport
-    /// a response's rows reach that does reads its stream through its
-    /// `deliver_stream()`, the text as it comes and each row once the store
-    /// holds it, and is not delivered those rows again (RFC §12.2 steps 13s
-    /// and 14s). `false` by default.
+    /// What the channel, a transport, declared at its registration (RFC §6.1
+    /// `supports_streaming_delivery`): `false` by default. The operations do
+    /// not read it: at each stream, every transport a response's rows reach
+    /// is asked `supports_streaming_delivery_for`
+    /// ([`ChannelRequest::StreamsIn`](crate::ops::ChannelRequest::StreamsIn));
+    /// a channel's own answer defaults to this declaration.
     pub supports_streaming_delivery: bool,
     /// How many of a room's latest events its turns read (RFC §6.1
     /// `recent_events_window`): what a context of a room it is bound to
