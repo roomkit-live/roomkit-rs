@@ -109,3 +109,50 @@ fn images_after_an_assistant_s_message_are_a_user_message_of_their_own() {
     assert_eq!(applied.len(), 2);
     assert_eq!(applied[1], AiMessage::new(AiRole::User, vec![image]));
 }
+
+// Python: tests/test_channels/test_tool_usage_memory.py::TestToolUsageMemory::test_record_revealed_feeds_reveal
+#[test]
+fn record_revealed_feeds_reveal() {
+    let memory = ToolUsageMemory::default();
+    memory.record_revealed(&room(), &["spotify_play".to_owned()]);
+    assert_eq!(memory.tool_names(&room()), ["spotify_play"]);
+}
+
+// Python: tests/test_channels/test_tool_usage_memory.py::TestToolUsageMemory::test_record_revealed_filters_infra_and_shares_the_reveal_cap
+#[test]
+fn record_revealed_shares_the_reveal_cap() {
+    let memory = ToolUsageMemory::default();
+    let result = ToolResult::Text("ok".to_owned());
+    memory.record(&room(), "tool_used", &Metadata::new(), &result);
+    let burst: Vec<String> = (0..12).map(|at| format!("tool_{at}")).collect();
+    memory.record_revealed(&room(), &burst);
+    // The burst ages the older used tool out of their shared recency window.
+    assert_eq!(memory.tool_names(&room()), burst);
+    memory.record(&room(), "tool_0", &Metadata::new(), &result);
+    assert_eq!(
+        memory.tool_names(&room()).last().map(String::as_str),
+        Some("tool_0")
+    );
+}
+
+// Python: tests/test_channels/test_tool_usage_memory.py::TestToolUsageMemory::test_live_entries_preempt_hydration
+#[test]
+fn live_entries_preempt_hydration() {
+    let memory = ToolUsageMemory::default();
+    let result = ToolResult::Text("ok".to_owned());
+    memory.record(&room(), "live", &Metadata::new(), &result);
+    memory.hydrate(&room(), ["stale"].into_iter());
+    assert_eq!(memory.tool_names(&room()), ["live"]);
+}
+
+// Python: tests/test_channels/test_tool_usage_memory.py::TestToolUsageInContext::test_build_context_hydrates_from_loader_once
+#[test]
+fn a_room_is_hydrated_once_even_from_nothing() {
+    let memory = ToolUsageMemory::default();
+    memory.hydrate(&room(), std::iter::empty());
+    memory.hydrate(&room(), ["late"].into_iter());
+    assert_eq!(memory.tool_names(&room()), Vec::<String>::new());
+    memory.forget(&room());
+    memory.hydrate(&room(), ["read_again"].into_iter());
+    assert_eq!(memory.tool_names(&room()), ["read_again"]);
+}

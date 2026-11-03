@@ -38,7 +38,7 @@ pub(crate) fn is_mark(c: char) -> bool {
 }
 
 /// Whether Python's `str.isalnum()` accepts `c`.
-pub(crate) fn is_alnum(c: char) -> bool {
+pub fn is_alnum(c: char) -> bool {
     within(ALNUM, c)
 }
 

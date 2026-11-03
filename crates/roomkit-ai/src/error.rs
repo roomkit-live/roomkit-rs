@@ -85,6 +85,20 @@ pub enum AiError {
     /// budget being a positive number.
     #[error("turn_budget_tokens must be a positive number, got 0")]
     TurnBudgetTokens,
+    /// A tool under a name Tool Search serves, `find_tools` or `list_tools`
+    /// (RFC §21.1): Python's `ValueError`, which turning Tool Search off frees.
+    #[error(
+        "tool {name:?} is a tool the channel serves itself: rename it or set tool_search to \
+         Some(false) (RFC §21.1)"
+    )]
+    ToolSearchName {
+        /// The name.
+        name: String,
+    },
+    /// A token cap of zero (RFC §6.4): Python's `ValueError`, a cap being a
+    /// positive number or none.
+    #[error("tool_search_threshold_tokens must be a positive integer or None, got 0")]
+    ToolSearchThresholdTokens,
     /// A retry policy's delay or multiplier is not greater than 0, as
     /// Python's `RetryPolicy` refuses it (`gt=0`): pydantic's words.
     #[error("{reason}")]

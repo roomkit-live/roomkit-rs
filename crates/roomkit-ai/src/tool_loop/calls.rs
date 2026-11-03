@@ -11,8 +11,9 @@ use tokio::time::Instant;
 use super::generation::{Called, Partial};
 use super::{Loop, ToolEnd};
 use crate::provider::AiProvider;
+use crate::skills::ACTIVATE_SKILL;
 use crate::texts;
-use crate::tools::{ToolError, ToolResult, read_tool_result, repair, schema};
+use crate::tools::{ToolContext, ToolError, ToolResult, read_tool_result, repair, schema};
 
 /// The kind a call past its bound reads as (RFC §21.6).
 const TIMED_OUT: &str = "ToolTimeoutError";
@@ -42,7 +43,12 @@ impl<P: AiProvider> Loop<P> {
                     .map(|turn| turn.start_call(&call.name, &call.id));
                 (self.execute(call).await, Some(asked))
             }
-            Gated::Refused(refused) => (refused, None),
+            Gated::Refused(refused) => {
+                if let Some(search) = &self.search {
+                    search.settle_refused(&called.call.id);
+                }
+                (refused, None)
+            }
         };
         let ended = match &self.turn {
             Some(turn) => turn.on_tool_call(ended).await,
@@ -59,6 +65,9 @@ impl<P: AiProvider> Loop<P> {
             turn.report_tool_call(&reported);
         }
         if let Some(asked) = asked {
+            if let Some(search) = &self.search {
+                search.settle(&reported.call.id, &reported.call.name, outcome);
+            }
             self.remember(&reported.call.name, &asked, outcome, &result);
         }
         ToolEnd {
@@ -127,14 +136,30 @@ impl<P: AiProvider> Loop<P> {
             return refuse(texts::not_available(&model_call.name));
         }
         let Some((tool, _)) = self.toolbox.find(&model_call.name) else {
-            return refuse(texts::not_declared(&model_call.name));
+            // While a catalogue is hidden, a name no tool carries may be a
+            // tool the model misspelled: it can search (RFC §21.1).
+            return refuse(match self.search {
+                Some(_) => texts::no_such_tool(&model_call.name),
+                None => texts::not_declared(&model_call.name),
+            });
         };
         if !self.toolbox.permits(&self.policy, &model_call.name) {
             return refuse(texts::not_permitted(&model_call.name));
         }
+        // A hidden tool the model named: a search applied at call time, every
+        // guard after this one still standing (RFC §6.4).
+        if let Some(search) = &self.search {
+            search.recover(&model_call.id, &model_call.name);
+        }
         let call = match self.repaired(model_call, &tool.parameters) {
             Ok(call) => call,
-            Err(refused) => return Gated::Refused(*refused),
+            Err(refused) => {
+                // Its next attempt needs the schema on the wire (RFC §6.4).
+                if let Some(search) = &self.search {
+                    search.retain(&model_call.name);
+                }
+                return Gated::Refused(*refused);
+            }
         };
         let asked = call.arguments.clone();
         let Some(turn) = &self.turn else {
@@ -199,6 +224,22 @@ impl<P: AiProvider> Loop<P> {
         Ok(repaired)
     }
 
+    /// What `call` is told of its turn: an activation also what its hint may
+    /// name and reveal (RFC §24.4).
+    fn call_context(&self, call: &ToolCall) -> ToolContext {
+        let mut context = self.context.clone();
+        if call.name == ACTIVATE_SKILL {
+            context.search.clone_from(&self.search);
+            context.hintable = self
+                .declared()
+                .into_iter()
+                .map(|tool| tool.name)
+                .filter(|name| self.toolbox.hintable(name))
+                .collect();
+        }
+        context
+    }
+
     /// Runs `call` on the tool serving it, within the agent's bound per
     /// call (RFC §21.6), and reads its answer (RFC §9.3).
     async fn execute(&self, call: ToolCall) -> ToolCallReport {
@@ -206,7 +247,7 @@ impl<P: AiProvider> Loop<P> {
             let text = texts::not_declared(&call.name);
             return ended(call, ToolCallOutcome::Refused, text);
         };
-        let context = self.context.clone();
+        let context = self.call_context(&call);
         // The tool gets its own call: its intent is the person's, as a
         // handler of the reference implementation never reads it (RFC §6.4).
         let mut handed = call.clone();

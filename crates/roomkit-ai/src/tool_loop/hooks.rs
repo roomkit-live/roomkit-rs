@@ -21,10 +21,11 @@ use serde_json::Value;
 
 use super::{Loop, Spent};
 use crate::loop_events::{
-    AiGenerationEvent, AiResponseEvent, DeclaredTool, FromToolOptions, ToolRoundEvent,
-    response_transcript,
+    AiGenerationEvent, AiResponseEvent, DeclaredTool, FromToolOptions, ToolDeclarationOrigin,
+    ToolRoundEvent, response_transcript,
 };
 use crate::provider::{AiContext, AiMessage, AiProvider, AiToolCall, AiToolResultPart};
+use crate::tools::AiTool;
 
 /// What `BEFORE_AI_GENERATION`'s hooks and `AFTER_TOOL_ROUND`'s left of the
 /// turn's context beside its prompt and sampling, which the loop holds
@@ -113,7 +114,13 @@ impl<P: AiProvider> Loop<P> {
         self.reasoning_effort = left.reasoning_effort;
         self.adopted.metadata = left.metadata;
         if left.tools != built.tools {
-            self.toolbox = Arc::new(self.toolbox.as_left(&left.tools));
+            let adopted = self.toolbox.as_left(&left.tools);
+            // A tool it adds is declared at every round, never hidden (RFC §6.4).
+            if let Some(search) = &self.search {
+                let known = self.toolbox.names();
+                search.never_hide(adopted.names().into_iter().filter(|n| !known.contains(n)));
+            }
+            self.toolbox = Arc::new(adopted);
         }
         let kept: BTreeSet<&str> = left.tools.iter().map(|tool| tool.name.as_str()).collect();
         self.adopted.withdrawn.extend(
@@ -190,9 +197,10 @@ impl<P: AiProvider> Loop<P> {
         turn.observe_turn(&event, move || host.emit_turn_event("ai_response", data));
     }
 
-    /// The tools the turn declares, by their own schemas: what the tool
-    /// policy permits, less what was withdrawn.
-    pub(super) fn declared(&self) -> Vec<crate::tools::AiTool> {
+    /// The turn's toolset as its hooks read it, by the tools' own schemas:
+    /// what the tool policy permits, less what was withdrawn, Tool Search's
+    /// whole catalogue included (RFC §6.4).
+    pub(super) fn declared(&self) -> Vec<AiTool> {
         self.toolbox
             .declared(&self.policy)
             .into_iter()
@@ -200,13 +208,44 @@ impl<P: AiProvider> Loop<P> {
             .collect()
     }
 
-    /// The declaration the turn reports (RFC §6.4): its first round's,
-    /// which every later round's is part of, a withdrawal only taking
-    /// tools away.
-    pub(super) fn declared_tools(&self) -> Vec<DeclaredTool> {
-        self.declared()
-            .iter()
-            .map(|tool| DeclaredTool::from_tool(tool, FromToolOptions::default()))
-            .collect()
+    /// What the first round declares: the toolset, collapsed when Tool Search
+    /// hides its catalogue.
+    pub(super) fn first_declaration(&self) -> Vec<AiTool> {
+        match &self.search {
+            Some(search) => search.collapsed(self.declared()),
+            None => self.declared(),
+        }
+    }
+
+    /// Whether the next round declares otherwise, a round of calls just ended
+    /// and `withdrawn` tools withdrawn before it: where a tool must appear, a
+    /// search's or a call's, or where a hook withdrew one (RFC §6.4).
+    pub(super) fn declaration_changes(&self, withdrawn: usize) -> bool {
+        if let Some(search) = &self.search {
+            search.next_round();
+            return true;
+        }
+        self.adopted.withdrawn.len() != withdrawn
+    }
+
+    /// What this round's requests show, each tool's schema with the intent
+    /// property when the agent asks for one, the round's declaration joining
+    /// what the turn reports (RFC §6.4).
+    pub(super) fn round_tools(&self, spent: &mut Spent) -> Vec<AiTool> {
+        let toolset = self.declared();
+        let round = match &self.search {
+            Some(search) => search.round_declaration(toolset),
+            None => toolset,
+        };
+        spent.declare(round.iter().map(|tool| {
+            let origin = self
+                .search
+                .as_ref()
+                .map_or(ToolDeclarationOrigin::Always, |search| {
+                    search.origin(&tool.name)
+                });
+            DeclaredTool::from_tool(tool, FromToolOptions { origin })
+        }));
+        self.shown_tools(round)
     }
 }

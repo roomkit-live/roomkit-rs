@@ -209,6 +209,7 @@ fn definition(written: &Value) -> AiTool {
         name: text("name"),
         description: text("description"),
         parameters: written.get("parameters").cloned().unwrap_or(Value::Null),
+        tags: Vec::new(),
     }
 }
 

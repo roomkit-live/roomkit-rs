@@ -63,6 +63,7 @@ use crate::provider::{
 };
 use crate::steering::{Loops, Steering};
 use crate::stream::{Items, Yielder, items, join_all};
+use crate::tool_search::TurnSearch;
 use crate::tool_usage::{ToolUsageMemory, TurnMedia, carries_turn_images};
 use crate::tools::ToolContext;
 use crate::tools::ToolPolicy;
@@ -190,6 +191,8 @@ pub(crate) struct Loop<P> {
     pub(crate) telemetry: TurnTelemetry,
     /// The turn's `llm.generate` span, once it runs.
     pub(crate) turn_span: Option<TurnSpan>,
+    /// The turn's Tool Search, when it hides its catalogue (RFC §6.4).
+    pub(crate) search: Option<Arc<TurnSearch>>,
 }
 
 impl<P: AiProvider> Loop<P> {
@@ -249,8 +252,8 @@ impl<P: AiProvider> Loop<P> {
             .loops
             .start(Some(self.context.room_id.clone()), turn_id);
         let mut system_prompt = self.system_prompt.clone();
-        let mut declared = self.shown_tools(self.declared());
-        let mut spent = Spent::reporting(self.declared_tools());
+        let mut spent = Spent::starting();
+        let mut declared = self.round_tools(&mut spent);
         let mut had_tool_round = false;
         let mut tool_rounds = 0;
         let mut prefix = String::new();
@@ -333,8 +336,8 @@ impl<P: AiProvider> Loop<P> {
             tool_rounds += u32::from(!ran.calls.is_empty());
             let withdrawn = self.adopted.withdrawn.len();
             messages.extend(self.after_tool_round(round, ran).await);
-            if self.adopted.withdrawn.len() != withdrawn {
-                declared = self.shown_tools(self.declared());
+            if self.declaration_changes(withdrawn) {
+                declared = self.round_tools(&mut spent);
             }
             if steering.read(&mut messages, &mut system_prompt) {
                 let ending = (&limits, &steering, &out);
@@ -693,9 +696,8 @@ struct Spent {
 }
 
 impl Spent {
-    /// Nothing spent yet by a turn that reports `declared` as its
-    /// declaration.
-    fn reporting(declared: Vec<DeclaredTool>) -> Self {
+    /// Nothing spent yet, and nothing declared.
+    fn starting() -> Self {
         Self {
             usage: Metadata::new(),
             last: Metadata::new(),
@@ -703,7 +705,7 @@ impl Spent {
             complete: true,
             segments: Vec::new(),
             calls: 0,
-            declared,
+            declared: Vec::new(),
             started: Instant::now(),
             thinking: Vec::new(),
         }
@@ -713,6 +715,17 @@ impl Spent {
     fn add_thinking(&mut self, thinking: String) {
         if !thinking.is_empty() {
             self.thinking.push(thinking);
+        }
+    }
+
+    /// Adds what a round declared to the turn's declaration: one entry per
+    /// name, in first-declaration order, a later round's reveal kept once a
+    /// search dropped it (RFC §6.4).
+    fn declare(&mut self, round: impl Iterator<Item = DeclaredTool>) {
+        for tool in round {
+            if !self.declared.iter().any(|known| known.name == tool.name) {
+                self.declared.push(tool);
+            }
         }
     }
 

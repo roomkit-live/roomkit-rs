@@ -67,4 +67,4 @@ pub mod verification;
 
 pub use self::permissions::{visibility_allows, visible_events};
 #[doc(hidden)]
-pub use self::unicode::python_repr;
+pub use self::unicode::{is_alnum, python_repr};

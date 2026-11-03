@@ -13,8 +13,8 @@ use roomkit::model::{
 use roomkit::{HookOptions, HookTrigger, ProcessInboundOptions, SendEventOptions, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiChannelOptions, AiError, AiTool, DiscoverOptions, SkillRegistry, ToolPolicy, ToolResult,
-    Tools,
+    AiChannelOptions, AiError, AiTool, DiscoverOptions, HumanInputToolHandler,
+    HumanInputToolHandlerOptions, SkillRegistry, ToolEntry, ToolPolicy, ToolResult, Tools,
 };
 use serde_json::json;
 
@@ -628,4 +628,134 @@ async fn an_empty_registry_adds_nothing() {
         (request.system_prompt.as_deref(), request.tools.len()),
         (Some("Base."), 0)
     );
+}
+
+fn spotify() -> Vec<ToolEntry> {
+    ["spotify_play", "spotify_search", "x0", "x1"]
+        .into_iter()
+        .map(|name| ToolEntry::Definition(AiTool::new(name, "Does a thing").unwrap()))
+        .collect()
+}
+
+fn declares(model: &ScriptedProvider, request: usize, name: &str) -> bool {
+    model
+        .requests()
+        .get(request)
+        .is_some_and(|request| request.tools.iter().any(|tool| tool.name == name))
+}
+
+// Python: tests/test_toolset_edges.py::test_a_text_activation_named_after_tools_reveals_them_for_the_next_turn
+/// RFC §24.4: an activation that names no skill but tools is served, its
+/// hint naming them, and reveals them as `find_tools` reveals its matches.
+#[tokio::test]
+async fn a_text_activation_named_after_tools_reveals_them_for_the_next_turn() {
+    let tree = TempDir::new();
+    let model = ScriptedProvider::new([
+        activating("c1", "Spotify"),
+        ScriptedRound::answering("Done."),
+        ScriptedRound::answering("Next."),
+    ]);
+    let room = Room::new(model.clone(), skills(&tree), |options| AiChannelOptions {
+        tools: spotify(),
+        tool_search: Some(true),
+        ..options
+    })
+    .await;
+    room.says("Play something").await;
+    room.says("Again").await;
+    assert!(!declares(&model, 0, "spotify_play"));
+    let answer: serde_json::Value = serde_json::from_str(&tool_results(&model)[1][0]).unwrap();
+    assert_eq!(
+        answer,
+        json!({
+            "error": "Skill 'Spotify' not found",
+            "available_skills": ["doc-helper", "extra-2", "extra-3", "extra-4", "extra-5", "extra-6"],
+            "tools_hint": "'Spotify' is not a skill, but these TOOLS match and are now in your \
+                tool list — call one directly instead: spotify_play, spotify_search.",
+        })
+    );
+    for request in [1, 2] {
+        assert!(declares(&model, request, "spotify_search"), "{request}");
+        assert!(!declares(&model, request, "x0"), "{request}");
+    }
+    let outcomes: Vec<_> = room.ends().await.iter().map(|row| row.outcome).collect();
+    assert_eq!(outcomes, [Some(ToolCallOutcome::Served)]);
+}
+
+// Python: tests/test_toolset_edges.py::test_a_blocked_text_activation_reveals_nothing
+#[tokio::test]
+async fn a_blocked_text_activation_reveals_nothing() {
+    let tree = TempDir::new();
+    let model = ScriptedProvider::new([
+        activating("c1", "spotify"),
+        ScriptedRound::answering("Done."),
+    ]);
+    let room = Room::new(model.clone(), skills(&tree), |options| AiChannelOptions {
+        tools: spotify(),
+        tool_search: Some(true),
+        ..options
+    })
+    .await;
+    room.kit
+        .hook(
+            HookTrigger::OnToolCall,
+            |_event: ToolCallEvent, _context| async move {
+                Ok(HookResult::block("no skills here", BlockOptions::default()))
+            },
+            HookOptions {
+                name: "no_skills".to_owned(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    room.says("Play something").await;
+    assert!(!declares(&model, 1, "spotify_play"));
+}
+
+// Python: tests/test_toolset_edges.py::test_an_activation_hints_no_human_input_tool_on_either_path
+#[tokio::test]
+async fn an_activation_hints_no_tool_the_channel_serves_itself_nor_a_person_s() {
+    let tree = TempDir::new();
+    let model = ScriptedProvider::new([
+        activating("c1", "ask"),
+        activating("c2", "read_skill"),
+        ScriptedRound::answering("Done."),
+    ]);
+    let human = HumanInputToolHandler::new(
+        ["ask_person"],
+        HumanInputToolHandlerOptions {
+            tool_definitions: vec![AiTool::new("ask_person", "Ask").unwrap()],
+            ..HumanInputToolHandlerOptions::default()
+        },
+    )
+    .unwrap();
+    let room = Room::new(model.clone(), skills(&tree), |options| AiChannelOptions {
+        human_input_handler: Some(human),
+        ..options
+    })
+    .await;
+    room.says("Ask").await;
+    for answer in &tool_results(&model)[2] {
+        assert!(!answer.contains("tools_hint"), "{answer}");
+    }
+}
+
+// Python: tests/test_tool_repeat_guard.py, the hint's words, whatever Tool Search says
+#[tokio::test]
+async fn an_activation_named_after_a_tool_is_served_where_nothing_is_hidden() {
+    let tree = TempDir::new();
+    let model = ScriptedProvider::new([
+        activating("c1", "spotify"),
+        ScriptedRound::answering("Done."),
+    ]);
+    let room = Room::new(model.clone(), skills(&tree), |options| AiChannelOptions {
+        tools: spotify(),
+        tool_search: Some(false),
+        ..options
+    })
+    .await;
+    room.says("Play something").await;
+    assert!(tool_results(&model)[1][0].contains("call one directly instead"));
+    let outcomes: Vec<_> = room.ends().await.iter().map(|row| row.outcome).collect();
+    assert_eq!(outcomes, [Some(ToolCallOutcome::Served)]);
 }

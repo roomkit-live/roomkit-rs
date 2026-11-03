@@ -199,8 +199,7 @@ const TYPE_ERROR: &str = "builtins:TypeError";
 
 /// A definition of the binding's metadata as Python's `AITool(name=
 /// t["name"], description=t.get("description", ""), parameters=
-/// t.get("parameters", {}))` reads it; its `tags`, which [`AiTool`] does
-/// not carry, are left unread.
+/// t.get("parameters", {}), tags=t.get("tags", []) or [])` reads it.
 fn definition(tool: &Value) -> Result<AiTool, ChannelError> {
     let Value::Object(fields) = tool else {
         return Err(not_indexed(tool));
@@ -222,6 +221,7 @@ fn definition(tool: &Value) -> Result<AiTool, ChannelError> {
         let refusal = Refusal::new("dict_type", "Input should be a valid dictionary", value);
         refusals.push(refusal.of("parameters"));
     }
+    let tags = tags_of(fields.get("tags"), &mut refusals);
     if !refusals.is_empty() {
         return Err(validation_error("AITool", &refusals));
     }
@@ -232,7 +232,30 @@ fn definition(tool: &Value) -> Result<AiTool, ChannelError> {
             .unwrap_or_default()
             .to_owned(),
         parameters: parameters.cloned().unwrap_or_else(|| json!({})),
+        tags,
     })
+}
+
+/// A definition's `tags`, nothing for what Python reads as false, with what
+/// pydantic refuses of them added to `refusals`.
+fn tags_of(tags: Option<&Value>, refusals: &mut Vec<Refusal>) -> Vec<String> {
+    let Some(tags) = tags.filter(|tags| !is_falsy(tags)) else {
+        return Vec::new();
+    };
+    let Value::Array(tags) = tags else {
+        refusals.push(Refusal::new("list_type", "Input should be a valid list", tags).of("tags"));
+        return Vec::new();
+    };
+    tags.iter()
+        .filter_map(|tag| {
+            if tag.is_string() {
+                tag.as_str().map(str::to_owned)
+            } else {
+                refusals.push(text_refused(tag).of("tags"));
+                None
+            }
+        })
+        .collect()
 }
 
 /// pydantic's refusal of `name`, written `value`, when no vendor accepts
@@ -319,6 +342,7 @@ mod tests {
                 name: "outlook".to_owned(),
                 description: String::new(),
                 parameters: json!({}),
+                tags: Vec::new(),
             }]
         );
         for falsy in [
@@ -379,6 +403,7 @@ mod tests {
                 name: "bad name!".to_owned(),
                 description: String::new(),
                 parameters: json!({}),
+                tags: Vec::new(),
             }]),
             ..AiChannelTurnConfig::default()
         };

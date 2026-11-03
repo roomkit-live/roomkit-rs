@@ -68,6 +68,18 @@ fn agent_options_defaults_as_python() {
 #[test]
 fn ai_channel_options_defaults_as_python() {
     let defaults = AiChannelOptions::default();
+    // roomkit.AIChannel.__init__(tool_search) = None
+    assert_eq!(defaults.tool_search, None);
+    // roomkit.AIChannel.__init__(tool_search_pinned) = None
+    assert_eq!(defaults.tool_search_pinned.len(), 0);
+    // roomkit.AIChannel.__init__(tool_search_threshold) = 20
+    assert_eq!(defaults.tool_search_threshold, 20);
+    // roomkit.AIChannel.__init__(tool_search_threshold_pct) = 10.0
+    assert!((defaults.tool_search_threshold_pct - 10.0).abs() < f64::EPSILON);
+    // roomkit.AIChannel.__init__(tool_search_miss_hint) = None
+    assert_eq!(defaults.tool_search_miss_hint, None);
+    // roomkit.AIChannel.__init__(tool_search_threshold_tokens) = 8000
+    assert_eq!(defaults.tool_search_threshold_tokens, Some(8000));
     // roomkit.AIChannel.__init__(max_context_events) = 50
     assert_eq!(defaults.max_context_events, 50);
     // roomkit.AIChannel.__init__(max_empty_retries) = 1

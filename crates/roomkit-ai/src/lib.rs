@@ -91,6 +91,7 @@ mod stream;
 pub mod testing;
 mod texts;
 mod tool_loop;
+mod tool_search;
 mod tool_usage;
 mod tools;
 mod transcript_content;
@@ -121,6 +122,7 @@ pub use self::provider::{
 pub use self::skills::dumps;
 pub use self::skills::{DiscoverOptions, Skill, SkillError, SkillMetadata, SkillRegistry};
 pub use self::steering::SteerOptions;
+pub use self::tool_search::{TOOL_FIND_TOOLS, TOOL_LIST_TOOLS, TOOL_SEARCH_INFRA_TOOL_NAMES};
 pub use self::tools::{
     AiTool, Tool, ToolCallContext, ToolEntry, ToolError, ToolFuture, ToolHandler, ToolPolicy,
     ToolResult, ToolResultPart, compose_tool_handlers, current_tool_actor_id, current_tool_call,

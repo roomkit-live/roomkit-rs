@@ -162,10 +162,31 @@ impl<'a> Catalogue<'a> {
                 "an MCP tool's description is cut"
             );
         }
+        let tags = published_tags(tool);
         AiTool::new(name, bounded_text(description, DESCRIPTION_LIMIT))
             .ok()
-            .map(|tool| AiTool { parameters, ..tool })
+            .map(|tool| AiTool {
+                parameters,
+                tags,
+                ..tool
+            })
     }
+}
+
+/// The tags a server published for `tool`, which `FastMCP` writes in its
+/// `_meta.fastmcp.tags`: what lets `find_tools` meet a tool across languages
+/// (RFC §6.4). Python's `_definition`.
+fn published_tags(tool: &Tool) -> Vec<String> {
+    tool.meta
+        .as_ref()
+        .and_then(|meta| meta.0.get("fastmcp"))
+        .and_then(|fastmcp| fastmcp.get("tags"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Whether some vendor accepts `name` for a tool (RFC §6.7): letters,
@@ -176,4 +197,31 @@ fn is_tool_name(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::*;
+
+    /// A tool as a server lists it, its `_meta` as written.
+    fn tool(meta: &Value) -> Tool {
+        serde_json::from_value(json!({
+            "name": "search",
+            "inputSchema": { "type": "object" },
+            "_meta": meta,
+        }))
+        .unwrap()
+    }
+
+    // Python: tools/mcp.py's _definition(): FastMCP's _meta.fastmcp.tags
+    #[test]
+    fn a_tool_s_tags_are_what_fastmcp_published() {
+        let tagged = tool(&json!({ "fastmcp": { "tags": ["send", "message"] } }));
+        assert_eq!(published_tags(&tagged), ["send", "message"]);
+        let other = tool(&json!({ "other": { "tags": ["send"] } }));
+        assert_eq!(published_tags(&other), Vec::<String>::new());
+    }
 }

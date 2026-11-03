@@ -29,7 +29,8 @@ impl<P: AiProvider> Loop<P> {
     /// budget apart.
     pub(crate) fn footprint(&self, rounds: &[Vec<Message>], people: &[String]) -> TurnFootprint {
         let prompt = estimate_tokens(self.system_prompt.as_deref().unwrap_or(""));
-        let tools: usize = self.declared().iter().map(estimate_tool_tokens).sum();
+        let declared = self.first_declaration();
+        let tools: usize = declared.iter().map(estimate_tool_tokens).sum();
         let room: Vec<String> = [SPEAKER_ATTRIBUTION_NOTE.to_owned()]
             .into_iter()
             .chain(people_note(people))

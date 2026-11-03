@@ -40,7 +40,12 @@ use crate::skills::tools::{SkillTools, SkillTurn};
 use crate::steering::{Loops, SteerOptions};
 use crate::tool_loop::TurnTelemetry;
 use crate::tool_loop::{Adopted, Bounds, Loop, Resilience, ThinkingPublication};
-use crate::tool_usage::{ToolUsageMemory, TurnMedia};
+use crate::tool_search::{
+    DEFAULT_TOOL_SEARCH_THRESHOLD, DEFAULT_TOOL_SEARCH_THRESHOLD_PCT,
+    DEFAULT_TOOL_SEARCH_THRESHOLD_TOKENS, TOOL_SEARCH_INFRA_TOOL_NAMES, TOOL_SEARCH_PREAMBLE,
+    ToolSearch, ToolSearchOptions, TurnSearch,
+};
+use crate::tool_usage::{ToolUsageMemory, TurnMedia, used_tools};
 use crate::tools::toolbox::Toolbox;
 use crate::tools::{
     AiTool, DynToolset, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy, served_by,
@@ -216,6 +221,32 @@ pub struct AiChannelOptions {
     /// `ON_USER_INPUT_REQUIRED` hooks, and the channel's close settles the
     /// requests still open.
     pub human_input_handler: Option<HumanInputToolHandler>,
+    /// Whether a turn hides its catalogue behind `find_tools` and `list_tools`,
+    /// which reveal tools into the next round (RFC §6.4): `Some(true)` always,
+    /// `Some(false)` never, which frees those two names for a host's tool;
+    /// `None` when its tools would cost more than `tool_search_threshold_tokens`,
+    /// more than `tool_search_threshold_pct` of the model's window, or, with the
+    /// window unknown, count past `tool_search_threshold`. Python's `tool_search`.
+    pub tool_search: Option<bool>,
+    /// The tools Tool Search never hides, and whose schemas it does not count
+    /// (RFC §6.4). Python's `tool_search_pinned`.
+    pub tool_search_pinned: Vec<String>,
+    /// The tool count past which a catalogue is hidden when the model's window
+    /// is unknown, and the most matches a search returns. Python's
+    /// `tool_search_threshold`, 20 by default.
+    pub tool_search_threshold: usize,
+    /// The share of the model's window, in percent, past which a catalogue's
+    /// schemas are hidden. Python's `tool_search_threshold_pct`, 10.0 by
+    /// default.
+    pub tool_search_threshold_pct: f64,
+    /// What a search that finds nothing adds to its answer: where to look
+    /// instead, a pinned inventory tool it never names, say. Python's
+    /// `tool_search_miss_hint`.
+    pub tool_search_miss_hint: Option<String>,
+    /// The schema tokens past which a catalogue is hidden whatever the window,
+    /// more than zero; `None` sets no cap. Python's
+    /// `tool_search_threshold_tokens`, 8000 by default.
+    pub tool_search_threshold_tokens: Option<u64>,
 }
 
 impl Default for AiChannelOptions {
@@ -257,6 +288,12 @@ impl Default for AiChannelOptions {
             serialize_room_turns: false,
             steer_room_turns: false,
             human_input_handler: None,
+            tool_search: None,
+            tool_search_pinned: Vec::new(),
+            tool_search_threshold: DEFAULT_TOOL_SEARCH_THRESHOLD,
+            tool_search_threshold_pct: DEFAULT_TOOL_SEARCH_THRESHOLD_PCT,
+            tool_search_miss_hint: None,
+            tool_search_threshold_tokens: Some(DEFAULT_TOOL_SEARCH_THRESHOLD_TOKENS),
         }
     }
 }
@@ -280,7 +317,8 @@ impl fmt::Debug for AiChannelOptions {
 /// Each turn is one tool loop, the same for every provider (RFC §6.4 "One
 /// loop, streamed or not"):
 /// - each round declares the tools the [`ToolPolicy`] permits, in the
-///   order the options give them;
+///   order the options give them, those Tool Search leaves when it hides a
+///   catalogue;
 /// - a round that calls runs its calls concurrently, each through its gate
 ///   (RFC §21.1: a call cut short, a tool the turn does not carry, the
 ///   policy, the arguments' schema, then the kit's `BEFORE_TOOL_USE`
@@ -305,6 +343,10 @@ impl fmt::Debug for AiChannelOptions {
 /// MESSAGE carries the turn's record. A later turn's history replays each
 /// round at its place, from those rows (RFC §6.4). Called outside a kit,
 /// the turn returns the same rows at its end, buffered.
+///
+/// Past a threshold, a turn declares its pinned tools and hides the rest
+/// behind `find_tools` and `list_tools`, which it serves itself (RFC §6.4,
+/// [`AiChannelOptions::tool_search`]).
 ///
 /// With MCP servers' instructions, each turn's system prompt carries them
 /// after the channel's own (RFC §21.2); with skills, it then lists them,
@@ -354,6 +396,8 @@ pub struct AiChannel<P> {
     /// registration on their handler, taken when a kit registers it; 0
     /// before.
     human_input: Option<(HumanInputToolHandler, Arc<AtomicU64>)>,
+    /// What decides a turn's Tool Search (RFC §6.4).
+    tool_search: Arc<ToolSearch>,
     /// The identity block an [`Agent`](crate::Agent) writes at the end of
     /// its turns' system prompt.
     identity: Option<IdentityPrompt>,
@@ -437,6 +481,7 @@ impl<P> Clone for AiChannel<P> {
             loops: Arc::clone(&self.loops),
             room_turns: self.room_turns,
             human_input: self.human_input.clone(),
+            tool_search: Arc::clone(&self.tool_search),
             identity: self.identity.clone(),
         }
     }
@@ -503,6 +548,12 @@ impl<P: AiProvider> AiChannel<P> {
             serialize_room_turns,
             steer_room_turns,
             human_input_handler,
+            tool_search,
+            tool_search_pinned,
+            tool_search_threshold,
+            tool_search_threshold_pct,
+            tool_search_miss_hint,
+            tool_search_threshold_tokens,
         } = options;
         // Python's ToolPolicy, RetryPolicy and AITool refuse as they are
         // built, before its constructor runs.
@@ -515,8 +566,16 @@ impl<P: AiProvider> AiChannel<P> {
         check_budgets(turn_budget_tokens, turn_budget_usd, &provider, fallback)?;
         let instructions = instructions_of(&server_instructions)?;
         refuse_zero_bounds(tool_timeout, &tool_timeouts)?;
+        let search = ToolSearch::checked(ToolSearchOptions {
+            mode: tool_search,
+            pinned: tool_search_pinned,
+            threshold: tool_search_threshold,
+            threshold_pct: tool_search_threshold_pct,
+            miss_hint: tool_search_miss_hint,
+            threshold_tokens: tool_search_threshold_tokens,
+        })?;
         let skilled = (skills, skills_in_prompt);
-        let surface = tool_surface(tool_handler, tools, human_input_handler, skilled)?;
+        let surface = tool_surface(&search, tool_handler, tools, human_input_handler, skilled)?;
         Ok(Self {
             capabilities: ai_channel_capabilities(),
             channel_id,
@@ -566,6 +625,7 @@ impl<P: AiProvider> AiChannel<P> {
                 steered: steer_room_turns,
             },
             human_input: surface.human_input,
+            tool_search: Arc::new(search),
             identity: None,
         })
     }
@@ -752,19 +812,47 @@ impl<P: AiProvider> AiChannel<P> {
         Ok(Arc::new(toolbox.for_turn(base, handler, collisions)))
     }
 
+    /// The turn's toolbox and its Tool Search, when it hides its catalogue on
+    /// `toolbox` (RFC §6.4): the tools the room used, read from its stored rows
+    /// the first time, stay declared unless the turn stands alone.
+    fn turn_search(
+        &self,
+        toolbox: Arc<Toolbox>,
+        context: &RoomContext,
+        stands_alone: bool,
+    ) -> Result<(Arc<Toolbox>, Option<Arc<TurnSearch>>), AiError> {
+        let memory = &self.media.tool_usage;
+        let rows = context
+            .recent_events
+            .iter()
+            .filter(|past| self.is_own_tool_row(past));
+        let used = used_tools(rows).filter(|name| self.toolbox.in_tool_memory(name));
+        memory.hydrate(&context.room.id, used);
+        let window = self.provider.context_window();
+        let opened =
+            self.tool_search
+                .open(&toolbox, window, &context.room.id, (memory, stands_alone));
+        let Some(search) = opened else {
+            return Ok((toolbox, None));
+        };
+        let own: Arc<dyn DynToolset> = Arc::<TurnSearch>::clone(&search);
+        let with_tools = toolbox.with_discovery(own)?;
+        Ok((Arc::new(with_tools), Some(search)))
+    }
+
     /// The system prompt of a turn in `context`'s room: its binding's
     /// `system_prompt`, else `configured`'s, else the channel's own
     /// (Python's `_turn_settings`, binding metadata first; a `null` there,
     /// or a value that is no text, is not set), then the instruction a strategy gives this one turn
     /// ([`with_turn_instruction`]), then the MCP
     /// servers' instructions (RFC §21.2), then what its skills add (RFC
-    /// §6.4, §24.4).
+    /// §6.4, §24.4), then Tool Search's preamble when it is `searching`.
     fn turn_system_prompt(
         &self,
         binding: &ChannelBinding,
         configured: Option<&AiChannelTurnConfig>,
         context: &RoomContext,
-        stands_alone: bool,
+        (stands_alone, searching): (bool, bool),
     ) -> Option<String> {
         // An empty one lifts the channel's prompt for the room (RFC
         // Appendix A.9), the turn then sending none.
@@ -790,6 +878,12 @@ impl<P: AiProvider> AiChannel<P> {
                 };
                 Some(skills.system_prompt(prompt.as_deref(), turn))
             }
+        };
+        let prompt = if searching {
+            let before = prompt.unwrap_or_default();
+            Some(format!("{before}\n\n{TOOL_SEARCH_PREAMBLE}"))
+        } else {
+            prompt
         };
         self.with_identity_block(prompt, context)
     }
@@ -1023,7 +1117,7 @@ fn serve_human_input(
         .filter(|name| !defined.iter().any(|tool| &tool.name == *name))
         .cloned()
         .collect();
-    toolbox.add_dyn(Arc::clone(&toolset), defined)?;
+    toolbox.add_person(Arc::clone(&toolset), defined)?;
     toolbox.intercept(toolset, &declared_elsewhere);
     Ok((human, Arc::default()))
 }
@@ -1149,14 +1243,20 @@ struct ToolSurface {
 /// # Errors
 ///
 /// [`AiError::DuplicateTool`] for a tool given twice, or one under a tool
-/// the channel serves itself (RFC §21.1).
+/// the channel serves itself, [`AiError::ToolSearchName`] for one under a name
+/// Tool Search keeps (RFC §21.1).
 fn tool_surface(
+    search: &ToolSearch,
     tool_handler: Option<ToolHandler>,
     tools: Vec<ToolEntry>,
     human_input_handler: Option<HumanInputToolHandler>,
     (skills, skills_in_prompt): (Option<SkillRegistry>, bool),
 ) -> Result<ToolSurface, AiError> {
     let mut toolbox = Toolbox::default();
+    // The names Tool Search keeps for itself, before any tool takes one.
+    if search.reserves_names() {
+        toolbox.reserve(TOOL_SEARCH_INFRA_TOOL_NAMES.map(str::to_owned));
+    }
     // The host's handler is read at each call, so that a handler set
     // later serves the next calls (Python's `tool_handler` setter).
     let tool_handler = Arc::new(RwLock::new(tool_handler));
@@ -1298,7 +1398,13 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         settings.read_budgets(&binding.metadata)?;
         let budget = self.budget_of(&settings)?;
         let stands_alone = stands_alone(&event);
-        let system_prompt = self.turn_system_prompt(&binding, configured, &context, stands_alone);
+        let (toolbox, search) = self.turn_search(toolbox, &context, stands_alone)?;
+        let system_prompt = self.turn_system_prompt(
+            &binding,
+            configured,
+            &context,
+            (stands_alone, search.is_some()),
+        );
         let tools = ToolContext::new(context.room.id.clone(), self.channel_id.clone())
             .within(turn.clone())
             .standing_alone(stands_alone)
@@ -1337,6 +1443,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
             media: TurnMedia::replaying(self.turn_images(&context.room.id, stands_alone)),
             telemetry: TurnTelemetry::current(),
             turn_span: None,
+            search,
         };
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).
@@ -1436,11 +1543,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
     /// kit sets up on it may not take (RFC §21.1), as Python's registry's
     /// `own_names`.
     fn own_tool_names(&self) -> Vec<String> {
-        self.toolbox
-            .declared(&ToolPolicy::default())
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect()
+        self.toolbox.own_names().cloned().collect()
     }
 
     /// Closes the channel's provider ([`AiProvider::close`]), then its

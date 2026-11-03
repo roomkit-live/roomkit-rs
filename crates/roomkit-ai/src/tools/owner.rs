@@ -81,6 +81,7 @@ pub(crate) fn with_owner_tools(
                     .get("parameters")
                     .cloned()
                     .unwrap_or_else(|| serde_json::json!({ "type": "object" })),
+                tags: Vec::new(),
             })
         })
         .collect();
@@ -100,7 +101,7 @@ pub(crate) fn with_owner_tools(
             turn: turn.clone(),
             waits,
         });
-        extended.add_dyn(served, tools)?;
+        extended.add_injected(served, tools)?;
     }
     Ok(Arc::new(extended))
 }

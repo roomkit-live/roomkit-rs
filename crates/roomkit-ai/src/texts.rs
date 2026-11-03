@@ -13,6 +13,17 @@ pub(crate) fn not_declared(name: &str) -> String {
     error_envelope(&format!("Tool '{name}' is not declared."))
 }
 
+/// A call to a name no tool carries while Tool Search hides a catalogue: none
+/// exists, and how to find the right one (RFC §21.1). Python's
+/// `unknown_tool_error(name, searching=True)`.
+pub(crate) fn no_such_tool(name: &str) -> String {
+    let error = quoted(&format!("No tool named '{name}' exists."));
+    let hint = quoted(
+        "Check the spelling, or call find_tools(query=<the task>) to discover the right tool.",
+    );
+    format!("{{\"error\": {error}, \"hint\": {hint}}}")
+}
+
 /// A call to a tool withdrawn for the turn, by `BEFORE_AI_GENERATION` or
 /// `AFTER_TOOL_ROUND` (RFC §6.4).
 pub(crate) fn not_available(name: &str) -> String {

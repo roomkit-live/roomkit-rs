@@ -8,6 +8,7 @@ use roomkit::model::{ToolCall, ToolCallOutcome};
 
 use super::{AiTool, DynToolset, ToolContext, ToolPolicy};
 use crate::error::AiError;
+use crate::tool_search::search_tool_defs;
 use crate::turn_config::Collisions;
 
 /// The toolsets an agent took, and the tools they declare, in the order
@@ -24,6 +25,13 @@ pub(crate) struct Toolbox {
     /// themselves behind it: what serves a tool a generation hook adds
     /// (RFC §6.4).
     handler: Option<usize>,
+    /// The names of the tools the agent may serve itself in a turn, which no
+    /// other tool may take (RFC §21.1): Tool Search's.
+    reserved: HashSet<String>,
+    /// The tools that ask a person (RFC §9.3).
+    person_tools: HashSet<String>,
+    /// The tools orchestration injected for the turn (RFC §21.1).
+    injected: HashSet<String>,
 }
 
 impl std::fmt::Debug for Toolbox {
@@ -41,27 +49,14 @@ impl std::fmt::Debug for Toolbox {
 }
 
 impl Toolbox {
-    /// Takes `toolset`, whose tools join the agent's.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AiError::DuplicateTool`] for a name the agent serves
-    /// already, or that the toolset declares twice; the toolbox is left as
-    /// it was.
-    pub(crate) fn add_dyn(
-        &mut self,
-        toolset: Arc<dyn DynToolset>,
-        declared: Vec<AiTool>,
-    ) -> Result<(), AiError> {
-        self.insert(toolset, declared, false)
-    }
-
     /// Takes `toolset`, the host's tool handler's, whose tools join the
     /// agent's, and which serves a tool a generation hook adds (RFC §6.4).
     ///
     /// # Errors
     ///
-    /// As [`add_dyn`](Self::add_dyn).
+    /// [`AiError::DuplicateTool`] for a name the agent serves already, or
+    /// that the toolset declares twice, [`AiError::ToolSearchName`] for one
+    /// reserved; the toolbox is left as it was.
     pub(crate) fn add_handler(
         &mut self,
         toolset: Arc<dyn DynToolset>,
@@ -71,6 +66,108 @@ impl Toolbox {
         self.insert(toolset, declared, false)?;
         self.handler = Some(position);
         Ok(())
+    }
+
+    /// Takes `toolset`, whose tools ask a person (RFC §9.3): Tool Search never
+    /// hides nor counts them.
+    ///
+    /// # Errors
+    ///
+    /// As [`add_handler`](Self::add_handler).
+    pub(crate) fn add_person(
+        &mut self,
+        toolset: Arc<dyn DynToolset>,
+        declared: Vec<AiTool>,
+    ) -> Result<(), AiError> {
+        let names: Vec<String> = declared.iter().map(|tool| tool.name.clone()).collect();
+        self.insert(toolset, declared, false)?;
+        self.person_tools.extend(names);
+        Ok(())
+    }
+
+    /// Takes `toolset`, whose tools orchestration injected for the turn (RFC
+    /// §21.1): Tool Search never hides nor counts them.
+    ///
+    /// # Errors
+    ///
+    /// As [`add_handler`](Self::add_handler).
+    pub(crate) fn add_injected(
+        &mut self,
+        toolset: Arc<dyn DynToolset>,
+        declared: Vec<AiTool>,
+    ) -> Result<(), AiError> {
+        let names: Vec<String> = declared.iter().map(|tool| tool.name.clone()).collect();
+        self.insert(toolset, declared, false)?;
+        self.injected.extend(names);
+        Ok(())
+    }
+
+    /// Keeps `names` for the agent to serve in a turn: no other tool may take
+    /// one (RFC §21.1). Before any tool is added.
+    pub(crate) fn reserve(&mut self, names: impl IntoIterator<Item = String>) {
+        self.reserved.extend(names);
+    }
+
+    /// The names of the agent's tools a turn may not hand it under, those
+    /// reserved among them: what its kit may not set up on it (RFC §21.1).
+    pub(crate) fn own_names(&self) -> impl Iterator<Item = &String> {
+        self.tools
+            .iter()
+            .map(|(tool, _)| &tool.name)
+            .chain(&self.reserved)
+    }
+
+    /// The toolbox with `search` serving Tool Search's tools, declared after
+    /// all the others, for the turn it hides a catalogue (RFC §6.4).
+    ///
+    /// # Errors
+    ///
+    /// [`AiError::DuplicateTool`] for a name already served: never, once
+    /// reserved.
+    pub(crate) fn with_discovery(&self, search: Arc<dyn DynToolset>) -> Result<Self, AiError> {
+        let mut turn = self.clone();
+        turn.insert(search, search_tool_defs(), true)?;
+        Ok(turn)
+    }
+
+    /// The names of its tools.
+    pub(crate) fn names(&self) -> HashSet<String> {
+        self.tools
+            .iter()
+            .map(|(tool, _)| tool.name.clone())
+            .collect()
+    }
+
+    /// The tools Tool Search may hide, whatever the policy says of them: what
+    /// is measured against its thresholds (RFC §21.1).
+    pub(crate) fn deferrable(&self) -> Vec<&AiTool> {
+        self.tools
+            .iter()
+            .map(|(tool, _)| tool)
+            .filter(|tool| !self.never_hidden_name(&tool.name))
+            .collect()
+    }
+
+    /// Whether Tool Search never hides `name`.
+    fn never_hidden_name(&self, name: &str) -> bool {
+        self.exempt.contains(name)
+            || self.person_tools.contains(name)
+            || self.injected.contains(name)
+    }
+
+    /// Whether a skill activation's hint may name `name`: not a tool the agent
+    /// serves itself nor one that asks a person (RFC §24.4).
+    pub(crate) fn hintable(&self, name: &str) -> bool {
+        !self.exempt.contains(name) && !self.person_tools.contains(name)
+    }
+
+    /// What Tool Search never hides: the agent's own tools, a person's, what
+    /// orchestration injected. Python's `_never_hidden`.
+    pub(crate) fn never_hidden(&self) -> HashSet<String> {
+        self.names()
+            .into_iter()
+            .filter(|name| self.never_hidden_name(name))
+            .collect()
     }
 
     /// The toolbox as a turn's `BEFORE_AI_GENERATION` hooks left the tools
@@ -99,6 +196,9 @@ impl Toolbox {
                     if self.find(&tool.name).is_some_and(|(own, _)| own != tool) {
                         tracing::warn!(target: "roomkit::ai", tool = %tool.name, "a generation hook redefined a tool the channel serves: its definition stands");
                     }
+                }
+                (None, _) if self.reserved.contains(&tool.name) => {
+                    tracing::warn!(target: "roomkit::ai", tool = %tool.name, "a generation hook added a tool under a name the channel serves: it is not declared");
                 }
                 (None, Some(handler)) => {
                     adopted.served.insert(tool.name.clone(), handler);
@@ -136,6 +236,10 @@ impl Toolbox {
         }
         let mut kept: Vec<AiTool> = Vec::with_capacity(base.len());
         for tool in base {
+            if self.reserved.contains(&tool.name) {
+                collisions.served(channel, &tool.name);
+                continue;
+            }
             match self.served.get(&tool.name) {
                 Some(&served) if served == at => collisions.duplicate(channel, &tool.name),
                 Some(_) => collisions.served(channel, &tool.name),
@@ -172,6 +276,11 @@ impl Toolbox {
     ) -> Result<(), AiError> {
         let mut names: Vec<&str> = Vec::with_capacity(declared.len());
         for tool in &declared {
+            if !exempt && self.reserved.contains(&tool.name) {
+                return Err(AiError::ToolSearchName {
+                    name: tool.name.clone(),
+                });
+            }
             if self.served.contains_key(&tool.name) || names.contains(&tool.name.as_str()) {
                 return Err(AiError::DuplicateTool {
                     name: tool.name.clone(),
@@ -218,10 +327,11 @@ impl Toolbox {
 
     /// Whether a call to `name` is work the agent did, which its later
     /// turns replay (RFC §6.4 "The tools of earlier turns"): not a call to
-    /// a tool of its own, which only reads or unlocks (its skills'), as the
-    /// reference implementation's `in_tool_memory` trait reads them.
+    /// a tool of its own, which only reads or unlocks (its skills', Tool
+    /// Search's), as the reference implementation's `in_tool_memory` trait
+    /// reads them.
     pub(crate) fn in_tool_memory(&self, name: &str) -> bool {
-        !self.exempt.contains(name)
+        !self.exempt.contains(name) && !self.reserved.contains(name)
     }
 
     /// The tools `policy` lets the model call, in order: what each round

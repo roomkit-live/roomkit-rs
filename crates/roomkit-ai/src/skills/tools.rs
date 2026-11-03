@@ -153,14 +153,7 @@ impl SkillTools {
     ) -> Result<ToolResult, ToolError> {
         let name = argument(call, "name");
         let Some(skill) = self.registry.get_skill(name) else {
-            let names = self.registry.skill_names();
-            return Err(ToolError::Refused(texts::object(&[
-                (
-                    "error",
-                    json!(format!("Skill {} not found", quoted_name(name))),
-                ),
-                ("available_skills", json!(names)),
-            ])));
+            return not_a_skill(call, name, &self.registry.skill_names(), context);
         };
         let active = !context.stands_alone && self.lock().is_active(&context.room_id, name);
         let path = skill.path.clone();
@@ -255,6 +248,58 @@ impl DynToolset for SkillTools {
             self.lock().activate(&context.room_id, name);
         }
     }
+}
+
+/// The most tools a hint names; the call reveals them all. Python's
+/// `tools_hint`.
+const HINT_MAX_NAMES: usize = 8;
+
+/// What an activation of `name`, no skill among `skills`, answers: its refusal,
+/// or, when tools the turn may call match the name, the same words served with a
+/// hint naming them, which the call reveals as `find_tools` reveals its matches
+/// once it is served. A small model confuses a skill with a tool ("activate the
+/// Spotify skill" when `spotify_play` is a tool), and the dead end becomes the
+/// right outcome (RFC §24.4). Python's `tools_hint`.
+fn not_a_skill(
+    call: &ToolCall,
+    name: &str,
+    skills: &[&str],
+    context: &ToolContext,
+) -> Result<ToolResult, ToolError> {
+    let mut answer = vec![
+        (
+            "error",
+            json!(format!("Skill {} not found", quoted_name(name))),
+        ),
+        ("available_skills", json!(skills)),
+    ];
+    let wanted = name.to_lowercase();
+    let mut matching: Vec<String> = context
+        .hintable
+        .iter()
+        .filter(|tool| !wanted.is_empty() && tool.to_lowercase().contains(&wanted))
+        .cloned()
+        .collect();
+    if matching.is_empty() {
+        return Err(ToolError::Refused(texts::object(&answer)));
+    }
+    matching.sort();
+    let named = matching
+        .iter()
+        .take(HINT_MAX_NAMES)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let hint = format!(
+        "{} is not a skill, but these TOOLS match and are now in your tool list — call one \
+         directly instead: {named}.",
+        quoted_name(name)
+    );
+    answer.push(("tools_hint", json!(hint)));
+    if let Some(search) = &context.search {
+        search.reveal_once_served(&call.id, matching);
+    }
+    Ok(ToolResult::Text(texts::object(&answer)))
 }
 
 /// The text argument `key` of `call`, empty when it gives none.

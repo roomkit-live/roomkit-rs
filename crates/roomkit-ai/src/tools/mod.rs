@@ -26,6 +26,7 @@ pub(crate) mod toolbox;
 use std::any::type_name;
 use std::error::Error;
 use std::future::Future;
+use std::sync::Arc;
 
 use roomkit::TurnHost;
 use roomkit::model::{ChannelId, RoomId, ToolCall, ToolCallOutcome};
@@ -46,9 +47,10 @@ pub(crate) use self::result::read as read_tool_result;
 pub use self::result::{ToolResult, ToolResultPart};
 use crate::error::AiError;
 use crate::texts::error_envelope;
+use crate::tool_search::TurnSearch;
 
 /// A tool as the model is told of it (RFC §6.7): Python's `AITool(*, name,
-/// description, parameters={})`, its parameters a JSON Schema object.
+/// description, parameters={}, tags=[])`, its parameters a JSON Schema object.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AiTool {
     /// The tool's name, one per channel (RFC §21.1 "One tool per name").
@@ -57,6 +59,9 @@ pub struct AiTool {
     pub description: String,
     /// Its parameters: a JSON Schema object.
     pub parameters: Value,
+    /// Keywords `find_tools` searches beside its name and description (RFC
+    /// §6.4), the bridge to a tool written in another language.
+    pub tags: Vec<String>,
 }
 
 impl AiTool {
@@ -88,6 +93,7 @@ impl AiTool {
             name,
             description: description.into(),
             parameters: Value::Object(serde_json::Map::new()),
+            tags: Vec::new(),
         })
     }
 
@@ -113,6 +119,7 @@ impl AiTool {
             name: name.to_owned(),
             description: description.to_owned(),
             parameters,
+            tags: Vec::new(),
         }
     }
 }
@@ -235,6 +242,13 @@ pub struct ToolContext {
     /// The participant whose event woke the turn, Python's tool loop
     /// context's `actor_id`, read with [`current_tool_actor_id`].
     pub(crate) actor_id: Option<String>,
+    /// What a skill activation's hint may name, when the call asks to
+    /// activate: the tools the turn reaches, its own and a person's aside (RFC
+    /// §24.4).
+    pub(crate) hintable: Vec<String>,
+    /// The turn's Tool Search, which reveals what such a hint names once its
+    /// call is served.
+    pub(crate) search: Option<Arc<TurnSearch>>,
 }
 
 impl ToolContext {
@@ -247,6 +261,8 @@ impl ToolContext {
             turn: None,
             stands_alone: false,
             actor_id: None,
+            hintable: Vec::new(),
+            search: None,
         }
     }
 
