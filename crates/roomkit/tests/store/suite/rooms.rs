@@ -214,7 +214,10 @@ async fn a_room_s_deletion_takes_what_it_holds() {
 }
 
 /// Python: `tests/test_store_memory.py::TestObservationOperations::test_list_by_room`:
-/// a room lists its own observations, not another room's.
+/// a room lists its own observations, not another room's. Both rooms are
+/// created: roomkit-rs refuses an observation of a room it does not hold
+/// (`RoomNotFound`, RMK-1058, `docs/architecture.md`), where Python's test
+/// adds them to rooms it never created.
 #[tokio::test]
 async fn a_room_lists_its_own_observations() {
     let store = with_room().await;

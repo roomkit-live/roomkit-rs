@@ -543,5 +543,12 @@ async fn an_agent_whose_handler_closed_whole_is_refused_at_its_registration() {
         matches!(&refused, Err(RoomKitError::Runtime(text)) if text == "Human input handler is closed"),
         "{refused:?}"
     );
+    // The kit holds the channel all the same, as Python's holds it before
+    // its wiring raises: a second registration is refused as a duplicate.
+    let again = kit.register_channel(agent_asking_through(&shared));
+    assert!(
+        matches!(&again, Err(RoomKitError::ChannelAlreadyRegistered(id)) if id.as_str() == "ai"),
+        "{again:?}"
+    );
     kit.close().await.unwrap();
 }

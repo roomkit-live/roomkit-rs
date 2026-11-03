@@ -506,8 +506,9 @@ mod an_edit {
                 HookTrigger::OnEventUpdated,
                 move |_: RoomEvent, context: RoomContext| {
                     let seen = seen.clone();
+                    let newest = context.recent_events.last().map(|event| event.r#type);
                     async move {
-                        seen.send(context.recent_events.len()).unwrap();
+                        seen.send((context.recent_events.len(), newest)).unwrap();
                     }
                 },
                 HookOptions {
@@ -521,7 +522,7 @@ mod an_edit {
         let read = tokio::time::timeout(Duration::from_secs(1), counted.recv())
             .await
             .unwrap();
-        assert_eq!(read, Some(51));
+        assert_eq!(read, Some((51, Some(EventType::Edit))));
     }
 
     #[tokio::test]
