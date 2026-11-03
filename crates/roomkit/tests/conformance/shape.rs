@@ -105,6 +105,8 @@ const CHANNEL: &[&str] = &[
     "temperature",
     "max_tokens",
     "config_provider",
+    "thinking_budget",
+    "enable_thinking",
     "retry_policy",
     "fallback_model",
     "max_author_images",
@@ -136,6 +138,8 @@ const AGENT: &[&str] = &[
 const HUMAN_INPUT: &[&str] = &["tool_names", "timeout_ms", "tools"];
 const TURN_CONFIG: &[&str] = &[
     "system_prompt",
+    "thinking_budget",
+    "enable_thinking",
     "tools",
     "temperature",
     "max_tokens",

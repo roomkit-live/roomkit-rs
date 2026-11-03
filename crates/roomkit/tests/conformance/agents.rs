@@ -522,6 +522,12 @@ fn agent_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), St
         let bound = bound.as_u64().ok_or("max_tokens: not a count")?;
         options.max_tokens = Some(u32::try_from(bound).map_err(|e| e.to_string())?);
     }
+    if let Some(budget) = spec.get("thinking_budget") {
+        options.thinking_budget = Some(budget.as_i64().ok_or("thinking_budget: not a count")?);
+    }
+    if let Some(enabled) = spec.get("enable_thinking") {
+        options.enable_thinking = Some(enabled.as_bool().ok_or("enable_thinking: not a flag")?);
+    }
     Ok(())
 }
 
@@ -582,6 +588,8 @@ fn turn_config(spec: &Value, run: &Arc<Run>) -> Result<AiChannelTurnConfig, Stri
         tools,
         temperature: spec["temperature"].as_f64(),
         max_tokens: max_tokens.map_err(|e| e.to_string())?,
+        thinking_budget: spec["thinking_budget"].as_i64(),
+        enable_thinking: spec["enable_thinking"].as_bool(),
         reasoning_effort: text("reasoning_effort"),
         turn_budget_tokens: spec["turn_budget_tokens"].as_u64(),
         turn_budget_usd: spec["turn_budget_usd"].as_f64(),
@@ -787,6 +795,8 @@ fn request(request: &AiContext) -> Value {
         "temperature": request.temperature,
         "max_tokens": request.max_tokens,
         "reasoning_effort": request.reasoning_effort,
+        "thinking_budget": request.thinking_budget,
+        "enable_thinking": request.enable_thinking,
         "tools": tools,
     })
 }
