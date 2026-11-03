@@ -267,11 +267,6 @@ impl HookTrigger {
         }
     }
 
-    /// Whether a turn fires the trigger, on the turn executor hosting the
-    /// channel, rather than the room owner (RFC §10.6.6), as the Python
-    /// implementation's `TURN_TRIGGERS` lists them: `BEFORE_TOOL_USE`,
-    /// `ON_TOOL_CALL`, `ON_USER_INPUT_REQUIRED` and an AI channel's loop
-    /// triggers among the triggers this list holds.
     /// Whether a turn trigger's payload carries the agent's channel type: a
     /// tool call, an input request. Only there does a hook's `channel_types`
     /// filter (RFC §9.1; Python's `TYPED_TURN_TRIGGERS`).
@@ -284,6 +279,11 @@ impl HookTrigger {
             )
     }
 
+    /// Whether a turn fires the trigger, on the turn executor hosting the
+    /// channel, rather than the room owner (RFC §10.6.6), as the Python
+    /// implementation's `TURN_TRIGGERS` lists them: `BEFORE_TOOL_USE`,
+    /// `ON_TOOL_CALL`, `ON_USER_INPUT_REQUIRED` and an AI channel's loop
+    /// triggers among the triggers this list holds.
     #[doc(hidden)]
     pub fn is_turn_trigger(self) -> bool {
         match self {

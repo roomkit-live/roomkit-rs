@@ -16,8 +16,9 @@ use roomkit::realtime::{
 };
 use roomkit::{RoomKit, RoomKitOptions, SubscribeRoomOptions};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, ProviderError, ProviderStream,
-    StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCall,
+    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiTool, ProviderError,
+    ProviderStream, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCall,
+    ToolResult, Tools,
 };
 use serde_json::Value;
 
@@ -185,4 +186,48 @@ async fn a_stuck_realtime_backend_stops_no_turn() {
     let said = tokio::time::timeout(Duration::from_secs(5), room.says("Why?")).await;
     assert!(said.is_ok(), "the turn waited on the backend");
     // Not closed: the publisher stuck on it would take the close's grace.
+}
+
+// Python: turns/_owner_turn.py TurnPublisher.close at the turn's end: a turn
+// that reasoned leaves nothing for a close from inside it to wait on, which
+// waits for no work of its own turn (RFC §12.10.4).
+#[tokio::test]
+async fn a_close_from_within_a_turn_that_reasoned_takes_no_grace() {
+    let provider = Streams(Mutex::new(
+        vec![
+            thinking("Hm."),
+            StreamEvent::ToolCall(StreamToolCall::new("c1", "stop")),
+            StreamEvent::Done(StreamDone::default()),
+        ]
+        .into(),
+    ));
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let weak = kit.downgrade();
+    let stop = AiTool::new("stop", "Stops the kit").unwrap();
+    let tools = Tools::new().tool(stop, move |_call, _context| {
+        let weak = weak.clone();
+        async move {
+            if let Some(kit) = weak.upgrade() {
+                // Past the publisher's first drain.
+                for _ in 0..20 {
+                    tokio::task::yield_now().await;
+                }
+                drop(kit.close().await);
+            }
+            Ok(ToolResult::Text("closed".to_owned()))
+        }
+    });
+    let options = AiChannelOptions {
+        tools: tools.into(),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(channel("assistant"), provider, options).unwrap();
+    let room = Room::on_kit(kit, agent).await;
+    tokio::time::timeout(Duration::from_secs(2), room.says("Stop."))
+        .await
+        .expect("the close took the grace");
+    tokio::time::timeout(Duration::from_secs(2), room.kit.close())
+        .await
+        .expect("the close took the grace")
+        .unwrap();
 }

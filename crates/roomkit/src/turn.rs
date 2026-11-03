@@ -107,8 +107,8 @@ struct Shared {
     response_depth: u32,
     /// The calls the gate let run, until they are reported.
     calls: Mutex<Calls>,
-    /// The queue of what the turn publishes, once it published anything.
-    publisher: Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::realtime::EphemeralEvent>>>,
+    /// What the turn queued to publish.
+    publisher: Arc<publish::Publisher>,
 }
 
 /// The calls of a turn its gate let run.
@@ -1625,7 +1625,7 @@ pub(crate) fn host(
             link,
             response_depth,
             calls: Mutex::new(Calls::default()),
-            publisher: Mutex::new(None),
+            publisher: Arc::default(),
         }),
     }
 }
