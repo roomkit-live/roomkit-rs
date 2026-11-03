@@ -122,7 +122,10 @@ pub struct HookOptions {
     /// Python `priority=0`: its place in its chain, lower first.
     pub priority: i32,
     /// Python `name=""`: unique among the kit's hooks; a hook given none is
-    /// named `hook`, then `hook#2`, ...
+    /// named `hook`, then `hook#2`, ... On `ON_SESSION_STARTED`, a leading `_`
+    /// makes a text session's first message wait for the hook, within its
+    /// `process_timeout` (RFC §10.1 step 2); any other name runs in the
+    /// background.
     pub name: String,
     /// Python `timeout=30.0`: the longest it may run.
     pub timeout: Duration,
