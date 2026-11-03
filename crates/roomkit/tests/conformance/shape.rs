@@ -42,6 +42,7 @@ const KIT: &[&str] = &[
     "attached_media",
     "orchestration",
     "delivery_gap_timeout_ms",
+    "lock_manager",
 ];
 const MEDIA_RESOLVER: &[&str] = &["media"];
 const ATTACHED_MEDIA: &[&str] = &["key"];
@@ -297,6 +298,7 @@ const STEPS: &[(&str, &[&str])] = &[
     ("open", &["open"]),
     ("idle", &["idle"]),
     ("wait_for_lock", &["wait_for_lock", "waiters"]),
+    ("lock_releases", &["lock_releases"]),
 ];
 
 /// Each call's arguments, beside `call` and `organization_id`.

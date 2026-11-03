@@ -67,7 +67,10 @@ pub(crate) async fn new_kit(configure: impl FnOnce(RoomKitOptions) -> RoomKitOpt
 
 /// Scenario id → the rule this implementation breaks (roomkit-specs
 /// `conformance/README.md`, "Known failures").
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[(
+    "locks/a-failed-release-keeps-the-committed-event-and-is-its-error",
+    "the kit takes no lock manager yet (RMK-1153)",
+)];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.
