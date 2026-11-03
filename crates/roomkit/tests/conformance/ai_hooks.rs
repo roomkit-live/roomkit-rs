@@ -13,7 +13,8 @@ use roomkit::model::hook::AllowOptions;
 use roomkit::model::{HookAction, HookResult, RoomContext};
 use roomkit::{HookError, TurnPayload};
 use roomkit_ai::{
-    AiContext, AiGenerationEvent, AiMessage, AiResponseEvent, AiRole, AiTool, ToolRoundEvent,
+    AiContext, AiGenerationEvent, AiMessage, AiResponseEvent, AiRole, AiTool, ThinkingEvent,
+    ToolRoundEvent,
 };
 use serde_json::{Map, Value, json};
 
@@ -149,6 +150,22 @@ impl Scripted for ToolRoundEvent {
             }
         }
         Ok(self)
+    }
+}
+
+impl Scripted for ThinkingEvent {
+    const MEMBER: &'static str = "thinking";
+
+    fn record(&self) -> Value {
+        json!({
+            "channel_id": self.channel_id.as_str(),
+            "thinking": self.thinking,
+            "round_index": self.round_index,
+        })
+    }
+
+    fn patched(self, _patch: &Value) -> Result<Self, String> {
+        Err("an ON_AI_THINKING hook is observed: it patches nothing".to_owned())
     }
 }
 

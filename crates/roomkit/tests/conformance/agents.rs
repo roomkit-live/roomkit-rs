@@ -522,6 +522,15 @@ fn agent_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), St
         let bound = bound.as_u64().ok_or("max_tokens: not a count")?;
         options.max_tokens = Some(u32::try_from(bound).map_err(|e| e.to_string())?);
     }
+    if let Some(flush) = spec.get("thinking_coalesce_ms") {
+        options.thinking_coalesce_ms = flush.as_f64().ok_or("thinking_coalesce_ms: no number")?;
+    }
+    if let Some(flush) = spec.get("thinking_coalesce_chars") {
+        let flush = flush
+            .as_u64()
+            .ok_or("thinking_coalesce_chars: not a count")?;
+        options.thinking_coalesce_chars = usize::try_from(flush).map_err(|e| e.to_string())?;
+    }
     if let Some(budget) = spec.get("thinking_budget") {
         options.thinking_budget = Some(budget.as_i64().ok_or("thinking_budget: not a count")?);
     }

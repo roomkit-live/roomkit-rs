@@ -24,7 +24,7 @@ use roomkit::{
     RemoveRoomHookOptions, RoomKitError, SendEventOptions, SetAccessOptions, SetVisibilityOptions,
     UnmuteOptions, UnmuteOutputOptions, UpdateEventOptions, WaitForIdle,
 };
-use roomkit_ai::{AiGenerationEvent, AiResponseEvent, ToolRoundEvent};
+use roomkit_ai::{AiGenerationEvent, AiResponseEvent, ThinkingEvent, ToolRoundEvent};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
@@ -692,6 +692,7 @@ fn add_room_hook(
     let generation = turn_hook_handler::<AiGenerationEvent>(hook, run);
     let tool_round = turn_hook_handler::<ToolRoundEvent>(hook, run);
     let response = turn_hook_handler::<AiResponseEvent>(hook, run);
+    let thinking = turn_hook_handler::<ThinkingEvent>(hook, run);
     Ok(async move {
         if let Some(router) = router {
             let added = kit.add_room_hook(&room, trigger, execution, router.as_hook(), options);
@@ -724,6 +725,10 @@ fn add_room_hook(
             }
             (None, HookTrigger::OnAiResponse) => {
                 kit.add_room_hook(&room, trigger, execution, response, options)
+                    .await
+            }
+            (None, HookTrigger::OnAiThinking) => {
+                kit.add_room_hook(&room, trigger, execution, thinking, options)
                     .await
             }
             (None, _) => {
@@ -783,6 +788,9 @@ pub(crate) fn register_hook(
         kit.hook(trigger, handler, options)
     } else if trigger == HookTrigger::OnAiResponse {
         let handler = turn_hook_handler::<AiResponseEvent>(hook, run);
+        kit.hook(trigger, handler, options)
+    } else if trigger == HookTrigger::OnAiThinking {
+        let handler = turn_hook_handler::<ThinkingEvent>(hook, run);
         kit.hook(trigger, handler, options)
     } else {
         kit.hook(trigger, hook_handler(hook, run), options)

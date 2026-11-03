@@ -301,6 +301,15 @@ impl Run {
             .push(item);
     }
 
+    /// One thinking event of `room_id`'s subscribers (README: `thinking_events`).
+    pub(crate) fn record_thinking_event(&self, room_id: &str, event: Value) {
+        lock(&self.observed)
+            .thinking_events
+            .entry(room_id.to_owned())
+            .or_default()
+            .push(event);
+    }
+
     pub(crate) fn record_hook(
         &self,
         name: &str,

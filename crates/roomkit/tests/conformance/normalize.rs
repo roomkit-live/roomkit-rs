@@ -52,6 +52,7 @@ pub(crate) struct Observed {
     pub(crate) room_callbacks: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     pub(crate) turns: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     pub(crate) observations: BTreeMap<String, Vec<Value>>,
+    pub(crate) thinking_events: BTreeMap<String, Vec<Value>>,
     pub(crate) tasks: BTreeMap<String, Vec<Value>>,
     pub(crate) steps: Vec<Value>,
     pub(crate) actions: BTreeMap<String, Vec<Value>>,

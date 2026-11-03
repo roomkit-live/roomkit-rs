@@ -5,14 +5,15 @@
 //! scenario's expectations.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use roomkit::model::{ChannelId, ChannelType, RoomId};
+use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
 use roomkit::{
     ArchiveRoomOptions, CloseRoomOptions, ConversationStore, InboundRoomRouter, RoomKitOptions,
-    RouteOptions, RouterFuture,
+    RouteOptions, RouterFuture, SubscribeRoomOptions,
 };
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
@@ -125,6 +126,14 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     if let Err(problem) = set_up(&run, &setup).await {
         return vec![format!("setup: {problem}")];
     }
+    if scenario["expect"].get("thinking_events").is_some() {
+        for room in setup["rooms"].as_array().into_iter().flatten() {
+            let room = room["id"].as_str().unwrap_or_default();
+            if let Err(problem) = subscribe_thinking(&run, room).await {
+                return vec![format!("setup: {problem}")];
+            }
+        }
+    }
     run.recording.store(true, Ordering::SeqCst);
     let mut step_outcomes = Vec::new();
     for (position, step) in scenario["steps"]
@@ -136,6 +145,12 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
         step_outcomes.extend(run_step(&run, step, &format!("steps[{position}]")).await);
     }
     run.idle().await;
+    if scenario["expect"].get("thinking_events").is_some() {
+        // The realtime backend's own tasks hand what it was published.
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+    }
     let observed = observe(&run, step_outcomes).await;
     run.kit().close().await.unwrap();
     let mut found = lock(&run.problems).clone();
@@ -277,6 +292,32 @@ async fn wait_for_lock(run: &Arc<Run>, room_id: &str, waiters: usize) -> bool {
     tokio::time::timeout(crate::scripted::GATE_BOUND, waited)
         .await
         .is_ok()
+}
+
+/// Records the room's thinking events, for a scenario that expects them.
+async fn subscribe_thinking(run: &Arc<Run>, room: &str) -> Result<(), String> {
+    let id = RoomId::new(room).map_err(|e| e.to_string())?;
+    let (recorder, room) = (Arc::downgrade(run), room.to_owned());
+    let record = move |event: EphemeralEvent| {
+        let (recorder, room) = (Weak::clone(&recorder), room.clone());
+        async move {
+            let thinking = matches!(
+                event.r#type,
+                EphemeralEventType::ThinkingStart
+                    | EphemeralEventType::ThinkingDelta
+                    | EphemeralEventType::ThinkingEnd
+            );
+            let Some(run) = recorder.upgrade().filter(|_| thinking) else {
+                return;
+            };
+            let mut read = event.data;
+            read.insert("type".to_owned(), json!(event.r#type));
+            run.record_thinking_event(&room, Value::Object(read));
+        }
+    };
+    let options = SubscribeRoomOptions::default();
+    let subscribed = run.kit().subscribe_room(&id, record, options).await;
+    subscribed.map(drop).map_err(|e| e.to_string())
 }
 
 async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
