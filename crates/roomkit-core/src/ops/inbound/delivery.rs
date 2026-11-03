@@ -542,9 +542,17 @@ impl DeliverySet {
             (&output.response_metadata, &output.response_events),
             streamed.is_none(),
         );
-        if let Some(error) = output.error.as_ref().filter(|_| is_agent) {
-            let failed = DeliveryResult::raised(responder.channel_id.clone(), error);
-            self.turn_failed(cx, index, error, failed);
+        if let Some(mut error) = output.error.filter(|_| is_agent) {
+            // A failure its own turn reported already (Python's
+            // `mark_reported`): handed on to the caller, never reported
+            // again (RFC §19.7.4).
+            let reported = error.take_reported();
+            let failed = DeliveryResult::raised(responder.channel_id.clone(), &error);
+            if reported {
+                self.handed_on(index, &error, failed);
+            } else {
+                self.turn_failed(cx, index, &error, failed);
+            }
         }
         match streamed.filter(|_| is_agent) {
             Some(turn) => self.outcome.streams.push(StreamedTurn { responder, turn }),
@@ -685,6 +693,16 @@ impl DeliverySet {
             now,
         );
         cx.fire_observers(HookTrigger::OnError, &payload, &target.context);
+        if self.outcome.error.is_none() {
+            self.outcome.error = Some(error.clone());
+        }
+        self.report_failure(index, failed);
+    }
+
+    /// A target's failure its own turn reported to `ON_ERROR` already: the
+    /// set's error and its delivery results read it, no observer is told
+    /// again.
+    fn handed_on(&mut self, index: usize, error: &ErrorRecord, failed: DeliveryResult) {
         if self.outcome.error.is_none() {
             self.outcome.error = Some(error.clone());
         }

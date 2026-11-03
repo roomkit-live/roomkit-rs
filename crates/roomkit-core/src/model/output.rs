@@ -67,6 +67,11 @@ fn no_attributes(attributes: &Box<Metadata>) -> bool {
     attributes.is_empty()
 }
 
+/// The attribute that marks a failure its own turn reported to `ON_ERROR`
+/// already, which the delivery set takes off before anyone reads the
+/// record.
+const REPORTED: &str = "roomkit:reported";
+
 impl ErrorRecord {
     /// An error of `error_type` saying `message`, with no attributes.
     pub fn new(error_type: impl Into<String>, message: impl Into<String>) -> Self {
@@ -75,6 +80,23 @@ impl ErrorRecord {
             message: message.into(),
             attributes: Box::default(),
         }
+    }
+
+    /// This error, marked as a failure its own turn reported to `ON_ERROR`
+    /// already, Python's `mark_reported`: the agent output that carries it
+    /// hands it on to the caller without a second report (RFC §19.7.4).
+    /// Outside the public API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn marked_reported(mut self) -> Self {
+        self.attributes
+            .insert(REPORTED.to_owned(), serde_json::Value::Bool(true));
+        self
+    }
+
+    /// Whether the error was marked reported, the mark taken off.
+    pub(crate) fn take_reported(&mut self) -> bool {
+        self.attributes.shift_remove(REPORTED).is_some()
     }
 }
 
