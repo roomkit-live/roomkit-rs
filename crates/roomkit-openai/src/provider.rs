@@ -83,16 +83,16 @@ impl OpenAiAiProvider {
         }
     }
 
-    /// The `reasoning_effort` a Chat Completions request carries, a turn
-    /// with tools when `tools` (RFC §6.7, Python's `_apply_sampling_kwargs`):
-    /// the configured effort, the model's floor where it states off
-    /// (`none`) and the catalogue knows the model's least effort; then, on
-    /// a turn with tools, what the endpoint accepts there
-    /// ([`Self::tool_turn_effort`]).
-    pub(crate) fn reasoning_effort(&self, tools: bool) -> Option<String> {
+    /// The `reasoning_effort` a Chat Completions request carries, the
+    /// turn's `turn` and a turn with tools when `tools` (RFC §6.7, Python's
+    /// `_apply_sampling_kwargs`): the turn's effort over the configured
+    /// one, the model's floor where it states off (`none`) and the
+    /// catalogue knows the model's least effort; then, on a turn with
+    /// tools, what the endpoint accepts there ([`Self::tool_turn_effort`]).
+    pub(crate) fn reasoning_effort(&self, turn: Option<&str>, tools: bool) -> Option<String> {
         let entry = self.official_entry();
         let configured = self.config.reasoning_effort.as_deref();
-        let effort = reasoning::floored_effort(None, configured, reasoning::reasoning_floor(entry));
+        let effort = reasoning::floored_effort(turn, configured, reasoning::reasoning_floor(entry));
         if tools {
             self.tool_turn_effort(entry, effort)
         } else {
@@ -187,7 +187,8 @@ impl OpenAiAiProvider {
                     serde_json::to_value(completion).map_err(|_| OpenAiError::Malformed {
                         reason: "could not encode request".into(),
                     })?;
-                if let Some(effort) = self.reasoning_effort(!request.tools.is_empty())
+                let turn = request.reasoning_effort.as_deref();
+                if let Some(effort) = self.reasoning_effort(turn, !request.tools.is_empty())
                     && let Some(fields) = value.as_object_mut()
                 {
                     fields.insert("reasoning_effort".into(), effort.into());
@@ -383,7 +384,7 @@ mod tests {
         };
         OpenAiAiProvider::new(config)
             .unwrap()
-            .reasoning_effort(true)
+            .reasoning_effort(None, true)
     }
 
     /// On OpenAI's own endpoint, however written, the switch does not

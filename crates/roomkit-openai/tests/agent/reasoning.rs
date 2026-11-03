@@ -130,3 +130,26 @@ async fn a_server_behind_a_base_url_decides() {
     let body = tool_turn_body("gpt-6-luna", false).await;
     assert_eq!(body["reasoning_effort"], json!("low"));
 }
+
+/// The turn's own effort reaches the wire over the configured one (RFC
+/// §6.7, Python's `_turn_effort`).
+#[tokio::test]
+async fn the_turn_s_effort_reaches_the_wire() {
+    let fake = FakeOpenAi::start(vec![Reply::completion("ok")]).await;
+    let config = OpenAiConfig {
+        base_url: Some(fake.base_url().to_owned()),
+        reasoning_effort: Some("high".to_owned()),
+        ..OpenAiConfig::new("sk-test", "mercury-2.5")
+    };
+    let provider = OpenAiAiProvider::new(config).unwrap();
+    let context = AiContext {
+        messages: vec![AiMessage::new(AiRole::User, "Hi")],
+        reasoning_effort: Some("minimal".to_owned()),
+        ..AiContext::default()
+    };
+    provider.generate(&context).await.unwrap();
+    assert_eq!(
+        fake.requests()[0].body["reasoning_effort"],
+        json!("minimal")
+    );
+}

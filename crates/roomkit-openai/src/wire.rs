@@ -733,6 +733,7 @@ mod tests {
                 tools: Vec::new(),
                 temperature: None,
                 max_tokens: turn,
+                reasoning_effort: None,
             };
             let body =
                 serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
@@ -765,6 +766,7 @@ mod tests {
             tools: Vec::new(),
             temperature: Some(0.7),
             max_tokens: None,
+            reasoning_effort: None,
         };
         let set = |base_url: Option<&str>, model: &str, switches: (Option<bool>, Option<bool>)| {
             let config = OpenAiConfig {
@@ -982,6 +984,7 @@ mod image_tests {
             tools: vec![],
             temperature: None,
             max_tokens: None,
+            reasoning_effort: None,
         };
         let config = OpenAiConfig {
             base_url: Some("http://localhost/v1".into()),

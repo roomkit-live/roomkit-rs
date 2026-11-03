@@ -23,6 +23,8 @@ pub(crate) struct Request {
     pub(crate) temperature: Option<f64>,
     /// The turn's token bound, over the configured one.
     pub(crate) max_tokens: Option<u32>,
+    /// The turn's reasoning effort, over the configured one (RFC §6.7).
+    pub(crate) reasoning_effort: Option<String>,
 }
 
 impl Request {
@@ -43,6 +45,7 @@ impl Request {
             tools: context.tools.clone(),
             temperature: Some(context.temperature),
             max_tokens: context.max_tokens,
+            reasoning_effort: context.reasoning_effort.clone(),
         })
     }
 }
