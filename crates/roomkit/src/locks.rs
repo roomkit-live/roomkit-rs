@@ -1,7 +1,7 @@
 //! Per-room mutual exclusion (RFC §13.5): the in-memory lock manager's
 //! mutexes, and the kit's hold on its lock manager.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -35,8 +35,10 @@ struct Rooms {
     /// recently asked for dropped first past it, as Python's
     /// `InMemoryLockManager(max_locks)`; none kept at 0.
     retained: usize,
-    /// When each room's mutex was last asked for, by a count of asks.
+    /// When each room's mutex was last asked for, by a count of asks, and
+    /// the rooms by that count, the least recently asked for first.
     asked: HashMap<RoomId, u64>,
+    order: BTreeMap<u64, RoomId>,
     asks: u64,
 }
 
@@ -45,25 +47,40 @@ impl Rooms {
     /// asked for first, while more than `retained` are kept, as Python's
     /// `_evict`: a held one stays, the bound passed meanwhile.
     fn evict(&mut self) {
-        if self.mutexes.len() <= self.retained {
+        let Some(over) = self.mutexes.len().checked_sub(self.retained) else {
             return;
-        }
-        let mut unused: Vec<(u64, RoomId)> = self
-            .mutexes
-            .iter()
-            .filter(|(_, mutex)| Arc::strong_count(mutex) == 1)
-            .map(|(room_id, _)| {
-                (
-                    self.asked.get(room_id).copied().unwrap_or(0),
-                    room_id.clone(),
-                )
+        };
+        let mutexes = &self.mutexes;
+        let unused: Vec<RoomId> = self
+            .order
+            .values()
+            .filter(|room_id| {
+                mutexes
+                    .get(*room_id)
+                    .is_some_and(|mutex| Arc::strong_count(mutex) == 1)
             })
+            .take(over)
+            .cloned()
             .collect();
-        unused.sort_unstable();
-        let over = self.mutexes.len() - self.retained;
-        for (_, room_id) in unused.into_iter().take(over) {
-            self.mutexes.remove(&room_id);
-            self.asked.remove(&room_id);
+        for room_id in unused {
+            self.forget(&room_id);
+        }
+    }
+
+    /// Counts an ask for `room_id`'s mutex, the most recent one.
+    fn ask(&mut self, room_id: &RoomId) {
+        self.asks += 1;
+        if let Some(before) = self.asked.insert(room_id.clone(), self.asks) {
+            self.order.remove(&before);
+        }
+        self.order.insert(self.asks, room_id.clone());
+    }
+
+    /// Drops `room_id`'s mutex and its place in the order of asks.
+    fn forget(&mut self, room_id: &RoomId) {
+        self.mutexes.remove(room_id);
+        if let Some(asked) = self.asked.remove(room_id) {
+            self.order.remove(&asked);
         }
     }
 }
@@ -96,9 +113,7 @@ impl RoomMutexes {
         let mutex = {
             let mut rooms = lock(&self.rooms);
             *rooms.waiting.entry(room_id.clone()).or_default() += 1;
-            rooms.asks += 1;
-            let asks = rooms.asks;
-            rooms.asked.insert(room_id.clone(), asks);
+            rooms.ask(room_id);
             let created = !rooms.mutexes.contains_key(room_id);
             let mutex = Arc::clone(rooms.mutexes.entry(room_id.clone()).or_default());
             if created {
@@ -222,6 +237,12 @@ impl Drop for HeldLock {
         let Some(lock) = self.lock.take() else {
             return;
         };
+        // Outside a runtime, no release can run: the lock's own drop lets
+        // it go, as it did before the kit released through the manager.
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            drop(lock);
+            return;
+        };
         // A release over at once (the in-memory lock's) is over before the
         // drop returns, as the lock's own drop was; one that waits on I/O
         // goes on in a task of its own.
@@ -233,9 +254,7 @@ impl Drop for HeldLock {
         {
             Poll::Ready(result) => log_failed_release(&key, result),
             Poll::Pending => {
-                if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                    drop(runtime.spawn(async move { log_failed_release(&key, release.await) }));
-                }
+                drop(runtime.spawn(async move { log_failed_release(&key, release.await) }));
             }
         }
     }
@@ -318,8 +337,7 @@ impl Drop for RoomGuard<'_> {
             .get(&self.room_id)
             .is_some_and(|mutex| Arc::strong_count(mutex) == 1);
         if unused && rooms.retained == 0 {
-            rooms.mutexes.remove(&self.room_id);
-            rooms.asked.remove(&self.room_id);
+            rooms.forget(&self.room_id);
         }
     }
 }
@@ -402,5 +420,60 @@ mod tests {
         )
         .await;
         assert!(second.is_err(), "the second lock should wait");
+    }
+
+    // Python: tests/test_locks.py::TestInMemoryLockManager::test_lru_eviction,
+    // the order: the least recently asked for goes first.
+    #[tokio::test]
+    async fn the_least_recently_asked_for_mutex_goes_first() {
+        let mutexes = RoomMutexes::retaining(2);
+        for id in ["r1", "r2", "r1", "r3"] {
+            drop(mutexes.lock_owned(&RoomId::new(id).unwrap()).await);
+        }
+        let rooms = mutexes.rooms();
+        let kept = |id: &str| rooms.mutexes.contains_key(&RoomId::new(id).unwrap());
+        assert!(kept("r1") && kept("r3") && !kept("r2"));
+    }
+
+    /// A manager whose release needs the runtime's timer.
+    struct Timed;
+
+    struct TimedLock;
+
+    impl RoomLockManager for Timed {
+        fn locked<'a>(
+            &'a self,
+            _room_id: &'a RoomId,
+        ) -> Pin<Box<dyn Future<Output = Result<Box<dyn RoomLock>, RoomKitError>> + Send + 'a>>
+        {
+            let lock: Box<dyn RoomLock> = Box::new(TimedLock);
+            Box::pin(std::future::ready(Ok(lock)))
+        }
+    }
+
+    impl RoomLock for TimedLock {
+        fn release(
+            self: Box<Self>,
+        ) -> Pin<Box<dyn Future<Output = Result<(), RoomKitError>> + Send + 'static>> {
+            Box::pin(async {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                Ok(())
+            })
+        }
+    }
+
+    /// A lock dropped once no runtime runs lets go through its own drop,
+    /// never polling a release that needs the runtime (light review of
+    /// RMK-1153's fixes: it panicked).
+    #[test]
+    fn a_lock_dropped_outside_a_runtime_lets_go_without_its_release() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let locks = KitLocks::new(Arc::new(Timed));
+        let held = runtime.block_on(locks.lock(&room_id())).unwrap();
+        drop(runtime);
+        drop(held);
     }
 }
