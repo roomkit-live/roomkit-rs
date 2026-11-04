@@ -176,6 +176,21 @@ async fn a_cut_target_s_work_does_not_hold_the_cut_of_its_turn() {
     assert_eq!(crossed, 1);
 }
 
+// Python: the cancel cuts the turn whatever the target does with it: one that
+// fails on it leaves no turn for the close to wait for (RMK-1323).
+#[tokio::test(start_paused = true)]
+async fn a_cut_target_that_fails_leaves_its_turn_cut() {
+    let target = ReadingOn::failing();
+    let (kit, handle) = called(holding(), &target).await;
+    target.read.notified().await;
+    let start = Instant::now();
+    let cut = handle.cancel(CancelOptions::default()).await.unwrap();
+    kit.close().await.unwrap();
+    let elapsed = start.elapsed();
+    assert_eq!(elapsed, Duration::ZERO);
+    assert_eq!(cut.response_metadata.get("cited"), Some(json!(3)));
+}
+
 // Python: a target past its stream's end, blocked at an await: the cancel lands
 // there, 0.000 s, cited=3, turns completed. A Rust future is dropped there.
 #[tokio::test(start_paused = true)]
@@ -212,12 +227,10 @@ async fn a_target_working_past_its_stream_s_end_is_cut_where_it_waits() {
     assert_eq!(kept, Vec::<&str>::new());
 }
 
-// Python: cancel(reason="stopped", timeout=0.001), close(), wait(): the close
-// finds the cascade cancelled, and wait() reads reason=stopped, cited=3.
-#[tokio::test(start_paused = true)]
-async fn a_close_after_a_cancel_past_its_timeout_keeps_the_cancel_s_reason() {
-    let target = ReadingOn::blocked();
-    let (kit, handle) = called(holding(), &target).await;
+/// Past a `cancel` of 1 ms that timed out, the kit's close and the handle's
+/// wait: how long the close took, the wait's end, what the target kept.
+async fn closed_past_a_cancel(target: &ReadingOn) -> (Duration, InboundResult, Vec<&'static str>) {
+    let (kit, handle) = called(holding(), target).await;
     target.read.notified().await;
     let cancel = handle
         .cancel(CancelOptions {
@@ -225,9 +238,39 @@ async fn a_close_after_a_cancel_past_its_timeout_keeps_the_cancel_s_reason() {
             timeout: Duration::from_millis(1),
         })
         .await;
-    kit.close().await.unwrap();
-    let waited = handle.wait().await.unwrap();
     assert!(matches!(cancel, Err(RoomKitError::Timeout)), "{cancel:?}");
+    let start = Instant::now();
+    kit.close().await.unwrap();
+    let closed_in = start.elapsed();
+    let waited = handle.wait().await.unwrap();
+    let kept = target.kept.lock().unwrap().clone();
+    (closed_in, waited, kept)
+}
+
+// Python: cancel(reason="stopped", timeout=0.001), close(), wait(), a target's
+// `finally` of 0.2 s: the close finds the cascade cancelled and leaves it to
+// end: close 0.2 s, kept=['flushed'], reason=stopped, cited=3.
+#[tokio::test(start_paused = true)]
+async fn a_close_past_a_cancel_lets_the_target_finish_and_keeps_the_cancel_s_reason() {
+    let flush = Duration::from_millis(200);
+    let (closed_in, waited, kept) = closed_past_a_cancel(&ReadingOn::flushing(flush)).await;
+    assert!(
+        at(closed_in, flush - Duration::from_millis(1)),
+        "{closed_in:?}"
+    );
+    assert_eq!(kept, ["flushed"]);
+    assert_eq!(waited.cancellation_reason.as_deref(), Some("stopped"));
+    assert_eq!(read(&waited), cited_and("cancelled"));
+}
+
+// Python: a `finally` that never ends: close takes its grace and its unwind, 7 s,
+// and wait() never returns. A future is dropped at the grace's end, nothing to
+// unwind, and its read stored what it had: the wait reads the whole record.
+#[tokio::test(start_paused = true)]
+async fn a_close_past_a_cancel_drops_a_blocked_target_at_its_grace_s_end() {
+    let (closed_in, waited, kept) = closed_past_a_cancel(&ReadingOn::blocked()).await;
+    assert!(at(closed_in, Duration::from_secs(5)), "{closed_in:?}");
+    assert_eq!(kept, Vec::<&str>::new());
     assert_eq!(waited.cancellation_reason.as_deref(), Some("stopped"));
     assert_eq!(read(&waited), cited_and("cancelled"));
 }

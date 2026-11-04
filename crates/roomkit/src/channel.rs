@@ -501,9 +501,10 @@ pub trait Channel: Send + Sync + 'static {
     /// A delivery cancelled (RFC §10.1 "Explicit delivery cancellation") ends
     /// the stream of a channel reading it: what the channel does past that
     /// end stands for Python's `finally`, which a future dropped could not
-    /// run. It runs to its end, however long, and the cancel's caller waits
-    /// for it within its own timeout. A channel past the stream already is
-    /// dropped where it waits, as above.
+    /// run. It runs to its end, however long, the cancel's caller waiting for
+    /// it within its own timeout, the kit's close within its grace, past
+    /// which it is dropped. A channel past the stream already is dropped
+    /// where it waits, as above.
     ///
     /// The default is Python's: it reads the text to the stream's end, then
     /// makes one [`deliver`](Channel::deliver) call with `event` holding the

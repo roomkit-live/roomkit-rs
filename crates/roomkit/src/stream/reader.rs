@@ -46,9 +46,10 @@ use super::segments::Segments;
 use super::{DeliveryStream, Pulled, ResponseItem, StreamItem};
 use crate::RoomKit;
 use crate::channel::ChannelError;
-use crate::context::{self, Adopting};
+use crate::context::{self, Adopting, ExecutionContext};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
+use crate::tasks::{Kind, Tasks};
 use crate::turn_runners::{FirstPass, Then};
 use crate::turns::{OwnerTurn, RemoteItem, record_of};
 
@@ -202,7 +203,9 @@ pub(super) async fn read_kept<S: ConversationStore>(
         let _signalled = done.send(());
         read
     };
-    let read = producer.read_by(reader, pulled, reader_done, stops).await;
+    let read = producer
+        .read_by(reader, pulled, reader_done, &inner.tasks, stops)
+        .await;
     let mut output = producer.finish(read).await;
     // The turn's record reaches the operation once its stream is read, how
     // it ended under the caller's `turns`, as Python's `_add_turn` puts it
@@ -319,17 +322,19 @@ impl Stops {
                 .is_some_and(|task| task.borrow().is_some())
     }
 
-    /// Returns once what cuts the reader too stops the read: the kit's
-    /// close, or the cut of the held task it runs within.
-    async fn until_reader_cut(&mut self) {
+    /// Returns once what ends the wait for a reader a stop of the read found
+    /// reading comes: whether it is the kit's close, which leaves it its
+    /// grace, rather than the cut of the held task it runs within.
+    async fn until_cut_reader_is_left(&mut self) -> bool {
         let kit = async { self.kit.wait_for(|cut| *cut).await.is_ok() };
         let task = async {
             let task = self.task.as_mut()?;
             task.wait_for(Option::is_some).await.ok().map(|_| ())
         };
         tokio::select! {
-            true = kit => {}
-            Some(()) = task => {}
+            biased;
+            true = kit => true,
+            Some(()) = task => false,
             else => std::future::pending().await,
         }
     }
@@ -401,17 +406,20 @@ impl Producer {
     /// The operation's stop of the read is Python's cancel of its reader,
     /// and a future has no `finally` to run once aborted. A reader the stop
     /// finds reading is handed the stream's end, and what it does past it
-    /// stands for that `finally`: it runs to its end, however long, unless
-    /// the close or the task's cut comes first, its caller's own timeout
-    /// bounding that caller only (RMK-1236, RMK-1326). A reader the stop
-    /// finds past the stream, its end read or its stream dropped, has no
-    /// such work left: it is dropped where it waits, as Python's cancel
-    /// lands there.
+    /// stands for that `finally`: it runs to its end, however long, its
+    /// caller's own timeout bounding that caller only (RMK-1326). The cut of
+    /// the held task drops it. The kit's close does not cut it, Python's
+    /// close leaving a cascade cancelled already to end: the read stores what
+    /// it has, and the rest of the reader's work runs on a task of its own
+    /// within the close's grace, dropped past it. A reader the stop finds
+    /// past the stream, its end read or its stream dropped, has no such work
+    /// left: it is dropped where it waits, as Python's cancel lands there.
     async fn read_by(
         &mut self,
-        reader: impl Future<Output = Result<ChannelOutput, ChannelError>>,
+        reader: impl Future<Output = Result<ChannelOutput, ChannelError>> + Send + 'static,
         pulls: mpsc::UnboundedReceiver<oneshot::Sender<Pulled>>,
         reader_done: oneshot::Receiver<()>,
+        tasks: &Arc<Tasks>,
         mut stops: Stops,
     ) -> Result<ChannelOutput, ChannelError> {
         let mut reader = Box::pin(reader);
@@ -430,12 +438,16 @@ impl Producer {
         if !self.reader_cut {
             drop(self.unanswered.take());
             drop(pulls);
-            tokio::select! {
+            let left_to_the_close = tokio::select! {
                 biased;
                 read = &mut reader => return read,
-                () = self.reader_past_the_stream_stopped(&mut stops) => {}
+                left = self.reader_past_the_stream_stopped(&mut stops) => left,
+            };
+            if !left_to_the_close {
+                return last_poll(reader).await;
             }
-            return last_poll(reader).await;
+            self.leave_to_the_close(reader, tasks);
+            return Ok(ChannelOutput::default());
         }
         // The pulls and the one left unanswered stay open while the reader
         // is polled one last time: it is dropped where it waits, never
@@ -446,16 +458,37 @@ impl Producer {
         last
     }
 
-    /// Returns once what ends a reader's work past the stream stops the
-    /// read: for a reader the stop found reading, only what cuts the reader
-    /// too; for one already past the stream, any stop, which cuts the turn.
-    async fn reader_past_the_stream_stopped(&mut self, stops: &mut Stops) {
+    /// Returns once what ends the wait for a reader past the stream comes:
+    /// for a reader a stop found reading, what [`Stops::until_cut_reader_is_left`]
+    /// waits for; for one already past the stream, any stop, which cuts the
+    /// turn. Whether the reader is left to the close's grace.
+    async fn reader_past_the_stream_stopped(&mut self, stops: &mut Stops) -> bool {
         if self.cut.is_some() {
-            stops.until_reader_cut().await;
-        } else {
-            let reason = stops.stopped().await;
-            self.stop(reason, stops);
+            return stops.until_cut_reader_is_left().await;
         }
+        let reason = stops.stopped().await;
+        self.stop(reason, stops);
+        false
+    }
+
+    /// Lets `reader` end on a task of the kit's, in the current context: the
+    /// close waits for it within its grace, then drops it.
+    fn leave_to_the_close<R>(&self, reader: Pin<Box<R>>, tasks: &Arc<Tasks>)
+    where
+        R: Future<Output = Result<ChannelOutput, ChannelError>> + Send + 'static,
+    {
+        let room_id = self.room_id.clone();
+        let work = ExecutionContext::current().scope(async move {
+            if let Err(error) = reader.await {
+                tracing::warn!(
+                    target: "roomkit::driver",
+                    room_id = %room_id,
+                    %error,
+                    "a streaming channel failed past a cut read, the kit closing"
+                );
+            }
+        });
+        drop(tasks.spawn_joined(Kind::Turn, work));
     }
 
     /// The read is stopped from outside, for `reason`: `cancel` crosses at

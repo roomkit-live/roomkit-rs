@@ -893,13 +893,13 @@ async fn a_cancel_does_not_wait_for_a_streaming_target_that_reads_nothing() {
     kit.close().await.unwrap();
 }
 
-// RFC §12.2 step 13s, §13.6 (RMK-1236): the kit's close cuts the reader
-// of a stream even once the operation stopped that read, as Python's close
-// cancels a reader in its `deliver_stream()` at any point: a delivery is
+// RFC §12.2 step 13s, §13.6 (RMK-1236, RMK-1326): Python's close finds the
+// cascade cancelled and leaves it to end within its grace: a delivery is
 // cancelled by its key, and its streaming target, handed the stream's end,
-// never returns; the close does not spend its grace waiting for it.
-#[tokio::test]
-async fn a_close_does_not_wait_for_a_target_whose_read_was_stopped() {
+// never returns; the close drops it at the end of its grace, and the call,
+// its read stored, has answered by then.
+#[tokio::test(start_paused = true)]
+async fn a_close_gives_a_target_whose_read_was_stopped_its_grace() {
     let kit = RoomKit::new(RoomKitOptions::default());
     let ended = Arc::new(tokio::sync::Notify::new());
     let target = Counting {
@@ -960,12 +960,13 @@ async fn a_close_does_not_wait_for_a_target_whose_read_was_stopped() {
         .await
         .unwrap();
 
-    // Within the close's grace of five seconds, never spent.
-    let closed = tokio::time::timeout(Duration::from_secs(2), kit.close()).await;
+    let start = tokio::time::Instant::now();
+    kit.close().await.unwrap();
+    let closed_in = start.elapsed();
 
     let reason = processed.await.unwrap().unwrap().cancellation_reason;
     assert_eq!(
-        (stopped, closed.is_ok(), reason.as_deref()),
-        (1, true, Some("caller_cancelled"))
+        (stopped, closed_in, reason.as_deref()),
+        (1, Duration::from_secs(5), Some("caller_cancelled"))
     );
 }
