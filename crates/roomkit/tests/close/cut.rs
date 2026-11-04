@@ -322,7 +322,7 @@ const COMMITTING: [&str; 3] = ["process_inbound", "send_event", "commit_event"];
 /// A call of "slow" into `r` through `door`, on a task of its own: what it
 /// came to.
 fn commit_through(
-    kit: &roomkit::RoomKit<StuckStore>,
+    kit: &RoomKit<StuckStore>,
     door: &'static str,
 ) -> tokio::task::JoinHandle<String> {
     let kit = kit.clone();
