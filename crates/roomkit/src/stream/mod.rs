@@ -7,7 +7,7 @@
 //! text as it is written, each tool call's start and end, the turn's end.
 //! The kit reads it once the event's delivery set is over, and stores each
 //! row as it ends (a text segment, a call's start, a call's end), the
-//! record of the turn on its last message. The stream is advanced on the
+//! record of the turn on its last message, else its last row. The stream is advanced on the
 //! kit's turn executor, its items crossing the turn backend as frames, a
 //! window of them at a time, as the kit's reader pulls them (RFC §10.6.4).
 //!
@@ -55,7 +55,7 @@ pub enum ResponseItem {
     Text(String),
     /// The turn's loop reached its end (RFC §6.4 "The turn's record"):
     /// Python's `LoopEndMarker`, whose record the kit writes on the turn's
-    /// last message.
+    /// last message, else its last row.
     LoopEnd(LoopEndMarker),
     /// A tool call starts: its row, its arguments as the model wrote them,
     /// pending. It ends the text before it, a segment of its own. Python's

@@ -1,6 +1,6 @@
 //! How an intelligence channel's streamed response ended (RFC §6.4 "The
 //! turn's record"): Python's `roomkit.models.LoopEndMarker`, and the record
-//! the kit writes from it on the turn's last message.
+//! the kit writes from it on the turn's last message, else its last row.
 
 use std::fmt;
 use std::time::Duration;
@@ -115,7 +115,7 @@ pub struct UsageMarker {
 /// usage={}, max_rounds=None, timeout_seconds=None, budget_tokens=None,
 /// budget_usd=None, last_usage=None, usage_complete=None, model=None,
 /// provider=None)`. With the reason, `usage` is the turn's record, which
-/// the kit writes on the turn's last message: `loop_end_reason` and
+/// the kit writes on the turn's last message, else its last row: `loop_end_reason` and
 /// `ai_usage`, then `ai_last_usage`, `ai_usage_complete`, `ai_model` and
 /// `ai_provider` when they are set, the first two together, when
 /// `usage_complete` is.
@@ -170,7 +170,7 @@ impl LoopEndMarker {
 
 impl LoopEndMarker {
     /// The turn's record the marker gives (RFC §6.4 "The turn's record"),
-    /// which the kit writes on the turn's last message: Python's
+    /// which the kit writes on the turn's last message, else its last row: Python's
     /// `loop_end_reason` and `ai_usage`, then the keys its other fields
     /// set. Outside the public API (decision 16): roomkit-ai writes
     /// it on a turn it answers whole.
