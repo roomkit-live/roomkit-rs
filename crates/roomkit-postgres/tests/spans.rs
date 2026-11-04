@@ -456,19 +456,53 @@ async fn a_row_the_model_refuses_is_read_after_the_span() {
     };
     let room = room_id("r1");
     store.create_room(Room::new(room.clone())).await.unwrap();
+    store.add_binding(binding("r1")).await.unwrap();
+    let id = ParticipantId::new("p1").unwrap();
+    store
+        .add_participant(Participant::new(id.clone(), room.clone(), channel()))
+        .await
+        .unwrap();
+    let mut keyed = event("r1", "x");
+    keyed.idempotency_key = Some("k".to_owned());
+    let added = store.add_event_auto_index(&room, keyed).await.unwrap();
     schema
         .client()
         .await
-        .batch_execute("UPDATE rooms SET status = 'nope'")
+        .batch_execute(
+            "UPDATE rooms SET status = 'nope'; \
+             UPDATE bindings SET access = 'nope'; \
+             UPDATE participants SET status = 'nope'; \
+             UPDATE events SET status = 'nope';",
+        )
         .await
         .unwrap();
+    let before = provider.spans().len();
     store.get_room(&room).await.unwrap_err();
     store
         .list_rooms(ListRoomsOptions::default())
         .await
         .unwrap_err();
+    store
+        .find_rooms(FindRoomsOptions::default())
+        .await
+        .unwrap_err();
     store.load_room_context(&room).await.unwrap_err();
-    for span in provider.spans() {
+    store.get_event(&added.id).await.unwrap_err();
+    store
+        .list_events(&room, ListEventsOptions::default())
+        .await
+        .unwrap_err();
+    store
+        .get_event_by_idempotency_key(&room, "k", Some(&channel()))
+        .await
+        .unwrap_err();
+    store.get_binding(&room, &channel()).await.unwrap_err();
+    store.list_bindings(&room).await.unwrap_err();
+    store.get_participant(&room, &id).await.unwrap_err();
+    store.list_participants(&room).await.unwrap_err();
+    let spans = provider.spans();
+    assert_eq!(spans.len(), before + 11);
+    for span in spans.iter().skip(before) {
         assert_eq!(
             (span.status.as_str(), &span.error_message),
             ("ok", &None),
@@ -481,13 +515,25 @@ async fn a_row_the_model_refuses_is_read_after_the_span() {
 /// to be had: `TimeoutError`, which has no text even when asked, and a closed pool.
 #[tokio::test]
 async fn a_failure_reads_asyncpg_s_class() {
-    let Some((schema, store, provider)) = reporting(true).await else {
+    let Some((schema, store, provider)) = reporting(false).await else {
         return;
     };
     store.create_room(Room::new(room_id("r1"))).await.unwrap();
-    store.add_binding(binding("gone")).await.unwrap_err();
+    schema
+        .client()
+        .await
+        .batch_execute("DROP TABLE private_state")
+        .await
+        .unwrap();
+    store
+        .get_private_state(&room_id("r1"), "k")
+        .await
+        .unwrap_err();
     let spans = provider.spans();
-    assert_eq!(named(spans.last().unwrap()).0, "add_binding");
+    assert_eq!(
+        spans.last().unwrap().error_message.as_deref(),
+        Some("UndefinedTableError")
+    );
     let config: tokio_postgres::Config = schema.dsn().parse().unwrap();
     let pool = deadpool_postgres::Pool::builder(deadpool_postgres::Manager::new(config, NoTls))
         .max_size(1)

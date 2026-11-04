@@ -150,10 +150,10 @@ fn failure_class(cause: &(dyn Error + 'static)) -> &'static str {
         };
     }
     if let Some(pool) = cause.downcast_ref::<PoolError>() {
-        return if let PoolError::Backend(driver) = pool {
-            driver_class(driver)
-        } else {
-            "InterfaceError"
+        return match pool {
+            PoolError::Backend(driver) => driver_class(driver),
+            PoolError::Timeout(_) => "TimeoutError",
+            _ => "InterfaceError",
         };
     }
     cause

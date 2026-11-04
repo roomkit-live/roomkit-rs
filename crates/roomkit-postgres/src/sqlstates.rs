@@ -276,3 +276,19 @@ pub(crate) fn class_of_state(state: &str) -> &'static str {
         .and_then(|at| STATES.get(at))
         .map_or("UnknownPostgresError", |(_, class)| class)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `class_of_state` searches them: a row out of order would read as unknown.
+    #[test]
+    fn the_states_are_in_order() {
+        assert!(STATES.windows(2).all(|rows| match rows {
+            [one, two] => one.0 < two.0,
+            _ => false,
+        }));
+        assert_eq!(class_of_state("23505"), "UniqueViolationError");
+        assert_eq!(class_of_state("99999"), "UnknownPostgresError");
+    }
+}

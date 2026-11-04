@@ -341,9 +341,9 @@ impl ConversationStore for PostgresStore {
     async fn find_rooms(&self, options: FindRoomsOptions) -> Result<Vec<Room>, StoreError> {
         self.spanned("find_rooms", "rooms", async {
             let client = self.client().await?;
-            Ok(lookups::find(&client, options).await?)
+            decoded_after_the_span(lookups::find(&client, options).await)
         })
-        .await
+        .await?
     }
 
     async fn find_latest_room(
@@ -464,9 +464,9 @@ impl ConversationStore for PostgresStore {
     ) -> Result<Option<ChannelBinding>, StoreError> {
         self.spanned("get_binding", "bindings", async {
             let client = self.client().await?;
-            Ok(members::binding(&client, room_id, channel_id).await?)
+            decoded_after_the_span(members::binding(&client, room_id, channel_id).await)
         })
-        .await
+        .await?
     }
 
     async fn binding_exists(
@@ -506,9 +506,9 @@ impl ConversationStore for PostgresStore {
     async fn list_bindings(&self, room_id: &RoomId) -> Result<Vec<ChannelBinding>, StoreError> {
         self.spanned("list_bindings", "bindings", async {
             let client = self.client().await?;
-            Ok(members::bindings(&client, room_id).await?)
+            decoded_after_the_span(members::bindings(&client, room_id).await)
         })
-        .await
+        .await?
     }
 
     /// The three reads over one connection, one checkout instead of three.
@@ -547,9 +547,9 @@ impl ConversationStore for PostgresStore {
     ) -> Result<Option<Participant>, StoreError> {
         self.spanned("get_participant", "participants", async {
             let client = self.client().await?;
-            Ok(members::participant(&client, room_id, participant_id).await?)
+            decoded_after_the_span(members::participant(&client, room_id, participant_id).await)
         })
-        .await
+        .await?
     }
 
     async fn update_participant(
@@ -579,9 +579,9 @@ impl ConversationStore for PostgresStore {
     async fn list_participants(&self, room_id: &RoomId) -> Result<Vec<Participant>, StoreError> {
         self.spanned("list_participants", "participants", async {
             let client = self.client().await?;
-            Ok(members::participants(&client, room_id).await?)
+            decoded_after_the_span(members::participants(&client, room_id).await)
         })
-        .await
+        .await?
     }
 
     async fn create_identity(&self, identity: Identity) -> Result<Identity, StoreError> {
@@ -714,9 +714,9 @@ impl ConversationStore for PostgresStore {
     ) -> Result<Option<RoomEvent>, StoreError> {
         self.spanned("get_event_by_idempotency_key", "events", async {
             let client = self.client().await?;
-            Ok(events::by_key(&client, room_id, channel_id, key).await?)
+            decoded_after_the_span(events::by_key(&client, room_id, channel_id, key).await)
         })
-        .await
+        .await?
     }
 
     async fn commit_event(
