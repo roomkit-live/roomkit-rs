@@ -420,7 +420,8 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
                 .or_else(|| crate::verification_calls::arguments(other))
                 .or_else(|| crate::strategy_calls::arguments(other))
                 .or_else(|| crate::routing_calls::arguments(other))
-                .or_else(|| crate::handoff_calls::arguments(other));
+                .or_else(|| crate::handoff_calls::arguments(other))
+                .or_else(|| crate::discussion_calls::arguments(other));
         }
     })
 }
