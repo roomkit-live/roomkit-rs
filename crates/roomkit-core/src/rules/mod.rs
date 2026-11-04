@@ -43,6 +43,7 @@ pub mod addresses;
 pub mod attachment;
 pub(crate) mod authors;
 pub mod chain_depth;
+pub mod discussion;
 pub mod edits;
 pub mod hook_chain;
 pub mod hook_registry;
@@ -67,4 +68,4 @@ pub mod verification;
 
 pub use self::permissions::{visibility_allows, visible_events};
 #[doc(hidden)]
-pub use self::unicode::{is_alnum, python_repr};
+pub use self::unicode::{casefold, is_alnum, python_repr};

@@ -730,6 +730,13 @@ pub fn json_text_line(line: &str) -> String {
     speakers::json_text_line(line)
 }
 
+/// The label of a turn whose author has no name (RFC §6.4): its channel as
+/// the room addresses it (`@sms1`), a form no name takes. Python's
+/// `channel_label`.
+pub(crate) fn channel_label(channel_id: &ChannelId) -> String {
+    speakers::channel_label(channel_id)
+}
+
 /// `value` as the runtime gives an identifier outside a quote (RFC §6.4):
 /// letters with their marks, digits and `_ . @ + -`, every other character
 /// a `-`, within 64 characters, composed first; `fallback` when nothing is

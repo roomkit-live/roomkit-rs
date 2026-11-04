@@ -136,7 +136,7 @@ pub(super) fn tell_apart<'a>(speakers: impl IntoIterator<Item = &'a mut Speaker>
 /// The label of a turn whose author has no name: its channel, `@` then
 /// the channel's id kept to an identifier's characters. No name takes that
 /// form, so a person named `sms1` does not read as a channel.
-fn channel_label(channel_id: &ChannelId) -> String {
+pub(super) fn channel_label(channel_id: &ChannelId) -> String {
     format!("@{}", identifier(channel_id.as_str(), "channel"))
 }
 

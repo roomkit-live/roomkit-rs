@@ -47,7 +47,7 @@ const VERSION: i64 = 3;
 /// channel they are reached through (RFC §5.5). An identity is one person
 /// however many records name it: the record that joined first stands for
 /// them all.
-struct People<'a> {
+pub(crate) struct People<'a> {
     by_id: BTreeMap<&'a str, &'a Participant>,
     by_identity: BTreeMap<&'a str, Vec<&'a Participant>>,
     /// One record per person, in the order they joined.
@@ -55,7 +55,7 @@ struct People<'a> {
 }
 
 impl<'a> People<'a> {
-    fn new(participants: &'a [Participant]) -> Self {
+    pub(crate) fn new(participants: &'a [Participant]) -> Self {
         let mut records: Vec<&Participant> = participants.iter().collect();
         records
             .sort_by(|left, right| (left.joined_at, &left.id).cmp(&(right.joined_at, &right.id)));
@@ -200,7 +200,7 @@ pub(crate) fn own_record_id(channel_id: &str, sender_id: &str) -> String {
 impl<'a> People<'a> {
     /// The record `event`'s id names on its channel, as
     /// [`named_on`](Self::named_on) reads it.
-    fn named(&self, event: &RoomEvent) -> Option<&'a Participant> {
+    pub(crate) fn named(&self, event: &RoomEvent) -> Option<&'a Participant> {
         self.named_on(
             event
                 .source
@@ -248,7 +248,7 @@ fn author_name(event: &RoomEvent, people: &People<'_>) -> Option<String> {
 
 /// Who `event` comes from: the room's participant, whichever channel
 /// reached them; else its sender on its channel; else its channel.
-fn source_of(event: &RoomEvent, people: &People<'_>) -> Vec<String> {
+pub(crate) fn source_of(event: &RoomEvent, people: &People<'_>) -> Vec<String> {
     if let Some(person) = people.of(event) {
         return vec!["participant".to_owned(), person.id.to_string()];
     }
