@@ -572,16 +572,16 @@ impl<S: ConversationStore> HandoffHandler<S> {
     }
 
     /// Whether a handoff under allowed transitions may lead `target` to
-    /// `phase`: one the phase map does not know may (a human, a host's own
-    /// target); one it knows holds its own phase and those the router's rules
-    /// give it (RFC §19.6).
+    /// `phase` (RFC §19.6). With no phase map nothing ties an agent to a
+    /// phase. With one, a human and a known target pass; any other holds its
+    /// own phase and those the router's rules give it, and no phase otherwise.
     fn holds_phase(&self, target: &str, phase: &str) -> bool {
-        match self.inner.phase_map.get(target) {
-            Some(own) if !own.is_empty() && own != phase => {
-                self.inner.router.routes_phase_to(phase, target)
-            }
-            _ => true,
+        let inner = &self.inner;
+        if inner.phase_map.is_empty() || target == HUMAN || inner.known_agents.contains(target) {
+            return true;
         }
+        inner.phase_map.get(target).is_some_and(|own| own == phase)
+            || inner.router.routes_phase_to(phase, target)
     }
 
     /// Whether `target` is a handoff's: an agent the room binds, a human, or
