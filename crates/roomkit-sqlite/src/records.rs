@@ -66,10 +66,9 @@ pub(crate) fn read_identity(data: &str) -> Result<Identity, Failure> {
     let mut value: Value = serde_json::from_str(data)?;
     // As Python's model: serde would read an array as the struct's fields.
     if !value.is_object() {
-        return Err(serde::de::Error::custom(
+        return Err(Failure::Json(serde::de::Error::custom(
             "an identity's record is no object",
-        ))
-        .map_err(Failure::Json);
+        )));
     }
     if let Some(Value::Object(addresses)) = value.get_mut(ADDRESSES) {
         addresses.retain(|channel_type, _| ChannelType::new(channel_type.as_str()).is_ok());
