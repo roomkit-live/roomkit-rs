@@ -5,6 +5,7 @@
 //! context. A task spawned plainly runs under no span.
 
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
@@ -106,27 +107,44 @@ pub(crate) fn current_span_context() -> Option<Arc<dyn Any + Send + Sync>> {
     read(Current::span_context)
 }
 
-/// Runs `work` under the span `span_id` of another process, `context` what
-/// [`TelemetryProvider::extract_context`] read of it: Python's
-/// `restored_span(span_id, telemetry_ctx=...)`.
-#[cfg(all(test, feature = "opentelemetry"))]
-pub(crate) fn within_extracted_span<F: Future>(
-    provider: Arc<dyn TelemetryProvider>,
-    span_id: String,
-    context: Option<Arc<dyn Any + Send + Sync>>,
+/// What names the current span to the executor of a turn: its id, with what
+/// names it to another process, for an executor elsewhere to continue its
+/// trace (RFC §10.6.9), Python's `_trace`; `None` under no span.
+pub(crate) fn current_trace() -> Option<BTreeMap<String, String>> {
+    read(|current| {
+        let span_id = current.span_id().filter(|span_id| !span_id.is_empty())?;
+        let mut carrier = current.telemetry.provider.inject_context(&span_id);
+        carrier.insert("span_id".to_owned(), span_id);
+        Some(carrier)
+    })
+}
+
+/// `work`, a turn's, continuing the span `trace`, its request's, names,
+/// whichever process runs it and whatever its context holds: what it opens
+/// sits under that span, in the owner's trace (RFC §10.6.9, §15.7), Python's
+/// `_run_work`. Under the kit's `telemetry`.
+pub(crate) fn within_turn_trace<F: Future>(
+    telemetry: Option<KitTelemetry>,
+    trace: Option<&BTreeMap<String, String>>,
     work: F,
-) -> impl Future<Output = F::Output> {
-    let current = Current {
-        telemetry: KitTelemetry {
-            provider,
-            sensitive: false,
-            suppressed: Arc::default(),
-        },
-        span_id: Some(span_id),
-        context,
-        late: None,
+) -> impl Future<Output = F::Output> + use<F> {
+    let held = CURRENT.try_with(Option::clone).ok().flatten();
+    let named = trace.and_then(|trace| Some((trace, trace.get("span_id")?)));
+    let current = match (named, telemetry) {
+        (Some((trace, span_id)), Some(telemetry))
+            if !span_id.is_empty() && get_current_span().as_ref() != Some(span_id) =>
+        {
+            let context = telemetry.provider.extract_context(trace);
+            Some(Current {
+                telemetry,
+                span_id: Some(span_id.clone()),
+                context,
+                late: None,
+            })
+        }
+        _ => held,
     };
-    CURRENT.scope(Some(current), work)
+    CURRENT.scope(current, work)
 }
 
 /// The call the current work is goes in: its late span, if it has one and

@@ -2,6 +2,7 @@
 //! two pipes, the owner's execution contexts its work runs in, and its
 //! request, the events as they are and the rest serialized.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use roomkit_core::model::{
@@ -119,6 +120,9 @@ pub(super) struct Request<'a> {
     pub(super) previous: Option<&'a PreviousTurn>,
     /// The tools the owner serves the turn (RFC §10.6.5).
     pub(super) owner_tools: &'a [OwnerTool],
+    /// The span the turn runs under, for its executor to continue its trace
+    /// (RFC §10.6.9).
+    pub(super) trace: Option<&'a BTreeMap<String, String>>,
 }
 
 impl Request<'_> {
@@ -170,7 +174,7 @@ impl Request<'_> {
             owner_tools: self.owner_tools,
             room_hooks: [],
             previous_turn: self.previous,
-            trace: None,
+            trace: self.trace,
         }
     }
 }
@@ -189,7 +193,7 @@ struct RestOut<'a> {
     owner_tools: &'a [OwnerTool],
     room_hooks: [String; 0],
     previous_turn: Option<&'a PreviousTurn>,
-    trace: Option<()>,
+    trace: Option<&'a BTreeMap<String, String>>,
 }
 
 /// A room's context, its recent events given apart.

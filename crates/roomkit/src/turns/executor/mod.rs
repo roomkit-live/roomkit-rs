@@ -45,6 +45,7 @@ use super::wire::{ContextRest, Control, Frame, RequestRest, TurnRequest};
 use super::{CarriedRequest, MemoryTurn, Turns, lock};
 use crate::channel::DynChannel;
 use crate::steering::SteeringDirective;
+use crate::telemetry::within_turn_trace;
 use crate::turn::{self, TurnHost, TurnKit};
 use tokio::task::AbortHandle;
 use tokio::time::{Instant, MissedTickBehavior};
@@ -143,14 +144,20 @@ impl Executor {
             sender: Arc::clone(&self.sender),
         };
         let changes = Arc::new(RecordChanges::default());
-        let work: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(work(
-            Arc::clone(&self.turn),
-            Arc::clone(&self.sender),
-            Arc::clone(&changes),
-            host.clone(),
-            Arc::clone(&flow),
-            request,
-            channel,
+        let telemetry = self.kit.telemetry();
+        let trace = request.trace.clone();
+        let work: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(within_turn_trace(
+            telemetry,
+            trace.as_ref(),
+            work(
+                Arc::clone(&self.turn),
+                Arc::clone(&self.sender),
+                Arc::clone(&changes),
+                host.clone(),
+                Arc::clone(&flow),
+                request,
+                channel,
+            ),
         ));
         let beating = Beating::start(&self.kit, &self.sender, &self.turn);
         let cut = self

@@ -30,6 +30,7 @@ use crate::store::ConversationStore;
 use crate::stream::ResponseStream;
 use crate::tasks::Kind;
 use crate::tasks::{DelegatedTask, DelegatedTaskResult};
+use crate::telemetry::KitTelemetry;
 use crate::tool_calls::{ToolCallEvent, ToolCallReport, error_envelope};
 use crate::turns::wire::{
     ADD_OBSERVATION, AddObservation, BETWEEN_TURNS, DELEGATE, Delegate, POST_STATUS, PostStatus,
@@ -1142,6 +1143,9 @@ pub(crate) struct OwnerCall {
 }
 
 pub(crate) trait TurnKit: Send + Sync {
+    /// The kit's telemetry, while it lives: what a turn's work reports to.
+    fn telemetry(&self) -> Option<KitTelemetry>;
+
     /// The tools the owner serves the turns of `channel_id` in `room_id`
     /// (RFC §10.6.5), as a turn's request lists them.
     fn owner_tools(
@@ -1293,6 +1297,10 @@ pub(crate) trait TurnKit: Send + Sync {
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
+    fn telemetry(&self) -> Option<KitTelemetry> {
+        self.upgrade().map(|inner| inner.telemetry.clone())
+    }
+
     fn realtime(&self) -> Option<Arc<dyn crate::realtime::RealtimeBackend>> {
         self.upgrade().map(|inner| Arc::clone(&inner.realtime))
     }

@@ -81,6 +81,7 @@ use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::steering::SteeringDirective;
 use crate::tasks::{Marks, Unit};
+use crate::telemetry::current_trace;
 use crate::turn::TurnKit;
 
 /// What a turn answered on the owner.
@@ -288,6 +289,7 @@ impl Turns {
         let history = std::mem::take(&mut context.recent_events);
         let observers = self.observers();
         let owner_tools = kit.owner_tools(&binding.channel_id, &event.room_id);
+        let trace = current_trace();
         let request = Request {
             turn_id: &turn_id,
             binding,
@@ -296,6 +298,7 @@ impl Turns {
             history: &history,
             previous: previous.as_ref(),
             owner_tools: &owner_tools,
+            trace: trace.as_ref(),
         };
         let rest = request.write(&observers).map_err(|why| uncarried(&why))?;
         let timeouts = self.timeouts();

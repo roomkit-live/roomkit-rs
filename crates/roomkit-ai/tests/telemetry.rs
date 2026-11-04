@@ -17,7 +17,7 @@ use roomkit::model::{ChannelId, ChannelType, InboundMessage, Metadata, RoomId, T
 use roomkit::telemetry::{
     Attr, MockTelemetryProvider, Span, SpanKind, TelemetryConfig, TelemetryProvider,
 };
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions, TurnTap};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, DelegateOptions, HookExecution, HookOptions,
     HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions, ToolCallEvent,
@@ -651,4 +651,57 @@ async fn a_delegated_turn_s_broadcast_ends_before_its_stream_is_read() {
         !seen.iter().any(|name| name == "framework.broadcast"),
         "{seen:?}"
     );
+}
+
+// Python: tests/test_turns_wiring.py::test_a_turn_in_a_context_of_its_own_continues_the_owner_s_span
+// and tests/test_opentelemetry.py: a turn's request names the span it runs
+// under, the broadcast's (RFC §10.6.9).
+#[tokio::test]
+async fn a_turn_s_request_names_the_broadcast_it_runs_under() {
+    let mock = Arc::new(MockTelemetryProvider::default());
+    let kit = RoomKit::new(RoomKitOptions {
+        telemetry: Some(Arc::clone(&mock).into()),
+        ..RoomKitOptions::default()
+    });
+    let tap = TurnTap::on(&kit);
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let script = vec![Round::Says("Yes.", None)];
+    let agent = AiChannel::new(id("ai"), Scripted::new(script), AiChannelOptions::default());
+    kit.register_channel(agent.unwrap()).unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    for channel in ["sms", "ai"] {
+        kit.attach_channel(&room(), &id(channel), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let message = InboundMessage::new(id("sms"), "+15550000001", TextContent::new("Hello"));
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..ProcessInboundOptions::default()
+    };
+    kit.process_inbound(message, options).await.unwrap();
+    kit.close().await.unwrap();
+    let requests: Vec<Value> = tap
+        .messages()
+        .into_iter()
+        .filter(|message| message.family == "request")
+        .map(|message| serde_json::from_str(&message.json).unwrap())
+        .collect();
+    let [request] = &requests[..] else {
+        panic!("one request in {requests:?}");
+    };
+    let span_id = request["trace"]["span_id"].as_str().unwrap();
+    let broadcasts = mock.get_spans(SpanKind::Broadcast);
+    assert!(broadcasts.iter().any(|span| span.id == span_id));
+    let generate = one(mock.get_spans(SpanKind::LlmGenerate));
+    assert_eq!(generate.parent_id.as_deref(), Some(span_id));
 }

@@ -26,8 +26,9 @@ use serde_json::json;
 
 use super::otel::ENDED_SPANS_KEPT;
 use super::{
-    EndSpanOptions, OpenTelemetryProvider, OpenTelemetryProviderOptions, RecordMetricOptions,
-    SpanKind, StartSpanOptions, TelemetryProvider, get_current_span,
+    EndSpanOptions, KitTelemetry, NoopTelemetryProvider, OpenTelemetryProvider,
+    OpenTelemetryProviderOptions, RecordMetricOptions, SpanKind, StartSpanOptions,
+    TelemetryProvider, current_trace, get_current_span, within_kit, within_turn_trace,
 };
 
 /// A provider whose spans land in an in-memory exporter.
@@ -331,11 +332,17 @@ async fn a_span_another_provider_names_is_the_parent_of_its_spans() {
     );
     let carrier = owner.inject_context(&parent);
     assert!(carrier.contains_key("traceparent"), "{carrier:?}");
-    let context = executor.extract_context(&carrier);
+    let mut trace = carrier;
+    trace.insert("span_id".to_owned(), parent.clone());
+    let telemetry = KitTelemetry {
+        provider: Arc::clone(&executor),
+        sensitive: false,
+        suppressed: Arc::default(),
+    };
     let child = {
         let executor = Arc::clone(&executor);
         let parent = parent.clone();
-        super::within_extracted_span(Arc::clone(&executor), parent.clone(), context, async move {
+        within_turn_trace(Some(telemetry), Some(&trace), async move {
             assert_eq!(get_current_span(), Some(parent.clone()));
             let options = StartSpanOptions {
                 parent_id: Some(parent),
@@ -490,4 +497,39 @@ fn the_close_exports_the_spans_it_ends_when_the_collector_answers() {
     );
     provider.close();
     assert_eq!(collector.exported(), vec!["roomkit.still open".to_owned()]);
+}
+
+// Python: tests/test_opentelemetry.py::TestAcrossProcesses::test_a_turn_request_names_its_span_by_trace_context
+#[tokio::test]
+async fn a_turn_request_names_its_span_by_trace_context() {
+    let (provider, _) = provider();
+    let provider: Arc<dyn TelemetryProvider> = Arc::new(provider);
+    let span = provider.start_span(
+        SpanKind::Broadcast,
+        "broadcast",
+        StartSpanOptions::default(),
+    );
+    let telemetry = KitTelemetry {
+        provider: Arc::clone(&provider),
+        sensitive: false,
+        suppressed: Arc::default(),
+    };
+    let named = within_kit(&telemetry, Some(span.clone()), async { current_trace() })
+        .await
+        .unwrap();
+    let bare = KitTelemetry {
+        provider: Arc::new(NoopTelemetryProvider),
+        sensitive: false,
+        suppressed: Arc::default(),
+    };
+    let without_a_carrier = within_kit(&bare, Some(span.clone()), async { current_trace() })
+        .await
+        .unwrap();
+    provider.end_span(&span, EndSpanOptions::default());
+    assert_eq!(named["span_id"], span);
+    assert_eq!(named["traceparent"].split('-').nth(2), Some(span.as_str()));
+    assert_eq!(
+        without_a_carrier,
+        BTreeMap::from([("span_id".to_owned(), span)])
+    );
 }

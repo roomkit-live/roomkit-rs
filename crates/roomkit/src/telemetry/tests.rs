@@ -1,5 +1,6 @@
 //! The providers without a kit: Python's `tests/test_telemetry.py`.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -439,4 +440,59 @@ fn a_config_s_defaults_are_python_s() {
     let mock = Arc::new(MockTelemetryProvider::default());
     let config = TelemetryConfig::from(Arc::clone(&mock));
     assert_eq!(config.provider.unwrap().name(), "mock");
+}
+
+/// The telemetry of a kit reporting to a mock.
+fn kit_telemetry() -> KitTelemetry {
+    KitTelemetry {
+        provider: Arc::new(MockTelemetryProvider::default()),
+        sensitive: false,
+        suppressed: Arc::default(),
+    }
+}
+
+// Python: tests/test_turns_wiring.py::test_a_turn_in_a_context_of_its_own_continues_the_owner_s_span
+#[tokio::test]
+async fn a_turn_s_work_in_a_context_of_its_own_continues_its_request_s_span() {
+    let trace = BTreeMap::from([("span_id".to_owned(), "b1".to_owned())]);
+    let read = within_turn_trace(Some(kit_telemetry()), Some(&trace), async {
+        get_current_span()
+    });
+    assert_eq!(read.await.as_deref(), Some("b1"));
+}
+
+// Python: turns/_executor_turn.py `_run_work`: a request that names no span
+// leaves its work where it stands, as a context under it already.
+#[tokio::test]
+async fn a_turn_s_work_under_its_request_s_span_or_with_none_stays_where_it_is() {
+    let telemetry = kit_telemetry();
+    let under = BTreeMap::from([("span_id".to_owned(), "b1".to_owned())]);
+    let blank = BTreeMap::from([("span_id".to_owned(), String::new())]);
+    let read = within_kit(&telemetry, Some("b1".to_owned()), {
+        let telemetry = telemetry.clone();
+        async move {
+            let under = within_turn_trace(Some(telemetry.clone()), Some(&under), async {
+                get_current_span()
+            })
+            .await;
+            let blank = within_turn_trace(Some(telemetry.clone()), Some(&blank), async {
+                get_current_span()
+            })
+            .await;
+            let none = within_turn_trace(Some(telemetry), None, async { get_current_span() }).await;
+            (under, blank, none)
+        }
+    });
+    let b1 = Some("b1".to_owned());
+    assert_eq!(read.await, (b1.clone(), b1.clone(), b1));
+}
+
+// Python: turns/owner.py `_trace`: under no span, or the no-op provider's,
+// a request names none.
+#[tokio::test]
+async fn a_turn_request_under_no_span_names_none() {
+    assert_eq!(current_trace(), None);
+    let telemetry = kit_telemetry();
+    let blank = within_kit(&telemetry, Some(String::new()), async { current_trace() });
+    assert_eq!(blank.await, None);
 }
