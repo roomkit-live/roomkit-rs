@@ -223,6 +223,13 @@ impl<S: ConversationStore> DefaultInboundRoomRouter<S> {
             identity: options.identity,
         }
     }
+
+    /// Who `candidate`'s binding of `channel_id` delivers to, as the channel
+    /// answers it (RFC §5.7, Python's `routed_recipient`).
+    fn routed_recipient(&self, channel_id: &ChannelId, candidate: &Candidate) -> Option<String> {
+        let channel = self.channel_of.as_ref()?(channel_id)?;
+        channel.routed_recipient(candidate.binding(channel_id)?)
+    }
 }
 
 impl<S: ConversationStore> InboundRoomRouter for DefaultInboundRoomRouter<S> {
@@ -253,11 +260,16 @@ impl<S: ConversationStore> InboundRoomRouter for DefaultInboundRoomRouter<S> {
             let Some(candidate) = candidate(store, sole, &query).await? else {
                 return Ok(None);
             };
-            let routed = routing::routed(&query, &[candidate]);
-            if let Some((room_id, Refusal::NotARecipient(kind))) = &routed.refused {
-                not_a_recipient(room_id, &query, kind);
+            let mut query = query;
+            query.form.answered_recipient = self.routed_recipient(&query.channel_id, &candidate);
+            match routing::admits(&query, &candidate) {
+                Ok(()) => Ok(Some(candidate.room.id)),
+                Err(Refusal::NotARecipient(kind)) => {
+                    not_a_recipient(&candidate.room.id, &query, kind);
+                    Ok(None)
+                }
+                Err(_) => Ok(None),
             }
-            Ok(routed.room_id)
         })
     }
 }
@@ -269,6 +281,7 @@ fn as_written() -> AddressForm {
         addressing: Addressing::AsWritten,
         country_code: None,
         recipient_key: None,
+        answered_recipient: None,
     }
 }
 

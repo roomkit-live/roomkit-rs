@@ -447,6 +447,7 @@ pub(super) async fn channel<S: ConversationStore>(
         ChannelRequest::RoomAttached { binding } => room_attached(inner, binding).await,
         ChannelRequest::RoomDetached { binding } => room_detached(inner, binding).await,
         ChannelRequest::NamedCorrespondent { binding } => named_binding(inner, binding),
+        ChannelRequest::RoutedRecipient { binding } => routed_recipient(inner, &binding),
         ChannelRequest::HandleInbound {
             channel_id,
             message,
@@ -842,6 +843,15 @@ fn named_binding<S>(inner: &Inner<S>, binding: ChannelBinding) -> Outcome {
     ChannelOutcome::Named(Box::new(named)).into()
 }
 
+/// Who `binding` delivers to, as routing reads it (RFC §5.7, §10.4); `None`
+/// for a channel no longer registered, whose declared key the core reads.
+fn routed_recipient<S>(inner: &Inner<S>, binding: &ChannelBinding) -> Outcome {
+    let recipient = inner
+        .registered(&binding.channel_id)
+        .and_then(|channel| channel.routed_recipient(binding));
+    ChannelOutcome::Recipient(recipient).into()
+}
+
 /// The refusal of `request`, a channel's call work a close spared made
 /// once the kit was sealed: a turn's, its submission or the read of its
 /// stream, its link's `backend_closed`, the turn still open as its owner
@@ -861,7 +871,8 @@ fn refused_once_sealed(request: &ChannelRequest) -> ErrorRecord {
         | ChannelRequest::StreamsIn { .. }
         | ChannelRequest::RoomAttached { .. }
         | ChannelRequest::RoomDetached { .. }
-        | ChannelRequest::NamedCorrespondent { .. } => cut_by_close(),
+        | ChannelRequest::NamedCorrespondent { .. }
+        | ChannelRequest::RoutedRecipient { .. } => cut_by_close(),
     }
 }
 

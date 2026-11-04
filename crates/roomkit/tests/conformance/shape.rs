@@ -139,7 +139,7 @@ const CHANNEL: &[&str] = &[
     "memory",
     "agent",
 ];
-const ADDRESSES: &[&str] = &["normalizes", "conversation_key"];
+const ADDRESSES: &[&str] = &["normalizes", "conversation_key", "recipient_at"];
 const AGENT: &[&str] = &[
     "name",
     "role",

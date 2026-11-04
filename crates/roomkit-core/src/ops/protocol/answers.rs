@@ -43,6 +43,8 @@ pub(crate) enum RequestKind {
     RoomCallback,
     /// A channel writing a binding's addresses in its own form.
     NamedCorrespondent,
+    /// A channel reading who a binding delivers to.
+    RoutedRecipient,
     RunHook,
     RunObservers,
     Route,
@@ -75,6 +77,7 @@ impl Request {
             Self::Channel(ChannelRequest::NamedCorrespondent { .. }) => {
                 RequestKind::NamedCorrespondent
             }
+            Self::Channel(ChannelRequest::RoutedRecipient { .. }) => RequestKind::RoutedRecipient,
             Self::Hook(HookRequest::RunHook { .. }) => RequestKind::RunHook,
             Self::Hook(HookRequest::RunObservers { .. }) => RequestKind::RunObservers,
             Self::Route { .. } => RequestKind::Route,
@@ -166,6 +169,7 @@ impl RequestKind {
             Self::StreamsIn => "StreamsIn",
             Self::RoomCallback => "Told",
             Self::NamedCorrespondent => "Named",
+            Self::RoutedRecipient => "Recipient",
             Self::RunHook => "Ran",
             Self::RunObservers => "Observed",
             Self::Route => "Routed",
@@ -227,6 +231,9 @@ impl RequestKind {
             Self::RoomCallback => matches!(outcome, Outcome::Channel(ChannelOutcome::Told)),
             Self::NamedCorrespondent => {
                 matches!(outcome, Outcome::Channel(ChannelOutcome::Named(_)))
+            }
+            Self::RoutedRecipient => {
+                matches!(outcome, Outcome::Channel(ChannelOutcome::Recipient(_)))
             }
             Self::RunHook => matches!(outcome, Outcome::Hook(HookAnswer::Ran(_))),
             Self::RunObservers => matches!(outcome, Outcome::Hook(HookAnswer::Observed)),
@@ -456,6 +463,14 @@ impl Outcome {
         }
     }
 
+    /// Who a binding delivers to, if anyone.
+    pub(crate) fn into_recipient(self) -> Result<Option<String>, ErrorRecord> {
+        match self {
+            Self::Channel(ChannelOutcome::Recipient(recipient)) => Ok(recipient),
+            other => Err(other.into_failure()),
+        }
+    }
+
     /// The identity an address resolved to, if any.
     pub(crate) fn into_resolved(self) -> Result<Option<Identity>, ErrorRecord> {
         match self {
@@ -575,6 +590,7 @@ impl Outcome {
             Self::Channel(ChannelOutcome::Raised(_)) => "Raised",
             Self::Channel(ChannelOutcome::Told) => "Told",
             Self::Channel(ChannelOutcome::Named(_)) => "Named",
+            Self::Channel(ChannelOutcome::Recipient(_)) => "Recipient",
             Self::Hook(HookAnswer::Ran(_)) => "Ran",
             Self::Hook(HookAnswer::Observed) => "Observed",
             Self::Routed(_) => "Routed",

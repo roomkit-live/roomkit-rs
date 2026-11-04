@@ -494,7 +494,13 @@ impl Channel for ScriptedChannel {
     }
 
     fn recipient_address(&self, binding: &ChannelBinding) -> Option<String> {
-        let held = binding.metadata.get(self.reply_key()?)?.as_str()?;
+        let declared = self.reply_key()?;
+        let key = self
+            .addresses
+            .as_ref()
+            .and_then(|addresses| addresses["recipient_at"].as_str())
+            .unwrap_or(declared);
+        let held = binding.metadata.get(key)?.as_str()?;
         (!held.trim().is_empty()).then(|| self.normalize_address(held))
     }
 

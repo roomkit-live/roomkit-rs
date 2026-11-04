@@ -11,7 +11,7 @@ use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelType,
 };
 use roomkit_core::ops::ChannelConfig;
-use roomkit_core::rules::addresses::AddressForm;
+use roomkit_core::rules::addresses::{AddressForm, written_recipient};
 
 use crate::channel::{BoxFuture, DynChannel};
 
@@ -126,16 +126,33 @@ impl sealed::Sealed for Registered {
     fn form(&self) -> AddressForm {
         self.declaration.form()
     }
+
+    fn routed_recipient(&self, binding: &ChannelBinding) -> Option<String> {
+        let answered = self.channel.recipient_address(binding);
+        answered.or_else(|| {
+            let key = self.declaration.recipient_key.as_deref()?;
+            let held = written_recipient(&binding.metadata, key)?;
+            Some(self.channel.normalize_address(&held))
+        })
+    }
 }
 
 /// What makes [`RegisteredChannel`] the kit's alone, and what the default
 /// router reads of it beside its members.
 pub(crate) mod sealed {
+    use roomkit_core::model::ChannelBinding;
     use roomkit_core::rules::addresses::AddressForm;
 
     /// Implemented by the kit's views only.
     pub trait Sealed {
         /// The form the channel's addresses are compared in.
         fn form(&self) -> AddressForm;
+
+        /// Who `binding` delivers to, as routing reads it (RFC §5.7, §10.4,
+        /// Python's `routed_recipient`, RMK-1129): the channel's own
+        /// `recipient_address`, or when it answers none the value under its
+        /// declared key, in its form. A value there that is not a recipient
+        /// is no answer: a caller reads it apart, as someone else's.
+        fn routed_recipient(&self, binding: &ChannelBinding) -> Option<String>;
     }
 }

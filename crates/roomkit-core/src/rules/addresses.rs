@@ -266,6 +266,11 @@ pub struct AddressForm {
     /// The binding metadata key the channel delivers to, if any (RFC §10.2
     /// step 3d).
     pub recipient_key: Option<String>,
+    /// The recipient the channel answers for the binding being read, in its
+    /// own form, when it was asked (Python's `routed_recipient`, RFC §5.7):
+    /// routing takes it over the value under the key, a value that is not a
+    /// recipient apart. `None` reads the key.
+    pub answered_recipient: Option<String>,
 }
 
 impl AddressForm {
@@ -285,18 +290,26 @@ impl AddressForm {
         }
     }
 
-    /// What `binding` holds under the channel's recipient key (RFC §5.7):
-    /// its recipient in the channel's form, no value, or a value that is
-    /// not a recipient. A channel with no recipient key holds no value.
+    /// Who `binding` delivers to, as routing reads it (RFC §5.7): a value
+    /// under the channel's recipient key that is not a recipient; else the
+    /// channel's own answer; else its recipient under the key, in the
+    /// channel's form, or no value. A channel with no recipient key holds no
+    /// value there.
     pub(crate) fn held(&self, binding: &ChannelBinding) -> Held<String> {
-        let Some(key) = self.recipient_key.as_deref() else {
-            return Held::Nothing;
-        };
-        match held(binding.metadata.get(key)) {
-            Held::Recipient(Written::Text(recipient)) => Held::Recipient(self.normalize(recipient)),
-            Held::Recipient(Written::Integer(recipient)) => Held::Recipient(recipient.to_string()),
-            Held::Nothing => Held::Nothing,
-            Held::NotARecipient(kind) => Held::NotARecipient(kind),
+        let under_key = self
+            .recipient_key
+            .as_deref()
+            .map_or(Held::Nothing, |key| held(binding.metadata.get(key)));
+        match (under_key, &self.answered_recipient) {
+            (Held::NotARecipient(kind), _) => Held::NotARecipient(kind),
+            (_, Some(answered)) => Held::Recipient(answered.clone()),
+            (Held::Recipient(Written::Text(recipient)), None) => {
+                Held::Recipient(self.normalize(recipient))
+            }
+            (Held::Recipient(Written::Integer(recipient)), None) => {
+                Held::Recipient(recipient.to_string())
+            }
+            (Held::Nothing, None) => Held::Nothing,
         }
     }
 }
@@ -990,6 +1003,7 @@ mod tests {
             addressing: Addressing::PhoneNumber,
             country_code: Some(code("1")),
             recipient_key: Some(PHONE_NUMBER.to_owned()),
+            answered_recipient: None,
         }
     }
 

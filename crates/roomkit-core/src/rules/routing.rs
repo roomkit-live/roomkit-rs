@@ -554,7 +554,7 @@ pub fn sole_bound<'room>(
 /// # Errors
 ///
 /// Returns the first condition that does not hold, as a [`Refusal`].
-pub(crate) fn admits(query: &RouteQuery, candidate: &Candidate) -> Result<(), Refusal> {
+pub fn admits(query: &RouteQuery, candidate: &Candidate) -> Result<(), Refusal> {
     let binding = candidate
         .binding(&query.channel_id)
         .ok_or(Refusal::Unbound)?;
@@ -606,6 +606,17 @@ pub(crate) fn still_admits(
         return Ok(());
     }
     admission(sender, form, binding, participants, heard)
+}
+
+/// Whether routing asks the channel who `binding`, read in `form`, delivers
+/// to (Python's `routed_recipient`, RFC §5.7): the correspondent of a binding
+/// naming no participant and not declared `group`, unless it holds a value
+/// under the key that is not a recipient, which is someone else's whatever
+/// the channel answers.
+pub(crate) fn reads_recipient(binding: &ChannelBinding, form: &AddressForm) -> bool {
+    !binding.group
+        && binding.participant_id.is_none()
+        && !matches!(form.held(binding), Held::NotARecipient(_))
 }
 
 /// Whether [`still_admits`] depends on who the room heard on the channel: a
@@ -775,7 +786,10 @@ pub(crate) fn recording(
     };
     let mut update = BindingUpdate::default();
     if binding.participant_id.is_none() {
-        update.participant_id = Some(ParticipantId::new(address.clone()).ok());
+        // The recipient the channel answers, which names the sender here,
+        // else their address.
+        let named = form.answered_recipient.as_ref().unwrap_or(address);
+        update.participant_id = Some(ParticipantId::new(named.clone()).ok());
     }
     // On a transport, where a reply goes, under each key the binding holds
     // no value under: a value that is not a recipient is kept, as a
@@ -842,6 +856,7 @@ mod tests {
             addressing: Addressing::PhoneNumber,
             country_code: Some(CountryCode::new("1").unwrap()),
             recipient_key: Some(PHONE_NUMBER.to_owned()),
+            answered_recipient: None,
         }
     }
 

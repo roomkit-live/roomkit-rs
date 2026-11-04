@@ -113,7 +113,7 @@ fn delivers_to(
         return DeliversTo::NotARecipient;
     }
     channel
-        .recipient_address(binding)
+        .routed_recipient(binding)
         .map_or(DeliversTo::NoOne, DeliversTo::Recipient)
 }
 

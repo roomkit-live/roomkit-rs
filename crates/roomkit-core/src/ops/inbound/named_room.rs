@@ -50,7 +50,9 @@ use std::convert::Infallible;
 use std::mem;
 
 use super::InboundError;
-use super::arrival_change::{ArrivalChange, Heard, Recorded, SenderRecord};
+use super::arrival_change::{
+    ArrivalChange, AutomaticAttach, Heard, RecipientRead, Recorded, SenderRecord,
+};
 use crate::model::{
     ChannelBinding, ChannelType, ErrorRecord, ParticipantId, Room, RoomContext, RoomId,
 };
@@ -356,6 +358,7 @@ impl NamedRoom {
                     sender: self.sender.clone(),
                     form: self.channel.form(),
                     heard: Heard::default(),
+                    recipient: RecipientRead::default(),
                 };
                 self.change(cx, ArrivalChange::RecordSender(Box::new(record)), false)
             }
@@ -367,7 +370,7 @@ impl NamedRoom {
                 let binding = self.channel.binding(self.room_id.clone(), cx.env.now());
                 self.change(
                     cx,
-                    ArrivalChange::AttachAutomatically(Box::new(binding)),
+                    ArrivalChange::AttachAutomatically(AutomaticAttach::of(binding)),
                     false,
                 )
             }
@@ -449,7 +452,7 @@ impl NamedRoom {
         let binding = self.sender_binding(cx);
         self.change(
             cx,
-            ArrivalChange::AttachAutomatically(Box::new(binding)),
+            ArrivalChange::AttachAutomatically(AutomaticAttach::of(binding)),
             true,
         )
     }

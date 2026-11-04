@@ -250,7 +250,8 @@ impl Work {
                 | ChannelRequest::StreamsIn { .. }
                 | ChannelRequest::RoomAttached { .. }
                 | ChannelRequest::RoomDetached { .. }
-                | ChannelRequest::NamedCorrespondent { .. },
+                | ChannelRequest::NamedCorrespondent { .. }
+                | ChannelRequest::RoutedRecipient { .. },
             )
             | Request::Hold(_)
             | Request::Store(_)

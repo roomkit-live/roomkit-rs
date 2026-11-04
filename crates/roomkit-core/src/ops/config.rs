@@ -140,6 +140,7 @@ impl ChannelConfig {
             addressing: self.addressing,
             country_code: self.country_code.clone(),
             recipient_key: self.recipient_key.clone(),
+            answered_recipient: None,
         }
     }
 

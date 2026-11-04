@@ -555,6 +555,15 @@ pub enum ChannelRequest {
         /// The binding, as the update leaves it.
         binding: ChannelBinding,
     },
+    /// Read who `binding` delivers to as routing reads it (RFC §5.7, §10.4,
+    /// Python's `routed_recipient`): the channel's `recipient_address`, else
+    /// the value under its recipient key in its form. Answer
+    /// [`ChannelOutcome::Recipient`], `None` for a channel the driver no
+    /// longer holds, whose declared key the core still reads.
+    RoutedRecipient {
+        /// The binding, as the lock finds it.
+        binding: ChannelBinding,
+    },
 }
 
 /// The channel that reads a turn's response as it is written (RFC §6.1
@@ -845,6 +854,9 @@ pub enum ChannelOutcome {
     /// The binding with its addresses in the channel's form: the answer of
     /// [`ChannelRequest::NamedCorrespondent`].
     Named(Box<ChannelBinding>),
+    /// Who the binding delivers to, if anyone: the answer of
+    /// [`ChannelRequest::RoutedRecipient`].
+    Recipient(Option<String>),
 }
 
 /// An error a call raised that declares its delivery error
