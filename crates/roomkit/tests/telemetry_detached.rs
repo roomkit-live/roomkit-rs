@@ -489,9 +489,9 @@ async fn a_failed_release_is_no_failure_of_the_tail() {
     kit.close().await.unwrap();
 }
 
-/// A transport whose send of "Hello" waits until the test lets it.
+/// A transport whose send of the text `.1` waits until the test lets it.
 #[derive(Clone)]
-struct HeldSend(Arc<Notify>);
+struct HeldSend(Arc<Notify>, &'static str);
 
 impl Channel for HeldSend {
     fn channel_id(&self) -> ChannelId {
@@ -517,13 +517,16 @@ impl Channel for HeldSend {
 
     fn deliver(
         &self,
-        _event: RoomEvent,
+        event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         let gate = Arc::clone(&self.0);
+        let held = serde_json::to_value(&event.content).unwrap()["body"] == self.1;
         async move {
-            gate.notified().await;
+            if held {
+                gate.notified().await;
+            }
             Ok(ChannelOutput::empty())
         }
     }
@@ -536,7 +539,8 @@ async fn a_stream_the_cancel_drops_is_not_counted() {
     let model = ScriptedProvider::new([ScriptedRound::answering("Yes.")]);
     let (kit, mock) = kit_with(model).await;
     let gate = Arc::new(Notify::new());
-    kit.register_channel(HeldSend(Arc::clone(&gate))).unwrap();
+    kit.register_channel(HeldSend(Arc::clone(&gate), "Hello"))
+        .unwrap();
     kit.attach_channel(&room(), &id("held"), AttachChannelOptions::default())
         .await
         .unwrap();
@@ -560,7 +564,8 @@ async fn a_stream_the_cancel_drops_is_not_counted() {
 }
 
 // Python: core/mixins/lane_execution.py: `len(cascade.streams)` is the caller's
-// own cascade's: the stream of an event its hook sends is another's.
+// own cascade's: the stream of an event its hook sends is another's. The event
+// is held in its set past the caller's answer, so that the tail is there to count.
 #[tokio::test]
 async fn an_adopted_event_s_stream_is_not_the_caller_s() {
     let model = ScriptedProvider::new([
@@ -568,6 +573,12 @@ async fn an_adopted_event_s_stream_is_not_the_caller_s() {
         ScriptedRound::answering("Two."),
     ]);
     let (kit, mock) = kit_with(model).await;
+    let gate = Arc::new(Notify::new());
+    kit.register_channel(HeldSend(Arc::clone(&gate), "adopted"))
+        .unwrap();
+    kit.attach_channel(&room(), &id("held"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     let hooked = kit.clone();
     kit.hook(
         HookTrigger::BeforeBroadcast,
@@ -595,6 +606,7 @@ async fn an_adopted_event_s_stream_is_not_the_caller_s() {
     )
     .unwrap();
     let result = say(&kit, true).await;
+    gate.notify_one();
     tokio::time::timeout(BOUND, result.delivery.unwrap().wait())
         .await
         .unwrap()
