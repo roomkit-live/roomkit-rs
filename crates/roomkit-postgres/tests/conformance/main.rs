@@ -1,0 +1,114 @@
+//! The shared conformance suite (RFC §1.4, §26.1) on the Postgres store: the
+//! runner is roomkit's (crates/roomkit/tests/conformance), included by
+//! path, and so are the scenarios it reads, the repository's copy.
+
+#![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+#![expect(
+    clippy::indexing_slicing,
+    reason = "the runner reads scenarios as serde_json values, whose index reads null for a \
+              missing member and never panics; its own lists are indexed within their length"
+)]
+
+#[path = "../../../roomkit/tests/conformance/agents.rs"]
+mod agents;
+#[path = "../../../roomkit/tests/conformance/ai_hooks.rs"]
+mod ai_hooks;
+#[path = "../../../roomkit/tests/conformance/audits.rs"]
+mod audits;
+#[path = "../../../roomkit/tests/conformance/calls.rs"]
+mod calls;
+#[path = "../../../roomkit/tests/conformance/compare.rs"]
+mod compare;
+#[path = "../../../roomkit/tests/conformance/errors.rs"]
+mod errors;
+#[path = "../../../roomkit/tests/conformance/handoff_calls.rs"]
+mod handoff_calls;
+#[path = "../../../roomkit/tests/conformance/harness.rs"]
+mod harness;
+#[path = "../../../roomkit/tests/conformance/identity.rs"]
+mod identity;
+#[path = "../../../roomkit/tests/conformance/input_calls.rs"]
+mod input_calls;
+#[path = "../../../roomkit/tests/conformance/locks.rs"]
+mod locks;
+#[path = "../../../roomkit/tests/conformance/matching.rs"]
+mod matching;
+#[path = "../../../roomkit/tests/conformance/media.rs"]
+mod media;
+#[path = "../../../roomkit/tests/conformance/member_calls.rs"]
+mod member_calls;
+#[path = "../../../roomkit/tests/conformance/memory.rs"]
+mod memory;
+#[path = "../../../roomkit/tests/conformance/normalize.rs"]
+mod normalize;
+#[path = "../../../roomkit/tests/conformance/routing_calls.rs"]
+mod routing_calls;
+#[path = "../../../roomkit/tests/conformance/run.rs"]
+mod run;
+#[path = "../../../roomkit/tests/conformance/scenarios.rs"]
+mod scenarios;
+#[path = "../../../roomkit/tests/conformance/scripted.rs"]
+mod scripted;
+#[path = "../../../roomkit/tests/conformance/shape.rs"]
+mod shape;
+#[path = "../../../roomkit/tests/conformance/store_calls.rs"]
+mod store_calls;
+#[path = "../../../roomkit/tests/conformance/strategy_calls.rs"]
+mod strategy_calls;
+#[path = "../support/mod.rs"]
+mod support;
+#[path = "../../../roomkit/tests/conformance/task_calls.rs"]
+mod task_calls;
+#[path = "../../../roomkit/tests/conformance/templates.rs"]
+mod templates;
+#[path = "../../../roomkit/tests/conformance/verification_calls.rs"]
+mod verification_calls;
+
+use std::time::Duration;
+
+use roomkit::{RoomKit, RoomKitOptions};
+use roomkit_postgres::PostgresStore;
+
+use crate::support::TempSchema;
+
+/// Scenario id → the rule this implementation breaks on this store. The
+/// in-memory store has none; a reason led by `timing:` depends on the
+/// machine's speed, and may pass.
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[(
+    "orchestration/a-team-worker-past-its-task-timeout-is-read-as-timed-out-beside-the-others",
+    "timing: the worker that answers has 50 ms, which a debug build's round trips to a server \
+     pass, and is cut with the one that must be; Python's PostgresStore fails it the same way",
+)];
+
+/// A scenario that has not finished by then fails instead of hanging the
+/// suite.
+pub(crate) const SCENARIO_BOUND: Duration = Duration::from_secs(60);
+
+/// The kit the scenarios run on, over the Postgres store.
+pub(crate) type Kit = RoomKit<PostgresStore>;
+/// The store of the kit the runner builds.
+pub(crate) type Store = PostgresStore;
+
+/// A kit over a store on a new schema, built with what `configure` makes of
+/// the defaults, and the schema, dropped once the run is over.
+pub(crate) async fn new_kit(
+    configure: impl FnOnce(RoomKitOptions<PostgresStore>) -> RoomKitOptions<PostgresStore>,
+) -> (Kit, TempSchema) {
+    let schema = TempSchema::new().await;
+    let store = schema.initialized_store().await;
+    (
+        RoomKit::new(configure(RoomKitOptions::with_store(store))),
+        schema,
+    )
+}
+
+/// Every scenario runs; those this implementation fails on this store are
+/// exactly the known failures. Without `POSTGRES_DSN` it skips itself.
+#[test]
+fn every_scenario_gives_what_the_rfc_says() {
+    if support::dsn().is_none() {
+        eprintln!("POSTGRES_DSN is not set: the conformance suite is skipped on Postgres");
+        return;
+    }
+    scenarios::every_scenario_gives_what_the_rfc_says();
+}

@@ -8,7 +8,8 @@ required and provided methods, with their signatures, and the traits an item
 implements. `scripts/api-parity.py` compares the result with the Python
 implementation's snapshot (docs/steps/step-05.md, lot 0).
 
-The scope is `roomkit`, `roomkit-ai`, `roomkit-openai`, `roomkit-sqlite` and
+The scope is `roomkit`, `roomkit-ai`, `roomkit-openai`, `roomkit-sqlite`,
+`roomkit-postgres` and
 `roomkit-mcp`. `roomkit-core` enters only through what `roomkit` re-exports,
 which rustdoc inlines into `roomkit`'s pages. An item or member hidden by
 `#[doc(hidden)]` is on no page, and so not in the surface.
@@ -33,7 +34,14 @@ import sys
 from pathlib import Path
 from typing import TextIO
 
-CRATES = ("roomkit", "roomkit_ai", "roomkit_openai", "roomkit_sqlite", "roomkit_mcp")
+CRATES = (
+    "roomkit",
+    "roomkit_ai",
+    "roomkit_openai",
+    "roomkit_sqlite",
+    "roomkit_postgres",
+    "roomkit_mcp",
+)
 
 # The sections of all.html, and the heading each kind's page opens with.
 KINDS = {

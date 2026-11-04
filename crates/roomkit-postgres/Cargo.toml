@@ -1,0 +1,40 @@
+[package]
+name = "roomkit-postgres"
+description = "A Postgres conversation store and lock manager for RoomKit, on the Python implementation's schema"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+blake2.workspace = true
+bytes.workspace = true
+deadpool-postgres.workspace = true
+roomkit.workspace = true
+roomkit-core.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+tracing.workspace = true
+webpki-roots.workspace = true
+
+[dev-dependencies]
+# The conformance runner's paced model, which the suite includes from
+# roomkit.
+futures-core.workspace = true
+pretty_assertions.workspace = true
+# The conformance runner's scripted agent, which the suite includes from
+# roomkit.
+roomkit-ai.workspace = true
+sha2.workspace = true
+# The conformance runner's, which the suite includes from roomkit.
+uuid.workspace = true
+
+[lints]
+workspace = true
