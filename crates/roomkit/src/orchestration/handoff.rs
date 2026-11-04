@@ -24,7 +24,8 @@ use crate::orchestration::agents::HeldAgent;
 use crate::orchestration::handoff_end::{accepted, moved_state, rejected};
 pub(crate) use crate::orchestration::handoff_tool::{HANDOFF_TOOL_NAME, handoff_tool_definition};
 use crate::orchestration::{
-    ConversationRouter, StrategyAgent, get_conversation_state, save_conversation_state,
+    ConversationRouter, ConversationState, StrategyAgent, get_conversation_state,
+    save_conversation_state,
 };
 use crate::store::{ConversationStore, InMemoryStore};
 use crate::turn::OwnerToolAnswer;
@@ -541,7 +542,7 @@ impl<S: ConversationStore> HandoffHandler<S> {
             ))));
         }
         if self.inner.allowed_transitions.is_some()
-            && !self.holds_phase(calling_agent_id.as_str(), &state.phase)
+            && !self.caller_holds_room(calling_agent_id, &state)
         {
             tracing::warn!(target: "roomkit::orchestration", "Handoff rejected: caller {calling_agent_id} does not hold phase {}", state.phase);
             return Ok(Decided::Rejected(refusal(format!(
@@ -578,6 +579,23 @@ impl<S: ConversationStore> HandoffHandler<S> {
             .get(&request.target_agent_id)
             .filter(|phase| !phase.is_empty())
             .map_or_else(|| "handling".to_owned(), Clone::clone)
+    }
+
+    /// Whether, under allowed transitions, `caller` may hand the room on
+    /// (RFC §19.6): it holds the room's phase; or the map does not name it,
+    /// and it is the room's active agent, or its default one while none is.
+    fn caller_holds_room(&self, caller: &ChannelId, state: &ConversationState) -> bool {
+        if self.holds_phase(caller.as_str(), &state.phase) {
+            return true;
+        }
+        if self.inner.phase_map.contains_key(caller.as_str()) {
+            return false;
+        }
+        let holder = state
+            .active_agent_id
+            .as_ref()
+            .or_else(|| self.inner.router.default_agent());
+        holder == Some(caller)
     }
 
     /// Whether, under allowed transitions, `agent_id` holds `phase`: as a

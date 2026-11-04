@@ -181,6 +181,11 @@ impl ConversationRouter {
         }
     }
 
+    /// The agent when no rule applies.
+    pub(super) fn default_agent(&self) -> Option<&ChannelId> {
+        self.default_agent_id.as_ref()
+    }
+
     /// Whether a rule of this router asks `agent_id` in `phase`.
     pub(super) fn routes_phase_to(&self, phase: &str, agent_id: &str) -> bool {
         self.rules.iter().any(|rule| {
