@@ -111,11 +111,12 @@ pub use self::loop_events::{
 pub use self::mock::{MockAiProvider, MockAiProviderOptions};
 pub use self::provider::{
     AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiProvider, AiResponse,
-    AiRole, AiTextPart, AiToolCall, AiToolCallPart, AiToolResultPart, Date, DynAiProvider,
-    ModelInfo, ModelPricing, ProviderError, ProviderErrorOptions, ProviderStream,
-    SPEECH_CAPABILITY, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta,
-    StreamToolCall, TRANSCRIPTION_CAPABILITY, TextStream, is_context_overflow_message, speech_tags,
-    tool_arguments, with_speech_tags,
+    AiRole, AiTextPart, AiThinkingPart, AiToolCall, AiToolCallPart, AiToolResultPart, Date,
+    DynAiProvider, ModelInfo, ModelPricing, ProviderError, ProviderErrorOptions, ProviderStream,
+    RoundTranscript, SPEECH_CAPABILITY, StreamDone, StreamEvent, StreamTextDelta,
+    StreamThinkingDelta, StreamToolCall, TRANSCRIPTION_CAPABILITY, TextStream, ThinkingBlocks,
+    is_context_overflow_message, round_parts, speech_tags, thinking_parts_of, tool_arguments,
+    with_speech_tags,
 };
 #[doc(hidden)]
 pub use self::provider::{listing, read_tool_calls};

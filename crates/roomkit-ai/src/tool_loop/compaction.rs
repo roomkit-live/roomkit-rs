@@ -169,6 +169,7 @@ fn part_said(part: &AiContentPart) -> String {
         AiContentPart::Image(_) => "[image]".to_owned(),
         AiContentPart::ToolCall(_) => "[tool_call]".to_owned(),
         AiContentPart::ToolResult(_) => "[tool_result]".to_owned(),
+        AiContentPart::Thinking(_) => "[thinking]".to_owned(),
     }
 }
 

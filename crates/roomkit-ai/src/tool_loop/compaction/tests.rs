@@ -233,3 +233,11 @@ fn a_message_of_parts_reads_a_line_per_part() {
         format!("{COMPACTION_HEADER}\n[user]: “see [image]”")
     );
 }
+
+// Python: channels/_compaction.py _said, "[{part.type}]" for a part with no
+// words of its own: a reasoning block is named, never quoted.
+#[test]
+fn a_summary_names_a_reasoning_block() {
+    let part = AiContentPart::Thinking(crate::provider::AiThinkingPart::new("secret"));
+    assert_eq!(part_said(&part), "[thinking]");
+}

@@ -130,7 +130,10 @@ fn tool_results(context: &AiContext) -> Vec<(String, bool)> {
                 };
                 Some((text, result.is_error))
             }
-            AiContentPart::Text(_) | AiContentPart::Image(_) | AiContentPart::ToolCall(_) => None,
+            AiContentPart::Text(_)
+            | AiContentPart::Image(_)
+            | AiContentPart::Thinking(_)
+            | AiContentPart::ToolCall(_) => None,
         })
         .collect()
 }

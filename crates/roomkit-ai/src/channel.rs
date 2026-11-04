@@ -1,7 +1,7 @@
 //! The AI channel (RFC §6.4, Appendix A.9): Python's `AIChannel`, an
 //! intelligence channel whose turn runs the tool loop over a provider.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::{self, Future};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1429,6 +1429,7 @@ impl<P: AiProvider> AiChannel<P> {
             telemetry: TurnTelemetry::current(),
             turn_span: None,
             search,
+            said: HashMap::new(),
         };
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).

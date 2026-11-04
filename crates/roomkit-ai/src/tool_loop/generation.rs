@@ -7,7 +7,10 @@ use roomkit::model::{Metadata, ToolCall};
 
 use super::TurnItem;
 use super::resilience::Reading;
-use crate::provider::{ProviderError, ProviderStream, StreamDone, StreamEvent, StreamToolCall};
+use crate::provider::{
+    AiToolCall, ProviderError, ProviderStream, RoundTranscript, StreamDone, StreamEvent,
+    StreamToolCall,
+};
 use crate::stream::{Yielder, next};
 
 /// The most calls one generation's round runs: far above a model's
@@ -33,6 +36,8 @@ pub(super) struct Generation {
     pub(super) by_fallback: bool,
     /// The round's reasoning, once the read returned.
     pub(super) thinking: String,
+    /// What it said, in the order it came, which its replay keeps (RFC §6.4).
+    pub(super) transcript: RoundTranscript,
 }
 
 /// A call as the loop reads it.
@@ -42,6 +47,21 @@ pub(super) struct Called {
     pub(super) call: ToolCall,
     /// Why it never runs, when it does not (RFC §6.4).
     pub(super) partial: Option<Partial>,
+    /// Provider-owned data of the call, which its replay carries.
+    pub(super) metadata: Metadata,
+}
+
+impl Called {
+    /// The call as its round's replay reads it: its intent and its metadata
+    /// its own.
+    fn replayed(&self) -> AiToolCall {
+        AiToolCall {
+            arguments: self.call.arguments.clone(),
+            metadata: self.metadata.clone(),
+            intent: self.call.intent.clone(),
+            ..AiToolCall::new(self.call.id.clone(), self.call.name.clone())
+        }
+    }
 }
 
 /// A generation its provider failed: the error, whether the stream had
@@ -97,17 +117,18 @@ impl Generation {
         mut stream: ProviderStream<'_>,
         (steering, out, prefix, window, limits): Reading<'_>,
     ) -> Result<Self, Failed> {
-        let mut text = String::new();
+        let mut transcript = RoundTranscript::new();
         let mut delivered = String::new();
         let mut replayed = Replayed::new(prefix);
         let mut calls = Vec::new();
+        let mut ids = HashSet::new();
         let mut done = StreamDone::default();
         let mut reports = Vec::new();
         let mut streamed = false;
         while let Some(event) = next(&mut stream).await {
             if steering.cancelled() {
                 window.end();
-                return Ok(Self::cut(text, delivered, done, reports));
+                return Ok(Self::cut(transcript, delivered, done, reports));
             }
             let event = match event {
                 Ok(event) => event,
@@ -125,13 +146,17 @@ impl Generation {
             match event {
                 StreamEvent::TextDelta(delta) => {
                     window.end();
-                    text.push_str(&delta.text);
+                    transcript.add_text(&delta.text);
                     let released = replayed.add(delta.text);
                     deliver(released, &mut delivered, out).await;
                 }
                 // A whole call closes no window: a fragment would (Python's
                 // `StreamToolCallDelta`), which no provider here hands.
-                StreamEvent::ToolCall(call) => calls.push(call),
+                StreamEvent::ToolCall(call) => {
+                    let call = with_its_own_id(call, &mut ids);
+                    transcript.add_call(call.id.clone());
+                    calls.push(call);
+                }
                 StreamEvent::Done(ended) => {
                     let unpriced = limits.cannot_price(&ended.usage);
                     take_done(ended, &mut done, &mut reports);
@@ -139,8 +164,10 @@ impl Generation {
                         break;
                     }
                 }
-                // A delta with a signature alone reads as nothing here.
+                // A delta with a signature or redacted data alone reaches no
+                // reader; the round replays it all the same (RFC §6.4).
                 StreamEvent::ThinkingDelta(delta) => {
+                    transcript.add_thinking(&delta);
                     if !delta.thinking.is_empty() {
                         window.add(&delta.thinking);
                         out.give(Ok(TurnItem::Thinking(delta.thinking))).await;
@@ -151,7 +178,7 @@ impl Generation {
         window.end();
         deliver(replayed.finish(), &mut delivered, out).await;
         Ok(Self {
-            text,
+            text: transcript.text(),
             delivered,
             calls: read_calls(calls),
             done,
@@ -159,15 +186,21 @@ impl Generation {
             cancelled: false,
             by_fallback: false,
             thinking: String::new(),
+            transcript,
         })
     }
 
-    /// A generation a `Cancel` stopped after it wrote `text`, `delivered`
-    /// of it handed to the room, and after the end `done` it handed, if
-    /// any, its usage among `reports`.
-    fn cut(text: String, delivered: String, done: StreamDone, reports: Vec<Metadata>) -> Self {
+    /// A generation a `Cancel` stopped after it said what `transcript`
+    /// holds, `delivered` of its text handed to the room, and after the end
+    /// `done` it handed, if any, its usage among `reports`.
+    fn cut(
+        transcript: RoundTranscript,
+        delivered: String,
+        done: StreamDone,
+        reports: Vec<Metadata>,
+    ) -> Self {
         Self {
-            text,
+            text: transcript.text(),
             delivered,
             calls: Vec::new(),
             done,
@@ -175,6 +208,22 @@ impl Generation {
             cancelled: true,
             by_fallback: false,
             thinking: String::new(),
+            transcript,
+        }
+    }
+
+    /// The round as the next one replays it, its calls as the loop kept them,
+    /// their intents taken: its reasoning, its text and its calls, in the
+    /// order they came (RFC §6.4). `None` for calls it never made, which the
+    /// loop's own never are: the round then reads from its text and its calls.
+    pub(super) fn said(&self) -> Option<Vec<crate::provider::AiContentPart>> {
+        let calls: Vec<AiToolCall> = self.calls.iter().map(Called::replayed).collect();
+        match self.transcript.parts(&calls) {
+            Ok(parts) => Some(parts),
+            Err(error) => {
+                tracing::error!(target: "roomkit::ai", %error, "a round's replay lost its reasoning");
+                None
+            }
         }
     }
 }
@@ -263,33 +312,39 @@ impl<'a> Replayed<'a> {
     }
 }
 
+/// `given` with an id no other call of its response carries: one minted for
+/// a call the provider gave none, or another's, as Python's `CallIds` hands
+/// them. Read as the call comes, so that the round's transcript names it.
+fn with_its_own_id(mut given: StreamToolCall, ids: &mut HashSet<String>) -> StreamToolCall {
+    if given.id.is_empty() || !ids.insert(given.id.clone()) {
+        given.id = minted_id(ids, &given.name);
+    }
+    given
+}
+
 /// The calls of a response, as the loop reads them: the first
-/// [`MAX_CALLS_PER_ROUND`], each with an id no other carries (one minted
-/// for a call the provider gave none, or another's, as Python's `CallIds`
-/// hands them), and, for one its provider marked `partial`, why it never
-/// runs. The calls past the bound are dropped before the round's assistant
-/// message is written, so that no call reaches the model without its
-/// result, and logged.
+/// [`MAX_CALLS_PER_ROUND`], and, for one its provider marked `partial`, why
+/// it never runs. The calls past the bound are dropped before the round's
+/// assistant message is written, so that no call reaches the model without
+/// its result, and logged.
 fn read_calls(calls: Vec<StreamToolCall>) -> Vec<Called> {
     log_dropped(&calls);
-    let mut ids = HashSet::new();
     calls
         .into_iter()
         .take(MAX_CALLS_PER_ROUND)
         .map(|given| {
-            let id = if !given.id.is_empty() && ids.insert(given.id.clone()) {
-                given.id
-            } else {
-                minted_id(&mut ids, &given.name)
-            };
             let partial = match (given.partial, given.garbled) {
                 (false, _) => None,
                 (true, true) => Some(Partial::Unreadable),
                 (true, false) => Some(Partial::Cut),
             };
-            let mut call = ToolCall::new(id, given.name, given.arguments);
+            let mut call = ToolCall::new(given.id, given.name, given.arguments);
             call.intent = given.intent;
-            Called { call, partial }
+            Called {
+                call,
+                partial,
+                metadata: given.metadata,
+            }
         })
         .collect()
 }
@@ -338,13 +393,10 @@ mod tests {
     // Python: tests/test_providers/test_tool_call_handoff.py::TestCallIds::test_every_call_of_a_response_gets_its_own_id
     #[test]
     fn every_call_of_a_response_gets_its_own_id() {
-        let calls = ["c1", "", "", "c1"]
+        let mut ids = HashSet::new();
+        let handed: Vec<String> = ["c1", "", "", "c1"]
             .iter()
-            .map(|id| AiToolCall::new(*id, "now").into())
-            .collect();
-        let handed: Vec<String> = read_calls(calls)
-            .into_iter()
-            .map(|called| called.call.id)
+            .map(|id| with_its_own_id(AiToolCall::new(*id, "now").into(), &mut ids).id)
             .collect();
         let distinct: HashSet<&String> = handed.iter().collect();
         let minted = handed.get(1..).unwrap_or_default();

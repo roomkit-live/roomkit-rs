@@ -328,7 +328,8 @@ fn on_the_responses_api_the_floor_applies_and_the_tool_turn_locks_do_not() {
     let sent = |provider: &OpenAiAiProvider, turn: Option<&str>, tools: bool| {
         let mut asked = context(tools);
         asked.reasoning_effort = turn.map(str::to_owned);
-        let request = crate::request::Request::of(&asked).unwrap();
+        let request =
+            crate::request::Request::of(&asked, crate::config::OpenAiApi::ChatCompletions).unwrap();
         provider.body(&request, true).unwrap()["reasoning"]["effort"].clone()
     };
     let effort = |value: &str| serde_json::Value::from(value);
@@ -382,7 +383,9 @@ fn a_turn_s_context_states_off_on_the_wire() {
             enable_thinking,
             ..AiContext::default()
         };
-        let request = crate::request::Request::of(&context).unwrap();
+        let request =
+            crate::request::Request::of(&context, crate::config::OpenAiApi::ChatCompletions)
+                .unwrap();
         let body = provider.body(&request, false).unwrap();
         assert_eq!(body["reasoning_effort"], "minimal");
         // On the Responses API too (RFC §6.7).

@@ -5,6 +5,8 @@
 use roomkit::model::Metadata;
 use serde_json::Value;
 
+use super::context::AiThinkingPart;
+
 /// The endings under which a response ran out of room: the output cap, the
 /// context window filling up mid-answer, in each provider's word.
 const OUT_OF_ROOM: [&str; 4] = [
@@ -35,8 +37,15 @@ pub struct AiResponse {
     pub metadata: Metadata,
     /// The calls it made, in order.
     pub tool_calls: Vec<AiToolCall>,
-    /// The model's reasoning (RFC §6.7), none when it showed none.
+    /// All the model's reasoning text (RFC §6.7), none when it showed none.
     pub thinking: Option<String>,
+    /// The last signature of its reasoning (RFC §6.4).
+    pub thinking_signature: Option<String>,
+    /// The reasoning blocks to replay, in the order the vendor sent them,
+    /// each with its signature or redacted data (RFC §6.4); `None` for a
+    /// provider whose reasoning has no blocks. A block the response cut before
+    /// its signature is not among them.
+    pub thinking_parts: Option<Vec<AiThinkingPart>>,
 }
 
 impl AiResponse {
@@ -49,8 +58,29 @@ impl AiResponse {
             metadata: Metadata::new(),
             tool_calls: Vec::new(),
             thinking: None,
+            thinking_signature: None,
+            thinking_parts: None,
         }
     }
+}
+
+/// A response's reasoning blocks (RFC §6.4): its `thinking_parts`, or for a
+/// provider that reports one block its `thinking` with its signature. Python's
+/// `thinking_parts_of(response)`.
+#[must_use]
+pub fn thinking_parts_of(response: &AiResponse) -> Vec<AiThinkingPart> {
+    if let Some(parts) = &response.thinking_parts {
+        return parts.clone();
+    }
+    let thinking = response.thinking.as_deref().unwrap_or_default();
+    let signature = response.thinking_signature.as_deref().unwrap_or_default();
+    if thinking.is_empty() && signature.is_empty() {
+        return Vec::new();
+    }
+    vec![AiThinkingPart {
+        signature: response.thinking_signature.clone(),
+        ..AiThinkingPart::new(thinking)
+    }]
 }
 
 /// A call the model made (RFC §6.4 "What a provider hands the loop for a
@@ -185,7 +215,7 @@ pub(crate) fn ran_out_of_room(finish_reason: Option<&str>) -> bool {
 
 /// One event of a structured stream (RFC §6.7, Appendix A.9): Python's
 /// `StreamEvent`, its classes tagged by their `type`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StreamEvent {
     /// Text the model wrote, as it came.
     TextDelta(StreamTextDelta),
@@ -323,23 +353,36 @@ pub struct StreamDone {
     pub metadata: Metadata,
 }
 
-/// The events `response` stands for: its text, its calls, then its end,
-/// as Python's `response_stream_events` wraps a whole response.
+/// The events `response` stands for: each reasoning block with its signature
+/// or redacted data (a signature alone too), its text, its calls, then its
+/// end, as Python's `response_stream_events` wraps a whole response.
 pub(crate) fn response_events(response: AiResponse) -> Vec<StreamEvent> {
+    let blocks = thinking_parts_of(&response);
+    let named = response.thinking_parts.is_some();
     let AiResponse {
         content,
         finish_reason,
         usage,
         metadata,
         tool_calls,
-        thinking,
+        ..
     } = response;
-    let mut events = Vec::new();
-    if let Some(thinking) = thinking.filter(|thinking| !thinking.is_empty()) {
-        events.push(StreamEvent::ThinkingDelta(StreamThinkingDelta::new(
-            thinking,
-        )));
-    }
+    let mut events: Vec<StreamEvent> = blocks
+        .into_iter()
+        .enumerate()
+        .map(|(block, part)| {
+            StreamEvent::ThinkingDelta(StreamThinkingDelta {
+                thinking: part.thinking,
+                signature: part.signature,
+                redacted: part.redacted,
+                block: if named {
+                    u32::try_from(block).ok()
+                } else {
+                    None
+                },
+            })
+        })
+        .collect();
     if !content.is_empty() {
         events.push(StreamEvent::TextDelta(StreamTextDelta { text: content }));
     }
@@ -391,6 +434,70 @@ mod tests {
             !response_events(empty)
                 .iter()
                 .any(|event| matches!(event, StreamEvent::ThinkingDelta(_)))
+        );
+    }
+
+    // Python: tests/test_providers/test_thinking_blocks.py::test_a_wrapped_response_hands_each_block_on
+    #[test]
+    fn a_wrapped_response_hands_each_block_on() {
+        let response = AiResponse {
+            thinking_parts: Some(vec![
+                AiThinkingPart {
+                    signature: Some("S0".to_owned()),
+                    ..AiThinkingPart::new("a")
+                },
+                AiThinkingPart {
+                    redacted: Some("RRR".to_owned()),
+                    ..AiThinkingPart::new("")
+                },
+            ]),
+            ..AiResponse::new("")
+        };
+        let events = response_events(response);
+        assert_eq!(
+            events.first(),
+            Some(&StreamEvent::ThinkingDelta(StreamThinkingDelta {
+                block: Some(0),
+                signature: Some("S0".to_owned()),
+                ..StreamThinkingDelta::new("a")
+            }))
+        );
+        assert_eq!(
+            events.get(1),
+            Some(&StreamEvent::ThinkingDelta(StreamThinkingDelta {
+                block: Some(1),
+                redacted: Some("RRR".to_owned()),
+                ..StreamThinkingDelta::new("")
+            }))
+        );
+    }
+
+    // Python: tests/test_providers/test_stream_adapter.py::test_a_wrapped_response_keeps_its_thinking_signature_and_call_metadata
+    // (its signature, a signature alone too)
+    #[test]
+    fn a_response_with_one_block_hands_its_signature_with_it() {
+        let response = AiResponse {
+            thinking: Some("Look.".to_owned()),
+            thinking_signature: Some("SIG".to_owned()),
+            ..AiResponse::new("")
+        };
+        assert_eq!(
+            thinking_parts_of(&response),
+            [AiThinkingPart {
+                signature: Some("SIG".to_owned()),
+                ..AiThinkingPart::new("Look.")
+            }]
+        );
+        let alone = AiResponse {
+            thinking_signature: Some("SIG".to_owned()),
+            ..AiResponse::new("")
+        };
+        assert_eq!(
+            response_events(alone).first(),
+            Some(&StreamEvent::ThinkingDelta(StreamThinkingDelta {
+                signature: Some("SIG".to_owned()),
+                ..StreamThinkingDelta::new("")
+            }))
         );
     }
 

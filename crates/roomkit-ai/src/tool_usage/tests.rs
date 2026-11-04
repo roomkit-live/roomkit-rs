@@ -23,9 +23,10 @@ fn replayed(memory: &ToolUsageMemory) -> Vec<String> {
         .into_iter()
         .filter_map(|part| match part {
             AiContentPart::Image(image) => Some(image.url),
-            AiContentPart::Text(_) | AiContentPart::ToolCall(_) | AiContentPart::ToolResult(_) => {
-                None
-            }
+            AiContentPart::Text(_)
+            | AiContentPart::Thinking(_)
+            | AiContentPart::ToolCall(_)
+            | AiContentPart::ToolResult(_) => None,
         })
         .collect()
 }

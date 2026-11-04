@@ -35,7 +35,7 @@ mod rules;
 mod spans;
 mod thinking;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -61,7 +61,7 @@ use crate::author_images::refuses_content;
 use crate::loop_events::DeclaredTool;
 use crate::memory::after_memory;
 use crate::provider::{
-    AiContext, AiMessage, AiProvider, AiToolCall, AiToolResultPart, ProviderError,
+    AiContentPart, AiContext, AiMessage, AiProvider, AiToolCall, AiToolResultPart, ProviderError,
     ProviderErrorOptions, ai_messages, ai_messages_with,
 };
 use crate::steering::{Loops, Steering};
@@ -200,6 +200,10 @@ pub(crate) struct Loop<P> {
     pub(crate) turn_span: Option<TurnSpan>,
     /// The turn's Tool Search, which reads its reveals (RFC §6.4).
     pub(crate) search: Arc<TurnSearch>,
+    /// What each of the turn's rounds said, by its message's index: its
+    /// reasoning, its text and its calls in the order they came, replayed
+    /// within the turn, never stored (RFC §6.4).
+    pub(crate) said: HashMap<usize, Vec<AiContentPart>>,
 }
 
 impl<P: AiProvider> Loop<P> {
@@ -314,11 +318,14 @@ impl<P: AiProvider> Loop<P> {
                 let limit = limits.passed();
                 let reason =
                     final_round_reason(had_tool_round, &generation.text, finish_reason, limit);
+                let said = generation.said();
                 let answer = Message::new(Role::Assistant, generation.text);
+                let at = messages.len();
                 if reason == LoopEndReason::Completed
                     && round < self.bounds.max_rounds
                     && steering.read_after_answer(&mut messages, &mut system_prompt, answer)
                 {
+                    self.said.extend(said.map(|said| (at, said)));
                     out.give(Ok(TurnItem::SegmentBreak)).await;
                     continue;
                 }
@@ -339,6 +346,8 @@ impl<P: AiProvider> Loop<P> {
             if !generation.text.is_empty() {
                 prefix.clone_from(&generation.text);
             }
+            self.said
+                .extend(generation.said().map(|said| (messages.len(), said)));
             let (read, ran) = self.round_of_calls(generation, &steering, &out).await;
             self.media.keep_results(messages.len(), &ran.results);
             messages.extend(read);
@@ -541,7 +550,11 @@ impl<P: AiProvider> Loop<P> {
     /// intent as the model wrote it, a round's results one message, a
     /// result of parts as its call answered it (RFC §6.4).
     pub(crate) fn shown(&self, messages: &[Message]) -> Vec<AiMessage> {
-        ai_messages_with(&self.shown_messages(messages), self.media.results())
+        ai_messages_with(
+            &self.shown_messages(messages),
+            self.media.results(),
+            &self.said,
+        )
     }
 
     /// The end of the loop for `reason` after `rounds` rounds of calls, the

@@ -829,8 +829,8 @@ reason = "language: AiContext is Clone and built by struct update, Python's mode
 
 [[missing]]
 python = "roomkit.providers.ai.AIResponse.__init__"
-params = ["thinking_signature", "thinking_parts", "tasks", "observations"]
-reason = "not in 0.x: a thinking block's signature and parts, and a response's tasks and observations"
+params = ["tasks", "observations"]
+reason = "not in 0.x: a response's tasks and observations"
 
 [[missing]]
 python = "roomkit.providers.ai.AIToolCall.__init__"

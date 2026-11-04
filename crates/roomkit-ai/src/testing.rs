@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use roomkit::model::Metadata;
 
 use crate::provider::{
-    AiContext, AiProvider, AiResponse, ProviderError, ProviderErrorOptions, ProviderStream,
-    StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, read_tool_calls,
+    AiContext, AiProvider, AiResponse, AiToolCall, ProviderError, ProviderErrorOptions,
+    ProviderStream, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, read_tool_calls,
+    response_events,
 };
 use crate::stream::{Yielder, items};
 
@@ -81,6 +82,9 @@ pub struct ScriptedRound {
     pub without_done: bool,
     /// Where its failure or refusal comes.
     failure_at: FailureAt,
+    /// Its events, in the order it hands them, in place of its text, its
+    /// reasoning, its calls and its end.
+    events: Option<Vec<StreamEvent>>,
 }
 
 /// Where a round's failure or refusal comes in its stream.
@@ -114,6 +118,7 @@ impl ScriptedRound {
             provider: String::new(),
             without_done: false,
             failure_at: FailureAt::Text,
+            events: None,
         }
     }
 
@@ -152,7 +157,24 @@ impl ScriptedRound {
             provider: String::new(),
             without_done: false,
             failure_at: FailureAt::Text,
+            events: None,
         }
+    }
+
+    /// A round handing `events`, in that order and no other: where its
+    /// reasoning, its text and its calls come among each other (RFC §6.4).
+    pub fn streaming(events: impl IntoIterator<Item = StreamEvent>) -> Self {
+        Self {
+            events: Some(events.into_iter().collect()),
+            ..Self::answering("")
+        }
+    }
+
+    /// A round handing `response` as a provider that does not stream does:
+    /// its reasoning, its text, its calls, then its end (RFC §6.4).
+    #[must_use]
+    pub fn whole_response(response: AiResponse) -> Self {
+        Self::streaming(response_events(response))
     }
 
     /// The same round, written in the pieces `deltas`, which join to its
@@ -324,6 +346,12 @@ impl AiProvider for ScriptedProvider {
                     Ok(round) => round,
                     Err(error) => return out.give(Err(error)).await,
                 };
+                if let Some(events) = round.events {
+                    for event in events {
+                        out.give(Ok(event)).await;
+                    }
+                    return;
+                }
                 for thinking in &round.thinking {
                     let delta = StreamThinkingDelta::new(thinking.as_str());
                     out.give(Ok(StreamEvent::ThinkingDelta(delta))).await;
@@ -359,6 +387,9 @@ impl ScriptedProvider {
     /// The next round, whole: its text, its calls, how it ended.
     fn whole(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
         let round = self.next_round(context)?;
+        if let Some(events) = round.events {
+            return Ok(response_of(events));
+        }
         if let Some(failure) = round.failure() {
             return Err(failure);
         }
@@ -384,11 +415,31 @@ impl ScriptedProvider {
     }
 }
 
+/// The response a round's `events` come to, read whole.
+fn response_of(events: Vec<StreamEvent>) -> AiResponse {
+    let mut response = AiResponse::new("");
+    let mut thinking = String::new();
+    for event in events {
+        match event {
+            StreamEvent::TextDelta(delta) => response.content.push_str(&delta.text),
+            StreamEvent::ThinkingDelta(delta) => thinking.push_str(&delta.thinking),
+            StreamEvent::ToolCall(call) => response.tool_calls.push(AiToolCall::from(call)),
+            StreamEvent::Done(done) => {
+                response.finish_reason = done.finish_reason;
+                response.usage = done.usage;
+                response.metadata = done.metadata;
+            }
+        }
+    }
+    response.thinking = Some(thinking).filter(|thinking| !thinking.is_empty());
+    response
+}
+
 impl ScriptedRound {
     /// The calls the round makes, read as its provider reads them for the
     /// round's ending. For a test's own provider.
     #[doc(hidden)]
-    pub fn tool_calls(&self) -> Vec<crate::AiToolCall> {
+    pub fn tool_calls(&self) -> Vec<AiToolCall> {
         read_tool_calls(self.calls.clone(), self.done.finish_reason.as_deref())
     }
 

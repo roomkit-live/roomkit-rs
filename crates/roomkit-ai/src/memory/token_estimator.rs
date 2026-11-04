@@ -73,6 +73,8 @@ fn part_tokens(part: &AiContentPart) -> usize {
             estimate_tokens(&result.as_text()) + IMAGE_TOKENS * result.result.images().len()
         }
         AiContentPart::Image(_) => IMAGE_TOKENS,
+        // Not counted, as Python's estimate reads no reasoning.
+        AiContentPart::Thinking(_) => 0,
     }
 }
 

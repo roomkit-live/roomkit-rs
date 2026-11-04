@@ -9,6 +9,8 @@ mod dynamic;
 mod error;
 mod model_tags;
 mod response;
+mod round_parts;
+mod thinking_blocks;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -19,7 +21,7 @@ pub(crate) use self::catalog::BILLED_USAGE_COUNTERS;
 pub use self::catalog::{ModelInfo, ModelPricing, listing};
 pub use self::context::{
     AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiRole, AiTextPart,
-    AiToolCallPart, AiToolResultPart,
+    AiThinkingPart, AiToolCallPart, AiToolResultPart,
 };
 pub(crate) use self::context::{ai_messages, ai_messages_with};
 pub use self::date::Date;
@@ -30,9 +32,11 @@ pub use self::model_tags::{
 };
 pub use self::response::{
     AiResponse, AiToolCall, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta,
-    StreamToolCall, read_tool_calls, tool_arguments,
+    StreamToolCall, read_tool_calls, thinking_parts_of, tool_arguments,
 };
 pub(crate) use self::response::{ran_out_of_room, response_events};
+pub use self::round_parts::{RoundTranscript, round_parts};
+pub use self::thinking_blocks::ThinkingBlocks;
 use crate::stream::{Yielder, items, next};
 
 /// The events of one generation, as a structured stream reads them: text

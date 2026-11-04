@@ -100,9 +100,10 @@ impl AiMessage {
         self.parts()
             .filter_map(|part| match part {
                 AiContentPart::ToolCall(call) => Some(call),
-                AiContentPart::Text(_) | AiContentPart::Image(_) | AiContentPart::ToolResult(_) => {
-                    None
-                }
+                AiContentPart::Text(_)
+                | AiContentPart::Image(_)
+                | AiContentPart::Thinking(_)
+                | AiContentPart::ToolResult(_) => None,
             })
             .collect()
     }
@@ -121,9 +122,10 @@ impl AiMessage {
         self.parts()
             .filter_map(|part| match part {
                 AiContentPart::ToolResult(result) => Some(result),
-                AiContentPart::Text(_) | AiContentPart::Image(_) | AiContentPart::ToolCall(_) => {
-                    None
-                }
+                AiContentPart::Text(_)
+                | AiContentPart::Image(_)
+                | AiContentPart::Thinking(_)
+                | AiContentPart::ToolCall(_) => None,
             })
             .collect()
     }
@@ -184,6 +186,7 @@ impl AiMessageContent {
                 .filter_map(|part| match part {
                     AiContentPart::Text(part) => Some(part.text.as_str()),
                     AiContentPart::Image(_)
+                    | AiContentPart::Thinking(_)
                     | AiContentPart::ToolCall(_)
                     | AiContentPart::ToolResult(_) => None,
                 })
@@ -211,7 +214,8 @@ impl From<Vec<AiContentPart>> for AiMessageContent {
 }
 
 /// One part of a message: Python's `AITextPart`, `AIImagePart`,
-/// `AIToolCallPart` or `AIToolResultPart`, tagged by its `type`.
+/// `AIThinkingPart`, `AIToolCallPart` or `AIToolResultPart`, tagged by its
+/// `type`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AiContentPart {
     /// A text.
@@ -222,6 +226,9 @@ pub enum AiContentPart {
     ToolCall(AiToolCallPart),
     /// A tool's result.
     ToolResult(AiToolResultPart),
+    /// A reasoning block the model wrote, replayed within its turn (RFC
+    /// §6.4).
+    Thinking(AiThinkingPart),
 }
 
 /// A text part: Python's `AITextPart(*, text)`.
@@ -265,6 +272,30 @@ impl std::fmt::Debug for AiImagePart {
             .debug_struct("AiImagePart")
             .field("mime_type", &self.mime_type)
             .finish_non_exhaustive()
+    }
+}
+
+/// A reasoning block in the conversation (RFC §6.4): Python's
+/// `AIThinkingPart(*, thinking, signature=None, redacted=None)`, kept across a
+/// turn's rounds, as a vendor that signs its blocks requires.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AiThinkingPart {
+    /// The reasoning text the model wrote.
+    pub thinking: String,
+    /// The vendor's opaque token for the block.
+    pub signature: Option<String>,
+    /// The opaque data of a block the vendor redacted, replayed as received;
+    /// `thinking` is then empty.
+    pub redacted: Option<String>,
+}
+
+impl AiThinkingPart {
+    /// The block saying `thinking`.
+    pub fn new(thinking: impl Into<String>) -> Self {
+        Self {
+            thinking: thinking.into(),
+            ..Self::default()
+        }
     }
 }
 
@@ -352,16 +383,20 @@ impl AiToolResultPart {
 /// them all, as Python's `_execute_round_tools` and `_tool_history._round`
 /// build it.
 pub(crate) fn ai_messages(messages: &[Message]) -> Vec<AiMessage> {
-    ai_messages_with(messages, &HashMap::new())
+    ai_messages_with(messages, &HashMap::new(), &HashMap::new())
 }
 
 /// [`ai_messages`], the result at each index of `kept` being the one kept
 /// there: a result of parts a call of the turn answered, which its
 /// transcript message holds as its text. By index, never by call id: an id
-/// is free again after its round (RFC §12.4).
+/// is free again after its round (RFC §12.4). The message at each index of
+/// `rounds` reads as the parts kept there: a round of the turn, its reasoning
+/// and its text and calls in the order they came (RFC §6.4), which the
+/// transcript does not hold and the store never sees.
 pub(crate) fn ai_messages_with(
     messages: &[Message],
     kept: &HashMap<usize, ToolResult>,
+    rounds: &HashMap<usize, Vec<AiContentPart>>,
 ) -> Vec<AiMessage> {
     let mut tools: HashMap<&str, &str> = HashMap::new();
     let mut read: Vec<AiMessage> = Vec::with_capacity(messages.len());
@@ -369,7 +404,10 @@ pub(crate) fn ai_messages_with(
         for call in &message.tool_calls {
             tools.insert(&call.id, &call.name);
         }
-        let content = content(message, &tools, kept.get(&index));
+        let content = rounds.get(&index).map_or_else(
+            || content(message, &tools, kept.get(&index)),
+            |parts| AiMessageContent::Parts(parts.clone()),
+        );
         if message.tool_call_id.is_some()
             && let Some(results) = read.last_mut().filter(|last| last.role == AiRole::Tool)
             && let (AiMessageContent::Parts(parts), AiMessageContent::Parts(more)) =
