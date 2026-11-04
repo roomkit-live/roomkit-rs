@@ -186,8 +186,10 @@ const MODEL_ROUND: &[&str] = &[
     "refuses",
     "failure_after_calls",
     "failure_after_done",
+    "stream",
+    "whole_response",
 ];
-const MODEL_CALL: &[&str] = &["id", "name", "arguments", "cut"];
+const MODEL_CALL: &[&str] = &["id", "name", "arguments", "cut", "metadata"];
 const TOOL: &[&str] = &[
     "name",
     "description",

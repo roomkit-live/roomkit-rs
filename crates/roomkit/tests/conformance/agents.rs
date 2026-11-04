@@ -23,10 +23,11 @@ use roomkit_ai::tasks::{
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     Agent, AgentOptions, AiChannel, AiChannelOptions, AiChannelTurnConfig, AiContentPart,
-    AiContext, AiImagePart, AiMessageContent, AiProvider, AiResponse, AiRole, AiTextPart, AiTool,
-    HumanInputToolHandler, HumanInputToolHandlerOptions, ModelInfo, ModelPricing, ProviderError,
-    ProviderStream, StreamEvent, Tool, ToolContext, ToolEntry, ToolError, ToolHandler, ToolPolicy,
-    ToolResult, ToolResultPart, Tools,
+    AiContext, AiImagePart, AiMessageContent, AiProvider, AiResponse, AiRole, AiTextPart,
+    AiThinkingPart, AiTool, AiToolCall, HumanInputToolHandler, HumanInputToolHandlerOptions,
+    ModelInfo, ModelPricing, ProviderError, ProviderStream, StreamDone, StreamEvent,
+    StreamTextDelta, StreamThinkingDelta, Tool, ToolContext, ToolEntry, ToolError, ToolHandler,
+    ToolPolicy, ToolResult, ToolResultPart, Tools,
 };
 use serde_json::{Value, json};
 
@@ -424,8 +425,103 @@ fn human_input(spec: &Value) -> Result<HumanInputToolHandler, String> {
     HumanInputToolHandler::new(names, options).map_err(|e| e.to_string())
 }
 
+/// A round's `stream`, in its order, then its end (README: `stream`).
+fn streaming_round(spec: &Value, events: &[Value]) -> Result<ScriptedRound, String> {
+    let mut called = false;
+    let mut read = Vec::with_capacity(events.len() + 1);
+    for event in events {
+        read.push(if let Some(call) = event.get("call") {
+            called = true;
+            StreamEvent::ToolCall(tool_call(call)?.into())
+        } else if let Some(text) = event["text"].as_str() {
+            StreamEvent::TextDelta(StreamTextDelta::new(text))
+        } else {
+            let text = |key: &str| event[key].as_str().map(str::to_owned);
+            StreamEvent::ThinkingDelta(StreamThinkingDelta {
+                thinking: text("thinking").ok_or("stream: no known event")?,
+                signature: text("signature"),
+                redacted: text("redacted"),
+                block: event["block"].as_u64().and_then(|n| u32::try_from(n).ok()),
+            })
+        });
+    }
+    read.push(StreamEvent::Done(StreamDone {
+        finish_reason: Some(finish_reason(spec, called)),
+        usage: usage(spec)?,
+        ..StreamDone::default()
+    }));
+    Ok(ScriptedRound::streaming(read))
+}
+
+/// A round read whole, its reasoning as `whole` reads (README:
+/// `whole_response`).
+fn whole_round(spec: &Value, whole: &Value) -> Result<ScriptedRound, String> {
+    let calls = spec["calls"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(tool_call)
+        .collect::<Result<Vec<_>, _>>()?;
+    let text = |value: &Value, key: &str| value[key].as_str().map(str::to_owned);
+    let parts = whole["thinking_parts"].as_array().map(|parts| {
+        parts
+            .iter()
+            .map(|part| AiThinkingPart {
+                signature: text(part, "signature"),
+                redacted: text(part, "redacted"),
+                ..AiThinkingPart::new(part["thinking"].as_str().unwrap_or_default())
+            })
+            .collect()
+    });
+    Ok(ScriptedRound::whole_response(AiResponse {
+        finish_reason: Some(finish_reason(spec, !calls.is_empty())),
+        usage: usage(spec)?,
+        tool_calls: calls,
+        thinking: text(whole, "thinking"),
+        thinking_signature: text(whole, "thinking_signature"),
+        thinking_parts: parts,
+        ..AiResponse::new(spec["text"].as_str().unwrap_or_default())
+    }))
+}
+
+/// A scripted call as a provider hands it.
+fn tool_call(call: &Value) -> Result<AiToolCall, String> {
+    let text = |key: &str| call[key].as_str().unwrap_or_default().to_owned();
+    let read = |key: &str| -> Result<Metadata, String> {
+        call.get(key).map_or(Ok(Metadata::new()), |value| {
+            serde_json::from_value(value.clone()).map_err(|e| e.to_string())
+        })
+    };
+    Ok(AiToolCall {
+        arguments: read("arguments")?,
+        metadata: read("metadata")?,
+        partial: call["cut"] == true,
+        ..AiToolCall::new(text("id"), text("name"))
+    })
+}
+
+/// How a round ends, `tool_calls` by default when it calls, else `stop`.
+fn finish_reason(spec: &Value, called: bool) -> String {
+    let default = if called { "tool_calls" } else { "stop" };
+    spec["finish_reason"].as_str().unwrap_or(default).to_owned()
+}
+
+/// What a round used.
+fn usage(spec: &Value) -> Result<Metadata, String> {
+    match spec.get("usage") {
+        Some(usage) => serde_json::from_value(usage.clone()).map_err(|e| e.to_string()),
+        None => Ok(Metadata::new()),
+    }
+}
+
 /// One round of the model's script.
 pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
+    if let Some(events) = spec.get("stream") {
+        return streaming_round(spec, events.as_array().ok_or("stream: not a list")?);
+    }
+    if let Some(whole) = spec.get("whole_response") {
+        return whole_round(spec, whole);
+    }
     let calls: Vec<(String, String, String)> = spec["calls"]
         .as_array()
         .into_iter()
@@ -452,13 +548,9 @@ pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
     let made = calls
         .iter()
         .map(|(id, name, arguments)| (id.as_str(), name.as_str(), arguments.as_str()));
-    let usage: Metadata = match spec.get("usage") {
-        Some(usage) => serde_json::from_value(usage.clone()).map_err(|e| e.to_string())?,
-        None => Metadata::new(),
-    };
     let mut round = ScriptedRound::calling(spec["text"].as_str().unwrap_or_default(), made)
         .with_finish_reason(finish)
-        .with_usage(usage);
+        .with_usage(usage(spec)?);
     if let Some(deltas) = spec.get("deltas") {
         let deltas = deltas.as_array().ok_or("deltas: not a list")?;
         round = round.in_pieces(deltas.iter().filter_map(Value::as_str));
@@ -867,6 +959,7 @@ fn request(request: &AiContext) -> Value {
                 "role": message.role.as_str(),
                 "text": message.content.text(),
                 "parts": parts(&message.content),
+                "round": round_of(&message.content),
             })
         })
         .collect();
@@ -885,7 +978,10 @@ fn request(request: &AiContext) -> Value {
                 "content": result_content(&result.result),
                 "is_error": result.is_error,
             })),
-            AiContentPart::Text(_) | AiContentPart::Image(_) | AiContentPart::ToolCall(_) => None,
+            AiContentPart::Text(_)
+            | AiContentPart::Image(_)
+            | AiContentPart::Thinking(_)
+            | AiContentPart::ToolCall(_) => None,
         })
         .collect();
     let tools: serde_json::Map<String, Value> = request
@@ -920,7 +1016,32 @@ fn parts(content: &AiMessageContent) -> Value {
             AiContentPart::Image(image) => {
                 Some(json!({ "image": image.url, "mime_type": image.mime_type }))
             }
-            AiContentPart::ToolCall(_) | AiContentPart::ToolResult(_) => None,
+            AiContentPart::Thinking(_)
+            | AiContentPart::ToolCall(_)
+            | AiContentPart::ToolResult(_) => None,
+        })
+        .collect()
+}
+
+/// A message's reasoning, text and call parts in order, `null` for a text
+/// content (README, `models`).
+fn round_of(content: &AiMessageContent) -> Value {
+    let AiMessageContent::Parts(parts) = content else {
+        return Value::Null;
+    };
+    parts
+        .iter()
+        .filter_map(|part| match part {
+            AiContentPart::Thinking(part) => Some(json!({
+                "thinking": part.thinking,
+                "signature": part.signature,
+                "redacted": part.redacted,
+            })),
+            AiContentPart::Text(text) => Some(json!({ "text": text.text })),
+            AiContentPart::ToolCall(call) => {
+                Some(json!({ "call": call.id, "metadata": call.metadata }))
+            }
+            AiContentPart::Image(_) | AiContentPart::ToolResult(_) => None,
         })
         .collect()
 }
