@@ -8,9 +8,14 @@
 #[path = "../../roomkit/tests/support/warnings.rs"]
 mod warnings;
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use roomkit::{InMemoryLockManager, RoomKit, RoomKitOptions};
+use roomkit::model::RoomId;
+use roomkit::{
+    InMemoryLockManager, RoomKit, RoomKitError, RoomKitOptions, RoomLock, RoomLockManager,
+};
 use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 use warnings::Warnings;
 
@@ -40,5 +45,27 @@ async fn a_shared_store_with_an_in_memory_lock_given_is_warned_of() {
 async fn the_in_memory_store_is_not_warned_of() {
     let (warnings, _capture) = Warnings::capture();
     let _kit = RoomKit::new(RoomKitOptions::default());
+    assert_eq!(warnings.containing("InMemoryLockManager").len(), 0);
+}
+
+/// A manager other than the in-process one, as a distributed lock is.
+struct Elsewhere(InMemoryLockManager);
+
+impl RoomLockManager for Elsewhere {
+    fn locked<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn RoomLock>, RoomKitError>> + Send + 'a>> {
+        self.0.locked(room_id)
+    }
+}
+
+// Python: core/framework.py `isinstance(lock_manager, InMemoryLockManager)`.
+#[tokio::test]
+async fn a_shared_store_with_another_lock_is_not_warned_of() {
+    let (warnings, _capture) = Warnings::capture();
+    let mut options = RoomKitOptions::with_store(store());
+    options.lock_manager = Some(Arc::new(Elsewhere(InMemoryLockManager::default())));
+    let _kit = RoomKit::new(options);
     assert_eq!(warnings.containing("InMemoryLockManager").len(), 0);
 }
