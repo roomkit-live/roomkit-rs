@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::error::{from_record, to_record};
 use super::pipe::Uncarried;
-use super::wire::{Item, SendEvent, ToolEnd, WireOutput, WireResult};
+use super::wire::{Item, SendEvent, ToolEnd, WireLoopEnd, WireOutput, WireResult};
 use crate::stream::{LoopEndMarker, LoopEndReason, ResponseItem};
 
 /// A channel's output without its stream; its provider's answer, a
@@ -121,7 +121,7 @@ pub(crate) fn decode_end(end: ToolEnd) -> ToolCallContent {
 /// A loop's end as the wire carries it (RFC §10.6.3): `marker`'s fields,
 /// as Python's `dataclasses.asdict` writes its `LoopEndMarker`.
 pub(crate) fn encode_loop_end(marker: &LoopEndMarker) -> Item {
-    Item::LoopEnd {
+    Item::LoopEnd(WireLoopEnd {
         reason: marker.reason.to_string(),
         rounds: u64::from(marker.rounds),
         usage: marker.usage.clone(),
@@ -133,23 +133,7 @@ pub(crate) fn encode_loop_end(marker: &LoopEndMarker) -> Item {
         usage_complete: marker.usage_complete,
         model: marker.model.clone(),
         provider: marker.provider.clone(),
-    }
-}
-
-/// What a loop's end crosses the wire with: Python's `LoopEndMarker`
-/// fields.
-pub(crate) struct WireLoopEnd {
-    pub(crate) reason: String,
-    pub(crate) rounds: u64,
-    pub(crate) usage: Metadata,
-    pub(crate) max_rounds: Option<u64>,
-    pub(crate) timeout_seconds: Option<f64>,
-    pub(crate) budget_tokens: Option<u64>,
-    pub(crate) budget_usd: Option<f64>,
-    pub(crate) last_usage: Option<Metadata>,
-    pub(crate) usage_complete: Option<bool>,
-    pub(crate) model: Option<String>,
-    pub(crate) provider: Option<String>,
+    })
 }
 
 /// A loop's end from the wire. A reason this implementation does not know, a

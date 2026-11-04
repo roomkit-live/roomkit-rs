@@ -225,31 +225,35 @@ pub(crate) enum Item {
         provider: Option<String>,
     },
     /// The loop's end: why, its rounds, its usage, the limits it ran under.
-    LoopEnd {
-        reason: String,
-        #[serde(default)]
-        rounds: u64,
-        #[serde(default)]
-        usage: Metadata,
-        #[serde(default)]
-        max_rounds: Option<u64>,
-        #[serde(default)]
-        timeout_seconds: Option<f64>,
-        #[serde(default)]
-        budget_tokens: Option<u64>,
-        #[serde(default)]
-        budget_usd: Option<f64>,
-        #[serde(default)]
-        last_usage: Option<Metadata>,
-        #[serde(default)]
-        usage_complete: Option<bool>,
-        #[serde(default)]
-        model: Option<String>,
-        #[serde(default)]
-        provider: Option<String>,
-    },
+    LoopEnd(WireLoopEnd),
     /// The stream's end.
     StreamEnd,
+}
+
+/// What a loop's end crosses the wire with: Python's `LoopEndMarker` fields.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct WireLoopEnd {
+    pub(crate) reason: String,
+    #[serde(default)]
+    pub(crate) rounds: u64,
+    #[serde(default)]
+    pub(crate) usage: Metadata,
+    #[serde(default)]
+    pub(crate) max_rounds: Option<u64>,
+    #[serde(default)]
+    pub(crate) timeout_seconds: Option<f64>,
+    #[serde(default)]
+    pub(crate) budget_tokens: Option<u64>,
+    #[serde(default)]
+    pub(crate) budget_usd: Option<f64>,
+    #[serde(default)]
+    pub(crate) last_usage: Option<Metadata>,
+    #[serde(default)]
+    pub(crate) usage_complete: Option<bool>,
+    #[serde(default)]
+    pub(crate) model: Option<String>,
+    #[serde(default)]
+    pub(crate) provider: Option<String>,
 }
 
 /// What a call's handler reads of the turn it serves (RFC §10.6.5, §21.4).

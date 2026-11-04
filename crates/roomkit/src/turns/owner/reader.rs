@@ -14,7 +14,7 @@ use super::{Canceller, Main, OwnerState, Steerable, cancel};
 use crate::channel::ChannelError;
 use crate::context::ExecutionContext;
 use crate::stream::{ResponseItem, UsageMarker};
-use crate::turns::codec::{WireLoopEnd, decode_end, decode_loop_end, decode_output, decode_start};
+use crate::turns::codec::{decode_end, decode_loop_end, decode_output, decode_start};
 use crate::turns::error::{RemoteError, TurnError, TurnFailure};
 use crate::turns::lock;
 use crate::turns::pulls::PullWindow;
@@ -270,33 +270,9 @@ impl OwnerTurn {
                 self.window.read_other();
                 Read::Item(RemoteItem::SegmentBreak)
             }
-            Item::LoopEnd {
-                reason,
-                rounds,
-                usage,
-                max_rounds,
-                timeout_seconds,
-                budget_tokens,
-                budget_usd,
-                last_usage,
-                usage_complete,
-                model,
-                provider,
-            } => {
+            Item::LoopEnd(end) => {
                 self.window.read_other();
-                Read::Item(RemoteItem::Item(decode_loop_end(WireLoopEnd {
-                    reason,
-                    rounds,
-                    usage,
-                    max_rounds,
-                    timeout_seconds,
-                    budget_tokens,
-                    budget_usd,
-                    last_usage,
-                    usage_complete,
-                    model,
-                    provider,
-                })))
+                Read::Item(RemoteItem::Item(decode_loop_end(end)))
             }
             Item::Usage {
                 usage,

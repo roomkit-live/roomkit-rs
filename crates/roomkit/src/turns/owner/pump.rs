@@ -234,7 +234,7 @@ impl Pump {
             | Item::ToolEnd { .. }
             | Item::SegmentBreak
             | Item::Usage { .. }
-            | Item::LoopEnd { .. }
+            | Item::LoopEnd(_)
             | Item::StreamEnd => 1,
         };
         self.received = self.received.saturating_add(counted);
