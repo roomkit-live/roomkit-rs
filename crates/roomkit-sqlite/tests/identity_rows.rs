@@ -252,9 +252,9 @@ async fn the_rewrite_takes_only_a_list_for_a_declaration() {
     connection
         .execute_batch(
             "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id)
-             VALUES ('sms', '+1', 'alice', ''), ('mms', '+2', 'alice', '');
+             VALUES ('sms', 'a@b.c', 'alice', ''), ('mms', '+2', 'alice', '');
              UPDATE identities SET data = json_set(data, '$.channel_addresses',
-                 json('{\"sms\": \"+1\", \"mms\": {\"k\": \"+2\"}}')) WHERE id = 'alice';
+                 json('{\"sms\": \"a@b.c\", \"mms\": {\"k\": \"+2\"}}')) WHERE id = 'alice';
              PRAGMA user_version = 13;",
         )
         .unwrap();
