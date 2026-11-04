@@ -155,11 +155,9 @@ impl RunSpans {
         let Some(broadcast) = self.open.get_mut(&event_id) else {
             return;
         };
-        let failed = match outcome {
-            // A cut turn leaves no result, as Python's `_leaves_no_result`.
-            Outcome::Failed(error) => error.error_type != TURN_CUT,
-            refused => is_refused(refused),
-        };
+        // A cut turn leaves no result, as Python's `_leaves_no_result`.
+        let cut = matches!(outcome, Outcome::Failed(error) if error.error_type == TURN_CUT);
+        let failed = !cut && (matches!(outcome, Outcome::Failed(_)) || is_refused(outcome));
         match (call, failed) {
             (_, true) => broadcast.failed += 1,
             (Call::Deliver, false) => broadcast.delivered += 1,
