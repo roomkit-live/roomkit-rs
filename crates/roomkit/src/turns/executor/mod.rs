@@ -72,10 +72,7 @@ pub(super) fn take(
         kit: Arc::clone(kit),
     };
     #[cfg(test)]
-    if turns
-        .executor_apart
-        .load(Ordering::SeqCst)
-    {
+    if turns.executor_apart.load(Ordering::SeqCst) {
         let run = executor.run(controls, carried);
         return kit.spawn(Box::pin(crate::telemetry::within_no_span(run)));
     }
