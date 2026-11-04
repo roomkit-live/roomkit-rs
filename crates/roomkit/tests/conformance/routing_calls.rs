@@ -46,7 +46,6 @@ pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
             "channel_type",
             "participant_id",
             "identity_id",
-            "organization_id",
         ]),
         _ => None,
     }
@@ -91,7 +90,6 @@ pub(crate) async fn default_route(
         .map_err(|error| format!("identity_id: {error}"))?;
     let options = RouteOptions {
         participant_id: optional(spec, "participant_id")?,
-        organization_id: optional(spec, "organization_id")?,
         identity,
         ..RouteOptions::default()
     };

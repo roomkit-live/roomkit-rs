@@ -718,6 +718,21 @@ mod a_routed_room_paused_by_its_lock {
     /// Whatever strategy chose this one, a record would name the sender on a
     /// binding naming no one, or attach the channel: the room is left
     /// paused, and the message gets a room of its own.
+    // Python: tests/test_shared_channel_routing.py::TestTheLockChecksTheRoomAgain::test_a_room_not_bound_to_the_channel_is_attached_only_if_still_the_messages,
+    // its closed case.
+    #[test]
+    fn a_closed_room_the_channel_does_not_bind_gets_no_binding_and_no_message() {
+        let mut sim = routed_to_room_1();
+        sim.room.status = RoomStatus::Closed;
+        sim.bindings.clear();
+        let result = sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            result.event.as_ref().map(|event| event.room_id.to_string()),
+            Some("new_room_1".to_owned())
+        );
+        assert_eq!(sim.room.status, RoomStatus::Closed);
+    }
+
     #[test]
     fn that_is_not_the_sender_s_conversation_routes_the_message_once_more() {
         let mut unbound = paused(routed_to_room_1());

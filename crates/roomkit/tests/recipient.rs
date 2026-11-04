@@ -681,7 +681,8 @@ async fn no_recipient_is_refused_before_any_send_and_spares_the_breaker() {
         )
         .await
         .unwrap();
-        assert_eq!(sms.sent().len(), 1, "{held:?}");
+        let to: Vec<String> = sms.sent().into_iter().map(|(to, _)| to).collect();
+        assert_eq!(to, [ALICE], "{held:?}");
         kit.close().await.unwrap();
     }
 }
@@ -708,6 +709,7 @@ async fn no_recipient_is_logged_as_a_refusal() {
     assert_eq!(refused.len(), 1, "{refused:?}");
     assert!(refused[0].starts_with("WARN"), "{refused:?}");
     assert!(refused[0].contains("phone_number"), "{refused:?}");
+    assert_eq!(warnings.containing("ERROR"), Vec::<String>::new());
     kit.close().await.unwrap();
 }
 

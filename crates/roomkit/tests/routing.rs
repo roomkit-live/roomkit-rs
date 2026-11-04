@@ -28,6 +28,7 @@ use roomkit::{
     RouterError, RouterFuture, WeakRoomKit,
 };
 use roomkit_core::ops::ChannelConfig;
+use roomkit_core::rules::routing::HISTORY_PAGE;
 use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::{Barrier, Notify};
 
@@ -999,7 +1000,7 @@ async fn a_room_that_heard_another_sender_before_the_record_routes_the_message_o
 
 /// Every row of a room's timeline, the refused ones included.
 // Python: tests/test_inbound_routing_ambiguity.py::TestStepThreeAdmitsOneConversation::test_another_sender_found_past_the_first_page_refuses
-// The history the default router reads goes past its first page of 200 events.
+// The history the default router reads goes past its first page.
 #[tokio::test]
 async fn another_sender_found_past_the_first_page_refuses() {
     let store = Arc::new(InMemoryStore::default());
@@ -1014,7 +1015,7 @@ async fn another_sender_found_past_the_first_page_refuses() {
         };
         RoomEvent::new(room_id.clone(), source, TextContent::new("hi"))
     };
-    for _ in 0..201 {
+    for _ in 0..=HISTORY_PAGE {
         store
             .add_event_auto_index(&room_id, said_by("bob"))
             .await
@@ -1044,6 +1045,162 @@ async fn another_sender_found_past_the_first_page_refuses() {
         .unwrap();
 
     assert_eq!(route("bob").await, None);
+}
+
+/// A kit answering on `provider`: its rooms take an agent as they open.
+fn kit_answering_on(provider: &Provider) -> RoomKit {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(provider.clone()).unwrap();
+    kit.register_channel(EchoAgent::new(
+        channel("ai"),
+        "You said: ",
+        EchoAgentOptions { quote: true },
+    ))
+    .unwrap();
+    let attaching = kit.clone();
+    kit.hook(
+        HookTrigger::OnRoomCreated,
+        move |event: RoomEvent, _| {
+            let kit = attaching.clone();
+            async move {
+                kit.attach_channel(
+                    &event.room_id,
+                    &channel("ai"),
+                    AttachChannelOptions::default(),
+                )
+                .await
+                .unwrap();
+            }
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "welcome".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    kit
+}
+
+// Python: tests/test_chat_conversations.py::test_a_chat_message_without_its_chat_has_no_address
+#[tokio::test]
+async fn a_chat_message_without_its_chat_has_no_address() {
+    for carried in [
+        None,
+        Some(serde_json::json!(true)),
+        Some(serde_json::json!("  ")),
+    ] {
+        let telegram = Provider::new("telegram", ChannelType::TELEGRAM);
+        let kit = kit_answering_on(&telegram);
+        let written = |key_value: Option<serde_json::Value>, text: &str| {
+            let mut message =
+                InboundMessage::new(channel("telegram"), "4242", TextContent::new(text));
+            if let Some(value) = key_value {
+                message.metadata.insert("chat_id".to_owned(), value);
+            }
+            message
+        };
+        let private = routed(&kit, written(Some(4242.into()), "hi")).await;
+        let sent = telegram.sent().len();
+
+        let lost = kit
+            .process_inbound(
+                written(carried.clone(), "lost"),
+                ProcessInboundOptions::default(),
+            )
+            .await
+            .unwrap();
+
+        let event = lost.event.unwrap();
+        assert_eq!(
+            event
+                .source
+                .participant_id
+                .as_ref()
+                .map(ParticipantId::as_str),
+            Some("4242"),
+            "{carried:?}"
+        );
+        assert_ne!(event.room_id, private, "{carried:?}");
+        let options = roomkit::GetBindingOptions::default();
+        let binding = kit
+            .get_binding(&event.room_id, &channel("telegram"), options)
+            .await
+            .unwrap();
+        assert_eq!(binding.participant_id, None, "{carried:?}");
+        assert!(binding.metadata.is_empty(), "{carried:?}");
+        assert_eq!(telegram.sent().len(), sent, "{carried:?}");
+        kit.close().await.unwrap();
+    }
+}
+
+// Python: tests/test_chat_conversations.py::test_whatsapp_personal_answers_a_private_chat_by_number_and_a_group_in_the_group
+#[tokio::test]
+async fn whatsapp_personal_answers_a_private_chat_by_number_and_a_group_in_the_group() {
+    let whatsapp = Provider::new("wa", ChannelType::WHATSAPP_PERSONAL);
+    let kit = kit_answering_on(&whatsapp);
+    let write = |sender: &'static str, group: &'static str| {
+        let (kit, whatsapp) = (kit.clone(), whatsapp.clone());
+        async move {
+            let mut message = InboundMessage::new(channel("wa"), sender, TextContent::new("hi"));
+            message
+                .metadata
+                .insert("group_jid".to_owned(), group.into());
+            let room = routed(&kit, message).await;
+            let last = whatsapp.sent().last().cloned().unwrap();
+            (room, last.0)
+        }
+    };
+    let (private, to_private) = write(ALICE, "").await;
+    let (alice_group, to_alice_group) = write(ALICE, "120363@g.us").await;
+    let (bob_group, to_bob_group) = write(BOB, "120363@g.us").await;
+
+    assert_eq!(to_private, ALICE);
+    assert_eq!(to_alice_group, "120363@g.us");
+    assert_eq!(to_bob_group, "120363@g.us");
+    assert_eq!(alice_group, bob_group);
+    assert_ne!(alice_group, private);
+    kit.close().await.unwrap();
+}
+
+// Python: tests/test_shared_channel_routing.py::TestEitherNameFindsTheNewestRoom::test_an_older_room_found_by_the_address_does_not_hide_a_newer_one
+#[tokio::test]
+async fn an_older_room_found_by_the_address_does_not_hide_a_newer_one() {
+    let (kit, _sms) = kit_with_agent();
+    let id_alice = IdentityId::new("id-alice").unwrap();
+    kit.store()
+        .create_identity(Identity::new(id_alice.clone()))
+        .await
+        .unwrap();
+    kit.store()
+        .link_address(
+            &id_alice,
+            &ChannelType::SMS,
+            ALICE,
+            roomkit::store::LinkAddressOptions::default(),
+        )
+        .await
+        .unwrap();
+    for (id, named) in [("by-address", ALICE), ("by-identity", "id-alice")] {
+        let room_id = room(id);
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let options = AttachChannelOptions {
+            participant_id: Some(ParticipantId::new(named).unwrap()),
+            ..Default::default()
+        };
+        kit.attach_channel(&room_id, &channel("sms"), options)
+            .await
+            .unwrap();
+    }
+
+    let landed = routed(&kit, message(ALICE, "Bonjour")).await;
+
+    assert_eq!(landed, room("by-identity"));
 }
 
 fn every_row() -> roomkit::store::ListEventsOptions {

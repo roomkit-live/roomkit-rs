@@ -180,6 +180,62 @@ async fn a_participant_reached_through_another_channel_finds_no_room() {
     assert_eq!(found, Ok(None));
 }
 
+// Python: tests/test_shared_channel_routing.py::TestAnIdentifiedCorrespondent::test_an_identity_does_not_pull_a_number_into_a_room_of_another_channel
+#[tokio::test]
+async fn an_identity_does_not_pull_a_number_into_a_room_of_another_channel() {
+    let store = with_room().await;
+    let mut member = jean();
+    member.identity_id = Some(IdentityId::new("id_jean").unwrap());
+    store.add_participant(member).await.unwrap();
+    let resolved = FindRoomIdByParticipantOptions {
+        identity_id: Some(IdentityId::new("id_jean").unwrap()),
+        room_filter: None,
+    };
+    let found = store
+        .find_room_id_by_participant(&channel("email"), ALICE, resolved)
+        .await;
+    assert_eq!(found, Ok(None));
+}
+
+// Python: tests/test_shared_channel_routing.py::TestEitherNameFindsTheNewestRoom::test_an_older_room_joined_through_the_channel_is_found_past_a_newer_one
+#[tokio::test]
+async fn an_older_room_joined_through_the_channel_is_found_past_a_newer_one() {
+    let store = bound(&[("older", None), ("newer", None)]).await;
+    for (room, through) in [("older", "sms"), ("newer", "email")] {
+        let member = Participant {
+            joined_at: Timestamp::UNIX_EPOCH,
+            ..Participant::new(
+                participant_id("p_jean"),
+                RoomId::new(room).unwrap(),
+                channel(through),
+            )
+        };
+        store.add_participant(member).await.unwrap();
+    }
+    let found = store
+        .find_room_id_by_participant(
+            &channel("sms"),
+            "p_jean",
+            FindRoomIdByParticipantOptions::default(),
+        )
+        .await;
+    assert_eq!(found, Ok(Some(RoomId::new("older").unwrap())));
+}
+
+// Python: tests/test_shared_channel_routing.py::TestAPausedConversation::test_the_newest_room_wins_whatever_its_status
+#[tokio::test]
+async fn the_newest_room_wins_whatever_its_status() {
+    let store = bound(&[("older", Some(ALICE)), ("newer", Some(ALICE))]).await;
+    let newer = RoomId::new("newer").unwrap();
+    let mut room = store.get_room(&newer).await.unwrap().unwrap();
+    room.status = RoomStatus::Paused;
+    store.update_room(room).await.unwrap();
+    assert_eq!(
+        by_binding(&store, None, &RoomFilter::default()).await,
+        Some("newer".to_owned())
+    );
+}
+
 /// Python's `find_room_ids_by_channel`: the rooms binding the channel, the
 /// oldest first, at most `limit` (2 by default), of a group binding or not
 /// when `group` names it; a room holding a participant reached through the
