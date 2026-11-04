@@ -56,6 +56,8 @@ struct Query {
     revocation_list: Option<String>,
     /// Each setting for the server, its value read.
     settings: Vec<(String, String)>,
+    /// The `database` parameter, which names the database if the path does not.
+    database: Option<String>,
 }
 
 /// `value` with its `%XX` escapes read.
@@ -112,7 +114,7 @@ fn read_query(dsn: &str) -> Result<Query, StoreError> {
             "sslmode" => read.mode = Some(percent_decoded(value)),
             "sslrootcert" => read.root_certificate = Some(percent_decoded(value)),
             "sslcrl" => read.revocation_list = Some(percent_decoded(value)),
-            "database" => kept.push(format!("dbname={value}")),
+            "database" => read.database = Some(percent_decoded(value)),
             known if CLIENT_PARAMS.contains(&known) => kept.push(pair.to_owned()),
             setting => read
                 .settings
@@ -132,15 +134,21 @@ fn variable(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
-/// Adds `settings` to what the session starts with, a value's blanks escaped
-/// as the server reads them.
+/// Adds `settings` to what the session starts with, each byte the server would
+/// split or read a value on escaped, so that a value stays one.
 fn with_settings(config: &mut Config, settings: &[(String, String)]) {
     if settings.is_empty() {
         return;
     }
     let mut options = config.get_options().unwrap_or_default().to_owned();
     for (name, value) in settings {
-        let value = value.replace('\\', "\\\\").replace(' ', "\\ ");
+        let value: String = value
+            .chars()
+            .flat_map(|c| {
+                let escaped = c == '\\' || c.is_ascii_whitespace();
+                escaped.then_some('\\').into_iter().chain([c])
+            })
+            .collect();
         options = format!("{options} -c {name}={value}");
     }
     config.options(options.trim_start());
@@ -204,6 +212,11 @@ fn target(dsn: Option<&str>) -> Result<Target, StoreError> {
             .map_err(StoreError::unavailable)?
     };
     with_settings(&mut config, &query.settings);
+    if config.get_dbname().is_none()
+        && let Some(database) = query.database
+    {
+        config.dbname(database);
+    }
     with_environment(&mut config);
     let mode = query.mode.or_else(|| variable("PGSSLMODE"));
     let encryption = mode
@@ -384,6 +397,16 @@ mod tests {
         );
         let named = target(Some("postgresql://u:p@h?database=mine")).unwrap();
         assert_eq!(named.config.get_dbname(), Some("mine"));
+        let beside_a_path = target(Some("postgresql://u:p@h/path?database=mine")).unwrap();
+        assert_eq!(beside_a_path.config.get_dbname(), Some("path"));
+        let tab = target(Some(
+            "postgresql://u:p@h/d?search_path=a%09-c%09application_name%3Dinjected",
+        ))
+        .unwrap();
+        assert_eq!(
+            tab.config.get_options(),
+            Some("-c search_path=a\\\t-c\\\tapplication_name=injected")
+        );
     }
 
     /// Python: asyncpg refuses a string that names no Postgres scheme, and
@@ -421,16 +444,26 @@ mod tests {
 
     /// A Unix socket connects, whatever the mode: the client asks a TLS
     /// connector for a name it has none to give, which refused every such
-    /// string. No server here: the connection fails on the socket, not on TLS.
+    /// string once connected. The socket here answers nothing and closes, so
+    /// the connection fails after that point, on the socket, not on TLS.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_unix_socket_is_tried_whatever_the_sslmode() {
-        for mode in ["disable", "prefer", "require"] {
-            let dsn = format!("postgresql://u@/d?host=/nowhere/at/all&sslmode={mode}");
+        let directory = std::env::temp_dir().join(format!("roomkit-sock-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(directory.join(".s.PGSQL.5432")).unwrap();
+        std::thread::spawn(move || listener.incoming().for_each(drop));
+        for mode in ["disable", "prefer", "require", "verify-full"] {
+            let dsn = format!(
+                "postgresql://u@/d?host={}&port=5432&sslmode={mode}",
+                directory.display()
+            );
             let refused = open(Some(&dsn), 1, 1).await.err().unwrap();
             let text = full_text(&refused);
             assert!(!text.contains("dns"), "{mode}: {text}");
-            assert!(text.contains("connect"), "{mode}: {text}");
+            assert!(!text.contains("root certificate"), "{mode}: {text}");
         }
+        std::fs::remove_dir_all(&directory).ok();
     }
 }

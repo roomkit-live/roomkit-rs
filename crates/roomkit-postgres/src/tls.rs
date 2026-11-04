@@ -91,10 +91,17 @@ fn revocation_lists(
     let Some(path) = file_of(named, "root.crl") else {
         return Ok(Vec::new());
     };
-    CertificateRevocationListDer::pem_file_iter(&path)
+    let lists = CertificateRevocationListDer::pem_file_iter(&path)
         .map_err(StoreError::unavailable)?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(StoreError::unavailable)
+        .map_err(StoreError::unavailable)?;
+    // As asyncpg: a file with no list in it is a mistake, never a check passed.
+    if lists.is_empty() {
+        return Err(StoreError::Value(
+            "sslcrl names a file with no revocation list in it".to_owned(),
+        ));
+    }
+    Ok(lists)
 }
 
 /// Takes any certificate the server shows, its signatures checked: what
@@ -222,6 +229,7 @@ pub(crate) fn tls_config(
     };
     let chain = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider)
         .with_crls(revocation_lists(files.revocation_list.as_deref())?)
+        .enforce_revocation_expiration()
         .build()
         .map_err(StoreError::unavailable)?;
     if encryption == Encryption::VerifyFull {
@@ -327,9 +335,14 @@ mod tests {
 
         /// The list revoking the serial [`REVOKED`], in PEM.
         fn revocation_list(&self) -> String {
+            self.list_until(2099)
+        }
+
+        /// The list revoking the serial [`REVOKED`], good until `year`, in PEM.
+        fn list_until(&self, year: i32) -> String {
             CertificateRevocationListParams {
                 this_update: date_time_ymd(2020, 1, 1),
-                next_update: date_time_ymd(2099, 1, 1),
+                next_update: date_time_ymd(year, 1, 1),
                 crl_number: SerialNumber::from(1_u64),
                 issuing_distribution_point: None,
                 revoked_certs: vec![RevokedCertParams {
@@ -434,6 +447,27 @@ mod tests {
             assert!(accepts(config(), ours.server(HOST, 1)), "{mode:?}");
             assert!(!accepts(config(), ours.server(HOST, REVOKED)), "{mode:?}");
         }
+    }
+
+    /// As asyncpg: a named file with no list in it is refused, and an expired
+    /// list does not stand for a check, on a certificate it does not name either.
+    #[test]
+    fn a_revocation_list_that_says_nothing_is_no_check_passed() {
+        let ours = Authority::new("ours");
+        let roots = TempPem::new(&ours.pem);
+        let empty = TempPem::new("");
+        let none_in_it = Files {
+            root_certificate: Some(roots.name()),
+            revocation_list: Some(empty.name()),
+        };
+        assert!(tls_config(Encryption::VerifyFull, &none_in_it).is_err());
+        let expired = TempPem::new(&ours.list_until(2021));
+        let files = Files {
+            root_certificate: Some(roots.name()),
+            revocation_list: Some(expired.name()),
+        };
+        let config = tls_config(Encryption::VerifyFull, &files).unwrap();
+        assert!(!accepts(config, ours.server(HOST, 1)));
     }
 
     /// A check of the server's name or chain needs a root certificate, as

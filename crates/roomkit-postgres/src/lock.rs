@@ -264,17 +264,24 @@ impl PostgresAdvisoryLockManager {
             return Err(RoomKitError::Runtime(NOT_INITIALIZED.to_owned()));
         };
         let key = advisory_key(room_id.as_str());
+        // Listening from here on: a close told after this reaches the wait below,
+        // and one before it left the pool closed, read before the wait.
+        let closing = self.shared.closing.notified();
+        tokio::pin!(closing);
+        closing.as_mut().enable();
         let client = pool.get().await.map_err(failure)?;
         if !self.shared.owns_pool {
             // A failure is a server that cannot: the wait goes on without it.
-            drop(client.execute(CHECK_THE_CLIENT, &[]).await);
+            if let Ok(check) = client.prepare_cached(CHECK_THE_CLIENT).await {
+                drop(client.execute(&check, &[]).await);
+            }
         }
         let statement = client.prepare_cached(TAKE).await.map_err(failure)?;
         let waiting = Waiting {
             client: Some(client),
             tls,
         };
-        let Some(client) = waiting.client.as_ref() else {
+        let (Some(client), false) = (waiting.client.as_ref(), pool.is_closed()) else {
             return Err(RoomKitError::Runtime(NOT_INITIALIZED.to_owned()));
         };
         let params: [Param<'_>; 1] = [&key];
@@ -282,11 +289,12 @@ impl PostgresAdvisoryLockManager {
             answered = client.execute(&statement, &params) => {
                 answered.map_err(failure)?;
             }
-            () = self.shared.closing.notified() => {
+            () = &mut closing => {
                 return Err(RoomKitError::Runtime(NOT_INITIALIZED.to_owned()));
             }
         }
-        // A close that came between the grant and here saw no wait to end.
+        // A pool closed while it waited, by the close of a manager that had no
+        // connection to count then, or by the owner of a pool handed in.
         if pool.is_closed() {
             return Err(RoomKitError::Runtime(NOT_INITIALIZED.to_owned()));
         }

@@ -235,6 +235,45 @@ async fn a_close_ends_the_wait_for_a_lock() {
     held.release().await.unwrap();
 }
 
+/// A pool closed while a lock is waited for grants nothing once the holder lets
+/// go: its owner's close of a pool handed in, which no close of the manager tells.
+#[tokio::test]
+async fn a_lock_granted_on_a_pool_closed_meanwhile_is_refused() {
+    use deadpool_postgres::{Manager, Pool};
+    use tokio_postgres::NoTls;
+    if dsn().is_none() {
+        return;
+    }
+    let schema = TempSchema::new().await;
+    let first = manager(&schema).await;
+    let config: tokio_postgres::Config = schema.dsn().parse().unwrap();
+    let pool = Pool::builder(Manager::new(config, NoTls))
+        .max_size(2)
+        .build()
+        .unwrap();
+    let second = PostgresAdvisoryLockManager::new(PostgresAdvisoryLockManagerOptions {
+        pool: Some(pool.clone()),
+        ..PostgresAdvisoryLockManagerOptions::default()
+    });
+    let held = first.locked(&room("r1")).await.unwrap();
+    let waiter = tokio::spawn({
+        let second = second.clone();
+        async move { second.locked(&room("r1")).await.map(drop) }
+    });
+    until_locks_are(&schema, (1, 1)).await;
+    pool.close();
+    held.release().await.unwrap();
+    let refused = tokio::time::timeout(Duration::from_secs(2), waiter)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(refused, Err(RoomKitError::Runtime(_))),
+        "{refused:?}"
+    );
+    until_locks_are(&schema, (0, 0)).await;
+}
+
 /// A wait dropped on a pool handed in, whose TLS the manager cannot cancel
 /// through, ends on the server when it sees the client gone: its session asks
 /// to look.
