@@ -12,6 +12,8 @@ use roomkit::telemetry::{
 };
 use serde_json::Value;
 
+use crate::error::NoConnection;
+
 /// Where a store's spans go.
 #[derive(Clone)]
 struct Reporting {
@@ -86,17 +88,20 @@ impl QuerySpans {
 
 /// What a span says of `error`: its class, unless the kit records what can hold
 /// personal data, its text: a driver's can quote a row (RFC §15.7, Python's
-/// `span_error`).
+/// `span_error`, `str(exc) or name`).
 fn error_message(error: &StoreError, sensitive: bool) -> String {
+    let class = class_of(error);
     if !sensitive {
-        return class_of(error).to_owned();
+        return class.to_owned();
     }
-    let text = match error {
-        StoreError::Unavailable(cause) => with_causes(&**cause),
-        other => other.to_string(),
+    let text = if let StoreError::Unavailable(cause) = error {
+        with_causes(&**cause)
+    } else {
+        error.to_string()
     };
-    if text.is_empty() {
-        class_of(error).to_owned()
+    // Python's `TimeoutError` of a pool's wait has no text.
+    if text.is_empty() || class == "TimeoutError" {
+        class.to_owned()
     } else {
         text
     }
@@ -115,8 +120,7 @@ fn with_causes(error: &(dyn Error + 'static)) -> String {
     text
 }
 
-/// The class Python's store raises for `error`; a driver's failure is the
-/// `ChannelError` the kit names a store's failure, its class being the driver's.
+/// The class Python's store raises for `error`.
 fn class_of(error: &StoreError) -> &'static str {
     match error {
         StoreError::RoomAlreadyExists(_) => "RoomAlreadyExistsError",
@@ -129,6 +133,41 @@ fn class_of(error: &StoreError) -> &'static str {
         StoreError::TaskNotFound(_) => "TaskNotFoundError",
         StoreError::IdempotencyKeyTaken { .. } => "IdempotencyKeyTakenError",
         StoreError::Value(_) => "ValueError",
-        _ => "ChannelError",
+        StoreError::Unavailable(cause) => failure_class(&**cause),
+        _ => "RuntimeError",
+    }
+}
+
+/// The class Python's driver or store raises for `cause`: asyncpg's, by the state
+/// the server reports, which holds no value of a row.
+fn failure_class(cause: &(dyn Error + 'static)) -> &'static str {
+    if let Some(no_connection) = cause.downcast_ref::<NoConnection>() {
+        return match no_connection {
+            NoConnection::NotInitialized => "RuntimeError",
+            NoConnection::TimedOut => "TimeoutError",
+        };
+    }
+    let Some(driver) = cause.downcast_ref::<tokio_postgres::Error>() else {
+        return "RuntimeError";
+    };
+    let Some(state) = driver.code() else {
+        return if driver.is_closed() {
+            "ConnectionDoesNotExistError"
+        } else {
+            "InterfaceError"
+        };
+    };
+    match state.code() {
+        "23505" => "UniqueViolationError",
+        "23503" => "ForeignKeyViolationError",
+        "23502" => "NotNullViolationError",
+        "23514" => "CheckViolationError",
+        "40P01" => "DeadlockDetectedError",
+        "40001" => "SerializationError",
+        "42P01" => "UndefinedTableError",
+        "42703" => "UndefinedColumnError",
+        "57014" => "QueryCanceledError",
+        "55P03" => "LockNotAvailableError",
+        _ => "PostgresError",
     }
 }

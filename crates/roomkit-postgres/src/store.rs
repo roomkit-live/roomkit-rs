@@ -23,6 +23,7 @@ use roomkit::store::{
 use roomkit::telemetry::TelemetryProvider;
 use roomkit::{ConversationStore, StoreError, written};
 
+use crate::error::{Failure, NoConnection};
 use crate::options::{
     DedupeEventIndicesOptions, DropLegacyParentIndexOptions, InitOptions, MigrateOptions,
     PostgresStoreOptions,
@@ -32,10 +33,6 @@ use crate::{
     events, identities, lookups, markers, members, pool, rooms, rows, schema, side_effects,
     timeline, verifications,
 };
-
-/// What an operation before [`PostgresStore::init`], or after the close of a
-/// pool the store owned, fails with, in Python's words.
-const NOT_INITIALIZED: &str = "PostgresStore.init() must be called before use";
 
 /// How long an operation waits for a connection: Python's `_acquire_timeout`.
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -198,27 +195,36 @@ impl PostgresStore {
             .clone()
     }
 
-    /// `work` under its `store.<operation>` span: Python's `_query_span`.
-    async fn spanned<T>(
-        &self,
-        operation: &str,
-        table: &str,
-        work: impl Future<Output = Result<T, StoreError>>,
-    ) -> Result<T, StoreError> {
-        self.shared.telemetry.around(operation, table, work).await
+    /// `work` under its `store.<operation>` span: Python's `_query_span`. A plain
+    /// function: another future around `around`'s would triple what a call holds.
+    fn spanned<'a, T: 'a>(
+        &'a self,
+        operation: &'a str,
+        table: &'a str,
+        work: impl Future<Output = Result<T, StoreError>> + 'a,
+    ) -> impl Future<Output = Result<T, StoreError>> + 'a {
+        self.shared.telemetry.around(operation, table, work)
     }
 
     /// A connection of the pool, waited for at most [`ACQUIRE_TIMEOUT`].
     async fn client(&self) -> Result<Object, StoreError> {
         let Some(pool) = self.pool() else {
-            return Err(StoreError::unavailable(NOT_INITIALIZED));
+            return Err(StoreError::unavailable(NoConnection::NotInitialized));
         };
         match tokio::time::timeout(ACQUIRE_TIMEOUT, pool.get()).await {
             Ok(client) => client.map_err(StoreError::unavailable),
-            Err(_) => Err(StoreError::unavailable(
-                "no connection of the pool came free in time",
-            )),
+            Err(_) => Err(StoreError::unavailable(NoConnection::TimedOut)),
         }
+    }
+}
+
+/// `outcome` for a refusal Python raises once the operation's span ended, `ok`: the
+/// span's failure is what else went wrong.
+fn after_the_span(outcome: Result<(), Failure>) -> Result<Result<(), StoreError>, StoreError> {
+    match outcome {
+        Ok(()) => Ok(Ok(())),
+        Err(Failure::Refused(refused)) => Ok(Err(refused)),
+        Err(failure) => Err(failure.into()),
     }
 }
 
@@ -242,10 +248,10 @@ impl ConversationStore for PostgresStore {
     async fn create_room(&self, room: Room) -> Result<Room, StoreError> {
         self.spanned("create_room", "rooms", async {
             let client = self.client().await?;
-            rooms::create(&client, &room).await?;
-            Ok(room)
+            after_the_span(rooms::create(&client, &room).await)
         })
-        .await
+        .await??;
+        Ok(room)
     }
 
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
@@ -430,8 +436,8 @@ impl ConversationStore for PostgresStore {
     }
 
     async fn add_binding(&self, binding: ChannelBinding) -> Result<ChannelBinding, StoreError> {
+        written::binding(&binding)?;
         self.spanned("add_binding", "bindings", async {
-            written::binding(&binding)?;
             let client = self.client().await?;
             members::add_binding(&client, &binding).await?;
             Ok(binding)
@@ -464,8 +470,8 @@ impl ConversationStore for PostgresStore {
     }
 
     async fn update_binding(&self, binding: ChannelBinding) -> Result<ChannelBinding, StoreError> {
+        written::binding(&binding)?;
         self.spanned("update_binding", "bindings", async {
-            written::binding(&binding)?;
             let client = self.client().await?;
             members::update_binding(&client, &binding).await?;
             Ok(binding)
@@ -536,10 +542,10 @@ impl ConversationStore for PostgresStore {
     ) -> Result<Participant, StoreError> {
         self.spanned("update_participant", "participants", async {
             let client = self.client().await?;
-            members::update_participant(&client, &participant).await?;
-            Ok(participant)
+            after_the_span(members::update_participant(&client, &participant).await)
         })
-        .await
+        .await??;
+        Ok(participant)
     }
 
     async fn delete_participant(
@@ -703,15 +709,15 @@ impl ConversationStore for PostgresStore {
         mut event: RoomEvent,
         options: CommitEventOptions,
     ) -> Result<RoomEvent, StoreError> {
+        let CommitEventOptions {
+            mut target,
+            activity,
+        } = options;
+        written::event(&mut event)?;
+        if let Some(target) = &mut target {
+            written::event(target)?;
+        }
         self.spanned("commit_event", "events", async {
-            let CommitEventOptions {
-                mut target,
-                activity,
-            } = options;
-            written::event(&mut event)?;
-            if let Some(target) = &mut target {
-                written::event(target)?;
-            }
             let at = activity.then(written::now);
             let mut client = self.client().await?;
             // Boxed: a commit's statements make a future past what callers hold on
@@ -722,8 +728,8 @@ impl ConversationStore for PostgresStore {
     }
 
     async fn add_event(&self, mut event: RoomEvent) -> Result<RoomEvent, StoreError> {
+        written::event(&mut event)?;
         self.spanned("add_event", "events", async {
-            written::event(&mut event)?;
             let mut client = self.client().await?;
             Ok(Box::pin(events::add(&mut client, event)).await?)
         })
@@ -735,8 +741,8 @@ impl ConversationStore for PostgresStore {
         room_id: &RoomId,
         mut event: RoomEvent,
     ) -> Result<RoomEvent, StoreError> {
+        written::event(&mut event)?;
         self.spanned("add_event_auto_index", "events", async {
-            written::event(&mut event)?;
             let mut client = self.client().await?;
             Ok(Box::pin(events::add_auto_indexed(&mut client, room_id, event)).await?)
         })
@@ -761,8 +767,8 @@ impl ConversationStore for PostgresStore {
         room_id: &RoomId,
         mut target: RoomEvent,
     ) -> Result<(), StoreError> {
+        written::event(&mut target)?;
         self.spanned("write_change_target", "events", async {
-            written::event(&mut target)?;
             let mut client = self.client().await?;
             Ok(Box::pin(events::write_target(&mut client, room_id, target)).await?)
         })
@@ -778,8 +784,8 @@ impl ConversationStore for PostgresStore {
     }
 
     async fn update_event(&self, mut event: RoomEvent) -> Result<RoomEvent, StoreError> {
+        written::event(&mut event)?;
         self.spanned("update_event", "events", async {
-            written::event(&mut event)?;
             let mut client = self.client().await?;
             Ok(Box::pin(events::update(&mut client, event)).await?)
         })
@@ -804,11 +810,11 @@ impl ConversationStore for PostgresStore {
         room_id: &RoomId,
         options: GetEventCountOptions,
     ) -> Result<u64, StoreError> {
+        let filter = options.event_filter;
+        if let Some(filter) = &filter {
+            filter.validate()?;
+        }
         self.spanned("get_event_count", "events", async {
-            let filter = options.event_filter;
-            if let Some(filter) = &filter {
-                filter.validate()?;
-            }
             let client = self.client().await?;
             Ok(timeline::count(&client, room_id, filter.as_ref()).await?)
         })
@@ -820,8 +826,8 @@ impl ConversationStore for PostgresStore {
         room_id: &RoomId,
         options: ListEventsOptions,
     ) -> Result<Vec<RoomEvent>, StoreError> {
+        options.validate()?;
         self.spanned("list_events", "events", async {
-            options.validate()?;
             let client = self.client().await?;
             Ok(timeline::page(&client, room_id, &options).await?)
         })
@@ -833,6 +839,9 @@ impl ConversationStore for PostgresStore {
         room_id: &RoomId,
         root_event_ids: &[EventId],
     ) -> Result<BTreeMap<EventId, ThreadSummary>, StoreError> {
+        if root_event_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
         self.spanned("get_thread_summaries", "events", async {
             let client = self.client().await?;
             Ok(timeline::thread_summaries(&client, room_id, root_event_ids).await?)

@@ -28,6 +28,17 @@ impl From<PostgresSchemaError> for StoreError {
     }
 }
 
+/// Why an operation got no connection, in Python's words: an operation before
+/// [`PostgresStore::init`](crate::PostgresStore::init), or after the close of a pool
+/// the store owned; a pool none of whose connections came free in time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub(crate) enum NoConnection {
+    #[error("PostgresStore.init() must be called before use")]
+    NotInitialized,
+    #[error("no connection of the pool came free in time")]
+    TimedOut,
+}
+
 /// What an operation meets: the store's refusal, or a failure, which the
 /// store reports unavailable.
 #[derive(Debug)]
