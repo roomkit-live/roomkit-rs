@@ -30,6 +30,9 @@ const LOOP_END_REASON: &str = "loop_end_reason";
 /// The record's key that holds the turn's usage (RFC §6.4).
 const AI_USAGE: &str = "ai_usage";
 
+/// The caller's key for each turn's end, the framework's (RFC §6.7).
+const TURNS: &str = "turns";
+
 /// The mark of a text its reader stopped (RFC §12.2 step 13s).
 const CANCELLED: &str = "cancelled";
 
@@ -163,6 +166,12 @@ impl Segments {
         if !self.began || self.record.is_some() {
             return;
         }
+        // An end the channel's own record names holds, but `completed`, which
+        // says it finished, not that the reader read it (Python's `end_stopped`).
+        let named = self.live.get(LOOP_END_REASON).filter(|end| !end.is_null());
+        if named.is_some_and(|end| end.as_str() != Some("completed")) {
+            return;
+        }
         let mut record = Metadata::new();
         record.insert(LOOP_END_REASON.to_owned(), Value::from(CANCELLED));
         self.end_turn(record);
@@ -232,7 +241,7 @@ impl Segments {
     /// its end: its end and usage (Python's `stream_turn_entry`, RFC §6.4).
     pub(super) fn turn_entry(&self) -> Option<Metadata> {
         let record = self.record();
-        let end = record.get(LOOP_END_REASON)?;
+        let end = record.get(LOOP_END_REASON).filter(|end| !end.is_null())?;
         let mut entry = Metadata::new();
         entry.insert(LOOP_END_REASON.to_owned(), end.clone());
         if let Some(usage) = record.get(AI_USAGE) {
@@ -262,6 +271,9 @@ impl Segments {
         }
         let mut row = self.draft(EventType::Message, TextContent::new(text).into());
         row.metadata = self.live.to_metadata();
+        // `turns` is the framework's key: on no message, whoever commits it
+        // (RFC §6.7, Python's `response_metadata`).
+        row.metadata.shift_remove(TURNS);
         if let Some(record) = self.record.as_ref().filter(|_| self.owed) {
             row.metadata.extend(record.clone());
             if is_cancelled(record) {
@@ -398,6 +410,25 @@ mod tests {
 
     /// RFC §12.2 step 13s: a reader that stops keeps the text it was handed,
     /// marked cancelled, and the turn records `cancelled`.
+    // Python: tests/test_inbound_turns_record.py, an end the channel's record
+    // names holds on a reader's stop (core/mixins/_streaming_segments.py end_stopped).
+    #[test]
+    fn an_end_the_record_names_holds_when_its_reader_stops() {
+        for (named, end) in [
+            (Value::from("interrupted"), Some(Value::from("interrupted"))),
+            (Value::from("completed"), Some(Value::from(CANCELLED))),
+            (Value::Null, Some(Value::from(CANCELLED))),
+        ] {
+            let live = ResponseMetadata::new();
+            live.insert(LOOP_END_REASON, named);
+            let mut segments = segments().reading(live);
+            segments.handed();
+            segments.stopped();
+            let entry = segments.turn_entry().expect("an end");
+            assert_eq!(entry.get(LOOP_END_REASON).cloned(), end);
+        }
+    }
+
     #[test]
     fn a_stopped_reader_s_text_is_marked_cancelled_and_records_cancelled() {
         let mut segments = segments();

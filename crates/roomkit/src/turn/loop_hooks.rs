@@ -180,6 +180,8 @@ impl TurnHost {
                 }
                 done.one();
             };
+            // Under the turn's record, as Python's task copies its context.
+            let bounded = crate::turn_record::within_current_turn_record(bounded);
             let task = ExecutionContext::current().scope(TURN.scope(self.clone(), bounded));
             if !self.shared.kit.spawn_observer(Box::pin(task)) {
                 tracing::debug!(target: "roomkit::hooks", "the kit is shut down: a turn's observer is not run");

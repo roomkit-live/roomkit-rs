@@ -29,12 +29,11 @@ pub(super) struct RecordChanges {
 impl RecordChanges {
     /// Watches `live`, the channel's output's record, as the `output` frame
     /// is about to carry it: a change is one from it.
-    pub(super) fn watch(&self, live: &ResponseMetadata) -> Metadata {
+    pub(super) fn watch(&self, live: &ResponseMetadata) {
         let mut sent = self.sent.lock().unwrap_or_else(PoisonError::into_inner);
         sent.writes = live.writes();
         sent.record = live.to_metadata();
         sent.live = Some(live.clone());
-        sent.record.clone()
     }
 
     /// Sends the record when it differs from the last one sent, read before

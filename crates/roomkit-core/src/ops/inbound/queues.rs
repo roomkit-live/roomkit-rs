@@ -549,10 +549,18 @@ impl Machine {
             return;
         };
         let own = !end.job.chained && end.job.lineage == Lineage::Call;
-        if own {
+        let caller = match end.job.lineage {
+            Lineage::Call if own => Some(&mut self.trigger.result.response_metadata),
+            // An adopted entry's wait reads its own stream's (RFC §10.1 step 18).
+            Lineage::Entry(entry) if !end.job.chained => self
+                .adopted_deliveries
+                .get_mut(&entry)
+                .map(|delivered| &mut delivered.response_metadata),
+            Lineage::Call | Lineage::Entry(_) => None,
+        };
+        if let Some(caller) = caller {
             let mut record = output.response_metadata.to_metadata();
             let turns = record.shift_remove(TURNS);
-            let caller = &mut self.trigger.result.response_metadata;
             super::reply_record::merge_channel_record(caller, &record);
             if let Some(turns) = turns {
                 add_turns(caller, turns);

@@ -133,11 +133,26 @@ impl ResponseMetadata {
         inner.data.clear();
     }
 
-    /// Changes the value under `key`, when it holds one, in place: Python's
-    /// `record[key].append(...)`, no write of a key.
-    pub fn with_value(&self, key: &str, change: impl FnOnce(&mut Value)) {
-        if let Some(value) = self.lock().data.get_mut(key) {
-            change(value);
+    /// Changes the value under `key`, when it holds one: Python's
+    /// `record[key].append(...)`, no write of a key. `change` runs with the
+    /// record free, so it may read it; another writer's change meanwhile
+    /// runs it again on what that writer left.
+    pub fn with_value(&self, key: &str, mut change: impl FnMut(&mut Value)) {
+        loop {
+            let Some(before) = self.get(key) else {
+                return;
+            };
+            let mut after = before.clone();
+            change(&mut after);
+            let mut inner = self.lock();
+            match inner.data.get_mut(key) {
+                Some(value) if *value == before => {
+                    *value = after;
+                    return;
+                }
+                Some(_) => {}
+                None => return,
+            }
         }
     }
 
@@ -247,6 +262,18 @@ mod tests {
         assert_eq!(record.get("read"), Some(json!(["doc-1"])));
         record.clear();
         assert_eq!(record.writes(), 8);
+    }
+
+    // Python: record["sources"].append(record["x"]), ordinary code.
+    #[test]
+    fn a_change_inside_a_value_may_read_the_record() {
+        let record = ResponseMetadata::from(keys(json!({"sources": [], "x": 1})));
+        let again = record.clone();
+        record.with_value("sources", |sources| {
+            let read = again.get("x").expect("x");
+            sources.as_array_mut().expect("a list").push(read);
+        });
+        assert_eq!(record.get("sources"), Some(json!([1])));
     }
 
     #[test]
