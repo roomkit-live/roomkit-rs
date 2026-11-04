@@ -78,12 +78,6 @@ impl RoundTranscript {
         Self::default()
     }
 
-    /// The round's reasoning blocks.
-    #[must_use]
-    pub fn thinking(&self) -> &ThinkingBlocks {
-        &self.thinking
-    }
-
     /// Everything the round said, its stretches joined.
     #[must_use]
     pub fn text(&self) -> String {

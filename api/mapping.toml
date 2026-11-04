@@ -858,6 +858,11 @@ params = ["type"]
 reason = "language: a part's `type` tag is the AiContentPart variant that holds it, a union no Python name exports"
 
 [[missing]]
+python = "roomkit.providers.ai.AIThinkingPart.__init__"
+params = ["type"]
+reason = "language: a part's `type` tag is the AiContentPart variant that holds it, a union no Python name exports"
+
+[[missing]]
 python = "roomkit.providers.ai.AIImagePart.__init__"
 params = ["type"]
 reason = "language: a part's `type` tag is the AiContentPart variant that holds it, a union no Python name exports"
