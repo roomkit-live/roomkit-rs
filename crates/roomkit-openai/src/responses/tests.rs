@@ -6,7 +6,8 @@ use roomkit::model::{Metadata, ToolCall};
 use serde_json::{Value, json};
 
 use super::{replay::OUTPUT, wire};
-use crate::OpenAiConfig;
+use crate::{OpenAiApi, OpenAiConfig};
+use roomkit_ai::{AiContentPart, AiContext, AiMessage, AiRole, AiTextPart, AiThinkingPart};
 use roomkit_core::rules::transcript::{Message, Role};
 
 fn request(message: Message) -> Result<Value, crate::error::OpenAiError> {
@@ -113,5 +114,39 @@ fn an_impossible_cached_count_does_not_inflate_total_input() {
             json!({"input_tokens":0,"cache_read_input_tokens":10,"output_tokens":2})
         )
         .unwrap()
+    );
+}
+
+// A steered answer goes back as its turn left it (RFC §6.4): its reasoning part
+// adds nothing to the text the replay checks, its reasoning items go back from
+// the message's metadata.
+#[test]
+fn a_steered_answer_replays_its_reasoning_items() {
+    let reasoning =
+        json!({"type":"reasoning","id":"rs_1","encrypted_content":"opaque","summary":[]});
+    let said = json!({"type":"message","role":"assistant",
+        "content":[{"type":"output_text","text":"a.py"}]});
+    let mut answer = AiMessage::new(
+        AiRole::Assistant,
+        vec![
+            AiContentPart::Thinking(AiThinkingPart::new("Weighing.")),
+            AiContentPart::Text(AiTextPart::new("a.py")),
+        ],
+    );
+    answer
+        .metadata
+        .insert(OUTPUT.into(), json!([reasoning, said]));
+    let context = AiContext {
+        messages: vec![answer],
+        ..AiContext::default()
+    };
+    let config = OpenAiConfig {
+        base_url: Some("https://example.com/v1".into()),
+        ..OpenAiConfig::new("", "fake")
+    };
+    let asked = Request::of(&context, OpenAiApi::Responses).unwrap();
+    assert_eq!(
+        wire::request(&config, &asked).unwrap()["input"],
+        json!([reasoning, said])
     );
 }

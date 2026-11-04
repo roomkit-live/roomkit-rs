@@ -53,11 +53,13 @@ pub(super) struct Called {
 
 impl Called {
     /// The call as its round's replay and `AFTER_TOOL_ROUND` read it, Python's
-    /// `AIToolCall`: its intent and its metadata its own.
+    /// `AIToolCall`: its intent, its metadata and why it never runs its own.
     pub(super) fn replayed(&self) -> AiToolCall {
         AiToolCall {
             arguments: self.call.arguments.clone(),
             metadata: self.metadata.clone(),
+            partial: self.partial.is_some(),
+            garbled: self.partial == Some(Partial::Unreadable),
             intent: self.call.intent.clone(),
             ..AiToolCall::new(self.call.id.clone(), self.call.name.clone())
         }

@@ -485,3 +485,29 @@ impl ScriptedRound {
         vec![self.text.clone()]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+    use crate::provider::AiThinkingPart;
+
+    // Python: tests/conformance/_agent.py `_response`: a round read whole keeps
+    // what it reasoned, not its joined text alone.
+    #[tokio::test]
+    async fn a_whole_response_is_what_generate_answers() {
+        let response = AiResponse {
+            thinking: Some("a".to_owned()),
+            thinking_signature: Some("S0".to_owned()),
+            thinking_parts: Some(vec![AiThinkingPart {
+                signature: Some("S0".to_owned()),
+                ..AiThinkingPart::new("a")
+            }]),
+            ..AiResponse::new("Looking.")
+        };
+        let model = ScriptedProvider::new([ScriptedRound::whole_response(response.clone())]);
+        let answered = model.generate(&AiContext::default()).await;
+        assert_eq!(answered.ok(), Some(response));
+    }
+}

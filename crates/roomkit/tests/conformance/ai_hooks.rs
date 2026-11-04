@@ -133,6 +133,8 @@ impl Scripted for ToolRoundEvent {
                     "name": call.name,
                     "arguments": call.arguments,
                     "metadata": call.metadata,
+                    "partial": call.partial,
+                    "garbled": call.garbled,
                 })
             })
             .collect();

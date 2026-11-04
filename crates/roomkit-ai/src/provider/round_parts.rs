@@ -32,7 +32,8 @@ fn call_part(call: &AiToolCall) -> AiToolCallPart {
 
 /// A round whose reasoning has no known place: the reasoning, then the text,
 /// then the calls, an [`AiToolCall`] or a [`StreamToolCall`](super::StreamToolCall)
-/// each, as Python's `RoundCall`.
+/// each, as Python's `RoundCall`. An empty list names its type:
+/// `round_parts::<AiToolCall>(&[], "text", &[])`.
 #[must_use]
 pub fn round_parts<C>(thinking: &[AiThinkingPart], text: &str, calls: &[C]) -> Vec<AiContentPart>
 where
@@ -118,6 +119,8 @@ impl RoundTranscript {
     ///
     /// [`RoomKitError::Runtime`] for a call in `calls` the round never made,
     /// as Python raises `RuntimeError`.
+    ///
+    /// An empty list names its type: `transcript.parts::<AiToolCall>(&[])`.
     pub fn parts<C>(&self, calls: &[C]) -> Result<Vec<AiContentPart>, RoomKitError>
     where
         C: Clone + Into<AiToolCall>,
@@ -159,6 +162,7 @@ impl RoundTranscript {
 mod tests {
     use pretty_assertions::assert_eq;
 
+    use super::super::response::StreamToolCall;
     use super::*;
 
     // Python: tests/test_providers/test_thinking_blocks.py::test_replaying_a_call_the_round_never_made_is_an_error
@@ -193,6 +197,38 @@ mod tests {
             .expect("the round made it");
         assert_eq!(parts.len(), 2);
         assert!(matches!(&parts[1], AiContentPart::ToolCall(call) if call.id == "kept"));
+    }
+
+    // Python's `RoundCall`: a stream's call or a response's, its metadata kept
+    // either way (Python: tests/test_providers/test_thinking_blocks.py reads
+    // both through `call_part`).
+    #[test]
+    fn a_round_takes_a_stream_s_call_or_a_response_s() {
+        let metadata = serde_json::json!({ "thought_signature": "TS" });
+        let metadata = metadata.as_object().cloned().unwrap_or_default();
+        let streamed = StreamToolCall {
+            metadata: metadata.clone(),
+            ..StreamToolCall::new("c1", "x")
+        };
+        let parts = round_parts(&[], "said", &[streamed.clone()]);
+        assert!(matches!(
+            &parts[1],
+            AiContentPart::ToolCall(part) if part.metadata == metadata
+        ));
+        let mut transcript = RoundTranscript::new();
+        transcript.add_thinking(&StreamThinkingDelta {
+            block: Some(0),
+            signature: Some("S0".to_owned()),
+            ..StreamThinkingDelta::new("a")
+        });
+        transcript.add_call("c1");
+        let keyed = transcript.parts(&[streamed]).expect("the round made it");
+        assert!(matches!(
+            &keyed[1],
+            AiContentPart::ToolCall(part) if part.metadata == metadata
+        ));
+        let answered = transcript.parts::<AiToolCall>(&[]).expect("an answer");
+        assert_eq!(answered.len(), 1);
     }
 
     // A call's intent goes back among its arguments (RFC §6.4).
