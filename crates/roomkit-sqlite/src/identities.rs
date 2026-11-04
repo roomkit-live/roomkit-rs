@@ -72,10 +72,11 @@ fn holder(
     Ok(holder.and_then(|holder| IdentityId::new(holder).ok()))
 }
 
-/// Refuses `address` when an identity of `organization` other than `owner`
-/// uses it (RFC §5.6, §14.1, gap G-060). What a read serves is what holds it: a
-/// row whose holder is of another organization, which only an older release wrote,
-/// holds nothing.
+/// Refuses `address` when an identity of `organization` other than `owner` uses it
+/// (RFC §5.6, §14.1, gap G-060). A row whose holder is of another organization holds
+/// nothing: no read serves it, and only an older release wrote one. A holder the
+/// model cannot read still holds it, and is not quoted: its record may be another
+/// organization's.
 fn check_free(
     connection: &Connection,
     channel_type: &ChannelType,
@@ -83,13 +84,25 @@ fn check_free(
     organization: Option<&str>,
     owner: &IdentityId,
 ) -> Result<(), Failure> {
-    match resolve(connection, channel_type, address, organization)? {
-        Some(holder) if &holder.id != owner => Err(StoreError::AddressLinked {
+    let Some(holder) = holder(connection, channel_type, address, organization)? else {
+        return Ok(());
+    };
+    if &holder == owner {
+        return Ok(());
+    }
+    let held = match get(connection, &holder) {
+        Ok(identity) => identity
+            .is_some_and(|held| scope(held.organization_id.as_deref()) == scope(organization)),
+        Err(Failure::Json(_)) => true,
+        Err(other) => return Err(other),
+    };
+    if held {
+        return Err(StoreError::AddressLinked {
             channel_type: channel_type.clone(),
         }
-        .into()),
-        Some(_) | None => Ok(()),
+        .into());
     }
+    Ok(())
 }
 
 /// Files `address` under the identity in the index.

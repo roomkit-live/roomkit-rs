@@ -7,9 +7,9 @@
 
 mod support;
 
-use roomkit::ConversationStore;
 use roomkit::model::{ChannelType, Identity, IdentityId};
 use roomkit::store::{LinkAddressOptions, ResolveIdentityOptions};
+use roomkit::{ConversationStore, StoreError};
 use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 use rusqlite::Connection;
 
@@ -293,6 +293,39 @@ async fn a_row_no_read_serves_leaves_its_address_free() {
             store.close().await;
         }
     }
+}
+
+/// Python: `test_a_holder_the_model_cannot_read_keeps_its_address` (RFC §5.6): the
+/// refusal stands, and quotes no part of the holder's record, which may be another
+/// organization's.
+#[tokio::test]
+async fn a_holder_the_model_cannot_read_keeps_its_address() {
+    let file = TempFile::new("identity-unread-holder");
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
+    let mut holder = Identity::new(IdentityId::new("i1").unwrap());
+    holder.organization_id = Some("globex".to_owned());
+    store.create_identity(holder).await.unwrap();
+    let connection = Connection::open(file.path()).unwrap();
+    connection
+        .execute_batch(
+            r#"UPDATE identities SET data = '{"id": "i1", "email": "a@globex.example", "channel_addresses": "x"}' WHERE id = 'i1';
+               INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id)
+               VALUES ('sms', '+1555', 'i1', 'acme');"#,
+        )
+        .unwrap();
+    let mut dana = Identity::new(IdentityId::new("dana").unwrap());
+    dana.organization_id = Some("acme".to_owned());
+    dana.link(ChannelType::SMS, "+1555");
+    let refused = store.create_identity(dana).await.unwrap_err();
+    assert_eq!(
+        refused,
+        StoreError::AddressLinked {
+            channel_type: ChannelType::SMS
+        }
+    );
+    store.close().await;
 }
 
 /// Python: `test_the_rewrite_takes_only_a_list_for_a_declaration`: a declaration no

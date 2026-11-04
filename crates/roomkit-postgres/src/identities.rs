@@ -12,15 +12,9 @@ use crate::rows::{self, IDENTITY_COLUMNS};
 use crate::values::{execute, query_opt};
 
 /// Files `address` under `identity_id`, refusing one another identity of the
-/// organization holds (RFC §5.6): one statement, so two concurrent links of
-/// one address cannot both win; the no-op update on a conflict is what makes
-/// `RETURNING` give the holder.
-///
-/// A row whose holder is of another organization holds nothing: no read serves it,
-/// and only an older release wrote one. The organization's identity takes it. The
-/// holder's organization is read by a statement of its own, which sees an identity
-/// that committed while the first waited on its row: a subquery of the first would
-/// miss it, and the second link would win too.
+/// organization holds (RFC §5.6). The first statement decides who waits, so two
+/// concurrent links of one address cannot both win; the no-op update on a conflict
+/// is what makes `RETURNING` give the holder.
 async fn file_address(
     transaction: &Transaction<'_>,
     channel_type: &str,
@@ -48,6 +42,30 @@ async fn file_address(
     if holder == identity_id.as_str() {
         return Ok(());
     }
+    take_a_row_no_read_serves(
+        transaction,
+        channel_type,
+        address,
+        identity_id,
+        organization,
+        holder,
+    )
+    .await
+}
+
+/// Takes the row `holder` holds, locked by the filing, if no read serves it: its
+/// holder is of another organization, which only an older release wrote. Else
+/// refuses. The holder's organization is read by a statement of its own, which sees
+/// an identity that committed while the filing waited on its row: a subquery of the
+/// filing would miss it, and the second link would win too.
+async fn take_a_row_no_read_serves(
+    transaction: &Transaction<'_>,
+    channel_type: &str,
+    address: &str,
+    identity_id: &IdentityId,
+    organization: &str,
+    holder: &str,
+) -> Result<(), Failure> {
     let held_in = query_opt(
         transaction,
         "SELECT COALESCE(organization_id, '') FROM identities WHERE id = $1",
@@ -142,7 +160,9 @@ pub(crate) async fn create(client: &mut Object, identity: &Identity) -> Result<(
     let organization = identity.organization_id.as_deref().unwrap_or_default();
     let mut declared = declared_addresses(&addresses);
     // In one order whoever files them, so that two replacements taking each
-    // other's addresses never wait on each other's rows.
+    // other's addresses never wait on each other's rows. A row no read serves is the
+    // exception: taken over, it stays locked while the removal below waits, and two
+    // writers on such rows can still deadlock (RMK-1394).
     declared.sort_unstable();
     for (channel_type, address) in &declared {
         file_address(
