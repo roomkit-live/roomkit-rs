@@ -544,6 +544,28 @@ impl Machine {
         answers.push(response.clone());
     }
 
+    /// The answers of the call `lineage` belongs to hold `rows` as stored
+    /// since their commit: Python's reader replaces a row it wrote the turn's
+    /// record on (RFC §6.4).
+    pub(super) fn rewrite_answers(&mut self, lineage: Lineage, rows: &[RoomEvent]) {
+        let answers = match lineage {
+            Lineage::Call => Some(&mut self.trigger.result),
+            Lineage::Entry(entry) => self
+                .adopted_deliveries
+                .get_mut(&entry)
+                .or_else(|| self.told_adopted.get_mut(&entry)),
+        };
+        let Some(result) = answers else {
+            return;
+        };
+        for row in rows {
+            let held = result.response_events.iter_mut();
+            if let Some(answer) = held.into_iter().find(|answer| answer.id == row.id) {
+                answer.clone_from(row);
+            }
+        }
+    }
+
     /// Tells the caller of each adopted entry whose cascade is over what
     /// its delivery set reported, with the answers its cascade delivered
     /// (RFC §10.1 step 18). Whether the report waits for those answers

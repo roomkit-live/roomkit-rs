@@ -76,9 +76,9 @@ pub(super) struct Segments {
     began: bool,
     open: Vec<Open>,
     /// The last message the store holds of the response.
-    last_message: Option<RoomEvent>,
+    last_message: Option<EventId>,
     /// The last row the store holds of the response.
-    last_row: Option<RoomEvent>,
+    last_row: Option<EventId>,
 }
 
 impl Segments {
@@ -253,14 +253,14 @@ impl Segments {
     /// `row` is stored: the last row, the last message, and the record when
     /// it carries it.
     pub(super) fn stored(&mut self, row: &RoomEvent) {
-        self.last_row = Some(row.clone());
+        self.last_row = Some(row.id.clone());
         if row.r#type != EventType::Message {
             return;
         }
         if self.owed && row.metadata.contains_key(LOOP_END_REASON) {
             self.owed = false;
         }
-        self.last_message = Some(row.clone());
+        self.last_message = Some(row.id.clone());
     }
 
     /// The turn's record whole: its live record, with how it ended once
@@ -293,13 +293,11 @@ impl Segments {
     /// it is owed: the update to write once the response is over, when no row
     /// carried it (RFC §6.4 "The turn's record"). Taken once.
     pub(super) fn take_owed_record(&mut self) -> Option<(EventId, Metadata)> {
-        let record = self.record.as_ref().filter(|_| self.owed)?;
+        let record = self.record.clone().filter(|_| self.owed)?;
         let last = self.last_message.as_ref().or(self.last_row.as_ref())?;
-        let mut metadata = last.metadata.clone();
-        metadata.extend(record.clone());
-        let id = last.id.clone();
+        let id = last.clone();
         self.owed = false;
-        Some((id, metadata))
+        Some((id, record))
     }
 
     /// The text read so far as a message, when it says something; with the
@@ -567,8 +565,7 @@ mod tests {
     }
 
     /// RFC §6.4 "The turn's record": a turn that ends on no text owes its
-    /// record to the last message it wrote, kept with that message's
-    /// metadata.
+    /// record to the last message it wrote.
     #[test]
     fn a_turn_ending_on_no_text_owes_its_record_to_its_last_message() {
         let mut segments = segments();
@@ -577,19 +574,14 @@ mod tests {
         let mut rows = segments.start(ToolCallContent::new("lookup", "call_1"));
         let mut message = rows.remove(0);
         message.id = EventId::new("evt_2").unwrap();
-        message.metadata.insert("label".to_owned(), json!("kept"));
         segments.stored(&message);
         segments.end(ToolCallContent::new("lookup", "call_1"));
         segments.end_turn(record("empty_response"));
         assert_eq!(segments.last_text(false), None);
-        let (id, metadata) = segments.take_owed_record().unwrap();
+        let (id, record) = segments.take_owed_record().unwrap();
         assert_eq!(
-            (
-                id.as_str(),
-                metadata.get("label").cloned(),
-                metadata.get("loop_end_reason").cloned()
-            ),
-            ("evt_2", Some(json!("kept")), Some(json!("empty_response")))
+            (id.as_str(), record.get("loop_end_reason").cloned()),
+            ("evt_2", Some(json!("empty_response")))
         );
     }
 }

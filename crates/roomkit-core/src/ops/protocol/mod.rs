@@ -200,6 +200,11 @@ pub enum Notice {
     CutReadOver {
         /// The call's record as the read left it.
         response_metadata: Metadata,
+        /// The call's first error as the read left it: a failure of the read
+        /// is its caller's error (RFC §12.2 step 13s).
+        error: Option<ErrorRecord>,
+        /// The rows the read wrote the turn's record on, as stored.
+        rewritten: Vec<RoomEvent>,
     },
     /// What the driver's spans read of the operation (Python's
     /// `framework.send_event` and `framework.broadcast`).

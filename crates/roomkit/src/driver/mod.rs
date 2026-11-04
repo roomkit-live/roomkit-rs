@@ -803,9 +803,15 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     async fn notice(&mut self, notice: Notice) {
         match notice {
             Notice::StopReading { effect } => self.shared.stop_reading(effect),
-            Notice::CutReadOver { response_metadata } => {
+            Notice::CutReadOver {
+                response_metadata,
+                error,
+                rewritten,
+            } => {
                 if let Some(caller) = self.caller.as_deref() {
-                    caller.record().cut_read_over(response_metadata);
+                    caller
+                        .record()
+                        .cut_read_over(response_metadata, error, rewritten);
                 }
             }
             Notice::Span(note) => {

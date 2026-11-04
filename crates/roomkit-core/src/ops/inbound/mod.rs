@@ -476,6 +476,8 @@ impl Operation for Inbound {
         if !self.machine.cascade.reads_stream_of(Lineage::Call) {
             self.io.notify(Notice::CutReadOver {
                 response_metadata: self.machine.trigger.result.response_metadata.clone(),
+                error: self.machine.trigger.result.error.clone(),
+                rewritten: Vec::new(),
             });
         }
         cut

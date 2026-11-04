@@ -106,8 +106,8 @@ pub(crate) struct Record {
     /// Whether the read of the call's own stream its cut stopped is over; no
     /// read waited for reads as over.
     cut_read_over: watch::Sender<bool>,
-    /// The call's record as that read left it.
-    cut_read_left: Mutex<Option<Metadata>>,
+    /// What that read left the call.
+    cut_read_left: Mutex<Option<CutReadLeft>>,
     /// The commits of the call's own answers: what the call reports as its
     /// `response_events` once the kit's close aborted its run.
     answers: StoredAnswers,
@@ -115,6 +115,33 @@ pub(crate) struct Record {
     in_flight: InFlight,
     /// What the caller, answered at the decision, did not wait for.
     tail: Mutex<Option<Tail>>,
+}
+
+/// What the read a call's cut stopped left the call.
+#[derive(Debug)]
+struct CutReadLeft {
+    record: Metadata,
+    error: Option<ErrorRecord>,
+    /// The rows it wrote the turn's record on, as stored.
+    rewritten: Vec<RoomEvent>,
+}
+
+impl CutReadLeft {
+    /// `result`, the call as its cut ends it, with what the read left: its
+    /// failure its caller's error, but one the kit's close caused (RFC §12.2
+    /// step 13s, §12.10.4).
+    fn apply(&self, result: &mut InboundResult) {
+        result.response_metadata.clone_from(&self.record);
+        if result.error.is_none() {
+            result.error = self.error.clone().filter(|error| !by_close(error));
+        }
+        for row in &self.rewritten {
+            let answers = result.response_events.iter_mut();
+            if let Some(answer) = answers.into_iter().find(|answer| answer.id == row.id) {
+                answer.clone_from(row);
+            }
+        }
+    }
 }
 
 /// The answers a call's cascade commits, each with what its write came to:
@@ -213,9 +240,7 @@ impl Record {
         };
         result.response_events = self.answers.stored();
         result.cancellation_reason = Some(reason);
-        if let Some(record) = self.left_by_the_cut_read() {
-            result.response_metadata = record;
-        }
+        self.apply_the_cut_read(&mut result);
         // What the caller did not wait for is cut with its turns, a send
         // still under way no part of it, as Python's reader is.
         let tail = self.tail().take();
@@ -223,12 +248,15 @@ impl Record {
         self.cancelled.send_replace(Some(result));
     }
 
-    /// The call's record as the read its cut stopped left it, once over.
-    fn left_by_the_cut_read(&self) -> Option<Metadata> {
-        self.cut_read_left
+    /// `result` with what the read its cut stopped left it, once over.
+    fn apply_the_cut_read(&self, result: &mut InboundResult) {
+        let left = self
+            .cut_read_left
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(left) = left.as_ref() {
+            left.apply(result);
+        }
     }
 
     /// The call's cut stops a read of its own stream under way: its end is
@@ -237,12 +265,27 @@ impl Record {
         self.cut_read_over.send_replace(false);
     }
 
-    /// The read the cut stopped is over, the call's record as it left it.
-    pub(super) fn cut_read_over(&self, record: Metadata) {
-        *self
-            .cut_read_left
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(record);
+    /// The read the cut stopped is over, the call's record and first error
+    /// as it left them, and the rows it wrote the turn's record on.
+    pub(super) fn cut_read_over(
+        &self,
+        record: Metadata,
+        error: Option<ErrorRecord>,
+        rewritten: Vec<RoomEvent>,
+    ) {
+        {
+            let mut left = self
+                .cut_read_left
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let mut all = left.take().map_or_else(Vec::new, |left| left.rewritten);
+            all.extend(rewritten);
+            *left = Some(CutReadLeft {
+                record,
+                error,
+                rewritten: all,
+            });
+        }
         self.cut_read_over.send_replace(true);
     }
 
@@ -303,9 +346,7 @@ impl Record {
             return cut_before_its_commit();
         };
         result.response_events = self.answers.stored();
-        if let Some(record) = self.left_by_the_cut_read() {
-            result.response_metadata = record;
-        }
+        self.apply_the_cut_read(&mut result);
         // Its caller's cancellation came first, the kit's close after.
         let reason = self.cancel_reason();
         result.cancellation_reason = Some(reason.unwrap_or_else(|| KIT_CLOSED.to_owned()));
@@ -1097,7 +1138,7 @@ mod tests {
         record.request_cancel("stopped");
         let mut left = Metadata::new();
         left.insert("cited".to_owned(), 3.into());
-        record.cut_read_over(left.clone());
+        record.cut_read_over(left.clone(), None, Vec::new());
         let aborted = record.aborted();
         assert_eq!(aborted.cancellation_reason.as_deref(), Some("stopped"));
         assert_eq!(aborted.response_metadata, left);

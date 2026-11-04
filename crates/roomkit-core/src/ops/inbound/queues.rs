@@ -542,10 +542,16 @@ impl Machine {
         match read.accept(cx, &self.cascade.budget, outcome, cut) {
             Read::Reading(read) => self.cascade.stream = Some(*read),
             Read::Over(end) => {
+                let rewritten = end
+                    .output
+                    .as_ref()
+                    .map_or_else(Vec::new, |output| output.response_events.clone());
                 self.stream_over(cx, *end);
                 if cut && own {
                     cx.io.notify(Notice::CutReadOver {
                         response_metadata: self.trigger.result.response_metadata.clone(),
+                        error: self.trigger.result.error.clone(),
+                        rewritten,
                     });
                 }
             }
@@ -560,12 +566,15 @@ impl Machine {
     /// §6.4, Python's `merge_channel_record` and `_add_turn`). Nothing of the
     /// streaming target's own output is kept, as Python's `_deliver_segments`
     /// keeps nothing of `deliver_stream()` (RFC §10.1 step 15): the rows the
-    /// stream commits are delivered to the others, whose outputs are.
+    /// stream commits are delivered to the others, whose outputs are. The
+    /// read's answer holds in `response_events` the rows it wrote the turn's
+    /// record on, as stored.
     fn stream_over(&mut self, cx: &mut Cx<'_>, end: StreamEnd) {
         let (Some(output), Some(context)) = (end.output, end.context) else {
             return;
         };
         let own = !end.job.chained && end.job.lineage == Lineage::Call;
+        self.rewrite_answers(end.job.lineage, &output.response_events);
         self.keep_stream_end(cx, &end.job, &output);
         let Some(error) = output.error else {
             return;

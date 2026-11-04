@@ -501,7 +501,11 @@ pub trait Channel: Send + Sync + 'static {
     /// [`DeliveryStream::cut`] tells that end from the response's own. It runs
     /// to its end, however long: the cancel's caller waits for it within its
     /// own timeout; the kit's close waits for it within its grace, then drops
-    /// it.
+    /// it. The read does not wait for it to store what the cut turn leaves:
+    /// the room's next turn may start meanwhile, a second `deliver_stream` of
+    /// this channel in this room, and [`deliver`](Channel::deliver) may be
+    /// handed the end of a call meanwhile. An error it then returns is its
+    /// caller's and `ON_ERROR`'s, what the cut stored standing.
     /// A channel past the stream already is dropped where it waits, with no
     /// async cleanup: one that must release what it holds does so in a `Drop`.
     ///

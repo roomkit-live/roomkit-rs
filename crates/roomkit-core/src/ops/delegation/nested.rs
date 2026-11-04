@@ -253,6 +253,8 @@ mod tests {
                         Notice::StopReading { effect: own_read },
                         Notice::CutReadOver {
                             response_metadata: crate::model::Metadata::new(),
+                            error: None,
+                            rewritten: Vec::new(),
                         },
                     ],
                     Next::Waiting,

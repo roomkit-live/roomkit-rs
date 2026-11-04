@@ -23,13 +23,12 @@
 //! before the calls left open are ended `failed`, their error `cancelled`,
 //! or `kit_closed` for the kit's close (RFC §12.10.4). That stop stores what
 //! the turn leaves at once, and only the read's caller waits for a reader
-//! still working past it. A response that fails
-//! stores the text it produced,
+//! still working past it. A response that fails stores the text it produced,
 //! hands its reader that row, then the failure; a streaming channel that
 //! fails leaves the text to every target. The turn's record, when no row
-//! carried it, is written on its last message, else its last row, once the
-//! response is over, a direct update (`ON_EVENT_UPDATED` fires) made in the
-//! room's work.
+//! carried it, is written on its last message, else its last row, as the store
+//! holds it, once the response is over, a direct update (`ON_EVENT_UPDATED`
+//! fires) made in the room's work; the read's answer holds that row.
 
 use std::collections::VecDeque;
 use std::future::{Future, poll_fn};
@@ -50,6 +49,7 @@ use super::{DeliveryStream, Pulled, ResponseItem, StreamItem, UsageMarker};
 use crate::RoomKit;
 use crate::channel::ChannelError;
 use crate::context::{self, Adopting, ExecutionContext};
+use crate::error::RoomKitError;
 use crate::kit::Inner;
 use crate::room_turns::Place;
 use crate::store::ConversationStore;
@@ -189,6 +189,7 @@ pub(super) async fn read_kept<S: ConversationStore>(
         cut: None,
         place: kept.place,
         settled: None,
+        rewritten: None,
         reader_unit,
         reads: channel.as_ref().map_or(Reads::Nobody, |_| Reads::Target),
         ready: VecDeque::new(),
@@ -238,6 +239,7 @@ pub(super) async fn read_kept<S: ConversationStore>(
         return (output, Some(pass));
     }
     producer.write_owed_record(inner).await;
+    output.response_events = producer.rewritten.take().into_iter().collect();
     (output, None)
 }
 
@@ -374,6 +376,8 @@ struct Producer {
     /// The response's rows were settled at a cut, its reader still working:
     /// the failure they settled on, if any.
     settled: Option<Option<ErrorRecord>>,
+    /// The row the turn's record was written on, as stored.
+    rewritten: Option<RoomEvent>,
     /// The unit of the kit's work the reader runs in, beside the run's, which
     /// a close it calls spares.
     reader_unit: Unit,
@@ -487,10 +491,14 @@ impl Producer {
     }
 
     /// Writes the turn's record on its last message or else its last row,
-    /// when no row carried it.
+    /// when no row carried it; a strategy's first pass hands its record on
+    /// (RFC §19.7.3).
     async fn write_owed_record<S: ConversationStore>(&mut self, inner: &Arc<Inner<S>>) {
-        if let Some((event_id, metadata)) = self.segments.take_owed_record() {
-            write_record(inner, &self.room_id, &event_id, metadata).await;
+        if self.kept_out.is_some() {
+            return;
+        }
+        if let Some((event_id, record)) = self.segments.take_owed_record() {
+            self.rewritten = write_record(inner, &self.room_id, &event_id, record).await;
         }
     }
 
@@ -940,24 +948,20 @@ enum Settled {
     Nothing,
 }
 
-/// Writes the turn's record, `metadata`, on its last message or else its last
-/// row, `event_id`, when no row carried it (RFC §6.4 "The turn's record"): a direct update,
-/// `ON_EVENT_UPDATED` firing as for any; best effort, a failure logged.
+/// Writes the turn's `record` on its last message or else its last row,
+/// `event_id`, when no row carried it (RFC §6.4 "The turn's record"), over the
+/// row as the store holds it: a direct update, `ON_EVENT_UPDATED` firing as for
+/// any; best effort, a failure logged. The row as stored, once written.
 async fn write_record<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     room_id: &RoomId,
     event_id: &EventId,
-    metadata: Metadata,
-) {
-    let kit = RoomKit {
-        inner: Arc::clone(inner),
-    };
-    let updates = EventUpdates {
-        metadata: Some(metadata),
-        ..EventUpdates::default()
-    };
-    if let Err(error) = kit.update_own(room_id, event_id, updates).await {
-        if inner.tasks.is_closing() {
+    record: Metadata,
+) -> Option<RoomEvent> {
+    let written = rewrite_with_record(inner, room_id, event_id, record).await;
+    match written {
+        Ok(row) => row,
+        Err(error) if inner.tasks.is_closing() => {
             tracing::debug!(
                 target: "roomkit::driver",
                 room_id = %room_id,
@@ -965,16 +969,41 @@ async fn write_record<S: ConversationStore>(
                 %error,
                 "the turn's record was not written on its row: the kit closed"
             );
-            return;
+            None
         }
-        tracing::warn!(
-            target: "roomkit::driver",
-            room_id = %room_id,
-            event_id = %event_id,
-            %error,
-            "the turn's record could not be written on its row"
-        );
+        Err(error) => {
+            tracing::warn!(
+                target: "roomkit::driver",
+                room_id = %room_id,
+                event_id = %event_id,
+                %error,
+                "the turn's record could not be written on its row"
+            );
+            None
+        }
     }
+}
+
+/// The update of [`write_record`]: nothing for a row the store no longer holds.
+async fn rewrite_with_record<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    room_id: &RoomId,
+    event_id: &EventId,
+    record: Metadata,
+) -> Result<Option<RoomEvent>, RoomKitError> {
+    let Some(stored) = inner.store.get_event(event_id).await? else {
+        return Ok(None);
+    };
+    let mut metadata = stored.metadata;
+    metadata.extend(record);
+    let updates = EventUpdates {
+        metadata: Some(metadata),
+        ..EventUpdates::default()
+    };
+    let kit = RoomKit {
+        inner: Arc::clone(inner),
+    };
+    kit.update_own(room_id, event_id, updates).await
 }
 
 /// What a row's settled entry tells its reader: a row settled

@@ -87,6 +87,7 @@ fn inbound_result(result: &InboundResult) -> Value {
         "reason": result.reason,
         "error": result.error.as_ref().map(|record| record.message.clone()),
         "response_metadata": result.response_metadata,
+        "response_events": dump(&result.response_events),
         "unavailable_targets": result.unavailable_targets.as_ref().map_or_else(|| json!([]), dump),
         "delivery_results": dump(&result.delivery_results),
         "cancellation_reason": result.cancellation_reason,
