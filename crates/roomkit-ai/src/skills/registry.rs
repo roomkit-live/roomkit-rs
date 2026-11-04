@@ -3,6 +3,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::error::SkillError;
 use super::files::{self, OpenFailure, ReadFailure, SKILL_FILE_MAX};
@@ -57,7 +58,8 @@ pub(crate) const MANIFEST_MAX: usize = 64 * 1024;
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SkillRegistry {
-    skills: Vec<Skill>,
+    /// Its skills, shared by its clones: a turn's reads one for its turn alone.
+    skills: Arc<Vec<Skill>>,
 }
 
 impl SkillRegistry {
@@ -170,21 +172,21 @@ impl SkillRegistry {
     /// Unknown names are omitted; the source registry is unchanged.
     #[must_use]
     pub fn copy(&self, names: Option<&[String]>) -> Self {
+        let skills = self
+            .skills
+            .iter()
+            .filter(|skill| names.is_none_or(|names| names.iter().any(|name| name == skill.name())))
+            .cloned()
+            .collect();
         Self {
-            skills: self
-                .skills
-                .iter()
-                .filter(|skill| {
-                    names.is_none_or(|names| names.iter().any(|name| name == skill.name()))
-                })
-                .cloned()
-                .collect(),
+            skills: Arc::new(skills),
         }
     }
 
     /// The tools an AI channel given this registry declares
     /// ([`AiChannelOptions::skills`](crate::AiChannelOptions::skills)).
-    /// An empty registry registers no tools (RFC §24.3).
+    /// An empty registry declares none, the channel keeping their names (RFC
+    /// §24.3).
     pub fn tool_definitions(&self) -> Vec<crate::AiTool> {
         if self.has_entries() {
             super::tools::SkillTools::definitions()
@@ -204,7 +206,7 @@ impl SkillRegistry {
     /// Takes `skills`, each replacing the one of its name, when the
     /// manifest stays within its bound; returns how many it took.
     fn commit(&mut self, skills: Vec<Skill>) -> Result<usize, SkillError> {
-        let mut next = self.skills.clone();
+        let mut next = Vec::clone(&self.skills);
         let mut names: Vec<String> = Vec::new();
         for skill in skills {
             if !names.iter().any(|name| name == skill.name()) {
@@ -222,7 +224,7 @@ impl SkillRegistry {
                 limit: MANIFEST_MAX,
             });
         }
-        self.skills = next;
+        self.skills = Arc::new(next);
         Ok(names.len())
     }
 }
