@@ -295,23 +295,45 @@ struct PromptDetails {
 }
 
 /// A whole answer's call id as text, whatever the server wrote: Python's
-/// `CallIds` reads `str(server_id) if server_id else ""`, nothing for what
-/// Python reads as false. A stream's id is read as Python's SDK reads it: a text,
-/// or the read fails.
+/// `CallIds` reads `str(server_id) if server_id else ""`.
 fn server_id<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     Ok(match Value::deserialize(deserializer)? {
         Value::String(id) => id,
-        Value::Null | Value::Bool(false) => String::new(),
-        Value::Bool(true) => "True".to_owned(),
-        Value::Number(number) if number.as_f64() == Some(0.0) => String::new(),
-        Value::Number(number) => number.to_string(),
-        Value::Array(items) if items.is_empty() => String::new(),
-        Value::Object(members) if members.is_empty() => String::new(),
-        other @ (Value::Array(_) | Value::Object(_)) => other.to_string(),
+        value if reads_false(&value) => String::new(),
+        Value::Bool(_) => "True".to_owned(),
+        other @ (Value::Null | Value::Number(_) | Value::Array(_) | Value::Object(_)) => {
+            other.to_string()
+        }
     })
+}
+
+/// A stream's call id: its text, none for what Python reads as false, and
+/// anything else fails the read, as Python's `ToolCallSlots` refuses it.
+fn streamed_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::String(id) => Ok(Some(id)),
+        value if reads_false(&value) => Ok(None),
+        other => Err(serde::de::Error::custom(format!(
+            "a call's id is no text: {other}"
+        ))),
+    }
+}
+
+/// Whether Python reads `value` as false.
+fn reads_false(value: &Value) -> bool {
+    match value {
+        Value::Null | Value::Bool(false) => true,
+        Value::Number(number) => number.as_f64() == Some(0.0),
+        Value::Array(items) => items.is_empty(),
+        Value::Object(members) => members.is_empty(),
+        Value::Bool(true) | Value::String(_) => false,
+    }
 }
 
 /// A member that reads `null` as absent: its type's default, a count of 0,
@@ -415,7 +437,7 @@ struct Delta {
 struct DeltaCall {
     #[serde(default, deserialize_with = "nullable")]
     index: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "streamed_id")]
     id: Option<String>,
     #[serde(default)]
     function: Option<DeltaFunction>,
@@ -1128,6 +1150,31 @@ mod tests {
                 RawCall::new("", "now", "{}")
             ]
         );
+    }
+
+    // Python: providers/ai/openai_dialect.py ToolCallSlots: an id Python reads as
+    // false is no id, and the read goes on; what is no text otherwise is refused.
+    #[test]
+    fn a_streamed_id_that_is_no_text_reads_as_python_s_slots() {
+        let chunk = |id: &str| {
+            format!(
+                r#"{{"choices": [{{"index": 0, "delta": {{"tool_calls": [{{"index": 0,
+                    "id": {id}, "function": {{"name": "now", "arguments": "{{}}"}}}}]}}}}]}}"#
+            )
+        };
+        for id in ["0", "0.0", "false", "[]", "{}"] {
+            let mut folding = Folding::default();
+            folding.take(&chunk(id), "sk-1").unwrap();
+            assert_eq!(folding.finish().0, [RawCall::new("", "now", "{}")], "{id}");
+        }
+        for id in ["7", "true", "[1]", r#"{"a": 1}"#] {
+            let mut folding = Folding::default();
+            let read = folding.take(&chunk(id), "sk-1");
+            assert!(
+                matches!(read, Err(OpenAiError::Malformed { .. })),
+                "{id}: {read:?}"
+            );
+        }
     }
 
     // Python: providers/ai/openai_dialect.py message_tool_calls: an entry with no
