@@ -694,6 +694,14 @@ fn agent_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), St
         options.thinking_coalesce_chars = usize::try_from(flush).map_err(|e| e.to_string())?;
     }
     options.publish_thinking_text = spec["publish_thinking_text"] == true;
+    if let Some(flush) = spec.get("text_coalesce_ms") {
+        options.text_coalesce_ms = flush.as_f64().ok_or("text_coalesce_ms: no number")?;
+    }
+    if let Some(flush) = spec.get("text_coalesce_chars") {
+        let flush = flush.as_u64().ok_or("text_coalesce_chars: not a count")?;
+        options.text_coalesce_chars = usize::try_from(flush).map_err(|e| e.to_string())?;
+    }
+    options.publish_text_deltas = spec["publish_text_deltas"] == true;
     if let Some(budget) = spec.get("thinking_budget") {
         options.thinking_budget = Some(budget.as_i64().ok_or("thinking_budget: not a count")?);
     }

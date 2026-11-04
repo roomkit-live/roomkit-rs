@@ -218,6 +218,7 @@ impl Comparison<'_> {
         for (kind, recorded) in [
             ("observations", &self.observed.observations),
             ("thinking_events", &self.observed.thinking_events),
+            ("text_events", &self.observed.text_events),
             ("tasks", &self.observed.tasks),
             ("participants", &self.observed.participants),
         ] {

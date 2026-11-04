@@ -4,13 +4,17 @@
 //! and what the run produced is normalized and matched against the
 //! scenario's expectations.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use roomkit::model::{ChannelId, ChannelType, RoomId};
-use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
+use roomkit::realtime::{
+    EphemeralCallback, EphemeralEvent, EphemeralEventType, InMemoryRealtime, RealtimeBackend,
+    RealtimeFuture,
+};
 use roomkit::{
     ArchiveRoomOptions, CloseRoomOptions, ConversationStore, InboundRoomRouter, RoomKitOptions,
     RouteOptions, RouterFuture, SubscribeRoomOptions,
@@ -92,6 +96,41 @@ fn kit_options<S>(
     options
 }
 
+/// Per room, the answer's text its realtime was handed.
+type TextEvents = Arc<Mutex<BTreeMap<String, Vec<Value>>>>;
+
+/// The answer's text a kit's realtime is handed, a room minted during the
+/// scenario included, which nothing could subscribe to ahead (README:
+/// `text_events`).
+struct TextRecorder {
+    realtime: InMemoryRealtime,
+    recorded: TextEvents,
+}
+
+impl RealtimeBackend for TextRecorder {
+    fn publish<'a>(&'a self, channel: &'a str, event: EphemeralEvent) -> RealtimeFuture<'a, ()> {
+        if event.r#type == EphemeralEventType::TextDelta {
+            lock(&self.recorded)
+                .entry(event.room_id.to_string())
+                .or_default()
+                .push(Value::Object(event.data.clone()));
+        }
+        self.realtime.publish(channel, event)
+    }
+
+    fn subscribe<'a>(
+        &'a self,
+        channel: &'a str,
+        callback: EphemeralCallback,
+    ) -> RealtimeFuture<'a, String> {
+        self.realtime.subscribe(channel, callback)
+    }
+
+    fn unsubscribe<'a>(&'a self, subscription_id: &'a str) -> RealtimeFuture<'a, bool> {
+        self.realtime.unsubscribe(subscription_id)
+    }
+}
+
 /// Runs `scenario`; returns every mismatch with its expectations.
 pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     // The store's file, when it has one, goes once the run is over.
@@ -104,8 +143,15 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
         Err(problem) => return vec![format!("setup: {problem}")],
     };
     let mut shared_store = None;
-    let (kit, _store_file) = crate::new_kit(|options| {
+    let text_events = TextEvents::default();
+    let (kit, _store_file) = crate::new_kit(|mut options| {
         shared_store = Some(Arc::clone(&options.store));
+        if scenario["expect"].get("text_events").is_some() {
+            options.realtime = Some(Arc::new(TextRecorder {
+                realtime: InMemoryRealtime::default(),
+                recorded: Arc::clone(&text_events),
+            }));
+        }
         let options = identity::kit_options(
             kit_options(options, &setup["kit"], &slot),
             &setup["kit"],
@@ -156,7 +202,8 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
             tokio::task::yield_now().await;
         }
     }
-    let observed = observe(&run, step_outcomes).await;
+    let mut observed = observe(&run, step_outcomes).await;
+    observed.text_events = std::mem::take(&mut *lock(&text_events));
     run.kit().close().await.unwrap();
     let mut found = lock(&run.problems).clone();
     found.extend(compare(&run, scenario, &observed));
