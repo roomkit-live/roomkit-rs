@@ -153,7 +153,9 @@ fn failure_class(cause: &(dyn Error + 'static)) -> &'static str {
         return match pool {
             PoolError::Backend(driver) => driver_class(driver),
             PoolError::Timeout(_) => "TimeoutError",
-            _ => "InterfaceError",
+            PoolError::Closed | PoolError::NoRuntimeSpecified | PoolError::PostCreateHook(_) => {
+                "InterfaceError"
+            }
         };
     }
     cause
