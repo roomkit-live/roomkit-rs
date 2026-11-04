@@ -1,19 +1,20 @@
-//! A discussion whose stored queue cannot be written (RFC §19.7.5): its driver
-//! backs off, as Python's `_drive`, rather than give and end a turn at once.
+//! A discussion whose store refuses or holds what it asks (RFC §19.7.5): its
+//! driver backs off, as Python's `_drive`, rather than give and end a turn at
+//! once, and a stop waits for the plan under way.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 
 use roomkit::model::*;
 use roomkit::orchestration::DiscussionOptions;
 use roomkit::store;
 use roomkit::testing::{
-    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions, idle,
 };
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, Discussion, HookOptions,
@@ -21,16 +22,20 @@ use roomkit::{
     RoomKitOptions, SpeakQueueChange, SpeakQueueEvent, StoreError, UninstallStrategyOptions,
 };
 
-/// Refuses the write of a queue that gave a turn, and holds one read of an
-/// event until it is told.
+/// Refuses the write of a queue that gave at least `refuse_from` turns, and
+/// holds one such write, or one read of an event, until it is told.
 #[derive(Default)]
 struct FlakyStore {
     store: InMemoryStore,
-    fails: Arc<AtomicBool>,
+    refuse_from: Arc<AtomicU64>,
+    refused: Arc<Notify>,
     held: Arc<AtomicBool>,
     reading: Arc<Notify>,
     read_on: Arc<Notify>,
     reads: Arc<AtomicU32>,
+    write_held: Arc<AtomicBool>,
+    writing: Arc<Notify>,
+    write_on: Arc<Notify>,
 }
 
 macro_rules! forward {
@@ -59,12 +64,18 @@ impl ConversationStore for FlakyStore {
         patch: Metadata,
         options: store::PatchRoomMetadataOptions,
     ) -> Result<Option<Room>, StoreError> {
-        let gave = patch
+        let given = patch
             .get("_speak_queue")
             .and_then(|queue| queue.get("turns_given"))
             .and_then(serde_json::Value::as_u64)
-            .is_some_and(|given| given > 0);
-        if gave && self.fails.load(Ordering::SeqCst) {
+            .unwrap_or(0);
+        if given > 0 && self.write_held.swap(false, Ordering::SeqCst) {
+            self.writing.notify_one();
+            self.write_on.notified().await;
+        }
+        let refuse_from = self.refuse_from.load(Ordering::SeqCst);
+        if refuse_from > 0 && given >= refuse_from {
+            self.refused.notify_one();
             return Err(StoreError::Value("the store refuses the write".to_owned()));
         }
         self.store
@@ -186,8 +197,32 @@ async fn installed(store: FlakyStore, options: DiscussionOptions) -> RoomKit<Fla
     kit
 }
 
+fn say(text: &str) -> InboundMessage {
+    InboundMessage::new(id("ops"), "oncall", TextContent::new(text))
+}
+
 fn hello() -> InboundMessage {
-    InboundMessage::new(id("ops"), "oncall", TextContent::new("@a hello"))
+    say("@a hello")
+}
+
+/// The turns `kit`'s hooks are told of, given and ended, in order.
+fn turns_told(kit: &RoomKit<FlakyStore>) -> watch::Receiver<Vec<SpeakQueueChange>> {
+    let (telling, told) = watch::channel(Vec::new());
+    kit.hook(
+        HookTrigger::OnSpeakQueue,
+        move |event: SpeakQueueEvent, _context: RoomContext| {
+            if matches!(
+                event.change,
+                SpeakQueueChange::TurnGiven | SpeakQueueChange::TurnEnded
+            ) {
+                telling.send_modify(|told| told.push(event.change));
+            }
+            async {}
+        },
+        HookOptions::default(),
+    )
+    .unwrap();
+    told
 }
 
 // Python: orchestration/strategies/discussion/_driver.py `_drive`, its failures
@@ -195,7 +230,7 @@ fn hello() -> InboundMessage {
 #[tokio::test]
 async fn a_queue_that_cannot_be_written_backs_off_and_tells_no_turn() {
     let store = FlakyStore::default();
-    let fails = Arc::clone(&store.fails);
+    let refuse_from = Arc::clone(&store.refuse_from);
     let asked = Arc::new(AtomicU32::new(0));
     let counted = Arc::clone(&asked);
     let options = DiscussionOptions {
@@ -206,24 +241,9 @@ async fn a_queue_that_cannot_be_written_backs_off_and_tells_no_turn() {
         ..DiscussionOptions::default()
     };
     let kit = installed(store, options).await;
-    let ended = Arc::new(AtomicU32::new(0));
-    let told = Arc::clone(&ended);
-    kit.hook(
-        HookTrigger::OnSpeakQueue,
-        move |event: SpeakQueueEvent, _context: RoomContext| {
-            if matches!(
-                event.change,
-                SpeakQueueChange::TurnGiven | SpeakQueueChange::TurnEnded
-            ) {
-                told.fetch_add(1, Ordering::SeqCst);
-            }
-            async {}
-        },
-        HookOptions::default(),
-    )
-    .unwrap();
+    let told = turns_told(&kit);
 
-    fails.store(true, Ordering::SeqCst);
+    refuse_from.store(1, Ordering::SeqCst);
     drop(
         kit.process_inbound(hello(), ProcessInboundOptions::default())
             .await,
@@ -239,8 +259,50 @@ async fn a_queue_that_cannot_be_written_backs_off_and_tells_no_turn() {
         "done was asked {} times in 200 ms",
         asked.load(Ordering::SeqCst)
     );
-    assert_eq!(ended.load(Ordering::SeqCst), 0, "no turn was given");
-    fails.store(false, Ordering::SeqCst);
+    assert!(told.borrow().is_empty(), "no turn was given");
+    refuse_from.store(0, Ordering::SeqCst);
+    kit.close().await.unwrap();
+}
+
+// Python: _driver.py `_planned_turn` keeps `_seen_version` once the queue's edit
+// is stored: a refused plan is planned again, by the wake of a message that lands
+// on the number the refused write would have had, without waiting for a poll.
+#[tokio::test]
+async fn a_message_after_a_refused_plan_is_planned_at_its_wake() {
+    let store = FlakyStore::default();
+    let (refuse_from, refused) = (Arc::clone(&store.refuse_from), Arc::clone(&store.refused));
+    let kit = installed(store, DiscussionOptions::default()).await;
+    let mut told = turns_told(&kit);
+    drop(
+        kit.process_inbound(say("@a one"), ProcessInboundOptions::default())
+            .await,
+    );
+    idle(&kit).await;
+    assert_eq!(
+        *told.borrow(),
+        [SpeakQueueChange::TurnGiven, SpeakQueueChange::TurnEnded]
+    );
+
+    refuse_from.store(2, Ordering::SeqCst);
+    drop(
+        kit.process_inbound(say("@a two"), ProcessInboundOptions::default())
+            .await,
+    );
+    tokio::time::timeout(Duration::from_secs(5), refused.notified())
+        .await
+        .expect("the plan tries its write");
+    refuse_from.store(0, Ordering::SeqCst);
+    drop(
+        kit.process_inbound(say("@a three"), ProcessInboundOptions::default())
+            .await,
+    );
+
+    // Under the back-off's first second and the poll's.
+    let given_again = told.wait_for(|told| told.len() > 2);
+    tokio::time::timeout(Duration::from_millis(500), given_again)
+        .await
+        .expect("the message's wake plans the turn")
+        .unwrap();
     kit.close().await.unwrap();
 }
 
@@ -256,19 +318,7 @@ async fn an_uninstall_during_a_plan_s_read_ends_and_gives_no_turn() {
     );
     let kit = installed(store, DiscussionOptions::default()).await;
     let room = RoomId::new("r1").unwrap();
-    let given = Arc::new(AtomicU32::new(0));
-    let told = Arc::clone(&given);
-    kit.hook(
-        HookTrigger::OnSpeakQueue,
-        move |event: SpeakQueueEvent, _context: RoomContext| {
-            if event.change == SpeakQueueChange::TurnGiven {
-                told.fetch_add(1, Ordering::SeqCst);
-            }
-            async {}
-        },
-        HookOptions::default(),
-    )
-    .unwrap();
+    let told = turns_told(&kit);
     // The first read of the turn's message is the plan's.
     held.store(true, Ordering::SeqCst);
     let saying = {
@@ -297,7 +347,57 @@ async fn an_uninstall_during_a_plan_s_read_ends_and_gives_no_turn() {
     drop(saying.await);
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    assert_eq!(given.load(Ordering::SeqCst), 0);
+    assert!(told.borrow().is_empty(), "no turn was given");
     assert!(reads.load(Ordering::SeqCst) < 10, "the plan read on");
+    kit.close().await.unwrap();
+}
+
+// Python: _driver.py `_planned_turn` plans under the room's lock, which a stop
+// waits for: the turn's given told first, then its end.
+#[tokio::test]
+async fn an_uninstall_during_a_plan_s_write_tells_the_turn_given_then_its_end() {
+    let store = FlakyStore::default();
+    let (write_held, writing, write_on) = (
+        Arc::clone(&store.write_held),
+        Arc::clone(&store.writing),
+        Arc::clone(&store.write_on),
+    );
+    let kit = installed(store, DiscussionOptions::default()).await;
+    let room = RoomId::new("r1").unwrap();
+    let told = turns_told(&kit);
+    write_held.store(true, Ordering::SeqCst);
+    let saying = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            kit.process_inbound(hello(), ProcessInboundOptions::default())
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), writing.notified())
+        .await
+        .expect("the plan writes its queue");
+
+    let uninstalling = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            kit.uninstall_strategy(&room, UninstallStrategyOptions::default())
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(!uninstalling.is_finished(), "it waits for the plan's lock");
+    write_on.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), uninstalling)
+        .await
+        .expect("the uninstall ends once the plan stored its queue")
+        .unwrap()
+        .unwrap();
+    drop(saying.await);
+    idle(&kit).await;
+
+    assert_eq!(
+        *told.borrow(),
+        [SpeakQueueChange::TurnGiven, SpeakQueueChange::TurnEnded]
+    );
     kit.close().await.unwrap();
 }

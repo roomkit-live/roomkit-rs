@@ -991,6 +991,58 @@ mod tests {
         assert_eq!(released.load(Ordering::SeqCst), 1);
     }
 
+    // Python: core/mixins/discussion.py `_fire_speak_queue` starts its hooks: a
+    // hook that panics at its first poll beside one that stays pending holds
+    // no announcement back.
+    #[tokio::test]
+    async fn an_announcement_goes_on_past_a_hook_that_panics_at_its_first_poll() {
+        let (kit, _agent) = discussion_room().await;
+        let (telling, mut told) = tokio::sync::watch::channel(Vec::new());
+        let held = Arc::new(Notify::new());
+        let holding = Arc::clone(&held);
+        kit.hook(
+            HookTrigger::OnSpeakQueue,
+            move |event: crate::SpeakQueueEvent, _: RoomContext| {
+                telling.send_modify(|told| told.push(event.change));
+                let holding = Arc::clone(&holding);
+                async move {
+                    if event.change == crate::SpeakQueueChange::Queued {
+                        holding.notified().await;
+                    }
+                }
+            },
+            HookOptions {
+                name: "holds".to_owned(),
+                ..HookOptions::default()
+            },
+        )
+        .unwrap();
+        kit.hook(
+            HookTrigger::OnSpeakQueue,
+            |event: crate::SpeakQueueEvent, _: RoomContext| async move {
+                assert_ne!(
+                    event.change,
+                    crate::SpeakQueueChange::Queued,
+                    "this hook panics at its first poll"
+                );
+            },
+            HookOptions {
+                name: "panics".to_owned(),
+                ..HookOptions::default()
+            },
+        )
+        .unwrap();
+
+        say(&kit, said("@a hello")).await;
+
+        let given = told.wait_for(|told| told.contains(&crate::SpeakQueueChange::TurnGiven));
+        tokio::time::timeout(Duration::from_secs(1), given)
+            .await
+            .expect("the turn's announcement goes on")
+            .unwrap();
+        held.notify_one();
+    }
+
     // Python: strategy.py `Discussion.install`, called directly.
     #[tokio::test]
     async fn an_install_called_directly_binds_its_agents_and_refuses_no_room() {

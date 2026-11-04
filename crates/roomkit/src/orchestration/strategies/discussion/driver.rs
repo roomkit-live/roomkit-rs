@@ -233,13 +233,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         if state.queue_differs(&before) {
             state.version += 1;
         }
-        {
-            let mut live = self.state();
-            live.queue = state.clone();
-            if !unasked {
-                live.seen_version = Some(state.version);
-            }
-        }
+        self.state().queue = state.clone();
         if state != before
             && let Err(error) = self.store_queue(&kit, &state).await
         {
@@ -250,6 +244,11 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                 retire_mark(&given.mark);
             }
             return Err(error);
+        }
+        // Once stored, as Python's: a refused plan is planned again, whatever
+        // message lands on the number the refused write would have had.
+        if !unasked {
+            self.state().seen_version = Some(state.version);
         }
         self.fire_all(changes);
         Ok(next)

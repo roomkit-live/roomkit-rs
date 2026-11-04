@@ -17,18 +17,22 @@ use roomkit::model::DeliveryOutcome;
 use roomkit::model::DeliveryOutcomeStatus;
 use roomkit::model::hook::{BlockOptions, ModifyOptions};
 use roomkit::model::{
-    ChannelCategory, ChannelId, ChannelType, EventContent, HookResult, RoomContext, RoomEvent,
-    RoomId, TextContent,
+    ChannelCategory, ChannelId, ChannelType, EventContent, HookResult, InboundMessage, RoomContext,
+    RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions, idle};
+use roomkit::orchestration::DiscussionOptions;
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions, idle,
+};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, DeliverOptions, DeliveryBackend, DeliveryBackendError,
-    DeliveryContext, DeliveryItem, DeliveryStrategy, DequeueOptions, GetDeadLetterItemsOptions,
-    HookExecution, HookOptions, HookTrigger, InMemoryDeliveryBackend,
-    InMemoryDeliveryBackendOptions, InMemoryStore, NackOptions, RoomKit, RoomKitError,
-    RoomKitOptions,
+    DeliveryContext, DeliveryItem, DeliveryStrategy, DequeueOptions, Discussion,
+    GetDeadLetterItemsOptions, HookExecution, HookOptions, HookTrigger, InMemoryDeliveryBackend,
+    InMemoryDeliveryBackendOptions, InMemoryStore, InstallStrategyOptions, NackOptions,
+    ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
 };
 use tokio::sync::Notify;
+use tokio::time::Instant;
 
 type Kit = RoomKit<InMemoryStore>;
 
@@ -297,11 +301,12 @@ async fn after_deliver_sees_the_rewrite_and_the_real_outcome() {
 }
 
 /// A backend over an in-memory one that counts its nacks, the first
-/// `failing` of which fail.
+/// `failing` of which fail, and keeps when its close was called.
 struct Flaky {
     inner: InMemoryDeliveryBackend,
     nacks: Mutex<usize>,
     failing: usize,
+    closed_at: Mutex<Option<Instant>>,
 }
 
 type Answer<'a, T> = Pin<Box<dyn Future<Output = Result<T, DeliveryBackendError>> + Send + 'a>>;
@@ -342,6 +347,10 @@ impl DeliveryBackend for Flaky {
         options: GetDeadLetterItemsOptions,
     ) -> Answer<'_, Vec<DeliveryItem>> {
         DeliveryBackend::<InMemoryStore>::get_dead_letter_items(&self.inner, options)
+    }
+    fn close(&self) -> Answer<'_, ()> {
+        *self.closed_at.lock().unwrap() = Some(Instant::now());
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -458,6 +467,7 @@ async fn a_failed_nack_is_retried_without_repeating_the_delivery() {
         inner: retrying_at_once(),
         nacks: Mutex::new(0),
         failing: 1,
+        closed_at: Mutex::new(None),
     });
     let item = DeliveryItem {
         max_retries: 0,
@@ -867,4 +877,82 @@ fn the_strategies_take_python_s_defaults() {
     });
     assert_eq!(custom.separator(), " | ");
     let _ = ChannelCategory::Transport;
+}
+
+// Python: core/framework.py `close` gives its work one grace: a discussion
+// whose stop outlasts it (a hook's body holds the room's lock) holds the kit's
+// own work back for nothing, the backend's close called at once.
+#[tokio::test(start_paused = true)]
+async fn a_discussion_s_stop_outlasting_the_grace_does_not_hold_the_backend_s_close_back() {
+    let backend = Arc::new(Flaky {
+        inner: InMemoryDeliveryBackend::default(),
+        nacks: Mutex::new(0),
+        failing: 0,
+        closed_at: Mutex::new(None),
+    });
+    let shared: Arc<dyn DeliveryBackend> = Arc::<Flaky>::clone(&backend);
+    let options = RoomKitOptions {
+        delivery_backend: Some(shared),
+        ..RoomKitOptions::default()
+    };
+    let kit = RoomKit::new(options);
+    let ops = RecordingTransport::new(
+        channel("ops"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(ops).unwrap();
+    kit.register_channel(EchoAgent::new(
+        channel("a"),
+        "a answers",
+        EchoAgentOptions::default(),
+    ))
+    .unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    kit.attach_channel(&room(), &channel("ops"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let discussion = Discussion::new(vec![channel("a").into()], DiscussionOptions::default());
+    kit.install_strategy(
+        &room(),
+        Arc::new(discussion.unwrap()),
+        InstallStrategyOptions::default(),
+    )
+    .await
+    .unwrap();
+    let under_lock = Arc::new(Notify::new());
+    let holding = Arc::clone(&under_lock);
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |_: RoomEvent, _: RoomContext| {
+            holding.notify_one();
+            std::future::pending::<HookResult>()
+        },
+        HookOptions::default(),
+    )
+    .unwrap();
+    let saying = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            let message = InboundMessage::new(channel("ops"), "oncall", TextContent::new("hello"));
+            kit.process_inbound(message, ProcessInboundOptions::default())
+                .await
+        })
+    };
+    under_lock.notified().await;
+
+    let started = Instant::now();
+    kit.close().await.unwrap();
+    drop(saying.await);
+
+    assert!(
+        started.elapsed() >= Duration::from_secs(5),
+        "the stop's grace"
+    );
+    let closed_at = backend.closed_at.lock().unwrap().unwrap();
+    assert_eq!(closed_at, started, "called as the close started");
 }
