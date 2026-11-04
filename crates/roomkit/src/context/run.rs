@@ -135,8 +135,10 @@ impl RunShared {
 
     /// Hands `adoption` to the run's driver; hands it back when the run is
     /// over.
-    pub(super) fn hand(&self, adoption: Adoption) -> Result<(), Adoption> {
-        self.adoptions.send(adoption).map_err(|unsent| unsent.0)
+    pub(super) fn hand(&self, adoption: Adoption) -> Result<(), Box<Adoption>> {
+        self.adoptions
+            .send(adoption)
+            .map_err(|unsent| Box::new(unsent.0))
     }
 
     /// Forgets everything the run held: it is over. A stream never read is

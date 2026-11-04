@@ -484,8 +484,7 @@ async fn the_kit_s_own_write_waits_for_its_room_lock_through_the_grace() {
 /// without what it wraps.
 #[test]
 fn a_store_s_name_in_the_warning_is_its_type_alone() {
-    struct Wrapper<T>(T);
-    let _unused = Wrapper(0_u8).0;
+    struct Wrapper<T>(std::marker::PhantomData<T>);
     assert_eq!(
         super::short_type_name::<crate::InMemoryStore>(),
         "InMemoryStore"

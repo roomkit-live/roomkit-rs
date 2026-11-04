@@ -319,12 +319,13 @@ impl Sim {
         }
         let mut step = operation.poll(&self.env);
         // What only the driver's spans read is no part of a run's journal.
-        step.notices.retain(|notice| match notice {
-            Notice::Span(note) => {
+        step.notices.retain(|notice| {
+            if let Notice::Span(note) = notice {
                 self.span_notes.push(note.clone());
                 false
+            } else {
+                true
             }
-            _ => true,
         });
         self.journal.extend(step.notices.iter().map(journal_line));
         for notice in &step.notices {

@@ -132,16 +132,20 @@ fn a_post_tells_its_spans_it_goes_in_then_its_set() {
         matches!(notes.first(), Some(SpanNote::Injecting { entry: None })),
         "{notes:?}"
     );
-    let over = notes.iter().find_map(|note| match note {
-        SpanNote::SetOver {
+    let over = notes.iter().find_map(|note| {
+        if let SpanNote::SetOver {
             targets,
             delivered,
             failed,
             streams,
             own,
             ..
-        } => Some((*targets, *delivered, *failed, *streams, *own)),
-        _ => None,
+        } = note
+        {
+            Some((*targets, *delivered, *failed, *streams, *own))
+        } else {
+            None
+        }
     });
     assert_eq!(over, Some((1, 1, 0, 0, true)));
 }

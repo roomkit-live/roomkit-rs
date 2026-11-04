@@ -1083,7 +1083,7 @@ async fn an_adopted_send_event_opens_its_span_as_it_goes_in() {
     let results = sent.lock().unwrap().clone();
     assert!(results.contains(&(true, true)), "{results:?}");
     let spans = send_event_spans(&mock);
-    assert!(!spans.is_empty());
+    assert_ne!(spans, vec![]);
     assert!(spans.iter().all(|span| span.status == "ok"), "{spans:?}");
 }
 
@@ -1172,10 +1172,7 @@ async fn an_injected_event_s_broadcast_counts_its_target_s_failure() {
                     ..roomkit::model::InjectedEvent::new(noted)
                 }]
             });
-            ready(HookResult::allow(AllowOptions {
-                injected,
-                ..AllowOptions::default()
-            }))
+            ready(HookResult::allow(AllowOptions { injected }))
         },
         HookOptions {
             name: "injects".to_owned(),

@@ -26,9 +26,10 @@ use serde_json::json;
 
 use super::otel::ENDED_SPANS_KEPT;
 use super::{
-    EndSpanOptions, KitTelemetry, NoopTelemetryProvider, OpenTelemetryProvider,
+    EndSpanOptions, KitTelemetry, LateSpan, NoopTelemetryProvider, OpenTelemetryProvider,
     OpenTelemetryProviderOptions, RecordMetricOptions, SpanKind, StartSpanOptions,
-    TelemetryProvider, current_trace, get_current_span, within_kit, within_turn_trace,
+    TelemetryProvider, current_call_goes_in, current_trace, get_current_span, within_kit,
+    within_turn_trace,
 };
 
 /// A provider whose spans land in an in-memory exporter.
@@ -531,5 +532,52 @@ async fn a_turn_request_names_its_span_by_trace_context() {
     assert_eq!(
         without_a_carrier,
         BTreeMap::from([("span_id".to_owned(), span)])
+    );
+}
+
+// Python: core/mixins/lane_execution.py carries `parent_ctx` itself: what a
+// call's work opens stays in its trace once the provider forgot its ended span.
+#[tokio::test]
+async fn a_child_of_a_forgotten_late_span_stays_in_its_trace() {
+    let (provider, exporter) = provider();
+    let provider: Arc<dyn TelemetryProvider> = Arc::new(provider);
+    let telemetry = KitTelemetry {
+        provider: Arc::clone(&provider),
+        sensitive: false,
+        suppressed: Arc::default(),
+    };
+    let late = LateSpan::new(
+        &telemetry,
+        SpanKind::Custom,
+        "late",
+        StartSpanOptions::default(),
+    );
+    let work = {
+        let provider = Arc::clone(&provider);
+        late.within(async move {
+            current_call_goes_in();
+            let late_id = get_current_span().unwrap();
+            provider.end_span(&late_id, EndSpanOptions::default());
+            for _ in 0..=ENDED_SPANS_KEPT {
+                let noise =
+                    provider.start_span(SpanKind::Custom, "noise", StartSpanOptions::default());
+                provider.end_span(&noise, EndSpanOptions::default());
+            }
+            let options = StartSpanOptions {
+                parent_id: get_current_span(),
+                ..StartSpanOptions::default()
+            };
+            let child = provider.start_span(SpanKind::Custom, "child", options);
+            provider.end_span(&child, EndSpanOptions::default());
+        })
+    };
+    work.await;
+    drop(late);
+    let parent = finished(&exporter, "roomkit.late");
+    let child = finished(&exporter, "roomkit.child");
+    assert_eq!(child.parent_span_id, parent.span_context.span_id());
+    assert_eq!(
+        child.span_context.trace_id(),
+        parent.span_context.trace_id()
     );
 }

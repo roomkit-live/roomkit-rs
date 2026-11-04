@@ -969,9 +969,12 @@ fn its_way_tells_its_spans_the_room_it_came_to() {
     );
     let over: Vec<&RouteEnd> = notes
         .iter()
-        .filter_map(|note| match note {
-            SpanNote::RouteOver { end, .. } => Some(end),
-            _ => None,
+        .filter_map(|note| {
+            if let SpanNote::RouteOver { end, .. } = note {
+                Some(end)
+            } else {
+                None
+            }
         })
         .collect();
     assert_eq!(over, [&RouteEnd::Room(room_id())]);
@@ -989,9 +992,12 @@ fn its_way_tells_its_spans_what_failed_it() {
     let over: Vec<&RouteEnd> = sim
         .span_notes
         .iter()
-        .filter_map(|note| match note {
-            SpanNote::RouteOver { end, .. } => Some(end),
-            _ => None,
+        .filter_map(|note| {
+            if let SpanNote::RouteOver { end, .. } = note {
+                Some(end)
+            } else {
+                None
+            }
         })
         .collect();
     assert_eq!(
