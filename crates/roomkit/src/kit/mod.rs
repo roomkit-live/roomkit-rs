@@ -57,6 +57,7 @@ mod structured;
 mod task_cancel;
 mod tasks;
 mod telemetry;
+pub(crate) use self::addresses::named_correspondent;
 pub(crate) use telemetry::{end_identity_span, end_route_span};
 #[cfg(test)]
 mod tests;

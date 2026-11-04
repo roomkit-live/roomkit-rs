@@ -47,10 +47,6 @@ pub type ChannelOf = Arc<dyn Fn(&ChannelId) -> Option<Arc<dyn RegisteredChannel>
 /// correspondent (RFC §10.4).
 const SYSTEM_SENDER: &str = "system";
 
-/// How many events a read of who a room heard on a channel asks the store
-/// for at a time, as Python's `_HISTORY_PAGE`.
-const HISTORY_PAGE: u64 = 200;
-
 /// A routing strategy (RFC §10.4 `InboundRoomRouter`): the room a message
 /// that names none belongs to, or `None` for a new room.
 ///
@@ -411,7 +407,10 @@ async fn candidate<S: ConversationStore>(
                 &participants,
             )
         };
-        let page = |offset| store.list_events(room_id, history_page(&query.channel_id, offset));
+        let page = |offset| {
+            let page = received_page(&query.channel_id, offset, routing::HISTORY_PAGE);
+            store.list_events(room_id, page)
+        };
         heard_until_another(page, &query.channel_id, other).await?
     };
     let mut candidate = Candidate::new(RoomContext {
@@ -423,11 +422,12 @@ async fn candidate<S: ConversationStore>(
     Ok(Some(candidate))
 }
 
-/// The page of the room's received events of `channel_id` at `offset`.
-fn history_page(channel_id: &ChannelId, offset: u64) -> ListEventsOptions {
+/// The page of at most `limit` of a room's received events of `channel_id`
+/// at `offset`.
+pub(crate) fn received_page(channel_id: &ChannelId, offset: u64, limit: u64) -> ListEventsOptions {
     ListEventsOptions {
         offset,
-        limit: HISTORY_PAGE,
+        limit,
         event_filter: Some(EventFilter {
             source_channel_id: Some(channel_id.clone()),
             ..EventFilter::default()
@@ -454,18 +454,10 @@ where
     let mut offset = 0;
     loop {
         let events = page(offset).await?;
-        for author in routing::heard(&events, channel_id) {
-            let another = other(&author);
-            heard.push(author);
-            if another {
-                return Ok(heard);
-            }
-        }
-        let read = u64::try_from(events.len()).unwrap_or(u64::MAX);
-        if read < HISTORY_PAGE {
+        if routing::read_heard_page(&events, channel_id, &other, &mut heard) {
             return Ok(heard);
         }
-        offset += read;
+        offset += u64::try_from(events.len()).unwrap_or(u64::MAX);
     }
 }
 
@@ -505,7 +497,7 @@ mod tests {
         let reads = Cell::new(0_usize);
         let page = |offset: u64| {
             reads.set(reads.get() + 1);
-            let index = usize::try_from(offset / HISTORY_PAGE).unwrap();
+            let index = usize::try_from(offset / routing::HISTORY_PAGE).unwrap();
             ready(Ok(pages[index].clone()))
         };
         let sms = channel("sms");

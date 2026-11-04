@@ -89,21 +89,26 @@ async fn a_send_outlasting_the_grace_is_cut_and_reported_failed() {
     let kit = kit_of(InMemoryStore::default(), &[&quick, &held], &["r"]).await;
     let call = deferred(&kit, "both", "r").await;
     held.entered("both").await;
+    let event_id = call.event.as_ref().unwrap().id.clone();
     let started = Instant::now();
 
     closed(spawn_close(&kit)).await;
 
     let took = started.elapsed();
     let result = call.delivery.unwrap().wait().await.unwrap();
+    // Its record is no aftermath of a set the close cut, as Python's.
+    let recorded = kit.store().get_event(&event_id).await.unwrap().unwrap();
     assert_eq!(
         (
             took >= Duration::from_secs(5) && took < Duration::from_secs(6),
+            recorded.delivery_results.is_empty(),
             result.cancellation_reason.as_deref(),
             statuses(&result),
             held.sent(),
             held.steps(),
         ),
         (
+            true,
             true,
             Some("kit_closed"),
             BTreeMap::from([

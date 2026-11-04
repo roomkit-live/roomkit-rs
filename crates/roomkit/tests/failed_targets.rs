@@ -9,6 +9,12 @@
 
 use std::future::{Future, ready};
 
+#[path = "store/abstract_only_store.rs"]
+mod abstract_only_store;
+#[path = "support/warnings.rs"]
+mod warnings;
+
+use abstract_only_store::AbstractOnly;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
@@ -17,8 +23,8 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, ProcessInboundOptions, RoomKit,
-    RoomKitError, RoomKitOptions,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
+    ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
 };
 use roomkit_core::ops::ChannelConfig;
 use serde_json::{Value, json};
@@ -395,4 +401,57 @@ async fn each_failed_target_is_reported_as_python_reports_it() {
         (reported, unavailable),
         (expected.map(Some).to_vec(), Some(Vec::new()))
     );
+}
+
+/// A custom store whose `update_event` keeps the stored results, as its
+/// contract says, and which inherits the trait's default record cannot record
+/// the failure: the kit logs why rather than record nothing, and the call
+/// reports its deliveries all the same.
+// Python: tests/test_delivery_outcomes.py::TestOnlyAFailingSetIsRemembered::test_a_store_that_cannot_record_says_why
+#[tokio::test]
+async fn a_store_that_cannot_record_says_why() {
+    let (warnings, _capturing) = warnings::Warnings::capture();
+    let kit = RoomKit::new(RoomKitOptions::with_store(AbstractOnly::default()));
+    kit.register_channel(RecordingTransport::new(
+        channel("ws"),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    kit.register_channel(Failing { id: "raising" }).unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["ws", "raising"] {
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let message = InboundMessage::new(channel("ws"), "u1", TextContent::new("hi"));
+    let routed = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+
+    let result = kit.process_inbound(message, routed).await.unwrap();
+
+    let event = result.event.unwrap();
+    let stored = kit.store().get_event(&event.id).await.unwrap().unwrap();
+    assert_eq!(
+        (
+            stored.delivery_results,
+            result.delivery_results.contains_key("raising")
+        ),
+        (Metadata::new(), true)
+    );
+    let said = warnings.containing("Could not record delivery results");
+    assert!(
+        said.iter()
+            .any(|line| line.contains("override record_delivery_results")),
+        "{said:?}"
+    );
+    kit.close().await.unwrap();
 }

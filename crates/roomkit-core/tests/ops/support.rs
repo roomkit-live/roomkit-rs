@@ -1083,6 +1083,15 @@ impl Sim {
             Request::Store(StoreRequest::ListEvents { room_id }) => {
                 format!("list_events {room_id}")
             }
+            Request::Store(StoreRequest::ListEventsPage {
+                room_id,
+                channel_id,
+                offset,
+                ..
+            }) => format!("list_events {room_id} {channel_id} from {offset}"),
+            Request::Store(StoreRequest::RecordDeliveryResults { event_id, .. }) => {
+                format!("record_delivery_results {event_id}")
+            }
             Request::Store(StoreRequest::Commit { .. }) => "commit".to_owned(),
             Request::Store(StoreRequest::PersistSideEffects { .. }) => "persist".to_owned(),
             Request::Store(StoreRequest::CreateRoom { room }) => format!("store room {}", room.id),
@@ -1146,6 +1155,9 @@ impl Sim {
             }
             Request::Channel(ChannelRequest::RoomDetached { binding }) => {
                 format!("on_room_detached {}", binding.channel_id)
+            }
+            Request::Channel(ChannelRequest::NamedCorrespondent { binding }) => {
+                format!("named_correspondent {}", binding.channel_id)
             }
             Request::Hook(HookRequest::RunHook { hook, .. }) => {
                 format!("hook {}", self.config.hooks.get(*hook).unwrap().name)
@@ -1217,6 +1229,10 @@ impl Sim {
             Request::Channel(
                 ChannelRequest::RoomAttached { .. } | ChannelRequest::RoomDetached { .. },
             ) => Outcome::Channel(ChannelOutcome::Told),
+            // The channel's form is its own: the binding as given.
+            Request::Channel(ChannelRequest::NamedCorrespondent { binding }) => {
+                Outcome::Channel(ChannelOutcome::Named(Box::new(binding)))
+            }
             Request::Hook(HookRequest::RunHook {
                 hook,
                 event,
@@ -1447,6 +1463,18 @@ impl Sim {
             }
             Request::Store(StoreRequest::ListEvents { room_id }) => {
                 (format!("list_events {room_id}"), store_down())
+            }
+            Request::Store(StoreRequest::ListEventsPage {
+                room_id,
+                channel_id,
+                offset,
+                ..
+            }) => (
+                format!("list_events {room_id} {channel_id} from {offset}"),
+                store_down(),
+            ),
+            Request::Store(StoreRequest::RecordDeliveryResults { event_id, .. }) => {
+                (format!("record_delivery_results {event_id}"), store_down())
             }
             Request::Route { query } => (
                 format!("route {}", query.channel_id),
@@ -1691,6 +1719,15 @@ impl Sim {
                 author_register,
             } => self.commit(*event, target.as_deref(), activity, author_register),
             StoreRequest::ListEvents { room_id } => self.list_events(&room_id),
+            StoreRequest::ListEventsPage {
+                room_id,
+                channel_id,
+                offset,
+                limit,
+            } => self.list_events_page(&room_id, &channel_id, offset, limit),
+            StoreRequest::RecordDeliveryResults {
+                event_id, results, ..
+            } => self.record_delivery_results(&event_id, results),
             StoreRequest::DeleteEvent {
                 event_id,
                 cascade_replies,
@@ -1807,6 +1844,40 @@ impl Sim {
             .cloned()
             .collect();
         Outcome::Store(StoreOutcome::Events(received))
+    }
+
+    /// A page of the room's received events of `channel_id`, as a store's
+    /// `list_events` reads it under the channel's filter.
+    fn list_events_page(
+        &mut self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+        offset: u64,
+        limit: u64,
+    ) -> Outcome {
+        self.trace
+            .push(format!("list_events {room_id} {channel_id} from {offset}"));
+        let page = self
+            .timeline
+            .iter()
+            .filter(|event| event.status != EventStatus::Blocked)
+            .filter(|event| &event.source.channel_id == channel_id)
+            .skip(usize::try_from(offset).unwrap())
+            .take(usize::try_from(limit).unwrap())
+            .cloned()
+            .collect();
+        Outcome::Store(StoreOutcome::Events(page))
+    }
+
+    /// Writes `results` on the event, nothing else of it (RFC §14.1
+    /// `record_delivery_results`).
+    fn record_delivery_results(&mut self, event_id: &EventId, results: Metadata) -> Outcome {
+        self.trace
+            .push(format!("record_delivery_results {event_id}"));
+        if let Some(stored) = self.timeline.iter_mut().find(|e| &e.id == event_id) {
+            stored.delivery_results = results;
+        }
+        Outcome::Store(StoreOutcome::Stored)
     }
 
     /// Commits `event` under the room's lock, as the driver and a store's
@@ -1948,7 +2019,9 @@ fn store_room(request: &StoreRequest) -> &RoomId {
         | StoreRequest::UpdateRoom { room_id, .. }
         | StoreRequest::DeleteBinding { room_id, .. }
         | StoreRequest::DeleteEvent { room_id, .. }
-        | StoreRequest::ListEvents { room_id } => room_id,
+        | StoreRequest::ListEvents { room_id }
+        | StoreRequest::ListEventsPage { room_id, .. }
+        | StoreRequest::RecordDeliveryResults { room_id, .. } => room_id,
         StoreRequest::Commit { event, .. } => &event.room_id,
         StoreRequest::CreateRoom { room } => &room.id,
         StoreRequest::StoreBinding { binding } => &binding.room_id,

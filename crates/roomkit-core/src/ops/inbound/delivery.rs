@@ -21,6 +21,7 @@
 
 use std::collections::BTreeMap;
 
+use super::delivery_record::DeliveryRecord;
 use super::queues::Lineage;
 use super::{reply_record, report, stamp};
 use crate::model::{
@@ -198,6 +199,9 @@ pub(super) struct DeliverySet {
     /// Whether its turns are cut: it asks no agent, and the turns it asked
     /// are given up on (RFC §10.1 "Explicit delivery cancellation").
     turns_cut: bool,
+    /// The record of its deliveries under way, once they are over and any
+    /// failed (RFC §14.3).
+    record: Option<DeliveryRecord>,
 }
 
 impl DeliverySet {
@@ -236,6 +240,7 @@ impl DeliverySet {
             outcome,
             lineage,
             turns_cut: false,
+            record: None,
         }
     }
 
@@ -291,6 +296,9 @@ impl DeliverySet {
 
     /// Whether the set waits for `effect`.
     pub(super) fn awaits(&self, effect: EffectId) -> bool {
+        if let Some(record) = &self.record {
+            return record.awaits(effect);
+        }
         match self.place {
             Place::Awaiting(awaited) | Place::Leaving(awaited) | Place::Checking(awaited)
                 if awaited == effect =>
@@ -400,10 +408,19 @@ impl DeliverySet {
         effect: EffectId,
         outcome: Outcome,
     ) -> Progress<SetOutcome> {
+        if let Some(record) = &mut self.record {
+            return match record.accept(cx, outcome) {
+                Progress::Waiting => Progress::Waiting,
+                Progress::Done(()) => {
+                    self.record = None;
+                    Progress::Done(std::mem::take(&mut self.outcome))
+                }
+            };
+        }
         match self.place {
             Place::Awaiting(awaited) if awaited == effect => return self.on_turn(cx, outcome),
             Place::Checking(awaited) if awaited == effect => return self.on_checked(cx, outcome),
-            Place::Leaving(awaited) if awaited == effect => return self.on_left(outcome),
+            Place::Leaving(awaited) if awaited == effect => return self.on_left(cx, outcome),
             Place::Taken
             | Place::Closed
             | Place::Missing
@@ -524,7 +541,7 @@ impl DeliverySet {
 
     /// The set left its place; a place that could not be left changes
     /// nothing the set did.
-    fn on_left(&mut self, outcome: Outcome) -> Progress<SetOutcome> {
+    fn on_left(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<SetOutcome> {
         if let Err(error) = outcome.into_left() {
             tracing::warn!(
                 target: "roomkit::core::delivery",
@@ -537,6 +554,23 @@ impl DeliverySet {
             );
         }
         self.place = Place::Left;
+        self.over(cx)
+    }
+
+    /// Off its place in the room's lane, the set reports its deliveries when
+    /// they are the root pass's (a message's or an event injected, the
+    /// call's own or an entry's), then records them on its event when any
+    /// failed (RFC §8.2, §14.3), as Python's `_report_root_pass`, before
+    /// anything else of its aftermath; a set the lane dropped does neither.
+    fn over(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
+        let root = matches!(self.kind, SetKind::Root | SetKind::Adopted(_));
+        if root && self.outcome.cancelled.is_none() {
+            report::root_deliveries(cx, &self.event, &self.outcome);
+            self.record = DeliveryRecord::start(cx, &self.event, &self.outcome.delivery_results);
+            if self.record.is_some() {
+                return Progress::Waiting;
+            }
+        }
         Progress::Done(std::mem::take(&mut self.outcome))
     }
 
@@ -547,7 +581,7 @@ impl DeliverySet {
             return Progress::Waiting;
         }
         if self.place != Place::Turn {
-            return Progress::Done(std::mem::take(&mut self.outcome));
+            return self.over(cx);
         }
         let request = HoldRequest::LeaveLane {
             room_id: self.event.room_id.clone(),

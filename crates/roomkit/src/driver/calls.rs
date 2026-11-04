@@ -31,7 +31,7 @@ use crate::error::RoomKitError;
 use crate::events::Handled;
 use crate::hooks;
 use crate::kit::{
-    Inner, end_identity_span, end_route_span, run_identity_hooks,
+    Inner, end_identity_span, end_route_span, named_correspondent, run_identity_hooks,
     verification_inbound as verification,
 };
 use crate::room_turns::{self, Queued, Started};
@@ -79,6 +79,23 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
         StoreRequest::ListEvents { room_id } => crate::store::whole_timeline(store, &room_id)
             .await
             .map(StoreOutcome::Events),
+        StoreRequest::ListEventsPage {
+            room_id,
+            channel_id,
+            offset,
+            limit,
+        } => store
+            .list_events(&room_id, router::received_page(&channel_id, offset, limit))
+            .await
+            .map(StoreOutcome::Events),
+        StoreRequest::RecordDeliveryResults {
+            room_id,
+            event_id,
+            results,
+        } => store
+            .record_delivery_results(&room_id, &event_id, results)
+            .await
+            .map(|()| StoreOutcome::Stored),
         StoreRequest::Commit {
             event,
             target,
@@ -425,6 +442,7 @@ pub(super) async fn channel<S: ConversationStore>(
         } => streams_in(inner, &room_id, channel_ids),
         ChannelRequest::RoomAttached { binding } => room_attached(inner, binding).await,
         ChannelRequest::RoomDetached { binding } => room_detached(inner, binding).await,
+        ChannelRequest::NamedCorrespondent { binding } => named_binding(inner, binding),
         ChannelRequest::HandleInbound {
             channel_id,
             message,
@@ -807,6 +825,16 @@ fn streams_in<S>(inner: &Inner<S>, room_id: &RoomId, channel_ids: Vec<ChannelId>
     ChannelOutcome::StreamsIn(channel_ids.into_iter().filter(streams).collect()).into()
 }
 
+/// `binding`, its addresses written by its channel as an attach writes them
+/// (RFC §5.7, §10.4); as given for a channel no longer registered.
+fn named_binding<S>(inner: &Inner<S>, binding: ChannelBinding) -> Outcome {
+    let named = match inner.channel(&binding.channel_id) {
+        Some(channel) => named_correspondent(binding, &*channel),
+        None => binding,
+    };
+    ChannelOutcome::Named(Box::new(named)).into()
+}
+
 /// The refusal of `request`, a channel's call work a close spared made
 /// once the kit was sealed: a turn's, its submission or the read of its
 /// stream, its link's `backend_closed`, the turn still open as its owner
@@ -825,7 +853,8 @@ fn refused_once_sealed(request: &ChannelRequest) -> ErrorRecord {
         | ChannelRequest::Deliver { .. }
         | ChannelRequest::StreamsIn { .. }
         | ChannelRequest::RoomAttached { .. }
-        | ChannelRequest::RoomDetached { .. } => cut_by_close(),
+        | ChannelRequest::RoomDetached { .. }
+        | ChannelRequest::NamedCorrespondent { .. } => cut_by_close(),
     }
 }
 

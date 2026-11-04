@@ -343,11 +343,10 @@ impl Machine {
         let event = set.event();
         let processed = match set.kind() {
             SetKind::Root => {
-                self.settle_root(cx, set, &outcome);
+                self.settle_root(set, &outcome);
                 true
             }
             SetKind::Adopted(entry) => {
-                report::root_deliveries(cx, event, &outcome);
                 self.adopted_deliveries
                     .insert(entry, delivered(set, &outcome));
                 true
@@ -435,11 +434,10 @@ impl Machine {
         }
     }
 
-    /// Reports the inbound event's deliveries and writes them into the
-    /// result (RFC §10.1 step 18), the addresses no turn reached among
-    /// them, as Python's `_report_root_pass` refreshes them.
-    fn settle_root(&mut self, cx: &mut Cx<'_>, set: &DeliverySet, outcome: &SetOutcome) {
-        report::root_deliveries(cx, set.event(), outcome);
+    /// Writes the inbound event's deliveries into the result (RFC §10.1 step
+    /// 18), the addresses no turn reached among them, as Python's
+    /// `_report_root_pass` refreshes them.
+    fn settle_root(&mut self, set: &DeliverySet, outcome: &SetOutcome) {
         self.trigger.result.unavailable_targets = Some(unavailable_after(set, outcome));
         self.trigger
             .result

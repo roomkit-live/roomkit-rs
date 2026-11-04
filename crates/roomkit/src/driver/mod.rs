@@ -1363,6 +1363,7 @@ fn writes(request: &StoreRequest) -> bool {
             | StoreRequest::GetEventByIdempotencyKey { .. }
             | StoreRequest::GetEvent { .. }
             | StoreRequest::ListEvents { .. }
+            | StoreRequest::ListEventsPage { .. }
             | StoreRequest::ResolveIdentity { .. }
     )
 }

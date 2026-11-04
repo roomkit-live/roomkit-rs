@@ -378,6 +378,32 @@ pub enum StoreRequest {
         /// The participant, its room named.
         participant: Box<Participant>,
     },
+    /// Write `results` as the event's `delivery_results`, nothing else of
+    /// it, under the room's lock (RFC §14.1 `record_delivery_results`,
+    /// §14.3): a delivery set with a failure. Answer
+    /// [`StoreOutcome::Stored`].
+    RecordDeliveryResults {
+        /// The room.
+        room_id: RoomId,
+        /// The event.
+        event_id: EventId,
+        /// Each target's outcome, in the serialized form, by its channel.
+        results: Metadata,
+    },
+    /// Read a page of the events the room received on `channel_id`, in index
+    /// order, the events stored `BLOCKED` left out (RFC §14.1 `list_events`,
+    /// §10.4): what step 2 reads of who the room heard, up to the first
+    /// other sender. Answer [`StoreOutcome::Events`].
+    ListEventsPage {
+        /// The room.
+        room_id: RoomId,
+        /// The channel the events came from.
+        channel_id: ChannelId,
+        /// How many of them the page skips.
+        offset: u64,
+        /// How many it holds at most.
+        limit: u64,
+    },
 }
 
 /// A call of a channel (RFC §6.1), answered by a [`ChannelOutcome`].
@@ -483,6 +509,16 @@ pub enum ChannelRequest {
     /// detach returns once announced.
     RoomDetached {
         /// The binding the detach removed.
+        binding: ChannelBinding,
+    },
+    /// Ask the channel to write `binding`'s addresses in its own form, as an
+    /// attach does (RFC §5.7, §10.4): its recipient by `recipient_address`
+    /// and `recipient_metadata`, its correspondent by `normalize_address`,
+    /// a binding naming no one taking its recipient. Answer
+    /// [`ChannelOutcome::Named`], the binding as given for a channel the
+    /// driver no longer holds.
+    NamedCorrespondent {
+        /// The binding, as the update leaves it.
         binding: ChannelBinding,
     },
 }
@@ -772,6 +808,9 @@ pub enum ChannelOutcome {
     /// nothing to be told: an answer of [`ChannelRequest::RoomAttached`] and
     /// [`ChannelRequest::RoomDetached`].
     Told,
+    /// The binding with its addresses in the channel's form: the answer of
+    /// [`ChannelRequest::NamedCorrespondent`].
+    Named(Box<ChannelBinding>),
 }
 
 /// An error a call raised that declares its delivery error

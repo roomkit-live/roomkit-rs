@@ -71,6 +71,7 @@ mod charge;
 mod commit;
 mod deadline;
 mod delivery;
+mod delivery_record;
 mod direct;
 mod edits;
 mod entry;

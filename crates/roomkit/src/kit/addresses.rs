@@ -1,7 +1,7 @@
 //! The channel's own address methods, asked where the Python
 //! implementation's framework calls them (RFC §5.7, §10.4): a message's
 //! sender, conversation and reply metadata as it enters, and the
-//! correspondent an attach names.
+//! correspondent an attach or a binding metadata update names.
 
 use roomkit_core::model::{ChannelBinding, InboundMessage, ParticipantId};
 use roomkit_core::ops::MessageAnswers;

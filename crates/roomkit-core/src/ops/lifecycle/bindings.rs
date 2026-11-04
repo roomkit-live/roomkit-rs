@@ -4,9 +4,9 @@
 use std::sync::Arc;
 
 use super::LifecycleError;
-use super::change::{AttachChange, DetachChange, UpdateChange};
+use super::change::{AttachChange, DetachChange, Naming, UpdateChange};
 use super::locked::LockedChange;
-use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomId, Visibility};
+use crate::model::{BindingUpdate, ChannelBinding, ChannelId, Metadata, RoomId, Visibility};
 use crate::ops::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
 use crate::ops::{Environment, KitConfig};
 use crate::rules::chain_depth::Draw;
@@ -161,6 +161,7 @@ impl UpdateBinding {
         let change = UpdateChange {
             channel_id,
             update: Box::new(update),
+            naming: Naming::Kept,
         };
         let change = if internal {
             LockedChange::refused(config, room_id, change, LifecycleError::InternalVisibility)
@@ -168,6 +169,31 @@ impl UpdateBinding {
             LockedChange::new(config, room_id, organization_id, change)
         };
         Self { change }
+    }
+
+    /// The update of `metadata` on `channel_id`'s binding to `room_id`, which
+    /// the channel then names as an attach does (RFC §5.7, §10.4): its
+    /// recipient in the channel's form, a binding naming no one taking it as
+    /// its correspondent. Python's `update_binding_metadata`.
+    pub fn metadata(
+        config: Arc<KitConfig>,
+        room_id: RoomId,
+        channel_id: ChannelId,
+        metadata: Metadata,
+        organization_id: Option<String>,
+    ) -> Self {
+        let update = BindingUpdate {
+            metadata,
+            ..BindingUpdate::default()
+        };
+        let change = UpdateChange {
+            channel_id,
+            update: Box::new(update),
+            naming: Naming::Asked,
+        };
+        Self {
+            change: LockedChange::new(config, room_id, organization_id, change),
+        }
     }
 
     /// The same change, made in the room's work that `draw` names, its

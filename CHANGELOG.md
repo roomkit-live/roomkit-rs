@@ -6,6 +6,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A delivery set with a failure is recorded on its event under the room's lock, every target's outcome, as Python's: a set that all succeeded, a response's and one the kit's close cut write nothing, and a record that fails is logged (RMK-1117).
+- `update_binding_metadata` names its correspondent as an attach does, as Python's: the recipient and the correspondent in the channel's form, a binding naming no one taking its recipient (RMK-1124).
+- Under the lock, a routed message's check reads the channel's received events a page at a time, up to the first other sender, and holds a message with no address to step 3's conditions, as Python's (RMK-1127).
 - The seams a discussion uses (RFC §19.7.5), as Python's, inert outside one: `HookTrigger::OnSpeakQueue` takes a `SpeakQueueEvent`; a room that stores a discussion asks no agent at broadcast, a bound agent is no unavailable target; an instruction to one of its agents goes to the discussion, one to a discussion that is over is blocked `discussion_over`; a turn reads its event at its place with its notes.
 - Each generation of a turn tells what it used, as Python's: `StreamItem::Usage(UsageMarker)`, in its order among the text and the rows, which the default `deliver_stream` skips, read ahead as a delta across the turn backend. A turn cut once it began records what the markers told as a finished turn does, its end `cancelled`; a generation in flight is not counted, and `ai_usage_complete` is then false (RMK-1333).
 - `LoopEndMarker`'s `last_usage`, `usage_complete`, `model` and `provider` cross on its own item as Python's do, no more in a `record` frame, and stay off a caller's record (RMK-1056).

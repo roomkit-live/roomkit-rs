@@ -598,6 +598,23 @@ pub(crate) fn still_admits(
     admission(sender, form, binding, participants, heard)
 }
 
+/// Whether [`still_admits`] depends on who the room heard on the channel: a
+/// binding not declared `group`, naming no correspondent, whose sender is no
+/// participant reached through it, and that step 3's other conditions
+/// already admit. The check under the lock reads the room's history only
+/// then, as Python's `step_three_admits` does.
+pub(crate) fn reads_heard(
+    binding: &ChannelBinding,
+    sender: &Sender,
+    form: &AddressForm,
+    participants: &[Participant],
+) -> bool {
+    !binding.group
+        && correspondent(binding, form).is_none()
+        && !joined(sender, form, &binding.channel_id, participants)
+        && admission(sender, form, binding, participants, &[]).is_ok()
+}
+
 /// Step 3's conditions on a binding not declared `group` ([`admits`]).
 fn admission(
     sender: &Sender,
@@ -651,6 +668,31 @@ pub(crate) fn newest<'room>(
 /// `find_room_id_by_binding`).
 pub fn recency(left: &Room, right: &Room) -> Ordering {
     (left.created_at, &left.id).cmp(&(right.created_at, &right.id))
+}
+
+/// How many events a read of who a room heard on a channel asks the store
+/// for at a time, as Python's `_HISTORY_PAGE`: the read stops at the first
+/// other sender, so a room with any history answers on its first page.
+pub const HISTORY_PAGE: u64 = 200;
+
+/// Adds to `heard` who `page`, a page of a room's received events, names on
+/// `channel_id`, up to the first participant `other` than the sender (RFC
+/// §10.4, Python's `_heard_from_other`). Whether the read is over: that
+/// other was found, or the page was the last.
+pub fn read_heard_page(
+    page: &[RoomEvent],
+    channel_id: &ChannelId,
+    other: impl Fn(&ParticipantId) -> bool,
+    heard: &mut Vec<ParticipantId>,
+) -> bool {
+    for author in self::heard(page, channel_id) {
+        let another = other(&author);
+        heard.push(author);
+        if another {
+            return true;
+        }
+    }
+    u64::try_from(page.len()).unwrap_or(u64::MAX) < HISTORY_PAGE
 }
 
 /// Who the room has heard on `channel_id` among `events`: the participant

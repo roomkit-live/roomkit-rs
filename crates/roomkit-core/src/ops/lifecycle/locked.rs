@@ -175,8 +175,8 @@ pub(crate) struct Changing<C: SectionChange> {
     organization_id: Option<String>,
     /// The write outstanding, and the decision's writes left after it.
     writing: Option<(EffectId, Box<Decision<C::Done>>)>,
-    /// The read of the room's timeline outstanding, and the room as the
-    /// section read it, for a change that reads it before deciding.
+    /// What the change reads under the lock before it decides, outstanding,
+    /// and the room as the section read it.
     reading: Option<(EffectId, Box<RoomContext>)>,
     /// The room's work the change is made in, and the least depth of its
     /// trigger's calls; `None` outside the room's work.
@@ -226,6 +226,21 @@ impl<C: SectionChange> Changing<C> {
             raised: None,
             undoing: false,
         }
+    }
+
+    /// Issues what the change reads next under the lock, or decides it.
+    fn read_or_decide(
+        &mut self,
+        cx: &mut Cx<'_>,
+        context: Box<RoomContext>,
+    ) -> Progress<SectionResult<C>> {
+        if let Some(request) = self.change.next_read(&context) {
+            let effect = cx.io.issue_locked(request, context.room.id.clone());
+            self.reading = Some((effect, context));
+            return Progress::Waiting;
+        }
+        let decided = self.change.decide(context, cx);
+        self.decided(cx, decided)
     }
 
     /// Goes on with what the change decided: its writes, or its refusal.
@@ -431,18 +446,10 @@ impl<C: SectionChange> SectionWork for Changing<C> {
         (!admitted).then(|| self.missing(&room.id))
     }
 
-    /// Decides the change on the room as the gate left it, once the room's
-    /// timeline is read for a change that reads it.
+    /// Decides the change on the room as the gate left it, once it read what
+    /// it reads under the lock.
     fn begin(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> Progress<SectionResult<C>> {
-        if self.change.reads_timeline(&context) {
-            let request = StoreRequest::ListEvents {
-                room_id: context.room.id.clone(),
-            };
-            self.reading = Some((cx.io.issue(request), context));
-            return Progress::Waiting;
-        }
-        let decided = self.change.decide(context, cx);
-        self.decided(cx, decided)
+        self.read_or_decide(cx, context)
     }
 
     fn accept(
@@ -456,11 +463,8 @@ impl<C: SectionChange> SectionWork for Changing<C> {
                 self.reading = Some((reading, context));
                 return Progress::Waiting;
             }
-            return match outcome.into_events() {
-                Ok(timeline) => {
-                    let decided = self.change.decide_on(context, &timeline, cx);
-                    self.decided(cx, decided)
-                }
+            return match self.change.take_read(&context, outcome) {
+                Ok(()) => self.read_or_decide(cx, context),
                 Err(error) => Progress::Done(Err(SectionError::Store(error))),
             };
         }

@@ -240,7 +240,8 @@ pub trait Channel: Send + Sync + 'static {
 
     /// `address` in the channel's form (RFC §5.7), as written by default.
     /// The kit reads every inbound sender through it before routing (RFC
-    /// §10.1 step 1), and the correspondent an attach names.
+    /// §10.1 step 1), and the correspondent an attach or a binding metadata
+    /// update names.
     fn normalize_address(&self, address: &str) -> String {
         address.to_owned()
     }
@@ -259,7 +260,8 @@ pub trait Channel: Send + Sync + 'static {
     }
 
     /// The binding metadata naming `address` as the channel's recipient:
-    /// none by default. An attach writes a binding's recipient by it.
+    /// none by default. An attach and a binding metadata update write a
+    /// binding's recipient by it.
     fn recipient_metadata(&self, _address: &str) -> BTreeMap<String, String> {
         BTreeMap::new()
     }

@@ -50,13 +50,14 @@ use std::convert::Infallible;
 use std::mem;
 
 use super::InboundError;
-use super::arrival_change::{ArrivalChange, Recorded, SenderRecord};
+use super::arrival_change::{ArrivalChange, Heard, Recorded, SenderRecord};
 use crate::model::{ChannelBinding, ChannelType, ErrorRecord, Room, RoomContext, RoomId};
 use crate::ops::io::Bound;
 use crate::ops::lifecycle::locked::{LockedSection, SectionError, SectionResult};
 use crate::ops::lifecycle::report::{self, Reported, SessionStarted};
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 use crate::ops::{ChannelConfig, Cx, Progress};
+use crate::rules::addresses::SYSTEM_SENDER;
 use crate::rules::chain_depth::Draw;
 use crate::rules::routing::{self, Recording, Sender};
 use crate::rules::{attachment, organizations};
@@ -332,6 +333,8 @@ impl NamedRoom {
                     binding: self.sender_binding(cx),
                     sender: self.sender.clone(),
                     form: self.channel.form(),
+                    system: self.sender_id == SYSTEM_SENDER,
+                    heard: Heard::default(),
                 };
                 self.change(cx, ArrivalChange::RecordSender(Box::new(record)), false)
             }

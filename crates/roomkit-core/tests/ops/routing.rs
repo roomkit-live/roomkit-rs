@@ -92,9 +92,9 @@ mod a_routed_sender {
                 "load_context room_1",
                 "lock room_1",
                 "load_context room_1",
-                // The record reads the room's whole timeline under the lock
-                // for another sender on the channel (RMK-1071).
-                "list_events room_1",
+                // The record reads the channel's received events under the
+                // lock, for another sender (RMK-1071, RMK-1127).
+                "list_events room_1 sms from 0",
                 "store binding sms",
                 "release room_1",
                 "handle_inbound sms",
@@ -483,7 +483,7 @@ mod a_room_that_heard_another_sender_meanwhile {
                 "load_context room_1",
                 "lock room_1",
                 "load_context room_1",
-                "list_events room_1",
+                "list_events room_1 sms from 0",
                 "release room_1",
                 "route sms +15551234567",
                 "store room new_room_1 Active",
@@ -1226,5 +1226,153 @@ mod the_lane {
                 Some("release room_1".to_owned())
             )
         );
+    }
+}
+
+/// RMK-1127, as Python's `_heard_from_other`: what the lock reads of who the
+/// room heard, the channel's received events a page at a time, up to the
+/// first other sender, and only when the check depends on it.
+mod the_read_under_the_lock {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// `room_1`, its binding naming no one, having heard `written` on `sms`
+    /// in their order, each sent naming the room, which records no one.
+    fn having_heard(written: &[(&str, usize)]) -> Sim {
+        let mut sim = routed_to_room_1();
+        for (author, count) in written {
+            for _ in 0..*count {
+                sim.send(message_from("sms", author, "Hello")).unwrap();
+            }
+        }
+        sim.trace.clear();
+        sim.notices.clear();
+        sim
+    }
+
+    /// What the record read of `room_1`: a room opened for the message reads
+    /// its own register of authors, which is no check of the sender.
+    fn reads(sim: &Sim) -> Vec<&str> {
+        sim.traced("list_events room_1")
+    }
+
+    // Python: tests/test_inbound_routing_ambiguity.py::test_another_sender_found_past_the_first_page_refuses
+    #[test]
+    fn finds_another_sender_past_the_first_page() {
+        let mut sim = having_heard(&[(SENDER, 200), (OTHER, 1)]);
+        let routed = sim
+            .route(None, message_from("sms", SENDER, "Bonjour"))
+            .unwrap();
+        assert_eq!(
+            (
+                reads(&sim),
+                routed.event.map(|event| event.room_id.to_string()),
+                named(binding_of(&sim, "sms")).0,
+            ),
+            (
+                vec![
+                    "list_events room_1 sms from 0",
+                    "list_events room_1 sms from 200",
+                ],
+                Some("new_room_1".to_owned()),
+                None,
+            )
+        );
+    }
+
+    #[test]
+    fn stops_at_the_first_other_sender() {
+        let mut sim = having_heard(&[(OTHER, 1), (SENDER, 250)]);
+        sim.route(None, message_from("sms", SENDER, "Bonjour"))
+            .unwrap();
+        assert_eq!(reads(&sim), ["list_events room_1 sms from 0"]);
+    }
+
+    #[test]
+    fn reads_to_the_end_when_the_room_heard_only_the_sender() {
+        let mut sim = having_heard(&[(SENDER, 200)]);
+        let routed = sim
+            .route(None, message_from("sms", SENDER, "Bonjour"))
+            .unwrap();
+        assert_eq!(
+            (
+                reads(&sim),
+                routed.event.map(|event| event.room_id.to_string()),
+            ),
+            (
+                vec![
+                    "list_events room_1 sms from 0",
+                    "list_events room_1 sms from 200",
+                ],
+                Some("room_1".to_owned()),
+            )
+        );
+    }
+
+    /// Another channel's events name no correspondent of this one.
+    #[test]
+    fn asks_only_for_the_channel_s_events() {
+        let mut sim = routed_to_room_1();
+        sim.unbound_transport("ws", ChannelType::WEBSOCKET);
+        sim.attach("ws");
+        sim.send(message_from("ws", OTHER, "Hello")).unwrap();
+        sim.trace.clear();
+        let routed = sim
+            .route(None, message_from("sms", SENDER, "Bonjour"))
+            .unwrap();
+        assert_eq!(
+            routed.event.map(|event| event.room_id.to_string()),
+            Some("room_1".to_owned())
+        );
+    }
+
+    /// A binding naming the sender is theirs: nothing depends on who else
+    /// the room heard.
+    #[test]
+    fn reads_nothing_on_a_binding_naming_the_sender() {
+        let mut sim = routed_to_room_1();
+        sim.route(None, message_from("sms", SENDER, "Bonjour"))
+            .unwrap();
+        sim.trace.clear();
+        sim.routes_to(Some("room_1"));
+        let routed = sim
+            .route(None, message_from("sms", SENDER, "Encore"))
+            .unwrap();
+        assert_eq!(
+            (
+                reads(&sim),
+                routed.event.map(|event| event.room_id.to_string()),
+            ),
+            (Vec::new(), Some("room_1".to_owned()))
+        );
+    }
+
+    /// The framework's own sender is held to none of step 3's conditions
+    /// under the lock: the room is the one it was routed to.
+    // Python: tests/test_inbound_routing_ambiguity.py::test_the_frameworks_own_messages_do_not
+    #[test]
+    fn reads_nothing_for_the_framework_s_own_sender() {
+        let mut sim = having_heard(&[(OTHER, 1)]);
+        let routed = sim
+            .route(None, message_from("sms", "system", "Rappel"))
+            .unwrap();
+        assert_eq!(
+            (
+                reads(&sim),
+                routed.event.map(|event| event.room_id.to_string()),
+            ),
+            (Vec::new(), Some("room_1".to_owned()))
+        );
+    }
+
+    /// A failed read fails the message, nothing written: the room's
+    /// conversation is not guessed at.
+    #[test]
+    fn that_fails_fails_the_message_with_nothing_written() {
+        let mut sim = routed_to_room_1();
+        sim.failing_effect = Some("list_events room_1 sms");
+        let failed = sim.route(None, message_from("sms", SENDER, "Bonjour"));
+        assert!(matches!(failed, Err(InboundError::Store(_))), "{failed:?}");
+        assert_eq!(named(binding_of(&sim, "sms")).0, None);
     }
 }

@@ -7,8 +7,8 @@ use super::{
     IdentityAnswer, IdentityRequest, Outcome, ProtocolError, Request, StoreOutcome, StoreRequest,
 };
 use crate::model::{
-    ChannelId, ChannelOutput, DeliveryError, ErrorRecord, Identity, IdentityHookResult,
-    IdentityResult, RoomContext, RoomEvent, RoomId, Verification,
+    ChannelBinding, ChannelId, ChannelOutput, DeliveryError, ErrorRecord, Identity,
+    IdentityHookResult, IdentityResult, RoomContext, RoomEvent, RoomId, Verification,
 };
 use crate::rules::hook_chain::HookOutcome;
 
@@ -41,6 +41,8 @@ pub(crate) enum RequestKind {
     StreamsIn,
     /// A channel told of its room's attach or detach.
     RoomCallback,
+    /// A channel writing a binding's addresses in its own form.
+    NamedCorrespondent,
     RunHook,
     RunObservers,
     Route,
@@ -70,6 +72,9 @@ impl Request {
             Self::Channel(
                 ChannelRequest::RoomAttached { .. } | ChannelRequest::RoomDetached { .. },
             ) => RequestKind::RoomCallback,
+            Self::Channel(ChannelRequest::NamedCorrespondent { .. }) => {
+                RequestKind::NamedCorrespondent
+            }
             Self::Hook(HookRequest::RunHook { .. }) => RequestKind::RunHook,
             Self::Hook(HookRequest::RunObservers { .. }) => RequestKind::RunObservers,
             Self::Route { .. } => RequestKind::Route,
@@ -103,7 +108,7 @@ impl StoreRequest {
             Self::LoadContext { .. } => RequestKind::LoadContext,
             Self::GetEventByIdempotencyKey { .. } => RequestKind::GetEventByIdempotencyKey,
             Self::GetEvent { .. } => RequestKind::GetEvent,
-            Self::ListEvents { .. } => RequestKind::ListEvents,
+            Self::ListEvents { .. } | Self::ListEventsPage { .. } => RequestKind::ListEvents,
             Self::DeleteEvent { .. } => RequestKind::DeleteEvent,
             Self::Commit { .. } => RequestKind::Commit,
             Self::PersistSideEffects { .. } => RequestKind::PersistSideEffects,
@@ -113,7 +118,8 @@ impl StoreRequest {
             | Self::DeleteBinding { .. }
             | Self::UpdateEvent { .. }
             | Self::AddParticipant { .. }
-            | Self::UpdateParticipant { .. } => RequestKind::Write,
+            | Self::UpdateParticipant { .. }
+            | Self::RecordDeliveryResults { .. } => RequestKind::Write,
             Self::ResolveIdentity { .. } => RequestKind::ResolveIdentity,
         }
     }
@@ -157,6 +163,7 @@ impl RequestKind {
             Self::ChannelCall => "Output",
             Self::StreamsIn => "StreamsIn",
             Self::RoomCallback => "Told",
+            Self::NamedCorrespondent => "Named",
             Self::RunHook => "Ran",
             Self::RunObservers => "Observed",
             Self::Route => "Routed",
@@ -216,6 +223,9 @@ impl RequestKind {
             ),
             Self::StreamsIn => matches!(outcome, Outcome::Channel(ChannelOutcome::StreamsIn(_))),
             Self::RoomCallback => matches!(outcome, Outcome::Channel(ChannelOutcome::Told)),
+            Self::NamedCorrespondent => {
+                matches!(outcome, Outcome::Channel(ChannelOutcome::Named(_)))
+            }
             Self::RunHook => matches!(outcome, Outcome::Hook(HookAnswer::Ran(_))),
             Self::RunObservers => matches!(outcome, Outcome::Hook(HookAnswer::Observed)),
             Self::Route => matches!(outcome, Outcome::Routed(_)),
@@ -438,6 +448,14 @@ impl Outcome {
         }
     }
 
+    /// The binding with its addresses in its channel's form.
+    pub(crate) fn into_named(self) -> Result<Box<ChannelBinding>, ErrorRecord> {
+        match self {
+            Self::Channel(ChannelOutcome::Named(binding)) => Ok(binding),
+            other => Err(other.into_failure()),
+        }
+    }
+
     /// The identity an address resolved to, if any.
     pub(crate) fn into_resolved(self) -> Result<Option<Identity>, ErrorRecord> {
         match self {
@@ -556,6 +574,7 @@ impl Outcome {
             Self::Channel(ChannelOutcome::StreamsIn(_)) => "StreamsIn",
             Self::Channel(ChannelOutcome::Raised(_)) => "Raised",
             Self::Channel(ChannelOutcome::Told) => "Told",
+            Self::Channel(ChannelOutcome::Named(_)) => "Named",
             Self::Hook(HookAnswer::Ran(_)) => "Ran",
             Self::Hook(HookAnswer::Observed) => "Observed",
             Self::Routed(_) => "Routed",

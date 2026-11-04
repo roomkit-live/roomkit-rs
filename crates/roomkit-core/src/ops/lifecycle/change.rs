@@ -13,9 +13,11 @@ use std::fmt::Debug;
 use super::LifecycleError;
 use super::record;
 use super::report::Reported;
-use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomContext, RoomEvent, RoomUpdates};
+use crate::model::{
+    BindingUpdate, ChannelBinding, ChannelId, ErrorRecord, RoomContext, RoomUpdates,
+};
 use crate::ops::Cx;
-use crate::ops::protocol::{ChannelRequest, EffectId, StoreRequest};
+use crate::ops::protocol::{ChannelRequest, EffectId, Outcome, Request, StoreRequest};
 use crate::rules::lifecycle::{self, Transition};
 use crate::rules::records::Record;
 use crate::rules::{attachment, host};
@@ -66,23 +68,21 @@ pub(crate) trait SectionChange: Debug {
         true
     }
 
-    /// Whether the change reads the room's whole timeline under the lock
-    /// before it decides on `context`, the room as its section read it: no
-    /// change does by default.
-    fn reads_timeline(&self, _context: &RoomContext) -> bool {
-        false
+    /// What the change still reads under the lock before it decides on
+    /// `context`, the room as its section read it, one request at a time:
+    /// nothing by default.
+    fn next_read(&self, _context: &RoomContext) -> Option<Request> {
+        None
     }
 
-    /// Decides the change on `context` and the room's whole `timeline`, for
-    /// a change that reads it ([`reads_timeline`](Self::reads_timeline)): as
-    /// [`decide`](Self::decide) by default.
-    fn decide_on(
-        &self,
-        context: Box<RoomContext>,
-        _timeline: &[RoomEvent],
-        cx: &Cx<'_>,
-    ) -> Result<Decision<Self::Done>, Self::Refusal> {
-        self.decide(context, cx)
+    /// Takes the answer to its [`next_read`](Self::next_read).
+    ///
+    /// # Errors
+    ///
+    /// Returns the failure of the read, which fails the section with nothing
+    /// written.
+    fn take_read(&mut self, _context: &RoomContext, _outcome: Outcome) -> Result<(), ErrorRecord> {
+        Ok(())
     }
 }
 
@@ -367,11 +367,43 @@ impl SectionChange for DetachChange {
 pub(crate) struct UpdateChange {
     pub(crate) channel_id: ChannelId,
     pub(crate) update: Box<BindingUpdate>,
+    /// How the update names the binding's correspondent.
+    pub(crate) naming: Naming,
+}
+
+/// Whether a binding's update writes its addresses as an attach does (RFC
+/// §5.7, §10.4): an update of its metadata does, the other updates leave
+/// them as they are.
+#[derive(Clone, Debug)]
+pub(crate) enum Naming {
+    /// It leaves them.
+    Kept,
+    /// It asks the channel, on the binding as the update leaves it, under
+    /// the room's lock.
+    Asked,
+    /// The channel answered.
+    Answered(Box<ChannelBinding>),
 }
 
 impl SectionChange for UpdateChange {
     type Done = Updated;
     type Refusal = LifecycleError;
+
+    /// A metadata update asks the channel to write the addresses of the
+    /// binding it leaves, once.
+    fn next_read(&self, context: &RoomContext) -> Option<Request> {
+        if !matches!(self.naming, Naming::Asked) {
+            return None;
+        }
+        let current = context.get_binding(&self.channel_id)?;
+        let binding = self.update.apply(current);
+        Some(ChannelRequest::NamedCorrespondent { binding }.into())
+    }
+
+    fn take_read(&mut self, _context: &RoomContext, outcome: Outcome) -> Result<(), ErrorRecord> {
+        self.naming = Naming::Answered(outcome.into_named()?);
+        Ok(())
+    }
 
     /// Writes the binding as the update leaves it, every field it does not
     /// name carried over, then a lifecycle record for each field it changed
@@ -383,7 +415,10 @@ impl SectionChange for UpdateChange {
         cx: &Cx<'_>,
     ) -> Result<Decision<Updated>, LifecycleError> {
         let current = bound(&context, &self.channel_id)?;
-        let updated = self.update.apply(&current);
+        let updated = match &self.naming {
+            Naming::Answered(named) => (**named).clone(),
+            Naming::Kept | Naming::Asked => self.update.apply(&current),
+        };
         if updated == current {
             return Ok(Decision::unwritten(Updated {
                 binding: Box::new(current),
@@ -391,7 +426,16 @@ impl SectionChange for UpdateChange {
                 context,
             }));
         }
-        let records = Record::of_update(&current, &updated, &self.update.metadata);
+        let mut records = Record::of_update(&current, &updated, &self.update.metadata);
+        // A metadata update whose naming changed the binding alone is
+        // recorded as one that changed its metadata, as Python's
+        // `update_binding_metadata` records any change.
+        if records.is_empty() && matches!(self.naming, Naming::Answered(_)) {
+            records.push(Record::MetadataUpdated {
+                channel_id: updated.channel_id.clone(),
+                keys: self.update.metadata.keys().cloned().collect(),
+            });
+        }
         let mut decision = store_updated(&current, updated, context);
         let Decision { writes, done, .. } = &mut decision;
         write_records(cx, writes, &mut done.context, &records);

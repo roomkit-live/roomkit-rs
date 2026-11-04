@@ -233,12 +233,18 @@ impl<S: ConversationStore> RoomKit<S> {
         metadata: Metadata,
         options: UpdateBindingMetadataOptions,
     ) -> Result<ChannelBinding, RoomKitError> {
-        let update = BindingUpdate {
+        let operation = UpdateBinding::metadata(
+            self.config(),
+            room_id.clone(),
+            channel_id.clone(),
             metadata,
-            ..BindingUpdate::default()
+            options.organization_id,
+        );
+        let operation = match room_work(room_id) {
+            Some((draw, floor)) => operation.made_in(draw, floor),
+            None => operation,
         };
-        self.update_binding(room_id, channel_id, update, options.organization_id)
-            .await
+        Ok(driver::run(&self.inner, "update_binding_metadata", operation).await??)
     }
 
     /// The channel's binding to a room, as the store holds it.

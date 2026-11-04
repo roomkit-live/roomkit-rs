@@ -2132,6 +2132,124 @@ mod a_failure_after_the_commit {
         );
     }
 
+    /// The room whose `ws` delivery fails, a message sent into it.
+    fn with_a_failed_delivery() -> Sim {
+        let mut sim = room();
+        sim.deliver_with(
+            "ws",
+            Box::new(|_| Err(ErrorRecord::new("ConnectionError", "socket closed"))),
+        );
+        sim
+    }
+
+    /// The trace from the set's leaving its place on: its report's record,
+    /// under the room's lock, comes before anything else of its aftermath.
+    // Python: tests/test_delivery_outcomes.py::TestOnlyAFailingSetIsRemembered::test_a_failure_survives_the_call
+    #[test]
+    fn a_failed_delivery_is_recorded_under_the_lock_once_its_place_is_left() {
+        let mut sim = with_a_failed_delivery();
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        let from = sim
+            .trace
+            .iter()
+            .position(|line| line.starts_with("leave lane"))
+            .unwrap();
+        let aftermath: Vec<&str> = sim
+            .trace
+            .iter()
+            .skip(from + 1)
+            .take(3)
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            aftermath,
+            [
+                "lock room_1",
+                "record_delivery_results evt_1",
+                "release room_1"
+            ]
+        );
+    }
+
+    /// What the stored event's `delivery_results` say of each channel.
+    fn stored_results(sim: &Sim) -> Vec<(String, serde_json::Value)> {
+        let stored = sim.timeline.first().unwrap();
+        stored
+            .delivery_results
+            .iter()
+            .map(|(id, result)| (id.clone(), result["status"].clone()))
+            .collect()
+    }
+
+    // Python: tests/test_delivery_outcomes.py::TestOnlyAFailingSetIsRemembered::test_the_record_keeps_the_successes_too
+    #[test]
+    fn the_record_keeps_every_target_s_outcome() {
+        let mut sim = with_a_failed_delivery();
+        sim.transport("email");
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            stored_results(&sim),
+            [
+                ("email".to_owned(), serde_json::json!("sent")),
+                ("ws".to_owned(), serde_json::json!("failed"))
+            ]
+        );
+    }
+
+    // Python: tests/test_delivery_outcomes.py::TestOnlyAFailingSetIsRemembered::test_a_clean_delivery_writes_nothing
+    #[test]
+    fn a_clean_delivery_records_nothing() {
+        let mut sim = room();
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (sim.traced("record_delivery_results"), stored_results(&sim)),
+            (Vec::new(), Vec::new())
+        );
+    }
+
+    /// A set the kit's close cut has nothing of its aftermath but its
+    /// caller's report (RFC §12.10.4, Python's `_report_cut`).
+    #[test]
+    fn a_set_the_close_cut_is_not_recorded() {
+        let mut sim = room();
+        sim.deliver_with(
+            "ws",
+            Box::new(|_| {
+                Err(ErrorRecord::new(
+                    roomkit_core::ops::KIT_CLOSED,
+                    "the kit closed before this call ended",
+                ))
+            }),
+        );
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(sim.traced("record_delivery_results"), Vec::<&str>::new());
+    }
+
+    /// A record that cannot be written changes nothing the set delivered:
+    /// the call reports its deliveries and no error, and the lock is
+    /// released, which the simulated driver checks at the end of the run.
+    #[test]
+    fn a_record_that_fails_changes_nothing_of_the_call() {
+        let mut sim = with_a_failed_delivery();
+        sim.failing_effect = Some("record_delivery_results");
+        let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (
+                result.error,
+                result
+                    .delivery_results
+                    .get("ws")
+                    .map(|delivery| delivery.status),
+                sim.framework_event_names().last().cloned(),
+            ),
+            (
+                None,
+                Some(DeliveryResultStatus::Failed),
+                Some("event_processed".to_owned()),
+            )
+        );
+    }
+
     /// The partial failure first, as Python's order (RMK-1095).
     #[test]
     fn a_failed_delivery_emits_delivery_failed_and_a_partial_failure() {
