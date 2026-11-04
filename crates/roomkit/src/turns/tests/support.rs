@@ -577,8 +577,6 @@ pub(super) struct Stuck {
 pub(super) struct ReadingOn {
     /// How long it flushes past the end; none, it never returns.
     flush: Option<Duration>,
-    /// Whether it fails at the end instead.
-    fails: bool,
     /// Told at its first item.
     pub(super) read: Arc<tokio::sync::Notify>,
     /// Told once it read the stream's end.
@@ -599,13 +597,6 @@ impl ReadingOn {
         Self::default()
     }
 
-    pub(super) fn failing() -> Self {
-        Self {
-            fails: true,
-            ..Self::default()
-        }
-    }
-
     /// Reads `stream` to its end, then does what it does past it.
     async fn deliver(&self, mut stream: DeliveryStream) -> Result<ChannelOutput, ChannelError> {
         let mut first = true;
@@ -615,9 +606,6 @@ impl ReadingOn {
             }
         }
         self.past_the_end.notify_one();
-        if self.fails {
-            return Err("the target failed".into());
-        }
         let Some(flush) = self.flush else {
             return std::future::pending().await;
         };

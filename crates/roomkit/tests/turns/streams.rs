@@ -41,6 +41,8 @@ struct Counting {
     lingers: Option<Arc<tokio::sync::Notify>>,
     /// Whether the reader waits at every fifth item, as Python's test reads.
     pauses: bool,
+    /// Whether it fails once it read the stream's end.
+    fails: bool,
 }
 
 impl Counting {
@@ -127,6 +129,9 @@ impl Channel for Counting {
             lingers.notify_one();
             std::future::pending::<()>().await;
         }
+        if self.fails {
+            return Err("the target failed".into());
+        }
         Ok(ChannelOutput {
             response_metadata: self.says.clone().into(),
             ..ChannelOutput::default()
@@ -173,6 +178,7 @@ async fn deltas_yielded_together_cross_as_one_item() {
         stalls: None,
         lingers: None,
         pauses: false,
+        fails: false,
     };
     kit.register_channel(target.clone()).unwrap();
     let words: Vec<String> = (0..200).map(|n| format!("w{n} ")).collect();
@@ -307,6 +313,7 @@ async fn deltas_bursts_and_thinking_before_each_break_never_stall_the_stream() {
             stalls: None,
             lingers: None,
             pauses: true,
+            fails: false,
         };
         kit.register_channel(target.clone()).unwrap();
         let writing = Writing {
@@ -811,6 +818,7 @@ async fn a_streaming_target_s_own_turns_never_reach_the_caller() {
         stalls: None,
         lingers: None,
         pauses: false,
+        fails: false,
     };
     kit.register_channel(target).unwrap();
     let model = ScriptedProvider::new([ScriptedRound::writing(["The answer."])]);
@@ -841,11 +849,11 @@ async fn a_streaming_target_s_own_turns_never_reach_the_caller() {
     kit.close().await.unwrap();
 }
 
-// RFC §23.3, §12.2 step 13s: a task's cancel cuts the reader of its
-// worker's stream as the kit's close does, as Python's cancel raises in
-// the target's `deliver_stream()`: a streaming target shared into the
-// child room that reads nothing does not hold the cancel.
-#[tokio::test]
+// RFC §23.3, §12.2 step 13s (HITL c7e4a96a): a task's cancel has no timeout
+// to bound its wait, so it does not wait for the reader of its worker's
+// stream: a streaming target shared into the child room that reads nothing
+// does not hold the cancel, and ends on its own, within the close's grace.
+#[tokio::test(start_paused = true)]
 async fn a_cancel_does_not_wait_for_a_streaming_target_that_reads_nothing() {
     let kit = RoomKit::new(RoomKitOptions::default());
     let stalled = Arc::new(tokio::sync::Notify::new());
@@ -855,6 +863,7 @@ async fn a_cancel_does_not_wait_for_a_streaming_target_that_reads_nothing() {
         stalls: Some(Arc::clone(&stalled)),
         lingers: None,
         pauses: false,
+        fails: false,
     };
     kit.register_channel(target).unwrap();
     let model = ScriptedProvider::new([ScriptedRound::writing(["Working."])]);
@@ -893,6 +902,74 @@ async fn a_cancel_does_not_wait_for_a_streaming_target_that_reads_nothing() {
     kit.close().await.unwrap();
 }
 
+// RFC §10.1, §10.6.8 (RMK-1323): the cancel cuts the turn whatever the target
+// does with it: a tool that hangs is cut though the target fails on the
+// stream's end, and neither the call nor the close waits for that tool.
+#[tokio::test(start_paused = true)]
+async fn a_cut_target_that_fails_leaves_no_tool_running() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let target = Counting {
+        sizes: Arc::default(),
+        says: roomkit::model::Metadata::new(),
+        stalls: None,
+        lingers: None,
+        pauses: false,
+        fails: true,
+    };
+    kit.register_channel(target).unwrap();
+    let waiting = Arc::new(tokio::sync::Notify::new());
+    let told = Arc::clone(&waiting);
+    let wait = move |_call, _context| {
+        let told = Arc::clone(&told);
+        async move {
+            told.notify_one();
+            std::future::pending::<Result<roomkit_ai::ToolResult, roomkit_ai::ToolError>>().await
+        }
+    };
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("Hello.", [("t1", "wait", "{}")]),
+        ScriptedRound::answering("Bye."),
+    ]);
+    let options = AiChannelOptions {
+        tools: roomkit_ai::Tools::new()
+            .tool(roomkit_ai::AiTool::new("wait", "d").unwrap(), wait)
+            .into(),
+        ..AiChannelOptions::default()
+    };
+    kit.register_channel(AiChannel::new(channel("ai"), model, options).unwrap())
+        .unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["ws", "ai"] {
+        kit.attach_channel(&room(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let mut message = InboundMessage::new(channel("ws"), "alice", TextContent::new("hi"));
+    message.delivery_key = Some("k".to_owned());
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..ProcessInboundOptions::default()
+    };
+    let sender = kit.clone();
+    let processed = tokio::spawn(async move { sender.process_inbound(message, options).await });
+    waiting.notified().await;
+    let start = tokio::time::Instant::now();
+    kit.cancel_delivery("k", roomkit::CancelDeliveryOptions::default())
+        .await;
+    let processed = processed.await.unwrap().unwrap();
+    kit.close().await.unwrap();
+    assert_eq!(start.elapsed(), Duration::ZERO);
+    assert_eq!(
+        processed.cancellation_reason.as_deref(),
+        Some("caller_cancelled")
+    );
+}
+
 // RFC §12.2 step 13s, §13.6 (RMK-1236, RMK-1326): Python's close finds the
 // cascade cancelled and leaves it to end within its grace: a delivery is
 // cancelled by its key, and its streaming target, handed the stream's end,
@@ -908,6 +985,7 @@ async fn a_close_gives_a_target_whose_read_was_stopped_its_grace() {
         stalls: None,
         lingers: Some(Arc::clone(&ended)),
         pauses: false,
+        fails: false,
     };
     kit.register_channel(target).unwrap();
     let waiting = Arc::new(tokio::sync::Notify::new());

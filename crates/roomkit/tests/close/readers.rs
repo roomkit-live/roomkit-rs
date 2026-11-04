@@ -425,13 +425,14 @@ async fn a_cut_target_s_stored_text_is_what_it_received() {
     assert_eq!(wrong, []);
 }
 
-/// The same on a multi-thread runtime, 20 runs each; on 8a2ca47, 8 of 40
-/// runs of N6 went wrong (`lr5_threads_head.out`).
+/// The same on a multi-thread runtime; on 8a2ca47, 8 of 40 runs of N6 went
+/// wrong (`lr5_threads_head.out`). The stalled target takes the close its
+/// grace of five seconds of real time: one run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_cut_target_s_stored_text_is_what_it_received_on_threads() {
     let mut wrong = Vec::new();
-    for pace in [Pace::Stall, Pace::Ms10] {
-        for run in 0..20 {
+    for (pace, runs) in [(Pace::Stall, 1), (Pace::Ms10, 20)] {
+        for run in 0..runs {
             let right = stores_what_it_received(pace).await;
             if !right {
                 wrong.push((pace, run));
@@ -441,28 +442,15 @@ async fn a_cut_target_s_stored_text_is_what_it_received_on_threads() {
     assert_eq!(wrong, []);
 }
 
-/// RFC §10.6.8, §12.2 step 13s (RMK-1017, light review 4, N6): a turn
-/// streams to a target that stalls; cut as the kit closes, the turn's
-/// reader holds the close no longer: the target is cut with it, as Python
-/// cancels its readers, and the text it was handed is stored, marked
-/// `cancelled`, the call reading `kit_closed`; the close returns at once.
-/// On 463c245 the close took 21 s or 15.1 s, nothing of the turn stored,
-/// the call reading no reason (`lr4_probe_n6_head.out`).
+/// RFC §10.6.8, §12.2 step 13s (RMK-1017, RMK-1326): a turn streams to a
+/// target that stalls; cut as the kit closes, the turn's reader holds the
+/// close no longer than its grace: the text the target was handed is stored
+/// at once, marked `cancelled`, the call reading `kit_closed`, and the target
+/// is dropped at the grace's end. A Python target's `finally` that never ends
+/// takes the close 7 s, its grace and its unwind; a future has none to unwind.
 #[tokio::test(start_paused = true)]
-async fn a_cut_turn_s_stalled_target_holds_the_close_no_longer() {
-    assert_eq!(stalled().await, stalled_rows(0));
-}
-
-/// The same, on a multi-thread runtime: the close returns within a
-/// second.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_cut_turn_s_stalled_target_holds_the_close_no_longer_on_threads() {
-    let rows: Vec<_> = stalled()
-        .await
-        .into_iter()
-        .map(|(left, took, call, answers)| (left, u128::from(took < 10), call, answers))
-        .collect();
-    assert_eq!(rows, stalled_rows(1));
+async fn a_cut_turn_s_stalled_target_holds_the_close_for_its_grace() {
+    assert_eq!(stalled().await, stalled_rows(50));
 }
 
 /// N1's shape, the turn doing what `left` says, its answer streamed to a
@@ -488,15 +476,14 @@ async fn ended_or_dropped(left: Left) -> (bool, bool) {
     )
 }
 
-/// RFC §12.2 step 13s (RMK-1017, light review 6, fix 1): a target the
-/// close cuts is dropped where it waits, as Python raises
-/// `CancelledError` in it: it never reads an end its stream did not have.
-/// N1's stream and tool shapes, the target pulling each item at once,
-/// waiting on the next. On c4cc718 the target's last poll ran once the
-/// producer's pulls were gone: it read `None`, ran its end and returned
-/// (`rmk1017-lightreview6/lr6b_head.out`).
+/// RFC §12.2 step 13s, §12.10.4 (RMK-1326, HITL c109350b): a target the
+/// close finds reading reads the stream's end, and what it does past it
+/// stands for Python's `finally`, which the close lets run within its grace
+/// (close 0.203 s, kept=['flushed'], for a `finally` of 0.2 s). It replaces
+/// RMK-1017's target dropped there, never reading an end. N1's stream and
+/// tool shapes, the target pulling each item at once.
 #[tokio::test(start_paused = true)]
-async fn a_cut_target_is_dropped_where_it_waits() {
+async fn a_target_the_close_finds_reading_reads_its_stream_s_end() {
     let mut rows = Vec::new();
     for left in [Left::Stream, Left::Tool] {
         let row = ended_or_dropped(left).await;
@@ -504,18 +491,18 @@ async fn a_cut_target_is_dropped_where_it_waits() {
     }
     assert_eq!(
         rows,
-        [(Left::Stream, (false, true)), (Left::Tool, (false, true))]
+        [(Left::Stream, (true, false)), (Left::Tool, (true, false))]
     );
 }
 
 /// The same on a multi-thread runtime, 10 runs of each shape.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_cut_target_is_dropped_where_it_waits_on_threads() {
+async fn a_target_the_close_finds_reading_reads_its_stream_s_end_on_threads() {
     let mut wrong = Vec::new();
     for left in [Left::Stream, Left::Tool] {
         for run in 0..10 {
             let row = ended_or_dropped(left).await;
-            if row != (false, true) {
+            if row != (true, false) {
                 wrong.push((left, run, row));
             }
         }

@@ -179,8 +179,6 @@ pub(super) async fn read_kept<S: ConversationStore>(
         segments: Segments::new(source, answers, correlation_id).reading(live.clone()),
         stream: Some(kept.turn),
         cut: None,
-        reader_cut: false,
-        unanswered: None,
         reads: channel.as_ref().map_or(Reads::Nobody, |_| Reads::Target),
         ready: VecDeque::new(),
         over: None,
@@ -312,29 +310,19 @@ pub(crate) struct Stops {
 }
 
 impl Stops {
-    /// Whether the read is stopped by what cuts its reader too: the kit's
-    /// close, or the cut of the held task it runs within.
-    fn cuts_the_reader(&self) -> bool {
-        *self.kit.borrow()
-            || self
-                .task
-                .as_ref()
-                .is_some_and(|task| task.borrow().is_some())
-    }
-
-    /// Returns once what ends the wait for a reader a stop of the read found
-    /// reading comes: whether it is the kit's close, which leaves it its
-    /// grace, rather than the cut of the held task it runs within.
-    async fn until_cut_reader_is_left(&mut self) -> bool {
+    /// Returns once what ends the wait for a reader a stop found reading
+    /// comes: the kit's close, which gives it its grace, or the cut of the
+    /// held task the read runs within, whose caller has no timeout to bound
+    /// its wait (RMK-1326).
+    async fn until_reader_is_left(&mut self) {
         let kit = async { self.kit.wait_for(|cut| *cut).await.is_ok() };
         let task = async {
             let task = self.task.as_mut()?;
             task.wait_for(Option::is_some).await.ok().map(|_| ())
         };
         tokio::select! {
-            biased;
-            true = kit => true,
-            Some(()) = task => false,
+            true = kit => {}
+            Some(()) = task => {}
             else => std::future::pending().await,
         }
     }
@@ -370,12 +358,6 @@ struct Producer {
     stream: Option<OwnerTurn>,
     /// Why the read was stopped from outside, once it was: the turn is cut.
     cut: Option<&'static str>,
-    /// Whether the stop cuts the reader with the turn: the kit's close or
-    /// a held task's cut, not the operation's stop of the read.
-    reader_cut: bool,
-    /// The reader's pull the read stopped on, unanswered: kept open until
-    /// the reader is dropped, so that it never reads an end there.
-    unanswered: Option<oneshot::Sender<Pulled>>,
     /// Who reads the stream's rows in it.
     reads: Reads,
     /// What the reader is handed next, in order.
@@ -395,25 +377,18 @@ impl Producer {
     /// Answers the pulls of `reader`, the stream's target or the driver's
     /// drain, until both are done: what the reader returned. The reader is
     /// polled first, so that what was handed it is taken before the
-    /// producer's end is seen. The kit's close, and the cut of the held
-    /// task the read runs within, cut the reader with the turn, as the
-    /// Python implementation cancels its stream readers: a
-    /// streaming target that reads on no more holds nothing, its
-    /// `deliver_stream()` dropped once polled one last time, so that what
-    /// it was handed it took, and that text is stored (RFC §12.2 step
-    /// 13s).
+    /// producer's end is seen.
     ///
-    /// The operation's stop of the read is Python's cancel of its reader,
-    /// and a future has no `finally` to run once aborted. A reader the stop
-    /// finds reading is handed the stream's end, and what it does past it
-    /// stands for that `finally`: it runs to its end, however long, its
-    /// caller's own timeout bounding that caller only (RMK-1326). The cut of
-    /// the held task drops it. The kit's close does not cut it, Python's
-    /// close leaving a cascade cancelled already to end: the read stores what
-    /// it has, and the rest of the reader's work runs on a task of its own
-    /// within the close's grace, dropped past it. A reader the stop finds
-    /// past the stream, its end read or its stream dropped, has no such work
-    /// left: it is dropped where it waits, as Python's cancel lands there.
+    /// A stop of the read from outside is Python's cancel of its reader, and
+    /// a future has no `finally` to run once dropped (RMK-1326). A reader the
+    /// stop finds reading is handed the stream's end, and what it does past
+    /// it stands for that `finally`: it runs to its end, however long, the
+    /// read waiting for it, a caller's own timeout bounding that caller only.
+    /// The kit's close and the cut of a held task stop that wait: the read
+    /// stores what it has, and the reader ends on a task of the kit's, within
+    /// the close's grace. A reader the stop finds past the stream, its end
+    /// read or its stream dropped, has no such work left: it is dropped where
+    /// it waits, once polled, as Python's cancel lands there.
     async fn read_by(
         &mut self,
         reader: impl Future<Output = Result<ChannelOutput, ChannelError>> + Send + 'static,
@@ -435,45 +410,36 @@ impl Producer {
                 () = &mut serving => {}
             }
         }
-        if !self.reader_cut {
-            drop(self.unanswered.take());
-            drop(pulls);
-            let left_to_the_close = tokio::select! {
-                biased;
-                read = &mut reader => return read,
-                left = self.reader_past_the_stream_stopped(&mut stops) => left,
-            };
-            if !left_to_the_close {
-                return last_poll(reader).await;
-            }
-            self.leave_to_the_close(reader, tasks);
-            return Ok(ChannelOutput::default());
-        }
-        // The pulls and the one left unanswered stay open while the reader
-        // is polled one last time: it is dropped where it waits, never
-        // reading an end the stream did not have.
-        let last = last_poll(reader).await;
-        drop(self.unanswered.take());
         drop(pulls);
-        last
+        let leaves_it = tokio::select! {
+            biased;
+            read = &mut reader => return read,
+            leaves_it = self.reader_past_the_stream_stopped(&mut stops) => leaves_it,
+        };
+        if !leaves_it {
+            return last_poll(reader).await;
+        }
+        self.leave_to_end_alone(reader, tasks);
+        Ok(ChannelOutput::default())
     }
 
     /// Returns once what ends the wait for a reader past the stream comes:
-    /// for a reader a stop found reading, what [`Stops::until_cut_reader_is_left`]
-    /// waits for; for one already past the stream, any stop, which cuts the
-    /// turn. Whether the reader is left to the close's grace.
+    /// for a reader a stop found reading, what [`Stops::until_reader_is_left`]
+    /// waits for, whether it is left to end alone; for one already past the
+    /// stream, any stop, which cuts the turn and drops it.
     async fn reader_past_the_stream_stopped(&mut self, stops: &mut Stops) -> bool {
         if self.cut.is_some() {
-            return stops.until_cut_reader_is_left().await;
+            stops.until_reader_is_left().await;
+            return true;
         }
         let reason = stops.stopped().await;
-        self.stop(reason, stops);
+        self.stop(reason);
         false
     }
 
     /// Lets `reader` end on a task of the kit's, in the current context: the
     /// close waits for it within its grace, then drops it.
-    fn leave_to_the_close<R>(&self, reader: Pin<Box<R>>, tasks: &Arc<Tasks>)
+    fn leave_to_end_alone<R>(&self, reader: Pin<Box<R>>, tasks: &Arc<Tasks>)
     where
         R: Future<Output = Result<ChannelOutput, ChannelError>> + Send + 'static,
     {
@@ -484,7 +450,7 @@ impl Producer {
                     target: "roomkit::driver",
                     room_id = %room_id,
                     %error,
-                    "a streaming channel failed past a cut read, the kit closing"
+                    "a streaming channel failed past a read that was cut"
                 );
             }
         });
@@ -494,9 +460,8 @@ impl Producer {
     /// The read is stopped from outside, for `reason`: `cancel` crosses at
     /// once, so that the turn's cut waits for nothing the reader does (RFC
     /// §10.6.8).
-    fn stop(&mut self, reason: &'static str, stops: &Stops) {
+    fn stop(&mut self, reason: &'static str) {
         self.cut = Some(reason);
-        self.reader_cut = stops.cuts_the_reader();
         if let Some(turn) = self.stream.as_mut() {
             turn.cancel(reason);
         }
@@ -517,7 +482,7 @@ impl Producer {
                 biased;
                 _ = &mut reader_done => return,
                 reason = stops.stopped() => {
-                    self.stop(reason, stops);
+                    self.stop(reason);
                     return;
                 }
                 pull = pulls.recv() => match pull {
@@ -546,8 +511,7 @@ impl Producer {
             let read = tokio::select! {
                 biased;
                 reason = stops.stopped() => {
-                    self.stop(reason, stops);
-                    self.unanswered = Some(pull);
+                    self.stop(reason);
                     return false;
                 }
                 read = self.pull_turn() => read,

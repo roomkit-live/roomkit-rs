@@ -2,7 +2,7 @@
 //! target, as Python's `DeliveryCascade.cancel_and_wait` leaves it. Python
 //! cancels the reader at once: its `finally` runs to its end, however long,
 //! the `timeout` bounding the waiter only, and `wait()` reads the whole
-//! record. A Rust future has no `finally` to run once aborted: the target is
+//! record. A Rust future has no `finally` to run once dropped: the target is
 //! handed the stream's end, and what it does past it stands for it.
 
 use std::future::Future;
@@ -176,21 +176,6 @@ async fn a_cut_target_s_work_does_not_hold_the_cut_of_its_turn() {
     assert_eq!(crossed, 1);
 }
 
-// Python: the cancel cuts the turn whatever the target does with it: one that
-// fails on it leaves no turn for the close to wait for (RMK-1323).
-#[tokio::test(start_paused = true)]
-async fn a_cut_target_that_fails_leaves_its_turn_cut() {
-    let target = ReadingOn::failing();
-    let (kit, handle) = called(holding(), &target).await;
-    target.read.notified().await;
-    let start = Instant::now();
-    let cut = handle.cancel(CancelOptions::default()).await.unwrap();
-    kit.close().await.unwrap();
-    let elapsed = start.elapsed();
-    assert_eq!(elapsed, Duration::ZERO);
-    assert_eq!(cut.response_metadata.get("cited"), Some(json!(3)));
-}
-
 // Python: a target past its stream's end, blocked at an await: the cancel lands
 // there, 0.000 s, cited=3, turns completed. A Rust future is dropped there.
 #[tokio::test(start_paused = true)]
@@ -260,6 +245,26 @@ async fn a_close_past_a_cancel_lets_the_target_finish_and_keeps_the_cancel_s_rea
     );
     assert_eq!(kept, ["flushed"]);
     assert_eq!(waited.cancellation_reason.as_deref(), Some("stopped"));
+    assert_eq!(read(&waited), cited_and("cancelled"));
+}
+
+// Python: a `close()` with no cancel before it cuts the cascade itself; a target's
+// `finally` of 0.2 s runs within its grace: close 0.203 s, kept=['flushed'],
+// reason=kit_closed, cited=3.
+#[tokio::test(start_paused = true)]
+async fn a_close_finding_a_target_reading_lets_it_finish() {
+    let flush = Duration::from_millis(200);
+    let target = ReadingOn::flushing(flush);
+    let (kit, handle) = called(holding(), &target).await;
+    target.read.notified().await;
+    let start = Instant::now();
+    kit.close().await.unwrap();
+    let closed_in = start.elapsed();
+    let waited = handle.wait().await.unwrap();
+    let kept = target.kept.lock().unwrap().clone();
+    assert!(at(closed_in, flush), "{closed_in:?}");
+    assert_eq!(kept, ["flushed"]);
+    assert_eq!(waited.cancellation_reason.as_deref(), Some("kit_closed"));
     assert_eq!(read(&waited), cited_and("cancelled"));
 }
 

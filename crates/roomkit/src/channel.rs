@@ -492,19 +492,14 @@ pub trait Channel: Send + Sync + 'static {
     /// handed stored marked `cancelled` (RFC §12.2 step 13s). The text is
     /// shown before `BEFORE_BROADCAST` judges the row it ends in.
     ///
-    /// The kit's close drops this future, as the Python implementation
-    /// cancels its stream readers: the close cuts every turn as it starts.
-    /// The future is polled once more first, so that it takes what it was
-    /// handed, then dropped where it waits, with no async cleanup: a target
-    /// that must release what it holds does so in a `Drop`.
-    ///
-    /// A delivery cancelled (RFC §10.1 "Explicit delivery cancellation") ends
-    /// the stream of a channel reading it: what the channel does past that
-    /// end stands for Python's `finally`, which a future dropped could not
-    /// run. It runs to its end, however long, the cancel's caller waiting for
-    /// it within its own timeout, the kit's close within its grace, past
-    /// which it is dropped. A channel past the stream already is dropped
-    /// where it waits, as above.
+    /// A delivery cancelled, a held task cut or the kit's close (RFC §10.1
+    /// "Explicit delivery cancellation", §23.3, §12.10.4) ends the stream of
+    /// a channel reading it: what the channel does past that end stands for
+    /// Python's `finally`, which a future dropped could not run. It runs to
+    /// its end, however long: the cancel's caller waits for it within its own
+    /// timeout; the kit's close waits for it within its grace, then drops it.
+    /// A channel past the stream already is dropped where it waits, with no
+    /// async cleanup: one that must release what it holds does so in a `Drop`.
     ///
     /// The default is Python's: it reads the text to the stream's end, then
     /// makes one [`deliver`](Channel::deliver) call with `event` holding the
