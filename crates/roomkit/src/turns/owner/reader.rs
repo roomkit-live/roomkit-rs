@@ -13,15 +13,12 @@ use tokio::sync::{mpsc, watch};
 use super::{Canceller, Main, OwnerState, Steerable, cancel};
 use crate::channel::ChannelError;
 use crate::context::ExecutionContext;
-use crate::stream::ResponseItem;
+use crate::stream::{ResponseItem, UsageMarker};
 use crate::turns::codec::{WireLoopEnd, decode_end, decode_loop_end, decode_output, decode_start};
 use crate::turns::error::{RemoteError, TurnError, TurnFailure};
 use crate::turns::lock;
 use crate::turns::pulls::PullWindow;
 use crate::turns::wire::{Control, Item};
-
-/// A turn's record's key naming how its loop ended.
-const LOOP_END_REASON: &str = "loop_end_reason";
 
 /// Where the reader stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -286,6 +283,10 @@ impl OwnerTurn {
                 timeout_seconds,
                 budget_tokens,
                 budget_usd,
+                last_usage,
+                usage_complete,
+                model,
+                provider,
             } => {
                 self.window.read_other();
                 let end = WireLoopEnd {
@@ -296,11 +297,25 @@ impl OwnerTurn {
                     timeout_seconds,
                     budget_tokens,
                     budget_usd,
+                    last_usage,
+                    usage_complete,
+                    model,
+                    provider,
                 };
-                let record = self.record.take();
-                let item = decode_loop_end(end, record.as_ref());
-                self.keep_out_the_end(record.as_ref(), &item);
-                Read::Item(RemoteItem::Item(item))
+                Read::Item(RemoteItem::Item(decode_loop_end(end)))
+            }
+            Item::Usage {
+                usage,
+                model,
+                provider,
+            } => {
+                self.window.read_deltas(1);
+                let marker = UsageMarker {
+                    usage,
+                    model,
+                    provider,
+                };
+                Read::Item(RemoteItem::Item(ResponseItem::Usage(marker)))
             }
             Item::StreamEnd => Read::Ended,
         }
@@ -311,19 +326,6 @@ impl OwnerTurn {
     fn take_record(&mut self, record: Metadata) {
         self.live.replace(record.clone());
         self.record = Some(record);
-    }
-
-    /// A frame that holds the turn's end carried the loop's own keys over
-    /// the turn's record (RMK-1029): they are its end's, not its record's.
-    fn keep_out_the_end(&self, frame: Option<&Metadata>, item: &ResponseItem) {
-        let (Some(frame), ResponseItem::LoopEnd(marker)) = (frame, item) else {
-            return;
-        };
-        if frame.contains_key(LOOP_END_REASON) {
-            for key in marker.record().keys() {
-                self.live.pop(key);
-            }
-        }
     }
 
     /// The turn's one record, its output's, kept as the executor sends it.

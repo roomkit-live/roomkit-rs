@@ -15,15 +15,27 @@ const TURNS: &str = "turns";
 const LOOP_END_REASON: &str = "loop_end_reason";
 /// What a turn spent, in its record.
 const AI_USAGE: &str = "ai_usage";
+/// What a turn's own record carries, which stays off its caller's: Python's
+/// `_TURN_RECORD_KEYS`.
+const TURN_RECORD_KEYS: [&str; 7] = [
+    TURNS,
+    LOOP_END_REASON,
+    AI_USAGE,
+    "ai_last_usage",
+    "ai_usage_complete",
+    "ai_model",
+    "ai_provider",
+];
 
 /// Merges a replying channel's record, `reply`, into `record`, its caller's:
 /// every key but the turn's own (`turns`, `loop_end_reason`, `ai_usage`),
-/// which the caller reads under `turns` alone (Python's
+/// which the caller reads under `turns` alone, and what it says of its
+/// generations, which rides its last message alone (Python's
 /// `merge_channel_record`).
 pub(super) fn merge_channel_record(record: &mut Metadata, reply: &Metadata) {
     let kept = reply
         .iter()
-        .filter(|(key, _)| ![TURNS, LOOP_END_REASON, AI_USAGE].contains(&key.as_str()))
+        .filter(|(key, _)| !TURN_RECORD_KEYS.contains(&key.as_str()))
         .map(|(key, value)| (key.clone(), value.clone()));
     record.extend(kept);
 }

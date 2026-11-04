@@ -88,6 +88,7 @@ const CHANNEL: &[&str] = &[
     "on_event",
     "deliver",
     "streams",
+    "reads_usage",
     "deliver_stream",
     "on_room_attached",
     "on_room_detached",
@@ -159,7 +160,7 @@ const TURN_CONFIG: &[&str] = &[
 ];
 const TURN_TOOL: &[&str] = &["name", "description", "parameters"];
 const HUMAN_TOOL: &[&str] = &["name", "description", "parameters"];
-const MODEL: &[&str] = &["rounds", "vision", "pricing", "context_window"];
+const MODEL: &[&str] = &["rounds", "vision", "pricing", "context_window", "name", "provider"];
 const MODEL_ROUND: &[&str] = &[
     "text",
     "deltas",
@@ -271,6 +272,8 @@ const REACTION: &[&str] = &[
     "output",
     "result",
     "stop_after",
+    "hold_after",
+    "hold_gate",
     "writes_record",
     "parsed",
     "refuse",

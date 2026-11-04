@@ -39,7 +39,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use roomkit::model::{LoopEndMarker, LoopEndReason, Metadata, ToolCall, ToolCallOutcome};
+use roomkit::model::{
+    LoopEndMarker, LoopEndReason, Metadata, ToolCall, ToolCallOutcome, UsageMarker,
+};
 use roomkit::{ToolCallReport, TurnHost, TurnRecord};
 use roomkit_core::rules::transcript::{Message, Role};
 use serde_json::Value;
@@ -88,6 +90,8 @@ pub(crate) enum TurnItem {
     SegmentBreak,
     /// A piece of the model's reasoning, as it came (RFC §6.7).
     Thinking(String),
+    /// What a generation used, told after it (RFC §6.4).
+    Usage(UsageMarker),
 }
 
 /// How a call ended.
@@ -286,6 +290,8 @@ impl<P: AiProvider> Loop<P> {
                     return self.failed(failed, failure, ending).await;
                 }
             };
+            out.give(Ok(TurnItem::Usage(self.usage_of(&generation))))
+                .await;
             self.take_intents(&mut generation.calls);
             // What the room saw (RFC §6.4, The turn's record).
             spent.segments.push(generation.delivered.clone());
@@ -533,11 +539,7 @@ impl<P: AiProvider> Loop<P> {
         timeout: Option<Duration>,
         by_fallback: bool,
     ) -> LoopEndMarker {
-        let fallback = self.resilience.fallback_provider.as_ref();
-        let (model, provider) = match fallback.filter(|_| by_fallback) {
-            Some(fallback) => (fallback.dyn_model_name(), fallback.dyn_name()),
-            None => (self.provider.model_name(), self.provider.name()),
-        };
+        let (model, provider) = self.served_by(by_fallback);
         LoopEndMarker {
             rounds,
             max_rounds: Some(self.bounds.max_rounds),
@@ -547,6 +549,26 @@ impl<P: AiProvider> Loop<P> {
             model: Some(model.to_owned()),
             provider: Some(provider.to_owned()),
             ..LoopEndMarker::new(reason)
+        }
+    }
+
+    /// The model and the provider of a generation, its fallback's when it
+    /// served it.
+    fn served_by(&self, by_fallback: bool) -> (&str, &str) {
+        let fallback = self.resilience.fallback_provider.as_ref();
+        match fallback.filter(|_| by_fallback) {
+            Some(fallback) => (fallback.dyn_model_name(), fallback.dyn_name()),
+            None => (self.provider.model_name(), self.provider.name()),
+        }
+    }
+
+    /// What `generation` tells of itself once it returned.
+    fn usage_of(&self, generation: &Generation) -> UsageMarker {
+        let (model, provider) = self.served_by(generation.by_fallback);
+        UsageMarker {
+            usage: generation.done.usage.clone(),
+            model: Some(model.to_owned()),
+            provider: Some(provider.to_owned()),
         }
     }
 

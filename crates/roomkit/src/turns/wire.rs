@@ -215,6 +215,15 @@ pub(crate) enum Item {
     },
     /// The loop goes on after a round that ended without a call.
     SegmentBreak,
+    /// What a generation used, told after it (RFC §6.4).
+    Usage {
+        #[serde(default)]
+        usage: Metadata,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        provider: Option<String>,
+    },
     /// The loop's end: why, its rounds, its usage, the limits it ran under.
     LoopEnd {
         reason: String,
@@ -230,6 +239,14 @@ pub(crate) enum Item {
         budget_tokens: Option<u64>,
         #[serde(default)]
         budget_usd: Option<f64>,
+        #[serde(default)]
+        last_usage: Option<Metadata>,
+        #[serde(default)]
+        usage_complete: Option<bool>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        provider: Option<String>,
     },
     /// The stream's end.
     StreamEnd,

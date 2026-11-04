@@ -56,13 +56,4 @@ impl RecordChanges {
         drop(sent);
         sender.send(&Frame::Record { record }).map(drop)
     }
-
-    /// The record as last sent, with `keys` over it: what a loop's end that
-    /// holds more than Python's two keys crosses before it (RMK-1029).
-    pub(super) fn with(&self, keys: Metadata) -> Metadata {
-        let sent = self.sent.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut record = sent.record.clone();
-        record.extend(keys);
-        record
-    }
 }

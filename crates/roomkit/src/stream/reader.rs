@@ -540,7 +540,8 @@ impl Producer {
     fn hand(&mut self, pull: oneshot::Sender<Pulled>, item: Pulled) -> bool {
         let text = match &item {
             Some(Ok(StreamItem::Text(text))) => Some(text.clone()),
-            Some(Ok(StreamItem::Row(_) | StreamItem::Thinking(_)) | Err(_)) | None => None,
+            Some(Ok(StreamItem::Row(_) | StreamItem::Thinking(_) | StreamItem::Usage(_)) | Err(_))
+            | None => None,
         };
         let ends = matches!(item, None | Some(Err(_)));
         if pull.send(item).is_err() {
@@ -588,6 +589,15 @@ impl Producer {
                 Reads::Target => self.ready.push_back(Ok(StreamItem::Thinking(delta))),
                 Reads::Nobody | Reads::Lost => self.segments.handed(),
             },
+            // What a generation used: the record of a turn cut before its end
+            // holds it; the target reads it as it comes, the store never.
+            Some(Ok(RemoteItem::Item(ResponseItem::Usage(marker)))) => {
+                self.segments.told(&marker);
+                match self.reads {
+                    Reads::Target => self.ready.push_back(Ok(StreamItem::Usage(marker))),
+                    Reads::Nobody | Reads::Lost => self.segments.handed(),
+                }
+            }
             Some(Ok(RemoteItem::Item(ResponseItem::ToolCallStart(start)))) => {
                 let rows = self.segments.start(start);
                 self.commit_all(rows).await;
@@ -602,6 +612,7 @@ impl Producer {
             // The loop goes on after a round without a call: its text is a
             // segment of its own (RFC §6.4).
             Some(Ok(RemoteItem::SegmentBreak | RemoteItem::Item(ResponseItem::SegmentBreak))) => {
+                self.segments.segment_break();
                 if let Some(row) = self.segments.last_text(false) {
                     self.commit(row).await;
                 }
@@ -729,6 +740,11 @@ impl Producer {
                         return CANCELLED;
                     }
                     read = Some(self.pull_turn().await);
+                }
+                // What a generation used, read as its reader stopped.
+                Some(Some(Ok(RemoteItem::Item(ResponseItem::Usage(marker))))) => {
+                    self.segments.told(&marker);
+                    return CANCELLED;
                 }
                 // A start: the round had not begun to run.
                 Some(Some(Ok(RemoteItem::Item(ResponseItem::ToolCallStart(start))))) => {

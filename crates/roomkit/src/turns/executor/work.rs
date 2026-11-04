@@ -155,7 +155,7 @@ impl Pump<'_> {
             }
             let delta = matches!(
                 read,
-                Some(Ok(ResponseItem::Text(_) | ResponseItem::Thinking(_)))
+                Some(Ok(ResponseItem::Text(_) | ResponseItem::Thinking(_) | ResponseItem::Usage(_)))
             );
             if let Err(why) = self.changes.report(self.sender, delta) {
                 return refuse(self.sender, "stream item", &why);
@@ -212,7 +212,7 @@ impl Pump<'_> {
         let mut gate = lock(&self.flow.gate);
         gate.end_read();
         match &read {
-            Some(Ok(ResponseItem::Text(_) | ResponseItem::Thinking(_))) => gate.read_deltas(1),
+            Some(Ok(ResponseItem::Text(_) | ResponseItem::Thinking(_) | ResponseItem::Usage(_))) => gate.read_deltas(1),
             Some(Ok(_)) | None => gate.read_other(),
             Some(Err(_)) => {}
         }
@@ -254,15 +254,16 @@ impl Pump<'_> {
                 })
                 .map(drop),
             Some(Ok(ResponseItem::LoopEnd(marker))) => {
-                let (whole, item) = encode_loop_end(&marker);
-                let recorded = match whole {
-                    Some(end) => {
-                        let record = self.changes.with(end);
-                        self.sender.send(&Frame::Record { record }).map(drop)
-                    }
-                    None => Ok(()),
+                let item = encode_loop_end(&marker);
+                self.sender.send(&Frame::Item { item }).map(drop)
+            }
+            Some(Ok(ResponseItem::Usage(marker))) => {
+                let item = Item::Usage {
+                    usage: marker.usage,
+                    model: marker.model,
+                    provider: marker.provider,
                 };
-                recorded.and_then(|()| self.sender.send(&Frame::Item { item }).map(drop))
+                self.sender.send(&Frame::Item { item }).map(drop)
             }
             Some(Err(error)) => {
                 let error = stream_failure(&*error);

@@ -26,6 +26,7 @@
 //! reaches the stored row and the other targets, never the deltas already
 //! shown (RFC §6.4: a streamed segment, once delivered, is not taken back).
 
+mod generations;
 mod loop_end;
 mod passes;
 mod reader;
@@ -39,8 +40,7 @@ use futures_core::Stream;
 use roomkit_core::model::{ChannelOutput, ResponseMetadata, RoomEvent, ToolCallContent};
 use tokio::sync::{mpsc, oneshot};
 
-pub(crate) use self::loop_end::read_record;
-pub use self::loop_end::{LoopEndMarker, LoopEndReason};
+pub use self::loop_end::{LoopEndMarker, LoopEndReason, UsageMarker};
 pub(crate) use self::reader::{CALLER_CANCELLED, KIT_CLOSED, KeptStream, Stops, StreamRead, read};
 use crate::channel::ChannelError;
 
@@ -73,6 +73,9 @@ pub enum ResponseItem {
     /// A piece of the model's reasoning, as it is written: Python's
     /// `ThinkingDeltaMarker` (RFC §6.1 `deliver_stream`, §6.7). Never stored.
     Thinking(String),
+    /// What a generation used, told after it: Python's `UsageMarker` (RFC
+    /// §6.4). Never stored.
+    Usage(UsageMarker),
 }
 
 /// A turn's response as its channel writes it: a stream ended by its last
@@ -96,6 +99,10 @@ pub enum StreamItem {
     /// the rows: Python's `ThinkingDeltaMarker`. Never stored; the default
     /// `deliver_stream` skips it.
     Thinking(String),
+    /// What a generation used, told after it, in its order among the text
+    /// and the rows: Python's `UsageMarker`. Never stored; the default
+    /// `deliver_stream` skips it.
+    Usage(UsageMarker),
 }
 
 /// What a muted channel's turn leaves of its output, its stream closed

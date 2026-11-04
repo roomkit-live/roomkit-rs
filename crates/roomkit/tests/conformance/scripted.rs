@@ -224,6 +224,9 @@ fn parsed_event(event: RoomEvent, patch: &Value) -> Result<RoomEvent, ScriptedFa
 /// A channel whose parse, turn and delivery follow the scenario's reactions.
 pub(crate) struct ScriptedChannel {
     declaration: ChannelConfig,
+    /// Whether its `deliver_stream` records what each generation told
+    /// (README: `reads_usage`).
+    reads_usage: bool,
     run: Weak<Run>,
     parse: Reactions,
     on_event: Reactions,
@@ -278,6 +281,7 @@ impl ScriptedChannel {
         declaration.supports_streaming_delivery = spec.get("streams") == Some(&Value::Bool(true));
         Ok(Self {
             declaration,
+            reads_usage: spec.get("reads_usage") == Some(&Value::Bool(true)),
             run: Arc::downgrade(run),
             parse: Reactions::new(spec.get("parse")),
             on_event: Reactions::new(spec.get("on_event")),
@@ -601,6 +605,20 @@ impl Channel for ScriptedChannel {
                     run.record_streamed(&room_id, channel_id, json!({ "text": text }));
                     if stop_after == Some(text.as_str()) {
                         break;
+                    }
+                    if reaction.get("hold_after").and_then(Value::as_str) == Some(text.as_str()) {
+                        let hold = json!({ "gate": reaction["hold_gate"] });
+                        perform(&run, &hold, &Scope::in_room(&room_id)).await?;
+                    }
+                }
+                Ok(StreamItem::Usage(marker)) => {
+                    if self.reads_usage {
+                        let told = json!({
+                            "usage": marker.usage,
+                            "model": marker.model,
+                            "provider": marker.provider,
+                        });
+                        run.record_streamed(&room_id, channel_id, told);
                     }
                 }
                 Ok(StreamItem::Thinking(thinking)) => {

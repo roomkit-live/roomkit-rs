@@ -83,8 +83,9 @@ impl Rows<'_> {
                 self.record(&end);
             }
             TurnItem::SegmentBreak => self.end_segment(),
-            // Nothing stores a model's reasoning.
-            TurnItem::Thinking(_) => {}
+            // Nothing stores a model's reasoning, nor a generation's usage
+            // but the turn's record.
+            TurnItem::Thinking(_) | TurnItem::Usage(_) => {}
         }
     }
 
@@ -220,6 +221,7 @@ fn response_item(item: TurnItem) -> ResponseItem {
         TurnItem::End(end) => ResponseItem::LoopEnd(end),
         TurnItem::SegmentBreak => ResponseItem::SegmentBreak,
         TurnItem::Thinking(delta) => ResponseItem::Thinking(delta),
+        TurnItem::Usage(marker) => ResponseItem::Usage(marker),
     }
 }
 

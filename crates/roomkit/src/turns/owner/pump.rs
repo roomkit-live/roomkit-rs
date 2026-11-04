@@ -233,6 +233,7 @@ impl Pump {
             | Item::ToolStart { .. }
             | Item::ToolEnd { .. }
             | Item::SegmentBreak
+            | Item::Usage { .. }
             | Item::LoopEnd { .. }
             | Item::StreamEnd => 1,
         };

@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::error::{from_record, to_record};
 use super::pipe::Uncarried;
 use super::wire::{Item, SendEvent, ToolEnd, WireOutput, WireResult};
-use crate::stream::{LoopEndMarker, LoopEndReason, ResponseItem, read_record};
+use crate::stream::{LoopEndMarker, LoopEndReason, ResponseItem};
 
 /// A channel's output without its stream; its provider's answer, a
 /// transport's delivery alone carries, does not cross.
@@ -119,12 +119,9 @@ pub(crate) fn decode_end(end: ToolEnd) -> ToolCallContent {
 }
 
 /// A loop's end as the wire carries it (RFC §10.6.3): `marker`'s fields,
-/// as Python's `dataclasses.asdict` writes its `LoopEndMarker`; and the
-/// turn's record when it holds more than Python's two keys, roomkit-rs's
-/// own (RMK-1029), to cross before it in a `record` frame.
-pub(crate) fn encode_loop_end(marker: &LoopEndMarker) -> (Option<Metadata>, Item) {
-    let record = marker.record();
-    let item = Item::LoopEnd {
+/// as Python's `dataclasses.asdict` writes its `LoopEndMarker`.
+pub(crate) fn encode_loop_end(marker: &LoopEndMarker) -> Item {
+    Item::LoopEnd {
         reason: marker.reason.to_string(),
         rounds: u64::from(marker.rounds),
         usage: marker.usage.clone(),
@@ -132,8 +129,11 @@ pub(crate) fn encode_loop_end(marker: &LoopEndMarker) -> (Option<Metadata>, Item
         timeout_seconds: marker.timeout.map(|timeout| timeout.as_secs_f64()),
         budget_tokens: marker.budget_tokens,
         budget_usd: marker.budget_usd,
-    };
-    ((record.len() > 2).then_some(record), item)
+        last_usage: marker.last_usage.clone(),
+        usage_complete: marker.usage_complete,
+        model: marker.model.clone(),
+        provider: marker.provider.clone(),
+    }
 }
 
 /// What a loop's end crosses the wire with: Python's `LoopEndMarker`
@@ -146,13 +146,15 @@ pub(crate) struct WireLoopEnd {
     pub(crate) timeout_seconds: Option<f64>,
     pub(crate) budget_tokens: Option<u64>,
     pub(crate) budget_usd: Option<f64>,
+    pub(crate) last_usage: Option<Metadata>,
+    pub(crate) usage_complete: Option<bool>,
+    pub(crate) model: Option<String>,
+    pub(crate) provider: Option<String>,
 }
 
-/// A loop's end from the wire, roomkit-rs's own fields read from `record`,
-/// the turn's record a `record` frame carried before it. A reason this
-/// implementation does not know, a newer peer's, reads `error`, logged; a
-/// limit out of range is none.
-pub(crate) fn decode_loop_end(end: WireLoopEnd, record: Option<&Metadata>) -> ResponseItem {
+/// A loop's end from the wire. A reason this implementation does not know, a
+/// newer peer's, reads `error`, logged; a limit out of range is none.
+pub(crate) fn decode_loop_end(end: WireLoopEnd) -> ResponseItem {
     let reason = LoopEndReason::of(&end.reason).unwrap_or_else(|| {
         tracing::warn!(
             target: "roomkit::turns",
@@ -161,7 +163,7 @@ pub(crate) fn decode_loop_end(end: WireLoopEnd, record: Option<&Metadata>) -> Re
         );
         LoopEndReason::Error
     });
-    let mut marker = LoopEndMarker {
+    ResponseItem::LoopEnd(LoopEndMarker {
         rounds: u32::try_from(end.rounds).unwrap_or(u32::MAX),
         usage: end.usage,
         max_rounds: end.max_rounds.and_then(|rounds| u32::try_from(rounds).ok()),
@@ -170,12 +172,12 @@ pub(crate) fn decode_loop_end(end: WireLoopEnd, record: Option<&Metadata>) -> Re
             .and_then(|seconds| std::time::Duration::try_from_secs_f64(seconds).ok()),
         budget_tokens: end.budget_tokens,
         budget_usd: end.budget_usd,
+        last_usage: end.last_usage,
+        usage_complete: end.usage_complete,
+        model: end.model,
+        provider: end.provider,
         ..LoopEndMarker::new(reason)
-    };
-    if let Some(record) = record {
-        read_record(&mut marker, record);
-    }
-    ResponseItem::LoopEnd(marker)
+    })
 }
 
 /// `event`, injected into `room_id` at least `floor` deep, as `send_event`'s

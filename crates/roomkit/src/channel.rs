@@ -601,7 +601,7 @@ async fn buffered(stream: &mut DeliveryStream) -> (String, Option<ChannelError>)
     while let Some(item) = stream.next().await {
         match item {
             Ok(StreamItem::Text(chunk)) => text.push_str(&chunk),
-            Ok(StreamItem::Row(_) | StreamItem::Thinking(_)) => {}
+            Ok(StreamItem::Row(_) | StreamItem::Thinking(_) | StreamItem::Usage(_)) => {}
             Err(failure) => return (text, Some(failure)),
         }
     }

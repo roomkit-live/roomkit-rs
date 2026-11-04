@@ -95,17 +95,30 @@ impl fmt::Display for LoopEndReason {
     }
 }
 
+/// What a generation of a turn used, and what it ran on, told after it, in
+/// its order among the text and the rows (RFC §6.4): Python's
+/// `roomkit.models.UsageMarker(usage={}, model=None, provider=None)`.
+/// `usage` is that generation's alone, empty when it reported no counters;
+/// the store holds none of it, and a generation in flight has told nothing.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UsageMarker {
+    /// What the generation used, as its provider reported it.
+    pub usage: Metadata,
+    /// The model that served it.
+    pub model: Option<String>,
+    /// The provider that served it, a fallback when it did.
+    pub provider: Option<String>,
+}
+
 /// The last item of an intelligence channel's streamed response, saying
 /// why its loop ended (RFC §6.4): Python's `LoopEndMarker(reason, rounds=0,
 /// usage={}, max_rounds=None, timeout_seconds=None, budget_tokens=None,
-/// budget_usd=None)`. With the reason, `usage` is the turn's record, which
+/// budget_usd=None, last_usage=None, usage_complete=None, model=None,
+/// provider=None)`. With the reason, `usage` is the turn's record, which
 /// the kit writes on the turn's last message: `loop_end_reason` and
-/// `ai_usage`.
-///
-/// `last_usage`, `usage_complete`, `model` and `provider` are roomkit-rs's
-/// own (RMK-1029): the record carries them as `ai_last_usage`,
-/// `ai_usage_complete`, `ai_model` and `ai_provider` when they are set,
-/// the first two together, when `usage_complete` is.
+/// `ai_usage`, then `ai_last_usage`, `ai_usage_complete`, `ai_model` and
+/// `ai_provider` when they are set, the first two together, when
+/// `usage_complete` is.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoopEndMarker {
     /// Why the loop ended.
@@ -157,8 +170,8 @@ impl LoopEndMarker {
 impl LoopEndMarker {
     /// The turn's record the marker gives (RFC §6.4 "The turn's record"),
     /// which the kit writes on the turn's last message: Python's
-    /// `loop_end_reason` and `ai_usage`, then the keys roomkit-rs's own
-    /// fields set. Outside the public API (decision 16): roomkit-ai writes
+    /// `loop_end_reason` and `ai_usage`, then the keys its other fields
+    /// set. Outside the public API (decision 16): roomkit-ai writes
     /// it on a turn it answers whole.
     #[doc(hidden)]
     pub fn record(&self) -> Metadata {
@@ -178,24 +191,4 @@ impl LoopEndMarker {
         }
         record
     }
-}
-
-/// Takes in `marker` roomkit-rs's own fields that `record`, the turn's
-/// record as a `record` frame carries it across the turn backend, holds.
-pub(crate) fn read_record(marker: &mut LoopEndMarker, record: &Metadata) {
-    if let Some(Value::Bool(complete)) = record.get(AI_USAGE_COMPLETE) {
-        marker.usage_complete = Some(*complete);
-        marker.last_usage = record
-            .get(AI_LAST_USAGE)
-            .and_then(Value::as_object)
-            .cloned();
-    }
-    marker.model = record
-        .get(AI_MODEL)
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    marker.provider = record
-        .get(AI_PROVIDER)
-        .and_then(Value::as_str)
-        .map(str::to_owned);
 }

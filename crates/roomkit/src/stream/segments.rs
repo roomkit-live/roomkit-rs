@@ -24,6 +24,9 @@ use roomkit_core::model::{
 use roomkit_core::rules::transcript::is_blank;
 use serde_json::Value;
 
+use super::UsageMarker;
+use super::generations::GenerationsRead;
+
 /// The record's key that says how the turn ended (RFC §6.4).
 const LOOP_END_REASON: &str = "loop_end_reason";
 
@@ -61,6 +64,8 @@ pub(super) struct Segments {
     /// How the turn ended, once its end was read: `loop_end_reason`,
     /// `ai_usage`.
     record: Option<Metadata>,
+    /// What the turn's generations told.
+    generations: GenerationsRead,
     /// Whether no stored row carries the record yet.
     owed: bool,
     /// Whether the reader was handed anything: from there, a stop cuts the
@@ -84,6 +89,7 @@ impl Segments {
             record: None,
             owed: false,
             began: false,
+            generations: GenerationsRead::default(),
             open: Vec::new(),
             last_message: None,
         }
@@ -101,6 +107,16 @@ impl Segments {
         self.began = true;
     }
 
+    /// A generation told what it used.
+    pub(super) fn told(&mut self, marker: &UsageMarker) {
+        self.generations.told(marker);
+    }
+
+    /// The loop goes on after a round without a call: a new generation.
+    pub(super) fn segment_break(&mut self) {
+        self.generations.next_generation();
+    }
+
     /// The reader was handed `delta`.
     pub(super) fn text(&mut self, delta: &str) {
         self.text.push_str(delta);
@@ -109,6 +125,7 @@ impl Segments {
     /// A call starts: the text before it, a segment of its own, then its
     /// start row.
     pub(super) fn start(&mut self, start: ToolCallContent) -> Vec<RoomEvent> {
+        self.generations.call_started();
         let mut rows: Vec<RoomEvent> = self.segment(false).into_iter().collect();
         rows.push(self.draft(
             EventType::ToolCallStart,
@@ -124,6 +141,7 @@ impl Segments {
     /// A call that is not open yet, read in flight once its reader stopped:
     /// opened, its row unwritten.
     pub(super) fn opened_unwritten(&mut self, start: ToolCallContent) {
+        self.generations.call_started();
         self.open.push(Open {
             start,
             written: false,
@@ -133,6 +151,7 @@ impl Segments {
     /// A call ended: its end row, closing the earliest call open under its
     /// id.
     pub(super) fn end(&mut self, end: ToolCallContent) -> Vec<RoomEvent> {
+        self.generations.call_ended();
         let mut rows = Vec::new();
         if let Some(position) = self
             .open
@@ -172,8 +191,7 @@ impl Segments {
         if named.is_some_and(|end| end.as_str() != Some("completed")) {
             return;
         }
-        let mut record = Metadata::new();
-        record.insert(LOOP_END_REASON.to_owned(), Value::from(CANCELLED));
+        let record = self.generations.cut_record();
         self.end_turn(record);
     }
 

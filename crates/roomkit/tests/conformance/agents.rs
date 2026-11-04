@@ -50,11 +50,19 @@ pub(crate) struct Paced {
     pricing: Option<ModelPricing>,
     /// The model's context window (README: `model.context_window`).
     context_window: Option<u64>,
+    /// The model's name (README: `model.name`).
+    name: String,
+    /// The provider's name (README: `model.provider`).
+    provider: String,
 }
 
 impl AiProvider for Paced {
+    fn name(&self) -> &str {
+        &self.provider
+    }
+
     fn model_name(&self) -> &str {
-        self.script.model_name()
+        &self.name
     }
 
     fn supports_vision(&self) -> bool {
@@ -302,6 +310,8 @@ fn scripted_model(spec: &Value, run: &Arc<Run>) -> Result<(ScriptedProvider, Pac
         vision: spec["vision"] == true,
         pricing,
         context_window: spec["context_window"].as_u64(),
+        name: spec["name"].as_str().unwrap_or("scripted").to_owned(),
+        provider: spec["provider"].as_str().unwrap_or("scripted").to_owned(),
     };
     Ok((model, paced))
 }
