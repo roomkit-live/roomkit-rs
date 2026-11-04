@@ -33,7 +33,7 @@ pub use results::{InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED};
 use thiserror::Error;
 
 use super::{Environment, FrameworkEvent};
-use crate::model::{RoomContext, RoomEvent, RoomId, Timestamp};
+use crate::model::{Metadata, RoomContext, RoomEvent, RoomId, Timestamp};
 use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_registry::{HookId, HookTrigger};
 
@@ -191,6 +191,13 @@ pub enum Notice {
         /// The read to stop.
         effect: EffectId,
     },
+    /// The read of the call's own stream its cut stopped is over: what the
+    /// call's caller reads of its turns (RFC §6.7, §10.1 "Explicit delivery
+    /// cancellation"), who was not waiting for the delivery that goes on.
+    CutReadOver {
+        /// The call's record as the read left it.
+        response_metadata: Metadata,
+    },
 }
 
 /// The work the body of an ASYNC hook is while it runs, when a cascade
@@ -313,6 +320,12 @@ pub trait Operation {
     /// already, or that has no caller to lose, gives up on nothing.
     fn expire(&mut self) -> Vec<EffectId> {
         Vec::new()
+    }
+
+    /// Whether its cut would stop a read of the call's own stream under way:
+    /// its end is then told by [`Notice::CutReadOver`].
+    fn reading_own_stream(&self) -> bool {
+        false
     }
 
     /// Cuts the turns of the call's own cascade (RFC §10.1 "Explicit

@@ -31,7 +31,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
-use roomkit_core::model::{ErrorRecord, EventId, EventStatus, RoomEvent, RoomId};
+use roomkit_core::model::{ErrorRecord, EventId, EventStatus, Metadata, RoomEvent, RoomId};
 use roomkit_core::ops::{
     Decided, Inbound, InboundError, InboundResult, KIT_CLOSED, Outcome, StoreOutcome,
 };
@@ -100,12 +100,21 @@ pub(crate) struct Record {
     /// on.
     cancelled: watch::Sender<Option<InboundResult>>,
     decided: Mutex<Option<InboundResult>>,
+    /// Whether the read of the call's own stream its cut stopped is over; no
+    /// read waited for reads as over.
+    cut_read_over: watch::Sender<bool>,
+    /// The call's record as that read left it.
+    cut_read_record: Mutex<Option<Metadata>>,
     /// The commits of the call's own answers: what the call reports as its
     /// `response_events` once the kit's close aborted its run.
     answers: StoredAnswers,
     /// The commit that decides the call, once it started.
     in_flight: InFlight,
 }
+
+/// How long a cut call's caller waits for the read its cut stopped, as
+/// Python's `DeliveryHandle.cancel(timeout=5.0)`.
+const CUT_READ_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The answers a call's cascade commits, each with what its write came to:
 /// what the call reports as its `response_events` when the run that
@@ -152,6 +161,8 @@ impl Record {
             named,
             cancelled: watch::Sender::new(None),
             decided: Mutex::new(None),
+            cut_read_over: watch::Sender::new(true),
+            cut_read_record: Mutex::new(None),
             answers: StoredAnswers::default(),
             in_flight: InFlight::default(),
         }
@@ -195,7 +206,30 @@ impl Record {
         };
         result.response_events = self.answers.stored();
         result.cancellation_reason = Some(reason);
+        if let Some(record) = self
+            .cut_read_record
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            result.response_metadata = record;
+        }
         self.cancelled.send_replace(Some(result));
+    }
+
+    /// The call's cut stops a read of its own stream under way: its end is
+    /// to be waited for, the turn's record its caller reads (RFC §6.7).
+    pub(super) fn await_cut_read(&self) {
+        self.cut_read_over.send_replace(false);
+    }
+
+    /// The read the cut stopped is over, the call's record as it left it.
+    pub(super) fn cut_read_over(&self, record: Metadata) {
+        *self
+            .cut_read_record
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(record);
+        self.cut_read_over.send_replace(true);
     }
 
     fn decide(&self, result: &InboundResult) {
@@ -683,6 +717,8 @@ pub(super) async fn end_once_over(record: Arc<Record>, turns: Vec<Canceller>) {
     for turn in &turns {
         turn.ended().await;
     }
+    let mut read_over = record.cut_read_over.subscribe();
+    drop(tokio::time::timeout(CUT_READ_BOUND, read_over.wait_for(|over| *over)).await);
     record.end_cancelled();
 }
 

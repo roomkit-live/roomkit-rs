@@ -426,6 +426,10 @@ impl Operation for Inbound {
         self.machine.cascade.cut_turns(&mut self.io, Lineage::Call)
     }
 
+    fn reading_own_stream(&self) -> bool {
+        self.machine.cascade.reads_stream_of(Lineage::Call)
+    }
+
     /// Cuts the turns of the cascade of `entry`, an entry the operation
     /// adopted, whose delivery was cancelled (RFC §10.1 "Explicit delivery
     /// cancellation"); the call's own cascade keeps its turns.

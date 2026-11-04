@@ -769,6 +769,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     async fn notice(&mut self, notice: Notice) {
         match notice {
             Notice::StopReading { effect } => self.shared.stop_reading(effect),
+            Notice::CutReadOver { response_metadata } => {
+                if let Some(caller) = self.caller.as_deref() {
+                    caller.record().cut_read_over(response_metadata);
+                }
+            }
             notice @ (Notice::FrameworkEvent(_) | Notice::AsyncHooks { .. }) => {
                 if let Some(handled) = calls::perform(self.inner, notice) {
                     handled.wait().await;
@@ -790,6 +795,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             call = self.call,
             "a call's caller stopped waiting or cancelled its delivery; its turns are cut, its events delivered"
         );
+        if operation.reading_own_stream()
+            && let Some(caller) = self.caller.as_deref()
+        {
+            caller.record().await_cut_read();
+        }
         let cut = operation.cancel_turns();
         self.give_up(&cut);
         true

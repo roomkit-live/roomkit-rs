@@ -209,6 +209,13 @@ impl Cascade {
         }
     }
 
+    /// Whether a read of a stream of the cascade of `lineage` is under way.
+    pub(super) fn reads_stream_of(&self, lineage: Lineage) -> bool {
+        self.stream
+            .as_ref()
+            .is_some_and(|read| read.lineage() == lineage && read.reading().is_some())
+    }
+
     /// Whether the turns of the cascade of `lineage` are cut.
     pub(super) fn is_cut(&self, lineage: Lineage) -> bool {
         self.cut.contains(&lineage)
@@ -529,9 +536,17 @@ impl Machine {
             return;
         };
         let cut = self.cascade.is_cut(read.lineage());
+        let own = read.lineage() == Lineage::Call;
         match read.accept(cx, &self.cascade.budget, outcome, cut) {
             Read::Reading(read) => self.cascade.stream = Some(*read),
-            Read::Over(end) => self.stream_over(cx, *end),
+            Read::Over(end) => {
+                self.stream_over(cx, *end);
+                if cut && own {
+                    cx.io.notify(Notice::CutReadOver {
+                        response_metadata: self.trigger.result.response_metadata.clone(),
+                    });
+                }
+            }
         }
     }
 
