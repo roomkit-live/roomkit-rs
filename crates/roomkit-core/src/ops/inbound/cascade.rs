@@ -550,10 +550,7 @@ impl Machine {
     pub(super) fn rewrite_answers(&mut self, lineage: Lineage, rows: &[RoomEvent]) {
         let answers = match lineage {
             Lineage::Call => Some(&mut self.trigger.result),
-            Lineage::Entry(entry) => self
-                .adopted_deliveries
-                .get_mut(&entry)
-                .or_else(|| self.told_adopted.get_mut(&entry)),
+            Lineage::Entry(entry) => self.adopted_deliveries.get_mut(&entry),
         };
         let Some(result) = answers else {
             return;

@@ -506,7 +506,7 @@ pub trait Channel: Send + Sync + 'static {
     /// this channel in this room, and [`deliver`](Channel::deliver) may be
     /// handed the end of a call meanwhile. An error it then returns is its
     /// caller's and `ON_ERROR`'s, what the cut stored standing; once the kit's
-    /// close left it to end alone, it is only logged.
+    /// close or a held task's cut left it to end alone, it is only logged.
     /// A channel past the stream already is dropped where it waits, with no
     /// async cleanup: one that must release what it holds does so in a `Drop`.
     ///
