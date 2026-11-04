@@ -1542,7 +1542,7 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         let record = TurnRecord::default();
         record
             .clone()
-            .scope(self.answer(event, binding, context, record))
+            .scope(Box::pin(self.answer(event, binding, context, record)))
             .await
     }
 

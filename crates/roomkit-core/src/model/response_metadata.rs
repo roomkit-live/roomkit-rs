@@ -8,6 +8,11 @@
 //! Cloning a record shares it, as Python's pydantic field keeps the instance:
 //! the clone a tool handler writes is the one the stored message is built from.
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "a record's own cell, held for one map operation, never across a call or an effect: no room lock (HITL acfd6f64)"
+)]
+
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -200,10 +205,10 @@ mod tests {
     use super::*;
 
     fn keys(value: Value) -> Metadata {
-        match value {
-            Value::Object(keys) => keys,
-            other => panic!("not an object: {other}"),
-        }
+        let Value::Object(keys) = value else {
+            panic!("not an object");
+        };
+        keys
     }
 
     // Python: tests/test_response_metadata.py::TestLiveRecord::test_type_keeps_identity_where_a_dict_was_copied

@@ -92,11 +92,10 @@ async fn messages(kit: &crate::RoomKit, key: &str) -> Vec<(String, Option<Value>
             event.r#type == EventType::Message && event.source.channel_id.as_str() == "ai"
         })
         .map(|event| {
-            let text = match &event.content {
-                roomkit_core::model::EventContent::Text(text) => text.body.clone(),
-                _ => String::new(),
+            let roomkit_core::model::EventContent::Text(text) = &event.content else {
+                panic!("the agent's messages are its text");
             };
-            (text, event.metadata.get(key).cloned())
+            (text.body.clone(), event.metadata.get(key).cloned())
         })
         .collect()
 }
