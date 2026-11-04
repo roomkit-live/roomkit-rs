@@ -55,6 +55,7 @@
 //! tools and opt-in author image input, not hosted tools. OAuth login, token refresh and
 //! credential persistence are host responsibilities.
 
+mod call_slots;
 mod config;
 mod credentials;
 mod error;

@@ -1,6 +1,7 @@
 //! The Chat Completions wire: the request a turn sends, and what it reads
 //! of the answer.
 
+use crate::call_slots::{CallSlots, Fragment};
 use crate::config::OpenAiConfig;
 use crate::request::{RawCall, Request, Whole, done as finished};
 use reqwest::StatusCode;
@@ -406,20 +407,12 @@ struct DeltaFunction {
     arguments: Value,
 }
 
-/// A call as its fragments built it so far.
-#[derive(Debug, Default)]
-struct Folded {
-    id: String,
-    name: String,
-    arguments: String,
-}
-
 /// A streamed completion, folded as its chunks come: the calls' fragments
 /// by their index, why it stopped, what it used (RFC §6.4 "What a provider
 /// hands the loop for a call").
 #[derive(Debug, Default)]
 pub(crate) struct Folding {
-    calls: std::collections::BTreeMap<u64, Folded>,
+    calls: CallSlots,
     finish_reason: Option<String>,
     usage: Metadata,
     /// Sorts the text into reasoning and answer, a tag split across chunks
@@ -482,38 +475,41 @@ impl Folding {
         self.tags.flush()
     }
 
-    /// Adds a call's fragment to the call its index names: its id and name
-    /// once given, its arguments' text appended.
+    /// Adds a call's fragment to the call it belongs to; an object for its
+    /// arguments reads as the JSON text it stands for.
     fn fold(&mut self, fragment: DeltaCall) {
-        let folded = self.calls.entry(fragment.index).or_default();
-        if let Some(id) = fragment.id.filter(|id| !id.is_empty()) {
-            folded.id = id;
-        }
-        let Some(function) = fragment.function else {
-            return;
-        };
-        if let Some(name) = function.name.filter(|name| !name.is_empty()) {
-            folded.name = name;
-        }
-        match function.arguments {
-            Value::String(text) => folded.arguments.push_str(&text),
-            Value::Null => {}
+        let DeltaCall {
+            index,
+            id,
+            function,
+        } = fragment;
+        let (name, arguments) = function.as_ref().map_or((None, Value::Null), |function| {
+            (function.name.as_deref(), function.arguments.clone())
+        });
+        let arguments = match arguments {
+            Value::String(text) => text,
+            Value::Null => String::new(),
             other @ (Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_)) => {
-                folded.arguments.push_str(&other.to_string());
+                other.to_string()
             }
-        }
+        };
+        self.calls.fold(&Fragment {
+            index,
+            id: id.as_deref().filter(|id| !id.is_empty()),
+            name: name.filter(|name| !name.is_empty()),
+            arguments: &arguments,
+            function: function.is_some(),
+        });
     }
 
-    /// The completion once its stream is over: its calls in their index's
-    /// order, each with its argument text, which the loop reads, and how it
+    /// The completion once its stream is over: its calls in the order they
+    /// came, each with its argument text, which the loop reads, and how it
     /// ended.
     pub(crate) fn finish(self) -> (Vec<RawCall>, StreamDone) {
-        let calls = self
-            .calls
-            .into_values()
-            .map(|call| RawCall::new(call.id, call.name, call.arguments))
-            .collect();
-        (calls, finished(self.finish_reason, self.usage))
+        (
+            self.calls.finish(),
+            finished(self.finish_reason, self.usage),
+        )
     }
 }
 
@@ -922,6 +918,133 @@ mod tests {
     /// RFC §6.4: a streamed call's fragments are folded by their index,
     /// its id and name kept from the first that gives them, its arguments'
     /// text joined; the usage comes in the last chunk.
+    /// The calls `fragments`, each an index and a `tool_calls` entry's
+    /// members, fold into.
+    fn folded(fragments: &[(u64, Value)]) -> Vec<RawCall> {
+        let mut folding = Folding::default();
+        for (index, fragment) in fragments {
+            let mut call = fragment.clone();
+            call["index"] = (*index).into();
+            let chunk = serde_json::json!({
+                "choices": [{ "index": 0, "delta": { "tool_calls": [call] } }]
+            });
+            folding.take(&chunk.to_string(), "sk-1").unwrap();
+        }
+        folding.finish().0
+    }
+
+    fn fragment(id: Option<&str>, name: Option<&str>, arguments: &str) -> Value {
+        serde_json::json!({ "id": id, "function": { "name": name, "arguments": arguments } })
+    }
+
+    // Python: tests/test_providers/test_tool_call_handoff.py::TestStreamedSlots::test_whole_calls_on_one_index_stay_two_calls
+    #[test]
+    fn whole_calls_on_one_index_stay_two_calls() {
+        let calls = folded(&[
+            (0, fragment(Some("a"), Some("now"), r#"{"tz": "A"}"#)),
+            (0, fragment(Some("b"), Some("later"), r#"{"tz": "B"}"#)),
+        ]);
+        assert_eq!(
+            calls,
+            [
+                RawCall::new("a", "now", r#"{"tz": "A"}"#),
+                RawCall::new("b", "later", r#"{"tz": "B"}"#),
+            ]
+        );
+    }
+
+    // Python: tests/test_providers/test_tool_call_handoff.py::TestStreamedSlots::test_whole_calls_without_ids_on_one_index_stay_two_calls
+    #[test]
+    fn whole_calls_without_ids_on_one_index_stay_two_calls() {
+        let calls = folded(&[
+            (0, fragment(None, Some("roll_die"), r#"{"sides": 6}"#)),
+            (0, fragment(None, Some("roll_die"), r#"{"sides": 6}"#)),
+        ]);
+        assert_eq!(
+            calls,
+            [
+                RawCall::new("", "roll_die", r#"{"sides": 6}"#),
+                RawCall::new("", "roll_die", r#"{"sides": 6}"#),
+            ]
+        );
+    }
+
+    // Python: tests/test_providers/test_tool_call_handoff.py::TestStreamedSlots::test_fragments_of_one_call_fold_together
+    #[test]
+    fn fragments_of_one_call_fold_together() {
+        let calls = folded(&[
+            (0, fragment(Some("a"), Some("now"), r#"{"tz": "#)),
+            (0, fragment(None, None, r#""A"}"#)),
+        ]);
+        assert_eq!(calls, [RawCall::new("a", "now", r#"{"tz": "A"}"#)]);
+    }
+
+    // Python: providers/ai/openai_dialect.py ToolCallSlots._starts_another_call:
+    // a server may repeat a call's name on every fragment; after whole arguments
+    // a new JSON object under no name opens a second call to the same tool.
+    #[test]
+    fn what_starts_another_call_on_an_occupied_index() {
+        let repeated = folded(&[
+            (0, fragment(None, Some("now"), r#"{"tz": "#)),
+            (0, fragment(None, Some("now"), r#""A"}"#)),
+        ]);
+        assert_eq!(repeated, [RawCall::new("", "now", r#"{"tz": "A"}"#)]);
+        let nameless = folded(&[
+            (0, fragment(Some("a"), Some("now"), r#"{"tz": "A"}"#)),
+            (0, fragment(None, None, r#"{"tz": "B"}"#)),
+        ]);
+        assert_eq!(
+            nameless,
+            [
+                RawCall::new("a", "now", r#"{"tz": "A"}"#),
+                RawCall::new("", "now", r#"{"tz": "B"}"#),
+            ]
+        );
+        let other_name_mid_arguments = folded(&[
+            (0, fragment(Some("a"), Some("now"), r#"{"tz": "#)),
+            (0, fragment(None, Some("later"), r#""A"}"#)),
+        ]);
+        assert_eq!(
+            other_name_mid_arguments,
+            [RawCall::new("a", "later", r#"{"tz": "A"}"#)]
+        );
+    }
+
+    // Python: providers/ai/openai_dialect.py ToolCallSlots.calls: an entry with
+    // no function is no call (a custom tool's), its id kept for a function a
+    // later fragment brings; one whose function has no name and no arguments is
+    // a call, for the loop to refuse.
+    #[test]
+    fn an_entry_with_no_function_is_no_call() {
+        let no_function = serde_json::json!({ "id": "a" });
+        assert_eq!(folded(&[(0, no_function.clone())]), []);
+        let empty = serde_json::json!({ "id": "a", "function": {} });
+        assert_eq!(folded(&[(0, empty)]), [RawCall::new("a", "", "")]);
+        assert_eq!(
+            folded(&[(0, no_function), (0, fragment(None, Some("now"), "{}"))]),
+            [RawCall::new("a", "now", "{}")]
+        );
+    }
+
+    // Python: providers/ai/openai_dialect.py ToolCallSlots._adopt_server_id: an
+    // id another call of the response holds stays with that call.
+    #[test]
+    fn a_server_id_another_call_holds_is_not_taken() {
+        let calls = folded(&[
+            (0, fragment(Some("a"), Some("now"), "{}")),
+            (1, fragment(Some("a"), Some("later"), "{}")),
+        ]);
+        assert_eq!(
+            calls,
+            [
+                RawCall::new("a", "now", "{}"),
+                RawCall::new("", "later", "{}"),
+            ]
+        );
+    }
+
+    // Python: providers/ai/openai_dialect.py ToolCallSlots: each call in the
+    // order it came, whatever index it names.
     #[test]
     fn a_streamed_completion_s_call_fragments_fold_by_index() {
         let mut folding = Folding::default();
@@ -952,8 +1075,8 @@ mod tests {
         assert_eq!(
             calls,
             [
-                RawCall::new("call_a", "lookup", r#"{"order": "42"}"#),
                 RawCall::new("call_b", "notify", ""),
+                RawCall::new("call_a", "lookup", r#"{"order": "42"}"#),
             ]
         );
         assert_eq!(
