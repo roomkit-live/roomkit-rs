@@ -12,7 +12,7 @@ use roomkit_core::rules::hook_registry::HookTrigger;
 use super::{RoomKit, greeting, read, write};
 use crate::channel::{Channel, DynChannel, config_of};
 use crate::error::{RoomKitError, repr};
-use crate::hooks::{Closure, HookHandler, HookOptions, HookPayload, IntoHookReturn};
+use crate::hooks::{HookHandler, HookOptions, HookPayload, IntoHookReturn, closure_kept};
 use crate::registered::{Registered, RegisteredChannel};
 use crate::store::ConversationStore;
 
@@ -212,7 +212,9 @@ impl<S: ConversationStore> RoomKit<S> {
         Fut: Future<Output = R> + Send + 'static,
         R: IntoHookReturn<P>,
     {
-        self.hook_handler(trigger, Closure(handler), options)
+        self.inner.open()?;
+        let hook = options.registration(trigger, closure_kept(handler));
+        self.hook_engine().register(hook).map(drop)
     }
 
     /// Registers a hook whose handler is a type of its own implementing

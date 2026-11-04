@@ -32,7 +32,7 @@ use crate::error::RoomKitError;
 use crate::events::FrameworkEvent;
 use crate::hooks::{self, HookHandler, Kept};
 use crate::orchestration::backend::StatusCallback;
-use crate::orchestration::{StatusBus, StatusEntry};
+use crate::orchestration::{SpeakQueueEvent, StatusBus, StatusEntry};
 use crate::store::ConversationStore;
 use crate::tasks::Kind;
 use crate::telemetry::within_kit;
@@ -323,6 +323,7 @@ impl ObservedPayload for StatusEntry {
         match kept {
             Kept::StatusEntry(handler) => Some(Arc::clone(handler)),
             Kept::Event(_)
+            | Kept::Router(_)
             | Kept::ToolCall(_)
             | Kept::Session(_)
             | Kept::Status(_)
@@ -333,10 +334,26 @@ impl ObservedPayload for StatusEntry {
     }
 }
 
+impl ObservedPayload for SpeakQueueEvent {
+    fn handler(kept: &Kept) -> Option<Arc<dyn HookHandler<Self>>> {
+        match kept {
+            Kept::Turn(hook) => hook.handler::<Self>(),
+            Kept::Event(_)
+            | Kept::Router(_)
+            | Kept::ToolCall(_)
+            | Kept::Session(_)
+            | Kept::Status(_)
+            | Kept::StatusEntry(_)
+            | Kept::Observation(_)
+            | Kept::Input(_) => None,
+        }
+    }
+}
+
 impl ObservedPayload for RoomEvent {
     fn handler(kept: &Kept) -> Option<Arc<dyn HookHandler<Self>>> {
         match kept {
-            Kept::Event(handler) => Some(Arc::clone(handler)),
+            Kept::Event(handler) | Kept::Router(handler) => Some(Arc::clone(handler)),
             Kept::Observation(_)
             | Kept::ToolCall(_)
             | Kept::Session(_)
@@ -353,6 +370,7 @@ impl ObservedPayload for Observation {
         match kept {
             Kept::Observation(handler) => Some(Arc::clone(handler)),
             Kept::Event(_)
+            | Kept::Router(_)
             | Kept::ToolCall(_)
             | Kept::Session(_)
             | Kept::Status(_)
@@ -514,6 +532,23 @@ impl<S: ConversationStore> Inner<S> {
         if let Some(handled) = self.events.emit(&self.tasks, event) {
             handled.wait().await;
         }
+    }
+
+    /// Runs the `ON_SPEAK_QUEUE` hooks on one change of a room's queue, and
+    /// returns once they ended: each announcement waits for the previous.
+    pub(crate) async fn observe_speak_queue(self: &Arc<Self>, event: SpeakQueueEvent) {
+        let observers = self.observers(HookTrigger::OnSpeakQueue, &event.room_id);
+        if observers.is_empty() {
+            return;
+        }
+        let Some(context) = self.observed_context(&event.room_id).await else {
+            return;
+        };
+        let (told, ended) = tokio::sync::oneshot::channel();
+        self.observe(observers, event, context, async move {
+            let _ = told.send(());
+        });
+        let _ = ended.await;
     }
 
     /// The context the observers of a room's trigger read (RFC §10.1 step

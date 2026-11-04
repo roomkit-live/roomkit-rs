@@ -2,7 +2,7 @@
 //! registration takes beside its trigger and its handler, and the payloads
 //! a hook is handed.
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::future::Future;
@@ -96,6 +96,32 @@ where
     fn call(&self, payload: P, context: RoomContext) -> HookFuture<P> {
         let running = (self.0)(payload, context);
         Box::pin(async move { running.await.into_hook_return() })
+    }
+}
+
+/// `r#fn` as the kit keeps it: a conversation router's hook under
+/// [`Kept::Router`], known by its closure's type, which a closure's own
+/// attribute stands for in Python's `mark_router_hook`.
+pub(crate) fn closure_kept<P, F, Fut, R>(r#fn: F) -> Kept
+where
+    P: HookPayload,
+    F: Fn(P, RoomContext) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = R> + Send + 'static,
+    R: IntoHookReturn<P>,
+{
+    let router = TypeId::of::<F>() == crate::orchestration::router_hook_type();
+    let handler: Arc<dyn HookHandler<P>> = Arc::new(Closure(r#fn));
+    match P::kept(handler) {
+        Kept::Event(handler) if router => Kept::Router(handler),
+        kept @ (Kept::Event(_)
+        | Kept::Router(_)
+        | Kept::ToolCall(_)
+        | Kept::Session(_)
+        | Kept::Status(_)
+        | Kept::StatusEntry(_)
+        | Kept::Observation(_)
+        | Kept::Input(_)
+        | Kept::Turn(_)) => kept,
     }
 }
 
@@ -249,8 +275,7 @@ impl HookRegistration {
         Fut: Future<Output = R> + Send + 'static,
         R: IntoHookReturn<P>,
     {
-        let handler: Arc<dyn HookHandler<P>> = Arc::new(Closure(r#fn));
-        Self::of(trigger, execution, P::kept(handler))
+        Self::of(trigger, execution, closure_kept(r#fn))
     }
 
     /// The registration of `r#fn` on `trigger`, run as `execution`, with
@@ -292,7 +317,7 @@ impl HookRegistration {
     /// Whether its handler takes the payload its trigger hands (RFC §9.2).
     pub(crate) fn takes_its_payload(&self) -> bool {
         match self.r#fn {
-            Kept::Event(_) => RoomEvent::accepts(self.trigger),
+            Kept::Event(_) | Kept::Router(_) => RoomEvent::accepts(self.trigger),
             Kept::ToolCall(_) => ToolCallEvent::accepts(self.trigger),
             Kept::Session(_) => SessionStartedEvent::accepts(self.trigger),
             Kept::Status(_) => DeliveryStatus::accepts(self.trigger),
@@ -549,6 +574,9 @@ impl TurnHook {
 pub enum Kept {
     /// An event's or a lifecycle change's hook.
     Event(Arc<dyn HookHandler<RoomEvent>>),
+    /// A conversation router's hook (RFC §19.4), an event's hook a room a
+    /// discussion holds cannot have (RFC §19.7.5 rule 1).
+    Router(Arc<dyn HookHandler<RoomEvent>>),
     /// A tool call's hook.
     ToolCall(Arc<dyn HookHandler<ToolCallEvent>>),
     /// A session's start's hook.
@@ -569,6 +597,7 @@ impl std::fmt::Debug for Kept {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Event(_) => "Kept::Event",
+            Self::Router(_) => "Kept::Router",
             Self::ToolCall(_) => "Kept::ToolCall",
             Self::Session(_) => "Kept::Session",
             Self::Status(_) => "Kept::Status",
@@ -664,7 +693,9 @@ pub(crate) async fn run_kept(
     timeout: Duration,
 ) -> HookOutcome<RoomEvent> {
     match kept {
-        Kept::Event(handler) => run(handler, event, context, timeout, refused_content).await,
+        Kept::Event(handler) | Kept::Router(handler) => {
+            run(handler, event, context, timeout, refused_content).await
+        }
         Kept::Session(handler) => {
             let Some(session) = SessionStartedEvent::of(&event) else {
                 return HookOutcome::invalid("the event reports no session's start");

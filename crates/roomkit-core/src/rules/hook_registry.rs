@@ -796,6 +796,17 @@ impl HookRegistry {
         self.hooks.iter().any(|hook| keep(&hook.spec))
     }
 
+    /// The ids of the kit's hooks and of those the room `room_id` was given.
+    pub fn ids_applying_to<'registry>(
+        &'registry self,
+        room_id: &'registry RoomId,
+    ) -> impl Iterator<Item = HookId> + 'registry {
+        self.hooks
+            .iter()
+            .filter(move |hook| hook.room.as_ref().is_none_or(|room| room == room_id))
+            .map(|hook| hook.id)
+    }
+
     /// The kit's hook named `name`.
     pub fn global_hook(&self, name: &str) -> Option<&HookSpec> {
         self.in_scope(None)

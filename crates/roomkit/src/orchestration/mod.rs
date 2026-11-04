@@ -48,6 +48,9 @@ pub use self::handoff_greeting::SendGreetingOptions;
 #[doc(hidden)]
 pub use self::handoff_tool::handoff_tool_definition;
 pub use self::memory::{InMemoryStatusBackend, InMemoryStatusBackendOptions};
+#[doc(inline)]
+#[doc(inline)]
+pub(crate) use self::router::router_hook_type;
 pub use self::router::{
     ConversationRouter, ConversationRouterOptions, InstallOptions, RoutingConditions, RoutingRule,
 };
@@ -60,8 +63,6 @@ pub use self::status::{
     HasCompletedOptions, PostAsyncOptions, PostOptions, RecentOptions, StatusBus, StatusBusOptions,
     StatusEntry, StatusLevel,
 };
-#[doc(inline)]
-#[doc(inline)]
 pub use self::strategies::discussion::strategy::{DiscussionOptions, DoneFn};
 #[doc(inline)]
 pub use self::strategies::discussion::{Discussion, SpeakQueue, SpeakQueueChange, SpeakQueueEvent};

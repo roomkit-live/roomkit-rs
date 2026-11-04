@@ -367,7 +367,8 @@ async fn run_chain<S: ConversationStore>(
     let chain = inner.config().hooks.chain(trigger, &event);
     let mut current = event;
     for hook in chain {
-        let Some((Kept::Event(handler), spec)) = inner.hook_with_spec(hook) else {
+        let Some((Kept::Event(handler) | Kept::Router(handler), spec)) = inner.hook_with_spec(hook)
+        else {
             continue;
         };
         let room_id = &context.room.id;
@@ -446,7 +447,7 @@ fn start_observers<S: ConversationStore>(
         let Some((kept, spec)) = inner.hook_with_spec(hook) else {
             continue;
         };
-        if !matches!(kept, Kept::Event(_)) {
+        if !matches!(kept, Kept::Event(_) | Kept::Router(_)) {
             continue;
         }
         let observer = Arc::clone(inner);

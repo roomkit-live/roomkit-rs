@@ -13,7 +13,8 @@ use roomkit::model::{
 };
 use roomkit::orchestration::ConversationRouterOptions;
 use roomkit::{
-    ConversationRouter, ConversationState, RoutingConditions, RoutingRule, set_conversation_state,
+    ConversationRouter, ConversationState, HookExecution, HookOptions, HookRegistration,
+    HookTrigger, RoomKit, RoomKitOptions, RoutingConditions, RoutingRule, set_conversation_state,
 };
 use serde_json::{Value, json};
 
@@ -335,4 +336,44 @@ async fn the_hook_allows_what_it_does_not_route_and_an_addressed_event() {
         .await
         .unwrap();
     assert_eq!((result.action, result.event), (HookAction::Allow, None));
+}
+
+// Python: core/hooks.py `mark_router_hook`, `HookEngine.has_router_hook`.
+#[tokio::test]
+async fn a_router_s_hook_is_known_for_one_wherever_it_is_registered() {
+    let room = RoomId::new("r1").unwrap();
+    let other = RoomId::new("r2").unwrap();
+    let router = ConversationRouter::new(ConversationRouterOptions::default());
+
+    let kit = RoomKit::new(RoomKitOptions::default());
+    assert!(!kit.hook_engine().has_router_hook(&room));
+    let hook = HookRegistration::new(
+        HookTrigger::BeforeBroadcast,
+        HookExecution::Sync,
+        router.as_hook(),
+    );
+    kit.hook_engine().add_room_hook(&room, hook).unwrap();
+    assert!(kit.hook_engine().has_router_hook(&room));
+    assert!(!kit.hook_engine().has_router_hook(&other));
+
+    // The kit's own applies to every room.
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        router.as_hook(),
+        HookOptions::default(),
+    )
+    .unwrap();
+    assert!(kit.hook_engine().has_router_hook(&other));
+
+    // A hook of another's is no router's, its closure wrapping one or not.
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let own = router.as_hook();
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, context: RoomContext| own(event, context),
+        HookOptions::default(),
+    )
+    .unwrap();
+    assert!(!kit.hook_engine().has_router_hook(&room));
 }

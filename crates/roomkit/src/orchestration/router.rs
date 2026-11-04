@@ -4,10 +4,12 @@
 //! event's metadata, which the broadcast reads to ask that agent alone,
 //! beside the router's supervisor.
 
+use std::any::TypeId;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::future::{Ready, ready};
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use roomkit_core::model::hook::{AllowOptions, ModifyOptions};
 use roomkit_core::model::{
@@ -24,6 +26,19 @@ use crate::hooks::HookError;
 use crate::kit::RoomKit;
 use crate::orchestration::StrategyAgent;
 use crate::store::ConversationStore;
+
+/// The type of what [`ConversationRouter::as_hook`] returns: how a hook is
+/// known for a router's (RFC §19.7.5 rule 1), a closure having no attribute to
+/// mark as Python's `mark_router_hook` does.
+pub(crate) fn router_hook_type() -> TypeId {
+    fn type_of<T: 'static>(_: &T) -> TypeId {
+        TypeId::of::<T>()
+    }
+    static TYPE: OnceLock<TypeId> = OnceLock::new();
+    *TYPE.get_or_init(|| {
+        type_of(&ConversationRouter::new(ConversationRouterOptions::default()).as_hook())
+    })
+}
 
 /// The metadata key the router stamps the agent it selected under.
 const ROUTED_TO: &str = "_routed_to";

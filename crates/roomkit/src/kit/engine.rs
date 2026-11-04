@@ -10,7 +10,7 @@ use roomkit_core::rules::hook_registry::{
 
 use super::{Inner, RoomKit, read, write};
 use crate::error::RoomKitError;
-use crate::hooks::HookRegistration;
+use crate::hooks::{HookRegistration, Kept};
 use crate::store::{ConversationStore, InMemoryStore};
 
 /// The kit's hooks, the kit's own and each room's (RFC §9.1): Python's
@@ -183,6 +183,19 @@ impl<S: ConversationStore> HookEngine<S> {
             }
             registry.remove_room_hook(room_id, name)
         })
+    }
+
+    /// Whether a conversation router's hook applies to `room_id`, the kit's
+    /// or the room's own: Python's `HookEngine.has_router_hook(room_id)`.
+    #[must_use]
+    pub fn has_router_hook(&self, room_id: &RoomId) -> bool {
+        let inner = &self.kit.inner;
+        let config = read(&inner.config);
+        let handlers = read(&inner.hooks);
+        config
+            .hooks
+            .ids_applying_to(room_id)
+            .any(|id| matches!(handlers.get(&id), Some(Kept::Router(_))))
     }
 
     /// The names of the hooks the room `room_id` was given, in their
