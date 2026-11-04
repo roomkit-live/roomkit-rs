@@ -15,6 +15,7 @@
 
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread::{self, ThreadId};
 
 use serde::de::Deserializer;
 use serde::ser::Serializer;
@@ -22,10 +23,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::Metadata;
-
-/// How many times [`ResponseMetadata::with_value`] runs its change against
-/// another writer's.
-const WITH_VALUE_TRIES: usize = 8;
 
 /// Turn-level metadata merged into every message event the turn produces:
 /// each message carries the record as it stands when the message is created
@@ -49,6 +46,8 @@ pub struct ResponseMetadata {
 struct Inner {
     data: Metadata,
     writes: u64,
+    /// The thread that wrote a key last, which `with_value` reads.
+    last_writer: Option<ThreadId>,
 }
 
 impl ResponseMetadata {
@@ -96,6 +95,7 @@ impl ResponseMetadata {
     pub fn insert(&self, key: impl Into<String>, value: Value) -> Option<Value> {
         let mut inner = self.lock();
         inner.writes += 1;
+        inner.last_writer = Some(thread::current().id());
         inner.data.insert(key.into(), value)
     }
 
@@ -106,6 +106,7 @@ impl ResponseMetadata {
         let removed = inner.data.shift_remove(key);
         if removed.is_some() {
             inner.writes += 1;
+            inner.last_writer = Some(thread::current().id());
         }
         removed
     }
@@ -119,6 +120,7 @@ impl ResponseMetadata {
             return value.clone();
         }
         inner.writes += 1;
+        inner.last_writer = Some(thread::current().id());
         inner.data.insert(key, default.clone());
         default
     }
@@ -127,6 +129,7 @@ impl ResponseMetadata {
     pub fn update(&self, keys: Metadata) {
         let mut inner = self.lock();
         inner.writes += u64::try_from(keys.len()).unwrap_or(u64::MAX);
+        inner.last_writer = Some(thread::current().id());
         inner.data.extend(keys);
     }
 
@@ -134,25 +137,29 @@ impl ResponseMetadata {
     pub fn clear(&self) {
         let mut inner = self.lock();
         inner.writes += u64::try_from(inner.data.len()).unwrap_or(u64::MAX);
+        inner.last_writer = Some(thread::current().id());
         inner.data.clear();
     }
 
     /// Changes the value under `key`, when it holds one: Python's
     /// `record[key].append(...)`, no write of a key. `change` runs with the
-    /// record free, so it may read it; another writer's change meanwhile runs
-    /// it again on what that writer left, a few times, then the last wins.
+    /// record free, so it may read it; another thread's write meanwhile runs
+    /// it again on what that thread left, no update lost. A write `change`
+    /// itself makes under `key` gives way to what it leaves in the value.
     pub fn with_value(&self, key: &str, mut change: impl FnMut(&mut Value)) {
-        for last in (0..WITH_VALUE_TRIES).rev() {
+        let me = thread::current().id();
+        loop {
             let Some(before) = self.get(key) else {
                 return;
             };
             let mut after = before.clone();
             change(&mut after);
             let mut inner = self.lock();
+            let last_writer = inner.last_writer;
             let Some(value) = inner.data.get_mut(key) else {
                 return;
             };
-            if *value == before || last == 0 {
+            if *value == before || last_writer == Some(me) {
                 *value = after;
                 return;
             }
@@ -170,6 +177,7 @@ impl ResponseMetadata {
     pub fn replace(&self, keys: Metadata) {
         let mut inner = self.lock();
         inner.writes += 1;
+        inner.last_writer = Some(thread::current().id());
         inner.data = keys;
     }
 
@@ -181,7 +189,11 @@ impl ResponseMetadata {
 impl From<Metadata> for ResponseMetadata {
     fn from(data: Metadata) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Inner { data, writes: 0 })),
+            inner: Arc::new(Mutex::new(Inner {
+                data,
+                writes: 0,
+                last_writer: None,
+            })),
         }
     }
 }
@@ -291,7 +303,28 @@ mod tests {
             *sources = json!("mine");
         });
         assert_eq!(record.get("sources"), Some(json!("mine")));
-        assert_eq!(runs, WITH_VALUE_TRIES);
+        assert_eq!(runs, 1);
+    }
+
+    // Python: one thread, so record["sources"].append(x) never loses one.
+    #[test]
+    fn no_update_inside_a_value_is_lost_between_threads() {
+        let record = ResponseMetadata::from(keys(json!({"sources": []})));
+        thread::scope(|scope| {
+            for writer in 0..8 {
+                let record = record.clone();
+                scope.spawn(move || {
+                    for write in 0..200 {
+                        record.with_value("sources", |sources| {
+                            let list = sources.as_array_mut().expect("a list");
+                            list.push(json!([writer, write]));
+                        });
+                    }
+                });
+            }
+        });
+        let sources = record.get("sources").expect("the list");
+        assert_eq!(sources.as_array().map(Vec::len), Some(1600));
     }
 
     #[test]

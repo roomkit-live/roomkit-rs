@@ -110,7 +110,9 @@ pub use self::stamp::default_inbound_event;
 pub(crate) use self::stamp::error_event;
 pub(crate) use self::stamp::stamp_response;
 use super::io::Io;
-use super::protocol::{Decided, EffectId, Entry, EntryId, Operation, Outcome, ProtocolError, Step};
+use super::protocol::{
+    Decided, EffectId, Entry, EntryId, Notice, Operation, Outcome, ProtocolError, Step,
+};
 use super::{Cx, Environment, KitConfig};
 use crate::model::{ChannelId, DirectEvent, EventId, InboundMessage, Post, RoomId};
 use crate::ops::io::Bound;
@@ -423,11 +425,18 @@ impl Operation for Inbound {
     /// Cuts the turns of the call's own cascade (RFC §10.1 "Explicit
     /// delivery cancellation"), the entries it adopted keeping theirs.
     fn cancel_turns(&mut self) -> Vec<EffectId> {
-        self.machine.cascade.cut_turns(&mut self.io, Lineage::Call)
+        let cut = self.machine.cascade.cut_turns(&mut self.io, Lineage::Call);
+        // A read under way tells it once it is over.
+        if !self.machine.cascade.reads_stream_of(Lineage::Call) {
+            self.io.notify(Notice::CutReadOver {
+                response_metadata: self.machine.trigger.result.response_metadata.clone(),
+            });
+        }
+        cut
     }
 
-    fn reading_own_stream(&self) -> bool {
-        self.machine.cascade.reads_stream_of(Lineage::Call)
+    fn tells_its_cut(&self) -> bool {
+        true
     }
 
     /// Cuts the turns of the cascade of `entry`, an entry the operation

@@ -563,6 +563,7 @@ pub(super) struct Stuck {
     declaration: ChannelConfig,
     reads: usize,
     returns: bool,
+    holds_answers: bool,
 }
 
 impl Stuck {
@@ -579,7 +580,17 @@ impl Stuck {
             declaration,
             reads,
             returns: false,
+            holds_answers: false,
         }
+    }
+
+    /// A transport that does not stream, and whose delivery of an agent's
+    /// answer never ends.
+    pub(super) fn holding_answers() -> Self {
+        let mut held = Self::new(0);
+        held.declaration.supports_streaming_delivery = false;
+        held.holds_answers = true;
+        held
     }
 
     /// A transport whose reader reads `reads` items, then stops reading and
@@ -665,13 +676,16 @@ impl Channel for Stuck {
         std::future::ready(Ok(crate::default_inbound_event(self, &message, &context)))
     }
 
-    fn deliver(
+    async fn deliver(
         &self,
-        _event: RoomEvent,
+        event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
-    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        std::future::ready(Ok(ChannelOutput::empty()))
+    ) -> Result<ChannelOutput, ChannelError> {
+        if self.holds_answers && event.source.channel_id.as_str() == "ai" {
+            std::future::pending::<()>().await;
+        }
+        Ok(ChannelOutput::empty())
     }
 }
 

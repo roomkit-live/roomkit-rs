@@ -98,8 +98,6 @@ pub enum StreamItem {
     Thinking(String),
 }
 
-/// The next item of a turn's response, as its executor reads it; `None` at
-/// its end.
 /// What a muted channel's turn leaves of its output, its stream closed
 /// unread: its side effects, always allowed (RFC §7.5), and no answer nor
 /// record, since no reply was generated.
@@ -112,6 +110,8 @@ pub(crate) fn muted_answer(output: Box<ChannelOutput>) -> Box<ChannelOutput> {
     })
 }
 
+/// The next item of a turn's response, as its executor reads it; `None` at
+/// its end.
 pub(crate) async fn next_item(
     stream: &mut ResponseStream,
 ) -> Option<Result<ResponseItem, ChannelError>> {

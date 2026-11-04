@@ -112,8 +112,9 @@ pub(crate) struct Record {
     in_flight: InFlight,
 }
 
-/// How long a cut call's caller waits for the read its cut stopped, as
-/// Python's `DeliveryHandle.cancel(timeout=5.0)`.
+/// How long a cut call's caller waits, at most, to be told what its turns
+/// left: Python's `DeliveryHandle.cancel(timeout=5.0)`. The read ends within
+/// `CUT_READER_GRACE` of its turn's end, so this bounds a run that is over.
 const CUT_READ_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The answers a call's cascade commits, each with what its write came to:
@@ -722,9 +723,8 @@ pub(super) async fn end_once_over(
     for turn in &turns {
         turn.ended().await;
     }
-    // The read of its own stream the cut stopped leaves the turn's record: a
-    // target that never returns holds it for no longer than the bound, nor
-    // past the kit's close.
+    // Told what the turns left, at the cut or once the read the cut stopped
+    // is over; never past the kit's close.
     let mut read_over = record.cut_read_over.subscribe();
     tokio::select! {
         _waited = tokio::time::timeout(CUT_READ_BOUND, read_over.wait_for(|over| *over)) => {}

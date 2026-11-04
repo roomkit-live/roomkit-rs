@@ -191,9 +191,10 @@ pub enum Notice {
         /// The read to stop.
         effect: EffectId,
     },
-    /// The read of the call's own stream its cut stopped is over: what the
-    /// call's caller reads of its turns (RFC §6.7, §10.1 "Explicit delivery
-    /// cancellation"), who was not waiting for the delivery that goes on.
+    /// The call's turns are cut, the read of its own stream over if one was
+    /// under way: what the call's caller reads of them (RFC §6.7, §10.1
+    /// "Explicit delivery cancellation"), who does not wait for the delivery
+    /// that goes on.
     CutReadOver {
         /// The call's record as the read left it.
         response_metadata: Metadata,
@@ -322,9 +323,10 @@ pub trait Operation {
         Vec::new()
     }
 
-    /// Whether its cut would stop a read of the call's own stream under way:
-    /// its end is then told by [`Notice::CutReadOver`].
-    fn reading_own_stream(&self) -> bool {
+    /// Whether it tells what its call's caller reads once its turns are cut,
+    /// by [`Notice::CutReadOver`]: at the cut, or when the read of the call's
+    /// own stream the cut stopped is over.
+    fn tells_its_cut(&self) -> bool {
         false
     }
 

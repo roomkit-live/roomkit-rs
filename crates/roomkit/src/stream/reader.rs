@@ -76,6 +76,10 @@ pub(crate) struct KeptStream {
 /// What a read of the turn's response gave.
 type Read = Option<Result<RemoteItem, ChannelError>>;
 
+/// How long a reader whose read was stopped from outside has to read the
+/// stream's end before it is dropped.
+const CUT_READER_GRACE: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// The reason a read the operation stops cuts its turn with (RFC §10.1
 /// "Explicit delivery cancellation").
 pub(crate) const CALLER_CANCELLED: &str = "caller_cancelled";
@@ -420,13 +424,24 @@ impl Producer {
             }
         }
         if !self.reader_cut {
-            // The reader reads the stream's end.
+            // The reader reads the stream's end; one the turn's cut left held
+            // has a moment for it, then is dropped where it waits, as Python
+            // cancels its reader: the cut's caller is not left waiting for it.
             drop(self.unanswered.take());
             drop(pulls);
+            let cut = self.cut.is_some();
+            let held = async {
+                if cut {
+                    tokio::time::sleep(CUT_READER_GRACE).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            };
             tokio::select! {
                 biased;
                 read = &mut reader => return read,
                 () = stops.until_reader_cut() => {}
+                () = held => {}
             }
             return last_poll(reader).await;
         }

@@ -795,7 +795,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             call = self.call,
             "a call's caller stopped waiting or cancelled its delivery; its turns are cut, its events delivered"
         );
-        if operation.reading_own_stream()
+        if operation.tells_its_cut()
             && let Some(caller) = self.caller.as_deref()
         {
             caller.record().await_cut_read();

@@ -242,6 +242,50 @@ async fn a_turn_sends_its_record_no_more_often_for_more_deltas() {
     assert!(counts[0] > 0);
 }
 
+// Python: models/delivery.py DeliveryHandle.cancel reads the cascade's record,
+// its stream read and its transport still sending (RFC 6.7, 10.1). The shared
+// scenario comes with the next sync.
+#[tokio::test(start_paused = true)]
+async fn a_cut_call_reads_its_record_while_a_transport_still_sends() {
+    let kit = kit_with(Streaming::scripted(vec![
+        Step::Write("cited", json!(1)),
+        Step::Text("Hi"),
+    ]))
+    .await;
+    bind(&kit, Stuck::holding_answers()).await;
+    let message = roomkit_core::model::InboundMessage::new(
+        roomkit_core::model::ChannelId::new("sms").unwrap(),
+        "+15550001",
+        roomkit_core::model::TextContent::new("Hi"),
+    );
+    let result = kit
+        .process_inbound(
+            message,
+            crate::ProcessInboundOptions {
+                room_id: Some(room_id()),
+                defer_delivery: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while messages(&kit, "cited").await.is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the stream was read"
+        );
+        tokio::task::yield_now().await;
+    }
+    let handle = result.delivery.expect("a handle");
+    let cut = handle
+        .cancel(crate::CancelOptions::default())
+        .await
+        .unwrap();
+    kit.close().await.unwrap();
+    assert_eq!(cut.response_metadata.get("cited"), Some(&json!(1)));
+}
+
 // Python: core/event_router.py keeps a muted stream's side effects, which RFC
 // 7.5 always allows; the stream is closed unread (test_muted_target_streaming_response_suppressed).
 #[tokio::test(start_paused = true)]
