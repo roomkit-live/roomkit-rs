@@ -15,11 +15,14 @@ use roomkit::model::{
     DeliveryResultStatus, HookResult, Observation, ObservationId, RoomContext, RoomEvent,
     RoomStatus, TextContent,
 };
-use roomkit::testing::{EchoAgent, EchoAgentOptions};
+use roomkit::telemetry::{MockTelemetryProvider, TelemetryConfig};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, CommitEventOptions, ConversationStore,
-    GetRoomOptions, HookExecution, HookOptions, HookTrigger, InMemoryStore, PauseRoomOptions,
-    SendEventOptions,
+    CreateRoomOptions, GetRoomOptions, HookExecution, HookOptions, HookTrigger, InMemoryStore,
+    PauseRoomOptions, RoomKit, RoomKitOptions, SendEventOptions,
 };
 use roomkit_core::ops::ChannelConfig;
 use tokio::sync::Notify;
@@ -786,4 +789,55 @@ async fn the_close_takes_its_grace_with_every_kind_of_work_stuck() {
         took >= Duration::from_secs(5) && took < Duration::from_millis(5500),
         "the close took {took:?}"
     );
+}
+
+// A run the close aborts, its unwind run out, ends its `framework.detached`
+// though its handle keeps its record: Python's `_end_tail` runs on the task's
+// done callback, `cancelled`.
+#[tokio::test(start_paused = true)]
+async fn a_run_aborted_ends_its_tail_cancelled_its_handle_alive() {
+    let store = StuckStore::default();
+    let cursor = Arc::clone(&store.cursor_writes_left);
+    let mock = Arc::new(MockTelemetryProvider::default());
+    let mut options = RoomKitOptions::with_store(store);
+    options.telemetry = Some(TelemetryConfig::from(Arc::clone(&mock)));
+    let kit = RoomKit::new(options);
+    let sms = RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    kit.register_channel(Holding::new("ws", [])).unwrap();
+    let agent = EchoAgent::new(channel("ai"), "hello", EchoAgentOptions::default());
+    kit.register_channel(agent).unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room("r")),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    for attached in ["ws", "ai"] {
+        kit.attach_channel(
+            &room("r"),
+            &channel(attached),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    *cursor.lock().unwrap() = Some(1);
+    let call = tokio::time::timeout(Duration::from_secs(30), deferred(&kit, "hi", "r"))
+        .await
+        .unwrap();
+    let delivery = call.delivery.unwrap();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    closed(spawn_close(&kit)).await;
+    assert_eq!(mock.get_active_spans(), vec![]);
+    let spans = mock.completed_spans();
+    let tail = spans
+        .iter()
+        .find(|span| span.name == "framework.detached")
+        .unwrap();
+    assert_eq!(tail.error_message.as_deref(), Some("cancelled"), "{tail:?}");
+    drop(delivery);
 }
