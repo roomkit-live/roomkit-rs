@@ -300,9 +300,12 @@ fn server_id<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    Ok(match Value::deserialize(deserializer)? {
+    let value = Value::deserialize(deserializer)?;
+    if reads_false(&value) {
+        return Ok(String::new());
+    }
+    Ok(match value {
         Value::String(id) => id,
-        value if reads_false(&value) => String::new(),
         Value::Bool(_) => "True".to_owned(),
         other @ (Value::Null | Value::Number(_) | Value::Array(_) | Value::Object(_)) => {
             other.to_string()
@@ -316,13 +319,16 @@ fn streamed_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    match Value::deserialize(deserializer)? {
-        Value::String(id) => Ok(Some(id)),
-        value if reads_false(&value) => Ok(None),
-        other => Err(serde::de::Error::custom(format!(
-            "a call's id is no text: {other}"
-        ))),
+    let value = Value::deserialize(deserializer)?;
+    if reads_false(&value) {
+        return Ok(None);
     }
+    if let Value::String(id) = value {
+        return Ok(Some(id));
+    }
+    Err(serde::de::Error::custom(format!(
+        "a call's id is no text: {value}"
+    )))
 }
 
 /// Whether Python reads `value` as false.
