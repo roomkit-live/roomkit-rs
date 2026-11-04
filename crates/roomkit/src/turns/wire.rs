@@ -231,7 +231,7 @@ pub(crate) enum Item {
 }
 
 /// What a loop's end crosses the wire with: Python's `LoopEndMarker` fields.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct WireLoopEnd {
     pub(crate) reason: String,
     #[serde(default)]

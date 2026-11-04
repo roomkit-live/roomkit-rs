@@ -20,7 +20,7 @@ use roomkit::{
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiChannel, AiChannelOptions};
 use roomkit_core::ops::ChannelConfig;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::Notify;
 use tokio::time::{Instant, timeout};
 
@@ -449,4 +449,213 @@ async fn a_reader_gone_while_a_call_runs_leaves_no_generation_in_flight() {
     assert_eq!(said.metadata["loop_end_reason"], json!("cancelled"));
     assert_eq!(said.metadata["ai_usage_complete"], json!(true));
     kit.close().await.unwrap();
+}
+
+// Python: tests/tasks/test_stopped_stream_turn_end.py, a reader's stop cancels
+// the generation it read, which tells nothing: the record holds what the
+// generations before it told, and reads incomplete, whatever the generation in
+// flight went on to say here (RMK-1333 review).
+mod a_read_in_flight {
+    use std::pin::Pin;
+    use std::task::{Context, Poll, ready};
+
+    use futures_core::Stream;
+    use roomkit_ai::{
+        AiContext, AiProvider, AiResponse, ProviderError, ProviderStream, StreamEvent,
+    };
+
+    use super::*;
+
+    struct HoldsDone {
+        script: ScriptedProvider,
+        round: usize,
+        at: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    struct Held<'a> {
+        inner: ProviderStream<'a>,
+        hold: Option<(Arc<Notify>, Arc<Notify>)>,
+        holding: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+        held: Option<Result<StreamEvent, ProviderError>>,
+    }
+
+    impl Stream for Held<'_> {
+        type Item = Result<StreamEvent, ProviderError>;
+
+        fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            let this = self.get_mut();
+            if let Some(holding) = this.holding.as_mut() {
+                ready!(holding.as_mut().poll(cx));
+                this.holding = None;
+                return Poll::Ready(this.held.take().map(Some).unwrap_or(None));
+            }
+            let next = ready!(this.inner.as_mut().poll_next(cx));
+            if matches!(next, Some(Ok(StreamEvent::Done(_))))
+                && let Some((at, release)) = this.hold.take()
+            {
+                this.held = next;
+                at.notify_one();
+                this.holding = Some(Box::pin(async move { release.notified().await }));
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            Poll::Ready(next)
+        }
+    }
+
+    impl AiProvider for HoldsDone {
+        fn name(&self) -> &str {
+            "scripted"
+        }
+
+        fn model_name(&self) -> &str {
+            "scripted"
+        }
+
+        fn supports_structured_streaming(&self) -> bool {
+            true
+        }
+
+        async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
+            self.script.generate(context).await
+        }
+
+        fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
+            let hold = self.script.requests().len() == self.round;
+            Box::pin(Held {
+                inner: self.script.generate_structured_stream(context),
+                hold: hold.then(|| (Arc::clone(&self.at), Arc::clone(&self.release))),
+                holding: None,
+                held: None,
+            })
+        }
+    }
+
+    struct Leaves {
+        at: Arc<Notify>,
+        release: Arc<Notify>,
+        after: &'static str,
+    }
+
+    impl Channel for Leaves {
+        streaming_channel_declaration!();
+
+        async fn deliver_stream(
+            &self,
+            mut stream: DeliveryStream,
+            _event: RoomEvent,
+            _binding: ChannelBinding,
+            _context: RoomContext,
+        ) -> Result<ChannelOutput, ChannelError> {
+            while let Some(item) = stream.next().await {
+                if matches!(&item, Ok(StreamItem::Text(text)) if text == self.after) {
+                    break;
+                }
+            }
+            {
+                let read = stream.next();
+                tokio::pin!(read);
+                tokio::select! {
+                    biased;
+                    _ = &mut read => panic!("the read gave an item before the gate"),
+                    () = self.at.notified() => {}
+                }
+                tokio::select! {
+                    biased;
+                    _ = &mut read => panic!("the read gave an item before the release"),
+                    () = tokio::time::sleep(Duration::from_millis(10)) => {}
+                }
+            }
+            self.release.notify_one();
+            Ok(ChannelOutput::empty())
+        }
+
+        fn handle_inbound(
+            &self,
+            message: InboundMessage,
+            context: RoomContext,
+        ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+            std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
+        }
+
+        fn deliver(
+            &self,
+            _event: RoomEvent,
+            _binding: ChannelBinding,
+            _context: RoomContext,
+        ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+            std::future::ready(Ok(ChannelOutput::empty()))
+        }
+    }
+
+    fn used(input: u64) -> roomkit::model::Metadata {
+        json!({ "input_tokens": input, "output_tokens": 10 })
+            .as_object()
+            .unwrap()
+            .clone()
+    }
+
+    /// A generation holds its done event while its reader leaves: the usage
+    /// it then tells comes on the read in flight.
+    #[tokio::test(start_paused = true)]
+    async fn as_its_reader_leaves_is_not_told() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let at = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        kit.register_channel(Leaves {
+            at: Arc::clone(&at),
+            release: Arc::clone(&release),
+            after: "Two.",
+        })
+        .unwrap();
+        let script = ScriptedProvider::new([
+            ScriptedRound::calling("One.", [("c1", "lookup", "{}")]).with_usage(used(1000)),
+            ScriptedRound::answering("Two.").with_usage(used(2000)),
+        ]);
+        let model = HoldsDone {
+            script: script.clone(),
+            round: 1,
+            at,
+            release,
+        };
+        let lookup = move |_call, _context| async move {
+            Ok::<_, roomkit_ai::ToolError>(roomkit_ai::ToolResult::Text("found".to_owned()))
+        };
+        let options_of_agent = AiChannelOptions {
+            tools: roomkit_ai::Tools::new()
+                .tool(roomkit_ai::AiTool::new("lookup", "d").unwrap(), lookup)
+                .into(),
+            ..AiChannelOptions::default()
+        };
+        kit.register_channel(AiChannel::new(channel("ai"), model, options_of_agent).unwrap())
+            .unwrap();
+        let room = RoomId::new("r").unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        for id in ["ws", "ai"] {
+            kit.attach_channel(&room, &channel(id), AttachChannelOptions::default())
+                .await
+                .unwrap();
+        }
+
+        let sent = kit.process_inbound(message("Go."), options(&room));
+        timeout(LONG, sent).await.unwrap().unwrap();
+        roomkit::testing::idle(&kit).await;
+
+        let rows = kit.store().list_events(&room, received()).await.unwrap();
+        let said = rows
+            .iter()
+            .rfind(|row| row.source.channel_id == channel("ai") && row.r#type == EventType::Message)
+            .unwrap();
+        assert_eq!(said.metadata["loop_end_reason"], json!("cancelled"));
+        assert_eq!(said.metadata["ai_usage"], Value::Object(used(1000)));
+        assert_eq!(said.metadata["ai_last_usage"], Value::Object(used(1000)));
+        assert_eq!(said.metadata["ai_usage_complete"], json!(false));
+        kit.close().await.unwrap();
+    }
 }
