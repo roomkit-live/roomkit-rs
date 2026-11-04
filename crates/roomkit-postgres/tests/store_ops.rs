@@ -920,8 +920,9 @@ async fn until_blocked_by(schema: &TempSchema, holder: &tokio_postgres::Client) 
         .unwrap()
         .get(0);
     let watcher = schema.client().await;
+    let mut blocked = 0_i64;
     for _ in 0..400 {
-        let blocked: i64 = watcher
+        blocked = watcher
             .query_one(
                 "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
                 &[&pid],
@@ -930,11 +931,11 @@ async fn until_blocked_by(schema: &TempSchema, holder: &tokio_postgres::Client) 
             .unwrap()
             .get(0);
         if blocked > 0 {
-            return;
+            break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    panic!("no session ever waited on the holder");
+    assert!(blocked > 0, "no session ever waited on the holder");
 }
 
 /// Python: `test_an_add_waiting_on_a_commit_holds_nothing_the_commit_needs` (RMK-1365):
@@ -947,7 +948,6 @@ async fn an_add_waiting_on_a_commit_holds_nothing_the_commit_needs() {
         let Some((schema, store)) = fresh().await else {
             return;
         };
-        let store = std::sync::Arc::new(store);
         let room = room_id("r1");
         store.create_room(Room::new(room.clone())).await.unwrap();
         store
@@ -1031,7 +1031,7 @@ async fn a_stream_of_adds_starves_nothing_on_its_room() {
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut adders = tokio::task::JoinSet::new();
         for _ in 0..4 {
-            let (store, room, stop) = (store.clone(), room.clone(), stop.clone());
+            let (store, room, stop) = (store.clone(), room.clone(), std::sync::Arc::clone(&stop));
             adders.spawn(async move {
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                     store
@@ -1075,7 +1075,7 @@ async fn the_writers_of_one_room_at_once_never_deadlock() {
     let Some((schema, _)) = fresh().await else {
         return;
     };
-    let store = std::sync::Arc::new(schema.store());
+    let store = schema.store();
     store
         .init(InitOptions {
             min_size: 1,
