@@ -7,6 +7,7 @@ mod context;
 mod date;
 mod dynamic;
 mod error;
+mod first_token;
 mod model_tags;
 mod response;
 mod round_parts;
@@ -27,6 +28,8 @@ pub(crate) use self::context::{ai_messages, ai_messages_with};
 pub use self::date::Date;
 pub use self::dynamic::DynAiProvider;
 pub use self::error::{ProviderError, ProviderErrorOptions, is_context_overflow_message};
+#[doc(hidden)]
+pub use self::first_token::FirstToken;
 pub use self::model_tags::{
     SPEECH_CAPABILITY, TRANSCRIPTION_CAPABILITY, speech_tags, with_speech_tags,
 };

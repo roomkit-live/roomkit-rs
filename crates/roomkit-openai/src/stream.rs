@@ -15,7 +15,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::Stream;
-use roomkit_ai::{AiResponse, ProviderError, ProviderStream, StreamEvent, TextStream};
+use roomkit_ai::{
+    AiProvider, AiResponse, FirstToken, ProviderError, ProviderStream, StreamEvent, TextStream,
+};
 
 use crate::request::{Request, push_end, push_text, push_thinking};
 
@@ -47,6 +49,7 @@ pub(crate) fn answer(
         ready: VecDeque::new(),
         failure: None,
         secret: String::new(),
+        first_token: None,
     };
     Box::pin(Answer {
         step: Some(Box::pin(reading.next())),
@@ -114,6 +117,8 @@ struct Reading<'a> {
     failure: Option<OpenAiError>,
     /// Credential used for this response, independent of concurrent refreshes.
     secret: String,
+    /// The answer's time to first token, from the request on.
+    first_token: Option<FirstToken>,
 }
 
 /// A streamed answer being read: its body, its events, its completion as
@@ -139,6 +144,7 @@ impl<'a> Reading<'a> {
     async fn next(mut self) -> Option<(Item, Reading<'a>)> {
         loop {
             if let Some(event) = self.ready.pop_front() {
+                self.hands(&event);
                 return Some((Ok(event), self));
             }
             if let Some(error) = self.failure.take() {
@@ -159,9 +165,23 @@ impl<'a> Reading<'a> {
         }
     }
 
+    /// `event` goes to the reader: the time to first token is read at its
+    /// first text or reasoning.
+    fn hands(&mut self, event: &StreamEvent) {
+        if matches!(
+            event,
+            StreamEvent::TextDelta(_) | StreamEvent::ThinkingDelta(_)
+        ) && let Some(first_token) = &mut self.first_token
+        {
+            first_token.seen();
+        }
+    }
+
     /// Sends the request: a streamed answer is read as it arrives, a whole
     /// completion read whole.
     async fn ask(&mut self) -> Result<(), OpenAiError> {
+        let provider = self.provider;
+        self.first_token = Some(FirstToken::start(provider.name(), provider.model_name()));
         let (answered, secret) = self.provider.ask(&self.request, self.streamed).await?;
         self.secret = secret;
         let body = match answered {
@@ -176,6 +196,13 @@ impl<'a> Reading<'a> {
                 return Ok(());
             }
         };
+        // Asked whole, the answer is its first token, whatever it holds, as
+        // Python's `_complete` reads it.
+        if !self.streamed
+            && let Some(first_token) = &mut self.first_token
+        {
+            first_token.seen();
+        }
         let whole = match self.provider.api() {
             // A completion asked whole may be an error object in its place,
             // which Python's client reads as its status; a stream answered

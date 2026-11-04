@@ -10,6 +10,7 @@
 
 mod credentials;
 mod fake;
+mod first_token;
 mod generate;
 mod reasoning;
 mod responses;
