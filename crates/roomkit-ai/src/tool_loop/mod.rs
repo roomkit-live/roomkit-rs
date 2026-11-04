@@ -15,7 +15,9 @@
 //! - `compaction`: a context the provider refused as too long, compacted
 //!   for its replay (RFC §6.4 "A turn compacted");
 //! - `calls`: one call through its gate (RFC §21.1) and its tool, reported
-//!   to the kit's hooks (RFC §9.3).
+//!   to the kit's hooks (RFC §9.3);
+//! - `repeat_guard`: a call or an answer that repeats within the turn (RFC
+//!   §6.4).
 //!
 //! The loop reads the directives a host steers into it (RFC §21.3,
 //! `crate::steering`) at its stops: at its start, after each round of
@@ -30,6 +32,7 @@ mod footprint;
 mod generation;
 mod hooks;
 mod intents;
+mod repeat_guard;
 mod resilience;
 mod rules;
 mod spans;
@@ -53,6 +56,8 @@ use tokio::time::Instant;
 use self::generation::{Called, Failed, Generation};
 pub(crate) use self::hooks::Adopted;
 use self::hooks::Ran;
+use self::repeat_guard::FORCE_STOP_NUDGE;
+pub(crate) use self::repeat_guard::RepeatGuard;
 pub(crate) use self::resilience::Resilience;
 use self::rules::{Limits, final_round_reason};
 pub(crate) use self::thinking::ThinkingPublication;
@@ -204,6 +209,8 @@ pub(crate) struct Loop<P> {
     /// reasoning, its text and its calls in the order they came, replayed
     /// within the turn, never stored (RFC §6.4).
     pub(crate) said: HashMap<usize, Vec<AiContentPart>>,
+    /// What the turn's calls and answers repeated (RFC §6.4).
+    pub(crate) repeat_guard: RepeatGuard,
 }
 
 impl<P: AiProvider> Loop<P> {
@@ -269,6 +276,7 @@ impl<P: AiProvider> Loop<P> {
         let mut tool_rounds = 0;
         let mut prefix = String::new();
         let mut limits = Limits::starting(&self.bounds, self.budget.clone());
+        let mut nudged = false;
         self.find_turn_input(&messages, system_prompt.clone());
         if steering.read(&mut messages, &mut system_prompt) {
             let ending = (&limits, &steering, &out);
@@ -281,6 +289,7 @@ impl<P: AiProvider> Loop<P> {
                     .end(LoopEndReason::Cancelled, tool_rounds, spent, ending)
                     .await;
             }
+            nudged = nudged || self.tell_it_to_stop(round, &mut messages);
             // Declared as the provider is about to be asked, nothing reported
             // of a round a cancel kept from running (RFC §6.4).
             let asked = (self.round_tools(&mut spent), system_prompt.clone());
@@ -307,6 +316,13 @@ impl<P: AiProvider> Loop<P> {
             if generation.cancelled || steering.cancelled() {
                 return self
                     .end(LoopEndReason::Cancelled, tool_rounds, spent, ending)
+                    .await;
+            }
+            // The generation after the guard's force stop was the last, its
+            // calls left to run, whatever it said (RFC §6.4).
+            if self.repeat_guard.force_stopped() {
+                return self
+                    .end(LoopEndReason::ForceStopped, tool_rounds, spent, ending)
                     .await;
             }
             if generation.calls.is_empty() {
@@ -384,6 +400,17 @@ impl<P: AiProvider> Loop<P> {
             self.said.extend(said.map(|said| (at, said)));
         }
         again
+    }
+
+    /// Whether the guard force-stopped the turn before round `round`, so that
+    /// its generation is told, its tools still declared (RFC §6.4).
+    fn tell_it_to_stop(&self, round: u32, messages: &mut Vec<Message>) -> bool {
+        if !self.repeat_guard.force_stopped() {
+            return false;
+        }
+        tracing::warn!(target: "roomkit::ai", round, "the guard force-stopped a model repeating a call");
+        messages.push(Message::new(Role::User, FORCE_STOP_NUDGE));
+        true
     }
 
     /// Ends the loop for `reason` after `rounds` rounds of calls, with what

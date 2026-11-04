@@ -223,6 +223,11 @@ impl Toolbox {
             .collect()
     }
 
+    /// Whether the channel itself serves `name`, past the tool policy.
+    pub(crate) fn is_exempt(&self, name: &str) -> bool {
+        self.exempt.contains(name)
+    }
+
     /// Whether Tool Search never hides `name`.
     fn never_hidden_name(&self, name: &str) -> bool {
         self.exempt.contains(name)

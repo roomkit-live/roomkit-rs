@@ -41,7 +41,7 @@ use crate::skills::SkillRegistry;
 use crate::skills::tools::{SkillTools, SkillTurn};
 use crate::steering::{Loops, SteerOptions};
 use crate::tool_loop::TurnTelemetry;
-use crate::tool_loop::{Adopted, Bounds, Loop, Resilience, ThinkingPublication};
+use crate::tool_loop::{Adopted, Bounds, Loop, RepeatGuard, Resilience, ThinkingPublication};
 use crate::tool_search::{
     DEFAULT_TOOL_SEARCH_THRESHOLD, DEFAULT_TOOL_SEARCH_THRESHOLD_PCT,
     DEFAULT_TOOL_SEARCH_THRESHOLD_TOKENS, TOOL_SEARCH_INFRA_TOOL_NAMES, TOOL_SEARCH_PREAMBLE,
@@ -1455,6 +1455,7 @@ impl<P: AiProvider> AiChannel<P> {
             turn_span: None,
             search,
             said: HashMap::new(),
+            repeat_guard: RepeatGuard::default(),
         };
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).

@@ -14,6 +14,7 @@ use super::{Loop, ToolEnd};
 use crate::provider::AiProvider;
 use crate::skills::ACTIVATE_SKILL;
 use crate::texts;
+use crate::tool_search::TOOL_SEARCH_INFRA_TOOL_NAMES;
 use crate::tools::{ToolContext, ToolError, ToolResult, read_tool_result, repair, schema};
 
 /// The kind a call past its bound reads as (RFC §21.6).
@@ -42,9 +43,9 @@ impl<P: AiProvider> Loop<P> {
                     .turn_span
                     .as_ref()
                     .map(|turn| turn.start_call(&call.name, &call.id));
-                (self.execute(call).await, Some(asked))
+                (self.guarded(call).await, Some(asked))
             }
-            Gated::Refused(refused) => (refused, None),
+            Gated::Refused(refused) => (self.refused_again(called, refused), None),
         };
         let ended = match &self.turn {
             Some(turn) => turn.on_tool_call(ended).await,
@@ -60,16 +61,55 @@ impl<P: AiProvider> Loop<P> {
         if let Some(turn) = &self.turn {
             turn.report_tool_call(&reported);
         }
-        if let Some(asked) = asked {
+        let result = if let Some(asked) = asked {
             self.search
                 .settle(&reported.call.id, &reported.call.name, outcome);
             self.remember(&reported.call.name, &asked, outcome, &result);
-        }
+            self.with_repeat_note(&reported.call.name, result)
+        } else {
+            result
+        };
         ToolEnd {
             outcome,
             call: reported.call,
             result,
             duration: started.elapsed(),
+        }
+    }
+
+    /// `call`, past its gate, on its tool, unless the turn's guard refuses it
+    /// as a repeat of the arguments it would run with (RFC §6.4).
+    async fn guarded(&self, call: ToolCall) -> ToolCallReport {
+        match self.repeat_refusal(&call.name, &call.arguments) {
+            Some(words) => ended(call, ToolCallOutcome::Refused, words),
+            None => self.execute(call).await,
+        }
+    }
+
+    /// `refused`, a call its gate stopped, counted as an attempt on the model's
+    /// own arguments: past the limit, the guard's words are the model's to read
+    /// (Python's `_reject_call`).
+    fn refused_again(&self, called: &Called, refused: ToolCallReport) -> ToolCallReport {
+        match self.repeat_refusal(&called.call.name, &called.call.arguments) {
+            Some(words) => refused.ended(ToolCallOutcome::Refused, Value::String(words)),
+            None => refused,
+        }
+    }
+
+    /// What the guard says of a call to `name` with `arguments`, Tool Search's
+    /// own tools, whose catalogue holds within the turn, the pure ones.
+    fn repeat_refusal(&self, name: &str, arguments: &Metadata) -> Option<String> {
+        let pure = TOOL_SEARCH_INFRA_TOOL_NAMES.contains(&name) && self.toolbox.is_exempt(name);
+        self.repeat_guard.refusal(name, arguments, pure)
+    }
+
+    /// `result`, what the model reads of a call past its gate, noted when its
+    /// tool already gave that answer this turn; a result of parts is not
+    /// compared (Python's `_model_part`).
+    fn with_repeat_note(&self, name: &str, result: ToolResult) -> ToolResult {
+        match result {
+            ToolResult::Text(text) => ToolResult::Text(self.repeat_guard.noted(name, text)),
+            ToolResult::Json(_) | ToolResult::Parts(_) => result,
         }
     }
 
