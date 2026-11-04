@@ -154,11 +154,11 @@ impl DeliveryStream {
         }
     }
 
-    /// Whether its read was stopped from outside, a delivery cancelled, a
-    /// held task cut or the kit's close, once [`next`](Self::next) read its
-    /// end: that end is no end of the response. What Python's channel reads by
-    /// the cancel raised in its read: what it keeps for a response that ended
-    /// goes behind this check.
+    /// Whether the end [`next`](Self::next) read is no end of the response:
+    /// its read was stopped from outside, a delivery cancelled, a held task
+    /// cut or the kit's close, or `deliver_stream` returned first. What
+    /// Python's channel reads by the cancel raised in its read: what it keeps
+    /// for a response that ended goes behind this check.
     #[must_use]
     pub fn cut(&self) -> bool {
         self.cut

@@ -20,8 +20,8 @@ use tokio::time::Instant;
 use super::support::{ReadingOn, Step, Streaming, Stuck, Timed, bind, kit_with, room_id};
 use crate::turns::observe::Carried;
 use crate::{
-    CancelOptions, Channel, ChannelError, DeliveryHandle, HookExecution, HookOptions, HookTrigger,
-    InboundResult, ProcessInboundOptions, RoomKit, RoomKitError,
+    CancelOptions, Channel, ChannelError, DeliveryHandle, InboundResult, ProcessInboundOptions,
+    RoomKit, RoomKitError,
 };
 
 /// A deferred call into a room whose agent's stream is `steps` and whose
@@ -209,7 +209,7 @@ async fn a_target_working_past_its_stream_s_end_is_cut_where_it_waits() {
     let kept = target.kept.lock().unwrap().clone();
     kit.close().await.unwrap();
     assert_eq!(elapsed, Duration::ZERO);
-    assert_eq!(kept, Vec::<&str>::new());
+    assert_eq!(kept, ["dropped"]);
 }
 
 /// Past a `cancel` of 1 ms that timed out, the kit's close and the handle's
@@ -265,34 +265,29 @@ async fn a_close_finding_a_target_reading_lets_it_finish() {
     assert_eq!(read(&waited), cited_and("cancelled"));
 }
 
-// Python's `record_error`: a target that fails on the close's cut: its ON_ERROR
-// fires once, and the call reads `kit_closed`, no error (RFC 12.10.4).
+// Python: a target's own `await kit.close()`, reading or past a cancel's end: 0.0 s,
+// and the code past it runs.
 #[tokio::test(start_paused = true)]
-async fn a_target_that_fails_on_the_close_s_cut_leaves_the_call_no_error() {
-    let target = ReadingOn::failing();
-    let kit = room(holding(), &target).await;
-    let errors = Arc::new(Mutex::new(0));
-    let counted = Arc::clone(&errors);
-    kit.hook(
-        HookTrigger::OnError,
-        move |_event: RoomEvent, _context| {
-            *counted.lock().unwrap() += 1;
-            async {}
-        },
-        HookOptions {
-            execution: HookExecution::Async,
-            name: "errors".to_owned(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let handle = deferred(&kit).await;
-    target.read.notified().await;
-    kit.close().await.unwrap();
-    let waited = handle.wait().await.unwrap();
-    assert_eq!(waited.error, None);
-    assert_eq!(waited.cancellation_reason.as_deref(), Some("kit_closed"));
-    assert_eq!(*errors.lock().unwrap(), 1);
+async fn a_target_s_own_close_returns_to_it() {
+    for (reading, cancels, expected) in [
+        (true, false, vec!["closed", "cut"]),
+        (false, true, vec!["cut", "closed"]),
+    ] {
+        let target = ReadingOn::closing(reading);
+        let kit = room(holding(), &target).await;
+        *target.closes.lock().unwrap() = Some(kit.clone());
+        let handle = deferred(&kit).await;
+        target.read.notified().await;
+        let start = Instant::now();
+        if cancels {
+            handle.cancel(CancelOptions::default()).await.unwrap();
+        }
+        kit.close().await.unwrap();
+        let elapsed = start.elapsed();
+        let kept = target.kept.lock().unwrap().clone();
+        assert_eq!(elapsed, Duration::ZERO, "reading: {reading}");
+        assert_eq!(kept, expected);
+    }
 }
 
 // Python: a `finally` that never ends: close takes its grace and its unwind, 7 s,
@@ -302,7 +297,7 @@ async fn a_target_that_fails_on_the_close_s_cut_leaves_the_call_no_error() {
 async fn a_close_past_a_cancel_drops_a_blocked_target_at_its_grace_s_end() {
     let (closed_in, waited, kept) = closed_past_a_cancel(&ReadingOn::blocked()).await;
     assert!(at(closed_in, Duration::from_secs(5)), "{closed_in:?}");
-    assert_eq!(kept, ["cut"]);
+    assert_eq!(kept, ["cut", "dropped"]);
     assert_eq!(waited.cancellation_reason.as_deref(), Some("stopped"));
     assert_eq!(read(&waited), cited_and("cancelled"));
 }

@@ -260,6 +260,21 @@ impl Tasks {
         self.spawn_in(kind, Marks::default().with(Unit::new()), future)
     }
 
+    /// Runs `future` as [`spawn`](Self::spawn) does, in `unit` and no other:
+    /// the kit's close spares it only for code that runs within that unit.
+    pub(crate) fn spawn_in_unit<F>(
+        self: &Arc<Self>,
+        kind: Kind,
+        unit: Unit,
+        future: F,
+    ) -> Option<JoinHandle<F::Output>>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.spawn_in(kind, Marks::default().with(unit), future)
+    }
+
     /// Runs `future` as [`spawn`](Self::spawn) does, in the unit the
     /// current code runs in: a task of a turn's, which the kit's close
     /// spares or cuts with the turn.

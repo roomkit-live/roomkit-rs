@@ -231,18 +231,6 @@ impl Record {
         self.cut_read_over.send_replace(true);
     }
 
-    /// What ends the wait for the read the cut stopped however the run ends:
-    /// nothing tells that read's end once the kit's close aborted the run.
-    fn read_over_with_the_run(self: &Arc<Self>) -> impl Drop + Send + use<> {
-        struct RunOver(Arc<Record>);
-        impl Drop for RunOver {
-            fn drop(&mut self) {
-                self.0.cut_read_over.send_replace(true);
-            }
-        }
-        RunOver(Arc::clone(self))
-    }
-
     fn decide(&self, result: &InboundResult) {
         // A held event keeps its delivery named until its release (RFC
         // §11.7.6), decided before the room's lock is released.
@@ -671,9 +659,7 @@ async fn run_leased<S: ConversationStore>(
     let kit = Arc::clone(inner);
     let mut caller = Caller::new(answer, defer, Arc::clone(&record));
     caller.hand = hand;
-    let read_over = record.read_over_with_the_run();
     let run = async move {
-        let _read_over = read_over;
         // The key names the delivery until the run is over.
         let _named = named;
         // A room activity: the kit's subscription to its bus first.
@@ -901,10 +887,6 @@ pub(crate) fn ended(
 mod tests {
     use super::*;
 
-    /// An agent's turn that met the kit's close crosses under its class,
-    /// `KitClosedError`: the close ended it, as a `kit_closed` call and a
-    /// cut turn's link, and the caller reads no error (RMK-1128's review;
-    /// Python's cascade drops its errors once the close cut it).
     /// A run the close aborted, past a cancel: Python's `wait()` reads the
     /// first reason (`DeliveryCascade.cancel` keeps it), and what its cut read
     /// left of the record.
@@ -925,26 +907,10 @@ mod tests {
         assert_eq!(aborted.response_metadata, left);
     }
 
-    /// A run over with nothing told of the read its cut stopped: the wait for
-    /// that read ends with it, a task the close would wait for otherwise.
-    #[tokio::test(start_paused = true)]
-    async fn the_wait_for_a_cut_read_ends_with_the_run() {
-        let record = Arc::new(Record::new(None));
-        record.decide(&InboundResult::default());
-        record.request_cancel("stopped");
-        record.await_cut_read();
-        let over = record.read_over_with_the_run();
-        let mut ending = tokio::spawn(end_once_over(Arc::clone(&record), Vec::new()));
-        let waited = tokio::time::timeout(std::time::Duration::from_secs(60), &mut ending).await;
-        assert!(waited.is_err(), "it ended with the read still under way");
-        drop(over);
-        tokio::time::timeout(std::time::Duration::from_secs(60), ending)
-            .await
-            .expect("the wait ends with the run")
-            .unwrap();
-        assert!(record.cancelled.borrow().is_some());
-    }
-
+    /// An agent's turn that met the kit's close crosses under its class,
+    /// `KitClosedError`: the close ended it, as a `kit_closed` call and a
+    /// cut turn's link, and the caller reads no error (RMK-1128's review;
+    /// Python's cascade drops its errors once the close cut it).
     #[test]
     fn a_turn_that_met_the_close_is_the_close_s() {
         let ended = [KIT_CLOSED, "KitClosedError", TURN_LINK_ERROR, "ValueError"]

@@ -49,7 +49,7 @@ use crate::channel::ChannelError;
 use crate::context::{self, Adopting, ExecutionContext};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::tasks::{Kind, Tasks};
+use crate::tasks::{Kind, Marks, Tasks, Unit};
 use crate::turn_runners::{FirstPass, Then};
 use crate::turns::{OwnerTurn, RemoteItem, record_of};
 
@@ -174,11 +174,13 @@ pub(super) async fn read_kept<S: ConversationStore>(
         ..EventSource::new(responder.channel_id.clone(), responder.channel_type.clone())
     };
     let live = kept.turn.record();
+    let reader_unit = Unit::new();
     let mut producer = Producer {
         room_id: answers.room_id.clone(),
         segments: Segments::new(source, answers, correlation_id).reading(live.clone()),
         stream: Some(kept.turn),
         cut: None,
+        reader_unit,
         reads: channel.as_ref().map_or(Reads::Nobody, |_| Reads::Target),
         ready: VecDeque::new(),
         over: None,
@@ -187,6 +189,7 @@ pub(super) async fn read_kept<S: ConversationStore>(
         kept_out: first_pass.then(String::new),
     };
     let placeholder = producer.segments.placeholder();
+    let reader_marks = Marks::current().with(reader_unit);
     let (done, reader_done) = oneshot::channel::<()>();
     let reader = async move {
         let read = match channel {
@@ -201,6 +204,7 @@ pub(super) async fn read_kept<S: ConversationStore>(
         let _signalled = done.send(());
         read
     };
+    let reader = reader_marks.scoped(reader);
     let read = producer
         .read_by(reader, pulled, reader_done, &inner.tasks, stops)
         .await;
@@ -358,6 +362,9 @@ struct Producer {
     stream: Option<OwnerTurn>,
     /// Why the read was stopped from outside, once it was: the turn is cut.
     cut: Option<&'static str>,
+    /// The unit of the kit's work the reader runs in, beside the run's, which
+    /// a close it calls spares.
+    reader_unit: Unit,
     /// Who reads the stream's rows in it.
     reads: Reads,
     /// What the reader is handed next, in order.
@@ -437,10 +444,11 @@ impl Producer {
         false
     }
 
-    /// Lets `reader` end on a task of the kit's, in the current context, in a
-    /// unit of its own: the close waits for it within its grace, then drops
-    /// it, even a close called from the turn whose run the read works for,
-    /// which spares that run alone.
+    /// Lets `reader` end on a task of the kit's, in the current context, in
+    /// its own unit and no other: the close waits for it within its grace,
+    /// then drops it, even a close called from the turn whose run the read
+    /// works for, which spares that run; a close `reader` called itself spares
+    /// that unit, and returns to it.
     fn leave_to_end_alone<R>(&self, reader: Pin<Box<R>>, tasks: &Arc<Tasks>)
     where
         R: Future<Output = Result<ChannelOutput, ChannelError>> + Send + 'static,
@@ -456,7 +464,7 @@ impl Producer {
                 );
             }
         });
-        drop(tasks.spawn_alone(Kind::Turn, work));
+        drop(tasks.spawn_in_unit(Kind::Turn, self.reader_unit, work));
     }
 
     /// The read is stopped from outside, for `reason`: `cancel` crosses at
@@ -617,15 +625,7 @@ impl Producer {
         let (mut output, target_error) = match read {
             Ok(output) => (output, None),
             Err(error) => {
-                // Past the close's cut a failure is the cut's: its ON_ERROR
-                // fires, and the call reads its reason, no error (Python's
-                // `record_error`, RFC §12.10.4).
-                let class = if self.cut == Some(KIT_CLOSED) {
-                    KIT_CLOSED
-                } else {
-                    "ChannelError"
-                };
-                let record = ErrorRecord::new(class, error.to_string());
+                let record = ErrorRecord::new("ChannelError", error.to_string());
                 (ChannelOutput::default(), Some(record))
             }
         };

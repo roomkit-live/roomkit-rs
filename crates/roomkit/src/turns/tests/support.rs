@@ -577,8 +577,10 @@ pub(super) struct Stuck {
 pub(super) struct ReadingOn {
     /// How long it flushes past the end; none, it never returns.
     flush: Option<Duration>,
-    /// Whether it fails at the end instead.
-    fails: bool,
+    /// The kit it closes, once at its first item or once past the end.
+    pub(super) closes: Arc<Mutex<Option<RoomKit>>>,
+    /// Whether it closes the kit reading, not past the end.
+    closes_reading: bool,
     /// Told at its first item.
     pub(super) read: Arc<tokio::sync::Notify>,
     /// Told once it read the stream's end.
@@ -599,34 +601,62 @@ impl ReadingOn {
         Self::default()
     }
 
-    pub(super) fn failing() -> Self {
+    /// A target that closes the kit `closes` holds, at its first item when
+    /// `reading`, else past the end; it then keeps `closed`.
+    pub(super) fn closing(reading: bool) -> Self {
         Self {
-            fails: true,
+            closes_reading: reading,
             ..Self::default()
+        }
+    }
+
+    /// Closes the kit it holds, if it still does, from its own code.
+    async fn close_the_kit(&self) {
+        let kit = self.closes.lock().unwrap().take();
+        if let Some(kit) = kit {
+            drop(kit.close().await);
+            self.kept.lock().unwrap().push("closed");
         }
     }
 
     /// Reads `stream` to its end, then does what it does past it.
     async fn deliver(&self, mut stream: DeliveryStream) -> Result<ChannelOutput, ChannelError> {
+        let mut dropped = DropNote(Some(Arc::clone(&self.kept)));
         let mut first = true;
         while stream.next().await.is_some() {
             if std::mem::take(&mut first) {
                 self.read.notify_one();
+                if self.closes_reading {
+                    self.close_the_kit().await;
+                }
             }
         }
         self.past_the_end.notify_one();
         if stream.cut() {
             self.kept.lock().unwrap().push("cut");
         }
-        if self.fails {
-            return Err("the target failed".into());
+        self.close_the_kit().await;
+        if self.flush.is_none() && !self.kept.lock().unwrap().contains(&"closed") {
+            std::future::pending::<()>().await;
         }
-        let Some(flush) = self.flush else {
-            return std::future::pending().await;
-        };
-        tokio::time::sleep(flush).await;
-        self.kept.lock().unwrap().push("flushed");
+        if let Some(flush) = self.flush {
+            tokio::time::sleep(flush).await;
+            self.kept.lock().unwrap().push("flushed");
+        }
+        dropped.0 = None;
         Ok(ChannelOutput::empty())
+    }
+}
+
+/// Notes a `deliver_stream` dropped before its end, while it holds the note's
+/// list.
+struct DropNote(Option<Arc<Mutex<Vec<&'static str>>>>);
+
+impl Drop for DropNote {
+    fn drop(&mut self) {
+        if let Some(kept) = self.0.take() {
+            kept.lock().unwrap().push("dropped");
+        }
     }
 }
 
