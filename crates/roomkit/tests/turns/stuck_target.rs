@@ -38,6 +38,8 @@ enum Stuck {
     Flushes,
     /// Past that end for a while: it flushes, then fails.
     FailsFlushing,
+    /// At that end, with no wait: it fails.
+    FailsAtOnce,
 }
 
 /// How the agent takes the room's turns.
@@ -64,6 +66,8 @@ struct Target {
     told: Arc<Notify>,
     read: Arc<Mutex<Vec<String>>>,
     delivered: Arc<Mutex<Vec<EventType>>>,
+    /// How long a delivery takes it.
+    delivers_in: Duration,
 }
 
 impl Target {
@@ -146,6 +150,9 @@ impl Channel for Target {
         if !first {
             return Ok(ChannelOutput::empty());
         }
+        if matches!(self.stuck, Stuck::FailsAtOnce) {
+            return Err(std::io::Error::other("the flush failed").into());
+        }
         if matches!(self.stuck, Stuck::BetweenReads | Stuck::PastTheEnd) {
             std::future::pending::<()>().await;
         }
@@ -172,7 +179,11 @@ impl Channel for Target {
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         self.delivered.lock().unwrap().push(event.r#type);
-        std::future::ready(Ok(ChannelOutput::empty()))
+        let takes = self.delivers_in;
+        async move {
+            tokio::time::sleep(takes).await;
+            Ok(ChannelOutput::empty())
+        }
     }
 }
 
@@ -202,6 +213,11 @@ struct Cut {
 }
 
 async fn cut(stuck: Stuck, turns: Turns) -> Cut {
+    cut_with(stuck, turns, Duration::ZERO).await
+}
+
+/// [`cut`], its target taking `delivers_in` for each delivery.
+async fn cut_with(stuck: Stuck, turns: Turns, delivers_in: Duration) -> Cut {
     let kit = RoomKit::new(RoomKitOptions::default());
     let told = Arc::new(Notify::new());
     let read = Arc::new(Mutex::new(Vec::new()));
@@ -212,6 +228,7 @@ async fn cut(stuck: Stuck, turns: Turns) -> Cut {
         told: Arc::clone(&told),
         read: Arc::clone(&read),
         delivered: Arc::clone(&delivered),
+        delivers_in,
     })
     .unwrap();
     let model = ScriptedProvider::new([
@@ -464,27 +481,56 @@ async fn the_room_s_next_turn_starts_while_a_cut_target_flushes() {
 }
 
 // A target that fails once it flushed past its cut: what the cut stored stands,
-// and its caller reads the failure (RMK-1343, HITL fcaf1ecd). Python, whose `finally`
-// fails before anything is stored, stores the text unmarked, with no record.
+// and its caller reads the failure, whichever ends first, the cut's end or the
+// run's, a delivery still running holding the run (RMK-1343, HITL fcaf1ecd).
+// Python, whose `finally` fails before anything is stored, stores the text
+// unmarked, with no record.
 #[tokio::test(start_paused = true)]
 async fn a_target_that_fails_flushing_leaves_what_the_cut_stored() {
-    let mut cut = cut(Stuck::FailsFlushing, Turns::Serialized).await;
-    let result = timeout(LONG, &mut cut.first)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(
-        result
-            .error
-            .as_ref()
-            .is_some_and(|error| error.message.contains("the flush failed")),
-        "{:?}",
-        result.error
-    );
-    timeout(LONG, cut.reported.notified()).await.unwrap();
-    assert_eq!(rows_of(&cut.kit, &cut.a).await, cut_in_a_call());
-    cut.kit.close().await.unwrap();
+    for delivers_in in [Duration::ZERO, FLUSH * 5] {
+        let mut cut = cut_with(Stuck::FailsFlushing, Turns::Serialized, delivers_in).await;
+        let result = timeout(LONG, &mut cut.first)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let error = result.error.as_ref().map(|error| error.message.as_str());
+        assert_eq!(error, Some("the flush failed"), "{delivers_in:?}");
+        assert_eq!(
+            result.response_metadata.get("turns").unwrap()["ai"]["loop_end_reason"],
+            json!("cancelled"),
+            "{delivers_in:?}"
+        );
+        timeout(LONG, cut.reported.notified()).await.unwrap();
+        assert_eq!(rows_of(&cut.kit, &cut.a).await, cut_in_a_call());
+        cut.kit.close().await.unwrap();
+    }
+}
+
+// A target that fails at its stream's end, with no wait: its read ends before
+// anything is stored, as Python's: the text unmarked with no record, its failure
+// its caller's, whichever ends first (HITL fcaf1ecd).
+#[tokio::test(start_paused = true)]
+async fn a_target_that_fails_at_once_stays_as_python() {
+    for delivers_in in [Duration::ZERO, FLUSH * 5] {
+        let mut cut = cut_with(Stuck::FailsAtOnce, Turns::Serialized, delivers_in).await;
+        let result = timeout(LONG, &mut cut.first)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let error = result.error.as_ref().map(|error| error.message.as_str());
+        assert_eq!(error, Some("the flush failed"), "{delivers_in:?}");
+        assert_eq!(
+            result.response_metadata.get("turns"),
+            None,
+            "{delivers_in:?}"
+        );
+        let mut unrecorded = cut_in_a_call();
+        unrecorded[1].2 = None;
+        assert_eq!(rows_of(&cut.kit, &cut.a).await, unrecorded);
+        cut.kit.close().await.unwrap();
+    }
 }
 
 macro_rules! streaming_channel_declaration {
@@ -635,6 +681,110 @@ async fn a_reader_gone_while_a_call_runs_leaves_no_generation_in_flight() {
         .unwrap();
     assert_eq!(said.metadata["loop_end_reason"], json!("cancelled"));
     assert_eq!(said.metadata["ai_usage_complete"], json!(true));
+    kit.close().await.unwrap();
+}
+
+/// A target that waits, once it read a row of its first response, until it is
+/// released: its read of the failure comes after.
+struct WaitsOnARow {
+    first: AtomicBool,
+    told: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl Channel for WaitsOnARow {
+    streaming_channel_declaration!();
+
+    async fn deliver_stream(
+        &self,
+        mut stream: DeliveryStream,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        let first = self.first.swap(false, Ordering::SeqCst);
+        while let Some(item) = stream.next().await {
+            if first && matches!(item, Ok(StreamItem::Row(_))) {
+                self.told.notify_one();
+                self.release.notified().await;
+            }
+        }
+        Ok(ChannelOutput::empty())
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
+    }
+}
+
+// A response that failed before the cut, its target still working on the failed
+// text's row: the room's next turn does not wait for it, and its caller reads
+// the response's failure. Python's cut wins there (RMK-1387).
+#[tokio::test(start_paused = true)]
+async fn a_response_failed_before_a_cut_keeps_its_failure() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let told = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    kit.register_channel(WaitsOnARow {
+        first: AtomicBool::new(true),
+        told: Arc::clone(&told),
+        release: Arc::clone(&release),
+    })
+    .unwrap();
+    let agent_options = AiChannelOptions {
+        serialize_room_turns: true,
+        ..AiChannelOptions::default()
+    };
+    let model = ScriptedProvider::new([
+        ScriptedRound::writing(["Hello."]).failing("boom"),
+        ScriptedRound::answering("second"),
+    ]);
+    kit.register_channel(AiChannel::new(channel("ai"), model, agent_options).unwrap())
+        .unwrap();
+    let a = RoomId::new("a").unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(a.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["ws", "ai"] {
+        kit.attach_channel(&a, &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let mut one = message("one");
+    one.delivery_key = Some("k".to_owned());
+    let sender = kit.clone();
+    let opts = options(&a);
+    let first = tokio::spawn(async move { sender.process_inbound(one, opts).await });
+    timeout(LONG, told.notified()).await.unwrap();
+    let cancelled = kit
+        .cancel_delivery("k", roomkit::CancelDeliveryOptions::default())
+        .await;
+    assert_eq!(cancelled, 1);
+    let start = Instant::now();
+    let next = kit.process_inbound(message("two"), options(&a));
+    timeout(LONG, next).await.unwrap().unwrap();
+    assert_eq!(start.elapsed(), Duration::ZERO);
+
+    release.notify_one();
+    let first = timeout(LONG, first).await.unwrap().unwrap().unwrap();
+    let error = first.error.as_ref().map(|error| error.message.as_str());
+    assert_eq!(error, Some("boom"));
     kit.close().await.unwrap();
 }
 
