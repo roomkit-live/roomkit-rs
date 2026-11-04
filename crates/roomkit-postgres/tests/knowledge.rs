@@ -175,9 +175,7 @@ async fn init_refuses_a_language_the_database_lacks() {
         .await
         .unwrap_err();
     assert!(
-        closed
-            .to_string()
-            .contains("init() must be called before use"),
+        full_text(&*closed).contains("init() must be called before use"),
         "{closed}"
     );
 }
