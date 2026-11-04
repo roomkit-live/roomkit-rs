@@ -247,12 +247,14 @@ impl<P: AiProvider> Loop<P> {
         )
     }
 
-    /// The loop's items on `conversation`, as its reader pulls them.
+    /// The loop's items on `conversation`, as its reader pulls them. Its span
+    /// opens at the first pull: a stream nobody read, muted or cut, opened
+    /// none, as Python's generator never started.
     pub(crate) fn run(mut self, conversation: Vec<Message>) -> TurnItems<'static> {
-        items(move |out| {
+        items(move |out| async move {
             let (room_id, channel_id) = (&self.context.room_id, &self.context.channel_id);
             self.turn_span = self.telemetry.start_turn::<P>(room_id, channel_id);
-            self.rounds(conversation, out)
+            self.rounds(conversation, out).await;
         })
     }
 

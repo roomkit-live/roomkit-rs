@@ -19,9 +19,9 @@ use roomkit::telemetry::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions, TurnTap};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, DelegateOptions, HookExecution, HookOptions,
-    HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions, ToolCallEvent,
-    current_turn_host,
+    AttachChannelOptions, CancelOptions, CreateRoomOptions, DelegateOptions, HookExecution,
+    HookOptions, HookTrigger, MuteOptions, ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions,
+    ToolCallEvent, current_turn_host,
 };
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiResponseEvent, AiTool,
@@ -29,6 +29,7 @@ use roomkit_ai::{
     StreamTextDelta, ToolError, ToolResult, Tools, tool_arguments,
 };
 use serde_json::{Value, json};
+use tokio::sync::Notify;
 
 /// What a scripted generation does: answers `.0`, calling `.1`, or fails.
 enum Round {
@@ -136,6 +137,13 @@ async fn turn_recording(
     sensitive: bool,
     rounds: Vec<Round>,
 ) -> (RoomKit, Arc<MockTelemetryProvider>) {
+    let (kit, mock) = room_of(sensitive, rounds).await;
+    says_hello(&kit).await;
+    (kit, mock)
+}
+
+/// The room of [`turn_recording`], no message sent yet.
+async fn room_of(sensitive: bool, rounds: Vec<Round>) -> (RoomKit, Arc<MockTelemetryProvider>) {
     let mock = Arc::new(MockTelemetryProvider::default());
     let provider: Arc<dyn TelemetryProvider> = Arc::<MockTelemetryProvider>::clone(&mock);
     let kit = RoomKit::new(RoomKitOptions {
@@ -184,13 +192,17 @@ async fn turn_recording(
             .await
             .unwrap();
     }
+    (kit, mock)
+}
+
+/// The first message of the room, answered before it returns.
+async fn says_hello(kit: &RoomKit) {
     let message = InboundMessage::new(id("sms"), "+15550000001", TextContent::new("Hello"));
     let options = ProcessInboundOptions {
         room_id: Some(room()),
         ..ProcessInboundOptions::default()
     };
     kit.process_inbound(message, options).await.unwrap();
-    (kit, mock)
 }
 
 fn one(spans: Vec<Span>) -> Span {
@@ -221,6 +233,82 @@ async fn a_turn_opens_a_generation_span_under_its_broadcast() {
         "{span:?} under {broadcasts:?}"
     );
     kit.close().await.unwrap();
+}
+
+// Python: tests/test_telemetry.py::TestLLMTelemetry::test_a_stream_closed_unread_opens_no_llm_span
+#[tokio::test]
+async fn a_muted_agent_s_stream_opens_no_generation_span() {
+    let (kit, mock) = room_of(false, vec![Round::Says("Never.", None)]).await;
+    kit.mute(&room(), &id("ai"), MuteOptions::default())
+        .await
+        .unwrap();
+    says_hello(&kit).await;
+    kit.close().await.unwrap();
+    let opened = mock.get_spans(SpanKind::LlmGenerate);
+    assert_eq!(opened, Vec::new());
+}
+
+// Python: tests/test_telemetry.py::TestLLMTelemetry::test_a_stream_a_cut_left_unread_opens_no_llm_span:
+// the first agent's stream is read while its tool holds, the delivery is
+// cancelled there, and the second agent's is closed unread.
+#[tokio::test]
+async fn a_stream_a_cut_left_unread_opens_no_generation_span() {
+    let (held, freed) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (kit, mock) = room_of(false, Vec::new()).await;
+    let schema = json!({ "type": "object", "properties": {} });
+    let tool = AiTool {
+        parameters: schema,
+        ..AiTool::new("held", "Holds.").unwrap()
+    };
+    let (holding, release) = (Arc::clone(&held), Arc::clone(&freed));
+    let tools = Tools::new().tool(tool, move |_call, _context| {
+        let (holding, release) = (Arc::clone(&holding), Arc::clone(&release));
+        async move {
+            holding.notify_one();
+            release.notified().await;
+            Ok(ToolResult::Text("42".to_owned()))
+        }
+    });
+    let options = AiChannelOptions {
+        tools: tools.into(),
+        ..AiChannelOptions::default()
+    };
+    let script = vec![
+        Round::Says("Checking.", Some("held")),
+        Round::Says("Done.", None),
+    ];
+    let first = AiChannel::new(id("first"), Scripted::new(script), options).unwrap();
+    kit.register_channel(first).unwrap();
+    let script = Scripted::new(vec![Round::Says("Never.", None)]);
+    let second = AiChannel::new(id("second"), script, AiChannelOptions::default()).unwrap();
+    kit.register_channel(second).unwrap();
+    for channel in ["first", "second"] {
+        kit.attach_channel(&room(), &id(channel), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    kit.mute(&room(), &id("ai"), MuteOptions::default())
+        .await
+        .unwrap();
+    let message = InboundMessage::new(id("sms"), "+15550000001", TextContent::new("Hello"));
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        defer_delivery: true,
+        ..ProcessInboundOptions::default()
+    };
+    let result = kit.process_inbound(message, options).await.unwrap();
+    let delivery = result.delivery.unwrap();
+    held.notified().await;
+    delivery.cancel(CancelOptions::default()).await.unwrap();
+    freed.notify_one();
+    delivery.wait().await.unwrap();
+    kit.close().await.unwrap();
+    let channels: Vec<_> = mock
+        .get_spans(SpanKind::LlmGenerate)
+        .into_iter()
+        .filter_map(|span| span.channel_id)
+        .collect();
+    assert_eq!(channels, ["first"]);
 }
 
 // Python: tests/test_telemetry.py::TestLLMTelemetry::test_ai_channel_tool_call_span,

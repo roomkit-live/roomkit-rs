@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A stream nobody read opens no `llm.generate`, as Python's: a muted agent's, or one a cut left unread, where the span opened with the response and ended `cancelled` under `framework.broadcast` (HITL 0baec919, RMK-1384).
 - A replay gives each call its own result, as Python's (RFC §6.4): a round's results pair to its calls first in, first out per id, so a later turn no longer reads a refused call with the result of the one that held its id (RMK-1373).
 - A turn that wrote no message records on its last row, as Python's: its record rides its last message, else its last row, the call's end, a strategy's first pass handing it on (RMK-1344).
 - A cut stores what its turn leaves at once and gives the room's line up: only its caller waits for a streaming target still working past the cut, so a target stuck there no longer holds the next message of an agent that serializes or steers its room's turns. Python's blocked `finally` holds it still, the target's defect. Unlike Python's, a target that fails once it flushed leaves what the cut stored, as a cut's, its failure its caller's error, and a call's end may reach it while it flushes (RMK-1343, HITL d406164d, fcaf1ecd).
