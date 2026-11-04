@@ -69,10 +69,9 @@ fn keep_unread_addresses(stored: &Value, addresses: &mut Value) {
 /// racing another's reads it once that commits. It files the addresses it
 /// declares under its own organization, then removes the rest of the identity's
 /// rows, a row of another scope for an address it keeps among them, so that what
-/// it no longer holds stops resolving to it; in that order,
-/// so that a replacement refused for an address it takes from another has locked
-/// nothing that other is removing, and two that swap addresses read the refusal,
-/// not a deadlock.
+/// it no longer holds stops resolving to it; in that order, so that a replacement
+/// refused for an address it takes from another has locked nothing that other is
+/// removing.
 pub(crate) async fn create(client: &mut Object, identity: &Identity) -> Result<(), Failure> {
     let transaction = client.transaction().await?;
     let mut addresses = serde_json::to_value(&identity.channel_addresses)?;
@@ -112,7 +111,10 @@ pub(crate) async fn create(client: &mut Object, identity: &Identity) -> Result<(
         return Err(StoreError::IdentityNotFound(identity.id.clone()).into());
     }
     let organization = identity.organization_id.as_deref().unwrap_or_default();
-    let declared = declared_addresses(&addresses);
+    let mut declared = declared_addresses(&addresses);
+    // In one order whoever files them, so that two replacements taking each
+    // other's addresses never wait on each other's rows.
+    declared.sort_unstable();
     for (channel_type, address) in &declared {
         file_address(
             &transaction,

@@ -556,33 +556,50 @@ async fn a_replacement_removes_a_row_of_another_scope_for_a_kept_address() {
 }
 
 /// Python: `test_two_replacements_swapping_addresses_are_refused_without_a_deadlock`:
-/// each new address is filed before the old ones go, so neither waits on what the
-/// other removes, and each reads the refusal.
+/// each new address is filed before the old ones go, in one order whoever files
+/// them, so neither waits on what the other holds, and each reads the refusal,
+/// whether or not it keeps its own.
 #[tokio::test]
 async fn two_replacements_swapping_addresses_are_refused_without_a_deadlock() {
     let Some((_schema, store)) = fresh().await else {
         return;
     };
-    for number in 0..8 {
-        let (one, two) = (format!("i{number}a"), format!("i{number}b"));
-        let (first, second) = (format!("+1{number}"), format!("+2{number}"));
-        for (name, address) in [(&one, &first), (&two, &second)] {
-            store
-                .create_identity(identity(name, None, Some(address)))
-                .await
-                .unwrap();
-        }
-        let (taken_by_one, taken_by_two) = tokio::join!(
-            store.create_identity(identity(&one, None, Some(&second))),
-            store.create_identity(identity(&two, None, Some(&first))),
-        );
-        for outcome in [taken_by_one, taken_by_two] {
-            assert_eq!(
-                outcome,
-                Err(StoreError::AddressLinked {
-                    channel_type: ChannelType::SMS,
-                })
+    for keeping in [false, true] {
+        for number in 0..8 {
+            let (one, two) = (
+                format!("i{keeping}{number}a"),
+                format!("i{keeping}{number}b"),
             );
+            let (first, second) = (
+                format!("+1{keeping}{number}"),
+                format!("+2{keeping}{number}"),
+            );
+            for (name, address) in [(&one, &first), (&two, &second)] {
+                store
+                    .create_identity(identity(name, None, Some(address)))
+                    .await
+                    .unwrap();
+            }
+            let taking = |name: &str, own: &str, other: &str| {
+                let mut taker = identity(name, None, Some(other));
+                if keeping {
+                    taker.link(ChannelType::SMS, own);
+                }
+                taker
+            };
+            let (taken_by_one, taken_by_two) = tokio::join!(
+                store.create_identity(taking(&one, &first, &second)),
+                store.create_identity(taking(&two, &second, &first)),
+            );
+            for outcome in [taken_by_one, taken_by_two] {
+                assert_eq!(
+                    outcome,
+                    Err(StoreError::AddressLinked {
+                        channel_type: ChannelType::SMS,
+                    }),
+                    "keeping: {keeping}"
+                );
+            }
         }
     }
 }

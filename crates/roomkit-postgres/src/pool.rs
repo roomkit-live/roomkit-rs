@@ -145,7 +145,8 @@ fn with_settings(config: &mut Config, settings: &[(String, String)]) {
         let value: String = value
             .chars()
             .flat_map(|c| {
-                let escaped = c == '\\' || c.is_ascii_whitespace();
+                // What C's `isspace` reads: `is_ascii_whitespace` leaves the vertical tab out.
+                let escaped = c == '\\' || c == '\u{b}' || c.is_ascii_whitespace();
                 escaped.then_some('\\').into_iter().chain([c])
             })
             .collect();
@@ -399,14 +400,26 @@ mod tests {
         assert_eq!(named.config.get_dbname(), Some("mine"));
         let beside_a_path = target(Some("postgresql://u:p@h/path?database=mine")).unwrap();
         assert_eq!(beside_a_path.config.get_dbname(), Some("path"));
-        let tab = target(Some(
-            "postgresql://u:p@h/d?search_path=a%09-c%09application_name%3Dinjected",
-        ))
-        .unwrap();
-        assert_eq!(
-            tab.config.get_options(),
-            Some("-c search_path=a\\\t-c\\\tapplication_name=injected")
-        );
+        for (escaped, blank) in [
+            ("%09", '\t'),
+            ("%0A", '\n'),
+            ("%0B", '\u{b}'),
+            ("%0C", '\u{c}'),
+            ("%0D", '\r'),
+        ] {
+            let read = target(Some(&format!(
+                "postgresql://u:p@h/d?search_path=a{escaped}-c{escaped}application_name%3Dinjected"
+            )))
+            .unwrap();
+            assert_eq!(
+                read.config.get_options(),
+                Some(
+                    format!("-c search_path=a\\{blank}-c\\{blank}application_name=injected")
+                        .as_str()
+                ),
+                "{escaped}"
+            );
+        }
     }
 
     /// Python: asyncpg refuses a string that names no Postgres scheme, and
@@ -449,7 +462,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_unix_socket_is_tried_whatever_the_sslmode() {
-        let directory = std::env::temp_dir().join(format!("roomkit-sock-{}", std::process::id()));
+        // Not under TMPDIR, whose length a socket's path has no room for.
+        let directory = std::path::Path::new("/tmp").join(format!("rk-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let listener =
             std::os::unix::net::UnixListener::bind(directory.join(".s.PGSQL.5432")).unwrap();
