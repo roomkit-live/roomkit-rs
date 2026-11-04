@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{EventType, RetryPolicy, RoomEvent};
+use roomkit::model::{EventContent, EventType, RetryPolicy, RoomEvent};
 use roomkit::testing::TurnTap;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -467,6 +467,40 @@ async fn a_usage_the_price_cannot_read_fails_the_turn() {
         );
         room.kit.close().await.unwrap();
     }
+}
+
+// Python: channels/_ai_stream_round.py stream: `record_usage` raises at the
+// done event, before `_dedup.finish()`. A round's replayed prefix, held, stays
+// held, so nothing of it reaches the room.
+#[tokio::test]
+async fn a_usage_the_price_cannot_read_hands_no_held_prefix() {
+    let usage = json!({ "input_tokens": -1 }).as_object().cloned().unwrap();
+    let provider = ScriptedProvider::new([
+        ScriptedRound::calling("Let me look.", [("c1", "lookup", "{}")]),
+        ScriptedRound::answering("Let me look.").with_usage(usage),
+    ]);
+    let options = AiChannelOptions {
+        turn_budget_usd: Some(1.0),
+        tools: served().into(),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(channel("assistant"), Priced(provider), options).unwrap();
+    let room = Room::with_agent(agent).await;
+    let result = room.says("Order 1?").await;
+    assert!(result.error.is_some());
+    let said: Vec<_> = room
+        .timeline()
+        .await
+        .into_iter()
+        .filter(|event| event.source.channel_id == channel("assistant"))
+        .filter_map(|event| match event.content {
+            EventContent::Text(text) => Some(text.body),
+            _ => None,
+        })
+        .collect();
+    room.kit.close().await.unwrap();
+    // The first round's, said before its call; the second's stays held.
+    assert_eq!(said, ["Let me look."]);
 }
 
 /// The budgets the loop's end states, as the turn's wire carries them.

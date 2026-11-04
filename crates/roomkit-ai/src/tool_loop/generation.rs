@@ -130,6 +130,7 @@ impl Generation {
         let mut done = StreamDone::default();
         let mut reports = Vec::new();
         let mut streamed = false;
+        let mut unpriced = false;
         while let Some(event) = next(&mut stream).await {
             if steering.cancelled() {
                 window.thinking.end();
@@ -164,7 +165,7 @@ impl Generation {
                     calls.push(call);
                 }
                 StreamEvent::Done(ended) => {
-                    let unpriced = limits.cannot_price(&ended.usage);
+                    unpriced = limits.cannot_price(&ended.usage);
                     take_done(ended, &mut done, &mut reports);
                     if unpriced {
                         break;
@@ -182,7 +183,12 @@ impl Generation {
             }
         }
         window.thinking.end();
-        let finished = replayed.finish();
+        // Python's loop raises at a usage it cannot price, past no `finish`.
+        let finished = if unpriced {
+            Vec::new()
+        } else {
+            replayed.finish()
+        };
         window.text.add(&finished);
         deliver(finished, &mut delivered, out).await;
         window.text.flush();
