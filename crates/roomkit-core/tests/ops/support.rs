@@ -52,11 +52,11 @@ use roomkit_core::model::{
     RoomEvent, RoomId, RoomStatus, RoomUpdates, Task, TextContent, Timestamp,
 };
 use roomkit_core::ops::{
-    ChannelConfig, ChannelOutcome, ChannelRequest, CommitRecord, Decided, DeleteEvent, Effect,
-    EffectId, Entry, Environment, FrameworkEvent, HoldOutcome, HoldRequest, HookAnswer,
-    HookRequest, IdentityRequest, Inbound, InboundError, InboundResult, InboundTarget, KitConfig,
-    MutationError, Notice, Outcome, Request, SequentialEnvironment, Settled, StoreOutcome,
-    StoreRequest, UpdateEvent, default_inbound_event,
+    ChannelConfig, ChannelOutcome, ChannelRequest, CommitRecord, Decided, DeleteEvent,
+    DiscussionOutcome, DiscussionRequest, Effect, EffectId, Entry, Environment, FrameworkEvent,
+    HoldOutcome, HoldRequest, HookAnswer, HookRequest, IdentityRequest, Inbound, InboundError,
+    InboundResult, InboundTarget, KitConfig, MutationError, Notice, Outcome, Request,
+    SequentialEnvironment, Settled, StoreOutcome, StoreRequest, UpdateEvent, default_inbound_event,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTrigger};
@@ -1124,6 +1124,7 @@ impl Sim {
             Request::Identity(IdentityRequest::TryCode { request_id, .. }) => {
                 format!("try code of {request_id}")
             }
+            Request::Discussion(_) => "discussion".to_owned(),
             Request::Route { query } => format!("route {} {}", query.channel_id, query.sender_id),
             Request::Channel(ChannelRequest::HandleInbound { channel_id, .. }) => {
                 format!("handle_inbound {channel_id}")
@@ -1236,6 +1237,7 @@ impl Sim {
                 address,
                 organization_id,
             }) => self.resolve_identity(&channel_type, &address, organization_id.as_deref()),
+            Request::Discussion(request) => no_discussion(&request),
             Request::Route { query } => self.execute_route(*query),
             // No simulated kit resolves its senders (RFC §11): the core asks
             // none.
@@ -1479,6 +1481,7 @@ impl Sim {
                 | StoreRequest::UpdateParticipant { .. },
             )
             | Request::Identity(_)
+            | Request::Discussion(_)
             | Request::Channel(_)
             | Request::Hook(HookRequest::RunHook { .. }) => return None,
         })
@@ -2103,4 +2106,15 @@ pub(crate) fn describe(event: &RoomEvent) -> String {
 /// Makes the binding `id` read-only.
 pub(crate) fn read_only(binding: &mut ChannelBinding) {
     binding.access = Access::ReadOnly;
+}
+
+/// A room whose discussion nothing runs in these operations' environment:
+/// told, with no turn to give.
+fn no_discussion(request: &DiscussionRequest) -> Outcome {
+    match request {
+        DiscussionRequest::Turn { .. } => DiscussionOutcome::Turn(None).into(),
+        DiscussionRequest::Committed { .. } | DiscussionRequest::Instruction { .. } => {
+            DiscussionOutcome::Done.into()
+        }
+    }
 }

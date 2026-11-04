@@ -3,6 +3,8 @@
 
 use std::time::Duration;
 
+use serde_json::Value;
+
 use super::EffectId;
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, ChannelType, DeliveryError, ErrorRecord, EventId,
@@ -43,9 +45,18 @@ pub enum Request {
         /// What the router is asked.
         query: Box<RouteQuery>,
     },
+    /// The discussion holding a room (RFC §19.7.5), told under the room's
+    /// lock. Answer [`Outcome::Discussion`].
+    Discussion(DiscussionRequest),
     /// Identity resolution (RFC §10.1 step 5, §11): the kit's resolver,
     /// and its identity hooks.
     Identity(IdentityRequest),
+}
+
+impl From<DiscussionRequest> for Request {
+    fn from(request: DiscussionRequest) -> Self {
+        Self::Discussion(request)
+    }
 }
 
 impl From<IdentityRequest> for Request {
@@ -76,6 +87,65 @@ impl From<HookRequest> for Request {
     fn from(request: HookRequest) -> Self {
         Self::Hook(request)
     }
+}
+
+/// What the pipeline asks of the discussion holding a room (RFC §19.7.5),
+/// under the room's lock, so that the queue moves in the order of the
+/// room's commits. A room whose discussion this process does not run is
+/// answered [`DiscussionOutcome::Done`], or no turn.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DiscussionRequest {
+    /// A message was committed and took its place in the room's lane: queue
+    /// whom it asks for (rule 8). What goes wrong here is logged: an event
+    /// committed is delivered.
+    Committed {
+        /// The room.
+        room_id: RoomId,
+        /// The message, committed.
+        event: Box<RoomEvent>,
+        /// The channels its delivery set reaches (§10.1 step 12).
+        reach: Vec<ChannelId>,
+        /// The room's context at the commit.
+        context: Box<RoomContext>,
+    },
+    /// An instruction addressed to agents of the discussion: a turn of its
+    /// own each, in place of its delivery (rule 7).
+    Instruction {
+        /// The room.
+        room_id: RoomId,
+        /// The instruction, never stored.
+        event: Box<RoomEvent>,
+    },
+    /// The turn to give now, if any, its queue edited under the lock.
+    Turn {
+        /// The room.
+        room_id: RoomId,
+        /// The room's context, with its history, read under the lock.
+        context: Box<RoomContext>,
+    },
+}
+
+/// The turn a discussion gives: the rerun of the event it answers, for one
+/// agent alone (RFC §19.7.5 rules 9 and 11).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiscussionTurn {
+    /// The agent whose turn it is.
+    pub agent: ChannelId,
+    /// The event the turn answers, at the depth it was asked at.
+    pub answered: Box<RoomEvent>,
+    /// The mark its trigger carries, under `rules::discussion::TURN_KEY`.
+    pub mark: Value,
+    /// The discussion's own chain-depth limit.
+    pub max_depth: u32,
+}
+
+/// A discussion's answer to a [`DiscussionRequest`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum DiscussionOutcome {
+    /// Told; nothing to answer.
+    Done,
+    /// The turn to give, `None` for none.
+    Turn(Option<Box<DiscussionTurn>>),
 }
 
 /// What the driver holds of a room for an operation, and carries out
@@ -563,6 +633,14 @@ pub enum Outcome {
     DeadlinePassed,
     /// Identity resolution's answer.
     Identity(IdentityAnswer),
+    /// A discussion's answer.
+    Discussion(DiscussionOutcome),
+}
+
+impl From<DiscussionOutcome> for Outcome {
+    fn from(outcome: DiscussionOutcome) -> Self {
+        Self::Discussion(outcome)
+    }
 }
 
 impl From<IdentityAnswer> for Outcome {

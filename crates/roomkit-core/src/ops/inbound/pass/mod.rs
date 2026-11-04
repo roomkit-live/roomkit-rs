@@ -125,6 +125,9 @@ pub(super) enum PassResult {
         /// The status that refused it.
         status: RoomStatus,
     },
+    /// An instruction to a discussion that is over, which gives no turn
+    /// (RFC §19.7.5 rule 15): nothing was stored.
+    DiscussionOver,
     /// Already committed under its idempotency key (RFC §13.4).
     Duplicate {
         /// The event the first delivery committed; `None` when the store
@@ -171,7 +174,10 @@ impl PassResult {
                 **event = stored;
             }
             Self::Blocked { event, .. } | Self::Stored { event, .. } => **event = stored,
-            Self::Refused { .. } | Self::Duplicate { .. } | Self::EditRefused { .. } => {}
+            Self::Refused { .. }
+            | Self::DiscussionOver
+            | Self::Duplicate { .. }
+            | Self::EditRefused { .. } => {}
         }
     }
 
@@ -181,7 +187,10 @@ impl PassResult {
             Self::Delivered { context, .. }
             | Self::Blocked { context, .. }
             | Self::Stored { context, .. } => Some(context),
-            Self::Refused { .. } | Self::Duplicate { .. } | Self::EditRefused { .. } => None,
+            Self::Refused { .. }
+            | Self::DiscussionOver
+            | Self::Duplicate { .. }
+            | Self::EditRefused { .. } => None,
         }
     }
 }
@@ -384,6 +393,11 @@ enum State {
         effect: EffectId,
         result: PassResult,
     },
+    /// The discussion holding the room is told, under the lock (RFC §19.7.5).
+    TellingDiscussion {
+        effect: EffectId,
+        result: PassResult,
+    },
     Releasing {
         effect: EffectId,
         result: Result<PassResult, Abort>,
@@ -410,6 +424,7 @@ impl State {
             | Self::ReadingTimeline { effect, .. }
             | Self::Committing { effect, .. }
             | Self::Placing { effect, .. }
+            | Self::TellingDiscussion { effect, .. }
             | Self::Releasing { effect, .. } => Some(*effect),
             Self::Start | Self::Finished(_) | Self::Reported => None,
         }
@@ -575,6 +590,7 @@ impl CommitPass {
             State::ReadingTimeline { pending, .. } => self.on_timeline(cx, *pending, outcome),
             State::Committing { result, .. } => self.on_committed(cx, result, outcome),
             State::Placing { result, .. } => self.on_placed(cx, result, outcome),
+            State::TellingDiscussion { result, .. } => self.on_told(cx, result, &outcome),
             State::Releasing { result, .. } => {
                 let (result, release_error) =
                     ops::after_release(&self.event.room_id, result, outcome.into_released());
@@ -651,6 +667,7 @@ impl CommitPass {
             | State::ReadingTimeline { .. }
             | State::Committing { .. }
             | State::Placing { .. }
+            | State::TellingDiscussion { .. }
             | State::Releasing { .. }
             | State::Finished(_)
             | State::Reported) => {

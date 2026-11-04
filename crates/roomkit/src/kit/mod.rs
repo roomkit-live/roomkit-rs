@@ -28,6 +28,7 @@ pub(crate) mod background_tools;
 mod bindings;
 mod delivery;
 mod delivery_keys;
+pub(crate) mod discussions;
 mod engine;
 mod ephemeral;
 mod events;
@@ -298,6 +299,8 @@ pub(crate) struct Inner<S> {
     /// The strategies' runners of their agents' turns, kept by the owner
     /// (RFC §10.6.1).
     pub(crate) turn_runners: crate::turn_runners::TurnRunners<S>,
+    /// The discussion this process runs for each room (RFC §19.7.5).
+    pub(crate) discussions: discussions::DiscussionSeams,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -411,6 +414,7 @@ impl<S: ConversationStore> RoomKit<S> {
             default_orchestration: orchestration,
             room_strategies: strategies::RoomStrategies::default(),
             turn_runners: crate::turn_runners::TurnRunners::default(),
+            discussions: discussions::DiscussionSeams::default(),
         });
         inner.subscribe_status_bus();
         inner.name_held_deliveries();

@@ -336,6 +336,15 @@ impl Inbound {
         Self::calling(config, call)
     }
 
+    /// The turn the discussion holding `room_id` gives now, if any (RFC
+    /// §19.7.5 rule 9): under the room's lock, the discussion edits its
+    /// queue and names the turn, which is planned for its one agent and
+    /// takes its place in the room's lane, as [`rerun`](Self::rerun)'s set
+    /// does. A room whose status refuses new events gives none.
+    pub fn discussion_turn(config: Arc<KitConfig>, room_id: RoomId) -> Self {
+        Self::calling(config, Call::Turn { room_id })
+    }
+
     /// The same call, made by the code a delivery set runs, a turn or a
     /// transport's delivery, drawing on `budget`, the reentry budget of the
     /// cascade that delivers, rather than on one of its own (RFC §8.3, gap
@@ -398,7 +407,7 @@ impl Inbound {
     fn calling(config: Arc<KitConfig>, call: Call) -> Self {
         let budget = ReentryBudget::new(config.max_chain_depth);
         let entry = match call {
-            Call::Message { .. } | Call::Rerun { .. } => EntryKind::Message,
+            Call::Message { .. } | Call::Rerun { .. } | Call::Turn { .. } => EntryKind::Message,
             Call::Direct { .. } | Call::Post { .. } => EntryKind::Direct,
             Call::Responses { .. } => EntryKind::Responses,
             Call::Greeting { .. } => EntryKind::Greeting,
@@ -513,6 +522,8 @@ enum Call {
         event_id: EventId,
         floor: u32,
     },
+    /// The turn a room's discussion gives now, if any (RFC §19.7.5).
+    Turn { room_id: RoomId },
     /// An agent's greeting (RFC §19.1).
     Greeting {
         room_id: RoomId,

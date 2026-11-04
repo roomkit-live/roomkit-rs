@@ -183,6 +183,10 @@ pub(super) struct DeliverySet {
     event: RoomEvent,
     context: Box<RoomContext>,
     targets: Vec<Target>,
+    /// The agents the room's discussion asks later (RFC §19.7.5).
+    deferred: Vec<ChannelId>,
+    /// A discussion's own chain-depth limit, for its turn.
+    depth_limit: Option<u32>,
     place: Place,
     /// The reentry budget of the cascade that delivers, which the calls its
     /// targets make into a room draw on (gap G-070).
@@ -210,6 +214,7 @@ impl DeliverySet {
         lineage: Lineage,
     ) -> Self {
         let targets = targets_of(&plan, &event, &context);
+        let deferred = plan.deferred.iter().map(|d| d.channel_id.clone()).collect();
         let outcome = SetOutcome {
             not_asked: plan.not_asked,
             ..SetOutcome::default()
@@ -219,6 +224,8 @@ impl DeliverySet {
             event,
             context,
             targets,
+            deferred,
+            depth_limit: None,
             place: match placement {
                 Placement::Taken => Place::Taken,
                 Placement::Missing => Place::Missing,
@@ -243,6 +250,23 @@ impl DeliverySet {
         self.targets
             .iter()
             .any(|target| target.role == Role::Agent && &target.binding.channel_id == channel_id)
+    }
+
+    /// Whether `channel_id` is an agent the room's discussion asks later, one
+    /// turn at a time (RFC §19.7.5): no agent unavailable.
+    pub(super) fn defers(&self, channel_id: &ChannelId) -> bool {
+        self.deferred.contains(channel_id)
+    }
+
+    /// The chain-depth limit the set's agents are held to: a discussion's
+    /// own for its turn, else none, the kit's.
+    pub(super) fn depth_limit(&self) -> Option<u32> {
+        self.depth_limit
+    }
+
+    /// Holds the set's agents to `limit`, a discussion's for its turn.
+    pub(super) fn held_to(&mut self, limit: u32) {
+        self.depth_limit = Some(limit);
     }
 
     /// Cuts the set's turns: it asks no agent from now on, and the turns it

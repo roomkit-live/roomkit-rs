@@ -255,6 +255,7 @@ impl Work {
             | Request::Store(_)
             | Request::Hook(_)
             | Request::Route { .. }
+            | Request::Discussion(_)
             | Request::Identity(_) => (None, None),
         };
         Self {

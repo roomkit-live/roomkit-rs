@@ -52,6 +52,7 @@ pub(crate) enum RequestKind {
     ReadVerification,
     /// A code reply attempted (RFC §11.7.4).
     TryCode,
+    Discussion,
 }
 
 impl Request {
@@ -72,6 +73,7 @@ impl Request {
             Self::Hook(HookRequest::RunHook { .. }) => RequestKind::RunHook,
             Self::Hook(HookRequest::RunObservers { .. }) => RequestKind::RunObservers,
             Self::Route { .. } => RequestKind::Route,
+            Self::Discussion(_) => RequestKind::Discussion,
             Self::Identity(IdentityRequest::Resolve { .. }) => RequestKind::ResolveSender,
             Self::Identity(IdentityRequest::RunHooks { .. }) => RequestKind::RunIdentityHooks,
             Self::Identity(IdentityRequest::Verification { .. }) => RequestKind::ReadVerification,
@@ -162,6 +164,7 @@ impl RequestKind {
             Self::RunIdentityHooks => "Hooked",
             Self::ReadVerification => "Verification",
             Self::TryCode => "CodeTried",
+            Self::Discussion => "Discussion",
         }
     }
 
@@ -227,6 +230,7 @@ impl RequestKind {
                 matches!(outcome, Outcome::Identity(IdentityAnswer::Verification(_)))
             }
             Self::TryCode => matches!(outcome, Outcome::Identity(IdentityAnswer::CodeTried(_))),
+            Self::Discussion => matches!(outcome, Outcome::Discussion(_)),
         }
     }
 
@@ -247,6 +251,7 @@ impl RequestKind {
             | Outcome::Channel(_)
             | Outcome::Hook(_)
             | Outcome::Routed(_)
+            | Outcome::Discussion(_)
             | Outcome::Identity(_) => self.answered_by(outcome),
         };
         if fits {
@@ -550,6 +555,7 @@ impl Outcome {
             Self::Identity(IdentityAnswer::Hooked(_)) => "Hooked",
             Self::Identity(IdentityAnswer::Verification(_)) => "Verification",
             Self::Identity(IdentityAnswer::CodeTried(_)) => "CodeTried",
+            Self::Discussion(_) => "Discussion",
             Self::Failed(_) => "Failed",
             Self::DeadlinePassed => "DeadlinePassed",
         }

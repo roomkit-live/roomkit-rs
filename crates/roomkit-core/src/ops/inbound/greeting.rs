@@ -71,12 +71,7 @@ pub(super) fn plan(cx: &Cx<'_>, event: &mut RoomEvent, context: &RoomContext) ->
     if permissions::write_refusal(source).is_some() {
         return DeliveryPlan::default();
     }
-    permissions::plan_delivery(
-        event,
-        bindings,
-        context.room.agent_response_policy,
-        cx.config.max_chain_depth,
-    )
+    permissions::plan_in_room(event, context, cx.config.max_chain_depth)
 }
 
 /// `result`, a greeting's pass committed: one the room binds no source for

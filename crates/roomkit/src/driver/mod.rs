@@ -920,6 +920,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             Request::Route { query } => self.spawn(id, work, deadline, None, async move {
                 calls::route(&inner, &query).await
             }),
+            Request::Discussion(request) => self.spawn(id, work, deadline, None, async move {
+                calls::discussion(&inner, request).await
+            }),
             Request::Identity(request) => self.spawn(id, work, deadline, None, async move {
                 calls::identity(&inner, request).await
             }),

@@ -142,6 +142,7 @@ fn lock_request(request: &Request) -> Option<(RoomId, Step)> {
         | Request::Channel(_)
         | Request::Hook(_)
         | Request::Route { .. }
+        | Request::Discussion(_)
         | Request::Identity(_) => None,
     }
 }

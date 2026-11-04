@@ -36,6 +36,9 @@ pub(super) enum RecordNote {
     NotAsked {
         agent: Box<ChannelBinding>,
         trigger: Box<RoomEvent>,
+        /// The chain-depth limit it reached: the kit's, or a discussion's
+        /// own for its turn (RFC §19.7.5).
+        limit: u32,
     },
     /// A response the room refused without asking anyone.
     Refused,

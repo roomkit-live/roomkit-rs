@@ -13,9 +13,10 @@ use roomkit_core::model::{
     RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp,
 };
 use roomkit_core::ops::{
-    AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId,
-    FrameworkEvent as CoreEvent, HookAnswer, HookRequest, IdentityAnswer, IdentityRequest,
-    KIT_CLOSED, Notice, Outcome, RecentEvents, StoreOutcome, StoreRequest,
+    AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, DiscussionOutcome,
+    DiscussionRequest, EffectId, FrameworkEvent as CoreEvent, HookAnswer, HookRequest,
+    IdentityAnswer, IdentityRequest, KIT_CLOSED, Notice, Outcome, RecentEvents, StoreOutcome,
+    StoreRequest,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookTrigger};
@@ -1265,4 +1266,50 @@ fn unregistered_channel(channel_id: &ChannelId) -> Outcome {
         CHANNEL_NOT_REGISTERED,
         format!("no channel {channel_id} is registered"),
     ))
+}
+
+/// What the pipeline asks of the discussion this process runs for the room,
+/// under the room's lock (RFC §19.7.5); a room it runs none for has nothing
+/// to answer, and no turn to give. What the discussion raises is answered
+/// as a failure, which the pipeline logs.
+pub(super) async fn discussion<S: ConversationStore>(
+    inner: &Inner<S>,
+    request: DiscussionRequest,
+) -> Outcome {
+    let room_id = match &request {
+        DiscussionRequest::Committed { room_id, .. }
+        | DiscussionRequest::Instruction { room_id, .. }
+        | DiscussionRequest::Turn { room_id, .. } => room_id,
+    };
+    let Some(seam) = inner.discussions.get(room_id) else {
+        return match request {
+            DiscussionRequest::Turn { .. } => DiscussionOutcome::Turn(None).into(),
+            DiscussionRequest::Committed { .. } | DiscussionRequest::Instruction { .. } => {
+                DiscussionOutcome::Done.into()
+            }
+        };
+    };
+    let answered = match request {
+        DiscussionRequest::Committed {
+            event,
+            reach,
+            context,
+            ..
+        } => seam
+            .on_committed(*event, reach, *context)
+            .await
+            .map(|()| DiscussionOutcome::Done),
+        DiscussionRequest::Instruction { event, .. } => seam
+            .queue_instruction(*event)
+            .await
+            .map(|()| DiscussionOutcome::Done),
+        DiscussionRequest::Turn { context, .. } => seam
+            .next_turn(*context)
+            .await
+            .map(|turn| DiscussionOutcome::Turn(turn.map(Box::new))),
+    };
+    match answered {
+        Ok(outcome) => outcome.into(),
+        Err(error) => Outcome::Failed(ErrorRecord::new("RoomKitError", error.to_string())),
+    }
 }

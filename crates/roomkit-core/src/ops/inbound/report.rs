@@ -222,8 +222,12 @@ pub(super) fn room_refused_as(
 
 /// Reports the record of a channel not asked at the chain-depth limit (RFC
 /// §8.3).
-pub(super) fn chain_depth_exceeded(cx: &mut Cx<'_>, record: &RoomEvent, agent: &ChannelBinding) {
-    let max_chain_depth = cx.config.max_chain_depth;
+pub(super) fn chain_depth_exceeded(
+    cx: &mut Cx<'_>,
+    record: &RoomEvent,
+    agent: &ChannelBinding,
+    max_chain_depth: u32,
+) {
     notify(
         cx,
         FrameworkEvent::ChainDepthExceeded {

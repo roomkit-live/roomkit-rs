@@ -8,6 +8,7 @@ use crate::model::{
     EventStatus, EventType, Metadata, RoomContext, RoomEvent, TextContent, Visibility,
 };
 use crate::rules::chain_depth;
+use crate::rules::discussion;
 use crate::rules::edits;
 
 /// Why a source's event may not be broadcast (RFC §7.5 rule 2).
@@ -273,6 +274,10 @@ pub(crate) struct DeliveryPlan {
     /// The intelligence channels the event solicits but that are not asked,
     /// because their response would reach the chain-depth limit (RFC §8.3).
     pub not_asked: Vec<ChannelBinding>,
+    /// In a room a discussion holds: the intelligence channels the event
+    /// reaches, which it asks later, one turn at a time (RFC §19.7.5). None
+    /// of them is unavailable.
+    pub deferred: Vec<ChannelBinding>,
 }
 
 /// A transport channel a broadcast reaches.
@@ -345,6 +350,72 @@ pub(crate) fn plan_delivery(
         }
     }
     plan
+}
+
+/// [`plan_delivery`] for an event of the room of `context`: in a room a
+/// discussion holds, the transports it reaches, and no agent asked, however
+/// the event addresses them and at any depth (RFC §19.7.5).
+pub(crate) fn plan_in_room(
+    event: &RoomEvent,
+    context: &RoomContext,
+    max_chain_depth: u32,
+) -> DeliveryPlan {
+    let bindings = &context.bindings;
+    if !discussion::holds(&context.room.metadata) {
+        let policy = context.room.agent_response_policy;
+        return plan_delivery(event, bindings, policy, max_chain_depth);
+    }
+    let mut readers: Vec<&ChannelBinding> = bindings
+        .iter()
+        .filter(|binding| receives(binding, event))
+        .collect();
+    readers.sort_by(|first, second| first.channel_id.cmp(&second.channel_id));
+    let mut plan = DeliveryPlan::default();
+    for reader in readers {
+        match reader.category {
+            ChannelCategory::Transport => plan.transports.push(TransportTarget {
+                binding: reader.clone(),
+                delivers: reader.direction.sends(),
+            }),
+            ChannelCategory::Intelligence => plan.deferred.push(reader.clone()),
+        }
+    }
+    plan
+}
+
+/// The channels `plan` reaches, whether it asks them now or not: what a
+/// discussion's queue never reaches past (RFC §19.7.5, §10.1 step 12).
+pub(crate) fn reach(plan: &DeliveryPlan) -> Vec<ChannelId> {
+    let transports = plan.transports.iter().map(|target| &target.binding);
+    transports
+        .chain(&plan.agents)
+        .chain(&plan.not_asked)
+        .chain(&plan.deferred)
+        .map(|binding| binding.channel_id.clone())
+        .collect()
+}
+
+/// A discussion's turn on `event`: `agent` alone, against the discussion's
+/// own depth limit `max_depth`, never a transport (RFC §19.7.5 rules 9 and
+/// 11). `None` when the agent cannot read the event. Past the limit it is
+/// not asked, and recorded unless the event opens no turn (§6.4, §8.3).
+#[must_use]
+pub(crate) fn plan_turn(
+    event: &RoomEvent,
+    bindings: &[ChannelBinding],
+    agent: &ChannelId,
+    max_depth: u32,
+) -> Option<DeliveryPlan> {
+    let binding = bindings
+        .iter()
+        .find(|binding| &binding.channel_id == agent && receives(binding, event))?;
+    let mut plan = DeliveryPlan::default();
+    if !chain_depth::reaches_limit(event.chain_depth, max_depth) {
+        plan.agents.push(binding.clone());
+    } else if !edits::opens_no_turn(event) {
+        plan.not_asked.push(binding.clone());
+    }
+    Some(plan)
 }
 
 /// Whether `event` is a tool call's start or end row.
@@ -1145,6 +1216,100 @@ mod tests {
             let bindings = [transport("sms"), transport("ws")];
             let plan = plan(&narrowed, &[channel("sms"), channel("ws")], &bindings);
             assert_eq!(transport_ids(&plan), ["ws"]);
+        }
+    }
+
+    /// RFC §19.7.5: the plans of a room a discussion holds.
+    mod a_discussion_s_plans {
+        use super::*;
+        use pretty_assertions::assert_eq;
+        use serde_json::json;
+
+        use crate::model::{Metadata, Room, RoomId, Timestamp};
+
+        fn held_room(bindings: Vec<ChannelBinding>) -> RoomContext {
+            let mut room = Room::at(RoomId::new("r1").unwrap(), Timestamp::UNIX_EPOCH);
+            room.metadata = Metadata::from_iter([(
+                discussion::CONFIG_KEY.to_owned(),
+                json!({"agents": ["a", "b"], "max_depth": 5}),
+            )]);
+            let mut context = RoomContext::new(room);
+            context.bindings = bindings;
+            context
+        }
+
+        fn ids(bindings: &[ChannelBinding]) -> Vec<&str> {
+            bindings.iter().map(|b| b.channel_id.as_str()).collect()
+        }
+
+        fn room_bindings() -> Vec<ChannelBinding> {
+            vec![
+                binding("a", ChannelCategory::Intelligence),
+                binding("b", ChannelCategory::Intelligence),
+                binding("ops", ChannelCategory::Transport),
+                binding("sms", ChannelCategory::Transport),
+            ]
+        }
+
+        // Python: tests/test_discussion_core.py::test_a_room_a_discussion_holds_asks_no_agent_at_broadcast
+        #[test]
+        fn test_a_room_a_discussion_holds_asks_no_agent_at_broadcast() {
+            let context = held_room(room_bindings());
+            let mut event = event_from(&transport("ops"));
+            event.addressed_to = Some(vec![channel("a")]);
+            // Past the limit too: no record, the discussion decides.
+            event.chain_depth = 50;
+
+            let plan = plan_in_room(&event, &context, 5);
+
+            assert_eq!(ids(&plan.agents), Vec::<&str>::new());
+            assert_eq!(ids(&plan.not_asked), Vec::<&str>::new());
+            assert_eq!(ids(&plan.deferred), vec!["a", "b"]);
+            let reached: Vec<&str> = plan
+                .transports
+                .iter()
+                .map(|target| target.binding.channel_id.as_str())
+                .collect();
+            assert_eq!(reached, vec!["sms"]);
+            assert_eq!(
+                reach(&plan),
+                vec![channel("sms"), channel("a"), channel("b")]
+            );
+        }
+
+        // Python: tests/test_discussion_core.py::test_without_a_discussion_the_room_answers_as_before
+        #[test]
+        fn test_without_a_discussion_the_room_answers_as_before() {
+            let mut context = held_room(room_bindings());
+            context.room.metadata = Metadata::default();
+
+            let plan = plan_in_room(&event_from(&transport("ops")), &context, 5);
+
+            assert_eq!(ids(&plan.agents), vec!["a", "b"]);
+            assert_eq!(ids(&plan.deferred), Vec::<&str>::new());
+        }
+
+        // Python: tests/test_discussion_core.py::test_a_turn_asks_its_one_agent_against_the_discussions_depth_limit
+        #[test]
+        fn test_a_turn_asks_its_one_agent_against_the_discussions_depth_limit() {
+            let bindings = room_bindings();
+            let mut deep = event_from(&transport("ops"));
+            deep.chain_depth = 4;
+
+            // The kit's limit (3) would stop it; the discussion's own (10) does not.
+            let plan = plan_turn(&deep, &bindings, &channel("a"), 10).unwrap();
+            assert_eq!(ids(&plan.agents), vec!["a"]);
+            assert_eq!(ids(&plan.not_asked), Vec::<&str>::new());
+            assert_eq!(plan.transports, Vec::new());
+
+            deep.chain_depth = 9;
+            let plan = plan_turn(&deep, &bindings, &channel("a"), 10).unwrap();
+            assert_eq!(ids(&plan.agents), Vec::<&str>::new());
+            assert_eq!(ids(&plan.not_asked), vec!["a"]);
+
+            // One it cannot read, or that is the event's own, takes no turn.
+            assert!(plan_turn(&deep, &bindings, &channel("ghost"), 10).is_none());
+            assert!(plan_turn(&deep, &bindings, &channel("ops"), 10).is_none());
         }
     }
 

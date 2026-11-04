@@ -24,9 +24,14 @@ use super::delivery::{DeliverySet, Placement, SetKind, SetOutcome};
 use super::queues::{Delivery, Lineage};
 use super::{InboundResult, Machine, Stage, cascade, report};
 use crate::model::{ChannelCategory, EventId, Room, RoomContext, RoomEvent, RoomId, Visibility};
-use crate::ops::protocol::{EffectId, HoldOutcome, HoldRequest, Outcome, StoreRequest};
+use crate::ops::protocol::{
+    DiscussionOutcome, DiscussionRequest, DiscussionTurn, EffectId, HoldOutcome, HoldRequest,
+    Outcome, StoreRequest,
+};
 use crate::ops::section::{Failure, Section, SectionWork};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
+use crate::rules::chain_depth::ReentryBudget;
+use crate::rules::discussion;
 use crate::rules::permissions::{self, DeliveryPlan};
 use crate::rules::verification::release;
 
@@ -53,23 +58,35 @@ pub(super) struct Planned {
     plan: DeliveryPlan,
     context: Box<RoomContext>,
     placement: Placement,
+    /// A discussion's turn: its own chain-depth limit (RFC §19.7.5).
+    limit: Option<u32>,
 }
 
 /// The rerun's work under the room's lock.
 #[derive(Debug)]
 pub(super) struct RerunWork {
-    event_id: EventId,
-    /// The least depth of the agents' answers: the depth of the work the
-    /// call is made in (RFC §8.3).
-    floor: u32,
+    asked: Asked,
     context: Option<Box<RoomContext>>,
     waiting: Waiting,
+}
+
+/// What the call reruns.
+#[derive(Debug)]
+enum Asked {
+    /// The stored event `event_id`, for the room's agents; `floor` is the
+    /// least depth of their answers: the depth of the work the call is made
+    /// in (RFC §8.3).
+    Event { event_id: EventId, floor: u32 },
+    /// The turn the discussion holding the room gives now, if any (RFC
+    /// §19.7.5).
+    Turn,
 }
 
 #[derive(Debug)]
 enum Waiting {
     Nothing,
     Event(EffectId),
+    Turn(EffectId),
     Placing {
         effect: EffectId,
         planned: Box<Planned>,
@@ -98,7 +115,39 @@ impl RerunWork {
         let Some(trigger) = trigger.filter(|event| answerable(event, &context)) else {
             return Progress::Done(Ok(Reran::Nothing));
         };
-        let planned = plan(cx, *trigger, context, self.floor);
+        let Asked::Event { floor, .. } = self.asked else {
+            return Progress::Done(Ok(Reran::Nothing));
+        };
+        self.placing(cx, plan(cx, *trigger, context, floor))
+    }
+
+    /// The turn the discussion gives, if any, is planned for its agent
+    /// alone; one the agent cannot read is no turn.
+    fn on_turn(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<Result<Reran, Abort>> {
+        let Some(context) = self.context.take() else {
+            return Progress::Done(Ok(Reran::Nothing));
+        };
+        let Outcome::Discussion(DiscussionOutcome::Turn(turn)) = outcome else {
+            tracing::warn!(
+                target: "roomkit::core::inbound",
+                room_id = %context.room.id,
+                outcome = ?outcome,
+                "the room's discussion gave no turn"
+            );
+            return Progress::Done(Ok(Reran::Nothing));
+        };
+        let Some(turn) = turn else {
+            return Progress::Done(Ok(Reran::Nothing));
+        };
+        match plan_turn(*turn, context) {
+            Some(planned) => self.placing(cx, planned),
+            None => Progress::Done(Ok(Reran::Nothing)),
+        }
+    }
+
+    /// The set takes its place in the room's lane, behind every event
+    /// committed.
+    fn placing(&mut self, cx: &mut Cx<'_>, planned: Planned) -> Progress<Result<Reran, Abort>> {
         let request = HoldRequest::EnterLane {
             room_id: planned.trigger.room_id.clone(),
             event_id: planned.trigger.id.clone(),
@@ -141,12 +190,28 @@ impl SectionWork for RerunWork {
         cx: &mut Cx<'_>,
         context: Box<RoomContext>,
     ) -> Progress<Result<Reran, Abort>> {
-        let request = StoreRequest::GetEvent {
-            event_id: self.event_id.clone(),
-        };
-        let effect = cx.io.issue_locked(request, context.room.id.clone());
+        let room_id = context.room.id.clone();
+        match &self.asked {
+            Asked::Event { event_id, .. } => {
+                let request = StoreRequest::GetEvent {
+                    event_id: event_id.clone(),
+                };
+                let effect = cx.io.issue_locked(request, room_id);
+                self.waiting = Waiting::Event(effect);
+            }
+            Asked::Turn => {
+                // A room whose status refuses new events gives no turn.
+                if !context.room.status.accepts_events() {
+                    return Progress::Done(Ok(Reran::Nothing));
+                }
+                let request = DiscussionRequest::Turn {
+                    room_id: room_id.clone(),
+                    context: context.clone(),
+                };
+                self.waiting = Waiting::Turn(cx.io.issue_locked(request, room_id));
+            }
+        }
         self.context = Some(context);
-        self.waiting = Waiting::Event(effect);
         Progress::Waiting
     }
 
@@ -158,6 +223,7 @@ impl SectionWork for RerunWork {
     ) -> Progress<Result<Reran, Abort>> {
         match std::mem::replace(&mut self.waiting, Waiting::Nothing) {
             Waiting::Event(_) => self.on_event(cx, outcome),
+            Waiting::Turn(_) => self.on_turn(cx, outcome),
             Waiting::Placing { mut planned, .. } => {
                 planned.placement = placement(&planned.trigger, outcome);
                 Progress::Done(Ok(Reran::Planned(planned)))
@@ -169,6 +235,7 @@ impl SectionWork for RerunWork {
     fn awaits(&self, effect: EffectId) -> bool {
         match &self.waiting {
             Waiting::Event(awaited)
+            | Waiting::Turn(awaited)
             | Waiting::Placing {
                 effect: awaited, ..
             } => *awaited == effect,
@@ -206,19 +273,39 @@ fn plan(cx: &Cx<'_>, trigger: RoomEvent, context: Box<RoomContext>, floor: u32) 
                 .map(|binding| binding.category)
         });
     event.chain_depth = event.chain_depth.max(floor);
-    let plan = permissions::plan_delivery(
-        &event,
-        &context.bindings,
-        context.room.agent_response_policy,
-        cx.config.max_chain_depth,
-    );
+    let plan = permissions::plan_in_room(&event, &context, cx.config.max_chain_depth);
     Planned {
         trigger,
         event,
         plan,
         context,
         placement: Placement::Missing,
+        limit: None,
     }
+}
+
+/// A discussion's turn on the event it answers: for its agent alone, the
+/// event carrying the turn's mark, its answers bound by the event's
+/// `response_visibility` (RFC §19.7.5 rules 9 and 11); `None` when the agent
+/// cannot read the event.
+fn plan_turn(turn: DiscussionTurn, context: Box<RoomContext>) -> Option<Planned> {
+    let DiscussionTurn {
+        agent,
+        answered,
+        mark,
+        max_depth,
+    } = turn;
+    let plan = permissions::plan_turn(&answered, &context.bindings, &agent, max_depth)?;
+    let mut event = (*answered).clone();
+    event.metadata.insert(discussion::TURN_KEY.to_owned(), mark);
+    Some(Planned {
+        trigger: *answered,
+        event,
+        plan,
+        context,
+        placement: Placement::Missing,
+        limit: Some(max_depth),
+    })
 }
 
 /// What became of the rerun's place in the room's lane: a place that could
@@ -255,10 +342,18 @@ impl Machine {
         event_id: EventId,
         floor: u32,
     ) {
+        self.begin_section(cx, room_id, Asked::Event { event_id, floor });
+    }
+
+    /// Starts the turn the discussion holding `room_id` gives now, if any.
+    pub(super) fn begin_turn(&mut self, cx: &mut Cx<'_>, room_id: RoomId) {
+        self.begin_section(cx, room_id, Asked::Turn);
+    }
+
+    fn begin_section(&mut self, cx: &mut Cx<'_>, room_id: RoomId, asked: Asked) {
         self.call.room_id = Some(room_id.clone());
         let work = RerunWork {
-            event_id,
-            floor,
+            asked,
             context: None,
             waiting: Waiting::Nothing,
         };
@@ -309,6 +404,7 @@ impl Machine {
             plan,
             context,
             placement,
+            limit,
         } = planned;
         self.trigger.decided = true;
         self.trigger.result.event = Some(trigger);
@@ -321,6 +417,11 @@ impl Machine {
             self.cascade.budget.clone(),
             Lineage::Call,
         );
+        if let Some(limit) = limit {
+            set.held_to(limit);
+            // A discussion's turn draws on a budget its own limit bounds.
+            self.cascade.budget = ReentryBudget::new(limit);
+        }
         // Its delivery cancelled before it was planned, the set asks no
         // agent (RFC §10.1 "Explicit delivery cancellation").
         if self.cascade.is_cut(Lineage::Call) {

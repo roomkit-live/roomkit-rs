@@ -6,7 +6,7 @@
 use std::collections::VecDeque;
 
 use super::{CommitPass, PassOrigin, PassResult, State};
-use crate::model::RoomContext;
+use crate::model::{EventType, RoomContext};
 use crate::ops::inbound::direct::DirectCall;
 use crate::ops::inbound::{greeting, identity};
 use crate::ops::lifecycle::gate::{self, Gate};
@@ -14,7 +14,7 @@ use crate::ops::lifecycle::record;
 use crate::ops::protocol::{KeyHeld, Outcome, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Abort, Cx};
-use crate::rules::{permissions, publications};
+use crate::rules::{discussion, permissions, publications};
 
 impl CommitPass {
     pub(super) fn on_locked(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
@@ -71,6 +71,12 @@ impl CommitPass {
             .and_then(|_| DirectCall::unbound(&self.event, &context));
         if let Some(refusal) = refusal {
             return self.release(cx, Err(Abort::Refused(refusal)));
+        }
+        // RFC §19.7.5 rule 15: a discussion that is over gives no turn.
+        if self.event.r#type == EventType::Instruction
+            && discussion::is_over(&context.room.metadata)
+        {
+            return self.release(cx, Ok(PassResult::DiscussionOver));
         }
         let status = context.room.status;
         if !status.accepts_events() {

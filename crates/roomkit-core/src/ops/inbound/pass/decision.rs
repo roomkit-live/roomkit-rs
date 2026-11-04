@@ -19,11 +19,14 @@ use super::super::greeting;
 use super::super::queues::Lineage;
 use super::super::stamp;
 use super::{CommitPass, Observed, PassOrigin, PassResult, State, Verdict};
-use crate::model::{ChannelBinding, ChannelId, RoomContext, RoomEvent, Visibility};
-use crate::ops::protocol::{AnswerOf, HoldOutcome, HoldRequest, Outcome, StoreRequest};
+use crate::model::{ChannelBinding, ChannelId, EventType, RoomContext, RoomEvent, Visibility};
+use crate::ops::protocol::{
+    AnswerOf, DiscussionRequest, HoldOutcome, HoldRequest, Outcome, StoreRequest,
+};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Abort, Cx};
 use crate::rules::authors;
+use crate::rules::discussion;
 use crate::rules::edits::EditRefusal;
 use crate::rules::hook_chain::{ChainDecision, ChainVerdict};
 use crate::rules::hook_registry::HookTrigger;
@@ -281,6 +284,9 @@ impl CommitPass {
         context: Box<RoomContext>,
     ) -> State {
         match self.plan(cx, &mut event, &context) {
+            Ok(_) if queued_by_discussion(&event, &context) => {
+                Self::queue_instruction(cx, event, context)
+            }
             Ok(plan) => {
                 let written = match self.accepted.take().map(|accepted| accepted.write(&event)) {
                     Some(None) => return self.refuse_edit(cx, EditRefusal::TargetNotFound),
@@ -439,10 +445,9 @@ impl CommitPass {
         if let Some(accepted) = &self.accepted {
             accepted.narrow(event, bindings);
         }
-        Ok(permissions::plan_delivery(
+        Ok(permissions::plan_in_room(
             event,
-            bindings,
-            context.room.agent_response_policy,
+            context,
             cx.config.max_chain_depth,
         ))
     }
@@ -525,7 +530,7 @@ impl CommitPass {
     ) -> State {
         if outcome == Outcome::Hold(HoldOutcome::LaneClosed) {
             self.placement = Placement::Closed;
-            return self.release(cx, Ok(result));
+            return self.tell_discussion(cx, result);
         }
         match outcome.into_entered() {
             Ok(()) => self.placement = Placement::Taken,
@@ -539,6 +544,83 @@ impl CommitPass {
                  all the same"
             ),
         }
+        self.tell_discussion(cx, result)
+    }
+
+    /// A message delivered, once its place is taken: the discussion holding
+    /// the room queues whom it asks for, still under the lock (RFC §19.7.5
+    /// rule 8).
+    fn tell_discussion(&mut self, cx: &mut Cx<'_>, result: PassResult) -> State {
+        let PassResult::Delivered {
+            event,
+            plan,
+            context,
+            ..
+        } = &result
+        else {
+            return self.release(cx, Ok(result));
+        };
+        if event.r#type != EventType::Message || !discussion::holds(&context.room.metadata) {
+            return self.release(cx, Ok(result));
+        }
+        let room_id = event.room_id.clone();
+        let request = DiscussionRequest::Committed {
+            room_id: room_id.clone(),
+            event: event.clone(),
+            reach: permissions::reach(plan),
+            context: context.clone(),
+        };
+        State::TellingDiscussion {
+            effect: cx.io.issue_locked(request, room_id),
+            result,
+        }
+    }
+
+    /// An instruction to agents of the discussion holding the room: it gives
+    /// each its turn, and the instruction has no delivery set (rule 7).
+    fn queue_instruction(cx: &mut Cx<'_>, event: RoomEvent, context: Box<RoomContext>) -> State {
+        let room_id = event.room_id.clone();
+        let request = DiscussionRequest::Instruction {
+            room_id: room_id.clone(),
+            event: Box::new(event.clone()),
+        };
+        State::TellingDiscussion {
+            effect: cx.io.issue_locked(request, room_id),
+            result: PassResult::Stored {
+                event: Box::new(event),
+                context,
+            },
+        }
+    }
+
+    /// The discussion has been told. A failure of its own is logged, and
+    /// never leaves the event undelivered (RFC §19.7.5).
+    pub(super) fn on_told(
+        &mut self,
+        cx: &mut Cx<'_>,
+        result: PassResult,
+        outcome: &Outcome,
+    ) -> State {
+        if let Outcome::Failed(error) = outcome {
+            tracing::warn!(
+                target: "roomkit::core::inbound",
+                room_id = %self.event.room_id,
+                event_id = %self.event.id,
+                error_type = %error.error_type,
+                message = %error.message,
+                "the room's discussion did not read the event"
+            );
+        }
         self.release(cx, Ok(result))
     }
+}
+
+/// Whether `event` is an instruction the discussion holding the room takes,
+/// addressed to one of its agents, rather than its delivery set (rule 7).
+fn queued_by_discussion(event: &RoomEvent, context: &RoomContext) -> bool {
+    event.r#type == EventType::Instruction
+        && event
+            .addressed_to
+            .as_deref()
+            .is_some_and(|to| discussion::addresses_an_agent(&context.room.metadata, to))
 }

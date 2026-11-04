@@ -24,9 +24,9 @@ mod results;
 pub(crate) use answers::{KeyHeld, RequestKind};
 pub use entries::{Decided, Delivered, Entry, EntryId, Settled};
 pub use requests::{
-    ChannelOutcome, ChannelRequest, HoldOutcome, HoldRequest, HookAnswer, HookRequest,
-    IdentityAnswer, IdentityRequest, Outcome, Raised, Request, StoreOutcome, StoreRequest,
-    StreamTarget,
+    ChannelOutcome, ChannelRequest, DiscussionOutcome, DiscussionRequest, DiscussionTurn,
+    HoldOutcome, HoldRequest, HookAnswer, HookRequest, IdentityAnswer, IdentityRequest, Outcome,
+    Raised, Request, StoreOutcome, StoreRequest, StreamTarget,
 };
 pub use results::{InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED};
 

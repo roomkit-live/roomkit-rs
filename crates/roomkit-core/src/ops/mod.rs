@@ -75,10 +75,10 @@ pub use lifecycle::{
 pub use members::{ChangeMember, MemberChange, MemberError, Membered};
 pub use protocol::{
     AfterDelivery, AnswerOf, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Decided,
-    Delivered, Effect, EffectId, Entry, EntryId, HoldOutcome, HoldRequest, HookAnswer, HookRequest,
-    IdentityAnswer, IdentityRequest, KIT_CLOSED, LANE_CANCELLED, Next, Notice, Operation, Outcome,
-    ProtocolError, ROW_HIDDEN, ROW_WITHHELD, Raised, Request, Settled, Step, StoreOutcome,
-    StoreRequest, StreamTarget,
+    Delivered, DiscussionOutcome, DiscussionRequest, DiscussionTurn, Effect, EffectId, Entry,
+    EntryId, HoldOutcome, HoldRequest, HookAnswer, HookRequest, IdentityAnswer, IdentityRequest,
+    KIT_CLOSED, LANE_CANCELLED, Next, Notice, Operation, Outcome, ProtocolError, ROW_HIDDEN,
+    ROW_WITHHELD, Raised, Request, Settled, Step, StoreOutcome, StoreRequest, StreamTarget,
 };
 
 use crate::model::{ErrorRecord, EventId, RoomContext, RoomEvent, RoomId};

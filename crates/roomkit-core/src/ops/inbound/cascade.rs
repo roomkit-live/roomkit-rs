@@ -180,6 +180,7 @@ impl Machine {
             | PassResult::Blocked { context, event, .. }
             | PassResult::Stored { context, event } => (Some(&**context), Some(&**event)),
             PassResult::Refused { .. }
+            | PassResult::DiscussionOver
             | PassResult::Duplicate { .. }
             | PassResult::EditRefused { .. } => (None, None),
         };
@@ -193,6 +194,7 @@ impl Machine {
                 self.injected(cx, report.injected_events, event, report.lineage)
             }
             PassResult::Refused { .. }
+            | PassResult::DiscussionOver
             | PassResult::Duplicate { .. }
             | PassResult::EditRefused { .. } => Vec::new(),
         };
@@ -293,7 +295,12 @@ impl Machine {
     /// on, decides the call; a channel's not asked at the chain-depth limit
     /// gets its observation and its framework event (RFC §8.3).
     pub(super) fn on_record(&mut self, cx: &mut Cx<'_>, report: RecordReport, note: RecordNote) {
-        let RecordNote::NotAsked { agent, trigger } = note else {
+        let RecordNote::NotAsked {
+            agent,
+            trigger,
+            limit,
+        } = note
+        else {
             if matches!(note, RecordNote::Trigger) {
                 return self.settle_capped_trigger(cx, report);
             }
@@ -305,16 +312,11 @@ impl Machine {
         };
         let id = cx.env.new_observation_id();
         let now = cx.env.now();
-        let max_chain_depth = cx.config.max_chain_depth;
         self.side_effects
             .observe(chain_depth::not_asked_observation(
-                id,
-                &trigger,
-                &agent,
-                max_chain_depth,
-                now,
+                id, &trigger, &agent, limit, now,
             ));
-        report::chain_depth_exceeded(cx, &record, &agent);
+        report::chain_depth_exceeded(cx, &record, &agent, limit);
     }
 
     /// The call's own record, stored past the reentry budget it draws on
@@ -382,6 +384,7 @@ impl Machine {
                 RecordNote::NotAsked {
                     agent: Box::new(agent),
                     trigger: Box::new(event.clone()),
+                    limit: set.depth_limit().unwrap_or(cx.config.max_chain_depth),
                 },
             ));
         }
@@ -632,6 +635,11 @@ pub(super) fn entry_result(result: &PassResult) -> InboundResult {
             reason: Some("room_closed".to_owned()),
             ..InboundResult::default()
         },
+        PassResult::DiscussionOver => InboundResult {
+            blocked: true,
+            reason: Some("discussion_over".to_owned()),
+            ..InboundResult::default()
+        },
         PassResult::EditRefused { refusal } => InboundResult {
             blocked: true,
             reason: Some(refusal.reason().to_owned()),
@@ -678,7 +686,13 @@ fn unavailable_targets(event: &RoomEvent, plan: &DeliveryPlan) -> Vec<ChannelId>
         .addressed_to
         .iter()
         .flatten()
-        .filter(|target| !plan.agents.iter().any(|agent| &agent.channel_id == *target))
+        .filter(|target| {
+            !plan.agents.iter().any(|agent| &agent.channel_id == *target)
+                && !plan
+                    .deferred
+                    .iter()
+                    .any(|agent| &agent.channel_id == *target)
+        })
         .cloned()
         .collect()
 }
@@ -693,7 +707,9 @@ fn unavailable_after(set: &DeliverySet, outcome: &SetOutcome) -> Vec<ChannelId> 
         .addressed_to
         .iter()
         .flatten()
-        .filter(|target| !set.asks(target) || outcome.unreached.contains(target))
+        .filter(|target| {
+            !set.defers(target) && (!set.asks(target) || outcome.unreached.contains(target))
+        })
         .cloned()
         .collect()
 }
