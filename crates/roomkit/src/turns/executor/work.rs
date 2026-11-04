@@ -17,7 +17,7 @@ use super::link::FrameSender;
 use super::record::RecordChanges;
 use crate::channel::DynChannel;
 use crate::discussion_turn::IssuedMark;
-use crate::stream::{ResponseItem, ResponseStream};
+use crate::stream::{ResponseItem, ResponseStream, UsageMarker};
 use crate::turn::TurnHost;
 use crate::turns::codec::{encode_loop_end, encode_output};
 use crate::turns::error::{CHANNEL_ERROR, one, stream_failure, turn_failure};
@@ -232,6 +232,16 @@ impl Pump<'_> {
         }
     }
 
+    /// Sends what a generation used.
+    fn send_usage(&self, marker: UsageMarker) -> Result<(), Uncarried> {
+        let item = Item::Usage {
+            usage: marker.usage,
+            model: marker.model,
+            provider: marker.provider,
+        };
+        self.sender.send(&Frame::Item { item }).map(drop)
+    }
+
     /// Sends what `read` gave, a text delta kept for the burst; whether
     /// the stream goes on.
     fn send(&mut self, read: Read) -> bool {
@@ -261,14 +271,7 @@ impl Pump<'_> {
                 let item = encode_loop_end(&marker);
                 self.sender.send(&Frame::Item { item }).map(drop)
             }
-            Some(Ok(ResponseItem::Usage(marker))) => {
-                let item = Item::Usage {
-                    usage: marker.usage,
-                    model: marker.model,
-                    provider: marker.provider,
-                };
-                self.sender.send(&Frame::Item { item }).map(drop)
-            }
+            Some(Ok(ResponseItem::Usage(marker))) => self.send_usage(marker),
             Some(Err(error)) => {
                 let error = stream_failure(&*error);
                 refuse_or_send(self.sender, &Frame::Error { error });

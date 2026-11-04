@@ -135,15 +135,16 @@ pub struct LoopEndMarker {
     pub budget_tokens: Option<u64>,
     /// The cost budget the turn ran under, in US dollars, if any.
     pub budget_usd: Option<f64>,
-    /// What the turn's last generation used, `None` when it reported no
-    /// counters.
+    /// What the turn's last generation used, empty when it reported no
+    /// counters, `None` when it failed.
     pub last_usage: Option<Metadata>,
     /// Whether every generation of the turn reported its counters; `None`
     /// when the channel does not say.
     pub usage_complete: Option<bool>,
-    /// The model the turn ran on, as the channel was configured.
+    /// The model the turn's last generation ran on, a fallback's when it
+    /// served it.
     pub model: Option<String>,
-    /// The provider the turn ran on.
+    /// The provider the turn's last generation ran on.
     pub provider: Option<String>,
 }
 
@@ -191,4 +192,32 @@ impl LoopEndMarker {
         }
         record
     }
+}
+
+/// Adds a generation's integer counters to a turn's running `total`, cache
+/// reads and writes with its input and output: Python's `add_usage`. Outside
+/// the public API (decision 16): roomkit-ai counts with it.
+#[doc(hidden)]
+pub fn add_usage(total: &mut Metadata, used: &Metadata) {
+    for (name, used) in used {
+        let Some(used) = used.as_i64() else {
+            continue;
+        };
+        let sum = total
+            .get(name)
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            .saturating_add(used);
+        total.insert(name.clone(), Value::from(sum));
+    }
+}
+
+/// Whether `used` holds a generation's input and output counters: Python's
+/// `reports_counters`. Outside the public API (decision 16): roomkit-ai
+/// counts with it.
+#[doc(hidden)]
+pub fn reports_counters(used: &Metadata) -> bool {
+    ["input_tokens", "output_tokens"]
+        .iter()
+        .all(|key| used.get(*key).and_then(Value::as_u64).is_some())
 }

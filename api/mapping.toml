@@ -99,7 +99,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 # the text and the response's rows, which its annotation does not name, and
 # `ChannelOutput.response_stream`, an `AsyncIterator` of text and markers,
 # `ResponseItem`'s `Text`, `Thinking` (`roomkit.models.ThinkingDeltaMarker`,
-# as `StreamItem`'s) and `LoopEnd(LoopEndMarker)`, Python's private
+# as `StreamItem`'s), `Usage(UsageMarker)` and `LoopEnd(LoopEndMarker)`, Python's private
 # tool markers hidden. Rust names the stream types and their items;
 # `next()` is `__anext__`.
 "roomkit::DeliveryStream" = { python = "AsyncIterator", members = ["next", "cut"] }

@@ -3,8 +3,8 @@
 //!
 //! The owner's reader grants a window of items, and grants it again once
 //! half of it was read, saying how many items it read. The executor reads
-//! text deltas ahead of the reader within what was granted, and never past
-//! any other item (a call's start, its end, the loop's end) until a pull
+//! text and reasoning deltas, and what a generation used, ahead of the reader
+//! within what was granted, and never past any other item (a call's start, its end, the loop's end) until a pull
 //! its reader sent once it read that item: one that says fewer items read
 //! than were read through such an item grants nothing.
 

@@ -41,6 +41,8 @@ use roomkit_core::model::{ChannelOutput, ResponseMetadata, RoomEvent, ToolCallCo
 use tokio::sync::{mpsc, oneshot};
 
 pub use self::loop_end::{LoopEndMarker, LoopEndReason, UsageMarker};
+#[doc(hidden)]
+pub use self::loop_end::{add_usage, reports_counters};
 pub(crate) use self::reader::{CALLER_CANCELLED, KIT_CLOSED, KeptStream, Stops, StreamRead, read};
 use crate::channel::ChannelError;
 
@@ -131,8 +133,8 @@ type Pulled = Option<Result<StreamItem, ChannelError>>;
 
 /// The stream a streaming channel's `deliver_stream` reads (RFC §6.1,
 /// step 4 decision 9): the response's text as it is written, each piece of
-/// the model's reasoning, and each row once the store holds it, in index
-/// order; the response's failure, if it
+/// the model's reasoning, what each generation used, and each row once the
+/// store holds it, in index order; the response's failure, if it
 /// fails, as its last item. Each read pulls the response one item further:
 /// nothing runs past what was read. Dropping it, or returning from
 /// `deliver_stream` before its end, stops the response: the text it was
@@ -171,7 +173,8 @@ impl DeliveryStream {
         self.cut
     }
 
-    /// The next item: text, a row, or the response's failure, its last;
+    /// The next item: text, reasoning, what a generation used, a row, or the
+    /// response's failure, its last;
     /// `None` once the response is over or its read was stopped from outside,
     /// which [`cut`](Self::cut) tells apart.
     /// It reads the response one item further, as polling the stream does.

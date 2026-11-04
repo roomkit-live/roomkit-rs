@@ -117,6 +117,17 @@ impl Segments {
         self.generations.next_generation();
     }
 
+    /// The reader's read gave a call's start.
+    pub(super) fn call_started(&mut self) {
+        self.generations.call_started();
+    }
+
+    /// The reader's read gave a call's end. One read past a stopped reader
+    /// does not come here: it asks no model again.
+    pub(super) fn call_ended(&mut self) {
+        self.generations.call_ended();
+    }
+
     /// The reader was handed `delta`.
     pub(super) fn text(&mut self, delta: &str) {
         self.text.push_str(delta);
@@ -125,7 +136,6 @@ impl Segments {
     /// A call starts: the text before it, a segment of its own, then its
     /// start row.
     pub(super) fn start(&mut self, start: ToolCallContent) -> Vec<RoomEvent> {
-        self.generations.call_started();
         let mut rows: Vec<RoomEvent> = self.segment(false).into_iter().collect();
         rows.push(self.draft(
             EventType::ToolCallStart,
@@ -141,7 +151,6 @@ impl Segments {
     /// A call that is not open yet, read in flight once its reader stopped:
     /// opened, its row unwritten.
     pub(super) fn opened_unwritten(&mut self, start: ToolCallContent) {
-        self.generations.call_started();
         self.open.push(Open {
             start,
             written: false,
@@ -151,7 +160,6 @@ impl Segments {
     /// A call ended: its end row, closing the earliest call open under its
     /// id.
     pub(super) fn end(&mut self, end: ToolCallContent) -> Vec<RoomEvent> {
-        self.generations.call_ended();
         let mut rows = Vec::new();
         if let Some(position) = self
             .open

@@ -40,7 +40,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit::model::{
-    LoopEndMarker, LoopEndReason, Metadata, ToolCall, ToolCallOutcome, UsageMarker,
+    LoopEndMarker, LoopEndReason, Metadata, ToolCall, ToolCallOutcome, UsageMarker, add_usage,
+    reports_counters,
 };
 use roomkit::{ToolCallReport, TurnHost, TurnRecord};
 use roomkit_core::rules::transcript::{Message, Role};
@@ -758,25 +759,8 @@ impl Spent {
         let used = &generation.done.usage;
         self.by_fallback = generation.by_fallback;
         add_usage(&mut self.usage, used);
-        self.complete &= ["input_tokens", "output_tokens"]
-            .iter()
-            .all(|key| used.get(*key).and_then(Value::as_u64).is_some());
+        self.complete &= reports_counters(used);
         self.last.clone_from(used);
-    }
-}
-
-/// Adds `round`'s integer counters to `total`'s.
-fn add_usage(total: &mut Metadata, round: &Metadata) {
-    for (name, used) in round {
-        let Some(used) = used.as_i64() else {
-            continue;
-        };
-        let sum = total
-            .get(name)
-            .and_then(Value::as_i64)
-            .unwrap_or(0)
-            .saturating_add(used);
-        total.insert(name.clone(), Value::from(sum));
     }
 }
 

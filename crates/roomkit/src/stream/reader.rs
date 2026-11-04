@@ -43,7 +43,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::segments::Segments;
-use super::{DeliveryStream, Pulled, ResponseItem, StreamItem};
+use super::{DeliveryStream, Pulled, ResponseItem, StreamItem, UsageMarker};
 use crate::RoomKit;
 use crate::channel::ChannelError;
 use crate::context::{self, Adopting, ExecutionContext};
@@ -591,20 +591,14 @@ impl Producer {
                 Reads::Target => self.ready.push_back(Ok(StreamItem::Thinking(delta))),
                 Reads::Nobody | Reads::Lost => self.segments.handed(),
             },
-            // What a generation used: the record of a turn cut before its end
-            // holds it; the target reads it as it comes, the store never.
-            Some(Ok(RemoteItem::Item(ResponseItem::Usage(marker)))) => {
-                self.segments.told(&marker);
-                match self.reads {
-                    Reads::Target => self.ready.push_back(Ok(StreamItem::Usage(marker))),
-                    Reads::Nobody | Reads::Lost => self.segments.handed(),
-                }
-            }
+            Some(Ok(RemoteItem::Item(ResponseItem::Usage(marker)))) => self.take_usage(marker),
             Some(Ok(RemoteItem::Item(ResponseItem::ToolCallStart(start)))) => {
+                self.segments.call_started();
                 let rows = self.segments.start(start);
                 self.commit_all(rows).await;
             }
             Some(Ok(RemoteItem::Item(ResponseItem::ToolCallEnd(end)))) => {
+                self.segments.call_ended();
                 let rows = self.segments.end(end);
                 self.commit_all(rows).await;
             }
@@ -627,6 +621,16 @@ impl Producer {
                 self.ready.push_back(Err(error));
                 self.over = Some(Over::Failed(record));
             }
+        }
+    }
+
+    /// Takes what a generation used: the record of a turn cut before its end
+    /// holds it; the target reads it as it comes, the store never.
+    fn take_usage(&mut self, marker: UsageMarker) {
+        self.segments.told(&marker);
+        match self.reads {
+            Reads::Target => self.ready.push_back(Ok(StreamItem::Usage(marker))),
+            Reads::Nobody | Reads::Lost => self.segments.handed(),
         }
     }
 
@@ -743,11 +747,6 @@ impl Producer {
                     }
                     read = Some(self.pull_turn().await);
                 }
-                // What a generation used, read as its reader stopped.
-                Some(Some(Ok(RemoteItem::Item(ResponseItem::Usage(marker))))) => {
-                    self.segments.told(&marker);
-                    return CANCELLED;
-                }
                 // A start: the round had not begun to run.
                 Some(Some(Ok(RemoteItem::Item(ResponseItem::ToolCallStart(start))))) => {
                     self.segments.opened_unwritten(start);
@@ -767,6 +766,7 @@ impl Producer {
                         RemoteItem::Item(
                             ResponseItem::Text(_)
                             | ResponseItem::Thinking(_)
+                            | ResponseItem::Usage(_)
                             | ResponseItem::LoopEnd(_)
                             | ResponseItem::SegmentBreak,
                         )

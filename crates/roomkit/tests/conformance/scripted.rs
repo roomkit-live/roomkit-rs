@@ -607,8 +607,8 @@ impl Channel for ScriptedChannel {
                         break;
                     }
                     if reaction.get("hold_after").and_then(Value::as_str) == Some(text.as_str()) {
-                        let hold = json!({ "gate": reaction["hold_gate"] });
-                        perform(&run, &hold, &Scope::in_room(&room_id)).await?;
+                        let at_gate = json!({ "gate": reaction["hold_gate"] });
+                        perform(&run, &at_gate, &Scope::in_room(&room_id)).await?;
                     }
                 }
                 Ok(StreamItem::Usage(marker)) => {

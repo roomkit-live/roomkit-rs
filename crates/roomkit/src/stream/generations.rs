@@ -5,7 +5,7 @@
 use roomkit_core::model::Metadata;
 use serde_json::Value;
 
-use super::{LoopEndMarker, LoopEndReason, UsageMarker};
+use super::{LoopEndMarker, LoopEndReason, UsageMarker, add_usage, reports_counters};
 
 /// The record's key holding what the turn's generations used.
 const AI_USAGE: &str = "ai_usage";
@@ -94,28 +94,6 @@ impl GenerationsRead {
             record.shift_remove(AI_USAGE);
         }
         record
-    }
-}
-
-/// Whether `used` holds a generation's input and output counters.
-fn reports_counters(used: &Metadata) -> bool {
-    ["input_tokens", "output_tokens"]
-        .iter()
-        .all(|key| used.get(*key).and_then(Value::as_u64).is_some())
-}
-
-/// Adds `used`'s integer counters to `total`'s.
-fn add_usage(total: &mut Metadata, used: &Metadata) {
-    for (name, used) in used {
-        let Some(used) = used.as_i64() else {
-            continue;
-        };
-        let sum = total
-            .get(name)
-            .and_then(Value::as_i64)
-            .unwrap_or(0)
-            .saturating_add(used);
-        total.insert(name.clone(), Value::from(sum));
     }
 }
 

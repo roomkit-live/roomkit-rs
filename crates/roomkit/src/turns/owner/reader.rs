@@ -59,9 +59,6 @@ pub(crate) struct OwnerTurn {
     open: Vec<(u64, ToolCallContent)>,
     /// The turn's one record, its output's, updated in place.
     live: ResponseMetadata,
-    /// The turn's record as the last `record` frame gave it: the record a
-    /// loop's end ends the turn on.
-    record: Option<Metadata>,
 }
 
 impl OwnerTurn {
@@ -73,7 +70,6 @@ impl OwnerTurn {
             window: PullWindow::default(),
             open: Vec::new(),
             live: ResponseMetadata::default(),
-            record: None,
         }
     }
 
@@ -95,8 +91,7 @@ impl OwnerTurn {
                     continue;
                 }
             };
-            if let Some(Main::Record(record)) = next {
-                self.record = Some(record);
+            if let Some(Main::Record(_)) = next {
                 continue;
             }
             self.stage = Stage::Done;
@@ -289,7 +284,7 @@ impl OwnerTurn {
                 provider,
             } => {
                 self.window.read_other();
-                let end = WireLoopEnd {
+                Read::Item(RemoteItem::Item(decode_loop_end(WireLoopEnd {
                     reason,
                     rounds,
                     usage,
@@ -301,22 +296,17 @@ impl OwnerTurn {
                     usage_complete,
                     model,
                     provider,
-                };
-                Read::Item(RemoteItem::Item(decode_loop_end(end)))
+                })))
             }
             Item::Usage {
                 usage,
                 model,
                 provider,
-            } => {
-                self.window.read_deltas(1);
-                let marker = UsageMarker {
-                    usage,
-                    model,
-                    provider,
-                };
-                Read::Item(RemoteItem::Item(ResponseItem::Usage(marker)))
-            }
+            } => self.read_usage(UsageMarker {
+                usage,
+                model,
+                provider,
+            }),
             Item::StreamEnd => Read::Ended,
         }
     }
@@ -324,8 +314,13 @@ impl OwnerTurn {
     /// The turn's record as `record`, a frame's, gives it: the one the
     /// items after it read (RFC §10.6.4).
     fn take_record(&mut self, record: Metadata) {
-        self.live.replace(record.clone());
-        self.record = Some(record);
+        self.live.replace(record);
+    }
+
+    /// What a generation used, read ahead as a delta is (RFC §10.6.4).
+    fn read_usage(&mut self, marker: UsageMarker) -> Read {
+        self.window.read_deltas(1);
+        Read::Item(RemoteItem::Item(ResponseItem::Usage(marker)))
     }
 
     /// The turn's one record, its output's, kept as the executor sends it.

@@ -10,20 +10,21 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput, ChannelType, InboundMessage,
-    RoomContext, RoomEvent, RoomId, TextContent,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput, ChannelType, EventType,
+    InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DeliveryStream,
-    ProcessInboundOptions, RoomKit, RoomKitOptions, StreamItem,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
+    DeliveryStream, ProcessInboundOptions, RoomKit, RoomKitOptions, StreamItem,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiChannel, AiChannelOptions};
 use roomkit_core::ops::ChannelConfig;
+use serde_json::json;
 use tokio::sync::Notify;
 use tokio::time::{Instant, timeout};
 
-use crate::support::channel;
+use crate::support::{channel, received};
 
 /// Where a target gets stuck, on its first stream only.
 #[derive(Clone, Copy, Debug)]
@@ -32,6 +33,13 @@ enum Stuck {
     BetweenReads,
     /// Past the end of the stream its read was stopped on.
     PastTheEnd,
+}
+
+/// A target that leaves while the call it read the start of runs, its next
+/// read in flight.
+struct LeavesWhileACallRuns {
+    running: Arc<Notify>,
+    release: Arc<Notify>,
 }
 
 struct Target {
@@ -290,4 +298,155 @@ async fn a_stuck_target_holds_the_room_s_line_of_a_serializing_agent() {
             .unwrap()
             .unwrap();
     }
+}
+
+macro_rules! streaming_channel_declaration {
+    () => {
+        fn channel_id(&self) -> roomkit::model::ChannelId {
+            Target::config().channel_id.clone()
+        }
+
+        fn channel_type(&self) -> ChannelType {
+            Target::config().channel_type.clone()
+        }
+
+        fn category(&self) -> ChannelCategory {
+            Target::config().category
+        }
+
+        fn direction(&self) -> ChannelDirection {
+            Target::config().direction
+        }
+
+        fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+            Target::config().capabilities.clone()
+        }
+
+        fn provider_name(&self) -> Option<String> {
+            Target::config().provider_name.clone()
+        }
+
+        fn recipient_key(&self) -> Option<String> {
+            Target::config().recipient_key.clone()
+        }
+
+        fn supports_streaming_delivery(&self) -> bool {
+            Target::config().supports_streaming_delivery
+        }
+
+        fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+            let config = Target::config();
+            let addressing = roomkit::ChannelAddressing {
+                addressing: config.addressing,
+                recipient_key: config.recipient_key.clone(),
+                chat_key: config.chat_key.clone(),
+                replies_to_sender: false,
+            };
+            (addressing, config.country_code.clone())
+        }
+    };
+}
+
+impl Channel for LeavesWhileACallRuns {
+    streaming_channel_declaration!();
+
+    async fn deliver_stream(
+        &self,
+        mut stream: DeliveryStream,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        while let Some(item) = stream.next().await {
+            let started = matches!(
+                &item,
+                Ok(StreamItem::Row(row)) if row.r#type == EventType::ToolCallStart
+            );
+            if started {
+                break;
+            }
+        }
+        tokio::select! {
+            _ = stream.next() => {}
+            () = self.running.notified() => {}
+        }
+        self.release.notify_one();
+        Ok(ChannelOutput::empty())
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
+    }
+}
+
+// Python: tests/tasks/test_stopped_stream_turn_end.py::test_a_reader_gone_while_a_call_runs_leaves_no_generation_in_flight
+#[tokio::test(start_paused = true)]
+async fn a_reader_gone_while_a_call_runs_leaves_no_generation_in_flight() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let running = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    kit.register_channel(LeavesWhileACallRuns {
+        running: Arc::clone(&running),
+        release: Arc::clone(&release),
+    })
+    .unwrap();
+    let used = json!({ "input_tokens": 1000, "output_tokens": 10 });
+    let model =
+        ScriptedProvider::new([
+            ScriptedRound::calling("Checking.", [("c1", "lookup", "{}")])
+                .with_usage(used.as_object().unwrap().clone()),
+        ]);
+    let wait = move |_call, _context| {
+        let (running, release) = (Arc::clone(&running), Arc::clone(&release));
+        async move {
+            running.notify_one();
+            release.notified().await;
+            Ok::<_, roomkit_ai::ToolError>(roomkit_ai::ToolResult::Text("found".to_owned()))
+        }
+    };
+    let options_of_agent = AiChannelOptions {
+        tools: roomkit_ai::Tools::new()
+            .tool(roomkit_ai::AiTool::new("lookup", "d").unwrap(), wait)
+            .into(),
+        ..AiChannelOptions::default()
+    };
+    kit.register_channel(AiChannel::new(channel("ai"), model, options_of_agent).unwrap())
+        .unwrap();
+    let room = RoomId::new("r").unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["ws", "ai"] {
+        kit.attach_channel(&room, &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+
+    let sent = kit.process_inbound(message("Go."), options(&room));
+    timeout(LONG, sent).await.unwrap().unwrap();
+
+    let rows = kit.store().list_events(&room, received()).await.unwrap();
+    let said = rows
+        .iter()
+        .find(|row| row.source.channel_id == channel("ai") && row.r#type == EventType::Message)
+        .unwrap();
+    assert_eq!(said.metadata["loop_end_reason"], json!("cancelled"));
+    assert_eq!(said.metadata["ai_usage_complete"], json!(true));
+    kit.close().await.unwrap();
 }

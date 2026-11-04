@@ -116,6 +116,8 @@ pub mod model {
     pub use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
     pub use crate::steering::{Cancel, InjectMessage, SteeringDirective, UpdateSystemPrompt};
     pub use crate::stream::{LoopEndMarker, LoopEndReason, UsageMarker};
+    #[doc(hidden)]
+    pub use crate::stream::{add_usage, reports_counters};
     /// What a hook returns: [`HookResult`]'s constructors and their options,
     /// Python's keywords of `HookResult.allow`, `block` and `modify`.
     pub mod hook {
