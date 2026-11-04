@@ -105,6 +105,8 @@ pub(crate) struct Check {
 /// One run of one scenario.
 pub(crate) struct Run {
     kit: crate::Kit,
+    /// The kit's store, shared: what a router of the run's own is built over.
+    store: Arc<crate::Store>,
     /// The labels whose outcomes the scenario's `expect.actions` checks.
     asserted_actions: BTreeSet<String>,
     pub(crate) gates: Gates,
@@ -141,7 +143,7 @@ pub(crate) struct Run {
 
 impl Run {
     /// A run of `scenario` on `kit`, recording nothing yet.
-    pub(crate) fn new(kit: crate::Kit, scenario: &Value) -> Self {
+    pub(crate) fn new(kit: crate::Kit, store: Arc<crate::Store>, scenario: &Value) -> Self {
         let tapped: Vec<&str> = LEVEL_0_EVENTS
             .iter()
             .chain(&crate::task_calls::LEVEL_2_EVENTS)
@@ -158,6 +160,7 @@ impl Run {
             .unwrap_or_default();
         Self {
             kit,
+            store,
             asserted_actions,
             gates: Gates::default(),
             recording: AtomicBool::new(false),
@@ -185,6 +188,10 @@ impl Run {
 
     pub(crate) fn kit(&self) -> &crate::Kit {
         &self.kit
+    }
+
+    pub(crate) fn store(&self) -> Arc<crate::Store> {
+        Arc::clone(&self.store)
     }
 
     /// Labels `value` as `label`, beside the labels the calls' `as` name:

@@ -16,8 +16,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    ErrorRecord, Identity, IdentityId, InboundMessage, Participant, ParticipantId, RoomContext,
-    RoomEvent, RoomId, TextContent, Timestamp,
+    ErrorRecord, EventSource, Identity, IdentityId, InboundMessage, Participant, ParticipantId,
+    Room, RoomContext, RoomEvent, RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::{EchoAgent, EchoAgentOptions, SequentialEnvironment, kit_with_environment};
 use roomkit::{
@@ -998,6 +998,54 @@ async fn a_room_that_heard_another_sender_before_the_record_routes_the_message_o
 }
 
 /// Every row of a room's timeline, the refused ones included.
+// Python: tests/test_inbound_routing_ambiguity.py::TestStepThreeAdmitsOneConversation::test_another_sender_found_past_the_first_page_refuses
+// The history the default router reads goes past its first page of 200 events.
+#[tokio::test]
+async fn another_sender_found_past_the_first_page_refuses() {
+    let store = Arc::new(InMemoryStore::default());
+    let room_id = room("r1");
+    store.create_room(Room::new(room_id.clone())).await.unwrap();
+    let binding = ChannelBinding::new(channel("ws"), room_id.clone(), ChannelType::WEBSOCKET);
+    store.add_binding(binding).await.unwrap();
+    let said_by = |sender: &str| {
+        let source = EventSource {
+            participant_id: Some(ParticipantId::new(sender).unwrap()),
+            ..EventSource::new(channel("ws"), ChannelType::WEBSOCKET)
+        };
+        RoomEvent::new(room_id.clone(), source, TextContent::new("hi"))
+    };
+    for _ in 0..201 {
+        store
+            .add_event_auto_index(&room_id, said_by("bob"))
+            .await
+            .unwrap();
+    }
+    let route = |sender: &str| {
+        let router = DefaultInboundRoomRouter::new(
+            Arc::clone(&store),
+            DefaultInboundRoomRouterOptions::default(),
+        );
+        let options = RouteOptions {
+            participant_id: Some(sender.to_owned()),
+            ..RouteOptions::default()
+        };
+        async move {
+            router
+                .route(&channel("ws"), &ChannelType::WEBSOCKET, options)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(route("bob").await, Some(room_id.clone()));
+
+    store
+        .add_event_auto_index(&room_id, said_by("alice"))
+        .await
+        .unwrap();
+
+    assert_eq!(route("bob").await, None);
+}
+
 fn every_row() -> roomkit::store::ListEventsOptions {
     roomkit::store::ListEventsOptions {
         limit: u64::MAX,

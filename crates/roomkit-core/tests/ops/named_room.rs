@@ -281,14 +281,27 @@ mod a_missing_room {
     /// integrator names one.
     #[test]
     fn names_neither_correspondent_nor_recipient_for_a_chat_message_without_its_chat() {
-        let mut sim = Sim::without_rooms();
-        sim.unbound_transport("telegram", ChannelType::TELEGRAM);
-        sim.send(message_from("telegram", "4242", "Hi")).unwrap();
-        let binding = binding_of(&sim, "telegram").unwrap();
-        assert_eq!(
-            (binding.participant_id.clone(), binding.metadata.len()),
-            (None, 0)
-        );
+        // Python: tests/test_chat_conversations.py::test_a_chat_message_without_its_chat_has_no_address
+        // A chat is read as a recipient is: any other value is no chat.
+        for carried in [
+            None,
+            Some(serde_json::json!(true)),
+            Some(serde_json::json!("  ")),
+        ] {
+            let mut sim = Sim::without_rooms();
+            sim.unbound_transport("telegram", ChannelType::TELEGRAM);
+            let mut message = message_from("telegram", "4242", "Hi");
+            if let Some(carried) = carried.clone() {
+                message.metadata.insert("chat_id".to_owned(), carried);
+            }
+            sim.send(message).unwrap();
+            let binding = binding_of(&sim, "telegram").unwrap();
+            assert_eq!(
+                (binding.participant_id.clone(), binding.metadata.len()),
+                (None, 0),
+                "{carried:?}"
+            );
+        }
     }
 
     /// RFC §10.4: the framework's own sender names no correspondent.

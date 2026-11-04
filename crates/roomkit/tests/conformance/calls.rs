@@ -206,6 +206,10 @@ pub(crate) async fn call(
             (crate::strategy_calls::call(run, name, spec).await?, None)
         }
         "save_conversation_state" => (crate::routing_calls::call(run, name, spec).await?, None),
+        "default_router.route" => (
+            crate::routing_calls::default_route(run, name, spec).await?,
+            None,
+        ),
         "delivery.cancel" | "delivery.wait" => (handle_call(run, name, spec).await?, None),
         "send_greeting" => (send_greeting(run, name, spec).await?, None),
         _ => (other_call(run, name, spec).await?, None),

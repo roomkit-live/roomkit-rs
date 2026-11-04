@@ -103,7 +103,9 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
         Ok(read) => read,
         Err(problem) => return vec![format!("setup: {problem}")],
     };
+    let mut shared_store = None;
     let (kit, _store_file) = crate::new_kit(|options| {
+        shared_store = Some(Arc::clone(&options.store));
         let options = identity::kit_options(
             kit_options(options, &setup["kit"], &slot),
             &setup["kit"],
@@ -119,7 +121,10 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
         options
     })
     .await;
-    let run = Arc::new(Run::new(kit, scenario));
+    let Some(store) = shared_store else {
+        return vec!["setup: the kit took no store".to_owned()];
+    };
+    let run = Arc::new(Run::new(kit, store, scenario));
     slot.set(&run);
     *lock(&run.backend) = backend;
     *lock(&run.strategies) = strategies;

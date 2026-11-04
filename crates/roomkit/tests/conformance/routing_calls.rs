@@ -2,17 +2,19 @@
 //! "Calls"; RFC §19.2, §19.4): a hook with a `router` is a conversation
 //! router's hook, the `ConversationRouter` built from it, recording no call;
 //! `save_conversation_state` makes phase transitions from the state of the
-//! room the store holds, then saves the state the last one leaves.
+//! room the store holds, then saves the state the last one leaves;
+//! `default_router.route` asks the default router over the kit's store.
 
 use std::sync::Arc;
 
-use roomkit::model::{ChannelId, RoomId};
+use roomkit::model::{ChannelId, ChannelType, RoomId};
 use roomkit::orchestration::{ConversationRouterOptions, TransitionOptions};
 use roomkit::{
-    ConversationRouter, ConversationState, ConversationStore, RoutingRule, get_conversation_state,
-    save_conversation_state,
+    ConversationRouter, ConversationState, ConversationStore, DefaultInboundRoomRouter,
+    DefaultInboundRoomRouterOptions, InboundRoomRouter, RoomKitError, RouteOptions, RoutingRule,
+    get_conversation_state, save_conversation_state,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::calls::{Called, Unreadable, field, finish, optional};
 use crate::run::Run;
@@ -37,7 +39,17 @@ pub(crate) fn router(spec: &Value) -> Result<ConversationRouter, Unreadable> {
 
 /// The arguments of the routing calls, for the shape check.
 pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
-    (name == "save_conversation_state").then_some(&["room_id", "transitions"])
+    match name {
+        "save_conversation_state" => Some(&["room_id", "transitions"]),
+        "default_router.route" => Some(&[
+            "channel_id",
+            "channel_type",
+            "participant_id",
+            "identity_id",
+            "organization_id",
+        ]),
+        _ => None,
+    }
 }
 
 /// Makes `save_conversation_state`.
@@ -62,4 +74,32 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
     }
     let saved = save_conversation_state(store, &room_id, &state).await;
     Ok(finish(run, name, saved, |()| Value::Null))
+}
+
+/// Makes `default_router.route`: the default router over the kit's store,
+/// reading no channel, whatever router the kit holds.
+pub(crate) async fn default_route(
+    run: &Run,
+    name: &str,
+    spec: &Value,
+) -> Result<Called, Unreadable> {
+    let channel_id = field::<ChannelId>(spec, "channel_id")?;
+    let channel_type = field::<ChannelType>(spec, "channel_type")?;
+    let identity = optional::<String>(spec, "identity_id")?
+        .map(|id| serde_json::from_value(json!({ "id": id })))
+        .transpose()
+        .map_err(|error| format!("identity_id: {error}"))?;
+    let options = RouteOptions {
+        participant_id: optional(spec, "participant_id")?,
+        organization_id: optional(spec, "organization_id")?,
+        identity,
+        ..RouteOptions::default()
+    };
+    let router =
+        DefaultInboundRoomRouter::new(run.store(), DefaultInboundRoomRouterOptions::default());
+    let answered = router
+        .route(&channel_id, &channel_type, options)
+        .await
+        .map_err(|error| RoomKitError::Runtime(error.to_string()));
+    Ok(finish(run, name, answered, |room| json!(room)))
 }

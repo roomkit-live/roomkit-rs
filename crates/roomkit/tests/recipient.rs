@@ -20,12 +20,15 @@ use roomkit::model::{
     InboundMessage, Metadata, ParticipantId, RoomContext, RoomEvent, RoomId, TextContent,
     Timestamp,
 };
-use roomkit::testing::{EchoAgent, EchoAgentOptions, SequentialEnvironment, kit_with_environment};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+    SequentialEnvironment, kit_with_environment,
+};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, ChannelOf, ConversationStore, CreateRoomOptions,
     DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, HookExecution, HookOptions,
     HookTrigger, InMemoryStore, InboundRoomRouter, ProcessInboundOptions, RoomKit, RoomKitOptions,
-    RouteOptions, RouterFuture, WeakRoomKit,
+    RouteOptions, RouterFuture, SendEventOptions, WeakRoomKit,
 };
 use roomkit_core::ops::ChannelConfig;
 use serde_json::{Value, json};
@@ -587,6 +590,127 @@ async fn a_room_whose_recipient_is_not_one_is_no_stranger_s() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
+/// A kit with no agent, the SMS number and a `bank` channel a host sends from.
+fn kit_of_a_bank() -> (RoomKit, Sms) {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let sms = Sms::new();
+    kit.register_channel(sms.clone()).unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("bank"),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    (kit, sms)
+}
+
+/// The room `id` binding `bank` and the SMS number, holding `held` under
+/// `phone_number`.
+async fn open_bank_room(kit: &RoomKit, id: &str, held: Option<Value>) -> RoomId {
+    let room_id = room(id);
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room_id, &channel("bank"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let mut metadata = Metadata::new();
+    if let Some(held) = held {
+        metadata.insert("phone_number".to_owned(), held);
+    }
+    let options = AttachChannelOptions {
+        metadata,
+        ..Default::default()
+    };
+    kit.attach_channel(&room_id, &channel("sms"), options)
+        .await
+        .unwrap();
+    room_id
+}
+
+// Python: tests/test_transport_recipient.py::test_no_recipient_is_refused_before_any_send_and_spares_the_breaker
+// Six refusals in one room; another room on the same channel still delivers.
+#[tokio::test]
+async fn no_recipient_is_refused_before_any_send_and_spares_the_breaker() {
+    let values = [
+        None,
+        Some(json!(true)),
+        Some(json!("  ")),
+        Some(json!({ "number": ALICE })),
+        Some(json!(15_550_000_001.0)),
+    ];
+    for held in values {
+        let (kit, sms) = kit_of_a_bank();
+        let failed: Arc<Mutex<Vec<Option<Value>>>> = Arc::default();
+        let noted = Arc::clone(&failed);
+        kit.on("delivery_failed", move |event: roomkit::FrameworkEvent| {
+            noted.lock().unwrap().push(event.data.get("error").cloned());
+            async {}
+        })
+        .unwrap();
+        let nobody = open_bank_room(&kit, "nobody", held.clone()).await;
+        let alice = open_bank_room(&kit, "alice", Some(json!(ALICE))).await;
+
+        for n in 0..6 {
+            let notice = TextContent::new(format!("notice {n}"));
+            kit.send_event(
+                &nobody,
+                &channel("bank"),
+                notice,
+                SendEventOptions::default(),
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(sms.sent(), Vec::new(), "{held:?}");
+        assert_eq!(
+            failed.lock().unwrap().clone(),
+            vec![Some(json!("no_recipient")); 6],
+            "{held:?}"
+        );
+
+        let appointment = TextContent::new("your appointment");
+        kit.send_event(
+            &alice,
+            &channel("bank"),
+            appointment,
+            SendEventOptions::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sms.sent().len(), 1, "{held:?}");
+        kit.close().await.unwrap();
+    }
+}
+
+// Python: tests/test_transport_recipient.py::test_no_recipient_is_logged_as_a_refusal_without_traceback
+// A warning naming the key. A traceback has no Rust form.
+#[tokio::test]
+async fn no_recipient_is_logged_as_a_refusal() {
+    let (kit, _sms) = kit_of_a_bank();
+    let nobody = open_bank_room(&kit, "nobody", None).await;
+    let (warnings, guard) = Warnings::capture();
+
+    kit.send_event(
+        &nobody,
+        &channel("bank"),
+        TextContent::new("notice"),
+        SendEventOptions::default(),
+    )
+    .await
+    .unwrap();
+    drop(guard);
+
+    let refused = warnings.containing("no recipient");
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(refused[0].starts_with("WARN"), "{refused:?}");
+    assert!(refused[0].contains("phone_number"), "{refused:?}");
+    kit.close().await.unwrap();
+}
+
 fn every_row() -> roomkit::store::ListEventsOptions {
     roomkit::store::ListEventsOptions {
         limit: u64::MAX,

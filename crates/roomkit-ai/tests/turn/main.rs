@@ -1092,3 +1092,32 @@ async fn failed_generation_does_not_reuse_previous_request_usage() {
     assert_eq!(record["ai_usage"]["input_tokens"], 100);
     room.kit.close().await.unwrap();
 }
+
+// Python: tests/test_external_call_routing.py::test_a_call_written_unreadable_is_refused_before_the_handler
+// A call whose arguments are no JSON object never runs, and the refusal says
+// the model wrote them so. Rust has no external handler: the channel's own tool
+// is what would run.
+#[tokio::test]
+async fn a_call_written_unreadable_is_refused_before_it_runs() {
+    let ran: Arc<Mutex<Vec<String>>> = Arc::default();
+    let running = Arc::clone(&ran);
+    let tools = Tools::new().tool(support::lookup(), move |call, _context| {
+        running.lock().unwrap().push(call.name.clone());
+        async move { Ok(ToolResult::Text("found".to_owned())) }
+    });
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("c1", "lookup_order", "[1, 2]")]),
+        ScriptedRound::answering("Sorry."),
+    ]);
+    let room = Room::new(model, tools).await;
+
+    room.says("Order 7?").await;
+
+    let timeline = room.timeline().await;
+    let end = end_row(&timeline, "c1");
+    assert_eq!(end.outcome, Some(ToolCallOutcome::Refused));
+    let result = end.result.to_string();
+    assert!(result.contains("arguments unreadable"), "{result}");
+    assert!(ran.lock().unwrap().is_empty());
+    room.kit.close().await.unwrap();
+}
