@@ -17,5 +17,6 @@ mod host;
 mod result_tool;
 mod steering;
 mod streams;
+mod stuck_target;
 mod support;
 mod tap;
