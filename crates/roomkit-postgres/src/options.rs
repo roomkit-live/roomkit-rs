@@ -30,6 +30,48 @@ impl fmt::Debug for PostgresStoreOptions {
     }
 }
 
+/// What [`PostgresAdvisoryLockManager::new`](crate::PostgresAdvisoryLockManager::new)
+/// takes: Python's `PostgresAdvisoryLockManager(dsn=None, *, pool=None,
+/// min_size=1, max_size=10)`.
+///
+/// Its `Debug` writes no DSN: one holds a password.
+#[derive(Clone)]
+pub struct PostgresAdvisoryLockManagerOptions {
+    /// The connection string, read as [`PostgresStoreOptions::dsn`] is.
+    pub dsn: Option<String>,
+    /// A pool of the integrator's, separate from the store's, which stays
+    /// theirs: the manager never closes it.
+    pub pool: Option<Pool>,
+    /// How many connections the pool opens at once.
+    pub min_size: usize,
+    /// How many connections the pool holds at most: one per room locked at
+    /// once.
+    pub max_size: usize,
+}
+
+impl Default for PostgresAdvisoryLockManagerOptions {
+    fn default() -> Self {
+        Self {
+            dsn: None,
+            pool: None,
+            min_size: 1,
+            max_size: 10,
+        }
+    }
+}
+
+impl fmt::Debug for PostgresAdvisoryLockManagerOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PostgresAdvisoryLockManagerOptions")
+            .field("dsn", &self.dsn.as_ref().map(|_| "<set>"))
+            .field("pool", &self.pool.as_ref().map(|_| "<set>"))
+            .field("min_size", &self.min_size)
+            .field("max_size", &self.max_size)
+            .finish()
+    }
+}
+
 /// What [`PostgresStore::init`](crate::PostgresStore::init) takes: Python's
 /// `init(min_size=2, max_size=10)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

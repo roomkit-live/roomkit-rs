@@ -66,8 +66,12 @@ mod verification_calls;
 
 use std::time::Duration;
 
+use std::sync::Arc;
+
 use roomkit::{RoomKit, RoomKitOptions};
-use roomkit_postgres::PostgresStore;
+use roomkit_postgres::{
+    PostgresAdvisoryLockManager, PostgresAdvisoryLockManagerOptions, PostgresStore,
+};
 
 use crate::support::TempSchema;
 
@@ -89,17 +93,26 @@ pub(crate) type Kit = RoomKit<PostgresStore>;
 /// The store of the kit the runner builds.
 pub(crate) type Store = PostgresStore;
 
-/// A kit over a store on a new schema, built with what `configure` makes of
-/// the defaults, and the schema, dropped once the run is over.
+/// A kit over a store on a new schema, with the advisory lock a deployment on
+/// this store takes, unless the scenario scripts one; built with what
+/// `configure` makes of the defaults, and the schema, dropped once the run is
+/// over.
 pub(crate) async fn new_kit(
     configure: impl FnOnce(RoomKitOptions<PostgresStore>) -> RoomKitOptions<PostgresStore>,
 ) -> (Kit, TempSchema) {
     let schema = TempSchema::new().await;
     let store = schema.initialized_store().await;
-    (
-        RoomKit::new(configure(RoomKitOptions::with_store(store))),
-        schema,
-    )
+    let mut options = configure(RoomKitOptions::with_store(store));
+    if options.lock_manager.is_none() {
+        let locks = PostgresAdvisoryLockManager::new(PostgresAdvisoryLockManagerOptions {
+            dsn: Some(schema.dsn()),
+            max_size: 8,
+            ..PostgresAdvisoryLockManagerOptions::default()
+        });
+        locks.init().await.unwrap();
+        options.lock_manager = Some(Arc::new(locks));
+    }
+    (RoomKit::new(options), schema)
 }
 
 /// Every scenario runs; those this implementation fails on this store are

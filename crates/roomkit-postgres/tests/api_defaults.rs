@@ -5,8 +5,21 @@
 
 use roomkit_postgres::{
     DedupeEventIndicesOptions, DropLegacyParentIndexOptions, InitOptions, MigrateOptions,
-    PostgresStoreOptions,
+    PostgresAdvisoryLockManagerOptions, PostgresStoreOptions,
 };
+
+#[test]
+fn postgres_advisory_lock_manager_options_defaults_as_python() {
+    let defaults = PostgresAdvisoryLockManagerOptions::default();
+    // roomkit.store.PostgresAdvisoryLockManager.__init__(dsn) = None
+    assert!(defaults.dsn.is_none());
+    // roomkit.store.PostgresAdvisoryLockManager.__init__(pool) = None
+    assert!(defaults.pool.is_none());
+    // roomkit.store.PostgresAdvisoryLockManager.__init__(min_size) = 1
+    assert_eq!(defaults.min_size, 1);
+    // roomkit.store.PostgresAdvisoryLockManager.__init__(max_size) = 10
+    assert_eq!(defaults.max_size, 10);
+}
 
 #[test]
 fn postgres_store_options_defaults_as_python() {
