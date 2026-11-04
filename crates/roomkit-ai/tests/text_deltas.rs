@@ -30,8 +30,8 @@ struct Texts {
 impl RealtimeBackend for Texts {
     fn publish<'a>(&'a self, channel: &'a str, event: EphemeralEvent) -> RealtimeFuture<'a, ()> {
         if event.r#type == EphemeralEventType::TextDelta {
-            let text = event.data["text"].as_str().unwrap().to_owned();
-            self.published.lock().unwrap().push(text);
+            let text = event.data.get("text").and_then(Value::as_str).unwrap();
+            self.published.lock().unwrap().push(text.to_owned());
         }
         self.realtime.publish(channel, event)
     }
@@ -69,8 +69,9 @@ fn text_delta(room_id: &RoomId, text: &str) -> EphemeralEvent {
 #[tokio::test]
 async fn an_answer_s_text_published_after_its_trace_ended_is_dropped() {
     let texts = Arc::new(Texts::default());
+    let realtime: Arc<dyn RealtimeBackend> = Arc::<Texts>::clone(&texts);
     let kit = RoomKit::new(RoomKitOptions {
-        realtime: Some(Arc::clone(&texts) as Arc<dyn RealtimeBackend>),
+        realtime: Some(realtime),
         ..RoomKitOptions::default()
     });
     let sms = RecordingTransport::new(

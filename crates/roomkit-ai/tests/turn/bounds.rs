@@ -493,9 +493,11 @@ async fn a_usage_the_price_cannot_read_hands_no_held_prefix() {
         .await
         .into_iter()
         .filter(|event| event.source.channel_id == channel("assistant"))
-        .filter_map(|event| match event.content {
-            EventContent::Text(text) => Some(text.body),
-            _ => None,
+        .filter_map(|event| {
+            let EventContent::Text(text) = event.content else {
+                return None;
+            };
+            Some(text.body)
         })
         .collect();
     room.kit.close().await.unwrap();
