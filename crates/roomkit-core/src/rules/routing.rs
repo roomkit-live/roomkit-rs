@@ -1838,37 +1838,32 @@ mod tests {
         }
 
         #[test]
-        fn a_binding_naming_the_sender_s_identity_keeps_it_and_gets_their_address() {
+        /// RFC §5.7: only a binding naming the sender by their address gets
+        /// it as its recipient.
+        #[test]
+        fn a_binding_naming_the_sender_s_identity_keeps_it_and_writes_nothing() {
             let mut jeans = binding();
             jeans.participant_id = Some(ParticipantId::new("id_jean").unwrap());
             let sender = Sender {
                 identity_id: Some(IdentityId::new("id_jean").unwrap()),
                 ..sender(ALICE)
             };
-            let Recording::Write(update) = recording(&jeans, &sender, &sms_form(), &[]) else {
-                panic!("the recipient is written");
-            };
             assert_eq!(
-                update.apply(&jeans).participant_id,
-                Some(ParticipantId::new("id_jean").unwrap())
+                recording(&jeans, &sender, &sms_form(), &[]),
+                Recording::Kept
             );
         }
 
-        /// RFC §10.4: the binding names a participant who is the sender, so
-        /// it is theirs, and gets their address as its recipient.
+        /// RFC §10.4, §5.7: the binding names a participant who is the sender,
+        /// so it is theirs, and writes no address beside that name.
         #[test]
         fn a_binding_naming_a_member_who_is_the_sender_is_theirs() {
             let mut jeans = binding();
             jeans.participant_id = Some(ParticipantId::new("p_jean").unwrap());
             let room = with_jean(room("room_1", 0), "sms");
-            let Recording::Write(update) =
-                recording(&jeans, &from_jean().sender, &sms_form(), &room.participants)
-            else {
-                panic!("the recipient is written");
-            };
             assert_eq!(
-                (update.participant_id, Value::Object(update.metadata)),
-                (None, json!({ "phone_number": ALICE }))
+                recording(&jeans, &from_jean().sender, &sms_form(), &room.participants),
+                Recording::Kept
             );
         }
 

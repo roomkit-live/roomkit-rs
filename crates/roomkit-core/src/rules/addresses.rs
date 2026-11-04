@@ -1025,6 +1025,7 @@ mod tests {
             addressing: Addressing::Chat,
             country_code: None,
             recipient_key: Some(TELEGRAM_CHAT_ID.to_owned()),
+            answered_recipient: None,
         };
         let read: Vec<(bool, Option<String>)> = [json!(42.0), json!(1e16), json!(4.5), json!(42)]
             .into_iter()
@@ -1053,6 +1054,7 @@ mod tests {
             addressing: Addressing::Chat,
             country_code: None,
             recipient_key: Some(TELEGRAM_CHAT_ID.to_owned()),
+            answered_recipient: None,
         };
         let binding = binding_with(json!({ "telegram_chat_id": -100_777 }));
         assert_eq!(form.recipient(&binding), Some("-100777".to_owned()));
