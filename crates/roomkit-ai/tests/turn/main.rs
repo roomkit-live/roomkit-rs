@@ -896,16 +896,25 @@ fn greet_on(kit: &RoomKit, trigger: HookTrigger) {
 /// delivered (review F1).
 #[tokio::test]
 async fn a_long_turn_draws_one_pass_and_its_answer_is_delivered() {
-    let ids: Vec<Vec<String>> = (0..6)
-        .map(|round| (0..4).map(|call| format!("c{round}_{call}")).collect())
+    // Each call its own arguments: the guard stops identical ones (RFC §6.4).
+    let calls: Vec<Vec<(String, String)>> = (0..6)
+        .map(|round| {
+            (0..4)
+                .map(|call| {
+                    let id = format!("c{round}_{call}");
+                    let arguments = format!(r#"{{"order": "{id}"}}"#);
+                    (id, arguments)
+                })
+                .collect()
+        })
         .collect();
-    let mut rounds: Vec<ScriptedRound> = ids
+    let mut rounds: Vec<ScriptedRound> = calls
         .iter()
         .enumerate()
         .map(|(round, calls)| {
             let calls = calls
                 .iter()
-                .map(|id| (id.as_str(), "lookup_order", r#"{"order": "1"}"#));
+                .map(|(id, arguments)| (id.as_str(), "lookup_order", arguments.as_str()));
             ScriptedRound::calling(format!("Round {round}."), calls)
         })
         .collect();
