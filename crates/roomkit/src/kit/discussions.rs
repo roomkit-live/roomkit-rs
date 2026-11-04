@@ -92,6 +92,7 @@ impl<S: ConversationStore> RoomKit<S> {
 
 #[cfg(test)]
 mod tests {
+    use std::future::{self, Future};
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
@@ -393,12 +394,12 @@ mod tests {
             ChannelCapabilities::default()
         }
 
-        async fn handle_inbound(
+        fn handle_inbound(
             &self,
             _message: InboundMessage,
             _context: RoomContext,
-        ) -> Result<RoomEvent, ChannelError> {
-            Err("no inbound".into())
+        ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+            future::ready(Err("no inbound".into()))
         }
 
         async fn deliver(
@@ -477,21 +478,21 @@ mod tests {
             ChannelCapabilities::default()
         }
 
-        async fn handle_inbound(
+        fn handle_inbound(
             &self,
             _message: InboundMessage,
             _context: RoomContext,
-        ) -> Result<RoomEvent, ChannelError> {
-            Err("no inbound".into())
+        ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+            future::ready(Err("no inbound".into()))
         }
 
-        async fn deliver(
+        fn deliver(
             &self,
             _event: RoomEvent,
             _binding: ChannelBinding,
             _context: RoomContext,
-        ) -> Result<ChannelOutput, ChannelError> {
-            Ok(ChannelOutput::default())
+        ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+            future::ready(Ok(ChannelOutput::default()))
         }
 
         async fn on_event(

@@ -306,17 +306,17 @@ pub fn conversation_with_memory(
         tool_rounds(&context.recent_events, channel_id, &replayed)
     };
     let in_place = memory.in_place && event.index > 0;
-    if !in_place {
-        place(&mut turns, rounds, rounds_before(event));
-        turns.push(Turn::input(event, &mut authors, &read));
-        tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
-    } else {
+    if in_place {
         turns.push(Turn::input(event, &mut authors, &read));
         // Told apart in the order spoken: the input read last, whatever its
         // place.
         tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
         read_at_its_place(&mut turns, event.index);
         place(&mut turns, rounds, None);
+    } else {
+        place(&mut turns, rounds, rounds_before(event));
+        turns.push(Turn::input(event, &mut authors, &read));
+        tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
     }
     let speakers: Vec<&Speaker> = turns
         .iter()
