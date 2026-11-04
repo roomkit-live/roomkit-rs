@@ -144,6 +144,7 @@ impl Executor {
             Arc::clone(&link),
             response_depth(&request.event),
         );
+        host.reads_trace_from(Arc::clone(&self.turn.traced));
         let flow = Arc::new(Flow::default());
         let _released = Released(Arc::clone(&link));
         let steering = Steering {

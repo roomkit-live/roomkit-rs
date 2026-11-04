@@ -132,13 +132,13 @@ impl Generation {
         let mut streamed = false;
         while let Some(event) = next(&mut stream).await {
             if steering.cancelled() {
-                window.end();
+                window.thinking.end();
                 return Ok(Self::cut(transcript, delivered, done, reports));
             }
             let event = match event {
                 Ok(event) => event,
                 Err(error) => {
-                    window.end();
+                    window.thinking.end();
                     return Err(Failed {
                         error,
                         streamed,
@@ -150,14 +150,16 @@ impl Generation {
             streamed = true;
             match event {
                 StreamEvent::TextDelta(delta) => {
-                    window.end();
+                    window.thinking.end();
                     transcript.add_text(&delta.text);
                     let released = replayed.add(delta.text);
+                    window.text.add(&released);
                     deliver(released, &mut delivered, out).await;
                 }
                 // A whole call closes no window: a fragment would (Python's
                 // `StreamToolCallDelta`), which no provider here hands.
                 StreamEvent::ToolCall(call) => {
+                    window.text.flush();
                     transcript.add_call(call.id.clone());
                     calls.push(call);
                 }
@@ -173,14 +175,17 @@ impl Generation {
                 StreamEvent::ThinkingDelta(delta) => {
                     transcript.add_thinking(&delta);
                     if !delta.thinking.is_empty() {
-                        window.add(&delta.thinking);
+                        window.thinking.add(&delta.thinking);
                         out.give(Ok(TurnItem::Thinking(delta.thinking))).await;
                     }
                 }
             }
         }
-        window.end();
-        deliver(replayed.finish(), &mut delivered, out).await;
+        window.thinking.end();
+        let finished = replayed.finish();
+        window.text.add(&finished);
+        deliver(finished, &mut delivered, out).await;
+        window.text.flush();
         Ok(Self {
             text: transcript.text(),
             delivered,

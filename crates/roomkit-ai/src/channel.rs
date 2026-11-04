@@ -41,7 +41,9 @@ use crate::skills::SkillRegistry;
 use crate::skills::tools::{SkillTools, SkillTurn};
 use crate::steering::{Loops, SteerOptions};
 use crate::tool_loop::TurnTelemetry;
-use crate::tool_loop::{Adopted, Bounds, Loop, RepeatGuard, Resilience, ThinkingPublication};
+use crate::tool_loop::{
+    Adopted, Bounds, Loop, RepeatGuard, Resilience, TextPublication, ThinkingPublication,
+};
 use crate::tool_search::{
     DEFAULT_TOOL_SEARCH_THRESHOLD, DEFAULT_TOOL_SEARCH_THRESHOLD_PCT,
     DEFAULT_TOOL_SEARCH_THRESHOLD_TOKENS, TOOL_SEARCH_INFRA_TOOL_NAMES, TOOL_SEARCH_PREAMBLE,
@@ -96,6 +98,20 @@ pub struct AiChannelOptions {
     /// How many characters batch into one `THINKING_DELTA` publish. Python's
     /// `thinking_coalesce_chars`, 256 by default.
     pub thinking_coalesce_chars: usize,
+    /// How long, in milliseconds, an answer's text batches into one
+    /// `TEXT_DELTA` publish; 0 publishes each piece. Python's
+    /// `text_coalesce_ms`, 80 by default.
+    pub text_coalesce_ms: f64,
+    /// How many characters batch into one `TEXT_DELTA` publish. Python's
+    /// `text_coalesce_chars`, 256 by default.
+    pub text_coalesce_chars: usize,
+    /// Whether the channel publishes its answer's text as it is written, one
+    /// `TEXT_DELTA` per window, for the code that delegated a task (RFC
+    /// §6.4). The kit publishes it only for a turn read as a delegated task's
+    /// trace: `BEFORE_BROADCAST` does not see this stream, so no turn it
+    /// judges has its text published (RFC §23.3). Python's
+    /// `publish_text_deltas`, off by default.
+    pub publish_text_deltas: bool,
     /// Whether a room's realtime subscribers read the model's reasoning text.
     /// It repeats what the model read and the channel has no visibility gate:
     /// by default they read its length and its round alone. Python's
@@ -262,6 +278,9 @@ impl Default for AiChannelOptions {
             enable_thinking: None,
             thinking_coalesce_ms: 80.0,
             thinking_coalesce_chars: 256,
+            text_coalesce_ms: 80.0,
+            text_coalesce_chars: 256,
+            publish_text_deltas: false,
             publish_thinking_text: false,
             max_context_events: 50,
             memory: None,
@@ -380,6 +399,8 @@ pub struct AiChannel<P> {
     max_tokens: Option<u32>,
     thinking: (Option<i64>, Option<bool>),
     thinking_coalesce: (f64, usize),
+    text_coalesce: (f64, usize),
+    publish_text_deltas: bool,
     publish_thinking_text: bool,
     reasoning_effort: Option<String>,
     /// What configures each turn (RFC Appendix A.9).
@@ -488,6 +509,8 @@ impl<P> Clone for AiChannel<P> {
             max_tokens: self.max_tokens,
             thinking: self.thinking,
             thinking_coalesce: self.thinking_coalesce,
+            text_coalesce: self.text_coalesce,
+            publish_text_deltas: self.publish_text_deltas,
             publish_thinking_text: self.publish_thinking_text,
             reasoning_effort: self.reasoning_effort.clone(),
             turn_configs: self.turn_configs.clone(),
@@ -538,6 +561,9 @@ impl<P: AiProvider> AiChannel<P> {
             enable_thinking,
             thinking_coalesce_ms,
             thinking_coalesce_chars,
+            text_coalesce_ms,
+            text_coalesce_chars,
+            publish_text_deltas,
             publish_thinking_text,
             reasoning_effort,
             config_provider,
@@ -614,6 +640,8 @@ impl<P: AiProvider> AiChannel<P> {
             max_tokens,
             thinking: (thinking_budget, enable_thinking),
             thinking_coalesce: (thinking_coalesce_ms, thinking_coalesce_chars),
+            text_coalesce: (text_coalesce_ms, text_coalesce_chars),
+            publish_text_deltas,
             publish_thinking_text,
             reasoning_effort,
             turn_configs: TurnConfigs::new(config_provider),
@@ -851,6 +879,19 @@ impl<P: AiProvider> AiChannel<P> {
             coalesce_ms: self.thinking_coalesce.0,
             coalesce_chars: self.thinking_coalesce.1,
             publishes_text: self.publish_thinking_text,
+            answers_room: event
+                .response_visibility
+                .as_ref()
+                .is_none_or(|scope| *scope == Visibility::All),
+        }
+    }
+
+    /// How a turn answering `event` publishes its answer's text.
+    fn text_publication(&self, event: &RoomEvent) -> TextPublication {
+        TextPublication {
+            coalesce_ms: self.text_coalesce.0,
+            coalesce_chars: self.text_coalesce.1,
+            publishes: self.publish_text_deltas,
             answers_room: event
                 .response_visibility
                 .as_ref()
@@ -1440,6 +1481,7 @@ impl<P: AiProvider> AiChannel<P> {
             thinking_budget: settings.thinking_budget,
             enable_thinking: settings.enable_thinking,
             thinking_publication: self.thinking_publication(&event),
+            text_publication: self.text_publication(&event),
             reasoning_effort: settings.reasoning_effort.clone(),
             turn: turn.clone(),
             context: tools,

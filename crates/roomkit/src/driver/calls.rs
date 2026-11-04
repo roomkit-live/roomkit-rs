@@ -524,12 +524,14 @@ pub(super) async fn channel<S: ConversationStore>(
             answers,
             target,
             correlation_id,
+            as_trace,
         } => {
             let read = stream::StreamRead {
                 responder,
                 answers: *answers,
                 target,
                 correlation_id,
+                as_trace,
             };
             Box::pin(read_stream(inner, shared, (effect, turn), read)).await
         }

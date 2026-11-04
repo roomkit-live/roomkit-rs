@@ -194,6 +194,7 @@ mod tests {
             answers: Box::new(task()),
             target: None,
             correlation_id: "cor_1".to_owned(),
+            as_trace: true,
         }
         .into()
     }

@@ -485,6 +485,10 @@ pub enum ChannelRequest {
         /// payload of `ON_ERROR` for its failure does (RFC §9.2): the
         /// Python implementation's `correlation_id`, one per read.
         correlation_id: String,
+        /// Whether its reader commits the turn as a delegated task's trace,
+        /// crossing no hook (RFC §23.3 step 5): only such a turn's answer
+        /// text is published (RFC §6.4).
+        as_trace: bool,
     },
     /// Ask which of `channel_ids`, the transports a response's rows reach,
     /// take a streamed response in `room_id` (RFC §6.1

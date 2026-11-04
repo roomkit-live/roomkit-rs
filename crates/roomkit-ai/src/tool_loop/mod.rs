@@ -36,6 +36,7 @@ mod repeat_guard;
 mod resilience;
 mod rules;
 mod spans;
+mod text_window;
 mod thinking;
 
 use std::collections::{BTreeMap, HashMap};
@@ -60,6 +61,8 @@ use self::repeat_guard::FORCE_STOP_NUDGE;
 pub(crate) use self::repeat_guard::RepeatGuard;
 pub(crate) use self::resilience::Resilience;
 use self::rules::{Limits, final_round_reason};
+pub(crate) use self::text_window::TextPublication;
+use self::text_window::{RoundWindows, TextWindow};
 pub(crate) use self::thinking::ThinkingPublication;
 use self::thinking::ThinkingWindow;
 use crate::author_images::refuses_content;
@@ -174,6 +177,7 @@ pub(crate) struct Loop<P> {
     pub(crate) enable_thinking: Option<bool>,
     /// How a round's reasoning reaches the room's subscribers.
     pub(crate) thinking_publication: ThinkingPublication,
+    pub(crate) text_publication: TextPublication,
     pub(crate) reasoning_effort: Option<String>,
     /// The kit's turn, whose hooks each call runs; `None` outside the kit.
     pub(crate) turn: Option<TurnHost>,
@@ -228,23 +232,28 @@ impl<P: AiProvider> Loop<P> {
             &Limits,
         ),
     ) -> Result<Generation, Failed> {
-        let mut window = self.thinking_window(round);
-        let reading = (steering, out, prefix, &mut window, limits);
+        let mut windows = self.round_windows(round);
+        let reading = (steering, out, prefix, &mut windows, limits);
         let read = self.generate(messages, asked, reading).await;
         read.map(|generation| Generation {
-            thinking: window.text(),
+            thinking: windows.thinking.text(),
             ..generation
         })
     }
 
-    /// The window of round `round`'s reasoning, for the turn's observers.
-    fn thinking_window(&self, round: u32) -> ThinkingWindow {
-        ThinkingWindow::new(
-            self.turn.as_ref(),
-            (&self.context.room_id, &self.context.channel_id),
-            round,
-            self.thinking_publication,
-        )
+    /// The windows of round `round`'s reasoning and answer text, for the
+    /// turn's observers.
+    fn round_windows(&self, round: u32) -> RoundWindows {
+        let ids = (&self.context.room_id, &self.context.channel_id);
+        RoundWindows {
+            thinking: ThinkingWindow::new(
+                self.turn.as_ref(),
+                ids,
+                round,
+                self.thinking_publication,
+            ),
+            text: TextWindow::new(self.turn.as_ref(), ids, round, self.text_publication),
+        }
     }
 
     /// The loop's items on `conversation`, as its reader pulls them. Its span

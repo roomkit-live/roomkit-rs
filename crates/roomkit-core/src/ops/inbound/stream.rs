@@ -294,6 +294,7 @@ impl StreamRead {
             answers: Box::new(self.job.answers.clone()),
             target,
             correlation_id,
+            as_trace: false,
         };
         self.state = ReadStage::Reading(cx.io.issue_drawing_on(request, budget));
         self.context = Some(context);

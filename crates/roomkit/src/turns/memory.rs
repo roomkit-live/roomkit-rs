@@ -3,6 +3,7 @@
 //! request, the events as they are and the rest serialized.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use roomkit_core::model::{
@@ -22,6 +23,9 @@ use crate::discussion_turn::{discussion_notes, discussion_turn};
 #[derive(Debug)]
 pub(crate) struct MemoryTurn {
     pub(crate) turn_id: Arc<str>,
+    /// Whether its reader commits the turn as a delegated task's trace (RFC
+    /// §23.3 step 5), which its publisher reads at each text it publishes.
+    pub(crate) traced: Arc<AtomicBool>,
     /// Executor to owner.
     pub(crate) frames: Pipe<Frame>,
     /// Owner to executor.
@@ -60,6 +64,7 @@ impl MemoryTurn {
             frames,
             controls,
             timeouts,
+            traced: Arc::default(),
             contexts: Mutex::new(Contexts {
                 turn: ExecutionContext::current(),
                 stream: None,

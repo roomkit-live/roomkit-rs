@@ -505,6 +505,7 @@ impl DelegatedTurn {
             answers: Box::new(message),
             target: None,
             correlation_id: correlation_id.clone(),
+            as_trace: true,
         });
         self.reading = Some((read.id, slot, correlation_id));
         effects.push(read);

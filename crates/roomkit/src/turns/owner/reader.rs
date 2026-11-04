@@ -361,6 +361,13 @@ impl OwnerTurn {
         self.canceller().ended().await;
     }
 
+    /// Says, before reading it, that its reader commits the turn as a
+    /// delegated task's trace, crossing no hook (RFC §23.3 step 5): only such
+    /// a turn's answer text is published (RFC §6.4).
+    pub(crate) fn read_as_trace(&self) {
+        self.state.turn.traced.store(true, Ordering::Release);
+    }
+
     /// What steers the turn from outside its reader (RFC §10.6.8).
     pub(crate) fn steerable(&self) -> Steerable {
         Steerable::new(&self.state)

@@ -128,6 +128,9 @@ pub(crate) struct StreamRead {
     pub(crate) target: Option<StreamTarget>,
     /// The response's own id, which each of its rows carries.
     pub(crate) correlation_id: String,
+    /// Whether its reader commits the turn as a delegated task's trace: only
+    /// such a turn's answer text is published (RFC §6.4).
+    pub(crate) as_trace: bool,
 }
 
 /// Reads `kept`, the stream of the read's responder's turn on its event,
@@ -169,7 +172,11 @@ pub(super) async fn read_kept<S: ConversationStore>(
         answers,
         target,
         correlation_id,
+        as_trace,
     } = read;
+    if as_trace {
+        kept.turn.read_as_trace();
+    }
     let target = target.filter(|_| !first_pass);
     let (pulls, pulled) = mpsc::unbounded_channel();
     let delivery = DeliveryStream::new(pulls);

@@ -10,17 +10,21 @@
 //! host.
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use roomkit_core::model::{ChannelId, RoomId};
 
 use super::{TurnHost, TurnKit};
-use crate::realtime::EphemeralEvent;
+use crate::realtime::{EphemeralEvent, EphemeralEventType};
 
 /// What a turn queued to publish, and whether a task is draining it.
 #[derive(Debug, Default)]
 pub(super) struct Publisher {
     state: Mutex<Queued>,
+    /// Whether the turn's reader commits it as a delegated task's trace, once
+    /// the kit's executor runs the turn; none outside a turn.
+    traced: OnceLock<Arc<AtomicBool>>,
 }
 
 #[derive(Debug, Default)]
@@ -46,6 +50,17 @@ impl Publisher {
         event
     }
 
+    /// Whether `event` may reach the room: an answer's text only for a turn
+    /// read as a delegated task's trace, the one stream no hook judges either
+    /// (RFC §6.4, §23.3 step 5).
+    fn may_publish(&self, event: &EphemeralEvent) -> bool {
+        event.r#type != EphemeralEventType::TextDelta
+            || self
+                .traced
+                .get()
+                .is_some_and(|traced| traced.load(Ordering::Acquire))
+    }
+
     /// Nothing drains any more, what was queued dropped: the kit is shut down.
     fn stop(&self) {
         let mut queued = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -66,6 +81,12 @@ impl Drop for Draining {
 }
 
 impl TurnHost {
+    /// Reads from `traced` whether the turn's reader commits it as a
+    /// delegated task's trace, which its owner says before its first read.
+    pub(crate) fn reads_trace_from(&self, traced: Arc<AtomicBool>) {
+        drop(self.shared.publisher.traced.set(traced));
+    }
+
     /// Queues `event` for the room's subscribers, published once the
     /// channel's binding, as the room holds it then, lets its answers reach
     /// every channel (Python's `binding_reaches_room`). For roomkit-ai's tool
@@ -96,6 +117,10 @@ async fn drain(
 ) {
     let _ended = Draining(Arc::clone(&publisher));
     while let Some(event) = publisher.next() {
+        if !publisher.may_publish(&event) {
+            tracing::debug!(target: "roomkit::turns", room_id = %room, "its answer is not a trace: its text is not published");
+            continue;
+        }
         if !kit.reaches_room(&room, &channel).await {
             tracing::debug!(target: "roomkit::turns", room_id = %room, "its answer does not reach the room: an ephemeral is not published");
             continue;

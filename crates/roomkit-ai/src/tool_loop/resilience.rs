@@ -16,7 +16,7 @@ use roomkit_core::rules::transcript::Message;
 
 use super::generation::{Failed, Generation};
 use super::rules::Limits;
-use super::thinking::ThinkingWindow;
+use super::text_window::RoundWindows;
 use super::{Loop, TurnItem};
 use crate::error::AiError;
 use crate::provider::{AiContext, AiProvider, DynAiProvider, ProviderError};
@@ -25,13 +25,13 @@ use crate::stream::Yielder;
 use crate::tools::AiTool;
 
 /// What a round's generation is read with: the loop's steering, its
-/// reader, the text a round replays of the round before, its reasoning's
-/// window, the turn's limits.
+/// reader, the text a round replays of the round before, the windows of its
+/// reasoning and its answer's text, the turn's limits.
 pub(super) type Reading<'a> = (
     &'a Steering,
     &'a Yielder<Result<TurnItem, ProviderError>>,
     &'a str,
-    &'a mut ThinkingWindow,
+    &'a mut RoundWindows,
     &'a Limits,
 );
 

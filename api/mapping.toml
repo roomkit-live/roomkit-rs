@@ -1011,8 +1011,7 @@ params = [
     "external_tool_handler",
     "response_schema", "evict_threshold_tokens", "enable_planning",
     "speak_policy", "speak_timeout", "thinker",
-    "think_wait", "text_coalesce_ms", "text_coalesce_chars",
-    "publish_text_deltas",
+    "think_wait",
 ]
 reason = "not in 0.x: continuation, thinking, scripts and sandbox, external and human tools, structured output, eviction, planning, tool search, speaking turns, the thinker and coalescing"
 
