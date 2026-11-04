@@ -99,7 +99,7 @@ pub(super) fn speaker(event: &RoomEvent, authors: &mut Authors<'_>) -> Option<Sp
     let (label, named) = match authors.of(event) {
         Some(Author { name, rank: 1 }) => (name, true),
         Some(Author { name, rank }) => (format!("{name} ({rank})"), true),
-        None => (channel_label(&event.source.channel_id), false),
+        None => (addressed_label(&event.source.channel_id, authors), false),
     };
     Some(Speaker {
         source,
@@ -138,6 +138,15 @@ pub(super) fn tell_apart<'a>(speakers: impl IntoIterator<Item = &'a mut Speaker>
 /// form, so a person named `sms1` does not read as a channel.
 pub(super) fn channel_label(channel_id: &ChannelId) -> String {
     format!("@{}", identifier(channel_id.as_str(), "channel"))
+}
+
+/// The label of a turn whose author has no name: its channel as the room
+/// addresses it, an agent of a discussion by its handle (RFC §19.7.5 rule 4).
+fn addressed_label(channel_id: &ChannelId, authors: &Authors<'_>) -> String {
+    format!(
+        "@{}",
+        identifier(authors.addressed(channel_id.as_str()), "channel")
+    )
 }
 
 /// `value` as the runtime gives an identifier outside a quote (RFC §6.4):
@@ -196,7 +205,7 @@ pub fn people_taking_part(context: &RoomContext, channel_id: &ChannelId) -> Vec<
         .map(|person| match authors.person(person) {
             Some(Author { name, rank: 1 }) => name,
             Some(Author { name, rank }) => format!("{name} ({rank})"),
-            None => channel_label(&person.channel_id),
+            None => addressed_label(&person.channel_id, &authors),
         })
         .collect()
 }

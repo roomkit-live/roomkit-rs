@@ -20,6 +20,7 @@ use std::fmt::Write as _;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use super::discussion::agent_handle;
 use super::lookalike::{person_name, skeletons};
 use crate::model::{
     ChannelType, EventStatus, IdentificationStatus, Metadata, Participant, ParticipantId,
@@ -668,6 +669,7 @@ pub(crate) struct Authors<'a> {
     salt: &'a str,
     stored: Option<&'a Metadata>,
     register: Option<AuthorRegister>,
+    room_metadata: &'a Metadata,
 }
 
 impl<'a> Authors<'a> {
@@ -678,7 +680,14 @@ impl<'a> Authors<'a> {
             salt: context.room.id.as_str(),
             stored: context.author_register.as_ref(),
             register: None,
+            room_metadata: &context.room.metadata,
         }
+    }
+
+    /// The name the room addresses `channel_id` by: an agent of its
+    /// discussion's handle, else the channel id (RFC §19.7.5 rule 4).
+    pub(crate) fn addressed<'b>(&'b self, channel_id: &'b str) -> &'b str {
+        agent_handle(self.room_metadata, channel_id)
     }
 
     /// Who `event` comes from, as a digest salted with the room's id: the

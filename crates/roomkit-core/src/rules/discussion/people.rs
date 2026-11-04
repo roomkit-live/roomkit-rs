@@ -6,6 +6,9 @@
 //! earlier source carries (`Alice (2)`), or the channel of a sender with no
 //! name (`@sms1`), a form no name takes.
 
+use std::collections::BTreeSet;
+use std::sync::OnceLock;
+
 use crate::model::{
     Access, ChannelCategory, ChannelId, Participant, ParticipantId, ParticipantRole,
     ParticipantStatus, RoomContext, RoomEvent,
@@ -13,13 +16,37 @@ use crate::model::{
 use crate::rules::addresses::SYSTEM_SENDER;
 use crate::rules::authors::{People, source_of};
 use crate::rules::discussion::names::{NAME_LIMIT, name_key};
-use crate::rules::lookalike::person_name;
+use crate::rules::lookalike::{person_name, skeletons};
 use crate::rules::permissions::visibility_allows;
 use crate::rules::transcript::{channel_label, turn_labels};
 use crate::rules::unicode::casefold;
 
 /// What follows a name in a label when it reads like an agent's.
 const A_PARTICIPANT: &str = " (a participant)";
+
+/// What the labels a model reads as its own turns, or a summarizer as the
+/// agent's and a one-to-one user's, read as. Python's `_agent_labels`.
+fn agent_labels() -> &'static BTreeSet<String> {
+    static LABELS: OnceLock<BTreeSet<String>> = OnceLock::new();
+    LABELS.get_or_init(|| {
+        ["You", "you (in a separate session)", "assistant", "user"]
+            .into_iter()
+            .flat_map(skeletons)
+            .collect()
+    })
+}
+
+/// A turn's label as a discussion reads it: with `(a participant)` after a
+/// name reading as one of an agent's own labels (Python's `_ranked`), which
+/// the transcript leaves out (docs/rfc-gaps.md, §6.4) and which keeps such a
+/// sender from being addressed. A nameless sender's label (`@sms`) has no
+/// name to read.
+fn labelled(label: String) -> String {
+    if !label.starts_with('@') && !skeletons(label_name(&label)).is_disjoint(agent_labels()) {
+        return format!("{label}{A_PARTICIPANT}");
+    }
+    label
+}
 
 /// Each name people are addressed by, ignoring case, and the people behind
 /// it: their label and their source, in the order first met. Two sources
@@ -113,7 +140,7 @@ pub fn person_label(event: &RoomEvent, context: &RoomContext) -> String {
         .pop()
         .flatten()
         .filter(|label| !label.is_empty())
-        .unwrap_or_else(|| channel_label(&event.source.channel_id))
+        .map_or_else(|| channel_label(&event.source.channel_id), labelled)
 }
 
 /// The name a label gives, without the rank a look-alike name carries nor
@@ -150,8 +177,36 @@ pub fn people_index(
     handles: &[String],
     listed: Option<&[String]>,
 ) -> PeopleIndex {
+    let allowed: Option<Vec<String>> = listed.map(|listed| {
+        listed
+            .iter()
+            .map(|person| casefold(&name_key(person)))
+            .collect()
+    });
+    let taken: Vec<String> = handles.iter().map(|handle| casefold(handle)).collect();
+    let mut index = PeopleIndex::default();
+    for (label, source) in addressable(context) {
+        let name = name_key(label.strip_prefix('@').unwrap_or(&label));
+        let key = casefold(&name);
+        if name.is_empty() || name.chars().count() > NAME_LIMIT || taken.contains(&key) {
+            continue;
+        }
+        if allowed
+            .as_ref()
+            .is_some_and(|allowed| !allowed.contains(&key))
+        {
+            continue;
+        }
+        index.add(key, label, source);
+    }
+    index
+}
+
+/// The people agents may address, each label and source: the room's active
+/// people, then the speakers of its recent messages.
+fn addressable(context: &RoomContext) -> Vec<Person> {
     let people = People::new(&context.participants);
-    let mut entries: Vec<(String, Vec<String>)> = context
+    let mut entries: Vec<Person> = context
         .participants
         .iter()
         .filter(|participant| active_person(participant))
@@ -167,7 +222,7 @@ pub fn people_index(
         // A nameless sender's rank (`@chat (2)`) is filed under its channel's
         // name, which then names neither alone; a look-alike's ranked name is
         // addressed by none.
-        let Some(label) = label.filter(|label| !label.is_empty()) else {
+        let Some(label) = label.filter(|label| !label.is_empty()).map(labelled) else {
             continue;
         };
         let name = label_name(&label);
@@ -175,29 +230,7 @@ pub fn people_index(
             entries.push((name.to_owned(), source_of(event, &people)));
         }
     }
-    let allowed: Option<Vec<String>> = listed.map(|listed| {
-        listed
-            .iter()
-            .map(|person| casefold(&name_key(person)))
-            .collect()
-    });
-    let taken: Vec<String> = handles.iter().map(|handle| casefold(handle)).collect();
-    let mut index = PeopleIndex::default();
-    for (label, source) in entries {
-        let name = name_key(label.strip_prefix('@').unwrap_or(&label));
-        let key = casefold(&name);
-        if name.is_empty() || name.chars().count() > NAME_LIMIT || taken.contains(&key) {
-            continue;
-        }
-        if allowed
-            .as_ref()
-            .is_some_and(|allowed| !allowed.contains(&key))
-        {
-            continue;
-        }
-        index.add(key, label, source);
-    }
-    index
+    entries
 }
 
 /// The names an index addresses people by, each once.
@@ -476,6 +509,94 @@ mod tests {
         let index = index_of(&context);
         assert_eq!(names_of(&index), ["sms"]);
         assert_eq!(one_person(&index, "sms"), Some("@sms"));
+    }
+
+    /// `metadata` as a room stores a discussion's handles.
+    fn with_handles(context: &mut RoomContext, channel: &str, handle: &str) {
+        context.room.metadata = serde_json::from_value(serde_json::json!({
+            "_discussion": {"handles": {channel: handle}}
+        }))
+        .unwrap();
+    }
+
+    // Python's channels/_speaker.py _Unrecorded.handles, what its tests read
+    // through the transcript at a later lot:
+    // tests/orchestration/test_discussion_handles.py::test_notes_and_the_transcript_present_agents_by_their_handles
+    #[test]
+    fn a_nameless_label_is_the_handle_the_stored_discussion_gives() {
+        let mut context = room();
+        with_handles(&mut context, "dev", "ops");
+        assert_eq!(
+            person_label(&said("e1", "dev", None, None), &context),
+            "@ops"
+        );
+        assert_eq!(
+            person_label(&said("e2", "sms", None, None), &context),
+            "@sms"
+        );
+
+        with_handles(&mut context, "sms", "desk");
+        context.participants.push(person("p1", None));
+        assert_eq!(
+            crate::rules::transcript::people_taking_part(&context, &channel_id("dev")),
+            ["@desk"]
+        );
+        context.participants.clear();
+        assert_eq!(
+            person_label(&said("e3", "sms", None, None), &context),
+            "@desk"
+        );
+        context
+            .recent_events
+            .push(said("e4", "sms", Some("u1"), None));
+        assert_eq!(names_of(&index_of(&context)), ["desk"]);
+    }
+
+    // What Python's `channels/_speaker.py` `_ranked` gives a name reading as
+    // one of an agent's own labels, and `_people.py` `people_index` of it.
+    #[test]
+    fn a_sender_named_like_an_agent_s_own_label_is_addressed_by_no_name() {
+        for (name, label) in [
+            ("You", "You (a participant)"),
+            ("assistant", "assistant (a participant)"),
+            ("user", "user (a participant)"),
+            ("Y\u{43e}u", "Y\u{43e}u (a participant)"),
+        ] {
+            let mut context = room();
+            context
+                .recent_events
+                .push(said("e1", "sms", Some("u1"), Some(name)));
+            assert_eq!(
+                person_label(&said("e2", "sms", Some("u1"), Some(name)), &context),
+                label
+            );
+            let index = index_of(&context);
+            assert_eq!(names_of(&index), Vec::<String>::new(), "{name:?}");
+            assert_eq!(one_person(&index, name), None, "{name:?}");
+        }
+        // A rank comes before the tail.
+        let mut context = room();
+        context
+            .recent_events
+            .push(said("e1", "sms", Some("u1"), Some("You")));
+        context
+            .recent_events
+            .push(said("e2", "sms", Some("u2"), Some("YOU")));
+        assert_eq!(
+            person_label(&said("e3", "sms", Some("u2"), Some("YOU")), &context),
+            "YOU (2) (a participant)"
+        );
+        // A participant is addressed by the name it records, whatever its turns
+        // are labelled.
+        let mut context = room();
+        context.participants.push(person("p1", Some("assistant")));
+        let spoken = said("e1", "sms", Some("p1"), None);
+        context.recent_events.push(spoken.clone());
+        assert_eq!(person_label(&spoken, &context), "assistant (a participant)");
+        assert_eq!(
+            one_person(&index_of(&context), "assistant"),
+            Some("assistant")
+        );
     }
 
     // What Python's `channels/_speaker.py` `label_name` answers.
