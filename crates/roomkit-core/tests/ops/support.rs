@@ -1059,7 +1059,10 @@ impl Sim {
     )]
     fn label(&self, request: &Request) -> String {
         match request {
-            Request::Hold(HoldRequest::AcquireLock { room_id }) => format!("lock {room_id}"),
+            Request::Hold(
+                HoldRequest::AcquireLock { room_id }
+                | HoldRequest::AcquireLockForRecord { room_id },
+            ) => format!("lock {room_id}"),
             Request::Hold(HoldRequest::ReleaseLock { room_id }) => format!("release {room_id}"),
             Request::Hold(HoldRequest::EnterLane { room_id, event_id }) => {
                 format!("enter lane {room_id} {event_id}")
@@ -1184,7 +1187,10 @@ impl Sim {
             return Some(refused);
         }
         let outcome = match request {
-            Request::Hold(HoldRequest::AcquireLock { room_id }) => {
+            Request::Hold(
+                HoldRequest::AcquireLock { room_id }
+                | HoldRequest::AcquireLockForRecord { room_id },
+            ) => {
                 return self.acquire(effect, room_id, deadline);
             }
             Request::Hold(HoldRequest::AwaitLane { room_id, event_id }) => {
@@ -1458,7 +1464,10 @@ impl Sim {
             {
                 (format!("unlocked load_context {room_id}"), store_down())
             }
-            Request::Hold(HoldRequest::AcquireLock { room_id }) => (
+            Request::Hold(
+                HoldRequest::AcquireLock { room_id }
+                | HoldRequest::AcquireLockForRecord { room_id },
+            ) => (
                 format!("lock {room_id}"),
                 ErrorRecord::new("LockUnavailable", "the lock manager is down"),
             ),

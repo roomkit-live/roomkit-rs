@@ -2142,9 +2142,8 @@ mod a_failure_after_the_commit {
         sim
     }
 
-    /// The trace from the set's leaving its place on: its report's record,
-    /// under the room's lock, comes before anything else of its aftermath.
-    // Python: tests/test_delivery_outcomes.py::TestOnlyAFailingSetIsRemembered::test_a_failure_survives_the_call
+    /// The trace from the set's leaving its place on: its record, under the
+    /// room's lock, as Python's `_record_failed_deliveries` writes it.
     #[test]
     fn a_failed_delivery_is_recorded_under_the_lock_once_its_place_is_left() {
         let mut sim = with_a_failed_delivery();
@@ -2205,24 +2204,6 @@ mod a_failure_after_the_commit {
             (sim.traced("record_delivery_results"), stored_results(&sim)),
             (Vec::new(), Vec::new())
         );
-    }
-
-    /// A set the kit's close cut has nothing of its aftermath but its
-    /// caller's report (RFC §12.10.4, Python's `_report_cut`).
-    #[test]
-    fn a_set_the_close_cut_is_not_recorded() {
-        let mut sim = room();
-        sim.deliver_with(
-            "ws",
-            Box::new(|_| {
-                Err(ErrorRecord::new(
-                    roomkit_core::ops::KIT_CLOSED,
-                    "the kit closed before this call ended",
-                ))
-            }),
-        );
-        sim.send(Sim::message("sms", "Bonjour")).unwrap();
-        assert_eq!(sim.traced("record_delivery_results"), Vec::<&str>::new());
     }
 
     /// A record that cannot be written changes nothing the set delivered:

@@ -275,9 +275,15 @@ impl Io {
             return None;
         };
         let answer = match hold {
-            HoldRequest::AcquireLock { room_id } if room_id == nested => HoldOutcome::Locked,
+            HoldRequest::AcquireLock { room_id }
+            | HoldRequest::AcquireLockForRecord { room_id }
+                if room_id == nested =>
+            {
+                HoldOutcome::Locked
+            }
             HoldRequest::ReleaseLock { room_id } if room_id == nested => HoldOutcome::Released,
             HoldRequest::AcquireLock { .. }
+            | HoldRequest::AcquireLockForRecord { .. }
             | HoldRequest::ReleaseLock { .. }
             | HoldRequest::EnterLane { .. }
             | HoldRequest::AwaitLane { .. }

@@ -409,13 +409,8 @@ impl DeliverySet {
         outcome: Outcome,
     ) -> Progress<SetOutcome> {
         if let Some(record) = &mut self.record {
-            return match record.accept(cx, outcome) {
-                Progress::Waiting => Progress::Waiting,
-                Progress::Done(()) => {
-                    self.record = None;
-                    Progress::Done(std::mem::take(&mut self.outcome))
-                }
-            };
+            let progress = record.accept(cx, outcome);
+            return self.on_record(progress);
         }
         match self.place {
             Place::Awaiting(awaited) if awaited == effect => return self.on_turn(cx, outcome),
@@ -557,11 +552,22 @@ impl DeliverySet {
         self.over(cx)
     }
 
+    /// The record of its deliveries went on: the set is over once it ended.
+    fn on_record(&mut self, progress: Progress<()>) -> Progress<SetOutcome> {
+        match progress {
+            Progress::Waiting => Progress::Waiting,
+            Progress::Done(()) => {
+                self.record = None;
+                Progress::Done(std::mem::take(&mut self.outcome))
+            }
+        }
+    }
+
     /// Off its place in the room's lane, the set reports its deliveries when
-    /// they are the root pass's (a message's or an event injected, the
-    /// call's own or an entry's), then records them on its event when any
-    /// failed (RFC §8.2, §14.3), as Python's `_report_root_pass`, before
-    /// anything else of its aftermath; a set the lane dropped does neither.
+    /// they are a message's or a sent event's, the call's own or an entry's,
+    /// then records them on its event when any failed (RFC §5.13, §8.2,
+    /// §14.3), as Python's `_report_root_pass`, before its `AFTER_BROADCAST`
+    /// hooks; a set the lane dropped does neither.
     fn over(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
         let root = matches!(self.kind, SetKind::Root | SetKind::Adopted(_));
         if root && self.outcome.cancelled.is_none() {

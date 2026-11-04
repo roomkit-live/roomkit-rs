@@ -332,10 +332,11 @@ impl Machine {
         self.publish(cx, &decided);
     }
 
-    /// A delivery set finished: its observers run, its responses re-enter,
-    /// and the records of the channels not asked are queued (RFC §10.1 steps
-    /// 14 to 17). The deliveries of an entry's event are reported, the
-    /// call's own written into its result too.
+    /// A delivery set finished, its deliveries reported and recorded by the
+    /// set itself (`DeliverySet::over`): its observers run, its responses
+    /// re-enter, and the records of the channels not asked are queued (RFC
+    /// §10.1 steps 14 to 17). The call's own deliveries are written into its
+    /// result, an entry's kept for its caller.
     pub(super) fn on_set(&mut self, cx: &mut Cx<'_>, outcome: SetOutcome, set: &DeliverySet) {
         if let Some(reason) = outcome.cancelled {
             return self.dropped(cx, reason, set);

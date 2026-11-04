@@ -161,6 +161,14 @@ pub enum HoldRequest {
         /// The room.
         room_id: RoomId,
     },
+    /// Take the room's lock to record a delivery set on its event (RFC
+    /// §14.3), work past that event's commit: the kit's close never cuts a
+    /// call for this wait as it cuts one waiting before its commit, and
+    /// past its grace answers it failed. Answer [`HoldOutcome::Locked`].
+    AcquireLockForRecord {
+        /// The room.
+        room_id: RoomId,
+    },
     /// Release the room's lock. Answer [`HoldOutcome::Released`].
     ReleaseLock {
         /// The room.

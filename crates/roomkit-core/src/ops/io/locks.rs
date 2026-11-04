@@ -131,9 +131,9 @@ impl RoomLocks {
 /// The room and the step of a lock request; `None` for any other request.
 fn lock_request(request: &Request) -> Option<(RoomId, Step)> {
     match request {
-        Request::Hold(HoldRequest::AcquireLock { room_id }) => {
-            Some((room_id.clone(), Step::Acquire))
-        }
+        Request::Hold(
+            HoldRequest::AcquireLock { room_id } | HoldRequest::AcquireLockForRecord { room_id },
+        ) => Some((room_id.clone(), Step::Acquire)),
         Request::Hold(HoldRequest::ReleaseLock { room_id }) => {
             Some((room_id.clone(), Step::Release))
         }

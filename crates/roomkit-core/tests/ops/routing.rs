@@ -1256,6 +1256,16 @@ mod the_read_under_the_lock {
         sim.traced("list_events room_1")
     }
 
+    /// `id`, a participant of `room_1` reached through `sms`.
+    fn joined_on_sms(id: &str) -> Participant {
+        Participant::at(
+            ParticipantId::new(id).unwrap(),
+            room_id(),
+            channel("sms"),
+            Timestamp::UNIX_EPOCH,
+        )
+    }
+
     // Python: tests/test_inbound_routing_ambiguity.py::test_another_sender_found_past_the_first_page_refuses
     #[test]
     fn finds_another_sender_past_the_first_page() {
@@ -1347,21 +1357,45 @@ mod the_read_under_the_lock {
         );
     }
 
-    /// The framework's own sender is held to none of step 3's conditions
-    /// under the lock: the room is the one it was routed to.
-    // Python: tests/test_inbound_routing_ambiguity.py::test_the_frameworks_own_messages_do_not
+    /// The sender is a participant reached through the channel: nothing
+    /// depends on who else the room heard, and their record is written.
     #[test]
-    fn reads_nothing_for_the_framework_s_own_sender() {
+    fn reads_nothing_for_a_participant_reached_through_the_channel() {
         let mut sim = having_heard(&[(OTHER, 1)]);
+        sim.participants.push(joined_on_sms(SENDER));
+        sim.trace.clear();
         let routed = sim
-            .route(None, message_from("sms", "system", "Rappel"))
+            .route(None, message_from("sms", SENDER, "Bonjour"))
+            .unwrap();
+        assert_eq!(
+            (
+                reads(&sim),
+                routed.event.map(|event| event.room_id.to_string()),
+                named(binding_of(&sim, "sms")).0,
+            ),
+            (
+                Vec::new(),
+                Some("room_1".to_owned()),
+                Some(SENDER.to_owned())
+            )
+        );
+    }
+
+    /// Step 3 already refuses the sender, another participant having joined
+    /// through the channel: the check needs no history to tell it.
+    #[test]
+    fn reads_nothing_when_another_condition_already_refuses_the_sender() {
+        let mut sim = routed_to_room_1();
+        sim.participants.push(joined_on_sms(OTHER));
+        let routed = sim
+            .route(None, message_from("sms", SENDER, "Bonjour"))
             .unwrap();
         assert_eq!(
             (
                 reads(&sim),
                 routed.event.map(|event| event.room_id.to_string()),
             ),
-            (Vec::new(), Some("room_1".to_owned()))
+            (Vec::new(), Some("new_room_1".to_owned()))
         );
     }
 

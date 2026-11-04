@@ -221,7 +221,10 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Merges `metadata` into a channel's binding to a room, key by key; the
-    /// keys it does not name are kept (RFC §7.5 rule 6).
+    /// keys it does not name are kept (RFC §7.5 rule 6). The channel then
+    /// writes the binding's addresses as an attach does (RFC §5.7, §10.4):
+    /// the recipient in its form, and a binding naming no one, not `group`,
+    /// naming that recipient as its correspondent.
     ///
     /// # Errors
     ///
@@ -240,11 +243,7 @@ impl<S: ConversationStore> RoomKit<S> {
             metadata,
             options.organization_id,
         );
-        let operation = match room_work(room_id) {
-            Some((draw, floor)) => operation.made_in(draw, floor),
-            None => operation,
-        };
-        Ok(driver::run(&self.inner, "update_binding_metadata", operation).await??)
+        self.run_update(room_id, operation).await
     }
 
     /// The channel's binding to a room, as the store holds it.
@@ -343,6 +342,16 @@ impl<S: ConversationStore> RoomKit<S> {
             update,
             organization_id,
         );
+        self.run_update(room_id, operation).await
+    }
+
+    /// Runs `operation`, a change of a binding of `room_id`, in the room's
+    /// work when the call is made from it.
+    async fn run_update(
+        &self,
+        room_id: &RoomId,
+        operation: UpdateBinding,
+    ) -> Result<ChannelBinding, RoomKitError> {
         let operation = match room_work(room_id) {
             Some((draw, floor)) => operation.made_in(draw, floor),
             None => operation,

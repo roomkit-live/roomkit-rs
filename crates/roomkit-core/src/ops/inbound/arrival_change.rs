@@ -38,8 +38,9 @@ pub(super) struct SenderRecord {
     pub(super) sender: Sender,
     /// The form the channel's addresses are compared in.
     pub(super) form: AddressForm,
-    /// Whether the sender is the framework's own `system`, which no one
-    /// holds to step 3's conditions (RFC §10.4).
+    /// Whether the sender goes by the framework's own name `system`, kept
+    /// out of step 3's conditions as it was before a message with no address
+    /// came under them: whether it stays so is open (RMK-1339).
     pub(super) system: bool,
     /// Who the room heard on the channel, as far as the record read it.
     pub(super) heard: Heard,
@@ -250,7 +251,7 @@ fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision<R
 /// Whether the room as `context` holds it, kept by its status, tells by who
 /// it heard on the channel whether it still admits the sender: the case
 /// whose check reads the room's history, a message with no address included
-/// (RFC §10.4), the framework's own sender never.
+/// (RFC §10.4), the name `system` not (RMK-1339).
 fn reads_heard(record: &SenderRecord, context: &RoomContext) -> bool {
     let Some(current) = context.get_binding(&record.binding.channel_id) else {
         return false;
@@ -294,8 +295,7 @@ fn not_a_recipient(binding: &ChannelBinding, form: &AddressForm, kind: &str) {
 /// under the lock, refused events set aside, as Python's `_heard_from_other`
 /// reads them (RMK-1071, RMK-1127): a sender another wrote before, however
 /// long ago, is not admitted. A message with no address is held to the same
-/// conditions (RFC §10.4); the framework's own sender is not, its room named
-/// by the framework.
+/// conditions (RFC §10.4); the name `system` is not (RMK-1339).
 fn still_admitted(record: &SenderRecord, current: &ChannelBinding, context: &RoomContext) -> bool {
     if record.system {
         return true;

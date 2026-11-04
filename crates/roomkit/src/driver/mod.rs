@@ -473,6 +473,9 @@ enum Wait {
     /// A room's lock or admission ticket: what a call waits for before its
     /// commit, which the kit's close cuts at once.
     Admission,
+    /// A room's lock to record a delivery set (RFC §14.3): work past its
+    /// event's commit, which the kit's close fails once its grace ran out.
+    Record,
     /// A place's turn in a room's delivery lane: a delivery queued, which
     /// the kit's close drops at once.
     Lane,
@@ -745,10 +748,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let waiting: Vec<EffectId> = self
             .waits
             .iter()
-            .filter(|(_, wait, _)| *wait == Wait::Admission)
+            .filter(|(_, wait, _)| matches!(wait, Wait::Admission | Wait::Record))
             .map(|(effect, _, _)| *effect)
             .collect();
-        self.waits.retain(|(_, wait, _)| *wait != Wait::Admission);
+        self.waits
+            .retain(|(_, wait, _)| !matches!(wait, Wait::Admission | Wait::Record));
         let running: Vec<(EffectId, AbortHandle)> = self.call_of_effect.drain().collect();
         for (effect, call) in running {
             call.abort();
@@ -966,6 +970,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         }
         let wait = match request {
             HoldRequest::AcquireLock { .. } | HoldRequest::AwaitTicket { .. } => Wait::Admission,
+            HoldRequest::AcquireLockForRecord { .. } => Wait::Record,
             HoldRequest::AwaitLane { .. } if runs => Wait::Running,
             HoldRequest::AwaitLane { .. } => Wait::Lane,
             HoldRequest::ReleaseLock { .. }
@@ -982,7 +987,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             None
         };
         match self.held.hold(rooms, &self.context, id, request, deadline) {
-            Hold::Wait(_) if wait == Wait::Admission && self.cut_now => {
+            Hold::Wait(_) if matches!(wait, Wait::Admission | Wait::Record) && self.cut_now => {
                 Some((id, Outcome::Failed(cut_by_close())))
             }
             Hold::Wait(_)
@@ -1040,6 +1045,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             ),
             HoldRequest::ReleaseLock { room_id } => (room_id, self.indexes.released(room_id)),
             HoldRequest::AcquireLock { .. }
+            | HoldRequest::AcquireLockForRecord { .. }
             | HoldRequest::AwaitLane { .. }
             | HoldRequest::TakeTicket { .. }
             | HoldRequest::AwaitTicket { .. }

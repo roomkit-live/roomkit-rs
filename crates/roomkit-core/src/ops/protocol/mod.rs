@@ -148,10 +148,10 @@ pub const ROW_WITHHELD: &str = "row_withheld";
 /// reads the rest of the response in the stream.
 pub const ROW_HIDDEN: &str = "row_hidden";
 
-/// The error type a turn the operation cut is answered with, by the
-/// operation itself ([`Operation::cancel_turns`]): no failure, nothing of it
-/// reported.
-pub(crate) const TURN_CUT: &str = "turn_cut";
+/// The error type a cut turn is answered with: by the operation itself
+/// ([`Operation::cancel_turns`]), or by the driver for a turn the kit's close
+/// cut: no failure, nothing of it reported.
+pub const TURN_CUT: &str = "turn_cut";
 
 /// Something the driver performs or reports without answering.
 #[derive(Clone, Debug, PartialEq)]

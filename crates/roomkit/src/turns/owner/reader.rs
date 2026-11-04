@@ -6,8 +6,10 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use roomkit_core::model::{
-    ChannelOutput, Metadata, ResponseMetadata, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    ChannelOutput, ErrorRecord, Metadata, ResponseMetadata, ToolCallContent, ToolCallOutcome,
+    ToolCallStatus,
 };
+use roomkit_core::ops::TURN_CUT;
 use tokio::sync::{mpsc, watch};
 
 use super::{Canceller, Main, OwnerState, Steerable, cancel};
@@ -106,7 +108,11 @@ impl OwnerTurn {
                 }
                 Some(Main::Error(error)) => return Err(TurnFailure::crossed(&error)),
                 Some(Main::Failed(error)) => Err(error.to_record()),
-                Some(Main::End) if cutting => Err(TurnError::link_reason("cancelled").to_record()),
+                // The kit's close cut it: no failure of the turn, which leaves
+                // no result, as Python's `_leaves_no_result` (RFC §12.10.4).
+                Some(Main::End) if cutting => {
+                    Err(ErrorRecord::new(TURN_CUT, "the kit's close cut the turn"))
+                }
                 // Cut by a steering `Cancel` before it answered (RFC §10.6.8).
                 Some(Main::End) if self.state.steer_cut.load(Ordering::Acquire) => {
                     return Ok((ChannelOutput::empty(), false));

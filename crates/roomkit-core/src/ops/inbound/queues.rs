@@ -8,9 +8,10 @@
 //! may wait for this call's decision, as an agent's turn waits for its call
 //! into the room: the trigger's pass, queued behind the set of an entry its
 //! off-lock hook made, would never run. Passes run once the trigger's pass
-//! is queued, at their head; a set runs as soon as it is queued, whatever
-//! the call is doing, the set of an entry its parse or its off-lock hook
-//! made included, so that nothing behind its place waits for the call's
+//! is queued, at their head; a set runs as soon as it is queued and the set
+//! before it is over, its record under the room's lock included (RFC §14.3),
+//! whatever the call is doing, the set of an entry its parse or its off-lock
+//! hook made included, so that nothing behind its place waits for the call's
 //! own steps.
 //!
 //! An event's place is taken at its commit, under the lock (`pass`), so the

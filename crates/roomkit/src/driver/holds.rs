@@ -252,7 +252,8 @@ impl<'kit> Held<'kit> {
         deadline: Option<Instant>,
     ) -> Hold<'kit> {
         match request {
-            HoldRequest::AcquireLock { room_id } => {
+            HoldRequest::AcquireLock { room_id }
+            | HoldRequest::AcquireLockForRecord { room_id } => {
                 self.acquire(rooms, context, effect, room_id, deadline)
             }
             HoldRequest::ReleaseLock { room_id } => {

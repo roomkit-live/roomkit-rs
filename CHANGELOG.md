@@ -6,7 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- A delivery set with a failure is recorded on its event under the room's lock, every target's outcome, as Python's: a set that all succeeded, a response's and one the kit's close cut write nothing, and a record that fails is logged (RMK-1117).
+- A delivery set with a failure is recorded on its event under the room's lock, every target's outcome, as Python's: a set that all succeeded, a response's, a greeting's, a hook's injected event's and one the kit's close cut write nothing, and a record that fails is logged (RMK-1117). A turn the close cuts is no failed delivery of its call, as Python's.
 - `update_binding_metadata` names its correspondent as an attach does, as Python's: the recipient and the correspondent in the channel's form, a binding naming no one taking its recipient (RMK-1124).
 - Under the lock, a routed message's check reads the channel's received events a page at a time, up to the first other sender, and holds a message with no address to step 3's conditions, as Python's (RMK-1127).
 - The seams a discussion uses (RFC §19.7.5), as Python's, inert outside one: `HookTrigger::OnSpeakQueue` takes a `SpeakQueueEvent`; a room that stores a discussion asks no agent at broadcast, a bound agent is no unavailable target; an instruction to one of its agents goes to the discussion, one to a discussion that is over is blocked `discussion_over`; a turn reads its event at its place with its notes.

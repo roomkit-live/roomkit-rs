@@ -8,8 +8,8 @@
 //! included. It is written alone, under the room's lock: the event as it
 //! stood at its commit would undo an edit or a delete made during its
 //! delivery. A record that cannot be written is logged and changes nothing
-//! the set delivered. A set the kit's close cut leaves no record: its caller
-//! reads what it delivered, and nothing else of its aftermath runs (RFC
+//! the set delivered. Past the close's grace the lock is refused: a set the
+//! close cut leaves no record, its caller reading what it delivered (RFC
 //! §12.10.4, Python's `_report_cut`).
 
 use std::collections::BTreeMap;
@@ -43,20 +43,14 @@ pub(super) struct DeliveryRecord {
 
 impl DeliveryRecord {
     /// Takes the room's lock to record `results` on `event`, or `None` for a
-    /// set in which nothing failed, or which the kit's close cut.
+    /// set in which nothing failed.
     pub(super) fn start(
         cx: &mut Cx<'_>,
         event: &RoomEvent,
         results: &BTreeMap<ChannelId, DeliveryResult>,
     ) -> Option<Self> {
         let failed = |result: &DeliveryResult| result.status == DeliveryResultStatus::Failed;
-        let cut = |result: &DeliveryResult| {
-            result
-                .error
-                .as_ref()
-                .is_some_and(|error| error.code == KIT_CLOSED)
-        };
-        if !results.values().any(failed) || results.values().any(cut) {
+        if !results.values().any(failed) {
             return None;
         }
         let results = results
@@ -64,7 +58,7 @@ impl DeliveryRecord {
             .filter_map(|(id, result)| Some((id.to_string(), serde_json::to_value(result).ok()?)))
             .collect();
         let room_id = event.room_id.clone();
-        let request = HoldRequest::AcquireLock {
+        let request = HoldRequest::AcquireLockForRecord {
             room_id: room_id.clone(),
         };
         Some(Self {

@@ -90,7 +90,9 @@ impl Request {
 impl HoldRequest {
     fn kind(&self) -> RequestKind {
         match self {
-            Self::AcquireLock { .. } => RequestKind::AcquireLock,
+            Self::AcquireLock { .. } | Self::AcquireLockForRecord { .. } => {
+                RequestKind::AcquireLock
+            }
             Self::ReleaseLock { .. } => RequestKind::ReleaseLock,
             Self::EnterLane { .. } => RequestKind::EnterLane,
             Self::AwaitLane { .. } => RequestKind::AwaitLane,

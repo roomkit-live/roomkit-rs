@@ -44,6 +44,7 @@ mod cut;
 mod doors;
 mod held;
 mod readers;
+mod record;
 mod shutdown;
 mod store;
 mod stuck;
