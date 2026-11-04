@@ -30,6 +30,7 @@ mod work;
 use std::future::{Future, pending};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use roomkit_core::rules::chain_depth::response_depth;
 
@@ -296,6 +297,8 @@ impl Executor {
     /// verbs it asked and that wait still failed, then its end, unless its
     /// owner is lost. No verb waits for an answer once the turn is over.
     fn end(&self, cut: Option<Cut>, host: &TurnHost, link: &HostLink) {
+        // What the turn's work publishes from now on is no trace's (RFC §6.4).
+        self.turn.traced.store(false, Ordering::Release);
         link.close();
         match cut {
             Some(Cut::LetGo) => {

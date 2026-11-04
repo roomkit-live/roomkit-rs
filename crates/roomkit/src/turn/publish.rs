@@ -50,9 +50,10 @@ impl Publisher {
         event
     }
 
-    /// Whether `event` may reach the room: an answer's text only for a turn
-    /// read as a delegated task's trace, the one stream no hook judges either
-    /// (RFC §6.4, §23.3 step 5).
+    /// Whether `event` may be published: an answer's text only by a turn read
+    /// as a delegated task's trace, the one stream no hook judges either, and
+    /// while that turn runs: what it queued by then still goes (RFC §6.4,
+    /// §23.3 step 5).
     fn may_publish(&self, event: &EphemeralEvent) -> bool {
         event.r#type != EphemeralEventType::TextDelta
             || self
@@ -94,6 +95,10 @@ impl TurnHost {
     #[doc(hidden)]
     pub fn publish_ephemeral(&self, event: EphemeralEvent) {
         let publisher = &self.shared.publisher;
+        if !publisher.may_publish(&event) {
+            tracing::debug!(target: "roomkit::turns", room_id = %self.shared.room_id, "no trace running: an answer's text is not published");
+            return;
+        }
         if !publisher.add(event) {
             return;
         }
@@ -117,10 +122,6 @@ async fn drain(
 ) {
     let _ended = Draining(Arc::clone(&publisher));
     while let Some(event) = publisher.next() {
-        if !publisher.may_publish(&event) {
-            tracing::debug!(target: "roomkit::turns", room_id = %room, "its answer is not a trace: its text is not published");
-            continue;
-        }
         if !kit.reaches_room(&room, &channel).await {
             tracing::debug!(target: "roomkit::turns", room_id = %room, "its answer does not reach the room: an ephemeral is not published");
             continue;
