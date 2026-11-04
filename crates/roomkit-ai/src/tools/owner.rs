@@ -50,8 +50,9 @@ impl DynToolset for OwnerToolset {
     }
 }
 
-/// `toolbox`, with the tools the owner serves `turn` after the agent's
-/// own; `toolbox` itself outside a turn, or for a turn served none.
+/// `toolbox`, with the tools the owner serves `turn` after the host's and
+/// before a person's and the skills'; `toolbox` itself outside a turn, or for a
+/// turn served none.
 ///
 /// # Errors
 ///

@@ -35,19 +35,14 @@ pub(crate) struct Toolbox {
     person_tools: HashSet<String>,
     /// The tools orchestration injected for the turn (RFC §21.1).
     injected: HashSet<String>,
-    /// Where the skill tools sit, once the agent was given a registry.
-    skills: Option<SkillsSlot>,
+    /// Where the tools orchestration injected are declared: after the host's,
+    /// before a person's and the skills' (Python's `_turn_base_tools`).
+    injected_at: usize,
+    /// The toolset of the skill tools, once the agent was given a registry.
+    skills: Option<usize>,
     /// The names a registry given keeps for them, a tool under one refused as
     /// any tool under a name served.
     skill_names: HashSet<String>,
-}
-
-/// Where an agent's skill tools sit: the toolset that serves them, and their
-/// place among the tools it declares.
-#[derive(Clone, Copy)]
-struct SkillsSlot {
-    toolset: usize,
-    place: usize,
 }
 
 impl std::fmt::Debug for Toolbox {
@@ -81,6 +76,7 @@ impl Toolbox {
         let position = self.toolsets.len();
         self.insert(toolset, declared, false)?;
         self.handler = Some(position);
+        self.injected_at = self.tools.len();
         Ok(())
     }
 
@@ -125,7 +121,12 @@ impl Toolbox {
         declared: Vec<AiTool>,
     ) -> Result<(), AiError> {
         let names: Vec<String> = declared.iter().map(|tool| tool.name.clone()).collect();
+        let end = self.tools.len();
         self.insert(toolset, declared, false)?;
+        let added = self.tools.split_off(end);
+        let at = self.injected_at;
+        self.injected_at += added.len();
+        self.tools.splice(at..at, added);
         self.injected.extend(names);
         Ok(())
     }
@@ -160,12 +161,9 @@ impl Toolbox {
         declared: Vec<AiTool>,
         names: &[&str],
     ) -> Result<(), AiError> {
-        let slot = SkillsSlot {
-            toolset: self.toolsets.len(),
-            place: self.tools.len(),
-        };
+        let position = self.toolsets.len();
         self.insert(toolset, declared, true)?;
-        self.skills = Some(slot);
+        self.skills = Some(position);
         self.skill_names
             .extend(names.iter().map(|name| (*name).to_owned()));
         self.reserved.extend(self.skill_names.iter().cloned());
@@ -173,25 +171,24 @@ impl Toolbox {
     }
 
     /// The toolbox of a turn that reads a registry of its own (RFC §24.3):
-    /// `toolset` serving the skill tools, which it declares as `declared`, at
-    /// their place, in place of the agent's. Never installed on the agent: the
-    /// turn reads its own copy.
+    /// `toolset` serving the skill tools, which it declares as `declared`, last
+    /// as the agent's stand, in place of the agent's. Never installed on the
+    /// agent: the turn reads its own copy.
     pub(crate) fn with_skills(&self, toolset: Arc<dyn DynToolset>, declared: Vec<AiTool>) -> Self {
         let mut turn = self.clone();
-        let Some(slot) = self.skills else {
+        let Some(position) = self.skills else {
             return turn;
         };
-        if let Some(served) = turn.toolsets.get_mut(slot.toolset) {
+        if let Some(served) = turn.toolsets.get_mut(position) {
             *served = toolset;
         }
-        turn.tools.retain(|(_, at)| *at != slot.toolset);
-        turn.served.retain(|_, at| *at != slot.toolset);
-        for tool in &declared {
-            turn.served.insert(tool.name.clone(), slot.toolset);
+        turn.tools.retain(|(_, at)| *at != position);
+        turn.served.retain(|_, at| *at != position);
+        for tool in declared {
+            turn.served.insert(tool.name.clone(), position);
             turn.exempt.insert(tool.name.clone());
+            turn.tools.push((tool, position));
         }
-        let declared = declared.into_iter().map(|tool| (tool, slot.toolset));
-        turn.tools.splice(slot.place..slot.place, declared);
         turn
     }
 
