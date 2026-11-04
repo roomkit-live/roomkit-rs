@@ -92,8 +92,12 @@ impl<P: AiProvider> Loop<P> {
 
     /// `refused`, a call its gate stopped, counted as an attempt on the model's
     /// own arguments: past the limit, the guard's words are the model's to read
-    /// (Python's `_reject_call`).
+    /// (Python's `_reject_call`). A call under a held id is no attempt: it never
+    /// reached a gate (Python's `_refuse_id_in_flight`).
     fn refused_again(&self, called: &Called, refused: ToolCallReport) -> ToolCallReport {
+        if called.duplicate {
+            return refused;
+        }
         match self.repeat_refusal(&called.call.name, &called.call.arguments) {
             Some(words) => refused.ended(ToolCallOutcome::Refused, Value::String(words)),
             None => refused,
