@@ -444,10 +444,10 @@ async fn a_room_keeps_four_active_skills_the_least_recently_used_retired() {
 }
 
 /// RFC §10.1.1 rule 7: an instruction that stands alone reads none of the
-/// room's working state: its prompt carries no active skill, an activation
-/// answers the body, and what it activates is not recorded.
+/// room's working state: its prompt carries no active skill and an activation
+/// answers the body; what it activates counts for the room (RFC §24.4).
 #[tokio::test]
-async fn a_turn_standing_alone_carries_no_active_skill_and_records_none() {
+async fn a_turn_standing_alone_carries_no_active_skill_and_records_what_it_activates() {
     let tree = TempDir::new();
     let model = ScriptedProvider::new([
         activating("c1", "doc-helper"),
@@ -485,7 +485,7 @@ async fn a_turn_standing_alone_carries_no_active_skill_and_records_none() {
     assert!(!prompts[2].contains("# Active skill instructions"));
     assert_eq!(tool_results(&model)[3][0], body());
     assert!(prompts[4].contains("## Skill: doc-helper\n"));
-    assert!(!prompts[4].contains("## Skill: extra-2"));
+    assert!(prompts[4].contains("## Skill: extra-2"));
 }
 
 /// RFC §24.6, §17.8: a reference is read by a plain name, confined to the
@@ -739,6 +739,64 @@ async fn a_room_is_read_again_under_a_turn_s_empty_registry() {
         .unwrap();
     assert_eq!(agent.active_skill_names(&room_id()), Vec::<String>::new());
     room.says("Go on").await;
+    assert_eq!(agent.active_skill_names(&room_id()), ["doc-helper"]);
+}
+
+// Python: channels/_ai_context.py _hydrate_room_memories has no standalone
+// check at its call: a turn standing alone reads the room's stored calls first,
+// though its prompt carries none of them (RMK-1356).
+#[tokio::test]
+async fn a_room_is_read_again_by_a_turn_standing_alone() {
+    let tree = TempDir::new();
+    let model = ScriptedProvider::new([
+        activating("c1", "doc-helper"),
+        ScriptedRound::answering("Activated."),
+        ScriptedRound::answering("Alone."),
+    ]);
+    let agent = AiChannel::new(
+        channel("assistant"),
+        model,
+        AiChannelOptions {
+            skills: Some(skills(&tree)),
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
+    let room = Room::with_agent(agent.clone()).await;
+    room.says("Activate").await;
+    room.kit
+        .detach_channel(
+            &room_id(),
+            &channel("assistant"),
+            DetachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    room.kit
+        .attach_channel(
+            &room_id(),
+            &channel("assistant"),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(agent.active_skill_names(&room_id()), Vec::<String>::new());
+    let alone = SendEventOptions {
+        event_type: EventType::Instruction,
+        standalone: true,
+        addressed_to: Some(vec![channel("assistant")]),
+        ..Default::default()
+    };
+    room.kit
+        .send_event(
+            &room_id(),
+            &channel("sms"),
+            TextContent::new("Summarize."),
+            alone,
+        )
+        .await
+        .unwrap();
+    roomkit::testing::idle(&room.kit).await;
     assert_eq!(agent.active_skill_names(&room_id()), ["doc-helper"]);
 }
 
