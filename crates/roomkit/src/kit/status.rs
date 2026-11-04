@@ -12,7 +12,7 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
-use std::task::{Context, Waker};
+use std::task::{Context, Poll, Waker};
 
 use roomkit_core::model::{
     ChannelId, ChannelType, Confidence, EventId, Metadata, Observation, Room, RoomContext,
@@ -626,10 +626,19 @@ impl<S: ConversationStore> Inner<S> {
                 let within = ExecutionContext::current().scope(body);
                 let started = started.clone();
                 running.spawn(async move {
+                    let mut within = std::pin::pin!(within);
+                    // Told once its body ran up to its first wait, not before:
+                    // the next announcement's hooks start after that.
+                    let first =
+                        std::future::poll_fn(|cx| Poll::Ready(within.as_mut().poll(cx))).await;
                     if let Some(started) = started {
                         let _ = started.send(());
                     }
-                    (spec, within.await)
+                    let outcome = match first {
+                        Poll::Ready(outcome) => outcome,
+                        Poll::Pending => within.await,
+                    };
+                    (spec, outcome)
                 });
             }
             while let Some(ended) = running.join_next().await {

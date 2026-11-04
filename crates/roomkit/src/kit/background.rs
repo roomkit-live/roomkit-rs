@@ -117,14 +117,7 @@ impl<S: ConversationStore> RoomKit<S> {
             let kit = self.clone();
             let context = ExecutionContext::current();
             tokio::spawn(marks.scoped(async move {
-                // In its caller's context: a close from a hook's body under the
-                // room's lock takes no lock that body holds. Within the grace:
-                // a slow hook under the lock delays the close no further.
-                let stopping = context.scope(kit.inner.discussions.stop_all());
-                if tokio::time::timeout(CLOSE_GRACE, stopping).await.is_err() {
-                    tracing::warn!(target: "roomkit::kit", "stopping the discussions outlasted the grace");
-                }
-                let failures = kit.shut_down().await;
+                let failures = kit.shut_down(context).await;
                 ended.send_replace(Some(failures));
             }));
         });
@@ -136,11 +129,18 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// The kit's one shutdown, in the steps [`close`](Self::close) lists:
     /// the channels whose close failed.
-    async fn shut_down(&self) -> shutdown::Ended {
+    async fn shut_down(&self, context: ExecutionContext) -> shutdown::Ended {
         let (tasks, turns) = (&self.inner.tasks, &self.inner.turns);
         // The running work's one grace, the cut turns storing what they
         // said included, the one a close's own call runs in among them.
         let grace = Instant::now() + CLOSE_GRACE;
+        // The discussions' turns first, in the context of the close's caller:
+        // a close from a hook's body under the room's lock takes no lock that
+        // body holds, and a slow hook under the lock takes this grace, no other.
+        let stopping = context.scope(self.inner.discussions.stop_all());
+        if tokio::time::timeout_at(grace, stopping).await.is_err() {
+            tracing::warn!(target: "roomkit::kit", "stopping the discussions outlasted the grace");
+        }
         // The kit's own work stops within the grace too: its delivery
         // backend's worker, its items kept (RFC §22.2), as the Python
         // implementation's close stops it while the channels are open.

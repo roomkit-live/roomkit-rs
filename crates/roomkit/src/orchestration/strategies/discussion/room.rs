@@ -147,7 +147,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         kit.store()
             .patch_room_metadata(&self.room_id, patch, PatchRoomMetadataOptions::default())
             .await?;
-        self.edit(&kit, |state, _| {
+        self.editing(&kit, |state, _| {
             state
                 .entries
                 .retain(|entry| entry.instruction.is_none() || entry.holder.is_some());

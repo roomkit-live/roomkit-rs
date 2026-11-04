@@ -781,7 +781,8 @@ fn an_instruction_with_no_turn_before_it_keeps_a_round_at_its_own_index_alone() 
         let mut instruction = room.instruction("do it", false);
         lookup(&mut room, &no_turn);
         let rows = room.context.recent_events.len();
-        // At the round's start, or just after it: the round then comes first.
+        // At the round's start the round reads after it; just after the round,
+        // the round is older than the turn, with no turn to read after.
         instruction.index = room.context.recent_events[rows - 2].index + at;
 
         let messages = read_with(&room, &instruction, &in_place());

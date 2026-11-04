@@ -233,13 +233,6 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         if state.queue_differs(&before) {
             state.version += 1;
         }
-        {
-            let mut live = self.state();
-            live.queue = state.clone();
-            if !unasked {
-                live.seen_version = Some(state.version);
-            }
-        }
         if state != before
             && let Err(error) = self.store_queue(&kit, &state).await
         {
@@ -249,6 +242,13 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                 retire_mark(&given.mark);
             }
             return Err(error);
+        }
+        {
+            let mut live = self.state();
+            live.queue = state.clone();
+            if !unasked {
+                live.seen_version = Some(state.version);
+            }
         }
         self.fire_all(changes);
         Ok(next)
@@ -304,6 +304,10 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                 next.turn = Some(Box::new(turn));
                 return Ok(next);
             }
+            // Stopped while it read: the entry is still queued, and stays.
+            if self.state().closed {
+                return Ok(next);
+            }
         }
     }
 
@@ -354,22 +358,23 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         if let Some(ask) = entry.answered() {
             answered.chain_depth = answered.chain_depth.max(ask.depth);
         }
-        // Stopped while the event was read: the stop found no turn to cut.
-        if self.state().closed {
-            return Ok(None);
-        }
         let notes = self.notes(kit, &entry, &answered, context);
         let mark = issue_mark(vec![notes]);
-        if !state.take(&entry) {
-            return Ok(None);
-        }
         {
+            // One read with the set: a stop either sees this turn to cut, or
+            // this sees the stop and gives none.
             let mut live = self.state();
-            live.turn_rows.clear();
-            live.turn = Some(GivenTurn {
-                entry: entry.clone(),
-                mark: mark.clone(),
-            });
+            if !live.closed && state.take(&entry) {
+                live.turn_rows.clear();
+                live.turn = Some(GivenTurn {
+                    entry: entry.clone(),
+                    mark: mark.clone(),
+                });
+            } else {
+                drop(live);
+                retire_mark(&mark);
+                return Ok(None);
+            }
         }
         if self.max_turns_given(state) {
             // Over once the last turn is given; that turn ends as it would.
@@ -773,7 +778,10 @@ fn forget_instruction(
 
 #[cfg(test)]
 mod tests {
-    use roomkit_core::model::{ChannelType, TextContent};
+    use roomkit_core::model::{
+        ChannelBinding, ChannelCategory, ChannelDirection, ChannelType, EventSource, RoomId,
+        TextContent,
+    };
 
     use super::*;
     use crate::kit::{CreateRoomOptions, RoomKitOptions};
@@ -784,17 +792,18 @@ mod tests {
     // stop during the plan finds a turn to cut, or none is given.
     #[tokio::test]
     async fn a_room_stopped_since_the_peek_gives_no_turn() {
-        let room_id = roomkit_core::model::RoomId::new("r1").unwrap();
+        let room_id = RoomId::new("r1").unwrap();
         let agent = ChannelId::new("a").unwrap();
+        let ops = ChannelId::new("ops").unwrap();
         let kit = RoomKit::new(RoomKitOptions::default());
         let options = CreateRoomOptions {
             room_id: Some(room_id.clone()),
             ..Default::default()
         };
-        kit.create_room(options).await.unwrap();
+        let created = kit.create_room(options).await.unwrap();
         let mut asked = RoomEvent::new(
             room_id.clone(),
-            roomkit_core::model::EventSource::new(ChannelId::new("ops").unwrap(), ChannelType::SMS),
+            EventSource::new(ops.clone(), ChannelType::SMS),
             TextContent::new("@a hello"),
         );
         asked.index = 1;
@@ -822,15 +831,31 @@ mod tests {
         })
         .await
         .unwrap();
+        let mut context = RoomContext::new(created);
+        for (channel, channel_type, category) in [
+            (&ops, ChannelType::SMS, ChannelCategory::Transport),
+            (&agent, ChannelType::AI, ChannelCategory::Intelligence),
+        ] {
+            context.bindings.push(ChannelBinding::at(
+                channel.clone(),
+                room_id.clone(),
+                channel_type,
+                category,
+                ChannelDirection::Bidirectional,
+                Timestamp::UNIX_EPOCH,
+            ));
+        }
+
         room.state().done = Some(false);
         room.state().closed = true;
-
-        let next = room
-            .planned_turn(RoomContext::new(roomkit_core::model::Room::new(room_id)))
-            .await
-            .unwrap();
-
-        assert!(next.turn.is_none());
+        let stopped = room.planned_turn(context.clone()).await.unwrap();
+        assert!(stopped.turn.is_none());
         assert!(room.state().turn.is_none());
+
+        // Not stopped, the same plan gives it: what the first read kept out.
+        room.state().closed = false;
+        room.state().done = Some(false);
+        let given = room.planned_turn(context).await.unwrap();
+        assert_eq!(given.turn.map(|turn| turn.agent), Some(agent));
     }
 }
