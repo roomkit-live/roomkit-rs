@@ -155,7 +155,9 @@ impl Pump<'_> {
             }
             let delta = matches!(
                 read,
-                Some(Ok(ResponseItem::Text(_) | ResponseItem::Thinking(_) | ResponseItem::Usage(_)))
+                Some(Ok(ResponseItem::Text(_)
+                    | ResponseItem::Thinking(_)
+                    | ResponseItem::Usage(_)))
             );
             if let Err(why) = self.changes.report(self.sender, delta) {
                 return refuse(self.sender, "stream item", &why);
@@ -212,7 +214,9 @@ impl Pump<'_> {
         let mut gate = lock(&self.flow.gate);
         gate.end_read();
         match &read {
-            Some(Ok(ResponseItem::Text(_) | ResponseItem::Thinking(_) | ResponseItem::Usage(_))) => gate.read_deltas(1),
+            Some(Ok(
+                ResponseItem::Text(_) | ResponseItem::Thinking(_) | ResponseItem::Usage(_),
+            )) => gate.read_deltas(1),
             Some(Ok(_)) | None => gate.read_other(),
             Some(Err(_)) => {}
         }

@@ -540,7 +540,9 @@ impl Producer {
     fn hand(&mut self, pull: oneshot::Sender<Pulled>, item: Pulled) -> bool {
         let text = match &item {
             Some(Ok(StreamItem::Text(text))) => Some(text.clone()),
-            Some(Ok(StreamItem::Row(_) | StreamItem::Thinking(_) | StreamItem::Usage(_)) | Err(_))
+            Some(
+                Ok(StreamItem::Row(_) | StreamItem::Thinking(_) | StreamItem::Usage(_)) | Err(_),
+            )
             | None => None,
         };
         let ends = matches!(item, None | Some(Err(_)));

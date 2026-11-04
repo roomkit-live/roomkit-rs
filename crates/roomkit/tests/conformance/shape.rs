@@ -160,7 +160,14 @@ const TURN_CONFIG: &[&str] = &[
 ];
 const TURN_TOOL: &[&str] = &["name", "description", "parameters"];
 const HUMAN_TOOL: &[&str] = &["name", "description", "parameters"];
-const MODEL: &[&str] = &["rounds", "vision", "pricing", "context_window", "name", "provider"];
+const MODEL: &[&str] = &[
+    "rounds",
+    "vision",
+    "pricing",
+    "context_window",
+    "name",
+    "provider",
+];
 const MODEL_ROUND: &[&str] = &[
     "text",
     "deltas",
