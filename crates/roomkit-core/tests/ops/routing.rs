@@ -164,24 +164,24 @@ mod a_routed_sender {
         );
     }
 
-    /// RFC §10.4: the framework's own sender names no correspondent, and
-    /// has no address to resolve.
+    /// RFC §10.1 step 2, §10.4: the framework names the room it writes to, so
+    /// a message routed under its name is refused before anything is read,
+    /// even where a `group` binding would take it. The router is not asked.
     #[test]
     fn is_never_the_framework_s_own_sender() {
         let mut sim = routed_to_room_1();
         sim.bindings[0].group = true;
-        sim.route(None, message_from("sms", "system", "Reminder"))
+        let result = sim
+            .route(None, message_from("sms", "system", "Reminder"))
             .unwrap();
         assert_eq!(
-            until_parse(&sim),
-            [
-                "route sms system",
-                "load_context room_1",
-                "lock room_1",
-                "load_context room_1",
-                "release room_1",
-                "handle_inbound sms",
-            ]
+            (
+                result.blocked,
+                result.reason.as_deref(),
+                result.event.is_none(),
+                sim.traced("route").len(),
+            ),
+            (true, Some("reserved_sender"), true, 0)
         );
     }
 
@@ -303,25 +303,6 @@ mod a_routed_sender {
                 (None, json!({})),
                 vec!["#0 telegram delivered \"Hi\"".to_owned()]
             )
-        );
-    }
-
-    /// Gap G-055: the framework's own sender, routed to a room whose
-    /// binding names someone, finds it someone else's.
-    #[test]
-    fn under_the_framework_s_own_name_into_a_binding_naming_someone_is_routed_once_more() {
-        let mut sim = routed_to_room_1();
-        sim.bindings[0].participant_id = Some(ParticipantId::new(OTHER).unwrap());
-        let result = sim
-            .route(None, message_from("sms", "system", "Reminder"))
-            .unwrap();
-        assert_eq!(
-            (
-                result.event.map(|event| event.room_id.to_string()),
-                sim.traced("route").len(),
-                named(binding_of(&sim, "sms")).0
-            ),
-            (Some("new_room_1".to_owned()), 2, Some(OTHER.to_owned()))
         );
     }
 

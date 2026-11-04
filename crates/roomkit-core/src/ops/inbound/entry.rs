@@ -74,12 +74,18 @@ impl Machine {
             Ok(Admitted::Refused(refused)) => return self.end(cx, Ok(*refused)),
             Err(error) => return self.end(cx, Err(error)),
         };
-        let charge = self.cascade.take_from_delivery();
-        let mut arrival = Box::new(
-            Arrival::new(target, organization_id, channel, message, self.call.bound)
-                .answered(answers)
-                .charging(charge),
-        );
+        let arrival = Arrival::new(target, organization_id, channel, message, self.call.bound)
+            .answered(answers);
+        if arrival.routed_under_the_reserved_name() {
+            tracing::warn!(
+                target: "roomkit::core::inbound",
+                channel_id = ?self.call.channel_id,
+                "a message routed under the framework's own name: refused; a host writing under \
+                 that name names its room"
+            );
+            return self.end(cx, Ok(result::reserved_sender()));
+        }
+        let mut arrival = Box::new(arrival.charging(self.cascade.take_from_delivery()));
         arrival.start(cx);
         self.stage.enter(Stage::Arriving(arrival));
     }

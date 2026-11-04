@@ -60,6 +60,10 @@ pub(crate) const WHATSAPP_GROUP: &str = "group_jid";
 /// no correspondent (RFC §10.4).
 pub(crate) const SYSTEM_SENDER: &str = "system";
 
+/// The reason a message routed under [`SYSTEM_SENDER`] is refused (RFC §10.1
+/// step 2): the framework names the room it writes to.
+pub(crate) const RESERVED_SENDER: &str = "reserved_sender";
+
 /// The most digits a phone number holds (ITU-T E.164).
 const MAX_DIGITS: usize = 15;
 

@@ -9,6 +9,7 @@ use roomkit_core::ops::MessageAnswers;
 use super::Inner;
 use crate::channel::DynChannel;
 use crate::context::ExecutionContext;
+use crate::delivery::targets::SYSTEM_SENDER_ID;
 
 impl<S> Inner<S> {
     /// Writes `message`'s sender in its channel's form by the channel's own
@@ -35,7 +36,10 @@ impl<S> Inner<S> {
 /// recipient written where `channel` reads it (`recipient_address`,
 /// `recipient_metadata`), the correspondent the host gives in the form the
 /// channel writes an inbound sender in (`normalize_address`), and a binding
-/// that names no one, not `group`, naming the person it delivers to.
+/// that names no one, not `group`, naming the person it delivers to. The
+/// framework's own name holds no one's place: a recipient replaces it, and
+/// with none the binding keeps it (a room opened by a message with no
+/// address, RFC §5.7).
 pub(crate) fn named_correspondent(
     mut binding: ChannelBinding,
     channel: &dyn DynChannel,
@@ -47,9 +51,11 @@ pub(crate) fn named_correspondent(
         }
     }
     let named = match &binding.participant_id {
-        Some(participant) => Some(channel.normalize_address(participant.as_str())),
-        None if binding.group => None,
-        None => recipient,
+        Some(participant) if participant.as_str() != SYSTEM_SENDER_ID || recipient.is_none() => {
+            Some(channel.normalize_address(participant.as_str()))
+        }
+        Some(_) | None if binding.group => None,
+        Some(_) | None => recipient,
     };
     binding.participant_id = named.and_then(|named| ParticipantId::new(named).ok());
     binding

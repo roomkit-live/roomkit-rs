@@ -296,6 +296,17 @@ impl Arrival {
             .notify(Notice::Span(SpanNote::RouteOver { entry, end }));
     }
 
+    /// Whether the message would be routed under the framework's own name:
+    /// its sender goes by it, or the address it is routed by, a chat's on a
+    /// chat channel, is it (RFC §10.1 step 2, §10.4). The framework names the
+    /// room it writes to and is never routed, so such a message is a sender
+    /// borrowing the name, on a channel whose senders choose their id.
+    pub(super) fn routed_under_the_reserved_name(&self) -> bool {
+        matches!(self.target, InboundTarget::Routed)
+            && (self.message.sender_id == addresses::SYSTEM_SENDER
+                || self.sender.address.as_deref() == Some(addresses::SYSTEM_SENDER))
+    }
+
     /// The room the arrival works on: the room step 2 works on or arrived
     /// in, `None` while the message is routed.
     pub(super) fn room(&self) -> Option<&RoomId> {

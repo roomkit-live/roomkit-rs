@@ -51,7 +51,9 @@ use std::mem;
 
 use super::InboundError;
 use super::arrival_change::{ArrivalChange, Heard, Recorded, SenderRecord};
-use crate::model::{ChannelBinding, ChannelType, ErrorRecord, Room, RoomContext, RoomId};
+use crate::model::{
+    ChannelBinding, ChannelType, ErrorRecord, ParticipantId, Room, RoomContext, RoomId,
+};
 use crate::ops::io::Bound;
 use crate::ops::lifecycle::locked::{LockedSection, SectionError, SectionResult};
 use crate::ops::lifecycle::report::{self, Reported, SessionStarted};
@@ -353,7 +355,6 @@ impl NamedRoom {
                     binding: self.sender_binding(cx),
                     sender: self.sender.clone(),
                     form: self.channel.form(),
-                    system: self.sender_id == SYSTEM_SENDER,
                     heard: Heard::default(),
                 };
                 self.change(cx, ArrivalChange::RecordSender(Box::new(record)), false)
@@ -460,8 +461,17 @@ impl NamedRoom {
     /// without its chat) and the framework's own sender `system` name
     /// neither. A binding at its defaults names no one, whoever the room's
     /// participants are.
+    ///
+    /// Unless the message was routed with no address: unnamed, the binding
+    /// would pass step 3 for the next sender, who would read what it left. It
+    /// names `system`, which no sender is (a message routed under that name
+    /// is refused, RFC §10.1 step 2), and no recipient (RFC §5.7, §10.4).
     fn sender_binding(&self, cx: &mut Cx<'_>) -> ChannelBinding {
-        let binding = self.channel.binding(self.room_id.clone(), cx.env.now());
+        let mut binding = self.channel.binding(self.room_id.clone(), cx.env.now());
+        if self.mode != Mode::Named && self.sender.address.is_none() {
+            binding.participant_id = ParticipantId::new(SYSTEM_SENDER).ok();
+            return binding;
+        }
         match routing::recording(&binding, &self.sender, &self.channel.form(), &[]) {
             Recording::Write(update) => update.apply(&binding),
             Recording::Kept | Recording::Taken | Recording::NotARecipient(_) => binding,

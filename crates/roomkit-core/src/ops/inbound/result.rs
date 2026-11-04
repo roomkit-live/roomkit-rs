@@ -3,7 +3,7 @@
 //! types are the protocol's (`protocol::results`).
 
 use super::{InboundError, InboundResult};
-use crate::rules::chain_depth;
+use crate::rules::{addresses, chain_depth};
 
 /// The result of a message refused past the reentry budget it draws on,
 /// before its parse, with no event (RFC §8.3, gap G-070).
@@ -11,6 +11,17 @@ pub(super) fn past_the_budget() -> InboundResult {
     InboundResult {
         blocked: true,
         reason: Some(chain_depth::REENTRY_LOOP_CAP.to_owned()),
+        refused_before_the_lock: true,
+        ..InboundResult::default()
+    }
+}
+
+/// The result of a message routed under the framework's own name, refused
+/// before anything is read or written (RFC §10.1 step 2, §10.4).
+pub(super) fn reserved_sender() -> InboundResult {
+    InboundResult {
+        blocked: true,
+        reason: Some(addresses::RESERVED_SENDER.to_owned()),
         refused_before_the_lock: true,
         ..InboundResult::default()
     }

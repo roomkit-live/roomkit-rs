@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- BREAKING: a message routed under the name `system`, or a chat of that name, is refused, as Python's (RFC §10.1 step 2, HITL 6200e78d, RMK-1339): `blocked`, reason `reserved_sender`, nothing written, no room opened, no router asked. Under the room lock the name spared a sender on a channel whose senders choose their id step 3's conditions. A host writing under that name names its room.
+- BREAKING: a routed message with no address enters a room only through a `group` binding, and the room it opens admits no other sender, as Python's (RFC §5.7, §10.4, HITL 8ea30e4a, 474148bb, RMK-1339): its binding names `system`, which no sender is, until the integrator gives it a recipient, where unnamed it passed step 3 and the next sender's agent read what it left.
 - **BREAKING:** a model's reasoning reaches no Chat Completions request, as Python's (RFC §6.4, RMK-1369): a `<think>` block in the content emptied a server's prompt cache at each step of a turn. `AiThinkingPart`, the hooks and the reader of a stream still read the reasoning, a `<think>` in a model's output is still read out of its text, and Responses still replays its reasoning items.
 - A stream nobody read opens no `llm.generate`, as Python's: a muted agent's, or one a cut left unread, where the span opened with the response and ended `cancelled` under `framework.broadcast` (HITL 0baec919, RMK-1384).
 - A replay gives each call its own result, as Python's (RFC §6.4): a round's results pair to its calls first in, first out per id, so a later turn no longer reads a refused call with the result of the one that held its id (RMK-1373).

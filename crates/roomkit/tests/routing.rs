@@ -1127,7 +1127,11 @@ async fn a_chat_message_without_its_chat_has_no_address() {
             .get_binding(&event.room_id, &channel("telegram"), options)
             .await
             .unwrap();
-        assert_eq!(binding.participant_id, None, "{carried:?}");
+        assert_eq!(
+            binding.participant_id.as_ref().map(ParticipantId::as_str),
+            Some("system"),
+            "{carried:?}"
+        );
         assert!(binding.metadata.is_empty(), "{carried:?}");
         assert_eq!(telegram.sent().len(), sent, "{carried:?}");
         kit.close().await.unwrap();
