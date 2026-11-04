@@ -399,8 +399,9 @@ pub struct AiChannel<P> {
     max_tokens: Option<u32>,
     thinking: (Option<i64>, Option<bool>),
     thinking_coalesce: (f64, usize),
-    text_coalesce: (f64, usize),
-    publish_text_deltas: bool,
+    /// `text_coalesce_ms` and `text_coalesce_chars`, when
+    /// `publish_text_deltas` asks for its text.
+    text_deltas: Option<(f64, usize)>,
     publish_thinking_text: bool,
     reasoning_effort: Option<String>,
     /// What configures each turn (RFC Appendix A.9).
@@ -491,6 +492,17 @@ struct RoomTurns {
     steered: bool,
 }
 
+impl RoomTurns {
+    /// What the channel's two settings ask: steering takes the room's turns
+    /// one at a time as well (RFC §21.3).
+    fn of(serialize_room_turns: bool, steer_room_turns: bool) -> Self {
+        Self {
+            serialized: serialize_room_turns || steer_room_turns,
+            steered: steer_room_turns,
+        }
+    }
+}
+
 impl<P> Clone for AiChannel<P> {
     fn clone(&self) -> Self {
         Self {
@@ -509,8 +521,7 @@ impl<P> Clone for AiChannel<P> {
             max_tokens: self.max_tokens,
             thinking: self.thinking,
             thinking_coalesce: self.thinking_coalesce,
-            text_coalesce: self.text_coalesce,
-            publish_text_deltas: self.publish_text_deltas,
+            text_deltas: self.text_deltas,
             publish_thinking_text: self.publish_thinking_text,
             reasoning_effort: self.reasoning_effort.clone(),
             turn_configs: self.turn_configs.clone(),
@@ -640,8 +651,7 @@ impl<P: AiProvider> AiChannel<P> {
             max_tokens,
             thinking: (thinking_budget, enable_thinking),
             thinking_coalesce: (thinking_coalesce_ms, thinking_coalesce_chars),
-            text_coalesce: (text_coalesce_ms, text_coalesce_chars),
-            publish_text_deltas,
+            text_deltas: publish_text_deltas.then_some((text_coalesce_ms, text_coalesce_chars)),
             publish_thinking_text,
             reasoning_effort,
             turn_configs: TurnConfigs::new(config_provider),
@@ -652,10 +662,7 @@ impl<P: AiProvider> AiChannel<P> {
             tool_call_intents,
             tool_call_intents_required,
             loops: Arc::default(),
-            room_turns: RoomTurns {
-                serialized: serialize_room_turns || steer_room_turns,
-                steered: steer_room_turns,
-            },
+            room_turns: RoomTurns::of(serialize_room_turns, steer_room_turns),
             human_input: surface.human_input,
             tool_search: Arc::new(search),
             identity: None,
@@ -889,9 +896,7 @@ impl<P: AiProvider> AiChannel<P> {
     /// How a turn answering `event` publishes its answer's text.
     fn text_publication(&self, event: &RoomEvent) -> TextPublication {
         TextPublication {
-            coalesce_ms: self.text_coalesce.0,
-            coalesce_chars: self.text_coalesce.1,
-            publishes: self.publish_text_deltas,
+            window: self.text_deltas,
             answers_room: event
                 .response_visibility
                 .as_ref()

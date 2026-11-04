@@ -8,24 +8,20 @@
 //! trace: `BEFORE_BROADCAST` judges the message a room stores, never this
 //! stream (RFC §23.3 step 5).
 
-use std::time::Instant;
-
 use roomkit::TurnHost;
 use roomkit::model::{ChannelId, Metadata, RoomId};
 use roomkit::realtime::{EphemeralEvent, EphemeralEventType};
 use serde_json::Value;
+use tokio::time::Instant;
 
 use super::thinking::ThinkingWindow;
 
 /// How a turn's answer text reaches the room's subscribers.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TextPublication {
-    /// `text_coalesce_ms`.
-    pub(crate) coalesce_ms: f64,
-    /// `text_coalesce_chars`.
-    pub(crate) coalesce_chars: usize,
-    /// `publish_text_deltas`.
-    pub(crate) publishes: bool,
+    /// `text_coalesce_ms` and `text_coalesce_chars`, when
+    /// `publish_text_deltas` asks for it.
+    pub(crate) window: Option<(f64, usize)>,
     /// Whether the turn's trigger scopes its answers nowhere.
     pub(crate) answers_room: bool,
 }
@@ -111,9 +107,8 @@ impl Publisher {
 
 /// A round's answer text, on its window.
 pub(super) struct TextWindow {
-    publisher: Option<Publisher>,
+    publishing: Option<(Publisher, TextCoalescer)>,
     round: u32,
-    coalescer: TextCoalescer,
 }
 
 impl TextWindow {
@@ -126,25 +121,25 @@ impl TextWindow {
         round: u32,
         publication: TextPublication,
     ) -> Self {
-        let publishes = publication.publishes && publication.answers_room;
-        Self {
-            publisher: turn.filter(|_| publishes).map(|turn| Publisher {
+        let window = publication.window.filter(|_| publication.answers_room);
+        let publishing = turn.zip(window).map(|(turn, (flush_ms, flush_chars))| {
+            let publisher = Publisher {
                 turn: turn.clone(),
                 room_id: room_id.clone(),
                 channel_id: channel_id.clone(),
-            }),
-            round,
-            coalescer: TextCoalescer::new(publication.coalesce_ms, publication.coalesce_chars),
-        }
+            };
+            (publisher, TextCoalescer::new(flush_ms, flush_chars))
+        });
+        Self { publishing, round }
     }
 
     /// Adds the pieces the room was handed, each as the window lets it go.
     pub(super) fn add(&mut self, pieces: &[String]) {
-        let Some(publisher) = self.publisher.as_ref() else {
+        let Some((publisher, coalescer)) = self.publishing.as_mut() else {
             return;
         };
         for piece in pieces {
-            if let Some(text) = self.coalescer.add(piece) {
+            if let Some(text) = coalescer.add(piece) {
                 publisher.publish(text, self.round);
             }
         }
@@ -153,10 +148,10 @@ impl TextWindow {
     /// Publishes what the window holds: before a call, so that an observer
     /// reads text and calls in the order they came, and at the round's end.
     pub(super) fn flush(&mut self) {
-        let Some(publisher) = self.publisher.as_ref() else {
+        let Some((publisher, coalescer)) = self.publishing.as_mut() else {
             return;
         };
-        if let Some(text) = self.coalescer.flush() {
+        if let Some(text) = coalescer.flush() {
             publisher.publish(text, self.round);
         }
     }
