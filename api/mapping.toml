@@ -229,6 +229,18 @@ reason = "Python's **options, which go to RoomKit.delegate's keywords that are d
 # The architecture table's exceptions, approved with the plan on 2026-10-27.
 
 [[exception]]
+rust = "roomkit::ConversationStore"
+members = ["is_process_local"]
+approved = "2026-11-04"
+reason = "Python's class attribute ConversationStore.is_process_local, which the snapshot does not record: a trait method, false by default, for a store of your own to opt out of the warning (HITL da7a6e4b, RMK-1291)"
+
+[[exception]]
+rust = "roomkit::store::ConversationStore"
+members = ["is_process_local"]
+approved = "2026-11-04"
+reason = "the same trait under its module's path: see roomkit::ConversationStore (HITL da7a6e4b, RMK-1291)"
+
+[[exception]]
 rust = "roomkit::StoreError"
 members = ["Unavailable", "unavailable"]
 approved = "2026-10-27"

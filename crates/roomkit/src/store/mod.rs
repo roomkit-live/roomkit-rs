@@ -268,8 +268,8 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// process, so that no other process can share it. A persistent store,
     /// the default, is shared as soon as a deployment runs a second process:
     /// the kit warns when one is paired with an in-process lock (RFC §13.5).
-    /// Hidden as Python's class attribute is out of its signature list.
-    #[doc(hidden)]
+    /// A store of your own that keeps its data in this process answers `true`,
+    /// and opts out of the warning.
     fn is_process_local(&self) -> bool {
         false
     }
