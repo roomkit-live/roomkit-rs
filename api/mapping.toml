@@ -235,7 +235,7 @@ reason = "a variant carries a foreign error, the cause kept: what Python propaga
 [[exception]]
 rust = "roomkit::model::ResponseMetadata"
 members = ["get", "contains_key", "len", "is_empty", "insert", "pop", "setdefault", "update", "clear", "with_value", "to_metadata"]
-approved = "2026-11-04"
+approved = "2026-11-03"
 reason = "language: Python's MutableMapping, record[key] = value among its forms, has no Rust operator on a shared record: methods of its names (HITL 5f1b8943)"
 
 [[exception]]
