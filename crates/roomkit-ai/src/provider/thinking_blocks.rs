@@ -48,6 +48,7 @@ impl Block {
 #[derive(Clone, Debug, Default)]
 pub struct ThinkingBlocks {
     blocks: Vec<(Option<u32>, Block)>,
+    last_signature: Option<String>,
 }
 
 impl ThinkingBlocks {
@@ -74,11 +75,19 @@ impl ThinkingBlocks {
         held.text.push_str(&delta.thinking);
         if let Some(signature) = delta.signature.as_ref().filter(|given| !given.is_empty()) {
             held.signature = Some(signature.clone());
+            self.last_signature = Some(signature.clone());
         }
         if let Some(redacted) = &delta.redacted {
             held.redacted = Some(redacted.clone());
         }
         opened
+    }
+
+    /// The last signature any block got, for a reader of one signature, as a
+    /// provider fills [`AiResponse::thinking_signature`](super::AiResponse).
+    #[must_use]
+    pub fn last_signature(&self) -> Option<&str> {
+        self.last_signature.as_deref()
     }
 
     /// Whether the response reasoned at all.
@@ -193,6 +202,7 @@ mod tests {
         assert_eq!(blocks.parts(), [part("kept", Some("S0"), None)]);
         assert_eq!(blocks.part(Some(2)), None);
         assert_eq!(blocks.text(), "keptcut");
+        assert_eq!(blocks.last_signature(), Some("S0"));
     }
 
     // Python: tests/test_providers/test_thinking_blocks.py::TestThinkingBlocks::test_reasoning_without_blocks_is_one_block

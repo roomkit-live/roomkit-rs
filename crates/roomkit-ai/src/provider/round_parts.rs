@@ -80,6 +80,12 @@ impl RoundTranscript {
         Self::default()
     }
 
+    /// The round's reasoning blocks.
+    #[must_use]
+    pub fn thinking(&self) -> &ThinkingBlocks {
+        &self.thinking
+    }
+
     /// Everything the round said, its stretches joined.
     #[must_use]
     pub fn text(&self) -> String {
@@ -229,6 +235,7 @@ mod tests {
         ));
         let answered = transcript.parts::<AiToolCall>(&[]).expect("an answer");
         assert_eq!(answered.len(), 1);
+        assert_eq!(transcript.thinking().last_signature(), Some("S0"));
     }
 
     // A call's intent goes back among its arguments (RFC §6.4).
