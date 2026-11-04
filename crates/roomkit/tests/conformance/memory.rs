@@ -19,6 +19,8 @@ use roomkit_ai::testing::ScriptedProvider;
 use roomkit_ai::{AiMessage, AiRole};
 use serde_json::Value;
 
+use crate::agents::write_record;
+
 /// The room's latest events, as `SlidingWindowMemory` reads them, and
 /// what the scenario says the memory built, retrieved and names.
 struct Scripted {
@@ -26,6 +28,8 @@ struct Scripted {
     messages: Vec<AiMessage>,
     notes: Vec<String>,
     speakers: Vec<String>,
+    /// What each read writes on the turn's record.
+    spec: Value,
 }
 
 impl MemoryProvider for Scripted {
@@ -41,6 +45,7 @@ impl MemoryProvider for Scripted {
         options: RetrieveOptions,
     ) -> Pin<Box<dyn Future<Output = Result<MemoryResult, ChannelError>> + Send + 'a>> {
         Box::pin(async move {
+            write_record(&self.spec);
             let window = self
                 .window
                 .retrieve(room_id, current_event, context, options)
@@ -79,6 +84,7 @@ pub(crate) fn scripted_memory(
         messages,
         notes: texts(&spec["notes"]),
         speakers: texts(&spec["speakers"]),
+        spec: spec.clone(),
     });
     let memory = match spec.get("budget_aware") {
         Some(budget) => budget_aware(budget, memory)?,

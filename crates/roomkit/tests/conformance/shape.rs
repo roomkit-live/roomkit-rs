@@ -188,6 +188,7 @@ const TOOL: &[&str] = &[
     "gate",
     "declared",
     "returns_json",
+    "writes_record",
     "returns_parts",
 ];
 const RAISES: &[&str] = &["kind", "message"];
@@ -197,6 +198,7 @@ const MEMORY: &[&str] = &[
     "messages",
     "notes",
     "speakers",
+    "writes_record",
     "budget_aware",
     "compacting",
     "summarizing",
@@ -269,6 +271,7 @@ const REACTION: &[&str] = &[
     "output",
     "result",
     "stop_after",
+    "writes_record",
     "parsed",
     "refuse",
     "after_turn",

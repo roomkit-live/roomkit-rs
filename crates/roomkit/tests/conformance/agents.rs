@@ -681,8 +681,20 @@ fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
         })
 }
 
+/// Writes a tool's, a memory's or a hook's `writes_record` on the turn's
+/// record, when it runs under one.
+pub(crate) fn write_record(spec: &Value) {
+    if let (Some(keys), Some(record)) = (
+        spec.get("writes_record").and_then(Value::as_object),
+        roomkit_ai::current_response_metadata(),
+    ) {
+        record.update(keys.clone());
+    }
+}
+
 /// What a scripted tool answers.
 pub(crate) async fn answer(tool: &Value) -> Result<ToolResult, ToolError> {
+    write_record(tool);
     let words = |key: &str| tool[key].as_str().map(str::to_owned);
     if let Some(text) = words("returns") {
         return Ok(ToolResult::Text(text));
@@ -922,6 +934,7 @@ impl ToolHook {
             return Ok(allow());
         };
         perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
+        write_record(&reaction);
         match reaction.get("result") {
             Some(result) => Ok(tool_hook_result(result, event)?),
             None => Ok(allow()),

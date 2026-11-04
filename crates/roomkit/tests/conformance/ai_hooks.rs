@@ -18,6 +18,7 @@ use roomkit_ai::{
 };
 use serde_json::{Map, Value, json};
 
+use crate::agents::write_record;
 use crate::run::{Run, Scope};
 use crate::scripted::{Reactions, perform};
 
@@ -35,6 +36,11 @@ pub(crate) trait Scripted: TurnPayload {
 
     /// The payload a modify's `patch` makes of it.
     fn patched(self, patch: &Value) -> Result<Self, String>;
+    /// Writes a reaction's `writes_record` on the turn's record: the one the
+    /// hook runs under, unless the payload holds it.
+    fn write_record(&self, reaction: &Value) {
+        write_record(reaction);
+    }
 }
 
 impl Scripted for AiGenerationEvent {
@@ -53,13 +59,23 @@ impl Scripted for AiGenerationEvent {
     }
 
     /// The replacement event: its context's `system_prompt`, `messages`,
-    /// `reasoning_effort`, `thinking_budget` and `enable_thinking` the patch's, its `tools` those of the context the patch names, and
+    /// `reasoning_effort`, `thinking_budget`, `enable_thinking` and `response_metadata` the patch's, its `tools` those of the context the patch names, and
     /// each tool `define` gives in place of the tool of its name, or after
     /// them.
+    fn write_record(&self, reaction: &Value) {
+        if let Some(keys) = reaction.get("writes_record").and_then(Value::as_object) {
+            self.ai_context.response_metadata.update(keys.clone());
+        }
+    }
+
     fn patched(mut self, patch: &Value) -> Result<Self, String> {
         for (member, value) in patch.as_object().into_iter().flatten() {
             let context = &mut self.ai_context;
             match member.as_str() {
+                "response_metadata" => {
+                    let keys = value.as_object().ok_or("a record is a mapping")?;
+                    context.response_metadata = keys.clone().into();
+                }
                 "system_prompt" => context.system_prompt = value.as_str().map(str::to_owned),
                 "reasoning_effort" => {
                     context.reasoning_effort = value.as_str().map(str::to_owned);
@@ -266,6 +282,7 @@ pub(crate) fn turn_hook_handler<P: Scripted>(
                 return Ok(allow);
             };
             perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
+            payload.write_record(&reaction);
             match reaction.get("result") {
                 Some(result) => Ok(turn_hook_result(result, payload)?),
                 None => Ok(allow),
