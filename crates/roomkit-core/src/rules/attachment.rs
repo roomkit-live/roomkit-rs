@@ -55,16 +55,22 @@ pub(crate) fn is_reserved_key(key: &str) -> bool {
 /// §14.1).
 const SPEAK_QUEUE_RESULTS: &str = "_speak_queue_results";
 
+/// The room metadata key a conversation state is stored under (RFC §19.2):
+/// `save_conversation_state` writes it, a room's metadata being no way to.
+pub const CONVERSATION_STATE_KEY: &str = "_conversation_state";
+
 /// Whether only the framework writes the room metadata key `key`: one of
 /// the namespace the implementation reserves, a key of the room's private
 /// state, its register of authors among them (RFC §5.1, §14.1, gap G-049), or
-/// a discussion's stored configuration and speak queue, written through the
-/// store (RFC §19.7.5 rule 16).
+/// what orchestration keeps for the room through the store: its conversation
+/// state (RFC §19.2), a discussion's configuration and speak queue (RFC
+/// §19.7.5 rule 16).
 pub(crate) fn the_framework_s(key: &str) -> bool {
     is_reserved_key(key)
         || [
             AUTHOR_REGISTER,
             SPEAK_QUEUE_RESULTS,
+            CONVERSATION_STATE_KEY,
             discussion::CONFIG_KEY,
             discussion::STATE_KEY,
         ]
@@ -334,6 +340,7 @@ mod tests {
             ("_speak_queue_results".to_owned(), json!([])),
             ("_discussion".to_owned(), json!({})),
             ("_speak_queue".to_owned(), json!({})),
+            ("_conversation_state".to_owned(), json!({})),
         ]
         .into_iter()
         .collect();

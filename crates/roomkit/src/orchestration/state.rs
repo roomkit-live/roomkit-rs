@@ -14,7 +14,7 @@ use crate::error::RoomKitError;
 use crate::store::{ConversationStore, PatchRoomMetadataOptions};
 
 /// The room metadata key a conversation state is stored under (RFC §19.2).
-const STATE_KEY: &str = "_conversation_state";
+const STATE_KEY: &str = roomkit_core::rules::attachment::CONVERSATION_STATE_KEY;
 
 /// The built-in conversation phases. A phase is any string: routing and the
 /// state do not restrict phases to these. A phase converts into the
