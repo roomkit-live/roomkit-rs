@@ -408,9 +408,8 @@ impl DeliverySet {
         effect: EffectId,
         outcome: Outcome,
     ) -> Progress<SetOutcome> {
-        if let Some(record) = &mut self.record {
-            let progress = record.accept(cx, outcome);
-            return self.on_record(progress);
+        if self.record.is_some() {
+            return self.on_record(cx, outcome);
         }
         match self.place {
             Place::Awaiting(awaited) if awaited == effect => return self.on_turn(cx, outcome),
@@ -552,8 +551,13 @@ impl DeliverySet {
         self.over(cx)
     }
 
-    /// The record of its deliveries went on: the set is over once it ended.
-    fn on_record(&mut self, progress: Progress<()>) -> Progress<SetOutcome> {
+    /// Hands the record of its deliveries `outcome`: the set is over once
+    /// the record ended.
+    fn on_record(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<SetOutcome> {
+        let progress = self
+            .record
+            .as_mut()
+            .map_or(Progress::Done(()), |record| record.accept(cx, outcome));
         match progress {
             Progress::Waiting => Progress::Waiting,
             Progress::Done(()) => {

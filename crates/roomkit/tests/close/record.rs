@@ -100,7 +100,7 @@ impl Channel for Stuck {
 #[derive(Clone)]
 struct Failing {
     id: &'static str,
-    failing: &'static [&'static str],
+    refused: &'static [&'static str],
     held: &'static [&'static str],
     entered: Arc<Notify>,
     release: Arc<Notify>,
@@ -109,12 +109,12 @@ struct Failing {
 impl Failing {
     fn new(
         id: &'static str,
-        failing: &'static [&'static str],
+        refused: &'static [&'static str],
         held: &'static [&'static str],
     ) -> Self {
         Self {
             id,
-            failing,
+            refused,
             held,
             entered: Arc::default(),
             release: Arc::default(),
@@ -156,7 +156,7 @@ impl Channel for Failing {
                 this.entered.notify_one();
                 this.release.notified().await;
             }
-            if this.failing.contains(&text.as_str()) {
+            if this.refused.contains(&text.as_str()) {
                 return Err("socket closed".into());
             }
             Ok(ChannelOutput::default())

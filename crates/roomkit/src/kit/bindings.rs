@@ -243,7 +243,8 @@ impl<S: ConversationStore> RoomKit<S> {
             metadata,
             options.organization_id,
         );
-        self.run_update(room_id, operation).await
+        let operation = in_room_work(room_id, operation);
+        Ok(driver::run(&self.inner, "update_binding_metadata", operation).await??)
     }
 
     /// The channel's binding to a room, as the store holds it.
@@ -342,20 +343,16 @@ impl<S: ConversationStore> RoomKit<S> {
             update,
             organization_id,
         );
-        self.run_update(room_id, operation).await
-    }
-
-    /// Runs `operation`, a change of a binding of `room_id`, in the room's
-    /// work when the call is made from it.
-    async fn run_update(
-        &self,
-        room_id: &RoomId,
-        operation: UpdateBinding,
-    ) -> Result<ChannelBinding, RoomKitError> {
-        let operation = match room_work(room_id) {
-            Some((draw, floor)) => operation.made_in(draw, floor),
-            None => operation,
-        };
+        let operation = in_room_work(room_id, operation);
         Ok(driver::run(&self.inner, "update_binding", operation).await??)
+    }
+}
+
+/// `operation`, a change of a binding of `room_id`, made in the room's work
+/// when the call comes from it (RFC §8.3, §10.3).
+fn in_room_work(room_id: &RoomId, operation: UpdateBinding) -> UpdateBinding {
+    match room_work(room_id) {
+        Some((draw, floor)) => operation.made_in(draw, floor),
+        None => operation,
     }
 }
