@@ -398,6 +398,7 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
             &["room_id", "channel_id"]
         }
         "set_access" => &["room_id", "channel_id", "access"],
+        "update_binding_metadata" => &["room_id", "channel_id", "metadata"],
         "set_visibility" => &["room_id", "channel_id", "visibility"],
         "close_room" | "archive_room" | "check_timers" => &["room_id"],
         "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],

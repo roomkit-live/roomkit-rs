@@ -22,7 +22,8 @@ use roomkit::{
     Immediate, InboundResult, MuteOptions, MuteOutputOptions, PostOptions,
     ProcessDeliveryStatusOptions, ProcessInboundOptions, ProcessWebhookOptions, Queued,
     RemoveRoomHookOptions, RoomKitError, SendEventOptions, SendGreetingOptions, SetAccessOptions,
-    SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions, UpdateEventOptions, WaitForIdle,
+    SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions, UpdateBindingMetadataOptions,
+    UpdateEventOptions, WaitForIdle,
 };
 use roomkit_ai::{AiGenerationEvent, AiResponseEvent, ThinkingEvent, ToolRoundEvent};
 use serde::de::DeserializeOwned;
@@ -364,6 +365,18 @@ async fn lifecycle_call(
         }
         "mute" | "unmute" | "set_access" | "set_visibility" => {
             binding_call(run, name, spec).await?
+        }
+        "update_binding_metadata" => {
+            let (room, channel) = (room_id(spec)?, channel_id(spec)?);
+            let options = UpdateBindingMetadataOptions {
+                organization_id: organization_id(spec),
+            };
+            let metadata = field::<Metadata>(spec, "metadata")?;
+            let outcome = run
+                .kit()
+                .update_binding_metadata(&room, &channel, metadata, options)
+                .await;
+            finish(run, name, outcome, dump)
         }
         "close_room" => {
             let room = room_id(spec)?;
