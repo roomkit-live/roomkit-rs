@@ -899,6 +899,26 @@ mod tests {
         assert!(said.is_ok(), "the close waited for the lock its hook holds");
     }
 
+    // Python: tests/orchestration/test_discussion_refusals.py::test_installing_a_router_is_refused_in_the_room_and_globally
+    #[tokio::test]
+    async fn a_router_is_refused_for_every_room_once_a_discussion_holds_one() {
+        let (kit, _agent) = discussion_room().await;
+        let router = crate::ConversationRouter::new(
+            crate::orchestration::ConversationRouterOptions::default(),
+        );
+
+        let refused = kit.hook(
+            HookTrigger::BeforeBroadcast,
+            router.as_hook(),
+            HookOptions::default(),
+        );
+
+        assert!(
+            matches!(refused, Err(RoomKitError::Value(_))),
+            "{refused:?}"
+        );
+    }
+
     // Python: core/mixins/discussion.py `_fire_speak_queue` starts its hooks.
     #[tokio::test]
     async fn an_announcement_waits_for_the_start_of_the_hooks_not_their_end() {
