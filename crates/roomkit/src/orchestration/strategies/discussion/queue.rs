@@ -419,18 +419,39 @@ impl SpeakQueueState {
         entry.asks.iter().any(|ask| ask.person && ask.named)
     }
 
-    /// Removes the first entry equal to `entry`.
-    fn remove(&mut self, entry: &Entry) {
-        if let Some(at) = self.entries.iter().position(|held| held == entry) {
-            self.entries.remove(at);
-        }
+    /// Removes the first entry equal to `entry`; whether one was held.
+    fn remove(&mut self, entry: &Entry) -> bool {
+        let Some(at) = self.entries.iter().position(|held| held == entry) else {
+            return false;
+        };
+        self.entries.remove(at);
+        true
     }
 
-    /// Gives `entry` its turn.
-    pub(crate) fn take(&mut self, entry: &Entry) {
-        self.remove(entry);
+    /// Gives `entry` its turn; `false`, nothing changed, when the queue holds
+    /// no such entry, where Python's `list.remove` raises.
+    #[must_use]
+    pub(crate) fn take(&mut self, entry: &Entry) -> bool {
+        if !self.remove(entry) {
+            return false;
+        }
         self.speaking = Some(entry.agent.clone());
-        self.turns_given += 1;
+        self.turns_given = self.turns_given.saturating_add(1);
+        true
+    }
+
+    /// Marks `entry`, a copy a pick gave, and the entry it stands for as
+    /// handed to the process holding its instruction's text, as Python's
+    /// `entry.handed = True` does through their one object; whether the
+    /// queue holds it.
+    #[must_use]
+    pub(crate) fn mark_handed(&mut self, entry: &mut Entry) -> bool {
+        let Some(held) = self.entries.iter_mut().find(|held| **held == *entry) else {
+            return false;
+        };
+        held.handed = true;
+        entry.handed = true;
+        true
     }
 
     /// `agent`'s turn ended.
@@ -537,7 +558,7 @@ impl SpeakQueueState {
     }
 
     fn next_seq(&mut self) -> u64 {
-        self.seq += 1;
+        self.seq = self.seq.saturating_add(1);
         self.seq
     }
 }
@@ -597,7 +618,7 @@ mod tests {
 
     fn give(state: &mut SpeakQueueState) -> Option<String> {
         let entry = state.next_turn(MAX_DEPTH).entry?;
-        state.take(&entry);
+        assert!(state.take(&entry));
         state.ended(&entry.agent);
         Some(entry.agent.to_string())
     }
@@ -776,7 +797,7 @@ mod tests {
         };
         ask_front(&mut state, "sre", person_ask("p1"));
         let entry = state.next_turn(MAX_DEPTH).entry.unwrap();
-        state.take(&entry);
+        assert!(state.take(&entry));
         state.waiting = true;
 
         let restored: SpeakQueueState =
@@ -801,7 +822,7 @@ mod tests {
         let entry = state.next_turn(MAX_DEPTH).entry.unwrap();
         assert_eq!(entry.agent, id("sre"));
         assert!(entry.regenerate);
-        state.take(&entry);
+        assert!(state.take(&entry));
         assert!(state.waiting);
 
         state.person_wrote();
@@ -1012,6 +1033,53 @@ mod tests {
         let pending = state.dispatching.first().unwrap();
         assert_eq!(pending.candidates, [id("b")]);
         assert_eq!(pending.asked, []);
+    }
+
+    // Python: _queue.py take, list.remove raising on an entry not held.
+    #[test]
+    fn giving_a_turn_no_entry_holds_changes_nothing() {
+        let mut state = SpeakQueueState::default();
+        ask(&mut state, "a", agent_ask("e1", 1, "b"));
+        let mut copy = state.entries.first().unwrap().clone();
+        copy.handed = true;
+
+        assert!(!state.take(&copy));
+
+        assert_eq!(state.speaking, None);
+        assert_eq!(state.turns_given, 0);
+        assert_eq!(state.entries.len(), 1);
+    }
+
+    // Python: _driver.py _hand_over, `entry.handed = True` on the entry held.
+    #[test]
+    fn a_turn_handed_over_stays_handed_in_the_queue() {
+        let mut state = SpeakQueueState::default();
+        state.queue_instruction(&id("a"), "i1", 0, Some("worker-b".to_owned()), false);
+        let mut entry = state.next_turn(MAX_DEPTH).entry.unwrap();
+
+        assert!(state.mark_handed(&mut entry));
+
+        assert!(entry.handed);
+        assert!(state.entries.first().unwrap().handed);
+        assert!(state.take(&entry));
+        assert_eq!(state.entries, []);
+
+        let mut gone = entry.clone();
+        assert!(!state.mark_handed(&mut gone));
+    }
+
+    #[test]
+    fn stored_maxima_do_not_overflow() {
+        let mut state = SpeakQueueState {
+            seq: u64::MAX,
+            turns_given: u32::MAX,
+            ..SpeakQueueState::default()
+        };
+        assert_eq!(state.reserve_seq(), u64::MAX);
+        ask(&mut state, "a", agent_ask("e1", 1, "b"));
+        let entry = state.next_turn(MAX_DEPTH).entry.unwrap();
+        assert!(state.take(&entry));
+        assert_eq!(state.turns_given, u32::MAX);
     }
 
     #[test]

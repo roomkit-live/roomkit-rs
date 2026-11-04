@@ -133,6 +133,8 @@ impl fmt::Debug for DiscussionOptions {
 /// ```
 pub struct Discussion {
     agents: Vec<StrategyAgent>,
+    /// The handles the host gave, by channel id.
+    given_handles: BTreeMap<ChannelId, String>,
     /// `None` while an agent named by an id that is no handle waits for the
     /// name its declaration gives, which only the kit's install reads.
     handles: Option<BTreeMap<ChannelId, String>>,
@@ -193,6 +195,7 @@ impl Discussion {
         };
         Ok(Self {
             agents,
+            given_handles: given,
             handles,
             people,
             addressed_only,
@@ -218,6 +221,17 @@ impl Discussion {
     pub fn handles(&self) -> BTreeMap<ChannelId, String> {
         self.handles.clone().unwrap_or_default()
     }
+
+    /// Each agent's handle once the kit's `names` are read: the install's
+    /// reading of what the constructor could not read, the handles the host
+    /// gave among it.
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by the install, lot 8c"))]
+    fn handles_named(
+        &self,
+        names: &HashMap<&ChannelId, String>,
+    ) -> Result<BTreeMap<ChannelId, String>, RoomKitError> {
+        read_handles(&self.agents, &self.given_handles, names)
+    }
 }
 
 impl fmt::Debug for Discussion {
@@ -225,6 +239,7 @@ impl fmt::Debug for Discussion {
         formatter
             .debug_struct("Discussion")
             .field("agents", &self.agents)
+            .field("given_handles", &self.given_handles)
             .field("handles", &self.handles)
             .field("people", &self.people)
             .field("addressed_only", &self.addressed_only)
@@ -371,7 +386,6 @@ fn read_handles(
     names: &HashMap<&ChannelId, String>,
 ) -> Result<BTreeMap<ChannelId, String>, RoomKitError> {
     let mut handles = BTreeMap::new();
-    let mut seen: Vec<(String, &ChannelId)> = Vec::new();
     for agent in agents {
         let channel_id = agent.channel_id();
         let handle = handle_of(
@@ -379,7 +393,13 @@ fn read_handles(
             given.get(channel_id).map(String::as_str),
             names.get(channel_id).map(String::as_str),
         )?;
-        let key = casefold(&handle);
+        handles.insert(channel_id.clone(), handle);
+    }
+    let mut seen: Vec<(String, &ChannelId)> = Vec::new();
+    for agent in agents {
+        let channel_id = agent.channel_id();
+        let handle = handles.get(channel_id).map_or("", String::as_str);
+        let key = casefold(handle);
         if let Some((_, other)) = seen.iter().find(|(known, _)| *known == key) {
             return Err(RoomKitError::Value(format!(
                 "{} and {} share the handle @{handle}: give one of them another with handles=",
@@ -388,7 +408,6 @@ fn read_handles(
             )));
         }
         seen.push((key, channel_id));
-        handles.insert(channel_id.clone(), handle);
     }
     Ok(handles)
 }
@@ -451,6 +470,51 @@ mod tests {
         assert!(
             matches!(&error, RoomKitError::Type(message)
                 if message.contains("neither an AI channel nor an ACP agent channel")),
+            "{error:?}"
+        );
+    }
+
+    // Python: strategy.py install, `_handles(self._agents, self._given_handles,
+    // _names(self._agents, kit))`.
+    #[test]
+    fn the_handles_the_host_gave_wait_for_the_install_with_the_rest() {
+        let agents = ["dev", "agent:1", "agent:2"].map(id);
+        let discussion = Discussion::new(
+            agents.iter().cloned().map(StrategyAgent::from).collect(),
+            DiscussionOptions {
+                handles: Some(BTreeMap::from([
+                    (id("dev"), "ops".to_owned()),
+                    (id("agent:1"), "counsel".to_owned()),
+                ])),
+                ..DiscussionOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(discussion.handles(), BTreeMap::new());
+
+        let desk = id("agent:2");
+        let names = HashMap::from([(&desk, "Research Desk".to_owned())]);
+        assert_eq!(
+            discussion.handles_named(&names).unwrap(),
+            BTreeMap::from([
+                (id("dev"), "ops".to_owned()),
+                (id("agent:1"), "counsel".to_owned()),
+                (id("agent:2"), "ResearchDesk".to_owned()),
+            ])
+        );
+    }
+
+    // Python: strategy.py _handles, every handle read before any is compared.
+    #[test]
+    fn an_agent_without_a_handle_is_refused_before_two_alike() {
+        let agents: Vec<StrategyAgent> = ["DEV", "dev", "agent:1"]
+            .iter()
+            .map(|agent| id(agent).into())
+            .collect();
+        let error = read_handles(&agents, &BTreeMap::new(), &HashMap::new()).unwrap_err();
+        assert!(
+            matches!(&error, RoomKitError::Value(message)
+                if message.starts_with("'agent:1' cannot be addressed")),
             "{error:?}"
         );
     }

@@ -6,12 +6,10 @@
 use std::collections::BTreeMap;
 
 use roomkit_core::model::{ChannelId, Metadata};
+use roomkit_core::rules::discussion::CONFIG_KEY;
 use serde::{Deserialize, Serialize};
 
 use super::strategy::Discussion;
-
-/// The room metadata key the configuration is stored under.
-pub(crate) const CONFIG_KEY: &str = "_discussion";
 
 /// What a process needs to follow a room's discussion.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +96,7 @@ impl DiscussionConfig {
     pub(crate) fn handle<'a>(&'a self, agent: &'a ChannelId) -> &'a str {
         self.handles
             .as_ref()
+            .filter(|_| self.agents.contains(agent))
             .and_then(|handles| handles.get(agent))
             .map_or_else(|| agent.as_str(), String::as_str)
     }
@@ -108,12 +107,19 @@ impl DiscussionConfig {
     }
 
     /// Each agent's handle and channel id, in the agents' order, as
-    /// `read_names` takes them (rule 4).
+    /// `read_names` takes them (rule 4): one agent under a handle, the last
+    /// a configuration names.
     pub(crate) fn by_handle(&self) -> Vec<(String, String)> {
-        self.agents
-            .iter()
-            .map(|agent| (self.handle(agent).to_owned(), agent.to_string()))
-            .collect()
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for agent in &self.agents {
+            let handle = self.handle(agent);
+            if let Some((_, held)) = pairs.iter_mut().find(|(known, _)| known == handle) {
+                *held = agent.to_string();
+            } else {
+                pairs.push((handle.to_owned(), agent.to_string()));
+            }
+        }
+        pairs
     }
 }
 
@@ -197,8 +203,10 @@ mod tests {
             DiscussionOptions {
                 handles: Some(BTreeMap::from([(id("b"), "ops".to_owned())])),
                 people: Some(vec!["Ana".to_owned()]),
+                addressed_only: true,
                 everyone: Some(vec![id("b")]),
                 max_turns: Some(3),
+                max_depth: Some(9),
                 silent_token: "PASS".to_owned(),
                 ..DiscussionOptions::default()
             },
@@ -208,10 +216,10 @@ mod tests {
             "agents": ["a", "b"],
             "handles": {"a": "a", "b": "ops"},
             "people": ["Ana"],
-            "addressed_only": false,
+            "addressed_only": true,
             "everyone": ["b"],
             "max_turns": 3,
-            "max_depth": 6,
+            "max_depth": 9,
             "silent_token": "PASS",
             "rules": null,
             "dispatch": false,
@@ -223,6 +231,24 @@ mod tests {
             DiscussionConfig::stored(&metadata(&python)).as_ref(),
             Some(&config)
         );
+    }
+
+    // Python: _room.py _configure, the handles of the agents held, by_handle a
+    // dict keeping one agent under a handle.
+    #[test]
+    fn a_stored_handle_names_only_an_agent_the_discussion_holds() {
+        let config = DiscussionConfig::stored(&metadata(
+            &json!({"agents": ["a"], "handles": {"b": "B"}, "max_depth": 5}),
+        ))
+        .unwrap();
+        assert_eq!(config.handle(&id("b")), "b");
+        assert_eq!(config.by_handle(), [("a".to_owned(), "a".to_owned())]);
+
+        let shared = DiscussionConfig::stored(&metadata(
+            &json!({"agents": ["a", "b"], "handles": {"a": "x", "b": "x"}, "max_depth": 5}),
+        ))
+        .unwrap();
+        assert_eq!(shared.by_handle(), [("x".to_owned(), "b".to_owned())]);
     }
 
     #[test]

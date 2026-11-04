@@ -7,7 +7,7 @@ use roomkit_core::model::{ChannelId, EventId, RoomId};
 use serde::{Deserialize, Serialize};
 
 /// A room's speak queue as the host reads it (RFC §19.7.5).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpeakQueue {
     /// The agent whose turn runs now, or `None` between turns.
     pub speaking: Option<ChannelId>,
