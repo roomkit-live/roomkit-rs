@@ -1217,3 +1217,44 @@ fn every_row() -> roomkit::store::ListEventsOptions {
         ..roomkit::store::ListEventsOptions::default()
     }
 }
+
+/// A router recording who it is told of each message.
+struct Told(Arc<Mutex<Vec<Option<String>>>>);
+
+impl InboundRoomRouter for Told {
+    fn route<'a>(
+        &'a self,
+        _channel_id: &'a ChannelId,
+        _channel_type: &'a ChannelType,
+        options: RouteOptions,
+    ) -> RouterFuture<'a> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(options.participant_id);
+        Box::pin(async { Ok(None) })
+    }
+}
+
+// Python: tests/test_shared_channel_routing.py::TestAMessageWithNoAddress::test_a_router_is_told_no_address_as_none
+#[tokio::test]
+async fn a_router_is_told_no_address_as_none() {
+    let told = Arc::new(Mutex::new(Vec::new()));
+    let (kit, _) = kit_with_agent_on(RoomKitOptions {
+        inbound_router: Some(Arc::new(Told(Arc::clone(&told)))),
+        ..RoomKitOptions::default()
+    });
+    for sender in ["", "  ", "bob"] {
+        kit.process_inbound(
+            InboundMessage::new(channel("sms"), sender, TextContent::new("x")),
+            ProcessInboundOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    kit.close().await.unwrap();
+    assert_eq!(
+        *told.lock().unwrap_or_else(PoisonError::into_inner),
+        [None, None, Some("bob".to_owned())]
+    );
+}
