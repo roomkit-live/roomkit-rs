@@ -1257,7 +1257,7 @@ fn serve_skills(
     };
     let skill_tools = Arc::new(SkillTools::new(skills, in_prompt));
     let own: Arc<dyn DynToolset> = Arc::<SkillTools>::clone(&skill_tools);
-    toolbox.add_skills(own, skill_tools.declared(), &SkillTools::RESERVED_NAMES)?;
+    toolbox.add_skills(own, skill_tools.declared())?;
     Ok(Some(skill_tools))
 }
 

@@ -115,47 +115,41 @@ impl SkillTools {
 
     /// The system prompt of `turn`: `base`, then the skills' preamble and
     /// manifest when they are listed, then the instructions of the skills
-    /// active in its room (RFC §24.4), each part after a blank line, whether a
-    /// `base` stands before it or not. A room served for the first time in
-    /// this process is read again first from its stored rows, whatever the
-    /// turn reads; a turn that stands alone carries no active skill. A registry
-    /// with no skill adds nothing and leaves the room's record as it is.
-    /// Python's `_hydrate_room_memories` and `_add_skills`.
+    /// active in its room
+    /// (RFC §24.4), each part apart from the next by a blank line. A room
+    /// served for the first time in this process is read again first from
+    /// its stored rows; a turn that stands alone carries no active skill. A
+    /// registry with no skill adds nothing and leaves the room's record as it
+    /// is; `None` when nothing is written (Python's `_add_skills`).
     pub(crate) fn system_prompt(&self, base: Option<&str>, turn: SkillTurn<'_>) -> Option<String> {
-        self.read_stored(turn);
-        let mut prompt = base.map(str::to_owned);
         if !self.registry.has_entries() {
-            return prompt;
+            return base.map(str::to_owned);
         }
+        let mut parts: Vec<&str> = base.into_iter().collect();
         if self.listed {
-            let before = prompt.unwrap_or_default();
-            prompt = Some(format!("{before}\n\n{PREAMBLE}\n\n{}", self.manifest));
+            parts.extend([PREAMBLE, self.manifest.as_str()]);
         }
-        if turn.stands_alone {
-            return prompt;
-        }
-        match self.instructions(&self.active_in(turn.room)) {
-            Some(active) => Some(format!("{}\n\n{active}", prompt.unwrap_or_default())),
-            None => prompt,
-        }
+        let active = if turn.stands_alone {
+            None
+        } else {
+            self.instructions(&self.active_in(turn))
+        };
+        parts.extend(active.as_deref());
+        (!parts.is_empty()).then(|| parts.join("\n\n"))
     }
 
-    /// Reads `turn`'s room's stored rows, when this process has not yet.
-    fn read_stored(&self, turn: SkillTurn<'_>) {
+    /// The skills active in `turn`'s room, its stored rows read first when
+    /// this process has not read them yet. A skill this registry does not
+    /// hold leaves them: its instructions are not in this prompt, so its next
+    /// activation delivers them (RFC §24.3, §24.4).
+    fn active_in(&self, turn: SkillTurn<'_>) -> Vec<String> {
         let mut activations = self.lock();
         if activations.needs_hydration(turn.room) {
             let names = activation::activated_in(turn.history, turn.agent);
             activations.hydrate(turn.room, &names);
         }
-    }
-
-    /// The skills active in `room`. A skill this registry does not hold leaves
-    /// them: its instructions are not in this prompt, so its next activation
-    /// delivers them (RFC §24.3, §24.4).
-    fn active_in(&self, room: &RoomId) -> Vec<String> {
-        let mut activations = self.lock();
-        activations.retain(room, |name| self.registry.get_skill(name).is_some());
-        activations.active(room)
+        activations.retain(turn.room, |name| self.registry.get_skill(name).is_some());
+        activations.active(turn.room)
     }
 
     /// The instructions of the skills `active`, under their heading; none

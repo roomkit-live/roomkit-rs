@@ -4,8 +4,6 @@
 //! answered with the reference implementation's words
 //! (`tasks/probes/step4-m8/skills_m8_probe.out`).
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -15,15 +13,11 @@ use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{
     EventContent, EventType, InboundMessage, TextContent, ToolCallContent, ToolCallOutcome,
 };
-use roomkit::{
-    AttachChannelOptions, ChannelError, DetachChannelOptions, HookOptions, HookTrigger,
-    ProcessInboundOptions, SendEventOptions, ToolCallEvent,
-};
+use roomkit::{HookOptions, HookTrigger, ProcessInboundOptions, SendEventOptions, ToolCallEvent};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiChannelTurnConfig, AiError, AiTool, DiscoverOptions,
-    HumanInputToolHandler, HumanInputToolHandlerOptions, SkillRegistry, ToolEntry, ToolPolicy,
-    ToolResult, Tools,
+    AiChannelOptions, AiChannelTurnConfig, AiError, AiTool, DiscoverOptions, HumanInputToolHandler,
+    HumanInputToolHandlerOptions, SkillRegistry, ToolEntry, ToolPolicy, ToolResult, Tools,
 };
 use serde_json::json;
 
@@ -268,7 +262,7 @@ async fn a_host_tool_under_a_skill_tool_s_name_is_refused() {
         let tools = Tools::new().tool(forged, |_call, _context| async {
             Ok(ToolResult::from("x"))
         });
-        AiChannel::new(
+        roomkit_ai::AiChannel::new(
             channel("assistant"),
             ScriptedProvider::default(),
             AiChannelOptions {
@@ -640,10 +634,6 @@ async fn an_empty_registry_adds_nothing() {
     );
 }
 
-/// What a test's `config_provider` answers a turn.
-type TurnConfigAnswer =
-    Pin<Box<dyn Future<Output = Result<Option<AiChannelTurnConfig>, ChannelError>> + Send>>;
-
 /// `options` whose turns' configuration gives `skills`.
 fn each_turn_reads(skills: SkillRegistry, mut options: AiChannelOptions) -> AiChannelOptions {
     options.config_provider = Some(Arc::new(move |_, _| {
@@ -683,63 +673,31 @@ async fn a_channel_built_without_skills_says_it_ignores_a_turn_s_registry() {
     );
 }
 
-// Python: channels/_ai_context.py _hydrate_room_memories reads a room's stored
-// calls before _add_skills, for a turn that gives an empty registry too: the
-// record is full once its turn is built, whatever that turn could carry.
+// Python: channels/_ai_context.py _add_skills: `skills_in_prompt` is the
+// channel's, a host that lists its skills itself lists a turn's too, and the
+// instructions of the skills active are written all the same.
 #[tokio::test]
-async fn a_room_is_read_again_under_a_turn_s_empty_registry() {
+async fn a_host_that_lists_its_skills_itself_reads_a_turn_s_active_ones() {
     let tree = TempDir::new();
     let model = ScriptedProvider::new([
-        activating("c1", "doc-helper"),
-        ScriptedRound::answering("Activated."),
-        ScriptedRound::answering("Under nothing."),
+        activating("call_1", "doc-helper"),
+        ScriptedRound::answering("Done."),
+        ScriptedRound::answering("Again."),
     ]);
-    let turns = Arc::new(AtomicUsize::new(0));
-    let (first, empty) = (skills(&tree), SkillRegistry::new());
-    let provider = move |_, _| {
-        let skills = if turns.fetch_add(1, Ordering::SeqCst) == 0 {
-            first.clone()
-        } else {
-            empty.clone()
+    let room = Room::new(model.clone(), SkillRegistry::new(), |options| {
+        let listing = AiChannelOptions {
+            skills_in_prompt: false,
+            ..options
         };
-        let config = AiChannelTurnConfig {
-            skills: Some(skills),
-            ..AiChannelTurnConfig::default()
-        };
-        let answered: TurnConfigAnswer = Box::pin(async move { Ok(Some(config)) });
-        answered
-    };
-    let agent = AiChannel::new(
-        channel("assistant"),
-        model,
-        AiChannelOptions {
-            skills: Some(SkillRegistry::new()),
-            config_provider: Some(Arc::new(provider)),
-            ..AiChannelOptions::default()
-        },
-    )
-    .unwrap();
-    let room = Room::with_agent(agent.clone()).await;
-    room.says("Activate").await;
-    room.kit
-        .detach_channel(
-            &room_id(),
-            &channel("assistant"),
-            DetachChannelOptions::default(),
-        )
-        .await
-        .unwrap();
-    room.kit
-        .attach_channel(
-            &room_id(),
-            &channel("assistant"),
-            AttachChannelOptions::default(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(agent.active_skill_names(&room_id()), Vec::<String>::new());
-    room.says("Go on").await;
-    assert_eq!(agent.active_skill_names(&room_id()), ["doc-helper"]);
+        each_turn_reads(skills(&tree), listing)
+    })
+    .await;
+    room.says("Help").await;
+    room.says("Again").await;
+    let requests = model.requests();
+    let prompt = |at: usize| requests[at].system_prompt.as_deref().unwrap_or_default();
+    assert!(!prompt(0).contains("<available_skills>"), "{}", prompt(0));
+    assert!(prompt(2).contains("## Skill: doc-helper"), "{}", prompt(2));
 }
 
 fn spotify() -> Vec<ToolEntry> {

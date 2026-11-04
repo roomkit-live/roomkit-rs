@@ -111,11 +111,6 @@ impl Room {
         skills: SkillRegistry,
         adjust: impl FnOnce(AiChannelOptions) -> AiChannelOptions,
     ) -> Self {
-        Self::with_agent(agent(model, skills, adjust)).await
-    }
-
-    /// The room, its agent `agent`.
-    pub(crate) async fn with_agent(agent: AiChannel<ScriptedProvider>) -> Self {
         let kit = RoomKit::new(RoomKitOptions::default());
         let sms = RecordingTransport::new(
             channel("sms"),
@@ -123,7 +118,7 @@ impl Room {
             RecordingTransportOptions::default(),
         );
         kit.register_channel(sms).unwrap();
-        kit.register_channel(agent).unwrap();
+        kit.register_channel(agent(model, skills, adjust)).unwrap();
         kit.create_room(CreateRoomOptions {
             room_id: Some(room_id()),
             ..Default::default()

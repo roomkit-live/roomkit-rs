@@ -197,9 +197,6 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
     if let Some(skills) = spec.get("skills") {
         options.skills = Some(run.skills.registry(skills)?);
     }
-    if let Some(listed) = spec.get("skills_in_prompt") {
-        options.skills_in_prompt = listed.as_bool().ok_or("skills_in_prompt: not a flag")?;
-    }
     if let Some(bound) = spec.get("max_author_images") {
         options.max_author_images = if bound.is_null() {
             None

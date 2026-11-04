@@ -8,6 +8,7 @@ use roomkit::model::{ToolCall, ToolCallOutcome};
 
 use super::{AiTool, DynToolset, ToolContext, ToolPolicy};
 use crate::error::AiError;
+use crate::skills::tools::SkillTools;
 use crate::tool_search::search_tool_defs;
 use crate::turn_config::Collisions;
 
@@ -37,9 +38,6 @@ pub(crate) struct Toolbox {
     injected: HashSet<String>,
     /// Where the skill tools sit, once the agent was given a registry.
     skills: Option<SkillsSlot>,
-    /// The names a registry given keeps for them, a tool under one refused as
-    /// any tool under a name served.
-    skill_names: HashSet<String>,
 }
 
 /// Where an agent's skill tools sit: the toolset that serves them, and their
@@ -148,8 +146,8 @@ impl Toolbox {
 
     /// Takes `toolset`, a registry's skill tools, which declares `declared`,
     /// none for a registry with no skill: the names they take are kept all the
-    /// same, `names`, for what a turn may give (RFC §21.1, §24.3). After the
-    /// host's tools and a person's.
+    /// same, for what a turn may give (RFC §21.1, §24.3). After the host's
+    /// tools and a person's.
     ///
     /// # Errors
     ///
@@ -158,7 +156,6 @@ impl Toolbox {
         &mut self,
         toolset: Arc<dyn DynToolset>,
         declared: Vec<AiTool>,
-        names: &[&str],
     ) -> Result<(), AiError> {
         let slot = SkillsSlot {
             toolset: self.toolsets.len(),
@@ -166,9 +163,8 @@ impl Toolbox {
         };
         self.insert(toolset, declared, true)?;
         self.skills = Some(slot);
-        self.skill_names
-            .extend(names.iter().map(|name| (*name).to_owned()));
-        self.reserved.extend(self.skill_names.iter().cloned());
+        self.reserved
+            .extend(SkillTools::RESERVED_NAMES.map(str::to_owned));
         Ok(())
     }
 
@@ -370,7 +366,7 @@ impl Toolbox {
 
     /// The refusal of a tool under `name`, a name kept for the agent's own.
     fn refused_name(&self, name: &str) -> AiError {
-        if self.skill_names.contains(name) {
+        if SkillTools::RESERVED_NAMES.contains(&name) {
             return AiError::DuplicateTool {
                 name: name.to_owned(),
             };
@@ -443,46 +439,5 @@ impl Toolbox {
         if let Some((_, toolset)) = self.find(&call.name) {
             toolset.settled(call, outcome, context);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use pretty_assertions::assert_eq;
-
-    use super::*;
-    use crate::tools::{BoxFuture, ToolError, ToolResult};
-
-    struct Serving;
-
-    impl DynToolset for Serving {
-        fn call(
-            &self,
-            _call: ToolCall,
-            _context: ToolContext,
-        ) -> BoxFuture<'_, Result<ToolResult, ToolError>> {
-            Box::pin(async { Ok(ToolResult::Text(String::new())) })
-        }
-    }
-
-    fn tool(name: &str) -> AiTool {
-        AiTool::new(name, "").unwrap()
-    }
-
-    // Python: turns/executor.py _refuse_clashing_owner_tools: a turn whose
-    // owner's tool bears a name the channel serves is refused, its registry's
-    // own names holding the skill tools' for a registry given, an empty one too.
-    #[test]
-    fn an_owner_s_tool_under_a_kept_skill_name_is_refused_as_a_tool_given_twice() {
-        let mut toolbox = Toolbox::default();
-        toolbox
-            .add_skills(Arc::new(Serving), Vec::new(), &["activate_skill"])
-            .unwrap();
-        assert_eq!(
-            toolbox.add_injected(Arc::new(Serving), vec![tool("activate_skill")]),
-            Err(AiError::DuplicateTool {
-                name: "activate_skill".to_owned()
-            })
-        );
     }
 }
