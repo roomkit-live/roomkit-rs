@@ -20,6 +20,7 @@ use roomkit::{
 };
 use roomkit_postgres::{
     PostgresAdvisoryLockManager, PostgresAdvisoryLockManagerOptions, PostgresStore,
+    PostgresStoreOptions,
 };
 use tokio::sync::oneshot;
 
@@ -206,6 +207,83 @@ async fn a_close_cuts_the_lock_still_held_past_its_bound() {
     ));
 }
 
+/// Python: `_close_bounded`: a wait for a lock when the close gives up on it is
+/// refused then, on the server too, never granted once the holder lets go.
+#[tokio::test]
+async fn a_close_ends_the_wait_for_a_lock() {
+    if dsn().is_none() {
+        return;
+    }
+    let schema = TempSchema::new().await;
+    let (first, second) = (manager(&schema).await, manager(&schema).await);
+    let held = first.locked(&room("r1")).await.unwrap();
+    let waiter = tokio::spawn({
+        let second = second.clone();
+        async move { second.locked(&room("r1")).await.map(drop) }
+    });
+    until_locks_are(&schema, (1, 1)).await;
+    second.close().await.unwrap();
+    let refused = tokio::time::timeout(Duration::from_secs(2), waiter)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(refused, Err(RoomKitError::Runtime(_))),
+        "{refused:?}"
+    );
+    until_locks_are(&schema, (1, 0)).await;
+    held.release().await.unwrap();
+}
+
+/// A wait dropped on a pool handed in, whose TLS the manager cannot cancel
+/// through, ends on the server when it sees the client gone: its session asks
+/// to look.
+#[tokio::test]
+async fn a_pool_handed_in_has_the_server_watch_for_a_client_gone() {
+    use deadpool_postgres::{Manager, Pool};
+    use tokio_postgres::NoTls;
+    if dsn().is_none() {
+        return;
+    }
+    let schema = TempSchema::new().await;
+    let config: tokio_postgres::Config = schema.dsn().parse().unwrap();
+    let pool = Pool::builder(Manager::new(config, NoTls))
+        .max_size(1)
+        .build()
+        .unwrap();
+    let locks = PostgresAdvisoryLockManager::new(PostgresAdvisoryLockManagerOptions {
+        pool: Some(pool.clone()),
+        ..PostgresAdvisoryLockManagerOptions::default()
+    });
+    locks
+        .locked(&room("r1"))
+        .await
+        .unwrap()
+        .release()
+        .await
+        .unwrap();
+    let row = pool
+        .get()
+        .await
+        .unwrap()
+        .query_one("SHOW client_connection_check_interval", &[])
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, String>(0), "1s");
+}
+
+/// The manager's failure at `init` says why, not only that the store failed.
+#[tokio::test]
+async fn a_failed_init_says_why() {
+    let locks = PostgresAdvisoryLockManager::new(PostgresAdvisoryLockManagerOptions {
+        dsn: Some("postgresql://user:hunter2@127.0.0.1:1/db?sslmode=disable".to_owned()),
+        ..PostgresAdvisoryLockManagerOptions::default()
+    });
+    let refused = locks.init().await.unwrap_err().to_string();
+    assert!(refused.contains("connect"), "{refused}");
+    assert!(!refused.contains("hunter2"), "{refused}");
+}
+
 /// Python: `test_close_skips_external_pool`: a pool handed in stays its owner's.
 #[tokio::test]
 async fn a_pool_handed_in_stays_open_after_the_manager_s_close() {
@@ -331,14 +409,14 @@ async fn the_advisory_lock_is_not_warned_of() {
     let (warnings, _capture) = warnings::Warnings::capture();
     let _in_memory = RoomKit::new(RoomKitOptions {
         lock_manager: Some(Arc::new(InMemoryLockManager::default())),
-        ..RoomKitOptions::with_store(PostgresStore::new(Default::default()))
+        ..RoomKitOptions::with_store(PostgresStore::new(PostgresStoreOptions::default()))
     });
     assert_eq!(warnings.containing("is paired with").len(), 1);
     let _advisory = RoomKit::new(RoomKitOptions {
         lock_manager: Some(Arc::new(PostgresAdvisoryLockManager::new(
             PostgresAdvisoryLockManagerOptions::default(),
         ))),
-        ..RoomKitOptions::with_store(PostgresStore::new(Default::default()))
+        ..RoomKitOptions::with_store(PostgresStore::new(PostgresStoreOptions::default()))
     });
     assert_eq!(warnings.containing("is paired with").len(), 1);
 }

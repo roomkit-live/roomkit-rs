@@ -1,6 +1,7 @@
 //! [`PostgresAdvisoryLockManager`]: the room lock across processes, on
 //! Postgres's session advisory locks (RFC §8.1, §13.5).
 
+use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -11,12 +12,14 @@ use blake2::digest::consts::U8;
 use blake2::{Blake2b, Digest};
 use deadpool_postgres::{GenericClient, Object, Pool};
 use roomkit::model::{ErrorRecord, RoomId};
-use roomkit::{RoomKitError, RoomLock, RoomLockManager};
+use roomkit::{RoomKitError, RoomLock, RoomLockManager, StoreError};
+use tokio::sync::Notify;
 use tokio_postgres::NoTls;
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::options::PostgresAdvisoryLockManagerOptions;
 use crate::pool;
+use crate::values::Param;
 
 /// What a lock before [`PostgresAdvisoryLockManager::init`], or after the
 /// close of a pool the manager owned, fails with, in Python's words.
@@ -26,6 +29,11 @@ const NOT_INITIALIZED: &str = "PostgresAdvisoryLockManager.init() must be called
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 const TAKE: &str = "SELECT pg_advisory_lock($1)";
+/// On a pool handed in, whose TLS the manager cannot cancel through, has the
+/// server notice a client gone while it waits (Postgres 14 on; a server that
+/// cannot is told nothing, and ends such a wait when its lock comes).
+const CHECK_THE_CLIENT: &str = "SELECT set_config('client_connection_check_interval', '1000', \
+     false) WHERE current_setting('server_version_num')::int >= 140000";
 const GIVE_BACK: &str = "SELECT pg_advisory_unlock($1)";
 
 /// A lock's connection, the manager's way to cut it at its close.
@@ -39,9 +47,16 @@ fn advisory_key(room_id: &str) -> i64 {
     i64::from_be_bytes(Blake2b::<U8>::digest(room_id.as_bytes()).into())
 }
 
-/// The lock's failure, as Python propagates the driver's exception.
-fn failure(error: impl fmt::Display) -> RoomKitError {
-    RoomKitError::Lock(ErrorRecord::new("PostgresError", error.to_string()))
+/// The lock's failure, as Python propagates the driver's exception: `error`'s
+/// message, each of its causes' after it.
+fn failure(error: impl Error) -> RoomKitError {
+    let mut message = error.to_string();
+    let mut cause = error.source();
+    while let Some(current) = cause {
+        message = format!("{message}: {current}");
+        cause = current.source();
+    }
+    RoomKitError::Lock(ErrorRecord::new("PostgresError", message))
 }
 
 /// Takes `client` out of its pool and closes it: the server ends the session,
@@ -174,6 +189,8 @@ struct Shared {
     owns_pool: bool,
     /// The connections of the locks granted, which a bounded close cuts.
     granted: Mutex<Vec<Weak<Held>>>,
+    /// Told when a bounded close gives up: each wait ends, and is refused.
+    closing: Notify,
 }
 
 impl fmt::Debug for PostgresAdvisoryLockManager {
@@ -199,6 +216,7 @@ impl PostgresAdvisoryLockManager {
                 connections: RwLock::new(connections),
                 owns_pool,
                 granted: Mutex::new(Vec::new()),
+                closing: Notify::new(),
             }),
         }
     }
@@ -216,9 +234,12 @@ impl PostgresAdvisoryLockManager {
         let options = &self.shared.options;
         let (pool, tls) = pool::open(options.dsn.as_deref(), options.min_size, options.max_size)
             .await
-            .map_err(|error| match error {
-                roomkit::StoreError::Value(message) => RoomKitError::Value(message),
-                other => failure(other),
+            .map_err(|error| {
+                if let StoreError::Value(message) = &error {
+                    RoomKitError::Value(message.clone())
+                } else {
+                    failure(error)
+                }
             })?;
         *self
             .shared
@@ -244,6 +265,10 @@ impl PostgresAdvisoryLockManager {
         };
         let key = advisory_key(room_id.as_str());
         let client = pool.get().await.map_err(failure)?;
+        if !self.shared.owns_pool {
+            // A failure is a server that cannot: the wait goes on without it.
+            drop(client.execute(CHECK_THE_CLIENT, &[]).await);
+        }
         let statement = client.prepare_cached(TAKE).await.map_err(failure)?;
         let waiting = Waiting {
             client: Some(client),
@@ -252,7 +277,19 @@ impl PostgresAdvisoryLockManager {
         let Some(client) = waiting.client.as_ref() else {
             return Err(RoomKitError::Runtime(NOT_INITIALIZED.to_owned()));
         };
-        client.execute(&statement, &[&key]).await.map_err(failure)?;
+        let params: [Param<'_>; 1] = [&key];
+        tokio::select! {
+            answered = client.execute(&statement, &params) => {
+                answered.map_err(failure)?;
+            }
+            () = self.shared.closing.notified() => {
+                return Err(RoomKitError::Runtime(NOT_INITIALIZED.to_owned()));
+            }
+        }
+        // A close that came between the grant and here saw no wait to end.
+        if pool.is_closed() {
+            return Err(RoomKitError::Runtime(NOT_INITIALIZED.to_owned()));
+        }
         let held = Arc::new(Mutex::new(waiting.answered()));
         let mut granted = self
             .shared
@@ -265,8 +302,9 @@ impl PostgresAdvisoryLockManager {
     }
 
     /// Closes the connections of the locks still held, which releases them on
-    /// the server.
+    /// the server, and ends the waits for one.
     fn cut_what_is_held(&self) {
+        self.shared.closing.notify_waiters();
         let granted = std::mem::take(
             &mut *self
                 .shared
@@ -294,9 +332,9 @@ impl RoomLockManager for PostgresAdvisoryLockManager {
     /// Closes the pool if the manager opened it, as Python's `close()` when the
     /// kit's close runs it (RFC §12.10.4): the connections still in use get a
     /// second to come back, then a lock still held has its connection closed,
-    /// which releases it, so a close never waits on work that holds one past
-    /// its cut. A pool handed in stays its owner's. A second close does
-    /// nothing.
+    /// which releases it, and a wait for one is refused, so a close never waits
+    /// on work that holds one past its cut. A pool handed in stays its owner's.
+    /// A second close does nothing.
     fn close(&self) -> Pin<Box<dyn Future<Output = Result<(), RoomKitError>> + Send + '_>> {
         Box::pin(async move {
             if !self.shared.owns_pool {
