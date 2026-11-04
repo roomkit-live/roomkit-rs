@@ -40,6 +40,7 @@ use std::collections::BTreeSet;
 use roomkit::model::{ChannelId, LoopEndReason, Metadata, RoomEvent, RoomId, Timestamp};
 use roomkit::{HookTrigger, TurnPayload};
 use roomkit_core::ops::{Environment, SystemEnvironment};
+use roomkit_core::rules::transcript::is_blank;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -52,12 +53,13 @@ use crate::tools::AiTool;
 const RESPONSE_SEGMENT_SEPARATOR: &str = "\n\n";
 
 /// The turn's text as `ON_AI_RESPONSE` reports it, Python's
-/// `response_transcript(segments)`: the segments kept, the empty stretches
-/// (a round in which the model said nothing) dropped, and their join, a
-/// blank line between two.
+/// `response_transcript(segments)`: the segments kept, the blank stretches
+/// (a round in which the model said nothing, or a line break, which the room
+/// never saw as a message either) dropped, and their join, a blank line
+/// between two.
 ///
 /// ```
-/// let (segments, content) = roomkit_ai::response_transcript(["", "Let me look.", "", "Done."]);
+/// let (segments, content) = roomkit_ai::response_transcript(["\n\n", "Let me look.", "", "Done."]);
 /// assert_eq!(segments, ["Let me look.", "Done."]);
 /// assert_eq!(content, "Let me look.\n\nDone.");
 /// ```
@@ -69,7 +71,7 @@ where
     let kept: Vec<String> = segments
         .into_iter()
         .map(Into::into)
-        .filter(|segment| !segment.is_empty())
+        .filter(|segment| !is_blank(segment))
         .collect();
     let content = kept.join(RESPONSE_SEGMENT_SEPARATOR);
     (kept, content)
@@ -390,6 +392,15 @@ mod tests {
     use super::*;
 
     // Python: tests/test_ai_response_transcript.py::test_the_transcript_keeps_the_separator_between_segments_only
+    // Python: tests/test_ai_response_transcript.py::test_the_transcript_drops_what_says_nothing
+    #[test]
+    fn the_transcript_drops_what_says_nothing() {
+        let (segments, content) =
+            response_transcript(["\n\n", "Looking.", " ", "Found.", "\t\n", "\u{1f}"]);
+        assert_eq!(segments, ["Looking.", "Found."]);
+        assert_eq!(content, "Looking.\n\nFound.");
+    }
+
     #[test]
     fn the_transcript_keeps_the_separator_between_segments_only() {
         let (segments, content) = response_transcript(["", "Let me look.", "", "Done.", ""]);

@@ -14,6 +14,7 @@ use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::addresses::{
     Addressing, ChannelAddressing, ChannelAddressingOptions, CountryCode,
 };
+use roomkit_core::rules::transcript::is_blank;
 
 use crate::steering::SteeringDirective;
 use crate::stream::{DeliveryStream, StreamItem};
@@ -513,7 +514,7 @@ pub trait Channel: Send + Sync + 'static {
             let Some(failure) = failure else {
                 return self.deliver(with_text(event, text), binding, context).await;
             };
-            if !text.is_empty() {
+            if !is_blank(&text) {
                 self.deliver(with_text(event, text), binding, context)
                     .await?;
             }
@@ -597,8 +598,10 @@ async fn buffered(mut stream: DeliveryStream) -> (String, Option<ChannelError>) 
     (text, None)
 }
 
-/// `event` holding `text`, as Python's `_buffered` writes it.
+/// `event` holding `text`, as Python's `_buffered` writes it; none when it
+/// is blank, which says nothing, as the room holds no row of it (RFC §6.4).
 fn with_text(mut event: RoomEvent, text: String) -> RoomEvent {
+    let text = if is_blank(&text) { String::new() } else { text };
     event.content = TextContent::new(text).into();
     event
 }
@@ -801,4 +804,25 @@ pub(crate) fn config_of<C: Channel>(channel: &C) -> ChannelConfig {
     config.chat_key = addressing.chat_key;
     config.country_code = country_code;
     config
+}
+
+#[cfg(test)]
+mod blank_tests {
+    use roomkit_core::model::{ChannelId, ChannelType, EventSource, RoomId};
+
+    use super::*;
+
+    // Python: tests/test_streamed_response_failure.py::test_a_buffering_channel_delivers_no_text_for_a_blank_stream
+    #[test]
+    fn a_buffering_channel_delivers_no_text_for_a_blank_stream() {
+        let event = RoomEvent::new(
+            RoomId::new("room").unwrap(),
+            EventSource::new(ChannelId::new("ai").unwrap(), ChannelType::AI),
+            TextContent::new(""),
+        );
+        let blank = with_text(event.clone(), "\n\n".to_owned());
+        assert_eq!(blank.content, TextContent::new("").into());
+        let said = with_text(event, "Hi\n".to_owned());
+        assert_eq!(said.content, TextContent::new("Hi\n").into());
+    }
 }

@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use roomkit::model::LoopEndReason;
-use roomkit_core::rules::transcript::{Message, Role};
+use roomkit_core::rules::transcript::{Message, Role, is_blank};
 use tokio::time::Instant;
 
 use super::Bounds;
@@ -157,7 +157,7 @@ impl Limits {
             "the round left no answer: the model is asked again"
         );
         let mut said = Vec::with_capacity(2);
-        if !text.trim().is_empty() {
+        if !is_blank(text) {
             said.push(Message::new(Role::Assistant, text));
         }
         said.push(Message::new(Role::User, nudge));
@@ -184,7 +184,7 @@ fn empty_round_nudge(
             MALFORMED_CALL_NUDGE
         });
     }
-    if !text.trim().is_empty() || !had_tool_round {
+    if !is_blank(text) || !had_tool_round {
         return None;
     }
     if ran_out_of_room(finish_reason) {
@@ -212,7 +212,7 @@ pub(super) fn final_round_reason(
     if is_malformed_call(finish_reason) {
         return limit.unwrap_or(LoopEndReason::EmptyResponse);
     }
-    if !text.trim().is_empty() || !had_tool_round {
+    if !is_blank(text) || !had_tool_round {
         return LoopEndReason::Completed;
     }
     if ran_out_of_room(finish_reason) {

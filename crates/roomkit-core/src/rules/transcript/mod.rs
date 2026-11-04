@@ -57,6 +57,13 @@ mod marks;
 mod quote;
 mod rounds;
 mod speakers;
+/// Whether `text` says nothing, as Python's `not text.strip()` reads it:
+/// empty, or Unicode's white space and the information separators `\x1c` to
+/// `\x1f` alone. A blank text is no message (RFC §6.4).
+pub fn is_blank(text: &str) -> bool {
+    text.chars().all(rounds::is_python_space)
+}
+
 #[cfg(test)]
 mod tests;
 

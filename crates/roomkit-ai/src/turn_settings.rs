@@ -648,6 +648,8 @@ mod tests {
             (json!({"max_tokens": "0x1f"}), "int_parsing"),
             (json!({"max_tokens": 64.5}), "int_from_float"),
             (json!({"max_tokens": 1e20}), "int_parsing_size"),
+            // Rust only (HITL f703c2e8): Python's int has no bound.
+            (json!({"thinking_budget": 1e20}), "int_parsing_size"),
             (json!({"max_tokens": [1]}), "int_type"),
         ];
         for (metadata, kind) in cases {
