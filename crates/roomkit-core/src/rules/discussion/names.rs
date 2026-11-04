@@ -404,6 +404,10 @@ mod tests {
 
     // Python: tests/test_discussion_names.py::test_a_hostile_text_is_read_in_linear_time
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test measures the reading itself"
+    )]
     fn a_hostile_text_is_read_in_linear_time() {
         let hostile = format!(
             "{}{}{}@sre",
@@ -502,8 +506,7 @@ mod tests {
         );
         assert_eq!(name_key("Zoë O'Brien-Smith"), "ZoëOBrien-Smith");
         // Cut short, a name could be another person's whole one.
-        assert_eq!(name_key(&"x".repeat(500)).len(), 500);
-        assert!(500 > NAME_LIMIT);
+        assert_eq!(name_key(&"x".repeat(NAME_LIMIT + 1)).len(), NAME_LIMIT + 1);
     }
 
     // Python: tests/test_discussion_names.py::test_only_one_final_period_is_dropped
@@ -513,10 +516,9 @@ mod tests {
             read_names("thanks @dev.", &dev(), &[], None).agents,
             ["dev"]
         );
-        assert!(
-            read_names("thanks @dev..", &dev(), &[], None)
-                .agents
-                .is_empty()
+        assert_eq!(
+            read_names("thanks @dev..", &dev(), &[], None).agents,
+            Vec::<String>::new()
         );
     }
 

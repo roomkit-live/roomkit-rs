@@ -1543,6 +1543,29 @@ fn conversation_pipeline_install_options_defaults_as_python() {
 }
 
 #[test]
+fn discussion_options_defaults_as_python() {
+    let defaults = orchestration::DiscussionOptions::default();
+    // roomkit.Discussion.__init__(handles) = None
+    assert!(defaults.handles.is_none());
+    // roomkit.Discussion.__init__(people) = None
+    assert!(defaults.people.is_none());
+    // roomkit.Discussion.__init__(addressed_only) = False
+    assert!(!defaults.addressed_only);
+    // roomkit.Discussion.__init__(everyone) = None
+    assert!(defaults.everyone.is_none());
+    // roomkit.Discussion.__init__(max_turns) = None
+    assert!(defaults.max_turns.is_none());
+    // roomkit.Discussion.__init__(max_depth) = None
+    assert!(defaults.max_depth.is_none());
+    // roomkit.Discussion.__init__(done) = None
+    assert!(defaults.done.is_none());
+    // roomkit.Discussion.__init__(silent_token) = '(silent)'
+    assert_eq!(defaults.silent_token, "(silent)");
+    // roomkit.Discussion.__init__(rules) = None
+    assert!(defaults.rules.is_none());
+}
+
+#[test]
 fn pipeline_options_defaults_as_python() {
     let defaults = orchestration::PipelineOptions::default();
     // roomkit.Pipeline.__init__(supervisor_id) = None
