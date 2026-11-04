@@ -251,6 +251,21 @@ mod tests {
         assert_eq!(shared.by_handle(), [("x".to_owned(), "b".to_owned())]);
     }
 
+    // Python: _config.py of, `strategy.max_depth or default_depth`.
+    #[test]
+    fn a_discussion_s_depth_limit_is_its_own_else_the_kit_s() {
+        assert_eq!(DiscussionConfig::of(&pair(None), 6).max_depth, 6);
+        let own = Discussion::new(
+            vec![StrategyAgent::id(id("jev"))],
+            DiscussionOptions {
+                max_depth: Some(2),
+                ..DiscussionOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(DiscussionConfig::of(&own, 6).max_depth, 2);
+    }
+
     #[test]
     fn what_does_not_read_as_a_configuration_is_none() {
         assert_eq!(DiscussionConfig::stored(&Metadata::new()), None);
