@@ -11,8 +11,8 @@ use crate::error::AiError;
 use crate::tool_search::search_tool_defs;
 use crate::turn_config::Collisions;
 
-/// The toolsets an agent took, and the tools they declare, in the order
-/// they were given: each name served by one toolset.
+/// The toolsets an agent took, and the tools they declare, in the order a
+/// turn declares them: each name served by one toolset.
 #[derive(Clone, Default)]
 pub(crate) struct Toolbox {
     toolsets: Vec<Arc<dyn DynToolset>>,
