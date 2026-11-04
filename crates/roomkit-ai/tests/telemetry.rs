@@ -246,6 +246,7 @@ async fn a_muted_agent_s_stream_opens_no_generation_span() {
     kit.close().await.unwrap();
     let opened = mock.get_spans(SpanKind::LlmGenerate);
     assert_eq!(opened, Vec::new());
+    assert_eq!(mock.get_active_spans(), Vec::new());
 }
 
 // Python: tests/test_telemetry.py::TestLLMTelemetry::test_a_stream_a_cut_left_unread_opens_no_llm_span:
@@ -287,6 +288,7 @@ async fn a_stream_a_cut_left_unread_opens_no_generation_span() {
             .await
             .unwrap();
     }
+    // The room's own agent has no script: muted, it stays out of this.
     kit.mute(&room(), &id("ai"), MuteOptions::default())
         .await
         .unwrap();
@@ -309,6 +311,7 @@ async fn a_stream_a_cut_left_unread_opens_no_generation_span() {
         .filter_map(|span| span.channel_id)
         .collect();
     assert_eq!(channels, ["first"]);
+    assert_eq!(mock.get_active_spans(), Vec::new());
 }
 
 // Python: tests/test_telemetry.py::TestLLMTelemetry::test_ai_channel_tool_call_span,
