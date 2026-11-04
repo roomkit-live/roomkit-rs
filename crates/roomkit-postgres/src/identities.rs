@@ -62,9 +62,13 @@ fn keep_unread_addresses(stored: &Value, addresses: &mut Value) {
     }
 }
 
-/// Stores an identity, in place of the one its id names, as the other stores
-/// do, and files the addresses it declares under its own organization, in one
-/// transaction.
+/// Stores an identity, in place of the one its id names within its
+/// organization, as the other stores do, in one transaction: an identity of
+/// another organization is never overwritten (RFC §5.6, §17.2), refused
+/// [`StoreError::IdentityNotFound`] by the write itself, so that a creation
+/// racing another's reads it once that commits. A replacement removes the
+/// identity's address rows, so that what it no longer holds stops resolving to
+/// it, and files the addresses it declares under its own organization.
 pub(crate) async fn create(client: &mut Object, identity: &Identity) -> Result<(), Failure> {
     let transaction = client.transaction().await?;
     let mut addresses = serde_json::to_value(&identity.channel_addresses)?;
@@ -77,7 +81,7 @@ pub(crate) async fn create(client: &mut Object, identity: &Identity) -> Result<(
     if let Some(stored) = stored {
         keep_unread_addresses(&stored.try_get(0)?, &mut addresses);
     }
-    execute(
+    let written = execute(
         &transaction,
         "INSERT INTO identities \
          (id, organization_id, display_name, email, phone, channel_addresses, \
@@ -85,7 +89,8 @@ pub(crate) async fn create(client: &mut Object, identity: &Identity) -> Result<(
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
          ON CONFLICT (id) DO UPDATE SET \
           organization_id=$2, display_name=$3, email=$4, phone=$5, \
-          channel_addresses=$6, external_id=$7, external_ids=$8, metadata=$9",
+          channel_addresses=$6, external_id=$7, external_ids=$8, metadata=$9 \
+         WHERE COALESCE(identities.organization_id, '') = COALESCE($2, '')",
         &[
             &identity.id.as_str(),
             &identity.organization_id,
@@ -99,20 +104,47 @@ pub(crate) async fn create(client: &mut Object, identity: &Identity) -> Result<(
         ],
     )
     .await?;
+    if written == 0 {
+        return Err(StoreError::IdentityNotFound(identity.id.clone()).into());
+    }
+    execute(
+        &transaction,
+        "DELETE FROM identity_addresses WHERE identity_id = $1",
+        &[&identity.id.as_str()],
+    )
+    .await?;
     let organization = identity.organization_id.as_deref().unwrap_or_default();
-    for (channel_type, addresses) in &identity.channel_addresses {
-        for address in addresses {
+    file_every_address(&transaction, &addresses, &identity.id, organization).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// Files each address of `addresses`, those under a key the model does not read
+/// among them, whose rows the replacement removed with the others.
+async fn file_every_address(
+    transaction: &Transaction<'_>,
+    addresses: &Value,
+    identity_id: &IdentityId,
+    organization: &str,
+) -> Result<(), Failure> {
+    let Value::Object(by_type) = addresses else {
+        return Ok(());
+    };
+    for (channel_type, held) in by_type {
+        for address in held.as_array().into_iter().flatten() {
+            let Some(address) = address.as_str() else {
+                continue;
+            };
             file_address(
-                &transaction,
-                channel_type.as_str(),
+                transaction,
+                channel_type,
                 address,
-                &identity.id,
+                identity_id,
                 organization,
             )
             .await?;
         }
     }
-    transaction.commit().await?;
     Ok(())
 }
 

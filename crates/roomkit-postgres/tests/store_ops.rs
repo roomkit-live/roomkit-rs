@@ -9,10 +9,10 @@ mod support;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelCapabilities, ChannelId, ChannelType, EventSource, IdentityId, Metadata,
-    Participant, ParticipantId, Room, RoomEvent, RoomId, TextContent, Verification,
+    ChannelBinding, ChannelCapabilities, ChannelId, ChannelType, EventSource, Identity, IdentityId,
+    Metadata, Participant, ParticipantId, Room, RoomEvent, RoomId, TextContent, Verification,
 };
-use roomkit::store::{CommitEventOptions, PatchRoomMetadataOptions};
+use roomkit::store::{CommitEventOptions, PatchRoomMetadataOptions, ResolveIdentityOptions};
 use roomkit::{ConversationStore, RoomKit, RoomKitOptions, StoreError};
 use roomkit_postgres::{PostgresStore, PostgresStoreOptions};
 use serde_json::{Value, json};
@@ -440,6 +440,142 @@ async fn a_rewrite_keeps_what_the_model_does_not_read() {
     assert_eq!(capabilities["later"], json!(2));
     assert_eq!(capabilities["max_length"], Value::Null);
     assert_eq!(content["later"], json!(3));
+}
+
+/// An identity of `organization`, at the `address` given on SMS.
+fn identity(name: &str, organization: Option<&str>, address: Option<&str>) -> Identity {
+    let mut identity = Identity {
+        organization_id: organization.map(str::to_owned),
+        ..Identity::new(IdentityId::new(name).unwrap())
+    };
+    if let Some(address) = address {
+        identity.link(ChannelType::SMS, address);
+    }
+    identity
+}
+
+/// Where `address` resolves in `organization`.
+async fn resolved(store: &PostgresStore, address: &str, organization: &str) -> Option<Identity> {
+    store
+        .resolve_identity(
+            &ChannelType::SMS,
+            address,
+            ResolveIdentityOptions {
+                organization_id: Some(organization.to_owned()),
+            },
+        )
+        .await
+        .unwrap()
+}
+
+/// Python: `test_an_id_another_organization_holds_is_refused`, the answer to the
+/// security finding on `create_identity` (RFC §5.6, §17.2): never an overwrite
+/// across organizations, nothing written. One of no organization counts as one.
+#[tokio::test]
+async fn an_id_another_organization_holds_is_refused() {
+    let Some((_schema, store)) = fresh().await else {
+        return;
+    };
+    let id = IdentityId::new("i1").unwrap();
+    let held = identity("i1", Some("acme"), Some("+1555"));
+    store.create_identity(held.clone()).await.unwrap();
+    for other in [Some("globex"), None] {
+        assert_eq!(
+            store.create_identity(identity("i1", other, None)).await,
+            Err(StoreError::IdentityNotFound(id.clone())),
+            "{other:?}"
+        );
+    }
+    assert_eq!(store.get_identity(&id).await, Ok(Some(held.clone())));
+    assert_eq!(resolved(&store, "+1555", "acme").await, Some(held));
+}
+
+/// Python: `test_a_creation_racing_another_organization_s_is_refused`: the
+/// refusal is the write's own, so a creation that waits on another's uncommitted
+/// row reads it once that commits, and writes nothing.
+#[tokio::test]
+async fn a_creation_racing_another_organization_s_is_refused() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    let creator = schema.client().await;
+    creator.batch_execute("BEGIN").await.unwrap();
+    creator
+        .batch_execute("INSERT INTO identities (id, organization_id) VALUES ('i1', 'acme')")
+        .await
+        .unwrap();
+    let racing = tokio::spawn({
+        let store = store.clone();
+        async move {
+            store
+                .create_identity(identity("i1", Some("globex"), None))
+                .await
+        }
+    });
+    let watcher = schema.client().await;
+    for _ in 0..400 {
+        let waiting: i64 = watcher
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if waiting > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    creator.batch_execute("COMMIT").await.unwrap();
+    let id = IdentityId::new("i1").unwrap();
+    assert_eq!(
+        racing.await.unwrap(),
+        Err(StoreError::IdentityNotFound(id.clone()))
+    );
+    let stored = store.get_identity(&id).await.unwrap().unwrap();
+    assert_eq!(stored.organization_id.as_deref(), Some("acme"));
+}
+
+/// Python: `test_a_replaced_identity_stops_resolving_at_what_it_no_longer_holds`.
+#[tokio::test]
+async fn a_replaced_identity_stops_resolving_at_what_it_no_longer_holds() {
+    let Some((_schema, store)) = fresh().await else {
+        return;
+    };
+    store
+        .create_identity(identity("i1", Some("acme"), Some("+1")))
+        .await
+        .unwrap();
+    let replaced = identity("i1", Some("acme"), Some("+2"));
+    store.create_identity(replaced.clone()).await.unwrap();
+    assert_eq!(resolved(&store, "+1", "acme").await, None);
+    assert_eq!(resolved(&store, "+2", "acme").await, Some(replaced));
+}
+
+/// Python: `test_a_replacement_refused_for_an_address_keeps_the_old_ones`: one
+/// transaction, so a refusal leaves what the identity held.
+#[tokio::test]
+async fn a_replacement_refused_for_an_address_keeps_the_old_ones() {
+    let Some((_schema, store)) = fresh().await else {
+        return;
+    };
+    let first = identity("i1", Some("acme"), Some("+1"));
+    store.create_identity(first.clone()).await.unwrap();
+    store
+        .create_identity(identity("i2", Some("acme"), Some("+2")))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .create_identity(identity("i1", Some("acme"), Some("+2")))
+            .await,
+        Err(StoreError::AddressLinked {
+            channel_type: ChannelType::SMS,
+        })
+    );
+    assert_eq!(store.get_identity(&first.id).await, Ok(Some(first.clone())));
+    assert_eq!(resolved(&store, "+1", "acme").await, Some(first));
 }
 
 /// A blank key is no key (RFC §13.4), written by an update too: two events of a
