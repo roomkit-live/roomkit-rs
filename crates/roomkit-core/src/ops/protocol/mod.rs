@@ -210,7 +210,10 @@ pub enum SpanNote {
     /// A direct injection goes in, its refusals before the room's lock
     /// behind it: from here it is a `framework.send_event`, as Python's
     /// `_inject` opens it.
-    Injecting,
+    Injecting {
+        /// The adopted entry it is, `None` for the call's own.
+        entry: Option<EntryId>,
+    },
     /// The targets of `event_id`'s delivery set are over.
     SetOver {
         /// The event.
@@ -222,6 +225,12 @@ pub enum SpanNote {
         delivered: usize,
         /// The targets that failed (`len(result.errors)`).
         failed: usize,
+        /// The turns that answered with a stream (what Python's
+        /// `cascade.add_streams` adds).
+        streams: usize,
+        /// Whether the set is of the call's own cascade, not an adopted
+        /// entry's.
+        own: bool,
     },
 }
 

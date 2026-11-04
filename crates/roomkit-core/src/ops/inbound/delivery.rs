@@ -621,6 +621,8 @@ impl DeliverySet {
             targets: self.reached,
             delivered: self.outcome.delivered.len(),
             failed: self.outcome.failures.len() + self.unreported,
+            streams: self.outcome.streams.len(),
+            own: self.lineage == Lineage::Call,
         }));
     }
 

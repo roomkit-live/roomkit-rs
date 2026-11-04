@@ -1029,3 +1029,60 @@ async fn a_send_event_refused_before_its_injection_opens_no_span() {
     assert_eq!(send_event_spans(&mock), vec![]);
     kit.close().await.unwrap();
 }
+
+// Python: core/framework.py `_enter_injection`: an event a hook sends into its
+// own room, which the room's work adopts, is a `framework.send_event` as any,
+// from the moment it goes in; one refused before that leaves no span.
+#[tokio::test]
+async fn an_adopted_send_event_opens_its_span_as_it_goes_in() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    let (hooked, sent) = (kit.clone(), Arc::new(Mutex::new(Vec::new())));
+    let results = Arc::clone(&sent);
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |_: RoomEvent, _| {
+            let (kit, results) = (hooked.clone(), Arc::clone(&results));
+            async move {
+                let refused = kit
+                    .send_event(
+                        &room(),
+                        &id("nowhere"),
+                        TextContent::new("Hi"),
+                        SendEventOptions::default(),
+                    )
+                    .await;
+                let adopted = kit
+                    .send_event(
+                        &room(),
+                        &id("src"),
+                        TextContent::new("Noted."),
+                        SendEventOptions::default(),
+                    )
+                    .await;
+                results
+                    .lock()
+                    .unwrap()
+                    .push((refused.is_err(), adopted.is_ok()));
+                HookResult::allow(AllowOptions::default())
+            }
+        },
+        HookOptions {
+            name: "sends".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    let mut message = hello();
+    message.metadata.insert("first".to_owned(), json!(true));
+    let named = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..ProcessInboundOptions::default()
+    };
+    kit.process_inbound(message, named).await.unwrap();
+    kit.close().await.unwrap();
+    let results = sent.lock().unwrap().clone();
+    assert!(results.contains(&(true, true)), "{results:?}");
+    let spans = send_event_spans(&mock);
+    assert!(!spans.is_empty());
+    assert!(spans.iter().all(|span| span.status == "ok"), "{spans:?}");
+}

@@ -30,7 +30,8 @@ pub use console::{ConsoleTelemetryProvider, ConsoleTelemetryProviderOptions};
 pub use context::get_current_span;
 pub(crate) use context::within_current_span;
 pub(crate) use context::{
-    current_call_goes_in, current_kit_telemetry, current_trace, within_turn_trace,
+    current_call_goes_in, current_kit_telemetry, current_late_span, current_trace,
+    within_turn_trace,
 };
 #[doc(hidden)]
 pub use context::{current_records_sensitive_data, current_telemetry};
@@ -38,7 +39,7 @@ pub use kinds::{Attr, SpanKind};
 pub use mock::MockTelemetryProvider;
 pub use noop::NoopTelemetryProvider;
 pub(crate) use open::{
-    KitTelemetry, LateSpan, OpenSpan, end_hook_span, end_observer_span, within_kit,
+    KitTelemetry, Late, LateSpan, OpenSpan, end_hook_span, end_observer_span, within_kit,
 };
 #[cfg(feature = "opentelemetry")]
 pub use otel::{OpenTelemetryProvider, OpenTelemetryProviderOptions};

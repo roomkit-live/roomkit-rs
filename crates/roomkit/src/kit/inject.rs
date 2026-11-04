@@ -429,21 +429,11 @@ fn refusal_of(entry: &Entry) -> impl FnOnce(InboundError) -> RoomKitError + use<
 /// its commit, nothing of it stored, [`RoomKitError::KitClosed`] (RFC
 /// §12.10.4).
 /// What a call under `span` that injects an event came to, and the span's
-/// end: a call the room's work adopted runs in that work's run, which tells
-/// this one nothing, so it opens here once it is known to be committed.
+/// end.
 pub(super) fn injected_under(
     span: &LateSpan,
     injected: Result<Entered, RoomKitError>,
 ) -> Result<RoomEvent, RoomKitError> {
-    if matches!(
-        &injected,
-        Ok(Entered {
-            following: Following::Adopted(_),
-            ..
-        })
-    ) {
-        span.open();
-    }
     let result = injected.and_then(|entered| event_of(entered.result));
     match &result {
         Ok(_) => span.end(Metadata::new()),

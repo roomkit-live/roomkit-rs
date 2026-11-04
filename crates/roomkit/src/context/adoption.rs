@@ -10,6 +10,7 @@ use tokio::sync::{oneshot, watch};
 use super::{ExecutionContext, Frame};
 use crate::delivery_keys::{CancelRequest, Named};
 use crate::driver::StoredAnswers;
+use crate::telemetry::{Late, current_late_span};
 
 /// What an adopted entry's caller receives (RFC §10.1 step 18).
 pub(crate) type EntryResult = Result<InboundResult, InboundError>;
@@ -51,6 +52,8 @@ pub(crate) struct Adoption {
     /// key before any release can reach it (RFC §11.7.6), as Python's
     /// `_name_held`, until its set ran.
     pub(crate) named: Option<Arc<Named>>,
+    /// The call's span, when it opens as the call goes in: the run tells.
+    pub(crate) late: Option<Arc<Late>>,
 }
 
 /// The answer of the run a call into its room was handed to.
@@ -124,6 +127,7 @@ async fn hand(frame: &Frame, entry: Entry, named: Option<Arc<Named>>) -> Adoptin
         answers,
         cancel,
         named,
+        late: current_late_span(),
     };
     if let Err(unsent) = frame.run.hand(adoption) {
         // The run is over: it holds nothing of the room any more.

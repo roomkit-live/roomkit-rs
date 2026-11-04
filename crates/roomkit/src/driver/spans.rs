@@ -5,15 +5,16 @@
 //! end, as Python's `EventRouter.execute_plan` opens one around a set.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use roomkit_core::model::{EventId, Metadata, RoomEvent, RoomId};
-use roomkit_core::ops::{ChannelRequest, EffectId, Outcome, Request, SpanNote};
+use roomkit_core::ops::{ChannelRequest, EffectId, EntryId, Outcome, Request, SpanNote};
 use roomkit_core::rules::routing::RouteQuery;
 use serde_json::Value;
 
 use crate::kit::end_route_span;
 use crate::telemetry::{
-    Attr, KitTelemetry, OpenSpan, SpanKind, StartSpanOptions, current_call_goes_in,
+    Attr, KitTelemetry, Late, OpenSpan, SpanKind, StartSpanOptions, current_call_goes_in,
 };
 
 /// A message's `framework.route`, until its room is known.
@@ -41,6 +42,9 @@ pub(super) struct RunSpans {
     /// span reads of its event.
     committed: HashMap<EventId, (String, String, Option<String>)>,
     open: HashMap<EventId, OpenSpan>,
+    /// The spans, opening late, of the entries the run adopted, until they
+    /// go in.
+    adopted: HashMap<EntryId, Arc<Late>>,
 }
 
 /// The `voice_session_id` an event's metadata carries, if any.
@@ -58,6 +62,7 @@ impl RunSpans {
             routing: None,
             committed: HashMap::new(),
             open: HashMap::new(),
+            adopted: HashMap::new(),
         }
     }
 
@@ -101,13 +106,27 @@ impl RunSpans {
     /// Takes what the operation told the run's spans.
     pub(super) fn noted(&mut self, note: SpanNote) {
         match note {
-            SpanNote::Injecting => current_call_goes_in(),
+            SpanNote::Injecting { entry: None } => current_call_goes_in(),
+            SpanNote::Injecting { entry: Some(entry) } => {
+                if let Some(late) = self.adopted.remove(&entry) {
+                    late.open();
+                }
+            }
             SpanNote::SetOver {
                 event_id,
                 targets,
                 delivered,
                 failed,
+                ..
             } => self.set_over(&event_id, targets, delivered, failed),
+        }
+    }
+
+    /// The run adopted the entry `id`, whose call's span, if it is one that
+    /// opens late, is `late`.
+    pub(super) fn adopted(&mut self, id: EntryId, late: Option<Arc<Late>>) {
+        if let Some(late) = late {
+            self.adopted.insert(id, late);
         }
     }
 

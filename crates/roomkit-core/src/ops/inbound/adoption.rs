@@ -58,7 +58,7 @@ use super::work_read::{Read, WorkRead};
 use super::{InboundError, InboundResult, Machine, MessageAnswers, result};
 use crate::model::{InboundMessage, InjectedEvent, Post, RoomEvent, RoomId};
 use crate::ops::io::{Bound, Io};
-use crate::ops::protocol::{EffectId, Entry, EntryId, Outcome};
+use crate::ops::protocol::{EffectId, Entry, EntryId, Notice, Outcome, SpanNote};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
 use crate::rules::chain_depth::{self, Draw};
 
@@ -504,6 +504,10 @@ impl Machine {
     ) {
         let charged = direct.is_none();
         let state = if charged || self.cascade.budget.take_pass() {
+            if !charged {
+                let entry = Some(adopted.id);
+                cx.io.notify(Notice::Span(SpanNote::Injecting { entry }));
+            }
             let pass = CommitPass::new(PassOrigin::Adopted(adopted.id), event)
                 .checking(direct)
                 .participating(participation);

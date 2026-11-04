@@ -147,10 +147,16 @@ pub(crate) fn within_turn_trace<F: Future>(
     CURRENT.scope(current, work)
 }
 
+/// The late span of the call the current work is, if it has one: for the run
+/// that adopts the call, which is another's work.
+pub(crate) fn current_late_span() -> Option<Arc<Late>> {
+    read(|current| current.late.clone())
+}
+
 /// The call the current work is goes in: its late span, if it has one and
 /// nothing ended it, opens.
 pub(crate) fn current_call_goes_in() {
-    if let Some(late) = read(|current| current.late.clone()) {
+    if let Some(late) = current_late_span() {
         late.open();
     }
 }

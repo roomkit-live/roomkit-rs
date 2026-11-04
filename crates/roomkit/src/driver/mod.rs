@@ -43,8 +43,8 @@ use std::task::Poll;
 
 use roomkit_core::model::{ErrorRecord, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::{
-    AnswerOf, ChannelOutcome, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome,
-    HoldRequest, InboundResult, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled,
+    AnswerOf, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest,
+    InboundResult, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, SpanNote,
     StoreOutcome, StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot, watch};
@@ -807,7 +807,16 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                     caller.record().cut_read_over(response_metadata);
                 }
             }
-            Notice::Span(note) => self.spans.noted(note),
+            Notice::Span(note) => {
+                if let SpanNote::SetOver {
+                    streams, own: true, ..
+                } = note
+                    && let Some(caller) = self.caller.as_deref_mut()
+                {
+                    caller.streams_started(streams);
+                }
+                self.spans.noted(note);
+            }
             notice @ (Notice::FrameworkEvent(_) | Notice::AsyncHooks { .. }) => {
                 if let Some(handled) = calls::perform(self.inner, notice) {
                     handled.wait().await;
@@ -1280,11 +1289,6 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         };
         let effect = self.effect_of_task.remove(&task)?;
         self.spans.answered(effect, &outcome);
-        if matches!(&outcome, Outcome::Channel(ChannelOutcome::Streamed(_)))
-            && let Some(caller) = self.caller.as_deref_mut()
-        {
-            caller.stream_started();
-        }
         self.locate(&outcome);
         self.call_of_effect.remove(&effect);
         self.written.extend(self.writing.remove(&effect));
@@ -1306,9 +1310,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             answers,
             cancel,
             named,
+            late,
         } = adoption;
         match operation.adopt(entry, origin) {
             Ok(id) => {
+                self.spans.adopted(id, late);
                 if let Some(named) = named {
                     self.entry_named.insert(id, (named, Arc::clone(&cancel)));
                 }

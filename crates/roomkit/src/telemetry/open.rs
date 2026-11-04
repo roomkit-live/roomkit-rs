@@ -247,7 +247,7 @@ pub(crate) struct LateSpan(Arc<Late>);
 
 /// What a [`LateSpan`] and the work under it share.
 #[derive(Debug)]
-pub(super) struct Late {
+pub(crate) struct Late {
     telemetry: KitTelemetry,
     kind: SpanKind,
     name: &'static str,
@@ -264,12 +264,12 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Late {
     /// The span's id, once it opened.
-    pub(super) fn id(&self) -> Option<&str> {
+    pub(crate) fn id(&self) -> Option<&str> {
         self.id.get().map(String::as_str)
     }
 
     /// Opens the span, the first time and unless its call ended.
-    pub(super) fn open(&self) {
+    pub(crate) fn open(&self) {
         let Some(options) = lock(&self.options).take() else {
             return;
         };
@@ -311,11 +311,6 @@ impl LateSpan {
     /// `work` under this span once it opens.
     pub(crate) fn within<F: Future>(&self, work: F) -> impl Future<Output = F::Output> + use<F> {
         within_late_span(&self.0.telemetry, Arc::clone(&self.0), work)
-    }
-
-    /// Opens it now, whatever the call's work told.
-    pub(crate) fn open(&self) {
-        self.0.open();
     }
 
     /// Ends it `ok`, `attributes` added, if it opened.

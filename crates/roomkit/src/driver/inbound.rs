@@ -363,8 +363,6 @@ pub(super) struct Caller {
     telemetry: KitTelemetry,
     /// What the caller, answered at the decision, did not wait for.
     tail: Option<Tail>,
-    /// How many of the call's turns answered with a stream.
-    streams: usize,
 }
 
 /// A call's `framework.detached`, Python's span of what a caller did not wait
@@ -372,7 +370,11 @@ pub(super) struct Caller {
 /// run's end, a child of the call's span and not current, so that it
 /// measures without re-parenting. Dropped with its run, the kit's close having
 /// aborted it, it ends `cancelled`, as Python's reads a consumer cut.
-struct Tail(Option<OpenSpan>);
+struct Tail {
+    span: Option<OpenSpan>,
+    /// How many of the call's turns answered with a stream.
+    streams: usize,
+}
 
 impl fmt::Debug for Tail {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -380,12 +382,13 @@ impl fmt::Debug for Tail {
     }
 }
 
-/// What a closed call's tail reads, as Python's reads a task cancelled.
+/// What a tail cut reads, whatever cut it, as Python's reads its task
+/// cancelled: never a cancellation's reason, the caller's own text.
 const CANCELLED: &str = "cancelled";
 
 impl Tail {
     fn open(telemetry: &KitTelemetry, room_id: Option<&RoomId>) -> Self {
-        Self(Some(OpenSpan::start(
+        let span = OpenSpan::start(
             telemetry,
             SpanKind::InboundPipeline,
             "framework.detached",
@@ -393,16 +396,27 @@ impl Tail {
                 room_id: room_id.map(ToString::to_string),
                 ..StartSpanOptions::default()
             },
-        )))
+        );
+        Self {
+            span: Some(span),
+            streams: 0,
+        }
     }
 
-    /// Ends it as `output`, the run's at its end, reads, with the `streams`
-    /// the call's turns started: `cut`, the kit's close ended the run.
-    fn end(mut self, output: &InboundOutput, cut: bool, streams: usize) {
-        let Some(span) = self.0.take() else {
+    /// What its end reads beside its status.
+    fn attributes(&self) -> Metadata {
+        let mut attributes = Metadata::new();
+        attributes.insert("streams".to_owned(), Value::from(self.streams));
+        attributes
+    }
+
+    /// Ends it as `output`, the run's at its end, reads: `cut`, the kit's
+    /// close ended the run.
+    fn end(mut self, output: &InboundOutput, cut: bool) {
+        let attributes = self.attributes();
+        let Some(span) = self.span.take() else {
             return;
         };
-        let attributes = stream_count(streams);
         let result = match output {
             Err(error) => {
                 return span.fail_error(error.class_name(), error.to_string(), attributes);
@@ -413,12 +427,10 @@ impl Tail {
             }
             Ok(Ok(result)) => result,
         };
-        if cut || result.cancellation_reason.as_deref() == Some(KIT_CLOSED) {
+        if cut || result.cancellation_reason.is_some() {
             span.fail(CANCELLED, attributes);
         } else if let Some(error) = &result.error {
             span.fail_error(&error.error_type, &error.message, attributes);
-        } else if let Some(reason) = &result.cancellation_reason {
-            span.fail(reason, attributes);
         } else {
             span.end(attributes);
         }
@@ -427,17 +439,11 @@ impl Tail {
 
 impl Drop for Tail {
     fn drop(&mut self) {
-        if let Some(span) = self.0.take() {
-            span.fail(CANCELLED, Metadata::new());
+        let attributes = self.attributes();
+        if let Some(span) = self.span.take() {
+            span.fail(CANCELLED, attributes);
         }
     }
-}
-
-/// What a tail's end reads of the streams its call's turns started.
-fn stream_count(streams: usize) -> Metadata {
-    let mut attributes = Metadata::new();
-    attributes.insert("streams".to_owned(), Value::from(streams));
-    attributes
 }
 
 /// The room's lock an inbound call's run holds from its start, its call
@@ -496,13 +502,14 @@ impl Caller {
             hand: None,
             telemetry,
             tail: None,
-            streams: 0,
         }
     }
 
-    /// One of the call's turns answered with a stream.
-    pub(super) fn stream_started(&mut self) {
-        self.streams += 1;
+    /// `streams` of the call's turns answered with a stream.
+    pub(super) fn streams_started(&mut self, streams: usize) {
+        if let Some(tail) = &mut self.tail {
+            tail.streams += streams;
+        }
     }
 
     /// The caller is answered at the decision: what it does not wait for is
@@ -517,7 +524,7 @@ impl Caller {
     /// The run is over, as `output` reads, `cut` by the kit's close or not.
     fn end_tail(&mut self, output: &InboundOutput, cut: bool) {
         if let Some(tail) = self.tail.take() {
-            tail.end(output, cut, self.streams);
+            tail.end(output, cut);
         }
     }
 

@@ -22,8 +22,8 @@ use roomkit::model::{
 use roomkit::telemetry::{MockTelemetryProvider, Span, TelemetryConfig};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CancelOptions, CreateRoomOptions, HookExecution, HookOptions,
-    HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    AttachChannelOptions, CancelDeliveryOptions, CancelOptions, CreateRoomOptions, HookExecution,
+    HookOptions, HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -98,8 +98,21 @@ impl AiProvider for Gated {
 /// A kit reporting to a mock, with a room of an SMS transport and `agent`.
 async fn kit_with<P: AiProvider + 'static>(agent: P) -> (RoomKit, Arc<MockTelemetryProvider>) {
     let mock = Arc::new(MockTelemetryProvider::default());
+    kit_reporting_to(&mock, false, agent).await
+}
+
+/// A kit reporting to `mock`, recording what can hold personal data when
+/// `sensitive`, with a room of an SMS transport and `agent`.
+async fn kit_reporting_to<P: AiProvider + 'static>(
+    mock: &Arc<MockTelemetryProvider>,
+    sensitive: bool,
+    agent: P,
+) -> (RoomKit, Arc<MockTelemetryProvider>) {
+    let mock = Arc::clone(mock);
+    let mut telemetry = TelemetryConfig::from(Arc::clone(&mock));
+    telemetry.record_sensitive_data = sensitive;
     let kit = RoomKit::new(RoomKitOptions {
-        telemetry: Some(TelemetryConfig::from(Arc::clone(&mock))),
+        telemetry: Some(telemetry),
         ..RoomKitOptions::default()
     });
     let sms = RecordingTransport::new(
@@ -264,28 +277,75 @@ async fn a_close_in_flight_ends_the_detached_span_cancelled() {
     assert_eq!(tail.error_message.as_deref(), Some("cancelled"));
 }
 
-// Python: core/mixins/lane_execution.py `_end_tail`: a delivery cancelled reads
-// its reason, what its caller named.
+// Python: core/lanes.py `cancel`: a delivery cancelled cuts its reader, and the
+// span reads `cancelled`, never the caller's text, recording it or not (run on
+// Python, 2026-11-04: reentry and streamed, by the handle and by the key).
 #[tokio::test]
-async fn a_delivery_cancelled_ends_the_detached_span_with_its_reason() {
-    let (kit, mock) = kit_with(Gated(Arc::new(Notify::new()))).await;
-    let result = say(&kit, true).await;
-    let delivery = result.delivery.unwrap();
-    let cancel = CancelOptions {
-        reason: "user_left".to_owned(),
-        ..CancelOptions::default()
+async fn a_delivery_cancelled_reads_cancelled_never_its_reason() {
+    for sensitive in [false, true] {
+        let mock = Arc::new(MockTelemetryProvider::default());
+        let (kit, _) = kit_reporting_to(&mock, sensitive, Gated(Arc::new(Notify::new()))).await;
+        let result = say(&kit, true).await;
+        let delivery = result.delivery.unwrap();
+        let cancel = CancelOptions {
+            reason: "Jean Dupont hung up".to_owned(),
+            ..CancelOptions::default()
+        };
+        tokio::time::timeout(BOUND, delivery.cancel(cancel))
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(BOUND, delivery.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        let tail = named(&mock.completed_spans(), "framework.detached");
+        assert_eq!(tail.status, "error");
+        assert_eq!(tail.error_message.as_deref(), Some("cancelled"));
+        kit.close().await.unwrap();
+    }
+}
+
+// Python: core/lanes.py `track`: a reader of a delivery a key cancelled before
+// its commit is cut as it is made, and reads the same.
+#[tokio::test]
+async fn a_delivery_cancelled_before_its_commit_reads_cancelled_never_its_reason() {
+    let (kit, mock) = kit_with(ScriptedProvider::new([ScriptedRound::answering("Yes.")])).await;
+    let canceller = kit.clone();
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |_: RoomEvent, _| {
+            let kit = canceller.clone();
+            async move {
+                let options = CancelDeliveryOptions {
+                    reason: "Jean Dupont hung up".to_owned(),
+                    ..CancelDeliveryOptions::default()
+                };
+                kit.cancel_delivery("k", options).await;
+                HookResult::allow(AllowOptions::default())
+            }
+        },
+        HookOptions {
+            name: "cancels".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    let mut message = hello();
+    message.delivery_key = Some("k".to_owned());
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        defer_delivery: true,
+        ..ProcessInboundOptions::default()
     };
-    tokio::time::timeout(BOUND, delivery.cancel(cancel))
-        .await
-        .unwrap()
-        .unwrap();
-    tokio::time::timeout(BOUND, delivery.wait())
+    let result = kit.process_inbound(message, options).await.unwrap();
+    tokio::time::timeout(BOUND, result.delivery.unwrap().wait())
         .await
         .unwrap()
         .unwrap();
     let tail = named(&mock.completed_spans(), "framework.detached");
     assert_eq!(tail.status, "error");
-    assert_eq!(tail.error_message.as_deref(), Some("user_left"));
+    assert_eq!(tail.error_message.as_deref(), Some("cancelled"));
     kit.close().await.unwrap();
 }
 

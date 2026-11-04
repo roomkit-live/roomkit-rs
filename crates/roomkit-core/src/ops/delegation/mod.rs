@@ -260,20 +260,22 @@ impl DelegatedTurn {
             .filter(|binding| permissions::receives(binding, &message))
             .count();
         if self.asked.is_empty() {
-            self.tell_set_over(0);
+            self.tell_set_over(0, 0);
         }
     }
 
     /// Tells the description's span its targets are over, `failed` of them
     /// failed, as Python's `router.broadcast` reports them when it returns:
     /// what it reaches is the room's agents alone, no send among them.
-    fn tell_set_over(&mut self, failed: usize) {
+    fn tell_set_over(&mut self, failed: usize, streams: usize) {
         if let Some(message) = &self.committed {
             self.notices.push(Notice::Span(SpanNote::SetOver {
                 event_id: message.id.clone(),
                 targets: self.reached,
                 delivered: 0,
                 failed,
+                streams,
+                own: true,
             }));
         }
     }
@@ -288,7 +290,10 @@ impl DelegatedTurn {
             let answer = collected.take(turn, binding, outcome, self.answers.len());
             self.answers.push(answer);
         }
-        self.tell_set_over(collected.failures.len() + collected.unreached);
+        self.tell_set_over(
+            collected.failures.len() + collected.unreached,
+            collected.streamed.len(),
+        );
         self.failures.append(&mut collected.failures);
         self.persist(
             collected.tasks,
