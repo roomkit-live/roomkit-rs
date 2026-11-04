@@ -207,6 +207,21 @@ async fn observe_index(transaction: &Transaction<'_>, event: &RoomEvent) -> Resu
     }
 }
 
+/// Takes the room's row before its sequence, the order of a commit, as Python's
+/// `_hold_room_first`. The event's foreign key would otherwise take it after, and
+/// a commit holding the room would wait on the sequence this write holds, while
+/// this write waits on the room: the server kills one of them. A missing room stays
+/// the foreign key's refusal, a few statements later.
+async fn hold_room_first(transaction: &Transaction<'_>, room_id: &RoomId) -> Result<(), Failure> {
+    execute(
+        transaction,
+        "SELECT 1 FROM rooms WHERE id = $1 FOR KEY SHARE",
+        &[&room_id.as_str()],
+    )
+    .await?;
+    Ok(())
+}
+
 /// Stores `event` as it is, its index the caller's, the room's counters
 /// unmoved and its next index kept past it, as Python's `add_event`.
 pub(crate) async fn add(client: &mut Object, mut event: RoomEvent) -> Result<RoomEvent, Failure> {
@@ -219,6 +234,7 @@ pub(crate) async fn add(client: &mut Object, mut event: RoomEvent) -> Result<Roo
 
 async fn add_in_transaction(client: &mut Object, event: RoomEvent) -> Result<RoomEvent, Failure> {
     let transaction = client.transaction().await?;
+    hold_room_first(&transaction, &event.room_id).await?;
     observe_index(&transaction, &event).await?;
     insert(&transaction, &event).await?;
     transaction.commit().await?;
@@ -244,6 +260,7 @@ async fn auto_indexed_in_transaction(
     mut event: RoomEvent,
 ) -> Result<RoomEvent, Failure> {
     let transaction = client.transaction().await?;
+    hold_room_first(&transaction, room_id).await?;
     event.index = reserve_index(&transaction, room_id).await?;
     insert(&transaction, &event).await?;
     transaction.commit().await?;
