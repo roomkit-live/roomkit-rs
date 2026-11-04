@@ -253,6 +253,47 @@ fn a_later_round_s_result_is_not_for_a_call_left_without_its_end() {
     assert_eq!(results(&rounds), ["other", "its own"]);
 }
 
+// Python: tests/test_channels/test_tool_history.py::test_a_withheld_end_row_leaves_its_call_without_a_later_call_s_result
+#[test]
+fn a_withheld_end_row_leaves_its_call_without_a_later_call_s_result() {
+    let mut deleted = end(2, "c1", json!(null), Some(ToolCallOutcome::Served));
+    deleted
+        .metadata
+        .insert("deleted".to_owned(), Value::Bool(true));
+    let rows = [
+        asking(1, "c1", "left"),
+        deleted,
+        asking(3, "c1", "new"),
+        end(4, "c1", json!("its own"), Some(ToolCallOutcome::Served)),
+    ];
+    let rounds = rounds(&rows);
+    assert_eq!(asked(&rounds), [("c1".to_owned(), Some(json!("new")))]);
+    assert_eq!(results(&rounds), ["its own"]);
+}
+
+// Python: tests/test_channels/test_tool_history.py::test_another_turn_among_a_round_s_starts_leaves_its_results_paired
+#[test]
+fn another_turn_among_a_round_s_starts_leaves_its_results_paired() {
+    let theirs = |row| in_turn(row, "t2", "t2");
+    let rows = [
+        asking(1, "c1", "first"),
+        theirs(asking(2, "c9", "theirs")),
+        asking(3, "c1", "second"),
+        theirs(end(4, "c9", json!("zed"), Some(ToolCallOutcome::Served))),
+        end(5, "c1", json!("fine"), Some(ToolCallOutcome::Served)),
+        end(6, "c1", json!("refused"), Some(ToolCallOutcome::Refused)),
+    ];
+    let rounds = rounds(&rows);
+    assert_eq!(
+        asked(&rounds),
+        [
+            ("c1".to_owned(), Some(json!("first"))),
+            ("c9".to_owned(), Some(json!("theirs")))
+        ]
+    );
+    assert_eq!(results(&rounds), ["fine", "zed"]);
+}
+
 /// The last 8 calls are replayed, the 3 most recent with their result
 /// whole, the older ones as a preview that says the rest is not shown: the
 /// reference implementation's bounds, written as numbers.
