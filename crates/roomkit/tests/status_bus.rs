@@ -622,7 +622,7 @@ async fn seeded(kit: &RoomKit) -> Vec<roomkit::model::EventId> {
 // The call the wait held before its room's lock is cut: nothing of it is
 // stored, no handle for a deferred one. The door it passed refuses nothing
 // any more (RMK-1255 item 3); its wait ends at the close's start, where
-// Python's has the close's grace (item 4, HITL below).
+// Python's has the close's grace (docs/architecture.md, HITL 939a625b).
 #[tokio::test(start_paused = true)]
 async fn a_message_waiting_for_the_subscription_is_cut_by_the_close() {
     use roomkit::ProcessInboundOptions;
