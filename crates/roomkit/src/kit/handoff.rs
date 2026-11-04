@@ -1,6 +1,8 @@
 //! The kit's side of the handoff (RFC §19.6): what
 //! `orchestration/handoff.rs` needs of its hooks and of its owner tools.
 
+use std::collections::HashSet;
+
 use roomkit_core::model::{ChannelId, ChannelType, EventSource, EventStatus, EventType, Metadata};
 use roomkit_core::model::{RoomEvent, RoomId, TextContent, Visibility};
 use roomkit_core::rules::hook_registry::HookTrigger as CoreTrigger;
@@ -72,6 +74,41 @@ impl<S: ConversationStore> RoomKit<S> {
              would never declare them",
             repr(agent.channel_id().as_str())
         )))
+    }
+
+    /// Refuses, before an install sets anything up, what setting up the
+    /// handoff would refuse on any of `agents`: an agent that takes no owner
+    /// tools, one set up already or named twice, one whose tools hold the
+    /// handoff's name. A refused install leaves no hook and no tool behind (RFC
+    /// §19.5). Python's `refuse_handoffs`.
+    pub(crate) fn refuse_handoffs(&self, agents: &[StrategyAgent]) -> Result<(), RoomKitError> {
+        let mut seen = HashSet::new();
+        for agent in agents {
+            self.takes_handoff(agent)?;
+            let channel = agent.channel_id();
+            if !seen.insert(channel) || self.serves_handoff(channel, None) {
+                return Err(RoomKitError::Runtime(format!(
+                    "setup_handoff() already called for channel '{channel}'"
+                )));
+            }
+            let own = self
+                .inner
+                .channel(channel)
+                .map(|held| held.own_tool_names())
+                .or_else(|| agent.live().map(|live| live.channel.own_tool_names()))
+                .unwrap_or_default();
+            if own.iter().any(|name| name == HANDOFF_TOOL_NAME) {
+                return Err(collision(
+                    HANDOFF_TOOL_NAME,
+                    "one of the channel's own tools",
+                    channel,
+                ));
+            }
+            if let Some(clash) = self.inner.owner_tools.clash(channel, HANDOFF_TOOL_NAME) {
+                return Err(collision(HANDOFF_TOOL_NAME, &clash, channel));
+            }
+        }
+        Ok(())
     }
 
     /// Serves `agent` `entry` in every room, or in `room_id`'s only: a tool

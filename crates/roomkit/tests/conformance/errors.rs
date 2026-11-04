@@ -35,6 +35,9 @@ pub(crate) fn error_of(error: &RoomKitError) -> Option<Value> {
         RoomKitError::Value(_)
         | RoomKitError::ChannelAlreadyRegistered(_)
         | RoomKitError::ToolNameCollision(_) => named("invalid_argument"),
+        RoomKitError::Runtime(message) if message.contains("setup_handoff() already called") => {
+            named("already_set_up")
+        }
         RoomKitError::VerificationRefused { reason } => {
             json!({ "name": "verification_refused", "reason": reason })
         }

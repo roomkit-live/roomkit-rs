@@ -8,14 +8,19 @@ use std::sync::Arc;
 
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use roomkit::orchestration::pipeline::InstallOptions;
-use roomkit::orchestration::{ConversationPipelineOptions, PipelineOptions, StrategyAgent};
+use roomkit::orchestration::{
+    ConversationPipelineOptions, ConversationRouterOptions, InstallOptions as RouterInstallOptions,
+    PipelineOptions, StrategyAgent,
+};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, ConversationPipeline, CreateRoomOptions, InstallStrategyOptions,
-    Orchestration, Pipeline, PipelineStage, ProcessInboundOptions, RoomKit, RoomKitError,
-    RoomKitOptions,
+    AttachChannelOptions, ConversationPipeline, ConversationRouter, CreateRoomOptions,
+    InstallStrategyOptions, Orchestration, Pipeline, PipelineStage, ProcessInboundOptions, RoomKit,
+    RoomKitError, RoomKitOptions,
 };
-use roomkit_ai::{Agent, AgentOptions, MockAiProvider, MockAiProviderOptions};
+use roomkit_ai::{
+    Agent, AgentOptions, AiChannelOptions, AiTool, MockAiProvider, MockAiProviderOptions,
+};
 
 fn id(name: &str) -> ChannelId {
     ChannelId::new(name).unwrap()
@@ -114,6 +119,78 @@ async fn a_second_install_on_the_same_agents_is_refused() {
     let again = chain().install(&kit, &agents, InstallOptions::default());
 
     assert!(matches!(again, Err(RoomKitError::Runtime(_))));
+    kit.close().await.unwrap();
+}
+
+/// An agent whose own tools hold the handoff's name.
+fn clashing(name: &str) -> Agent<MockAiProvider> {
+    let tool = AiTool::new("handoff_conversation", "host").unwrap();
+    let options = AgentOptions {
+        ai: AiChannelOptions {
+            tools: vec![tool.into()],
+            ..AiChannelOptions::default()
+        },
+        ..AgentOptions::default()
+    };
+    Agent::new(id(name), model(), options).unwrap()
+}
+
+// Python: tests/orchestration/test_pipeline.py::test_an_install_refused_by_an_agent_s_tool_sets_nothing_up[pipeline]
+#[tokio::test]
+async fn a_pipeline_s_install_refused_by_a_tool_or_a_repeat_sets_nothing_up() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(agent("a", None)).unwrap();
+    kit.register_channel(clashing("clash")).unwrap();
+    let chain = ConversationPipeline::new(
+        vec![PipelineStage::new("a", id("a"))],
+        ConversationPipelineOptions::default(),
+    )
+    .unwrap();
+    let options = InstallOptions::default;
+
+    let clash = [
+        StrategyAgent::from(id("a")),
+        StrategyAgent::from(id("clash")),
+    ];
+    assert!(matches!(
+        chain.install(&kit, &clash, options()),
+        Err(RoomKitError::ToolNameCollision(_))
+    ));
+    let repeat = [StrategyAgent::from(id("a")), StrategyAgent::from(id("a"))];
+    assert!(matches!(
+        chain.install(&kit, &repeat, options()),
+        Err(RoomKitError::Runtime(_))
+    ));
+    assert!(chain.install(&kit, &repeat[..1], options()).is_ok());
+    kit.close().await.unwrap();
+}
+
+// Python: tests/orchestration/test_pipeline.py::test_an_install_refused_by_an_agent_s_tool_sets_nothing_up[router]
+#[tokio::test]
+async fn a_router_s_install_refused_by_a_tool_or_a_repeat_sets_nothing_up() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(agent("a", None)).unwrap();
+    kit.register_channel(clashing("clash")).unwrap();
+    let router = ConversationRouter::new(ConversationRouterOptions {
+        default_agent_id: Some(id("a")),
+        ..ConversationRouterOptions::default()
+    });
+    let options = RouterInstallOptions::default;
+
+    let clash = [
+        StrategyAgent::from(id("a")),
+        StrategyAgent::from(id("clash")),
+    ];
+    assert!(matches!(
+        router.install(&kit, &clash, options()),
+        Err(RoomKitError::ToolNameCollision(_))
+    ));
+    let repeat = [StrategyAgent::from(id("a")), StrategyAgent::from(id("a"))];
+    assert!(matches!(
+        router.install(&kit, &repeat, options()),
+        Err(RoomKitError::Runtime(_))
+    ));
+    assert!(router.install(&kit, &repeat[..1], options()).is_ok());
     kit.close().await.unwrap();
 }
 

@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A `ConversationPipeline`'s or a router's install refused for an agent whose handoff is set up already, named twice, or whose tools hold the handoff's name leaves no hook and no tool behind, as Python's (RMK-1233).
 - A muted agent's stream is closed unread, as Python's, a supervisor's second pass included: its reply is never generated, its tools never run, nothing of its record reaches the caller, its side effects stay, where the stream was read and its rows blocked (RFC §7.5, §10.6.4).
 - `AiChannel::new` names a person's tool under a host's name before a definition the person gave twice, as Python's (RMK-1290).
 - A turn's live record (RFC §6.7, §10.6.4), as Python's: `ResponseMetadata`, `roomkit_ai::current_response_metadata`, `AiContext::response_metadata`, and `ChannelOutput::response_metadata` now a record shared with its writers: what a memory, a generation hook, a `BEFORE_TOOL_USE` hook or a tool handler writes rides the messages stored after it and reaches the caller's result once the stream is read, a deferred wait, a reader's stop and a failed turn included; a value written under `turns` stays off every message (RMK-1254, RMK-1248).

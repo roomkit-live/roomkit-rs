@@ -328,10 +328,10 @@ impl ConversationRouter {
     /// # Errors
     ///
     /// Before anything is installed, [`RoomKitError::ChannelNotRegistered`]
-    /// for an id naming no channel of the kit, and [`RoomKitError::Value`] or
-    /// [`RoomKitError::Type`] for an agent that takes no handoff; afterwards,
-    /// what registering the hook or a tool fails with, what came before it
-    /// left in place: a second install's.
+    /// for an id naming no channel of the kit, [`RoomKitError::Value`] or
+    /// [`RoomKitError::Type`] for an agent that takes no handoff,
+    /// [`RoomKitError::Runtime`] for one set up already or named twice, and
+    /// [`RoomKitError::ToolNameCollision`] for a name its tools take.
     pub fn install<S: ConversationStore>(
         &self,
         kit: &RoomKit<S>,
@@ -341,8 +341,8 @@ impl ConversationRouter {
         // Every agent read before anything is installed.
         for agent in agents {
             held(kit, agent)?;
-            kit.takes_handoff(agent)?;
         }
+        kit.refuse_handoffs(agents)?;
         kit.register_strategy_agents(agents)?;
         kit.install_router_hook(self, options.hook_priority)?;
         let handler = HandoffHandler::new(

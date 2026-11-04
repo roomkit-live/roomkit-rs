@@ -128,6 +128,17 @@ impl<S> OwnerToolStore<S> {
         Ok(())
     }
 
+    /// Why `name` cannot be set up for `channel_id` in every room: what
+    /// [`register_all`](Self::register_all) would refuse it with, nothing set
+    /// up. Python's registry's `check`.
+    pub(crate) fn clash(&self, channel_id: &ChannelId, name: &str) -> Option<String> {
+        if self.serves(channel_id, name) {
+            return Some("served by the channel".to_owned());
+        }
+        self.room_serving(channel_id, name)
+            .map(|room_id| format!("served in room '{room_id}'"))
+    }
+
     /// The first room, by its id, whose tools for `channel_id` hold `name`.
     fn room_serving(&self, channel_id: &ChannelId, name: &str) -> Option<RoomId> {
         let in_rooms = self.in_rooms.read().unwrap_or_else(PoisonError::into_inner);
