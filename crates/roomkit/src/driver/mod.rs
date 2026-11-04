@@ -816,7 +816,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         if !caller.ends_cancelled() {
             return;
         }
-        let ending = inbound::end_once_over(Arc::clone(caller.record()), self.cut.clone());
+        let closing = self.inner.turns.cutting();
+        let ending = inbound::end_once_over(Arc::clone(caller.record()), self.cut.clone(), closing);
         drop(self.inner.tasks.spawn_alone(Kind::Turn, ending));
     }
 

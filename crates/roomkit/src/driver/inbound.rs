@@ -681,7 +681,8 @@ async fn run_leased<S: ConversationStore>(
             && let Ok(Ok(result)) = &mut output
             && !result.refused_before_the_lock
         {
-            result.cancellation_reason.get_or_insert(reason);
+            // Its caller's cancellation came first, the kit's close after.
+            result.cancellation_reason = Some(reason);
         }
         caller.log_unread_end(call, &output, closing);
         output
@@ -713,12 +714,22 @@ async fn run_leased<S: ConversationStore>(
 /// Reports `record`'s call as its cancellation ends it once each of `turns`,
 /// the turns cut, is over for its owner (RFC §10.1 "Explicit delivery
 /// cancellation": the cancellation joins the turns it cuts).
-pub(super) async fn end_once_over(record: Arc<Record>, turns: Vec<Canceller>) {
+pub(super) async fn end_once_over(
+    record: Arc<Record>,
+    turns: Vec<Canceller>,
+    mut closing: watch::Receiver<bool>,
+) {
     for turn in &turns {
         turn.ended().await;
     }
+    // The read of its own stream the cut stopped leaves the turn's record: a
+    // target that never returns holds it for no longer than the bound, nor
+    // past the kit's close.
     let mut read_over = record.cut_read_over.subscribe();
-    drop(tokio::time::timeout(CUT_READ_BOUND, read_over.wait_for(|over| *over)).await);
+    tokio::select! {
+        _waited = tokio::time::timeout(CUT_READ_BOUND, read_over.wait_for(|over| *over)) => {}
+        _closed = closing.wait_for(|closed| *closed) => {}
+    }
     record.end_cancelled();
 }
 
