@@ -20,7 +20,7 @@
 //! their result whole up to 6,000 characters, the older ones a preview.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde_json::Value;
 
@@ -143,7 +143,8 @@ fn own_rows<'a>(
 
 /// The calls `rows` hold, round by round: a round is a run of start rows
 /// of one turn, each call completed by the end row of the same turn and
-/// id. A turn's rows all carry its `correlation_id`, as the reference
+/// id, the first of a round's calls under an id by the first such row. A
+/// turn's rows all carry its `correlation_id`, as the reference
 /// implementation pairs them: a provider may reuse an id from one turn to
 /// the next, and two turns of a room may run at once. A row whose content
 /// is withheld ends the round it stands in, and pairs with nothing.
@@ -151,7 +152,8 @@ fn rounds<'a>(
     rows: impl Iterator<Item = (&'a RoomEvent, Option<&'a ToolCallContent>)>,
 ) -> Vec<Vec<Call<'a>>> {
     let mut rounds: Vec<Vec<Call<'a>>> = Vec::new();
-    let mut started: BTreeMap<(Option<&'a str>, &'a str), (usize, usize)> = BTreeMap::new();
+    let mut started: BTreeMap<(Option<&'a str>, &'a str), VecDeque<(usize, usize)>> =
+        BTreeMap::new();
     let mut last_turn: Option<&str> = None;
     let mut opened = false;
     for (event, row) in rows {
@@ -167,7 +169,7 @@ fn rounds<'a>(
             }
             let round = rounds.len().saturating_sub(1);
             if let Some(calls) = rounds.last_mut() {
-                started.insert(key, (round, calls.len()));
+                hold(started.entry(key).or_default(), (round, calls.len()));
                 calls.push(Call {
                     index: event.index,
                     start: row,
@@ -178,7 +180,7 @@ fn rounds<'a>(
             continue;
         }
         opened = false;
-        let Some((round, position)) = started.remove(&key) else {
+        let Some((round, position)) = started.get_mut(&key).and_then(VecDeque::pop_front) else {
             continue;
         };
         if let Some(call) = rounds
@@ -189,6 +191,16 @@ fn rounds<'a>(
         }
     }
     rounds
+}
+
+/// `call`, a round and a position in it, waits for its end row behind its
+/// round's calls under its id. One an earlier round left without its end
+/// stays so: the row to come is not its.
+fn hold(waiting: &mut VecDeque<(usize, usize)>, call: (usize, usize)) {
+    if waiting.back().is_some_and(|(round, _)| *round != call.0) {
+        waiting.clear();
+    }
+    waiting.push_back(call);
 }
 
 /// Whether `call` is replayed: it ended, with an answer the tool gave

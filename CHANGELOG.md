@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A replay gives each call its own result, as Python's (RFC §6.4): a round's results pair to its calls first in, first out per id, so a later turn no longer reads a refused call with the result of the one that held its id (RMK-1373).
 - A turn that wrote no message records on its last row, as Python's: its record rides its last message, else its last row, the call's end, a strategy's first pass handing it on (RMK-1344).
 - A cut stores what its turn leaves at once and gives the room's line up: only its caller waits for a streaming target still working past the cut, so a target stuck there no longer holds the next message of an agent that serializes or steers its room's turns. Python's blocked `finally` holds it still, the target's defect. Unlike Python's, a target that fails once it flushed leaves what the cut stored, as a cut's, its failure its caller's error, and a call's end may reach it while it flushes (RMK-1343, HITL d406164d, fcaf1ecd).
 - What a turn standing alone activates counts for the room, as Python's: its next ordinary turn carries the rules, and it reads the room's stored rows first as any turn does (RMK-1356).

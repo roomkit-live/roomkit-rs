@@ -191,6 +191,68 @@ fn calls_started_together_are_one_round_and_turns_their_own() {
     assert_eq!(results(&rounds), ["a", "b", "c", "d"]);
 }
 
+/// The start of the call `id` at `index`, asking `q`.
+fn asking(index: u64, id: &str, q: &str) -> RoomEvent {
+    let mut row = start(index, id);
+    let EventContent::ToolCall(call) = &mut row.content else {
+        unreachable!()
+    };
+    call.arguments = json!({ "q": q }).as_object().unwrap().clone();
+    row
+}
+
+/// Each replayed call's id and what it asked, in order.
+fn asked(rounds: &[ToolRound]) -> Vec<(String, Option<Value>)> {
+    rounds
+        .iter()
+        .flat_map(|round| &round.messages)
+        .flat_map(|message| &message.tool_calls)
+        .map(|call| (call.id.clone(), call.arguments.get("q").cloned()))
+        .collect()
+}
+
+// Python: tests/test_channels/test_tool_history.py::test_a_round_s_results_pair_to_its_calls_first_in_first_out
+#[test]
+fn a_round_s_results_pair_to_its_calls_first_in_first_out() {
+    let rows = [
+        asking(1, "c1", "first"),
+        asking(2, "c1", "second"),
+        end(3, "c1", json!("a"), Some(ToolCallOutcome::Served)),
+        end(4, "c1", json!("b"), Some(ToolCallOutcome::Served)),
+    ];
+    let rounds = rounds(&rows);
+    assert_eq!(
+        asked(&rounds),
+        [
+            ("c1".to_owned(), Some(json!("first"))),
+            ("c1_2".to_owned(), Some(json!("second")))
+        ]
+    );
+    assert_eq!(results(&rounds), ["a", "b"]);
+}
+
+// Python: tests/test_channels/test_tool_history.py::test_a_later_round_s_result_is_not_for_a_call_left_without_its_end
+#[test]
+fn a_later_round_s_result_is_not_for_a_call_left_without_its_end() {
+    let [other, other_end] = served(2, "c2", "other");
+    let rows = [
+        asking(1, "c1", "left"),
+        other,
+        other_end,
+        asking(4, "c1", "new"),
+        end(5, "c1", json!("its own"), Some(ToolCallOutcome::Served)),
+    ];
+    let rounds = rounds(&rows);
+    assert_eq!(
+        asked(&rounds),
+        [
+            ("c2".to_owned(), None),
+            ("c1".to_owned(), Some(json!("new")))
+        ]
+    );
+    assert_eq!(results(&rounds), ["other", "its own"]);
+}
+
 /// The last 8 calls are replayed, the 3 most recent with their result
 /// whole, the older ones as a preview that says the rest is not shown: the
 /// reference implementation's bounds, written as numbers.
