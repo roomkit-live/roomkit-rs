@@ -498,10 +498,18 @@ pub trait Channel: Send + Sync + 'static {
     /// handed, then dropped where it waits, with no async cleanup: a target
     /// that must release what it holds does so in a `Drop`.
     ///
+    /// A delivery cancelled (RFC §10.1 "Explicit delivery cancellation") ends
+    /// the stream of a channel reading it: what the channel does past that
+    /// end stands for Python's `finally`, which a future dropped could not
+    /// run. It runs to its end, however long, and the cancel's caller waits
+    /// for it within its own timeout. A channel past the stream already is
+    /// dropped where it waits, as above.
+    ///
     /// The default is Python's: it reads the text to the stream's end, then
     /// makes one [`deliver`](Channel::deliver) call with `event` holding the
     /// text joined; a response that fails delivers the text it read, if
-    /// any, before the failure is returned.
+    /// any, before the failure is returned; a delivery cancelled delivers
+    /// nothing.
     fn deliver_stream(
         &self,
         text_stream: DeliveryStream,
@@ -510,7 +518,11 @@ pub trait Channel: Send + Sync + 'static {
         context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         async move {
-            let (text, failure) = buffered(text_stream).await;
+            let mut text_stream = text_stream;
+            let (text, failure) = buffered(&mut text_stream).await;
+            if text_stream.cut() {
+                return Ok(ChannelOutput::empty());
+            }
             let Some(failure) = failure else {
                 return self.deliver(with_text(event, text), binding, context).await;
             };
@@ -586,7 +598,7 @@ pub fn default_inbound_event(
 }
 
 /// The text of `stream`, read to its end, and the failure it ended on.
-async fn buffered(mut stream: DeliveryStream) -> (String, Option<ChannelError>) {
+async fn buffered(stream: &mut DeliveryStream) -> (String, Option<ChannelError>) {
     let mut text = String::new();
     while let Some(item) = stream.next().await {
         match item {

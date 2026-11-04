@@ -125,7 +125,8 @@ pub struct CancelOptions {
     /// `cancellation_reason`; a handle cancelled already keeps its first.
     pub reason: String,
     /// Python `timeout=5.0`: how long the cancel waits for the turns it
-    /// cuts to be over.
+    /// cuts to be over. It bounds this wait only: past it the cleanup goes
+    /// on, and [`DeliveryHandle::wait`] reads the whole record.
     pub timeout: Duration,
 }
 
@@ -258,6 +259,10 @@ impl DeliveryHandle {
     /// returns its result unchanged. Code without the handle cancels the
     /// same way by the message's `delivery_key`
     /// ([`cancel_delivery`](crate::RoomKit::cancel_delivery)).
+    ///
+    /// A streaming target it finds reading is handed the stream's end, and
+    /// what it does past it is part of the cleanup (Python's `finally`); one
+    /// past the stream already is dropped where it waits.
     ///
     /// Dropped before it returns, the cancel stands: the cut turns end
     /// without this caller, and [`wait`](Self::wait) joins them.

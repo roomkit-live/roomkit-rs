@@ -76,10 +76,6 @@ pub(crate) struct KeptStream {
 /// What a read of the turn's response gave.
 type Read = Option<Result<RemoteItem, ChannelError>>;
 
-/// How long a reader whose read was stopped from outside has to read the
-/// stream's end before it is dropped.
-const CUT_READER_GRACE: std::time::Duration = std::time::Duration::from_millis(50);
-
 /// The reason a read the operation stops cuts its turn with (RFC §10.1
 /// "Explicit delivery cancellation").
 pub(crate) const CALLER_CANCELLED: &str = "caller_cancelled";
@@ -400,9 +396,17 @@ impl Producer {
     /// streaming target that reads on no more holds nothing, its
     /// `deliver_stream()` dropped once polled one last time, so that what
     /// it was handed it took, and that text is stored (RFC §12.2 step
-    /// 13s). Once the operation stopped the read, or the stream ended, the
-    /// reader reads its end, unless the close or the task's cut comes
-    /// first, which cut it as above (RMK-1236).
+    /// 13s).
+    ///
+    /// The operation's stop of the read is Python's cancel of its reader,
+    /// and a future has no `finally` to run once aborted. A reader the stop
+    /// finds reading is handed the stream's end, and what it does past it
+    /// stands for that `finally`: it runs to its end, however long, unless
+    /// the close or the task's cut comes first, its caller's own timeout
+    /// bounding that caller only (RMK-1236, RMK-1326). A reader the stop
+    /// finds past the stream, its end read or its stream dropped, has no
+    /// such work left: it is dropped where it waits, as Python's cancel
+    /// lands there.
     async fn read_by(
         &mut self,
         reader: impl Future<Output = Result<ChannelOutput, ChannelError>>,
@@ -424,24 +428,12 @@ impl Producer {
             }
         }
         if !self.reader_cut {
-            // The reader reads the stream's end; one the turn's cut left held
-            // has a moment for it, then is dropped where it waits, as Python
-            // cancels its reader: the cut's caller is not left waiting for it.
             drop(self.unanswered.take());
             drop(pulls);
-            let cut = self.cut.is_some();
-            let held = async {
-                if cut {
-                    tokio::time::sleep(CUT_READER_GRACE).await;
-                } else {
-                    std::future::pending::<()>().await;
-                }
-            };
             tokio::select! {
                 biased;
                 read = &mut reader => return read,
-                () = stops.until_reader_cut() => {}
-                () = held => {}
+                () = self.reader_past_the_stream_stopped(&mut stops) => {}
             }
             return last_poll(reader).await;
         }
@@ -452,6 +444,29 @@ impl Producer {
         drop(self.unanswered.take());
         drop(pulls);
         last
+    }
+
+    /// Returns once what ends a reader's work past the stream stops the
+    /// read: for a reader the stop found reading, only what cuts the reader
+    /// too; for one already past the stream, any stop, which cuts the turn.
+    async fn reader_past_the_stream_stopped(&mut self, stops: &mut Stops) {
+        if self.cut.is_some() {
+            stops.until_reader_cut().await;
+        } else {
+            let reason = stops.stopped().await;
+            self.stop(reason, stops);
+        }
+    }
+
+    /// The read is stopped from outside, for `reason`: `cancel` crosses at
+    /// once, so that the turn's cut waits for nothing the reader does (RFC
+    /// §10.6.8).
+    fn stop(&mut self, reason: &'static str, stops: &Stops) {
+        self.cut = Some(reason);
+        self.reader_cut = stops.cuts_the_reader();
+        if let Some(turn) = self.stream.as_mut() {
+            turn.cancel(reason);
+        }
     }
 
     /// Answers the reader's pulls, until it stops or is handed the end, or
@@ -469,8 +484,7 @@ impl Producer {
                 biased;
                 _ = &mut reader_done => return,
                 reason = stops.stopped() => {
-                    self.cut = Some(reason);
-                    self.reader_cut = stops.cuts_the_reader();
+                    self.stop(reason, stops);
                     return;
                 }
                 pull = pulls.recv() => match pull {
@@ -499,8 +513,7 @@ impl Producer {
             let read = tokio::select! {
                 biased;
                 reason = stops.stopped() => {
-                    self.cut = Some(reason);
-                    self.reader_cut = stops.cuts_the_reader();
+                    self.stop(reason, stops);
                     self.unanswered = Some(pull);
                     return false;
                 }
@@ -665,15 +678,13 @@ impl Producer {
         }
     }
 
-    /// Cuts the turn a stop from outside stopped (RFC §10.6.8): `cancel`
-    /// crosses, its executor cuts the call it runs, and the turn's end is
-    /// awaited within its cancel bound before its rows are settled.
+    /// Waits for the turn a stop from outside cut (RFC §10.6.8): its executor
+    /// cuts the call it runs, and the turn's end is awaited within its cancel
+    /// bound before its rows are settled.
     async fn cut_turn(&mut self) {
-        let (Some(reason), Some(turn)) = (self.cut, self.stream.as_mut()) else {
-            return;
-        };
-        turn.cancel(reason);
-        turn.ended().await;
+        if let (Some(_), Some(turn)) = (self.cut, self.stream.as_ref()) {
+            turn.ended().await;
+        }
     }
 
     /// The streaming channel failed, the response did not: what it was

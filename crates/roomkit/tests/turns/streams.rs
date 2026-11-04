@@ -959,18 +959,10 @@ async fn a_close_does_not_wait_for_a_target_whose_read_was_stopped() {
         .await
         .unwrap();
 
-    // The cut's caller is not left waiting for the target, as Python cancels
-    // its reader.
-    let reason = tokio::time::timeout(Duration::from_secs(1), processed)
-        .await
-        .expect("the caller is not held by the target")
-        .unwrap()
-        .unwrap()
-        .cancellation_reason;
-
     // Within the close's grace of five seconds, never spent.
     let closed = tokio::time::timeout(Duration::from_secs(2), kit.close()).await;
 
+    let reason = processed.await.unwrap().unwrap().cancellation_reason;
     assert_eq!(
         (stopped, closed.is_ok(), reason.as_deref()),
         (1, true, Some("caller_cancelled"))

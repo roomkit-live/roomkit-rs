@@ -332,6 +332,8 @@ pub(super) enum Step {
     Fail(&'static str),
     /// The stream waits forever; dropped there, it writes the record's `final`.
     Hold,
+    /// The loop ends, completed.
+    Completed,
 }
 
 /// A [`Streaming`] agent's scripted stream.
@@ -390,6 +392,9 @@ impl Stream for Scripted {
                 Step::Hold => {
                     this.holding = true;
                     continue;
+                }
+                Step::Completed => {
+                    ResponseItem::LoopEnd(LoopEndMarker::new(LoopEndReason::Completed))
                 }
             };
             return Ready(Some(Ok(item)));
@@ -564,6 +569,50 @@ pub(super) struct Stuck {
     reads: usize,
     returns: bool,
     holds_answers: bool,
+    reading_on: Option<ReadingOn>,
+}
+
+/// What a transport that reads its stream to its end does past it.
+#[derive(Clone, Debug, Default)]
+pub(super) struct ReadingOn {
+    /// How long it flushes past the end; none, it never returns.
+    flush: Option<Duration>,
+    /// Told at its first item.
+    pub(super) read: Arc<tokio::sync::Notify>,
+    /// Told once it read the stream's end.
+    pub(super) past_the_end: Arc<tokio::sync::Notify>,
+    /// What its flush kept, once over.
+    pub(super) kept: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl ReadingOn {
+    pub(super) fn flushing(flush: Duration) -> Self {
+        Self {
+            flush: Some(flush),
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn blocked() -> Self {
+        Self::default()
+    }
+
+    /// Reads `stream` to its end, then does what it does past it.
+    async fn deliver(&self, mut stream: DeliveryStream) -> Result<ChannelOutput, ChannelError> {
+        let mut first = true;
+        while stream.next().await.is_some() {
+            if std::mem::take(&mut first) {
+                self.read.notify_one();
+            }
+        }
+        self.past_the_end.notify_one();
+        let Some(flush) = self.flush else {
+            return std::future::pending().await;
+        };
+        tokio::time::sleep(flush).await;
+        self.kept.lock().unwrap().push("flushed");
+        Ok(ChannelOutput::empty())
+    }
 }
 
 impl Stuck {
@@ -581,6 +630,15 @@ impl Stuck {
             reads,
             returns: false,
             holds_answers: false,
+            reading_on: None,
+        }
+    }
+
+    /// A transport that reads its stream to its end and works on past it.
+    pub(super) fn reading_on(reading_on: &ReadingOn) -> Self {
+        Self {
+            reading_on: Some(reading_on.clone()),
+            ..Self::new(0)
         }
     }
 
@@ -659,6 +717,9 @@ impl Channel for Stuck {
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
+        if let Some(reading_on) = &self.reading_on {
+            return reading_on.deliver(stream).await;
+        }
         for _ in 0..self.reads {
             stream.next().await;
         }

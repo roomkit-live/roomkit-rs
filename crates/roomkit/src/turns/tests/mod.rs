@@ -2,6 +2,7 @@
 //! kit, with the faults a transport could make.
 
 mod cross_read;
+mod cut_reads;
 mod liveness;
 mod records;
 mod support;

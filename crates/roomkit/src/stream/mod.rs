@@ -138,6 +138,9 @@ pub struct DeliveryStream {
     pulls: mpsc::UnboundedSender<oneshot::Sender<Pulled>>,
     waiting: Option<oneshot::Receiver<Pulled>>,
     ended: bool,
+    /// Whether its end is no end of the response, its read stopped from
+    /// outside: Python's reader reads a cancel there.
+    cut: bool,
 }
 
 impl DeliveryStream {
@@ -147,7 +150,14 @@ impl DeliveryStream {
             pulls,
             waiting: None,
             ended: false,
+            cut: false,
         }
+    }
+
+    /// Whether its read was stopped from outside: the end it reads is no end
+    /// of the response.
+    pub(crate) fn cut(&self) -> bool {
+        self.cut
     }
 
     /// The next item: text, a row, or the response's failure, its last;
@@ -181,6 +191,7 @@ impl Stream for DeliveryStream {
             let (pull, answer) = oneshot::channel();
             if this.pulls.send(pull).is_err() {
                 this.ended = true;
+                this.cut = true;
                 return Poll::Ready(None);
             }
             this.waiting.insert(answer)
@@ -195,8 +206,13 @@ impl Stream for DeliveryStream {
                 this.ended = true;
                 Poll::Ready(Some(Err(error)))
             }
-            Ok(None) | Err(_) => {
+            Ok(None) => {
                 this.ended = true;
+                Poll::Ready(None)
+            }
+            Err(_) => {
+                this.ended = true;
+                this.cut = true;
                 Poll::Ready(None)
             }
         }

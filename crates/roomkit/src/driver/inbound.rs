@@ -112,11 +112,6 @@ pub(crate) struct Record {
     in_flight: InFlight,
 }
 
-/// How long a cut call's caller waits, at most, to be told what its turns
-/// left: Python's `DeliveryHandle.cancel(timeout=5.0)`. The read ends within
-/// `CUT_READER_GRACE` of its turn's end, so this bounds a run that is over.
-const CUT_READ_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
-
 /// The answers a call's cascade commits, each with what its write came to:
 /// what the call reports as its `response_events` when the run that
 /// delivers it ends without telling them, the kit's close aborting it, as
@@ -233,6 +228,18 @@ impl Record {
         self.cut_read_over.send_replace(true);
     }
 
+    /// What ends the wait for the read the cut stopped however the run ends:
+    /// nothing tells that read's end once the kit's close aborted the run.
+    fn read_over_with_the_run(self: &Arc<Self>) -> impl Drop + Send + use<> {
+        struct RunOver(Arc<Record>);
+        impl Drop for RunOver {
+            fn drop(&mut self) {
+                self.0.cut_read_over.send_replace(true);
+            }
+        }
+        RunOver(Arc::clone(self))
+    }
+
     fn decide(&self, result: &InboundResult) {
         // A held event keeps its delivery named until its release (RFC
         // §11.7.6), decided before the room's lock is released.
@@ -264,7 +271,9 @@ impl Record {
             return cut_before_its_commit();
         };
         result.response_events = self.answers.stored();
-        result.cancellation_reason = Some(KIT_CLOSED.to_owned());
+        // Its caller's cancellation came first, the kit's close after.
+        let reason = self.cancel_reason();
+        result.cancellation_reason = Some(reason.unwrap_or_else(|| KIT_CLOSED.to_owned()));
         result
     }
 }
@@ -656,7 +665,9 @@ async fn run_leased<S: ConversationStore>(
     let kit = Arc::clone(inner);
     let mut caller = Caller::new(answer, defer, Arc::clone(&record));
     caller.hand = hand;
+    let read_over = record.read_over_with_the_run();
     let run = async move {
+        let _read_over = read_over;
         // The key names the delivery until the run is over.
         let _named = named;
         // A room activity: the kit's subscription to its bus first.
@@ -714,22 +725,17 @@ async fn run_leased<S: ConversationStore>(
 
 /// Reports `record`'s call as its cancellation ends it once each of `turns`,
 /// the turns cut, is over for its owner (RFC §10.1 "Explicit delivery
-/// cancellation": the cancellation joins the turns it cuts).
-pub(super) async fn end_once_over(
-    record: Arc<Record>,
-    turns: Vec<Canceller>,
-    mut closing: watch::Receiver<bool>,
-) {
+/// cancellation": the cancellation joins the turns it cuts) and it was told
+/// what they left, at the cut or once the read the cut stopped is over,
+/// however long that takes: a waiter's own timeout bounds that waiter only,
+/// and what it reads then is the whole record.
+pub(super) async fn end_once_over(record: Arc<Record>, turns: Vec<Canceller>) {
     for turn in &turns {
         turn.ended().await;
     }
-    // Told what the turns left, at the cut or once the read the cut stopped
-    // is over; never past the kit's close.
     let mut read_over = record.cut_read_over.subscribe();
-    tokio::select! {
-        _waited = tokio::time::timeout(CUT_READ_BOUND, read_over.wait_for(|over| *over)) => {}
-        _closed = closing.wait_for(|closed| *closed) => {}
-    }
+    // The record holds the sender: never closed.
+    drop(read_over.wait_for(|over| *over).await);
     record.end_cancelled();
 }
 

@@ -269,13 +269,14 @@ async fn a_cut_call_reads_its_record_while_a_transport_still_sends() {
         )
         .await
         .unwrap();
+    // A sleep, for paused time to pass and the deadline to come.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     while messages(&kit, "cited").await.is_empty() {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the stream was read"
+            "the stream was never read"
         );
-        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
     let handle = result.delivery.expect("a handle");
     let cut = handle
