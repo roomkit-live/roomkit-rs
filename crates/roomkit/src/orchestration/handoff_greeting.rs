@@ -15,8 +15,9 @@ use crate::store::ConversationStore;
 /// `send_greeting` keyword.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SendGreetingOptions {
-    /// The channel the greeting goes through, the handler's event channel
-    /// when unset. With neither, nothing is said.
+    /// What allows the greeting, the handler's event channel when unset:
+    /// with neither, nothing is said. The channel itself is read only for a
+    /// realtime session: the greeting reaches the whole room.
     pub channel_id: Option<ChannelId>,
 }
 

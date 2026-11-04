@@ -3,7 +3,7 @@
 //! `install_router` the one a router's `install` returns and
 //! `install_pipeline` the one a `ConversationPipeline`'s `install` returns, each
 //! under a name the later calls use; `conversation_pipeline` builds a pipeline
-//! and reads it; `setup_handoff` serves the tool on an agent; `handoff.handle`
+//! and reads it; `setup_handoff` serves the tool on an agent; `handoff.handle`,
 //! `handoff.set_language` and `handoff.send_greeting` are the handler's own
 //! calls.
 
