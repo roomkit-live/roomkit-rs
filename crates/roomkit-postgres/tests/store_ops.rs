@@ -523,9 +523,22 @@ async fn a_creation_racing_another_organization_s_is_refused() {
     assert_eq!(stored.organization_id.as_deref(), Some("acme"));
 }
 
+/// Writes an address row directly, as an upgrade left it.
+async fn insert_address(schema: &TempSchema, address: &str, identity_id: &str, held_in: &str) {
+    schema
+        .client()
+        .await
+        .execute(
+            "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id) \
+             VALUES ('sms', $1, $2, $3)",
+            &[&address, &identity_id, &held_in],
+        )
+        .await
+        .unwrap();
+}
+
 /// Python: `test_a_replacement_removes_a_row_of_another_scope_for_a_kept_address`:
-/// a row of another scope for an address it keeps, one left unscoped by an upgrade,
-/// stops resolving (RFC §17.2).
+/// a row of another scope for an address it keeps goes, not only stops resolving.
 #[tokio::test]
 async fn a_replacement_removes_a_row_of_another_scope_for_a_kept_address() {
     let Some((schema, store)) = fresh().await else {
@@ -533,26 +546,86 @@ async fn a_replacement_removes_a_row_of_another_scope_for_a_kept_address() {
     };
     let held = identity("i1", Some("acme"), Some("+1555"));
     store.create_identity(held.clone()).await.unwrap();
-    schema
+    insert_address(&schema, "+1555", "i1", "").await;
+    store.create_identity(held.clone()).await.unwrap();
+    let scopes: Vec<String> = schema
         .client()
         .await
-        .batch_execute(
-            "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id) \
-             VALUES ('sms', '+1555', 'i1', '')",
+        .query(
+            "SELECT organization_id FROM identity_addresses WHERE identity_id = 'i1'",
+            &[],
         )
         .await
-        .unwrap();
-    store.create_identity(held.clone()).await.unwrap();
-    let unscoped = store
-        .resolve_identity(
-            &ChannelType::SMS,
-            "+1555",
-            ResolveIdentityOptions::default(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(unscoped, None);
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(scopes, ["acme"]);
     assert_eq!(resolved(&store, "+1555", "acme").await, Some(held));
+}
+
+/// Python: `test_an_unlink_removes_the_identity_s_rows_in_every_scope`: a link
+/// revoked is revoked, a row an upgrade left in another scope with it, so that no
+/// later rewrite can restore it (RFC §5.6).
+#[tokio::test]
+async fn an_unlink_removes_the_identity_s_rows_in_every_scope() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    store
+        .create_identity(identity("i1", Some("acme"), Some("+1")))
+        .await
+        .unwrap();
+    insert_address(&schema, "+1", "i1", "").await;
+    store
+        .unlink_address(
+            &IdentityId::new("i1").unwrap(),
+            &ChannelType::SMS,
+            "+1",
+            roomkit::store::UnlinkAddressOptions {
+                organization_id: Some("acme".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+    let left: i64 = schema
+        .client()
+        .await
+        .query_one("SELECT count(*) FROM identity_addresses", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(left, 0);
+}
+
+/// Python: `test_a_row_of_another_scope_than_its_identity_resolves_for_nobody`
+/// (RFC §17.2, HITL 0f96a597): an identity is read in its own organization only,
+/// whatever a row left by an upgrade or written directly says.
+#[tokio::test]
+async fn a_row_of_another_scope_than_its_identity_resolves_for_nobody() {
+    for (held_in, stored) in [("", Some("acme")), ("globex", Some("acme")), ("acme", None)] {
+        let Some((schema, store)) = fresh().await else {
+            return;
+        };
+        store
+            .create_identity(identity("i1", stored, None))
+            .await
+            .unwrap();
+        insert_address(&schema, "+1555", "i1", held_in).await;
+        for scope in [None, Some("acme"), Some("globex")] {
+            let found = store
+                .resolve_identity(
+                    &ChannelType::SMS,
+                    "+1555",
+                    ResolveIdentityOptions {
+                        organization_id: scope.map(str::to_owned),
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(found, None, "row in {held_in:?}, read in {scope:?}");
+        }
+    }
 }
 
 /// Python: `test_two_replacements_swapping_addresses_are_refused_without_a_deadlock`:

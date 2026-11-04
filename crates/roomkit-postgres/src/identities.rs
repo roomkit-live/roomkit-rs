@@ -172,7 +172,8 @@ pub(crate) async fn get<C: GenericClient>(
     row.as_ref().map(rows::identity).transpose()
 }
 
-/// The identity holding `address` in `organization`.
+/// The identity holding `address` in `organization`, in its own organization
+/// only (RFC §17.2), whatever a row left by an upgrade or written directly says.
 pub(crate) async fn resolve<C: GenericClient>(
     client: &C,
     channel_type: &ChannelType,
@@ -184,7 +185,8 @@ pub(crate) async fn resolve<C: GenericClient>(
         "SELECT i.id, i.organization_id, i.display_name, i.email, i.phone, \
                 i.channel_addresses, i.external_id, i.external_ids, i.metadata \
          FROM identity_addresses ia JOIN identities i ON i.id = ia.identity_id \
-         WHERE ia.channel_type = $1 AND ia.address = $2 AND ia.organization_id = $3",
+         WHERE ia.channel_type = $1 AND ia.address = $2 AND ia.organization_id = $3 \
+         AND COALESCE(i.organization_id, '') = ia.organization_id",
         &[
             &channel_type.as_str(),
             &address,
@@ -285,8 +287,9 @@ fn without_address(addresses: &Value, channel_type: &str, address: &str) -> Valu
     remaining
 }
 
-/// Unlinks `address` from the identity, in one transaction: its own row only,
-/// an address another identity holds stays theirs.
+/// Unlinks `address` from the identity, in one transaction: its own rows only, in
+/// every scope, so that an address another identity holds stays theirs and a row an
+/// upgrade left elsewhere goes with the link.
 pub(crate) async fn unlink(
     client: &mut Object,
     identity_id: &IdentityId,
@@ -299,13 +302,8 @@ pub(crate) async fn unlink(
     execute(
         &transaction,
         "DELETE FROM identity_addresses WHERE channel_type = $1 AND address = $2 \
-         AND organization_id = $3 AND identity_id = $4",
-        &[
-            &channel_type.as_str(),
-            &address,
-            &organization.unwrap_or_default(),
-            &identity_id.as_str(),
-        ],
+         AND identity_id = $3",
+        &[&channel_type.as_str(), &address, &identity_id.as_str()],
     )
     .await?;
     let remaining = without_address(&addresses, channel_type.as_str(), address);

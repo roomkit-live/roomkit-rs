@@ -12,8 +12,8 @@ use std::error::Error;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelType, EventSource, RateLimit, RetryPolicy, Room, RoomEvent,
-    RoomId, TextContent, Visibility,
+    ChannelBinding, ChannelId, ChannelType, EventSource, Identity, IdentityId, RateLimit,
+    RetryPolicy, Room, RoomEvent, RoomId, TextContent, Visibility,
 };
 use roomkit::{ConversationStore, StoreError};
 use roomkit_postgres::{
@@ -454,6 +454,68 @@ async fn init_moves_the_author_registers_to_the_private_state() {
     assert_eq!(metadata("r2").await, json!({}));
     assert_eq!(state("r3").await, Some(register));
     assert_eq!(metadata("r3").await, json!({ "author_register": later }));
+}
+
+/// Python: `test_init_moves_an_unscoped_address_to_its_identity_s_organization`
+/// (HITL 0f96a597, RFC §17.2): a row the upgrade left unscoped moves to the
+/// organization of its identity, once, if the identity still declares the address;
+/// one whose organization holds the address already yields to that row. A link
+/// since revoked is not restored: its row goes (HITL 6928c418). An identity of no
+/// organization keeps its unscoped row, and a row of another organization is left
+/// alone, which no read serves.
+#[tokio::test]
+async fn init_moves_an_unscoped_address_to_its_identity_s_organization() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    for (id, organization, address) in [
+        ("alice", Some("acme"), None),
+        ("bob", Some("acme"), Some("+2")),
+        ("carol", None, Some("+3")),
+    ] {
+        let mut identity = Identity::new(IdentityId::new(id).unwrap());
+        identity.organization_id = organization.map(str::to_owned);
+        if let Some(address) = address {
+            identity.link(ChannelType::SMS, address);
+        }
+        store.create_identity(identity).await.unwrap();
+    }
+    let client = schema.client().await;
+    client
+        .batch_execute(
+            "UPDATE identities SET channel_addresses = '{\"sms\": [\"+1\", \"+2\"]}' \
+             WHERE id = 'alice';
+             INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id) \
+             VALUES ('sms', '+1', 'alice', ''), ('sms', '+2', 'alice', ''), \
+                    ('sms', '+4', 'alice', 'globex'), ('sms', '+5', 'alice', '');
+             DELETE FROM schema_version WHERE version >= 5;",
+        )
+        .await
+        .unwrap();
+    store.init(SMALL_POOL).await.unwrap();
+    store.init(SMALL_POOL).await.unwrap();
+    let stored: Vec<(String, String, String)> = client
+        .query(
+            "SELECT address, identity_id, organization_id FROM identity_addresses ORDER BY 1, 3",
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2)))
+        .collect();
+    let row = |address: &str, id: &str, organization: &str| {
+        (address.to_owned(), id.to_owned(), organization.to_owned())
+    };
+    assert_eq!(
+        stored,
+        [
+            row("+1", "alice", "acme"),
+            row("+2", "bob", "acme"),
+            row("+3", "carol", ""),
+            row("+4", "alice", "globex"),
+        ]
+    );
 }
 
 /// Python: `test_a_second_init_waits_on_no_open_transaction`: on an up-to-date
