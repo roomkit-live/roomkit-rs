@@ -135,6 +135,8 @@ pub(crate) struct Run {
     pub(crate) handoff_handlers: Mutex<HashMap<String, roomkit::HandoffHandler<crate::Store>>>,
     /// The run's tool and session auditors (README, "Setup").
     pub(crate) auditors: crate::audits::Auditors,
+    /// The directories of the scripted agents' skills.
+    pub(crate) skills: crate::skills::SkillDirectories,
 }
 
 impl Run {
@@ -177,6 +179,7 @@ impl Run {
             strategies: Mutex::default(),
             handoff_handlers: Mutex::default(),
             auditors: crate::audits::Auditors::default(),
+            skills: crate::skills::SkillDirectories::default(),
         }
     }
 

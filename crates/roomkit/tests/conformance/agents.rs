@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::future::{Future, pending};
 use std::pin::Pin;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
@@ -193,6 +193,9 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
     tool_search_settings(spec, &mut options)?;
     if let Some(by_room) = spec.get("config_provider") {
         options.config_provider = Some(config_provider(by_room, run)?);
+    }
+    if let Some(skills) = spec.get("skills") {
+        options.skills = Some(run.skills.registry(skills)?);
     }
     if let Some(bound) = spec.get("max_author_images") {
         options.max_author_images = if bound.is_null() {
@@ -594,27 +597,45 @@ type TurnConfigFuture =
     Pin<Box<dyn Future<Output = Result<Option<AiChannelTurnConfig>, ChannelError>> + Send>>;
 
 /// A scripted agent's per-turn configuration (README, "Scripted agents"):
-/// the one `by_room` gives the binding's room, none for a room it does
-/// not name; called with a context of another room, the turn fails.
+/// the one `by_room` gives the binding's room, none for a room it does not
+/// name; a list gives that room's turns, one each, its last standing for the
+/// turns after. Called with a context of another room, the turn fails.
 fn config_provider(
     by_room: &Value,
     run: &Arc<Run>,
 ) -> Result<Arc<dyn Fn(ChannelBinding, RoomContext) -> TurnConfigFuture + Send + Sync>, String> {
-    let mut configs: HashMap<String, Option<AiChannelTurnConfig>> = HashMap::new();
+    let mut configs: HashMap<String, Vec<Option<AiChannelTurnConfig>>> = HashMap::new();
     for (room, spec) in by_room
         .as_object()
         .ok_or("config_provider: not an object")?
     {
-        let config = if spec.is_null() {
-            None
-        } else {
-            Some(turn_config(spec, run)?)
+        let turns = match spec.as_array() {
+            Some(turns) => turns.iter().collect(),
+            None => vec![spec],
         };
-        configs.insert(room.clone(), config);
+        let turns = turns
+            .into_iter()
+            .map(|turn| {
+                (!turn.is_null())
+                    .then(|| turn_config(turn, run))
+                    .transpose()
+            })
+            .collect::<Result<_, _>>()?;
+        configs.insert(room.clone(), turns);
     }
+    let taken: Mutex<HashMap<String, usize>> = Mutex::default();
     Ok(Arc::new(
         move |binding: ChannelBinding, context: RoomContext| {
-            let config = configs.get(binding.room_id.as_str()).cloned().flatten();
+            let room = binding.room_id.as_str();
+            let turn = {
+                let mut taken = crate::run::lock(&taken);
+                let turn = taken.entry(room.to_owned()).or_default();
+                *turn += 1;
+                *turn - 1
+            };
+            let config = configs
+                .get(room)
+                .and_then(|turns| turns.get(turn).or_else(|| turns.last()).cloned().flatten());
             Box::pin(async move {
                 if context.room.id != binding.room_id {
                     let called = format!("called for {} in {}", binding.room_id, context.room.id);
@@ -655,6 +676,10 @@ fn turn_config(spec: &Value, run: &Arc<Run>) -> Result<AiChannelTurnConfig, Stri
         tool_handler: spec["tool_handler"]
             .as_array()
             .map(|tools| scripted_handler(tools.clone(), run)),
+        skills: spec
+            .get("skills")
+            .map(|skills| run.skills.registry(skills))
+            .transpose()?,
     })
 }
 

@@ -38,6 +38,7 @@ mod run;
 mod scenarios;
 mod scripted;
 mod shape;
+mod skills;
 mod store_calls;
 mod strategy_calls;
 mod task_calls;

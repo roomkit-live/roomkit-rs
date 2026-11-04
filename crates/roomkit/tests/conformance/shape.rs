@@ -107,6 +107,7 @@ const CHANNEL: &[&str] = &[
     "temperature",
     "max_tokens",
     "config_provider",
+    "skills",
     "thinking_budget",
     "enable_thinking",
     "thinking_coalesce_ms",
@@ -158,8 +159,10 @@ const TURN_CONFIG: &[&str] = &[
     "turn_budget_tokens",
     "turn_budget_usd",
     "tool_handler",
+    "skills",
 ];
 const TURN_TOOL: &[&str] = &["name", "description", "parameters"];
+const SKILL: &[&str] = &["name", "description", "instructions", "references"];
 const HUMAN_TOOL: &[&str] = &["name", "description", "parameters"];
 const MODEL: &[&str] = &[
     "rounds",
@@ -646,7 +649,22 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     optional(&channel["agent"], AGENT, &format!("{path}.agent"), found);
     memory(&channel["memory"], &format!("{path}.memory"), found);
     for (room, config) in channel["config_provider"].as_object().into_iter().flatten() {
-        turn_config(config, &format!("{path}.config_provider.{room}"), found);
+        let at = format!("{path}.config_provider.{room}");
+        match config.as_array() {
+            Some(turns) => {
+                for (turn, given) in turns.iter().enumerate() {
+                    turn_config(given, &format!("{at}[{turn}]"), found);
+                }
+            }
+            None => turn_config(config, &at, found),
+        }
+    }
+    skills(&channel["skills"], &format!("{path}.skills"), found);
+}
+
+fn skills(skills: &Value, path: &str, found: &mut Vec<String>) {
+    for (index, skill) in items(skills) {
+        members(skill, SKILL, &format!("{path}[{index}]"), found);
     }
 }
 
@@ -658,6 +676,7 @@ fn turn_config(config: &Value, path: &str, found: &mut Vec<String>) {
     for (index, tool) in items(&config["tool_handler"]) {
         members(tool, TOOL, &format!("{path}.tool_handler[{index}]"), found);
     }
+    skills(&config["skills"], &format!("{path}.skills"), found);
 }
 
 fn memory(memory: &Value, path: &str, found: &mut Vec<String>) {
