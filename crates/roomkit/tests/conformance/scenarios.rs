@@ -78,15 +78,19 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says() {
                     vec![format!("did not finish within {:?}", crate::SCENARIO_BOUND)]
                 })
         });
-        let known = crate::KNOWN_FAILURES.iter().any(|(known, _)| *known == id);
+        let known = crate::KNOWN_FAILURES.iter().find(|(known, _)| *known == id);
         if !problems.is_empty() {
             failing.push(id.clone());
         }
         match (problems.is_empty(), known) {
-            (true, true) => report.push(format!("{id}: passes, but is listed as a known failure")),
-            (false, false) => report.push(format!("{id}:\n  {}", problems.join("\n  "))),
-            (false, true) => println!("known failure {id}:\n  {}", problems.join("\n  ")),
-            (true, false) => {}
+            // A failure that depends on the machine's speed may pass.
+            (true, Some((_, reason))) if reason.starts_with("timing:") => {}
+            (true, Some(_)) => {
+                report.push(format!("{id}: passes, but is listed as a known failure"));
+            }
+            (false, None) => report.push(format!("{id}:\n  {}", problems.join("\n  "))),
+            (false, Some(_)) => println!("known failure {id}:\n  {}", problems.join("\n  ")),
+            (true, None) => {}
         }
     }
     for (known, _) in crate::KNOWN_FAILURES {
