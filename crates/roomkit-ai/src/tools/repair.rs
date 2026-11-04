@@ -177,9 +177,10 @@ fn unquote_primitives(parameters: &Value, mut arguments: Metadata) -> (Metadata,
 /// What `text`, its surrounding whitespace left out, is as a literal of the
 /// JSON type `declared`, if it spells one exactly.
 ///
-/// The digits read are ASCII's, and an integer is read only when it fits
-/// 64 bits: a JSON value holds no wider one. Python reads every Unicode
-/// decimal digit, and any integer up to the length bound.
+/// The digits read are ASCII's, and an integer wider than 64 bits is read as
+/// the float a JSON value holds it as, which [`schema`](super::schema) takes for
+/// an integer. Python reads every Unicode decimal digit, and any integer up to
+/// the length bound exactly.
 fn literal(text: &str, declared: &str) -> Option<Value> {
     let text = text.trim();
     if text.chars().count() > MAX_LITERAL_CHARS {
@@ -190,7 +191,8 @@ fn literal(text: &str, declared: &str) -> Option<Value> {
             .parse::<i64>()
             .map(Value::from)
             .or_else(|_| text.parse::<u64>().map(Value::from))
-            .ok(),
+            .ok()
+            .or_else(|| text.parse::<f64>().ok().map(Value::from)),
         "number" if spells_number(text) => text
             .parse::<f64>()
             .ok()

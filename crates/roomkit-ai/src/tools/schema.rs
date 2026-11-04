@@ -56,13 +56,25 @@ fn has_type(value: &Value, declared: &str) -> bool {
     match declared {
         "string" => value.is_string(),
         "boolean" => value.is_boolean(),
-        "integer" => value.is_i64() || value.is_u64(),
+        "integer" => value.is_i64() || value.is_u64() || is_wider_integer(value),
         "number" => value.is_number(),
         "object" => value.is_object(),
         "array" => value.is_array(),
         "null" => value.is_null(),
         _ => true,
     }
+}
+
+/// Whether `value` is an integer past what a JSON value holds as one, which it
+/// reads as a float (the smallest past `u64`, or below `i64`): whole, as every
+/// float that wide is. It reads so whether the model wrote its digits or `1e24`,
+/// which Python's check refuses: only the digits are an `int` there.
+fn is_wider_integer(value: &Value) -> bool {
+    const PAST_U64: f64 = 18_446_744_073_709_551_616.0;
+    const BELOW_I64: f64 = -9_223_372_036_854_775_808.0;
+    value
+        .as_f64()
+        .is_some_and(|number| !(BELOW_I64..PAST_U64).contains(&number))
 }
 
 #[cfg(test)]
@@ -101,6 +113,25 @@ mod tests {
                 Some("argument 'count' must be of type integer".to_owned())
             ]
         );
+    }
+
+    // Python: tools/validation.py _TYPE_CHECKS reads any int; the first float
+    // past each bound is one here, the last within it stays no integer.
+    #[test]
+    fn an_integer_past_64_bits_is_an_integer() {
+        let parameters = json!({ "properties": { "count": { "type": "integer" } } });
+        let refused = Some("argument 'count' must be of type integer".to_owned());
+        for (count, read) in [
+            (json!(u64::MAX), None),
+            (json!(i64::MIN), None),
+            (json!(18_446_744_073_709_551_616.0_f64), None),
+            (json!(-1e24_f64), None),
+            (json!(-9_223_372_036_854_775_808.0_f64), refused.clone()),
+            (json!(9_007_199_254_740_992.0_f64), refused.clone()),
+        ] {
+            let given = arguments(&json!({ "count": count }));
+            assert_eq!(mismatch(&parameters, &given), read, "{count}");
+        }
     }
 
     /// Python's `validate_tool_arguments`: an argument the schema does not
