@@ -19,7 +19,9 @@ use super::super::greeting;
 use super::super::queues::Lineage;
 use super::super::stamp;
 use super::{CommitPass, Observed, PassOrigin, PassResult, State, Verdict};
-use crate::model::{ChannelBinding, ChannelId, EventType, RoomContext, RoomEvent, Visibility};
+use crate::model::{
+    ChannelBinding, ChannelId, EventStatus, EventType, RoomContext, RoomEvent, Visibility,
+};
 use crate::ops::protocol::{
     AnswerOf, DiscussionRequest, HoldOutcome, HoldRequest, Outcome, StoreRequest,
 };
@@ -578,7 +580,12 @@ impl CommitPass {
 
     /// An instruction to agents of the discussion holding the room: it gives
     /// each its turn, and the instruction has no delivery set (rule 7).
-    fn queue_instruction(cx: &mut Cx<'_>, event: RoomEvent, context: Box<RoomContext>) -> State {
+    fn queue_instruction(
+        cx: &mut Cx<'_>,
+        mut event: RoomEvent,
+        context: Box<RoomContext>,
+    ) -> State {
+        event.status = EventStatus::Delivered;
         let room_id = event.room_id.clone();
         let request = DiscussionRequest::Instruction {
             room_id: room_id.clone(),
@@ -593,15 +600,19 @@ impl CommitPass {
         }
     }
 
-    /// The discussion has been told. A failure of its own is logged, and
-    /// never leaves the event undelivered (RFC §19.7.5).
+    /// The discussion has been told. A failure of its own on a committed
+    /// event is logged, and never leaves it undelivered; an instruction it
+    /// did not take is lost, which its caller is told (RFC §19.7.5).
     pub(super) fn on_told(
         &mut self,
         cx: &mut Cx<'_>,
         result: PassResult,
-        outcome: &Outcome,
+        outcome: Outcome,
     ) -> State {
         if let Outcome::Failed(error) = outcome {
+            if matches!(result, PassResult::Stored { .. }) {
+                return self.release(cx, Err(Abort::Store(error)));
+            }
             tracing::warn!(
                 target: "roomkit::core::inbound",
                 room_id = %self.event.room_id,

@@ -92,17 +92,25 @@ impl<S: ConversationStore> RoomKit<S> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
 
     use pretty_assertions::assert_eq;
     use roomkit_core::model::{
-        ChannelCategory, ChannelType, EventStatus, EventType, InboundMessage, Metadata, TextContent,
+        ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelOutput, ChannelType,
+        EventStatus, EventType, InboundMessage, Metadata, TextContent,
     };
     use roomkit_core::rules::discussion::{CONFIG_KEY, STATE_KEY};
+    use roomkit_core::rules::hook_registry::HookTrigger;
     use serde_json::json;
+    use tokio::sync::Notify;
 
     use super::*;
+    use crate::HookOptions;
+    use crate::channel::{Channel, ChannelError};
     use crate::discussion_turn::discussion_notes;
+    use crate::kit::WeakRoomKit;
     use crate::kit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions};
     use crate::testing::{
         EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
@@ -145,7 +153,13 @@ mod tests {
 
         fn queue_instruction(&self, event: RoomEvent) -> BoxFuture<'_, Result<(), RoomKitError>> {
             self.instructed.lock().unwrap().push(event);
-            Box::pin(async { Ok(()) })
+            let fails = self.fails;
+            Box::pin(async move {
+                if fails {
+                    return Err(RoomKitError::Value("it fails".to_owned()));
+                }
+                Ok(())
+            })
         }
 
         fn next_turn(
@@ -153,7 +167,13 @@ mod tests {
             _context: RoomContext,
         ) -> BoxFuture<'_, Result<Option<DiscussionTurn>, RoomKitError>> {
             let turn = self.turn.lock().unwrap().take();
-            Box::pin(async move { Ok(turn) })
+            let fails = self.fails;
+            Box::pin(async move {
+                if fails {
+                    return Err(RoomKitError::Value("it fails".to_owned()));
+                }
+                Ok(turn)
+            })
         }
     }
 
@@ -290,8 +310,240 @@ mod tests {
 
         assert!(!result.blocked);
         assert_eq!(result.response_events, Vec::new());
+        assert_eq!(result.event.unwrap().status, EventStatus::Delivered);
         assert_eq!(held.instructed.lock().unwrap().len(), 1);
         assert_eq!(held.committed.lock().unwrap().len(), 0);
+    }
+
+    // Python: core/mixins/lane_execution.py, `queue_instruction` is not caught
+    #[tokio::test]
+    async fn an_instruction_the_discussion_did_not_take_fails_its_call() {
+        let held = Arc::new(Held {
+            fails: true,
+            ..Held::default()
+        });
+        let (kit, _ops) = held_room(&held).await;
+        let mut message = said("Introduce yourself");
+        message.event_type = EventType::Instruction;
+        message.addressed_to = Some(vec![id("a")]);
+
+        let result = kit
+            .process_inbound(message, ProcessInboundOptions::default())
+            .await;
+
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    // Python: core/mixins/discussion.py `_drive` backs off on what the
+    // discussion raises: a failed look is no quiet "no turn".
+    #[tokio::test]
+    async fn a_failure_to_name_the_turn_fails_the_turn_s_call() {
+        let held = Arc::new(Held {
+            fails: true,
+            ..Held::default()
+        });
+        let (kit, _ops) = held_room(&held).await;
+
+        let result = kit.run_discussion_turn(&room_id()).await;
+
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    // Python: core/mixins/discussion.py `_plan_discussion_turn`
+    #[tokio::test]
+    async fn a_turn_on_an_event_whose_source_cannot_write_is_no_turn() {
+        let held = Arc::new(Held::default());
+        let (kit, ops) = held_room(&held).await;
+        let asked = say(&kit, said("hello")).await.event.unwrap();
+        crate::testing::idle(&kit).await;
+        kit.mute(&room_id(), &id("ops"), crate::kit::MuteOptions::default())
+            .await
+            .unwrap();
+
+        *held.turn.lock().unwrap() = Some(turn_on(asked, "a", 1, &[]));
+        let result = kit.run_discussion_turn(&room_id()).await.unwrap();
+        crate::testing::idle(&kit).await;
+
+        assert_eq!(result, InboundResult::default());
+        assert_eq!(ops.texts(), Vec::<String>::new());
+    }
+
+    /// A transport whose first delivery waits for its gate.
+    #[derive(Clone, Default)]
+    struct Gated {
+        reached: Arc<Notify>,
+        gate: Arc<Notify>,
+        delivered: Arc<AtomicU32>,
+    }
+
+    impl Channel for Gated {
+        fn channel_id(&self) -> ChannelId {
+            id("slow")
+        }
+
+        fn channel_type(&self) -> ChannelType {
+            ChannelType::SMS
+        }
+
+        fn category(&self) -> ChannelCategory {
+            ChannelCategory::Transport
+        }
+
+        fn capabilities(&self) -> ChannelCapabilities {
+            ChannelCapabilities::default()
+        }
+
+        async fn handle_inbound(
+            &self,
+            _message: InboundMessage,
+            _context: RoomContext,
+        ) -> Result<RoomEvent, ChannelError> {
+            Err("no inbound".into())
+        }
+
+        async fn deliver(
+            &self,
+            _event: RoomEvent,
+            _binding: ChannelBinding,
+            _context: RoomContext,
+        ) -> Result<ChannelOutput, ChannelError> {
+            if self.delivered.fetch_add(1, Ordering::Relaxed) == 0 {
+                self.reached.notify_one();
+                self.gate.notified().await;
+            }
+            Ok(ChannelOutput::default())
+        }
+    }
+
+    // Python: core/mixins/discussion.py `_plan_discussion_turn`, its
+    // `after_index`; RFC §10.2, §19.7.5 rule 9.
+    #[tokio::test]
+    async fn a_turn_waits_for_its_event_s_own_delivery() {
+        let held = Arc::new(Held::default());
+        let (kit, _ops) = held_room(&held).await;
+        let gated = Gated::default();
+        kit.register_channel(gated.clone()).unwrap();
+        kit.attach_channel(&room_id(), &id("slow"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let kit = Arc::new(kit);
+        let delivering = {
+            let kit = Arc::clone(&kit);
+            tokio::spawn(async move { say(&kit, said("hello")).await })
+        };
+        gated.reached.notified().await;
+        let options = crate::store::ListEventsOptions::default();
+        let stored = kit.store().list_events(&room_id(), options).await.unwrap();
+        let asked = stored.last().unwrap().clone();
+
+        *held.turn.lock().unwrap() = Some(turn_on(asked, "a", 1, &[]));
+        let mut turn = {
+            let kit = Arc::clone(&kit);
+            tokio::spawn(async move { kit.run_discussion_turn(&room_id()).await })
+        };
+
+        let early = tokio::time::timeout(Duration::from_millis(30), &mut turn).await;
+        assert!(
+            early.is_err(),
+            "the turn ran before its event was delivered"
+        );
+        gated.gate.notify_one();
+        delivering.await.unwrap();
+        let answered = turn.await.unwrap().unwrap();
+        assert_eq!(answered.response_events.len(), 1);
+    }
+
+    /// An agent whose turn calls into its room until a call is refused.
+    #[derive(Clone, Default)]
+    struct Calling {
+        kit: Arc<OnceLock<WeakRoomKit>>,
+        made: Arc<AtomicU32>,
+    }
+
+    impl Channel for Calling {
+        fn channel_id(&self) -> ChannelId {
+            id("calling")
+        }
+
+        fn channel_type(&self) -> ChannelType {
+            ChannelType::AI
+        }
+
+        fn category(&self) -> ChannelCategory {
+            ChannelCategory::Intelligence
+        }
+
+        fn capabilities(&self) -> ChannelCapabilities {
+            ChannelCapabilities::default()
+        }
+
+        async fn handle_inbound(
+            &self,
+            _message: InboundMessage,
+            _context: RoomContext,
+        ) -> Result<RoomEvent, ChannelError> {
+            Err("no inbound".into())
+        }
+
+        async fn deliver(
+            &self,
+            _event: RoomEvent,
+            _binding: ChannelBinding,
+            _context: RoomContext,
+        ) -> Result<ChannelOutput, ChannelError> {
+            Ok(ChannelOutput::default())
+        }
+
+        async fn on_event(
+            &self,
+            _event: RoomEvent,
+            _binding: ChannelBinding,
+            _context: RoomContext,
+        ) -> Result<ChannelOutput, ChannelError> {
+            let kit = self.kit.get().and_then(WeakRoomKit::upgrade).unwrap();
+            loop {
+                let options = ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                };
+                let called = kit
+                    .process_inbound(said("follow-up"), options)
+                    .await
+                    .map_err(|error| ChannelError::from(error.to_string()))?;
+                if called.event.is_none() {
+                    return Ok(ChannelOutput::default());
+                }
+                self.made.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    // Python: core/mixins/discussion.py `_plan_discussion_turn`,
+    // `reentry_budget=10 * max_depth`, one budget (rule 11).
+    #[tokio::test]
+    async fn a_turn_s_calls_draw_on_the_budget_its_limit_bounds() {
+        let held = Arc::new(Held::default());
+        let (kit, _ops) = held_room(&held).await;
+        let calling = Calling::default();
+        kit.register_channel(calling.clone()).unwrap();
+        calling.kit.set(kit.downgrade()).unwrap();
+        let options = AttachChannelOptions {
+            category: Some(ChannelCategory::Intelligence),
+            ..Default::default()
+        };
+        kit.attach_channel(&room_id(), &id("calling"), options)
+            .await
+            .unwrap();
+        let asked = say(&kit, said("hello")).await.event.unwrap();
+        crate::testing::idle(&kit).await;
+
+        let mut turn = turn_on(asked, "calling", 0, &[]);
+        turn.max_depth = 2;
+        *held.turn.lock().unwrap() = Some(turn);
+        kit.run_discussion_turn(&room_id()).await.unwrap();
+
+        // Twice the discussion's limit, in tens; the kit's own would be 50.
+        assert_eq!(calling.made.load(Ordering::Relaxed), 20);
     }
 
     // Python: core/mixins/inbound_locked.py, RFC §19.7.5 rule 15
@@ -375,6 +627,24 @@ mod tests {
         let result = kit.run_discussion_turn(&room_id()).await.unwrap();
 
         assert_eq!(result, InboundResult::default());
+    }
+
+    // Python: HookTrigger.ON_SPEAK_QUEUE takes a SpeakQueueEvent, and no other payload.
+    #[tokio::test]
+    async fn on_speak_queue_takes_its_own_payload() {
+        let kit = RoomKit::new(crate::kit::RoomKitOptions::default());
+        let speak_queue = |_: crate::SpeakQueueEvent, _: RoomContext| async {};
+        kit.hook(
+            HookTrigger::OnSpeakQueue,
+            speak_queue,
+            HookOptions::default(),
+        )
+        .unwrap();
+        let event = |_: RoomEvent, _: RoomContext| async {};
+        assert!(
+            kit.hook(HookTrigger::OnSpeakQueue, event, HookOptions::default())
+                .is_err()
+        );
     }
 
     #[test]

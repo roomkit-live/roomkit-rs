@@ -20,7 +20,7 @@ use std::pin::pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use roomkit_core::model::{EventId, RoomId};
+use roomkit_core::model::RoomId;
 use tokio::sync::Notify;
 
 /// One queue per room, created on first use and dropped once the room holds
@@ -61,12 +61,17 @@ pub(crate) struct RoomTickets {
 /// A ticket of a room's admission order.
 pub(crate) type Ticket<'tickets> = Slot<'tickets, u64>;
 
-/// The rooms' delivery lanes (RFC §10.2): one place per event committed,
-/// by the event's id.
-pub(crate) type RoomLanes = RoomQueues<EventId>;
+/// The rooms' delivery lanes (RFC §10.2): one place per set to deliver, each
+/// its own: a discussion's turn on an event takes a place behind the event's
+/// own (RFC §19.7.5).
+#[derive(Debug, Default)]
+pub(crate) struct RoomLanes {
+    queues: RoomQueues<u64>,
+    next: AtomicU64,
+}
 
-/// An event's place in its room's delivery lane.
-pub(crate) type Place<'lanes> = Slot<'lanes, EventId>;
+/// A set's place in its room's delivery lane.
+pub(crate) type Place<'lanes> = Slot<'lanes, u64>;
 
 impl<K> Default for RoomQueues<K> {
     fn default() -> Self {
@@ -148,6 +153,25 @@ impl<K: PartialEq> Drop for Slot<'_, K> {
     }
 }
 
+impl RoomLanes {
+    /// Takes the room's next place: it never waits.
+    pub(crate) fn take(&self, room_id: &RoomId) -> Place<'_> {
+        let number = self.next.fetch_add(1, Ordering::Relaxed);
+        self.queues.take(room_id, number)
+    }
+
+    /// Waits until every place of the room taken before `place` is left.
+    /// Cancelled, it leaves the place where it stands.
+    pub(crate) async fn turn(&self, place: &Place<'_>) {
+        self.queues.turn(place).await;
+    }
+
+    /// Whether no place of the room taken before `place` is held.
+    pub(crate) fn is_first(&self, place: &Place<'_>) -> bool {
+        self.queues.is_first(place)
+    }
+}
+
 impl RoomTickets {
     /// Takes the room's next ticket: it never waits.
     pub(crate) fn take(&self, room_id: &RoomId) -> Ticket<'_> {
@@ -176,10 +200,6 @@ mod tests {
 
     fn room_id() -> RoomId {
         RoomId::new("room_1").unwrap()
-    }
-
-    fn event(id: &str) -> EventId {
-        EventId::new(id).unwrap()
     }
 
     /// How long a wait that should end may take before the test fails.
@@ -284,8 +304,8 @@ mod tests {
     #[tokio::test]
     async fn a_place_s_turn_comes_once_every_earlier_place_is_left() {
         let lanes = RoomLanes::default();
-        let earlier = lanes.take(&room_id(), event("evt_1"));
-        let later = lanes.take(&room_id(), event("evt_2"));
+        let earlier = lanes.take(&room_id());
+        let later = lanes.take(&room_id());
         let early = tokio::time::timeout(Duration::from_millis(20), lanes.turn(&later)).await;
         drop(earlier);
         let turn = tokio::time::timeout(BOUND, lanes.turn(&later)).await;

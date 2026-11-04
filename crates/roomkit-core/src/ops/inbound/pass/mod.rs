@@ -590,7 +590,7 @@ impl CommitPass {
             State::ReadingTimeline { pending, .. } => self.on_timeline(cx, *pending, outcome),
             State::Committing { result, .. } => self.on_committed(cx, result, outcome),
             State::Placing { result, .. } => self.on_placed(cx, result, outcome),
-            State::TellingDiscussion { result, .. } => self.on_told(cx, result, &outcome),
+            State::TellingDiscussion { result, .. } => self.on_told(cx, result, outcome),
             State::Releasing { result, .. } => {
                 let (result, release_error) =
                     ops::after_release(&self.event.room_id, result, outcome.into_released());

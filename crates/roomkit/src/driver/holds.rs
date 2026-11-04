@@ -273,7 +273,7 @@ impl<'kit> Held<'kit> {
                 }
             }
             HoldRequest::EnterLane { room_id, event_id } => {
-                let place = rooms.lanes.take(&room_id, event_id.clone());
+                let place = rooms.lanes.take(&room_id);
                 let key = (room_id, event_id);
                 if rooms.lanes.is_first(&place) {
                     self.running.insert(key.clone());

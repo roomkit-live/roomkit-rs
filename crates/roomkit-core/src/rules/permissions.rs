@@ -395,6 +395,19 @@ pub(crate) fn reach(plan: &DeliveryPlan) -> Vec<ChannelId> {
         .collect()
 }
 
+/// `answered`, as a discussion's turn hands it: within what its source
+/// binding lets through (RFC §7.3). `None` when the room no longer binds its
+/// source, or that binding cannot write: the turn is not given (RFC §19.7.5).
+pub(crate) fn turn_event(answered: &RoomEvent, context: &RoomContext) -> Option<RoomEvent> {
+    let source = context.get_binding(&answered.source.channel_id)?;
+    if write_refusal(source).is_some() {
+        return None;
+    }
+    let mut event = answered.clone();
+    event.visibility = effective_visibility(&answered.visibility, source, &context.bindings);
+    Some(event)
+}
+
 /// A discussion's turn on `event`: `agent` alone, against the discussion's
 /// own depth limit `max_depth`, never a transport (RFC §19.7.5 rules 9 and
 /// 11). `None` when the agent cannot read the event. Past the limit it is
@@ -1310,6 +1323,26 @@ mod tests {
             // One it cannot read, or that is the event's own, takes no turn.
             assert!(plan_turn(&deep, &bindings, &channel("ghost"), 10).is_none());
             assert!(plan_turn(&deep, &bindings, &channel("ops"), 10).is_none());
+        }
+
+        // Python: core/mixins/discussion.py `_plan_discussion_turn`, what
+        // the discussion reads before it takes an entry off its queue.
+        #[test]
+        fn a_turn_needs_a_source_that_can_write_and_an_agent_that_reads() {
+            let event = event_from(&transport("ops"));
+            let context = held_room(room_bindings());
+            assert!(discussion::takes_turn(&event, &context, &channel("a")));
+            assert!(!discussion::takes_turn(&event, &context, &channel("ghost")));
+
+            let mut muted = room_bindings();
+            muted[2].muted = true;
+            let context = held_room(muted);
+            assert!(!discussion::takes_turn(&event, &context, &channel("a")));
+
+            let mut detached = room_bindings();
+            detached.remove(2);
+            let context = held_room(detached);
+            assert!(!discussion::takes_turn(&event, &context, &channel("a")));
         }
     }
 

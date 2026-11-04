@@ -293,6 +293,15 @@ impl Outcome {
         self.held(HoldOutcome::Released)
     }
 
+    pub(crate) fn into_discussion_turn(
+        self,
+    ) -> Result<Option<Box<super::DiscussionTurn>>, ErrorRecord> {
+        match self {
+            Self::Discussion(super::DiscussionOutcome::Turn(turn)) => Ok(turn),
+            other => Err(other.into_failure()),
+        }
+    }
+
     pub(crate) fn into_entered(self) -> Result<(), ErrorRecord> {
         self.held(HoldOutcome::Entered)
     }

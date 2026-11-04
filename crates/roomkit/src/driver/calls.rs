@@ -1282,6 +1282,11 @@ pub(super) async fn discussion<S: ConversationStore>(
         | DiscussionRequest::Turn { room_id, .. } => room_id,
     };
     let Some(seam) = inner.discussions.get(room_id) else {
+        tracing::warn!(
+            target: "roomkit::discussion",
+            %room_id,
+            "the room stores a discussion this process runs none of: it is told nothing"
+        );
         return match request {
             DiscussionRequest::Turn { .. } => DiscussionOutcome::Turn(None).into(),
             DiscussionRequest::Committed { .. } | DiscussionRequest::Instruction { .. } => {

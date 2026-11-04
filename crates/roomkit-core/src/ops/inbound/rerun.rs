@@ -25,8 +25,7 @@ use super::queues::{Delivery, Lineage};
 use super::{InboundResult, Machine, Stage, cascade, report};
 use crate::model::{ChannelCategory, EventId, Room, RoomContext, RoomEvent, RoomId, Visibility};
 use crate::ops::protocol::{
-    DiscussionOutcome, DiscussionRequest, DiscussionTurn, EffectId, HoldOutcome, HoldRequest,
-    Outcome, StoreRequest,
+    DiscussionRequest, DiscussionTurn, EffectId, HoldOutcome, HoldRequest, Outcome, StoreRequest,
 };
 use crate::ops::section::{Failure, Section, SectionWork};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
@@ -127,14 +126,9 @@ impl RerunWork {
         let Some(context) = self.context.take() else {
             return Progress::Done(Ok(Reran::Nothing));
         };
-        let Outcome::Discussion(DiscussionOutcome::Turn(turn)) = outcome else {
-            tracing::warn!(
-                target: "roomkit::core::inbound",
-                room_id = %context.room.id,
-                outcome = ?outcome,
-                "the room's discussion gave no turn"
-            );
-            return Progress::Done(Ok(Reran::Nothing));
+        let turn = match outcome.into_discussion_turn() {
+            Ok(turn) => turn,
+            Err(error) => return Progress::Done(Err(Abort::Store(error))),
         };
         let Some(turn) = turn else {
             return Progress::Done(Ok(Reran::Nothing));
@@ -295,8 +289,8 @@ fn plan_turn(turn: DiscussionTurn, context: Box<RoomContext>) -> Option<Planned>
         mark,
         max_depth,
     } = turn;
-    let plan = permissions::plan_turn(&answered, &context.bindings, &agent, max_depth)?;
-    let mut event = (*answered).clone();
+    let mut event = permissions::turn_event(&answered, &context)?;
+    let plan = permissions::plan_turn(&event, &context.bindings, &agent, max_depth)?;
     event.metadata.insert(discussion::TURN_KEY.to_owned(), mark);
     Some(Planned {
         trigger: *answered,
@@ -408,6 +402,11 @@ impl Machine {
         } = planned;
         self.trigger.decided = true;
         self.trigger.result.event = Some(trigger);
+        // A discussion's turn, and all that answers it, draws on one budget
+        // its own limit bounds (RFC §19.7.5 rule 11).
+        if let Some(limit) = limit {
+            self.cascade.budget = ReentryBudget::new(limit);
+        }
         let mut set = DeliverySet::new(
             SetKind::Rerun,
             event,
@@ -419,8 +418,6 @@ impl Machine {
         );
         if let Some(limit) = limit {
             set.held_to(limit);
-            // A discussion's turn draws on a budget its own limit bounds.
-            self.cascade.budget = ReentryBudget::new(limit);
         }
         // Its delivery cancelled before it was planned, the set asks no
         // agent (RFC §10.1 "Explicit delivery cancellation").

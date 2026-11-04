@@ -9,7 +9,8 @@ pub mod people;
 use serde_json::Value;
 
 use self::config::DiscussionConfig;
-use crate::model::{ChannelId, Metadata};
+use crate::model::{ChannelId, Metadata, RoomContext, RoomEvent};
+use crate::rules::permissions;
 
 /// The room metadata key a discussion's configuration is stored under (rule
 /// 16).
@@ -50,6 +51,17 @@ pub fn addresses_an_agent(metadata: &Metadata, addressed_to: &[ChannelId]) -> bo
         addressed_to
             .iter()
             .any(|agent| config.agents.contains(agent))
+    })
+}
+
+/// Whether `agent` can take a turn on `event` in the room of `context`: the
+/// room still binds the event's source and that binding can write, and the
+/// agent reads the event (RFC §19.7.5). A discussion asks before it takes an
+/// entry off its queue, so that a turn it cannot give costs no turn.
+#[must_use]
+pub fn takes_turn(event: &RoomEvent, context: &RoomContext, agent: &ChannelId) -> bool {
+    permissions::turn_event(event, context).is_some_and(|event| {
+        permissions::plan_turn(&event, &context.bindings, agent, u32::MAX).is_some()
     })
 }
 

@@ -273,8 +273,8 @@ pub struct TurnMemory {
     /// the turns, unless a turn's speaker already has it.
     pub speakers: Vec<String>,
     /// The runtime's own notes for this turn alone, a discussion's (RFC
-    /// §19.7.5 rule 14): blocks of the turn's notes, after the speaker
-    /// note and before the memory's.
+    /// §19.7.5 rule 14): blocks of the turn's notes, after the memory's, a
+    /// copy of a runtime mark in them replaced.
     pub turn_notes: Vec<String>,
     /// A discussion's turn: its event reads at its place in the history,
     /// before what was said after it, rounds of tool calls included, rather
@@ -300,19 +300,23 @@ pub fn conversation_with_memory(
 ) -> Vec<Message> {
     let mut authors = Authors::new(context);
     let mut turns = past_turns(channel_id, event, context, history, &mut authors, &read);
-    let rounds = tool_rounds(&context.recent_events, channel_id, &replayed);
+    let rounds = if turns.is_empty() {
+        Vec::new()
+    } else {
+        tool_rounds(&context.recent_events, channel_id, &replayed)
+    };
     let in_place = memory.in_place && event.index > 0;
-    if !in_place && !turns.is_empty() {
-        place(&mut turns, rounds.clone(), rounds_before(event));
-    }
-    turns.push(Turn::input(event, &mut authors, &read));
-    // Told apart in the order spoken: the input, read last, whatever its place.
-    tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
-    if in_place {
+    if !in_place {
+        place(&mut turns, rounds, rounds_before(event));
+        turns.push(Turn::input(event, &mut authors, &read));
+        tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
+    } else {
+        turns.push(Turn::input(event, &mut authors, &read));
+        // Told apart in the order spoken: the input read last, whatever its
+        // place.
+        tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
         read_at_its_place(&mut turns, event.index);
-        if turns.len() > 1 {
-            place(&mut turns, rounds, None);
-        }
+        place(&mut turns, rounds, None);
     }
     let speakers: Vec<&Speaker> = turns
         .iter()
@@ -435,14 +439,16 @@ fn past_turns(
 }
 
 /// `turns`, the input last, with the input at its place, before the first
-/// turn that came after it (index `index`). Python's `_answered_position`.
+/// turn that came after it, one at its index `index` too: an instruction,
+/// never stored, carries the index of the message that follows it. Python's
+/// `_answered_position`.
 fn read_at_its_place(turns: &mut Vec<Turn>, index: u64) {
     let Some(input) = turns.pop() else {
         return;
     };
     let at = turns
         .iter()
-        .position(|turn| turn.index > index)
+        .position(|turn| turn.index >= index)
         .unwrap_or(turns.len());
     turns.insert(at, input);
 }
@@ -588,6 +594,13 @@ struct Notes<'a> {
 }
 
 impl Notes<'_> {
+    /// The blocks a copy of a runtime mark is replaced in: the memory's,
+    /// then the discussion's, whose notes quote what people wrote.
+    fn after_the_runtime_s(&self) -> Vec<String> {
+        let (memory, discussion) = (self.remembered.iter(), self.discussion.iter());
+        memory.chain(discussion).cloned().collect()
+    }
+
     /// The notes' blocks, in order: the runtime's own, then the memory's,
     /// each copy of a runtime mark in them replaced.
     fn blocks(&self) -> Vec<String> {
@@ -595,8 +608,7 @@ impl Notes<'_> {
         speaker_note
             .into_iter()
             .chain(people_note(self.people))
-            .chain(self.discussion.iter().cloned())
-            .chain(cleaned_notes(self.remembered))
+            .chain(cleaned_notes(&self.after_the_runtime_s()))
             .collect()
     }
 }

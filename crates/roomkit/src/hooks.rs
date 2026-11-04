@@ -421,6 +421,7 @@ impl HookPayload for RoomEvent {
                     | HookTrigger::BeforeAiGeneration
                     | HookTrigger::OnAiResponse
                     | HookTrigger::OnAiThinking
+                    | HookTrigger::OnSpeakQueue
             )
     }
 
@@ -491,8 +492,10 @@ impl HookPayload for crate::human_input::PendingInputEvent {
 
 /// The payload of a trigger a turn fires whose type a crate beside the kit
 /// defines: roomkit-ai's loop events, `AFTER_TOOL_ROUND`'s,
-/// `BEFORE_AI_GENERATION`'s and `ON_AI_RESPONSE`'s (RFC §6.4). Its hooks
-/// register as any hook's, and a turn runs them through its host.
+/// `BEFORE_AI_GENERATION`'s and `ON_AI_RESPONSE`'s (RFC §6.4), or a payload
+/// the kit fires apart from any event, the discussion's `ON_SPEAK_QUEUE`
+/// (RFC §19.7.5). Its hooks register as any hook's, and a turn runs them
+/// through its host.
 #[doc(hidden)]
 pub trait TurnPayload: Clone + Send + Sync + 'static {
     /// The trigger that hands it.
