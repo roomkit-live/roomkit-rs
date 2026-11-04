@@ -437,8 +437,10 @@ impl Producer {
         false
     }
 
-    /// Lets `reader` end on a task of the kit's, in the current context: the
-    /// close waits for it within its grace, then drops it.
+    /// Lets `reader` end on a task of the kit's, in the current context, in a
+    /// unit of its own: the close waits for it within its grace, then drops
+    /// it, even a close called from the turn whose run the read works for,
+    /// which spares that run alone.
     fn leave_to_end_alone<R>(&self, reader: Pin<Box<R>>, tasks: &Arc<Tasks>)
     where
         R: Future<Output = Result<ChannelOutput, ChannelError>> + Send + 'static,
@@ -454,7 +456,7 @@ impl Producer {
                 );
             }
         });
-        drop(tasks.spawn_joined(Kind::Turn, work));
+        drop(tasks.spawn_alone(Kind::Turn, work));
     }
 
     /// The read is stopped from outside, for `reason`: `cancel` crosses at
@@ -615,7 +617,15 @@ impl Producer {
         let (mut output, target_error) = match read {
             Ok(output) => (output, None),
             Err(error) => {
-                let record = ErrorRecord::new("ChannelError", error.to_string());
+                // Past the close's cut a failure is the cut's: its ON_ERROR
+                // fires, and the call reads its reason, no error (Python's
+                // `record_error`, RFC §12.10.4).
+                let class = if self.cut == Some(KIT_CLOSED) {
+                    KIT_CLOSED
+                } else {
+                    "ChannelError"
+                };
+                let record = ErrorRecord::new(class, error.to_string());
                 (ChannelOutput::default(), Some(record))
             }
         };

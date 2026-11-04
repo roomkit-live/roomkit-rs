@@ -382,8 +382,9 @@ mod tests {
         assert_eq!(runs, 1);
     }
 
-    // Python: a change that calls `with_value` on its own key, as a helper of
-    // the handler's may, is two appends to one list, and ends.
+    // A change that calls `with_value` on its own key ends. Python's two appends
+    // to one list give ['inner', 'outer']; here the change holds its own copy,
+    // which the inner change cannot reach: the outer wins (HITL e9bc9288).
     #[test]
     fn a_change_that_changes_its_own_key_ends() {
         let record = ResponseMetadata::from(keys(json!({"sources": []})));

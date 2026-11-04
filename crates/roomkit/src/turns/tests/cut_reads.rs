@@ -20,8 +20,8 @@ use tokio::time::Instant;
 use super::support::{ReadingOn, Step, Streaming, Stuck, Timed, bind, kit_with, room_id};
 use crate::turns::observe::Carried;
 use crate::{
-    CancelOptions, Channel, ChannelError, DeliveryHandle, InboundResult, ProcessInboundOptions,
-    RoomKit, RoomKitError,
+    CancelOptions, Channel, ChannelError, DeliveryHandle, HookExecution, HookOptions, HookTrigger,
+    InboundResult, ProcessInboundOptions, RoomKit, RoomKitError,
 };
 
 /// A deferred call into a room whose agent's stream is `steps` and whose
@@ -263,6 +263,36 @@ async fn a_close_finding_a_target_reading_lets_it_finish() {
     assert_eq!(kept, ["flushed"]);
     assert_eq!(waited.cancellation_reason.as_deref(), Some("kit_closed"));
     assert_eq!(read(&waited), cited_and("cancelled"));
+}
+
+// Python's `record_error`: a target that fails on the close's cut: its ON_ERROR
+// fires once, and the call reads `kit_closed`, no error (RFC 12.10.4).
+#[tokio::test(start_paused = true)]
+async fn a_target_that_fails_on_the_close_s_cut_leaves_the_call_no_error() {
+    let target = ReadingOn::failing();
+    let kit = room(holding(), &target).await;
+    let errors = Arc::new(Mutex::new(0));
+    let counted = Arc::clone(&errors);
+    kit.hook(
+        HookTrigger::OnError,
+        move |_event: RoomEvent, _context| {
+            *counted.lock().unwrap() += 1;
+            async {}
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "errors".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let handle = deferred(&kit).await;
+    target.read.notified().await;
+    kit.close().await.unwrap();
+    let waited = handle.wait().await.unwrap();
+    assert_eq!(waited.error, None);
+    assert_eq!(waited.cancellation_reason.as_deref(), Some("kit_closed"));
+    assert_eq!(*errors.lock().unwrap(), 1);
 }
 
 // Python: a `finally` that never ends: close takes its grace and its unwind, 7 s,

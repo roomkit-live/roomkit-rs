@@ -161,8 +161,8 @@ impl DeliveryStream {
     }
 
     /// The next item: text, a row, or the response's failure, its last;
-    /// `None` once the response is over. It reads the response one item
-    /// further, as polling the stream does.
+    /// `None` once the response is over or its read was stopped from outside.
+    /// It reads the response one item further, as polling the stream does.
     pub async fn next(&mut self) -> Option<Result<StreamItem, ChannelError>> {
         std::future::poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await
     }

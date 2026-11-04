@@ -425,21 +425,18 @@ async fn a_cut_target_s_stored_text_is_what_it_received() {
     assert_eq!(wrong, []);
 }
 
-/// The same on a multi-thread runtime; on 8a2ca47, 8 of 40 runs of N6 went
-/// wrong (`lr5_threads_head.out`). The stalled target takes the close its
-/// grace of five seconds of real time: one run.
+/// The same on a multi-thread runtime, a target reading every 10 ms; a
+/// stalled one would take the close its grace of real time.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_cut_target_s_stored_text_is_what_it_received_on_threads() {
     let mut wrong = Vec::new();
-    for (pace, runs) in [(Pace::Stall, 1), (Pace::Ms10, 20)] {
-        for run in 0..runs {
-            let right = stores_what_it_received(pace).await;
-            if !right {
-                wrong.push((pace, run));
-            }
+    for run in 0..20 {
+        let right = stores_what_it_received(Pace::Ms10).await;
+        if !right {
+            wrong.push(run);
         }
     }
-    assert_eq!(wrong, []);
+    assert_eq!(wrong, Vec::<i32>::new());
 }
 
 /// RFC §10.6.8, §12.2 step 13s (RMK-1017, RMK-1326): a turn streams to a

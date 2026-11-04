@@ -970,6 +970,66 @@ async fn a_cut_target_that_fails_leaves_no_tool_running() {
     );
 }
 
+// RFC §12.10.4 (RMK-1326): a close called from a tool of the turn spares that
+// turn's run, not the target its read left: it waits for that target within its
+// grace, then drops it, as a close from outside does.
+#[tokio::test(start_paused = true)]
+async fn a_close_from_a_turn_s_tool_gives_a_target_left_reading_its_grace() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let target = Counting {
+        sizes: Arc::default(),
+        says: roomkit::model::Metadata::new(),
+        stalls: None,
+        lingers: Some(Arc::new(tokio::sync::Notify::new())),
+        pauses: false,
+        fails: false,
+    };
+    kit.register_channel(target).unwrap();
+    let took = Arc::new(Mutex::new(None));
+    let (closer, noted) = (kit.clone(), Arc::clone(&took));
+    let close = move |_call, _context| {
+        let (closer, noted) = (closer.clone(), Arc::clone(&noted));
+        async move {
+            let start = tokio::time::Instant::now();
+            drop(closer.close().await);
+            *noted.lock().unwrap() = Some(start.elapsed());
+            Ok(roomkit_ai::ToolResult::Text("closed".to_owned()))
+        }
+    };
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("Hello.", [("t1", "close", "{}")]),
+        ScriptedRound::answering("Bye."),
+    ]);
+    let options = AiChannelOptions {
+        tools: roomkit_ai::Tools::new()
+            .tool(roomkit_ai::AiTool::new("close", "d").unwrap(), close)
+            .into(),
+        ..AiChannelOptions::default()
+    };
+    kit.register_channel(AiChannel::new(channel("ai"), model, options).unwrap())
+        .unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["ws", "ai"] {
+        kit.attach_channel(&room(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let message = InboundMessage::new(channel("ws"), "alice", TextContent::new("hi"));
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..ProcessInboundOptions::default()
+    };
+    drop(kit.process_inbound(message, options).await);
+    kit.close().await.unwrap();
+    let took = *took.lock().unwrap();
+    assert_eq!(took, Some(Duration::from_secs(5)));
+}
+
 // RFC §12.2 step 13s, §13.6 (RMK-1236, RMK-1326): Python's close finds the
 // cascade cancelled and leaves it to end within its grace: a delivery is
 // cancelled by its key, and its streaming target, handed the stream's end,

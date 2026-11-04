@@ -202,15 +202,18 @@ impl Record {
         };
         result.response_events = self.answers.stored();
         result.cancellation_reason = Some(reason);
-        if let Some(record) = self
-            .cut_read_left
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-        {
+        if let Some(record) = self.left_by_the_cut_read() {
             result.response_metadata = record;
         }
         self.cancelled.send_replace(Some(result));
+    }
+
+    /// The call's record as the read its cut stopped left it, once over.
+    fn left_by_the_cut_read(&self) -> Option<Metadata> {
+        self.cut_read_left
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The call's cut stops a read of its own stream under way: its end is
@@ -271,6 +274,9 @@ impl Record {
             return cut_before_its_commit();
         };
         result.response_events = self.answers.stored();
+        if let Some(record) = self.left_by_the_cut_read() {
+            result.response_metadata = record;
+        }
         // Its caller's cancellation came first, the kit's close after.
         let reason = self.cancel_reason();
         result.cancellation_reason = Some(reason.unwrap_or_else(|| KIT_CLOSED.to_owned()));
@@ -899,6 +905,43 @@ mod tests {
     /// `KitClosedError`: the close ended it, as a `kit_closed` call and a
     /// cut turn's link, and the caller reads no error (RMK-1128's review;
     /// Python's cascade drops its errors once the close cut it).
+    /// A run the close aborted, past a cancel: Python's `wait()` reads the
+    /// first reason (`DeliveryCascade.cancel` keeps it), and what its cut read
+    /// left of the record.
+    #[test]
+    fn a_run_aborted_past_a_cancel_keeps_its_reason_and_its_record() {
+        let record = Record::new(None);
+        record.decide(&InboundResult::default());
+        assert_eq!(
+            record.aborted().cancellation_reason.as_deref(),
+            Some(KIT_CLOSED)
+        );
+        record.request_cancel("stopped");
+        let mut left = Metadata::new();
+        left.insert("cited".to_owned(), 3.into());
+        record.cut_read_over(left.clone());
+        let aborted = record.aborted();
+        assert_eq!(aborted.cancellation_reason.as_deref(), Some("stopped"));
+        assert_eq!(aborted.response_metadata, left);
+    }
+
+    /// A run over with nothing told of the read its cut stopped: the wait for
+    /// that read ends with it, a task the close would wait for otherwise.
+    #[tokio::test(start_paused = true)]
+    async fn the_wait_for_a_cut_read_ends_with_the_run() {
+        let record = Arc::new(Record::new(None));
+        record.decide(&InboundResult::default());
+        record.request_cancel("stopped");
+        record.await_cut_read();
+        let over = record.read_over_with_the_run();
+        let mut ending = tokio::spawn(end_once_over(Arc::clone(&record), Vec::new()));
+        let waited = tokio::time::timeout(std::time::Duration::from_secs(60), &mut ending).await;
+        assert!(waited.is_err(), "it ended with the read still under way");
+        drop(over);
+        ending.await.unwrap();
+        assert!(record.cancelled.borrow().is_some());
+    }
+
     #[test]
     fn a_turn_that_met_the_close_is_the_close_s() {
         let ended = [KIT_CLOSED, "KitClosedError", TURN_LINK_ERROR, "ValueError"]

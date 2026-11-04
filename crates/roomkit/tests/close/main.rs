@@ -10,7 +10,7 @@
 //! - `cut`: the running work gets one grace, then is cut, and each call the
 //!   close cuts reads `kit_closed`, with what it delivered;
 //! - `readers`: the reader of a cut turn's stream stores what its target
-//!   received, and holds the close no longer;
+//!   received at once, and its target ends within the close's grace;
 //! - `answers`: a call whose run the close aborts reads the answers its
 //!   cascade stored;
 //! - `shutdown`: every `close` joins the kit's one shutdown, a caller that
