@@ -7,10 +7,14 @@
 use std::pin::Pin;
 
 use futures_core::Stream;
+use std::collections::BTreeMap;
+use std::time::Duration;
+
 use pretty_assertions::assert_eq;
 use roomkit_ai::{AiContext, AiMessage, AiProvider, AiRole, ProviderError, StreamEvent};
 use roomkit_openai::{OpenAiAiProvider, OpenAiConfig};
 use serde_json::json;
+use tokio::time::Instant;
 
 use super::fake::{FakeOpenAi, Reply};
 
@@ -179,29 +183,112 @@ async fn the_endpoint_s_headers_decide_over_the_status() {
 }
 
 /// The SDK's `except Exception` around its send: a connection that closed
-/// with no answer is tried again, after its backoff.
+/// with no answer is tried again, each try after its backoff, which doubles:
+/// at least 0.375 s then 0.75 s.
 #[tokio::test]
-async fn a_connection_that_closed_is_tried_again() {
-    let fake = FakeOpenAi::start(vec![Reply::closed(), answering(true, "Recovered")]).await;
-    let provider = OpenAiAiProvider::new(config(fake.base_url(), 1)).unwrap();
+async fn a_connection_that_closed_is_tried_again_after_its_backoff() {
+    let replies = vec![
+        Reply::closed(),
+        Reply::closed(),
+        answering(true, "Recovered"),
+    ];
+    let (provider, fake) = on(replies, 2).await;
+    let started = Instant::now();
+    assert_eq!(answer(&provider, true).await.unwrap(), "Recovered");
+    assert!(
+        started.elapsed() >= Duration::from_millis(1125),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(fake.requests().len(), 3);
+}
+
+/// The SDK's `except timeout_exceptions()`: a try that timed out is tried
+/// again.
+#[tokio::test]
+async fn a_timeout_is_tried_again() {
+    let fake = FakeOpenAi::start(vec![
+        Reply::silent_for(Duration::from_millis(100)),
+        answering(true, "Recovered"),
+    ])
+    .await;
+    let timed = OpenAiConfig {
+        timeout: Duration::from_millis(50),
+        ..config(fake.base_url(), 1)
+    };
+    let provider = OpenAiAiProvider::new(timed).unwrap();
     assert_eq!(answer(&provider, true).await.unwrap(), "Recovered");
     assert_eq!(fake.requests().len(), 2);
 }
 
-/// The SDK's `send` reads a request it does not stream inside its try; a
-/// stream's body it reads after, where no retry reaches it.
+/// The SDK's `_calculate_retry_timeout`: the wait the endpoint asks replaces
+/// the backoff, whose first wait is 0.5 s at most.
+#[tokio::test]
+async fn the_wait_an_endpoint_asks_is_taken() {
+    let asking = Reply::status(429, "{}").with_header("retry-after-ms", "700");
+    let (provider, fake) = on(vec![asking, answering(true, "Recovered")], 1).await;
+    let started = Instant::now();
+    assert_eq!(answer(&provider, true).await.unwrap(), "Recovered");
+    assert!(
+        started.elapsed() >= Duration::from_millis(700),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(fake.requests().len(), 2);
+}
+
+/// The SDK builds its request outside its try: one that cannot be built
+/// never leaves, and fails at once, with no backoff (at least 2.6 s here).
+#[tokio::test]
+async fn a_request_that_cannot_be_built_is_not_tried_again() {
+    let (_, fake) = on(vec![answering(true, "never")], 0).await;
+    let unbuildable = OpenAiConfig {
+        default_headers: Some(BTreeMap::from([(
+            "x-broken".to_owned(),
+            "new\nline".to_owned(),
+        )])),
+        ..config(fake.base_url(), 3)
+    };
+    let provider = OpenAiAiProvider::new(unbuildable).unwrap();
+    let started = Instant::now();
+    assert!(answer(&provider, true).await.is_err());
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(fake.requests().len(), 0);
+}
+
+/// The SDK's `send` reads a request it does not stream inside its try,
+/// whatever its status; a stream's body it reads after, where no retry
+/// reaches it.
 #[tokio::test]
 async fn a_whole_completion_s_body_counts_in_the_try_a_stream_s_does_not() {
-    let whole = vec![Reply::dropped_in_its_body(), Reply::completion("Recovered")];
+    let answered = vec![
+        Reply::dropped_in_its_body(200),
+        Reply::completion("Recovered"),
+    ];
+    let refused = vec![
+        Reply::dropped_in_its_body(400),
+        Reply::completion("Recovered"),
+    ];
     let stream = vec![
         Reply::dropped_before_its_first_event(),
         answering(true, "never"),
     ];
-    let (whole, whole_fake) = on(whole, 1).await;
+    let (answered, answered_fake) = on(answered, 1).await;
+    let (refused, refused_fake) = on(refused, 1).await;
     let (stream, stream_fake) = on(stream, 1).await;
-    let (whole, stream) = tokio::join!(answer(&whole, false), answer(&stream, true));
-    assert_eq!(whole.unwrap(), "Recovered");
-    assert_eq!(whole_fake.requests().len(), 2);
+    let (answered, refused, stream) = tokio::join!(
+        answer(&answered, false),
+        answer(&refused, false),
+        answer(&stream, true)
+    );
+    assert_eq!(answered.unwrap(), "Recovered");
+    assert_eq!(answered_fake.requests().len(), 2);
+    assert_eq!(refused.unwrap(), "Recovered");
+    assert_eq!(refused_fake.requests().len(), 2);
     assert_eq!(status_of(&stream.unwrap_err()), (true, None));
     assert_eq!(stream_fake.requests().len(), 1);
 }
@@ -265,6 +352,8 @@ async fn a_model_listing_that_is_no_page_of_models_fails() {
         r#"{"data": null}"#,
         r#"{"data": [{"object": "model"}]}"#,
         r#"{"data": [{"id": 5}]}"#,
+        r#"{"data": [["gpt-4o"]]}"#,
+        r#"[[["gpt-4o"]]]"#,
     ] {
         let (provider, _fake) = on(vec![Reply::status(200, body)], 0).await;
         let error = provider.list_models().await.unwrap_err();
@@ -278,6 +367,16 @@ async fn a_model_listing_refused_fails_with_its_status_and_is_tried_again_as_any
     let (provider, _fake) = on(vec![Reply::status(401, "{}")], 0).await;
     let error = provider.list_models().await.unwrap_err();
     assert_eq!(status_of(&error), (false, Some(401)));
+
+    let (provider, _fake) = on(vec![Reply::closed()], 0).await;
+    let error = provider.list_models().await.unwrap_err();
+    assert_eq!(status_of(&error), (true, None));
+    assert!(
+        error
+            .to_string()
+            .contains("the model listing request failed"),
+        "{error}"
+    );
 
     let replies = vec![soon(Reply::status(503, "{}")), Reply::models(&["a"])];
     let (provider, fake) = on(replies, 1).await;

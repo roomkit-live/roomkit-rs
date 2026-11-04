@@ -1,4 +1,4 @@
-//! Host-owned bearer credentials, resolved separately for every generation.
+//! Host-owned bearer credentials, resolved separately for every request.
 use std::{future::Future, pin::Pin};
 
 /// An asynchronous credential lookup. Implementations must bound their I/O;
@@ -8,7 +8,8 @@ pub type TokenFuture<'a> = Pin<Box<dyn Future<Output = Result<String, TokenError
 /// A source of renewable bearer credentials. No OAuth or storage policy lives
 /// in the engine. Errors use a closed vocabulary so secrets cannot reach logs.
 pub trait TokenSource: Send + Sync {
-    /// Resolve a credential before each HTTP request, including tool rounds.
+    /// Resolve a credential before each HTTP request, including tool rounds
+    /// and each try of a request under `OpenAiConfig::max_retries`.
     /// An error fails the generation; there is no fallback to the static key.
     fn token(&self) -> TokenFuture<'_>;
 }

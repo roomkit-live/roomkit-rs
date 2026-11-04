@@ -298,6 +298,7 @@ impl OpenAiAiProvider {
             let body = match read_body(response).await {
                 Ok(body) => body,
                 Err(OpenAiError::AnswerTooLong { .. }) => Vec::new(),
+                Err(OpenAiError::Request { .. }) if left && whole => return Err(again()),
                 Err(error) => return Err(error.into()),
             };
             return Err(wire::status_error(status, &body, &secret).into());
@@ -310,6 +311,17 @@ impl OpenAiAiProvider {
             Err(OpenAiError::Request { .. }) if left => Err(again()),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// The models `GET /models` answers.
+    async fn live_models(&self) -> Result<Vec<ModelInfo>, OpenAiError> {
+        let call = || self.client.get(self.models_endpoint.clone());
+        let (answered, _) = self.send(&call, true).await?;
+        let body = match answered {
+            Answered::Body(body) => body,
+            Answered::Head(response) => read_body(response).await?,
+        };
+        crate::models::listed(&body)
     }
 
     /// `call` with the configuration's headers and the bearer token
@@ -399,13 +411,7 @@ impl AiProvider for OpenAiAiProvider {
     /// models the catalogue knows is backfilled from it, and the non-chat
     /// models (embeddings, audio) pass through, its speech models tagged.
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
-        let call = || self.client.get(self.models_endpoint.clone());
-        let (answered, _) = self.send(&call, true).await?;
-        let body = match answered {
-            Answered::Body(body) => body,
-            Answered::Head(response) => read_body(response).await?,
-        };
-        let live = crate::models::listed(&body)?;
+        let live = self.live_models().await.map_err(OpenAiError::of_listing)?;
         Ok(roomkit_ai::listing(live, crate::models::models()))
     }
 

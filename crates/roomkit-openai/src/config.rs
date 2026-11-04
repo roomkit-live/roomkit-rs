@@ -118,8 +118,9 @@ pub struct OpenAiConfig {
     /// Members every request's body carries, which win over RoomKit's own,
     /// as Python's client merges them last.
     pub extra_body: Option<Metadata>,
-    /// Where the bearer token comes from before each generation, in place
-    /// of `api_key`: a renewable credential.
+    /// Where the bearer token comes from before each request, each try of
+    /// it under `max_retries` included, in place of `api_key`: a renewable
+    /// credential.
     pub token_source: Option<Arc<dyn crate::TokenSource>>,
     /// Whether the configured model takes images (RFC §6.4).
     pub vision: bool,

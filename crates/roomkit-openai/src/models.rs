@@ -7,7 +7,7 @@
 use std::sync::LazyLock;
 
 use roomkit_ai::ModelInfo;
-use serde::Deserialize;
+use serde_json::Value;
 
 use crate::error::OpenAiError;
 
@@ -31,31 +31,23 @@ pub(crate) fn read() -> Result<Vec<ModelInfo>, serde_json::Error> {
     serde_json::from_str(CATALOG)
 }
 
-/// What a `GET /models` answer holds: a page of models, each read by its id
-/// alone, as Python's `list_models` reads it.
-#[derive(Deserialize)]
-struct Listing {
-    data: Vec<Listed>,
-}
-
-/// One model of a [`Listing`].
-#[derive(Deserialize)]
-struct Listed {
-    id: String,
-}
-
-/// The models the `body` of a `GET /models` answer lists, nothing known of
-/// them but their ids. A body that is no such page is no listing: an error,
-/// not an empty one. The error does not repeat it.
+/// The models the `body` of a `GET /models` answer lists: a page of models,
+/// each read by its id alone, as Python's `list_models` reads it. A body that
+/// is no such page is no listing: an error, not an empty one. The error does
+/// not repeat it.
 pub(crate) fn listed(body: &[u8]) -> Result<Vec<ModelInfo>, OpenAiError> {
-    let listing: Listing = serde_json::from_slice(body).map_err(|_| OpenAiError::Malformed {
+    let no_page = || OpenAiError::Malformed {
         reason: "the model listing is no page of models with their ids".to_owned(),
-    })?;
-    Ok(listing
-        .data
-        .into_iter()
-        .map(|model| ModelInfo::new(model.id))
-        .collect())
+    };
+    let page: Value = serde_json::from_slice(body).map_err(|_| no_page())?;
+    let data = page.get("data").and_then(Value::as_array);
+    data.ok_or_else(no_page)?
+        .iter()
+        .map(|model| {
+            let id = model.get("id").and_then(Value::as_str);
+            id.map(ModelInfo::new).ok_or_else(no_page)
+        })
+        .collect()
 }
 
 /// Every entry of the catalogue, in Python's order.

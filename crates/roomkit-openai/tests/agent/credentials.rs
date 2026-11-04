@@ -57,6 +57,38 @@ async fn a_rotating_source_is_resolved_again_and_its_current_error_is_redacted()
     );
     assert_eq!(source.0.load(Ordering::SeqCst), 2);
 }
+/// A request tried again under `max_retries` asks its source again, as
+/// Python's SDK refreshes a key before each try.
+#[tokio::test]
+async fn each_try_of_a_request_resolves_its_credential() {
+    let source = Arc::new(Rotating(AtomicUsize::new(0)));
+    let room = Room::configured(
+        vec![
+            Reply::status(503, "{}").with_header("retry-after-ms", "1"),
+            Reply::completion("Recovered"),
+        ],
+        "unused-static",
+        |config| {
+            let shared = Arc::clone(&source);
+            OpenAiConfig {
+                token_source: Some(shared),
+                max_retries: 1,
+                ..config
+            }
+        },
+    )
+    .await;
+    let said = room.says(&room.sms, "alice", "Alice", "Hello").await;
+    assert_eq!(said.error, None);
+    let requests = room.fake.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.authorization.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("Bearer rotating-0"), Some("Bearer rotating-1")]
+    );
+}
 #[tokio::test]
 async fn a_failed_credential_source_never_falls_back_to_the_static_key() {
     let room = Room::configured(vec![], "unused-static", |config| OpenAiConfig {

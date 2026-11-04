@@ -27,8 +27,9 @@ pub(crate) struct Reply {
     pace: Option<std::time::Duration>,
     /// More headers of the answer's head.
     headers: Vec<(&'static str, String)>,
-    /// Whether the connection closes before any answer.
-    closes: bool,
+    /// The wait after which the connection closes with no answer, if it
+    /// does.
+    closes_after: Option<std::time::Duration>,
 }
 
 /// The length an answer's head declares.
@@ -67,7 +68,7 @@ impl Reply {
             fill: b" ".to_vec(),
             pace: None,
             headers: Vec::new(),
-            closes: false,
+            closes_after: None,
         }
     }
 
@@ -155,7 +156,7 @@ impl Reply {
             fill: b" ".to_vec(),
             pace: None,
             headers: Vec::new(),
-            closes: false,
+            closes_after: None,
         }
     }
 
@@ -202,20 +203,24 @@ impl Reply {
         }
     }
 
-    /// A whole completion's head, then the connection closes short of the
-    /// length it declared.
-    pub(crate) fn dropped_in_its_body() -> Self {
+    /// The head of a JSON answer of HTTP `status`, then the connection closes
+    /// short of the length it declared.
+    pub(crate) fn dropped_in_its_body(status: u16) -> Self {
         Self {
-            body: String::new(),
             length: Length::Declared(1024),
-            ..Self::completion("")
+            ..Self::status(status, "")
         }
     }
 
     /// The connection closes once the request is read, with no answer.
     pub(crate) fn closed() -> Self {
+        Self::silent_for(std::time::Duration::ZERO)
+    }
+
+    /// No answer for `wait`, then the connection closes.
+    pub(crate) fn silent_for(wait: std::time::Duration) -> Self {
         Self {
-            closes: true,
+            closes_after: Some(wait),
             ..Self::status(200, "")
         }
     }
@@ -366,7 +371,8 @@ async fn answer(stream: &mut TcpStream, reply: &Reply) {
     if reply.silent {
         std::future::pending::<()>().await;
     }
-    if reply.closes {
+    if let Some(wait) = reply.closes_after {
+        tokio::time::sleep(wait).await;
         return;
     }
     let location = reply

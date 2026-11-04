@@ -3,13 +3,19 @@
 //! request loop reads an answer (`openai._base_client`, 2.54).
 //!
 //! A try that could not reach the endpoint is tried again, and one answered
-//! with a status [`should_retry`] says is worth it, each after [`delay`]; a
-//! stream's body is out of it, read once its head came.
+//! with a status [`should_retry`] says is worth it, each after [`delay`]. A
+//! whole answer's body counts in the try, a stream's does not, read once its
+//! head came. An answer to a whole request that is no JSON reads as a stream
+//! here, so its body is out of the try where the SDK's is in it: the SDK can
+//! do nothing with such a body but fail.
 
 use std::hash::{BuildHasher, Hasher};
 use std::time::Duration;
 
+use jiff::Timestamp;
 use jiff::fmt::rfc2822::DateTimeParser;
+use jiff::fmt::strtime::BrokenDownTime;
+use jiff::tz::TimeZone;
 use reqwest::StatusCode;
 use reqwest::header::{HeaderMap, HeaderValue};
 use roomkit_core::ops::{Environment, SystemEnvironment};
@@ -36,7 +42,8 @@ pub(crate) fn should_retry(status: StatusCode, headers: &HeaderMap) -> bool {
         Some(b"false") => return false,
         _ => {}
     }
-    matches!(status.as_u16(), 408 | 409 | 429) || status.is_server_error()
+    let status = status.as_u16();
+    matches!(status, 408 | 409 | 429) || status >= 500
 }
 
 /// How long to wait before the try after `retries_taken` tries, answered
@@ -72,21 +79,41 @@ fn retry_after(headers: &HeaderMap, now: f64) -> Option<f64> {
 }
 
 /// `text` as Python's `float()` reads what an endpoint writes: spaces
-/// around it are no part of it.
+/// around it are no part of it. Python's `1_000` is left out, which no
+/// endpoint writes.
 fn python_float(text: &str) -> Option<f64> {
     text.trim().parse().ok()
 }
 
-/// The seconds since the epoch of the date `text`, as an HTTP date is
-/// written.
+/// The seconds since the epoch of the date `text`, in any of HTTP's three
+/// forms (RFC 9110 §5.6.7), its weekday not held against it, as Python's
+/// `parsedate_tz` reads them.
 #[expect(
     clippy::cast_precision_loss,
     reason = "a date's seconds since the epoch are far within an f64's exact integers"
 )]
 fn date_seconds(text: &str) -> Option<f64> {
-    let parser = DateTimeParser::new();
-    let date = parser.parse_timestamp(text).ok()?;
-    Some(date.as_second() as f64)
+    let text = text.trim();
+    let date = match text.split_once(", ") {
+        Some((_, dated)) => DateTimeParser::new()
+            .parse_timestamp(dated)
+            .ok()
+            .or_else(|| obsolete_date("%d-%b-%y %H:%M:%S GMT", dated)),
+        // `Sun Nov  6 08:49:37 1994`.
+        None => text
+            .split_once(' ')
+            .and_then(|(_, dated)| obsolete_date("%b %e %H:%M:%S %Y", dated.trim_start())),
+    };
+    Some(date?.as_second() as f64)
+}
+
+/// The instant `text` writes in the UTC of `format`.
+fn obsolete_date(format: &str, text: &str) -> Option<Timestamp> {
+    let written = BrokenDownTime::parse(format, text)
+        .ok()?
+        .to_datetime()
+        .ok()?;
+    TimeZone::UTC.to_timestamp(written).ok()
 }
 
 /// The seconds since the epoch now.
@@ -179,10 +206,19 @@ mod tests {
         assert_eq!(read(&[("retry-after", " 2.5 ")]), Some(2.5));
         assert_eq!(read(&[("retry-after", "soon")]), None);
         assert_eq!(read(&[]), None);
-        // 1970-01-12T13:46:49Z, nine seconds past the clock.
+        // 1970-01-12T13:46:49Z, nine seconds past the clock, in HTTP's three
+        // forms, a wrong weekday not held against it.
+        for date in [
+            "Mon, 12 Jan 1970 13:46:49 GMT",
+            "Tue, 12 Jan 1970 13:46:49 GMT",
+            "Monday, 12-Jan-70 13:46:49 GMT",
+            "Mon Jan 12 13:46:49 1970",
+        ] {
+            assert_eq!(read(&[("retry-after", date)]), Some(9.0), "{date}");
+        }
         assert_eq!(
-            read(&[("retry-after", "Mon, 12 Jan 1970 13:46:49 GMT")]),
-            Some(9.0)
+            read(&[("retry-after", "Mon Jan  5 00:00:00 1970")]),
+            Some(345_600.0 - now)
         );
     }
 
@@ -192,7 +228,7 @@ mod tests {
         let worth = |status: u16, given: &[(&'static str, &str)]| {
             should_retry(StatusCode::from_u16(status).unwrap(), &headers(given))
         };
-        for status in [408, 409, 429, 500, 503, 599] {
+        for status in [408, 409, 429, 500, 503, 599, 600] {
             assert!(worth(status, &[]), "{status}");
         }
         for status in [400, 401, 403, 404, 422] {

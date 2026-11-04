@@ -15,7 +15,7 @@ use crate::{OpenAiAiProvider, OpenAiConfig};
 #[test]
 fn the_catalogue_reads_whole() {
     let models = read().unwrap();
-    let python: serde_json::Value = serde_json::from_str(CATALOG).unwrap();
+    let python: Value = serde_json::from_str(CATALOG).unwrap();
     assert_eq!(serde_json::to_value(&models).unwrap(), python);
     assert_eq!(models.len(), self::models().len());
 }

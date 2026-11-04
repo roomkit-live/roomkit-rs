@@ -38,6 +38,14 @@ pub(crate) enum OpenAiError {
         /// Why, with its causes.
         reason: String,
     },
+    /// The model listing's request failed before the endpoint answered it
+    /// in full: the endpoint could not be reached, or it took longer than
+    /// the configured timeout.
+    #[error("the model listing request failed: {reason}")]
+    ListingRequest {
+        /// Why, with its causes.
+        reason: String,
+    },
     /// The provider answered with an HTTP error.
     #[error("the provider answered HTTP {status}{}: {message}", detail(.error_type.as_deref(), .code.as_deref()))]
     Status {
@@ -126,6 +134,16 @@ impl OpenAiError {
     pub(crate) fn request(error: reqwest::Error) -> Self {
         Self::Request {
             reason: with_causes(&error.without_url()),
+        }
+    }
+
+    /// This failure as a model listing's: a request that failed says so,
+    /// any other reads the same.
+    pub(crate) fn of_listing(self) -> Self {
+        if let Self::Request { reason } = self {
+            Self::ListingRequest { reason }
+        } else {
+            self
         }
     }
 
@@ -248,7 +266,7 @@ impl From<OpenAiError> for ProviderError {
                 Some(*status),
                 (code.as_deref() == Some("context_length_exceeded")).then_some(true),
             ),
-            OpenAiError::Request { .. } => (true, None, None),
+            OpenAiError::Request { .. } | OpenAiError::ListingRequest { .. } => (true, None, None),
             // An error object read inside a stream: the status it names
             // decides, else its words (Python's `provider_error`).
             OpenAiError::StreamFailed {
