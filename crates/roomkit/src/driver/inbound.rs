@@ -1144,6 +1144,20 @@ mod tests {
         assert_eq!(aborted.response_metadata, left);
     }
 
+    /// A failure the read a cut stopped left is its caller's error, but one the
+    /// kit's close caused, which ends the work it met.
+    #[test]
+    fn a_cut_read_s_failure_is_its_caller_s_unless_the_close_caused_it() {
+        for (error_type, read) in [("ValueError", true), (KIT_CLOSED, false)] {
+            let record = Record::new(None);
+            record.decide(&InboundResult::default());
+            record.request_cancel("stopped");
+            let failure = ErrorRecord::new(error_type, "m");
+            record.cut_read_over(Metadata::new(), Some(failure), Vec::new());
+            assert_eq!(record.aborted().error.is_some(), read, "{error_type}");
+        }
+    }
+
     /// An agent's turn that met the kit's close crosses under its class,
     /// `KitClosedError`: the close ended it, as a `kit_closed` call and a
     /// cut turn's link, and the caller reads no error (RMK-1128's review;

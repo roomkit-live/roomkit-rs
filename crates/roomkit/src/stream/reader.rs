@@ -495,12 +495,10 @@ impl Producer {
     }
 
     /// Writes the turn's record on its last message or else its last row,
-    /// when no row carried it; a strategy's first pass hands its record on
-    /// (RFC §19.7.3).
+    /// when no row carried it. A strategy's first pass, whose record is handed
+    /// on (RFC §19.7.3), comes nowhere near: its reader ends with its stream,
+    /// and its read returns before this.
     async fn write_owed_record<S: ConversationStore>(&mut self, inner: &Arc<Inner<S>>) {
-        if self.kept_out.is_some() {
-            return;
-        }
         if let Some((event_id, record)) = self.segments.take_owed_record() {
             self.rewritten = write_record(inner, &self.room_id, &event_id, record).await;
         }
