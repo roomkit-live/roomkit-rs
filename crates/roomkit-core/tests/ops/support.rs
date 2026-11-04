@@ -1053,6 +1053,10 @@ impl Sim {
 
     /// How the trace names `request`, or the start of it for the requests
     /// whose line says more once they ran.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a dispatch: one arm per request the simulated driver answers"
+    )]
     fn label(&self, request: &Request) -> String {
         match request {
             Request::Hold(HoldRequest::AcquireLock { room_id }) => format!("lock {room_id}"),
@@ -1409,6 +1413,10 @@ impl Sim {
 
     /// The effect `request` is, as `failing_effect` names it, and the error
     /// it fails with; `None` for an effect that never fails.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a dispatch: one arm per request the simulated driver answers"
+    )]
     fn failure_of(&self, request: &Request) -> Option<(String, ErrorRecord)> {
         let store_down = || ErrorRecord::new("StoreUnavailable", "the store is down");
         Some(match request {
@@ -1669,6 +1677,10 @@ impl Sim {
 
     /// The store, for the room the fields hold: its bindings, participants,
     /// timeline and side effects.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a dispatch: one arm per request the simulated driver answers"
+    )]
     fn execute_store(&mut self, request: StoreRequest) -> Outcome {
         match request {
             StoreRequest::LoadContext {

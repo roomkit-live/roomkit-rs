@@ -363,20 +363,8 @@ async fn lifecycle_call(
                 outcome => finish(run, name, outcome, |_| Value::Null),
             }
         }
-        "mute" | "unmute" | "set_access" | "set_visibility" => {
+        "mute" | "unmute" | "set_access" | "set_visibility" | "update_binding_metadata" => {
             binding_call(run, name, spec).await?
-        }
-        "update_binding_metadata" => {
-            let (room, channel) = (room_id(spec)?, channel_id(spec)?);
-            let options = UpdateBindingMetadataOptions {
-                organization_id: organization_id(spec),
-            };
-            let metadata = field::<Metadata>(spec, "metadata")?;
-            let outcome = run
-                .kit()
-                .update_binding_metadata(&room, &channel, metadata, options)
-                .await;
-            finish(run, name, outcome, dump)
         }
         "close_room" => {
             let room = room_id(spec)?;
@@ -453,6 +441,12 @@ async fn binding_call(
             let access = field::<Access>(spec, "access")?;
             let options = SetAccessOptions { organization_id };
             kit.set_access(&room, &channel, access, options).await
+        }
+        "update_binding_metadata" => {
+            let metadata = field::<Metadata>(spec, "metadata")?;
+            let options = UpdateBindingMetadataOptions { organization_id };
+            kit.update_binding_metadata(&room, &channel, metadata, options)
+                .await
         }
         _ => {
             let visibility = field::<Visibility>(spec, "visibility")?;

@@ -55,6 +55,10 @@ const AUTHOR_REGISTER: &str = "author_register";
 
 /// Carries out a request on the store (RFC §14), through Python's store
 /// calls.
+#[expect(
+    clippy::too_many_lines,
+    reason = "a dispatch: one arm per store request, each a call of the store"
+)]
 pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest) -> Outcome {
     let answer = match request {
         StoreRequest::LoadContext {
