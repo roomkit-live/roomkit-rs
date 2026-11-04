@@ -220,6 +220,15 @@ impl Reply {
         }
     }
 
+    /// A page of models, each of `ids`, as `GET /models` answers.
+    pub(crate) fn models(ids: &[&str]) -> Self {
+        let data: Vec<Value> = ids
+            .iter()
+            .map(|id| json!({ "id": id, "object": "model", "owned_by": "fake" }))
+            .collect();
+        Self::status(200, &json!({ "object": "list", "data": data }).to_string())
+    }
+
     /// No answer at all: the connection stays open, silent.
     pub(crate) fn silent() -> Self {
         Self {
@@ -232,6 +241,8 @@ impl Reply {
 /// A request the fake received.
 #[derive(Clone, Debug)]
 pub(crate) struct Request {
+    /// The request's method.
+    pub(crate) method: String,
     /// The request's path.
     pub(crate) path: String,
     /// Its `Authorization` header, if any.
@@ -331,6 +342,7 @@ async fn exchange(mut stream: TcpStream, reply: &Reply, requests: &Mutex<Vec<Req
     }
     let body = serde_json::from_slice(&received[head_end..head_end + length]).unwrap_or_default();
     let request = Request {
+        method,
         path,
         authorization: header("authorization"),
         accept_encoding: header("accept-encoding"),

@@ -7,6 +7,9 @@
 use std::sync::LazyLock;
 
 use roomkit_ai::ModelInfo;
+use serde::Deserialize;
+
+use crate::error::OpenAiError;
 
 /// The catalogue as Python writes it.
 const CATALOG: &str = include_str!("../catalog/models.json");
@@ -26,6 +29,33 @@ static MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
 /// Reads the catalogue's copy.
 pub(crate) fn read() -> Result<Vec<ModelInfo>, serde_json::Error> {
     serde_json::from_str(CATALOG)
+}
+
+/// What a `GET /models` answer holds: a page of models, each read by its id
+/// alone, as Python's `list_models` reads it.
+#[derive(Deserialize)]
+struct Listing {
+    data: Vec<Listed>,
+}
+
+/// One model of a [`Listing`].
+#[derive(Deserialize)]
+struct Listed {
+    id: String,
+}
+
+/// The models the `body` of a `GET /models` answer lists, nothing known of
+/// them but their ids. A body that is no such page is no listing: an error,
+/// not an empty one. The error does not repeat it.
+pub(crate) fn listed(body: &[u8]) -> Result<Vec<ModelInfo>, OpenAiError> {
+    let listing: Listing = serde_json::from_slice(body).map_err(|_| OpenAiError::Malformed {
+        reason: "the model listing is no page of models with their ids".to_owned(),
+    })?;
+    Ok(listing
+        .data
+        .into_iter()
+        .map(|model| ModelInfo::new(model.id))
+        .collect())
 }
 
 /// Every entry of the catalogue, in Python's order.

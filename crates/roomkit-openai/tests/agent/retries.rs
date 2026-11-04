@@ -205,3 +205,83 @@ async fn a_whole_completion_s_body_counts_in_the_try_a_stream_s_does_not() {
     assert_eq!(status_of(&stream.unwrap_err()), (true, None));
     assert_eq!(stream_fake.requests().len(), 1);
 }
+
+// Python: tests/test_providers/test_ai_models.py::test_openai_list_models_maps_and_merges
+#[tokio::test]
+async fn openai_list_models_maps_and_merges() {
+    let reply = Reply::models(&[
+        "gpt-4o",
+        "gpt-6-luna",
+        "text-embedding-3",
+        "whisper-1",
+        "gpt-4o-mini-tts",
+    ]);
+    let (provider, fake) = on(vec![reply], 0).await;
+    let models = provider.list_models().await.unwrap();
+    let known = models.first().unwrap();
+    assert_eq!(known.display_name.as_deref(), Some("GPT-4o"));
+    assert_eq!(known.supports_vision, Some(true));
+    let read: Vec<(&str, Option<&str>, &[String])> = models
+        .iter()
+        .map(|model| {
+            (
+                model.id.as_str(),
+                model.display_name.as_deref(),
+                &model.capabilities[..],
+            )
+        })
+        .skip(2)
+        .collect();
+    assert_eq!(
+        read,
+        [
+            ("text-embedding-3", None, &[][..]),
+            ("whisper-1", None, &["transcription".to_owned()][..]),
+            ("gpt-4o-mini-tts", None, &["speech".to_owned()][..]),
+        ]
+    );
+    // A catalogue's flag (gpt-6-luna's tools_reasoning_none) stays out.
+    let luna = models.get(1).unwrap();
+    assert_eq!(luna.capabilities, Vec::<String>::new());
+    let request = fake.requests().remove(0);
+    assert_eq!(
+        (
+            request.method.as_str(),
+            request.path.as_str(),
+            request.authorization.as_deref()
+        ),
+        ("GET", "/v1/models", Some("Bearer sk-test"))
+    );
+}
+
+/// Python reads `page.data` of what the SDK gave: a body that is no page of
+/// models with their ids raises, it is no empty listing, and the error does
+/// not repeat it.
+#[tokio::test]
+async fn a_model_listing_that_is_no_page_of_models_fails() {
+    for body in [
+        "<html>sk-test Sign in</html>",
+        "{}",
+        r#"{"data": null}"#,
+        r#"{"data": [{"object": "model"}]}"#,
+        r#"{"data": [{"id": 5}]}"#,
+    ] {
+        let (provider, _fake) = on(vec![Reply::status(200, body)], 0).await;
+        let error = provider.list_models().await.unwrap_err();
+        assert_eq!(status_of(&error), (false, None), "{body}");
+        assert!(!error.to_string().contains("sk-test"), "{error}");
+    }
+}
+
+#[tokio::test]
+async fn a_model_listing_refused_fails_with_its_status_and_is_tried_again_as_any_request() {
+    let (provider, _fake) = on(vec![Reply::status(401, "{}")], 0).await;
+    let error = provider.list_models().await.unwrap_err();
+    assert_eq!(status_of(&error), (false, Some(401)));
+
+    let replies = vec![soon(Reply::status(503, "{}")), Reply::models(&["a"])];
+    let (provider, fake) = on(replies, 1).await;
+    let models = provider.list_models().await.unwrap();
+    assert_eq!(models.len(), 1);
+    assert_eq!(fake.requests().len(), 2);
+}

@@ -22,6 +22,9 @@ use crate::wire::{self, CompletionRequest};
 /// completion's text and calls take.
 pub(crate) const ANSWER_LIMIT: usize = 4 * 1024 * 1024;
 
+/// Where an endpoint lists its models, under its base URL.
+const MODELS_PATH: &str = "/models";
+
 /// A model behind an OpenAI-compatible endpoint (RFC §6.7): Python's
 /// `OpenAIAIProvider(config)`. A generation is one streamed completion,
 /// read as it arrives; [`generate`](AiProvider::generate) asks Chat
@@ -36,6 +39,8 @@ pub(crate) const ANSWER_LIMIT: usize = 4 * 1024 * 1024;
 pub struct OpenAiAiProvider {
     config: Arc<OpenAiConfig>,
     endpoint: reqwest::Url,
+    /// Where the endpoint lists its models.
+    models_endpoint: reqwest::Url,
     client: reqwest::Client,
     /// Whether the provider warned of an effort a turn with tools left out
     /// unsaid, which it does once (Python's `_reasoning_left_out_logged`).
@@ -52,6 +57,7 @@ impl OpenAiAiProvider {
     /// that cannot be built.
     pub fn new(config: OpenAiConfig) -> Result<Self, ProviderError> {
         let endpoint = endpoint(config.base_url(), config.api)?;
+        let models_endpoint = joined(config.base_url(), MODELS_PATH)?;
         // An API endpoint has no use for a redirect, which could carry the
         // key to another scheme of the same host. The timeouts are Python's
         // httpx `Timeout(timeout, connect=connect_timeout)`: between two
@@ -69,6 +75,7 @@ impl OpenAiAiProvider {
         Ok(Self {
             config: Arc::new(config),
             endpoint,
+            models_endpoint,
             client,
             left_out_warned: Arc::new(AtomicBool::new(false)),
         })
@@ -387,6 +394,21 @@ impl AiProvider for OpenAiAiProvider {
         crate::models::entry(&self.config.model).cloned()
     }
 
+    /// Every model id the configured endpoint exposes, `GET /models`, as
+    /// Python's: the response carries only ids, so the metadata of the
+    /// models the catalogue knows is backfilled from it, and the non-chat
+    /// models (embeddings, audio) pass through, its speech models tagged.
+    async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
+        let call = || self.client.get(self.models_endpoint.clone());
+        let (answered, _) = self.send(&call, true).await?;
+        let body = match answered {
+            Answered::Body(body) => body,
+            Answered::Head(response) => read_body(response).await?,
+        };
+        let live = crate::models::listed(&body)?;
+        Ok(roomkit_ai::listing(live, crate::models::models()))
+    }
+
     fn supports_streaming(&self) -> bool {
         true
     }
@@ -448,9 +470,13 @@ pub(crate) async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>
 }
 
 /// The selected API endpoint under `base_url`, appended after its path.
-/// A base URL with a query or a fragment is refused, since the
-/// path would follow them instead.
 fn endpoint(base_url: &str, api: OpenAiApi) -> Result<reqwest::Url, OpenAiError> {
+    joined(base_url, api.path())
+}
+
+/// `path` under `base_url`, appended after its path. A base URL with a
+/// query or a fragment is refused, since the path would follow them instead.
+fn joined(base_url: &str, path: &str) -> Result<reqwest::Url, OpenAiError> {
     let refused = |reason: &str| OpenAiError::BaseUrl {
         reason: reason.to_owned(),
     };
@@ -461,7 +487,7 @@ fn endpoint(base_url: &str, api: OpenAiApi) -> Result<reqwest::Url, OpenAiError>
             "it has a query or a fragment, which the API path cannot follow",
         ));
     }
-    let joined = format!("{}{}", base_url.trim_end_matches('/'), api.path());
+    let joined = format!("{}{path}", base_url.trim_end_matches('/'));
     let url = reqwest::Url::parse(&joined).map_err(|_| not_http())?;
     match url.scheme() {
         "http" | "https" => Ok(url),
