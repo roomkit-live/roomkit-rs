@@ -1,0 +1,113 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "streaming/a-message-steered-at-an-answer-a-reader-still-shows-is-too-late",
+  "title": "A message steered at an answer its reader is still showing reaches no loop: the loop read past what the generation told, its steering closed, as it reads past a text delta",
+  "rules": [
+    "§6.4 The turn's record",
+    "§10.6.4"
+  ],
+  "notes": "Python: turns/_codec.py, the usage item is read ahead as a delta (RMK-1333 review): channels/_ai_streaming.py _steered_after_answer runs ahead of the reader.",
+  "setup": {
+    "channels": [
+      {
+        "id": "ws",
+        "type": "websocket",
+        "category": "transport",
+        "streams": true,
+        "deliver_stream": [
+          {
+            "hold_after": "Done.",
+            "hold_gate": "shown"
+          }
+        ]
+      },
+      {
+        "id": "agent",
+        "type": "ai",
+        "model": {
+          "rounds": [
+            {
+              "text": "Done.",
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 2
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "rooms": [
+      {
+        "id": "room-1",
+        "bindings": [
+          {
+            "channel_id": "ws"
+          },
+          {
+            "channel_id": "agent",
+            "category": "intelligence"
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "room_id": "room-1",
+      "message": {
+        "channel_id": "ws",
+        "sender_id": "alice",
+        "content": {
+          "type": "text",
+          "body": "Go."
+        }
+      },
+      "background": true,
+      "as": "a"
+    },
+    {
+      "wait_for": "shown"
+    },
+    {
+      "call": "steer",
+      "channel_id": "agent",
+      "room_id": "room-1",
+      "directive": {
+        "type": "inject_message",
+        "content": "More."
+      },
+      "expect": {
+        "result": 0
+      }
+    },
+    {
+      "open": "shown"
+    },
+    {
+      "await": "a"
+    },
+    {
+      "idle": true
+    }
+  ],
+  "expect": {
+    "timeline": {
+      "room-1": [
+        {
+          "index": 0
+        },
+        {
+          "index": 1,
+          "content": {
+            "body": "Done."
+          },
+          "metadata": {
+            "loop_end_reason": "completed"
+          }
+        }
+      ]
+    }
+  }
+}
