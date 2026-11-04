@@ -89,6 +89,14 @@ impl Limits {
         Ok(())
     }
 
+    /// Whether a done event's `usage` is one [`Self::count`] raises for: a
+    /// billed counter the turn's price cannot read.
+    pub(super) fn cannot_price(&self, usage: &roomkit::model::Metadata) -> bool {
+        self.budget
+            .as_ref()
+            .is_some_and(|budget| budget.cost_of(usage).is_err())
+    }
+
     /// The limit of the loop's own the turn has passed: its deadline, then
     /// its budget (RFC §6.4, Python's `limit_passed`).
     pub(super) fn passed(&self) -> Option<LoopEndReason> {

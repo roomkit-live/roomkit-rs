@@ -50,7 +50,7 @@ impl AiProvider for Slow {
 
 /// The loop's end as the turn's wire carries it: why, after how many rounds
 /// of calls, under which deadline.
-fn loop_end(tap: &TurnTap) -> (Value, Value, Value) {
+pub(super) fn loop_end(tap: &TurnTap) -> (Value, Value, Value) {
     tap.messages()
         .into_iter()
         .filter_map(|message| serde_json::from_str::<Value>(&message.json).ok())
@@ -179,6 +179,7 @@ async fn an_empty_answer_after_a_round_is_asked_again_within_its_tries() {
 /// RFC §6.4: a call its provider did not hand over is no answer, on any
 /// round: the model is told it did not run, what it said kept before the
 /// word to it, and asked again.
+// Python: tests/test_channels/test_ai_empty_retry.py::test_a_malformed_call_after_text_is_told_too
 #[tokio::test]
 async fn a_call_the_provider_did_not_hand_over_is_told_and_asked_again() {
     for (finish_reason, told) in [
@@ -410,18 +411,42 @@ impl AiProvider for Priced {
 /// fallback's when it did (HITL 5a287312).
 #[tokio::test]
 async fn a_usage_the_price_cannot_read_fails_the_turn() {
-    let unreadable = || {
-        let usage = json!({"input_tokens": -1}).as_object().cloned().unwrap();
+    let unreadable = |counter: Value| {
+        let usage = json!({ "input_tokens": counter })
+            .as_object()
+            .cloned()
+            .unwrap();
         ScriptedRound::answering("Done.").with_usage(usage)
     };
-    let busy = ScriptedRound::answering("")
-        .refusing(503, "busy")
-        .retrying();
+    let busy = || {
+        ScriptedRound::answering("")
+            .refusing(503, "busy")
+            .retrying()
+    };
     let cases = [
-        (ScriptedProvider::new([unreadable()]), None, "Priced"),
         (
-            ScriptedProvider::new([busy]),
-            Some(ScriptedProvider::new([unreadable()])),
+            ScriptedProvider::new([unreadable(json!(-1))]),
+            None,
+            "Priced",
+        ),
+        (
+            ScriptedProvider::new([unreadable(json!("many"))]),
+            None,
+            "Priced",
+        ),
+        (
+            ScriptedProvider::new([unreadable(json!(1.5))]),
+            None,
+            "Priced",
+        ),
+        (
+            ScriptedProvider::new([unreadable(json!(true))]),
+            None,
+            "Priced",
+        ),
+        (
+            ScriptedProvider::new([busy()]),
+            Some(ScriptedProvider::new([unreadable(json!(-1))])),
             "scripted",
         ),
     ];

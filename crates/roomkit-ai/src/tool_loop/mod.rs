@@ -209,15 +209,16 @@ impl<P: AiProvider> Loop<P> {
         &mut self,
         messages: &[Message],
         asked: (Vec<crate::tools::AiTool>, Option<String>),
-        (steering, out, prefix, round): (
+        (steering, out, prefix, round, limits): (
             &Steering,
             &Yielder<Result<TurnItem, ProviderError>>,
             &str,
             u32,
+            &Limits,
         ),
     ) -> Result<Generation, Failed> {
         let mut window = self.thinking_window(round);
-        let reading = (steering, out, prefix, &mut window);
+        let reading = (steering, out, prefix, &mut window, limits);
         let read = self.generate(messages, asked, reading).await;
         read.map(|generation| Generation {
             thinking: window.text(),
@@ -279,7 +280,7 @@ impl<P: AiProvider> Loop<P> {
             // Declared as the provider is about to be asked, nothing reported
             // of a round a cancel kept from running (RFC §6.4).
             let asked = (self.round_tools(&mut spent), system_prompt.clone());
-            let reading = (&steering, &out, prefix.as_str(), round);
+            let reading = (&steering, &out, prefix.as_str(), round, &limits);
             let read = self.read_round(&messages, asked, reading).await;
             let read = read.and_then(|read| self.counted(read, &mut spent, &mut limits));
             let mut generation = match read {
@@ -422,9 +423,12 @@ impl<P: AiProvider> Loop<P> {
     ) -> Result<Generation, Failed> {
         spent.count(&generation);
         if let Some(span) = &self.turn_span {
-            span.generation_used(&generation.used);
+            for report in &generation.reports {
+                span.generation_used(report);
+            }
         }
-        let Err(error) = limits.count(&generation.used) else {
+        let priced = generation.reports.iter();
+        let Err(error) = priced.into_iter().try_for_each(|used| limits.count(used)) else {
             // A round that failed reports no reasoning, as Python keeps a
             // round's once its generation returned.
             spent.add_thinking(generation.thinking.clone());
@@ -443,7 +447,7 @@ impl<P: AiProvider> Loop<P> {
             error: ProviderError::new(error.to_string(), options).with_source(error),
             streamed: true,
             delivered: generation.delivered,
-            used: Box::default(),
+            reports: Vec::new(),
         })
     }
 
@@ -464,14 +468,16 @@ impl<P: AiProvider> Loop<P> {
         let Failed {
             error,
             delivered,
-            used,
+            reports,
             ..
         } = failure;
         spent.segments.push(delivered);
-        add_usage(&mut spent.usage, &used);
+        for report in &reports {
+            add_usage(&mut spent.usage, report);
+        }
         if let Some(span) = &self.turn_span {
-            if !used.is_empty() {
-                span.generation_used(&used);
+            for report in &reports {
+                span.generation_used(report);
             }
             span.failed(error.to_string());
         }
@@ -767,7 +773,9 @@ impl Spent {
     fn count(&mut self, generation: &Generation) {
         let last = &generation.done.usage;
         self.by_fallback = generation.by_fallback;
-        add_usage(&mut self.usage, &generation.used);
+        for report in &generation.reports {
+            add_usage(&mut self.usage, report);
+        }
         self.complete &= reports_counters(last);
         self.last.clone_from(last);
     }

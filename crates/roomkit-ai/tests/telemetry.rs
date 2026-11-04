@@ -34,6 +34,7 @@ use serde_json::{Value, json};
 enum Round {
     Says(&'static str, Option<&'static str>),
     Fails(&'static str),
+    FailsPastItsEnd(&'static str),
 }
 
 /// A model reading its rounds from a script, each using 10 tokens in and 5
@@ -79,6 +80,19 @@ impl AiProvider for Scripted {
             Round::Fails(message) => {
                 let failure = ProviderError::new(message, ProviderErrorOptions::default());
                 vec![Err(failure)]
+            }
+            Round::FailsPastItsEnd(message) => {
+                let failure = ProviderError::new(message, ProviderErrorOptions::default());
+                let mut usage = Metadata::new();
+                usage.insert("input_tokens".to_owned(), json!(10));
+                usage.insert("output_tokens".to_owned(), json!(5));
+                vec![
+                    Ok(StreamEvent::Done(StreamDone {
+                        usage,
+                        ..StreamDone::default()
+                    })),
+                    Err(failure),
+                ]
             }
             Round::Says(text, call) => {
                 let text = text.to_owned();
@@ -279,6 +293,37 @@ async fn a_provider_s_failure_ends_the_turn_s_span_in_error() {
             .as_deref()
             .unwrap()
             .contains("the model is down")
+    );
+    kit.close().await.unwrap();
+}
+
+/// Python's round records a generation's usage at its done event, so a
+/// failure past it leaves the metrics written and the tokens on the span the
+/// failure ends (`_record_stream_usage`, `_end_unfinished_turn`).
+#[tokio::test]
+async fn a_failure_past_a_done_event_keeps_its_tokens_on_the_span() {
+    let (kit, mock) = turn_of(vec![Round::FailsPastItsEnd("the model is down")]).await;
+    let span = one(mock.get_spans(SpanKind::LlmGenerate));
+    assert_eq!(span.status, "error");
+    assert_eq!(
+        (
+            span.attributes.get(Attr::LLM_INPUT_TOKENS).cloned(),
+            span.attributes.get(Attr::LLM_OUTPUT_TOKENS).cloned()
+        ),
+        (Some(json!(10)), Some(json!(5)))
+    );
+    let tokens: Vec<(String, f64)> = mock
+        .metrics()
+        .into_iter()
+        .filter(|(name, ..)| name.starts_with("roomkit.llm."))
+        .map(|(name, value, ..)| (name, value))
+        .collect();
+    assert_eq!(
+        tokens,
+        [
+            ("roomkit.llm.input_tokens".to_owned(), 10.0),
+            ("roomkit.llm.output_tokens".to_owned(), 5.0)
+        ]
     );
     kit.close().await.unwrap();
 }

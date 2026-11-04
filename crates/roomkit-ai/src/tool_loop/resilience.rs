@@ -15,6 +15,7 @@ use roomkit::model::RetryPolicy;
 use roomkit_core::rules::transcript::Message;
 
 use super::generation::{Failed, Generation};
+use super::rules::Limits;
 use super::thinking::ThinkingWindow;
 use super::{Loop, TurnItem};
 use crate::error::AiError;
@@ -25,12 +26,13 @@ use crate::tools::AiTool;
 
 /// What a round's generation is read with: the loop's steering, its
 /// reader, the text a round replays of the round before, its reasoning's
-/// window.
+/// window, the turn's limits.
 pub(super) type Reading<'a> = (
     &'a Steering,
     &'a Yielder<Result<TurnItem, ProviderError>>,
     &'a str,
     &'a mut ThinkingWindow,
+    &'a Limits,
 );
 
 /// How a channel's generations recover from their provider's refusals:
@@ -104,7 +106,7 @@ impl<P: AiProvider> Loop<P> {
         (tools, system_prompt): (Vec<AiTool>, Option<String>),
         reading: Reading<'_>,
     ) -> Result<Generation, Failed> {
-        let (steering, out, prefix, window) = reading;
+        let (steering, out, prefix, window, limits) = reading;
         let mut context = AiContext {
             tools,
             ..self.round_context(messages, system_prompt)
@@ -117,7 +119,7 @@ impl<P: AiProvider> Loop<P> {
         let mut attempt = 0;
         let last = loop {
             let stream = self.provider.generate_structured_stream(&context);
-            let reading = (steering, out, prefix, &mut *window);
+            let reading = (steering, out, prefix, &mut *window, limits);
             let failure = match Generation::read(stream, reading).await {
                 Ok(generation) => return Ok(generation),
                 Err(failure) => failure,
@@ -152,7 +154,7 @@ impl<P: AiProvider> Loop<P> {
         };
         match self.resilience.fallback_provider.clone() {
             Some(fallback) => {
-                let reading = (steering, out, prefix, window);
+                let reading = (steering, out, prefix, window, limits);
                 fall_back(&*fallback, &context, last, reading).await
             }
             None => Err(last),

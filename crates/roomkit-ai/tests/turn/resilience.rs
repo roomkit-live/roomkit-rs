@@ -13,16 +13,18 @@ use futures_core::Stream;
 use pretty_assertions::assert_eq;
 use roomkit::SteerOptions;
 use roomkit::model::{Cancel, Metadata};
+use roomkit::testing::TurnTap;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, MockAiProvider,
-    MockAiProviderOptions, ProviderError, ProviderStream, StreamDone, StreamEvent, StreamTextDelta,
-    Tools,
+    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiToolCall, Date,
+    MockAiProvider, MockAiProviderOptions, ModelInfo, ModelPricing, ProviderError, ProviderStream,
+    StreamDone, StreamEvent, StreamTextDelta, Tools, tool_arguments,
 };
 use roomkit_core::rules::transcoding::text_of;
 use serde_json::{Value, json};
 
-use super::support::{Room, channel, room_id};
+use super::bounds::loop_end;
+use super::support::{Room, channel, room_id, served};
 
 /// What a [`Streams`] model does next.
 enum Step {
@@ -32,19 +34,29 @@ enum Step {
     Wait(Pin<Box<dyn Future<Output = ()> + Send>>),
 }
 
-/// A model that takes `steps`, whatever it is asked.
+/// A model that takes `steps`, whatever it is asked, at `pricing`.
 #[derive(Clone, Default)]
-struct Streams(Arc<Mutex<VecDeque<Step>>>);
+struct Streams {
+    steps: Arc<Mutex<VecDeque<Step>>>,
+    pricing: Option<ModelPricing>,
+}
 
 impl Streams {
     fn set(&self, steps: Vec<Step>) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = steps.into();
+        *self.steps.lock().unwrap_or_else(PoisonError::into_inner) = steps.into();
     }
 }
 
 impl AiProvider for Streams {
     fn model_name(&self) -> &'static str {
         "streams"
+    }
+
+    fn catalog_entry(&self) -> Option<ModelInfo> {
+        self.pricing.clone().map(|pricing| ModelInfo {
+            pricing: Some(pricing),
+            ..ModelInfo::new("streams")
+        })
     }
 
     fn generate<'a>(
@@ -55,7 +67,7 @@ impl AiProvider for Streams {
     }
 
     fn generate_structured_stream<'a>(&'a self, _context: &'a AiContext) -> ProviderStream<'a> {
-        let steps = std::mem::take(&mut *self.0.lock().unwrap_or_else(PoisonError::into_inner));
+        let steps = std::mem::take(&mut *self.steps.lock().unwrap_or_else(PoisonError::into_inner));
         Box::pin(Steps(steps))
     }
 }
@@ -97,16 +109,24 @@ fn done(finish_reason: &str, usage: Value) -> Step {
 
 /// The agent's room over `model`.
 async fn room_over(model: Streams) -> Room {
-    let agent = AiChannel::new(
-        channel("assistant"),
-        model,
-        AiChannelOptions {
-            tools: Tools::default().into(),
-            ..AiChannelOptions::default()
-        },
-    )
-    .unwrap();
+    room_under(model, AiChannelOptions::default()).await
+}
+
+/// The agent's room over `model`, under `options`.
+async fn room_under(model: Streams, options: AiChannelOptions) -> Room {
+    let agent = AiChannel::new(channel("assistant"), model, options).unwrap();
     Room::with_agent(agent).await
+}
+
+/// A price of $1 per input token and output token, a flat one unless
+/// `long_context_threshold_tokens` says.
+fn a_dollar_a_token(long_context_threshold_tokens: Option<u64>) -> ModelPricing {
+    let verified = Date::new(2026, 8, 5).unwrap();
+    ModelPricing {
+        long_context_threshold_tokens,
+        long_context_input_multiplier: 2.0,
+        ..ModelPricing::new(1_000_000.0, 1_000_000.0, verified).unwrap()
+    }
 }
 
 /// The turn's answer: its text, and what its record says it used.
@@ -188,6 +208,70 @@ async fn a_cancel_past_a_done_event_keeps_what_it_reported() {
         answer(&room).await,
         ("Voici".to_owned(), used.clone(), used, json!("cancelled"))
     );
+    room.kit.close().await.unwrap();
+}
+
+/// Python's `_ToolLoopState.count` raises at the done event itself, so its
+/// round reads nothing after a usage the price cannot read: the turn's
+/// failure is that, and what followed never reaches the room.
+#[tokio::test]
+async fn a_usage_the_price_cannot_read_stops_the_read_at_its_done_event() {
+    let model = Streams {
+        pricing: Some(a_dollar_a_token(None)),
+        ..Streams::default()
+    };
+    let options = AiChannelOptions {
+        turn_budget_usd: Some(100.0),
+        ..AiChannelOptions::default()
+    };
+    let room = room_under(model.clone(), options).await;
+    model.set(vec![
+        text("Voici"),
+        done("stop", json!({ "input_tokens": "many" })),
+        text(" jamais"),
+    ]);
+    let result = room.says("Hello?").await;
+    let message = result.error.map(|error| error.message).unwrap_or_default();
+    assert!(message.contains("input_tokens"), "{message}");
+    let said: Vec<String> = room
+        .timeline()
+        .await
+        .iter()
+        .map(|row| text_of(&row.content))
+        .collect();
+    assert!(said.iter().all(|text| !text.contains("jamais")), "{said:?}");
+    room.kit.close().await.unwrap();
+}
+
+/// Python prices each done event as it comes, `cost_for` reading one
+/// response's usage: two of 150 input tokens stay under a long-context
+/// threshold of 200, at $300, where their sum would cross it, at $600.
+#[tokio::test]
+async fn each_done_event_is_priced_as_one_response() {
+    let model = Streams {
+        pricing: Some(a_dollar_a_token(Some(200))),
+        ..Streams::default()
+    };
+    let options = AiChannelOptions {
+        turn_budget_usd: Some(400.0),
+        max_empty_retries: 0,
+        tools: served().into(),
+        ..AiChannelOptions::default()
+    };
+    let room = room_under(model.clone(), options).await;
+    let tap = TurnTap::on(&room.kit);
+    let call = AiToolCall {
+        arguments: tool_arguments(r#"{"order": "1"}"#),
+        ..AiToolCall::new("c1", "lookup_order")
+    };
+    let used = json!({ "input_tokens": 150, "output_tokens": 0 });
+    model.set(vec![
+        Step::Event(Box::new(StreamEvent::ToolCall(call.into()))),
+        done("tool_calls", used.clone()),
+        done("tool_calls", used),
+    ]);
+    room.says("Order 1?").await;
+    assert_eq!(loop_end(&tap).0, json!("empty_response"));
     room.kit.close().await.unwrap();
 }
 
