@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use roomkit::model::ToolCall;
+use roomkit::model::{Metadata, ToolCall, add_usage};
 
 use super::TurnItem;
 use super::resilience::Reading;
@@ -24,6 +24,8 @@ pub(super) struct Generation {
     pub(super) delivered: String,
     pub(super) calls: Vec<Called>,
     pub(super) done: StreamDone,
+    /// What its done events reported, summed: what it spent.
+    pub(super) used: Metadata,
     /// A `Cancel` stopped it before its end (RFC §21.3).
     pub(super) cancelled: bool,
     /// The fallback provider served it, not the channel's own (RFC §6.4).
@@ -49,6 +51,9 @@ pub(super) struct Failed {
     /// The text delivered before the failure, which the room keeps: the
     /// turn's last segment when the failure ends it `error` (RFC §6.4).
     pub(super) delivered: String,
+    /// What the done events it handed before the failure reported, which
+    /// the turn's usage keeps (RFC §6.4).
+    pub(super) used: Metadata,
 }
 
 impl Failed {
@@ -58,6 +63,7 @@ impl Failed {
             error,
             streamed: false,
             delivered: String::new(),
+            used: Metadata::new(),
         }
     }
 }
@@ -72,12 +78,13 @@ pub(super) enum Partial {
 }
 
 impl Generation {
-    /// Reads a provider's answer from its `stream`, handing its text to
-    /// `out` as it comes. A stream that ends without its done event is read whole
-    /// all the same, its calls kept, with no finish reason and no usage, as
-    /// Python's stream round reads it. A `Cancel` `steering` received stops
-    /// the read at the next event, which is dropped with the stream (RFC
-    /// §21.3).
+    /// Reads a provider's answer from its `stream`, to the stream's end,
+    /// handing its text to `out` as it comes. A stream that ends without its
+    /// done event is read whole all the same, its calls kept, with no finish
+    /// reason and no usage, and one that goes on past its done event is read
+    /// on, a failure there failing the generation as streamed, as Python's
+    /// stream round reads it. A `Cancel` `steering` received stops the read
+    /// at the next event, which is dropped with the stream (RFC §21.3).
     ///
     /// # Errors
     ///
@@ -92,11 +99,12 @@ impl Generation {
         let mut replayed = Replayed::new(prefix);
         let mut calls = Vec::new();
         let mut done = StreamDone::default();
+        let mut used = Metadata::new();
         let mut streamed = false;
         while let Some(event) = next(&mut stream).await {
             if steering.cancelled() {
                 window.end();
-                return Ok(Self::cut(text, delivered));
+                return Ok(Self::cut(text, delivered, done, used));
             }
             let event = match event {
                 Ok(event) => event,
@@ -106,6 +114,7 @@ impl Generation {
                         error,
                         streamed,
                         delivered,
+                        used,
                     });
                 }
             };
@@ -120,10 +129,7 @@ impl Generation {
                 // A whole call closes no window: a fragment would (Python's
                 // `StreamToolCallDelta`), which no provider here hands.
                 StreamEvent::ToolCall(call) => calls.push(call),
-                StreamEvent::Done(ended) => {
-                    done = ended;
-                    break;
-                }
+                StreamEvent::Done(ended) => take_done(ended, &mut done, &mut used),
                 // A delta with a signature alone reads as nothing here.
                 StreamEvent::ThinkingDelta(delta) => {
                     if !delta.thinking.is_empty() {
@@ -140,6 +146,7 @@ impl Generation {
             delivered,
             calls: read_calls(calls),
             done,
+            used,
             cancelled: false,
             by_fallback: false,
             thinking: String::new(),
@@ -147,18 +154,32 @@ impl Generation {
     }
 
     /// A generation a `Cancel` stopped after it wrote `text`, `delivered`
-    /// of it handed to the room.
-    fn cut(text: String, delivered: String) -> Self {
+    /// of it handed to the room, and after the end `done` it handed, if
+    /// any, which `used` sums.
+    fn cut(text: String, delivered: String, done: StreamDone, used: Metadata) -> Self {
         Self {
             text,
             delivered,
             calls: Vec::new(),
-            done: StreamDone::default(),
+            done,
+            used,
             cancelled: true,
             by_fallback: false,
             thinking: String::new(),
         }
     }
+}
+
+/// Takes a done event `ended` as Python's stream round does: the last one
+/// says how the generation ended, one with no usage leaving what an earlier
+/// one reported, and each one's usage counts in `used`.
+fn take_done(mut ended: StreamDone, done: &mut StreamDone, used: &mut Metadata) {
+    if ended.usage.is_empty() {
+        ended.usage = std::mem::take(&mut done.usage);
+    } else {
+        add_usage(used, &ended.usage);
+    }
+    *done = ended;
 }
 
 /// Hands `pieces` to the room, each in turn, and keeps them in

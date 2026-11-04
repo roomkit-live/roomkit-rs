@@ -422,9 +422,9 @@ impl<P: AiProvider> Loop<P> {
     ) -> Result<Generation, Failed> {
         spent.count(&generation);
         if let Some(span) = &self.turn_span {
-            span.generation_used(&generation.done.usage);
+            span.generation_used(&generation.used);
         }
-        let Err(error) = limits.count(&generation.done.usage) else {
+        let Err(error) = limits.count(&generation.used) else {
             // A round that failed reports no reasoning, as Python keeps a
             // round's once its generation returned.
             spent.add_thinking(generation.thinking.clone());
@@ -443,14 +443,16 @@ impl<P: AiProvider> Loop<P> {
             error: ProviderError::new(error.to_string(), options).with_source(error),
             streamed: true,
             delivered: generation.delivered,
+            used: Metadata::new(),
         })
     }
 
     /// The provider failed with `failure`: after a round of calls, the loop
     /// ends `error`, its rounds kept (RFC §6.4 "A turn cut short"), and the
     /// turn is reported, the text the failed round handed the room its last
-    /// segment; then the error. `failed` is whether a round ran, the rounds
-    /// of calls and what the turn spent.
+    /// segment, what its done events reported counted; then the error.
+    /// `failed` is whether a round ran, the rounds of calls and what the
+    /// turn spent.
     async fn failed(
         &self,
         (after_round, rounds, mut spent): (bool, u32, Spent),
@@ -460,10 +462,17 @@ impl<P: AiProvider> Loop<P> {
         let (limits, steering, out) = ending;
         steering.close();
         let Failed {
-            error, delivered, ..
+            error,
+            delivered,
+            used,
+            ..
         } = failure;
         spent.segments.push(delivered);
+        add_usage(&mut spent.usage, &used);
         if let Some(span) = &self.turn_span {
+            if !used.is_empty() {
+                span.generation_used(&used);
+            }
             span.failed(error.to_string());
         }
         if after_round {
@@ -756,11 +765,11 @@ impl Spent {
     /// Counts one generation's usage counters, and which provider served
     /// it.
     fn count(&mut self, generation: &Generation) {
-        let used = &generation.done.usage;
+        let last = &generation.done.usage;
         self.by_fallback = generation.by_fallback;
-        add_usage(&mut self.usage, used);
-        self.complete &= reports_counters(used);
-        self.last.clone_from(used);
+        add_usage(&mut self.usage, &generation.used);
+        self.complete &= reports_counters(last);
+        self.last.clone_from(last);
     }
 }
 
