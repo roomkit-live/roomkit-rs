@@ -1340,9 +1340,8 @@ mod image_tests {
         );
     }
 
-    // Python: tests/test_providers/test_chat_request.py::test_a_plain_answer_sends_no_reasoning
-    // (a message of parts goes as its blocks in order: here a caption, its
-    // image, then the next text, RMK-1191)
+    // Python: tests/test_providers/test_chat_request.py::test_a_message_s_text_and_images_keep_their_order
+    // (RMK-1191)
     #[test]
     fn a_message_s_text_and_image_parts_keep_their_order() {
         use roomkit_ai::{AiContentPart, AiContext, AiImagePart, AiMessage, AiRole, AiTextPart};

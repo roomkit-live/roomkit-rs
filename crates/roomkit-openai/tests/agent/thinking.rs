@@ -285,26 +285,28 @@ async fn a_responses_reasoning_delta_with_nothing_in_it_reads_as_none() {
 /// and its call, and its reasoning reaches neither the request nor the room.
 #[tokio::test]
 async fn a_round_s_reasoning_reaches_no_request_and_is_not_stored() {
-    let round = json!({
-        "reasoning_content": "Why.",
-        "content": "Look.",
-        "tool_calls": [{ "id": "c1", "type": "function",
-            "function": { "name": "lookup", "arguments": "{}" } }],
-    });
-    let room = Room::new(
-        vec![completion(&round), Reply::completion("Done.")],
-        API_KEY,
-    )
-    .await;
-    room.says(&room.web, "alice", "Alice", "go").await;
+    let calls = json!([{ "id": "c1", "type": "function",
+        "function": { "name": "lookup", "arguments": "{}" } }]);
+    // In a field beside the text, and in the text as `<think>` tags.
+    for round in [
+        json!({ "reasoning_content": "Why.", "content": "Look.", "tool_calls": calls }),
+        json!({ "content": "<think>Why.</think>Look.", "tool_calls": calls }),
+    ] {
+        let room = Room::new(
+            vec![completion(&round), Reply::completion("Done.")],
+            API_KEY,
+        )
+        .await;
+        room.says(&room.web, "alice", "Alice", "go").await;
 
-    let sent = messages(&room.fake, 1);
-    let replayed = sent.iter().find(|message| message["role"] == "assistant");
-    let replayed = replayed.expect("the round goes back");
-    assert_eq!(replayed["content"], "Look.");
-    assert_eq!(replayed["tool_calls"][0]["id"], "c1");
-    let sent = Value::Array(sent.clone()).to_string();
-    assert!(!sent.contains("Why."), "{sent}");
-    let stored = format!("{:?}", room.timeline().await);
-    assert!(!stored.contains("Why."), "{stored}");
+        let sent = messages(&room.fake, 1);
+        let replayed = sent.iter().find(|message| message["role"] == "assistant");
+        let replayed = replayed.expect("the round goes back");
+        assert_eq!(replayed["content"], "Look.");
+        assert_eq!(replayed["tool_calls"][0]["id"], "c1");
+        let sent = Value::Array(sent.clone()).to_string();
+        assert!(!sent.contains("Why."), "{sent}");
+        let stored = format!("{:?}", room.timeline().await);
+        assert!(!stored.contains("Why."), "{stored}");
+    }
 }
