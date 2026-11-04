@@ -1592,3 +1592,37 @@ fn conversation_router_install_options_defaults_as_python() {
     // roomkit.ConversationRouter.install(hook_priority) = -100
     assert_eq!(defaults.hook_priority, -100);
 }
+
+#[test]
+fn delegate_handler_options_defaults_as_python() {
+    let defaults = roomkit::tasks::DelegateHandlerOptions::<InMemoryStore>::default();
+    // roomkit.tasks.DelegateHandler.__init__(notify) = None
+    assert!(defaults.notify.is_none());
+    // roomkit.tasks.DelegateHandler.__init__(default_share_channels) = None
+    assert!(defaults.default_share_channels.is_none());
+    // roomkit.tasks.DelegateHandler.__init__(delivery_strategy) = None
+    assert!(defaults.delivery_strategy.is_none());
+    // roomkit.tasks.DelegateHandler.__init__(cache) = None
+    assert!(defaults.cache.is_none());
+    // roomkit.tasks.DelegateHandler.__init__(serialize_per_room) = False
+    assert!(!defaults.serialize_per_room);
+    // roomkit.tasks.DelegateHandler.__init__(max_conversation) = 0
+    assert_eq!(defaults.max_conversation, 0);
+}
+
+#[test]
+fn completed_task_cache_options_defaults_as_python() {
+    let defaults = roomkit::tasks::CompletedTaskCacheOptions::default();
+    // roomkit.tasks.CompletedTaskCache.__init__(ttl_seconds) = 300.0
+    assert_eq!(defaults.ttl, Duration::from_secs(300));
+}
+
+#[test]
+fn completed_task_cache_method_options_defaults_as_python() {
+    // roomkit.tasks.CompletedTaskCache.put(context) = None
+    assert!(roomkit::tasks::PutOptions::default().context.is_none());
+    // roomkit.tasks.CompletedTaskCache.get(context) = None
+    assert!(roomkit::tasks::GetOptions::default().context.is_none());
+    // roomkit.tasks.CompletedTaskCache.recent_context(limit) = 5
+    assert_eq!(roomkit::tasks::RecentContextOptions::default().limit, 5);
+}

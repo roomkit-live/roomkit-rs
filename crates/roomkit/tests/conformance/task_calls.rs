@@ -108,9 +108,10 @@ pub(crate) fn arguments(call: &str) -> Option<&'static [&'static str]> {
     })
 }
 
-/// Whether this module makes the call `call`.
+/// Whether this module makes the call `call`, or the `delegate_task` tool
+/// kit's, which a task's call does.
 pub(crate) fn handles(call: &str) -> bool {
-    arguments(call).is_some()
+    arguments(call).is_some() || crate::delegate_calls::handles(call)
 }
 
 fn organization_id(spec: &Value) -> Option<String> {
@@ -126,6 +127,9 @@ pub(crate) async fn call(
     name: &str,
     spec: &Value,
 ) -> Result<(Called, Option<String>), Unreadable> {
+    if crate::delegate_calls::handles(name) {
+        return crate::delegate_calls::call(run, name, spec).await;
+    }
     let kit = run.kit();
     let room = || field::<RoomId>(spec, "room_id");
     Ok(match name {

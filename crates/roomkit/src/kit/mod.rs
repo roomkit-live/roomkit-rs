@@ -274,7 +274,7 @@ pub(crate) struct Inner<S> {
     /// (RFC §10.6.5).
     pub(crate) host_tasks: crate::tasks::HostTasks,
     /// The strategy a delivery naming none takes (RFC §22.2).
-    pub(crate) delivery_strategy: Option<Arc<dyn crate::DeliveryStrategy<S>>>,
+    pub(crate) delivery_strategy: RwLock<Option<Arc<dyn crate::DeliveryStrategy<S>>>>,
     /// The persistent queue deliveries are enqueued in (RFC §22.2).
     pub(crate) delivery_backend: Option<Arc<dyn crate::DeliveryBackend<S>>>,
     /// What the kit knows of the tasks it runs for each room (RFC §23.4).
@@ -433,7 +433,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 .unwrap_or_else(|| Arc::new(crate::tasks::InMemoryTaskRunner::new())),
             inline_tasks: crate::tasks::HeldTasks::default(),
             host_tasks: crate::tasks::HostTasks::default(),
-            delivery_strategy,
+            delivery_strategy: RwLock::new(delivery_strategy),
             delivery_backend,
             room_tasks: crate::tasks::RoomTaskRecord::default(),
             task_cancels: crate::tasks::TaskCancels::default(),

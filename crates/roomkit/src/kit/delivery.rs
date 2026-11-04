@@ -4,7 +4,7 @@
 //! `process_delivery_status`, `on_delivery_status` and `process_webhook`.
 
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 use roomkit_core::model::{ChannelId, DeliveryStatus, Metadata, RoomContext, RoomId};
 use roomkit_core::rules::hook_registry::{HookExecution, HookSubject, HookTrigger};
@@ -193,7 +193,13 @@ impl<S: ConversationStore> RoomKit<S> {
                 .await?;
         }
         let strategy = strategy
-            .or_else(|| self.inner.delivery_strategy.clone())
+            .or_else(|| {
+                self.inner
+                    .delivery_strategy
+                    .read()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone()
+            })
             .unwrap_or_else(|| Arc::new(Immediate));
         // Made within a turn, a tool call or an ASYNC hook's body, the content
         // continues at least that work's chain (RFC §8.3), when it runs here

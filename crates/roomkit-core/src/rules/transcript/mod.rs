@@ -70,6 +70,7 @@ mod tests;
 pub use self::fence::fence;
 #[doc(hidden)]
 pub use self::fence::named_blocks;
+pub use self::fence::without_tags;
 #[doc(hidden)]
 pub use self::marks::COMPACTION_HEADER;
 pub use self::marks::SPEAKER_NOTE as SPEAKER_ATTRIBUTION_NOTE;
@@ -782,6 +783,15 @@ pub fn without_mark_copies(text: &str) -> String {
 /// §6.4): Python's `json_text_line`.
 pub fn json_text_line(line: &str) -> String {
     speakers::json_text_line(line)
+}
+
+/// `text` with every double quote mark but `"` made a single one and the
+/// marks that reorder text dropped, as inside a quote (RFC §6.4): what
+/// [`json_text_line`] reads a line as before it writes it, for a string
+/// written as part of a larger JSON value. Python's `_QUOTE_LOOKALIKES`.
+#[must_use]
+pub fn without_quote_lookalikes(text: &str) -> String {
+    speakers::without_quote_lookalikes(text)
 }
 
 /// The label of a turn whose author has no name (RFC §6.4): its channel as

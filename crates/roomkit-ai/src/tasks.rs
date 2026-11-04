@@ -5,11 +5,17 @@
 //! [`setup_task_tools`](roomkit::RoomKit::setup_task_tools) has the room's
 //! owner serve.
 
+use std::sync::LazyLock;
+
 use roomkit::model::Metadata;
-use roomkit::tasks::{TaskToolWindow, cancel_task_definition, task_status_definition};
+use roomkit::orchestration::StrategyAgent;
+use roomkit::tasks::{
+    DelegateHandler, TaskToolWindow, cancel_task_definition, delegate_tool_definition,
+    task_status_definition,
+};
 use roomkit::{ConversationStore, RoomKit, RoomKitError, WeakRoomKit};
 use roomkit_core::rules::python_repr;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::tools::{AiTool, Tool, ToolError, ToolFuture, ToolResult, current_tool_call};
 
@@ -18,6 +24,55 @@ const TASK_STATUS_TOOL: &str = "task_status";
 
 /// The tool [`CancelTaskTool`] serves: Python's `CANCEL_TASK_TOOL`.
 const CANCEL_TASK_TOOL: &str = "cancel_task";
+
+/// The generic delegate tool, its worker free: Python's `DELEGATE_TOOL`.
+pub static DELEGATE_TOOL: LazyLock<AiTool> =
+    LazyLock::new(|| definition(&delegate_tool_definition(&[])));
+
+/// A delegate tool whose worker can only be one of `targets`, each an agent
+/// id and its description; the generic [`DELEGATE_TOOL`] for none: the tool
+/// [`setup_delegation`] serves from it refuses a call naming another.
+/// Python's `build_delegate_tool(targets)`.
+#[must_use]
+pub fn build_delegate_tool(targets: &[(String, Option<String>)]) -> AiTool {
+    definition(&delegate_tool_definition(targets))
+}
+
+/// What [`setup_delegation`] takes beside the agent and the handler:
+/// Python's `setup_delegation(channel, handler, *, tool=None)`.
+#[derive(Clone, Debug, Default)]
+pub struct SetupDelegationOptions {
+    /// Python `tool=None`: the tool declared, as [`build_delegate_tool`]
+    /// builds one; `None`, the generic [`DELEGATE_TOOL`].
+    pub tool: Option<AiTool>,
+}
+
+/// Serves `delegate_task` on `channel`, live or named by the id of one the
+/// kit holds, with `handler`, in the room of each call (RFC §23.4): one
+/// agent serving several rooms delegates from each. The tool gains a
+/// `conversation` argument when the handler's `max_conversation` is above
+/// 0. Python's `setup_delegation`.
+///
+/// # Errors
+///
+/// [`RoomKitError::Runtime`] when delegation is already set up on the
+/// channel; [`RoomKitError::ChannelNotRegistered`] for an id naming no
+/// channel of the kit.
+pub fn setup_delegation<S: ConversationStore>(
+    channel: impl Into<StrategyAgent>,
+    handler: &DelegateHandler<S>,
+    options: SetupDelegationOptions,
+) -> Result<(), RoomKitError> {
+    let SetupDelegationOptions { tool } = options;
+    let definition = tool.map(|tool| {
+        json!({
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.parameters,
+        })
+    });
+    handler.serve_tool(&channel.into(), definition)
+}
 
 /// What [`TaskStatusTool::new`] takes beside the kit: Python's
 /// `TaskStatusTool(kit, *, window=500, limit=10)`.

@@ -198,7 +198,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Sets up `entries` for `agent`, all or none: a name one of the
     /// agent's own tools takes, or one the owner serves it already, is
     /// refused (RFC §21.1), as Python's registry's `register_all`.
-    pub(super) fn register_owner_tools(
+    pub(crate) fn register_owner_tools(
         &self,
         agent: &ChannelId,
         entries: Vec<OwnerToolEntry<S>>,

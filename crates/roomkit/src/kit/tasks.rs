@@ -314,7 +314,7 @@ impl<S: ConversationStore> RoomKit<S> {
         self.check_hand_back(room_id, &options.hand_back, &notify, options.wait)
             .await?;
         let conversation = self
-            .room_conversation(room_id, &notify, options.conversation)
+            .room_conversation(room_id, std::slice::from_ref(&notify), options.conversation)
             .await?;
         let description =
             worker_description(&task, options.brief.as_deref(), conversation.as_deref());
@@ -418,14 +418,14 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(())
     }
 
-    /// The parent room's last `count` messages `reader` may read, set apart
-    /// as data for the worker (RFC §23.3 step 4): read from a context of
-    /// the room's latest messages, `4 * count` and 50 at least, as Python's
-    /// `_room_conversation` builds it.
-    async fn room_conversation(
+    /// The parent room's last `count` messages each of `readers` may read,
+    /// set apart as data for the worker (RFC §23.3 step 4): read from a
+    /// context of the room's latest messages, `4 * count` and 50 at least,
+    /// as Python's `_room_conversation` builds it.
+    pub(crate) async fn room_conversation(
         &self,
         room_id: &RoomId,
-        reader: &ChannelId,
+        readers: &[ChannelId],
         count: u64,
     ) -> Result<Option<String>, RoomKitError> {
         if count == 0 {
@@ -449,7 +449,7 @@ impl<S: ConversationStore> RoomKit<S> {
             recent_events,
             author_register,
         };
-        Ok(conversation_block(&context, reader, count))
+        Ok(conversation_block(&context, readers, count))
     }
 
     /// Whether the kit registers `channel_id` as an intelligence channel.

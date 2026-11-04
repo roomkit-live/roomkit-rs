@@ -37,6 +37,41 @@ pub(crate) fn object<'a>(
     written.push('}');
 }
 
+/// `value` as JSON on one line, its text kept past ASCII: the line
+/// separators a JSON string keeps raw (U+2028, U+2029, U+0085) escaped, so
+/// a text inside cannot start a line of its own (RFC §6.4). Python's
+/// `json_line`.
+pub(crate) fn json_line(value: &Value) -> String {
+    let mut written = String::new();
+    json(&mut written, value, false);
+    written
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+        .replace('\u{85}', "\\u0085")
+}
+
+/// `value` with an object's members in the order of their keys, at any
+/// depth: what two values that differ only by that order have in common.
+/// Python's `json.dumps(sort_keys=True)`.
+pub(crate) fn sorted_keys(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(sorted_keys).collect()),
+        Value::Object(members) => {
+            let mut sorted: Vec<_> = members.iter().collect();
+            sorted.sort_by_key(|(name, _)| name.as_str());
+            Value::Object(
+                sorted
+                    .into_iter()
+                    .map(|(name, value)| (name.clone(), sorted_keys(value)))
+                    .collect(),
+            )
+        }
+        scalar @ (Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)) => {
+            scalar.clone()
+        }
+    }
+}
+
 /// Writes `value`.
 pub(crate) fn json(written: &mut String, value: &Value, ensure_ascii: bool) {
     match value {

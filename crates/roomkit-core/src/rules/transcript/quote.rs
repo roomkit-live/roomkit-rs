@@ -80,6 +80,9 @@ pub const FENCED_TAGS: &[&str] = &[
     "context",
     "task",
     "vision",
+    "conversation",
+    "task_context",
+    "previous_tasks",
 ];
 
 /// External `text` quoted inline (RFC §6.4): on one line, within `limit`

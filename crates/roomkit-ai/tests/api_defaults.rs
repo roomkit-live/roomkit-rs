@@ -339,3 +339,10 @@ fn setup_handoff_options_defaults_as_python() {
     // roomkit.setup_handoff(room_id) = None
     assert!(defaults.room_id.is_none());
 }
+
+#[test]
+fn setup_delegation_options_defaults_as_python() {
+    let defaults = roomkit_ai::tasks::SetupDelegationOptions::default();
+    // roomkit.tasks.setup_delegation(tool) = None
+    assert!(defaults.tool.is_none());
+}

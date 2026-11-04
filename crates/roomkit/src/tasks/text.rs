@@ -32,7 +32,7 @@ pub(crate) fn one_line(text: &str) -> String {
 /// Whether `c` separates words as Python's `str.split()` splits them:
 /// Unicode's white space, and the four information separators, as the
 /// transcript's `is_python_space` reads them.
-fn is_python_space(c: char) -> bool {
+pub(crate) fn is_python_space(c: char) -> bool {
     c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }
 

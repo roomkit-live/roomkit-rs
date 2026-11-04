@@ -322,12 +322,10 @@ fn is_blank(line: &str) -> bool {
     line.chars().all(|c| c.is_whitespace() || c == '\u{1f}')
 }
 
-/// `line` as a JSON string a model does not read as ending early: `"` and
-/// backslashes escaped, every other double quote mark made a single one
-/// and the marks that reorder text dropped (RFC §6.4).
-pub(super) fn json_text_line(line: &str) -> String {
-    let kept: String = line
-        .chars()
+/// `text` with every double quote mark but `"` made a single one and the
+/// marks that reorder text dropped.
+pub(super) fn without_quote_lookalikes(text: &str) -> String {
+    text.chars()
         .filter(|c| !BIDI_CONTROLS.contains(c))
         .map(|c| {
             if QUOTE_LOOKALIKES.contains(&c) {
@@ -336,8 +334,14 @@ pub(super) fn json_text_line(line: &str) -> String {
                 c
             }
         })
-        .collect();
-    Value::String(kept)
+        .collect()
+}
+
+/// `line` as a JSON string a model does not read as ending early: `"` and
+/// backslashes escaped, every other double quote mark made a single one
+/// and the marks that reorder text dropped (RFC §6.4).
+pub(super) fn json_text_line(line: &str) -> String {
+    Value::String(without_quote_lookalikes(line))
         .to_string()
         .replace('\u{2028}', "\\u2028")
         .replace('\u{2029}', "\\u2029")

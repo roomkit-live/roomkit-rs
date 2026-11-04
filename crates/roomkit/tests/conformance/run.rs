@@ -140,6 +140,8 @@ pub(crate) struct Run {
     pub(crate) strategies: Mutex<HashMap<String, crate::strategy_calls::Strategy>>,
     /// The handoff handlers the run built, by the name its calls give them.
     pub(crate) handoff_handlers: Mutex<HashMap<String, roomkit::HandoffHandler<crate::Store>>>,
+    pub(crate) delegate_handlers:
+        Mutex<HashMap<String, roomkit::tasks::DelegateHandler<crate::Store>>>,
     /// The run's tool and session auditors (README, "Setup").
     pub(crate) auditors: crate::audits::Auditors,
     /// The directories of the scripted agents' skills.
@@ -201,6 +203,7 @@ impl Run {
             backend: Mutex::default(),
             strategies: Mutex::default(),
             handoff_handlers: Mutex::default(),
+            delegate_handlers: Mutex::default(),
             auditors: crate::audits::Auditors::default(),
             skills: crate::skills::SkillDirectories::default(),
         }

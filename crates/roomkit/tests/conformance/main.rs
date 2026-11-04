@@ -22,6 +22,7 @@ mod audits;
 mod calls;
 mod chat_wire;
 mod compare;
+mod delegate_calls;
 mod discussion_calls;
 mod errors;
 mod handoff_calls;

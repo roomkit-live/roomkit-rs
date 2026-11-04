@@ -22,7 +22,9 @@
 // not started; its grace ends, cutting what is left; it seals the kit.
 
 pub(crate) mod brief;
+mod cache;
 mod cut;
+mod delegate;
 mod delegated;
 pub(crate) mod handback;
 mod held;
@@ -35,7 +37,15 @@ pub(crate) mod result_tool;
 mod runner;
 pub(crate) mod text;
 
+pub use self::cache::{
+    CompletedTaskCache, CompletedTaskCacheOptions, GetOptions, PutOptions, RecentContextOptions,
+};
 pub(crate) use self::cut::{TaskCut, TaskCuts};
+// `delegate_tool_definition` is for roomkit-ai's `build_delegate_tool` alone,
+// which holds the `AiTool`, as the handoff's is.
+#[doc(hidden)]
+pub use self::delegate::delegate_tool_definition;
+pub use self::delegate::{DelegateHandler, DelegateHandlerOptions};
 pub use self::delegated::{DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, WaitOptions};
 pub(crate) use self::delegated::{cut_short_message, task_cut_reason, task_work};
 pub(crate) use self::held::{Claim, HeldTasks, spawn_apart, until_ended};

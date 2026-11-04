@@ -608,6 +608,11 @@ approved = "2026-11-03"
 reason = "Python's constant `HANDOFF_TOOL`, an AITool: a static read at first use, since no `const` builds an AiTool's strings and JSON (HITL 884fc415)"
 
 [[exception]]
+rust = "roomkit_ai::tasks::DELEGATE_TOOL"
+approved = "2026-11-04"
+reason = "Python's constant `DELEGATE_TOOL`, an AITool: a static read at first use, since no `const` builds an AiTool's strings and JSON, as `HANDOFF_TOOL` (HITL 0ddbfda4)"
+
+[[exception]]
 rust = "roomkit::orchestration::OnHandoffComplete"
 approved = "2026-11-03"
 reason = "the callback's type, Python's Callable[[str, HandoffResult], Awaitable[None]]: an Arc of a closure returning a future, as delegate's on_complete (HITL 884fc415)"

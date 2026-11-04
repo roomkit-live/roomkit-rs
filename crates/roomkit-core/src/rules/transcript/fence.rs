@@ -32,6 +32,15 @@ use super::super::unicode;
 /// );
 /// ```
 pub fn fence(tag: &str, text: &str) -> String {
+    format!("<{tag}>\n{}\n</{tag}>", without_tags(tag, text))
+}
+
+/// `text` with every closing and opening tag of `tag` neutralised, as
+/// [`fence`] says. For a text about to be written as JSON inside a block,
+/// which reads it before JSON hides a line break or a slash as an escape.
+/// Python's `without_tags`.
+#[must_use]
+pub fn without_tags(tag: &str, text: &str) -> String {
     let name: Vec<char> = tag.chars().flat_map(char::to_lowercase).collect();
     let chars: Vec<char> = text.chars().collect();
     let mut ends = Vec::new();
@@ -56,7 +65,7 @@ pub fn fence(tag: &str, text: &str) -> String {
     if ends.next().is_some() {
         body.push('_');
     }
-    format!("<{tag}>\n{body}\n</{tag}>")
+    body
 }
 
 /// Where the name of a tag of `name` that opens at `chars[at]` ends: a
@@ -423,6 +432,9 @@ mod tests {
         "context",
         "task",
         "vision",
+        "conversation",
+        "task_context",
+        "previous_tasks",
     ];
 
     /// One character of each range Unicode marks ignorable by default, as
