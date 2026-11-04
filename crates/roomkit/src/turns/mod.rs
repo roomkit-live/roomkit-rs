@@ -237,8 +237,9 @@ impl Turns {
     ///
     /// # Errors
     ///
-    /// The turn's failure as a record: the channel's error, or the link's
-    /// under `TurnLinkError`.
+    /// The turn's failure as a record: the channel's error, the link's under
+    /// `TurnLinkError`, or for a turn the kit's close cut, `TURN_CUT`, no
+    /// failure.
     pub(crate) async fn run(
         self: &Arc<Self>,
         kit: &Arc<dyn TurnKit>,

@@ -5,7 +5,9 @@
 use std::collections::HashMap;
 
 use roomkit_core::model::{EventId, Metadata, RoomEvent};
-use roomkit_core::ops::{ChannelOutcome, ChannelRequest, EffectId, HoldRequest, Outcome, Request};
+use roomkit_core::ops::{
+    ChannelOutcome, ChannelRequest, EffectId, HoldRequest, Outcome, Request, TURN_CUT,
+};
 use serde_json::Value;
 
 use crate::telemetry::{Attr, KitTelemetry, OpenSpan, SpanKind, StartSpanOptions};
@@ -153,7 +155,11 @@ impl RunSpans {
         let Some(broadcast) = self.open.get_mut(&event_id) else {
             return;
         };
-        let failed = matches!(outcome, Outcome::Failed(_)) || is_refused(outcome);
+        let failed = match outcome {
+            // A cut turn leaves no result, as Python's `_leaves_no_result`.
+            Outcome::Failed(error) => error.error_type != TURN_CUT,
+            refused => is_refused(refused),
+        };
         match (call, failed) {
             (_, true) => broadcast.failed += 1,
             (Call::Deliver, false) => broadcast.delivered += 1,

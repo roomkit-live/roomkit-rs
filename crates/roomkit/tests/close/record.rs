@@ -13,12 +13,16 @@ use roomkit::model::{
     ChannelOutput, ChannelType, DeliveryResultStatus, HookResult, InboundMessage, RoomContext,
     RoomEvent, RoomId, TextContent,
 };
+use roomkit::telemetry::{MockTelemetryProvider, TelemetryConfig, TelemetryProvider};
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions, HookOptions,
-    HookTrigger, InMemoryStore, ProcessInboundOptions, RoomKit, SendEventOptions,
+    HookTrigger, InMemoryStore, InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    SendEventOptions,
 };
 use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
+use serde_json::json;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
@@ -251,6 +255,15 @@ async fn open<S: ConversationStore>(kit: &RoomKit<S>, ids: &[&str]) {
 async fn cut_within_the_grace(failing: bool) -> (Vec<(String, DeliveryResultStatus)>, Vec<String>) {
     let held = Holding::new("ws", [("held", Hold::UntilReleased)]);
     let kit = kit_of(InMemoryStore::default(), &[&held], &["busy"]).await;
+    cut_in(&kit, &held, failing).await
+}
+
+/// [`cut_within_the_grace`] in `kit`, whose room `busy` binds `held`.
+async fn cut_in(
+    kit: &RoomKit<InMemoryStore>,
+    held: &Holding,
+    failing: bool,
+) -> (Vec<(String, DeliveryResultStatus)>, Vec<String>) {
     let stuck = Stuck {
         began: Arc::default(),
     };
@@ -258,7 +271,7 @@ async fn cut_within_the_grace(failing: bool) -> (Vec<(String, DeliveryResultStat
     kit.register_channel(stuck).unwrap();
     let bad: &[&str] = if failing { &["Go."] } else { &[] };
     kit.register_channel(Failing::new("bad", bad, &[])).unwrap();
-    open(&kit, &["sms", "agent", "bad"]).await;
+    open(kit, &["sms", "agent", "bad"]).await;
     let holder = kit.clone();
     let call = tokio::spawn(async move {
         let options = ProcessInboundOptions {
@@ -268,10 +281,10 @@ async fn cut_within_the_grace(failing: bool) -> (Vec<(String, DeliveryResultStat
         holder.process_inbound(said("Go."), options).await
     });
     began.notified().await;
-    let _busy = deferred(&kit, "held", "busy").await;
+    let _busy = deferred(kit, "held", "busy").await;
     held.entered("held").await;
 
-    let close = spawn_close(&kit);
+    let close = spawn_close(kit);
     let result = tokio::time::timeout(Duration::from_secs(1), call)
         .await
         .unwrap()
@@ -295,6 +308,49 @@ async fn cut_within_the_grace(failing: bool) -> (Vec<(String, DeliveryResultStat
 #[tokio::test(start_paused = true)]
 async fn a_turn_the_close_cuts_is_no_failed_delivery() {
     assert_eq!(cut_within_the_grace(false).await, (Vec::new(), Vec::new()));
+}
+
+/// Nor does its broadcast count it among its failures, as Python's
+/// `failed_count`, the length of the failures its targets left.
+#[tokio::test(start_paused = true)]
+async fn a_turn_the_close_cuts_is_no_failure_of_its_broadcast() {
+    let mock = Arc::new(MockTelemetryProvider::default());
+    let provider: Arc<dyn TelemetryProvider> = Arc::<MockTelemetryProvider>::clone(&mock);
+    let telemetry = TelemetryConfig {
+        provider: Some(provider),
+        ..TelemetryConfig::default()
+    };
+    let kit = RoomKit::new(RoomKitOptions {
+        telemetry: Some(telemetry),
+        ..RoomKitOptions::with_store(InMemoryStore::default())
+    });
+    let held = Holding::new("ws", [("held", Hold::UntilReleased)]);
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    kit.register_channel(held.clone()).unwrap();
+    let options = CreateRoomOptions {
+        room_id: Some(room("busy")),
+        ..Default::default()
+    };
+    kit.create_room(options).await.unwrap();
+    for id in ["sms", "ws"] {
+        kit.attach_channel(&room("busy"), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+
+    cut_in(&kit, &held, false).await;
+
+    let spans = mock.completed_spans();
+    let broadcast = spans
+        .iter()
+        .find(|span| span.name == "framework.broadcast" && span.room_id.as_deref() == Some("r"))
+        .unwrap();
+    assert_eq!(broadcast.attributes["failed_count"], json!(0));
 }
 
 /// The record of what did fail beside it is written all the same, the close
@@ -384,4 +440,103 @@ async fn a_record_waiting_for_the_lock_leaves_the_call_s_hook_its_grace() {
     late_go.notify_one();
     drop(attach.await);
     closed(close).await;
+}
+
+/// A hook under the lock, on the text `closer`, that closes the kit from its
+/// own work, which the close spares, and goes on holding the lock.
+fn closing_hook(kit: &RoomKit<InMemoryStore>, inside: &Arc<Notify>, go: &Arc<Notify>) {
+    let (weak, inside, go) = (kit.downgrade(), Arc::clone(inside), Arc::clone(go));
+    let hook = move |event: RoomEvent, _context| {
+        let (weak, inside, go) = (weak.clone(), Arc::clone(&inside), Arc::clone(&go));
+        let ours = text_of(&event.content) == "closer";
+        async move {
+            if ours {
+                let kit = weak.upgrade().unwrap();
+                inside.notify_one();
+                go.notified().await;
+                drop(tokio::spawn(roomkit::keep_context(async move {
+                    drop(kit.close().await);
+                })));
+                pending::<()>().await;
+            }
+            Ok(HookResult::allow(AllowOptions::default()))
+        }
+    };
+    let options = HookOptions {
+        name: "closer".to_owned(),
+        ..Default::default()
+    };
+    kit.hook(HookTrigger::BeforeBroadcast, hook, options)
+        .unwrap();
+}
+
+/// A kit whose transport `g` holds the text `a`, failing it when `refused`
+/// says, its send waiting as a hook takes the room's lock to close the kit;
+/// the deferred call of `a`, and what releases the hook into its close.
+async fn behind_a_lock_the_close_spares(
+    refused: &'static [&'static str],
+    release_first: bool,
+) -> (InboundResult, RoomKit<InMemoryStore>, Instant) {
+    let gate = Failing::new("g", refused, &["a"]);
+    let kit = kit_of(InMemoryStore::default(), &[], &[]).await;
+    kit.register_channel(gate.clone()).unwrap();
+    open(&kit, &["sms", "g"]).await;
+    let (inside, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    closing_hook(&kit, &inside, &go);
+    let first = deferred(&kit, "a", "r").await;
+    gate.entered.notified().await;
+    let holder = kit.clone();
+    drop(tokio::spawn(async move {
+        let options = ProcessInboundOptions {
+            room_id: Some(room("r")),
+            ..Default::default()
+        };
+        holder.process_inbound(said("closer"), options).await
+    }));
+    inside.notified().await;
+    if release_first {
+        gate.release.notify_one();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    go.notify_one();
+    (first, kit, Instant::now())
+}
+
+/// When the call ended, whether it reads its target `g`, and how many results
+/// its event holds.
+async fn ended(
+    first: InboundResult,
+    kit: &RoomKit<InMemoryStore>,
+    started: Instant,
+) -> (Duration, bool, usize) {
+    let event_id = first.event.as_ref().unwrap().id.clone();
+    let result = first.delivery.unwrap().wait().await.unwrap();
+    let stored = kit.store().get_event(&event_id).await.unwrap().unwrap();
+    (
+        started.elapsed(),
+        result.delivery_results.contains_key("g"),
+        stored.delivery_results.len(),
+    )
+}
+
+/// A record already waiting behind a lock the close spares is answered at the
+/// grace's end: its call reads what it delivered, nothing recorded.
+#[tokio::test(start_paused = true)]
+async fn a_record_behind_a_lock_the_close_spares_ends_at_the_grace() {
+    let (first, kit, started) = behind_a_lock_the_close_spares(&["a"], true).await;
+    assert_eq!(
+        ended(first, &kit, started).await,
+        (Duration::from_secs(5), true, 0)
+    );
+}
+
+/// A set the grace's end cuts asks that lock past its cut: refused at once,
+/// its call reading what it delivered.
+#[tokio::test(start_paused = true)]
+async fn a_set_cut_at_the_grace_asks_no_lock_the_close_spares() {
+    let (first, kit, started) = behind_a_lock_the_close_spares(&[], false).await;
+    assert_eq!(
+        ended(first, &kit, started).await,
+        (Duration::from_secs(5), true, 0)
+    );
 }
