@@ -73,7 +73,9 @@ fn holder(
 }
 
 /// Refuses `address` when an identity of `organization` other than `owner`
-/// uses it (RFC §14.1, gap G-060).
+/// uses it (RFC §5.6, §14.1, gap G-060). What a read serves is what holds it: a
+/// row whose holder is of another organization, which only an older release wrote,
+/// holds nothing.
 fn check_free(
     connection: &Connection,
     channel_type: &ChannelType,
@@ -81,8 +83,8 @@ fn check_free(
     organization: Option<&str>,
     owner: &IdentityId,
 ) -> Result<(), Failure> {
-    match holder(connection, channel_type, address, organization)? {
-        Some(holder) if &holder != owner => Err(StoreError::AddressLinked {
+    match resolve(connection, channel_type, address, organization)? {
+        Some(holder) if &holder.id != owner => Err(StoreError::AddressLinked {
             channel_type: channel_type.clone(),
         }
         .into()),

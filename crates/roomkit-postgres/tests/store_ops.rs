@@ -12,7 +12,9 @@ use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelId, ChannelType, EventSource, Identity, IdentityId,
     Metadata, Participant, ParticipantId, Room, RoomEvent, RoomId, TextContent, Verification,
 };
-use roomkit::store::{CommitEventOptions, PatchRoomMetadataOptions, ResolveIdentityOptions};
+use roomkit::store::{
+    CommitEventOptions, LinkAddressOptions, PatchRoomMetadataOptions, ResolveIdentityOptions,
+};
 use roomkit::{ConversationStore, RoomKit, RoomKitOptions, StoreError};
 use roomkit_postgres::{PostgresStore, PostgresStoreOptions};
 use serde_json::{Value, json};
@@ -625,6 +627,150 @@ async fn a_row_of_another_scope_than_its_identity_resolves_for_nobody() {
                 .unwrap();
             assert_eq!(found, None, "row in {held_in:?}, read in {scope:?}");
         }
+    }
+}
+
+/// Python: `test_a_row_no_read_serves_leaves_its_address_free` (RFC §5.6): an address
+/// is refused for what another identity of the organization holds. A row an older
+/// release left, whose identity is of another organization, resolves for nobody: the
+/// organization's own identity takes the address.
+#[tokio::test]
+async fn a_row_no_read_serves_leaves_its_address_free() {
+    for (held_in, stored) in [("", Some("acme")), ("globex", Some("acme")), ("acme", None)] {
+        for taking in ["create_identity", "link_address"] {
+            let Some((schema, store)) = fresh().await else {
+                return;
+            };
+            store
+                .create_identity(identity("i1", stored, None))
+                .await
+                .unwrap();
+            insert_address(&schema, "+1555", "i1", held_in).await;
+            let scope = (!held_in.is_empty()).then_some(held_in);
+            if taking == "create_identity" {
+                store
+                    .create_identity(identity("dana", scope, Some("+1555")))
+                    .await
+                    .unwrap();
+            } else {
+                store
+                    .create_identity(identity("dana", scope, None))
+                    .await
+                    .unwrap();
+                store
+                    .link_address(
+                        &IdentityId::new("dana").unwrap(),
+                        &ChannelType::SMS,
+                        "+1555",
+                        LinkAddressOptions {
+                            organization_id: scope.map(str::to_owned),
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            let found = resolved(&store, "+1555", held_in).await.unwrap();
+            assert_eq!(found.id.as_str(), "dana", "row in {held_in:?}, {taking}");
+        }
+    }
+}
+
+/// Python: `test_a_creation_waiting_on_a_new_identity_s_address_is_refused` (RFC §5.6):
+/// the holder's organization is read once the first commits. Its identity is new to
+/// the waiting statement's snapshot, and is no row to take.
+#[tokio::test]
+async fn a_creation_waiting_on_a_new_identity_s_address_is_refused() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    let creator = schema.client().await;
+    creator
+        .batch_execute(
+            "BEGIN; \
+             INSERT INTO identities (id, organization_id) VALUES ('i1', 'acme'); \
+             INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id) \
+             VALUES ('sms', '+1555', 'i1', 'acme')",
+        )
+        .await
+        .unwrap();
+    let racing = {
+        let store = store.clone();
+        tokio::spawn(async move {
+            store
+                .create_identity(identity("i2", Some("acme"), Some("+1555")))
+                .await
+        })
+    };
+    let pid: i32 = creator
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let watcher = schema.client().await;
+    let mut blocked = 0_i64;
+    for _ in 0..400 {
+        blocked = watcher
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+                &[&pid],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if blocked > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(blocked, 1, "the creation never waited on the other's row");
+    creator.batch_execute("COMMIT").await.unwrap();
+    assert_eq!(
+        racing.await.unwrap(),
+        Err(StoreError::AddressLinked {
+            channel_type: ChannelType::SMS
+        })
+    );
+    let found = resolved(&store, "+1555", "acme").await.unwrap();
+    assert_eq!(found.id.as_str(), "i1");
+}
+
+/// Python: `test_two_identities_taking_a_row_no_read_serves_leave_one_winner` (RFC
+/// §5.6): the first holds the address from then on, and the second is refused.
+#[tokio::test]
+async fn two_identities_taking_a_row_no_read_serves_leave_one_winner() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    store
+        .create_identity(identity("i1", Some("globex"), None))
+        .await
+        .unwrap();
+    for number in 0..8 {
+        let address = format!("+1{number}");
+        insert_address(&schema, &address, "i1", "acme").await;
+        let take = |name: String| {
+            let (store, address) = (store.clone(), address.clone());
+            tokio::spawn(async move {
+                store
+                    .create_identity(identity(&name, Some("acme"), Some(&address)))
+                    .await
+            })
+        };
+        let (one, two) = (take(format!("a{number}")), take(format!("b{number}")));
+        let taken = [one.await.unwrap(), two.await.unwrap()];
+        let won: Vec<&Identity> = taken
+            .iter()
+            .filter_map(|taken| taken.as_ref().ok())
+            .collect();
+        assert_eq!(won.len(), 1, "{taken:?}");
+        assert!(
+            taken
+                .iter()
+                .any(|taken| { matches!(taken, Err(StoreError::AddressLinked { .. })) }),
+            "{taken:?}"
+        );
+        let found = resolved(&store, &address, "acme").await.unwrap();
+        assert_eq!(found.id, won[0].id);
     }
 }
 

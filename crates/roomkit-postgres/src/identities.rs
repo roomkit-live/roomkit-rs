@@ -15,6 +15,12 @@ use crate::values::{execute, query_opt};
 /// organization holds (RFC §5.6): one statement, so two concurrent links of
 /// one address cannot both win; the no-op update on a conflict is what makes
 /// `RETURNING` give the holder.
+///
+/// A row whose holder is of another organization holds nothing: no read serves it,
+/// and only an older release wrote one. The organization's identity takes it. The
+/// holder's organization is read by a statement of its own, which sees an identity
+/// that committed while the first waited on its row: a subquery of the first would
+/// miss it, and the second link would win too.
 async fn file_address(
     transaction: &Transaction<'_>,
     channel_type: &str,
@@ -42,11 +48,34 @@ async fn file_address(
     if holder == identity_id.as_str() {
         return Ok(());
     }
-    Err(StoreError::AddressLinked {
-        channel_type: ChannelType::new(channel_type)
-            .map_err(|_| Failure::OutOfRange("a channel type"))?,
+    let held_in = query_opt(
+        transaction,
+        "SELECT COALESCE(organization_id, '') FROM identities WHERE id = $1",
+        &[&holder],
+    )
+    .await?;
+    if let Some(held_in) = held_in
+        && held_in.try_get::<_, &str>(0)? == organization
+    {
+        return Err(StoreError::AddressLinked {
+            channel_type: ChannelType::new(channel_type)
+                .map_err(|_| Failure::OutOfRange("a channel type"))?,
+        }
+        .into());
     }
-    .into())
+    execute(
+        transaction,
+        "UPDATE identity_addresses SET identity_id = $4 \
+         WHERE channel_type = $1 AND address = $2 AND organization_id = $3",
+        &[
+            &channel_type,
+            &address,
+            &organization,
+            &identity_id.as_str(),
+        ],
+    )
+    .await?;
+    Ok(())
 }
 
 /// Puts back in `addresses` those `stored` keeps under keys that are no

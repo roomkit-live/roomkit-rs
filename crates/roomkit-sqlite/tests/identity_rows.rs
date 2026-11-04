@@ -9,7 +9,7 @@ mod support;
 
 use roomkit::ConversationStore;
 use roomkit::model::{ChannelType, Identity, IdentityId};
-use roomkit::store::ResolveIdentityOptions;
+use roomkit::store::{LinkAddressOptions, ResolveIdentityOptions};
 use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 use rusqlite::Connection;
 
@@ -232,6 +232,66 @@ async fn a_row_of_another_scope_than_its_identity_resolves_for_nobody() {
             assert_eq!(found, None, "row in {held_in:?}, read in {scope:?}");
         }
         store.close().await;
+    }
+}
+
+/// Python: `test_a_row_no_read_serves_leaves_its_address_free` (RFC §5.6): an address
+/// is refused for what another identity of the organization holds. A row an older
+/// release left, whose identity is of another organization, resolves for nobody: the
+/// organization's own identity takes the address.
+#[tokio::test]
+async fn a_row_no_read_serves_leaves_its_address_free() {
+    for (held_in, stored) in [("", Some("acme")), ("globex", Some("acme")), ("acme", None)] {
+        for taking in ["create_identity", "link_address"] {
+            let file = TempFile::new("identity-free");
+            let store = SqliteStore::new(SqliteStoreOptions {
+                path: file.path().into(),
+            });
+            let mut identity = Identity::new(IdentityId::new("i1").unwrap());
+            identity.organization_id = stored.map(str::to_owned);
+            store.create_identity(identity).await.unwrap();
+            let connection = Connection::open(file.path()).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id)
+                     VALUES ('sms', '+1555', 'i1', ?)",
+                    [held_in],
+                )
+                .unwrap();
+            let scope = (!held_in.is_empty()).then(|| held_in.to_owned());
+            let mut dana = Identity::new(IdentityId::new("dana").unwrap());
+            dana.organization_id = scope.clone();
+            if taking == "create_identity" {
+                dana.link(ChannelType::SMS, "+1555");
+                store.create_identity(dana).await.unwrap();
+            } else {
+                store.create_identity(dana).await.unwrap();
+                store
+                    .link_address(
+                        &IdentityId::new("dana").unwrap(),
+                        &ChannelType::SMS,
+                        "+1555",
+                        LinkAddressOptions {
+                            organization_id: scope.clone(),
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            let found = store
+                .resolve_identity(
+                    &ChannelType::SMS,
+                    "+1555",
+                    ResolveIdentityOptions {
+                        organization_id: scope,
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(found.id.as_str(), "dana", "row in {held_in:?}, {taking}");
+            store.close().await;
+        }
     }
 }
 
