@@ -575,7 +575,11 @@ pub(crate) async fn patch_store_metadata(
     let id: RoomId = field(room, "id").map_err(|e| e.to_string())?;
     run.kit()
         .store()
-        .patch_room_metadata(&id, patch, roomkit::store::PatchRoomMetadataOptions::default())
+        .patch_room_metadata(
+            &id,
+            patch,
+            roomkit::store::PatchRoomMetadataOptions::default(),
+        )
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
