@@ -586,6 +586,38 @@ async fn a_replacement_refused_for_an_address_keeps_the_old_ones() {
     assert_eq!(resolved(&store, "+1", "acme").await, Some(first));
 }
 
+/// Python: `test_a_replacement_removes_a_row_of_another_scope_for_a_kept_address`:
+/// a row of another scope for an address it keeps, one left unscoped by an upgrade,
+/// stops resolving (RFC §17.2).
+#[tokio::test]
+async fn a_replacement_removes_a_row_of_another_scope_for_a_kept_address() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    let held = identity("i1", Some("acme"), Some("+1555"));
+    store.create_identity(held.clone()).await.unwrap();
+    schema
+        .client()
+        .await
+        .batch_execute(
+            "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id) \
+             VALUES ('sms', '+1555', 'i1', '')",
+        )
+        .await
+        .unwrap();
+    store.create_identity(held.clone()).await.unwrap();
+    let unscoped = store
+        .resolve_identity(
+            &ChannelType::SMS,
+            "+1555",
+            ResolveIdentityOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unscoped, None);
+    assert_eq!(resolved(&store, "+1555", "acme").await, Some(held));
+}
+
 /// Python: `test_two_replacements_swapping_addresses_are_refused_without_a_deadlock`:
 /// each new address is filed before the old ones go, so neither waits on what the
 /// other removes, and each reads the refusal.

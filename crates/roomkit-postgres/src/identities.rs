@@ -68,7 +68,8 @@ fn keep_unread_addresses(stored: &Value, addresses: &mut Value) {
 /// [`StoreError::IdentityNotFound`] by the write itself, so that a creation
 /// racing another's reads it once that commits. It files the addresses it
 /// declares under its own organization, then removes the rest of the identity's
-/// rows, so that what it no longer holds stops resolving to it; in that order,
+/// rows, a row of another scope for an address it keeps among them, so that what
+/// it no longer holds stops resolving to it; in that order,
 /// so that a replacement refused for an address it takes from another has locked
 /// nothing that other is removing, and two that swap addresses read the refusal,
 /// not a deadlock.
@@ -125,11 +126,12 @@ pub(crate) async fn create(client: &mut Object, identity: &Identity) -> Result<(
     let (channel_types, kept): (Vec<&str>, Vec<&str>) = declared.iter().copied().unzip();
     execute(
         &transaction,
-        "DELETE FROM identity_addresses WHERE identity_id = $1 AND NOT EXISTS ( \
+        "DELETE FROM identity_addresses WHERE identity_id = $1 \
+         AND (organization_id <> $4 OR NOT EXISTS ( \
           SELECT 1 FROM unnest($2::text[], $3::text[]) AS kept(channel_type, address) \
           WHERE kept.channel_type = identity_addresses.channel_type \
-          AND kept.address = identity_addresses.address)",
-        &[&identity.id.as_str(), &channel_types, &kept],
+          AND kept.address = identity_addresses.address))",
+        &[&identity.id.as_str(), &channel_types, &kept, &organization],
     )
     .await?;
     transaction.commit().await?;
