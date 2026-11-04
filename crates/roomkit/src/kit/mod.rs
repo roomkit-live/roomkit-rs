@@ -67,6 +67,7 @@ mod turn_hooks;
 mod verification;
 mod weak;
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
@@ -310,6 +311,27 @@ impl<S> std::fmt::Debug for Inner<S> {
     }
 }
 
+/// Warns when a store other processes may share is paired with an in-process
+/// lock (RFC §10.1 step 12, §13.5), as Python's kit: per-process locks do not
+/// coordinate the whole inbound pipeline, its idempotency decisions or the
+/// room's register of authors.
+fn warn_of_a_process_local_lock<S: ConversationStore>(
+    store: &S,
+    lock_manager: &Arc<dyn RoomLockManager>,
+) {
+    let any: &dyn Any = &**lock_manager;
+    if !store.is_process_local() && any.is::<InMemoryLockManager>() {
+        tracing::warn!(
+            target: "roomkit::kit",
+            "{} is paired with InMemoryLockManager. This is safe only in a single process; if \
+             the store is shared across processes (e.g. a load-balanced deployment), use a \
+             distributed lock manager such as PostgresAdvisoryLockManager with PostgresStore, or \
+             two processes may give two senders whose names read alike one rank.",
+            std::any::type_name::<S>().rsplit("::").next().unwrap_or("The store"),
+        );
+    }
+}
+
 impl<S: ConversationStore> RoomKit<S> {
     /// A kit built with `options`, Python's `RoomKit(...)` keywords (step 5,
     /// decision 2), on the system clock with random ids.
@@ -348,6 +370,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let telemetry = telemetry::telemetry_of(telemetry);
         let lock_manager: Arc<dyn RoomLockManager> =
             lock_manager.unwrap_or_else(|| Arc::new(InMemoryLockManager::default()));
+        warn_of_a_process_local_lock(&*store, &lock_manager);
         let claim_base = delivery_claim_lock_manager
             .clone()
             .unwrap_or_else(|| Arc::clone(&lock_manager));

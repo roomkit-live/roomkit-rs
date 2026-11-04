@@ -347,6 +347,10 @@ impl InMemoryStore {
     reason = "the store answers at once; written as async fn, it reads as a store that awaits"
 )]
 impl ConversationStore for InMemoryStore {
+    fn is_process_local(&self) -> bool {
+        true
+    }
+
     async fn create_room(&self, room: Room) -> Result<Room, StoreError> {
         let mut rooms = self.rooms();
         if rooms.contains_key(&room.id) {

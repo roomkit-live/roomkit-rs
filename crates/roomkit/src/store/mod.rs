@@ -264,6 +264,16 @@ async fn mark_edits_deleted<S: ConversationStore + ?Sized>(
 /// (RFC §10.6.5): the framework writes them, and host code that writes the
 /// store directly must leave them alone.
 pub trait ConversationStore: Send + Sync + 'static {
+    /// Python `is_process_local`: whether the store lives and dies with this
+    /// process, so that no other process can share it. A persistent store,
+    /// the default, is shared as soon as a deployment runs a second process:
+    /// the kit warns when one is paired with an in-process lock (RFC §13.5).
+    /// Hidden as Python's class attribute is out of its signature list.
+    #[doc(hidden)]
+    fn is_process_local(&self) -> bool {
+        false
+    }
+
     /// Stores a new room, and returns it.
     ///
     /// # Errors
