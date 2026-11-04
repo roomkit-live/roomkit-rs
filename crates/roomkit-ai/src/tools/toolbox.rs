@@ -8,6 +8,7 @@ use roomkit::model::{ToolCall, ToolCallOutcome};
 
 use super::{AiTool, DynToolset, ToolContext, ToolPolicy};
 use crate::error::AiError;
+use crate::skills::tools::SkillTools;
 use crate::tool_search::search_tool_defs;
 use crate::turn_config::Collisions;
 
@@ -26,7 +27,8 @@ pub(crate) struct Toolbox {
     /// (RFC §6.4).
     handler: Option<usize>,
     /// The names of the tools the agent may serve itself in a turn, which no
-    /// other tool may take (RFC §21.1): Tool Search's.
+    /// other tool may take (RFC §21.1): Tool Search's, and the skill tools'
+    /// once it was given a registry.
     reserved: HashSet<String>,
     /// The agent, which a refusal of one of those names names.
     agent: String,
@@ -34,6 +36,16 @@ pub(crate) struct Toolbox {
     person_tools: HashSet<String>,
     /// The tools orchestration injected for the turn (RFC §21.1).
     injected: HashSet<String>,
+    /// Where the skill tools sit, once the agent was given a registry.
+    skills: Option<SkillsSlot>,
+}
+
+/// Where an agent's skill tools sit: the toolset that serves them, and their
+/// place among the tools it declares.
+#[derive(Clone, Copy)]
+struct SkillsSlot {
+    toolset: usize,
+    place: usize,
 }
 
 impl std::fmt::Debug for Toolbox {
@@ -130,6 +142,53 @@ impl Toolbox {
             .iter()
             .map(|(tool, _)| &tool.name)
             .chain(&self.reserved)
+    }
+
+    /// Takes `toolset`, a registry's skill tools, which declares `declared`,
+    /// none for a registry with no skill: the names they take are kept all the
+    /// same, for what a turn may give (RFC §21.1, §24.3). After the host's
+    /// tools and a person's.
+    ///
+    /// # Errors
+    ///
+    /// [`AiError::DuplicateTool`] for a name the agent serves already.
+    pub(crate) fn add_skills(
+        &mut self,
+        toolset: Arc<dyn DynToolset>,
+        declared: Vec<AiTool>,
+    ) -> Result<(), AiError> {
+        let slot = SkillsSlot {
+            toolset: self.toolsets.len(),
+            place: self.tools.len(),
+        };
+        self.insert(toolset, declared, true)?;
+        self.skills = Some(slot);
+        self.reserved
+            .extend(SkillTools::RESERVED_NAMES.map(str::to_owned));
+        Ok(())
+    }
+
+    /// The toolbox of a turn that reads a registry of its own (RFC §24.3):
+    /// `toolset` serving the skill tools, which it declares as `declared`, at
+    /// their place, in place of the agent's. Never installed on the agent: the
+    /// turn reads its own copy.
+    pub(crate) fn with_skills(&self, toolset: Arc<dyn DynToolset>, declared: Vec<AiTool>) -> Self {
+        let mut turn = self.clone();
+        let Some(slot) = self.skills else {
+            return turn;
+        };
+        if let Some(served) = turn.toolsets.get_mut(slot.toolset) {
+            *served = toolset;
+        }
+        turn.tools.retain(|(_, at)| *at != slot.toolset);
+        turn.served.retain(|_, at| *at != slot.toolset);
+        for tool in &declared {
+            turn.served.insert(tool.name.clone(), slot.toolset);
+            turn.exempt.insert(tool.name.clone());
+        }
+        let declared = declared.into_iter().map(|tool| (tool, slot.toolset));
+        turn.tools.splice(slot.place..slot.place, declared);
+        turn
     }
 
     /// The toolbox with `search` serving Tool Search's tools, declared after
@@ -275,14 +334,6 @@ impl Toolbox {
         turn
     }
 
-    pub(crate) fn add_own(
-        &mut self,
-        toolset: Arc<dyn DynToolset>,
-        declared: Vec<AiTool>,
-    ) -> Result<(), AiError> {
-        self.insert(toolset, declared, true)
-    }
-
     fn insert(
         &mut self,
         toolset: Arc<dyn DynToolset>,
@@ -292,10 +343,7 @@ impl Toolbox {
         let mut names: Vec<&str> = Vec::with_capacity(declared.len());
         for tool in &declared {
             if !exempt && self.reserved.contains(&tool.name) {
-                return Err(AiError::ToolSearchName {
-                    name: tool.name.clone(),
-                    channel: self.agent.clone(),
-                });
+                return Err(self.refused_name(&tool.name));
             }
             if self.served.contains_key(&tool.name) || names.contains(&tool.name.as_str()) {
                 return Err(AiError::DuplicateTool {
@@ -314,6 +362,19 @@ impl Toolbox {
             self.tools.push((tool, position));
         }
         Ok(())
+    }
+
+    /// The refusal of a tool under `name`, a name kept for the agent's own.
+    fn refused_name(&self, name: &str) -> AiError {
+        if SkillTools::RESERVED_NAMES.contains(&name) {
+            return AiError::DuplicateTool {
+                name: name.to_owned(),
+            };
+        }
+        AiError::ToolSearchName {
+            name: name.to_owned(),
+            channel: self.agent.clone(),
+        }
     }
 
     /// Serves the names of `names` the agent declares already with

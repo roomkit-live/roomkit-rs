@@ -1084,8 +1084,3 @@ members = [
 ]
 approved = "2026-11-03"
 reason = "Python's class attributes, which the snapshot does not list: associated constants of the same names and values (HITL dddf8dc0, RMK-1213)"
-
-[[missing]]
-python = "roomkit.AIChannelTurnConfig.__init__"
-params = ["skills"]
-reason = "not in 0.x yet: a turn's own skill registry, which Python added (RMK-1282) after the turn configuration was ported; Rust's skills extensions are listed apart"

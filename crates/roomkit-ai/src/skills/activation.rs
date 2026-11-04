@@ -95,6 +95,13 @@ impl Activations {
         self.keep(held);
     }
 
+    /// Keeps, of the skills active in `room`, those `held` holds.
+    pub(crate) fn retain(&mut self, room: &RoomId, held: impl Fn(&str) -> bool) {
+        if let Some(kept) = self.rooms.iter_mut().find(|kept| &kept.id == room) {
+            kept.names.retain(|name| held(name));
+        }
+    }
+
     /// Drops `room`'s record: its next turn reads its stored rows again
     /// (RFC §10.6.3). Python's `SkillActivationMemory.forget()`.
     pub(crate) fn forget(&mut self, room: &RoomId) {

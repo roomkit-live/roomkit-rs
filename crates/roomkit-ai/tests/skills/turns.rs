@@ -22,6 +22,7 @@ use roomkit_ai::{
 use serde_json::json;
 
 use super::support::{Room, TempDir, channel, prompts, room_id, skill_md, tool_results};
+use super::warnings::Warnings;
 
 const PREAMBLE: &str = "You have access to Agent Skills — specialized knowledge packages. Use \
 the activate_skill tool to load a skill's full instructions before using it. Available skills are \
@@ -631,6 +632,72 @@ async fn an_empty_registry_adds_nothing() {
         (request.system_prompt.as_deref(), request.tools.len()),
         (Some("Base."), 0)
     );
+}
+
+/// `options` whose turns' configuration gives `skills`.
+fn each_turn_reads(skills: SkillRegistry, mut options: AiChannelOptions) -> AiChannelOptions {
+    options.config_provider = Some(Arc::new(move |_, _| {
+        let skills = skills.clone();
+        Box::pin(async move {
+            Ok(Some(AiChannelTurnConfig {
+                skills: Some(skills),
+                ..AiChannelTurnConfig::default()
+            }))
+        })
+    }));
+    options
+}
+
+// Python: tests/test_channels/test_turn_skills.py::test_a_channel_built_without_skills_ignores_a_turns_registry
+// (what it logs; the rest is the scenario
+// skills/a-channel-built-without-skills-ignores-a-turn-s-registry)
+#[tokio::test]
+async fn a_channel_built_without_skills_says_it_ignores_a_turn_s_registry() {
+    let tree = TempDir::new();
+    let (warnings, _capturing) = Warnings::capture();
+    let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
+    let room = Room::new(model, SkillRegistry::new(), |options| {
+        let without = AiChannelOptions {
+            skills: None,
+            ..options
+        };
+        each_turn_reads(skills(&tree), without)
+    })
+    .await;
+    room.says("Hello").await;
+    assert_eq!(
+        warnings
+            .containing("the turn's skill registry is ignored")
+            .len(),
+        1
+    );
+}
+
+// Python: channels/_ai_context.py _add_skills: `skills_in_prompt` is the
+// channel's, a host that lists its skills itself lists a turn's too, and the
+// instructions of the skills active are written all the same.
+#[tokio::test]
+async fn a_host_that_lists_its_skills_itself_reads_a_turn_s_active_ones() {
+    let tree = TempDir::new();
+    let model = ScriptedProvider::new([
+        activating("call_1", "doc-helper"),
+        ScriptedRound::answering("Done."),
+        ScriptedRound::answering("Again."),
+    ]);
+    let room = Room::new(model.clone(), SkillRegistry::new(), |options| {
+        let listing = AiChannelOptions {
+            skills_in_prompt: false,
+            ..options
+        };
+        each_turn_reads(skills(&tree), listing)
+    })
+    .await;
+    room.says("Help").await;
+    room.says("Again").await;
+    let requests = model.requests();
+    let prompt = |at: usize| requests[at].system_prompt.as_deref().unwrap_or_default();
+    assert!(!prompt(0).contains("<available_skills>"), "{}", prompt(0));
+    assert!(prompt(2).contains("## Skill: doc-helper"), "{}", prompt(2));
 }
 
 fn spotify() -> Vec<ToolEntry> {

@@ -188,7 +188,8 @@ pub struct AiChannelOptions {
     /// earlier image not shown (RFC §6.4); `None` bounds nothing. Python's
     /// `max_author_images`, 4 by default.
     pub max_author_images: Option<usize>,
-    /// The skills the channel serves (RFC §24).
+    /// The skills the channel serves (RFC §24). A registry with no skill
+    /// serves none, and lets a turn's configuration give its own (RFC §24.3).
     pub skills: Option<SkillRegistry>,
     /// Whether the system prompt lists the skills; without, the host lists
     /// them in its own prompt, and the active skills' instructions are
@@ -791,28 +792,57 @@ impl<P: AiProvider> AiChannel<P> {
     /// else those its binding's metadata declares, before `toolbox`'s, the
     /// channel's own and its room's owner's, the host's served by
     /// `configured`'s handler, else the channel's (Python's
-    /// `_turn_base_tools`).
+    /// `_turn_base_tools`), and the skills the turn reads, their tools among
+    /// them.
     ///
     /// # Errors
     ///
     /// A binding's `tools` that is no list of definitions.
     fn turn_toolbox(
         &self,
-        toolbox: &Arc<Toolbox>,
+        toolbox: Arc<Toolbox>,
         configured: Option<&AiChannelTurnConfig>,
         binding: &ChannelBinding,
-    ) -> Result<Arc<Toolbox>, ChannelError> {
+    ) -> Result<(Arc<Toolbox>, Option<Arc<SkillTools>>), ChannelError> {
         let base = base_tools(configured, &binding.metadata)?;
+        let (toolbox, skills) = self.turn_skills(toolbox, configured);
         let handler = configured.and_then(|turn| turn.tool_handler.clone());
         if base.is_empty() && handler.is_none() {
-            return Ok(Arc::clone(toolbox));
+            return Ok((toolbox, skills));
         }
         let handler = match handler {
             None => None,
             Some(handler) => served_by(Some(handler), Vec::new())?.map(|(toolset, _)| toolset),
         };
         let collisions = (self.channel_id.as_str(), self.turn_configs.collisions());
-        Ok(Arc::new(toolbox.for_turn(base, handler, collisions)))
+        let turn = toolbox.for_turn(base, handler, collisions);
+        Ok((Arc::new(turn), skills))
+    }
+
+    /// The skills a turn `configured` reads (RFC §24.3), and `toolbox` with
+    /// their tools: the registry its configuration gave it, under the channel's
+    /// record of each room's active skills, else the channel's own. A channel
+    /// built without a registry declares no skill tools for a turn's to use: it
+    /// ignores it, and says so (Python's `_given_turn_skills`, `_turn_skills`).
+    fn turn_skills(
+        &self,
+        toolbox: Arc<Toolbox>,
+        configured: Option<&AiChannelTurnConfig>,
+    ) -> (Arc<Toolbox>, Option<Arc<SkillTools>>) {
+        let given = configured.and_then(|turn| turn.skills.as_ref());
+        let Some(own) = &self.skills else {
+            if given.is_some() {
+                tracing::warn!(target: "roomkit::ai", channel = %self.channel_id, "the channel was built without skills: the turn's skill registry is ignored (build the channel with a registry, an empty one will do)");
+            }
+            return (toolbox, None);
+        };
+        let Some(given) = given else {
+            return (toolbox, Some(Arc::clone(own)));
+        };
+        let skills = Arc::new(own.of_turn(given.clone()));
+        let served: Arc<dyn DynToolset> = Arc::<SkillTools>::clone(&skills);
+        let with_skills = toolbox.with_skills(served, skills.declared());
+        (Arc::new(with_skills), Some(skills))
     }
 
     /// How a turn answering `event` publishes its model's reasoning.
@@ -866,12 +896,12 @@ impl<P: AiProvider> AiChannel<P> {
     /// (Python's `_turn_settings`, binding metadata first; a `null` there,
     /// or a value that is no text, is not set), then the instruction a strategy gives this one turn
     /// ([`with_turn_instruction`]), then the MCP
-    /// servers' instructions (RFC §21.2), then what its skills add (RFC
-    /// §6.4, §24.4), then Tool Search's preamble when it is `searching`.
+    /// servers' instructions (RFC §21.2), then what the turn's `skills` add
+    /// (RFC §6.4, §24.4), then Tool Search's preamble when it is `searching`.
     fn turn_system_prompt(
         &self,
         binding: &ChannelBinding,
-        configured: Option<&AiChannelTurnConfig>,
+        (configured, skills): (Option<&AiChannelTurnConfig>, Option<&SkillTools>),
         context: &RoomContext,
         (stands_alone, searching): (bool, bool),
     ) -> Option<String> {
@@ -888,7 +918,7 @@ impl<P: AiProvider> AiChannel<P> {
         };
         let own = with_turn_instruction(own, binding);
         let prompt = self.server_instructions.after(own.as_deref());
-        let prompt = match &self.skills {
+        let prompt = match skills {
             None => prompt,
             Some(skills) => {
                 let turn = SkillTurn {
@@ -897,7 +927,7 @@ impl<P: AiProvider> AiChannel<P> {
                     history: &context.recent_events,
                     stands_alone,
                 };
-                Some(skills.system_prompt(prompt.as_deref(), turn))
+                skills.system_prompt(prompt.as_deref(), turn)
             }
         };
         let prompt = if searching {
@@ -1214,19 +1244,20 @@ fn sliding_window(max_events: usize) -> Arc<dyn MemoryProvider> {
     }))
 }
 
-/// The skill tools a registry with entries serves, added to `toolbox`;
-/// none for a registry without any (Python's constructor).
+/// The skill tools a registry given serves, added to `toolbox`: one with no
+/// skill declares none, and a turn's own registry may still be read (Python's
+/// constructor, RFC §24.3).
 fn serve_skills(
     toolbox: &mut Toolbox,
     skills: Option<SkillRegistry>,
     in_prompt: bool,
 ) -> Result<Option<Arc<SkillTools>>, AiError> {
-    let Some(skills) = skills.filter(SkillRegistry::has_entries) else {
+    let Some(skills) = skills else {
         return Ok(None);
     };
     let skill_tools = Arc::new(SkillTools::new(skills, in_prompt));
     let own: Arc<dyn DynToolset> = Arc::<SkillTools>::clone(&skill_tools);
-    toolbox.add_own(own, SkillTools::definitions())?;
+    toolbox.add_skills(own, skill_tools.declared())?;
     Ok(Some(skill_tools))
 }
 
@@ -1354,7 +1385,7 @@ impl<P: AiProvider> AiChannel<P> {
         let configured = self.turn_configs.resolve(&binding, &context).await?;
         let configured = configured.as_ref();
         let mut settings = self.turn_settings(&binding, configured)?;
-        let toolbox = self.turn_toolbox(&owned, configured, &binding)?;
+        let (toolbox, skills) = self.turn_toolbox(owned, configured, &binding)?;
         settings.read_budgets(&binding.metadata)?;
         let budget = self.budget_of(&settings)?;
         let stands_alone = stands_alone(&event);
@@ -1362,7 +1393,7 @@ impl<P: AiProvider> AiChannel<P> {
         let (toolbox, search) = self.turn_search(toolbox, &context, (stands_alone, in_kit))?;
         let system_prompt = self.turn_system_prompt(
             &binding,
-            configured,
+            (configured, skills.as_deref()),
             &context,
             (stands_alone, search.active()),
         );

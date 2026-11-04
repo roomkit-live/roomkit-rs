@@ -3,7 +3,7 @@
 //! and so escape the tool policy (RFC §21.1), and what each turn's system
 //! prompt carries of the skills (RFC §6.4, §24.3, §24.4).
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit::model::{ChannelId, RoomEvent, RoomId, ToolCall, ToolCallOutcome};
 use serde_json::{Value, json};
@@ -18,7 +18,8 @@ use super::texts::{
 use crate::tools::{AiTool, BoxFuture, DynToolset, ToolContext, ToolError, ToolResult};
 
 /// The skills an agent serves: the registry, read only, and which skills
-/// are active in each room.
+/// are active in each room, a record its turns share whichever registry each
+/// reads (RFC §24.3, §24.4).
 #[derive(Debug)]
 pub(crate) struct SkillTools {
     registry: SkillRegistry,
@@ -26,7 +27,7 @@ pub(crate) struct SkillTools {
     /// Whether the system prompt lists the skills (Python's
     /// `skills_in_prompt`).
     listed: bool,
-    activations: Mutex<Activations>,
+    activations: Arc<Mutex<Activations>>,
 }
 
 /// What a turn's system prompt reads of its turn.
@@ -51,8 +52,25 @@ impl SkillTools {
             manifest: registry.to_prompt_xml(),
             registry,
             listed,
-            activations: Mutex::default(),
+            activations: Arc::default(),
         }
+    }
+
+    /// The tools a turn whose configuration gave `registry` reads in place of
+    /// these (RFC §24.3), the record of each room's active skills the same.
+    pub(crate) fn of_turn(&self, registry: SkillRegistry) -> Self {
+        Self {
+            manifest: registry.to_prompt_xml(),
+            registry,
+            listed: self.listed,
+            activations: Arc::clone(&self.activations),
+        }
+    }
+
+    /// The tools these skills declare: none for a registry with no skill
+    /// (RFC §24.3).
+    pub(crate) fn declared(&self) -> Vec<AiTool> {
+        self.registry.tool_definitions()
     }
 
     /// The skills active in `room`, least recently used first.
@@ -100,8 +118,13 @@ impl SkillTools {
     /// active in its room
     /// (RFC §24.4), each part apart from the next by a blank line. A room
     /// served for the first time in this process is read again first from
-    /// its stored rows; a turn that stands alone carries no active skill.
-    pub(crate) fn system_prompt(&self, base: Option<&str>, turn: SkillTurn<'_>) -> String {
+    /// its stored rows; a turn that stands alone carries no active skill. A
+    /// registry with no skill adds nothing and leaves the room's record as it
+    /// is; `None` when nothing is written (Python's `_add_skills`).
+    pub(crate) fn system_prompt(&self, base: Option<&str>, turn: SkillTurn<'_>) -> Option<String> {
+        if !self.registry.has_entries() {
+            return base.map(str::to_owned);
+        }
         let mut parts: Vec<&str> = base.into_iter().collect();
         if self.listed {
             parts.extend([PREAMBLE, self.manifest.as_str()]);
@@ -112,20 +135,20 @@ impl SkillTools {
             self.instructions(&self.active_in(turn))
         };
         parts.extend(active.as_deref());
-        parts.join("\n\n")
+        (!parts.is_empty()).then(|| parts.join("\n\n"))
     }
 
     /// The skills active in `turn`'s room, its stored rows read first when
-    /// this process has not read them yet.
+    /// this process has not read them yet. A skill this registry does not
+    /// hold leaves them: its instructions are not in this prompt, so its next
+    /// activation delivers them (RFC §24.3, §24.4).
     fn active_in(&self, turn: SkillTurn<'_>) -> Vec<String> {
         let mut activations = self.lock();
         if activations.needs_hydration(turn.room) {
-            let names: Vec<String> = activation::activated_in(turn.history, turn.agent)
-                .into_iter()
-                .filter(|name| self.registry.get_skill(name).is_some())
-                .collect();
+            let names = activation::activated_in(turn.history, turn.agent);
             activations.hydrate(turn.room, &names);
         }
+        activations.retain(turn.room, |name| self.registry.get_skill(name).is_some());
         activations.active(turn.room)
     }
 

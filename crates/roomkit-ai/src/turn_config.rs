@@ -14,6 +14,7 @@ use roomkit::model::{ChannelBinding, Metadata, RoomContext};
 use roomkit::{ChannelError, ClassedError};
 use serde_json::{Value, json};
 
+use crate::skills::SkillRegistry;
 use crate::tools::{AiTool, ToolHandler};
 use crate::turn_settings::{Refusal, type_name, validation_error};
 
@@ -52,6 +53,12 @@ pub struct AiChannelTurnConfig {
     /// channel's own tools (a person's, the skills') keep their own. It is
     /// never installed on the channel, nor read by another turn.
     pub tool_handler: Option<ToolHandler>,
+    /// The skills this turn may activate (RFC §24.3), in place of the
+    /// channel's: its manifest and its skill tools read this registry.
+    /// `None` keeps the channel's. Read only on a channel built with a
+    /// registry, an empty one included: one built without declares no skill
+    /// tools. Never installed on the channel, nor read by another turn.
+    pub skills: Option<SkillRegistry>,
 }
 
 impl fmt::Debug for AiChannelTurnConfig {
@@ -68,6 +75,7 @@ impl fmt::Debug for AiChannelTurnConfig {
             .field("turn_budget_tokens", &self.turn_budget_tokens)
             .field("turn_budget_usd", &self.turn_budget_usd)
             .field("tool_handler", &self.tool_handler.is_some())
+            .field("skills", &self.skills.is_some())
             .finish()
     }
 }
