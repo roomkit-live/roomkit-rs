@@ -10,7 +10,8 @@ mod support;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelId, ChannelType, EventSource, Identity, IdentityId,
-    Metadata, Participant, ParticipantId, Room, RoomEvent, RoomId, TextContent, Verification,
+    Metadata, Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus, TextContent,
+    Verification,
 };
 use roomkit::store::{
     CommitEventOptions, LinkAddressOptions, PatchRoomMetadataOptions, ResolveIdentityOptions,
@@ -984,21 +985,19 @@ async fn an_add_waiting_on_a_commit_holds_nothing_the_commit_needs() {
 
 /// Python: `test_an_add_to_a_missing_room_stays_the_foreign_key_s_refusal`: holding
 /// the room first finds no row and refuses nothing itself: the refusal is still the
-/// write's, and stores nothing.
+/// write's (the shared suite's `an_event_added_to_a_missing_room_is_refused`), and
+/// stores nothing.
 #[tokio::test]
 async fn an_add_to_a_missing_room_stays_the_foreign_key_s_refusal() {
     let Some((schema, store)) = fresh().await else {
         return;
     };
     let room = room_id("gone");
-    assert_eq!(
-        store.add_event(event("gone", "x")).await,
-        Err(StoreError::RoomNotFound(room.clone()))
-    );
-    assert_eq!(
-        store.add_event_auto_index(&room, event("gone", "x")).await,
-        Err(StoreError::RoomNotFound(room.clone()))
-    );
+    store.add_event(event("gone", "x")).await.unwrap_err();
+    store
+        .add_event_auto_index(&room, event("gone", "x"))
+        .await
+        .unwrap_err();
     let left: i64 = schema
         .client()
         .await
@@ -1009,10 +1008,68 @@ async fn an_add_to_a_missing_room_stays_the_foreign_key_s_refusal() {
     assert_eq!(left, 0);
 }
 
+/// Python: `test_a_stream_of_adds_starves_nothing_on_its_room` (HITL 0affbb3b): four
+/// sessions adding to one room without a pause, and what takes the room's row `FOR
+/// UPDATE` still gets its turn. An add holds the room while it queues on the sequence,
+/// and a lock the next add could share would never free it.
+#[tokio::test]
+async fn a_stream_of_adds_starves_nothing_on_its_room() {
+    for waiting in ["commit_event", "update_room_if"] {
+        let Some((schema, _)) = fresh().await else {
+            return;
+        };
+        let store = schema.store();
+        store
+            .init(InitOptions {
+                min_size: 1,
+                max_size: 8,
+            })
+            .await
+            .unwrap();
+        let room = room_id("r1");
+        let created = store.create_room(Room::new(room.clone())).await.unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut adders = tokio::task::JoinSet::new();
+        for _ in 0..4 {
+            let (store, room, stop) = (store.clone(), room.clone(), stop.clone());
+            adders.spawn(async move {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    store
+                        .add_event_auto_index(&room, event("r1", "x"))
+                        .await
+                        .unwrap();
+                }
+            });
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let limit = std::time::Duration::from_secs(2);
+        let finished = if waiting == "commit_event" {
+            tokio::time::timeout(
+                limit,
+                store.commit_event(&room, event("r1", "y"), CommitEventOptions::default()),
+            )
+            .await
+            .is_ok()
+        } else {
+            tokio::time::timeout(
+                limit,
+                store.update_room_if(created, RoomStatus::Active, None, None),
+            )
+            .await
+            .is_ok()
+        };
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        while let Some(added) = adders.join_next().await {
+            added.unwrap();
+        }
+        assert!(finished, "{waiting} waited on the adds");
+    }
+}
+
 /// Python: `test_the_writers_of_one_room_at_once_never_deadlock` (RMK-1365): 40
-/// commits, 40 automatic adds and 40 adds at their own index, on one room, each on
-/// its connection: none fails. The own indexes stay far apart, so that a reserved
-/// index never meets one.
+/// commits, 40 automatic adds and 40 adds at their own index, on one room, over 40
+/// connections: none fails. The own indexes stay far apart, so that a reserved index
+/// never meets one.
 #[tokio::test]
 async fn the_writers_of_one_room_at_once_never_deadlock() {
     let Some((schema, _)) = fresh().await else {

@@ -208,14 +208,16 @@ async fn observe_index(transaction: &Transaction<'_>, event: &RoomEvent) -> Resu
 }
 
 /// Takes the room's row before its sequence, the order of a commit, as Python's
-/// `_hold_room_first`. The event's foreign key would otherwise take it after, and
-/// a commit holding the room would wait on the sequence this write holds, while
-/// this write waits on the room: the server kills one of them. A missing room stays
-/// the foreign key's refusal, a few statements later.
+/// `_hold_room_first`. The event's foreign key would otherwise take it after, and a
+/// commit holding the room would wait on the sequence this write holds, while this
+/// write waits on the room: the server kills one of them. `FOR NO KEY UPDATE`, not
+/// the key share the foreign key needs: adds would share that one past a waiting
+/// `FOR UPDATE`, which a stream of them would starve. A missing room stays the
+/// foreign key's refusal, in the next statement.
 async fn hold_room_first(transaction: &Transaction<'_>, room_id: &RoomId) -> Result<(), Failure> {
     execute(
         transaction,
-        "SELECT 1 FROM rooms WHERE id = $1 FOR KEY SHARE",
+        "SELECT 1 FROM rooms WHERE id = $1 FOR NO KEY UPDATE",
         &[&room_id.as_str()],
     )
     .await?;
