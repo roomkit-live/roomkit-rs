@@ -27,6 +27,8 @@ pretty_assertions.workspace = true
 roomkit-ai.workspace = true
 # The fixture's fingerprint (tests/cross_read.rs).
 sha2.workspace = true
+# The warnings test's capture, which the test includes from roomkit.
+tracing.workspace = true
 # The conformance runner's, which the suite includes from roomkit.
 uuid.workspace = true
 
