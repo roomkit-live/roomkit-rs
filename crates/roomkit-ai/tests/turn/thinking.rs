@@ -233,9 +233,9 @@ async fn a_close_from_within_a_turn_that_reasoned_takes_no_grace() {
         .unwrap();
 }
 
-/// A round's transcript names a call by the id the loop gave it (Python's
-/// `CallIds` before `RoundTranscript.add_call`): a call the provider gave none,
-/// or another's, keeps its place, and the round its reasoning.
+/// A round's transcript names a call by the id its provider handed: a call
+/// under another's id, or under none, keeps its place, and the round its
+/// reasoning.
 #[tokio::test]
 async fn a_round_s_calls_keep_their_place_among_the_blocks_whatever_their_ids() {
     let delta = |block: u32, thinking: &str, signature: &str| {

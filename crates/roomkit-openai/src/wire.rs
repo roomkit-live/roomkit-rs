@@ -294,10 +294,10 @@ struct PromptDetails {
     cached_tokens: u64,
 }
 
-/// A member that reads `null` as absent: its type's default, a count of 0,
-/// an empty text or list, as the reference implementation reads it.
-/// A server's call id as text, whatever it wrote: Python's `CallIds` reads
-/// `str(server_id) if server_id else ""`, nothing for what Python reads as false.
+/// A whole answer's call id as text, whatever the server wrote: Python's
+/// `CallIds` reads `str(server_id) if server_id else ""`, nothing for what
+/// Python reads as false. A stream's id is read as Python's SDK reads it: a text,
+/// or the read fails.
 fn server_id<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -314,6 +314,8 @@ where
     })
 }
 
+/// A member that reads `null` as absent: its type's default, a count of 0,
+/// an empty text or list, as the reference implementation reads it.
 fn nullable<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -413,8 +415,8 @@ struct Delta {
 struct DeltaCall {
     #[serde(default, deserialize_with = "nullable")]
     index: u64,
-    #[serde(default, deserialize_with = "server_id")]
-    id: String,
+    #[serde(default)]
+    id: Option<String>,
     #[serde(default)]
     function: Option<DeltaFunction>,
 }
@@ -516,7 +518,7 @@ impl Folding {
         };
         self.calls.fold(&Fragment {
             index,
-            id: Some(id.as_str()).filter(|id| !id.is_empty()),
+            id: id.as_deref().filter(|id| !id.is_empty()),
             name: name.filter(|name| !name.is_empty()),
             arguments: &arguments,
             function: function.is_some(),
@@ -935,9 +937,6 @@ mod tests {
         assert_eq!((read.text.as_str(), read.calls.len()), ("Hi", 0));
     }
 
-    /// RFC §6.4: a streamed call's fragments are folded by their index,
-    /// its id and name kept from the first that gives them, its arguments'
-    /// text joined; the usage comes in the last chunk.
     /// The calls `fragments`, each an index and a `tool_calls` entry's
     /// members, fold into.
     fn folded(fragments: &[(u64, Value)]) -> Vec<RawCall> {
@@ -1052,7 +1051,7 @@ mod tests {
     #[test]
     fn what_a_fragment_on_an_occupied_index_folds_into() {
         type Part = (Option<&'static str>, Option<&'static str>, &'static str);
-        let cases: [(&[Part], Vec<RawCall>); 8] = [
+        let cases: [(&[Part], Vec<RawCall>); 9] = [
             (
                 &[
                     (Some("a"), Some("now"), r#"{"o": "#),
@@ -1090,6 +1089,11 @@ mod tests {
                     RawCall::new("", "now", "{}"),
                 ],
             ),
+            // Named before its server gave an id, with no arguments yet.
+            (
+                &[(None, Some("now"), ""), (Some("a"), None, "{}")],
+                vec![RawCall::new("", "now", "{}")],
+            ),
             // The call was named before its server gave an id: no id starts
             // another call, none is taken.
             (
@@ -1124,11 +1128,6 @@ mod tests {
                 RawCall::new("", "now", "{}")
             ]
         );
-        let streamed = folded(&[(
-            0,
-            serde_json::json!({ "id": 7, "function": { "name": "now" } }),
-        )]);
-        assert_eq!(streamed, [RawCall::new("7", "now", "")]);
     }
 
     // Python: providers/ai/openai_dialect.py message_tool_calls: an entry with no
@@ -1162,6 +1161,9 @@ mod tests {
         );
     }
 
+    /// RFC §6.4: a streamed call's fragments are folded by their index,
+    /// its id and name kept from the first that gives them, its arguments'
+    /// text joined; the usage comes in the last chunk.
     // Python: providers/ai/openai_dialect.py ToolCallSlots: each call in the
     // order it came, whatever index it names.
     #[test]

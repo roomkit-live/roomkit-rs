@@ -503,3 +503,53 @@ fn image_part(image: &Image) -> AiContentPart {
         mime_type: Some(image.mime_type().to_owned()),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use roomkit::model::{Metadata, ToolCall};
+
+    use super::*;
+
+    /// The tool each of `messages`' results names.
+    fn result_names(messages: &[Message]) -> Vec<String> {
+        ai_messages_with(messages, &HashMap::new(), &HashMap::new())
+            .iter()
+            .flat_map(|message| match &message.content {
+                AiMessageContent::Parts(parts) => parts.as_slice(),
+                AiMessageContent::Text(_) => &[],
+            })
+            .filter_map(|part| match part {
+                AiContentPart::ToolResult(result) => Some(result.name.clone()),
+                AiContentPart::Text(_)
+                | AiContentPart::Image(_)
+                | AiContentPart::Thinking(_)
+                | AiContentPart::ToolCall(_) => None,
+            })
+            .collect()
+    }
+
+    fn calling(names: &[&str]) -> Message {
+        let calls = names
+            .iter()
+            .map(|name| ToolCall::new("c1", *name, Metadata::new()))
+            .collect();
+        Message::assistant_calls("", calls)
+    }
+
+    // Python: ToolOutcome.as_part(tc.id, tc.name): a result carries its own
+    // call's tool, in a round under one id, and in a round after one that left
+    // a call under the id with no result.
+    #[test]
+    fn a_result_names_its_own_call_s_tool() {
+        let result = || Message::tool_result("c1", "fine");
+        assert_eq!(
+            result_names(&[calling(&["lookup", "other"]), result(), result()]),
+            ["lookup", "other"]
+        );
+        assert_eq!(
+            result_names(&[calling(&["lookup"]), calling(&["other"]), result()]),
+            ["other"]
+        );
+    }
+}
