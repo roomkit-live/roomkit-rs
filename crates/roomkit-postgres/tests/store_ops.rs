@@ -16,7 +16,7 @@ use roomkit::store::{
     CommitEventOptions, LinkAddressOptions, PatchRoomMetadataOptions, ResolveIdentityOptions,
 };
 use roomkit::{ConversationStore, RoomKit, RoomKitOptions, StoreError};
-use roomkit_postgres::{PostgresStore, PostgresStoreOptions};
+use roomkit_postgres::{InitOptions, PostgresStore, PostgresStoreOptions};
 use serde_json::{Value, json};
 use tokio_postgres::NoTls;
 
@@ -909,6 +909,150 @@ async fn a_commit_and_a_verification_keep_what_the_model_does_not_read() {
     let (timers, data): (Value, Value) = (row.get(0), row.get(1));
     assert_eq!(timers["later"], json!(1));
     assert_eq!(data["later"], json!(2));
+}
+
+/// Returns once a session waits on a lock `holder`'s transaction holds.
+async fn until_blocked_by(schema: &TempSchema, holder: &tokio_postgres::Client) {
+    let pid: i32 = holder
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let watcher = schema.client().await;
+    for _ in 0..400 {
+        let blocked: i64 = watcher
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+                &[&pid],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if blocked > 0 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    panic!("no session ever waited on the holder");
+}
+
+/// Python: `test_an_add_waiting_on_a_commit_holds_nothing_the_commit_needs` (RMK-1365):
+/// a commit holds the room, then its sequence. An add takes them in that order too,
+/// so that it waits on the room with the sequence free: in the other order, each
+/// waits on what the other holds, and the server kills one.
+#[tokio::test]
+async fn an_add_waiting_on_a_commit_holds_nothing_the_commit_needs() {
+    for auto_indexed in [false, true] {
+        let Some((schema, store)) = fresh().await else {
+            return;
+        };
+        let store = std::sync::Arc::new(store);
+        let room = room_id("r1");
+        store.create_room(Room::new(room.clone())).await.unwrap();
+        store
+            .add_event_auto_index(&room, event("r1", "first"))
+            .await
+            .unwrap();
+        let committer = schema.client().await;
+        committer
+            .batch_execute("BEGIN; SELECT 1 FROM rooms WHERE id = 'r1' FOR UPDATE")
+            .await
+            .unwrap();
+        let adding = {
+            let (store, room) = (store.clone(), room.clone());
+            tokio::spawn(async move {
+                if auto_indexed {
+                    store.add_event_auto_index(&room, event("r1", "x")).await
+                } else {
+                    let mut own = event("r1", "x");
+                    own.index = 7;
+                    store.add_event(own).await
+                }
+            })
+        };
+        until_blocked_by(&schema, &committer).await;
+        committer
+            .batch_execute(
+                "UPDATE event_sequences SET next_index = next_index + 1 WHERE room_id = 'r1'; \
+                 COMMIT",
+            )
+            .await
+            .unwrap();
+        adding.await.unwrap().unwrap();
+    }
+}
+
+/// Python: `test_an_add_to_a_missing_room_stays_the_foreign_key_s_refusal`: holding
+/// the room first finds no row and refuses nothing itself: the refusal is still the
+/// write's, and stores nothing.
+#[tokio::test]
+async fn an_add_to_a_missing_room_stays_the_foreign_key_s_refusal() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    let room = room_id("gone");
+    assert_eq!(
+        store.add_event(event("gone", "x")).await,
+        Err(StoreError::RoomNotFound(room.clone()))
+    );
+    assert_eq!(
+        store.add_event_auto_index(&room, event("gone", "x")).await,
+        Err(StoreError::RoomNotFound(room.clone()))
+    );
+    let left: i64 = schema
+        .client()
+        .await
+        .query_one("SELECT count(*) FROM event_sequences", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(left, 0);
+}
+
+/// Python: `test_the_writers_of_one_room_at_once_never_deadlock` (RMK-1365): 40
+/// commits, 40 automatic adds and 40 adds at their own index, on one room, each on
+/// its connection: none fails. The own indexes stay far apart, so that a reserved
+/// index never meets one.
+#[tokio::test]
+async fn the_writers_of_one_room_at_once_never_deadlock() {
+    let Some((schema, _)) = fresh().await else {
+        return;
+    };
+    let store = std::sync::Arc::new(schema.store());
+    store
+        .init(InitOptions {
+            min_size: 1,
+            max_size: 40,
+        })
+        .await
+        .unwrap();
+    let room = room_id("r1");
+    store.create_room(Room::new(room.clone())).await.unwrap();
+    let mut failures = Vec::new();
+    for pass in 0_u64..8 {
+        let mut writers = tokio::task::JoinSet::new();
+        for own in 0_u64..40 {
+            let (first, second, third) = (store.clone(), store.clone(), store.clone());
+            let (one, two) = (room.clone(), room.clone());
+            writers.spawn(async move {
+                first
+                    .commit_event(&one, event("r1", "x"), CommitEventOptions::default())
+                    .await
+            });
+            writers.spawn(async move { second.add_event_auto_index(&two, event("r1", "x")).await });
+            writers.spawn(async move {
+                let mut held = event("r1", "x");
+                held.index = (pass * 40 + own + 1) * 1_000_000;
+                third.add_event(held).await
+            });
+        }
+        while let Some(written) = writers.join_next().await {
+            if let Err(failure) = written.unwrap() {
+                failures.push(full_text(&failure));
+            }
+        }
+    }
+    assert_eq!(failures.len(), 0, "of 960 calls: {:?}", failures.first());
 }
 
 /// Python: `test_without_cross_process_lock_the_constraint_catches_races` and
