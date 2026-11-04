@@ -265,6 +265,24 @@ async fn a_tool_that_fails_ends_its_span_in_error() {
     kit.close().await.unwrap();
 }
 
+// Python: channels/_ai_tools.py::_judged_call: a refusal past the gate is a
+// raise like any other, its span ended in error; the guard's is one.
+#[tokio::test]
+async fn a_call_refused_past_its_gate_ends_its_span_in_error() {
+    let script = vec![
+        Round::Says("One.", Some("lookup")),
+        Round::Says("Two.", Some("lookup")),
+        Round::Says("Three.", Some("lookup")),
+        Round::Says("Done.", None),
+    ];
+    let (kit, mock) = turn_of(script).await;
+    let calls = mock.get_spans(SpanKind::LlmToolCall);
+    let statuses: Vec<&str> = calls.iter().map(|call| call.status.as_str()).collect();
+    assert_eq!(statuses, ["ok", "ok", "error"]);
+    assert_eq!(calls[2].error_message.as_deref(), Some("ToolError"));
+    kit.close().await.unwrap();
+}
+
 // Python: channels/_ai_tools.py::_serve_gated_call: a call its gate refuses
 // never reaches `_judged_call`, which opens the span.
 #[tokio::test]

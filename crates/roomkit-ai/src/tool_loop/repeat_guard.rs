@@ -18,6 +18,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use roomkit::model::Metadata;
 use serde_json::{Map, Value};
 
+use crate::texts;
+
 /// The call that repeats at this count is refused: two identical executions
 /// can be legitimate, a retry after a transient failure.
 const REPEAT_CALL_LIMIT: u32 = 3;
@@ -73,7 +75,7 @@ impl RepeatGuard {
         if count >= limit + REPEAT_FORCE_STOP_AT {
             self.force_stop.store(true, Ordering::SeqCst);
         }
-        Some(advisory(name, count - 1))
+        Some(texts::repeated_call(name, count - 1))
     }
 
     /// Whether the guard pulled the ripcord: the next generation is the
@@ -113,17 +115,6 @@ this turn, for different arguments. Varying the arguments is not finding anythin
 this answer is settled. Use it and move on, or answer with what you have.]"
         )
     }
-}
-
-/// The guard's words for a call to `name` already made `repeats` times, as
-/// Python's `json.dumps` writes them, non-ASCII escaped.
-fn advisory(name: &str, repeats: u32) -> String {
-    format!(
-        "{{\"error\": \"You already called '{name}' with these EXACT arguments {repeats} time(s) \
-this turn \\u2014 repeating it cannot yield anything new.\", \"hint\": \"STOP repeating this \
-call. Use the results you already have, try genuinely different arguments, or answer the user now \
-with what you know.\"}}"
-    )
 }
 
 /// `arguments` as one text whatever the order of their keys, at any depth:
@@ -204,8 +195,8 @@ mod tests {
     fn the_advisory_error_is_not_itself_annotated() {
         let guard = RepeatGuard::default();
         for _ in 0..5 {
-            let read = guard.noted("boards", advisory("boards", 2));
-            assert_eq!(read, advisory("boards", 2));
+            let read = guard.noted("boards", texts::repeated_call("boards", 2));
+            assert_eq!(read, texts::repeated_call("boards", 2));
         }
     }
 
@@ -230,7 +221,10 @@ mod tests {
         let two = arguments(&json!({"b": {"y": [{"q": 2, "p": 1}], "x": 1}, "a": 1}));
         assert_eq!(guard.refusal("t", &one, false), None);
         assert_eq!(guard.refusal("t", &two, false), None);
-        assert_eq!(guard.refusal("t", &one, false), Some(advisory("t", 2)));
+        assert_eq!(
+            guard.refusal("t", &one, false),
+            Some(texts::repeated_call("t", 2))
+        );
     }
 
     #[test]

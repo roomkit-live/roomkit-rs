@@ -97,15 +97,17 @@ impl<P: AiProvider> Loop<P> {
     }
 
     /// What the guard says of a call to `name` with `arguments`, Tool Search's
-    /// own tools, whose catalogue holds within the turn, the pure ones.
+    /// own names, whose catalogue holds within the turn, the pure ones wherever
+    /// the channel keeps them for itself, a search hiding anything or not
+    /// (Python's `traits.pure`).
     fn repeat_refusal(&self, name: &str, arguments: &Metadata) -> Option<String> {
-        let pure = TOOL_SEARCH_INFRA_TOOL_NAMES.contains(&name) && self.toolbox.is_exempt(name);
+        let pure = TOOL_SEARCH_INFRA_TOOL_NAMES.contains(&name) && self.toolbox.is_reserved(name);
         self.repeat_guard.refusal(name, arguments, pure)
     }
 
     /// `result`, what the model reads of a call past its gate, noted when its
-    /// tool already gave that answer this turn; a result of parts is not
-    /// compared (Python's `_model_part`).
+    /// tool already gave that answer this turn; a result of parts a model that
+    /// sees reads is not compared (Python's `_model_part`).
     fn with_repeat_note(&self, name: &str, result: ToolResult) -> ToolResult {
         match result {
             ToolResult::Text(text) => ToolResult::Text(self.repeat_guard.noted(name, text)),
@@ -302,9 +304,14 @@ impl<P: AiProvider> Loop<P> {
     }
 }
 
-/// What the tool raised, for its span, when the call ended `Failed`.
+/// What the tool raised, for its span, when the call ended `Failed`, or was
+/// refused past its gate, as Python's `_judged_call` reads a raise.
 fn raised_of(ended: &ToolCallReport) -> Option<String> {
-    (ended.outcome == Some(ToolCallOutcome::Failed)).then(|| {
+    let raised = matches!(
+        ended.outcome,
+        Some(ToolCallOutcome::Failed | ToolCallOutcome::Refused)
+    );
+    raised.then(|| {
         ended
             .error_detail
             .clone()

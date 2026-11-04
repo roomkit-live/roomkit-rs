@@ -24,6 +24,18 @@ pub(crate) fn no_such_tool(name: &str) -> String {
     format!("{{\"error\": {error}, \"hint\": {hint}}}")
 }
 
+/// A call to `name` repeated with identical arguments, already made `repeats`
+/// times this turn (RFC §6.4). Python's `_repeated_call_guard`.
+pub(crate) fn repeated_call(name: &str, repeats: u32) -> String {
+    let error = quoted(&format!(
+        "You already called '{name}' with these EXACT arguments {repeats} time(s) this turn \u{2014} repeating it cannot yield anything new."
+    ));
+    let hint = quoted(
+        "STOP repeating this call. Use the results you already have, try genuinely different arguments, or answer the user now with what you know.",
+    );
+    format!("{{\"error\": {error}, \"hint\": {hint}}}")
+}
+
 /// A call to a tool withdrawn for the turn, by `BEFORE_AI_GENERATION` or
 /// `AFTER_TOOL_ROUND` (RFC §6.4).
 pub(crate) fn not_available(name: &str) -> String {

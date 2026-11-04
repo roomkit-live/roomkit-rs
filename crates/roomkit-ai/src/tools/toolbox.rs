@@ -223,9 +223,10 @@ impl Toolbox {
             .collect()
     }
 
-    /// Whether the channel itself serves `name`, past the tool policy.
-    pub(crate) fn is_exempt(&self, name: &str) -> bool {
-        self.exempt.contains(name)
+    /// Whether the channel keeps `name` for its own tools, served or not this
+    /// turn.
+    pub(crate) fn is_reserved(&self, name: &str) -> bool {
+        self.reserved.contains(name)
     }
 
     /// Whether Tool Search never hides `name`.
