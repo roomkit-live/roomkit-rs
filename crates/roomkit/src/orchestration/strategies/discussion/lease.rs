@@ -73,11 +73,17 @@ impl SpeakQueueState {
 }
 
 #[cfg(test)]
+#[expect(clippy::cast_possible_truncation, reason = "times of a few seconds")]
 mod tests {
     use pretty_assertions::assert_eq;
     use roomkit_core::model::ChannelId;
 
     use super::*;
+
+    /// The time a lease ends, to the millisecond a stored `f64` keeps.
+    fn millis(seconds: f64) -> i64 {
+        (seconds * 1000.0).round() as i64
+    }
 
     fn held_by(holder: &str, expires: f64) -> SpeakQueueState {
         SpeakQueueState {
@@ -104,7 +110,7 @@ mod tests {
         let mut state = held_by("a", 10.0);
         assert!(!state.take_lease("b", 9.0));
         assert_eq!(state.lease_holder.as_deref(), Some("a"));
-        assert_eq!(state.lease_expires, 10.0);
+        assert_eq!(millis(state.lease_expires), millis(10.0));
     }
 
     #[test]
@@ -113,7 +119,7 @@ mod tests {
         state.speaking = Some(ChannelId::new("sre").unwrap());
         assert!(state.take_lease("b", 11.0));
         assert_eq!(state.lease_holder.as_deref(), Some("b"));
-        assert_eq!(state.lease_expires, 26.0);
+        assert_eq!(millis(state.lease_expires), millis(26.0));
         assert_eq!(state.speaking, None);
     }
 
@@ -123,7 +129,7 @@ mod tests {
         let sre = ChannelId::new("sre").unwrap();
         state.speaking = Some(sre.clone());
         assert!(state.take_lease("a", 9.0));
-        assert_eq!(state.lease_expires, 24.0);
+        assert_eq!(millis(state.lease_expires), millis(24.0));
         assert_eq!(state.speaking, Some(sre));
     }
 
@@ -143,7 +149,7 @@ mod tests {
         state.speaking = Some(sre.clone());
         state.grant_lease("b", 11.0);
         assert_eq!(state.lease_holder.as_deref(), Some("b"));
-        assert_eq!(state.lease_expires, 26.0);
+        assert_eq!(millis(state.lease_expires), millis(26.0));
 
         state.release_lease("a");
         assert_eq!(state.lease_holder.as_deref(), Some("b"));
@@ -151,7 +157,7 @@ mod tests {
 
         state.release_lease("b");
         assert_eq!(state.lease_holder, None);
-        assert_eq!(state.lease_expires, 0.0);
+        assert_eq!(millis(state.lease_expires), millis(0.0));
         assert_eq!(state.speaking, None);
     }
 

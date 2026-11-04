@@ -60,7 +60,9 @@ pub use self::status::{
 };
 #[doc(inline)]
 #[doc(inline)]
-pub use self::strategies::discussion::{SpeakQueue, SpeakQueueChange, SpeakQueueEvent};
+pub use self::strategies::discussion::strategy::{DiscussionOptions, DoneFn};
+#[doc(inline)]
+pub use self::strategies::discussion::{Discussion, SpeakQueue, SpeakQueueChange, SpeakQueueEvent};
 pub use self::strategies::pipeline::Pipeline;
 pub use self::strategies::pipeline::PipelineOptions;
 pub use self::strategies::review_loop::{Loop, LoopOptions};

@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The discussion's rules and its constructor (RFC §19.7.5), as Python's: `roomkit::Discussion`, `DiscussionOptions`, `SpeakQueue`, `SpeakQueueChange`, `SpeakQueueEvent`. A discussion is built and read: its handles and refusals are Python's; it cannot be installed yet.
 - A handoff to a human holds the room for them (RFC §19.6), as Python's: `ConversationState::human_hold`; while it holds, the router asks no agent and no supervisor, the message still reaching the room's transports, an address naming an agent still asking it and the supervisor beside it, `ON_HANDOFF` naming the human; a handoff to an agent is refused, by the tool and by `handle`, and only the host's transition to an agent takes it off (RMK-1233).
 - A `ConversationPipeline`'s or a router's install refused for an agent whose handoff is set up already, named twice, or whose tools hold the handoff's name leaves no hook and no tool behind, as Python's (RMK-1233).
 - A delivery cancelled, a held task cut or the kit's close leaves a streaming target reading its stream to end, what it does past the stream's end standing for Python's `finally`: no more 50 ms grace nor hard 5 s bound, `CancelOptions::timeout` bounds the waiter only, the close its grace, `DeliveryHandle::wait` reads the whole record, a target past its stream's end is dropped where it waits, `DeliveryStream::cut` tells a cut's end from the response's, and the default `deliver_stream` delivers nothing (RMK-1326).

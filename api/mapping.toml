@@ -54,6 +54,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::orchestration" = ["roomkit.orchestration"]
 "roomkit::orchestration::strategies" = ["roomkit.orchestration.strategies"]
 "roomkit::orchestration::strategies::supervisor" = ["roomkit.orchestration.strategies.supervisor"]
+"roomkit::orchestration::strategies::discussion" = ["roomkit.orchestration.strategies.discussion"]
 "roomkit::identity" = ["roomkit.identity"]
 "roomkit::tasks" = ["roomkit.tasks"]
 "roomkit::telemetry" = ["roomkit.telemetry"]
@@ -591,6 +592,21 @@ reason = "Python's constant `HANDOFF_TOOL`, an AITool: a static read at first us
 rust = "roomkit::orchestration::OnHandoffComplete"
 approved = "2026-11-03"
 reason = "the callback's type, Python's Callable[[str, HandoffResult], Awaitable[None]]: an Arc of a closure returning a future, as delegate's on_complete (HITL 884fc415)"
+
+[[missing]]
+python = "roomkit.Discussion"
+members = ["install", "uninstall"]
+reason = "not yet: a discussion is built and read, its running turns come with lot 8c of stream I (RMK-1233)"
+
+[[missing]]
+python = "roomkit.Discussion.__init__"
+params = ["dispatch", "dispatch_timeout"]
+reason = "not yet: the dispatch policy, lot 9 of stream I (RMK-1233)"
+
+[[exception]]
+rust = "roomkit::orchestration::DoneFn"
+approved = "2026-11-03"
+reason = "the callback's type, Python's Callable[[str], bool | Awaitable[bool]]: an Arc of a closure returning a future, as OnHandoffComplete (HITL a6edbffd)"
 
 [[missing]]
 python = "roomkit.HandoffHandler"
