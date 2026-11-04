@@ -147,16 +147,16 @@ mod tests {
     // dict keeping one agent under a handle.
     #[test]
     fn a_stored_handle_names_only_an_agent_the_discussion_holds() {
-        let config = DiscussionConfig::stored(&metadata(
-            &json!({"agents": ["a"], "handles": {"b": "B"}, "max_depth": 5}),
-        ))
+        let config: DiscussionConfig = serde_json::from_value(json!({
+            "agents": ["a"], "handles": {"b": "B"}, "max_depth": 5
+        }))
         .unwrap();
         assert_eq!(config.handle(&id("b")), "b");
         assert_eq!(config.by_handle(), [("a".to_owned(), "a".to_owned())]);
 
-        let shared = DiscussionConfig::stored(&metadata(
-            &json!({"agents": ["a", "b"], "handles": {"a": "x", "b": "x"}, "max_depth": 5}),
-        ))
+        let shared: DiscussionConfig = serde_json::from_value(json!({
+            "agents": ["a", "b"], "handles": {"a": "x", "b": "x"}, "max_depth": 5
+        }))
         .unwrap();
         assert_eq!(shared.by_handle(), [("x".to_owned(), "b".to_owned())]);
     }
@@ -182,6 +182,40 @@ mod tests {
         for stored in [json!(null), json!({}), json!("x"), json!({"agents": ["a"]})] {
             assert_eq!(DiscussionConfig::stored(&metadata(&stored)), None);
         }
+    }
+
+    // Python: tests/orchestration/test_discussion_handles.py::test_what_the_constructor_refuses_stored_reads_as_no_discussion
+    #[test]
+    fn test_what_the_constructor_refuses_stored_reads_as_no_discussion() {
+        for stored in [
+            json!({"agents": [], "max_depth": 5}),
+            json!({"agents": ["a", "a"], "max_depth": 5}),
+            json!({"agents": ["a"], "max_depth": 0}),
+            json!({"agents": ["a"], "max_depth": 5, "max_turns": 0}),
+            json!({"agents": ["a"], "max_depth": 5, "silent_token": "  "}),
+            json!({"agents": ["a"], "max_depth": 5, "rules": "  "}),
+            json!({"agents": ["a"], "max_depth": 5, "everyone": ["ghost"]}),
+            json!({"agents": ["a"], "max_depth": 5, "handles": {"ghost": "ops"}}),
+            json!({"agents": ["a", "b"], "max_depth": 5, "handles": {"a": "ops", "b": "OPS"}}),
+            // An agent stored with no handle is addressed by its channel id.
+            json!({"agents": ["a", "b"], "max_depth": 5, "handles": {"a": "b"}}),
+            json!({"agents": ["a"], "max_depth": 5, "handles": {"a": "two\nlines"}}),
+            json!({"agents": ["a"], "max_depth": 5, "handles": {"a": "all"}}),
+        ] {
+            assert_eq!(
+                DiscussionConfig::stored(&metadata(&stored)),
+                None,
+                "{stored}"
+            );
+        }
+    }
+
+    // Python: tests/orchestration/test_discussion_handles.py::test_a_depth_of_1_the_kit_writes_for_a_discussion_is_read_back
+    #[test]
+    fn test_a_depth_of_1_the_kit_writes_for_a_discussion_is_read_back() {
+        let written = config_of(&pair(None), 1);
+        let stored = serde_json::to_value(&written).unwrap();
+        assert_eq!(DiscussionConfig::stored(&metadata(&stored)), Some(written));
     }
 
     #[test]

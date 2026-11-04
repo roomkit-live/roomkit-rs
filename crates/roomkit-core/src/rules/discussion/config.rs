@@ -3,12 +3,14 @@
 //! queues by it, whether or not its host installed the discussion there;
 //! `done` is the host's and stays in the processes that installed it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
 use super::CONFIG_KEY;
+use super::names::is_handle;
 use crate::model::{ChannelId, Metadata};
+use crate::rules::unicode::casefold;
 
 /// What a process needs to follow a room's discussion.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,11 +57,89 @@ fn default_silent_token() -> String {
 }
 
 impl DiscussionConfig {
-    /// The configuration stored in a room's `metadata`, if one is: one that
-    /// does not read as a configuration is none.
+    /// The configuration stored in a room's `metadata`, if one is. One that
+    /// does not read as a configuration, or that the constructor would
+    /// refuse, reads as none, with a warning, never an error: this runs for
+    /// every context the kit builds, and an error would break every message
+    /// of the room.
     #[must_use]
     pub fn stored(metadata: &Metadata) -> Option<Self> {
-        serde_json::from_value(metadata.get(CONFIG_KEY)?.clone()).ok()
+        let raw = metadata.get(CONFIG_KEY).filter(|raw| !raw.is_null())?;
+        let refusal = match serde_json::from_value::<Self>(raw.clone()) {
+            Ok(config) => match config.refusal() {
+                None => return Some(config),
+                Some(refusal) => refusal.to_owned(),
+            },
+            Err(error) => format!("it does not read: {error}"),
+        };
+        tracing::warn!(
+            target: "roomkit::orchestration::discussion",
+            "a stored discussion reads as none: {refusal}"
+        );
+        None
+    }
+
+    /// What `Discussion::new` would refuse in this configuration, if anything.
+    fn refusal(&self) -> Option<&'static str> {
+        let distinct: BTreeSet<&ChannelId> = self.agents.iter().collect();
+        if self.agents.is_empty() {
+            return Some("it holds no agent");
+        }
+        if distinct.len() != self.agents.len() {
+            return Some("its agents are not distinct");
+        }
+        if self.max_turns.is_some_and(|turns| turns < 1) {
+            return Some("max_turns is below 1");
+        }
+        // 1 is not refused: the kit writes its max_chain_depth when the
+        // strategy gives none, and a kit may hold 1.
+        if self.max_depth < 1 {
+            return Some("max_depth is below 1");
+        }
+        if self.silent_token.trim().is_empty() {
+            return Some("silent_token is blank");
+        }
+        if self
+            .rules
+            .as_deref()
+            .is_some_and(|rules| rules.trim().is_empty())
+        {
+            return Some("rules is blank");
+        }
+        if self
+            .everyone
+            .iter()
+            .flatten()
+            .any(|agent| !self.agents.contains(agent))
+        {
+            return Some("everyone names a channel that is not an agent");
+        }
+        self.handles_refusal()
+    }
+
+    fn handles_refusal(&self) -> Option<&'static str> {
+        let given = self.handles.as_ref();
+        if given
+            .into_iter()
+            .flatten()
+            .any(|(agent, _)| !self.agents.contains(agent))
+        {
+            return Some("handles names a channel that is not an agent");
+        }
+        if !given
+            .into_iter()
+            .flatten()
+            .all(|(_, handle)| is_handle(handle))
+        {
+            return Some("a handle cannot name an agent");
+        }
+        // An agent with no handle stored is addressed by its channel id.
+        let addressed: BTreeSet<String> = self
+            .agents
+            .iter()
+            .map(|agent| casefold(self.handle(agent)))
+            .collect();
+        (addressed.len() != self.agents.len()).then_some("two agents are addressed alike")
     }
 
     /// Whether `other` configures the same discussion, whatever agents its
