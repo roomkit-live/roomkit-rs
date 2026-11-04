@@ -302,13 +302,15 @@ pub fn conversation_with_memory(
     let mut turns = past_turns(channel_id, event, context, history, &mut authors, &read);
     let input = Turn::input(event, &mut authors, &read);
     let in_place = memory.in_place && event.index > 0;
-    // An input read at its place, saying something, may be all the history a
-    // round reads after; else a round with no turn before it opens no history.
-    let rounds = if turns.is_empty() && (!in_place || input.content.is_blank()) {
-        Vec::new()
-    } else {
-        tool_rounds(&context.recent_events, channel_id, &replayed)
-    };
+    // A standalone turn reads nothing of the room (RFC §10.1.1 rule 7). An input
+    // read at its place, saying something, may be all the history a round reads
+    // after; else a round with no turn before it opens no history.
+    let rounds =
+        if is_standalone(event) || (turns.is_empty() && (!in_place || input.content.is_blank())) {
+            Vec::new()
+        } else {
+            tool_rounds(&context.recent_events, channel_id, &replayed)
+        };
     if in_place {
         turns.push(input);
         // Told apart in the order spoken: the input read last, whatever its

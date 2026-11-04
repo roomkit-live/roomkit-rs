@@ -749,3 +749,22 @@ fn an_instruction_s_turn_reads_before_a_round_at_its_own_index() {
         .unwrap();
     assert!(input < calls, "{messages:?}");
 }
+
+// Python: channels/_ai_context.py `_replayed_rounds`: a standalone turn reads
+// nothing of the room (RFC §10.1.1 rule 7), read at its place or not.
+#[test]
+fn a_standalone_instruction_read_at_its_place_reads_no_round() {
+    let mut room = numbered();
+    let earlier = room.says("sms", "alice", Some("Alice"), "earlier");
+    lookup(&mut room, &earlier);
+    for shift in [0, 1] {
+        let mut instruction = room.instruction("do it", true);
+        let rows = room.context.recent_events.len();
+        instruction.index = room.context.recent_events[rows - 2].index + shift;
+
+        let messages = read_with(&room, &instruction, &in_place());
+
+        let roles: Vec<_> = messages.iter().map(|message| message.role).collect();
+        assert_eq!(roles, [Role::User], "{messages:?}");
+    }
+}
