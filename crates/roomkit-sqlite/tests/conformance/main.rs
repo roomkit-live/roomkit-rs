@@ -19,6 +19,8 @@ mod audits;
 mod calls;
 #[path = "../../../roomkit/tests/conformance/compare.rs"]
 mod compare;
+#[path = "../../../roomkit/tests/conformance/discussion_calls.rs"]
+mod discussion_calls;
 #[path = "../../../roomkit/tests/conformance/errors.rs"]
 mod errors;
 #[path = "../../../roomkit/tests/conformance/handoff_calls.rs"]
