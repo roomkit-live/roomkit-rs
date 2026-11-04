@@ -4,7 +4,10 @@
 use std::collections::BTreeSet;
 
 use roomkit_core::model::{ChannelId, EventId, RoomId};
+use roomkit_core::rules::hook_registry::HookTrigger;
 use serde::{Deserialize, Serialize};
+
+use crate::hooks::TurnPayload;
 
 /// A room's speak queue as the host reads it (RFC §19.7.5).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,6 +64,10 @@ pub struct SpeakQueueEvent {
     /// The event behind the change, when one is (the message that queued,
     /// the event a turn answers).
     pub event_id: Option<EventId>,
+}
+
+impl TurnPayload for SpeakQueueEvent {
+    const TRIGGER: HookTrigger = HookTrigger::OnSpeakQueue;
 }
 
 impl SpeakQueueEvent {
