@@ -791,10 +791,19 @@ pub(crate) fn recording(
         let named = form.answered_recipient.as_ref().unwrap_or(address);
         update.participant_id = Some(ParticipantId::new(named.clone()).ok());
     }
-    // On a transport, where a reply goes, under each key the binding holds
-    // no value under: a value that is not a recipient is kept, as a
-    // recipient is (RFC §5.7).
-    let addressed = binding.category == ChannelCategory::Transport;
+    // On a transport naming the sender by their address, where a reply goes,
+    // under each key the binding holds no value under: a value that is not a
+    // recipient is kept, as a recipient is (RFC §5.7). A binding naming the
+    // sender otherwise (their identity) names a conversation that address is
+    // not, as Python's `_lacks_recipient` reads it.
+    let named = update
+        .participant_id
+        .as_ref()
+        .unwrap_or(&binding.participant_id);
+    let addressed = binding.category == ChannelCategory::Transport
+        && named
+            .as_ref()
+            .is_some_and(|named| form.normalize(named.as_str()) == *address);
     for (key, value) in sender.reply_metadata.iter().filter(|_| addressed) {
         if matches!(addresses::held(binding.metadata.get(key)), Held::Nothing) {
             update
