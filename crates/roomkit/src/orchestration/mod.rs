@@ -17,6 +17,7 @@ mod conversation_pipeline;
 mod gather;
 pub(crate) mod handoff;
 mod handoff_end;
+mod handoff_greeting;
 mod handoff_tool;
 pub(crate) mod lifecycle;
 mod memory;
@@ -43,6 +44,7 @@ pub use self::conversation_pipeline::{
 pub use self::handoff::{
     HandoffHandler, HandoffHandlerOptions, HandoffRequest, HandoffResult, OnHandoffComplete,
 };
+pub use self::handoff_greeting::SendGreetingOptions;
 #[doc(hidden)]
 pub use self::handoff_tool::handoff_tool_definition;
 pub use self::memory::{InMemoryStatusBackend, InMemoryStatusBackendOptions};

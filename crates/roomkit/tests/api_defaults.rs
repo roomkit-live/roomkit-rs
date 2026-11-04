@@ -1522,6 +1522,9 @@ fn handoff_handler_options_defaults_as_python() {
     assert!(defaults.on_handoff_complete.is_none());
     // roomkit.HandoffHandler.__init__(event_channel_id) = None
     assert!(defaults.event_channel_id.is_none());
+    let greeting = orchestration::SendGreetingOptions::default();
+    // roomkit.HandoffHandler.send_greeting(channel_id) = None
+    assert!(greeting.channel_id.is_none());
 }
 
 #[test]

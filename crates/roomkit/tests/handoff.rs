@@ -16,8 +16,9 @@ use roomkit::model::{
 };
 use roomkit::orchestration::{
     ConversationPipelineOptions, ConversationRouterOptions, ConversationState,
-    HandoffHandlerOptions, InstallOptions, OnHandoffComplete, StrategyAgent, StrategyFuture,
-    get_conversation_state, pipeline, set_conversation_state,
+    HandoffHandlerOptions, InstallOptions, OnHandoffComplete, SendGreetingOptions, StrategyAgent,
+    StrategyFuture, get_conversation_state, pipeline, save_conversation_state,
+    set_conversation_state,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
@@ -404,6 +405,35 @@ async fn an_install_sets_the_language_under_its_own_lock() {
 
     assert_eq!(state_of(&kit).await.context["language"], json!("French"));
     kit.close().await.unwrap();
+}
+
+// Python: orchestration/handoff.py HandoffHandler.send_greeting past the kit's
+// close: get_room still reads, so a room with nothing to say stays silent, and
+// the kit's send_greeting refuses at its door (tests/test_kit_close.py).
+#[tokio::test]
+async fn a_handler_s_greeting_past_the_close_is_refused_only_with_a_line_to_say() {
+    let kit = kit_with_room().await;
+    let handler = HandoffHandler::new(&kit, router(), HandoffHandlerOptions::default());
+    handler.set_greeting_map(HashMap::from([(id("a"), "Welcome!".to_owned())]));
+    let through_sms = || SendGreetingOptions {
+        channel_id: Some(id("sms")),
+    };
+    kit.close().await.unwrap();
+
+    handler.send_greeting(&room(), through_sms()).await.unwrap();
+
+    let state = ConversationState {
+        active_agent_id: Some(id("a")),
+        ..ConversationState::default()
+    };
+    save_conversation_state(kit.store(), &room(), &state)
+        .await
+        .unwrap();
+    let refused = handler.send_greeting(&room(), through_sms()).await;
+    assert!(
+        matches!(refused, Err(RoomKitError::KitClosed)),
+        "{refused:?}"
+    );
 }
 
 // Python: orchestration/_registry.py register, its refusal of a tool a room

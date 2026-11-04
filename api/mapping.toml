@@ -603,11 +603,6 @@ approved = "2026-11-03"
 reason = "the callback's type, Python's Callable[[str], bool | Awaitable[bool]]: an Arc of a closure returning a future, as OnHandoffComplete (HITL a6edbffd)"
 
 [[missing]]
-python = "roomkit.HandoffHandler"
-members = ["send_greeting"]
-reason = "not yet: a handoff's greeting says through RoomKit.send_greeting, its text path ported since (RMK-1314)"
-
-[[missing]]
 python = "roomkit.HandoffHandler.set_language"
 params = ["channel_id"]
 reason = "not in 0.x: the realtime voice channel whose sessions it reconfigures (left out of the orchestration lots with voice, HITL a9e5d1a3)"

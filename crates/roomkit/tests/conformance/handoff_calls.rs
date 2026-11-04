@@ -4,14 +4,16 @@
 //! `install_pipeline` the one a `ConversationPipeline`'s `install` returns, each
 //! under a name the later calls use; `conversation_pipeline` builds a pipeline
 //! and reads it; `setup_handoff` serves the tool on an agent; `handoff.handle`
-//! and `handoff.set_language` are the handler's own calls.
+//! `handoff.set_language` and `handoff.send_greeting` are the handler's own
+//! calls.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use roomkit::model::{ChannelId, Metadata, RoomId};
 use roomkit::orchestration::{
-    ConversationPipelineOptions, HandoffHandlerOptions, InstallOptions, StrategyAgent, pipeline,
+    ConversationPipelineOptions, HandoffHandlerOptions, InstallOptions, SendGreetingOptions,
+    StrategyAgent, pipeline,
 };
 use roomkit::{ConversationPipeline, HandoffHandler, PipelineStage, RoomKitError};
 use roomkit_ai::orchestration::build_handoff_tool;
@@ -31,6 +33,8 @@ pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
             "phase_map",
             "allowed_transitions",
             "known_agents",
+            "greeting_map",
+            "event_channel_id",
         ]),
         "install_router" => Some(&[
             "handler",
@@ -53,6 +57,7 @@ pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
         "setup_handoff" => Some(&["agent_id", "handler", "targets", "room_id"]),
         "handoff.handle" => Some(&["handler", "room_id", "calling_agent_id", "arguments"]),
         "handoff.set_language" => Some(&["handler", "room_id", "language"]),
+        "handoff.send_greeting" => Some(&["handler", "room_id", "channel_id"]),
         _ => None,
     }
 }
@@ -117,15 +122,16 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
                 phase_map: optional(spec, "phase_map")?,
                 allowed_transitions: allowed,
                 known_agents: optional(spec, "known_agents")?,
+                event_channel_id: optional(spec, "event_channel_id")?,
                 ..HandoffHandlerOptions::default()
             };
             let router = crate::routing_calls::router(&spec["router"])?;
-            keep(
-                run,
-                name,
-                spec,
-                Ok(HandoffHandler::new(run.kit(), router, options)),
-            )
+            let greeting_map: Option<HashMap<ChannelId, String>> = optional(spec, "greeting_map")?;
+            let handler = HandoffHandler::new(run.kit(), router, options);
+            if let Some(greeting_map) = greeting_map {
+                handler.set_greeting_map(greeting_map);
+            }
+            keep(run, name, spec, Ok(handler))
         }
         "install_router" => {
             let agents = field::<Vec<ChannelId>>(spec, "agents")?;
@@ -183,6 +189,14 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
             let language = field::<String>(spec, "language")?;
             let set = handler(run, spec)?.set_language(&room_id, language).await;
             Ok(finish(run, name, set, |()| Value::Null))
+        }
+        "handoff.send_greeting" => {
+            let room_id = field::<RoomId>(spec, "room_id")?;
+            let options = SendGreetingOptions {
+                channel_id: optional(spec, "channel_id")?,
+            };
+            let said = handler(run, spec)?.send_greeting(&room_id, options).await;
+            Ok(finish(run, name, said, |()| Value::Null))
         }
         other => Err(format!("no handoff call {other:?}")),
     }

@@ -465,7 +465,7 @@ impl<S: ConversationStore> HandoffHandler<S> {
         );
     }
 
-    fn kit(&self) -> Result<RoomKit<S>, RoomKitError> {
+    pub(super) fn kit(&self) -> Result<RoomKit<S>, RoomKitError> {
         self.inner.kit.upgrade().ok_or(RoomKitError::KitClosed)
     }
 
