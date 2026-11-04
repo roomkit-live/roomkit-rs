@@ -52,8 +52,9 @@ pub(super) struct Failed {
     /// turn's last segment when the failure ends it `error` (RFC §6.4).
     pub(super) delivered: String,
     /// What the done events it handed before the failure reported, which
-    /// the turn's usage keeps (RFC §6.4).
-    pub(super) used: Metadata,
+    /// the turn's usage keeps (RFC §6.4). Boxed: a failure is carried by
+    /// value through the loop, and this is rarely anything.
+    pub(super) used: Box<Metadata>,
 }
 
 impl Failed {
@@ -63,7 +64,7 @@ impl Failed {
             error,
             streamed: false,
             delivered: String::new(),
-            used: Metadata::new(),
+            used: Box::default(),
         }
     }
 }
@@ -114,7 +115,7 @@ impl Generation {
                         error,
                         streamed,
                         delivered,
-                        used,
+                        used: Box::new(used),
                     });
                 }
             };

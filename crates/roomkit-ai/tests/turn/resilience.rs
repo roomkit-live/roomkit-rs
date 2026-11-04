@@ -12,13 +12,14 @@ use std::task::{Context, Poll};
 use futures_core::Stream;
 use pretty_assertions::assert_eq;
 use roomkit::SteerOptions;
-use roomkit::model::{Cancel, EventContent, Metadata};
+use roomkit::model::{Cancel, Metadata};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, MockAiProvider,
-    MockAiProviderOptions, ProviderError, ProviderStream, StreamDone, StreamEvent,
-    StreamTextDelta, Tools,
+    MockAiProviderOptions, ProviderError, ProviderStream, StreamDone, StreamEvent, StreamTextDelta,
+    Tools,
 };
+use roomkit_core::rules::transcoding::text_of;
 use serde_json::{Value, json};
 
 use super::support::{Room, channel, room_id};
@@ -26,7 +27,7 @@ use super::support::{Room, channel, room_id};
 /// What a [`Streams`] model does next.
 enum Step {
     /// Hands an event.
-    Event(StreamEvent),
+    Event(Box<StreamEvent>),
     /// Waits for this, then goes on.
     Wait(Pin<Box<dyn Future<Output = ()> + Send>>),
 }
@@ -70,7 +71,7 @@ impl Stream for Steps {
         loop {
             match steps.pop_front() {
                 None => return Poll::Ready(None),
-                Some(Step::Event(event)) => return Poll::Ready(Some(Ok(event))),
+                Some(Step::Event(event)) => return Poll::Ready(Some(Ok(*event))),
                 Some(Step::Wait(mut wait)) => {
                     if wait.as_mut().poll(context).is_pending() {
                         steps.push_front(Step::Wait(wait));
@@ -83,15 +84,15 @@ impl Stream for Steps {
 }
 
 fn text(text: &str) -> Step {
-    Step::Event(StreamEvent::TextDelta(StreamTextDelta::new(text)))
+    Step::Event(Box::new(StreamEvent::TextDelta(StreamTextDelta::new(text))))
 }
 
 fn done(finish_reason: &str, usage: Value) -> Step {
-    Step::Event(StreamEvent::Done(StreamDone {
+    Step::Event(Box::new(StreamEvent::Done(StreamDone {
         finish_reason: Some(finish_reason.to_owned()),
         usage: serde_json::from_value::<Metadata>(usage).unwrap(),
         ..StreamDone::default()
-    }))
+    })))
 }
 
 /// The agent's room over `model`.
@@ -115,14 +116,12 @@ async fn answer(room: &Room) -> (String, Value, Value, Value) {
         .iter()
         .find(|row| row.metadata.contains_key("loop_end_reason"))
         .unwrap();
-    let EventContent::Text(said) = &row.content else {
-        panic!("{:?}", row.content);
-    };
+    let read = |name: &str| row.metadata.get(name).cloned().unwrap_or_default();
     (
-        said.body.clone(),
-        row.metadata["ai_usage"].clone(),
-        row.metadata["ai_last_usage"].clone(),
-        row.metadata["loop_end_reason"].clone(),
+        text_of(&row.content),
+        read("ai_usage"),
+        read("ai_last_usage"),
+        read("loop_end_reason"),
     )
 }
 
@@ -153,12 +152,7 @@ async fn a_stream_is_read_past_its_done_event() {
         room.says("Hello?").await;
         assert_eq!(
             answer(&room).await,
-            (
-                "Voici la suite".to_owned(),
-                total,
-                last,
-                json!("completed")
-            )
+            ("Voici la suite".to_owned(), total, last, json!("completed"))
         );
         room.kit.close().await.unwrap();
     }
@@ -192,12 +186,7 @@ async fn a_cancel_past_a_done_event_keeps_what_it_reported() {
     room.says("Hello?").await;
     assert_eq!(
         answer(&room).await,
-        (
-            "Voici".to_owned(),
-            used.clone(),
-            used,
-            json!("cancelled")
-        )
+        ("Voici".to_owned(), used.clone(), used, json!("cancelled"))
     );
     room.kit.close().await.unwrap();
 }

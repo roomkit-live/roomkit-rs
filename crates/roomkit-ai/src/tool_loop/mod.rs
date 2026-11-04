@@ -443,7 +443,7 @@ impl<P: AiProvider> Loop<P> {
             error: ProviderError::new(error.to_string(), options).with_source(error),
             streamed: true,
             delivered: generation.delivered,
-            used: Metadata::new(),
+            used: Box::default(),
         })
     }
 

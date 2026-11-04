@@ -79,10 +79,20 @@ pub struct ScriptedRound {
     provider: String,
     /// Whether its stream ends after its calls without its done event.
     pub without_done: bool,
-    /// Whether its failure or refusal comes after its calls.
-    failure_after_calls: bool,
-    /// Whether its failure or refusal comes after its done event.
-    failure_after_done: bool,
+    /// Where its failure or refusal comes.
+    failure_at: FailureAt,
+}
+
+/// Where a round's failure or refusal comes in its stream.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum FailureAt {
+    /// Once its text is written.
+    #[default]
+    Text,
+    /// Once its calls are.
+    Calls,
+    /// Once its done event is.
+    Done,
 }
 
 impl ScriptedRound {
@@ -103,8 +113,7 @@ impl ScriptedRound {
             context_overflow: None,
             provider: String::new(),
             without_done: false,
-            failure_after_calls: false,
-            failure_after_done: false,
+            failure_at: FailureAt::Text,
         }
     }
 
@@ -142,8 +151,7 @@ impl ScriptedRound {
             context_overflow: None,
             provider: String::new(),
             without_done: false,
-            failure_after_calls: false,
-            failure_after_done: false,
+            failure_at: FailureAt::Text,
         }
     }
 
@@ -227,7 +235,7 @@ impl ScriptedRound {
     /// are written, never its done event: the provider began its answer.
     #[must_use]
     pub fn failing_after_calls(mut self) -> Self {
-        self.failure_after_calls = true;
+        self.failure_at = FailureAt::Calls;
         self
     }
 
@@ -235,7 +243,7 @@ impl ScriptedRound {
     /// event is written: the provider's stream fails past its end.
     #[must_use]
     pub fn failing_after_done(mut self) -> Self {
-        self.failure_after_done = true;
+        self.failure_at = FailureAt::Done;
         self
     }
 
@@ -324,27 +332,22 @@ impl AiProvider for ScriptedProvider {
                     out.give(Ok(StreamEvent::TextDelta(StreamTextDelta { text })))
                         .await;
                 }
-                let failure = round.failure();
-                let (before, after_calls, after_done) =
-                    match (round.failure_after_calls, round.failure_after_done) {
-                        (true, _) => (None, failure, None),
-                        (false, true) => (None, None, failure),
-                        (false, false) => (failure, None, None),
-                    };
-                if let Some(failure) = before {
+                let mut failure = round.failure();
+                let mut failing_at = |at: FailureAt| failure.take_if(|_| round.failure_at == at);
+                if let Some(failure) = failing_at(FailureAt::Text) {
                     return out.give(Err(failure)).await;
                 }
                 let finish_reason = round.done.finish_reason.as_deref();
                 for call in read_tool_calls(round.calls, finish_reason) {
                     out.give(Ok(StreamEvent::ToolCall(call.into()))).await;
                 }
-                if let Some(failure) = after_calls {
+                if let Some(failure) = failing_at(FailureAt::Calls) {
                     return out.give(Err(failure)).await;
                 }
                 if !round.without_done {
                     out.give(Ok(StreamEvent::Done(round.done))).await;
                 }
-                if let Some(failure) = after_done {
+                if let Some(failure) = failing_at(FailureAt::Done) {
                     out.give(Err(failure)).await;
                 }
             },
