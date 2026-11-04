@@ -384,6 +384,8 @@ async fn an_uninstall_during_a_plan_s_write_tells_the_turn_given_then_its_end() 
                 .await
         })
     };
+    // The stop past its driver, the plan's write still held: only then is this
+    // an uninstall during the write.
     tokio::time::sleep(Duration::from_millis(10)).await;
     write_on.notify_one();
     tokio::time::timeout(Duration::from_secs(5), uninstalling)
