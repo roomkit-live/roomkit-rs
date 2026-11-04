@@ -522,8 +522,16 @@ impl<S: ConversationStore> HandoffHandler<S> {
                 "Agent {target} not found in room"
             ))));
         }
-        let phase = self.phase_of(request);
         let state = get_conversation_state(&room)?;
+        // Only the host's transition to an agent takes a hold off, with no
+        // model's tool on its way (RFC §19.6).
+        if state.human_hold && target != HUMAN {
+            tracing::warn!(target: "roomkit::orchestration", "Handoff rejected: room {room_id} is held for a human");
+            return Ok(Decided::Rejected(refusal(format!(
+                "Room {room_id} is held for a human"
+            ))));
+        }
+        let phase = self.phase_of(request);
         if let Some(allowed) = &self.inner.allowed_transitions
             && !allowed
                 .get(&state.phase)
