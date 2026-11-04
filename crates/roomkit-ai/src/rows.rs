@@ -2,7 +2,8 @@
 //! §6.1 `response_stream`), or, for a turn run outside a kit, buffered into
 //! the rows its output returns (RFC §6.4): each round's text as a MESSAGE,
 //! its calls' `TOOL_CALL_START` rows, then their `TOOL_CALL_END` rows in
-//! call order, the last MESSAGE carrying the turn's record.
+//! call order, the last MESSAGE, or else the last row, carrying the turn's
+//! record.
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -103,15 +104,14 @@ impl Rows<'_> {
     }
 
     /// The turn's record on its last MESSAGE: its final text's, or the last
-    /// one the turn wrote; with none, nothing records it.
+    /// one the turn wrote; with none, on its last row, the call's end.
     fn record(&mut self, end: &LoopEndMarker) {
-        let Some(message) = self
+        let position = self
             .last_message
-            .and_then(|position| self.events.get_mut(position))
-        else {
-            return;
-        };
-        message.metadata.extend(end.record());
+            .unwrap_or_else(|| self.events.len().saturating_sub(1));
+        if let Some(row) = self.events.get_mut(position) {
+            row.metadata.extend(end.record());
+        }
     }
 
     fn push(&mut self, event_type: EventType, content: EventContent) {

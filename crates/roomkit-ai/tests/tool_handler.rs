@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use pretty_assertions::assert_eq;
 use roomkit::Channel;
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelId, ChannelType, EventContent, EventSource, Room,
-    RoomContext, RoomEvent, RoomId, TextContent,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelType, EventContent, EventSource, EventType,
+    Room, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiChannel, AiChannelOptions, AiTool, ToolHandler, ToolResult};
@@ -191,10 +191,48 @@ async fn a_handler_s_write_lands_on_the_answer_and_a_task_it_spawns_with_keep_co
     let messages: Vec<_> = output
         .response_events
         .iter()
-        .filter(|event| event.r#type == roomkit::model::EventType::Message)
+        .filter(|event| event.r#type == EventType::Message)
         .collect();
     // The segment written before the call carries what was known then; the
     // answer, written after, what the handler wrote.
     assert_eq!(messages[0].metadata.get("cited"), None);
     assert_eq!(messages[1].metadata.get("cited"), Some(&"doc-1".into()));
+}
+
+// RFC §6.4: a turn that wrote no message holds its record on its last row, run
+// outside a kit too.
+#[tokio::test]
+async fn a_turn_with_no_message_records_on_its_last_row() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("c1", "lookup", "{}")]),
+        ScriptedRound::answering("\n"),
+        ScriptedRound::answering("\n"),
+    ]);
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let options = AiChannelOptions {
+        tools: vec![AiTool::new("lookup", "Look it up.").unwrap().into()],
+        tool_handler: Some(recording("found", &ran)),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(ChannelId::new("ai1").unwrap(), model, options).unwrap();
+    let output = turn(&agent).await;
+    let ends: Vec<_> = output
+        .response_events
+        .iter()
+        .map(|row| {
+            (
+                row.r#type,
+                row.metadata
+                    .get("loop_end_reason")
+                    .and_then(|end| end.as_str()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        ends,
+        [
+            (EventType::ToolCallStart, None),
+            (EventType::ToolCallEnd, Some("empty_response")),
+        ]
+    );
 }
