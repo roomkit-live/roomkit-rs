@@ -20,6 +20,7 @@ mod agents;
 mod ai_hooks;
 mod audits;
 mod calls;
+mod chat_wire;
 mod compare;
 mod discussion_calls;
 mod errors;

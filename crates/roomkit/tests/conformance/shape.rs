@@ -172,6 +172,7 @@ const MODEL: &[&str] = &[
     "context_window",
     "name",
     "provider",
+    "chat_dialect",
 ];
 const MODEL_ROUND: &[&str] = &[
     "text",

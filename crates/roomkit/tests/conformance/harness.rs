@@ -338,11 +338,21 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
     }
     let mut observed = std::mem::take(&mut *lock(&run.observed));
     observed.steps = step_outcomes;
-    observed.models = lock(&run.models)
-        .iter()
-        .map(|(channel, model)| (channel.clone(), crate::agents::requests(model)))
-        .collect();
     let mut problems = Vec::new();
+    let models = lock(&run.models).clone();
+    let dialects = lock(&run.chat_dialects).clone();
+    for (channel, model) in &models {
+        let requests = match dialects.get(channel) {
+            None => crate::agents::requests(model),
+            Some(dialect) => crate::agents::requests_on_the_wire(model, dialect)
+                .await
+                .unwrap_or_else(|problem| {
+                    problems.push(format!("models.{channel}: {problem}"));
+                    Vec::new()
+                }),
+        };
+        observed.models.insert(channel.clone(), requests);
+    }
     (observed.tool_audit, observed.session_audit) = run.auditors.observe(&mut problems);
     lock(&run.problems).extend(problems);
     for ((room_key, timeline), room) in timelines.into_iter().zip(&rooms) {

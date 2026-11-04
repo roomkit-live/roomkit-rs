@@ -17,6 +17,8 @@ mod ai_hooks;
 mod audits;
 #[path = "../../../roomkit/tests/conformance/calls.rs"]
 mod calls;
+#[path = "../../../roomkit/tests/conformance/chat_wire.rs"]
+mod chat_wire;
 #[path = "../../../roomkit/tests/conformance/compare.rs"]
 mod compare;
 #[path = "../../../roomkit/tests/conformance/discussion_calls.rs"]

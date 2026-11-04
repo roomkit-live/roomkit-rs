@@ -45,9 +45,12 @@ pretty_assertions.workspace = true
 # The conformance runner's scripted agent (roomkit-specs conformance/README.md,
 # "Scripted agents"): roomkit-ai's AI channel over a scripted model.
 roomkit-ai.workspace = true
+# The conformance runner's `chat_dialect`: a request written through the Chat
+# Completions rendering, to a local server (`net`, `io-util`).
+roomkit-openai.workspace = true
 sha2.workspace = true
 # The turn backend's liveness, tested on tokio's paused clock.
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util", "net", "io-util"] }
 # The in-memory exporter the `opentelemetry` feature's tests read.
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 

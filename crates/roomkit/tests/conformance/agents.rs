@@ -221,7 +221,9 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
         options.retry_policy = Some(retry_policy(policy)?);
     }
     let mut models = vec![(id.to_string(), model)];
+    keep_chat_dialect(&spec["model"], id.to_string(), run);
     if let Some(fallback) = spec.get("fallback_model") {
+        keep_chat_dialect(fallback, format!("{id}/fallback"), run);
         let (fallback, paced) = scripted_model(fallback, run)?;
         models.push((format!("{id}/fallback"), fallback));
         options.fallback_provider = Some(Arc::new(paced));
@@ -298,6 +300,14 @@ fn bounds(spec: &Value, options: &mut AiChannelOptions) -> Result<(), String> {
         options.turn_budget_usd = Some(budget);
     }
     Ok(())
+}
+
+/// The Chat Completions rendering the model `spec` names, if any, under the
+/// name `expect.models` gives the model (README, `model.chat_dialect`).
+fn keep_chat_dialect(spec: &Value, model: String, run: &Arc<Run>) {
+    if let Some(dialect) = spec["chat_dialect"].as_str() {
+        crate::run::lock(&run.chat_dialects).insert(model, dialect.to_owned());
+    }
 }
 
 /// The scripted model `spec` describes, and the provider reading it, its
@@ -954,6 +964,19 @@ fn tool_policy(spec: &Value) -> ToolPolicy {
 /// `models`).
 pub(crate) fn requests(model: &ScriptedProvider) -> Vec<Value> {
     model.requests().iter().map(request).collect()
+}
+
+/// Each request `model` received with what `dialect` writes of it on the wire
+/// beside it (README, `models`, `chat_messages`).
+pub(crate) async fn requests_on_the_wire(
+    model: &ScriptedProvider,
+    dialect: &str,
+) -> Result<Vec<Value>, String> {
+    let mut requests = requests(model);
+    for (read, context) in requests.iter_mut().zip(model.requests()) {
+        read["chat_messages"] = crate::chat_wire::chat_messages(dialect, &context).await?;
+    }
+    Ok(requests)
 }
 
 /// The messages `request` carries, as `models` reads them.
