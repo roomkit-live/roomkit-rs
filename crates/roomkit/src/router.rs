@@ -111,8 +111,8 @@ pub trait InboundRoomRouter: Send + Sync + 'static {
 pub struct RouteOptions {
     /// The address naming the message's conversation, in the channel's
     /// form: the sender's, or on a chat channel the chat it was posted in
-    /// (RFC §5.7); `system` for the framework's own sender, and `None` for a
-    /// message with no address.
+    /// (RFC §5.7); `None` for a message with no address. A message under
+    /// the framework's own name reaches no router (RFC §10.1 step 2).
     pub participant_id: Option<String>,
     /// The message's metadata.
     pub channel_data: Option<Metadata>,
@@ -202,10 +202,7 @@ impl<S: ConversationStore> DefaultInboundRoomRouter<S> {
         let sender_id = options.participant_id.unwrap_or_default();
         let address =
             (!sender_id.is_empty() && sender_id != SYSTEM_SENDER).then(|| sender_id.clone());
-        let identity_id = options
-            .identity
-            .as_ref()
-            .map(|identity| identity.id.clone());
+        let identity_id = routing::identity_name(options.identity.as_ref());
         RouteQuery {
             channel_id: channel_id.clone(),
             channel_type: channel_type.clone(),
@@ -274,13 +271,8 @@ fn as_written() -> AddressForm {
 /// `route(channel_id, channel_type, participant_id, channel_data, *,
 /// organization_id, identity)`.
 pub(crate) fn options_of(query: &RouteQuery) -> RouteOptions {
-    let participant_id = if query.is_system() {
-        Some(SYSTEM_SENDER.to_owned())
-    } else {
-        query.sender.address.clone()
-    };
     RouteOptions {
-        participant_id,
+        participant_id: query.sender.address.clone(),
         channel_data: Some(query.metadata.clone()),
         organization_id: query.organization_id.clone(),
         identity: query.identity.clone(),

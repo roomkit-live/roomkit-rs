@@ -6,6 +6,7 @@ use roomkit_core::model::{ChannelBinding, ChannelId, DeliveryStatus, RoomId, Roo
 use roomkit_core::rules::addresses::written_recipient;
 use serde_json::Value;
 
+use crate::delivery::targets::SYSTEM_SENDER_ID;
 use crate::registered::RegisteredChannel;
 use crate::store::{
     ConversationStore, FindRoomIdByBindingOptions, FindRoomIdsByChannelOptions, RoomFilter,
@@ -43,6 +44,10 @@ pub(crate) async fn room_of_status<S: ConversationStore>(
         }
         Some(_) | None => status.recipient.clone(),
     };
+    if recipient == SYSTEM_SENDER_ID {
+        // No one's name (RFC §10.4): a binding naming it delivers to no one.
+        return Ok(None);
+    }
     if !recipient.is_empty() {
         let by_binding = FindRoomIdByBindingOptions {
             identity_id: None,

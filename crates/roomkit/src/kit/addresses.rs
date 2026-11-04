@@ -38,8 +38,8 @@ impl<S> Inner<S> {
 /// channel writes an inbound sender in (`normalize_address`), and a binding
 /// that names no one, not `group`, naming the person it delivers to. The
 /// framework's own name holds no one's place: a recipient replaces it, and
-/// with none the binding keeps it (a room opened by a message with no
-/// address, RFC §5.7).
+/// with none the binding keeps it as it is, a channel's form never making it
+/// a sender's (a room opened by a message with no address, RFC §5.7).
 pub(crate) fn named_correspondent(
     mut binding: ChannelBinding,
     channel: &dyn DynChannel,
@@ -51,9 +51,10 @@ pub(crate) fn named_correspondent(
         }
     }
     let named = match &binding.participant_id {
-        Some(participant) if participant.as_str() != SYSTEM_SENDER_ID || recipient.is_none() => {
+        Some(participant) if participant.as_str() != SYSTEM_SENDER_ID => {
             Some(channel.normalize_address(participant.as_str()))
         }
+        Some(_) if recipient.is_none() => Some(SYSTEM_SENDER_ID.to_owned()),
         Some(_) | None if binding.group => None,
         Some(_) | None => recipient,
     };

@@ -55,6 +55,14 @@ pub fn own_record_id(channel_id: &str, sender_id: &str) -> String {
     super::authors::own_record_id(channel_id, sender_id)
 }
 
+/// The id `identity` names its sender by; none for an identity under the
+/// framework's own name, which is no sender's (RFC §10.4).
+pub fn identity_name(identity: Option<&Identity>) -> Option<IdentityId> {
+    identity
+        .filter(|identity| identity.id.as_str() != SYSTEM_SENDER)
+        .map(|identity| identity.id.clone())
+}
+
 /// Who a routed message is from, as routing names them (RFC §10.4).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Sender {

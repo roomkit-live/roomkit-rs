@@ -13,7 +13,7 @@ use crate::ops::Cx;
 use crate::ops::lifecycle::change::{self, Attached, Decision, SectionChange, Updated};
 use crate::ops::lifecycle::report::Reported;
 use crate::ops::protocol::{Outcome, Request, StoreRequest};
-use crate::rules::addresses::AddressForm;
+use crate::rules::addresses::{AddressForm, SYSTEM_SENDER};
 use crate::rules::attachment;
 use crate::rules::routing::{self, Recording, Sender};
 
@@ -179,7 +179,7 @@ fn attach_automatically(
     mut context: Box<RoomContext>,
 ) -> Decision<Recorded> {
     if !attachment::may_attach_automatically(&context, &binding.channel_id) {
-        return Decision::unwritten(Recorded::Kept(context));
+        return close_hook_s_binding(binding, context);
     }
     context.bindings.push(binding.clone());
     let writes = VecDeque::from([StoreRequest::StoreBinding {
@@ -192,6 +192,29 @@ fn attach_automatically(
             context,
         }),
         telling: Some(change::told_of_attach(binding, None)),
+    }
+}
+
+/// What an attach that may not be made leaves. A binding is kept as it is,
+/// unless `binding`, the one step 2 would have made, names the name no sender
+/// is, for a routed message with no address (RFC §5.7, §10.4), and the room's
+/// names no one and is open: one an `ON_ROOM_CREATED` hook made, which left
+/// unnamed would pass step 3 for the next sender, gets the name too.
+fn close_hook_s_binding(binding: &ChannelBinding, context: Box<RoomContext>) -> Decision<Recorded> {
+    let current = context.get_binding(&binding.channel_id).cloned();
+    match current {
+        Some(current)
+            if binding.participant_id.as_ref().map(ParticipantId::as_str)
+                == Some(SYSTEM_SENDER)
+                && current.participant_id.is_none()
+                && !current.group
+                && context.room.status.accepts_events() =>
+        {
+            let mut closed = current.clone();
+            closed.participant_id.clone_from(&binding.participant_id);
+            change::store_updated(&current, closed, context).map(Recorded::Updated)
+        }
+        Some(_) | None => Decision::unwritten(Recorded::Kept(context)),
     }
 }
 

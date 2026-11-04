@@ -43,7 +43,7 @@ use crate::ops::protocol::{
 use crate::ops::{ChannelConfig, Cx, KitConfig, Progress};
 use crate::rules::chain_depth::Draw;
 use crate::rules::instructions::InstructionRefusal;
-use crate::rules::routing::{RouteQuery, Sender};
+use crate::rules::routing::{self, RouteQuery, Sender};
 use crate::rules::{addresses, idempotency, permissions, publications};
 
 /// How many times a message is routed before it gets a new room: once, then
@@ -441,7 +441,7 @@ impl Arrival {
     fn on_resolved(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arriving {
         match outcome.into_resolved() {
             Ok(identity) => {
-                self.sender.identity_id = identity.as_ref().map(|identity| identity.id.clone());
+                self.sender.identity_id = routing::identity_name(identity.as_ref());
                 self.identity = identity;
                 self.route(cx);
                 Progress::Waiting
