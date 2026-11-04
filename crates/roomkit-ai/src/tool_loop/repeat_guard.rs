@@ -162,7 +162,7 @@ mod tests {
 
     use super::*;
 
-    fn arguments(value: Value) -> Metadata {
+    fn arguments(value: &Value) -> Metadata {
         value.as_object().cloned().unwrap_or_default()
     }
 
@@ -226,8 +226,8 @@ mod tests {
     #[test]
     fn the_order_of_the_keys_makes_no_new_call() {
         let guard = RepeatGuard::default();
-        let one = arguments(json!({"a": 1, "b": {"x": 1, "y": [{"p": 1, "q": 2}]}}));
-        let two = arguments(json!({"b": {"y": [{"q": 2, "p": 1}], "x": 1}, "a": 1}));
+        let one = arguments(&json!({"a": 1, "b": {"x": 1, "y": [{"p": 1, "q": 2}]}}));
+        let two = arguments(&json!({"b": {"y": [{"q": 2, "p": 1}], "x": 1}, "a": 1}));
         assert_eq!(guard.refusal("t", &one, false), None);
         assert_eq!(guard.refusal("t", &two, false), None);
         assert_eq!(guard.refusal("t", &one, false), Some(advisory("t", 2)));

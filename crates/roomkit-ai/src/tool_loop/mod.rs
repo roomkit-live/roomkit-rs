@@ -311,19 +311,8 @@ impl<P: AiProvider> Loop<P> {
             // What the room saw (RFC §6.4, The turn's record).
             spent.segments.push(generation.delivered.clone());
             let ending = (&limits, &steering, &out);
-            // A stop that came after the model's last event counts as one
-            // that came during it (RFC §21.3).
-            if generation.cancelled || steering.cancelled() {
-                return self
-                    .end(LoopEndReason::Cancelled, tool_rounds, spent, ending)
-                    .await;
-            }
-            // The generation after the guard's force stop was the last, its
-            // calls left to run, whatever it said (RFC §6.4).
-            if self.repeat_guard.force_stopped() {
-                return self
-                    .end(LoopEndReason::ForceStopped, tool_rounds, spent, ending)
-                    .await;
+            if let Some(stop) = self.stop_after_round(&generation, &steering) {
+                return self.end(stop, tool_rounds, spent, ending).await;
             }
             if generation.calls.is_empty() {
                 let tried = (had_tool_round, &generation);
@@ -400,6 +389,24 @@ impl<P: AiProvider> Loop<P> {
             self.said.extend(said.map(|said| (at, said)));
         }
         again
+    }
+
+    /// Why the loop stops after `generation`, if it does (Python's
+    /// `_round_stop_reason`): a stop that came after the model's last event
+    /// counts as one that came during it (RFC §21.3), and the generation after
+    /// the guard's force stop was the last, whatever it said, none of its calls
+    /// run (RFC §6.4).
+    fn stop_after_round(
+        &self,
+        generation: &Generation,
+        steering: &Steering,
+    ) -> Option<LoopEndReason> {
+        if generation.cancelled || steering.cancelled() {
+            return Some(LoopEndReason::Cancelled);
+        }
+        self.repeat_guard
+            .force_stopped()
+            .then_some(LoopEndReason::ForceStopped)
     }
 
     /// Whether the guard force-stopped the turn before round `round`, so that
