@@ -1340,7 +1340,7 @@ mod image_tests {
         );
     }
 
-    // Python: tests/test_providers/test_chat_request.py::test_a_plain_answer_keeps_its_reasoning_inline
+    // Python: tests/test_providers/test_chat_request.py::test_a_plain_answer_sends_no_reasoning
     // (a message of parts goes as its blocks in order: here a caption, its
     // image, then the next text, RMK-1191)
     #[test]
@@ -1362,7 +1362,7 @@ mod image_tests {
             )],
             ..AiContext::default()
         };
-        let request = Request::of(&context, crate::config::OpenAiApi::ChatCompletions).unwrap();
+        let request = Request::of(&context).unwrap();
         let config = OpenAiConfig {
             base_url: Some("http://localhost/v1".into()),
             vision: true,

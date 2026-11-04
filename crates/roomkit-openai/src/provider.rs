@@ -427,7 +427,7 @@ impl AiProvider for OpenAiAiProvider {
     /// not streamed, as Python's `generate` sends it; on Responses, its
     /// stream read to its end.
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
-        let events = match Request::of(context, self.config.api) {
+        let events = match Request::of(context) {
             Ok(request) => stream::answer(self, request, false),
             Err(error) => stream::refused(error),
         };
@@ -439,7 +439,7 @@ impl AiProvider for OpenAiAiProvider {
     }
 
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
-        match Request::of(context, self.config.api) {
+        match Request::of(context) {
             Ok(request) => stream::answer(self, request, true),
             Err(error) => stream::refused(error),
         }

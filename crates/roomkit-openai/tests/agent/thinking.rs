@@ -280,11 +280,11 @@ async fn a_responses_reasoning_delta_with_nothing_in_it_reads_as_none() {
     }
 }
 
-// Python: tests/test_providers/test_round_text.py::test_a_round_that_spoke_keeps_its_reasoning
-/// End to end on Chat Completions (RFC §6.4): a round's reasoning goes back
-/// inline with its text and its call, and nothing of it reaches the room.
+// Python: tests/test_providers/test_chat_request.py::test_a_provider_without_a_reasoning_field_sends_none
+/// End to end on Chat Completions (RFC §6.4): a round goes back with its text
+/// and its call, and its reasoning reaches neither the request nor the room.
 #[tokio::test]
-async fn a_round_s_reasoning_goes_back_inline_and_is_not_stored() {
+async fn a_round_s_reasoning_reaches_no_request_and_is_not_stored() {
     let round = json!({
         "reasoning_content": "Why.",
         "content": "Look.",
@@ -301,8 +301,10 @@ async fn a_round_s_reasoning_goes_back_inline_and_is_not_stored() {
     let sent = messages(&room.fake, 1);
     let replayed = sent.iter().find(|message| message["role"] == "assistant");
     let replayed = replayed.expect("the round goes back");
-    assert_eq!(replayed["content"], "<think>Why.</think>Look.");
+    assert_eq!(replayed["content"], "Look.");
     assert_eq!(replayed["tool_calls"][0]["id"], "c1");
+    let sent = Value::Array(sent.clone()).to_string();
+    assert!(!sent.contains("Why."), "{sent}");
     let stored = format!("{:?}", room.timeline().await);
     assert!(!stored.contains("Why."), "{stored}");
 }

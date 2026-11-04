@@ -10,7 +10,6 @@ use roomkit_ai::{
 };
 use roomkit_core::rules::transcript::{Image, Message, Part, Role, parse_data_uri};
 
-use crate::config::OpenAiApi;
 use crate::error::OpenAiError;
 use crate::reasoning::thinking_switch;
 
@@ -38,11 +37,10 @@ impl Request {
     ///
     /// [`OpenAiError::Image`] for an image part whose `data:` URI does not
     /// read: the request is never sent.
-    pub(crate) fn of(context: &AiContext, api: OpenAiApi) -> Result<Self, OpenAiError> {
-        let inline_thinking = api == OpenAiApi::ChatCompletions;
+    pub(crate) fn of(context: &AiContext) -> Result<Self, OpenAiError> {
         let mut written = Vec::new();
         for message in &context.messages {
-            written.extend(messages(message, inline_thinking)?);
+            written.extend(messages(message)?);
         }
         Ok(Self {
             system_prompt: context.system_prompt.clone(),
@@ -64,7 +62,7 @@ impl Request {
 /// result, each answering its call with its text, then the results' images
 /// on a user message: a tool message carries text only, an image part is a
 /// user's (Python's `chat_request._tool_messages`); any other is one.
-fn messages(message: &AiMessage, inline_thinking: bool) -> Result<Vec<Message>, OpenAiError> {
+fn messages(message: &AiMessage) -> Result<Vec<Message>, OpenAiError> {
     let results: Vec<_> = match &message.content {
         AiMessageContent::Parts(parts) => parts
             .iter()
@@ -79,7 +77,7 @@ fn messages(message: &AiMessage, inline_thinking: bool) -> Result<Vec<Message>, 
         AiMessageContent::Text(_) => Vec::new(),
     };
     if results.is_empty() {
-        return Ok(vec![self::message(message, inline_thinking)?]);
+        return Ok(vec![self::message(message)?]);
     }
     let mut written = Vec::with_capacity(results.len() + 1);
     let mut images = Vec::new();
@@ -106,11 +104,10 @@ fn messages(message: &AiMessage, inline_thinking: bool) -> Result<Vec<Message>, 
 /// `message`, which carries no tool result, as the transcript writes it:
 /// its text, its images, its calls; a message of text and images keeps its
 /// parts in order, each image at its place (Python's `chat_request._plain`).
-/// With `inline_thinking`, Chat Completions' own form of a model's earlier
-/// reasoning, a `<think>` block: leading a round's text (Python's
-/// `round_text`), in its place among a plain message's parts. Responses keeps
-/// its reasoning items in the round's metadata.
-fn message(message: &AiMessage, inline_thinking: bool) -> Result<Message, OpenAiError> {
+/// A model's reasoning is not written (RFC §6.4): a generic Chat Completions
+/// server would read it as text the model said, and its prompt cache would not
+/// survive it. Responses keeps its reasoning items in the round's metadata.
+fn message(message: &AiMessage) -> Result<Message, OpenAiError> {
     let parts: &[AiContentPart] = match &message.content {
         AiMessageContent::Text(text) => {
             let mut written = Message::new(role(message.role), text.clone());
@@ -120,18 +117,11 @@ fn message(message: &AiMessage, inline_thinking: bool) -> Result<Message, OpenAi
         AiMessageContent::Parts(parts) => parts,
     };
     let mut text = String::new();
-    let mut thinking = String::new();
     let mut images = Vec::new();
     let mut ordered = Vec::new();
     let mut calls = Vec::new();
     for part in parts {
         match part {
-            // A block with no text (redacted, a signature alone) goes as
-            // nothing.
-            AiContentPart::Thinking(part) if inline_thinking && !part.thinking.is_empty() => {
-                thinking.push_str(&part.thinking);
-                ordered.push(Part::Text(format!("<think>{}</think>", part.thinking)));
-            }
             AiContentPart::Text(part) => {
                 text.push_str(&part.text);
                 ordered.push(Part::Text(part.text.clone()));
@@ -151,9 +141,6 @@ fn message(message: &AiMessage, inline_thinking: bool) -> Result<Message, OpenAi
         }
     }
     let plain = calls.is_empty();
-    if !plain && !thinking.is_empty() {
-        text = format!("<think>{thinking}</think>{text}");
-    }
     let mut written = Message::assistant_calls(text, calls);
     if plain {
         written.parts = ordered;
@@ -354,27 +341,23 @@ mod tests {
         AiContentPart::ToolCall(AiToolCallPart::new("c1", "lookup"))
     }
 
-    fn written(parts: Vec<AiContentPart>, api: OpenAiApi) -> Message {
+    fn written(parts: Vec<AiContentPart>) -> Message {
         let context = AiContext {
             messages: vec![AiMessage::new(AiRole::Assistant, parts)],
             ..AiContext::default()
         };
-        let mut written = Request::of(&context, api).unwrap().messages;
+        let mut written = Request::of(&context).unwrap().messages;
         written.remove(0)
     }
 
-    // Python: tests/test_providers/test_round_text.py::test_a_round_is_its_reasoning_then_its_text_whatever_their_order
-    // and test_chat_request.py::test_a_tool_round_keeps_its_reasoning_inline_and_its_calls
+    // Python: tests/test_providers/test_chat_request.py::test_a_tool_round_sends_its_text_and_its_calls_and_no_reasoning
+    // and test_a_round_of_reasoning_and_calls_alone_has_no_content
     #[test]
-    fn a_round_is_its_reasoning_then_its_text_whatever_their_order() {
-        let chat = OpenAiApi::ChatCompletions;
+    fn a_round_sends_its_text_and_its_calls_and_no_reasoning() {
         let say = || AiContentPart::Text(AiTextPart::new("what"));
         let cases = [
-            (
-                vec![say(), thought(), call_part()],
-                "<think>why</think>what",
-            ),
-            (vec![thought(), call_part()], "<think>why</think>"),
+            (vec![say(), thought(), call_part()], "what"),
+            (vec![thought(), call_part()], ""),
             (vec![say(), call_part()], "what"),
             (
                 vec![
@@ -388,33 +371,26 @@ mod tests {
             ),
         ];
         for (parts, read) in cases {
-            let message = written(parts, chat);
+            let message = written(parts);
             assert_eq!(message.text, read);
             assert_eq!(message.tool_calls.len(), 1);
         }
     }
 
-    // Python: tests/test_providers/test_chat_request.py::test_a_plain_answer_keeps_its_reasoning_inline
+    // Python: tests/test_providers/test_chat_request.py::test_a_plain_answer_sends_no_reasoning
     #[test]
-    fn a_plain_answer_keeps_its_reasoning_inline() {
+    fn a_plain_answer_sends_no_reasoning() {
         let done = AiContentPart::Text(AiTextPart::new("Done."));
-        let message = written(vec![thought(), done], OpenAiApi::ChatCompletions);
-        assert_eq!(
-            message.parts,
-            [
-                Part::Text("<think>why</think>".to_owned()),
-                Part::Text("Done.".to_owned())
-            ]
-        );
+        let message = written(vec![thought(), done]);
+        assert_eq!(message.parts, [Part::Text("Done.".to_owned())]);
     }
 
-    // Responses replays its own reasoning items: a part adds nothing to the
-    // round's text, which its replay checks.
+    // Python: tests/test_providers/test_chat_request.py::test_an_answer_of_reasoning_alone_is_an_empty_text
     #[test]
-    fn responses_writes_no_reasoning_inline() {
-        let done = AiContentPart::Text(AiTextPart::new("Done."));
-        let round = written(vec![thought(), done, call_part()], OpenAiApi::Responses);
-        assert_eq!(round.text, "Done.");
+    fn an_answer_of_reasoning_alone_is_an_empty_text() {
+        let message = written(vec![thought()]);
+        assert_eq!(message.parts, []);
+        assert_eq!(message.text, "");
     }
 
     // Python: tests/test_providers/test_chat_request.py::test_an_image_result_rides_a_user_message_after_the_tool_messages
@@ -439,9 +415,7 @@ mod tests {
             )],
             ..AiContext::default()
         };
-        let written = Request::of(&context, OpenAiApi::ChatCompletions)
-            .unwrap()
-            .messages;
+        let written = Request::of(&context).unwrap().messages;
         let read: Vec<(Role, Option<&str>, &str, Vec<&str>)> = written
             .iter()
             .map(|message| {
@@ -481,13 +455,12 @@ mod tests {
             )],
             ..AiContext::default()
         };
-        let written: Vec<(Role, Option<String>, String)> =
-            Request::of(&context, OpenAiApi::ChatCompletions)
-                .unwrap()
-                .messages
-                .into_iter()
-                .map(|message| (message.role, message.tool_call_id, message.text))
-                .collect();
+        let written: Vec<(Role, Option<String>, String)> = Request::of(&context)
+            .unwrap()
+            .messages
+            .into_iter()
+            .map(|message| (message.role, message.tool_call_id, message.text))
+            .collect();
         assert_eq!(
             written,
             [

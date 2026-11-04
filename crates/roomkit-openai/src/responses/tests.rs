@@ -6,7 +6,7 @@ use roomkit::model::{Metadata, ToolCall};
 use serde_json::{Value, json};
 
 use super::{replay::OUTPUT, wire};
-use crate::{OpenAiApi, OpenAiConfig};
+use crate::OpenAiConfig;
 use roomkit_ai::{AiContentPart, AiContext, AiMessage, AiRole, AiTextPart, AiThinkingPart};
 use roomkit_core::rules::transcript::{Message, Role};
 
@@ -144,7 +144,7 @@ fn a_steered_answer_replays_its_reasoning_items() {
         base_url: Some("https://example.com/v1".into()),
         ..OpenAiConfig::new("", "fake")
     };
-    let asked = Request::of(&context, OpenAiApi::Responses).unwrap();
+    let asked = Request::of(&context).unwrap();
     assert_eq!(
         wire::request(&config, &asked).unwrap()["input"],
         json!([reasoning, said])
