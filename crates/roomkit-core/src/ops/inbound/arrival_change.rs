@@ -9,10 +9,10 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 
 use crate::model::{ChannelBinding, ErrorRecord, ParticipantId, RoomContext};
+use crate::ops::Cx;
 use crate::ops::lifecycle::change::{self, Attached, Decision, SectionChange, Updated};
 use crate::ops::lifecycle::report::Reported;
 use crate::ops::protocol::{ChannelRequest, Outcome, Request, StoreRequest};
-use crate::ops::Cx;
 use crate::rules::addresses::{AddressForm, SYSTEM_SENDER};
 use crate::rules::attachment;
 use crate::rules::routing::{self, Recording, Sender};

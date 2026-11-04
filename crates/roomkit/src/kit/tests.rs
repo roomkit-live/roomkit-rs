@@ -242,22 +242,6 @@ impl Channel for Paused {
         self.declaration.supports_streaming_delivery
     }
 
-    fn address_config(
-        &self,
-    ) -> (
-        roomkit_core::rules::addresses::ChannelAddressing,
-        Option<roomkit_core::rules::addresses::CountryCode>,
-    ) {
-        let config = &self.declaration;
-        let addressing = roomkit_core::rules::addresses::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
-    }
-
     fn deliver(
         &self,
         _event: RoomEvent,

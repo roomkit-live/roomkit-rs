@@ -249,17 +249,6 @@ impl Channel for Unregistering {
         Self::config().supports_streaming_delivery
     }
 
-    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
-        let config = Self::config();
-        let addressing = roomkit::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
-    }
-
     fn on_event(
         &self,
         _event: RoomEvent,
@@ -770,17 +759,6 @@ impl Channel for Panicking {
         self.declaration.supports_streaming_delivery
     }
 
-    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
-        let config = &self.declaration;
-        let addressing = roomkit::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
-    }
-
     fn deliver(
         &self,
         _event: RoomEvent,
@@ -840,17 +818,6 @@ impl Channel for ProviderIds {
 
     fn supports_streaming_delivery(&self) -> bool {
         self.declaration.supports_streaming_delivery
-    }
-
-    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
-        let config = &self.declaration;
-        let addressing = roomkit::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
     }
 
     fn handle_inbound(
@@ -1253,17 +1220,6 @@ impl Channel for ShoutingGate {
         Self::config().supports_streaming_delivery
     }
 
-    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
-        let config = Self::config();
-        let addressing = roomkit::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
-    }
-
     fn handle_inbound(
         &self,
         message: InboundMessage,
@@ -1333,17 +1289,6 @@ impl Channel for ShoutingAgent {
 
     fn supports_streaming_delivery(&self) -> bool {
         Self::config().supports_streaming_delivery
-    }
-
-    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
-        let config = Self::config();
-        let addressing = roomkit::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
     }
 
     fn on_event(
@@ -1584,17 +1529,6 @@ impl Channel for AnsweringJavascript {
 
     fn supports_streaming_delivery(&self) -> bool {
         self.declaration.supports_streaming_delivery
-    }
-
-    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
-        let config = &self.declaration;
-        let addressing = roomkit::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
     }
 
     fn handle_inbound(

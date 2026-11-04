@@ -497,10 +497,6 @@ impl Channel for Sms {
         as_transport(self).reply_metadata(message)
     }
 
-    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
-        as_transport(self).address_config()
-    }
-
     fn deliver(
         &self,
         _event: RoomEvent,

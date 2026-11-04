@@ -202,10 +202,6 @@ impl Channel for TransportChannel {
         BTreeMap::new()
     }
 
-    fn address_config(&self) -> (ChannelAddressing, Option<CountryCode>) {
-        (self.addressing.clone(), self.country_code.clone())
-    }
-
     /// The event of `message` in `context`'s room, as Python's builds it:
     /// its type, its content, its sender, its provider data, its
     /// idempotency key and its metadata; an SMS message with media is

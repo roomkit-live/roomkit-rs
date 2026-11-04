@@ -146,17 +146,6 @@ impl Channel for Gated {
         self.declaration.supports_streaming_delivery
     }
 
-    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
-        let config = &self.declaration;
-        let addressing = roomkit::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
-    }
-
     fn deliver(
         &self,
         event: RoomEvent,
@@ -593,17 +582,6 @@ impl Channel for Closing {
 
     fn supports_streaming_delivery(&self) -> bool {
         self.declaration.supports_streaming_delivery
-    }
-
-    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
-        let config = &self.declaration;
-        let addressing = roomkit::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
     }
 
     async fn close(&self) {

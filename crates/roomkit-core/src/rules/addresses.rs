@@ -20,7 +20,9 @@
 //!
 //! A binding's correspondent and recipient, and a participant's id, are
 //! stored as their writer wrote them; routing compares them in their
-//! channel's form, an [`AddressForm`] (gap G-058).
+//! channel's form, an [`AddressForm`] (gap G-058). The kit's channels write
+//! their addresses by their own methods, so its forms compare as written and
+//! read a binding's recipient as the channel answers it (RMK-1129).
 
 use serde_json::{Number, Value};
 use thiserror::Error;

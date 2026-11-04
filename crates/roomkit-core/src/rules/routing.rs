@@ -1837,7 +1837,6 @@ mod tests {
             );
         }
 
-        #[test]
         /// RFC §5.7: only a binding naming the sender by their address gets
         /// it as its recipient.
         #[test]

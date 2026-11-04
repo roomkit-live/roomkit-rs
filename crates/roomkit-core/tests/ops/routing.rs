@@ -245,9 +245,9 @@ mod a_routed_sender {
         );
     }
 
-    /// RFC §10.4: a binding naming a member who is the sender, by the
+    /// RFC §10.4, §5.7: a binding naming a member who is the sender, by the
     /// identity their address resolves to, is theirs; the message lands in
-    /// their room, which records their address as its recipient.
+    /// their room, and no address is written beside that name.
     #[test]
     fn named_by_the_binding_through_their_membership_lands_in_their_room() {
         let mut sim = routed_to_room_1();
@@ -272,7 +272,7 @@ mod a_routed_sender {
             ),
             (
                 vec!["#0 sms delivered \"Bonjour\"".to_owned()],
-                (Some("p_jean".to_owned()), json!({ "phone_number": SENDER })),
+                (Some("p_jean".to_owned()), json!({})),
                 1
             )
         );

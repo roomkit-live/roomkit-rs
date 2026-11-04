@@ -14,10 +14,7 @@ use roomkit::model::{
     ChannelOutput, ChannelType, InboundMessage, Metadata, Room, RoomContext, RoomEvent, RoomId,
     SteeringDirective,
 };
-use roomkit::{
-    AgentIdentity, Channel, ChannelAddressing, ChannelDeclaration, ChannelError, CountryCode,
-    DeliveryStream,
-};
+use roomkit::{AgentIdentity, Channel, ChannelDeclaration, ChannelError, DeliveryStream};
 use serde_json::Value;
 
 use crate::channel::{AiChannel, AiChannelOptions};
@@ -410,10 +407,6 @@ impl<P: AiProvider> Channel for Agent<P> {
 
     fn supports_streaming_delivery_for(&self, room_id: &RoomId) -> bool {
         self.channel.supports_streaming_delivery_for(room_id)
-    }
-
-    fn address_config(&self) -> (ChannelAddressing, Option<CountryCode>) {
-        self.channel.address_config()
     }
 
     fn steer_turn(&self, directive: &SteeringDirective, turn_id: &str) -> Option<usize> {

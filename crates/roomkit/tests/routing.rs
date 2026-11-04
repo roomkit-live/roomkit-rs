@@ -151,10 +151,6 @@ impl Channel for Provider {
         self.as_transport().reply_metadata(message)
     }
 
-    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
-        self.as_transport().address_config()
-    }
-
     fn deliver(
         &self,
         event: RoomEvent,

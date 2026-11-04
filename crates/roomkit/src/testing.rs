@@ -15,9 +15,7 @@ use roomkit_core::model::{
     EventContent, EventDirection, EventSource, EventType, InboundMessage, ParticipantId,
     RoomContext, RoomEvent, RoomId, TextContent,
 };
-use roomkit_core::rules::addresses::{
-    ChannelAddressing, ChannelAddressingOptions, CountryCode, NormalizeOptions, addressing_of,
-};
+use roomkit_core::rules::addresses::{NormalizeOptions, addressing_of};
 use roomkit_core::rules::transcoding::text_of;
 
 pub use roomkit_core::ops::{Environment, SequentialEnvironment};
@@ -181,16 +179,6 @@ impl Channel for RecordingTransport {
             return address.to_owned();
         }
         addressing_of(&self.channel_type).normalize(address, NormalizeOptions::default())
-    }
-
-    /// Its type's addressing, with no recipient key: its destination is its
-    /// record, so it needs no recipient (RFC §10.2 step 3d).
-    fn address_config(&self) -> (ChannelAddressing, Option<CountryCode>) {
-        let addressing = ChannelAddressing::new(
-            addressing_of(&self.channel_type).addressing,
-            ChannelAddressingOptions::default(),
-        );
-        (addressing, None)
     }
 
     /// The event of `message` in `context`'s room, as Python's builds it:

@@ -1172,6 +1172,9 @@ impl Sim {
             Request::Channel(ChannelRequest::RoomDetached { binding }) => {
                 format!("on_room_detached {}", binding.channel_id)
             }
+            Request::Channel(ChannelRequest::RoutedRecipient { binding }) => {
+                format!("routed recipient {}", binding.channel_id)
+            }
             Request::Channel(ChannelRequest::NamedCorrespondent { binding }) => {
                 format!("named_correspondent {}", binding.channel_id)
             }
@@ -1249,6 +1252,10 @@ impl Sim {
                 ChannelRequest::RoomAttached { .. } | ChannelRequest::RoomDetached { .. },
             ) => Outcome::Channel(ChannelOutcome::Told),
             // The channel's form is its own: the binding as given.
+            // No scripted channel overrides its recipient: routing reads the key.
+            Request::Channel(ChannelRequest::RoutedRecipient { .. }) => {
+                Outcome::Channel(ChannelOutcome::Recipient(None))
+            }
             Request::Channel(ChannelRequest::NamedCorrespondent { binding }) => {
                 Outcome::Channel(ChannelOutcome::Named(Box::new(binding)))
             }

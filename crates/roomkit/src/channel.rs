@@ -11,9 +11,7 @@ use roomkit_core::model::{
     Metadata, ParticipantId, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit_core::ops::ChannelConfig;
-use roomkit_core::rules::addresses::{
-    Addressing, ChannelAddressing, ChannelAddressingOptions, CountryCode,
-};
+use roomkit_core::rules::addresses::Addressing;
 use roomkit_core::rules::transcript::is_blank;
 
 use crate::steering::SteeringDirective;
@@ -248,13 +246,20 @@ pub trait Channel: Send + Sync + 'static {
 
     /// The binding metadata key the channel delivers to (RFC §5.7,
     /// Appendix A): none by default, a channel that delivers to a
-    /// destination of its own.
+    /// destination of its own. Routing reads a binding's recipient under it
+    /// (RFC §10.4), whatever
+    /// [`recipient_address`](Channel::recipient_address) answers there when
+    /// that answers none.
     fn recipient_key(&self) -> Option<String> {
         None
     }
 
     /// The recipient `binding` delivers to, in the channel's form: none by
-    /// default.
+    /// default. It names the binding's conversation as much as its
+    /// `participant_id` does: routing admits no one else through it (RFC
+    /// §5.7, §10.4). Routing takes this answer first; when it is none, a
+    /// value under [`recipient_key`](Channel::recipient_key) still names the
+    /// conversation.
     fn recipient_address(&self, _binding: &ChannelBinding) -> Option<String> {
         None
     }
@@ -310,26 +315,6 @@ pub trait Channel: Send + Sync + 'static {
     /// says: a channel may stream once a client connects.
     fn supports_streaming_delivery_for(&self, _room_id: &RoomId) -> bool {
         self.supports_streaming_delivery()
-    }
-
-    /// How the channel's addresses are written, and the country code its
-    /// phone numbers written without one take (RFC §5.7), as the core
-    /// compares the addresses its bindings name: as written by default,
-    /// with no chat and the channel's own recipient key. A transport
-    /// channel gives its declaration.
-    ///
-    /// For the workspace's channels, which carry an addressing
-    /// declaration: outside the public API.
-    #[doc(hidden)]
-    fn address_config(&self) -> (ChannelAddressing, Option<CountryCode>) {
-        let addressing = ChannelAddressing::new(
-            Addressing::AsWritten,
-            ChannelAddressingOptions {
-                recipient_key: self.recipient_key(),
-                ..ChannelAddressingOptions::default()
-            },
-        );
-        (addressing, None)
     }
 
     /// Applies `directive` to the loops of the turn `turn_id` the channel
@@ -816,10 +801,12 @@ pub(crate) fn config_of<C: Channel>(channel: &C) -> ChannelConfig {
     config.supports_streaming_delivery = channel.supports_streaming_delivery();
     config.recent_events_window = channel.recent_events_window();
     config.sender_is_participant = channel.sender_is_participant();
-    let (addressing, country_code) = channel.address_config();
-    config.addressing = addressing.addressing;
-    config.chat_key = addressing.chat_key;
-    config.country_code = country_code;
+    // The channel's own methods write and read its addresses, and the core
+    // compares what they wrote as written, as Python's framework does (RFC
+    // §5.7, RMK-1129).
+    config.addressing = Addressing::AsWritten;
+    config.chat_key = None;
+    config.country_code = None;
     config
 }
 

@@ -6,10 +6,7 @@ use std::future::{Future, ready};
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelOutput, ChannelType, InboundMessage, RoomContext, RoomEvent,
 };
-use roomkit::{
-    Channel, ChannelAddressing, ChannelError, CountryCode, TransportChannel,
-    TransportChannelOptions,
-};
+use roomkit::{Channel, ChannelError, TransportChannel, TransportChannelOptions};
 
 use crate::Log;
 
@@ -88,10 +85,6 @@ impl Channel for SmsNumber {
 
     fn reply_metadata(&self, message: &InboundMessage) -> BTreeMap<String, String> {
         self.transport.reply_metadata(message)
-    }
-
-    fn address_config(&self) -> (ChannelAddressing, Option<CountryCode>) {
-        self.transport.address_config()
     }
 
     fn handle_inbound(

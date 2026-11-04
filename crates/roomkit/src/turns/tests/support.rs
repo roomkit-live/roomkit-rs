@@ -228,22 +228,6 @@ impl Channel for Waiting {
         self.declaration.supports_streaming_delivery
     }
 
-    fn address_config(
-        &self,
-    ) -> (
-        roomkit_core::rules::addresses::ChannelAddressing,
-        Option<roomkit_core::rules::addresses::CountryCode>,
-    ) {
-        let config = &self.declaration;
-        let addressing = roomkit_core::rules::addresses::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
-    }
-
     async fn on_event(
         &self,
         event: RoomEvent,
@@ -490,22 +474,6 @@ impl Channel for Streaming {
         self.declaration.supports_streaming_delivery
     }
 
-    fn address_config(
-        &self,
-    ) -> (
-        roomkit_core::rules::addresses::ChannelAddressing,
-        Option<roomkit_core::rules::addresses::CountryCode>,
-    ) {
-        let config = &self.declaration;
-        let addressing = roomkit_core::rules::addresses::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
-    }
-
     fn on_event(
         &self,
         event: RoomEvent,
@@ -740,22 +708,6 @@ impl Channel for Stuck {
         self.declaration.supports_streaming_delivery
     }
 
-    fn address_config(
-        &self,
-    ) -> (
-        roomkit_core::rules::addresses::ChannelAddressing,
-        Option<roomkit_core::rules::addresses::CountryCode>,
-    ) {
-        let config = &self.declaration;
-        let addressing = roomkit_core::rules::addresses::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
-    }
-
     async fn deliver_stream(
         &self,
         mut stream: DeliveryStream,
@@ -848,22 +800,6 @@ impl Channel for Panicking {
         self.declaration.supports_streaming_delivery
     }
 
-    fn address_config(
-        &self,
-    ) -> (
-        roomkit_core::rules::addresses::ChannelAddressing,
-        Option<roomkit_core::rules::addresses::CountryCode>,
-    ) {
-        let config = &self.declaration;
-        let addressing = roomkit_core::rules::addresses::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
-    }
-
     fn on_event(
         &self,
         event: RoomEvent,
@@ -950,22 +886,6 @@ impl Channel for Eager {
 
     fn supports_streaming_delivery(&self) -> bool {
         self.declaration.supports_streaming_delivery
-    }
-
-    fn address_config(
-        &self,
-    ) -> (
-        roomkit_core::rules::addresses::ChannelAddressing,
-        Option<roomkit_core::rules::addresses::CountryCode>,
-    ) {
-        let config = &self.declaration;
-        let addressing = roomkit_core::rules::addresses::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
     }
 
     fn on_event(

@@ -504,17 +504,6 @@ impl Channel for ScriptedChannel {
         (!held.trim().is_empty()).then(|| self.normalize_address(held))
     }
 
-    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
-        let config = &self.declaration;
-        let addressing = roomkit::ChannelAddressing {
-            addressing: config.addressing,
-            recipient_key: config.recipient_key.clone(),
-            chat_key: config.chat_key.clone(),
-            replies_to_sender: false,
-        };
-        (addressing, config.country_code.clone())
-    }
-
     async fn handle_inbound(
         &self,
         message: InboundMessage,
