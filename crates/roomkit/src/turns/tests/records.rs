@@ -108,7 +108,7 @@ async fn read(steps: Vec<Step>, key: &str) -> (Option<Value>, Vec<(String, Optio
     crate::testing::idle(&kit).await;
     let stored = messages(&kit, key).await;
     kit.close().await.unwrap();
-    (result.response_metadata.get(key).cloned(), stored)
+    (result.response_metadata.get(key), stored)
 }
 
 // Python: tests/test_turns_backend.py::test_a_record_written_mid_stream_reaches_the_owner_before_the_next_item
@@ -219,7 +219,7 @@ async fn a_reader_that_stops_reads_the_turn_s_last_record() {
     let result = says(&kit, "Hi").await.unwrap();
     crate::testing::idle(&kit).await;
     kit.close().await.unwrap();
-    assert_eq!(result.response_metadata.get("final"), Some(&json!(true)));
+    assert_eq!(result.response_metadata.get("final"), Some(json!(true)));
 }
 
 // Python: tests/test_turns_record_changes.py::test_a_turn_copies_its_record_no_more_often_for_more_deltas
@@ -284,7 +284,46 @@ async fn a_cut_call_reads_its_record_while_a_transport_still_sends() {
         .await
         .unwrap();
     kit.close().await.unwrap();
-    assert_eq!(cut.response_metadata.get("cited"), Some(&json!(1)));
+    assert_eq!(cut.response_metadata.get("cited"), Some(json!(1)));
+}
+
+// Python: models/delivery.py report_cascade merges into the record the call
+// returned at its commit: `result.response_metadata` is the one `wait()` fills
+// (RMK-1321).
+#[tokio::test(start_paused = true)]
+async fn a_deferred_wait_fills_the_record_the_call_returned_at_its_commit() {
+    let kit = kit_with(Streaming::scripted(vec![
+        Step::Write("cited", json!(3)),
+        Step::Text("Hi"),
+        Step::Hold,
+    ]))
+    .await;
+    let message = roomkit_core::model::InboundMessage::new(
+        roomkit_core::model::ChannelId::new("sms").unwrap(),
+        "+15550001",
+        roomkit_core::model::TextContent::new("Hi"),
+    );
+    let result = kit
+        .process_inbound(
+            message,
+            crate::ProcessInboundOptions {
+                room_id: Some(room_id()),
+                defer_delivery: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let at_the_commit = result.response_metadata.get("cited");
+    let handle = result.delivery.clone().expect("a handle");
+    let waited = handle.cancel(crate::CancelOptions::default()).await;
+    waited.unwrap().response_metadata.insert("mine", json!(1));
+    kit.close().await.unwrap();
+    let turns = result.response_metadata.get("turns").unwrap_or_default();
+    assert_eq!(at_the_commit, None);
+    assert_eq!(result.response_metadata.get("cited"), Some(json!(3)));
+    assert_eq!(result.response_metadata.get("mine"), Some(json!(1)));
+    assert_eq!(turns["ai"]["loop_end_reason"], json!("cancelled"));
 }
 
 // Python: core/event_router.py keeps a muted stream's side effects, which RFC

@@ -832,9 +832,10 @@ async fn a_streaming_target_s_own_turns_never_reach_the_caller() {
 
     let result = asks(&kit, "Answer.").await;
 
-    let turns: Vec<String> = result.response_metadata["turns"]
-        .as_object()
-        .map(|turns| turns.keys().cloned().collect())
+    let turns: Vec<String> = result
+        .response_metadata
+        .get("turns")
+        .and_then(|turns| Some(turns.as_object()?.keys().cloned().collect()))
         .unwrap_or_default();
     assert_eq!(turns, ["ai"]);
     kit.close().await.unwrap();

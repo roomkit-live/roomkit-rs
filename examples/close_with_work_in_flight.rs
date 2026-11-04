@@ -425,9 +425,8 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         .answer
         .response_metadata
         .get("turns")
-        .and_then(|turns| turns.get("agent"))
-        .and_then(|turn| turn.get("loop_end_reason"))
-        .and_then(serde_json::Value::as_str)
+        .and_then(|turns| turns.get("agent")?.get("loop_end_reason").cloned())
+        .and_then(|reason| reason.as_str().map(str::to_owned))
         .map_or_else(|| "None".to_owned(), |reason| format!("'{reason}'"));
     println!(
         "The streaming turn: {}, its turn ended {ended}",

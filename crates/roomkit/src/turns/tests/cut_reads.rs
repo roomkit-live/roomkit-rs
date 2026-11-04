@@ -91,9 +91,8 @@ fn read(result: &InboundResult) -> (Option<Value>, Option<Value>) {
     let record = &result.response_metadata;
     let end = record
         .get("turns")
-        .and_then(|turns| turns.get("ai"))
-        .and_then(|end| end.get("loop_end_reason"));
-    (record.get("cited").cloned(), end.cloned())
+        .and_then(|turns| turns.get("ai")?.get("loop_end_reason").cloned());
+    (record.get("cited"), end)
 }
 
 fn cited_and(end: &str) -> (Option<Value>, Option<Value>) {

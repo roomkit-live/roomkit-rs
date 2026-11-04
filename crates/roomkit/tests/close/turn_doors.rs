@@ -71,7 +71,8 @@ async fn a_room_turn_returns_cancelled_to_its_caller() {
                 if let Some(delivery) = result.delivery.take() {
                     result = delivery.wait().await.unwrap();
                 }
-                let ended = result.response_metadata["turns"]["agent"]["loop_end_reason"]
+                let turns = result.response_metadata.get("turns").unwrap_or_default();
+                let ended = turns["agent"]["loop_end_reason"]
                     .as_str()
                     .map(str::to_owned);
                 (true, result.error.map(|error| error.error_type), ended)

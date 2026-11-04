@@ -7,8 +7,11 @@ use std::fmt;
 use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
-use roomkit_core::model::{ChannelId, DeliveryResult, ErrorRecord, Metadata, RoomEvent};
+use roomkit_core::model::{
+    ChannelId, DeliveryResult, ErrorRecord, Metadata, ResponseMetadata, RoomEvent,
+};
 use roomkit_core::ops::{self, KIT_CLOSED};
+use serde_json::Value;
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::{AbortHandle, JoinHandle};
 
@@ -58,8 +61,10 @@ pub struct InboundResult {
     /// §12.10.4), as the Python implementation's `cancellation_reason`
     /// reads; `None` for a delivery that ran.
     pub cancellation_reason: Option<String>,
-    /// The merged response metadata of the turns the message asked for.
-    pub response_metadata: Metadata,
+    /// The merged response metadata of the turns the message asked for: a
+    /// deferred call's [`DeliveryHandle::wait`] fills the record the call
+    /// returned at its commit, as Python's `result.response_metadata`.
+    pub response_metadata: ResponseMetadata,
     /// The responses this call's cascade committed and delivered, in their
     /// commit order: the answers to its event and to their answers, a
     /// streamed answer's rows among them, never the event itself, a response
@@ -95,6 +100,10 @@ impl InboundResult {
             cancellation_reason,
             refused_before_the_lock: _,
         } = result;
+        let response_metadata = match &delivery {
+            Some(handle) => handle.shared.reported(response_metadata),
+            None => response_metadata.into(),
+        };
         Self {
             event,
             duplicate,
@@ -155,10 +164,15 @@ pub struct DeliveryHandle {
     shared: Arc<Shared>,
 }
 
+/// The key of a caller's record under which each turn's end is (RFC §6.4).
+const TURNS: &str = "turns";
+
 /// What every clone of a handle shares.
 struct Shared {
     /// The result at the commit, which the call returned.
     decided: ops::InboundResult,
+    /// The record the call returned at its commit, each wait filling it.
+    record: ResponseMetadata,
     following: Following,
     /// What the delivery came to, once a wait saw its end.
     ended: OnceCell<Ended>,
@@ -225,6 +239,7 @@ impl DeliveryHandle {
     fn new(decided: ops::InboundResult, following: Following, tasks: Arc<Tasks>) -> Self {
         Self {
             shared: Arc::new(Shared {
+                record: ResponseMetadata::new(),
                 decided,
                 following,
                 ended: OnceCell::new(),
@@ -350,6 +365,24 @@ impl DeliveryHandle {
 }
 
 impl Shared {
+    /// The call's record, `reported` merged into it, each channel's end beside
+    /// the others': Python's `merge_caller_record`.
+    fn reported(&self, mut reported: Metadata) -> ResponseMetadata {
+        let mut turns = match self.record.get(TURNS) {
+            Some(Value::Object(turns)) => turns,
+            _ => Metadata::new(),
+        };
+        if let Some(Value::Object(ended)) = reported.get(TURNS) {
+            turns.extend(ended.clone());
+        }
+        reported.shift_remove(TURNS);
+        self.record.update(reported);
+        if !turns.is_empty() {
+            self.record.insert(TURNS, Value::Object(turns));
+        }
+        self.record.clone()
+    }
+
     /// Asks the run that delivers the call, or the run that adopted it, to
     /// cut its turns, for `reason`.
     fn request_cancel(&self, reason: &str) {
