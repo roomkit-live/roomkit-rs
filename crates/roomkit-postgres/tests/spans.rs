@@ -19,9 +19,7 @@ use roomkit::store::{
     AdvanceDeliveredIndexOptions, CommitEventOptions, DeleteEventOptions, FindRoomsOptions,
     GetEventCountOptions, ListEventsOptions, ListRoomsOptions, PatchRoomMetadataOptions,
 };
-use roomkit::telemetry::{
-    MockTelemetryProvider, Span, SpanKind, TelemetryConfig, TelemetryProvider,
-};
+use roomkit::telemetry::{MockTelemetryProvider, Span, SpanKind, TelemetryProvider};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, GetRoomOptions,
@@ -435,10 +433,7 @@ async fn a_store_before_init_reads_as_python_s_runtime_error() {
     ] {
         let store = PostgresStore::new(PostgresStoreOptions::default());
         let provider = Arc::new(MockTelemetryProvider::default());
-        store.set_telemetry(
-            Arc::<MockTelemetryProvider>::clone(&provider) as Arc<dyn TelemetryProvider>,
-            sensitive,
-        );
+        store.set_telemetry(Arc::<MockTelemetryProvider>::clone(&provider), sensitive);
         store.get_room(&room_id("r1")).await.unwrap_err();
         let spans = provider.spans();
         assert_eq!(spans[0].error_message.as_deref(), Some(read));
@@ -452,10 +447,7 @@ async fn a_shared_store_reports_to_the_last_kit() {
         return;
     };
     let last = Arc::new(MockTelemetryProvider::default());
-    store.set_telemetry(
-        Arc::<MockTelemetryProvider>::clone(&last) as Arc<dyn TelemetryProvider>,
-        false,
-    );
+    store.set_telemetry(Arc::<MockTelemetryProvider>::clone(&last), false);
     store.get_room(&room_id("r1")).await.unwrap();
     assert_eq!((first.spans().len(), last.spans().len()), (0, 1));
 }
@@ -471,13 +463,9 @@ async fn a_kit_gives_the_store_its_provider() {
     let schema = TempSchema::new().await;
     let store = schema.initialized_store().await;
     let provider = Arc::new(MockTelemetryProvider::default());
+    let handed: Arc<dyn TelemetryProvider> = Arc::<MockTelemetryProvider>::clone(&provider);
     let kit = RoomKit::new(RoomKitOptions {
-        telemetry: Some(TelemetryConfig {
-            record_sensitive_data: true,
-            ..TelemetryConfig::from(
-                Arc::<MockTelemetryProvider>::clone(&provider) as Arc<dyn TelemetryProvider>
-            )
-        }),
+        telemetry: Some(handed.into()),
         ..RoomKitOptions::with_store(store)
     });
     let sms = RecordingTransport::new(
