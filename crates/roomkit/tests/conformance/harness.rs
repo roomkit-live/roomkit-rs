@@ -203,8 +203,8 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
         }
     }
     let mut observed = observe(&run, step_outcomes).await;
-    observed.text_events = std::mem::take(&mut *lock(&text_events));
     run.kit().close().await.unwrap();
+    observed.text_events = std::mem::take(&mut *lock(&text_events));
     let mut found = lock(&run.problems).clone();
     found.extend(compare(&run, scenario, &observed));
     found

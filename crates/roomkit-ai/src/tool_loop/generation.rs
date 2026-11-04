@@ -156,7 +156,7 @@ impl Generation {
                     window.text.add(&released);
                     deliver(released, &mut delivered, out).await;
                 }
-                // A whole call closes no window: a fragment would (Python's
+                // A whole call closes no reasoning window: a fragment would (Python's
                 // `StreamToolCallDelta`), which no provider here hands.
                 StreamEvent::ToolCall(call) => {
                     window.text.flush();

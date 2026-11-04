@@ -1013,7 +1013,7 @@ params = [
     "speak_policy", "speak_timeout", "thinker",
     "think_wait",
 ]
-reason = "not in 0.x: continuation, thinking, scripts and sandbox, external and human tools, structured output, eviction, planning, tool search, speaking turns, the thinker and coalescing"
+reason = "not in 0.x: continuation, thinking, scripts and sandbox, external and human tools, structured output, eviction, planning, tool search, speaking turns and the thinker"
 
 [[missing]]
 python = "roomkit.AIChannelTurnConfig.__init__"

@@ -40,7 +40,9 @@ pub(super) async fn read<S: ConversationStore>(
         answers: read.answers.clone(),
         target: None,
         correlation_id: read.correlation_id.clone(),
-        as_trace: read.as_trace,
+        // A first pass's text is kept out of the room (RFC §19.7.3): it is
+        // no trace's, whoever reads the turn after it.
+        as_trace: false,
     };
     let (mut first, pass) = Box::pin(read_kept(inner, kept, stops.clone(), first_read, true)).await;
     let Some(pass) = pass.filter(|_| first.error.is_none()) else {
