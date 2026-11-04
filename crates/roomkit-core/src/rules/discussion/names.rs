@@ -227,6 +227,12 @@ fn is_python_space(c: char) -> bool {
     c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }
 
+/// Whether `text` is empty once Python's `str.strip()` read it.
+#[must_use]
+pub fn is_blank(text: &str) -> bool {
+    text.chars().all(is_python_space)
+}
+
 /// `text` as Python's `text.strip().lower()` reads it.
 fn lowered(text: &str) -> String {
     text.trim_matches(is_python_space).to_lowercase()

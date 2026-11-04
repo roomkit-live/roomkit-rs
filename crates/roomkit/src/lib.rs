@@ -261,6 +261,8 @@ pub use self::orchestration::{
 };
 #[doc(inline)]
 pub use self::orchestration::{HandoffHandler, HandoffRequest, HandoffResult};
+#[doc(inline)]
+pub use self::orchestration::{SpeakQueue, SpeakQueueChange, SpeakQueueEvent};
 pub use self::tasks::result_tool::ResultTool;
 #[doc(hidden)]
 pub use self::turn::OwnerToolAnswer;

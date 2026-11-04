@@ -59,6 +59,8 @@ pub use self::status::{
     StatusEntry, StatusLevel,
 };
 #[doc(inline)]
+#[doc(inline)]
+pub use self::strategies::discussion::{SpeakQueue, SpeakQueueChange, SpeakQueueEvent};
 pub use self::strategies::pipeline::Pipeline;
 pub use self::strategies::pipeline::PipelineOptions;
 pub use self::strategies::review_loop::{Loop, LoopOptions};
