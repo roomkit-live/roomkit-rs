@@ -7,7 +7,7 @@ MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"$$/\1/p' Cargo.toml).0
 # The examples: every file of examples/, each declared in examples/Cargo.toml.
 EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
-.PHONY: all fmt fmt-check clippy test test-core doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture api-sync api-check-pin api-test api-parity models-sync models-check
+.PHONY: all fmt fmt-check clippy test test-core doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture postgres-fixture turns-fixture api-sync api-check-pin api-test api-parity models-sync models-check
 
 all: conformance-check api-check-pin models-check api-test fmt-check clippy test test-core doc api-parity deny check-core-deps examples
 
@@ -137,6 +137,32 @@ sqlite-fixture:
 	echo "$$commit" > $(SQLITE_FIXTURES)/ROOMKIT_COMMIT && \
 	sha256sum $(SQLITE_FIXTURES)/python-v13.db | cut -c1-64 > $(SQLITE_FIXTURES)/FIXTURE_SHA256 && \
 	echo "sqlite fixture written by roomkit $$commit"
+
+# The cross-read fixture of roomkit-postgres (RMK-989): the rows the Python
+# implementation's PostgresStore writes, as JSON, which
+# crates/roomkit-postgres/tests/cross_read.rs loads, reads and rewrites with
+# nothing lost; its schema.sql is Python's SCHEMA, byte for byte. Both are written
+# with the interpreter of a roomkit checkout (ROOMKIT_DIR) at a commit on its
+# origin/main, recorded in tests/fixtures/ROOMKIT_COMMIT, the rows against the
+# server POSTGRES_DSN names.
+POSTGRES_CRATE := crates/roomkit-postgres
+
+postgres-fixture:
+	@commit=$$(git -C "$$ROOMKIT_DIR" rev-parse --verify HEAD) && \
+	if ! git -C "$$ROOMKIT_DIR" diff --quiet HEAD -- src; then \
+		echo "roomkit at $$ROOMKIT_DIR has changes under src/: write the fixture from a commit"; exit 1; \
+	fi && \
+	if ! git -C "$$ROOMKIT_DIR" merge-base --is-ancestor "$$commit" origin/main; then \
+		echo "roomkit $$commit is not on origin/main: push it and fetch first"; exit 1; \
+	fi && \
+	PYTHONDONTWRITEBYTECODE=1 "$$ROOMKIT_DIR/.venv/bin/python" -c \
+		'from roomkit.store.postgres_schema import SCHEMA; import sys; sys.stdout.write(SCHEMA)' \
+		> $(POSTGRES_CRATE)/src/schema.sql && \
+	PYTHONDONTWRITEBYTECODE=1 "$$ROOMKIT_DIR/.venv/bin/python" -I \
+		$(POSTGRES_CRATE)/tests/fixtures/make_fixture.py $(POSTGRES_CRATE)/tests/fixtures/python-rows.json && \
+	echo "$$commit" > $(POSTGRES_CRATE)/tests/fixtures/ROOMKIT_COMMIT && \
+	sha256sum $(POSTGRES_CRATE)/tests/fixtures/python-rows.json | cut -c1-64 > $(POSTGRES_CRATE)/tests/fixtures/FIXTURE_SHA256 && \
+	echo "postgres fixture written by roomkit $$commit"
 
 # The turn backend's cross-read fixture (step 4, milestone 7): the messages
 # the Python implementation's in-memory backend carries for one turn, a
