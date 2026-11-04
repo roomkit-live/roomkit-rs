@@ -578,6 +578,11 @@ impl<S: ConversationStore> RoomKit<S> {
     /// in flight, a hook's; a room it created is attached first (gap
     /// G-076).
     ///
+    /// A message naming no room under the framework's own name, `system`, is
+    /// refused `reserved_sender` with nothing read or written (RFC §10.1 step
+    /// 2): the framework names the room it writes to, and a host writing under
+    /// that name names its room.
+    ///
     /// # Errors
     ///
     /// Returns the error that failed the message before its commit:
