@@ -170,6 +170,13 @@ async fn the_kit_s_events<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<(&'stat
             refused(kit.process_inbound(said("x"), into("r")).await),
         ),
         (
+            "process_inbound routed",
+            refused(
+                kit.process_inbound(said("x"), ProcessInboundOptions::default())
+                    .await,
+            ),
+        ),
+        (
             "send_event",
             refused(
                 kit.send_event(&r, &sms, text(), SendEventOptions::default())

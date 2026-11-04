@@ -309,6 +309,8 @@ pub(crate) fn cut_before_its_commit() -> InboundResult {
         blocked: true,
         reason: Some(KIT_CLOSED.to_owned()),
         cancellation_reason: Some(KIT_CLOSED.to_owned()),
+        // No deferred tail, and its caller's cancellation does not name it.
+        refused_before_the_lock: true,
         ..InboundResult::default()
     }
 }
@@ -611,6 +613,11 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     defer: bool,
     named: Option<NamedGuard>,
 ) -> Ran {
+    // Past the call's door, which its caller kept: a close that started since
+    // cuts the call, as it cuts one at its room's lock (RFC §12.10.4).
+    if inner.open().is_err() {
+        return Ran::ended(Ok(Ok(cut_before_its_commit())));
+    }
     run_leased(inner, call, room_id, inbound, defer, named, Leases::Refused).await
 }
 

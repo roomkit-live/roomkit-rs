@@ -306,10 +306,10 @@ async fn a_cancel_for_a_channel_without_steering_cuts_its_turn() {
 
 // Python: tests/test_turns_control.py::test_a_close_after_a_cut_lets_the_channel_finish_its_cleanup.
 // A stream's cleanup is its `Drop`, which nothing can cancel again, so the
-// wait Python's finalizer goes through has no form here: the cleanup runs once,
-// and the kit's close comes after it.
+// wait Python's finalizer goes through has no form here: what holds is the
+// stream dropped once, whatever comes after the cut.
 #[tokio::test]
-async fn a_close_after_a_cut_lets_the_channel_finish_its_cleanup() {
+async fn a_close_after_a_cut_drops_the_channel_s_stream_once() {
     let agent = Held::new(false);
     let kit = kit(agent.clone()).await;
     let turn = asked(&kit, "hello");
@@ -381,10 +381,10 @@ impl Channel for StopsReading {
 }
 
 // Python: tests/test_turns_control.py::test_a_cut_after_a_close_lets_the_channel_finish_its_cleanup.
-// The reader's stop, then a cut: the cut reaches nothing, the cleanup, a
-// stream's `Drop`, ran once.
+// The reader's stop, then a cut: the cut reaches no turn, the stream, whose
+// `Drop` is its cleanup, dropped once already.
 #[tokio::test]
-async fn a_cut_after_a_close_lets_the_channel_finish_its_cleanup() {
+async fn a_cut_after_a_reader_stopped_reaches_no_turn_and_the_stream_is_dropped_once() {
     let agent = Held::new(false);
     let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(StopsReading).unwrap();
@@ -402,7 +402,8 @@ async fn a_cut_after_a_close_lets_the_channel_finish_its_cleanup() {
     }
 
     asked(&kit, "hello").await.unwrap();
-    steer(&kit, Cancel::default(), in_room()).await;
+    assert_eq!(agent.cleaned.load(Ordering::SeqCst), 1);
+    assert_eq!(steer(&kit, Cancel::default(), in_room()).await, 0);
     kit.close().await.unwrap();
 
     assert_eq!(agent.cleaned.load(Ordering::SeqCst), 1);

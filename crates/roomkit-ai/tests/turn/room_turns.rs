@@ -588,9 +588,10 @@ async fn a_strategy_that_takes_the_agent_s_turns_orders_them_itself() {
         },
     )
     .unwrap();
+    let reviewing = answering("APPROVED");
     let reviewer = Agent::new(
         channel("rev"),
-        answering("APPROVED"),
+        reviewing.clone(),
         AgentOptions {
             role: Some("Editor".to_owned()),
             ..AgentOptions::default()
@@ -631,8 +632,9 @@ async fn a_strategy_that_takes_the_agent_s_turns_orders_them_itself() {
         result.is_ok(),
         "the loop's turn waited on a line of its own"
     );
-    // The loop's answer, which no stream carries.
+    // The loop's answer, which no stream carries, once its reviewer read it.
     assert_eq!(said(&kit, "prod").await, ["draft"]);
+    assert_eq!(reviewing.calls().len(), 1);
     kit.close().await.unwrap();
 }
 

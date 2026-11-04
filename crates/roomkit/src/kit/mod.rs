@@ -630,6 +630,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 .await?
         } else {
             context::as_deep_as_its_turn(&mut message.chain_depth);
+            self.inner.open()?;
             let target = InboundTarget::Routed;
             let routed = match answers {
                 Some(answers) => {

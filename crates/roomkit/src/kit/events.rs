@@ -3,9 +3,10 @@
 //! `DeleteEvent`.
 
 use roomkit_core::model::{EventId, EventUpdates, RoomEvent, RoomId};
-use roomkit_core::ops::{DeleteEvent, UpdateEvent};
+use roomkit_core::ops::{DeleteEvent, Operation, UpdateEvent};
 
 use roomkit_core::rules::chain_depth::Draw;
+use roomkit_core::rules::hook_registry::HookTrigger;
 
 use super::RoomKit;
 use super::options::{DeleteEventOptions, UpdateEventOptions};
@@ -104,7 +105,8 @@ impl<S: ConversationStore> RoomKit<S> {
             Some((draw, floor)) => operation.made_in(draw, floor),
             None => operation,
         };
-        Ok(driver::run(&self.inner, "delete_event", operation).await??)
+        let hooked = HookTrigger::OnEventDeleted;
+        Ok(Box::pin(self.run_change("delete_event", hooked, operation)).await??)
     }
 
     /// Writes `updates` on the stored event in a room `organization_id`
@@ -117,7 +119,30 @@ impl<S: ConversationStore> RoomKit<S> {
         organization_id: Option<String>,
     ) -> Result<Option<RoomEvent>, RoomKitError> {
         let operation = self.update_of(room_id, event_id, updates, organization_id);
-        Ok(driver::run(&self.inner, "update_event", operation).await??)
+        let hooked = HookTrigger::OnEventUpdated;
+        Ok(Box::pin(self.run_change("update_event", hooked, operation)).await??)
+    }
+
+    /// Runs `operation`, a change of a stored event: a room activity, the
+    /// kit's subscription first, only with a hook on `hooked`, which reads
+    /// the change's context. Python's `held = await self._build_context(room_id)
+    /// if hooked else None`, read under the lock past the checks that find
+    /// nothing to change: here a change that finds nothing also waits, which
+    /// only a subscription still pending can tell.
+    async fn run_change<O: Operation + Send + 'static>(
+        &self,
+        call: &'static str,
+        hooked: HookTrigger,
+        operation: O,
+    ) -> Result<O::Output, RoomKitError>
+    where
+        O::Output: Send + 'static,
+    {
+        if self.config().hooks.has_hooks(Some(hooked)) {
+            driver::run(&self.inner, call, operation).await
+        } else {
+            driver::run_unread(&self.inner, call, operation).await
+        }
     }
 
     /// Writes `updates` on the stored event as the kit's own work, a cut

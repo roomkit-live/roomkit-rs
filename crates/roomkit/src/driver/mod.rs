@@ -183,8 +183,37 @@ where
     // Boxed whole: the operation waits there for the kit's subscription.
     Box::pin(async move {
         inner.subscribed().await;
-        run_in_its_task(inner, environment, call, operation, false).await
+        // A close that ended the wait found the call past its door, which
+        // Python's finds under its room's lock: the call has the close's grace.
+        let own = inner.tasks.is_closing();
+        run_in_its_task(inner, environment, call, operation, own).await
     })
+    .await
+    .map_err(Stop::into_error)
+}
+
+/// Runs `operation` as [`run`] does, without the kit's subscription: a call
+/// that reads no context of its room, a change of an event no hook reads.
+///
+/// # Errors
+///
+/// As [`run`].
+pub(crate) async fn run_unread<S: ConversationStore, O: Operation + Send + 'static>(
+    inner: &Arc<Inner<S>>,
+    call: &'static str,
+    operation: O,
+) -> Result<O::Output, RoomKitError>
+where
+    O::Output: Send + 'static,
+{
+    inner.open()?;
+    Box::pin(run_in_its_task(
+        inner,
+        inner.environment(),
+        call,
+        operation,
+        false,
+    ))
     .await
     .map_err(Stop::into_error)
 }

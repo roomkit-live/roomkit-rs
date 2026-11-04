@@ -525,6 +525,297 @@ async fn a_message_or_an_event_is_a_first_room_activity() {
     assert_eq!(heard, vec![vec!["agent-1".to_owned()]; 5]);
 }
 
+/// A backend whose subscription waits to be answered: Python's `_LateBackend`.
+#[derive(Default)]
+struct Answered {
+    kept: InMemoryStatusBackend,
+    asked: tokio::sync::watch::Sender<bool>,
+    answer: tokio::sync::watch::Sender<bool>,
+}
+
+impl Answered {
+    /// Until a call waits for the subscription: a kit built in a runtime asks
+    /// it at once, and a paused clock moves once the call is at its wait.
+    async fn until_waited_for(&self) {
+        drop(self.asked.subscribe().wait_for(|asked| *asked).await);
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+
+    fn answer(&self) {
+        self.answer.send_replace(true);
+    }
+}
+
+impl StatusBackend for Answered {
+    fn publish(&self, entry: StatusEntry) -> Future<'_, ()> {
+        self.kept.publish(entry)
+    }
+
+    fn recent(&self, n: usize, options: BackendRecentOptions) -> Future<'_, Vec<StatusEntry>> {
+        self.kept.recent(n, options)
+    }
+
+    fn subscribe(&self, callback: Callback) -> Future<'_, ()> {
+        Box::pin(async move {
+            self.asked.send_replace(true);
+            drop(self.answer.subscribe().wait_for(|answer| *answer).await);
+            self.kept.subscribe(callback).await;
+        })
+    }
+
+    fn unsubscribe(&self, callback: Callback) -> Future<'_, ()> {
+        self.kept.unsubscribe(callback)
+    }
+}
+
+/// A kit over `backend`, an SMS transport on it.
+#[expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+fn late_kit(backend: &Arc<Answered>) -> RoomKit {
+    use roomkit::model::{ChannelId, ChannelType};
+    use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
+
+    let held: Arc<dyn StatusBackend> = Arc::<Answered>::clone(backend);
+    let kit = RoomKit::new(RoomKitOptions {
+        status_bus: Some(StatusBus::new(StatusBusOptions {
+            backend: Some(held),
+            ..StatusBusOptions::default()
+        })),
+        ..RoomKitOptions::default()
+    });
+    kit.register_channel(RecordingTransport::new(
+        ChannelId::new("sms").unwrap(),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    kit
+}
+
+/// A room `r` the store holds, and in it two events `id`, the kit idle: no
+/// call asked for the subscription yet.
+#[expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+async fn seeded(kit: &RoomKit) -> Vec<roomkit::model::EventId> {
+    use roomkit::ConversationStore;
+    use roomkit::model::{
+        ChannelId, ChannelType, EventSource, Room, RoomEvent, RoomId, TextContent,
+    };
+
+    let room = RoomId::new("r").unwrap();
+    kit.store()
+        .create_room(Room::new(room.clone()))
+        .await
+        .unwrap();
+    let source = EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS);
+    let mut ids = Vec::new();
+    for index in 0..2 {
+        let event = RoomEvent {
+            index,
+            ..RoomEvent::new(room.clone(), source.clone(), TextContent::new("hi"))
+        };
+        ids.push(event.id.clone());
+        kit.store().add_event(event).await.unwrap();
+    }
+    ids
+}
+
+// Python: tests/test_status_posted_without_context_manager.py::test_a_message_waiting_for_the_subscription_is_cut_by_the_close
+// The call the wait held before its room's lock is cut: nothing of it is
+// stored, no handle for a deferred one. The door it passed refuses nothing
+// any more (RMK-1255 item 3); its wait ends at the close's start, where
+// Python's has the close's grace (item 4, HITL below).
+#[tokio::test(start_paused = true)]
+async fn a_message_waiting_for_the_subscription_is_cut_by_the_close() {
+    use roomkit::ProcessInboundOptions;
+    use roomkit::model::{ChannelId, InboundMessage, RoomId, TextContent};
+
+    for (named, defer_delivery) in [(false, false), (true, false), (false, true), (true, true)] {
+        let backend = Arc::new(Answered::default());
+        let kit = late_kit(&backend);
+        let message =
+            InboundMessage::new(ChannelId::new("sms").unwrap(), "u1", TextContent::new("hi"));
+        let options = ProcessInboundOptions {
+            room_id: named.then(|| RoomId::new("r1").unwrap()),
+            defer_delivery,
+            ..ProcessInboundOptions::default()
+        };
+        let calling = kit.clone();
+        let call = tokio::spawn(async move { calling.process_inbound(message, options).await });
+        backend.until_waited_for().await;
+
+        kit.close().await.unwrap();
+        let result = call.await.unwrap().unwrap();
+
+        let read = (
+            result.blocked,
+            result.reason.as_deref(),
+            result.cancellation_reason.as_deref(),
+            result.event.is_some(),
+            result.delivery.is_some(),
+        );
+        assert_eq!(
+            read,
+            (true, Some("kit_closed"), Some("kit_closed"), false, false),
+            "named {named}, deferred {defer_delivery}"
+        );
+    }
+}
+
+// Python: tests/test_status_posted_without_context_manager.py::test_a_call_waiting_for_the_subscription_goes_on_within_the_close_s_grace
+// A call past its door that met its room's lock only after the wait keeps
+// what Python's call holds as the close starts: its right to end its work
+// within the grace, rather than a cut at the lock.
+#[tokio::test(start_paused = true)]
+async fn a_call_waiting_for_the_subscription_goes_on_within_the_close_s_grace() {
+    use roomkit::model::{ChannelId, EventContent, RoomEvent, RoomId, RoomStatus, TextContent};
+    use roomkit::{
+        AttachChannelOptions, CloseRoomOptions, ConversationStore, CreateRoomOptions,
+        DeleteEventOptions, HookExecution, HookOptions, HookTrigger, PauseRoomOptions,
+        UpdateEventOptions,
+    };
+
+    for name in [
+        "create_room",
+        "pause_room",
+        "close_room",
+        "attach_channel",
+        "update_event",
+        "delete_event",
+    ] {
+        let backend = Arc::new(Answered::default());
+        let kit = late_kit(&backend);
+        let ids = seeded(&kit).await;
+        for trigger in [HookTrigger::OnEventUpdated, HookTrigger::OnEventDeleted] {
+            let options = HookOptions {
+                execution: HookExecution::Async,
+                ..HookOptions::default()
+            };
+            kit.hook(trigger, |_event: RoomEvent, _context| async {}, options)
+                .unwrap();
+        }
+        let room = RoomId::new("r").unwrap();
+        let (calling, in_room, event) = (kit.clone(), room.clone(), ids[0].clone());
+        let call = tokio::spawn(async move {
+            match name {
+                "create_room" => {
+                    let options = CreateRoomOptions {
+                        room_id: Some(RoomId::new("new").unwrap()),
+                        ..CreateRoomOptions::default()
+                    };
+                    calling.create_room(options).await.map(drop)
+                }
+                "pause_room" => calling
+                    .pause_room(&in_room, PauseRoomOptions::default())
+                    .await
+                    .map(drop),
+                "close_room" => calling
+                    .close_room(&in_room, CloseRoomOptions::default())
+                    .await
+                    .map(drop),
+                "attach_channel" => {
+                    let sms = ChannelId::new("sms").unwrap();
+                    calling
+                        .attach_channel(&in_room, &sms, AttachChannelOptions::default())
+                        .await
+                        .map(drop)
+                }
+                "update_event" => {
+                    let options = UpdateEventOptions {
+                        content: Some(EventContent::Text(TextContent::new("new"))),
+                        ..UpdateEventOptions::default()
+                    };
+                    calling
+                        .update_event(&in_room, &event, options)
+                        .await
+                        .map(drop)
+                }
+                _ => calling
+                    .delete_event(&in_room, &event, DeleteEventOptions::default())
+                    .await
+                    .map(drop),
+            }
+        });
+        backend.until_waited_for().await;
+
+        let closing = kit.clone();
+        let closing = tokio::spawn(async move { closing.close().await });
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        backend.answer();
+        call.await
+            .unwrap()
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        closing.await.unwrap().unwrap();
+
+        let stored = kit.store();
+        let got = stored.get_room(&room).await.unwrap().unwrap();
+        let written = match name {
+            "create_room" => stored
+                .get_room(&RoomId::new("new").unwrap())
+                .await
+                .unwrap()
+                .is_some(),
+            "pause_room" => got.status == RoomStatus::Paused,
+            "close_room" => got.status == RoomStatus::Closed,
+            "attach_channel" => {
+                let sms = ChannelId::new("sms").unwrap();
+                stored.get_binding(&room, &sms).await.unwrap().is_some()
+            }
+            "update_event" => {
+                let event = stored.get_event(&ids[0]).await.unwrap().unwrap();
+                matches!(event.content, EventContent::Text(text) if text.body == "new")
+            }
+            _ => stored.get_event(&ids[0]).await.unwrap().is_none(),
+        };
+        assert!(written, "{name}");
+    }
+}
+
+// Python: tests/test_status_posted_without_context_manager.py::test_a_change_of_an_event_subscribes_only_for_a_hook_that_reads_its_context
+// RMK-1255 item 5: event_ops.py builds a change's context only for a hook.
+#[tokio::test]
+async fn a_change_of_an_event_subscribes_only_for_a_hook_that_reads_its_context() {
+    use roomkit::model::{EventContent, RoomEvent, RoomId, TextContent};
+    use roomkit::{
+        DeleteEventOptions, HookExecution, HookOptions, HookTrigger, UpdateEventOptions,
+    };
+
+    let backend = Arc::new(Answered::default());
+    let kit = late_kit(&backend);
+    let ids = seeded(&kit).await;
+    let room = RoomId::new("r").unwrap();
+    let changed = |body: &str| UpdateEventOptions {
+        content: Some(EventContent::Text(TextContent::new(body))),
+        ..UpdateEventOptions::default()
+    };
+    let deleted = DeleteEventOptions::default;
+
+    // No hook: neither change waits for a subscription nobody answered.
+    let bound = std::time::Duration::from_secs(1);
+    let update = kit.update_event(&room, &ids[0], changed("changed"));
+    tokio::time::timeout(bound, update).await.unwrap().unwrap();
+    let delete = kit.delete_event(&room, &ids[1], deleted());
+    tokio::time::timeout(bound, delete).await.unwrap().unwrap();
+
+    // A hook on the trigger: each waits for it.
+    let options = || HookOptions {
+        execution: HookExecution::Async,
+        ..HookOptions::default()
+    };
+    let noted = |_event: RoomEvent, _context| async {};
+    kit.hook(HookTrigger::OnEventUpdated, noted, options())
+        .unwrap();
+    kit.hook(HookTrigger::OnEventDeleted, noted, options())
+        .unwrap();
+    let waits = std::time::Duration::from_millis(50);
+    let update = kit.update_event(&room, &ids[0], changed("again"));
+    assert!(tokio::time::timeout(waits, update).await.is_err());
+    let delete = kit.delete_event(&room, &ids[0], deleted());
+    assert!(tokio::time::timeout(waits, delete).await.is_err());
+    backend.answer();
+    let update = kit.update_event(&room, &ids[0], changed("again"));
+    tokio::time::timeout(bound, update).await.unwrap().unwrap();
+    kit.close().await.unwrap();
+}
+
 // RMK-1201 (1): the close does not leave a first activity waiting for a
 // subscription that never ends: the wait ends at the close's start and the
 // call goes on under the close's rules, as Python's close cuts the call
