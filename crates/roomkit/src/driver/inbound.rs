@@ -938,7 +938,10 @@ mod tests {
         let waited = tokio::time::timeout(std::time::Duration::from_secs(60), &mut ending).await;
         assert!(waited.is_err(), "it ended with the read still under way");
         drop(over);
-        ending.await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(60), ending)
+            .await
+            .expect("the wait ends with the run")
+            .unwrap();
         assert!(record.cancelled.borrow().is_some());
     }
 
