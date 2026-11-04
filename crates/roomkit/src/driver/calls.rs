@@ -602,10 +602,7 @@ async fn run_turn<S: ConversationStore>(
         // closed unread, so its reply is never generated (RFC §7.5, §10.6.4).
         Ok(Answer::Streamed(output, mut turn)) if binding.muted => {
             turn.close_stream().await;
-            checked_output(Box::new(ChannelOutput {
-                observations: output.observations,
-                ..ChannelOutput::empty()
-            }))
+            checked_output(stream::muted_answer(output))
         }
         Ok(Answer::Streamed(output, turn)) => {
             shared.keep_stream(effect, KeptStream { turn, then: None });

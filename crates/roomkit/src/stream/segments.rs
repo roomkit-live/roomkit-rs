@@ -244,7 +244,7 @@ impl Segments {
         let end = record.get(LOOP_END_REASON).filter(|end| !end.is_null())?;
         let mut entry = Metadata::new();
         entry.insert(LOOP_END_REASON.to_owned(), end.clone());
-        if let Some(usage) = record.get(AI_USAGE) {
+        if let Some(usage) = record.get(AI_USAGE).filter(|usage| !usage.is_null()) {
             entry.insert(AI_USAGE.to_owned(), usage.clone());
         }
         Some(entry)
@@ -408,12 +408,19 @@ mod tests {
         );
     }
 
-    /// RFC §12.2 step 13s: a reader that stops keeps the text it was handed,
-    /// marked cancelled, and the turn records `cancelled`.
     // Python: tests/test_inbound_turns_record.py, an end the channel's record
     // names holds on a reader's stop (core/mixins/_streaming_segments.py end_stopped).
     #[test]
     fn an_end_the_record_names_holds_when_its_reader_stops() {
+        // A null is no end, and no usage (Python's `turn_summary`).
+        let live = ResponseMetadata::new();
+        live.insert(LOOP_END_REASON, Value::Null);
+        assert_eq!(segments().reading(live.clone()).turn_entry(), None);
+        live.insert(LOOP_END_REASON, Value::from("interrupted"));
+        live.insert(AI_USAGE, Value::Null);
+        let entry = segments().reading(live).turn_entry().expect("an end");
+        assert_eq!(entry.get(AI_USAGE), None);
+
         for (named, end) in [
             (Value::from("interrupted"), Some(Value::from("interrupted"))),
             (Value::from("completed"), Some(Value::from(CANCELLED))),
@@ -429,6 +436,8 @@ mod tests {
         }
     }
 
+    /// RFC §12.2 step 13s: a reader that stops keeps the text it was handed,
+    /// marked cancelled, and the turn records `cancelled`.
     #[test]
     fn a_stopped_reader_s_text_is_marked_cancelled_and_records_cancelled() {
         let mut segments = segments();

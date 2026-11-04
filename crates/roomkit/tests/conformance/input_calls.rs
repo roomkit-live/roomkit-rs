@@ -91,6 +91,7 @@ pub(crate) fn input_hook_handler(
                 return Ok(allow);
             };
             let scope = Scope::with_request(&room_id, &event.pending_id);
+            crate::agents::write_record(&reaction);
             perform(&run, &reaction, &scope).await?;
             match reaction.get("result") {
                 Some(result) => Ok(input_hook_result(result, &event)?),

@@ -184,6 +184,8 @@ impl InputNotification {
                     tracing::warn!(target: "roomkit::hooks", hook = %spec.name, error = %error.message, "a human-input request's observer raised");
                 }
             };
+            // Under the turn's record, as Python's task copies its context.
+            let bounded = crate::turn_record::within_current_turn_record(bounded);
             let task: BoxFuture<'static, ()> = match &self.turn {
                 Some(turn) => {
                     Box::pin(ExecutionContext::current().scope(TURN.scope(turn.clone(), bounded)))

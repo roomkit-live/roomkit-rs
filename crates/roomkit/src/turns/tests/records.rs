@@ -242,6 +242,29 @@ async fn a_turn_sends_its_record_no_more_often_for_more_deltas() {
     assert!(counts[0] > 0);
 }
 
+// Python: core/event_router.py keeps a muted stream's side effects, which RFC
+// 7.5 always allows; the stream is closed unread (test_muted_target_streaming_response_suppressed).
+#[tokio::test(start_paused = true)]
+async fn a_muted_agent_s_stream_keeps_its_side_effects() {
+    let mut agent = Streaming::scripted(vec![Step::Text("never")]);
+    agent.updates.insert("topic".to_owned(), json!("sales"));
+    let kit = kit_with(agent).await;
+    kit.mute(
+        &room_id(),
+        &roomkit_core::model::ChannelId::new("ai").unwrap(),
+        crate::MuteOptions::default(),
+    )
+    .await
+    .unwrap();
+    says(&kit, "Hi").await.unwrap();
+    crate::testing::idle(&kit).await;
+    let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+    let stored = messages(&kit, "topic").await;
+    kit.close().await.unwrap();
+    assert_eq!(room.metadata.get("topic"), Some(&json!("sales")));
+    assert_eq!(stored, Vec::new());
+}
+
 /// Every event of a room's timeline the room received.
 fn received() -> crate::store::ListEventsOptions {
     crate::store::ListEventsOptions {

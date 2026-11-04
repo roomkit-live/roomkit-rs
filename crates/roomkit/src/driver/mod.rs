@@ -350,6 +350,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         call_of_effect: HashMap::new(),
         callers: HashMap::new(),
         deliveries: HashMap::new(),
+        told_deliveries: HashMap::new(),
         entry_answers: HashMap::new(),
         entry_cancels: HashMap::new(),
         entry_named: HashMap::new(),
@@ -410,6 +411,9 @@ struct Driver<'kit, S> {
     /// Where the delivery's end of each entry the operation adopted goes,
     /// until its set ran.
     deliveries: HashMap<EntryId, watch::Sender<Option<InboundResult>>>,
+    /// The handles of the entries told their delivery: a stream read later
+    /// tells them again what it adds.
+    told_deliveries: HashMap<EntryId, watch::Sender<Option<InboundResult>>>,
     /// The answers of each adopted entry's cascade, which its handle reads
     /// when the run ends without telling its delivery's end.
     entry_answers: HashMap<EntryId, Arc<StoredAnswers>>,
@@ -1276,8 +1280,14 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     fn delivered(&mut self, delivered: Delivered) {
         self.entry_answers.remove(&delivered.entry);
         self.entry_cancels.remove(&delivered.entry);
-        if let Some(completion) = self.deliveries.remove(&delivered.entry) {
+        // Kept: an entry told before its streams are read is told again.
+        let completion = self
+            .deliveries
+            .remove(&delivered.entry)
+            .or_else(|| self.told_deliveries.remove(&delivered.entry));
+        if let Some(completion) = completion {
             completion.send_replace(Some(delivered.result));
+            self.told_deliveries.insert(delivered.entry, completion);
         }
         // Its set ran: the delivery is over, but for an event it holds.
         self.entry_names.remove(&delivered.entry);

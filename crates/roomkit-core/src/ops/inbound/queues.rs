@@ -549,29 +549,47 @@ impl Machine {
             return;
         };
         let own = !end.job.chained && end.job.lineage == Lineage::Call;
-        let caller = match end.job.lineage {
-            Lineage::Call if own => Some(&mut self.trigger.result.response_metadata),
-            // An adopted entry's wait reads its own stream's (RFC §10.1 step 18).
-            Lineage::Entry(entry) if !end.job.chained => self
-                .adopted_deliveries
-                .get_mut(&entry)
-                .map(|delivered| &mut delivered.response_metadata),
-            Lineage::Call | Lineage::Entry(_) => None,
-        };
-        if let Some(caller) = caller {
-            let mut record = output.response_metadata.to_metadata();
-            let turns = record.shift_remove(TURNS);
-            super::reply_record::merge_channel_record(caller, &record);
-            if let Some(turns) = turns {
-                add_turns(caller, turns);
-            }
-        }
+        self.keep_stream_end(cx, &end.job, &output);
         let Some(error) = output.error else {
             return;
         };
         stream::report_failure(cx, &end.job, &context, &error);
         if own {
             self.trigger.note_error(Some(error));
+        }
+    }
+
+    /// What a stream's read leaves its caller: the turn's record, how it ended
+    /// under `turns`, and for an adopted entry's own stream its failure, which
+    /// its wait reads (RFC §6.4, §10.1 step 18). An entry told at once, its
+    /// call's passes not running yet, is told again (`report_adopted_deliveries`).
+    fn keep_stream_end(
+        &mut self,
+        cx: &mut Cx<'_>,
+        job: &StreamJob,
+        output: &crate::model::ChannelOutput,
+    ) {
+        if job.chained {
+            return;
+        }
+        let mut record = output.response_metadata.to_metadata();
+        let turns = record.shift_remove(TURNS);
+        let merge = |caller: &mut Metadata| {
+            super::reply_record::merge_channel_record(caller, &record);
+            if let Some(turns) = turns.clone() {
+                add_turns(caller, turns);
+            }
+        };
+        let Lineage::Entry(entry) = job.lineage else {
+            return merge(&mut self.trigger.result.response_metadata);
+        };
+        if let Some(delivered) = self.adopted_deliveries.get_mut(&entry) {
+            merge(&mut delivered.response_metadata);
+            delivered.error = delivered.error.take().or_else(|| output.error.clone());
+        } else if let Some(told) = self.told_adopted.get_mut(&entry) {
+            merge(&mut told.response_metadata);
+            told.error = told.error.take().or_else(|| output.error.clone());
+            cx.io.delivered(entry, told.clone());
         }
     }
 }

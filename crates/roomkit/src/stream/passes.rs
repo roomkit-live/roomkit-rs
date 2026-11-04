@@ -103,6 +103,11 @@ async fn second_pass<S: ConversationStore>(
         ..read
     };
     match inner.turns.run(&kit, &binding, event, context, drop).await {
+        // A muted supervisor's answer is never generated (RFC §7.5, §10.6.4).
+        Ok(Answer::Streamed(output, mut turn)) if binding.muted => {
+            turn.close_stream().await;
+            ChannelOutcome::Output(super::muted_answer(output)).into()
+        }
         Ok(Answer::Streamed(_output, turn)) => {
             let kept = KeptStream { turn, then: None };
             let (output, _) = Box::pin(read_kept(inner, kept, stops, read, false)).await;

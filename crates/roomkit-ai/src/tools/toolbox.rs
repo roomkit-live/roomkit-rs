@@ -82,11 +82,13 @@ impl Toolbox {
         declared: Vec<AiTool>,
     ) -> Result<(), AiError> {
         // A name the agent serves already is named before one given twice,
-        // as Python refuses the host's tools first.
-        if let Some(served) = declared
+        // the first in the host's order, as Python refuses the host's tools
+        // against the person's names first.
+        let taken = self
+            .tools
             .iter()
-            .find(|tool| self.served.contains_key(&tool.name))
-        {
+            .find(|(served, _)| declared.iter().any(|tool| tool.name == served.name));
+        if let Some((served, _)) = taken {
             return Err(AiError::DuplicateTool {
                 name: served.name.clone(),
             });

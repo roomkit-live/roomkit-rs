@@ -307,6 +307,8 @@ pub(super) struct Streaming {
     pub(super) produced: Arc<AtomicUsize>,
     /// The turn's stream instead of its deltas, writing the turn's record.
     script: Option<Vec<Step>>,
+    /// The room metadata its output updates, with its stream.
+    pub(super) updates: roomkit_core::model::Metadata,
 }
 
 /// A step of a [`Streaming`] agent's scripted stream.
@@ -413,6 +415,7 @@ impl Streaming {
             end,
             produced: Arc::default(),
             script: None,
+            updates: roomkit_core::model::Metadata::new(),
         }
     }
 
@@ -511,6 +514,7 @@ impl Channel for Streaming {
             end: Some(self.end.clone()),
         };
         let script = self.script.clone();
+        let updates = self.updates.clone();
         // The turn's host is read as the turn runs, within it.
         async move {
             if own {
@@ -528,6 +532,7 @@ impl Channel for Streaming {
             };
             Ok(ChannelOutput {
                 response_metadata: record,
+                metadata_updates: updates,
                 ..host.respond_with_stream(Box::pin(stream))
             })
         }

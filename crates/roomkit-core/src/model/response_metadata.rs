@@ -23,6 +23,10 @@ use serde_json::Value;
 
 use super::Metadata;
 
+/// How many times [`ResponseMetadata::with_value`] runs its change against
+/// another writer's.
+const WITH_VALUE_TRIES: usize = 8;
+
 /// Turn-level metadata merged into every message event the turn produces:
 /// each message carries the record as it stands when the message is created
 /// (RFC §6.7). Python's `ResponseMetadata`; a clone is the same record, as
@@ -135,23 +139,22 @@ impl ResponseMetadata {
 
     /// Changes the value under `key`, when it holds one: Python's
     /// `record[key].append(...)`, no write of a key. `change` runs with the
-    /// record free, so it may read it; another writer's change meanwhile
-    /// runs it again on what that writer left.
+    /// record free, so it may read it; another writer's change meanwhile runs
+    /// it again on what that writer left, a few times, then the last wins.
     pub fn with_value(&self, key: &str, mut change: impl FnMut(&mut Value)) {
-        loop {
+        for last in (0..WITH_VALUE_TRIES).rev() {
             let Some(before) = self.get(key) else {
                 return;
             };
             let mut after = before.clone();
             change(&mut after);
             let mut inner = self.lock();
-            match inner.data.get_mut(key) {
-                Some(value) if *value == before => {
-                    *value = after;
-                    return;
-                }
-                Some(_) => {}
-                None => return,
+            let Some(value) = inner.data.get_mut(key) else {
+                return;
+            };
+            if *value == before || last == 0 {
+                *value = after;
+                return;
             }
         }
     }
@@ -274,6 +277,21 @@ mod tests {
             sources.as_array_mut().expect("a list").push(read);
         });
         assert_eq!(record.get("sources"), Some(json!([1])));
+    }
+
+    // Python: record["sources"] = [...], a plain assignment, which ends.
+    #[test]
+    fn a_change_that_writes_its_own_key_ends() {
+        let record = ResponseMetadata::from(keys(json!({"sources": 0})));
+        let again = record.clone();
+        let mut runs = 0;
+        record.with_value("sources", |sources| {
+            runs += 1;
+            again.insert("sources", json!(runs));
+            *sources = json!("mine");
+        });
+        assert_eq!(record.get("sources"), Some(json!("mine")));
+        assert_eq!(runs, WITH_VALUE_TRIES);
     }
 
     #[test]

@@ -544,6 +544,10 @@ impl Machine {
             .collect();
         for entry in over {
             if let Some(delivered) = self.adopted_deliveries.remove(&entry) {
+                // Told before its streams are read: they tell it again.
+                if !passing {
+                    self.told_adopted.insert(entry, delivered.clone());
+                }
                 cx.io.delivered(entry, delivered);
             }
         }

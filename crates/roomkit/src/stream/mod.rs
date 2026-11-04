@@ -36,7 +36,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::Stream;
-use roomkit_core::model::{RoomEvent, ToolCallContent};
+use roomkit_core::model::{ChannelOutput, ResponseMetadata, RoomEvent, ToolCallContent};
 use tokio::sync::{mpsc, oneshot};
 
 pub(crate) use self::loop_end::read_record;
@@ -100,6 +100,18 @@ pub enum StreamItem {
 
 /// The next item of a turn's response, as its executor reads it; `None` at
 /// its end.
+/// What a muted channel's turn leaves of its output, its stream closed
+/// unread: its side effects, always allowed (RFC §7.5), and no answer nor
+/// record, since no reply was generated.
+pub(crate) fn muted_answer(output: Box<ChannelOutput>) -> Box<ChannelOutput> {
+    Box::new(ChannelOutput {
+        responded: false,
+        response_events: Vec::new(),
+        response_metadata: ResponseMetadata::default(),
+        ..*output
+    })
+}
+
 pub(crate) async fn next_item(
     stream: &mut ResponseStream,
 ) -> Option<Result<ResponseItem, ChannelError>> {
