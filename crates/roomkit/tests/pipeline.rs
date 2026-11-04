@@ -197,13 +197,10 @@ async fn installing_it_again_in_its_room_replaces_its_own() {
         vec![id("a").into(), id("b").into()],
         PipelineOptions::default(),
     ));
-    kit.install_strategy(
-        &room(),
-        Arc::clone(&pipeline) as _,
-        InstallStrategyOptions::default(),
-    )
-    .await
-    .unwrap();
+    let same = Arc::clone(&pipeline);
+    kit.install_strategy(&room(), same, InstallStrategyOptions::default())
+        .await
+        .unwrap();
 
     Orchestration::install(&*pipeline, &kit, &room())
         .await
