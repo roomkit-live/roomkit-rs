@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The seams a discussion uses (RFC §19.7.5), as Python's, inert outside one: `HookTrigger::OnSpeakQueue` takes a `SpeakQueueEvent`; a room that stores a discussion asks no agent at broadcast, a bound agent is no unavailable target; an instruction to one of its agents goes to the discussion, one to a discussion that is over is blocked `discussion_over`; a turn reads its event at its place with its notes.
 - The discussion's rules and its constructor (RFC §19.7.5), as Python's: `roomkit::Discussion`, `DiscussionOptions`, `SpeakQueue`, `SpeakQueueChange`, `SpeakQueueEvent`. A discussion is built and read: its handles and refusals are Python's; it cannot be installed yet.
 - A handoff to a human holds the room for them (RFC §19.6), as Python's: `ConversationState::human_hold`; while it holds, the router asks no agent and no supervisor, the message still reaching the room's transports, an address naming an agent still asking it and the supervisor beside it, `ON_HANDOFF` naming the human; a handoff to an agent is refused, by the tool and by `handle`, and only the host's transition to an agent takes it off (RMK-1233).
 - A `ConversationPipeline`'s or a router's install refused for an agent whose handoff is set up already, named twice, or whose tools hold the handoff's name leaves no hook and no tool behind, as Python's (RMK-1233).
