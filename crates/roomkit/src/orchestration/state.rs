@@ -145,6 +145,9 @@ pub struct ConversationState {
     pub phase_history: Vec<PhaseTransition>,
     /// Integrator-defined data, the room's `language` among it.
     pub context: Metadata,
+    /// A handoff to a human holds the room for them: the router asks no agent
+    /// until a transition gives it to one (RFC §19.6).
+    pub human_hold: bool,
 }
 
 impl ConversationState {
@@ -158,6 +161,7 @@ impl ConversationState {
             phase_started_at: now(),
             phase_history: Vec::new(),
             context: Metadata::new(),
+            human_hold: false,
         }
     }
 
@@ -175,6 +179,7 @@ impl ConversationState {
             ..PhaseTransition::new(self.phase.clone(), to_phase.clone())
         };
         let agent_changed = options.to_agent != self.active_agent_id;
+        let human_hold = self.human_hold && options.to_agent.is_none();
         let mut phase_history = self.phase_history.clone();
         phase_history.push(record);
         Self {
@@ -185,6 +190,7 @@ impl ConversationState {
             phase_started_at: now(),
             phase_history,
             context: self.context.clone(),
+            human_hold,
         }
     }
 }

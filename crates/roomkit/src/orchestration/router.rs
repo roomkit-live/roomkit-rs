@@ -199,7 +199,8 @@ impl ConversationRouter {
     }
 
     /// The agent an unaddressed `event` goes to: none for an agent's own
-    /// output; the state's active agent while the room binds it (sticky
+    /// output, or while the room is held for a human (RFC §19.6); the state's
+    /// active agent while the room binds it (sticky
     /// affinity); else the first rule that applies; else the default agent.
     /// An addressed event never reaches here: its address decides (RFC
     /// §19.4 step 0).
@@ -209,7 +210,7 @@ impl ConversationRouter {
         context: &RoomContext,
         state: &ConversationState,
     ) -> Option<ChannelId> {
-        if from_agent(event, context) {
+        if from_agent(event, context) || state.human_hold {
             return None;
         }
         if let Some(active) = &state.active_agent_id
@@ -255,7 +256,7 @@ impl ConversationRouter {
         let state = get_conversation_state(&context.room)?;
         let routed_to = match self.select_agent(&event, context, &state) {
             Some(selected) => selected.as_str().to_owned(),
-            None if from_agent(&event, context) => NO_AGENT.to_owned(),
+            None if from_agent(&event, context) || state.human_hold => NO_AGENT.to_owned(),
             None => return Ok(HookResult::allow(AllowOptions::default())),
         };
         tracing::debug!(

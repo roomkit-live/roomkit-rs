@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A handoff to a human holds the room for them (RFC §19.6), as Python's: `ConversationState::human_hold`; while it holds, the router asks no agent, the message still reaching the room's transports, an address still asking the agent it names and a supervisor staying informed; a transition to an agent takes it off (RMK-1233).
 - A `ConversationPipeline`'s or a router's install refused for an agent whose handoff is set up already, named twice, or whose tools hold the handoff's name leaves no hook and no tool behind, as Python's (RMK-1233).
 - A muted agent's stream is closed unread, as Python's, a supervisor's second pass included: its reply is never generated, its tools never run, nothing of its record reaches the caller, its side effects stay, where the stream was read and its rows blocked (RFC §7.5, §10.6.4).
 - `AiChannel::new` names a person's tool under a host's name before a definition the person gave twice, as Python's (RMK-1290).

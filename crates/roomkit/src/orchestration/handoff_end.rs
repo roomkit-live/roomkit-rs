@@ -58,6 +58,7 @@ pub(super) fn moved_state(
     moved
         .context
         .insert("handoff_reason".to_owned(), json!(request.reason));
+    moved.human_hold = agent.is_none();
     Ok(moved)
 }
 
