@@ -9,6 +9,7 @@ mod support;
 
 use roomkit::ConversationStore;
 use roomkit::model::{ChannelType, Identity, IdentityId};
+use roomkit::store::ResolveIdentityOptions;
 use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 use rusqlite::Connection;
 
@@ -194,4 +195,81 @@ async fn an_unlink_removes_the_identity_s_rows_in_every_scope() {
         .unwrap();
     assert_eq!(left, 0);
     store.close().await;
+}
+
+/// Python: `test_a_row_of_another_scope_than_its_identity_resolves_for_nobody` (RFC
+/// §17.2): an identity is read in its own organization only, whatever a row a file's
+/// migration left or a direct write says.
+#[tokio::test]
+async fn a_row_of_another_scope_than_its_identity_resolves_for_nobody() {
+    for (held_in, stored) in [("", Some("acme")), ("globex", Some("acme")), ("acme", None)] {
+        let file = TempFile::new("identity-scope");
+        let store = SqliteStore::new(SqliteStoreOptions {
+            path: file.path().into(),
+        });
+        let mut identity = Identity::new(IdentityId::new("i1").unwrap());
+        identity.organization_id = stored.map(str::to_owned);
+        store.create_identity(identity).await.unwrap();
+        Connection::open(file.path())
+            .unwrap()
+            .execute(
+                "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id)
+                 VALUES ('sms', '+1555', 'i1', ?)",
+                [held_in],
+            )
+            .unwrap();
+        for scope in [None, Some("acme"), Some("globex")] {
+            let found = store
+                .resolve_identity(
+                    &ChannelType::SMS,
+                    "+1555",
+                    ResolveIdentityOptions {
+                        organization_id: scope.map(str::to_owned),
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(found, None, "row in {held_in:?}, read in {scope:?}");
+        }
+        store.close().await;
+    }
+}
+
+/// Python: `test_the_rewrite_takes_only_a_list_for_a_declaration`: a declaration no
+/// API writes (a text, a map) declares nothing: the row goes, as on Postgres, and the
+/// file still opens.
+#[tokio::test]
+async fn the_rewrite_takes_only_a_list_for_a_declaration() {
+    let file = TempFile::new("identity-declaration");
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
+    let mut identity = Identity::new(IdentityId::new("alice").unwrap());
+    identity.organization_id = Some("acme".to_owned());
+    store.create_identity(identity).await.unwrap();
+    store.close().await;
+    let connection = Connection::open(file.path()).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id)
+             VALUES ('sms', '+1', 'alice', ''), ('mms', '+2', 'alice', '');
+             UPDATE identities SET data = json_set(data, '$.channel_addresses',
+                 json('{\"sms\": \"+1\", \"mms\": {\"k\": \"+2\"}}')) WHERE id = 'alice';
+             PRAGMA user_version = 13;",
+        )
+        .unwrap();
+    let reopened = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
+    let opened = reopened
+        .room_exists(&roomkit::model::RoomId::new("any").unwrap())
+        .await;
+    assert_eq!(opened, Ok(false));
+    reopened.close().await;
+    let left: i64 = connection
+        .query_row("SELECT count(*) FROM identity_addresses", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(left, 0);
 }

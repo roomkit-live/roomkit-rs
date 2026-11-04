@@ -51,7 +51,7 @@ pub(crate) fn resolve(
         return Ok(None);
     };
     Ok(get(connection, &holder)?
-        .filter(|identity| identity.organization_id.as_deref() == organization))
+        .filter(|identity| scope(identity.organization_id.as_deref()) == scope(organization)))
 }
 
 /// The identity of `organization` the index files `address` under.
@@ -201,7 +201,7 @@ fn of_organization(
     organization: Option<&str>,
 ) -> Result<(Identity, String), Failure> {
     stored(connection, identity_id)?
-        .filter(|(identity, _)| identity.organization_id.as_deref() == organization)
+        .filter(|(identity, _)| scope(identity.organization_id.as_deref()) == scope(organization))
         .ok_or_else(|| StoreError::IdentityNotFound(identity_id.clone()).into())
 }
 

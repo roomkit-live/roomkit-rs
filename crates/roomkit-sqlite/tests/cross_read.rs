@@ -85,6 +85,18 @@ async fn fixture_kit(file: &TempFile) -> RoomKit<SqliteStore> {
     )
 }
 
+/// The id of the fixture's event holding `body`: its ids change at each generation.
+fn event_with_body(body: &str) -> String {
+    Connection::open(fixture())
+        .unwrap()
+        .query_row(
+            "SELECT id FROM events WHERE json_extract(data, '$.content.body') = ?",
+            [body],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
 /// The fixture is the one `make sqlite-fixture` wrote, at a roomkit commit.
 #[test]
 fn the_fixture_is_the_one_its_generator_wrote() {
@@ -889,7 +901,7 @@ async fn a_search_finds_what_python_s_search_finds_in_the_file_python_wrote() {
                 .collect::<Vec<_>>(),
         );
     }
-    let invoice = vec!["811ff92ecc4841949da4567beef91d01".to_owned()];
+    let invoice = vec![event_with_body("Hello, my invoice for March is wrong")];
     assert_eq!(
         found,
         [
@@ -898,8 +910,8 @@ async fn a_search_finds_what_python_s_search_finds_in_the_file_python_wrote() {
             vec![],
             vec![],
             vec![
-                "78813bf9d62d43ab8fc4f555462f019e".to_owned(),
-                "0f3d8db793b64aa098f907a96188f3c2".to_owned()
+                event_with_body("Channel ws-gone detached"),
+                event_with_body("Channel ws-user attached (read_write, all)")
             ],
             vec![],
             vec![],

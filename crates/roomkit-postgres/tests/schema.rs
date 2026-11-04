@@ -518,6 +518,98 @@ async fn init_moves_an_unscoped_address_to_its_identity_s_organization() {
     );
 }
 
+/// Python: `test_the_rewrite_takes_only_a_list_for_a_declaration`: a declaration no
+/// API writes (a text, a map) declares nothing: the row goes, as on SQLite, and the
+/// rewrite does not fail.
+#[tokio::test]
+async fn the_rewrite_takes_only_a_list_for_a_declaration() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    let mut alice = Identity::new(IdentityId::new("alice").unwrap());
+    alice.organization_id = Some("acme".to_owned());
+    store.create_identity(alice).await.unwrap();
+    let client = schema.client().await;
+    client
+        .batch_execute(
+            "UPDATE identities SET channel_addresses = \
+                 '{\"sms\": \"+1\", \"mms\": {\"+2\": true}}' WHERE id = 'alice';
+             INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id) \
+             VALUES ('sms', '+1', 'alice', ''), ('mms', '+2', 'alice', '');
+             DELETE FROM schema_version WHERE version >= 5;",
+        )
+        .await
+        .unwrap();
+    store.init(SMALL_POOL).await.unwrap();
+    let left: i64 = client
+        .query_one("SELECT count(*) FROM identity_addresses", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(left, 0);
+}
+
+/// Python: `test_the_rewrite_waits_for_an_unlink_in_flight`: an older process's
+/// unlink, uncommitted, has removed the address from the declaration the rewrite
+/// reads: the rewrite waits, and restores nothing.
+#[tokio::test]
+async fn the_rewrite_waits_for_an_unlink_in_flight() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    let mut alice = Identity::new(IdentityId::new("alice").unwrap());
+    alice.organization_id = Some("acme".to_owned());
+    store.create_identity(alice).await.unwrap();
+    let client = schema.client().await;
+    client
+        .batch_execute(
+            "UPDATE identities SET channel_addresses = '{\"sms\": [\"+1\"]}' WHERE id = 'alice';
+             INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id) \
+             VALUES ('sms', '+1', 'alice', '');
+             DELETE FROM schema_version WHERE version >= 5;",
+        )
+        .await
+        .unwrap();
+    let unlinker = schema.client().await;
+    unlinker
+        .batch_execute("BEGIN; UPDATE identities SET channel_addresses = '{}' WHERE id = 'alice';")
+        .await
+        .unwrap();
+    let unlinker_pid: i32 = unlinker
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let rewrite = tokio::spawn({
+        let store = store.clone();
+        async move { store.init(SMALL_POOL).await }
+    });
+    let mut blocked = 0_i64;
+    for _ in 0..400 {
+        blocked = client
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+                &[&unlinker_pid],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if blocked > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(blocked, 1, "the rewrite never waited on the unlink");
+    unlinker.batch_execute("COMMIT").await.unwrap();
+    rewrite.await.unwrap().unwrap();
+    let left: i64 = client
+        .query_one("SELECT count(*) FROM identity_addresses", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(left, 0);
+}
+
 /// Python: `test_a_second_init_waits_on_no_open_transaction`: on an up-to-date
 /// schema `init` takes no lock an open transaction on its tables holds
 /// against it, a second's lock timeout proves it.

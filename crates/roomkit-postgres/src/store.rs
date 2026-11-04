@@ -101,7 +101,9 @@ impl PostgresStore {
     /// Python's `init(min_size=2, max_size=10)`. It runs only additive,
     /// idempotent schema maintenance, under an advisory lock, in one
     /// transaction, so a fleet restarting at once runs it one process after
-    /// the other, and a library upgrade cannot destroy data.
+    /// the other, and a library upgrade destroys no data but, once, address rows no
+    /// read serves: one whose organization holds the address, or whose identity no
+    /// longer declares it (RFC §17.2).
     ///
     /// # Errors
     ///

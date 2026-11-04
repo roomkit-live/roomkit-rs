@@ -50,7 +50,7 @@ struct Inner {
 impl Database {
     /// Opens the file at `path`, creating it, and its directory, at the
     /// schema version this crate knows when it holds none, migrating one of
-    /// version 12, and refusing one of another version. The writer opens it;
+    /// version 12 or 13, and refusing one of another version. The writer opens it;
     /// a reader opens it later, at its first read.
     pub(crate) async fn open(path: PathBuf) -> Result<Self, StoreError> {
         let opened = path.clone();

@@ -186,6 +186,46 @@ async fn a_replacement_refused_for_an_address_keeps_the_old_ones() {
     );
 }
 
+/// The empty string and none both name no organization, as Python's stores read
+/// them: for a read, a link and an unlink, whichever form the identity has.
+#[tokio::test]
+async fn an_empty_organization_is_no_organization() {
+    for (stored, given) in [(None, Some("")), (Some(""), None)] {
+        let store = holding(vec![identity("id_alice", stored)]).await;
+        assert_eq!(
+            resolved(&store, given).await.as_deref(),
+            Some("id_alice"),
+            "stored {stored:?}, read under {given:?}"
+        );
+        let linked = store
+            .link_address(
+                &id("id_alice"),
+                &ChannelType::SMS,
+                "+15550000002",
+                roomkit::store::LinkAddressOptions {
+                    organization_id: given.map(str::to_owned),
+                },
+            )
+            .await;
+        assert_eq!(linked, Ok(()), "stored {stored:?}, linked under {given:?}");
+        let unlinked = store
+            .unlink_address(
+                &id("id_alice"),
+                &ChannelType::SMS,
+                "+15550000002",
+                roomkit::store::UnlinkAddressOptions {
+                    organization_id: given.map(str::to_owned),
+                },
+            )
+            .await;
+        assert_eq!(
+            unlinked,
+            Ok(()),
+            "stored {stored:?}, unlinked under {given:?}"
+        );
+    }
+}
+
 /// Python's `create_identity`: an identity created under an id the store
 /// holds replaces the stored one.
 #[tokio::test]

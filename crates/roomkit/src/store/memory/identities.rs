@@ -10,6 +10,12 @@ use roomkit_core::model::{ChannelType, Identity, IdentityId};
 
 use crate::store::StoreError;
 
+/// Whether `identity` is of `organization`, the empty string and none both naming
+/// no organization, as Python's stores read them.
+fn in_scope(identity: &Identity, organization: Option<&str>) -> bool {
+    identity.organization_id.as_deref().unwrap_or_default() == organization.unwrap_or_default()
+}
+
 /// Every identity, by id.
 #[derive(Debug, Default)]
 pub(super) struct Identities {
@@ -23,9 +29,11 @@ impl Identities {
     /// of its organization uses one of its addresses.
     pub(super) fn create(&mut self, identity: Identity) -> Result<(), StoreError> {
         let organization = identity.organization_id.as_deref();
-        if self.by_id.get(&identity.id).is_some_and(|held| {
-            held.organization_id.as_deref().unwrap_or_default() != organization.unwrap_or_default()
-        }) {
+        if self
+            .by_id
+            .get(&identity.id)
+            .is_some_and(|held| !in_scope(held, organization))
+        {
             return Err(StoreError::IdentityNotFound(identity.id));
         }
         for (channel_type, addresses) in &identity.channel_addresses {
@@ -93,7 +101,7 @@ impl Identities {
         let in_organization = self
             .by_id
             .get(identity_id)
-            .is_some_and(|identity| identity.organization_id.as_deref() == organization);
+            .is_some_and(|identity| in_scope(identity, organization));
         if in_organization {
             Ok(())
         } else {
@@ -126,8 +134,7 @@ impl Identities {
         address: &str,
     ) -> Option<&Identity> {
         self.by_id.values().find(|identity| {
-            identity.organization_id.as_deref() == organization
-                && identity.uses(channel_type, address)
+            in_scope(identity, organization) && identity.uses(channel_type, address)
         })
     }
 }

@@ -621,6 +621,11 @@ END $$;
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM schema_version WHERE version >= 5) THEN
+        -- Whoever holds these identities first: an older process's unlink in flight
+        -- has written the declaration read below.
+        PERFORM 1 FROM identities i JOIN identity_addresses ia ON i.id = ia.identity_id
+            WHERE ia.organization_id = '' AND COALESCE(i.organization_id, '') <> ''
+            FOR SHARE OF i;
         DELETE FROM identity_addresses ia USING identities i, identity_addresses held
             WHERE i.id = ia.identity_id
               AND ia.organization_id = ''
@@ -633,6 +638,7 @@ BEGIN
             WHERE i.id = ia.identity_id
               AND ia.organization_id = ''
               AND COALESCE(i.organization_id, '') <> ''
+              AND jsonb_typeof(i.channel_addresses -> ia.channel_type) = 'array'
               AND i.channel_addresses -> ia.channel_type ? ia.address;
         DELETE FROM identity_addresses ia USING identities i
             WHERE i.id = ia.identity_id

@@ -53,7 +53,8 @@ WHERE organization_id = ''
   AND EXISTS (
       SELECT 1 FROM identities i,
            json_each(i.data, '$.channel_addresses') declared,
-           json_each(declared.value) held
+           json_each(CASE declared.type WHEN 'array' THEN declared.value
+                     ELSE '[]' END) held
       WHERE i.id = identity_addresses.identity_id
         AND declared.key = identity_addresses.channel_type
         AND held.value = identity_addresses.address);
