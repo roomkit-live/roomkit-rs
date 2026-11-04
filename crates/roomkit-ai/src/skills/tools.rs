@@ -117,12 +117,16 @@ impl SkillTools {
     /// manifest when they are listed, then the instructions of the skills
     /// active in its room (RFC §24.4), each part after a blank line, whether a
     /// `base` stands before it or not. A room served for the first time in
-    /// this process is read again first from its stored rows, whatever the
-    /// turn reads; a turn that stands alone carries no active skill. A registry
-    /// with no skill adds nothing and leaves the room's record as it is.
-    /// Python's `_hydrate_room_memories` and `_add_skills`.
+    /// this process is read again first from its stored rows, under any
+    /// registry; a registry with no skill adds nothing and leaves the room's
+    /// record as it is. A turn that stands alone carries no active skill and
+    /// leaves the room unread: what it activates is recorded by no one but its
+    /// row, which the room's first ordinary turn reads (RMK-1356). Python's
+    /// `_hydrate_room_memories` and `_add_skills`.
     pub(crate) fn system_prompt(&self, base: Option<&str>, turn: SkillTurn<'_>) -> Option<String> {
-        self.read_stored(turn);
+        if !turn.stands_alone {
+            self.read_stored(turn);
+        }
         let mut prompt = base.map(str::to_owned);
         if !self.registry.has_entries() {
             return prompt;
