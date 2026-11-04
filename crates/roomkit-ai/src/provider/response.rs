@@ -169,9 +169,18 @@ pub fn read_tool_calls(
 /// Hands each call of one response its id: the server's when it gave one no
 /// earlier call of the response took, a minted one otherwise (`call_<name>_<12
 /// hex digits>`, unique across turns). Results, cuts and a call's rows all find
-/// a call by its id, so a provider reading its wire gives two calls two ids:
-/// Python's `CallIds`. For a provider reading its wire.
-#[doc(hidden)]
+/// a call by its id, so a provider reading its wire gives two calls two ids
+/// (RFC §6.4): the loop refuses a second call of a round under an id. Python's
+/// `CallIds`.
+///
+/// ```
+/// use roomkit_ai::CallIds;
+///
+/// let mut ids = CallIds::new();
+/// assert_eq!(ids.call("c1", "now"), "c1");
+/// assert!(ids.call("c1", "now").starts_with("call_now_"));
+/// assert!(ids.call("", "now").starts_with("call_now_"));
+/// ```
 #[derive(Clone, Debug, Default)]
 pub struct CallIds {
     taken: HashSet<String>,
@@ -184,7 +193,8 @@ impl CallIds {
     }
 
     /// The id of the response's next call, to the tool `name`, its server's
-    /// `server_id` empty when it gave none. Python calls the object.
+    /// `server_id` empty when it gave none. Python's `ids(server_id, name)`:
+    /// Rust has no object to call.
     pub fn call(&mut self, server_id: &str, name: &str) -> String {
         let id = if !server_id.is_empty() && !self.taken.contains(server_id) {
             server_id.to_owned()

@@ -1114,3 +1114,9 @@ members = [
 ]
 approved = "2026-11-03"
 reason = "Python's class attributes, which the snapshot does not list: associated constants of the same names and values (HITL dddf8dc0, RMK-1213)"
+
+[[exception]]
+rust = "roomkit_ai::CallIds"
+members = ["call"]
+approved = "2026-11-04"
+reason = "Rust has no object to call: Python's ids(server_id, name) is ids.call(server_id, name), a server's id read as text before it, none as empty (HITL 8a3d3780)"
