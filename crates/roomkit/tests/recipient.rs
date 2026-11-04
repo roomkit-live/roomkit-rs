@@ -180,6 +180,154 @@ impl Channel for Sms {
     }
 }
 
+/// A host's own channel: it declares where a binding's recipient is written
+/// and sends there, and keeps the default `recipient_address`, which answers
+/// none, unless it reads the recipient under `reached_at`.
+#[derive(Clone, Default)]
+struct Keyed {
+    reached_at: Option<&'static str>,
+    sent: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+impl Channel for Keyed {
+    fn channel_id(&self) -> ChannelId {
+        channel("sms")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::SMS
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Transport
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        ChannelDirection::Bidirectional
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        roomkit::model::ChannelCapabilities::default()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        None
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        Some("phone_number".to_owned())
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        false
+    }
+
+    fn recipient_address(&self, binding: &ChannelBinding) -> Option<String> {
+        let held = binding.metadata.get(self.reached_at?)?;
+        held.as_str().map(str::to_owned)
+    }
+
+    fn deliver(
+        &self,
+        event: RoomEvent,
+        binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let key = self.reached_at.unwrap_or("phone_number");
+        let to = binding.metadata.get(key).and_then(Value::as_str);
+        self.sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((to.unwrap_or_default().to_owned(), text_of(&event.content)));
+        ready(Ok(ChannelOutput::default()))
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
+    }
+}
+
+/// RFC §5.7, §10.4: a binding's recipient names its conversation whether the
+/// channel reads it by its own `recipient_address` or holds it under the key
+/// it declares. Alice writes naming no room: she gets a room of her own, Bob's
+/// binding is as it was and nothing of her reaches his number. Bob is then
+/// found under the declared key, and answered.
+// Python: tests/test_shared_channel_routing.py::TestAChannelReadingNoRecipient
+#[tokio::test]
+async fn a_stranger_is_not_admitted_to_the_conversation_of_a_channel_s_recipient() {
+    for (reached_at, key) in [(None, "phone_number"), (Some("reached_at"), "reached_at")] {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let sms = Keyed {
+            reached_at,
+            ..Keyed::default()
+        };
+        kit.register_channel(sms.clone()).unwrap();
+        kit.register_channel(EchoAgent::new(
+            channel("ai"),
+            "You said: ",
+            EchoAgentOptions { quote: true },
+        ))
+        .unwrap();
+        let bobs = room("bobs");
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(bobs.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        kit.attach_channel(&bobs, &channel("ai"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let mut binding = ChannelBinding::at(
+            channel("sms"),
+            bobs.clone(),
+            ChannelType::SMS,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+            Timestamp::from_unix_millis(0).unwrap(),
+        );
+        binding.metadata.insert(key.to_owned(), json!(BOB));
+        kit.store().add_binding(binding).await.unwrap();
+
+        let alices = routed(&kit, message(ALICE, "alice: hi")).await;
+        assert_ne!(alices, bobs, "{key}");
+        assert_eq!(sms_binding(&kit, &bobs).await.participant_id, None, "{key}");
+        let of_alice = |sent: &(String, String)| sent.1.contains("alice: hi");
+        let reached_bob = sms
+            .sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|sent| sent.0 == BOB)
+            .any(of_alice);
+        assert!(!reached_bob, "{key}");
+
+        // Step 1 finds Bob under the declared key; under a key of the channel's
+        // own, only as the one room bound to the channel, which Alice's no
+        // longer leaves it.
+        if reached_at.is_some() {
+            continue;
+        }
+        assert_eq!(routed(&kit, message(BOB, "bob: hi")).await, bobs, "{key}");
+        assert_eq!(
+            sms_binding(&kit, &bobs).await.participant_id,
+            Some(ParticipantId::new(BOB).unwrap()),
+            "{key}"
+        );
+        let answered = sms
+            .sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|sent| sent.0 == BOB && sent.1.contains("bob: hi"));
+        assert!(answered, "{key}");
+    }
+}
+
 /// A kit with an SMS number and an agent an `ON_ROOM_CREATED` hook attaches
 /// to every room created for a message (RFC Appendix B.1).
 fn kit_with_agent() -> (RoomKit, Sms) {
