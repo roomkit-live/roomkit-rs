@@ -119,14 +119,13 @@ impl RoundTranscript {
     /// The round as the next one replays it, keeping `calls` of the ones it
     /// made. Reasoning a vendor sent in blocks goes back block by block, each
     /// where it came; a single block goes first, then the text, then the
-    /// calls.
+    /// calls. An empty list names its type:
+    /// `transcript.parts::<AiToolCall>(&[])`.
     ///
     /// # Errors
     ///
     /// [`RoomKitError::Runtime`] for a call in `calls` the round never made,
     /// as Python raises `RuntimeError`.
-    ///
-    /// An empty list names its type: `transcript.parts::<AiToolCall>(&[])`.
     pub fn parts<C>(&self, calls: &[C]) -> Result<Vec<AiContentPart>, RoomKitError>
     where
         C: Clone + Into<AiToolCall>,

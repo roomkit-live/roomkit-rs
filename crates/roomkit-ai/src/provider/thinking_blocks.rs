@@ -186,6 +186,7 @@ mod tests {
                 part("second", Some("S3"), None),
             ]
         );
+        assert_eq!(blocks.last_signature(), Some("S3"));
     }
 
     // Python: tests/test_providers/test_thinking_blocks.py::TestThinkingBlocks::test_a_named_block_cut_before_its_signature_is_not_replayed

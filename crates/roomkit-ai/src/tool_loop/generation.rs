@@ -392,6 +392,24 @@ mod tests {
     use super::*;
     use crate::provider::AiToolCall;
 
+    // Python hands AFTER_TOOL_ROUND the calls themselves, their `partial` and
+    // `garbled` with them.
+    #[test]
+    fn a_call_that_never_runs_says_why_to_its_hook() {
+        let read = |partial| {
+            let called = Called {
+                call: ToolCall::new("c1", "x", Metadata::new()),
+                partial,
+                metadata: Metadata::new(),
+            };
+            let call = called.replayed();
+            (call.partial, call.garbled)
+        };
+        assert_eq!(read(None), (false, false));
+        assert_eq!(read(Some(Partial::Cut)), (true, false));
+        assert_eq!(read(Some(Partial::Unreadable)), (true, true));
+    }
+
     // Python: tests/test_providers/test_tool_call_handoff.py::TestCallIds::test_every_call_of_a_response_gets_its_own_id
     #[test]
     fn every_call_of_a_response_gets_its_own_id() {
