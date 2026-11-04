@@ -986,6 +986,7 @@ fn request(request: &AiContext) -> Value {
         .filter_map(|part| match part {
             AiContentPart::ToolResult(result) => Some(json!({
                 "tool_call_id": result.tool_call_id,
+                "name": result.name,
                 "content": result_content(&result.result),
                 "is_error": result.is_error,
             })),
