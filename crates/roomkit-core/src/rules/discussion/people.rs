@@ -15,7 +15,7 @@ use crate::model::{
 };
 use crate::rules::addresses::SYSTEM_SENDER;
 use crate::rules::authors::{People, source_of};
-use crate::rules::discussion::names::{NAME_LIMIT, name_key};
+use crate::rules::discussion::names::{EVERYONE, NAME_LIMIT, name_key};
 use crate::rules::lookalike::{person_name, skeletons};
 use crate::rules::permissions::visibility_allows;
 use crate::rules::transcript::{channel_label, turn_labels};
@@ -166,8 +166,10 @@ fn without_rank(label: &str) -> &str {
 /// names, as the transcript labels them (§6.4): the room's active people and
 /// the speakers of its recent messages; with `listed` (`people`), only
 /// those. A name is kept to a name's characters (`@AliceMartin`), never an
-/// agent's handle (one of `handles`) nor longer than [`NAME_LIMIT`]; two
-/// labels behind one name (`Alice Martin`, `AliceMartin`) make it ambiguous,
+/// agent's handle (one of `handles`) nor one reading like it or like `all` (a
+/// Cyrillic `а` in `@аlice`: an agent writing it believes it asks the agent),
+/// nor longer than [`NAME_LIMIT`]; two labels behind one name (`Alice Martin`,
+/// `AliceMartin`) make it ambiguous,
 /// a look-alike's ranked label (`Alice (2)`) is addressed by no name, and
 /// two nameless senders of a channel (`@chat`, `@chat (2)`) make its name
 /// ambiguous.
@@ -184,11 +186,21 @@ pub fn people_index(
             .collect()
     });
     let taken: Vec<String> = handles.iter().map(|handle| casefold(handle)).collect();
+    let reads_as: BTreeSet<String> = handles
+        .iter()
+        .map(String::as_str)
+        .chain([EVERYONE])
+        .flat_map(skeletons)
+        .collect();
     let mut index = PeopleIndex::default();
     for (label, source) in addressable(context) {
         let name = name_key(label.strip_prefix('@').unwrap_or(&label));
         let key = casefold(&name);
-        if name.is_empty() || name.chars().count() > NAME_LIMIT || taken.contains(&key) {
+        if name.is_empty()
+            || name.chars().count() > NAME_LIMIT
+            || taken.contains(&key)
+            || !skeletons(&name).is_disjoint(&reads_as)
+        {
             continue;
         }
         if allowed
@@ -509,6 +521,43 @@ mod tests {
         let index = index_of(&context);
         assert_eq!(names_of(&index), ["sms"]);
         assert_eq!(one_person(&index, "sms"), Some("@sms"));
+    }
+
+    // Python: tests/orchestration/test_discussion_edges.py::test_a_person_named_like_a_handle_is_addressed_by_no_name
+    #[test]
+    fn test_a_person_named_like_a_handle_is_addressed_by_no_name() {
+        let lookalike = "\u{430}lice";
+        let mut context = room();
+        context
+            .participants
+            .extend([person("p1", Some(lookalike)), person("p2", Some("Ana"))]);
+        let index = people_index(&context, &["alice".to_owned()], None);
+        assert_eq!(names_of(&index), ["Ana"]);
+        assert_eq!(one_person(&index, lookalike), None);
+        // Their label does not change: it has no @, so it stays apart from an agent's.
+        context
+            .recent_events
+            .push(said("e1", "sms", Some("p1"), None));
+        assert_eq!(
+            person_label(&said("e2", "sms", Some("p1"), None), &context),
+            lookalike
+        );
+    }
+
+    // Python: tests/orchestration/test_discussion_edges.py::test_a_person_named_like_all_is_addressed_by_no_name
+    #[test]
+    fn test_a_person_named_like_all_is_addressed_by_no_name() {
+        for name in ["\u{430}ll", "ALL", "all"] {
+            for handles in [Vec::new(), vec!["alice".to_owned()]] {
+                let mut context = room();
+                context
+                    .participants
+                    .extend([person("p1", Some(name)), person("p2", Some("Ana"))]);
+                let index = people_index(&context, &handles, None);
+                assert_eq!(names_of(&index), ["Ana"], "{name:?} {handles:?}");
+                assert_eq!(one_person(&index, name), None, "{name:?} {handles:?}");
+            }
+        }
     }
 
     /// `metadata` as a room stores a discussion's handles.

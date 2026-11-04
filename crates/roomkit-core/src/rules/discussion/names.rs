@@ -13,7 +13,7 @@ use crate::rules::transcript::identifier;
 use crate::rules::unicode::{casefold, is_alnum, nfc};
 
 /// The name that names every agent.
-const EVERYONE: &str = "all";
+pub(crate) const EVERYONE: &str = "all";
 
 /// The longest name a person is addressed by (a name joins every turn's
 /// notes): a longer one is not addressable, never cut short, since a cut

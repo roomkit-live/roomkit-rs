@@ -78,7 +78,11 @@ pub fn agent_handle<'a>(metadata: &'a Metadata, channel_id: &'a str) -> &'a str 
     let an_agent = config
         .get("agents")
         .and_then(Value::as_array)
-        .is_some_and(|agents| agents.iter().any(|agent| agent.as_str() == Some(channel_id)));
+        .is_some_and(|agents| {
+            agents
+                .iter()
+                .any(|agent| agent.as_str() == Some(channel_id))
+        });
     if !an_agent {
         return channel_id;
     }
@@ -105,15 +109,31 @@ mod tests {
     #[test]
     fn test_a_stored_handle_counts_for_an_agent_and_if_it_can_name_one() {
         for (config, channel, handle) in [
-            (json!({"agents": ["b"], "handles": {"b": "ops"}}), "b", "ops"),
+            (
+                json!({"agents": ["b"], "handles": {"b": "ops"}}),
+                "b",
+                "ops",
+            ),
             // A channel that is no agent is no agent's handle: a person stays one.
-            (json!({"agents": ["b"], "handles": {"sms": "b"}}), "sms", "sms"),
+            (
+                json!({"agents": ["b"], "handles": {"sms": "b"}}),
+                "sms",
+                "sms",
+            ),
             (json!({"handles": {"b": "ops"}}), "b", "b"),
             // What cannot name an agent: a line break would leave the transcript's label.
-            (json!({"agents": ["b"], "handles": {"b": "two\nlines"}}), "b", "b"),
+            (
+                json!({"agents": ["b"], "handles": {"b": "two\nlines"}}),
+                "b",
+                "b",
+            ),
             (json!({"agents": ["b"], "handles": {"b": 3}}), "b", "b"),
         ] {
-            assert_eq!(agent_handle(&stored(config.clone()), channel), handle, "{config}");
+            assert_eq!(
+                agent_handle(&stored(config.clone()), channel),
+                handle,
+                "{config}"
+            );
         }
     }
 }
