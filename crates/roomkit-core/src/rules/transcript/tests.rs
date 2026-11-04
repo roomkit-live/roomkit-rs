@@ -677,6 +677,15 @@ fn in_place() -> super::TurnMemory {
     }
 }
 
+/// A timeline whose next event is numbered, index 0 being an event the store
+/// never numbered, which reads last: its first is no turn.
+fn numbered() -> Timeline {
+    let mut room = Timeline::new();
+    room.says("sms", "alice", Some("Alice"), "no turn");
+    room.context.recent_events[0].status = EventStatus::Blocked;
+    room
+}
+
 /// One round of calls answering `question`.
 fn lookup(room: &mut Timeline, question: &RoomEvent) {
     room.round(question, &[("call_1", "lookup", json!({}), "found")]);
@@ -685,9 +694,7 @@ fn lookup(room: &mut Timeline, question: &RoomEvent) {
 // Python: tests/test_discussion_core.py::test_a_turn_replays_a_round_when_its_answered_event_is_all_the_history
 #[test]
 fn test_a_turn_replays_a_round_when_its_answered_event_is_all_the_history() {
-    let mut room = Timeline::new();
-    // Index 0 is an event the store never numbered: one that reads last.
-    room.count = 3;
+    let mut room = numbered();
     let asked = room.says("sms", "alice", Some("Alice"), "asked");
     lookup(&mut room, &asked);
 
@@ -701,8 +708,7 @@ fn test_a_turn_replays_a_round_when_its_answered_event_is_all_the_history() {
 #[test]
 fn test_a_history_opens_on_no_calls_when_the_answered_event_reads_as_nothing() {
     for followed in [false, true] {
-        let mut room = Timeline::new();
-        room.count = 3;
+        let mut room = numbered();
         let asked = room.says("sms", "alice", Some("Alice"), "");
         lookup(&mut room, &asked);
         if followed {
