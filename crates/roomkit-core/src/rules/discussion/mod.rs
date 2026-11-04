@@ -66,14 +66,54 @@ pub fn takes_turn(event: &RoomEvent, context: &RoomContext, agent: &ChannelId) -
 }
 
 /// The name the discussion a room's `metadata` stores addresses `channel_id`
-/// by: its handle, else the channel id itself (rule 4). Python's
+/// by: its handle, else the channel id itself (rule 4). A handle counts only
+/// for a channel the discussion holds as an agent and only if it can name one,
+/// so what a store holds never labels a person as an agent. Python's
 /// `agent_handle`.
 #[must_use]
 pub fn agent_handle<'a>(metadata: &'a Metadata, channel_id: &'a str) -> &'a str {
-    metadata
-        .get(CONFIG_KEY)
-        .and_then(|config| config.get("handles"))
+    let Some(config) = metadata.get(CONFIG_KEY) else {
+        return channel_id;
+    };
+    let an_agent = config
+        .get("agents")
+        .and_then(Value::as_array)
+        .is_some_and(|agents| agents.iter().any(|agent| agent.as_str() == Some(channel_id)));
+    if !an_agent {
+        return channel_id;
+    }
+    config
+        .get("handles")
         .and_then(|handles| handles.get(channel_id))
         .and_then(Value::as_str)
+        .filter(|handle| names::is_handle(handle))
         .unwrap_or(channel_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::*;
+
+    fn stored(config: Value) -> Metadata {
+        Metadata::from_iter([(CONFIG_KEY.to_owned(), config)])
+    }
+
+    // Python: tests/orchestration/test_discussion_handles.py::test_a_stored_handle_counts_for_an_agent_and_if_it_can_name_one
+    #[test]
+    fn test_a_stored_handle_counts_for_an_agent_and_if_it_can_name_one() {
+        for (config, channel, handle) in [
+            (json!({"agents": ["b"], "handles": {"b": "ops"}}), "b", "ops"),
+            // A channel that is no agent is no agent's handle: a person stays one.
+            (json!({"agents": ["b"], "handles": {"sms": "b"}}), "sms", "sms"),
+            (json!({"handles": {"b": "ops"}}), "b", "b"),
+            // What cannot name an agent: a line break would leave the transcript's label.
+            (json!({"agents": ["b"], "handles": {"b": "two\nlines"}}), "b", "b"),
+            (json!({"agents": ["b"], "handles": {"b": 3}}), "b", "b"),
+        ] {
+            assert_eq!(agent_handle(&stored(config.clone()), channel), handle, "{config}");
+        }
+    }
 }

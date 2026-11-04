@@ -28,6 +28,7 @@
 use serde_json::Value;
 
 use super::authors::AUTHOR_REGISTER;
+use super::discussion;
 use crate::model::{ChannelId, Metadata, Room, RoomContext, RoomId, RoomUpdates, Timestamp};
 
 /// The prefix of the room metadata keys the implementation reserves (gap
@@ -55,11 +56,19 @@ pub(crate) fn is_reserved_key(key: &str) -> bool {
 const SPEAK_QUEUE_RESULTS: &str = "_speak_queue_results";
 
 /// Whether only the framework writes the room metadata key `key`: one of
-/// the namespace the implementation reserves, or a key of the room's
-/// private state, its register of authors among them (RFC §5.1, §14.1, gap
-/// G-049).
+/// the namespace the implementation reserves, a key of the room's private
+/// state, its register of authors among them (RFC §5.1, §14.1, gap G-049), or
+/// a discussion's stored configuration and speak queue, written through the
+/// store (RFC §19.7.5 rule 16).
 pub(crate) fn the_framework_s(key: &str) -> bool {
-    is_reserved_key(key) || [AUTHOR_REGISTER, SPEAK_QUEUE_RESULTS].contains(&key)
+    is_reserved_key(key)
+        || [
+            AUTHOR_REGISTER,
+            SPEAK_QUEUE_RESULTS,
+            discussion::CONFIG_KEY,
+            discussion::STATE_KEY,
+        ]
+        .contains(&key)
 }
 
 /// `metadata`, a write of room `room_id`'s metadata by `writer`, without the
@@ -323,6 +332,8 @@ mod tests {
             ("roomkit:detached_channels".to_owned(), json!([])),
             ("author_register".to_owned(), json!({})),
             ("_speak_queue_results".to_owned(), json!([])),
+            ("_discussion".to_owned(), json!({})),
+            ("_speak_queue".to_owned(), json!({})),
         ]
         .into_iter()
         .collect();

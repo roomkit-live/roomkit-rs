@@ -514,7 +514,7 @@ mod tests {
     /// `metadata` as a room stores a discussion's handles.
     fn with_handles(context: &mut RoomContext, channel: &str, handle: &str) {
         context.room.metadata = serde_json::from_value(serde_json::json!({
-            "_discussion": {"handles": {channel: handle}}
+            "_discussion": {"agents": [channel], "handles": {channel: handle}}
         }))
         .unwrap();
     }
