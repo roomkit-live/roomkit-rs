@@ -66,9 +66,12 @@ fn keep_unread_addresses(stored: &Value, addresses: &mut Value) {
 /// organization, as the other stores do, in one transaction: an identity of
 /// another organization is never overwritten (RFC §5.6, §17.2), refused
 /// [`StoreError::IdentityNotFound`] by the write itself, so that a creation
-/// racing another's reads it once that commits. A replacement removes the
-/// identity's address rows, so that what it no longer holds stops resolving to
-/// it, and files the addresses it declares under its own organization.
+/// racing another's reads it once that commits. It files the addresses it
+/// declares under its own organization, then removes the rest of the identity's
+/// rows, so that what it no longer holds stops resolving to it; in that order,
+/// so that a replacement refused for an address it takes from another has locked
+/// nothing that other is removing, and two that swap addresses read the refusal,
+/// not a deadlock.
 pub(crate) async fn create(client: &mut Object, identity: &Identity) -> Result<(), Failure> {
     let transaction = client.transaction().await?;
     let mut addresses = serde_json::to_value(&identity.channel_addresses)?;
@@ -107,45 +110,48 @@ pub(crate) async fn create(client: &mut Object, identity: &Identity) -> Result<(
     if written == 0 {
         return Err(StoreError::IdentityNotFound(identity.id.clone()).into());
     }
+    let organization = identity.organization_id.as_deref().unwrap_or_default();
+    let declared = declared_addresses(&addresses);
+    for (channel_type, address) in &declared {
+        file_address(
+            &transaction,
+            channel_type,
+            address,
+            &identity.id,
+            organization,
+        )
+        .await?;
+    }
+    let (channel_types, kept): (Vec<&str>, Vec<&str>) = declared.iter().copied().unzip();
     execute(
         &transaction,
-        "DELETE FROM identity_addresses WHERE identity_id = $1",
-        &[&identity.id.as_str()],
+        "DELETE FROM identity_addresses WHERE identity_id = $1 AND NOT EXISTS ( \
+          SELECT 1 FROM unnest($2::text[], $3::text[]) AS kept(channel_type, address) \
+          WHERE kept.channel_type = identity_addresses.channel_type \
+          AND kept.address = identity_addresses.address)",
+        &[&identity.id.as_str(), &channel_types, &kept],
     )
     .await?;
-    let organization = identity.organization_id.as_deref().unwrap_or_default();
-    file_every_address(&transaction, &addresses, &identity.id, organization).await?;
     transaction.commit().await?;
     Ok(())
 }
 
-/// Files each address of `addresses`, those under a key the model does not read
-/// among them, whose rows the replacement removed with the others.
-async fn file_every_address(
-    transaction: &Transaction<'_>,
-    addresses: &Value,
-    identity_id: &IdentityId,
-    organization: &str,
-) -> Result<(), Failure> {
+/// Each channel type and address of `addresses`, those under a key the model
+/// does not read among them.
+fn declared_addresses(addresses: &Value) -> Vec<(&str, &str)> {
     let Value::Object(by_type) = addresses else {
-        return Ok(());
+        return Vec::new();
     };
-    for (channel_type, held) in by_type {
-        for address in held.as_array().into_iter().flatten() {
-            let Some(address) = address.as_str() else {
-                continue;
-            };
-            file_address(
-                transaction,
-                channel_type,
-                address,
-                identity_id,
-                organization,
-            )
-            .await?;
-        }
-    }
-    Ok(())
+    by_type
+        .iter()
+        .flat_map(|(channel_type, held)| {
+            held.as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(move |address| (channel_type.as_str(), address))
+        })
+        .collect()
 }
 
 /// The identity `identity_id`.

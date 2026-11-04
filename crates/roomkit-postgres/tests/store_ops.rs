@@ -512,21 +512,29 @@ async fn a_creation_racing_another_organization_s_is_refused() {
                 .await
         }
     });
+    // Python's `_until_blocked_by`: a session waits on this one's transaction.
+    let creator_pid: i32 = creator
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
     let watcher = schema.client().await;
+    let mut blocked = 0_i64;
     for _ in 0..400 {
-        let waiting: i64 = watcher
+        blocked = watcher
             .query_one(
-                "SELECT count(*) FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0",
-                &[],
+                "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+                &[&creator_pid],
             )
             .await
             .unwrap()
             .get(0);
-        if waiting > 0 {
+        if blocked > 0 {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
+    assert_eq!(blocked, 1, "the creation never waited on the other's row");
     creator.batch_execute("COMMIT").await.unwrap();
     let id = IdentityId::new("i1").unwrap();
     assert_eq!(
@@ -576,6 +584,38 @@ async fn a_replacement_refused_for_an_address_keeps_the_old_ones() {
     );
     assert_eq!(store.get_identity(&first.id).await, Ok(Some(first.clone())));
     assert_eq!(resolved(&store, "+1", "acme").await, Some(first));
+}
+
+/// Python: `test_two_replacements_swapping_addresses_are_refused_without_a_deadlock`:
+/// each new address is filed before the old ones go, so neither waits on what the
+/// other removes, and each reads the refusal.
+#[tokio::test]
+async fn two_replacements_swapping_addresses_are_refused_without_a_deadlock() {
+    let Some((_schema, store)) = fresh().await else {
+        return;
+    };
+    for number in 0..8 {
+        let (one, two) = (format!("i{number}a"), format!("i{number}b"));
+        let (first, second) = (format!("+1{number}"), format!("+2{number}"));
+        for (name, address) in [(&one, &first), (&two, &second)] {
+            store
+                .create_identity(identity(name, None, Some(address)))
+                .await
+                .unwrap();
+        }
+        let (taken_by_one, taken_by_two) = tokio::join!(
+            store.create_identity(identity(&one, None, Some(&second))),
+            store.create_identity(identity(&two, None, Some(&first))),
+        );
+        for outcome in [taken_by_one, taken_by_two] {
+            assert_eq!(
+                outcome,
+                Err(StoreError::AddressLinked {
+                    channel_type: ChannelType::SMS,
+                })
+            );
+        }
+    }
 }
 
 /// A blank key is no key (RFC §13.4), written by an update too: two events of a
