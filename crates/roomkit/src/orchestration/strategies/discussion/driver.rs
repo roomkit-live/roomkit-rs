@@ -209,7 +209,8 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         let done = self.state().done.take();
         let room = kit.store().get_room(&self.room_id).await?;
         let metadata = room.map(|room| room.metadata).unwrap_or_default();
-        if DiscussionConfig::stored(&metadata).is_none() {
+        // Uninstalled or stopped since the peek: no turn.
+        if DiscussionConfig::stored(&metadata).is_none() || self.state().closed {
             return Ok(NextTurn::default());
         }
         let before = read_queue(&metadata);
@@ -218,7 +219,11 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             return Ok(NextTurn::default());
         }
         let mut changes = Vec::new();
-        let next = if done.is_none() && holds_work(&state) {
+        // Holding something now that it held nothing at the peek: done was not
+        // asked, the next look asks it, which this one's version must not
+        // read as nothing new.
+        let unasked = done.is_none() && holds_work(&state);
+        let next = if unasked {
             self.rouse();
             NextTurn::default()
         } else {
@@ -231,18 +236,36 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         {
             let mut live = self.state();
             live.queue = state.clone();
-            live.seen_version = Some(state.version);
+            if !unasked {
+                live.seen_version = Some(state.version);
+            }
         }
-        if state != before {
-            let value = serde_json::to_value(&state)
-                .map_err(|error| RoomKitError::Value(error.to_string()))?;
-            let patch = Metadata::from_iter([(STATE_KEY.to_owned(), value)]);
-            kit.store()
-                .patch_room_metadata(&self.room_id, patch, PatchRoomMetadataOptions::default())
-                .await?;
+        if state != before
+            && let Err(error) = self.store_queue(&kit, &state).await
+        {
+            // No turn was given: a stored queue that cannot be written is the
+            // look's failure, which backs off.
+            if let Some(given) = self.state().turn.take() {
+                retire_mark(&given.mark);
+            }
+            return Err(error);
         }
         self.fire_all(changes);
         Ok(next)
+    }
+
+    async fn store_queue(
+        &self,
+        kit: &RoomKit<S>,
+        state: &SpeakQueueState,
+    ) -> Result<(), RoomKitError> {
+        let value =
+            serde_json::to_value(state).map_err(|error| RoomKitError::Value(error.to_string()))?;
+        let patch = Metadata::from_iter([(STATE_KEY.to_owned(), value)]);
+        kit.store()
+            .patch_room_metadata(&self.room_id, patch, PatchRoomMetadataOptions::default())
+            .await?;
+        Ok(())
     }
 
     async fn pick(
@@ -331,6 +354,10 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         if let Some(ask) = entry.answered() {
             answered.chain_depth = answered.chain_depth.max(ask.depth);
         }
+        // Stopped while the event was read: the stop found no turn to cut.
+        if self.state().closed {
+            return Ok(None);
+        }
         let notes = self.notes(kit, &entry, &answered, context);
         let mark = issue_mark(vec![notes]);
         if !state.take(&entry) {
@@ -403,7 +430,14 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         kit: &RoomKit<S>,
         entry: &Entry,
     ) -> Result<Option<StoppedTurn>, RoomKitError> {
-        let event = self.answered(kit, entry).await?;
+        let Some(ask) = entry.answered() else {
+            return Ok(None);
+        };
+        let Ok(id) = ask.event_id.parse() else {
+            return Ok(None);
+        };
+        let event = kit.store().get_event(&id).await?;
+        let event = event.filter(|event| event.room_id == self.room_id);
         Ok(event.map(|answered| StoppedTurn {
             agent: entry.agent.clone(),
             answered: Box::new(answered),
@@ -629,9 +663,15 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             );
         }
         let given = self.state().turn.take();
-        if let Some(given) = given {
-            retire_mark(&given.mark);
-            self.fire(SpeakQueueChange::TurnEnded, vec![given.entry.agent], None);
+        let Some(given) = given else {
+            return;
+        };
+        retire_mark(&given.mark);
+        // Its end recorded, what it committed queueing whom it names, unless
+        // the queue goes with it (rule 1).
+        match self.kit.upgrade() {
+            Some(kit) => self.ended(&kit, &given.entry, Vec::new()).await,
+            None => self.fire(SpeakQueueChange::TurnEnded, vec![given.entry.agent], None),
         }
     }
 
@@ -691,12 +731,26 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             (STATE_KEY.to_owned(), Value::Null),
             (CONFIG_KEY.to_owned(), Value::Null),
         ]);
-        let forgetting = kit.store().patch_room_metadata(
-            &self.room_id,
-            patch,
-            PatchRoomMetadataOptions::default(),
-        );
-        section.scope(forgetting).await?;
+        let forgetting = async {
+            let room = kit.store().get_room(&self.room_id).await?;
+            let metadata = room.map(|room| room.metadata).unwrap_or_default();
+            let state = read_queue(&metadata);
+            kit.store()
+                .patch_room_metadata(&self.room_id, patch, PatchRoomMetadataOptions::default())
+                .await?;
+            Ok::<_, RoomKitError>(state)
+        };
+        let state = section.scope(forgetting).await?;
+        drop(section);
+        for entry in &state.entries {
+            if entry.holder.as_deref() == Some(self.me.as_str()) {
+                self.fire(
+                    SpeakQueueChange::InstructionDropped,
+                    vec![entry.agent.clone()],
+                    entry.instruction.clone(),
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -714,5 +768,69 @@ fn forget_instruction(
         .any(|entry| entry.instruction.as_deref() == Some(instruction));
     if !held {
         instructions.remove(instruction);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use roomkit_core::model::{ChannelType, TextContent};
+
+    use super::*;
+    use crate::kit::{CreateRoomOptions, RoomKitOptions};
+    use crate::orchestration::strategies::discussion::queue::Ask;
+    use crate::store::CommitEventOptions;
+
+    // Python: _driver.py `_planned_turn`, under the lock `closed` is read: a
+    // stop during the plan finds a turn to cut, or none is given.
+    #[tokio::test]
+    async fn a_room_stopped_since_the_peek_gives_no_turn() {
+        let room_id = roomkit_core::model::RoomId::new("r1").unwrap();
+        let agent = ChannelId::new("a").unwrap();
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let options = CreateRoomOptions {
+            room_id: Some(room_id.clone()),
+            ..Default::default()
+        };
+        kit.create_room(options).await.unwrap();
+        let mut asked = RoomEvent::new(
+            room_id.clone(),
+            roomkit_core::model::EventSource::new(ChannelId::new("ops").unwrap(), ChannelType::SMS),
+            TextContent::new("@a hello"),
+        );
+        asked.index = 1;
+        let asked = kit
+            .store()
+            .commit_event(&room_id, asked, CommitEventOptions::default())
+            .await
+            .unwrap();
+        let config: DiscussionConfig = serde_json::from_value(serde_json::json!({
+            "agents": ["a"], "max_depth": 5
+        }))
+        .unwrap();
+        let room = DiscussionRoom::new(&kit, room_id.clone(), None, config, None);
+        room.load().await.unwrap();
+        room.editing(&kit, |state, _| {
+            let ask = Ask {
+                event_id: asked.id.to_string(),
+                depth: 0,
+                asker: "ops".to_owned(),
+                index: asked.index,
+                person: true,
+                named: true,
+            };
+            state.ask(&agent, ask, true, None);
+        })
+        .await
+        .unwrap();
+        room.state().done = Some(false);
+        room.state().closed = true;
+
+        let next = room
+            .planned_turn(RoomContext::new(roomkit_core::model::Room::new(room_id)))
+            .await
+            .unwrap();
+
+        assert!(next.turn.is_none());
+        assert!(room.state().turn.is_none());
     }
 }

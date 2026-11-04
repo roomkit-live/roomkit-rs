@@ -113,7 +113,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             kit: kit.downgrade(),
             room_id,
             organization_id,
-            me: uuid::Uuid::new_v4().simple().to_string(),
+            me: kit.inner.discussions.me(),
             silent: SilentToken::new(config.silent_token.clone()),
             config,
             done,
@@ -627,7 +627,12 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         category: ChannelCategory,
         channel_type: &ChannelType,
     ) -> Option<String> {
-        binding_refusal(&self.config.agents, channel_id, category, channel_type)
+        binding_refusal(
+            &self.config.agents,
+            channel_id,
+            category,
+            Some(channel_type),
+        )
     }
 }
 
@@ -637,13 +642,13 @@ fn takes_nothing(state: &SpeakQueueState, live: &Live) -> bool {
     state.over || live.closed
 }
 
-/// Why a room holding a discussion of `agents` cannot bind `channel_id`, if
-/// it cannot (rule 1).
+/// Why a room holding a discussion of `agents` cannot bind `channel_id`, of
+/// `channel_type` when the kit holds it, if it cannot (rule 1).
 pub(crate) fn binding_refusal(
     agents: &[ChannelId],
     channel_id: &ChannelId,
     category: ChannelCategory,
-    channel_type: &ChannelType,
+    channel_type: Option<&ChannelType>,
 ) -> Option<String> {
     let spoken = [
         ChannelType::VOICE,
@@ -651,7 +656,7 @@ pub(crate) fn binding_refusal(
         ChannelType::REALTIME_AUDIO_VIDEO,
         ChannelType::AUDIO_VIDEO,
     ];
-    if spoken.contains(channel_type) {
+    if channel_type.is_some_and(|channel_type| spoken.contains(channel_type)) {
         return Some(format!("{channel_id} is a voice or realtime channel"));
     }
     if category == ChannelCategory::Intelligence && !agents.contains(channel_id) {
@@ -707,7 +712,7 @@ impl<S: ConversationStore> DiscussionSeam for DiscussionRoom<S> {
     }
 
     fn settled(&self) -> bool {
-        self.settled.load(Ordering::SeqCst)
+        self.settled.load(Ordering::SeqCst) || self.stopping.load(Ordering::SeqCst)
     }
 
     fn stop(&self) -> BoxFuture<'_, ()> {

@@ -534,8 +534,9 @@ impl<S: ConversationStore> Inner<S> {
         }
     }
 
-    /// Runs the `ON_SPEAK_QUEUE` hooks on one change of a room's queue, and
-    /// returns once they ended: each announcement waits for the previous.
+    /// Starts the `ON_SPEAK_QUEUE` hooks on one change of a room's queue, and
+    /// returns once they started, never waiting for their end: each
+    /// announcement starts after the previous, whatever a hook waits for.
     pub(crate) async fn observe_speak_queue(self: &Arc<Self>, event: SpeakQueueEvent) {
         let observers = self.observers(HookTrigger::OnSpeakQueue, &event.room_id);
         if observers.is_empty() {
@@ -544,11 +545,17 @@ impl<S: ConversationStore> Inner<S> {
         let Some(context) = self.observed_context(&event.room_id).await else {
             return;
         };
-        let (told, ended) = tokio::sync::oneshot::channel();
-        self.observe(observers, event, context, async move {
-            let _ = told.send(());
-        });
-        let _ = ended.await;
+        let handlers = observers
+            .iter()
+            .filter(|(_, kept)| SpeakQueueEvent::handler(kept).is_some())
+            .count();
+        let (started, mut starting) = tokio::sync::mpsc::unbounded_channel();
+        self.observe_telling(observers, event, context, async {}, Some(started));
+        for _ in 0..handlers {
+            if starting.recv().await.is_none() {
+                return;
+            }
+        }
     }
 
     /// The context the observers of a room's trigger read (RFC §10.1 step
@@ -591,6 +598,19 @@ impl<S: ConversationStore> Inner<S> {
         context: RoomContext,
         then: impl Future<Output = ()> + Send + 'static,
     ) {
+        self.observe_telling(observers, payload, context, then, None);
+    }
+
+    /// [`observe`](Self::observe), `started` told as each observer's body
+    /// starts.
+    fn observe_telling<P: ObservedPayload>(
+        self: &Arc<Self>,
+        observers: Observers,
+        payload: P,
+        context: RoomContext,
+        then: impl Future<Output = ()> + Send + 'static,
+        started: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    ) {
         let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
         let inner = Arc::clone(self);
         let observing = async move {
@@ -604,7 +624,13 @@ impl<S: ConversationStore> Inner<S> {
                 let body =
                     hooks::observe_traced(spec.clone(), handler, payload.clone(), context.clone());
                 let within = ExecutionContext::current().scope(body);
-                running.spawn(async move { (spec, within.await) });
+                let started = started.clone();
+                running.spawn(async move {
+                    if let Some(started) = started {
+                        let _ = started.send(());
+                    }
+                    (spec, within.await)
+                });
             }
             while let Some(ended) = running.join_next().await {
                 match ended {

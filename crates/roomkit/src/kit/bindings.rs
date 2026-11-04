@@ -71,12 +71,20 @@ impl<S: ConversationStore> RoomKit<S> {
                 .unregistered(room_id, channel_id, organization_id)
                 .await);
         };
-        self.refuse_discussion_binding(
-            room_id,
-            channel_id,
-            options.category.unwrap_or(declaration.category),
-            &declaration.channel_type,
-        )?;
+        if self.inner.discussions.get(room_id).is_some() {
+            // The room in the caller's scope first: another tenant's reads as
+            // not found, whatever it holds (RFC §17.2).
+            let scope = GetRoomOptions {
+                organization_id: options.organization_id.clone(),
+            };
+            self.get_room(room_id, scope).await?;
+            self.refuse_discussion_binding(
+                room_id,
+                channel_id,
+                options.category.unwrap_or(declaration.category),
+                &declaration.channel_type,
+            )?;
+        }
         let environment = self.inner.environment();
         let organization_id = options.organization_id.clone();
         let binding = options.apply(declaration.binding(room_id.clone(), environment.now()));

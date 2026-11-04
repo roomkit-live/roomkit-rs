@@ -11,6 +11,7 @@ use tokio::time::Instant;
 
 use super::RoomKit;
 use super::shutdown::{self, Joined, Starting};
+use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
 use crate::store::ConversationStore;
 use crate::tasks::CUT_UNWIND;
@@ -114,8 +115,15 @@ impl<S: ConversationStore> RoomKit<S> {
             self.inner.verification.cancel_timers();
             let Starting { marks, ended } = starting;
             let kit = self.clone();
+            let context = ExecutionContext::current();
             tokio::spawn(marks.scoped(async move {
-                kit.inner.discussions.stop_all().await;
+                // In its caller's context: a close from a hook's body under the
+                // room's lock takes no lock that body holds. Within the grace:
+                // a slow hook under the lock delays the close no further.
+                let stopping = context.scope(kit.inner.discussions.stop_all());
+                if tokio::time::timeout(CLOSE_GRACE, stopping).await.is_err() {
+                    tracing::warn!(target: "roomkit::kit", "stopping the discussions outlasted the grace");
+                }
                 let failures = kit.shut_down().await;
                 ended.send_replace(Some(failures));
             }));

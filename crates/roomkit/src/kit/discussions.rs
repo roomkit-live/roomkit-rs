@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use roomkit_core::model::{
     ChannelCategory, ChannelId, ChannelType, RoomContext, RoomEvent, RoomId,
@@ -88,9 +88,13 @@ pub struct SpeakQueueOptions {
     pub organization_id: Option<String>,
 }
 
-/// The discussion this process runs for each room.
+/// The discussion this process runs for each room, and who this process is
+/// as a discussion's lease names it (rule 16).
 #[derive(Default)]
-pub(crate) struct DiscussionSeams(Mutex<HashMap<RoomId, Arc<dyn DiscussionSeam>>>);
+pub(crate) struct DiscussionSeams {
+    rooms: Mutex<HashMap<RoomId, Arc<dyn DiscussionSeam>>>,
+    me: OnceLock<String>,
+}
 
 impl fmt::Debug for DiscussionSeams {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -102,7 +106,19 @@ impl fmt::Debug for DiscussionSeams {
 
 impl DiscussionSeams {
     fn rooms(&self) -> MutexGuard<'_, HashMap<RoomId, Arc<dyn DiscussionSeam>>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.rooms.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Who this process is, as a lease names it: Python's `kit._instance_id`.
+    pub(crate) fn me(&self) -> String {
+        self.me
+            .get_or_init(|| uuid::Uuid::new_v4().simple().to_string())
+            .clone()
+    }
+
+    /// Whether a discussion runs here, in any room.
+    pub(crate) fn any(&self) -> bool {
+        !self.rooms().is_empty()
     }
 
     /// The discussion this process runs for `room_id`.
@@ -161,11 +177,14 @@ impl<S: ConversationStore> RoomKit<S> {
             ))
         };
         for binding in self.store().list_bindings(room_id).await? {
+            let channel = self.inner.channel(&binding.channel_id);
             let refusal = binding_refusal(
                 &config.agents,
                 &binding.channel_id,
                 binding.category,
-                &binding.channel_type,
+                channel
+                    .map(|channel| channel.declaration().channel_type)
+                    .as_ref(),
             );
             if let Some(refusal) = refusal {
                 return Err(refused(refusal));
@@ -179,6 +198,27 @@ impl<S: ConversationStore> RoomKit<S> {
         }
         if self.hook_engine().has_router_hook(room_id) {
             return Err(refused("a router is installed".to_owned()));
+        }
+        Ok(())
+    }
+
+    /// Binds the agents of a discussion the room does not bind: an install
+    /// called directly attaches them as `install_strategy` does.
+    pub(crate) async fn bind_discussion_agents(
+        &self,
+        room_id: &RoomId,
+        agents: &[ChannelId],
+    ) -> Result<(), RoomKitError> {
+        let bound = self.store().list_bindings(room_id).await?;
+        for agent in agents {
+            if bound.iter().any(|binding| &binding.channel_id == agent) {
+                continue;
+            }
+            let options = crate::kit::AttachChannelOptions {
+                category: Some(ChannelCategory::Intelligence),
+                ..Default::default()
+            };
+            self.attach_channel(room_id, agent, options).await?;
         }
         Ok(())
     }
@@ -221,8 +261,8 @@ impl<S: ConversationStore> RoomKit<S> {
 #[cfg(test)]
 mod tests {
     use std::future::{self, Future};
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
     use pretty_assertions::assert_eq;
@@ -661,9 +701,8 @@ mod tests {
         }
     }
 
-    /// A room binding `ops` and the gated agent, a real discussion of it
-    /// installed, its first turn under way.
-    async fn turn_under_way() -> (RoomKit, GatedAgent) {
+    /// A room binding `ops`, a real discussion of `a`, gated, and `b`.
+    async fn discussion_room() -> (RoomKit, GatedAgent) {
         let kit = RoomKit::new(crate::kit::RoomKitOptions::default());
         let ops = RecordingTransport::new(
             id("ops"),
@@ -673,6 +712,12 @@ mod tests {
         kit.register_channel(ops).unwrap();
         let agent = GatedAgent::default();
         kit.register_channel(agent.clone()).unwrap();
+        kit.register_channel(EchoAgent::new(
+            id("b"),
+            "b answers",
+            EchoAgentOptions::default(),
+        ))
+        .unwrap();
         let options = CreateRoomOptions {
             room_id: Some(room_id()),
             ..Default::default()
@@ -682,7 +727,7 @@ mod tests {
             .await
             .unwrap();
         let discussion = crate::Discussion::new(
-            vec![id("a").into()],
+            vec![id("a").into(), id("b").into()],
             crate::orchestration::DiscussionOptions::default(),
         )
         .unwrap();
@@ -693,9 +738,31 @@ mod tests {
         )
         .await
         .unwrap();
+        (kit, agent)
+    }
+
+    /// [`discussion_room`], the first turn of `a` under way.
+    async fn turn_under_way() -> (RoomKit, GatedAgent) {
+        let (kit, agent) = discussion_room().await;
         say(&kit, said("@a hello")).await;
         agent.reached.notified().await;
         (kit, agent)
+    }
+
+    /// Every change of the queue, as `ON_SPEAK_QUEUE` tells it.
+    fn following(kit: &RoomKit) -> Arc<Mutex<Vec<crate::SpeakQueueChange>>> {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let told = Arc::clone(&seen);
+        kit.hook(
+            HookTrigger::OnSpeakQueue,
+            move |event: crate::SpeakQueueEvent, _: RoomContext| {
+                told.lock().unwrap().push(event.change);
+                async {}
+            },
+            HookOptions::default(),
+        )
+        .unwrap();
+        seen
     }
 
     // Python: tests/orchestration/test_discussion_edges.py::test_uninstalling_forgets_the_discussion_so_a_new_one_starts_fresh;
@@ -734,6 +801,210 @@ mod tests {
 
         let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
         assert!(room.metadata.contains_key(CONFIG_KEY));
+    }
+
+    // Python: orchestration/strategies/discussion/_room.py `forget`, what it held
+    // told dropped.
+    #[tokio::test]
+    async fn an_uninstall_tells_the_instruction_it_drops() {
+        let (kit, _agent) = turn_under_way().await;
+        let seen = following(&kit);
+        let mut instruction = said("Introduce yourself");
+        instruction.event_type = EventType::Instruction;
+        instruction.addressed_to = Some(vec![id("b")]);
+        say(&kit, instruction).await;
+
+        kit.uninstall_strategy(&room_id(), crate::kit::UninstallStrategyOptions::default())
+            .await
+            .unwrap();
+        crate::testing::idle(&kit).await;
+
+        let seen = seen.lock().unwrap();
+        assert!(
+            seen.contains(&crate::SpeakQueueChange::InstructionDropped),
+            "{seen:?}"
+        );
+    }
+
+    // Python: orchestration/strategies/discussion/_driver.py `_drive`'s cancel:
+    // `_abandon_orphan`/`_ended`; the queue outlives the process (rule 16).
+    #[tokio::test]
+    async fn a_close_during_a_turn_records_its_end_and_whom_it_named() {
+        let (kit, _agent) = turn_under_way().await;
+        // Its row commits, and waits behind the turn in the room's lane.
+        let sending = {
+            let kit = kit.clone();
+            tokio::spawn(async move {
+                let content = TextContent::new("@b your turn");
+                let options = crate::SendEventOptions::default();
+                kit.send_event(&room_id(), &id("a"), content, options).await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let options = crate::store::ListEventsOptions::default();
+                let stored = kit.store().list_events(&room_id(), options).await.unwrap();
+                if stored
+                    .iter()
+                    .any(|event| event.source.channel_id == id("a"))
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        kit.close().await.unwrap();
+        drop(sending.await);
+
+        let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+        let queue = room.metadata.get(STATE_KEY).unwrap();
+        assert_eq!(queue["last_speaker"], json!("a"));
+        assert_eq!(queue["entries"][0]["agent"], json!("b"));
+        // What a test waits on still returns, the driver stopped.
+        crate::testing::idle(&kit).await;
+    }
+
+    // Python: a close from a hook's body re-enters the lock it holds.
+    #[tokio::test]
+    async fn a_close_from_a_hook_under_the_room_s_lock_does_not_wait_for_that_lock() {
+        let (kit, _agent) = discussion_room().await;
+        let weak = kit.downgrade();
+        kit.hook(
+            HookTrigger::BeforeBroadcast,
+            move |event: RoomEvent, _: RoomContext| {
+                let closing = weak.upgrade();
+                async move {
+                    if let Some(kit) = closing {
+                        drop(kit.close().await);
+                    }
+                    let _ = event;
+                    roomkit_core::model::HookResult::allow(
+                        roomkit_core::model::hook::AllowOptions::default(),
+                    )
+                }
+            },
+            HookOptions {
+                execution: crate::HookExecution::Sync,
+                ..HookOptions::default()
+            },
+        )
+        .unwrap();
+
+        let saying = kit.process_inbound(said("hello"), ProcessInboundOptions::default());
+        let said = tokio::time::timeout(Duration::from_secs(3), saying).await;
+
+        assert!(said.is_ok(), "the close waited for the lock its hook holds");
+    }
+
+    // Python: core/mixins/discussion.py `_fire_speak_queue` starts its hooks.
+    #[tokio::test]
+    async fn an_announcement_waits_for_the_start_of_the_hooks_not_their_end() {
+        let kit = RoomKit::new(crate::kit::RoomKitOptions::default());
+        let ops = RecordingTransport::new(
+            id("ops"),
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
+        kit.register_channel(ops).unwrap();
+        kit.register_channel(EchoAgent::new(
+            id("a"),
+            "a answers",
+            EchoAgentOptions::default(),
+        ))
+        .unwrap();
+        let options = CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        };
+        kit.create_room(options).await.unwrap();
+        kit.attach_channel(&room_id(), &id("ops"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let given = Arc::new(Notify::new());
+        let released = Arc::new(AtomicU32::new(0));
+        let (telling, counted) = (Arc::clone(&given), Arc::clone(&released));
+        kit.hook(
+            HookTrigger::OnSpeakQueue,
+            move |event: crate::SpeakQueueEvent, _: RoomContext| {
+                let (given, released) = (Arc::clone(&telling), Arc::clone(&counted));
+                async move {
+                    match event.change {
+                        crate::SpeakQueueChange::Queued => {
+                            let wait =
+                                tokio::time::timeout(Duration::from_secs(2), given.notified());
+                            if wait.await.is_ok() {
+                                released.fetch_add(1, Ordering::SeqCst);
+                            }
+                        }
+                        crate::SpeakQueueChange::TurnGiven => given.notify_one(),
+                        _ => {}
+                    }
+                }
+            },
+            HookOptions::default(),
+        )
+        .unwrap();
+        let discussion = crate::Discussion::new(
+            vec![id("a").into()],
+            crate::orchestration::DiscussionOptions::default(),
+        )
+        .unwrap();
+        kit.install_strategy(
+            &room_id(),
+            Arc::new(discussion),
+            crate::kit::InstallStrategyOptions::default(),
+        )
+        .await
+        .unwrap();
+
+        say(&kit, said("@a hello")).await;
+        crate::testing::idle(&kit).await;
+
+        assert_eq!(released.load(Ordering::SeqCst), 1);
+    }
+
+    // Python: strategy.py `Discussion.install`, called directly.
+    #[tokio::test]
+    async fn an_install_called_directly_binds_its_agents_and_refuses_no_room() {
+        let kit = RoomKit::new(crate::kit::RoomKitOptions::default());
+        kit.register_channel(EchoAgent::new(
+            id("a"),
+            "a answers",
+            EchoAgentOptions::default(),
+        ))
+        .unwrap();
+        let discussion = crate::Discussion::new(
+            vec![id("a").into()],
+            crate::orchestration::DiscussionOptions::default(),
+        )
+        .unwrap();
+        let direct: &dyn crate::Orchestration = &discussion;
+
+        let missing = direct.install(&kit, &room_id()).await;
+        assert!(
+            matches!(missing, Err(RoomKitError::RoomNotFound { .. })),
+            "{missing:?}"
+        );
+
+        let options = CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        };
+        kit.create_room(options).await.unwrap();
+        direct.install(&kit, &room_id()).await.unwrap();
+        let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
+        assert!(bindings.iter().any(|binding| binding.channel_id == id("a")));
+        assert_eq!(kit.hook_engine().room_hook_names(&room_id()).len(), 2);
+
+        direct.uninstall(&kit, &room_id()).await.unwrap();
+        assert_eq!(kit.hook_engine().room_hook_names(&room_id()).len(), 0);
+        assert_eq!(
+            kit.speak_queue(&room_id(), SpeakQueueOptions::default()),
+            None
+        );
     }
 
     // Python: core/mixins/discussion.py `_planned_turn` has no bound on the room's lock.

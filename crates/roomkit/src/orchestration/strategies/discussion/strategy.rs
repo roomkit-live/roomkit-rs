@@ -12,12 +12,12 @@ use roomkit_core::rules::python_repr;
 
 use crate::channel::BoxFuture;
 use crate::error::RoomKitError;
-use crate::kit::{RoomKit, strategy_address};
+use crate::kit::{GetRoomOptions, RoomKit, strategy_address};
 use crate::orchestration::{Orchestration, StrategyAgent, StrategyFuture};
 use crate::store::ConversationStore;
 
 use super::config::config_of;
-use super::room::DiscussionRoom;
+use super::room::{DiscussionRoom, NAMES, SILENT};
 
 /// `done(room_id)`: whether the discussion is over. Python's `DoneFn`, sync
 /// or async; here always a future.
@@ -276,10 +276,11 @@ impl Discussion {
                 self.handles_named(&held.iter().map(|(id, name)| (id, name.clone())).collect())?;
             *self.read_handles() = Some(named);
         }
+        let room = kit.get_room(room_id, GetRoomOptions::default()).await?;
         let config = config_of(self, kit.inner.config().max_chain_depth);
         kit.check_discussion_room(room_id, &config).await?;
-        let room = kit.store().get_room(room_id).await?;
-        let organization_id = room.and_then(|room| room.organization_id);
+        kit.bind_discussion_agents(room_id, &config.agents).await?;
+        let organization_id = room.organization_id;
         let running = DiscussionRoom::new(
             kit,
             room_id.clone(),
@@ -332,10 +333,13 @@ impl Discussion {
         kit: &RoomKit<S>,
         room_id: &RoomId,
     ) -> Result<(), RoomKitError> {
-        match kit.inner.discussions.release(room_id) {
-            Some(running) => running.forget().await,
-            None => Ok(()),
+        let Some(running) = kit.inner.discussions.release(room_id) else {
+            return Ok(());
+        };
+        for hook in [SILENT, NAMES] {
+            kit.hook_engine().remove_room_hook(room_id, hook);
         }
+        running.forget().await
     }
 }
 

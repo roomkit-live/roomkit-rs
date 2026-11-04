@@ -105,6 +105,7 @@ impl<S: ConversationStore> HookEngine<S> {
                 trigger_name(hook.trigger)
             )));
         }
+        self.refuse_router(&hook, None)?;
         self.given(hook, |registry, spec| {
             if spec.trigger.is_tool_trigger() {
                 registry.register_tool_hook(spec)
@@ -132,6 +133,7 @@ impl<S: ConversationStore> HookEngine<S> {
         hook: HookRegistration,
     ) -> Result<HookRegistration, RoomKitError> {
         self.takes_room_hooks(&hook)?;
+        self.refuse_router(&hook, Some(room_id))?;
         self.given(hook, |registry, spec| {
             registry
                 .add_room_hook(room_id.clone(), spec)
@@ -154,6 +156,7 @@ impl<S: ConversationStore> HookEngine<S> {
         hook: HookRegistration,
     ) -> Result<HookRegistration, RoomKitError> {
         self.takes_room_hooks(&hook)?;
+        self.refuse_router(&hook, Some(room_id))?;
         self.given(hook, |registry, spec| {
             registry.replace_room_hook(room_id.clone(), spec)
         })
@@ -183,6 +186,31 @@ impl<S: ConversationStore> HookEngine<S> {
             }
             registry.remove_room_hook(room_id, name)
         })
+    }
+
+    /// Refuses a router's hook where a discussion holds the room, any room for
+    /// the kit's own (RFC §19.7.5 rule 1): Python's `_check_router_placement`.
+    fn refuse_router(
+        &self,
+        hook: &HookRegistration,
+        room_id: Option<&RoomId>,
+    ) -> Result<(), RoomKitError> {
+        if !matches!(hook.r#fn, Kept::Router(_)) {
+            return Ok(());
+        }
+        let discussions = &self.kit.inner.discussions;
+        let refused = match room_id {
+            Some(room_id) => discussions
+                .get(room_id)
+                .map(|_| format!("Room {room_id} holds")),
+            None => discussions.any().then(|| "A room holds".to_owned()),
+        };
+        match refused {
+            Some(holder) => Err(RoomKitError::Value(format!(
+                "{holder} a discussion: a router cannot be installed there"
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// Whether a conversation router's hook applies to `room_id`, the kit's
