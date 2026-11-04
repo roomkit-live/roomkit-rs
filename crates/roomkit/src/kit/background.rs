@@ -127,20 +127,8 @@ impl<S: ConversationStore> RoomKit<S> {
         }
     }
 
-    /// The kit's one shutdown, in the steps [`close`](Self::close) lists:
-    /// the channels whose close failed.
-    async fn shut_down(&self, context: ExecutionContext) -> shutdown::Ended {
-        let (tasks, turns) = (&self.inner.tasks, &self.inner.turns);
-        // The running work's one grace, the cut turns storing what they
-        // said included, the one a close's own call runs in among them.
-        let grace = Instant::now() + CLOSE_GRACE;
-        // The discussions' turns first, in the context of the close's caller:
-        // a close from a hook's body under the room's lock takes no lock that
-        // body holds, and a slow hook under the lock takes this grace, no other.
-        let stopping = context.scope(self.inner.discussions.stop_all());
-        if tokio::time::timeout_at(grace, stopping).await.is_err() {
-            tracing::warn!(target: "roomkit::kit", "stopping the discussions outlasted the grace");
-        }
+    /// The kit's own work stops within `grace`: see [`shut_down`](Self::shut_down).
+    async fn close_kit_work(&self, grace: Instant) {
         // The kit's own work stops within the grace too: its delivery
         // backend's worker, its items kept (RFC §22.2), as the Python
         // implementation's close stops it while the channels are open.
@@ -165,6 +153,26 @@ impl<S: ConversationStore> RoomKit<S> {
         {
             tracing::warn!(target: "roomkit::kit", "the inline delegations' close outlasted the grace");
         }
+    }
+
+    /// The kit's one shutdown, in the steps [`close`](Self::close) lists:
+    /// the channels whose close failed.
+    async fn shut_down(&self, context: ExecutionContext) -> shutdown::Ended {
+        let (tasks, turns) = (&self.inner.tasks, &self.inner.turns);
+        // The running work's one grace, the cut turns storing what they
+        // said included, the one a close's own call runs in among them.
+        let grace = Instant::now() + CLOSE_GRACE;
+        // Beside the kit's own work, each within the one grace, neither holding
+        // the other back: the discussions' turns, in the context of the close's
+        // caller, so that a close from a hook's body under the room's lock takes
+        // no lock that body holds.
+        let stopping = context.scope(self.inner.discussions.stop_all());
+        let stopping = async {
+            if tokio::time::timeout_at(grace, stopping).await.is_err() {
+                tracing::warn!(target: "roomkit::kit", "stopping the discussions outlasted the grace");
+            }
+        };
+        tokio::join!(stopping, self.close_kit_work(grace));
         let readers_done = || turns.reads_none();
         let waited = tasks.unspared_idle(readers_done, turns.reads_changed());
         drop(tokio::time::timeout_at(grace, waited).await);

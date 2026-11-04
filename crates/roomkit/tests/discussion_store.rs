@@ -211,7 +211,10 @@ async fn a_queue_that_cannot_be_written_backs_off_and_tells_no_turn() {
     kit.hook(
         HookTrigger::OnSpeakQueue,
         move |event: SpeakQueueEvent, _context: RoomContext| {
-            if event.change == SpeakQueueChange::TurnEnded {
+            if matches!(
+                event.change,
+                SpeakQueueChange::TurnGiven | SpeakQueueChange::TurnEnded
+            ) {
                 told.fetch_add(1, Ordering::SeqCst);
             }
             async {}

@@ -233,22 +233,23 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         if state.queue_differs(&before) {
             state.version += 1;
         }
-        if state != before
-            && let Err(error) = self.store_queue(&kit, &state).await
-        {
-            // No turn was given: a stored queue that cannot be written is the
-            // look's failure, which backs off.
-            if let Some(given) = self.state().turn.take() {
-                retire_mark(&given.mark);
-            }
-            return Err(error);
-        }
         {
             let mut live = self.state();
             live.queue = state.clone();
             if !unasked {
                 live.seen_version = Some(state.version);
             }
+        }
+        if state != before
+            && let Err(error) = self.store_queue(&kit, &state).await
+        {
+            // No turn was given: a stored queue that cannot be written is the
+            // look's failure, which backs off. The queue read shows the change
+            // until the next look, as Python's state changed in place does.
+            if let Some(given) = self.state().turn.take() {
+                retire_mark(&given.mark);
+            }
+            return Err(error);
         }
         self.fire_all(changes);
         Ok(next)
@@ -667,6 +668,11 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                 "a discussion's driver failed"
             );
         }
+        // A plan under way holds the room's lock: its turn's given told first,
+        // then its end, whichever stops it.
+        if let Some(kit) = self.kit.upgrade() {
+            drop(Section::enter(&kit.inner.locks, &self.room_id).await);
+        }
         let given = self.state().turn.take();
         let Some(given) = given else {
             return;
@@ -788,8 +794,9 @@ mod tests {
     use crate::orchestration::strategies::discussion::queue::Ask;
     use crate::store::CommitEventOptions;
 
-    // Python: _driver.py `_planned_turn`, under the lock `closed` is read: a
-    // stop during the plan finds a turn to cut, or none is given.
+    // Python: _driver.py `_next_turn` reads `closed` off the lock, the cancel
+    // acting under it: a stop during the plan finds a turn to cut, or none is
+    // given, and no end of the discussion is written for it.
     #[tokio::test]
     async fn a_room_stopped_since_the_peek_gives_no_turn() {
         let room_id = RoomId::new("r1").unwrap();
@@ -851,6 +858,11 @@ mod tests {
         let stopped = room.planned_turn(context.clone()).await.unwrap();
         assert!(stopped.turn.is_none());
         assert!(room.state().turn.is_none());
+        // Nor does a done that holds end it, once stopped.
+        room.state().done = Some(true);
+        room.planned_turn(context.clone()).await.unwrap();
+        let stored = kit.store().get_room(&room_id).await.unwrap().unwrap();
+        assert!(!read_queue(&stored.metadata).over);
 
         // Not stopped, the same plan gives it: what the first read kept out.
         room.state().closed = false;

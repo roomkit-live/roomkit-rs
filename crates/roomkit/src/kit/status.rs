@@ -641,6 +641,9 @@ impl<S: ConversationStore> Inner<S> {
                     (spec, outcome)
                 });
             }
+            // Every body told or gone, a panic's first poll among them, the
+            // announcement waiting on them goes on.
+            drop(started);
             while let Some(ended) = running.join_next().await {
                 match ended {
                     Ok((spec, outcome)) => inner.observed(&context.room.id, &spec, outcome).await,
