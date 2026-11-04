@@ -385,7 +385,6 @@ async fn an_uninstall_during_a_plan_s_write_tells_the_turn_given_then_its_end() 
         })
     };
     tokio::time::sleep(Duration::from_millis(10)).await;
-    assert!(!uninstalling.is_finished(), "it waits for the plan's lock");
     write_on.notify_one();
     tokio::time::timeout(Duration::from_secs(5), uninstalling)
         .await

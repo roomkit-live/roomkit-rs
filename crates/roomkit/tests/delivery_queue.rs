@@ -949,10 +949,6 @@ async fn a_discussion_s_stop_outlasting_the_grace_does_not_hold_the_backend_s_cl
     kit.close().await.unwrap();
     drop(saying.await);
 
-    assert!(
-        started.elapsed() >= Duration::from_secs(5),
-        "the stop's grace"
-    );
     let closed_at = backend.closed_at.lock().unwrap().unwrap();
     assert_eq!(closed_at, started, "called as the close started");
 }

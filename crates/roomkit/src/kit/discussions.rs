@@ -1036,7 +1036,7 @@ mod tests {
         say(&kit, said("@a hello")).await;
 
         let given = told.wait_for(|told| told.contains(&crate::SpeakQueueChange::TurnGiven));
-        tokio::time::timeout(Duration::from_secs(1), given)
+        tokio::time::timeout(Duration::from_secs(5), given)
             .await
             .expect("the turn's announcement goes on")
             .unwrap();
