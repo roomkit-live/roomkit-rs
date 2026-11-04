@@ -216,7 +216,7 @@ mod tests {
             metadata: metadata.clone(),
             ..StreamToolCall::new("c1", "x")
         };
-        let parts = round_parts(&[], "said", &[streamed.clone()]);
+        let parts = round_parts(&[], "said", std::slice::from_ref(&streamed));
         assert!(matches!(
             &parts[1],
             AiContentPart::ToolCall(part) if part.metadata == metadata

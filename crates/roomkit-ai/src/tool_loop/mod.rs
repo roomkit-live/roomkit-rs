@@ -318,15 +318,11 @@ impl<P: AiProvider> Loop<P> {
                 let limit = limits.passed();
                 let reason =
                     final_round_reason(had_tool_round, &generation.text, finish_reason, limit);
-                let said = generation.said();
-                let mut answer = Message::new(Role::Assistant, generation.text);
-                answer.metadata = generation.done.metadata;
-                let at = messages.len();
+                let asked = (&steering, &mut messages, &mut system_prompt);
                 if reason == LoopEndReason::Completed
                     && round < self.bounds.max_rounds
-                    && steering.read_after_answer(&mut messages, &mut system_prompt, answer)
+                    && self.steered_after_answer(generation, asked)
                 {
-                    self.said.extend(said.map(|said| (at, said)));
                     out.give(Ok(TurnItem::SegmentBreak)).await;
                     continue;
                 }
@@ -368,6 +364,26 @@ impl<P: AiProvider> Loop<P> {
         let ending = (&limits, &steering, &out);
         self.end(LoopEndReason::MaxRounds, tool_rounds, spent, ending)
             .await;
+    }
+
+    /// Whether a message steered in while the model wrote `generation`, its
+    /// answer, asks it again (RFC §21.3): the answer then joins the
+    /// conversation as it came, its reasoning and what its provider keeps for
+    /// its replay with it (RFC §6.4), then the message.
+    fn steered_after_answer(
+        &mut self,
+        generation: Generation,
+        (steering, messages, system_prompt): (&Steering, &mut Vec<Message>, &mut Option<String>),
+    ) -> bool {
+        let said = generation.said();
+        let mut answer = Message::new(Role::Assistant, generation.text);
+        answer.metadata = generation.done.metadata;
+        let at = messages.len();
+        let again = steering.read_after_answer(messages, system_prompt, answer);
+        if again {
+            self.said.extend(said.map(|said| (at, said)));
+        }
+        again
     }
 
     /// Ends the loop for `reason` after `rounds` rounds of calls, with what
