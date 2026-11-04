@@ -308,6 +308,9 @@ impl Executor {
                 ));
             }
             Some(Cut::Cancelled(reason)) => {
+                // No read returned while the call ran: the arguments its gate
+                // fixed reach the owner before the turn's end (RFC §10.6.4).
+                drop(host.with_ran_with(|ran_with| self.sender.report_args(ran_with)));
                 host.report_cut(&self.turn.stream_context(), &reason);
                 link.fail_all(&TurnError::new(
                     "cancelled",

@@ -155,12 +155,12 @@ impl<P: AiProvider> Loop<P> {
         }
     }
 
-    /// The call `called` may run as, or its refusal, in the order of RFC
-    /// §21.1 "One refusal per cause": a call under an id its round holds, one
-    /// that never runs, one to a tool
-    /// withdrawn for the turn (RFC §6.4), one the turn does not carry, one the policy denies, arguments that do not fit the
-    /// tool's schema once repaired, then the kit's `BEFORE_TOOL_USE` hooks,
-    /// whose arguments are checked again, unrepaired.
+    /// The call `called` may run as, or its refusal: one under an id its round
+    /// holds first (RFC §12.4), then in the order of RFC §21.1 "One refusal per
+    /// cause": a call that never runs, one to a tool withdrawn for the turn (RFC
+    /// §6.4), one the turn does not carry, one the policy denies, arguments that
+    /// do not fit the tool's schema once repaired, then the kit's
+    /// `BEFORE_TOOL_USE` hooks, whose arguments are checked again, unrepaired.
     async fn gate(&self, called: &Called) -> Gated {
         let model_call = &called.call;
         let refuse = |text: String| {

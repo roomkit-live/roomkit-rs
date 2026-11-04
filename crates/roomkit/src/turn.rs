@@ -705,9 +705,7 @@ impl TurnHost {
                 calls.running.remove(position);
             }
         }
-        let execution = ExecutionContext::current();
-        let floor = execution.turn_depth().unwrap_or(0);
-        self.observe(report, &execution, floor);
+        self.report_call_under_held_id(report);
     }
 
     /// Reports `report`, a call refused for coming under an id another call

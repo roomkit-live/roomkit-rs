@@ -66,15 +66,16 @@ fn has_type(value: &Value, declared: &str) -> bool {
 }
 
 /// Whether `value` is an integer past what a JSON value holds as one, which it
-/// reads as a float (the smallest past `u64`, or below `i64`): whole, as every
-/// float that wide is. It reads so whether the model wrote its digits or `1e24`,
-/// which Python's check refuses: only the digits are an `int` there.
+/// reads as a float: whole, as every float that wide is. An integer just below
+/// `i64` rounds to its bound, which `i64` itself never reads as. It reads so
+/// whether the model wrote its digits or `1e24`, which Python's check refuses:
+/// only the digits are an `int` there.
 fn is_wider_integer(value: &Value) -> bool {
     const PAST_U64: f64 = 18_446_744_073_709_551_616.0;
-    const BELOW_I64: f64 = -9_223_372_036_854_775_808.0;
+    const I64_BOUND: f64 = -9_223_372_036_854_775_808.0;
     value
         .as_f64()
-        .is_some_and(|number| !(BELOW_I64..PAST_U64).contains(&number))
+        .is_some_and(|number| number >= PAST_U64 || number <= I64_BOUND)
 }
 
 #[cfg(test)]
@@ -126,7 +127,9 @@ mod tests {
             (json!(i64::MIN), None),
             (json!(18_446_744_073_709_551_616.0_f64), None),
             (json!(-1e24_f64), None),
-            (json!(-9_223_372_036_854_775_808.0_f64), refused.clone()),
+            (json!(-9_223_372_036_854_775_808.0_f64), None),
+            (json!(-9_223_372_036_854_774_784.0_f64), refused.clone()),
+            (json!(18_446_744_073_709_549_568.0_f64), refused.clone()),
             (json!(9_007_199_254_740_992.0_f64), refused.clone()),
         ] {
             let given = arguments(&json!({ "count": count }));

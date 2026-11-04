@@ -6,7 +6,7 @@
 //! owner serves the turn, each a `tool_call` answered once while the turn
 //! runs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -167,9 +167,12 @@ impl FrameSender {
         if sent.silenced {
             return Ok(());
         }
+        // Of calls open under one id, the first is the one that ran (RFC §12.4).
+        let mut holders = HashSet::new();
         let unsent: Vec<(u64, Metadata)> = sent
             .open
             .iter()
+            .filter(|(_, tool_id)| holders.insert(tool_id))
             .filter_map(|(start, tool_id)| {
                 let arguments = ran_with.get(tool_id)?;
                 (sent.fixed.get(start) != Some(arguments)).then(|| (*start, arguments.clone()))

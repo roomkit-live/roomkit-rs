@@ -1,6 +1,6 @@
 //! What one generation is asked: Python's `AIContext` and its messages.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use roomkit::model::{Metadata, ResponseMetadata};
 use roomkit_core::rules::transcript::{Image, Message, Part, Role};
@@ -398,14 +398,18 @@ pub(crate) fn ai_messages_with(
     kept: &HashMap<usize, ToolResult>,
     rounds: &HashMap<usize, Vec<AiContentPart>>,
 ) -> Vec<AiMessage> {
-    let mut tools: HashMap<&str, &str> = HashMap::new();
+    let mut tools: HashMap<&str, VecDeque<&str>> = HashMap::new();
     let mut read: Vec<AiMessage> = Vec::with_capacity(messages.len());
     for (index, message) in messages.iter().enumerate() {
-        for call in &message.tool_calls {
-            tools.insert(&call.id, &call.name);
-        }
+        take_calls(&mut tools, message);
+        let name = message
+            .tool_call_id
+            .as_deref()
+            .and_then(|id| tools.get_mut(id))
+            .and_then(VecDeque::pop_front)
+            .unwrap_or_default();
         let content = rounds.get(&index).map_or_else(
-            || content(message, &tools, kept.get(&index)),
+            || content(message, name, kept.get(&index)),
             |parts| AiMessageContent::Parts(parts.clone()),
         );
         if message.tool_call_id.is_some()
@@ -436,14 +440,23 @@ fn role(role: Role) -> AiRole {
     }
 }
 
-/// What `message` says, a result's tool read in `tools`.
-fn content(
-    message: &Message,
-    tools: &HashMap<&str, &str>,
-    kept: Option<&ToolResult>,
-) -> AiMessageContent {
+/// Takes the tools `message` calls: two calls under one id are two calls, whose
+/// results come in their order, and an id a later round uses again is a new
+/// call (RFC §12.4).
+fn take_calls<'a>(tools: &mut HashMap<&'a str, VecDeque<&'a str>>, message: &'a Message) {
+    let mut seen = HashSet::new();
+    for call in &message.tool_calls {
+        let names = tools.entry(&call.id).or_default();
+        if seen.insert(call.id.as_str()) {
+            names.clear();
+        }
+        names.push_back(&call.name);
+    }
+}
+
+/// What `message` says, a result's tool `name`.
+fn content(message: &Message, name: &str, kept: Option<&ToolResult>) -> AiMessageContent {
     if let Some(call_id) = &message.tool_call_id {
-        let name = tools.get(call_id.as_str()).copied().unwrap_or_default();
         return AiMessageContent::Parts(vec![AiContentPart::ToolResult(AiToolResultPart {
             tool_call_id: call_id.clone(),
             name: name.to_owned(),

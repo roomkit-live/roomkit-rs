@@ -237,7 +237,7 @@ async fn a_close_from_within_a_turn_that_reasoned_takes_no_grace() {
 /// `CallIds` before `RoundTranscript.add_call`): a call the provider gave none,
 /// or another's, keeps its place, and the round its reasoning.
 #[tokio::test]
-async fn a_call_under_a_minted_id_keeps_its_place_among_the_blocks() {
+async fn a_round_s_calls_keep_their_place_among_the_blocks_whatever_their_ids() {
     let delta = |block: u32, thinking: &str, signature: &str| {
         StreamEvent::ThinkingDelta(StreamThinkingDelta {
             block: Some(block),
@@ -278,12 +278,11 @@ async fn a_call_under_a_minted_id_keeps_its_place_among_the_blocks() {
         .iter()
         .map(|part| match part {
             AiContentPart::Thinking(part) => part.thinking.clone(),
-            AiContentPart::ToolCall(part) if part.id == "c1" => "c1".to_owned(),
-            AiContentPart::ToolCall(_) => "minted".to_owned(),
+            AiContentPart::ToolCall(part) => part.id.clone(),
             AiContentPart::Text(_) | AiContentPart::Image(_) | AiContentPart::ToolResult(_) => {
                 panic!("{part:?}")
             }
         })
         .collect();
-    assert_eq!(read, ["A", "c1", "minted", "minted", "B"]);
+    assert_eq!(read, ["A", "c1", "c1", "", "B"]);
 }

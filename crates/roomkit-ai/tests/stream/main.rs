@@ -60,6 +60,8 @@ enum Stop {
     AfterText(&'static str),
     /// Once handed a call's start row.
     AtACallsStart,
+    /// Once handed a call's end row.
+    AtACallsEnd,
     /// When the signal comes, wherever it reads.
     OnSignal(Arc<Notify>),
     /// It fails once handed this text.
@@ -184,9 +186,11 @@ impl Channel for Streaming {
                     item = stream.next() => item,
                     () = signal.notified() => return Err("the socket broke".into()),
                 },
-                Stop::Never | Stop::AfterText(_) | Stop::AtACallsStart | Stop::FailsAfter(_) => {
-                    stream.next().await
-                }
+                Stop::Never
+                | Stop::AfterText(_)
+                | Stop::AtACallsStart
+                | Stop::AtACallsEnd
+                | Stop::FailsAfter(_) => stream.next().await,
             };
             let Some(item) = item else {
                 return Ok(ChannelOutput::default());
@@ -204,6 +208,7 @@ impl Channel for Streaming {
                         Stop::Never
                         | Stop::AfterText(_)
                         | Stop::AtACallsStart
+                        | Stop::AtACallsEnd
                         | Stop::OnSignal(_)
                         | Stop::FailsAfter(_)
                         | Stop::FailsOnSignal(_) => {}
@@ -214,6 +219,11 @@ impl Channel for Streaming {
                     self.note(Read::Row(row.r#type, text, row.index));
                     if matches!(self.stop, Stop::AtACallsStart)
                         && row.r#type == EventType::ToolCallStart
+                    {
+                        return Ok(ChannelOutput::default());
+                    }
+                    if matches!(self.stop, Stop::AtACallsEnd)
+                        && row.r#type == EventType::ToolCallEnd
                     {
                         return Ok(ChannelOutput::default());
                     }
@@ -1331,5 +1341,43 @@ async fn streamed_usage_record_keeps_last_generation_separate() {
     assert_eq!(record["ai_last_usage"]["input_tokens"], 40);
     assert_eq!(record["ai_usage"]["input_tokens"], 140);
     assert_eq!(record["ai_usage_complete"], true);
+    room.kit.close().await.unwrap();
+}
+
+// Python: turns/_executor_changes.py report sends a call's fixed arguments per
+// start: a reader stopped between two ends under one id closes the second with
+// its own, not its holder's (RFC §10.6.4, §12.4).
+#[tokio::test]
+async fn a_duplicate_closed_after_its_holder_keeps_its_own_arguments() {
+    let rounds = vec![
+        ScriptedRound::calling(
+            "",
+            [
+                ("c1", "lookup_order", r#"{"order":"first"}"#),
+                ("c1", "lookup_order", r#"{"order":"second"}"#),
+            ],
+        ),
+        ScriptedRound::answering("Shipped."),
+    ];
+    let runs = Arc::new(AtomicUsize::new(0));
+    let ws = Streaming::new(Stop::AtACallsEnd);
+    let (room, _model) = Room::new(rounds, lookup(Arc::clone(&runs), None), ws).await;
+    room.says("Where is my order?").await;
+    let ends: Vec<serde_json::Value> = room
+        .timeline()
+        .await
+        .iter()
+        .filter(|event| event.r#type == EventType::ToolCallEnd)
+        .filter_map(|event| {
+            let EventContent::ToolCall(row) = &event.content else {
+                return None;
+            };
+            row.arguments.get("order").cloned()
+        })
+        .collect();
+    assert_eq!(
+        ends,
+        [serde_json::json!("first"), serde_json::json!("second")]
+    );
     room.kit.close().await.unwrap();
 }
