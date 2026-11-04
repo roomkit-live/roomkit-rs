@@ -575,7 +575,8 @@ pub(super) struct Stuck {
 /// What a transport that reads its stream to its end does past it.
 #[derive(Clone, Debug, Default)]
 pub(super) struct ReadingOn {
-    /// How long it flushes past the end; none, it never returns.
+    /// How long it flushes past the end; none, it never returns, unless it
+    /// closed the kit.
     flush: Option<Duration>,
     /// The kit it closes, once at its first item or once past the end.
     pub(super) closes: Arc<Mutex<Option<RoomKit>>>,

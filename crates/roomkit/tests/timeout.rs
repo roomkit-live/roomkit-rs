@@ -176,6 +176,35 @@ async fn timeline(kit: &RoomKit) -> Vec<RoomEvent> {
     timeline
 }
 
+// RMK-1326: a delivery cancelled in the step that decides its call and ends the
+// run: nothing tells the end of a read its cut would wait for. The run's end ends
+// that wait, and the close spends no grace on it.
+#[tokio::test(start_paused = true)]
+async fn a_delivery_cancelled_as_its_call_times_out_leaves_the_close_nothing_to_wait_for() {
+    let kit = room().await;
+    slow_the_first_time(&kit, true);
+    let canceller = kit.clone();
+    kit.on("process_timeout", move |_event| {
+        let canceller = canceller.clone();
+        async move {
+            canceller
+                .cancel_delivery("k", roomkit::CancelDeliveryOptions::default())
+                .await;
+        }
+    })
+    .unwrap();
+    let mut said = message("Bonjour");
+    said.delivery_key = Some("k".to_owned());
+    let options = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    kit.process_inbound(said, options).await.unwrap();
+    let start = tokio::time::Instant::now();
+    kit.close().await.unwrap();
+    assert_eq!(start.elapsed(), Duration::ZERO);
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_timeout_during_an_off_lock_hook_writes_nothing_and_the_next_message_goes_through() {
     let kit = room().await;

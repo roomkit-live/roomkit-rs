@@ -231,6 +231,19 @@ impl Record {
         self.cut_read_over.send_replace(true);
     }
 
+    /// What ends the wait for the read the cut stopped however the run ends:
+    /// a cut seen in the step that ends the run tells nothing, nothing polling
+    /// the operation after it.
+    fn read_over_with_the_run(self: &Arc<Self>) -> impl Drop + Send + use<> {
+        struct RunOver(Arc<Record>);
+        impl Drop for RunOver {
+            fn drop(&mut self) {
+                self.0.cut_read_over.send_replace(true);
+            }
+        }
+        RunOver(Arc::clone(self))
+    }
+
     fn decide(&self, result: &InboundResult) {
         // A held event keeps its delivery named until its release (RFC
         // §11.7.6), decided before the room's lock is released.
@@ -659,7 +672,9 @@ async fn run_leased<S: ConversationStore>(
     let kit = Arc::clone(inner);
     let mut caller = Caller::new(answer, defer, Arc::clone(&record));
     caller.hand = hand;
+    let read_over = record.read_over_with_the_run();
     let run = async move {
+        let _read_over = read_over;
         // The key names the delivery until the run is over.
         let _named = named;
         // A room activity: the kit's subscription to its bus first.
