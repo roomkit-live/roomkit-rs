@@ -43,9 +43,9 @@ use std::task::Poll;
 
 use roomkit_core::model::{ErrorRecord, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::{
-    AnswerOf, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest,
-    InboundResult, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, StoreOutcome,
-    StoreRequest,
+    AnswerOf, ChannelOutcome, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome,
+    HoldRequest, InboundResult, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled,
+    StoreOutcome, StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinHandle, JoinSet};
@@ -1280,6 +1280,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         };
         let effect = self.effect_of_task.remove(&task)?;
         self.spans.answered(effect, &outcome);
+        if matches!(&outcome, Outcome::Channel(ChannelOutcome::Streamed(_)))
+            && let Some(caller) = self.caller.as_deref_mut()
+        {
+            caller.stream_started();
+        }
         self.locate(&outcome);
         self.call_of_effect.remove(&effect);
         self.written.extend(self.writing.remove(&effect));

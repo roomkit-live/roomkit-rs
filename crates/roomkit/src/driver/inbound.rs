@@ -28,6 +28,7 @@
 //! its commit was in flight. A room its step 2 created is completed first,
 //! its creation never within the call's bound.
 
+use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
@@ -35,6 +36,7 @@ use roomkit_core::model::{ErrorRecord, EventId, EventStatus, Metadata, RoomEvent
 use roomkit_core::ops::{
     Decided, Inbound, InboundError, InboundResult, KIT_CLOSED, Outcome, StoreOutcome,
 };
+use serde_json::Value;
 use tokio::sync::{oneshot, watch};
 use tokio::task::{JoinError, JoinHandle};
 
@@ -48,6 +50,7 @@ use crate::kit::Inner;
 use crate::locks::HeldLock;
 use crate::store::ConversationStore;
 use crate::tasks::{Kind, Marks, Tasks};
+use crate::telemetry::{KitTelemetry, OpenSpan, SpanKind, StartSpanOptions};
 use crate::turns::Canceller;
 use crate::turns::TURN_LINK_ERROR;
 
@@ -357,6 +360,84 @@ pub(super) struct Caller {
     /// The room's lock the run holds from its start, its call nested under
     /// it (`Inbound::under_lock`).
     pub(super) hand: Option<Under>,
+    telemetry: KitTelemetry,
+    /// What the caller, answered at the decision, did not wait for.
+    tail: Option<Tail>,
+    /// How many of the call's turns answered with a stream.
+    streams: usize,
+}
+
+/// A call's `framework.detached`, Python's span of what a caller did not wait
+/// for: open from the instant the call is answered at its decision to the
+/// run's end, a child of the call's span and not current, so that it
+/// measures without re-parenting. Dropped with its run, the kit's close having
+/// aborted it, it ends `cancelled`, as Python's reads a consumer cut.
+struct Tail(Option<OpenSpan>);
+
+impl fmt::Debug for Tail {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("Tail").finish_non_exhaustive()
+    }
+}
+
+/// What a closed call's tail reads, as Python's reads a task cancelled.
+const CANCELLED: &str = "cancelled";
+
+impl Tail {
+    fn open(telemetry: &KitTelemetry, room_id: Option<&RoomId>) -> Self {
+        Self(Some(OpenSpan::start(
+            telemetry,
+            SpanKind::InboundPipeline,
+            "framework.detached",
+            StartSpanOptions {
+                room_id: room_id.map(ToString::to_string),
+                ..StartSpanOptions::default()
+            },
+        )))
+    }
+
+    /// Ends it as `output`, the run's at its end, reads, with the `streams`
+    /// the call's turns started: `cut`, the kit's close ended the run.
+    fn end(mut self, output: &InboundOutput, cut: bool, streams: usize) {
+        let Some(span) = self.0.take() else {
+            return;
+        };
+        let attributes = stream_count(streams);
+        let result = match output {
+            Err(error) => {
+                return span.fail_error(error.class_name(), error.to_string(), attributes);
+            }
+            Ok(Err(error)) => {
+                let error = RoomKitError::from(error.clone());
+                return span.fail_error(error.class_name(), error.to_string(), attributes);
+            }
+            Ok(Ok(result)) => result,
+        };
+        if cut || result.cancellation_reason.as_deref() == Some(KIT_CLOSED) {
+            span.fail(CANCELLED, attributes);
+        } else if let Some(error) = &result.error {
+            span.fail_error(&error.error_type, &error.message, attributes);
+        } else if let Some(reason) = &result.cancellation_reason {
+            span.fail(reason, attributes);
+        } else {
+            span.end(attributes);
+        }
+    }
+}
+
+impl Drop for Tail {
+    fn drop(&mut self) {
+        if let Some(span) = self.0.take() {
+            span.fail(CANCELLED, Metadata::new());
+        }
+    }
+}
+
+/// What a tail's end reads of the streams its call's turns started.
+fn stream_count(streams: usize) -> Metadata {
+    let mut attributes = Metadata::new();
+    attributes.insert("streams".to_owned(), Value::from(streams));
+    attributes
 }
 
 /// The room's lock an inbound call's run holds from its start, its call
@@ -399,7 +480,12 @@ struct Departure {
 impl Caller {
     /// The caller answered on `answer` at the decision, when its context
     /// detaches from the call's room or `defer` is set.
-    fn new(answer: oneshot::Sender<InboundOutput>, defer: bool, record: Arc<Record>) -> Self {
+    fn new(
+        answer: oneshot::Sender<InboundOutput>,
+        defer: bool,
+        record: Arc<Record>,
+        telemetry: KitTelemetry,
+    ) -> Self {
         Self {
             answer: Some(answer),
             defer,
@@ -408,6 +494,30 @@ impl Caller {
             departure: Departure::default(),
             record,
             hand: None,
+            telemetry,
+            tail: None,
+            streams: 0,
+        }
+    }
+
+    /// One of the call's turns answered with a stream.
+    pub(super) fn stream_started(&mut self) {
+        self.streams += 1;
+    }
+
+    /// The caller is answered at the decision: what it does not wait for is
+    /// measured from now, unless its call was refused before the room's lock
+    /// and has nothing left.
+    fn open_tail(&mut self, room_id: Option<&RoomId>, answered: &InboundOutput) {
+        if matches!(answered, Ok(Ok(result)) if !result.refused_before_the_lock) {
+            self.tail = Some(Tail::open(&self.telemetry, room_id));
+        }
+    }
+
+    /// The run is over, as `output` reads, `cut` by the kit's close or not.
+    fn end_tail(&mut self, output: &InboundOutput, cut: bool) {
+        if let Some(tail) = self.tail.take() {
+            tail.end(output, cut, self.streams);
         }
     }
 
@@ -465,6 +575,7 @@ impl Caller {
             }),
             None => Ok(decided.result),
         };
+        self.open_tail(decided.room_id.as_ref(), &answered);
         if answer.send(answered).is_err() {
             tracing::debug!(
                 target: "roomkit::driver",
@@ -677,7 +788,7 @@ async fn run_leased<S: ConversationStore>(
     let mut named = named;
     let record = Arc::new(Record::new(named.as_mut()));
     let kit = Arc::clone(inner);
-    let mut caller = Caller::new(answer, defer, Arc::clone(&record));
+    let mut caller = Caller::new(answer, defer, Arc::clone(&record), kit.telemetry.clone());
     caller.hand = hand;
     let read_over = record.read_over_with_the_run();
     let run = async move {
@@ -701,6 +812,7 @@ async fn run_leased<S: ConversationStore>(
         )
         .await;
         let closing = kit.tasks.is_closing();
+        let cut = matches!(output, Err(Stop::Cut(_)));
         let mut output = closed_at_its_end(output, closing);
         if caller.departure.turns_cut
             && let Some(reason) = caller.record.cancel_reason()
@@ -710,6 +822,7 @@ async fn run_leased<S: ConversationStore>(
             // Its caller's cancellation came first, the kit's close after.
             result.cancellation_reason = Some(reason);
         }
+        caller.end_tail(&output, cut);
         caller.log_unread_end(call, &output, closing);
         output
     };
