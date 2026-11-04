@@ -1,7 +1,10 @@
-//! A discussion built and read (roomkit-specs `conformance/README.md`,
-//! "Calls"; RFC §19.7.5): `discussion` builds the implementation's
+//! A discussion in the runner (roomkit-specs `conformance/README.md`,
+//! "Calls", "Setup"; RFC §19.7.5): `discussion` builds the implementation's
 //! `Discussion` from its keywords, each agent a channel id or an agent given
-//! live, and reads it, installed nowhere.
+//! live, and reads it, installed nowhere. A setup's strategy with a
+//! `discussion` is one installed through the kit, its `done` read from the
+//! `discussion.done` call; `speak_queue` reads its queue, and an
+//! `ON_SPEAK_QUEUE` hook records each change it is handed.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -30,6 +33,8 @@ pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
             "silent_token",
             "rules",
         ]),
+        "speak_queue" => Some(&["room_id", "organization_id"]),
+        "discussion.done" => Some(&["strategy", "holds"]),
         _ => None,
     }
 }
@@ -58,8 +63,13 @@ fn built(spec: &Value) -> Result<Result<Discussion, roomkit::RoomKitError>, Unre
         .iter()
         .map(agent)
         .collect::<Result<Vec<_>, _>>()?;
+    Ok(Discussion::new(agents, options_of(spec)?))
+}
+
+/// The keywords of a discussion `spec` describes.
+fn options_of(spec: &Value) -> Result<DiscussionOptions, Unreadable> {
     let defaults = DiscussionOptions::default();
-    let options = DiscussionOptions {
+    Ok(DiscussionOptions {
         handles: optional::<BTreeMap<ChannelId, String>>(spec, "handles")?,
         people: optional(spec, "people")?,
         addressed_only: optional(spec, "addressed_only")?.unwrap_or(defaults.addressed_only),
@@ -69,12 +79,93 @@ fn built(spec: &Value) -> Result<Result<Discussion, roomkit::RoomKitError>, Unre
         silent_token: optional(spec, "silent_token")?.unwrap_or(defaults.silent_token),
         rules: optional(spec, "rules")?,
         ..DiscussionOptions::default()
-    };
-    Ok(Discussion::new(agents, options))
+    })
+}
+
+/// The members a setup's strategy with a `discussion` may give.
+pub(crate) const DISCUSSION: &[&str] = &[
+    "agents",
+    "handles",
+    "people",
+    "addressed_only",
+    "everyone",
+    "max_turns",
+    "max_depth",
+    "silent_token",
+    "rules",
+    "done",
+];
+
+/// The Discussion a setup's strategy describes: its agents by id, its `done`
+/// what the last `discussion.done` call named, false until one.
+pub(crate) fn installed(
+    id: &str,
+    spec: &Value,
+    slot: &crate::identity::RunSlot,
+) -> Result<Discussion, Unreadable> {
+    let mut options = options_of(spec)?;
+    if spec.get("done").and_then(Value::as_bool) == Some(true) {
+        let (id, slot) = (id.to_owned(), slot.clone());
+        options.done = Some(Arc::new(move |_room| {
+            let holds = slot.run().is_some_and(|run| run.discussion_done(&id));
+            Box::pin(async move { holds })
+        }));
+    }
+    let agents = field::<Vec<ChannelId>>(spec, "agents")?;
+    let agents = agents.into_iter().map(StrategyAgent::from).collect();
+    Discussion::new(agents, options).map_err(|error| error.to_string())
+}
+
+/// A speak queue as a scenario reads it.
+fn queue_record(queue: &roomkit::SpeakQueue) -> Value {
+    json!({
+        "speaking": queue.speaking,
+        "queue": queue.queue,
+        "listening": queue.listening,
+        "asked": queue.asked,
+        "waiting": queue.waiting,
+        "over": queue.over,
+    })
+}
+
+/// What an `ON_SPEAK_QUEUE` hook is handed, as a scenario reads it.
+pub(crate) fn speak_queue_event(event: &roomkit::SpeakQueueEvent) -> Value {
+    let change = serde_json::to_value(event.change).unwrap_or_default();
+    json!({
+        "room_id": event.room_id,
+        "change": change,
+        "channel_ids": event.channel_ids,
+        "event_id": event.event_id,
+        "queue": queue_record(&event.queue),
+    })
 }
 
 /// Makes the discussion's call `name`.
 pub(crate) fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+    if name == "speak_queue" {
+        let room: roomkit::model::RoomId = field(spec, "room_id")?;
+        let options = roomkit::SpeakQueueOptions {
+            organization_id: optional(spec, "organization_id")?,
+        };
+        let queue = run.kit().speak_queue(&room, options);
+        let result = queue.as_ref().map_or(Value::Null, queue_record);
+        return Ok(finish(
+            run,
+            name,
+            Ok::<_, roomkit::RoomKitError>(result),
+            Clone::clone,
+        ));
+    }
+    if name == "discussion.done" {
+        let id: String = field(spec, "strategy")?;
+        run.set_discussion_done(id, field(spec, "holds")?);
+        return Ok(finish(
+            run,
+            name,
+            Ok::<_, roomkit::RoomKitError>(Value::Null),
+            Clone::clone,
+        ));
+    }
     let outcome = built(spec)?;
     Ok(finish(run, name, outcome, |discussion| {
         let agents: Vec<String> = discussion

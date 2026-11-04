@@ -747,6 +747,7 @@ fn add_room_hook(
     let tool_round = turn_hook_handler::<ToolRoundEvent>(hook, run);
     let response = turn_hook_handler::<AiResponseEvent>(hook, run);
     let thinking = turn_hook_handler::<ThinkingEvent>(hook, run);
+    let speak_queue = turn_hook_handler::<roomkit::SpeakQueueEvent>(hook, run);
     Ok(async move {
         if let Some(router) = router {
             let added = kit.add_room_hook(&room, trigger, execution, router.as_hook(), options);
@@ -783,6 +784,10 @@ fn add_room_hook(
             }
             (None, HookTrigger::OnAiThinking) => {
                 kit.add_room_hook(&room, trigger, execution, thinking, options)
+                    .await
+            }
+            (None, HookTrigger::OnSpeakQueue) => {
+                kit.add_room_hook(&room, trigger, execution, speak_queue, options)
                     .await
             }
             (None, _) => {
@@ -842,6 +847,9 @@ pub(crate) fn register_hook(
         kit.hook(trigger, handler, options)
     } else if trigger == HookTrigger::OnAiResponse {
         let handler = turn_hook_handler::<AiResponseEvent>(hook, run);
+        kit.hook(trigger, handler, options)
+    } else if trigger == HookTrigger::OnSpeakQueue {
+        let handler = turn_hook_handler::<roomkit::SpeakQueueEvent>(hook, run);
         kit.hook(trigger, handler, options)
     } else if trigger == HookTrigger::OnAiThinking {
         let handler = turn_hook_handler::<ThinkingEvent>(hook, run);

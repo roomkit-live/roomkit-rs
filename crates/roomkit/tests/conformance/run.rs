@@ -105,6 +105,8 @@ pub(crate) struct Check {
 /// One run of one scenario.
 pub(crate) struct Run {
     kit: crate::Kit,
+    /// What each discussion's `done` answers, by its strategy's id.
+    discussion_done: Mutex<HashMap<String, bool>>,
     /// The kit's store, shared: what a router of the run's own is built over.
     store: Arc<crate::Store>,
     /// The labels whose outcomes the scenario's `expect.actions` checks.
@@ -145,6 +147,19 @@ pub(crate) struct Run {
 }
 
 impl Run {
+    /// What the discussion of the strategy `id`'s `done` answers now.
+    pub(crate) fn discussion_done(&self, id: &str) -> bool {
+        lock(&self.discussion_done)
+            .get(id)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// What the discussion of the strategy `id`'s `done` answers from now on.
+    pub(crate) fn set_discussion_done(&self, id: String, holds: bool) {
+        lock(&self.discussion_done).insert(id, holds);
+    }
+
     /// A run of `scenario` on `kit`, recording nothing yet.
     pub(crate) fn new(kit: crate::Kit, store: Arc<crate::Store>, scenario: &Value) -> Self {
         let tapped: Vec<&str> = LEVEL_0_EVENTS
@@ -176,6 +191,7 @@ impl Run {
             problems: Mutex::default(),
             events,
             events_read: Mutex::new(0),
+            discussion_done: Mutex::default(),
             background: Mutex::default(),
             tasks: Mutex::default(),
             handles: Mutex::default(),

@@ -42,6 +42,19 @@ pub(crate) trait Scripted: TurnPayload {
     }
 }
 
+impl Scripted for roomkit::SpeakQueueEvent {
+    const MEMBER: &'static str = "speak_queue";
+
+    fn record(&self) -> Value {
+        crate::discussion_calls::speak_queue_event(self)
+    }
+
+    /// An observer's: a modify is no answer of its.
+    fn patched(self, _patch: &Value) -> Result<Self, String> {
+        Ok(self)
+    }
+}
+
 impl Scripted for AiGenerationEvent {
     const MEMBER: &'static str = "generation";
 

@@ -37,6 +37,7 @@ pub(crate) const STRATEGY: &[&str] = &[
     "supervisor",
     "swarm",
     "pipeline",
+    "discussion",
 ];
 pub(crate) const SWARM: &[&str] = &["agents", "entry"];
 pub(crate) const PIPELINE: &[&str] = &["agents", "supervisor_id"];
@@ -142,6 +143,11 @@ pub(crate) fn strategies(
             let agents = agents.into_iter().map(StrategyAgent::from).collect();
             let entry = crate::calls::optional::<ChannelId>(swarm, "entry")?;
             strategies.insert(id, Arc::new(roomkit::Swarm::new(agents, entry)));
+            continue;
+        }
+        if let Some(discussion) = spec.get("discussion") {
+            let built = crate::discussion_calls::installed(&id, discussion, slot)?;
+            strategies.insert(id, Arc::new(built));
             continue;
         }
         if let Some(pipeline) = spec.get("pipeline") {
