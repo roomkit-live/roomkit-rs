@@ -23,8 +23,8 @@ use crate::store::ConversationStore;
 
 /// What a discussion running in this process does when the pipeline tells
 /// it, always under the room's lock: it edits its stored queue without taking
-/// that lock again. What it returns as an error is logged, and never leaves
-/// an event undelivered.
+/// that lock again. An error on a committed message is logged, and never
+/// leaves it undelivered; on an instruction or a turn it fails the call.
 pub(crate) trait DiscussionSeam: Send + Sync + 'static {
     /// A message was committed and took its place in the room's lane: queue
     /// whom it asks for, within `reach` (rule 8).
@@ -446,7 +446,19 @@ mod tests {
         let early = tokio::time::timeout(Duration::from_millis(30), &mut turn).await;
         assert!(
             early.is_err(),
-            "the turn ran before its event was delivered"
+            "the turn's call ended before its event was delivered"
+        );
+        // Its answer's own set would wait behind the event's place as well:
+        // only the store tells whether the agent was asked.
+        let options = crate::store::ListEventsOptions::default();
+        let stored = kit.store().list_events(&room_id(), options).await.unwrap();
+        let answers = stored
+            .iter()
+            .filter(|event| event.source.channel_id == id("a"));
+        assert_eq!(
+            answers.count(),
+            0,
+            "the agent answered before its event was delivered"
         );
         gated.gate.notify_one();
         delivering.await.unwrap();

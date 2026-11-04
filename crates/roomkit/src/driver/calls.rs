@@ -1271,7 +1271,7 @@ fn unregistered_channel(channel_id: &ChannelId) -> Outcome {
 /// What the pipeline asks of the discussion this process runs for the room,
 /// under the room's lock (RFC §19.7.5); a room it runs none for has nothing
 /// to answer, and no turn to give. What the discussion raises is answered
-/// as a failure, which the pipeline logs.
+/// as a failure: logged for a committed message, the call's for the rest.
 pub(super) async fn discussion<S: ConversationStore>(
     inner: &Inner<S>,
     request: DiscussionRequest,
@@ -1285,7 +1285,7 @@ pub(super) async fn discussion<S: ConversationStore>(
         tracing::warn!(
             target: "roomkit::discussion",
             %room_id,
-            "the room stores a discussion this process runs none of: it is told nothing"
+            "no discussion of the room runs in this process: it is told nothing"
         );
         return match request {
             DiscussionRequest::Turn { .. } => DiscussionOutcome::Turn(None).into(),

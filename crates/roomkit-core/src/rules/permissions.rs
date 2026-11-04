@@ -1343,6 +1343,12 @@ mod tests {
             detached.remove(2);
             let context = held_room(detached);
             assert!(!discussion::takes_turn(&event, &context, &channel("a")));
+
+            // Within what its source's binding lets through (RFC §7.3).
+            let mut narrowed = room_bindings();
+            narrowed[2].visibility = Visibility::Transport;
+            let context = held_room(narrowed);
+            assert!(!discussion::takes_turn(&event, &context, &channel("a")));
         }
     }
 
