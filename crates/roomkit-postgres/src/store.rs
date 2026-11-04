@@ -111,25 +111,23 @@ impl PostgresStore {
     /// else what failed; [`StoreError::Value`] for sizes or a connection
     /// string asyncpg refuses.
     pub async fn init(&self, options: InitOptions) -> Result<(), StoreError> {
-        let pool = if let Some(pool) = self.pool() {
-            pool
-        } else {
-            let opened = pool::open(
+        if self.pool().is_none() {
+            let (pool, _) = pool::open(
                 self.shared.dsn.as_deref(),
                 options.min_size,
                 options.max_size,
-            );
-            opened.await?.0
-        };
-        let mut client = pool.get().await.map_err(StoreError::unavailable)?;
-        schema::prepare(&mut client).await?;
-        drop(client);
-        *self
-            .shared
-            .pool
-            .write()
-            .unwrap_or_else(PoisonError::into_inner) = Some(pool);
-        Ok(())
+            )
+            .await?;
+            // Kept before the schema is read, as Python keeps it: a schema
+            // `init` refuses is one `migrate` moves, on this pool.
+            *self
+                .shared
+                .pool
+                .write()
+                .unwrap_or_else(PoisonError::into_inner) = Some(pool);
+        }
+        let mut client = self.client().await?;
+        Ok(schema::prepare(&mut client).await?)
     }
 
     /// The explicit, opt-in schema migration, which never runs on its own:
@@ -581,10 +579,8 @@ impl ConversationStore for PostgresStore {
         key: &str,
         channel_id: Option<&ChannelId>,
     ) -> Result<bool, StoreError> {
-        let found = self
-            .get_event_by_idempotency_key(room_id, key, channel_id)
-            .await?;
-        Ok(found.is_some())
+        let client = self.client().await?;
+        Ok(events::key_held(&client, room_id, channel_id, key).await?)
     }
 
     async fn get_event_by_idempotency_key(

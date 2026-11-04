@@ -224,7 +224,7 @@ impl PostgresAdvisoryLockManager {
             .shared
             .connections
             .write()
-            .unwrap_or_else(PoisonError::into_inner) = Some((pool, Some(tls)));
+            .unwrap_or_else(PoisonError::into_inner) = Some((pool, tls));
         Ok(())
     }
 

@@ -12,8 +12,14 @@ use deadpool_postgres::Pool;
 #[derive(Clone, Default)]
 pub struct PostgresStoreOptions {
     /// The connection string, `postgresql://user:password@host:port/database`,
-    /// read as Python's asyncpg reads it, `sslmode` and `sslrootcert`
-    /// included. Without one, the `PG*` environment variables say where.
+    /// read as Python's asyncpg reads it: `sslmode`, `sslrootcert` and `sslcrl`,
+    /// a parameter the client does not read passed to the server as a setting
+    /// (`?search_path=tenant`), and what it leaves out read from the `PG*`
+    /// environment variables. Not read: `passfile`, `sslcert` and `sslkey`,
+    /// which fail as unknown parameters or are ignored by name below.
+    /// A certificate that is its own root and a CA (the recipe of Postgres's
+    /// documentation) is refused under a mode that checks the chain: rustls
+    /// takes no CA as an end entity; give the server one issued by that CA.
     pub dsn: Option<String>,
     /// A pool of the integrator's, which stays theirs: the store never closes
     /// it.

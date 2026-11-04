@@ -1,72 +1,61 @@
-//! A pool from a connection string, read as Python's asyncpg reads it, TLS
-//! through rustls; and the close of a pool a component opened itself.
+//! A pool from a connection string, read as Python's asyncpg reads it; and the
+//! close of a pool a component opened itself.
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use roomkit::StoreError;
-use rustls::client::WebPkiServerVerifier;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::{CryptoProvider, WebPkiSupportedAlgorithms, ring};
-use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{
-    CertificateError, ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
-};
-use tokio_postgres::Config;
 use tokio_postgres::config::SslMode;
+use tokio_postgres::{Config, NoTls};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
-/// How the connection to the server is encrypted and checked: asyncpg's
-/// `sslmode`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Encryption {
-    /// No TLS.
-    Disable,
-    /// TLS if the server offers it, unchecked.
-    Prefer,
-    /// TLS, checked against the root certificate if one is there.
-    Require,
-    /// TLS, the chain checked against the root certificate.
-    VerifyCa,
-    /// TLS, the chain and the host's name checked.
-    VerifyFull,
-}
+use crate::tls::{Encryption, Files, tls_config};
 
-impl Encryption {
-    /// The mode `value` names; `allow`, which asyncpg tries in clear first,
-    /// has no such order here, and asks for what it would prefer.
-    fn named(value: &str) -> Result<Self, StoreError> {
-        match value {
-            "disable" => Ok(Self::Disable),
-            "allow" | "prefer" => Ok(Self::Prefer),
-            "require" => Ok(Self::Require),
-            "verify-ca" => Ok(Self::VerifyCa),
-            "verify-full" => Ok(Self::VerifyFull),
-            _ => Err(StoreError::Value(format!(
-                "sslmode {value:?} is not one of disable, allow, prefer, require, verify-ca, \
-                 verify-full"
-            ))),
-        }
-    }
+/// asyncpg's default `timeout`, for a server that accepts and never answers.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 
-    fn client_mode(self) -> SslMode {
-        match self {
-            Self::Disable => SslMode::Disable,
-            Self::Prefer => SslMode::Prefer,
-            Self::Require | Self::VerifyCa | Self::VerifyFull => SslMode::Require,
-        }
-    }
-}
+/// The DSN parameters the client reads itself. asyncpg passes any other to the
+/// server as a setting (`search_path=tenant`).
+const CLIENT_PARAMS: [&str; 18] = [
+    "user",
+    "password",
+    "dbname",
+    "options",
+    "application_name",
+    "sslnegotiation",
+    "host",
+    "hostaddr",
+    "port",
+    "connect_timeout",
+    "tcp_user_timeout",
+    "keepalives",
+    "keepalives_idle",
+    "keepalives_interval",
+    "keepalives_retries",
+    "target_session_attrs",
+    "channel_binding",
+    "load_balance_hosts",
+];
 
 /// A connection string read: the client's configuration, and what the client
 /// does not read itself.
 struct Target {
     config: Config,
     encryption: Encryption,
+    files: Files,
+}
+
+/// A connection string's query, split into what the client reads and what it
+/// does not.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Query {
+    /// The string the client parses.
+    dsn: String,
+    mode: Option<String>,
     root_certificate: Option<String>,
+    revocation_list: Option<String>,
+    /// Each setting for the server, its value read.
+    settings: Vec<(String, String)>,
 }
 
 /// `value` with its `%XX` escapes read.
@@ -91,27 +80,51 @@ fn percent_decoded(value: &str) -> String {
     String::from_utf8_lossy(&decoded).into_owned()
 }
 
-/// `dsn` without its `sslmode` and `sslrootcert` parameters, which the client
-/// does not read or reads only in part, and their values.
-fn without_tls_params(dsn: &str) -> (String, Option<String>, Option<String>) {
+/// Whether `key` can be a parameter's name. What is left of an authority after
+/// a raw `?` in a password cannot be one (`ss@host/db`): asyncpg refuses such a
+/// string, and reading its tail as a query would drop the `sslmode` it holds.
+fn is_param_name(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+}
+
+/// `dsn`'s query read. The refusal does not repeat the string.
+fn read_query(dsn: &str) -> Result<Query, StoreError> {
     let Some((base, query)) = dsn.split_once('?') else {
-        return (dsn.to_owned(), None, None);
+        return Ok(Query {
+            dsn: dsn.to_owned(),
+            ..Query::default()
+        });
     };
-    let (mut mode, mut root) = (None, None);
+    let mut read = Query::default();
     let mut kept = Vec::new();
-    for pair in query.split('&') {
-        match pair.split_once('=') {
-            Some(("sslmode", value)) => mode = Some(percent_decoded(value)),
-            Some(("sslrootcert", value)) => root = Some(percent_decoded(value)),
-            Some(_) | None => kept.push(pair),
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if !is_param_name(key) {
+            return Err(StoreError::Value(
+                "invalid DSN: a parameter has no name; a ? in a password must be written %3F"
+                    .to_owned(),
+            ));
+        }
+        match key {
+            "sslmode" => read.mode = Some(percent_decoded(value)),
+            "sslrootcert" => read.root_certificate = Some(percent_decoded(value)),
+            "sslcrl" => read.revocation_list = Some(percent_decoded(value)),
+            "database" => kept.push(format!("dbname={value}")),
+            known if CLIENT_PARAMS.contains(&known) => kept.push(pair.to_owned()),
+            setting => read
+                .settings
+                .push((setting.to_owned(), percent_decoded(value))),
         }
     }
-    let dsn = if kept.is_empty() {
+    read.dsn = if kept.is_empty() {
         base.to_owned()
     } else {
         format!("{base}?{}", kept.join("&"))
     };
-    (dsn, mode, root)
+    Ok(read)
 }
 
 /// The value of the environment variable `name`, if it holds one.
@@ -119,24 +132,23 @@ fn variable(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
-/// What `dsn` names, what it leaves out read from the `PG*` environment
-/// variables, as asyncpg reads them. A bad string is told without its text,
-/// which holds a password.
-fn target(dsn: Option<&str>) -> Result<Target, StoreError> {
-    let (mut config, mode, root) = match dsn {
-        Some(dsn) => {
-            if !dsn.starts_with("postgresql://") && !dsn.starts_with("postgres://") {
-                return Err(StoreError::Value(
-                    "invalid DSN: scheme is expected to be either \"postgresql\" or \"postgres\""
-                        .to_owned(),
-                ));
-            }
-            let (kept, mode, root) = without_tls_params(dsn);
-            let config = kept.parse::<Config>().map_err(StoreError::unavailable)?;
-            (config, mode, root)
-        }
-        None => (Config::new(), None, None),
-    };
+/// Adds `settings` to what the session starts with, a value's blanks escaped
+/// as the server reads them.
+fn with_settings(config: &mut Config, settings: &[(String, String)]) {
+    if settings.is_empty() {
+        return;
+    }
+    let mut options = config.get_options().unwrap_or_default().to_owned();
+    for (name, value) in settings {
+        let value = value.replace('\\', "\\\\").replace(' ', "\\ ");
+        options = format!("{options} -c {name}={value}");
+    }
+    config.options(options.trim_start());
+}
+
+/// Fills in what `config` leaves out from the `PG*` environment variables, as
+/// asyncpg reads them.
+fn with_environment(config: &mut Config) {
     if config.get_hosts().is_empty() {
         config.host(variable("PGHOST").unwrap_or_else(|| "localhost".to_owned()));
     }
@@ -163,7 +175,37 @@ fn target(dsn: Option<&str>) -> Result<Target, StoreError> {
     {
         config.dbname(database);
     }
-    let mode = mode.or_else(|| variable("PGSSLMODE"));
+    if config.get_connect_timeout().is_none() {
+        config.connect_timeout(CONNECT_TIMEOUT);
+    }
+}
+
+/// What `dsn` names, what it leaves out read from the `PG*` environment
+/// variables. A bad string is told without its text, which holds a password.
+fn target(dsn: Option<&str>) -> Result<Target, StoreError> {
+    let query = match dsn {
+        Some(dsn) => {
+            if !dsn.starts_with("postgresql://") && !dsn.starts_with("postgres://") {
+                return Err(StoreError::Value(
+                    "invalid DSN: scheme is expected to be either \"postgresql\" or \"postgres\""
+                        .to_owned(),
+                ));
+            }
+            read_query(dsn)?
+        }
+        None => Query::default(),
+    };
+    let mut config = if query.dsn.is_empty() {
+        Config::new()
+    } else {
+        query
+            .dsn
+            .parse::<Config>()
+            .map_err(StoreError::unavailable)?
+    };
+    with_settings(&mut config, &query.settings);
+    with_environment(&mut config);
+    let mode = query.mode.or_else(|| variable("PGSSLMODE"));
     let encryption = mode
         .as_deref()
         .map_or(Ok(Encryption::Prefer), Encryption::named)?;
@@ -171,187 +213,57 @@ fn target(dsn: Option<&str>) -> Result<Target, StoreError> {
     Ok(Target {
         config,
         encryption,
-        root_certificate: root.or_else(|| variable("PGSSLROOTCERT")),
+        files: Files {
+            root_certificate: query.root_certificate.or_else(|| variable("PGSSLROOTCERT")),
+            revocation_list: query.revocation_list.or_else(|| variable("PGSSLCRL")),
+        },
     })
 }
 
-/// The root certificates `sslrootcert` names (`system`: the webpki roots), or
-/// the user's own file when it names none; `None` when there is none to read.
-fn root_certificates(named: Option<&str>) -> Result<Option<RootCertStore>, StoreError> {
-    if named == Some("system") {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        return Ok(Some(roots));
-    }
-    let path = if let Some(path) = named {
-        PathBuf::from(path)
-    } else {
-        let Some(default) = std::env::home_dir()
-            .map(|home| home.join(".postgresql").join("root.crt"))
-            .filter(|path| path.is_file())
-        else {
-            return Ok(None);
-        };
-        default
-    };
-    let certificates = CertificateDer::pem_file_iter(&path)
-        .map_err(StoreError::unavailable)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(StoreError::unavailable)?;
-    let mut roots = RootCertStore::empty();
-    roots.add_parsable_certificates(certificates);
-    Ok(Some(roots))
+/// Whether `config` connects through Unix sockets alone: asyncpg never asks
+/// for TLS on one, and the client asks a TLS connector for a name it has none
+/// to give.
+#[cfg(unix)]
+fn only_sockets(config: &Config) -> bool {
+    use tokio_postgres::config::Host;
+    config
+        .get_hosts()
+        .iter()
+        .all(|host| matches!(host, Host::Unix(_)))
 }
 
-/// Takes any certificate the server shows, its signatures checked: what
-/// asyncpg and libpq do under `prefer` and `require`, which encrypt and
-/// check nothing else.
-#[derive(Debug)]
-struct Unchecked(WebPkiSupportedAlgorithms);
-
-impl ServerCertVerifier for Unchecked {
-    fn verify_server_cert(
-        &self,
-        _: &CertificateDer<'_>,
-        _: &[CertificateDer<'_>],
-        _: &ServerName<'_>,
-        _: &[u8],
-        _: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        certificate: &CertificateDer<'_>,
-        signature: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(message, certificate, signature, &self.0)
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        certificate: &CertificateDer<'_>,
-        signature: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(message, certificate, signature, &self.0)
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.0.supported_schemes()
-    }
+/// Whether `config` connects through Unix sockets alone: there are none here.
+#[cfg(not(unix))]
+fn only_sockets(_: &Config) -> bool {
+    false
 }
 
-/// Checks the chain and not the host's name: `verify-ca`.
-#[derive(Debug)]
-struct ChainOnly(Arc<WebPkiServerVerifier>);
-
-impl ServerCertVerifier for ChainOnly {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        intermediates: &[CertificateDer<'_>],
-        server_name: &ServerName<'_>,
-        ocsp_response: &[u8],
-        now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        match self
-            .0
-            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
-        {
-            Err(rustls::Error::InvalidCertificate(
-                CertificateError::NotValidForName | CertificateError::NotValidForNameContext { .. },
-            )) => Ok(ServerCertVerified::assertion()),
-            other => other,
-        }
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        certificate: &CertificateDer<'_>,
-        signature: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        self.0
-            .verify_tls12_signature(message, certificate, signature)
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        certificate: &CertificateDer<'_>,
-        signature: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        self.0
-            .verify_tls13_signature(message, certificate, signature)
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.0.supported_verify_schemes()
-    }
-}
-
-/// The TLS configuration `encryption` asks for.
-fn tls_config(
-    encryption: Encryption,
-    root_certificate: Option<&str>,
-) -> Result<ClientConfig, StoreError> {
-    let provider = Arc::new(ring::default_provider());
-    let builder = ClientConfig::builder_with_provider(Arc::clone(&provider))
-        .with_safe_default_protocol_versions()
-        .map_err(StoreError::unavailable)?;
-    let roots = match encryption {
-        Encryption::Disable | Encryption::Prefer => None,
-        Encryption::Require | Encryption::VerifyCa | Encryption::VerifyFull => {
-            root_certificates(root_certificate)?
-        }
-    };
-    let Some(roots) = roots else {
-        if matches!(encryption, Encryption::VerifyCa | Encryption::VerifyFull) {
-            return Err(StoreError::Value(
-                "sslmode verify-ca and verify-full need a root certificate: sslrootcert, \
-                 PGSSLROOTCERT or ~/.postgresql/root.crt"
-                    .to_owned(),
-            ));
-        }
-        return Ok(unchecked(builder, &provider));
-    };
-    if encryption == Encryption::VerifyFull {
-        return Ok(builder.with_root_certificates(roots).with_no_client_auth());
-    }
-    let chain = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider)
+/// A pool of `manager`, at most `max_size` connections.
+fn pool_of(manager: Manager, max_size: usize) -> Result<Pool, StoreError> {
+    Pool::builder(manager)
+        .max_size(max_size)
+        .runtime(Runtime::Tokio1)
         .build()
-        .map_err(StoreError::unavailable)?;
-    Ok(builder
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(ChainOnly(chain)))
-        .with_no_client_auth())
+        .map_err(StoreError::unavailable)
 }
 
-/// The configuration that encrypts and checks no certificate.
-fn unchecked(
-    builder: rustls::ConfigBuilder<ClientConfig, rustls::WantsVerifier>,
-    provider: &CryptoProvider,
-) -> ClientConfig {
-    builder
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(Unchecked(
-            provider.signature_verification_algorithms,
-        )))
-        .with_no_client_auth()
+/// What a pool's connections use: Python's asyncpg checks a connection is open
+/// when it is lent, no more.
+fn manager_config() -> ManagerConfig {
+    ManagerConfig {
+        recycling_method: RecyclingMethod::Fast,
+    }
 }
 
-/// A pool for `dsn`, at most `max_size` connections, with what a cancel
-/// request connects with; `min_size` of them opened at once, so that a server
-/// out of reach fails here rather than at the first operation, as asyncpg's
+/// A pool for `dsn`, with what a cancel request connects with when TLS may be
+/// in use; `min_size` of its connections opened at once, so that a server out
+/// of reach fails here rather than at the first operation, as asyncpg's
 /// `create_pool`.
 pub(crate) async fn open(
     dsn: Option<&str>,
     min_size: usize,
     max_size: usize,
-) -> Result<(Pool, MakeRustlsConnect), StoreError> {
+) -> Result<(Pool, Option<MakeRustlsConnect>), StoreError> {
     if max_size == 0 {
         return Err(StoreError::Value(
             "max_size is expected to be greater than zero".to_owned(),
@@ -362,30 +274,24 @@ pub(crate) async fn open(
             "min_size is greater than max_size".to_owned(),
         ));
     }
-    let target = target(dsn)?;
     let Target {
-        config,
+        mut config,
         encryption,
-        root_certificate,
-    } = target;
-    // The root certificate is a file, read off the runtime's threads.
-    let tls =
-        tokio::task::spawn_blocking(move || tls_config(encryption, root_certificate.as_deref()))
+        files,
+    } = target(dsn)?;
+    let (pool, tls) = if only_sockets(&config) {
+        config.ssl_mode(SslMode::Disable);
+        let manager = Manager::from_config(config, NoTls, manager_config());
+        (pool_of(manager, max_size)?, None)
+    } else {
+        // The certificates are files, read off the runtime's threads.
+        let tls = tokio::task::spawn_blocking(move || tls_config(encryption, &files))
             .await
             .map_err(StoreError::unavailable)??;
-    let tls = MakeRustlsConnect::new(tls);
-    let manager = Manager::from_config(
-        config,
-        tls.clone(),
-        ManagerConfig {
-            recycling_method: RecyclingMethod::Fast,
-        },
-    );
-    let pool = Pool::builder(manager)
-        .max_size(max_size)
-        .runtime(Runtime::Tokio1)
-        .build()
-        .map_err(StoreError::unavailable)?;
+        let tls = MakeRustlsConnect::new(tls);
+        let manager = Manager::from_config(config, tls.clone(), manager_config());
+        (pool_of(manager, max_size)?, Some(tls))
+    };
     let mut opened = Vec::with_capacity(min_size);
     for _ in 0..min_size {
         opened.push(pool.get().await.map_err(StoreError::unavailable)?);
@@ -421,20 +327,63 @@ pub(crate) async fn close_own_pool(pool: &Pool, timeout: Duration, owner: &str) 
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::*;
 
     #[test]
     fn the_tls_params_leave_the_string_the_client_reads() {
-        let (dsn, mode, root) = without_tls_params(
-            "postgresql://u:p@h/d?sslmode=verify-full&sslrootcert=%2Fetc%2Fca.pem&connect_timeout=3",
-        );
-        assert_eq!(dsn, "postgresql://u:p@h/d?connect_timeout=3");
-        assert_eq!(mode.as_deref(), Some("verify-full"));
-        assert_eq!(root.as_deref(), Some("/etc/ca.pem"));
+        let read = read_query(
+            "postgresql://u:p@h/d?sslmode=verify-full&sslrootcert=%2Fetc%2Fca.pem&sslcrl=%2Fetc%2Fca.crl&connect_timeout=3",
+        )
+        .unwrap();
+        assert_eq!(read.dsn, "postgresql://u:p@h/d?connect_timeout=3");
+        assert_eq!(read.mode.as_deref(), Some("verify-full"));
+        assert_eq!(read.root_certificate.as_deref(), Some("/etc/ca.pem"));
+        assert_eq!(read.revocation_list.as_deref(), Some("/etc/ca.crl"));
         assert_eq!(
-            without_tls_params("postgresql://u:p@h/d?sslmode=disable").0,
+            read_query("postgresql://u:p@h/d?sslmode=disable")
+                .unwrap()
+                .dsn,
             "postgresql://u:p@h/d"
         );
+    }
+
+    /// A raw `?` in a password never drops the `sslmode` after it, as a plain
+    /// connection in place of the one asked for: refused, as asyncpg refuses
+    /// it, and without the password in the refusal.
+    #[test]
+    fn a_raw_question_mark_in_a_password_is_refused_without_its_text() {
+        for dsn in [
+            "postgresql://qm:pa?ss@127.0.0.1:1/postgres?sslmode=require",
+            "postgresql://qm:123?sslmode=hunter2@127.0.0.1:1/db",
+        ] {
+            let Err(refused) = target(Some(dsn)) else {
+                panic!("{dsn} was read");
+            };
+            assert!(matches!(refused, StoreError::Value(_)), "{refused:?}");
+            let text = refused.to_string();
+            assert!(
+                !text.contains("pa?ss") && !text.contains("hunter2"),
+                "{text}"
+            );
+        }
+    }
+
+    /// Python: asyncpg passes a parameter it does not read to the server as a
+    /// setting, and takes `database` for the database's name.
+    #[test]
+    fn a_parameter_the_client_does_not_read_is_a_setting_for_the_server() {
+        let read = target(Some(
+            "postgresql://u:p@h/d?search_path=tenant&statement_timeout=5%20s&options=-cx%3Dy",
+        ))
+        .unwrap();
+        assert_eq!(
+            read.config.get_options(),
+            Some("-cx=y -c search_path=tenant -c statement_timeout=5\\ s")
+        );
+        let named = target(Some("postgresql://u:p@h?database=mine")).unwrap();
+        assert_eq!(named.config.get_dbname(), Some("mine"));
     }
 
     /// Python: asyncpg refuses a string that names no Postgres scheme, and
@@ -447,26 +396,41 @@ mod tests {
         assert!(!refused.to_string().contains("secret"), "{refused}");
     }
 
+    /// A connection that never answers does not hang `init`: asyncpg's 60 s.
     #[test]
-    fn each_sslmode_names_its_encryption_and_a_bad_one_is_refused() {
-        for (name, encryption) in [
-            ("disable", Encryption::Disable),
-            ("allow", Encryption::Prefer),
-            ("prefer", Encryption::Prefer),
-            ("require", Encryption::Require),
-            ("verify-ca", Encryption::VerifyCa),
-            ("verify-full", Encryption::VerifyFull),
-        ] {
-            assert_eq!(Encryption::named(name).unwrap(), encryption, "{name}");
-        }
-        assert!(Encryption::named("off").is_err());
+    fn a_connection_has_asyncpg_s_timeout_unless_the_string_names_one() {
+        let default = target(Some("postgresql://u@h/d")).unwrap();
+        assert_eq!(default.config.get_connect_timeout(), Some(&CONNECT_TIMEOUT));
+        let named = target(Some("postgresql://u@h/d?connect_timeout=3")).unwrap();
+        assert_eq!(
+            named.config.get_connect_timeout(),
+            Some(&Duration::from_secs(3))
+        );
     }
 
-    /// A check of the server's name or chain needs a root certificate, as
-    /// asyncpg says; a file that is not there is no silent downgrade.
-    #[test]
-    fn verifying_without_a_root_certificate_is_refused() {
-        let refused = tls_config(Encryption::VerifyFull, Some("/nowhere/root.crt"));
-        assert!(refused.is_err());
+    /// `error`'s message, each of its causes' after it.
+    fn full_text(error: &dyn Error) -> String {
+        let mut text = error.to_string();
+        let mut cause = error.source();
+        while let Some(current) = cause {
+            text = format!("{text}: {current}");
+            cause = current.source();
+        }
+        text
+    }
+
+    /// A Unix socket connects, whatever the mode: the client asks a TLS
+    /// connector for a name it has none to give, which refused every such
+    /// string. No server here: the connection fails on the socket, not on TLS.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_unix_socket_is_tried_whatever_the_sslmode() {
+        for mode in ["disable", "prefer", "require"] {
+            let dsn = format!("postgresql://u@/d?host=/nowhere/at/all&sslmode={mode}");
+            let refused = open(Some(&dsn), 1, 1).await.err().unwrap();
+            let text = full_text(&refused);
+            assert!(!text.contains("dns"), "{mode}: {text}");
+            assert!(text.contains("connect"), "{mode}: {text}");
+        }
     }
 }

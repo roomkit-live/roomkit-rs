@@ -22,13 +22,13 @@ tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-postgres-rustls.workspace = true
 tracing.workspace = true
-webpki-roots.workspace = true
 
 [dev-dependencies]
 # The conformance runner's paced model, which the suite includes from
 # roomkit.
 futures-core.workspace = true
 pretty_assertions.workspace = true
+rcgen.workspace = true
 # The conformance runner's scripted agent, which the suite includes from
 # roomkit.
 roomkit-ai.workspace = true

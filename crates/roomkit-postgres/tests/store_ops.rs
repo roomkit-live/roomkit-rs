@@ -9,8 +9,8 @@ mod support;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelCapabilities, ChannelId, ChannelType, EventSource, Metadata,
-    Participant, ParticipantId, Room, RoomEvent, RoomId, TextContent,
+    ChannelBinding, ChannelCapabilities, ChannelId, ChannelType, EventSource, IdentityId, Metadata,
+    Participant, ParticipantId, Room, RoomEvent, RoomId, TextContent, Verification,
 };
 use roomkit::store::{CommitEventOptions, PatchRoomMetadataOptions};
 use roomkit::{ConversationStore, RoomKit, RoomKitOptions, StoreError};
@@ -440,6 +440,94 @@ async fn a_rewrite_keeps_what_the_model_does_not_read() {
     assert_eq!(capabilities["later"], json!(2));
     assert_eq!(capabilities["max_length"], Value::Null);
     assert_eq!(content["later"], json!(3));
+}
+
+/// A blank key is no key (RFC §13.4), written by an update too: two events of a
+/// channel never collide on one.
+#[tokio::test]
+async fn a_blank_key_written_by_an_update_is_no_key() {
+    let Some((_schema, store)) = fresh().await else {
+        return;
+    };
+    let room = room_id("r1");
+    store.create_room(Room::new(room.clone())).await.unwrap();
+    let mut first = store
+        .commit_event(&room, event("r1", "one"), CommitEventOptions::default())
+        .await
+        .unwrap();
+    first.idempotency_key = Some("  ".to_owned());
+    store.update_event(first).await.unwrap();
+    let mut second = store
+        .commit_event(&room, event("r1", "two"), CommitEventOptions::default())
+        .await
+        .unwrap();
+    second.idempotency_key = Some("  ".to_owned());
+    assert!(store.update_event(second).await.is_ok());
+}
+
+/// Python: `check_idempotency` reads no row: a key is found on an event this
+/// version's model cannot read, a later version's type among them.
+#[tokio::test]
+async fn a_key_is_found_on_a_row_the_model_cannot_read() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    let room = room_id("r1");
+    store.create_room(Room::new(room.clone())).await.unwrap();
+    let mut keyed = event("r1", "x");
+    keyed.idempotency_key = Some("k".to_owned());
+    store
+        .commit_event(&room, keyed, CommitEventOptions::default())
+        .await
+        .unwrap();
+    schema
+        .client()
+        .await
+        .batch_execute("UPDATE events SET type = 'from_a_later_version'")
+        .await
+        .unwrap();
+    let channel = channel();
+    for scope in [None, Some(&channel)] {
+        assert!(store.check_idempotency(&room, "k", scope).await.unwrap());
+    }
+    assert!(!store.check_idempotency(&room, "  ", None).await.unwrap());
+}
+
+/// A commit's timers and a verification's document keep, on a rewrite, what the
+/// model does not read (RMK-989).
+#[tokio::test]
+async fn a_commit_and_a_verification_keep_what_the_model_does_not_read() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    let room = room_id("r1");
+    store.create_room(Room::new(room.clone())).await.unwrap();
+    let identity = IdentityId::new("alice").unwrap();
+    let verification = Verification::new(identity.clone());
+    store.put_verification(verification.clone()).await.unwrap();
+    let client = schema.client().await;
+    client
+        .batch_execute(
+            "UPDATE rooms SET timers = timers || '{\"later\": 1}';
+             UPDATE verifications SET data = data || '{\"later\": 2}';",
+        )
+        .await
+        .unwrap();
+    store
+        .commit_event(&room, event("r1", "x"), CommitEventOptions::default())
+        .await
+        .unwrap();
+    store.put_verification(verification).await.unwrap();
+    let row = client
+        .query_one(
+            "SELECT (SELECT timers FROM rooms), (SELECT data FROM verifications)",
+            &[],
+        )
+        .await
+        .unwrap();
+    let (timers, data): (Value, Value) = (row.get(0), row.get(1));
+    assert_eq!(timers["later"], json!(1));
+    assert_eq!(data["later"], json!(2));
 }
 
 /// Python: `test_without_cross_process_lock_the_constraint_catches_races` and

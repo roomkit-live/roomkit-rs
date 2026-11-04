@@ -604,6 +604,39 @@ async fn a_migration_drops_only_when_it_is_run_and_confirmed() {
     assert_eq!(count().await, Some(0));
 }
 
+/// Python: `init` keeps its pool before it reads the schema: a version 1 database
+/// migrates on the store whose `init` refused it, as its refusal tells the caller.
+#[tokio::test]
+async fn a_store_whose_init_refused_a_version_1_schema_migrates_it() {
+    if dsn().is_none() {
+        return;
+    }
+    let schema = TempSchema::new().await;
+    let client = schema.client().await;
+    client
+        .batch_execute(
+            "CREATE TABLE rooms (id TEXT PRIMARY KEY, data JSONB NOT NULL);
+             INSERT INTO rooms VALUES ('old', '{}');",
+        )
+        .await
+        .unwrap();
+    let store = schema.store();
+    let refused = store.init(SMALL_POOL).await.unwrap_err();
+    assert!(schema_error(&refused).is_some(), "{refused:?}");
+    let dry = store.migrate(MigrateOptions::default()).await.unwrap();
+    assert_eq!(dry["action"], json!("dry_run"));
+    let run = MigrateOptions {
+        dry_run: false,
+        confirm: true,
+    };
+    assert_eq!(
+        store.migrate(run).await.unwrap()["action"],
+        json!("migrated")
+    );
+    store.init(SMALL_POOL).await.unwrap();
+    assert!(!store.room_exists(&room_id("old")).await.unwrap());
+}
+
 /// Python: `test_migrate_noop_on_v2`.
 #[tokio::test]
 async fn a_migration_of_a_version_2_schema_does_nothing() {

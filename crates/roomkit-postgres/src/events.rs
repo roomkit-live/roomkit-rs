@@ -404,7 +404,8 @@ async fn update_row(
             &name(&event.status)?,
             &name(&event.visibility)?,
             &Value::Object(event.metadata.clone()),
-            &event.idempotency_key,
+            // A blank key is no key (RFC §13.4).
+            &idempotency::key(event.idempotency_key.clone()),
             &event.blocked_by,
             &event.source.channel_id.as_str(),
             &event.source.channel_type.as_str(),
@@ -551,6 +552,39 @@ pub(crate) async fn delete(
     changes.sort_by_key(|event| event.index);
     thread.append(&mut changes);
     Ok(thread)
+}
+
+/// Whether the room holds an event with `key`, from `channel_id`, or from any
+/// channel for none (RFC §13.4, §22.1), its row unread: a blank key names none.
+pub(crate) async fn key_held<C: GenericClient>(
+    client: &C,
+    room_id: &RoomId,
+    channel_id: Option<&ChannelId>,
+    key: &str,
+) -> Result<bool, Failure> {
+    if !idempotency::is_key(key) {
+        return Ok(false);
+    }
+    let found = match channel_id {
+        None => {
+            query_opt(
+                client,
+                "SELECT 1 FROM events WHERE room_id = $1 AND idempotency_key = $2 LIMIT 1",
+                &[&room_id.as_str(), &key],
+            )
+            .await?
+        }
+        Some(channel) => {
+            query_opt(
+                client,
+                "SELECT 1 FROM events WHERE room_id = $1 AND source_channel_id = $2 \
+                 AND idempotency_key = $3",
+                &[&room_id.as_str(), &channel.as_str(), &key],
+            )
+            .await?
+        }
+    };
+    Ok(found.is_some())
 }
 
 /// The event the room committed with `key`, from `channel_id`, or from any

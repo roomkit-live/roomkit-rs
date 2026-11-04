@@ -7,7 +7,8 @@
 //! implementations share one database:
 //!
 //! - a value of a JSONB column roomkit-rs does not model (a capability Python
-//!   adds, a content's member) is kept when it rewrites the row;
+//!   adds, a content's member) is kept when it rewrites the row, an integer past
+//!   64 bits excepted, which `serde_json` reads as a float;
 //! - every statement is parameterized, as Python's are; a statement's text
 //!   holds only this crate's own names;
 //! - a DSN holds a password: nothing here logs or prints one.
@@ -62,6 +63,7 @@ mod schema;
 mod side_effects;
 mod store;
 mod timeline;
+mod tls;
 mod values;
 mod verifications;
 
