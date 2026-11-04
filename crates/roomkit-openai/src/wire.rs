@@ -260,10 +260,12 @@ struct AnswerMessage {
 /// A call the answer makes.
 #[derive(Debug, Deserialize)]
 struct AnswerCall {
-    /// Empty when the server gave none: the loop makes one.
-    #[serde(default, deserialize_with = "nullable")]
+    /// Empty when the server gave none: `CallIds` mints one.
+    #[serde(default, deserialize_with = "server_id")]
     id: String,
-    function: AnswerFunction,
+    /// None for an entry with no function, a custom tool's call: no call.
+    #[serde(default)]
+    function: Option<AnswerFunction>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -294,6 +296,24 @@ struct PromptDetails {
 
 /// A member that reads `null` as absent: its type's default, a count of 0,
 /// an empty text or list, as the reference implementation reads it.
+/// A server's call id as text, whatever it wrote: Python's `CallIds` reads
+/// `str(server_id) if server_id else ""`, nothing for what Python reads as false.
+fn server_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match Value::deserialize(deserializer)? {
+        Value::String(id) => id,
+        Value::Null | Value::Bool(false) => String::new(),
+        Value::Bool(true) => "True".to_owned(),
+        Value::Number(number) if number.as_f64() == Some(0.0) => String::new(),
+        Value::Number(number) => number.to_string(),
+        Value::Array(items) if items.is_empty() => String::new(),
+        Value::Object(members) if members.is_empty() => String::new(),
+        other @ (Value::Array(_) | Value::Object(_)) => other.to_string(),
+    })
+}
+
 fn nullable<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -336,8 +356,9 @@ pub(crate) fn response(body: &[u8], secret: &str) -> Result<Whole, OpenAiError> 
         .message
         .tool_calls
         .into_iter()
-        .map(|call| {
-            let arguments = match call.function.arguments {
+        .filter_map(|call| {
+            let function = call.function?;
+            let arguments = match function.arguments {
                 Value::String(text) => text,
                 Value::Null => String::new(),
                 other
@@ -345,7 +366,7 @@ pub(crate) fn response(body: &[u8], secret: &str) -> Result<Whole, OpenAiError> 
                     other.to_string()
                 }
             };
-            RawCall::new(call.id, call.function.name, arguments)
+            Some(RawCall::new(call.id, function.name, arguments))
         })
         .collect();
     Ok(Whole::new(text, calls, finished(choice.finish_reason, usage)).with_thinking(thinking))
@@ -392,8 +413,8 @@ struct Delta {
 struct DeltaCall {
     #[serde(default, deserialize_with = "nullable")]
     index: u64,
-    #[serde(default)]
-    id: Option<String>,
+    #[serde(default, deserialize_with = "server_id")]
+    id: String,
     #[serde(default)]
     function: Option<DeltaFunction>,
 }
@@ -495,7 +516,7 @@ impl Folding {
         };
         self.calls.fold(&Fragment {
             index,
-            id: id.as_deref().filter(|id| !id.is_empty()),
+            id: Some(id.as_str()).filter(|id| !id.is_empty()),
             name: name.filter(|name| !name.is_empty()),
             arguments: &arguments,
             function: function.is_some(),
@@ -887,8 +908,7 @@ mod tests {
     }
 
     /// An OpenAI-compatible server may write `null` for any member it
-    /// leaves out: each reads as absent, a call's id made by
-    /// the loop.
+    /// leaves out: each reads as absent, a call's id left to `CallIds`.
     #[test]
     fn a_completion_s_nulls_read_as_absent() {
         let body = br#"{"id": null, "choices": [{"index": 0, "finish_reason": null,
@@ -1023,6 +1043,105 @@ mod tests {
         assert_eq!(
             folded(&[(0, no_function), (0, fragment(None, Some("now"), "{}"))]),
             [RawCall::new("a", "now", "{}")]
+        );
+    }
+
+    // Python: providers/ai/openai_dialect.py ToolCallSlots, its answers read from
+    // Python: each fragment an id, a name and its arguments, and the calls they
+    // fold into.
+    #[test]
+    fn what_a_fragment_on_an_occupied_index_folds_into() {
+        type Part = (Option<&'static str>, Option<&'static str>, &'static str);
+        let cases: [(&[Part], Vec<RawCall>); 8] = [
+            (
+                &[
+                    (Some("a"), Some("now"), r#"{"o": "#),
+                    (None, None, r#"{"k": 1}}"#),
+                ],
+                vec![RawCall::new("a", "now", r#"{"o": {"k": 1}}"#)],
+            ),
+            (
+                &[(Some("a"), Some("now"), "{}"), (None, None, "\n")],
+                vec![RawCall::new("a", "now", "{}\n")],
+            ),
+            (
+                &[(Some("a"), Some("now"), "{}"), (None, Some("now"), " ")],
+                vec![RawCall::new("a", "now", "{} ")],
+            ),
+            (
+                &[(Some("a"), Some("now"), ""), (None, Some("now"), "{}")],
+                vec![RawCall::new("a", "now", "{}")],
+            ),
+            (
+                &[(Some("a"), Some("now"), ""), (None, Some("later"), "{}")],
+                vec![
+                    RawCall::new("a", "now", ""),
+                    RawCall::new("", "later", "{}"),
+                ],
+            ),
+            (
+                &[(Some("a"), Some("now"), "{}"), (Some("b"), None, "{}")],
+                vec![RawCall::new("a", "now", "{}"), RawCall::new("b", "", "{}")],
+            ),
+            (
+                &[(Some("a"), Some("now"), "{}"), (Some("a"), None, "{}")],
+                vec![
+                    RawCall::new("a", "now", "{}"),
+                    RawCall::new("", "now", "{}"),
+                ],
+            ),
+            // The call was named before its server gave an id: no id starts
+            // another call, none is taken.
+            (
+                &[
+                    (None, Some("now"), r#"{"tz": "#),
+                    (Some("a"), None, r#""A""#),
+                    (Some("b"), None, "}"),
+                ],
+                vec![RawCall::new("", "now", r#"{"tz": "A"}"#)],
+            ),
+        ];
+        for (parts, read) in cases {
+            let fragments: Vec<(u64, Value)> = parts
+                .iter()
+                .map(|(id, name, arguments)| (0, fragment(*id, *name, arguments)))
+                .collect();
+            assert_eq!(folded(&fragments), read, "{parts:?}");
+        }
+    }
+
+    // Python: tests/test_providers/test_tool_call_handoff.py::TestCallIds::test_a_server_id_that_is_not_text_becomes_text
+    #[test]
+    fn a_server_id_that_is_not_text_becomes_text() {
+        let body = br#"{"choices": [{"index": 0, "finish_reason": "tool_calls",
+            "message": {"tool_calls": [
+                {"id": 7, "function": {"name": "now", "arguments": "{}"}},
+                {"id": 0, "function": {"name": "now", "arguments": "{}"}}]}}]}"#;
+        assert_eq!(
+            response(body, "sk-1").unwrap().calls,
+            [
+                RawCall::new("7", "now", "{}"),
+                RawCall::new("", "now", "{}")
+            ]
+        );
+        let streamed = folded(&[(
+            0,
+            serde_json::json!({ "id": 7, "function": { "name": "now" } }),
+        )]);
+        assert_eq!(streamed, [RawCall::new("7", "now", "")]);
+    }
+
+    // Python: providers/ai/openai_dialect.py message_tool_calls: an entry with no
+    // function is no call, whole as in a stream.
+    #[test]
+    fn a_whole_answer_s_entry_with_no_function_is_no_call() {
+        let body = br#"{"choices": [{"index": 0, "finish_reason": "tool_calls",
+            "message": {"tool_calls": [
+                {"id": "a", "type": "custom", "custom": {"name": "x"}},
+                {"id": "b", "function": {"name": "now", "arguments": "{}"}}]}}]}"#;
+        assert_eq!(
+            response(body, "sk-1").unwrap().calls,
+            [RawCall::new("b", "now", "{}")]
         );
     }
 

@@ -4,9 +4,9 @@
 //! A fragment belongs to the call its stream index names, unless it starts
 //! another call: a server that sends each call whole may tag every one with
 //! index 0, and folding them together would run one call made of two. No
-//! composition event names a call here, so a call's id is its server's, empty
-//! until it gives one no other call holds; [`CallIds`](roomkit_ai::CallIds)
-//! mints the rest once the response is over.
+//! composition event crosses here, so a call's id is its server's, empty until
+//! it gives one no other call holds before the call is named;
+//! [`CallIds`](roomkit_ai::CallIds) mints the rest once the response is over.
 
 use std::collections::{HashMap, HashSet};
 
@@ -23,6 +23,9 @@ struct Slot {
     /// Whether a fragment carried a function, even one with no name and no
     /// arguments: that is a call, for the loop to refuse.
     function: bool,
+    /// Whether a composition event would have named the call, on a wire that
+    /// sends them: it keeps the id it had then.
+    announced: bool,
 }
 
 /// One fragment of a call, as a chunk carries it.
@@ -83,15 +86,18 @@ impl CallSlots {
         slot.function |= fragment.function;
         if let Some(id) = fragment.id
             && slot.id.is_empty()
+            && !slot.announced
             && !self.taken.contains(id)
         {
             id.clone_into(&mut slot.id);
             self.taken.insert(id.to_owned());
         }
+        let first_name = name.is_some() && slot.name.is_empty();
         if let Some(name) = name {
             name.clone_into(&mut slot.name);
         }
         slot.arguments.push_str(fragment.arguments);
+        slot.announced |= !slot.name.is_empty() && (first_name || !fragment.arguments.is_empty());
     }
 
     /// The calls once the response is over, each with its argument text: a
