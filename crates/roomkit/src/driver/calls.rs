@@ -31,7 +31,7 @@ use crate::error::RoomKitError;
 use crate::events::Handled;
 use crate::hooks;
 use crate::kit::{
-    Inner, end_identity_span, end_route_span, named_correspondent, run_identity_hooks,
+    Inner, end_identity_span, named_correspondent, run_identity_hooks,
     verification_inbound as verification,
 };
 use crate::room_turns::{self, Queued, Started};
@@ -800,20 +800,13 @@ pub(super) async fn route<S: ConversationStore>(
     query: &RouteQuery,
 ) -> Outcome {
     let options = router::options_of(query);
-    let span = inner.route_span(&query.channel_id, &query.sender_id);
     let routed = inner
         .router()
         .route(&query.channel_id, &query.channel_type, options)
         .await;
     match routed {
-        Ok(room_id) => {
-            end_route_span(span, room_id.as_ref());
-            Outcome::Routed(room_id)
-        }
-        Err(error) => {
-            span.fail_error("RouterError", error.to_string(), Metadata::new());
-            Outcome::Failed(ErrorRecord::new("RouterError", error.to_string()))
-        }
+        Ok(room_id) => Outcome::Routed(room_id),
+        Err(error) => Outcome::Failed(ErrorRecord::new("RouterError", error.to_string())),
     }
 }
 
@@ -1024,7 +1017,7 @@ pub(super) fn perform<S: ConversationStore>(
     match notice {
         Notice::FrameworkEvent(event) => return inner.emit(event),
         // The run's own: the driver stops its read (`Driver::notice`).
-        Notice::StopReading { .. } | Notice::CutReadOver { .. } => {}
+        Notice::StopReading { .. } | Notice::CutReadOver { .. } | Notice::Span(_) => {}
         Notice::AsyncHooks {
             trigger,
             hooks,

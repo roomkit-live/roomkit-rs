@@ -849,3 +849,183 @@ async fn a_hook_raising_no_text_reads_its_class_even_recording() {
     assert_eq!(hook.error_message.as_deref(), Some("HookError"));
     kit.close().await.unwrap();
 }
+
+// Python: core/mixins/inbound.py `_route_to_room`: its span reads the room
+// routing came to, one the kit opened included.
+#[tokio::test]
+async fn a_route_reads_the_room_the_kit_creates() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    let fresh = TransportChannel::new(
+        id("fresh"),
+        ChannelType::SMS,
+        TransportChannelOptions::default(),
+    );
+    kit.register_channel(fresh).unwrap();
+    let message = InboundMessage::new(id("fresh"), "user1", TextContent::new("hello"));
+    let result = kit
+        .process_inbound(message, ProcessInboundOptions::default())
+        .await
+        .unwrap();
+    let created = result.event.unwrap().room_id.to_string();
+    assert_ne!(created, "r1");
+    let spans = mock.completed_spans();
+    let route = named(&spans, "framework.route");
+    assert_eq!(route.status, "ok");
+    assert_eq!(route.attributes[Attr::ROOM_ID], json!(created));
+    let root = named(&spans, "framework.inbound");
+    assert_eq!(route.parent_id.as_deref(), Some(root.id.as_str()));
+    kit.close().await.unwrap();
+}
+
+/// The span of the set of the message sent on `src`.
+fn message_s_broadcast(mock: &MockTelemetryProvider) -> Span {
+    let spans = mock.get_spans(SpanKind::Broadcast);
+    let of_the_message = spans
+        .into_iter()
+        .filter(|span| span.attributes[Attr::CHANNEL_ID] == json!("src"));
+    let found: Vec<Span> = of_the_message.collect();
+    assert_eq!(found.len(), 1, "{found:?}");
+    found.into_iter().next().unwrap()
+}
+
+/// `agent` registered and attached to `r1`.
+async fn with_agent(kit: &RoomKit, agent: &str) {
+    let echo = EchoAgent::new(id(agent), "Yes.", EchoAgentOptions::default());
+    kit.register_channel(echo).unwrap();
+    kit.attach_channel(&room(), &id(agent), AttachChannelOptions::default())
+        .await
+        .unwrap();
+}
+
+// Python: core/event_router.py `execute_plan`: `target_count` is
+// `len(plan.targets)`, whom the event reaches, asked or not; the agent the
+// address leaves out is one (RFC §19.3).
+#[tokio::test]
+async fn a_broadcast_counts_the_targets_it_planned_asked_or_not() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    with_agent(&kit, "a1").await;
+    with_agent(&kit, "a2").await;
+    let mut message = hello();
+    message.addressed_to = Some(vec![id("a1")]);
+    let named = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..ProcessInboundOptions::default()
+    };
+    kit.process_inbound(message, named).await.unwrap();
+    let broadcast = message_s_broadcast(&mock);
+    assert_eq!(broadcast.attributes["target_count"], json!(3));
+    assert_eq!(broadcast.attributes["delivered_count"], json!(1));
+    assert_eq!(broadcast.attributes["failed_count"], json!(0));
+    kit.close().await.unwrap();
+}
+
+// Python: core/event_router.py `_process_target`: an agent the event asks,
+// not registered, is a failure of the set, `channel_not_registered`; a
+// transport absent here is none (RFC §10.2 step 3).
+#[tokio::test]
+async fn a_broadcast_counts_an_unregistered_agent_as_failed_a_transport_not() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    with_agent(&kit, "gone").await;
+    kit.unregister_channel(&id("gone")).unwrap();
+    kit.unregister_channel(&id("out")).unwrap();
+    inbound(&kit).await;
+    let broadcast = message_s_broadcast(&mock);
+    assert_eq!(broadcast.attributes["target_count"], json!(2));
+    assert_eq!(broadcast.attributes["delivered_count"], json!(0));
+    assert_eq!(broadcast.attributes["failed_count"], json!(1));
+    kit.close().await.unwrap();
+}
+
+// Python: core/event_router.py `execute_plan`: a target that fails is one of
+// `errors`, a send that goes through one of `delivery_outputs`.
+#[tokio::test]
+async fn a_broadcast_counts_what_its_targets_came_to() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    let fails = TransportChannel::new(
+        id("no-recipient"),
+        ChannelType::SMS,
+        TransportChannelOptions::default(),
+    );
+    kit.register_channel(fails).unwrap();
+    kit.attach_channel(
+        &room(),
+        &id("no-recipient"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    inbound(&kit).await;
+    let broadcast = message_s_broadcast(&mock);
+    assert_eq!(broadcast.attributes["target_count"], json!(2));
+    assert_eq!(broadcast.attributes["delivered_count"], json!(1));
+    assert_eq!(broadcast.attributes["failed_count"], json!(1));
+    kit.close().await.unwrap();
+}
+
+fn send_event_spans(mock: &MockTelemetryProvider) -> Vec<Span> {
+    let active = mock.get_active_spans().into_iter();
+    active
+        .chain(mock.completed_spans())
+        .filter(|span| span.name == "framework.send_event")
+        .collect()
+}
+
+// Python: core/_host_post.py `post`: what it refuses before `_inject` opens
+// `framework.send_event` leaves no span.
+#[tokio::test]
+async fn a_post_refused_before_its_injection_opens_no_span() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    let not_a_host = PostOptions {
+        channel_id: Some(id("out")),
+        ..PostOptions::default()
+    };
+    let no_such_channel = PostOptions {
+        channel_id: Some(id("nowhere")),
+        ..PostOptions::default()
+    };
+    let unreached = PostOptions {
+        participant_id: Some(roomkit::model::ParticipantId::new("nobody").unwrap()),
+        ..PostOptions::default()
+    };
+    for options in [not_a_host, no_such_channel, unreached] {
+        let refused = kit.post(&room(), TextContent::new("Hi"), options).await;
+        assert!(refused.is_err());
+    }
+    let nowhere = RoomId::new("no-such-room").unwrap();
+    let refused = kit
+        .post(&nowhere, TextContent::new("Hi"), PostOptions::default())
+        .await;
+    assert!(refused.is_err());
+    // A room the host channel was detached from.
+    kit.post(&room(), TextContent::new("Hi"), PostOptions::default())
+        .await
+        .unwrap();
+    mock.reset();
+    kit.detach_channel(&room(), &ChannelId::host(), DetachChannelOptions::default())
+        .await
+        .unwrap();
+    let refused = kit
+        .post(&room(), TextContent::new("Hi"), PostOptions::default())
+        .await;
+    assert!(refused.is_err());
+    assert_eq!(send_event_spans(&mock), vec![]);
+    kit.close().await.unwrap();
+}
+
+// Python: core/framework.py `_send_event`: an instruction that names no agent
+// is refused before it goes in.
+#[tokio::test]
+async fn a_send_event_refused_before_its_injection_opens_no_span() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    let refused = kit
+        .send_event(
+            &room(),
+            &id("nowhere"),
+            TextContent::new("Hi"),
+            SendEventOptions::default(),
+        )
+        .await;
+    assert!(refused.is_err());
+    assert_eq!(send_event_spans(&mock), vec![]);
+    kit.close().await.unwrap();
+}

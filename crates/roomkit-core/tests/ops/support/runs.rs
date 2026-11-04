@@ -317,7 +317,10 @@ impl Sim {
                 } => self.offer(operation, *entry, origin, *call),
             }
         }
-        let step = operation.poll(&self.env);
+        let mut step = operation.poll(&self.env);
+        // What only the driver's spans read is no part of a run's journal.
+        step.notices
+            .retain(|notice| !matches!(notice, Notice::Span(_)));
         self.journal.extend(step.notices.iter().map(journal_line));
         for notice in &step.notices {
             if let Notice::AsyncHooks { trigger, event, .. } = notice {

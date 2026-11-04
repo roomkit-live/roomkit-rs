@@ -1,39 +1,46 @@
-//! The `framework.broadcast` spans of a run: each delivery set of the run
-//! from its first target's call to the set leaving its place in the room's
-//! lane, as Python's `EventRouter.broadcast` opens one around a set.
+//! The spans of a run: its message's `framework.route`, from the router's
+//! call to the room step 2 hands the channel, as Python's `_route_to_room`
+//! opens one around `_route_and_claim`; and each delivery set's
+//! `framework.broadcast`, from its first target's call to its last target's
+//! end, as Python's `EventRouter.execute_plan` opens one around a set.
 
 use std::collections::HashMap;
 
-use roomkit_core::model::{EventId, Metadata, RoomEvent};
-use roomkit_core::ops::{
-    ChannelOutcome, ChannelRequest, EffectId, HoldRequest, Outcome, Request, TURN_CUT,
-};
+use roomkit_core::model::{EventId, Metadata, RoomEvent, RoomId};
+use roomkit_core::ops::{ChannelRequest, EffectId, Outcome, Request, SpanNote};
+use roomkit_core::rules::routing::RouteQuery;
 use serde_json::Value;
 
-use crate::telemetry::{Attr, KitTelemetry, OpenSpan, SpanKind, StartSpanOptions};
+use crate::kit::end_route_span;
+use crate::telemetry::{
+    Attr, KitTelemetry, OpenSpan, SpanKind, StartSpanOptions, current_call_goes_in,
+};
 
-/// A delivery set's span, and what its end reports.
-struct Broadcast {
+/// A message's `framework.route`, until its room is known.
+struct Routing {
     span: OpenSpan,
-    targets: u64,
-    delivered: u64,
-    failed: u64,
+    /// The router's call under way, which fails the message when it fails.
+    asked: Option<EffectId>,
+    /// What failed last on the way to the room: what stopped the run, if
+    /// it ends with no room.
+    failure: Option<(String, String)>,
 }
 
-/// What a call of a set counts as, once answered.
-#[derive(Clone, Copy)]
-enum Call {
-    OnEvent,
-    Deliver,
-}
+/// What Python's `_PastTheCapError` reads: the one way to stop short of a
+/// room that nothing failed for.
+const PAST_THE_CAP: &str = "_PastTheCapError";
+
+/// What Python's `_RoutingTimeoutError` reads: the call's deadline passed
+/// on the way to the room.
+const ROUTING_TIMEOUT: &str = "_RoutingTimeoutError";
 
 pub(super) struct RunSpans {
     telemetry: KitTelemetry,
+    routing: Option<Routing>,
     /// The events the run committed, until their set is over: what a set's
     /// span reads of its event.
     committed: HashMap<EventId, (String, String, Option<String>)>,
-    open: HashMap<EventId, Broadcast>,
-    calls: HashMap<EffectId, (EventId, Call)>,
+    open: HashMap<EventId, OpenSpan>,
 }
 
 /// The `voice_session_id` an event's metadata carries, if any.
@@ -48,32 +55,35 @@ impl RunSpans {
     pub(super) fn new(telemetry: KitTelemetry) -> Self {
         Self {
             telemetry,
+            routing: None,
             committed: HashMap::new(),
             open: HashMap::new(),
-            calls: HashMap::new(),
         }
     }
 
-    /// Notes what `request` means to the run's sets; the id of the
+    /// Notes what `request` means to the run's spans; the id of the
     /// `framework.broadcast` span the call of `effect` runs under, when it
     /// is a set's.
     #[expect(
         clippy::wildcard_enum_match_arm,
-        reason = "a set's span reads a set's calls and its leaving alone, whatever else a run asks"
+        reason = "the spans read a set's calls and a message's way to its room alone, whatever \
+                  else a run asks"
     )]
     pub(super) fn requested(&mut self, effect: EffectId, request: &Request) -> Option<String> {
         match request {
-            Request::Channel(ChannelRequest::OnEvent { event, .. }) => {
-                self.called(effect, event, Call::OnEvent);
+            Request::Channel(
+                ChannelRequest::OnEvent { event, .. } | ChannelRequest::Deliver { event, .. },
+            ) => Some(self.set_of(event)),
+            Request::Channel(ChannelRequest::HandleInbound { context, .. }) => {
+                self.routed_to(&context.room.id);
+                None
             }
-            Request::Channel(ChannelRequest::Deliver { event, .. }) => {
-                self.called(effect, event, Call::Deliver);
+            Request::Route { query } => {
+                self.routes(effect, query);
+                None
             }
-            Request::Hold(HoldRequest::LeaveLane { event_id, .. }) => self.left(event_id),
-            _ => return None,
+            _ => None,
         }
-        let (event_id, _) = self.calls.get(&effect)?;
-        Some(self.open.get(event_id)?.span.id().to_owned())
     }
 
     /// Remembers `event`, which the run commits, for its set's span.
@@ -88,19 +98,86 @@ impl RunSpans {
         );
     }
 
-    fn called(&mut self, effect: EffectId, event: &RoomEvent, call: Call) {
-        let (room, source, session) = (
+    /// Takes what the operation told the run's spans.
+    pub(super) fn noted(&mut self, note: SpanNote) {
+        match note {
+            SpanNote::Injecting => current_call_goes_in(),
+            SpanNote::SetOver {
+                event_id,
+                targets,
+                delivered,
+                failed,
+            } => self.set_over(&event_id, targets, delivered, failed),
+        }
+    }
+
+    /// Reads the answer to the call of `effect`, while the message finds its
+    /// room: a router that fails fails the message, a failure of any other
+    /// step only once the run stops there.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "any other answer is no failure on the way to the room"
+    )]
+    pub(super) fn answered(&mut self, effect: EffectId, outcome: &Outcome) {
+        let Some(routing) = &mut self.routing else {
+            return;
+        };
+        let failure = match outcome {
+            Outcome::Failed(error) => (error.error_type.clone(), error.message.clone()),
+            Outcome::DeadlinePassed => (ROUTING_TIMEOUT.to_owned(), String::new()),
+            _ => return,
+        };
+        if routing.asked != Some(effect) {
+            routing.failure = Some(failure);
+            return;
+        }
+        if let Some(routing) = self.routing.take() {
+            routing
+                .span
+                .fail_error(failure.0, failure.1, Metadata::new());
+        }
+    }
+
+    /// The run is over: a message that found no room, past its budget or
+    /// past a failure, ends its span in error. A run dropped before this
+    /// ends its spans `cancelled`.
+    pub(super) fn over(&mut self) {
+        if let Some(routing) = self.routing.take() {
+            let (class, text) = routing
+                .failure
+                .unwrap_or_else(|| (PAST_THE_CAP.to_owned(), String::new()));
+            routing.span.fail_error(class, text, Metadata::new());
+        }
+    }
+
+    /// The router is asked: the message's `framework.route` opens, once
+    /// however many times step 2 asks.
+    fn routes(&mut self, effect: EffectId, query: &RouteQuery) {
+        let routing = self.routing.get_or_insert_with(|| Routing {
+            span: self
+                .telemetry
+                .route_span(None, &query.channel_id, &query.sender_id),
+            asked: None,
+            failure: None,
+        });
+        routing.asked = Some(effect);
+    }
+
+    /// The message's room is known, `room_id`, and handed to its channel.
+    fn routed_to(&mut self, room_id: &RoomId) {
+        if let Some(routing) = self.routing.take() {
+            end_route_span(routing.span, Some(room_id));
+        }
+    }
+
+    /// The id of the span of `event`'s set, opened with its first call.
+    fn set_of(&mut self, event: &RoomEvent) -> String {
+        self.opened(
+            &event.id,
             event.room_id.to_string(),
             event.source.channel_id.to_string(),
             voice_session(&event.metadata),
-        );
-        self.opened(&event.id, room, source, session);
-        if matches!(call, Call::OnEvent)
-            && let Some(broadcast) = self.open.get_mut(&event.id)
-        {
-            broadcast.targets += 1;
-        }
-        self.calls.insert(effect, (event.id.clone(), call));
+        )
     }
 
     fn opened(
@@ -109,65 +186,29 @@ impl RunSpans {
         room: String,
         source: String,
         session: Option<String>,
-    ) {
-        if self.open.contains_key(event_id) {
-            return;
-        }
-        let mut attributes = Metadata::new();
-        attributes.insert(Attr::CHANNEL_ID.to_owned(), Value::String(source));
-        let span = OpenSpan::start(
-            &self.telemetry,
-            SpanKind::Broadcast,
-            "framework.broadcast",
-            StartSpanOptions {
-                room_id: Some(room),
-                session_id: session,
-                attributes,
-                ..StartSpanOptions::default()
-            },
-        );
-        self.open.insert(
-            event_id.clone(),
-            Broadcast {
-                span,
-                targets: 0,
-                delivered: 0,
-                failed: 0,
-            },
-        );
+    ) -> String {
+        let telemetry = &self.telemetry;
+        let span = self.open.entry(event_id.clone()).or_insert_with(|| {
+            let mut attributes = Metadata::new();
+            attributes.insert(Attr::CHANNEL_ID.to_owned(), Value::String(source));
+            OpenSpan::start(
+                telemetry,
+                SpanKind::Broadcast,
+                "framework.broadcast",
+                StartSpanOptions {
+                    room_id: Some(room),
+                    session_id: session,
+                    attributes,
+                    ..StartSpanOptions::default()
+                },
+            )
+        });
+        span.id().to_owned()
     }
 
-    /// The run is over: ends the spans of the sets that hold no place in a
-    /// lane, a delegated turn's, or whose place could not be taken, which no
-    /// `LeaveLane` ends. A run dropped before this ends them `cancelled`.
-    pub(super) fn over(&mut self) {
-        let open: Vec<EventId> = self.open.keys().cloned().collect();
-        for event_id in open {
-            self.left(&event_id);
-        }
-    }
-
-    /// Counts the answer to the call of `effect`, if it is a set's.
-    pub(super) fn answered(&mut self, effect: EffectId, outcome: &Outcome) {
-        let Some((event_id, call)) = self.calls.remove(&effect) else {
-            return;
-        };
-        let Some(broadcast) = self.open.get_mut(&event_id) else {
-            return;
-        };
-        // A cut turn leaves no result, as Python's `_leaves_no_result`.
-        let cut = matches!(outcome, Outcome::Failed(error) if error.error_type == TURN_CUT);
-        let failed = !cut && (matches!(outcome, Outcome::Failed(_)) || is_refused(outcome));
-        match (call, failed) {
-            (_, true) => broadcast.failed += 1,
-            (Call::Deliver, false) => broadcast.delivered += 1,
-            (Call::OnEvent, false) => {}
-        }
-    }
-
-    /// The set of `event_id` is over: ends its span, opening one for a set
-    /// that had no target, as Python's reports `target_count` 0.
-    fn left(&mut self, event_id: &EventId) {
+    /// The targets of `event_id`'s set are over: ends its span, opening one
+    /// for a set that called nobody, as Python's reports `target_count` 0.
+    fn set_over(&mut self, event_id: &EventId, targets: usize, delivered: usize, failed: usize) {
         let known = self.committed.remove(event_id);
         if !self.open.contains_key(event_id) {
             let Some((room, source, session)) = known else {
@@ -175,31 +216,15 @@ impl RunSpans {
             };
             self.opened(event_id, room, source, session);
         }
-        if let Some(broadcast) = self.open.remove(event_id) {
-            let mut attributes = Metadata::new();
-            attributes.insert("target_count".to_owned(), Value::from(broadcast.targets));
-            if broadcast.targets > 0 {
-                attributes.insert(
-                    "delivered_count".to_owned(),
-                    Value::from(broadcast.delivered),
-                );
-                attributes.insert("failed_count".to_owned(), Value::from(broadcast.failed));
-            }
-            broadcast.span.end(attributes);
+        let Some(span) = self.open.remove(event_id) else {
+            return;
+        };
+        let mut attributes = Metadata::new();
+        attributes.insert("target_count".to_owned(), Value::from(targets));
+        if targets > 0 {
+            attributes.insert("delivered_count".to_owned(), Value::from(delivered));
+            attributes.insert("failed_count".to_owned(), Value::from(failed));
         }
-    }
-}
-
-/// Whether `outcome` is a provider's refusal, a channel's raise, or an output
-/// that says it failed.
-#[expect(
-    clippy::wildcard_enum_match_arm,
-    reason = "any other answer is no failure of the target"
-)]
-fn is_refused(outcome: &Outcome) -> bool {
-    match outcome {
-        Outcome::Channel(ChannelOutcome::ProviderDelivery(_) | ChannelOutcome::Raised(_)) => true,
-        Outcome::Channel(ChannelOutcome::Output(output)) => output.error.is_some(),
-        _ => false,
+        span.end(attributes);
     }
 }

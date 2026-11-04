@@ -33,7 +33,7 @@ pub use results::{InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED};
 use thiserror::Error;
 
 use super::{Environment, FrameworkEvent};
-use crate::model::{Metadata, RoomContext, RoomEvent, RoomId, Timestamp};
+use crate::model::{EventId, Metadata, RoomContext, RoomEvent, RoomId, Timestamp};
 use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_registry::{HookId, HookTrigger};
 
@@ -198,6 +198,30 @@ pub enum Notice {
     CutReadOver {
         /// The call's record as the read left it.
         response_metadata: Metadata,
+    },
+    /// What the driver's spans read of the operation (Python's
+    /// `framework.send_event` and `framework.broadcast`).
+    Span(SpanNote),
+}
+
+/// What the operation tells the driver's spans: nothing depends on it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpanNote {
+    /// A direct injection goes in, its refusals before the room's lock
+    /// behind it: from here it is a `framework.send_event`, as Python's
+    /// `_inject` opens it.
+    Injecting,
+    /// The targets of `event_id`'s delivery set are over.
+    SetOver {
+        /// The event.
+        event_id: EventId,
+        /// Whom the event reaches, asked or not (Python's
+        /// `len(plan.targets)`).
+        targets: usize,
+        /// The sends that went through (`len(result.delivery_outputs)`).
+        delivered: usize,
+        /// The targets that failed (`len(result.errors)`).
+        failed: usize,
     },
 }
 

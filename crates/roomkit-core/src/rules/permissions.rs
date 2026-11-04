@@ -278,6 +278,10 @@ pub(crate) struct DeliveryPlan {
     /// reaches, which it asks later, one turn at a time (RFC §19.7.5). None
     /// of them is unavailable.
     pub deferred: Vec<ChannelBinding>,
+    /// How many bindings the event reaches, asked or not, an agent its
+    /// address leaves out among them: what the set's span reports, as
+    /// Python's `len(plan.targets)`.
+    pub reached: usize,
 }
 
 /// A transport channel a broadcast reaches.
@@ -323,7 +327,10 @@ pub(crate) fn plan_delivery(
         .collect();
     readers.sort_by(|first, second| first.channel_id.cmp(&second.channel_id));
 
-    let mut plan = DeliveryPlan::default();
+    let mut plan = DeliveryPlan {
+        reached: readers.len(),
+        ..DeliveryPlan::default()
+    };
     for reader in readers {
         match reader.category {
             ChannelCategory::Transport => plan.transports.push(TransportTarget {
@@ -370,7 +377,10 @@ pub(crate) fn plan_in_room(
         .filter(|binding| receives(binding, event))
         .collect();
     readers.sort_by(|first, second| first.channel_id.cmp(&second.channel_id));
-    let mut plan = DeliveryPlan::default();
+    let mut plan = DeliveryPlan {
+        reached: readers.len(),
+        ..DeliveryPlan::default()
+    };
     for reader in readers {
         match reader.category {
             ChannelCategory::Transport => plan.transports.push(TransportTarget {
@@ -422,7 +432,13 @@ pub(crate) fn plan_turn(
     let binding = bindings
         .iter()
         .find(|binding| &binding.channel_id == agent && receives(binding, event))?;
-    let mut plan = DeliveryPlan::default();
+    let mut plan = DeliveryPlan {
+        reached: bindings
+            .iter()
+            .filter(|binding| receives(binding, event))
+            .count(),
+        ..DeliveryPlan::default()
+    };
     if !chain_depth::reaches_limit(event.chain_depth, max_depth) {
         plan.agents.push(binding.clone());
     } else if !edits::opens_no_turn(event) {
@@ -509,6 +525,7 @@ pub(crate) fn plan_targets(
             delivers: reader.direction.sends(),
         })
         .collect();
+    plan.reached = plan.transports.len();
     plan
 }
 

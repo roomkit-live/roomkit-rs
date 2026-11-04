@@ -19,8 +19,8 @@ use roomkit::telemetry::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, HookExecution, HookOptions, HookTrigger,
-    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions, ToolCallEvent,
+    AttachChannelOptions, CreateRoomOptions, DelegateOptions, HookExecution, HookOptions,
+    HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions, ToolCallEvent,
     current_turn_host,
 };
 use roomkit_ai::{
@@ -591,4 +591,64 @@ async fn a_turn_host_s_send_event_stays_in_the_trace() {
         .collect();
     assert_eq!(roots, ["framework.inbound"], "{spans:?}");
     assert!(spans.iter().any(|span| span.name == "framework.send_event"));
+}
+
+// Python: core/mixins/lane_execution.py: `framework.broadcast` ends as
+// `execute_plan` returns; the turn's stream is read after it, a delegated
+// turn's as any other's.
+#[tokio::test]
+async fn a_delegated_turn_s_broadcast_ends_before_its_stream_is_read() {
+    let mock = Arc::new(MockTelemetryProvider::default());
+    let kit = RoomKit::new(RoomKitOptions {
+        telemetry: Some(Arc::clone(&mock).into()),
+        ..RoomKitOptions::default()
+    });
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let lookup = AiTool {
+        parameters: json!({ "type": "object", "properties": {} }),
+        ..AiTool::new("lookup", "Look it up.").unwrap()
+    };
+    let (reading, seen) = (Arc::clone(&mock), Arc::new(Mutex::new(Vec::new())));
+    let noted = Arc::clone(&seen);
+    let tools = Tools::new().tool(lookup, move |_call, _context| {
+        let active = reading.get_active_spans();
+        let names = active.into_iter().map(|span| span.name);
+        noted.lock().unwrap().extend(names);
+        async { Ok(ToolResult::Text("42".to_owned())) }
+    });
+    let options = AiChannelOptions {
+        tools: tools.into(),
+        ..AiChannelOptions::default()
+    };
+    let script = vec![
+        Round::Says("Checking.", Some("lookup")),
+        Round::Says("42.", None),
+    ];
+    let agent = AiChannel::new(id("ai"), Scripted::new(script), options).unwrap();
+    kit.register_channel(agent).unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    kit.attach_channel(&room(), &id("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let wait = DelegateOptions {
+        wait: true,
+        ..DelegateOptions::default()
+    };
+    kit.delegate(&room(), &id("ai"), "go", wait).await.unwrap();
+    kit.close().await.unwrap();
+    let seen = seen.lock().unwrap().clone();
+    assert!(seen.iter().any(|name| name == "llm.generate"), "{seen:?}");
+    assert!(
+        !seen.iter().any(|name| name == "framework.broadcast"),
+        "{seen:?}"
+    );
 }

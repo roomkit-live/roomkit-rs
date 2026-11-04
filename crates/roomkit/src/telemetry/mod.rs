@@ -27,17 +27,19 @@ mod tests;
 
 pub use config::TelemetryConfig;
 pub use console::{ConsoleTelemetryProvider, ConsoleTelemetryProviderOptions};
-pub(crate) use context::current_kit_telemetry;
 pub use context::get_current_span;
 pub(crate) use context::within_current_span;
 #[cfg(all(test, feature = "opentelemetry"))]
 pub(crate) use context::within_extracted_span;
+pub(crate) use context::{current_call_goes_in, current_kit_telemetry};
 #[doc(hidden)]
 pub use context::{current_records_sensitive_data, current_telemetry};
 pub use kinds::{Attr, SpanKind};
 pub use mock::MockTelemetryProvider;
 pub use noop::NoopTelemetryProvider;
-pub(crate) use open::{KitTelemetry, OpenSpan, end_hook_span, end_observer_span, within_kit};
+pub(crate) use open::{
+    KitTelemetry, LateSpan, OpenSpan, end_hook_span, end_observer_span, within_kit,
+};
 #[cfg(feature = "opentelemetry")]
 pub use otel::{OpenTelemetryProvider, OpenTelemetryProviderOptions};
 pub use provider::{

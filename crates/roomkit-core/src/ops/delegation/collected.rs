@@ -37,6 +37,9 @@ pub(super) struct Collected {
     pub(super) streamed: Vec<Streamed>,
     /// The turns that failed, to report under `generation`.
     pub(super) failures: Vec<Failure>,
+    /// How many agents the description asks are not registered: a failure
+    /// of its broadcast, though no turn of theirs ran to report one.
+    pub(super) unreached: usize,
 }
 
 impl Collected {
@@ -115,7 +118,9 @@ impl Collected {
                 log_raised(&binding.channel_id, &error);
                 // An agent not registered ran no turn, and a turn its
                 // cascade cut is no failure: neither is reported.
-                if error.error_type != CHANNEL_NOT_REGISTERED && error.error_type != TURN_CUT {
+                if error.error_type == CHANNEL_NOT_REGISTERED {
+                    self.unreached += 1;
+                } else if error.error_type != TURN_CUT {
                     self.failed(&binding, error);
                 }
             }

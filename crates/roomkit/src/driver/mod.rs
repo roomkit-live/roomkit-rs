@@ -807,6 +807,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                     caller.record().cut_read_over(response_metadata);
                 }
             }
+            Notice::Span(note) => self.spans.noted(note),
             notice @ (Notice::FrameworkEvent(_) | Notice::AsyncHooks { .. }) => {
                 if let Some(handled) = calls::perform(self.inner, notice) {
                     handled.wait().await;

@@ -25,8 +25,8 @@ use super::events::{CommitRecord, MutationError};
 use super::inbound::{Inbound, InboundError, error_event, stamp_response};
 use super::protocol::{
     ChannelOutcome, ChannelRequest, Delivered, Effect, EffectId, Entry, EntryId, InboundResult,
-    Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, Step, StoreOutcome,
-    StoreRequest,
+    Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, SpanNote, Step,
+    StoreOutcome, StoreRequest,
 };
 use super::{Environment, KitConfig};
 use crate::model::{
@@ -112,6 +112,8 @@ pub struct DelegatedTurn {
     /// The agent the task is given to, whose turn a stream's failure ends
     /// when several agents streamed.
     agent_id: Option<ChannelId>,
+    /// Whom the description reaches, asked or not, for its span.
+    reached: usize,
     /// The turns' failures not reported yet, each with its category: a
     /// turn's own (`generation`), a trace stream's (`streaming`).
     failures: Vec<Failure>,
@@ -157,6 +159,7 @@ impl DelegatedTurn {
             filing: None,
             created: Vec::new(),
             agent_id: None,
+            reached: 0,
             failures: Vec::new(),
             room_path: None,
             streamers: Vec::new(),
@@ -251,6 +254,28 @@ impl DelegatedTurn {
             self.asked.push((effect.id, binding.clone(), None));
             effects.push(effect);
         }
+        self.reached = context
+            .bindings
+            .iter()
+            .filter(|binding| permissions::receives(binding, &message))
+            .count();
+        if self.asked.is_empty() {
+            self.tell_set_over(0);
+        }
+    }
+
+    /// Tells the description's span its targets are over, `failed` of them
+    /// failed, as Python's `router.broadcast` reports them when it returns:
+    /// what it reaches is the room's agents alone, no send among them.
+    fn tell_set_over(&mut self, failed: usize) {
+        if let Some(message) = &self.committed {
+            self.notices.push(Notice::Span(SpanNote::SetOver {
+                event_id: message.id.clone(),
+                targets: self.reached,
+                delivered: 0,
+                failed,
+            }));
+        }
     }
 
     /// Once every turn answered: their side effects to store, then their
@@ -263,6 +288,7 @@ impl DelegatedTurn {
             let answer = collected.take(turn, binding, outcome, self.answers.len());
             self.answers.push(answer);
         }
+        self.tell_set_over(collected.failures.len() + collected.unreached);
         self.failures.append(&mut collected.failures);
         self.persist(
             collected.tasks,

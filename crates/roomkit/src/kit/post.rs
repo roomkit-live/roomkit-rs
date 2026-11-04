@@ -1,7 +1,7 @@
 //! The host's own voice (RFC §10.5 `post()`): what the application that
 //! embeds the kit says in a room in its own name.
 
-use roomkit_core::model::{ChannelId, EventContent, EventType, Metadata, RoomEvent, RoomId};
+use roomkit_core::model::{ChannelId, EventContent, EventType, RoomEvent, RoomId};
 use roomkit_core::ops::Entry;
 
 use super::RoomKit;
@@ -72,12 +72,7 @@ impl<S: ConversationStore> RoomKit<S> {
             post: Box::new(options.post(content)),
         };
         let posted = span.within(Box::pin(self.enter(entry, POST, false))).await;
-        let result = posted.and_then(|entered| super::inject::event_of(entered.result));
-        match &result {
-            Ok(_) => span.end(Metadata::new()),
-            Err(error) => span.fail_error(error.class_name(), error.to_string(), Metadata::new()),
-        }
-        result
+        super::inject::injected_under(&span, posted)
     }
 
     /// Registers the kit's own host channel, when no channel holds its id:

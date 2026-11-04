@@ -10,7 +10,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use super::TelemetryProvider;
-use super::open::KitTelemetry;
+use super::open::{KitTelemetry, Late};
 
 /// The current span: its id, the provider that started it, and the
 /// provider's own context for it.
@@ -18,21 +18,38 @@ use super::open::KitTelemetry;
 struct Current {
     telemetry: KitTelemetry,
     span_id: Option<String>,
-    #[cfg_attr(
-        not(feature = "opentelemetry"),
-        expect(
-            dead_code,
-            reason = "only OpenTelemetryProvider reads its context back"
-        )
-    )]
     context: Option<Arc<dyn Any + Send + Sync>>,
+    /// The span of the call this work is that opens once the call goes in:
+    /// from then on, the current one.
+    late: Option<Arc<Late>>,
+}
+
+impl Current {
+    /// The current span: the late one once it opened.
+    fn span_id(&self) -> Option<String> {
+        self.late
+            .as_ref()
+            .and_then(|late| late.id())
+            .map(str::to_owned)
+            .or_else(|| self.span_id.clone())
+    }
+
+    /// The provider's own context of the current span.
+    #[cfg(feature = "opentelemetry")]
+    fn span_context(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        let late = self.late.as_ref().and_then(|late| late.id());
+        match late {
+            Some(span_id) => self.telemetry.provider.get_span_context(span_id),
+            None => self.context.clone(),
+        }
+    }
 }
 
 impl fmt::Debug for Current {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Current")
-            .field("span_id", &self.span_id)
+            .field("span_id", &self.span_id())
             .finish_non_exhaustive()
     }
 }
@@ -57,7 +74,7 @@ fn read<T>(with: impl FnOnce(&Current) -> Option<T>) -> Option<T> {
 /// kit's work.
 #[must_use]
 pub fn get_current_span() -> Option<String> {
-    read(|current| current.span_id.clone())
+    read(Current::span_id)
 }
 
 /// The provider of the span the current code runs under: the kit's, for
@@ -86,7 +103,7 @@ pub fn current_records_sensitive_data() -> bool {
 /// `get_current_telemetry_ctx()`.
 #[cfg(feature = "opentelemetry")]
 pub(crate) fn current_span_context() -> Option<Arc<dyn Any + Send + Sync>> {
-    read(|current| current.context.clone())
+    read(Current::span_context)
 }
 
 /// Runs `work` under the span `span_id` of another process, `context` what
@@ -107,6 +124,31 @@ pub(crate) fn within_extracted_span<F: Future>(
         },
         span_id: Some(span_id),
         context,
+        late: None,
+    };
+    CURRENT.scope(Some(current), work)
+}
+
+/// The call the current work is goes in: its late span, if it has one and
+/// nothing ended it, opens.
+pub(crate) fn current_call_goes_in() {
+    if let Some(late) = read(|current| current.late.clone()) {
+        late.open();
+    }
+}
+
+/// `work` under `late`, which is the current span once it opens, and until
+/// then under whatever is current.
+pub(super) fn within_late_span<F: Future>(
+    telemetry: &KitTelemetry,
+    late: Arc<Late>,
+    work: F,
+) -> impl Future<Output = F::Output> + use<F> {
+    let current = Current {
+        telemetry: telemetry.clone(),
+        span_id: get_current_span(),
+        context: read(|current| current.context.clone()),
+        late: Some(late),
     };
     CURRENT.scope(Some(current), work)
 }
@@ -124,6 +166,7 @@ pub(crate) fn within_optional_span<F: Future>(
         telemetry: telemetry.clone(),
         span_id,
         context,
+        late: None,
     };
     CURRENT.scope(Some(current), work)
 }

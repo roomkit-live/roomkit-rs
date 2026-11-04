@@ -10,7 +10,7 @@ use crate::error::RoomKitError;
 use crate::inbound::InboundResult;
 use crate::tasks::DelegatedTask;
 use crate::telemetry::{
-    Attr, KitTelemetry, NoopTelemetryProvider, OpenSpan, SpanKind, StartSpanOptions,
+    Attr, KitTelemetry, LateSpan, NoopTelemetryProvider, OpenSpan, SpanKind, StartSpanOptions,
     TelemetryConfig, TelemetryProvider,
 };
 
@@ -79,26 +79,16 @@ pub(super) fn telemetry_of(config: Option<TelemetryConfig>) -> KitTelemetry {
 }
 
 impl<S> Inner<S> {
-    /// A span's `sender_id`, an address: none unless the kit records what
-    /// can hold personal data (Python's `sensitive`).
-    fn sender_attributes(&self, sender_id: &str) -> Metadata {
-        let mut attributes = Metadata::new();
-        if self.telemetry.sensitive {
-            attributes.insert("sender_id".to_owned(), Value::from(sender_id));
-        }
-        attributes
-    }
-
     /// The span of a call to `process_inbound`, Python's `framework.inbound`,
     /// and, for a call that names its room, its `framework.route` read: the
-    /// router's own runs in the driver (`route_span`).
+    /// router's own opens in the driver (`RunSpans`).
     pub(crate) fn inbound_span(
         &self,
         message: &InboundMessage,
         sender_id: &str,
         room_id: Option<&RoomId>,
     ) -> OpenSpan {
-        let mut attributes = self.sender_attributes(sender_id);
+        let mut attributes = self.telemetry.sender_attributes(sender_id);
         if let Some(session) = message.metadata.get("voice_session_id") {
             attributes.insert(Attr::SESSION_ID.to_owned(), session.clone());
         }
@@ -114,36 +104,13 @@ impl<S> Inner<S> {
             },
         );
         if let Some(room_id) = room_id {
-            let route =
-                self.route_span_under(Some(span.id().to_owned()), &message.channel_id, sender_id);
+            let parent = Some(span.id().to_owned());
+            let route = self
+                .telemetry
+                .route_span(parent, &message.channel_id, sender_id);
             end_route_span(route, Some(room_id));
         }
         span
-    }
-
-    /// The span of a router's answer, Python's `framework.route`.
-    pub(crate) fn route_span(&self, channel_id: &ChannelId, sender_id: &str) -> OpenSpan {
-        self.route_span_under(None, channel_id, sender_id)
-    }
-
-    fn route_span_under(
-        &self,
-        parent_id: Option<String>,
-        channel_id: &ChannelId,
-        sender_id: &str,
-    ) -> OpenSpan {
-        let attributes = self.sender_attributes(sender_id);
-        OpenSpan::start(
-            &self.telemetry,
-            SpanKind::InboundPipeline,
-            "framework.route",
-            StartSpanOptions {
-                parent_id,
-                channel_id: Some(channel_id.to_string()),
-                attributes,
-                ..StartSpanOptions::default()
-            },
-        )
     }
 
     /// The span of the resolver's answer, Python's
@@ -161,17 +128,18 @@ impl<S> Inner<S> {
         )
     }
 
-    /// The span of an injected event, Python's `framework.send_event`.
+    /// The span of an injected event, Python's `framework.send_event`: it
+    /// opens as the injection goes in, the refusals before it behind.
     pub(crate) fn send_event_span(
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
         event_type: EventType,
-    ) -> OpenSpan {
+    ) -> LateSpan {
         let mut attributes = Metadata::new();
         let event_type = serde_json::to_value(event_type).unwrap_or_default();
         attributes.insert("event_type".to_owned(), event_type);
-        OpenSpan::start(
+        LateSpan::new(
             &self.telemetry,
             SpanKind::InboundPipeline,
             "framework.send_event",

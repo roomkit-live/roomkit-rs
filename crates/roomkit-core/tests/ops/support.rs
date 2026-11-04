@@ -950,7 +950,8 @@ impl Sim {
                 } => Some(event),
                 Notice::AsyncHooks { then: None, .. }
                 | Notice::StopReading { .. }
-                | Notice::CutReadOver { .. } => None,
+                | Notice::CutReadOver { .. }
+                | Notice::Span(_) => None,
             })
             .collect()
     }
@@ -971,7 +972,8 @@ impl Sim {
                 Notice::AsyncHooks { trigger, .. } => Some(*trigger),
                 Notice::FrameworkEvent(_)
                 | Notice::StopReading { .. }
-                | Notice::CutReadOver { .. } => None,
+                | Notice::CutReadOver { .. }
+                | Notice::Span(_) => None,
             })
             .collect()
     }
@@ -984,7 +986,8 @@ impl Sim {
                 Notice::AsyncHooks { event, .. } => Some(&**event),
                 Notice::FrameworkEvent(_)
                 | Notice::StopReading { .. }
-                | Notice::CutReadOver { .. } => None,
+                | Notice::CutReadOver { .. }
+                | Notice::Span(_) => None,
             })
             .collect()
     }
@@ -997,7 +1000,8 @@ impl Sim {
                 Notice::AsyncHooks { context, .. } => Some(&**context),
                 Notice::FrameworkEvent(_)
                 | Notice::StopReading { .. }
-                | Notice::CutReadOver { .. } => None,
+                | Notice::CutReadOver { .. }
+                | Notice::Span(_) => None,
             })
             .collect()
     }
@@ -2089,6 +2093,7 @@ fn entry_name(entry: &Entry) -> String {
 /// A notice as the journal shows it.
 fn journal_line(notice: &Notice) -> String {
     match notice {
+        Notice::Span(note) => format!("span {note:?}"),
         Notice::FrameworkEvent(event) => format!("emit {}", event_name(event)),
         Notice::AsyncHooks {
             trigger,

@@ -3,14 +3,14 @@
 
 use std::collections::BTreeSet;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
-use roomkit_core::model::{Metadata, RoomId};
+use roomkit_core::model::{ChannelId, Metadata, RoomId};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::HookTrigger;
 use serde_json::Value;
 
-use super::context::{get_current_span, within_optional_span};
+use super::context::{get_current_span, within_late_span, within_optional_span};
 use super::{Attr, EndSpanOptions, SpanKind, StartSpanOptions, TelemetryProvider};
 
 /// The kit's telemetry: its provider, and whether its spans carry what can
@@ -24,6 +24,37 @@ pub(crate) struct KitTelemetry {
 }
 
 impl KitTelemetry {
+    /// A span's `sender_id`, an address: none unless the kit records what
+    /// can hold personal data (Python's `sensitive`).
+    pub(crate) fn sender_attributes(&self, sender_id: &str) -> Metadata {
+        let mut attributes = Metadata::new();
+        if self.sensitive {
+            attributes.insert("sender_id".to_owned(), Value::from(sender_id));
+        }
+        attributes
+    }
+
+    /// The span of a message finding its room, Python's `framework.route`.
+    pub(crate) fn route_span(
+        &self,
+        parent_id: Option<String>,
+        channel_id: &ChannelId,
+        sender_id: &str,
+    ) -> OpenSpan {
+        let attributes = self.sender_attributes(sender_id);
+        OpenSpan::start(
+            self,
+            SpanKind::InboundPipeline,
+            "framework.route",
+            StartSpanOptions {
+                parent_id,
+                channel_id: Some(channel_id.to_string()),
+                attributes,
+                ..StartSpanOptions::default()
+            },
+        )
+    }
+
     /// The span of the hook `name` on `trigger` in `room_id`, Python's
     /// `hook.sync.<name>` and `hook.async.<name>`; `None` for a trigger the
     /// telemetry's config suppresses.
@@ -203,6 +234,113 @@ impl Drop for OpenSpan {
             }
         };
         self.finish(options);
+    }
+}
+
+/// The span of a call that opens only once the call goes in, when it does:
+/// a call refused before that, as Python's `post()` refuses what cannot be
+/// injected, leaves no span at all. Its work runs under whatever is current
+/// until it opens, and under it from then on. It ends with its value, as
+/// [`OpenSpan`] does when dropped unended.
+#[derive(Debug)]
+pub(crate) struct LateSpan(Arc<Late>);
+
+/// What a [`LateSpan`] and the work under it share.
+#[derive(Debug)]
+pub(super) struct Late {
+    telemetry: KitTelemetry,
+    kind: SpanKind,
+    name: &'static str,
+    /// What it opens with, until it opened or its call ended.
+    options: Mutex<Option<StartSpanOptions>>,
+    span: Mutex<Option<OpenSpan>>,
+    id: OnceLock<String>,
+}
+
+/// `mutex`'s value, a panic that poisoned it past.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl Late {
+    /// The span's id, once it opened.
+    pub(super) fn id(&self) -> Option<&str> {
+        self.id.get().map(String::as_str)
+    }
+
+    /// Opens the span, the first time and unless its call ended.
+    pub(super) fn open(&self) {
+        let Some(options) = lock(&self.options).take() else {
+            return;
+        };
+        let span = OpenSpan::start(&self.telemetry, self.kind, self.name, options);
+        if self.id.set(span.id().to_owned()).is_ok() {
+            *lock(&self.span) = Some(span);
+        }
+    }
+
+    /// The span, if it opened, for its end; none opens from here on.
+    fn ending(&self) -> Option<OpenSpan> {
+        lock(&self.options).take();
+        lock(&self.span).take()
+    }
+}
+
+impl LateSpan {
+    /// The span `name` of `kind`, not open yet, a child of the current span
+    /// when `options` name no other parent.
+    pub(crate) fn new(
+        telemetry: &KitTelemetry,
+        kind: SpanKind,
+        name: &'static str,
+        mut options: StartSpanOptions,
+    ) -> Self {
+        if options.parent_id.is_none() {
+            options.parent_id = get_current_span();
+        }
+        Self(Arc::new(Late {
+            telemetry: telemetry.clone(),
+            kind,
+            name,
+            options: Mutex::new(Some(options)),
+            span: Mutex::new(None),
+            id: OnceLock::new(),
+        }))
+    }
+
+    /// `work` under this span once it opens.
+    pub(crate) fn within<F: Future>(&self, work: F) -> impl Future<Output = F::Output> + use<F> {
+        within_late_span(&self.0.telemetry, Arc::clone(&self.0), work)
+    }
+
+    /// Opens it now, whatever the call's work told.
+    pub(crate) fn open(&self) {
+        self.0.open();
+    }
+
+    /// Ends it `ok`, `attributes` added, if it opened.
+    pub(crate) fn end(&self, attributes: Metadata) {
+        if let Some(span) = self.0.ending() {
+            span.end(attributes);
+        }
+    }
+
+    /// Ends it as [`OpenSpan::fail_error`] does, if it opened.
+    pub(crate) fn fail_error(
+        &self,
+        class: impl Into<String>,
+        text: impl Into<String>,
+        attributes: Metadata,
+    ) {
+        if let Some(span) = self.0.ending() {
+            span.fail_error(class, text, attributes);
+        }
+    }
+}
+
+impl Drop for LateSpan {
+    fn drop(&mut self) {
+        drop(self.0.ending());
     }
 }
 

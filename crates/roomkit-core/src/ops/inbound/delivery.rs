@@ -30,7 +30,7 @@ use crate::model::{
 };
 use crate::ops::protocol::{
     CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, EntryId, HoldOutcome,
-    HoldRequest, KIT_CLOSED, Outcome, Raised, StoreRequest, TURN_CUT,
+    HoldRequest, KIT_CLOSED, Notice, Outcome, Raised, SpanNote, StoreRequest, TURN_CUT,
 };
 use crate::ops::{Cx, Progress, RefusedOperation};
 use crate::rules::chain_depth::ReentryBudget;
@@ -202,6 +202,11 @@ pub(super) struct DeliverySet {
     /// The record of its deliveries under way, once they are over and any
     /// failed (RFC §14.3).
     record: Option<DeliveryRecord>,
+    /// Whom the event reaches, asked or not, for the set's span.
+    reached: usize,
+    /// The targets of an injected set that failed, which its outcome does
+    /// not report, for the set's span.
+    unreported: usize,
 }
 
 impl DeliverySet {
@@ -219,6 +224,7 @@ impl DeliverySet {
     ) -> Self {
         let targets = targets_of(&plan, &event, &context);
         let deferred = plan.deferred.iter().map(|d| d.channel_id.clone()).collect();
+        let reached = plan.reached;
         let outcome = SetOutcome {
             not_asked: plan.not_asked,
             ..SetOutcome::default()
@@ -241,6 +247,8 @@ impl DeliverySet {
             lineage,
             turns_cut: false,
             record: None,
+            reached,
+            unreported: 0,
         }
     }
 
@@ -590,6 +598,7 @@ impl DeliverySet {
         if !self.calls.is_empty() {
             return Progress::Waiting;
         }
+        self.tell_its_span(cx);
         if self.place != Place::Turn {
             return self.over(cx);
         }
@@ -599,6 +608,20 @@ impl DeliverySet {
         };
         self.place = Place::Leaving(cx.io.issue(request));
         Progress::Waiting
+    }
+
+    /// Tells the set's span what its targets came to, unless the room's lane
+    /// or the room refused the set, which then delivered nothing.
+    fn tell_its_span(&self, cx: &mut Cx<'_>) {
+        if self.outcome.cancelled.is_some() || self.outcome.refused {
+            return;
+        }
+        cx.io.notify(Notice::Span(SpanNote::SetOver {
+            event_id: self.event.id.clone(),
+            targets: self.reached,
+            delivered: self.outcome.delivered.len(),
+            failed: self.outcome.failures.len() + self.unreported,
+        }));
     }
 
     /// A target's `on_event()` returned (RFC §10.2 step 3c); an agent's
@@ -697,6 +720,7 @@ impl DeliverySet {
             return;
         };
         if self.kind == SetKind::Injected {
+            self.unreported += 1;
             return;
         }
         let failed = DeliveryResult::raised(target.binding.channel_id.clone(), error);
@@ -715,6 +739,7 @@ impl DeliverySet {
             return;
         };
         if self.kind == SetKind::Injected {
+            self.unreported += 1;
             return;
         }
         let failed = DeliveryResult::refused(target.binding.channel_id.clone(), result);
@@ -737,6 +762,7 @@ impl DeliverySet {
             return;
         };
         if self.kind == SetKind::Injected {
+            self.unreported += 1;
             return;
         }
         let failed = DeliveryResult {

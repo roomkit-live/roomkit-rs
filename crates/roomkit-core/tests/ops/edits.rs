@@ -1596,7 +1596,8 @@ mod a_mutation_trigger {
                 Notice::AsyncHooks { .. }
                 | Notice::FrameworkEvent(_)
                 | Notice::StopReading { .. }
-                | Notice::CutReadOver { .. } => None,
+                | Notice::CutReadOver { .. }
+                | Notice::Span(_) => None,
             })
             .unwrap()
     }
@@ -1758,7 +1759,8 @@ mod a_mutation_trigger {
                 Notice::AsyncHooks { .. }
                 | Notice::FrameworkEvent(_)
                 | Notice::StopReading { .. }
-                | Notice::CutReadOver { .. } => None,
+                | Notice::CutReadOver { .. }
+                | Notice::Span(_) => None,
             })
             .collect();
         assert_eq!(fired, [vec![of_the_target]]);

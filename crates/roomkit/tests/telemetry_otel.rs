@@ -17,7 +17,7 @@ use roomkit::model::{
 use roomkit::telemetry::{OpenTelemetryProvider, OpenTelemetryProviderOptions};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, HookExecution, HookOptions, HookTrigger,
+    AttachChannelOptions, CreateRoomOptions, HookExecution, HookOptions, HookTrigger, PostOptions,
     ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
 use roomkit_ai::{AiChannel, AiChannelOptions, MockAiProvider, MockAiProviderOptions};
@@ -145,4 +145,53 @@ async fn a_turn_s_generation_is_a_child_of_the_broadcast_it_runs_under() {
         .find(|span| span.span_context.span_id() == generate.parent_span_id)
         .unwrap();
     assert_eq!(parent.name, "roomkit.framework.broadcast");
+}
+
+// Python: core/mixins/inbound... `_inject`: a post's span opens as it goes in,
+// and what follows nests under it in the trace.
+#[tokio::test]
+async fn a_post_s_broadcast_is_a_child_of_its_send_event() {
+    let exporter = InMemorySpanExporter::default();
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let telemetry = OpenTelemetryProvider::new(OpenTelemetryProviderOptions {
+        tracer_provider: Some(tracer_provider),
+        ..OpenTelemetryProviderOptions::default()
+    });
+    let kit = RoomKit::new(RoomKitOptions {
+        telemetry: Some(Arc::new(telemetry).into()),
+        ..RoomKitOptions::default()
+    });
+    let transport = RecordingTransport::new(
+        id("ch1"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(transport).unwrap();
+    let room = RoomId::new("r1").unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    kit.attach_channel(&room, &id("ch1"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    kit.post(&room, TextContent::new("Bonjour"), PostOptions::default())
+        .await
+        .unwrap();
+    kit.close().await.unwrap();
+    let spans = exporter.get_finished_spans().unwrap();
+    let [post] = named(&spans, "roomkit.framework.send_event")[..] else {
+        panic!("one framework.send_event in {spans:?}");
+    };
+    let [broadcast] = named(&spans, "roomkit.framework.broadcast")[..] else {
+        panic!("one framework.broadcast in {spans:?}");
+    };
+    assert_eq!(broadcast.parent_span_id, post.span_context.span_id());
+    assert_eq!(
+        broadcast.span_context.trace_id(),
+        post.span_context.trace_id()
+    );
 }
