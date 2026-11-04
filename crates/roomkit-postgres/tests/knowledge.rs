@@ -157,6 +157,23 @@ async fn the_configured_language_stems_on_a_real_database() {
             found,
             "{language}, {asked}"
         );
+        assert_eq!(
+            in_all(&source, asked).await > 0,
+            found,
+            "{language}, {asked}"
+        );
+        index(
+            &source,
+            "Les chevaux dorment encore",
+            json!({"id": "doc-1", "room_id": "r1"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            in_all(&source, asked).await > 0,
+            found,
+            "again, {language}, {asked}"
+        );
     }
 }
 
@@ -403,6 +420,18 @@ async fn a_search_ranks_limits_and_scopes_as_python_s() {
         .unwrap();
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].content, "refund refund refund");
+    let first_of_room = source
+        .search(
+            "refund",
+            SearchOptions {
+                room_id: Some(RoomId::new("r1").unwrap()),
+                limit: 1,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_of_room.len(), 1);
+    assert_eq!(first_of_room[0].content, "refund refund refund");
 }
 
 /// Python's `close`: it waits for a statement in flight, and until it ends the source
@@ -456,8 +485,10 @@ async fn a_close_waits_for_a_statement_in_flight() {
             .is_err(),
         "the source took a search while closing"
     );
+    // Bounded: an init on a pool of its own would wait on this test's lock.
+    let init = tokio::time::timeout(std::time::Duration::from_secs(1), source.init(SMALL_POOL));
     assert!(
-        source.init(SMALL_POOL).await.is_err(),
+        matches!(init.await, Ok(Err(_))),
         "the source took an init while closing"
     );
     holder.batch_execute("COMMIT").await.unwrap();
@@ -498,6 +529,11 @@ async fn an_operation_before_init_fails_and_says_so() {
     assert!(!format!("{options:?}").contains("secret"));
     let source = PostgresKnowledgeSource::new(options);
     assert!(!format!("{source:?}").contains("secret"));
+    let early = index(&source, "x", json!({"id": 5})).await.unwrap_err();
+    assert!(
+        full_text(&*early).contains("init() must be called before use"),
+        "{early}"
+    );
     let refused = source
         .search("x", SearchOptions::default())
         .await

@@ -220,6 +220,27 @@ impl PostgresKnowledgeSource {
         }
     }
 
+    /// Closes the pool if the source opened it, waiting at most `timeout`. The slot is
+    /// cleared of the pool it closed only: a close that started earlier and ends later
+    /// leaves the pool an `init` opened since.
+    async fn close_within(&self, timeout: Duration) {
+        if !self.shared.owns_pool {
+            return;
+        }
+        let Some(pool) = self.pool() else {
+            return;
+        };
+        pool::close_own_pool(&pool, timeout, "PostgresKnowledgeSource").await;
+        let mut slot = self
+            .shared
+            .pool
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot.as_ref().is_some_and(Pool::is_closed) {
+            *slot = None;
+        }
+    }
+
     /// The passages `query` finds, the room's only if it names one.
     async fn found(
         &self,
@@ -396,19 +417,40 @@ impl KnowledgeSource for PostgresKnowledgeSource {
     /// back, at most [`CLOSE_TIMEOUT`] later. Meanwhile the source refuses any other
     /// use, its pool closed, and a second close waits too, as Python's.
     fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async move {
-            if !self.shared.owns_pool {
-                return;
-            }
-            let Some(pool) = self.pool() else {
-                return;
-            };
-            pool::close_own_pool(&pool, CLOSE_TIMEOUT, "PostgresKnowledgeSource").await;
-            *self
-                .shared
-                .pool
-                .write()
-                .unwrap_or_else(PoisonError::into_inner) = None;
-        })
+        Box::pin(self.close_within(CLOSE_TIMEOUT))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A future kept and no longer polled holds its connection for ever: the close
+    /// warns and returns, here within its short bound, and the pool's slot is free.
+    #[tokio::test]
+    async fn a_close_returns_though_a_connection_stays_lent() {
+        let Ok(dsn) = std::env::var("POSTGRES_DSN") else {
+            return;
+        };
+        let source = PostgresKnowledgeSource::new(PostgresKnowledgeSourceOptions {
+            dsn: Some(dsn),
+            ..PostgresKnowledgeSourceOptions::default()
+        });
+        source
+            .init(InitOptions {
+                min_size: 1,
+                max_size: 1,
+            })
+            .await
+            .unwrap();
+        let kept = source.client().await.unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            source.close_within(Duration::from_millis(20)),
+        )
+        .await
+        .unwrap();
+        assert!(source.pool().is_none());
+        drop(kept);
     }
 }
