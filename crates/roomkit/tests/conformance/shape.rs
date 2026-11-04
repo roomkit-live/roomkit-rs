@@ -96,6 +96,7 @@ const CHANNEL: &[&str] = &[
     "tools",
     "tool_policy",
     "max_tool_rounds",
+    "max_empty_retries",
     "max_context_events",
     "tool_timeout_ms",
     "tool_timeouts_ms",
@@ -180,6 +181,7 @@ const MODEL_ROUND: &[&str] = &[
     "gate",
     "refuses",
     "failure_after_calls",
+    "failure_after_done",
 ];
 const MODEL_CALL: &[&str] = &["id", "name", "arguments", "cut"];
 const TOOL: &[&str] = &[

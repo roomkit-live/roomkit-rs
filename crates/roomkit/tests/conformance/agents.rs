@@ -271,6 +271,10 @@ fn bounds(spec: &Value, options: &mut AiChannelOptions) -> Result<(), String> {
         let rounds = rounds.as_u64().ok_or("max_tool_rounds: not a count")?;
         options.max_tool_rounds = u32::try_from(rounds).map_err(|e| e.to_string())?;
     }
+    if let Some(tries) = spec.get("max_empty_retries") {
+        let tries = tries.as_u64().ok_or("max_empty_retries: not a count")?;
+        options.max_empty_retries = u32::try_from(tries).map_err(|e| e.to_string())?;
+    }
     if let Some(window) = spec.get("max_context_events") {
         let window = window.as_u64().ok_or("max_context_events: not a count")?;
         options.max_context_events = usize::try_from(window).map_err(|e| e.to_string())?;
@@ -484,6 +488,9 @@ pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
     }
     if spec.get("failure_after_calls") == Some(&Value::Bool(true)) {
         round = round.failing_after_calls();
+    }
+    if spec.get("failure_after_done") == Some(&Value::Bool(true)) {
+        round = round.failing_after_done();
     }
     Ok(round)
 }

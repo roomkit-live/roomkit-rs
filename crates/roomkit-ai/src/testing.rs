@@ -81,6 +81,8 @@ pub struct ScriptedRound {
     pub without_done: bool,
     /// Whether its failure or refusal comes after its calls.
     failure_after_calls: bool,
+    /// Whether its failure or refusal comes after its done event.
+    failure_after_done: bool,
 }
 
 impl ScriptedRound {
@@ -102,6 +104,7 @@ impl ScriptedRound {
             provider: String::new(),
             without_done: false,
             failure_after_calls: false,
+            failure_after_done: false,
         }
     }
 
@@ -140,6 +143,7 @@ impl ScriptedRound {
             provider: String::new(),
             without_done: false,
             failure_after_calls: false,
+            failure_after_done: false,
         }
     }
 
@@ -227,6 +231,14 @@ impl ScriptedRound {
         self
     }
 
+    /// The same round, its failure or its refusal coming once its done
+    /// event is written: the provider's stream fails past its end.
+    #[must_use]
+    pub fn failing_after_done(mut self) -> Self {
+        self.failure_after_done = true;
+        self
+    }
+
     /// The same round, its stream ending after its calls without its done
     /// event, as a provider's that drops it.
     #[must_use]
@@ -293,8 +305,9 @@ impl AiProvider for ScriptedProvider {
     }
     /// The next round, as a stream: its reasoning, its text in its pieces,
     /// then its calls and its end (none for a round [`ScriptedRound::without_done`]), or
-    /// its failure once its text is written, or once its calls are for a
-    /// round [`ScriptedRound::failing_after_calls`].
+    /// its failure once its text is written, once its calls are for a
+    /// round [`ScriptedRound::failing_after_calls`], or once its end is for
+    /// a round [`ScriptedRound::failing_after_done`].
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
         let round = self.next_round(context);
         Box::pin(items(
@@ -312,11 +325,12 @@ impl AiProvider for ScriptedProvider {
                         .await;
                 }
                 let failure = round.failure();
-                let (before, after) = if round.failure_after_calls {
-                    (None, failure)
-                } else {
-                    (failure, None)
-                };
+                let (before, after_calls, after_done) =
+                    match (round.failure_after_calls, round.failure_after_done) {
+                        (true, _) => (None, failure, None),
+                        (false, true) => (None, None, failure),
+                        (false, false) => (failure, None, None),
+                    };
                 if let Some(failure) = before {
                     return out.give(Err(failure)).await;
                 }
@@ -324,11 +338,14 @@ impl AiProvider for ScriptedProvider {
                 for call in read_tool_calls(round.calls, finish_reason) {
                     out.give(Ok(StreamEvent::ToolCall(call.into()))).await;
                 }
-                if let Some(failure) = after {
+                if let Some(failure) = after_calls {
                     return out.give(Err(failure)).await;
                 }
                 if !round.without_done {
                     out.give(Ok(StreamEvent::Done(round.done))).await;
+                }
+                if let Some(failure) = after_done {
+                    out.give(Err(failure)).await;
                 }
             },
         ))
