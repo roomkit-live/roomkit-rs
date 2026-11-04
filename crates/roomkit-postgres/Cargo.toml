@@ -13,6 +13,7 @@ blake2.workspace = true
 bytes.workspace = true
 deadpool-postgres.workspace = true
 roomkit.workspace = true
+roomkit-ai.workspace = true
 roomkit-core.workspace = true
 rustls.workspace = true
 serde.workspace = true
@@ -29,9 +30,6 @@ tracing.workspace = true
 futures-core.workspace = true
 pretty_assertions.workspace = true
 rcgen.workspace = true
-# The conformance runner's scripted agent, which the suite includes from
-# roomkit.
-roomkit-ai.workspace = true
 sha2.workspace = true
 # The conformance runner's, which the suite includes from roomkit.
 uuid.workspace = true

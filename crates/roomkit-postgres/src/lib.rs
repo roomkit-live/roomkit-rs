@@ -20,6 +20,9 @@
 //! same keys as Python's, so that processes of both implementations exclude
 //! each other. It needs a pool of its own: a held lock keeps its connection.
 //!
+//! [`PostgresKnowledgeSource`] is a full-text keyword search for an AI channel's
+//! memory (RFC §20.2), on the table of Python's source of that name.
+//!
 //! ```no_run
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! use roomkit::{RoomKit, RoomKitOptions};
@@ -51,6 +54,7 @@
 mod error;
 mod events;
 mod identities;
+mod knowledge;
 mod lock;
 mod lookups;
 mod markers;
@@ -70,9 +74,10 @@ mod values;
 mod verifications;
 
 pub use self::error::PostgresSchemaError;
+pub use self::knowledge::PostgresKnowledgeSource;
 pub use self::lock::PostgresAdvisoryLockManager;
 pub use self::options::{
     DedupeEventIndicesOptions, DropLegacyParentIndexOptions, InitOptions, MigrateOptions,
-    PostgresAdvisoryLockManagerOptions, PostgresStoreOptions,
+    PostgresAdvisoryLockManagerOptions, PostgresKnowledgeSourceOptions, PostgresStoreOptions,
 };
 pub use self::store::PostgresStore;
