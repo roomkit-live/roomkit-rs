@@ -282,8 +282,8 @@ fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision<R
 
 /// Whether the room as `context` holds it, kept by its status, tells by who
 /// it heard on the channel whether it still admits the sender: the case
-/// whose check reads the room's history, a message with no address included
-/// (RFC §10.4).
+/// whose check reads the room's history (RFC §10.4). A message with no
+/// address is refused without it.
 fn reads_heard(record: &SenderRecord, context: &RoomContext) -> bool {
     let Some(current) = context.get_binding(&record.binding.channel_id) else {
         return false;
@@ -325,8 +325,8 @@ fn not_a_recipient(binding: &ChannelBinding, form: &AddressForm, kind: &str) {
 /// Who the room heard on the channel was read from its received events
 /// under the lock, refused events set aside, as Python's `_heard_from_other`
 /// reads them (RMK-1071, RMK-1127): a sender another wrote before, however
-/// long ago, is not admitted. A message with no address is held to the same
-/// conditions (RFC §10.4).
+/// long ago, is not admitted. A message with no address is refused, unless
+/// the binding is declared `group` (RFC §10.4).
 fn still_admitted(record: &SenderRecord, current: &ChannelBinding, context: &RoomContext) -> bool {
     let admitted = routing::still_admits(
         current,
