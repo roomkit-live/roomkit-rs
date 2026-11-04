@@ -419,8 +419,8 @@ impl KnowledgeSource for PostgresKnowledgeSource {
     }
 
     /// Closes the pool if the source opened it, once the connections in use came
-    /// back, at most [`CLOSE_TIMEOUT`] later. Meanwhile the source refuses any other
-    /// use, its pool closed, and a second close waits too, as Python's.
+    /// back, at most 60 s later. Meanwhile the source refuses any other use, its pool
+    /// closed, and a second close waits too, as Python's.
     fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(self.close_within(CLOSE_TIMEOUT))
     }
