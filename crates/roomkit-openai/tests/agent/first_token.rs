@@ -189,3 +189,32 @@ async fn a_completion_asked_whole_records_as_it_arrives_a_failure_nothing() {
     let metrics = recorded(Mode::Generate, OpenAiApi::ChatCompletions, refused).await;
     assert_eq!(metrics, vec![]);
 }
+
+// Rust alone: Python's provider has no Responses API (a feature only one
+// implementation has). As on Chat Completions: once, at the first text, on
+// both modes.
+#[tokio::test]
+async fn on_responses_the_first_text_records_it_once_on_both_modes() {
+    for mode in [Mode::Generate, Mode::Stream] {
+        let reply = Reply::events(&[
+            json!({ "type": "response.output_text.delta", "delta": "Ready " }),
+            json!({ "type": "response.output_text.delta", "delta": "at noon." }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "status": "completed",
+                    "model": "fake-model",
+                    "output": [{
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{ "type": "output_text", "text": "Ready at noon." }],
+                    }],
+                },
+            }),
+        ]);
+        let metrics = recorded(mode, OpenAiApi::Responses, reply).await;
+        assert_eq!(metrics.len(), 1, "{mode:?}: {metrics:?}");
+    }
+}
