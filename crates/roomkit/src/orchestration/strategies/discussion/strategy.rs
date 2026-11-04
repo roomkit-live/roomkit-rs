@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{ChannelId, ChannelType, RoomId};
 use roomkit_core::rules::casefold;
@@ -12,7 +12,12 @@ use roomkit_core::rules::python_repr;
 
 use crate::channel::BoxFuture;
 use crate::error::RoomKitError;
-use crate::orchestration::StrategyAgent;
+use crate::kit::{RoomKit, strategy_address};
+use crate::orchestration::{Orchestration, StrategyAgent, StrategyFuture};
+use crate::store::ConversationStore;
+
+use super::config::config_of;
+use super::room::DiscussionRoom;
 
 /// `done(room_id)`: whether the discussion is over. Python's `DoneFn`, sync
 /// or async; here always a future.
@@ -106,8 +111,6 @@ impl fmt::Debug for DiscussionOptions {
 /// and no other, and no router or other strategy shares it. Text only in this
 /// version.
 ///
-/// Built and read for now: it cannot be installed yet.
-///
 /// ```
 /// use std::collections::BTreeMap;
 ///
@@ -137,7 +140,7 @@ pub struct Discussion {
     given_handles: BTreeMap<ChannelId, String>,
     /// `None` while an agent named by an id that is no handle waits for the
     /// name its declaration gives, which only the kit's install reads.
-    handles: Option<BTreeMap<ChannelId, String>>,
+    handles: Mutex<Option<BTreeMap<ChannelId, String>>>,
     pub(super) people: Option<Vec<String>>,
     pub(super) addressed_only: bool,
     pub(super) everyone: Option<Vec<ChannelId>>,
@@ -196,7 +199,7 @@ impl Discussion {
         Ok(Self {
             agents,
             given_handles: given,
-            handles,
+            handles: Mutex::new(handles),
             people,
             addressed_only,
             everyone,
@@ -219,13 +222,16 @@ impl Discussion {
     /// an id that is no handle has one once the discussion is installed.
     #[must_use]
     pub fn handles(&self) -> BTreeMap<ChannelId, String> {
-        self.handles.clone().unwrap_or_default()
+        self.read_handles().clone().unwrap_or_default()
+    }
+
+    fn read_handles(&self) -> MutexGuard<'_, Option<BTreeMap<ChannelId, String>>> {
+        self.handles.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Each agent's handle once the kit's `names` are read: the install's
     /// reading of what the constructor could not read, the handles the host
     /// gave among it.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by the install, lot 8c"))]
     fn handles_named(
         &self,
         names: &HashMap<&ChannelId, String>,
@@ -240,7 +246,7 @@ impl fmt::Debug for Discussion {
             .debug_struct("Discussion")
             .field("agents", &self.agents)
             .field("given_handles", &self.given_handles)
-            .field("handles", &self.handles)
+            .field("handles", &*self.read_handles())
             .field("people", &self.people)
             .field("addressed_only", &self.addressed_only)
             .field("everyone", &self.everyone)
@@ -250,6 +256,108 @@ impl fmt::Debug for Discussion {
             .field("silent_token", &self.silent_token)
             .field("rules", &self.rules)
             .finish()
+    }
+}
+
+impl Discussion {
+    /// Gives the room to the discussion (rule 1): its agents attached by the
+    /// kit, its stored queue read, its turns started. Python's `install`.
+    async fn install_in<S: ConversationStore>(
+        &self,
+        kit: &RoomKit<S>,
+        room_id: &RoomId,
+    ) -> Result<(), RoomKitError> {
+        let owner = strategy_address::<S>(self);
+        kit.claim_for(room_id, owner)?;
+        kit.register_strategy_agents(&self.agents)?;
+        if self.read_handles().is_none() {
+            let held = self.named_by_the_kit(kit);
+            let named =
+                self.handles_named(&held.iter().map(|(id, name)| (id, name.clone())).collect())?;
+            *self.read_handles() = Some(named);
+        }
+        let config = config_of(self, kit.inner.config().max_chain_depth);
+        kit.check_discussion_room(room_id, &config).await?;
+        let room = kit.store().get_room(room_id).await?;
+        let organization_id = room.and_then(|room| room.organization_id);
+        let running = DiscussionRoom::new(
+            kit,
+            room_id.clone(),
+            organization_id,
+            config,
+            self.done.clone(),
+        );
+        // Before the configuration is stored: from then on a message is told
+        // to it, and to nobody without it.
+        kit.inner
+            .discussions
+            .hold(room_id.clone(), Arc::<DiscussionRoom<S>>::clone(&running));
+        let started = async {
+            running.load().await?;
+            for hook in running.hooks() {
+                kit.hook_engine().replace_room_hook(room_id, hook)?;
+            }
+            Ok::<(), RoomKitError>(())
+        }
+        .await;
+        if let Err(error) = started {
+            kit.inner.discussions.release(room_id);
+            return Err(error);
+        }
+        running.start();
+        Ok(())
+    }
+
+    /// Each agent's name, an id's from the channel the kit holds under it.
+    fn named_by_the_kit<S: ConversationStore>(&self, kit: &RoomKit<S>) -> Vec<(ChannelId, String)> {
+        self.agents
+            .iter()
+            .filter_map(|agent| {
+                let identity = match agent.live() {
+                    Some(live) => live.channel.declaration().identity,
+                    None => kit
+                        .inner
+                        .channel(agent.channel_id())
+                        .and_then(|channel| channel.declaration().identity),
+                };
+                Some((agent.channel_id().clone(), identity?.name?))
+            })
+            .collect()
+    }
+
+    /// Gives the room back to its policy: the turns stopped, the queue
+    /// dropped. Python's `uninstall`.
+    async fn uninstall_in<S: ConversationStore>(
+        &self,
+        kit: &RoomKit<S>,
+        room_id: &RoomId,
+    ) -> Result<(), RoomKitError> {
+        match kit.inner.discussions.release(room_id) {
+            Some(running) => running.forget().await,
+            None => Ok(()),
+        }
+    }
+}
+
+impl<S: ConversationStore> Orchestration<S> for Discussion {
+    fn agents(&self) -> Vec<StrategyAgent> {
+        self.agents.clone()
+    }
+
+    fn install<'call>(
+        &'call self,
+        kit: &'call RoomKit<S>,
+        room_id: &'call RoomId,
+    ) -> StrategyFuture<'call> {
+        Box::pin(self.install_in(kit, room_id))
+    }
+
+    fn uninstall<'call>(
+        &'call self,
+        kit: &'call RoomKit<S>,
+        room_id: &'call RoomId,
+    ) -> StrategyFuture<'call> {
+        Box::pin(self.uninstall_in(kit, room_id))
     }
 }
 

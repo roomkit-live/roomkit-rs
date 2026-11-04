@@ -305,11 +305,9 @@ impl Outcome {
         self.held(HoldOutcome::Released)
     }
 
-    pub(crate) fn into_discussion_turn(
-        self,
-    ) -> Result<Option<Box<super::DiscussionTurn>>, ErrorRecord> {
+    pub(crate) fn into_discussion_turn(self) -> Result<super::NextTurn, ErrorRecord> {
         match self {
-            Self::Discussion(super::DiscussionOutcome::Turn(turn)) => Ok(turn),
+            Self::Discussion(super::DiscussionOutcome::Turn(next)) => Ok(next),
             other => Err(other.into_failure()),
         }
     }

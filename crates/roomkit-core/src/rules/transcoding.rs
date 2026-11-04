@@ -33,6 +33,38 @@ pub(crate) fn transcode(
     }
 }
 
+/// What the author wrote in `content` (RFC §6.6): its text, a media's caption,
+/// a voice message's transcript, never a file name or a type, since a name read
+/// in `nova.png` would address an agent; `None` for content of another kind.
+/// Python's `content_words`.
+#[must_use]
+pub fn content_words(content: &EventContent) -> Option<String> {
+    match content {
+        EventContent::Text(text) => Some(text.body.clone()),
+        EventContent::Rich(rich) => {
+            Some(rich.plain_text.clone().unwrap_or_else(|| rich.body.clone()))
+        }
+        EventContent::Media(media) => Some(media.caption.clone().unwrap_or_default()),
+        EventContent::Audio(audio) => Some(audio.transcript.clone().unwrap_or_default()),
+        EventContent::Video(_) => Some(String::new()),
+        EventContent::Composite(composite) => {
+            let parts: Vec<String> = composite
+                .parts()
+                .iter()
+                .filter_map(content_words)
+                .filter(|part| !part.is_empty())
+                .collect();
+            Some(parts.join("\n"))
+        }
+        EventContent::Location(_)
+        | EventContent::System(_)
+        | EventContent::Template(_)
+        | EventContent::Edit(_)
+        | EventContent::Delete(_)
+        | EventContent::ToolCall(_) => None,
+    }
+}
+
 /// The text a reader takes from a content (RFC §6.6): its text, each media
 /// as its label, a location's coordinates in decimal with a point
 /// (`45.0`), a system notice as its body, a tool call as

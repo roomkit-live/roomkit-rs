@@ -84,6 +84,7 @@ use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookSubject, HookTrig
 pub use self::background_tools::SetupBackgroundOptions;
 pub use self::delivery::{DeliverOptions, ProcessDeliveryStatusOptions, ProcessWebhookOptions};
 pub use self::delivery_keys::CancelDeliveryOptions;
+pub use self::discussions::SpeakQueueOptions;
 pub use self::engine::{HasHooksOptions, HookEngine};
 pub use self::ephemeral::{
     PublishPresenceOptions, PublishReactionOptions, PublishReadReceiptOptions,

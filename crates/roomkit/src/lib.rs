@@ -247,7 +247,8 @@ pub use self::turn::{PostStatusOptions, ToolGate, TurnHost, WaitTaskOptions, cur
 pub use self::turn_record::{Scoped, TurnRecord, current_turn_record};
 // For the AI channel's turn alone: the answer of a tool the owner serves.
 pub use self::kit::{
-    ClaimRoomStrategyOptions, InstallStrategyOptions, RoomStrategyOptions, UninstallStrategyOptions,
+    ClaimRoomStrategyOptions, InstallStrategyOptions, RoomStrategyOptions, SpeakQueueOptions,
+    UninstallStrategyOptions,
 };
 #[doc(inline)]
 pub use self::orchestration::Discussion;

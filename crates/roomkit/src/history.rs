@@ -20,6 +20,7 @@
 use roomkit_core::model::{ChannelBinding, EventType, RoomContext, RoomEvent};
 use roomkit_core::rules::visible_events;
 
+use crate::discussion_turn::discussion_turn;
 use crate::store::{ConversationStore, EventFilter, ListEventsOptions, StoreError};
 
 /// How many of the channel's latest tool-call rows a turn reads: a start
@@ -181,7 +182,9 @@ async fn stored<S: ConversationStore>(store: &S, event: &RoomEvent) -> RoomEvent
 }
 
 /// The query of the room's latest messages that `event`'s turn reads:
-/// those up to `event`, which came before its turn. An instruction, never
+/// those up to `event`, which came before its turn; a discussion's turn reads
+/// its event at its place, before what was said after it, so the room's
+/// latest whatever `event` (RFC §19.7.5). An instruction, never
 /// stored, holds the index the room's next event takes; an event the store
 /// never numbered bounds nothing.
 fn messages_up_to(event: &RoomEvent, filter: EventFilter, window: usize) -> ListEventsOptions {
@@ -194,7 +197,7 @@ fn messages_up_to(event: &RoomEvent, filter: EventFilter, window: usize) -> List
         // The window before the event, and the event itself.
         limit: u64::try_from(window).unwrap_or(u64::MAX).saturating_add(1),
         event_filter: Some(filter),
-        before_index: (event.index > 0).then_some(bound),
+        before_index: (event.index > 0 && !discussion_turn(event)).then_some(bound),
         newest_first: true,
         ..ListEventsOptions::default()
     }

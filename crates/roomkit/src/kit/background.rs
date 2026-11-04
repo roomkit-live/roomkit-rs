@@ -115,6 +115,7 @@ impl<S: ConversationStore> RoomKit<S> {
             let Starting { marks, ended } = starting;
             let kit = self.clone();
             tokio::spawn(marks.scoped(async move {
+                kit.inner.discussions.stop_all().await;
                 let failures = kit.shut_down().await;
                 ended.send_replace(Some(failures));
             }));

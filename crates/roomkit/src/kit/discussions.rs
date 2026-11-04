@@ -11,14 +11,19 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use roomkit_core::model::{ChannelId, RoomContext, RoomEvent, RoomId};
-use roomkit_core::ops::{DiscussionTurn, Inbound};
+use roomkit_core::model::{
+    ChannelCategory, ChannelId, ChannelType, RoomContext, RoomEvent, RoomId,
+};
+use roomkit_core::ops::{Inbound, NextTurn};
+use roomkit_core::rules::discussion::config::DiscussionConfig;
 
 use super::RoomKit;
 use crate::InboundResult;
 use crate::channel::BoxFuture;
 use crate::driver;
 use crate::error::RoomKitError;
+use crate::orchestration::SpeakQueue;
+use crate::orchestration::strategies::discussion::room::binding_refusal;
 use crate::store::ConversationStore;
 
 /// What a discussion running in this process does when the pipeline tells
@@ -40,10 +45,47 @@ pub(crate) trait DiscussionSeam: Send + Sync + 'static {
     fn queue_instruction(&self, event: RoomEvent) -> BoxFuture<'_, Result<(), RoomKitError>>;
 
     /// The turn to give now, if any, its queue edited.
-    fn next_turn(
+    fn next_turn(&self, context: RoomContext) -> BoxFuture<'_, Result<NextTurn, RoomKitError>>;
+
+    /// The speak queue as last read, in `organization_id`'s scope (rule 17).
+    fn view(&self, _organization_id: Option<&str>) -> Option<SpeakQueue> {
+        None
+    }
+
+    /// Whether it has no turn to give for now, and no wake to read.
+    fn settled(&self) -> bool {
+        true
+    }
+
+    /// Stops taking part: its turns stopped, its queue left stored (rule 16).
+    fn stop(&self) -> BoxFuture<'_, ()> {
+        Box::pin(std::future::ready(()))
+    }
+
+    /// Leaves the discussion, for every process: its queue and configuration
+    /// forgotten (rule 1).
+    fn forget(&self) -> BoxFuture<'_, Result<(), RoomKitError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    /// Why the room cannot bind `channel_id`, if it cannot (rule 1).
+    fn binding_refusal(
         &self,
-        context: RoomContext,
-    ) -> BoxFuture<'_, Result<Option<DiscussionTurn>, RoomKitError>>;
+        _channel_id: &ChannelId,
+        _category: ChannelCategory,
+        _channel_type: &ChannelType,
+    ) -> Option<String> {
+        None
+    }
+}
+
+/// What [`RoomKit::speak_queue`] takes: Python's `speak_queue(room_id, *,
+/// organization_id=None)`.
+#[derive(Clone, Debug, Default)]
+pub struct SpeakQueueOptions {
+    /// Scopes the read to one tenant (RFC §17.2): a room of another reads as
+    /// holding none.
+    pub organization_id: Option<String>,
 }
 
 /// The discussion this process runs for each room.
@@ -69,17 +111,103 @@ impl DiscussionSeams {
     }
 
     /// `seam` runs the discussion of `room_id` from now on.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the install's, lot 8c"))]
     pub(crate) fn hold(&self, room_id: RoomId, seam: Arc<dyn DiscussionSeam>) {
         self.rooms().insert(room_id, seam);
+    }
+
+    /// `room_id`'s discussion runs here no longer; the one it ran.
+    pub(crate) fn release(&self, room_id: &RoomId) -> Option<Arc<dyn DiscussionSeam>> {
+        self.rooms().remove(room_id)
+    }
+
+    /// Whether every discussion here has no turn to give for now.
+    pub(crate) fn settled(&self) -> bool {
+        self.rooms().values().all(|seam| seam.settled())
+    }
+
+    /// Stops every discussion's turns; their queues stay stored (rule 16).
+    pub(crate) async fn stop_all(&self) {
+        let seams: Vec<_> = self.rooms().values().cloned().collect();
+        for seam in seams {
+            seam.stop().await;
+        }
     }
 }
 
 impl<S: ConversationStore> RoomKit<S> {
+    /// The speak queue of the discussion `room_id` holds in this process, or
+    /// `None` when it holds none (RFC §19.7.5 rule 17): Python's
+    /// `speak_queue(room_id, *, organization_id=None)`. `options` scopes the
+    /// read to one tenant (RFC §17.2): a room of another reads as holding none.
+    #[must_use]
+    pub fn speak_queue(&self, room_id: &RoomId, options: SpeakQueueOptions) -> Option<SpeakQueue> {
+        let SpeakQueueOptions { organization_id } = options;
+        self.inner
+            .discussions
+            .get(room_id)?
+            .view(organization_id.as_deref())
+    }
+
+    /// Refuses what the room binds that a discussion of `config` cannot share
+    /// it with (rule 1): Python's `_discussion_refusal`.
+    pub(crate) async fn check_discussion_room(
+        &self,
+        room_id: &RoomId,
+        config: &DiscussionConfig,
+    ) -> Result<(), RoomKitError> {
+        let refused = |refusal: String| {
+            RoomKitError::Value(format!(
+                "Room {room_id} cannot hold a discussion: {refusal}"
+            ))
+        };
+        for binding in self.store().list_bindings(room_id).await? {
+            let refusal = binding_refusal(
+                &config.agents,
+                &binding.channel_id,
+                binding.category,
+                &binding.channel_type,
+            );
+            if let Some(refusal) = refusal {
+                return Err(refused(refusal));
+            }
+        }
+        for agent in &config.agents {
+            // A strategy's runner already takes this agent's turns here.
+            if self.inner.turn_runners.get(room_id, agent).is_some() {
+                return Err(refused(format!("another strategy runs {agent}'s turns")));
+            }
+        }
+        if self.hook_engine().has_router_hook(room_id) {
+            return Err(refused("a router is installed".to_owned()));
+        }
+        Ok(())
+    }
+
+    /// Refuses a binding the room's discussion cannot share it with (rule 1):
+    /// Python's `_refuse_discussion_binding`.
+    pub(crate) fn refuse_discussion_binding(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+        category: ChannelCategory,
+        channel_type: &ChannelType,
+    ) -> Result<(), RoomKitError> {
+        let refusal = self
+            .inner
+            .discussions
+            .get(room_id)
+            .and_then(|seam| seam.binding_refusal(channel_id, category, channel_type));
+        match refusal {
+            Some(refusal) => Err(RoomKitError::Value(format!(
+                "Room {room_id} holds a discussion: {refusal}"
+            ))),
+            None => Ok(()),
+        }
+    }
+
     /// Gives the turn the discussion of `room_id` names now, if any, and
     /// waits for it: its agent's answers are the result's, as a new
     /// message's. The result names no event when no turn was given.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the driver's, lot 8c"))]
     pub(crate) async fn run_discussion_turn(
         &self,
         room_id: &RoomId,
@@ -102,6 +230,7 @@ mod tests {
         ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelOutput, ChannelType,
         EventStatus, EventType, InboundMessage, Metadata, TextContent,
     };
+    use roomkit_core::ops::DiscussionTurn;
     use roomkit_core::rules::discussion::{CONFIG_KEY, STATE_KEY};
     use roomkit_core::rules::hook_registry::HookTrigger;
     use serde_json::json;
@@ -166,14 +295,17 @@ mod tests {
         fn next_turn(
             &self,
             _context: RoomContext,
-        ) -> BoxFuture<'_, Result<Option<DiscussionTurn>, RoomKitError>> {
+        ) -> BoxFuture<'_, Result<NextTurn, RoomKitError>> {
             let turn = self.turn.lock().unwrap().take();
             let fails = self.fails;
             Box::pin(async move {
                 if fails {
                     return Err(RoomKitError::Value("it fails".to_owned()));
                 }
-                Ok(turn)
+                Ok(NextTurn {
+                    turn: turn.map(Box::new),
+                    stopped: Vec::new(),
+                })
             })
         }
     }
@@ -181,7 +313,14 @@ mod tests {
     /// A room storing a discussion of `a` and `b`, the transport `ops`
     /// recorded, the seam `held` running it.
     async fn held_room(held: &Arc<Held>) -> (RoomKit, RecordingTransport) {
-        let kit = RoomKit::new(crate::kit::RoomKitOptions::default());
+        held_room_of(held, crate::kit::RoomKitOptions::default()).await
+    }
+
+    async fn held_room_of(
+        held: &Arc<Held>,
+        options: crate::kit::RoomKitOptions,
+    ) -> (RoomKit, RecordingTransport) {
+        let kit = RoomKit::new(options);
         let ops = RecordingTransport::new(
             id("ops"),
             ChannelType::SMS,
@@ -462,6 +601,166 @@ mod tests {
         );
         gated.gate.notify_one();
         delivering.await.unwrap();
+        let answered = turn.await.unwrap().unwrap();
+        assert_eq!(answered.response_events.len(), 1);
+    }
+
+    /// An agent whose first turn waits for its gate, then each answers.
+    #[derive(Clone, Default)]
+    struct GatedAgent {
+        reached: Arc<Notify>,
+        gate: Arc<Notify>,
+        turns: Arc<AtomicU32>,
+    }
+
+    impl Channel for GatedAgent {
+        fn channel_id(&self) -> ChannelId {
+            id("a")
+        }
+
+        fn channel_type(&self) -> ChannelType {
+            ChannelType::AI
+        }
+
+        fn category(&self) -> ChannelCategory {
+            ChannelCategory::Intelligence
+        }
+
+        fn capabilities(&self) -> ChannelCapabilities {
+            ChannelCapabilities::default()
+        }
+
+        fn handle_inbound(
+            &self,
+            _message: InboundMessage,
+            _context: RoomContext,
+        ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+            future::ready(Err("no inbound".into()))
+        }
+
+        fn deliver(
+            &self,
+            _event: RoomEvent,
+            _binding: ChannelBinding,
+            _context: RoomContext,
+        ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+            future::ready(Ok(ChannelOutput::default()))
+        }
+
+        async fn on_event(
+            &self,
+            _event: RoomEvent,
+            _binding: ChannelBinding,
+            _context: RoomContext,
+        ) -> Result<ChannelOutput, ChannelError> {
+            if self.turns.fetch_add(1, Ordering::Relaxed) == 0 {
+                self.reached.notify_one();
+                self.gate.notified().await;
+            }
+            Ok(ChannelOutput::default())
+        }
+    }
+
+    /// A room binding `ops` and the gated agent, a real discussion of it
+    /// installed, its first turn under way.
+    async fn turn_under_way() -> (RoomKit, GatedAgent) {
+        let kit = RoomKit::new(crate::kit::RoomKitOptions::default());
+        let ops = RecordingTransport::new(
+            id("ops"),
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
+        kit.register_channel(ops).unwrap();
+        let agent = GatedAgent::default();
+        kit.register_channel(agent.clone()).unwrap();
+        let options = CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        };
+        kit.create_room(options).await.unwrap();
+        kit.attach_channel(&room_id(), &id("ops"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let discussion = crate::Discussion::new(
+            vec![id("a").into()],
+            crate::orchestration::DiscussionOptions::default(),
+        )
+        .unwrap();
+        kit.install_strategy(
+            &room_id(),
+            Arc::new(discussion),
+            crate::kit::InstallStrategyOptions::default(),
+        )
+        .await
+        .unwrap();
+        say(&kit, said("@a hello")).await;
+        agent.reached.notified().await;
+        (kit, agent)
+    }
+
+    // Python: tests/orchestration/test_discussion_edges.py::test_uninstalling_forgets_the_discussion_so_a_new_one_starts_fresh;
+    // a turn running is cut (core/mixins/discussion.py `_uninstall_discussion`)
+    #[tokio::test]
+    async fn an_uninstall_cuts_the_turn_under_way_and_gives_the_room_back() {
+        let (kit, agent) = turn_under_way().await;
+
+        let room = room_id();
+        let uninstalled =
+            kit.uninstall_strategy(&room, crate::kit::UninstallStrategyOptions::default());
+        let uninstalled = tokio::time::timeout(Duration::from_secs(5), uninstalled)
+            .await
+            .expect("an uninstall waits for no running turn");
+
+        assert_eq!(uninstalled.unwrap(), true);
+        assert_eq!(
+            kit.speak_queue(&room_id(), SpeakQueueOptions::default()),
+            None
+        );
+        crate::testing::idle(&kit).await;
+        let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+        assert_eq!(room.metadata.get(STATE_KEY).filter(|v| !v.is_null()), None);
+        assert_eq!(agent.turns.load(Ordering::Relaxed), 1);
+    }
+
+    // Python: core/mixins/discussion.py `_stop_discussions`, a close cuts its turn.
+    #[tokio::test]
+    async fn the_kit_s_close_cuts_a_discussion_s_turn_and_keeps_its_queue() {
+        let (kit, _agent) = turn_under_way().await;
+
+        tokio::time::timeout(Duration::from_secs(10), kit.close())
+            .await
+            .expect("a close waits for no running turn")
+            .unwrap();
+
+        let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+        assert!(room.metadata.contains_key(CONFIG_KEY));
+    }
+
+    // Python: core/mixins/discussion.py `_planned_turn` has no bound on the room's lock.
+    #[tokio::test]
+    async fn a_turn_waits_for_the_room_s_lock_past_the_call_s_bound() {
+        let held = Arc::new(Held::default());
+        let options = crate::kit::RoomKitOptions {
+            process_timeout: Duration::from_millis(5),
+            ..crate::kit::RoomKitOptions::default()
+        };
+        let (kit, _ops) = held_room_of(&held, options).await;
+        let asked = say(&kit, said("hello")).await.event.unwrap();
+        crate::testing::idle(&kit).await;
+        *held.turn.lock().unwrap() = Some(turn_on(asked, "a", 1, &[]));
+        let lock = kit.inner.locks.lock(&room_id()).await.unwrap();
+
+        let mut turn = {
+            let kit = kit.clone();
+            tokio::spawn(async move { kit.run_discussion_turn(&room_id()).await })
+        };
+        let early = tokio::time::timeout(Duration::from_millis(40), &mut turn).await;
+        assert!(
+            early.is_err(),
+            "the turn gave up waiting for the room's lock"
+        );
+        drop(lock);
+
         let answered = turn.await.unwrap().unwrap();
         assert_eq!(answered.response_events.len(), 1);
     }

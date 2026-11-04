@@ -15,8 +15,8 @@ use roomkit_core::model::{
 use roomkit_core::ops::{
     AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, DiscussionOutcome,
     DiscussionRequest, EffectId, FrameworkEvent as CoreEvent, HookAnswer, HookRequest,
-    IdentityAnswer, IdentityRequest, KIT_CLOSED, Notice, Outcome, RecentEvents, StoreOutcome,
-    StoreRequest,
+    IdentityAnswer, IdentityRequest, KIT_CLOSED, NextTurn, Notice, Outcome, RecentEvents,
+    StoreOutcome, StoreRequest,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookTrigger};
@@ -1324,7 +1324,7 @@ pub(super) async fn discussion<S: ConversationStore>(
             "no discussion of the room runs in this process: it is told nothing"
         );
         return match request {
-            DiscussionRequest::Turn { .. } => DiscussionOutcome::Turn(None).into(),
+            DiscussionRequest::Turn { .. } => DiscussionOutcome::Turn(NextTurn::default()).into(),
             DiscussionRequest::Committed { .. } | DiscussionRequest::Instruction { .. } => {
                 DiscussionOutcome::Done.into()
             }
@@ -1344,10 +1344,9 @@ pub(super) async fn discussion<S: ConversationStore>(
             .queue_instruction(*event)
             .await
             .map(|()| DiscussionOutcome::Done),
-        DiscussionRequest::Turn { context, .. } => seam
-            .next_turn(*context)
-            .await
-            .map(|turn| DiscussionOutcome::Turn(turn.map(Box::new))),
+        DiscussionRequest::Turn { context, .. } => {
+            seam.next_turn(*context).await.map(DiscussionOutcome::Turn)
+        }
     };
     match answered {
         Ok(outcome) => outcome.into(),

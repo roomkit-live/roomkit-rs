@@ -55,7 +55,7 @@ use roomkit_core::ops::{
     ChannelConfig, ChannelOutcome, ChannelRequest, CommitRecord, Decided, DeleteEvent,
     DiscussionOutcome, DiscussionRequest, Effect, EffectId, Entry, Environment, FrameworkEvent,
     HoldOutcome, HoldRequest, HookAnswer, HookRequest, IdentityRequest, Inbound, InboundError,
-    InboundResult, InboundTarget, KitConfig, MutationError, Notice, Outcome, Request,
+    InboundResult, InboundTarget, KitConfig, MutationError, NextTurn, Notice, Outcome, Request,
     SequentialEnvironment, Settled, SpanNote, StoreOutcome, StoreRequest, UpdateEvent,
     default_inbound_event,
 };
@@ -2216,7 +2216,7 @@ pub(crate) fn read_only(binding: &mut ChannelBinding) {
 /// told, with no turn to give.
 fn no_discussion(request: &DiscussionRequest) -> Outcome {
     match request {
-        DiscussionRequest::Turn { .. } => DiscussionOutcome::Turn(None).into(),
+        DiscussionRequest::Turn { .. } => DiscussionOutcome::Turn(NextTurn::default()).into(),
         DiscussionRequest::Committed { .. } | DiscussionRequest::Instruction { .. } => {
             DiscussionOutcome::Done.into()
         }

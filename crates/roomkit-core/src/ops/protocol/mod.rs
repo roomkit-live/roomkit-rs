@@ -25,8 +25,8 @@ pub(crate) use answers::{KeyHeld, RequestKind};
 pub use entries::{Decided, Delivered, Entry, EntryId, Settled};
 pub use requests::{
     ChannelOutcome, ChannelRequest, DiscussionOutcome, DiscussionRequest, DiscussionTurn,
-    HoldOutcome, HoldRequest, HookAnswer, HookRequest, IdentityAnswer, IdentityRequest, Outcome,
-    Raised, Request, StoreOutcome, StoreRequest, StreamTarget,
+    HoldOutcome, HoldRequest, HookAnswer, HookRequest, IdentityAnswer, IdentityRequest, NextTurn,
+    Outcome, Raised, Request, StoppedTurn, StoreOutcome, StoreRequest, StreamTarget,
 };
 pub use results::{InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED};
 

@@ -1375,6 +1375,13 @@ fn claim_room_strategy_options_defaults_as_python() {
 }
 
 #[test]
+fn speak_queue_options_defaults_as_python() {
+    let defaults = roomkit::SpeakQueueOptions::default();
+    // roomkit.RoomKit.speak_queue(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
 fn room_strategy_options_defaults_as_python() {
     let defaults = roomkit::RoomStrategyOptions::default();
     // roomkit.RoomKit.room_strategy(organization_id) = None

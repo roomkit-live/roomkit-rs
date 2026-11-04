@@ -21,15 +21,21 @@
 //! `event_processed` is emitted.
 
 use super::delivery::{DeliverySet, Placement, SetKind, SetOutcome};
+use super::job::{Job, RecordNote};
 use super::queues::{Delivery, Lineage};
+use super::record::RecordPass;
 use super::{InboundResult, Machine, Stage, cascade, report};
-use crate::model::{ChannelCategory, EventId, Room, RoomContext, RoomEvent, RoomId, Visibility};
+use crate::model::{
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelType, EventId, Room, RoomContext,
+    RoomEvent, RoomId, Visibility,
+};
 use crate::ops::protocol::{
-    DiscussionRequest, DiscussionTurn, EffectId, HoldOutcome, HoldRequest, Outcome, StoreRequest,
+    DiscussionRequest, DiscussionTurn, EffectId, HoldOutcome, HoldRequest, Outcome, StoppedTurn,
+    StoreRequest,
 };
 use crate::ops::section::{Failure, Section, SectionWork};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
-use crate::rules::chain_depth::ReentryBudget;
+use crate::rules::chain_depth::{self, ReentryBudget};
 use crate::rules::discussion;
 use crate::rules::permissions::{self, DeliveryPlan};
 use crate::rules::verification::release;
@@ -45,6 +51,9 @@ pub(super) enum Reran {
     /// The event's delivery set, planned for the agents and placed in the
     /// room's lane.
     Planned(Box<Planned>),
+    /// No turn, but turns the discussion's depth limit stopped, to record
+    /// (RFC §8.3).
+    Stopped(Vec<StoppedTurn>, Box<RoomContext>),
 }
 
 /// A rerun's delivery set, as planned under the lock.
@@ -59,6 +68,8 @@ pub(super) struct Planned {
     placement: Placement,
     /// A discussion's turn: its own chain-depth limit (RFC §19.7.5).
     limit: Option<u32>,
+    /// The turns its depth limit stopped on the way, recorded first.
+    stopped: Vec<StoppedTurn>,
 }
 
 /// The rerun's work under the room's lock.
@@ -126,16 +137,17 @@ impl RerunWork {
         let Some(context) = self.context.take() else {
             return Progress::Done(Ok(Reran::Nothing));
         };
-        let turn = match outcome.into_discussion_turn() {
-            Ok(turn) => turn,
+        let next = match outcome.into_discussion_turn() {
+            Ok(next) => next,
             Err(error) => return Progress::Done(Err(Abort::Store(error))),
         };
-        let Some(turn) = turn else {
-            return Progress::Done(Ok(Reran::Nothing));
-        };
-        match plan_turn(*turn, context) {
+        let planned = next
+            .turn
+            .and_then(|turn| plan_turn(*turn, context.clone(), next.stopped.clone()));
+        match planned {
             Some(planned) => self.placing(cx, planned),
-            None => Progress::Done(Ok(Reran::Nothing)),
+            None if next.stopped.is_empty() => Progress::Done(Ok(Reran::Nothing)),
+            None => Progress::Done(Ok(Reran::Stopped(next.stopped, context))),
         }
     }
 
@@ -275,6 +287,7 @@ fn plan(cx: &Cx<'_>, trigger: RoomEvent, context: Box<RoomContext>, floor: u32) 
         context,
         placement: Placement::Missing,
         limit: None,
+        stopped: Vec::new(),
     }
 }
 
@@ -282,7 +295,11 @@ fn plan(cx: &Cx<'_>, trigger: RoomEvent, context: Box<RoomContext>, floor: u32) 
 /// event carrying the turn's mark, its answers bound by the event's
 /// `response_visibility` (RFC §19.7.5 rules 9 and 11); `None` when the agent
 /// cannot read the event.
-fn plan_turn(turn: DiscussionTurn, context: Box<RoomContext>) -> Option<Planned> {
+fn plan_turn(
+    turn: DiscussionTurn,
+    context: Box<RoomContext>,
+    stopped: Vec<StoppedTurn>,
+) -> Option<Planned> {
     let DiscussionTurn {
         agent,
         answered,
@@ -299,6 +316,7 @@ fn plan_turn(turn: DiscussionTurn, context: Box<RoomContext>) -> Option<Planned>
         context,
         placement: Placement::Missing,
         limit: Some(max_depth),
+        stopped,
     })
 }
 
@@ -346,12 +364,19 @@ impl Machine {
 
     fn begin_section(&mut self, cx: &mut Cx<'_>, room_id: RoomId, asked: Asked) {
         self.call.room_id = Some(room_id.clone());
+        // A discussion's turn waits for the room's lock as long as it takes:
+        // nobody is waiting on its call, whose driver would only ask again.
+        let bound = (!matches!(asked, Asked::Turn)).then_some(self.call.bound);
         let work = RerunWork {
             asked,
             context: None,
             waiting: Waiting::Nothing,
         };
-        let mut section = Box::new(Section::new(room_id, work).waiting_within(self.call.bound));
+        let section = Section::new(room_id, work);
+        let mut section = Box::new(match bound {
+            Some(bound) => section.waiting_within(bound),
+            None => section,
+        });
         section.start(cx);
         self.stage.enter(Stage::Rerunning(section));
     }
@@ -382,6 +407,14 @@ impl Machine {
                 self.trigger.note_error(ended.release_error);
                 self.queue_rerun(cx, *planned);
             }
+            Ok(Reran::Stopped(stopped, context)) => {
+                self.trigger.note_error(ended.release_error);
+                self.queue_stopped(cx, stopped, &context);
+                self.trigger.decided = true;
+                self.stage.enter(Stage::Cascade);
+                let decided = Ok(self.trigger.result.clone());
+                self.publish(cx, &decided);
+            }
             Err(abort) => {
                 let error = cascade::failure(abort, self.call.room_id.clone());
                 self.end(cx, Err(error));
@@ -399,7 +432,9 @@ impl Machine {
             context,
             placement,
             limit,
+            stopped,
         } = planned;
+        self.queue_stopped(cx, stopped, &context);
         self.trigger.decided = true;
         self.trigger.result.event = Some(trigger);
         // A discussion's turn, and all that answers it, draws on one budget
@@ -431,6 +466,39 @@ impl Machine {
         self.stage.enter(Stage::Cascade);
         let decided = Ok(self.trigger.result.clone());
         self.publish(cx, &decided);
+    }
+
+    /// The record of each turn a discussion's depth limit stopped, once, with
+    /// that limit (RFC §8.3, §19.7.5 rule 11).
+    fn queue_stopped(&mut self, cx: &mut Cx<'_>, stopped: Vec<StoppedTurn>, context: &RoomContext) {
+        for StoppedTurn {
+            agent,
+            answered,
+            max_depth,
+        } in stopped
+        {
+            // An agent detached while it stayed queued is still recorded.
+            let binding = context.get_binding(&agent).cloned().unwrap_or_else(|| {
+                ChannelBinding::at(
+                    agent,
+                    context.room.id.clone(),
+                    ChannelType::AI,
+                    ChannelCategory::Intelligence,
+                    ChannelDirection::Bidirectional,
+                    cx.env.now(),
+                )
+            });
+            let id = cx.env.new_event_id();
+            let record = chain_depth::not_asked_record(id, &answered, &binding, cx.env.now());
+            self.cascade.queue(Job::Record(
+                Box::new(RecordPass::new(record).within(Lineage::Call)),
+                RecordNote::NotAsked {
+                    agent: Box::new(binding),
+                    trigger: answered,
+                    limit: max_depth,
+                },
+            ));
+        }
     }
 
     /// A rerun's set is over: what its agents answered is the call's, as a

@@ -51,7 +51,15 @@ pub fn kit_with_environment<S: ConversationStore>(
 /// waits for itself: a test awaits it once its calls returned.
 #[doc(hidden)]
 pub async fn idle<S>(kit: &RoomKit<S>) {
-    kit.inner.tasks.idle().await;
+    loop {
+        kit.inner.tasks.idle().await;
+        // A discussion's driver is no task of the kit's: at rest it looks at
+        // its queue once a second, for ever.
+        if kit.inner.discussions.settled() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
 }
 
 /// Sets the bounds both sides of `kit`'s turns keep (RFC §10.6.8), which

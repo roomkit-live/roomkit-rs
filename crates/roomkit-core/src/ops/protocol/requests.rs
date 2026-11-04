@@ -139,13 +139,35 @@ pub struct DiscussionTurn {
     pub max_depth: u32,
 }
 
+/// A turn the depth limit stopped: recorded once, in place of the answer it
+/// would have made, its agent kept queued (RFC §8.3, §19.7.5 rule 11).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoppedTurn {
+    /// The agent not asked.
+    pub agent: ChannelId,
+    /// The event it would have answered.
+    pub answered: Box<RoomEvent>,
+    /// The discussion's own chain-depth limit.
+    pub max_depth: u32,
+}
+
+/// What a discussion gives now: at most one turn, and the turns its depth
+/// limit stopped on the way.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NextTurn {
+    /// The turn to give, `None` for none.
+    pub turn: Option<Box<DiscussionTurn>>,
+    /// The turns stopped: their records are committed before the turn runs.
+    pub stopped: Vec<StoppedTurn>,
+}
+
 /// A discussion's answer to a [`DiscussionRequest`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum DiscussionOutcome {
     /// Told; nothing to answer.
     Done,
-    /// The turn to give, `None` for none.
-    Turn(Option<Box<DiscussionTurn>>),
+    /// What it gives now.
+    Turn(NextTurn),
 }
 
 /// What the driver holds of a room for an operation, and carries out
