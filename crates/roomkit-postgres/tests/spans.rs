@@ -553,6 +553,38 @@ async fn a_failure_reads_asyncpg_s_class() {
     );
 }
 
+/// A wait for a connection that runs out reads `TimeoutError`, its bound the pool's or
+/// the store's, as Python's `TimeoutError`, which has no text even when asked.
+#[tokio::test]
+async fn a_wait_for_a_connection_reads_timeout_error() {
+    let Some((schema, _, _)) = reporting(false).await else {
+        return;
+    };
+    for bound in [Some(std::time::Duration::from_millis(20)), None] {
+        let config: tokio_postgres::Config = schema.dsn().parse().unwrap();
+        let pool = deadpool_postgres::Pool::builder(deadpool_postgres::Manager::new(config, NoTls))
+            .max_size(1)
+            .wait_timeout(bound)
+            .runtime(deadpool_postgres::Runtime::Tokio1)
+            .build()
+            .unwrap();
+        let held = pool.get().await.unwrap();
+        let store = PostgresStore::new(PostgresStoreOptions {
+            pool: Some(pool.clone()),
+            ..PostgresStoreOptions::default()
+        });
+        let provider = Arc::new(MockTelemetryProvider::default());
+        store.set_telemetry(Arc::<MockTelemetryProvider>::clone(&provider), true);
+        store.get_room(&room_id("r1")).await.unwrap_err();
+        assert_eq!(
+            provider.spans()[0].error_message.as_deref(),
+            Some("TimeoutError"),
+            "{bound:?}"
+        );
+        drop(held);
+    }
+}
+
 /// `sqlstates.rs` is asyncpg's table, when `ROOMKIT_PYTHON` names a roomkit checkout's
 /// interpreter.
 #[test]
