@@ -74,7 +74,7 @@ pub(super) fn take(
     #[cfg(test)]
     if turns
         .executor_apart
-        .load(std::sync::atomic::Ordering::SeqCst)
+        .load(Ordering::SeqCst)
     {
         let run = executor.run(controls, carried);
         return kit.spawn(Box::pin(crate::telemetry::within_no_span(run)));
