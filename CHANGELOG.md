@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A turn that wrote no message records on its last row, as Python's: its record rides its last message, else its last row, the call's end, a strategy's first pass handing it on (RMK-1344).
 - A cut stores what its turn leaves at once and gives the room's line up: only its caller waits for a streaming target still working past the cut, so a target stuck there no longer holds the next message of an agent that serializes or steers its room's turns. Python's blocked `finally` holds it still, the target's defect (RMK-1343).
 - What a turn standing alone activates counts for the room, as Python's: its next ordinary turn carries the rules, and it reads the room's stored rows first as any turn does (RMK-1356).
 - A discussion's stored key and a room's conversation state are the framework's, as Python's (HITL 9247da98, RMK-1337): `create_room`, `update_room_metadata` and a channel's `metadata_updates` drop `_discussion`, `_speak_queue` and `_conversation_state` with a warning, `save_conversation_state` staying the way to set a state (RFC §19.2). A stored handle counts only for an agent and if it can name one, a stored discussion the constructor would refuse reads as none, with a warning, and a person whose name reads like a handle or like `all` is addressed by no name.

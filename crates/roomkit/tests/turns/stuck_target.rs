@@ -464,7 +464,7 @@ async fn the_room_s_next_turn_starts_while_a_cut_target_flushes() {
 }
 
 // A target that fails once it flushed past its cut: what the cut stored stands,
-// and its caller reads the failure (RMK-1343). On HITL ... Python, whose `finally`
+// and its caller reads the failure (RMK-1343, HITL fcaf1ecd). Python, whose `finally`
 // fails before anything is stored, stores the text unmarked, with no record.
 #[tokio::test(start_paused = true)]
 async fn a_target_that_fails_flushing_leaves_what_the_cut_stored() {

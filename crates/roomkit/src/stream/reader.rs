@@ -27,8 +27,9 @@
 //! stores the text it produced,
 //! hands its reader that row, then the failure; a streaming channel that
 //! fails leaves the text to every target. The turn's record, when no row
-//! carried it, is written on its last message once the response is over,
-//! a direct update (`ON_EVENT_UPDATED` fires) made in the room's work.
+//! carried it, is written on its last message, else its last row, once the
+//! response is over, a direct update (`ON_EVENT_UPDATED` fires) made in the
+//! room's work.
 
 use std::collections::VecDeque;
 use std::future::{Future, poll_fn};
@@ -485,7 +486,8 @@ impl Producer {
         drop(self.place.take());
     }
 
-    /// Writes the turn's record on its last message, when no row carried it.
+    /// Writes the turn's record on its last message or else its last row,
+    /// when no row carried it.
     async fn write_owed_record<S: ConversationStore>(&mut self, inner: &Arc<Inner<S>>) {
         if let Some((event_id, metadata)) = self.segments.take_owed_record() {
             write_record(inner, &self.room_id, &event_id, metadata).await;
@@ -938,8 +940,8 @@ enum Settled {
     Nothing,
 }
 
-/// Writes the turn's record, `metadata`, on its last message, `event_id`,
-/// when no row carried it (RFC §6.4 "The turn's record"): a direct update,
+/// Writes the turn's record, `metadata`, on its last message or else its last
+/// row, `event_id`, when no row carried it (RFC §6.4 "The turn's record"): a direct update,
 /// `ON_EVENT_UPDATED` firing as for any; best effort, a failure logged.
 async fn write_record<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
@@ -961,7 +963,7 @@ async fn write_record<S: ConversationStore>(
                 room_id = %room_id,
                 event_id = %event_id,
                 %error,
-                "the turn's record was not written on its last message: the kit closed"
+                "the turn's record was not written on its row: the kit closed"
             );
             return;
         }
@@ -970,7 +972,7 @@ async fn write_record<S: ConversationStore>(
             room_id = %room_id,
             event_id = %event_id,
             %error,
-            "the turn's record could not be written on its last message"
+            "the turn's record could not be written on its row"
         );
     }
 }

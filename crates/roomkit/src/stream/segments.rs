@@ -5,7 +5,8 @@
 //! blank one writes nothing. The turn's live record rides each message as it
 //! stands when the message is written; how the turn ended rides the segment
 //! the turn ends on; when the turn ends on no text, it is owed to the last message
-//! the turn wrote, which is updated once the response is over. A response
+//! the turn wrote, or to its last row when it wrote none, which is updated once
+//! the response is over. A response
 //! its reader stopped once it began ends `cancelled`, its text kept and
 //! marked so; a call it opened and did not end gets its end, `failed`.
 //!
@@ -76,6 +77,8 @@ pub(super) struct Segments {
     open: Vec<Open>,
     /// The last message the store holds of the response.
     last_message: Option<RoomEvent>,
+    /// The last row the store holds of the response.
+    last_row: Option<RoomEvent>,
 }
 
 impl Segments {
@@ -94,6 +97,7 @@ impl Segments {
             generations: GenerationsRead::default(),
             open: Vec::new(),
             last_message: None,
+            last_row: None,
         }
     }
 
@@ -246,8 +250,10 @@ impl Segments {
         rows
     }
 
-    /// `row` is stored: the last message, and the record when it carries it.
+    /// `row` is stored: the last row, the last message, and the record when
+    /// it carries it.
     pub(super) fn stored(&mut self, row: &RoomEvent) {
+        self.last_row = Some(row.clone());
         if row.r#type != EventType::Message {
             return;
         }
@@ -283,12 +289,12 @@ impl Segments {
         Some(entry)
     }
 
-    /// The last message the store holds, and the record it is owed: the
-    /// update to write once the response is over, when no row carried it
-    /// (RFC §6.4 "The turn's record"). Taken once.
+    /// The last message the store holds, else its last row, and the record
+    /// it is owed: the update to write once the response is over, when no row
+    /// carried it (RFC §6.4 "The turn's record"). Taken once.
     pub(super) fn take_owed_record(&mut self) -> Option<(EventId, Metadata)> {
         let record = self.record.as_ref().filter(|_| self.owed)?;
-        let last = self.last_message.as_ref()?;
+        let last = self.last_message.as_ref().or(self.last_row.as_ref())?;
         let mut metadata = last.metadata.clone();
         metadata.extend(record.clone());
         let id = last.id.clone();
