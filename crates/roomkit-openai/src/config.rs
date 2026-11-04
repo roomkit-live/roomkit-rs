@@ -42,7 +42,7 @@ impl OpenAiApi {
 
 /// The endpoint a provider calls and how: Python's `OpenAIConfig(*, api_key,
 /// base_url=None, model, max_tokens=1024, timeout=30.0, connect_timeout=5.0,
-/// include_stream_usage=True, use_max_completion_tokens=False,
+/// max_retries=0, include_stream_usage=True, use_max_completion_tokens=False,
 /// supports_custom_temperature=True, reasoning_effort=None,
 /// default_headers=None, extra_body=None,
 /// supports_reasoning_effort_with_tools=None)`, built with
@@ -69,6 +69,16 @@ pub struct OpenAiConfig {
     pub timeout: Duration,
     /// How long a request waits for its connection.
     pub connect_timeout: Duration,
+    /// How many times a request is tried again on its own, as Python's
+    /// openai SDK does (`max_retries`): a connection failure, a timeout, or
+    /// an answer the endpoint's `x-should-retry` or its status says is worth
+    /// it (408, 409, 429, 5xx); each after the wait its `retry-after-ms` or
+    /// `retry-after` asks, within two minutes, past which the answer is
+    /// final, else 0.5 s doubling to 8 s, up to a quarter less. A stream is
+    /// tried again until its head came, never after. 0 by default, since a
+    /// channel's [`retry_policy`](roomkit_ai::AiChannelOptions::retry_policy)
+    /// is the layer that retries, with the fallback beyond it.
+    pub max_retries: u32,
     /// Whether a streamed answer reports its usage
     /// (`stream_options.include_usage`).
     pub include_stream_usage: bool,
@@ -131,6 +141,7 @@ impl OpenAiConfig {
             max_tokens: Some(1024),
             timeout: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(5),
+            max_retries: 0,
             include_stream_usage: true,
             use_max_completion_tokens: None,
             supports_custom_temperature: None,
@@ -194,6 +205,7 @@ impl fmt::Debug for OpenAiConfig {
             .field("max_tokens", &self.max_tokens)
             .field("timeout", &self.timeout)
             .field("connect_timeout", &self.connect_timeout)
+            .field("max_retries", &self.max_retries)
             .field("api", &self.api)
             .field("vision", &self.vision)
             .field("tool_namespace", &self.tool_namespace)

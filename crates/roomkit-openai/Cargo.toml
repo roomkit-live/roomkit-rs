@@ -18,6 +18,9 @@ roomkit-core.workspace = true
 roomkit-ai.workspace = true
 # The `Stream` a streamed completion is read as (step 4, decision 11).
 futures-core.workspace = true
+# An HTTP date an endpoint's `Retry-After` names, as Python's SDK reads it;
+# already in the tree through roomkit-core.
+jiff.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
 webpki-roots.workspace = true
@@ -27,6 +30,9 @@ thiserror.workspace = true
 # The one warning of an effort a turn with tools left out unsaid (RFC
 # §6.7), as Python's; already in the tree through roomkit.
 tracing.workspace = true
+# The wait between two tries of a request (`OpenAiConfig::max_retries`);
+# already in the tree through roomkit-ai.
+tokio.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

@@ -64,6 +64,7 @@ mod provider;
 mod reasoning;
 mod request;
 mod responses;
+mod retry;
 mod sse;
 mod stream;
 mod think_tags;

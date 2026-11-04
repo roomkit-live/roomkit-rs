@@ -21,7 +21,7 @@ use crate::request::{Request, push_end, push_text, push_thinking};
 
 use crate::config::OpenAiApi;
 use crate::error::OpenAiError;
-use crate::provider::{ANSWER_LIMIT, OpenAiAiProvider, read_body};
+use crate::provider::{ANSWER_LIMIT, Answered, OpenAiAiProvider, read_body};
 use crate::sse::Events;
 use crate::wire;
 
@@ -162,17 +162,20 @@ impl<'a> Reading<'a> {
     /// Sends the request: a streamed answer is read as it arrives, a whole
     /// completion read whole.
     async fn ask(&mut self) -> Result<(), OpenAiError> {
-        let (response, secret) = self.provider.ask(&self.request, self.streamed).await?;
+        let (answered, secret) = self.provider.ask(&self.request, self.streamed).await?;
         self.secret = secret;
-        if !is_json(&response) {
-            self.phase = Phase::Streaming(Box::new(Streamed {
-                response,
-                events: Events::new(ANSWER_LIMIT),
-                folding: Folding::new(self.provider.api(), self.provider.namespace()),
-            }));
-            return Ok(());
-        }
-        let body = read_body(response).await?;
+        let body = match answered {
+            Answered::Body(body) => body,
+            Answered::Head(response) if is_json(&response) => read_body(response).await?,
+            Answered::Head(response) => {
+                self.phase = Phase::Streaming(Box::new(Streamed {
+                    response,
+                    events: Events::new(ANSWER_LIMIT),
+                    folding: Folding::new(self.provider.api(), self.provider.namespace()),
+                }));
+                return Ok(());
+            }
+        };
         let whole = match self.provider.api() {
             // A completion asked whole may be an error object in its place,
             // which Python's client reads as its status; a stream answered
@@ -226,7 +229,7 @@ impl<'a> Reading<'a> {
 }
 
 /// Whether `response` holds a whole completion rather than events.
-fn is_json(response: &reqwest::Response) -> bool {
+pub(crate) fn is_json(response: &reqwest::Response) -> bool {
     response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)

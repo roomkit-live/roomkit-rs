@@ -4,6 +4,7 @@
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use roomkit_ai::{
     AiContext, AiProvider, AiResponse, ModelInfo, ProviderError, ProviderStream, TextStream,
@@ -13,6 +14,7 @@ use crate::config::{OpenAiApi, OpenAiConfig};
 use crate::error::OpenAiError;
 use crate::reasoning;
 use crate::request::Request;
+use crate::retry;
 use crate::stream;
 use crate::wire::{self, CompletionRequest};
 
@@ -210,24 +212,106 @@ impl OpenAiAiProvider {
         Ok(value)
     }
 
-    /// Sends `request`: its body as the configured API writes it, the
-    /// bearer token the configuration gives, its headers; `streamed` false
-    /// asks Chat Completions for the completion whole.
+    /// Sends `request`: its body as the configured API writes it, under
+    /// [`Self::send`]; `streamed` false asks Chat Completions for the
+    /// completion whole.
     pub(crate) async fn ask(
         &self,
         request: &Request,
         streamed: bool,
-    ) -> Result<(reqwest::Response, String), OpenAiError> {
+    ) -> Result<(Answered, String), OpenAiError> {
         // Python's order: the model's refusal, then the effort (and its
         // one warning), then the tools' names.
         let body = self.body(request, streamed)?;
         crate::names::check(self.config.base_url(), &request.tools)?;
+        let body = with_extra_body(body, self.config.extra_body.as_ref());
+        let call = || self.client.post(self.endpoint.clone()).json(&body);
+        self.send(&call, !streamed).await
+    }
+
+    /// Sends what `call` builds, tried again up to the configuration's
+    /// `max_retries` as Python's SDK does ([`crate::retry`]): its answer and
+    /// the credential it was sent with, or the last try's failure. A JSON
+    /// answer to a call asked `whole` is read inside the try, as the SDK
+    /// reads a request it does not stream.
+    async fn send(
+        &self,
+        call: &(dyn Fn() -> reqwest::RequestBuilder + Sync),
+        whole: bool,
+    ) -> Result<(Answered, String), OpenAiError> {
+        let mut retries_taken = 0;
+        loop {
+            let left = retries_taken < self.config.max_retries;
+            match self.attempt(call, whole, (retries_taken, left)).await {
+                Ok(answered) => return Ok(answered),
+                Err(Failed::Final(error)) => return Err(error),
+                Err(Failed::Again(wait)) => {
+                    tracing::info!(
+                        target: "roomkit::openai",
+                        retries_taken,
+                        ?wait,
+                        "a request is tried again"
+                    );
+                    tokio::time::sleep(wait).await;
+                    retries_taken += 1;
+                }
+            }
+        }
+    }
+
+    /// One try of what `call` builds, the bearer token the configuration
+    /// gives and its headers on it, after `retries_taken` tries, with
+    /// another one `left` or not.
+    async fn attempt(
+        &self,
+        call: &(dyn Fn() -> reqwest::RequestBuilder + Sync),
+        whole: bool,
+        (retries_taken, left): (u32, bool),
+    ) -> Result<(Answered, String), Failed> {
         let secret = match &self.config.token_source {
-            Some(source) => source.token().await?,
+            Some(source) => source.token().await.map_err(OpenAiError::from)?,
             None => self.config.api_key.clone(),
         };
-        let body = with_extra_body(body, self.config.extra_body.as_ref());
-        let mut call = self.client.post(self.endpoint.clone()).json(&body);
+        let again = || Failed::Again(retry::delay(retries_taken, None));
+        let response = match self.authorized(call(), &secret).send().await {
+            Ok(response) => response,
+            // A request that could not be built never left: it fails the same
+            // however many times it is tried.
+            Err(error) if left && !error.is_builder() => return Err(again()),
+            Err(error) => return Err(OpenAiError::request(error).into()),
+        };
+        let status = response.status();
+        if !status.is_success() {
+            if left && retry::should_retry(status, response.headers()) {
+                let wait = retry::delay(retries_taken, Some(response.headers()));
+                return Err(Failed::Again(wait));
+            }
+            // An error body past what a turn reads still keeps its status,
+            // as Python's client reads the status whatever the body.
+            let body = match read_body(response).await {
+                Ok(body) => body,
+                Err(OpenAiError::AnswerTooLong { .. }) => Vec::new(),
+                Err(error) => return Err(error.into()),
+            };
+            return Err(wire::status_error(status, &body, &secret).into());
+        }
+        if !whole || !stream::is_json(&response) {
+            return Ok((Answered::Head(response), secret));
+        }
+        match read_body(response).await {
+            Ok(body) => Ok((Answered::Body(body), secret)),
+            Err(OpenAiError::Request { .. }) if left => Err(again()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// `call` with the configuration's headers and the bearer token
+    /// `secret`.
+    fn authorized(
+        &self,
+        mut call: reqwest::RequestBuilder,
+        secret: &str,
+    ) -> reqwest::RequestBuilder {
         let mut authorized = false;
         for (name, value) in self.config.default_headers.iter().flatten() {
             authorized |= name.eq_ignore_ascii_case("authorization");
@@ -236,21 +320,30 @@ impl OpenAiAiProvider {
         // An `Authorization` the host's headers carry replaces the key's
         // bearer, as Python's client lets `default_headers` override it.
         if !secret.is_empty() && !authorized {
-            call = call.bearer_auth(&secret);
+            call = call.bearer_auth(secret);
         }
-        let response = call.send().await.map_err(OpenAiError::request)?;
-        let status = response.status();
-        if !status.is_success() {
-            // An error body past what a turn reads still keeps its status,
-            // as Python's client reads the status whatever the body.
-            let body = match read_body(response).await {
-                Ok(body) => body,
-                Err(OpenAiError::AnswerTooLong { .. }) => Vec::new(),
-                Err(error) => return Err(error),
-            };
-            return Err(wire::status_error(status, &body, &secret));
-        }
-        Ok((response, secret))
+        call
+    }
+}
+
+/// A request's answer: its head, its body to read as it arrives, or its
+/// body, read whole inside the try.
+pub(crate) enum Answered {
+    Head(reqwest::Response),
+    Body(Vec<u8>),
+}
+
+/// What a try that did not answer leaves its request.
+enum Failed {
+    /// Its failure, the request's.
+    Final(OpenAiError),
+    /// Another try, after this wait.
+    Again(Duration),
+}
+
+impl From<OpenAiError> for Failed {
+    fn from(error: OpenAiError) -> Self {
+        Self::Final(error)
     }
 }
 

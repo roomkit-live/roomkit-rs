@@ -1459,6 +1459,7 @@ name = "roomkit-openai"
 version = "0.1.0"
 dependencies = [
  "futures-core",
+ "jiff",
  "pretty_assertions",
  "reqwest",
  "roomkit",

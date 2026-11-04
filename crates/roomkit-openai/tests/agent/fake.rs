@@ -25,6 +25,10 @@ pub(crate) struct Reply {
     /// The wait before each server-sent event after the first, when the
     /// body is sent event by event.
     pace: Option<std::time::Duration>,
+    /// More headers of the answer's head.
+    headers: Vec<(&'static str, String)>,
+    /// Whether the connection closes before any answer.
+    closes: bool,
 }
 
 /// The length an answer's head declares.
@@ -62,6 +66,8 @@ impl Reply {
             content_type: "application/json",
             fill: b" ".to_vec(),
             pace: None,
+            headers: Vec::new(),
+            closes: false,
         }
     }
 
@@ -148,6 +154,8 @@ impl Reply {
             content_type: "application/json",
             fill: b" ".to_vec(),
             pace: None,
+            headers: Vec::new(),
+            closes: false,
         }
     }
 
@@ -174,6 +182,41 @@ impl Reply {
         Self {
             location: Some(location.to_owned()),
             ..Self::status(307, "")
+        }
+    }
+
+    /// The same answer, its head carrying the header `name`.
+    pub(crate) fn with_header(mut self, name: &'static str, value: &str) -> Self {
+        self.headers.push((name, value.to_owned()));
+        self
+    }
+
+    /// A stream's head, then the connection closes before its body's first
+    /// byte, short of the length it declared.
+    pub(crate) fn dropped_before_its_first_event() -> Self {
+        Self {
+            body: String::new(),
+            length: Length::Declared(1024),
+            content_type: "text/event-stream",
+            ..Self::completion("")
+        }
+    }
+
+    /// A whole completion's head, then the connection closes short of the
+    /// length it declared.
+    pub(crate) fn dropped_in_its_body() -> Self {
+        Self {
+            body: String::new(),
+            length: Length::Declared(1024),
+            ..Self::completion("")
+        }
+    }
+
+    /// The connection closes once the request is read, with no answer.
+    pub(crate) fn closed() -> Self {
+        Self {
+            closes: true,
+            ..Self::status(200, "")
         }
     }
 
@@ -253,17 +296,13 @@ async fn serve(listener: TcpListener, replies: Vec<Reply>, requests: Arc<Mutex<V
             .cloned()
             .unwrap_or_else(|| Reply::status(500, "no reply scripted"));
         next += 1;
-        let request = exchange(stream, &reply).await;
-        requests
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(request);
+        exchange(stream, &reply, &requests).await;
     }
 }
 
-/// Reads one HTTP/1.1 request from `stream`, answers it with `reply`, and
-/// closes the connection.
-async fn exchange(mut stream: TcpStream, reply: &Reply) -> Request {
+/// Reads one HTTP/1.1 request from `stream`, keeps it in `requests`, answers
+/// it with `reply`, and closes the connection.
+async fn exchange(mut stream: TcpStream, reply: &Reply, requests: &Mutex<Vec<Request>>) {
     let mut received = Vec::new();
     let head_end = loop {
         if let Some(at) = received.windows(4).position(|window| window == b"\r\n\r\n") {
@@ -273,11 +312,9 @@ async fn exchange(mut stream: TcpStream, reply: &Reply) -> Request {
     };
     let head = String::from_utf8_lossy(&received[..head_end]).into_owned();
     let mut lines = head.split("\r\n");
-    let path = lines
-        .next()
-        .and_then(|line| line.split(' ').nth(1))
-        .unwrap_or_default()
-        .to_owned();
+    let mut request_line = lines.next().unwrap_or_default().split(' ');
+    let method = request_line.next().unwrap_or_default().to_owned();
+    let path = request_line.next().unwrap_or_default().to_owned();
     let headers: Vec<(String, String)> = lines
         .filter_map(|line| line.split_once(':'))
         .map(|(name, value)| (name.trim().to_lowercase(), value.trim().to_owned()))
@@ -293,8 +330,7 @@ async fn exchange(mut stream: TcpStream, reply: &Reply) -> Request {
         read_more(&mut stream, &mut received).await;
     }
     let body = serde_json::from_slice(&received[head_end..head_end + length]).unwrap_or_default();
-    answer(&mut stream, reply).await;
-    Request {
+    let request = Request {
         path,
         authorization: header("authorization"),
         accept_encoding: header("accept-encoding"),
@@ -304,7 +340,12 @@ async fn exchange(mut stream: TcpStream, reply: &Reply) -> Request {
             .map(|(_, value)| value.clone())
             .collect(),
         body,
-    }
+    };
+    requests
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(request);
+    answer(&mut stream, reply).await;
 }
 
 /// Writes `reply` on `stream`, then closes it. A client that stops reading
@@ -312,6 +353,9 @@ async fn exchange(mut stream: TcpStream, reply: &Reply) -> Request {
 async fn answer(stream: &mut TcpStream, reply: &Reply) {
     if reply.silent {
         std::future::pending::<()>().await;
+    }
+    if reply.closes {
+        return;
     }
     let location = reply
         .location
@@ -323,8 +367,12 @@ async fn answer(stream: &mut TcpStream, reply: &Reply) {
         Length::Declared(length) => format!("Content-Length: {length}\r\n"),
         Length::Streamed(_) => String::new(),
     };
+    let mut headers = String::new();
+    for (name, value) in &reply.headers {
+        write!(headers, "{name}: {value}\r\n").unwrap();
+    }
     let head = format!(
-        "HTTP/1.1 {} Fake\r\nContent-Type: {}\r\n{length}{location}Connection: close\r\n\r\n",
+        "HTTP/1.1 {} Fake\r\nContent-Type: {}\r\n{length}{location}{headers}Connection: close\r\n\r\n",
         reply.status, reply.content_type
     );
     let mut sent = stream.write_all(head.as_bytes()).await.is_ok();
