@@ -61,6 +61,7 @@ mod rooms;
 mod rows;
 mod schema;
 mod side_effects;
+mod spans;
 mod store;
 mod timeline;
 mod tls;

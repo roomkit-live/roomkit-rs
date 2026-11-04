@@ -376,6 +376,7 @@ impl<S: ConversationStore> RoomKit<S> {
             telemetry,
         } = options;
         let telemetry = telemetry::telemetry_of(telemetry);
+        store.set_telemetry(Arc::clone(&telemetry.provider), telemetry.sensitive);
         let lock_manager: Arc<dyn RoomLockManager> =
             lock_manager.unwrap_or_else(|| Arc::new(InMemoryLockManager::default()));
         warn_of_a_process_local_lock(&*store, &lock_manager);

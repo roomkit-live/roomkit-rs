@@ -235,6 +235,18 @@ approved = "2026-11-04"
 reason = "Python's class attribute ConversationStore.is_process_local, which the snapshot does not record: a trait method, false by default, for a store of your own to opt out of the warning (HITL da7a6e4b, RMK-1291)"
 
 [[exception]]
+rust = "roomkit::ConversationStore"
+members = ["set_telemetry"]
+approved = "2026-11-04"
+reason = "Python's private attribute store._telemetry, which the kit sets: a trait method, empty by default, the store being in another crate than the kit (HITL 70079f74, RMK-1383)"
+
+[[exception]]
+rust = "roomkit::store::ConversationStore"
+members = ["set_telemetry"]
+approved = "2026-11-04"
+reason = "the same trait under its module's path: see roomkit::ConversationStore (HITL 70079f74, RMK-1383)"
+
+[[exception]]
 rust = "roomkit::store::ConversationStore"
 members = ["is_process_local"]
 approved = "2026-11-04"

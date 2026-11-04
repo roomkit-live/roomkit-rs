@@ -17,7 +17,7 @@ pub(crate) mod rooms;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelType, EventContent, EventId, EventType, Identity, IdentityId,
@@ -27,6 +27,8 @@ use roomkit_core::model::{
 use roomkit_core::rules::addresses::written_recipient;
 use roomkit_core::rules::edits;
 use roomkit_core::rules::routing;
+
+use crate::telemetry::TelemetryProvider;
 
 pub use self::memory::InMemoryStore;
 pub use self::options::{
@@ -273,6 +275,14 @@ pub trait ConversationStore: Send + Sync + 'static {
     fn is_process_local(&self) -> bool {
         false
     }
+
+    /// The kit's telemetry, given as the kit is built on this store: Python's
+    /// attribute `store._telemetry`, which the kit sets. `record_sensitive_data` is
+    /// [`TelemetryConfig::record_sensitive_data`](crate::telemetry::TelemetryConfig):
+    /// a span's error then reads its text, else its class alone (RFC §15.7).
+    /// Nothing by default: a store of your own keeps it to report its queries'
+    /// spans, as `PostgresStore`'s `store.<operation>`.
+    fn set_telemetry(&self, _provider: Arc<dyn TelemetryProvider>, _record_sensitive_data: bool) {}
 
     /// Stores a new room, and returns it.
     ///
