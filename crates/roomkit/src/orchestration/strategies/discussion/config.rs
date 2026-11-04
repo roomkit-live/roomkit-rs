@@ -194,6 +194,8 @@ mod tests {
             json!({"agents": ["a"], "max_depth": 5, "max_turns": 0}),
             json!({"agents": ["a"], "max_depth": 5, "silent_token": "  "}),
             json!({"agents": ["a"], "max_depth": 5, "rules": "  "}),
+            json!({"agents": ["a"], "max_depth": 5, "silent_token": "\u{1c}"}),
+            json!({"agents": ["a"], "max_depth": 5, "rules": "\u{1f}"}),
             json!({"agents": ["a"], "max_depth": 5, "everyone": ["ghost"]}),
             json!({"agents": ["a"], "max_depth": 5, "handles": {"ghost": "ops"}}),
             json!({"agents": ["a", "b"], "max_depth": 5, "handles": {"a": "ops", "b": "OPS"}}),

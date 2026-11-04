@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use super::CONFIG_KEY;
-use super::names::is_handle;
+use super::names::{is_blank, is_handle};
 use crate::model::{ChannelId, Metadata};
 use crate::rules::unicode::casefold;
 
@@ -64,19 +64,36 @@ impl DiscussionConfig {
     /// of the room.
     #[must_use]
     pub fn stored(metadata: &Metadata) -> Option<Self> {
-        let raw = metadata.get(CONFIG_KEY).filter(|raw| !raw.is_null())?;
-        let refusal = match serde_json::from_value::<Self>(raw.clone()) {
-            Ok(config) => match config.refusal() {
-                None => return Some(config),
-                Some(refusal) => refusal.to_owned(),
-            },
-            Err(error) => format!("it does not read: {error}"),
+        let (config, refusal) = Self::read(metadata);
+        if let Some(refusal) = refusal {
+            tracing::warn!(
+                target: "roomkit::orchestration::discussion",
+                "a stored discussion reads as none: {refusal}"
+            );
+        }
+        config
+    }
+
+    /// [`stored`](Self::stored) with no warning: what a reader of its handles
+    /// asks.
+    #[must_use]
+    pub(crate) fn valid(metadata: &Metadata) -> Option<Self> {
+        Self::read(metadata).0
+    }
+
+    /// The configuration `metadata` stores, or what keeps it from being one.
+    fn read(metadata: &Metadata) -> (Option<Self>, Option<&'static str>) {
+        let Some(raw) = metadata.get(CONFIG_KEY).filter(|raw| !raw.is_null()) else {
+            return (None, None);
         };
-        tracing::warn!(
-            target: "roomkit::orchestration::discussion",
-            "a stored discussion reads as none: {refusal}"
-        );
-        None
+        match serde_json::from_value::<Self>(raw.clone()) {
+            Ok(config) => match config.refusal() {
+                None => (Some(config), None),
+                refusal => (None, refusal),
+            },
+            // Its error would quote what the store holds.
+            Err(_) => (None, Some("its fields do not read")),
+        }
     }
 
     /// What `Discussion::new` would refuse in this configuration, if anything.
@@ -96,14 +113,10 @@ impl DiscussionConfig {
         if self.max_depth < 1 {
             return Some("max_depth is below 1");
         }
-        if self.silent_token.trim().is_empty() {
+        if is_blank(&self.silent_token) {
             return Some("silent_token is blank");
         }
-        if self
-            .rules
-            .as_deref()
-            .is_some_and(|rules| rules.trim().is_empty())
-        {
+        if self.rules.as_deref().is_some_and(is_blank) {
             return Some("rules is blank");
         }
         if self

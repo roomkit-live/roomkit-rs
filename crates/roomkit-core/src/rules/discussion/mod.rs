@@ -66,31 +66,19 @@ pub fn takes_turn(event: &RoomEvent, context: &RoomContext, agent: &ChannelId) -
 }
 
 /// The name the discussion a room's `metadata` stores addresses `channel_id`
-/// by: its handle, else the channel id itself (rule 4). A handle counts only
-/// for a channel the discussion holds as an agent and only if it can name one,
-/// so what a store holds never labels a person as an agent. Python's
-/// `agent_handle`.
+/// by: its handle, else the channel id itself (rule 4). What reads as no
+/// discussion names nobody, so what a store holds never labels a person as an
+/// agent. Python's `agent_handle`.
 #[must_use]
 pub fn agent_handle<'a>(metadata: &'a Metadata, channel_id: &'a str) -> &'a str {
-    let Some(config) = metadata.get(CONFIG_KEY) else {
-        return channel_id;
-    };
-    let an_agent = config
-        .get("agents")
-        .and_then(Value::as_array)
-        .is_some_and(|agents| {
-            agents
-                .iter()
-                .any(|agent| agent.as_str() == Some(channel_id))
-        });
-    if !an_agent {
+    if DiscussionConfig::valid(metadata).is_none() {
         return channel_id;
     }
-    config
-        .get("handles")
+    metadata
+        .get(CONFIG_KEY)
+        .and_then(|config| config.get("handles"))
         .and_then(|handles| handles.get(channel_id))
         .and_then(Value::as_str)
-        .filter(|handle| names::is_handle(handle))
         .unwrap_or(channel_id)
 }
 
@@ -110,24 +98,39 @@ mod tests {
     fn test_a_stored_handle_counts_for_an_agent_and_if_it_can_name_one() {
         for (config, channel, handle) in [
             (
-                json!({"agents": ["b"], "handles": {"b": "ops"}}),
+                json!({"agents": ["b"], "handles": {"b": "ops"}, "max_depth": 5}),
                 "b",
                 "ops",
             ),
             // A channel that is no agent is no agent's handle: a person stays one.
             (
-                json!({"agents": ["b"], "handles": {"sms": "b"}}),
+                json!({"agents": ["b"], "handles": {"sms": "b"}, "max_depth": 5}),
                 "sms",
                 "sms",
             ),
-            (json!({"handles": {"b": "ops"}}), "b", "b"),
+            (json!({"handles": {"b": "ops"}, "max_depth": 5}), "b", "b"),
             // What cannot name an agent: a line break would leave the transcript's label.
             (
-                json!({"agents": ["b"], "handles": {"b": "two\nlines"}}),
+                json!({"agents": ["b"], "handles": {"b": "two\nlines"}, "max_depth": 5}),
                 "b",
                 "b",
             ),
-            (json!({"agents": ["b"], "handles": {"b": 3}}), "b", "b"),
+            (
+                json!({"agents": ["b"], "handles": {"b": 3}, "max_depth": 5}),
+                "b",
+                "b",
+            ),
+            // What reads as no discussion labels nobody, a handle of an agent included.
+            (
+                json!({"agents": ["sms", "b"], "handles": {"sms": "ops"}}),
+                "sms",
+                "sms",
+            ),
+            (
+                json!({"agents": ["sms"], "handles": {"sms": "ops"}, "max_depth": 0}),
+                "sms",
+                "sms",
+            ),
         ] {
             assert_eq!(
                 agent_handle(&stored(config.clone()), channel),

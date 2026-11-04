@@ -300,14 +300,17 @@ pub fn conversation_with_memory(
 ) -> Vec<Message> {
     let mut authors = Authors::new(context);
     let mut turns = past_turns(channel_id, event, context, history, &mut authors, &read);
-    let rounds = if turns.is_empty() {
+    let input = Turn::input(event, &mut authors, &read);
+    let in_place = memory.in_place && event.index > 0;
+    // An input read at its place, saying something, may be all the history a
+    // round reads after; else a round with no turn before it opens no history.
+    let rounds = if turns.is_empty() && (!in_place || input.content.is_blank()) {
         Vec::new()
     } else {
         tool_rounds(&context.recent_events, channel_id, &replayed)
     };
-    let in_place = memory.in_place && event.index > 0;
     if in_place {
-        turns.push(Turn::input(event, &mut authors, &read));
+        turns.push(input);
         // Told apart in the order spoken: the input read last, whatever its
         // place.
         tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
@@ -315,7 +318,7 @@ pub fn conversation_with_memory(
         place(&mut turns, rounds, None);
     } else {
         place(&mut turns, rounds, rounds_before(event));
-        turns.push(Turn::input(event, &mut authors, &read));
+        turns.push(input);
         tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
     }
     let speakers: Vec<&Speaker> = turns
@@ -467,7 +470,12 @@ fn place(turns: &mut [Turn], rounds: Vec<ToolRound>, before: Option<u64>) {
         if before.is_some_and(|before| round.index >= before) {
             continue;
         }
-        if let Some(turn) = turns.iter_mut().rev().find(|turn| turn.index < round.index) {
+        // An instruction holds the index of what follows it, a round at that
+        // index among them: it reads before that round.
+        let before_it = |turn: &&mut Turn| {
+            turn.index < round.index || (turn.instruction && turn.index == round.index)
+        };
+        if let Some(turn) = turns.iter_mut().rev().find(before_it) {
             turn.rounds.push(round);
         }
     }

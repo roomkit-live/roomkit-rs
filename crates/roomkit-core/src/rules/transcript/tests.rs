@@ -668,3 +668,78 @@ fn an_instruction_s_turn_reads_before_the_message_that_followed_it() {
         "{texts:?}"
     );
 }
+
+/// A discussion's turn, its event read at its place.
+fn in_place() -> super::TurnMemory {
+    super::TurnMemory {
+        in_place: true,
+        ..super::TurnMemory::default()
+    }
+}
+
+/// One round of calls answering `question`.
+fn lookup(room: &mut Timeline, question: &RoomEvent) {
+    room.round(question, &[("call_1", "lookup", json!({}), "found")]);
+}
+
+// Python: tests/test_discussion_core.py::test_a_turn_replays_a_round_when_its_answered_event_is_all_the_history
+#[test]
+fn test_a_turn_replays_a_round_when_its_answered_event_is_all_the_history() {
+    let mut room = Timeline::new();
+    // Index 0 is an event the store never numbered: one that reads last.
+    room.count = 3;
+    let asked = room.says("sms", "alice", Some("Alice"), "asked");
+    lookup(&mut room, &asked);
+
+    let messages = read_with(&room, &asked, &in_place());
+
+    let roles: Vec<_> = messages.iter().map(|message| message.role).collect();
+    assert_eq!(roles, [Role::User, Role::Assistant, Role::Tool]);
+}
+
+// Python: tests/test_discussion_core.py::test_a_history_opens_on_no_calls_when_the_answered_event_reads_as_nothing
+#[test]
+fn test_a_history_opens_on_no_calls_when_the_answered_event_reads_as_nothing() {
+    for followed in [false, true] {
+        let mut room = Timeline::new();
+        room.count = 3;
+        let asked = room.says("sms", "alice", Some("Alice"), "");
+        lookup(&mut room, &asked);
+        if followed {
+            room.says("sms", "alice", Some("Alice"), "later");
+        }
+
+        let messages = read_with(&room, &asked, &in_place());
+
+        assert_ne!(
+            messages.first().map(|message| message.role),
+            Some(Role::Assistant),
+            "{messages:?}"
+        );
+    }
+}
+
+// Python: channels/_tool_history.py `_position`, channels/_ai_context.py
+// `_answered_position`: an instruction carries the index of what follows it, a
+// round at that index among them, and reads before it.
+#[test]
+fn an_instruction_s_turn_reads_before_a_round_at_its_own_index() {
+    let mut room = Timeline::new();
+    let earlier = room.says("sms", "alice", Some("Alice"), "earlier");
+    let mut instruction = room.instruction("do it", false);
+    lookup(&mut room, &earlier);
+    let rows = room.context.recent_events.len();
+    instruction.index = room.context.recent_events[rows - 2].index;
+
+    let messages = read_with(&room, &instruction, &in_place());
+
+    let input = messages
+        .iter()
+        .position(|message| message.text.contains("do it"))
+        .unwrap();
+    let calls = messages
+        .iter()
+        .position(|message| message.role == Role::Assistant)
+        .unwrap();
+    assert!(input < calls, "{messages:?}");
+}
