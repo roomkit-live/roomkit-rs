@@ -188,7 +188,8 @@ pub(super) async fn read_kept<S: ConversationStore>(
         stream: Some(kept.turn),
         cut: None,
         place: kept.place,
-        settled: None,
+        settled: false,
+        settled_on: None,
         rewritten: None,
         reader_unit,
         reads: channel.as_ref().map_or(Reads::Nobody, |_| Reads::Target),
@@ -373,9 +374,11 @@ struct Producer {
     cut: Option<&'static str>,
     /// The turn's place in its channel's line in the room, while it holds it.
     place: Option<Place>,
-    /// The response's rows were settled at a cut, its reader still working:
-    /// the failure they settled on, if any.
-    settled: Option<Option<ErrorRecord>>,
+    /// Whether the response's rows were settled at a cut, its reader still
+    /// working.
+    settled: bool,
+    /// The failure they settled on, if any.
+    settled_on: Option<ErrorRecord>,
     /// The row the turn's record was written on, as stored.
     rewritten: Option<RoomEvent>,
     /// The unit of the kit's work the reader runs in, beside the run's, which
@@ -485,7 +488,8 @@ impl Producer {
     /// Stores what a cut turn leaves, its record with it, and gives its place
     /// in the room's line up, whatever its reader does from here.
     async fn settle_at_the_cut<S: ConversationStore>(&mut self, inner: &Arc<Inner<S>>) {
-        self.settled = Some(self.settle(false).await);
+        self.settled_on = self.settle(false).await;
+        self.settled = true;
         self.write_owed_record(inner).await;
         drop(self.place.take());
     }
@@ -717,9 +721,10 @@ impl Producer {
                 (ChannelOutput::default(), Some(record))
             }
         };
-        let failure = match self.settled.take() {
-            Some(failure) => failure,
-            None => self.settle(target_error.is_some()).await,
+        let failure = if self.settled {
+            self.settled_on.take()
+        } else {
+            self.settle(target_error.is_some()).await
         };
         match (failure, target_error) {
             (Some(failure), target_error) => {
