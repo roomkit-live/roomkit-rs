@@ -1,7 +1,7 @@
 //! RFC §6.4 "The turn's record", §10.6.3: the loop's end a channel's
 //! stream ends on crosses whole. The wire's loop end carries Python's
-//! `LoopEndMarker` fields; roomkit-rs's own (RMK-1029) cross in a `record`
-//! frame before it, and the owner's reader ends the turn on the marker.
+//! `LoopEndMarker` fields, and the owner's reader ends the turn on the
+//! marker.
 
 use pretty_assertions::assert_eq;
 use roomkit_core::model::{EventType, Metadata};
@@ -40,8 +40,8 @@ fn usage(value: Value) -> Metadata {
     usage
 }
 
-/// Python's marker writes Python's record, its two keys alone; one carrying
-/// roomkit-rs's own fields crosses them in a `record` frame, written whole.
+/// A marker that says nothing of its generations writes the two keys alone;
+/// one that does writes them all, its fields crossing on its own item.
 /// (The loop's end carried a record: an empty one wrote nothing, a key of
 /// the channel's own crossed with it.)
 #[tokio::test(start_paused = true)]

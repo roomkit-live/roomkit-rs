@@ -150,6 +150,6 @@ fn every_message_python_carried_reads_and_rewrites_with_nothing_lost() {
     let added: BTreeSet<String> = added.iter().map(|path| member(path)).collect();
     assert_eq!(
         (lines.len(), lost, added),
-        (27, BTreeSet::new(), BTreeSet::new())
+        (29, BTreeSet::new(), BTreeSet::new())
     );
 }
