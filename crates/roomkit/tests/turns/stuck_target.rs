@@ -477,7 +477,7 @@ mod a_read_in_flight {
         inner: ProviderStream<'a>,
         hold: Option<(Arc<Notify>, Arc<Notify>)>,
         holding: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
-        held: Option<Result<StreamEvent, ProviderError>>,
+        event: Option<Result<StreamEvent, ProviderError>>,
     }
 
     impl Stream for Held<'_> {
@@ -488,13 +488,13 @@ mod a_read_in_flight {
             if let Some(holding) = this.holding.as_mut() {
                 ready!(holding.as_mut().poll(cx));
                 this.holding = None;
-                return Poll::Ready(this.held.take().map(Some).unwrap_or(None));
+                return Poll::Ready(this.event.take());
             }
             let next = ready!(this.inner.as_mut().poll_next(cx));
             if matches!(next, Some(Ok(StreamEvent::Done(_))))
                 && let Some((at, release)) = this.hold.take()
             {
-                this.held = next;
+                this.event = next;
                 at.notify_one();
                 this.holding = Some(Box::pin(async move { release.notified().await }));
                 cx.waker().wake_by_ref();
@@ -505,11 +505,11 @@ mod a_read_in_flight {
     }
 
     impl AiProvider for HoldsDone {
-        fn name(&self) -> &str {
+        fn name(&self) -> &'static str {
             "scripted"
         }
 
-        fn model_name(&self) -> &str {
+        fn model_name(&self) -> &'static str {
             "scripted"
         }
 
@@ -527,7 +527,7 @@ mod a_read_in_flight {
                 inner: self.script.generate_structured_stream(context),
                 hold: hold.then(|| (Arc::clone(&self.at), Arc::clone(&self.release))),
                 holding: None,
-                held: None,
+                event: None,
             })
         }
     }
