@@ -568,11 +568,10 @@ pub(crate) async fn patch_store_metadata(
     run: &std::sync::Arc<Run>,
     room: &Value,
 ) -> Result<(), String> {
-    let Some(patch) = optional::<Metadata>(room, "store_metadata").map_err(|e| e.to_string())?
-    else {
+    let Some(patch) = optional::<Metadata>(room, "store_metadata")? else {
         return Ok(());
     };
-    let id: RoomId = field(room, "id").map_err(|e| e.to_string())?;
+    let id: RoomId = field(room, "id")?;
     run.kit()
         .store()
         .patch_room_metadata(
