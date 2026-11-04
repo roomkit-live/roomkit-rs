@@ -30,7 +30,7 @@ use tokio_postgres::NoTls;
 use crate::support::{SMALL_POOL, TempSchema, dsn, full_text};
 
 fn metadata(value: Value) -> Metadata {
-    value.as_object().unwrap().clone()
+    serde_json::from_value(value).unwrap()
 }
 
 fn of_schema(schema: &TempSchema, language: &str) -> PostgresKnowledgeSource {
