@@ -89,7 +89,9 @@ impl<S: ConversationStore> RoomKit<S> {
         let organization_id = options.organization_id.clone();
         let binding = options.apply(declaration.binding(room_id.clone(), environment.now()));
         let binding = match self.inner.channel(channel_id) {
-            Some(channel) => named_correspondent(binding, &*channel),
+            Some(channel) => {
+                named_correspondent(binding, &*channel, declaration.recipient_key.as_deref())
+            }
             None => binding,
         };
         let attach = AttachChannel::new(config, binding, organization_id);

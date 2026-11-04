@@ -233,8 +233,7 @@ impl Channel for Keyed {
         binding: ChannelBinding,
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        let key = self.reached_at.unwrap_or("phone_number");
-        let to = binding.metadata.get(key).and_then(Value::as_str);
+        let to = binding.metadata.get("phone_number").and_then(Value::as_str);
         self.sent
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

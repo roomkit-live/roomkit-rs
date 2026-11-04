@@ -11,9 +11,10 @@ use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelType,
 };
 use roomkit_core::ops::ChannelConfig;
-use roomkit_core::rules::addresses::{AddressForm, written_recipient};
+use roomkit_core::rules::addresses::AddressForm;
 
 use crate::channel::{BoxFuture, DynChannel};
+use crate::kit::addresses::channel_recipient;
 
 /// A registered channel as the kit holds it, an object a trait with
 /// `async` methods cannot be: its id, type, category and direction, how it
@@ -128,12 +129,11 @@ impl sealed::Sealed for Registered {
     }
 
     fn routed_recipient(&self, binding: &ChannelBinding) -> Option<String> {
-        let answered = self.channel.recipient_address(binding);
-        answered.or_else(|| {
-            let key = self.declaration.recipient_key.as_deref()?;
-            let held = written_recipient(&binding.metadata, key)?;
-            Some(self.channel.normalize_address(&held))
-        })
+        channel_recipient(
+            &*self.channel,
+            self.declaration.recipient_key.as_deref(),
+            binding,
+        )
     }
 }
 

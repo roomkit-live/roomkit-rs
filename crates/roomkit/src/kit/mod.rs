@@ -22,7 +22,7 @@
 //! - `verification`: identity verification's requests, completion,
 //!   revocation and timers (RFC §11.7).
 
-mod addresses;
+pub(crate) mod addresses;
 mod background;
 pub(crate) mod background_tools;
 mod bindings;

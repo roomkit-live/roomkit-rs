@@ -1251,11 +1251,11 @@ impl Sim {
             Request::Channel(
                 ChannelRequest::RoomAttached { .. } | ChannelRequest::RoomDetached { .. },
             ) => Outcome::Channel(ChannelOutcome::Told),
-            // The channel's form is its own: the binding as given.
             // No scripted channel overrides its recipient: routing reads the key.
             Request::Channel(ChannelRequest::RoutedRecipient { .. }) => {
                 Outcome::Channel(ChannelOutcome::Recipient(None))
             }
+            // The channel's form is its own: the binding as given.
             Request::Channel(ChannelRequest::NamedCorrespondent { binding }) => {
                 Outcome::Channel(ChannelOutcome::Named(Box::new(binding)))
             }

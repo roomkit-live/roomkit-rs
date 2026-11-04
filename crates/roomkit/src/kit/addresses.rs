@@ -5,6 +5,8 @@
 
 use roomkit_core::model::{ChannelBinding, InboundMessage, ParticipantId};
 use roomkit_core::ops::MessageAnswers;
+use roomkit_core::rules::addresses::written_recipient;
+use serde_json::Value;
 
 use super::Inner;
 use crate::channel::DynChannel;
@@ -31,20 +33,52 @@ impl<S> Inner<S> {
     }
 }
 
+/// Who `binding` delivers to by `channel`, whose declared key is
+/// `recipient_key`, whether or not it is `group` (RFC §5.7), Python's
+/// `channel_recipient`: the channel's `recipient_address`, else the value
+/// under the key in its form; none for no value and for a value under the key
+/// that is not a recipient, whatever the channel answers.
+pub(crate) fn channel_recipient(
+    channel: &dyn DynChannel,
+    recipient_key: Option<&str>,
+    binding: &ChannelBinding,
+) -> Option<String> {
+    if recipient_key.is_some_and(|key| holds_another_value(binding, key)) {
+        return None;
+    }
+    channel.recipient_address(binding).or_else(|| {
+        let held = written_recipient(&binding.metadata, recipient_key?)?;
+        Some(channel.normalize_address(&held))
+    })
+}
+
+/// Whether `binding` holds a value under `key` that is no recipient, and no
+/// absence either: neither absent, null nor a blank string, and neither a
+/// string nor an integer (RFC §5.7).
+pub(crate) fn holds_another_value(binding: &ChannelBinding, key: &str) -> bool {
+    match binding.metadata.get(key) {
+        None | Some(Value::Null) => false,
+        Some(Value::String(text)) if text.trim().is_empty() => false,
+        Some(_) => written_recipient(&binding.metadata, key).is_none(),
+    }
+}
+
 /// `binding` naming its correspondent as the router compares senders (RFC
 /// §5.7, §10.4), as Python's `_named_correspondent` writes it: its
-/// recipient written where `channel` reads it (`recipient_address`,
+/// recipient written where `channel` reads it ([`channel_recipient`],
 /// `recipient_metadata`), the correspondent the host gives in the form the
 /// channel writes an inbound sender in (`normalize_address`), and a binding
 /// that names no one, not `group`, naming the person it delivers to. The
 /// framework's own name holds no one's place: a recipient replaces it, and
 /// with none the binding keeps it as it is, a channel's form never making it
-/// a sender's (a room opened by a message with no address, RFC §5.7).
+/// a sender's (a room opened by a message with no address, RFC §5.7). A value
+/// under the key that is not a recipient is kept, and names no one.
 pub(crate) fn named_correspondent(
     mut binding: ChannelBinding,
     channel: &dyn DynChannel,
+    recipient_key: Option<&str>,
 ) -> ChannelBinding {
-    let recipient = channel.recipient_address(&binding);
+    let recipient = channel_recipient(channel, recipient_key, &binding);
     if let Some(recipient) = &recipient {
         for (key, value) in channel.recipient_metadata(recipient) {
             binding.metadata.insert(key, value.into());

@@ -836,9 +836,14 @@ fn streams_in<S>(inner: &Inner<S>, room_id: &RoomId, channel_ids: Vec<ChannelId>
 /// `binding`, its addresses written by its channel as an attach writes them
 /// (RFC §5.7, §10.4); as given for a channel no longer registered.
 fn named_binding<S>(inner: &Inner<S>, binding: ChannelBinding) -> Outcome {
-    let named = match inner.channel(&binding.channel_id) {
-        Some(channel) => named_correspondent(binding, &*channel),
-        None => binding,
+    let named = match (
+        inner.channel(&binding.channel_id),
+        inner.registered(&binding.channel_id),
+    ) {
+        (Some(channel), Some(registered)) => {
+            named_correspondent(binding, &*channel, registered.recipient_key())
+        }
+        (Some(_) | None, _) => binding,
     };
     ChannelOutcome::Named(Box::new(named)).into()
 }

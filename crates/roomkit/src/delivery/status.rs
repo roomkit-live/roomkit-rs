@@ -3,10 +3,9 @@
 //! `_room_of_status` finds it.
 
 use roomkit_core::model::{ChannelBinding, ChannelId, DeliveryStatus, RoomId, RoomStatus};
-use roomkit_core::rules::addresses::written_recipient;
-use serde_json::Value;
 
 use crate::delivery::targets::SYSTEM_SENDER_ID;
+use crate::kit::addresses::holds_another_value;
 use crate::registered::RegisteredChannel;
 use crate::store::{
     ConversationStore, FindRoomIdByBindingOptions, FindRoomIdsByChannelOptions, RoomFilter,
@@ -57,8 +56,16 @@ pub(crate) async fn room_of_status<S: ConversationStore>(
         let found = store
             .find_room_id_by_binding(channel_id, &recipient, by_binding)
             .await?;
-        if found.is_some() {
-            return Ok(found);
+        if let Some(found) = found {
+            // The store read the key; the channel may deliver elsewhere.
+            let binding = store.get_binding(&found, channel_id).await?;
+            let elsewhere = binding.as_ref().is_some_and(|binding| {
+                let delivers_to = delivers_to(channel, recipient_key.as_deref(), binding);
+                !takes_the_status(binding, &recipient, &delivers_to)
+            });
+            if !elsewhere {
+                return Ok(Some(found));
+            }
         }
     }
     let active = FindRoomIdsByChannelOptions {
@@ -115,17 +122,6 @@ fn delivers_to(
     channel
         .routed_recipient(binding)
         .map_or(DeliversTo::NoOne, DeliversTo::Recipient)
-}
-
-/// Whether `binding` holds a value under `key` that is no recipient, and no
-/// absence either: neither absent, null nor a blank string, and neither a
-/// string nor an integer (RFC §5.7).
-fn holds_another_value(binding: &ChannelBinding, key: &str) -> bool {
-    match binding.metadata.get(key) {
-        None | Some(Value::Null) => false,
-        Some(Value::String(text)) if text.trim().is_empty() => false,
-        Some(_) => written_recipient(&binding.metadata, key).is_none(),
-    }
 }
 
 /// Whether the one active room bound to the channel, by its binding
