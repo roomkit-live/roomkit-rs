@@ -49,6 +49,10 @@ pub(super) struct Called {
     pub(super) partial: Option<Partial>,
     /// Provider-owned data of the call, which its replay carries.
     pub(super) metadata: Metadata,
+    /// It came under an id an earlier call of its round holds: refused
+    /// before anything else is read of it (RFC §12.4). Python's
+    /// `AnnouncedCall.duplicate`.
+    pub(super) duplicate: bool,
 }
 
 impl Called {
@@ -123,7 +127,6 @@ impl Generation {
         let mut delivered = String::new();
         let mut replayed = Replayed::new(prefix);
         let mut calls = Vec::new();
-        let mut ids = HashSet::new();
         let mut done = StreamDone::default();
         let mut reports = Vec::new();
         let mut streamed = false;
@@ -155,7 +158,6 @@ impl Generation {
                 // A whole call closes no window: a fragment would (Python's
                 // `StreamToolCallDelta`), which no provider here hands.
                 StreamEvent::ToolCall(call) => {
-                    let call = with_its_own_id(call, &mut ids);
                     transcript.add_call(call.id.clone());
                     calls.push(call);
                 }
@@ -314,27 +316,20 @@ impl<'a> Replayed<'a> {
     }
 }
 
-/// `given` with an id no other call of its response carries: one minted for
-/// a call the provider gave none, or another's, as Python's `CallIds` hands
-/// them. Read as the call comes, so that the round's transcript names it.
-fn with_its_own_id(mut given: StreamToolCall, ids: &mut HashSet<String>) -> StreamToolCall {
-    if given.id.is_empty() || !ids.insert(given.id.clone()) {
-        given.id = minted_id(ids, &given.name);
-    }
-    given
-}
-
 /// The calls of a response, as the loop reads them: the first
-/// [`MAX_CALLS_PER_ROUND`], and, for one its provider marked `partial`, why
-/// it never runs. The calls past the bound are dropped before the round's
-/// assistant message is written, so that no call reaches the model without
-/// its result, and logged.
+/// [`MAX_CALLS_PER_ROUND`], and, for one its provider marked `partial`, why it
+/// never runs, for one under an id an earlier call of the round took, that it
+/// is a duplicate. The calls past the bound are dropped before the round's
+/// assistant message is written, so that no call reaches the model without its
+/// result, and logged.
 fn read_calls(calls: Vec<StreamToolCall>) -> Vec<Called> {
     log_dropped(&calls);
+    let mut holders = HashSet::new();
     calls
         .into_iter()
         .take(MAX_CALLS_PER_ROUND)
         .map(|given| {
+            let duplicate = !holders.insert(given.id.clone());
             let partial = match (given.partial, given.garbled) {
                 (false, _) => None,
                 (true, true) => Some(Partial::Unreadable),
@@ -346,23 +341,10 @@ fn read_calls(calls: Vec<StreamToolCall>) -> Vec<Called> {
                 call,
                 partial,
                 metadata: given.metadata,
+                duplicate,
             }
         })
         .collect()
-}
-
-/// An id for a call to `name` its provider gave none, unique across turns:
-/// Python's `minted_call_id`, `call_<name>_<12 hex digits>`, taken among
-/// `ids`.
-fn minted_id(ids: &mut HashSet<String>, name: &str) -> String {
-    loop {
-        // The 48 high bits of a v4 UUID are random: uuid4().hex[:12].
-        let random = uuid::Uuid::new_v4().as_u128() >> 80;
-        let id = format!("call_{name}_{random:012x}");
-        if ids.insert(id.clone()) {
-            return id;
-        }
-    }
 }
 
 /// Logs the calls of a round past [`MAX_CALLS_PER_ROUND`], which never run:
@@ -390,7 +372,6 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::provider::AiToolCall;
 
     // Python hands AFTER_TOOL_ROUND the calls themselves, their `partial` and
     // `garbled` with them.
@@ -401,6 +382,7 @@ mod tests {
                 call: ToolCall::new("c1", "x", Metadata::new()),
                 partial,
                 metadata: Metadata::new(),
+                duplicate: false,
             };
             let call = called.replayed();
             (call.partial, call.garbled)
@@ -410,25 +392,28 @@ mod tests {
         assert_eq!(read(Some(Partial::Unreadable)), (true, true));
     }
 
-    // Python: tests/test_providers/test_tool_call_handoff.py::TestCallIds::test_every_call_of_a_response_gets_its_own_id
+    // Python: tools/_turn_calls.py TurnCalls.announce: the first holds the id,
+    // whatever it is, an empty one included, and only a later call under it is
+    // a duplicate.
     #[test]
-    fn every_call_of_a_response_gets_its_own_id() {
-        let mut ids = HashSet::new();
-        let handed: Vec<String> = ["c1", "", "", "c1"]
+    fn only_a_later_call_under_an_id_is_a_duplicate() {
+        let calls = ["c1", "c2", "c1", "", ""]
             .iter()
-            .map(|id| with_its_own_id(AiToolCall::new(*id, "now").into(), &mut ids).id)
+            .map(|id| StreamToolCall::new(*id, "now"))
             .collect();
-        let distinct: HashSet<&String> = handed.iter().collect();
-        let minted = handed.get(1..).unwrap_or_default();
+        let read: Vec<(String, bool)> = read_calls(calls)
+            .into_iter()
+            .map(|called| (called.call.id, called.duplicate))
+            .collect();
         assert_eq!(
-            (handed.first().map(String::as_str), distinct.len()),
-            (Some("c1"), 4)
-        );
-        assert!(
-            minted.iter().all(|id| id.starts_with("call_now_")
-                && id.len() == "call_now_".len() + 12
-                && id.bytes().skip(9).all(|byte| byte.is_ascii_hexdigit())),
-            "{handed:?}"
+            read,
+            [
+                ("c1".to_owned(), false),
+                ("c2".to_owned(), false),
+                ("c1".to_owned(), true),
+                (String::new(), false),
+                (String::new(), true),
+            ]
         );
     }
 }

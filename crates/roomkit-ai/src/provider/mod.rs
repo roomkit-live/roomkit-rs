@@ -34,7 +34,7 @@ pub use self::model_tags::{
     SPEECH_CAPABILITY, TRANSCRIPTION_CAPABILITY, speech_tags, with_speech_tags,
 };
 pub use self::response::{
-    AiResponse, AiToolCall, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta,
+    AiResponse, AiToolCall, CallIds, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta,
     StreamToolCall, read_tool_calls, thinking_parts_of, tool_arguments,
 };
 pub(crate) use self::response::{ran_out_of_room, response_events};

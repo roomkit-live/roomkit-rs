@@ -8,6 +8,12 @@ pub(crate) fn error_envelope(reason: &str) -> String {
     format!("{{\"error\": {}}}", quoted(reason))
 }
 
+/// A call under an id another call of its round holds (RFC §12.4). Python's
+/// `call_id_in_flight_error`.
+pub(crate) fn call_id_in_flight(id: &str) -> String {
+    error_envelope(&format!("Tool call '{id}' has not had its result yet"))
+}
+
 /// A call to a name the turn does not carry (RFC §21.1).
 pub(crate) fn not_declared(name: &str) -> String {
     error_envelope(&format!("Tool '{name}' is not declared."))

@@ -2,6 +2,8 @@
 //! events of a structured stream, and the one reading of a call's
 //! arguments every provider applies (RFC §6.4).
 
+use std::collections::HashSet;
+
 use roomkit::model::Metadata;
 use serde_json::Value;
 
@@ -88,8 +90,8 @@ pub fn thinking_parts_of(response: &AiResponse) -> Vec<AiThinkingPart> {
 /// partial=False, garbled=False, intent=None)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AiToolCall {
-    /// The call's id; the loop gives one of its own to a call with none or
-    /// another's.
+    /// The call's id, unique in its response ([`CallIds`]): the loop refuses a
+    /// second call of a round under it (RFC §12.4).
     pub id: String,
     /// The tool called.
     pub name: String,
@@ -162,6 +164,44 @@ pub fn read_tool_calls(
             AiToolCall::read(id, name, &arguments, finish_reason, Some(position) == last)
         })
         .collect()
+}
+
+/// Hands each call of one response its id: the server's when it gave one no
+/// earlier call of the response took, a minted one otherwise (`call_<name>_<12
+/// hex digits>`, unique across turns). Results, cuts and a call's rows all find
+/// a call by its id, so a provider reading its wire gives two calls two ids:
+/// Python's `CallIds`. For a provider reading its wire.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default)]
+pub struct CallIds {
+    taken: HashSet<String>,
+}
+
+impl CallIds {
+    /// No id taken yet.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The id of the response's next call, to the tool `name`, its server's
+    /// `server_id` empty when it gave none. Python calls the object.
+    pub fn call(&mut self, server_id: &str, name: &str) -> String {
+        let id = if !server_id.is_empty() && !self.taken.contains(server_id) {
+            server_id.to_owned()
+        } else {
+            minted_call_id(name)
+        };
+        self.taken.insert(id.clone());
+        id
+    }
+}
+
+/// An id for a call to `name` its server gave none, unique across turns:
+/// Python's `minted_call_id`.
+fn minted_call_id(name: &str) -> String {
+    // The 48 high bits of a v4 UUID are random: uuid4().hex[:12].
+    let random = uuid::Uuid::new_v4().as_u128() >> 80;
+    format!("call_{name}_{random:012x}")
 }
 
 /// A call's arguments as a mapping, never an error (RFC §6.4): Python's
@@ -405,6 +445,25 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    // Python: tests/test_providers/test_tool_call_handoff.py::TestCallIds::test_every_call_of_a_response_gets_its_own_id
+    #[test]
+    fn every_call_of_a_response_gets_its_own_id() {
+        let mut ids = CallIds::new();
+        let handed = ["c1", "", "", "c1"].map(|id| ids.call(id, "now"));
+        let distinct: HashSet<&String> = handed.iter().collect();
+        let minted = handed.get(1..).unwrap_or_default();
+        assert_eq!(
+            (handed.first().map(String::as_str), distinct.len()),
+            (Some("c1"), 4)
+        );
+        assert!(
+            minted.iter().all(|id| id.starts_with("call_now_")
+                && id.len() == "call_now_".len() + 12
+                && id.bytes().skip(9).all(|byte| byte.is_ascii_hexdigit())),
+            "{handed:?}"
+        );
+    }
 
     // Python: tests/test_providers/test_stream_adapter.py::test_a_wrapped_response_keeps_its_thinking_signature_and_call_metadata
     // (its thinking): a response read whole reaches the loop as a stream,

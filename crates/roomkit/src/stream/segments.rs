@@ -17,6 +17,8 @@
 //! the response's rows have in common, which a later turn's history pairs
 //! a call's start and end by (RFC §6.4).
 
+use std::collections::HashSet;
+
 use roomkit_core::model::{
     EventContent, EventId, EventSource, EventType, Metadata, ResponseMetadata, RoomEvent,
     TextContent, ToolCallContent, ToolCallOutcome, ToolCallStatus,
@@ -212,13 +214,15 @@ impl Segments {
     /// The ends of the calls still open, each `failed` with `error`, with
     /// the arguments `ran_with` says it ran with when its gate fixed them,
     /// and the start row of one whose start was never written (RFC §12.2
-    /// step 13s: no start row stays pending; §10.6.4).
+    /// step 13s: no start row stays pending; §10.6.4). Of two calls under one
+    /// id, the first is the one that ran (RFC §12.4).
     pub(super) fn close_open(
         &mut self,
         error: &str,
         ran_with: impl Fn(&str) -> Option<Metadata>,
     ) -> Vec<RoomEvent> {
         let mut rows = Vec::new();
+        let mut ran = HashSet::new();
         for open in std::mem::take(&mut self.open) {
             if !open.written {
                 rows.push(self.draft(
@@ -227,7 +231,10 @@ impl Segments {
                 ));
             }
             let mut end = open.start;
-            if let Some(arguments) = ran_with(&end.tool_id) {
+            let fixed = ran
+                .insert(end.tool_id.clone())
+                .then(|| ran_with(&end.tool_id));
+            if let Some(arguments) = fixed.flatten() {
                 end.arguments = arguments;
             }
             end.status = ToolCallStatus::Failed;
@@ -518,6 +525,37 @@ mod tests {
                 (EventType::ToolCallEnd, ToolCallStatus::Failed, None),
             ]
         );
+    }
+
+    /// RFC §12.4: of two calls open under one id, the first is the one that
+    /// ran: the arguments its gate fixed are not the second's.
+    // Python: core/mixins/_response_reader.py _cut_end reads each start's own.
+    #[test]
+    fn a_second_call_open_under_an_id_keeps_its_own_arguments() {
+        let mut segments = segments();
+        segments.handed();
+        let call = |q: &str| {
+            let mut call = ToolCallContent::new("lookup", "c1");
+            call.arguments.insert("q".to_owned(), json!(q));
+            call
+        };
+        segments.start(call("first"));
+        segments.start(call("second"));
+        let closed = segments.close_open("cancelled", |_| {
+            let mut fixed = Metadata::new();
+            fixed.insert("q".to_owned(), json!("fixed"));
+            Some(fixed)
+        });
+        let read: Vec<&Value> = closed
+            .iter()
+            .map(|row| {
+                let EventContent::ToolCall(call) = &row.content else {
+                    unreachable!()
+                };
+                &call.arguments["q"]
+            })
+            .collect();
+        assert_eq!(read, [&json!("fixed"), &json!("second")]);
     }
 
     /// RFC §6.4 "The turn's record": a turn that ends on no text owes its

@@ -119,7 +119,7 @@ pub use self::provider::{
     with_speech_tags,
 };
 #[doc(hidden)]
-pub use self::provider::{FirstToken, listing, read_tool_calls};
+pub use self::provider::{CallIds, FirstToken, listing, read_tool_calls};
 #[doc(hidden)]
 pub use self::skills::dumps;
 pub use self::skills::{DiscoverOptions, Skill, SkillError, SkillMetadata, SkillRegistry};

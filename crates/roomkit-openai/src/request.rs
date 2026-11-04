@@ -5,8 +5,8 @@ use std::collections::VecDeque;
 
 use roomkit::model::{Metadata, ToolCall};
 use roomkit_ai::{
-    AiContentPart, AiContext, AiMessage, AiMessageContent, AiRole, AiTool, StreamDone, StreamEvent,
-    StreamTextDelta, StreamThinkingDelta, read_tool_calls,
+    AiContentPart, AiContext, AiMessage, AiMessageContent, AiRole, AiTool, CallIds, StreamDone,
+    StreamEvent, StreamTextDelta, StreamThinkingDelta, read_tool_calls,
 };
 use roomkit_core::rules::transcript::{Image, Message, Part, Role, parse_data_uri};
 
@@ -272,9 +272,10 @@ pub(crate) fn push_text(ready: &mut VecDeque<StreamEvent>, text: String) {
 /// Queues the end of an answer: its calls, read for its ending as every
 /// provider reads them (RFC §6.4), then its done event.
 pub(crate) fn push_end(ready: &mut VecDeque<StreamEvent>, calls: Vec<RawCall>, done: StreamDone) {
+    let mut ids = CallIds::new();
     let raw = calls
         .into_iter()
-        .map(|call| (call.id, call.name, call.arguments))
+        .map(|call| (ids.call(&call.id, &call.name), call.name, call.arguments))
         .collect();
     let calls = read_tool_calls(raw, done.finish_reason.as_deref());
     ready.extend(
@@ -292,6 +293,36 @@ mod tests {
     use roomkit_ai::{AiThinkingPart, AiToolCallPart};
 
     use super::*;
+
+    // Python: tests/test_providers/test_tool_call_handoff.py::TestCallIds: a
+    // provider reading its wire gives a call its server left without an id, or
+    // gave another's, one of its own, so that the loop runs both.
+    #[test]
+    fn a_response_s_two_calls_under_one_id_reach_the_loop_with_two_ids() {
+        let mut ready = VecDeque::new();
+        let calls = vec![
+            RawCall::new("c1", "now", "{}"),
+            RawCall::new("c1", "now", "{}"),
+            RawCall::new("", "later", "{}"),
+        ];
+        push_end(&mut ready, calls, StreamDone::default());
+        let ids: Vec<String> = ready
+            .into_iter()
+            .filter_map(|event| {
+                if let StreamEvent::ToolCall(call) = event {
+                    Some(call.id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let [first, second, third] = ids.as_slice() else {
+            panic!("three calls: {ids:?}");
+        };
+        assert_eq!(first, "c1");
+        assert!(second.starts_with("call_now_"), "{second}");
+        assert!(third.starts_with("call_later_"), "{third}");
+    }
 
     // Python: tests/test_providers/test_image_parts.py::test_uri_is_rebuilt_for_a_data_uri_and_untouched_for_a_url
     #[test]

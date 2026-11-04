@@ -59,7 +59,11 @@ impl<P: AiProvider> Loop<P> {
         let reported = ended.ended(outcome, result.clone().into_value());
         log_failure(&reported);
         if let Some(turn) = &self.turn {
-            turn.report_tool_call(&reported);
+            if called.duplicate {
+                turn.report_call_under_held_id(&reported);
+            } else {
+                turn.report_tool_call(&reported);
+            }
         }
         let result = if let Some(asked) = asked {
             self.search
@@ -152,7 +156,8 @@ impl<P: AiProvider> Loop<P> {
     }
 
     /// The call `called` may run as, or its refusal, in the order of RFC
-    /// §21.1 "One refusal per cause": a call that never runs, one to a tool
+    /// §21.1 "One refusal per cause": a call under an id its round holds, one
+    /// that never runs, one to a tool
     /// withdrawn for the turn (RFC §6.4), one the turn does not carry, one the policy denies, arguments that do not fit the
     /// tool's schema once repaired, then the kit's `BEFORE_TOOL_USE` hooks,
     /// whose arguments are checked again, unrepaired.
@@ -161,6 +166,11 @@ impl<P: AiProvider> Loop<P> {
         let refuse = |text: String| {
             Gated::Refused(ended(model_call.clone(), ToolCallOutcome::Refused, text))
         };
+        // Before any gate, whatever is wrong with it otherwise: the first call
+        // holds the id, and this one reports as its own (RFC §12.4).
+        if called.duplicate {
+            return refuse(texts::call_id_in_flight(&model_call.id));
+        }
         if let Some(partial) = called.partial {
             return refuse(match partial {
                 Partial::Cut => texts::cut(&model_call.name),

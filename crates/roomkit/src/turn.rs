@@ -710,6 +710,18 @@ impl TurnHost {
         self.observe(report, &execution, floor);
     }
 
+    /// Reports `report`, a call refused for coming under an id another call
+    /// of its round holds (RFC §12.4), as [`report_tool_call`](Self::report_tool_call)
+    /// does: the call holding the id is left running, a cut still reporting it.
+    ///
+    /// For roomkit-ai's tool loop, once per such call.
+    #[doc(hidden)]
+    pub fn report_call_under_held_id(&self, report: &ToolCallReport) {
+        let execution = ExecutionContext::current();
+        let floor = execution.turn_depth().unwrap_or(0);
+        self.observe(report, &execution, floor);
+    }
+
     /// Reports the calls the turn's cut stopped while they ran `cancelled`
     /// to the kit's observers (RFC §9.3): each with the arguments it ran
     /// with, what it reads saying the turn ended first, at least as deep as
