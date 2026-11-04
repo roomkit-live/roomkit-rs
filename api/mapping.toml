@@ -507,12 +507,6 @@ members = ["channel_type", "category", "direction"]
 approved = "2026-10-27"
 reason = "decision 12: Python's class attributes channel_type, category and direction (channels/base.py:163-165), which the snapshot does not list, are the trait's methods: a trait holds no data"
 
-[[exception]]
-rust = "roomkit::model::LoopEndMarker"
-members = ["last_usage", "usage_complete", "model", "provider"]
-approved = "2026-10-31"
-reason = "RMK-1029, a feature roomkit-rs has first: the turn's record keeps the last generation's usage, whether every generation reported it, and the model and provider; Python adopts them through its own card"
-
 [[missing]]
 python = "roomkit.Channel"
 members = [
