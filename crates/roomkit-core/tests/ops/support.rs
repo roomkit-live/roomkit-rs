@@ -948,7 +948,9 @@ impl Sim {
                 | Notice::AsyncHooks {
                     then: Some(event), ..
                 } => Some(event),
-                Notice::AsyncHooks { then: None, .. } | Notice::StopReading { .. } => None,
+                Notice::AsyncHooks { then: None, .. }
+                | Notice::StopReading { .. }
+                | Notice::CutReadOver { .. } => None,
             })
             .collect()
     }
@@ -967,7 +969,9 @@ impl Sim {
             .iter()
             .filter_map(|notice| match notice {
                 Notice::AsyncHooks { trigger, .. } => Some(*trigger),
-                Notice::FrameworkEvent(_) | Notice::StopReading { .. } => None,
+                Notice::FrameworkEvent(_)
+                | Notice::StopReading { .. }
+                | Notice::CutReadOver { .. } => None,
             })
             .collect()
     }
@@ -978,7 +982,9 @@ impl Sim {
             .iter()
             .filter_map(|notice| match notice {
                 Notice::AsyncHooks { event, .. } => Some(&**event),
-                Notice::FrameworkEvent(_) | Notice::StopReading { .. } => None,
+                Notice::FrameworkEvent(_)
+                | Notice::StopReading { .. }
+                | Notice::CutReadOver { .. } => None,
             })
             .collect()
     }
@@ -989,7 +995,9 @@ impl Sim {
             .iter()
             .filter_map(|notice| match notice {
                 Notice::AsyncHooks { context, .. } => Some(&**context),
-                Notice::FrameworkEvent(_) | Notice::StopReading { .. } => None,
+                Notice::FrameworkEvent(_)
+                | Notice::StopReading { .. }
+                | Notice::CutReadOver { .. } => None,
             })
             .collect()
     }
@@ -1999,6 +2007,7 @@ fn journal_line(notice: &Notice) -> String {
             event_name(event)
         ),
         Notice::StopReading { effect } => format!("stop reading {effect:?}"),
+        Notice::CutReadOver { .. } => "cut read over".to_owned(),
     }
 }
 

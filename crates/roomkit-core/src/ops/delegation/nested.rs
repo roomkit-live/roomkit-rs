@@ -91,8 +91,13 @@ impl<O: Operation> Nested<O> {
     }
 
     /// `notice` as the driver reads it: a `StopReading` names the read by
-    /// its outer id, and is dropped once that read is answered.
+    /// its outer id, and is dropped once that read is answered. A
+    /// `CutReadOver` is the inner call's, and the driver's caller is not its
+    /// caller.
     fn renamed(&self, notice: Notice) -> Option<Notice> {
+        if matches!(notice, Notice::CutReadOver { .. }) {
+            return None;
+        }
         let Notice::StopReading { effect } = notice else {
             return Some(notice);
         };
@@ -244,7 +249,12 @@ mod tests {
                     ]),
                 ),
                 _ => (
-                    vec![Notice::StopReading { effect: own_read }],
+                    vec![
+                        Notice::StopReading { effect: own_read },
+                        Notice::CutReadOver {
+                            response_metadata: crate::model::Metadata::new(),
+                        },
+                    ],
                     Next::Waiting,
                 ),
             };

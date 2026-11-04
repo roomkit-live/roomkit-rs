@@ -1595,7 +1595,8 @@ mod a_mutation_trigger {
                 } if *fired == trigger => Some((**context).clone()),
                 Notice::AsyncHooks { .. }
                 | Notice::FrameworkEvent(_)
-                | Notice::StopReading { .. } => None,
+                | Notice::StopReading { .. }
+                | Notice::CutReadOver { .. } => None,
             })
             .unwrap()
     }
@@ -1756,7 +1757,8 @@ mod a_mutation_trigger {
                 }
                 Notice::AsyncHooks { .. }
                 | Notice::FrameworkEvent(_)
-                | Notice::StopReading { .. } => None,
+                | Notice::StopReading { .. }
+                | Notice::CutReadOver { .. } => None,
             })
             .collect();
         assert_eq!(fired, [vec![of_the_target]]);
