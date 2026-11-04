@@ -1,7 +1,7 @@
-//! RFC §12.2 step 13s (RMK-1326, HITL 81395c77, d406164d): a streaming
-//! target that never returns once a cut handed it its stream's end, or while
-//! it waits on its own between two reads: what it holds, and what it does
-//! not. Measured beside Python's, with a target that blocks in a `finally`
+//! RFC §12.2 step 13s (RMK-1326, RMK-1343, HITL 81395c77, d406164d): a
+//! streaming target that never returns once a cut handed it its stream's end,
+//! or while it waits on its own between two reads: what it holds, and what it
+//! does not. Measured beside Python's, with a target that blocks in a `finally`
 //! (Python's other shapes return at once).
 
 use std::future::Future;
@@ -15,7 +15,8 @@ use roomkit::model::{
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
-    DeliveryStream, ProcessInboundOptions, RoomKit, RoomKitOptions, StreamItem,
+    DeliveryStream, HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomKit,
+    RoomKitOptions, StreamItem,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiChannel, AiChannelOptions};
@@ -33,6 +34,21 @@ enum Stuck {
     BetweenReads,
     /// Past the end of the stream its read was stopped on.
     PastTheEnd,
+    /// Past that end for a while: it flushes, then returns.
+    Flushes,
+    /// Past that end for a while: it flushes, then fails.
+    FailsFlushing,
+}
+
+/// How the agent takes the room's turns.
+#[derive(Clone, Copy, Debug)]
+enum Turns {
+    /// Side by side.
+    Ordinary,
+    /// One after the other.
+    Serialized,
+    /// One after the other, a message handed to the running one: roomkit-tui's.
+    Steered,
 }
 
 /// A target that leaves while the call it read the start of runs, its next
@@ -47,6 +63,7 @@ struct Target {
     first: AtomicBool,
     told: Arc<Notify>,
     read: Arc<Mutex<Vec<String>>>,
+    delivered: Arc<Mutex<Vec<EventType>>>,
 }
 
 impl Target {
@@ -126,8 +143,16 @@ impl Channel for Target {
                 }
             }
         }
-        if first {
+        if !first {
+            return Ok(ChannelOutput::empty());
+        }
+        if matches!(self.stuck, Stuck::BetweenReads | Stuck::PastTheEnd) {
             std::future::pending::<()>().await;
+        }
+        tokio::time::sleep(FLUSH).await;
+        self.read.lock().unwrap().push("flushed".to_owned());
+        if matches!(self.stuck, Stuck::FailsFlushing) {
+            return Err(std::io::Error::other("the flush failed").into());
         }
         Ok(ChannelOutput::empty())
     }
@@ -142,10 +167,11 @@ impl Channel for Target {
 
     fn deliver(
         &self,
-        _event: RoomEvent,
+        event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        self.delivered.lock().unwrap().push(event.r#type);
         std::future::ready(Ok(ChannelOutput::empty()))
     }
 }
@@ -167,20 +193,25 @@ fn message(body: &str) -> InboundMessage {
 struct Cut {
     kit: RoomKit,
     read: Arc<Mutex<Vec<String>>>,
+    delivered: Arc<Mutex<Vec<EventType>>>,
+    /// Told of each `ON_ERROR`.
+    reported: Arc<Notify>,
     first: tokio::task::JoinHandle<Result<roomkit::InboundResult, roomkit::RoomKitError>>,
     a: RoomId,
     b: RoomId,
 }
 
-async fn cut(stuck: Stuck, serialize: bool) -> Cut {
+async fn cut(stuck: Stuck, turns: Turns) -> Cut {
     let kit = RoomKit::new(RoomKitOptions::default());
     let told = Arc::new(Notify::new());
     let read = Arc::new(Mutex::new(Vec::new()));
+    let delivered = Arc::new(Mutex::new(Vec::new()));
     kit.register_channel(Target {
         stuck,
         first: AtomicBool::new(true),
         told: Arc::clone(&told),
         read: Arc::clone(&read),
+        delivered: Arc::clone(&delivered),
     })
     .unwrap();
     let model = ScriptedProvider::new([
@@ -201,11 +232,27 @@ async fn cut(stuck: Stuck, serialize: bool) -> Cut {
         tools: roomkit_ai::Tools::new()
             .tool(roomkit_ai::AiTool::new("wait", "d").unwrap(), wait)
             .into(),
-        serialize_room_turns: serialize,
+        serialize_room_turns: matches!(turns, Turns::Serialized),
+        steer_room_turns: matches!(turns, Turns::Steered),
         ..AiChannelOptions::default()
     };
     kit.register_channel(AiChannel::new(channel("ai"), model, agent_options).unwrap())
         .unwrap();
+    let reported = Arc::new(Notify::new());
+    let on_error = Arc::clone(&reported);
+    kit.hook(
+        HookTrigger::OnError,
+        move |_event: RoomEvent, _context| {
+            on_error.notify_one();
+            async {}
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "error".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let (a, b) = (RoomId::new("a").unwrap(), RoomId::new("b").unwrap());
     for room in [&a, &b] {
         kit.create_room(CreateRoomOptions {
@@ -226,7 +273,7 @@ async fn cut(stuck: Stuck, serialize: bool) -> Cut {
     let opts = options(&a);
     let first = tokio::spawn(async move { sender.process_inbound(one, opts).await });
     timeout(LONG, told.notified()).await.unwrap();
-    if matches!(stuck, Stuck::PastTheEnd) {
+    if !matches!(stuck, Stuck::BetweenReads) {
         timeout(LONG, running.notified()).await.unwrap();
     }
     let cancelled = kit
@@ -236,6 +283,8 @@ async fn cut(stuck: Stuck, serialize: bool) -> Cut {
     Cut {
         kit,
         read,
+        delivered,
+        reported,
         first,
         a,
         b,
@@ -245,12 +294,15 @@ async fn cut(stuck: Stuck, serialize: bool) -> Cut {
 /// Longer than anything a test here waits for, on its clock.
 const LONG: Duration = Duration::from_secs(60);
 
+/// How long a target that flushes works past its stream's end.
+const FLUSH: Duration = Duration::from_millis(200);
+
 // An ordinary agent: the cut target holds its caller alone. Python's blocked
 // `finally`: the same, next message 0.011 s, other room 0.003 s.
 #[tokio::test(start_paused = true)]
 async fn a_stuck_target_holds_its_caller_and_no_other_work() {
     for stuck in [Stuck::BetweenReads, Stuck::PastTheEnd] {
-        let mut cut = cut(stuck, false).await;
+        let mut cut = cut(stuck, Turns::Ordinary).await;
         assert!(timeout(LONG, &mut cut.first).await.is_err(), "{stuck:?}");
 
         let start = Instant::now();
@@ -276,28 +328,163 @@ async fn a_stuck_target_holds_its_caller_and_no_other_work() {
     }
 }
 
-// An agent that takes the room's turns one after the other: the room's next
-// message waits for the cut target until the kit's close, the other room goes
-// on. Python's blocked `finally` waits too; Python with no `finally` does not,
-// at 0.003 s. The maintainer decides on HITL d406164d.
+/// A room's rows as the store holds them in their order, but its bindings:
+/// each one's type, its text and the turn's end it records.
+async fn rows_of(kit: &RoomKit, room: &RoomId) -> Vec<(EventType, String, Option<Value>)> {
+    let rows = kit.store().list_events(room, received()).await.unwrap();
+    rows.iter()
+        .filter(|row| row.r#type != EventType::ChannelAttached)
+        .map(|row| {
+            (
+                row.r#type,
+                roomkit_core::rules::transcoding::text_of(&row.content),
+                row.metadata.get("loop_end_reason").cloned(),
+            )
+        })
+        .collect()
+}
+
+/// What room `a` holds of a cut in a call's run: the message that asked, and
+/// the turn's rows, its record on its last message.
+fn cut_in_a_call() -> Vec<(EventType, String, Option<Value>)> {
+    vec![
+        (EventType::Message, "one".to_owned(), None),
+        (
+            EventType::Message,
+            "Hello.".to_owned(),
+            Some(json!("cancelled")),
+        ),
+        (
+            EventType::ToolCallStart,
+            "[Tool call: wait]".to_owned(),
+            None,
+        ),
+        (EventType::ToolCallEnd, "[Tool call: wait]".to_owned(), None),
+    ]
+}
+
+// An agent that takes the room's turns one after the other, or steers them: at
+// the cut the read stores what it has and gives its place up, and only its
+// caller still waits for the target (RMK-1343, HITL d406164d). Python with no
+// `finally`: the next message 0.003 s. Python's blocked `finally` waits there,
+// the target's defect, and stores nothing: on that the maintainer chose apart.
 #[tokio::test(start_paused = true)]
-async fn a_stuck_target_holds_the_room_s_line_of_a_serializing_agent() {
-    for stuck in [Stuck::BetweenReads, Stuck::PastTheEnd] {
-        let mut cut = cut(stuck, true).await;
-        assert!(timeout(LONG, &mut cut.first).await.is_err(), "{stuck:?}");
+async fn a_stuck_target_holds_its_caller_and_not_the_room_s_line() {
+    for turns in [Turns::Serialized, Turns::Steered] {
+        for stuck in [Stuck::BetweenReads, Stuck::PastTheEnd] {
+            let mut cut = cut(stuck, turns).await;
+            assert!(timeout(LONG, &mut cut.first).await.is_err(), "{stuck:?}");
+            let mut expected = if matches!(stuck, Stuck::PastTheEnd) {
+                cut_in_a_call()
+            } else {
+                vec![
+                    (EventType::Message, "one".to_owned(), None),
+                    (
+                        EventType::Message,
+                        "Hello.".to_owned(),
+                        Some(json!("cancelled")),
+                    ),
+                ]
+            };
+            assert_eq!(
+                rows_of(&cut.kit, &cut.a).await,
+                expected,
+                "{stuck:?} {turns:?}"
+            );
 
-        let next = cut.kit.process_inbound(message("two"), options(&cut.a));
-        assert!(timeout(LONG, next).await.is_err(), "{stuck:?}");
-        let other = cut.kit.process_inbound(message("three"), options(&cut.b));
-        timeout(LONG, other).await.unwrap().unwrap();
+            let start = Instant::now();
+            let next = cut.kit.process_inbound(message("two"), options(&cut.a));
+            timeout(LONG, next).await.unwrap().unwrap();
+            let other = cut.kit.process_inbound(message("three"), options(&cut.b));
+            timeout(LONG, other).await.unwrap().unwrap();
+            assert_eq!(start.elapsed(), Duration::ZERO, "{stuck:?} {turns:?}");
+            expected.extend([
+                (EventType::Message, "two".to_owned(), None),
+                (
+                    EventType::Message,
+                    "second".to_owned(),
+                    Some(json!("completed")),
+                ),
+            ]);
+            assert_eq!(
+                rows_of(&cut.kit, &cut.a).await,
+                expected,
+                "{stuck:?} {turns:?}"
+            );
 
-        cut.kit.close().await.unwrap();
-        timeout(LONG, &mut cut.first)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
+            let start = Instant::now();
+            cut.kit.close().await.unwrap();
+            assert_eq!(
+                start.elapsed(),
+                Duration::from_secs(5),
+                "{stuck:?} {turns:?}"
+            );
+            timeout(LONG, &mut cut.first)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        }
     }
+}
+
+// A target that flushes past its cut: the room's next turn does not wait for it,
+// where Python's `finally` of 0.2 s holds it 0.2 s (HITL d406164d), and its caller
+// does, as Python's: the call returns once the flush is over.
+#[tokio::test(start_paused = true)]
+async fn the_room_s_next_turn_starts_while_a_cut_target_flushes() {
+    let mut cut = cut(Stuck::Flushes, Turns::Serialized).await;
+    let start = Instant::now();
+    let next = cut.kit.process_inbound(message("two"), options(&cut.a));
+    timeout(LONG, next).await.unwrap().unwrap();
+    assert_eq!(start.elapsed(), Duration::ZERO);
+    assert_eq!(
+        cut.read.lock().unwrap().as_slice(),
+        ["Hello.", "second"],
+        "the flush is not over"
+    );
+    // The call's end the stream no longer carries reaches it meanwhile; in
+    // Python, past its `finally`.
+    assert_eq!(
+        cut.delivered.lock().unwrap().as_slice(),
+        [EventType::ToolCallEnd]
+    );
+
+    timeout(LONG, &mut cut.first)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(start.elapsed(), FLUSH);
+    assert_eq!(
+        cut.read.lock().unwrap().as_slice(),
+        ["Hello.", "second", "flushed"]
+    );
+    cut.kit.close().await.unwrap();
+}
+
+// A target that fails once it flushed past its cut: what the cut stored stands,
+// and its caller reads the failure (RMK-1343). On HITL ... Python, whose `finally`
+// fails before anything is stored, stores the text unmarked, with no record.
+#[tokio::test(start_paused = true)]
+async fn a_target_that_fails_flushing_leaves_what_the_cut_stored() {
+    let mut cut = cut(Stuck::FailsFlushing, Turns::Serialized).await;
+    let result = timeout(LONG, &mut cut.first)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        result
+            .error
+            .as_ref()
+            .is_some_and(|error| error.message.contains("the flush failed")),
+        "{:?}",
+        result.error
+    );
+    timeout(LONG, cut.reported.notified()).await.unwrap();
+    assert_eq!(rows_of(&cut.kit, &cut.a).await, cut_in_a_call());
+    cut.kit.close().await.unwrap();
 }
 
 macro_rules! streaming_channel_declaration {

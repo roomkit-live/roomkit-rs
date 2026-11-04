@@ -537,8 +537,8 @@ pub(super) async fn channel<S: ConversationStore>(
 }
 
 /// Reads the stream the turn of `turn` answered with, for the read
-/// `effect`: a turn that waited its place starts now, and holds it until
-/// what it said is stored (RFC §6.4).
+/// `effect`: a turn that waited its place starts now, and its stream holds it
+/// until what it said is stored (RFC §6.4).
 async fn read_stream<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     shared: &RunShared,
@@ -554,12 +554,12 @@ async fn read_stream<S: ConversationStore>(
         kit: inner.turns.cutting(),
         task: task_cut.as_ref().map(|cut| cut.signal()),
     };
-    let (kept, _place) = match shared.take_queued(turn) {
+    let kept = match shared.take_queued(turn) {
         Some(queued) => match queued.start(inner, &mut stops).await {
-            Started::Turn(kept, place) => (Some(kept), Some(place)),
+            Started::Turn(kept) => Some(kept),
             Started::Answered(outcome) => return outcome,
         },
-        None => (shared.take_stream(turn), None),
+        None => shared.take_stream(turn),
     };
     // The kit's close waits, within its grace, for the read of a turn it
     // cut to store what the turn said.
@@ -628,7 +628,14 @@ async fn run_turn<S: ConversationStore>(
             checked_output(stream::muted_answer(output))
         }
         Ok(Answer::Streamed(output, turn)) => {
-            shared.keep_stream(effect, KeptStream { turn, then: None });
+            shared.keep_stream(
+                effect,
+                KeptStream {
+                    turn,
+                    then: None,
+                    place: None,
+                },
+            );
             ChannelOutcome::Streamed(output).into()
         }
         Err(failure) => failure.into_outcome(),
@@ -698,6 +705,7 @@ async fn first_pass<S: ConversationStore>(
                 KeptStream {
                     turn,
                     then: Some(then),
+                    place: None,
                 },
             );
             shared.turn_answered(effect);

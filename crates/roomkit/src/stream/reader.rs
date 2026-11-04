@@ -21,7 +21,9 @@
 //! kit's close, cuts the turn first: `cancel` crosses, its executor cuts
 //! the call it runs, and the turn's end is awaited within its cancel bound
 //! before the calls left open are ended `failed`, their error `cancelled`,
-//! or `kit_closed` for the kit's close (RFC §12.10.4). A response that fails
+//! or `kit_closed` for the kit's close (RFC §12.10.4). That stop stores what
+//! the turn leaves at once, and only the read's caller waits for a reader
+//! still working past it. A response that fails
 //! stores the text it produced,
 //! hands its reader that row, then the failure; a streaming channel that
 //! fails leaves the text to every target. The turn's record, when no row
@@ -48,6 +50,7 @@ use crate::RoomKit;
 use crate::channel::ChannelError;
 use crate::context::{self, Adopting, ExecutionContext};
 use crate::kit::Inner;
+use crate::room_turns::Place;
 use crate::store::ConversationStore;
 use crate::tasks::{Kind, Marks, Tasks, Unit};
 use crate::turn_runners::{FirstPass, Then};
@@ -72,6 +75,9 @@ pub(crate) struct KeptStream {
     /// What follows the turn when it is a strategy's first pass, read with
     /// its text kept out of the room ([`Taken::Passes`](crate::turn_runners::Taken::Passes)).
     pub(crate) then: Option<Then>,
+    /// The turn's place in its channel's line in the room, given up once what
+    /// it said is stored (RFC §6.4), when it waited one.
+    pub(crate) place: Option<Place>,
 }
 
 /// What a read of the turn's response gave.
@@ -180,6 +186,8 @@ pub(super) async fn read_kept<S: ConversationStore>(
         segments: Segments::new(source, answers, correlation_id).reading(live.clone()),
         stream: Some(kept.turn),
         cut: None,
+        place: kept.place,
+        settled: None,
         reader_unit,
         reads: channel.as_ref().map_or(Reads::Nobody, |_| Reads::Target),
         ready: VecDeque::new(),
@@ -206,7 +214,7 @@ pub(super) async fn read_kept<S: ConversationStore>(
     };
     let reader = reader_marks.scoped(reader);
     let read = producer
-        .read_by(reader, pulled, reader_done, &inner.tasks, stops)
+        .read_by(reader, pulled, reader_done, inner, stops)
         .await;
     let mut output = producer.finish(read).await;
     // The turn's record reaches the operation once its stream is read, how
@@ -228,9 +236,7 @@ pub(super) async fn read_kept<S: ConversationStore>(
         );
         return (output, Some(pass));
     }
-    if let Some((event_id, metadata)) = producer.segments.owed_record() {
-        write_record(inner, &producer.room_id, &event_id, metadata).await;
-    }
+    producer.write_owed_record(inner).await;
     (output, None)
 }
 
@@ -362,6 +368,11 @@ struct Producer {
     stream: Option<OwnerTurn>,
     /// Why the read was stopped from outside, once it was: the turn is cut.
     cut: Option<&'static str>,
+    /// The turn's place in its channel's line in the room, while it holds it.
+    place: Option<Place>,
+    /// The response's rows were settled at a cut, its reader still working:
+    /// the failure they settled on, if any.
+    settled: Option<Option<ErrorRecord>>,
     /// The unit of the kit's work the reader runs in, beside the run's, which
     /// a close it calls spares.
     reader_unit: Unit,
@@ -391,17 +402,19 @@ impl Producer {
     /// stop finds reading is handed the stream's end, and what it does past
     /// it stands for that `finally`: it runs to its end, however long, the
     /// read waiting for it, a caller's own timeout bounding that caller only.
-    /// The kit's close and the cut of a held task stop that wait: the read
-    /// stores what it has, and the reader ends on a task of the kit's, within
-    /// the close's grace. A reader the stop finds past the stream, its end
-    /// read or its stream dropped, has no such work left: it is dropped where
-    /// it waits, once polled, as Python's cancel lands there.
-    async fn read_by(
+    /// The read does not wait for it to store what it has and give its place
+    /// up: only its caller does, so a target stuck there holds no room's line
+    /// (RMK-1343). The kit's close and the cut of a held task stop that wait:
+    /// the reader ends on a task of the kit's, within the close's grace. A
+    /// reader the stop finds past the stream, its end read or its stream
+    /// dropped, has no such work left: it is dropped where it waits, once
+    /// polled, as Python's cancel lands there.
+    async fn read_by<S: ConversationStore>(
         &mut self,
         reader: impl Future<Output = Result<ChannelOutput, ChannelError>> + Send + 'static,
         pulls: mpsc::UnboundedReceiver<oneshot::Sender<Pulled>>,
         reader_done: oneshot::Receiver<()>,
-        tasks: &Arc<Tasks>,
+        inner: &Arc<Inner<S>>,
         mut stops: Stops,
     ) -> Result<ChannelOutput, ChannelError> {
         let mut reader = Box::pin(reader);
@@ -418,6 +431,18 @@ impl Producer {
             }
         }
         drop(pulls);
+        if self.cut.is_some() {
+            // A reader that ends with its stream's end leaves nothing to wait
+            // for: its read settles as any reader's that ended.
+            tokio::select! {
+                biased;
+                read = &mut reader => return read,
+                () = std::future::ready(()) => {}
+            }
+            if let Some(read) = self.settle_past(&mut reader, inner).await {
+                return read;
+            }
+        }
         let leaves_it = tokio::select! {
             biased;
             read = &mut reader => return read,
@@ -426,8 +451,45 @@ impl Producer {
         if !leaves_it {
             return last_poll(reader).await;
         }
-        self.leave_to_end_alone(reader, tasks);
+        self.leave_to_end_alone(reader, &inner.tasks);
         Ok(ChannelOutput::default())
+    }
+
+    /// Stores what a cut turn leaves, `reader` working on meanwhile: what it
+    /// returned, if it did by then.
+    async fn settle_past<R, S>(
+        &mut self,
+        reader: &mut Pin<Box<R>>,
+        inner: &Arc<Inner<S>>,
+    ) -> Option<Result<ChannelOutput, ChannelError>>
+    where
+        R: Future<Output = Result<ChannelOutput, ChannelError>> + ?Sized,
+        S: ConversationStore,
+    {
+        let mut read = None;
+        let mut settling = pin!(self.settle_at_the_cut(inner));
+        loop {
+            tokio::select! {
+                biased;
+                done = reader.as_mut(), if read.is_none() => read = Some(done),
+                () = &mut settling => return read,
+            }
+        }
+    }
+
+    /// Stores what a cut turn leaves, its record with it, and gives its place
+    /// in the room's line up, whatever its reader does from here.
+    async fn settle_at_the_cut<S: ConversationStore>(&mut self, inner: &Arc<Inner<S>>) {
+        self.settled = Some(self.settle(false).await);
+        self.write_owed_record(inner).await;
+        drop(self.place.take());
+    }
+
+    /// Writes the turn's record on its last message, when no row carried it.
+    async fn write_owed_record<S: ConversationStore>(&mut self, inner: &Arc<Inner<S>>) {
+        if let Some((event_id, metadata)) = self.segments.take_owed_record() {
+            write_record(inner, &self.room_id, &event_id, metadata).await;
+        }
     }
 
     /// Returns once what ends the wait for a reader past the stream comes:
@@ -635,9 +697,8 @@ impl Producer {
     }
 
     /// Settles the response once its reader is done, read `read` returned
-    /// with: read through, it ended or failed; otherwise it stopped (RFC
-    /// §12.2 step 13s), unless the target failed. Returns what answers the
-    /// operation's read.
+    /// with, unless a cut did already. Returns what answers the operation's
+    /// read: its `error` the response's failure, else the target's.
     async fn finish(&mut self, read: Result<ChannelOutput, ChannelError>) -> ChannelOutput {
         let (mut output, target_error) = match read {
             Ok(output) => (output, None),
@@ -646,8 +707,12 @@ impl Producer {
                 (ChannelOutput::default(), Some(record))
             }
         };
-        match self.over.take() {
-            Some(Over::Failed(error)) => {
+        let failure = match self.settled.take() {
+            Some(failure) => failure,
+            None => self.settle(target_error.is_some()).await,
+        };
+        match (failure, target_error) {
+            (Some(failure), target_error) => {
                 if let Some(target_error) = &target_error {
                     tracing::warn!(
                         target: "roomkit::driver",
@@ -656,20 +721,33 @@ impl Producer {
                         "the streaming channel failed on a response that failed"
                     );
                 }
-                self.close_open(TURN_FAILED).await;
-                output.error = Some(error);
+                output.error = Some(failure);
             }
-            Some(Over::End) if self.read_through && target_error.is_none() => {}
+            (None, Some(target_error)) => output.error = Some(target_error),
+            (None, None) => {}
+        }
+        output
+    }
+
+    /// Stores what the response leaves: read through, it ended or failed;
+    /// otherwise it stopped (RFC §12.2 step 13s), unless `target_failed`.
+    /// Returns its failure, if it failed.
+    async fn settle(&mut self, target_failed: bool) -> Option<ErrorRecord> {
+        match self.over.take() {
+            Some(Over::Failed(error)) => {
+                self.close_open(TURN_FAILED).await;
+                return Some(error);
+            }
+            Some(Over::End) if self.read_through && !target_failed => {}
             over @ (Some(Over::End) | None) => {
-                if target_error.is_some() {
+                if target_failed {
                     self.target_failed().await;
-                    output.error = target_error;
                 } else {
                     self.stopped(over.is_some()).await;
                 }
             }
         }
-        output
+        None
     }
 
     /// The reader stopped before the end (RFC §12.2 step 13s): the round

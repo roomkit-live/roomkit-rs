@@ -285,13 +285,15 @@ impl Segments {
 
     /// The last message the store holds, and the record it is owed: the
     /// update to write once the response is over, when no row carried it
-    /// (RFC §6.4 "The turn's record").
-    pub(super) fn owed_record(&self) -> Option<(EventId, Metadata)> {
+    /// (RFC §6.4 "The turn's record"). Taken once.
+    pub(super) fn take_owed_record(&mut self) -> Option<(EventId, Metadata)> {
         let record = self.record.as_ref().filter(|_| self.owed)?;
         let last = self.last_message.as_ref()?;
         let mut metadata = last.metadata.clone();
         metadata.extend(record.clone());
-        Some((last.id.clone(), metadata))
+        let id = last.id.clone();
+        self.owed = false;
+        Some((id, metadata))
     }
 
     /// The text read so far as a message, when it says something; with the
@@ -430,7 +432,7 @@ mod tests {
                 texts(&started)[0].clone(),
                 started[1].r#type,
                 last.metadata.get("loop_end_reason").cloned(),
-                segments.owed_record(),
+                segments.take_owed_record(),
             ),
             (
                 (EventType::Message, "Let me check.".to_owned()),
@@ -574,7 +576,7 @@ mod tests {
         segments.end(ToolCallContent::new("lookup", "call_1"));
         segments.end_turn(record("empty_response"));
         assert_eq!(segments.last_text(false), None);
-        let (id, metadata) = segments.owed_record().unwrap();
+        let (id, metadata) = segments.take_owed_record().unwrap();
         assert_eq!(
             (
                 id.as_str(),

@@ -152,8 +152,9 @@ pub(crate) struct Queued {
 /// What a waiting turn's start came to.
 #[derive(Debug)]
 pub(crate) enum Started {
-    /// The turn runs: its stream, and its place, held until it is read.
-    Turn(KeptStream, Place),
+    /// The turn runs: its stream, which holds its place until what it said
+    /// is stored.
+    Turn(KeptStream),
     /// No stream to read: what answers the read.
     Answered(Outcome),
 }
@@ -218,7 +219,11 @@ impl Queued {
         };
         match answered {
             Ok(Answer::Streamed(output, turn)) if answers_nothing_beside(&output) => {
-                Started::Turn(KeptStream { turn, then: None }, place)
+                Started::Turn(KeptStream {
+                    turn,
+                    then: None,
+                    place: Some(place),
+                })
             }
             Ok(Answer::Output(output)) if answers_nothing_beside(&output) => {
                 Started::Answered(nothing())

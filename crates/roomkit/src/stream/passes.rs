@@ -109,7 +109,11 @@ async fn second_pass<S: ConversationStore>(
             ChannelOutcome::Output(super::muted_answer(output)).into()
         }
         Ok(Answer::Streamed(_output, turn)) => {
-            let kept = KeptStream { turn, then: None };
+            let kept = KeptStream {
+                turn,
+                then: None,
+                place: None,
+            };
             let (output, _) = Box::pin(read_kept(inner, kept, stops, read, false)).await;
             ChannelOutcome::Output(Box::new(output)).into()
         }
