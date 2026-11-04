@@ -880,7 +880,7 @@ mod tests {
                     if let Some(kit) = closing {
                         drop(kit.close().await);
                     }
-                    let _ = event;
+                    drop(event);
                     roomkit_core::model::HookResult::allow(
                         roomkit_core::model::hook::AllowOptions::default(),
                     )
@@ -960,7 +960,12 @@ mod tests {
                             }
                         }
                         crate::SpeakQueueChange::TurnGiven => given.notify_one(),
-                        _ => {}
+                        crate::SpeakQueueChange::TurnEnded
+                        | crate::SpeakQueueChange::InstructionDropped
+                        | crate::SpeakQueueChange::Listening
+                        | crate::SpeakQueueChange::TalkingAgain
+                        | crate::SpeakQueueChange::Waiting
+                        | crate::SpeakQueueChange::Over => {}
                     }
                 }
             },
