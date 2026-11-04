@@ -104,7 +104,7 @@ pub(crate) struct Record {
     /// read waited for reads as over.
     cut_read_over: watch::Sender<bool>,
     /// The call's record as that read left it.
-    cut_read_record: Mutex<Option<Metadata>>,
+    cut_read_left: Mutex<Option<Metadata>>,
     /// The commits of the call's own answers: what the call reports as its
     /// `response_events` once the kit's close aborted its run.
     answers: StoredAnswers,
@@ -162,7 +162,7 @@ impl Record {
             cancelled: watch::Sender::new(None),
             decided: Mutex::new(None),
             cut_read_over: watch::Sender::new(true),
-            cut_read_record: Mutex::new(None),
+            cut_read_left: Mutex::new(None),
             answers: StoredAnswers::default(),
             in_flight: InFlight::default(),
         }
@@ -207,7 +207,7 @@ impl Record {
         result.response_events = self.answers.stored();
         result.cancellation_reason = Some(reason);
         if let Some(record) = self
-            .cut_read_record
+            .cut_read_left
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take()
@@ -226,7 +226,7 @@ impl Record {
     /// The read the cut stopped is over, the call's record as it left it.
     pub(super) fn cut_read_over(&self, record: Metadata) {
         *self
-            .cut_read_record
+            .cut_read_left
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(record);
         self.cut_read_over.send_replace(true);
