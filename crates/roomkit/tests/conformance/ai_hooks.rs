@@ -13,8 +13,7 @@ use roomkit::model::hook::AllowOptions;
 use roomkit::model::{HookAction, HookResult, RoomContext};
 use roomkit::{HookError, TurnPayload};
 use roomkit_ai::{
-    AiContext, AiGenerationEvent, AiMessage, AiResponseEvent, AiRole, AiTool, ThinkingEvent,
-    ToolRoundEvent,
+    AiGenerationEvent, AiMessage, AiResponseEvent, AiRole, AiTool, ThinkingEvent, ToolRoundEvent,
 };
 use serde_json::{Map, Value, json};
 
@@ -53,7 +52,7 @@ impl Scripted for AiGenerationEvent {
             "purpose": self.purpose,
             "trigger": self.trigger.as_ref().map(|event| event.id.as_str()),
             "system_prompt": self.ai_context.system_prompt,
-            "messages": messages(&self.ai_context),
+            "messages": crate::agents::messages(&self.ai_context),
             "tools": self.ai_context.tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
         })
     }
@@ -128,7 +127,14 @@ impl Scripted for ToolRoundEvent {
         let calls: Vec<Value> = self
             .calls
             .iter()
-            .map(|call| json!({ "tool_call_id": call.id, "name": call.name, "arguments": call.arguments }))
+            .map(|call| {
+                json!({
+                    "tool_call_id": call.id,
+                    "name": call.name,
+                    "arguments": call.arguments,
+                    "metadata": call.metadata,
+                })
+            })
             .collect();
         let results: Vec<Value> = self
             .results
@@ -220,16 +226,6 @@ impl Scripted for AiResponseEvent {
     fn patched(self, _patch: &Value) -> Result<Self, String> {
         Err("a response's hook observes: no patch".to_owned())
     }
-}
-
-/// The messages `context` carries as `models` reads them: each its role
-/// and its text parts joined.
-pub(crate) fn messages(context: &AiContext) -> Vec<Value> {
-    context
-        .messages
-        .iter()
-        .map(|message| json!({ "role": message.role.as_str(), "text": message.content.text() }))
-        .collect()
 }
 
 /// A patch's `messages`, each `{role, text}`.

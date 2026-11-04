@@ -31,13 +31,13 @@ fn call_part(call: &AiToolCall) -> AiToolCallPart {
 }
 
 /// A round whose reasoning has no known place: the reasoning, then the text,
-/// then the calls.
+/// then the calls, an [`AiToolCall`] or a [`StreamToolCall`](super::StreamToolCall)
+/// each, as Python's `RoundCall`.
 #[must_use]
-pub fn round_parts(
-    thinking: &[AiThinkingPart],
-    text: &str,
-    calls: &[AiToolCall],
-) -> Vec<AiContentPart> {
+pub fn round_parts<C>(thinking: &[AiThinkingPart], text: &str, calls: &[C]) -> Vec<AiContentPart>
+where
+    C: Clone + Into<AiToolCall>,
+{
     let mut parts: Vec<AiContentPart> = thinking
         .iter()
         .cloned()
@@ -49,7 +49,8 @@ pub fn round_parts(
     parts.extend(
         calls
             .iter()
-            .map(|call| AiContentPart::ToolCall(call_part(call))),
+            .cloned()
+            .map(|call| AiContentPart::ToolCall(call_part(&call.into()))),
     );
     parts
 }
@@ -117,11 +118,14 @@ impl RoundTranscript {
     ///
     /// [`RoomKitError::Runtime`] for a call in `calls` the round never made,
     /// as Python raises `RuntimeError`.
-    pub fn parts(&self, calls: &[AiToolCall]) -> Result<Vec<AiContentPart>, RoomKitError> {
+    pub fn parts<C>(&self, calls: &[C]) -> Result<Vec<AiContentPart>, RoomKitError>
+    where
+        C: Clone + Into<AiToolCall>,
+    {
         if !self.thinking.keyed() {
             return Ok(round_parts(&self.thinking.parts(), &self.text(), calls));
         }
-        let mut pending: Vec<&AiToolCall> = calls.iter().collect();
+        let mut pending: Vec<AiToolCall> = calls.iter().cloned().map(Into::into).collect();
         let mut parts = Vec::with_capacity(self.entries.len());
         for entry in &self.entries {
             match entry {
@@ -135,7 +139,7 @@ impl RoundTranscript {
                 Entry::Call(id) => {
                     if let Some(at) = pending.iter().position(|call| call.id == *id) {
                         let call = pending.remove(at);
-                        parts.push(AiContentPart::ToolCall(call_part(call)));
+                        parts.push(AiContentPart::ToolCall(call_part(&call)));
                     }
                 }
             }

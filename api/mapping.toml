@@ -384,7 +384,7 @@ reason = "a serialized model holds no live error"
 [[exception]]
 rust = "roomkit_ai::AiContentPart"
 approved = "2026-10-31"
-reason = "a message's content parts, Python's AITextPart | AIImagePart | AIToolCallPart | AIToolResultPart, which no Python name exports: an enum of the four (language)"
+reason = "a message's content parts, Python's AITextPart | AIImagePart | AIThinkingPart | AIToolCallPart | AIToolResultPart, which no Python name exports: an enum of the five (language)"
 
 [[exception]]
 rust = "roomkit_ai::ToolResultPart"

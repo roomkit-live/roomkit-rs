@@ -271,6 +271,31 @@ async fn a_message_steered_while_the_model_answers_asks_it_again() {
     room.kit.close().await.unwrap();
 }
 
+/// RFC §6.7: what a provider keeps for a round's replay (its reasoning items
+/// on Responses) rides a steered answer too, as it rides a round of calls.
+#[tokio::test]
+async fn a_steered_answer_keeps_what_its_provider_keeps_for_its_replay() {
+    let mut answer = ScriptedRound::answering("a.py, b.txt");
+    let kept = serde_json::json!({ "output": [] });
+    let kept = kept.as_object().cloned().unwrap();
+    answer.done.metadata.clone_from(&kept);
+    let model = Gated::new([answer, ScriptedRound::answering("a.py")], 0);
+    let room = Arc::new(with_tools(model.clone(), Paused::new().tools()).await);
+    let turn = first_turn(&room);
+    model.answering().await;
+
+    steer(&room.kit, InjectMessage::new(STEERED)).await;
+    model.release();
+    turn.await.unwrap();
+
+    let requests = model.requests();
+    let asked_again = &requests[1];
+    let answered = &asked_again.messages[asked_again.messages.len() - 2];
+    assert_eq!(answered.role, AiRole::Assistant);
+    assert_eq!(answered.metadata, kept);
+    room.kit.close().await.unwrap();
+}
+
 /// RFC §21.3: once the model has answered with nothing steered in, the
 /// loop reads its queue no more, and the host is told so.
 #[tokio::test]

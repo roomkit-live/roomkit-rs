@@ -85,6 +85,10 @@ pub struct ScriptedRound {
     /// Its events, in the order it hands them, in place of its text, its
     /// reasoning, its calls and its end.
     events: Option<Vec<StreamEvent>>,
+    /// The response it is, read whole, in place of the same.
+    whole: Option<AiResponse>,
+    /// Provider-owned data of its calls, by id.
+    call_metadata: Vec<(String, Metadata)>,
 }
 
 /// Where a round's failure or refusal comes in its stream.
@@ -119,6 +123,8 @@ impl ScriptedRound {
             without_done: false,
             failure_at: FailureAt::Text,
             events: None,
+            whole: None,
+            call_metadata: Vec::new(),
         }
     }
 
@@ -158,6 +164,8 @@ impl ScriptedRound {
             without_done: false,
             failure_at: FailureAt::Text,
             events: None,
+            whole: None,
+            call_metadata: Vec::new(),
         }
     }
 
@@ -174,7 +182,18 @@ impl ScriptedRound {
     /// its reasoning, its text, its calls, then its end (RFC §6.4).
     #[must_use]
     pub fn whole_response(response: AiResponse) -> Self {
-        Self::streaming(response_events(response))
+        Self {
+            whole: Some(response),
+            ..Self::answering("")
+        }
+    }
+
+    /// The same round, its call `id` carrying `metadata`, provider-owned data
+    /// (a thought signature).
+    #[must_use]
+    pub fn with_call_metadata(mut self, id: impl Into<String>, metadata: Metadata) -> Self {
+        self.call_metadata.push((id.into(), metadata));
+        self
     }
 
     /// The same round, written in the pieces `deltas`, which join to its
@@ -346,7 +365,11 @@ impl AiProvider for ScriptedProvider {
                     Ok(round) => round,
                     Err(error) => return out.give(Err(error)).await,
                 };
-                if let Some(events) = round.events {
+                let events = round
+                    .events
+                    .clone()
+                    .or_else(|| round.whole.clone().map(response_events));
+                if let Some(events) = events {
                     for event in events {
                         out.give(Ok(event)).await;
                     }
@@ -365,8 +388,7 @@ impl AiProvider for ScriptedProvider {
                 if let Some(failure) = failing_at(FailureAt::Text) {
                     return out.give(Err(failure)).await;
                 }
-                let finish_reason = round.done.finish_reason.as_deref();
-                for call in read_tool_calls(round.calls, finish_reason) {
+                for call in round.tool_calls() {
                     out.give(Ok(StreamEvent::ToolCall(call.into()))).await;
                 }
                 if let Some(failure) = failing_at(FailureAt::Calls) {
@@ -387,13 +409,16 @@ impl ScriptedProvider {
     /// The next round, whole: its text, its calls, how it ended.
     fn whole(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
         let round = self.next_round(context)?;
+        if let Some(response) = round.whole {
+            return Ok(response);
+        }
         if let Some(events) = round.events {
             return Ok(response_of(events));
         }
         if let Some(failure) = round.failure() {
             return Err(failure);
         }
-        let calls = read_tool_calls(round.calls, round.done.finish_reason.as_deref());
+        let calls = round.tool_calls();
         Ok(AiResponse {
             finish_reason: round.done.finish_reason,
             usage: round.done.usage,
@@ -440,7 +465,13 @@ impl ScriptedRound {
     /// round's ending. For a test's own provider.
     #[doc(hidden)]
     pub fn tool_calls(&self) -> Vec<AiToolCall> {
-        read_tool_calls(self.calls.clone(), self.done.finish_reason.as_deref())
+        let mut calls = read_tool_calls(self.calls.clone(), self.done.finish_reason.as_deref());
+        for call in &mut calls {
+            if let Some((_, metadata)) = self.call_metadata.iter().find(|(id, _)| *id == call.id) {
+                call.metadata.clone_from(metadata);
+            }
+        }
+        calls
     }
 
     /// The pieces the round writes its text in.

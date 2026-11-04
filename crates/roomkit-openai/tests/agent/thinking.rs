@@ -279,3 +279,30 @@ async fn a_responses_reasoning_delta_with_nothing_in_it_reads_as_none() {
         assert_eq!(read, [thinking("Weighing."), text("42.")]);
     }
 }
+
+// Python: tests/test_providers/test_round_text.py::test_a_round_that_spoke_keeps_its_reasoning
+/// End to end on Chat Completions (RFC §6.4): a round's reasoning goes back
+/// inline with its text and its call, and nothing of it reaches the room.
+#[tokio::test]
+async fn a_round_s_reasoning_goes_back_inline_and_is_not_stored() {
+    let round = json!({
+        "reasoning_content": "Why.",
+        "content": "Look.",
+        "tool_calls": [{ "id": "c1", "type": "function",
+            "function": { "name": "lookup", "arguments": "{}" } }],
+    });
+    let room = Room::new(
+        vec![completion(&round), Reply::completion("Done.")],
+        API_KEY,
+    )
+    .await;
+    room.says(&room.web, "alice", "Alice", "go").await;
+
+    let sent = messages(&room.fake, 1);
+    let replayed = sent.iter().find(|message| message["role"] == "assistant");
+    let replayed = replayed.expect("the round goes back");
+    assert_eq!(replayed["content"], "<think>Why.</think>Look.");
+    assert_eq!(replayed["tool_calls"][0]["id"], "c1");
+    let stored = format!("{:?}", room.timeline().await);
+    assert!(!stored.contains("Why."), "{stored}");
+}

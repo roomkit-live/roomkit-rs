@@ -590,6 +590,12 @@ pub(crate) fn round(spec: &Value) -> Result<ScriptedRound, String> {
     if spec.get("failure_after_done") == Some(&Value::Bool(true)) {
         round = round.failing_after_done();
     }
+    for call in spec["calls"].as_array().into_iter().flatten() {
+        if let (Some(id), Some(metadata)) = (call["id"].as_str(), call.get("metadata")) {
+            let metadata = serde_json::from_value(metadata.clone()).map_err(|e| e.to_string())?;
+            round = round.with_call_metadata(id, metadata);
+        }
+    }
     Ok(round)
 }
 
@@ -950,8 +956,9 @@ pub(crate) fn requests(model: &ScriptedProvider) -> Vec<Value> {
     model.requests().iter().map(request).collect()
 }
 
-fn request(request: &AiContext) -> Value {
-    let messages: Vec<Value> = request
+/// The messages `request` carries, as `models` reads them.
+pub(crate) fn messages(request: &AiContext) -> Vec<Value> {
+    request
         .messages
         .iter()
         .map(|message| {
@@ -962,7 +969,11 @@ fn request(request: &AiContext) -> Value {
                 "round": round_of(&message.content),
             })
         })
-        .collect();
+        .collect()
+}
+
+fn request(request: &AiContext) -> Value {
+    let messages = messages(request);
     // Every result of each tool message: a round's results are one message.
     let results: Vec<Value> = request
         .messages
@@ -1038,9 +1049,11 @@ fn round_of(content: &AiMessageContent) -> Value {
                 "redacted": part.redacted,
             })),
             AiContentPart::Text(text) => Some(json!({ "text": text.text })),
-            AiContentPart::ToolCall(call) => {
-                Some(json!({ "call": call.id, "metadata": call.metadata }))
-            }
+            AiContentPart::ToolCall(call) => Some(json!({
+                "call": call.id,
+                "arguments": call.arguments,
+                "metadata": call.metadata,
+            })),
             AiContentPart::Image(_) | AiContentPart::ToolResult(_) => None,
         })
         .collect()

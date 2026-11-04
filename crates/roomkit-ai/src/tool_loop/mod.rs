@@ -50,7 +50,7 @@ use spans::TurnSpan;
 pub(crate) use spans::TurnTelemetry;
 use tokio::time::Instant;
 
-use self::generation::{Failed, Generation};
+use self::generation::{Called, Failed, Generation};
 pub(crate) use self::hooks::Adopted;
 use self::hooks::Ran;
 pub(crate) use self::resilience::Resilience;
@@ -61,7 +61,7 @@ use crate::author_images::refuses_content;
 use crate::loop_events::DeclaredTool;
 use crate::memory::after_memory;
 use crate::provider::{
-    AiContentPart, AiContext, AiMessage, AiProvider, AiToolCall, AiToolResultPart, ProviderError,
+    AiContentPart, AiContext, AiMessage, AiProvider, AiToolResultPart, ProviderError,
     ProviderErrorOptions, ai_messages, ai_messages_with,
 };
 use crate::steering::{Loops, Steering};
@@ -319,7 +319,8 @@ impl<P: AiProvider> Loop<P> {
                 let reason =
                     final_round_reason(had_tool_round, &generation.text, finish_reason, limit);
                 let said = generation.said();
-                let answer = Message::new(Role::Assistant, generation.text);
+                let mut answer = Message::new(Role::Assistant, generation.text);
+                answer.metadata = generation.done.metadata;
                 let at = messages.len();
                 if reason == LoopEndReason::Completed
                     && round < self.bounds.max_rounds
@@ -633,15 +634,15 @@ impl<P: AiProvider> Loop<P> {
             )
             .await
         };
+        let mut ran = Ran::default();
+        if !unrun {
+            ran.calls = generation.calls.iter().map(Called::replayed).collect();
+        }
         let made: Vec<ToolCall> = generation
             .calls
             .into_iter()
             .map(|called| called.call)
             .collect();
-        let mut ran = Ran::default();
-        if !unrun {
-            ran.calls = made.iter().map(ai_tool_call).collect();
-        }
         let mut assistant = Message::assistant_calls(generation.text, made);
         assistant.metadata = generation.done.metadata;
         let mut read = vec![assistant];
@@ -718,15 +719,6 @@ async fn try_again(
     out.give(Ok(TurnItem::SegmentBreak)).await;
     messages.extend(said);
     true
-}
-
-/// `call` as `AFTER_TOOL_ROUND` hands it: Python's `AIToolCall`.
-fn ai_tool_call(call: &ToolCall) -> AiToolCall {
-    AiToolCall {
-        arguments: call.arguments.clone(),
-        intent: call.intent.clone(),
-        ..AiToolCall::new(call.id.clone(), call.name.clone())
-    }
 }
 
 /// What a turn's generations used: their counters summed, the last one's,

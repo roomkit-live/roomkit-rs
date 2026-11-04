@@ -1368,6 +1368,31 @@ fn refuse_bracketed(policy: &ToolPolicy) -> Result<(), AiError> {
 }
 
 impl<P: AiProvider> AiChannel<P> {
+    /// The conversation a turn reads of `read`, its event as the model reads
+    /// it, and of `history`, with what `memory` adds.
+    fn conversation(
+        &self,
+        read: &RoomEvent,
+        history: &RoomContext,
+        memory: &TurnMemory,
+        images: &AuthorImages,
+    ) -> Vec<Message> {
+        let reader = TurnReader {
+            images,
+            vision: self.provider.supports_vision(),
+            describer: self.media.describer.as_ref(),
+        };
+        conversation_with_memory(
+            &self.channel_id,
+            read,
+            history,
+            usize::MAX,
+            |name| self.toolbox.in_tool_memory(name),
+            memory,
+            |said| reader.read(said),
+        )
+    }
+
     /// The turn's work within its `record`: its settings, its memory, its
     /// generation hooks, then its loop, as a stream within the kit.
     async fn answer(
@@ -1455,21 +1480,8 @@ impl<P: AiProvider> AiChannel<P> {
             room: context.room.id.clone(),
             keys: images.sent(),
         });
-        let reader = TurnReader {
-            images: &images,
-            vision: self.provider.supports_vision(),
-            describer: self.media.describer.as_ref(),
-        };
         let memory = with_discussion_turn(&event, recalled.memory);
-        let messages = conversation_with_memory(
-            &self.channel_id,
-            &read,
-            &recalled.history,
-            usize::MAX,
-            |name| self.toolbox.in_tool_memory(name),
-            &memory,
-            |said| reader.read(said),
-        );
+        let messages = self.conversation(&read, &recalled.history, &memory, &images);
         // The context takes the settings once the conversation is read, as
         // Python's AIContext validates them.
         settings.validated()?;

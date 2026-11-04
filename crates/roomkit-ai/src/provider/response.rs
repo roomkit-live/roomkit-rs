@@ -22,7 +22,7 @@ const CUTTING: [&str; 3] = ["error", "content_filter", "refusal"];
 
 /// A whole generation (RFC §6.7): Python's `AIResponse(*, content,
 /// finish_reason=None, usage={}, metadata={}, tool_calls=[])`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AiResponse {
     /// Its text.
     pub content: String,

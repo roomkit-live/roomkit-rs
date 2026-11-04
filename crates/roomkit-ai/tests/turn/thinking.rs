@@ -15,10 +15,11 @@ use roomkit::realtime::{
     EphemeralCallback, EphemeralEvent, EphemeralEventType, RealtimeBackend, RealtimeFuture,
 };
 use roomkit::{RoomKit, RoomKitOptions, SubscribeRoomOptions};
+use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiTool, ProviderError,
-    ProviderStream, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta, StreamToolCall,
-    ToolResult, Tools,
+    AiChannel, AiChannelOptions, AiContentPart, AiContext, AiMessageContent, AiProvider,
+    AiResponse, AiRole, AiTool, ProviderError, ProviderStream, StreamDone, StreamEvent,
+    StreamTextDelta, StreamThinkingDelta, StreamToolCall, ToolResult, Tools,
 };
 use serde_json::Value;
 
@@ -230,4 +231,59 @@ async fn a_close_from_within_a_turn_that_reasoned_takes_no_grace() {
         .await
         .expect("the close took the grace")
         .unwrap();
+}
+
+/// A round's transcript names a call by the id the loop gave it (Python's
+/// `CallIds` before `RoundTranscript.add_call`): a call the provider gave none,
+/// or another's, keeps its place, and the round its reasoning.
+#[tokio::test]
+async fn a_call_under_a_minted_id_keeps_its_place_among_the_blocks() {
+    let delta = |block: u32, thinking: &str, signature: &str| {
+        StreamEvent::ThinkingDelta(StreamThinkingDelta {
+            block: Some(block),
+            signature: Some(signature.to_owned()),
+            ..StreamThinkingDelta::new(thinking)
+        })
+    };
+    let call = |id: &str| StreamEvent::ToolCall(StreamToolCall::new(id, "lookup"));
+    let done = StreamDone {
+        finish_reason: Some("tool_calls".to_owned()),
+        ..StreamDone::default()
+    };
+    let first = ScriptedRound::streaming([
+        delta(0, "A", "S0"),
+        call("c1"),
+        call("c1"),
+        call(""),
+        delta(2, "B", "S2"),
+        StreamEvent::Done(done),
+    ]);
+    let model = ScriptedProvider::new([first, ScriptedRound::answering("Done.")]);
+    let options = AiChannelOptions::default();
+    let agent = AiChannel::new(channel("assistant"), model.clone(), options).unwrap();
+    let room = Room::with_agent(agent).await;
+    room.says("Why?").await;
+    roomkit::testing::idle(&room.kit).await;
+    room.kit.close().await.unwrap();
+
+    let requests = model.requests();
+    let replayed = requests[1]
+        .messages
+        .iter()
+        .find(|m| m.role == AiRole::Assistant);
+    let AiMessageContent::Parts(parts) = &replayed.expect("the round goes back").content else {
+        panic!("a round reads as parts");
+    };
+    let read: Vec<String> = parts
+        .iter()
+        .map(|part| match part {
+            AiContentPart::Thinking(part) => part.thinking.clone(),
+            AiContentPart::ToolCall(part) if part.id == "c1" => "c1".to_owned(),
+            AiContentPart::ToolCall(_) => "minted".to_owned(),
+            AiContentPart::Text(_) | AiContentPart::Image(_) | AiContentPart::ToolResult(_) => {
+                panic!("{part:?}")
+            }
+        })
+        .collect();
+    assert_eq!(read, ["A", "c1", "minted", "minted", "B"]);
 }
