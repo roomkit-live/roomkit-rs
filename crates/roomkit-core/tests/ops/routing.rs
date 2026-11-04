@@ -14,7 +14,7 @@ use roomkit_core::model::{
     Access, ChannelBinding, ChannelType, ErrorRecord, Identity, IdentityId, InboundMessage,
     Participant, ParticipantId, Room, RoomId, RoomStatus, RoomTimers, TextContent, Timestamp,
 };
-use roomkit_core::ops::{FrameworkEvent, InboundError, InboundResult};
+use roomkit_core::ops::{FrameworkEvent, InboundError, InboundResult, RouteEnd, SpanNote};
 use roomkit_core::rules::hook_registry::HookTrigger;
 use serde_json::json;
 
@@ -931,6 +931,29 @@ mod a_failing_router {
                 ))),
                 vec!["resolve_identity +15551234567 failed".to_owned()]
             )
+        );
+    }
+
+    /// Python's `_route_to_room` reads the failed identity read on its span.
+    #[test]
+    fn whose_identity_read_fails_tells_its_route_so() {
+        let mut sim = routed_to_room_1();
+        sim.failing_effect = Some("resolve_identity");
+        assert!(sim.route(None, Sim::message("sms", "Bonjour")).is_err());
+        let over: Vec<&SpanNote> = sim
+            .span_notes
+            .iter()
+            .filter(|note| matches!(note, SpanNote::RouteOver { .. }))
+            .collect();
+        assert!(
+            matches!(
+                over[..],
+                [SpanNote::RouteOver {
+                    end: RouteEnd::Failed(_),
+                    ..
+                }]
+            ),
+            "{over:?}"
         );
     }
 }

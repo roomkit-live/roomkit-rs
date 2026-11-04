@@ -489,6 +489,83 @@ async fn a_failed_release_is_no_failure_of_the_tail() {
     kit.close().await.unwrap();
 }
 
+// Python: core/mixins/lane_execution.py `_end_tail`: the tail reads its cascade's
+// failure whatever else the call's result reports first.
+#[tokio::test]
+async fn a_failed_release_hides_no_failure_of_the_tail() {
+    let mock = Arc::new(MockTelemetryProvider::default());
+    let failing = Arc::new(AtomicBool::new(false));
+    let kit = RoomKit::new(RoomKitOptions {
+        telemetry: Some(TelemetryConfig::from(Arc::clone(&mock))),
+        lock_manager: Some(Arc::new(LostLock {
+            inner: InMemoryLockManager::default(),
+            failing: Arc::clone(&failing),
+        })),
+        ..RoomKitOptions::default()
+    });
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let model = ScriptedProvider::new([ScriptedRound::answering("").failing("stream exploded")]);
+    let agent = AiChannel::new(id("ai"), model, AiChannelOptions::default()).unwrap();
+    kit.register_channel(agent).unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    for channel in ["sms", "ai"] {
+        kit.attach_channel(&room(), &id(channel), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    failing.store(true, Ordering::SeqCst);
+    let result = say(&kit, true).await;
+    tokio::time::timeout(BOUND, result.delivery.unwrap().wait())
+        .await
+        .unwrap()
+        .unwrap();
+    failing.store(false, Ordering::SeqCst);
+    let tail = tail_of(&mock).unwrap();
+    assert_eq!(tail.status, "error", "{tail:?}");
+    assert_eq!(
+        tail.error_message.as_deref(),
+        Some("ProviderError"),
+        "{tail:?}"
+    );
+    kit.close().await.unwrap();
+}
+
+// A run the close aborts, its unwind run out, ends its tail though its handle
+// keeps its record (Python's `_end_tail` on the task's done callback).
+#[tokio::test(start_paused = true)]
+async fn an_aborted_run_ends_its_tail_cancelled() {
+    let model = ScriptedProvider::new([ScriptedRound::answering("Yes.")]);
+    let (kit, mock) = kit_with(model).await;
+    kit.on("delivery_succeeded", |_| std::future::pending::<()>())
+        .unwrap();
+    let other = RecordingTransport::new(
+        id("other"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(other).unwrap();
+    kit.attach_channel(&room(), &id("other"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let result = say(&kit, true).await;
+    let delivery = result.delivery.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    kit.close().await.unwrap();
+    assert_eq!(mock.get_active_spans(), vec![]);
+    let tail = tail_of(&mock).unwrap();
+    assert_eq!(tail.error_message.as_deref(), Some("cancelled"), "{tail:?}");
+    drop(delivery);
+}
+
 /// A transport whose send of the text `.1` waits until the test lets it.
 #[derive(Clone)]
 struct HeldSend(Arc<Notify>, &'static str);

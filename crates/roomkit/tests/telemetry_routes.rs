@@ -9,6 +9,8 @@
 )]
 
 use std::future::{Future, pending, ready};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -22,8 +24,8 @@ use roomkit::telemetry::{MockTelemetryProvider, TelemetryConfig};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, HookOptions, HookTrigger,
-    InboundRoomRouter, ProcessInboundOptions, RoomKit, RoomKitOptions, RouteOptions, RouterFuture,
-    SessionStartedEvent,
+    InMemoryLockManager, InboundRoomRouter, ProcessInboundOptions, RoomKit, RoomKitError,
+    RoomKitOptions, RoomLock, RoomLockManager, RouteOptions, RouterFuture, SessionStartedEvent,
 };
 use serde_json::{Value, json};
 
@@ -355,4 +357,58 @@ async fn a_routed_message_past_the_budget_found_its_room() {
     let ended = routes(&mock);
     assert_eq!(ended.len(), 22, "{ended:?}");
     assert!(ended.iter().all(|span| span == &found("r1")), "{ended:?}");
+}
+
+/// A lock manager whose lock is never granted while `stuck`.
+struct StuckLock {
+    inner: InMemoryLockManager,
+    stuck: Arc<AtomicBool>,
+}
+
+impl RoomLockManager for StuckLock {
+    fn locked<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn RoomLock>, RoomKitError>> + Send + 'a>> {
+        let stuck = self.stuck.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if stuck {
+                pending::<()>().await;
+            }
+            self.inner.locked(room_id).await
+        })
+    }
+}
+
+// Python: _RoutingTimeoutError, "or in a read of the room routing gave it or the
+// wait for its lock": a busy room, routed or named.
+#[tokio::test]
+async fn a_lock_wait_past_the_deadline_reads_its_timeout() {
+    for routed in [true, false] {
+        let stuck = Arc::new(AtomicBool::new(false));
+        let (kit, mock) = kit_of(RoomKitOptions {
+            process_timeout: Duration::from_millis(10),
+            lock_manager: Some(Arc::new(StuckLock {
+                inner: InMemoryLockManager::default(),
+                stuck: Arc::clone(&stuck),
+            })),
+            inbound_router: routed.then(|| -> Arc<dyn InboundRoomRouter> { Arc::new(To(room())) }),
+            ..RoomKitOptions::default()
+        });
+        create_room(&kit, None).await;
+        stuck.store(true, Ordering::SeqCst);
+        let options = ProcessInboundOptions {
+            room_id: (!routed).then(room),
+            ..ProcessInboundOptions::default()
+        };
+        let result = kit.process_inbound(hello(), options).await;
+        assert!(result.is_ok_and(|result| result.blocked), "{routed}");
+        stuck.store(false, Ordering::SeqCst);
+        kit.close().await.unwrap();
+        assert_eq!(
+            routes(&mock),
+            vec![failed("_RoutingTimeoutError")],
+            "{routed}"
+        );
+    }
 }

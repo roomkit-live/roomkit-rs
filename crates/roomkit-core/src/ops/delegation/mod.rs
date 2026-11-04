@@ -282,6 +282,7 @@ impl DelegatedTurn {
                 delivered: 0,
                 failed,
                 streams,
+                error: None,
                 own: true,
             }));
         }

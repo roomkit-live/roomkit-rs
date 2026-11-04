@@ -44,8 +44,8 @@ use std::task::Poll;
 use roomkit_core::model::{ErrorRecord, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::{
     AnswerOf, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest,
-    InboundResult, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, SpanNote,
-    StoreOutcome, StoreRequest,
+    InboundResult, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, StoreOutcome,
+    StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinHandle, JoinSet};
@@ -663,6 +663,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 }
                 Some(Event::Waited(id, waited)) => {
                     let outcome = self.held.settle(waited);
+                    self.spans.answered(&outcome);
                     return Ok(operation.complete(id, outcome)?);
                 }
                 Some(Event::Joined(joined)) => {
@@ -808,12 +809,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 }
             }
             Notice::Span(note) => {
-                if let SpanNote::SetOver {
-                    streams, own: true, ..
-                } = note
-                    && let Some(caller) = self.caller.as_deref_mut()
-                {
-                    caller.streams_started(streams);
+                if let Some(caller) = self.caller.as_deref() {
+                    caller.noted(&note);
                 }
                 self.spans.noted(note);
             }

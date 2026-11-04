@@ -160,9 +160,9 @@ pub(super) struct Arrival {
     /// The identity the sender's address resolved to, which the router is
     /// handed (RFC §10.4).
     identity: Option<Identity>,
-    /// How many times the router was asked.
     /// The adopted entry the arrival is, `None` for the call's own.
     entry: Option<EntryId>,
+    /// How many times the router was asked.
     routes: u8,
     /// The room step 2 works on or arrived in; `None` while the message is
     /// routed.
@@ -435,7 +435,11 @@ impl Arrival {
                 self.route(cx);
                 Progress::Waiting
             }
-            Err(error) => failed(InboundError::Store(error)),
+            Err(error) => {
+                let error = InboundError::Store(error);
+                self.tell_route(cx, RouteEnd::Failed(Box::new(error.clone())));
+                failed(error)
+            }
         }
     }
 

@@ -34,7 +34,7 @@ use std::task::{Context, Poll};
 
 use roomkit_core::model::{ErrorRecord, EventId, EventStatus, Metadata, RoomEvent, RoomId};
 use roomkit_core::ops::{
-    Decided, Inbound, InboundError, InboundResult, KIT_CLOSED, Outcome, StoreOutcome,
+    Decided, Inbound, InboundError, InboundResult, KIT_CLOSED, Outcome, SpanNote, StoreOutcome,
 };
 use serde_json::Value;
 use tokio::sync::{oneshot, watch};
@@ -246,9 +246,8 @@ impl Record {
         self.cut_read_over.send_replace(true);
     }
 
-    /// What ends the wait for the read the cut stopped however the run ends:
-    /// a cut seen in the step that ends the run tells nothing, nothing polling
-    /// the operation after it.
+    /// What ends the call's tail however the run ends, its task aborted
+    /// included: its handle may keep this record long after.
     fn tail_over_with_the_run(self: &Arc<Self>) -> impl Drop + Send + use<> {
         struct RunOver(Arc<Record>);
         impl Drop for RunOver {
@@ -260,6 +259,9 @@ impl Record {
         RunOver(Arc::clone(self))
     }
 
+    /// What ends the wait for the read the cut stopped however the run ends:
+    /// a cut seen in the step that ends the run tells nothing, nothing polling
+    /// the operation after it.
     fn read_over_with_the_run(self: &Arc<Self>) -> impl Drop + Send + use<> {
         struct RunOver(Arc<Record>);
         impl Drop for RunOver {
@@ -395,9 +397,10 @@ struct Tail {
     span: Option<OpenSpan>,
     /// How many of the call's turns answered with a stream.
     streams: usize,
-    /// The error the call was decided with, a failed release's: its caller's,
-    /// and no failure of what it did not wait for.
-    decided: Option<ErrorRecord>,
+    /// The first failure of an agent of the call's own cascade, a turn's or
+    /// its stream's, Python's `cascade.error`: nothing else the call's result
+    /// reports, a failed release, is the tail's.
+    failure: Option<ErrorRecord>,
 }
 
 impl fmt::Debug for Tail {
@@ -411,11 +414,7 @@ impl fmt::Debug for Tail {
 const CANCELLED: &str = "cancelled";
 
 impl Tail {
-    fn open(
-        telemetry: &KitTelemetry,
-        room_id: Option<&RoomId>,
-        decided: Option<ErrorRecord>,
-    ) -> Self {
+    fn open(telemetry: &KitTelemetry, room_id: Option<&RoomId>) -> Self {
         let span = OpenSpan::start(
             telemetry,
             SpanKind::InboundPipeline,
@@ -428,7 +427,14 @@ impl Tail {
         Self {
             span: Some(span),
             streams: 0,
-            decided,
+            failure: None,
+        }
+    }
+
+    /// An agent of the call failed with `error`, if any: the first one stands.
+    fn failed(&mut self, error: Option<&ErrorRecord>) {
+        if self.failure.is_none() {
+            self.failure = error.cloned();
         }
     }
 
@@ -458,11 +464,7 @@ impl Tail {
         };
         if cut || result.cancellation_reason.is_some() {
             span.fail(CANCELLED, attributes);
-        } else if let Some(error) = result
-            .error
-            .as_ref()
-            .filter(|error| Some(*error) != self.decided.as_ref())
-        {
+        } else if let Some(error) = &self.failure {
             span.fail_error(&error.error_type, &error.message, attributes);
         } else {
             span.end(attributes);
@@ -537,10 +539,24 @@ impl Caller {
         }
     }
 
-    /// `streams` of the call's turns answered with a stream.
-    pub(super) fn streams_started(&self, streams: usize) {
-        if let Some(tail) = self.record.tail().as_mut() {
+    /// Reads what the operation told its spans of the call's own cascade.
+    pub(super) fn noted(&self, note: &SpanNote) {
+        let mut tail = self.record.tail();
+        let Some(tail) = tail.as_mut() else {
+            return;
+        };
+        if let SpanNote::SetOver {
+            streams,
+            error,
+            own: true,
+            ..
+        } = note
+        {
             tail.streams += streams;
+            tail.failed(error.as_ref());
+        }
+        if let SpanNote::StreamFailed { error } = note {
+            tail.failed(Some(error));
         }
     }
 
@@ -551,8 +567,7 @@ impl Caller {
         if let Ok(Ok(result)) = answered
             && !result.refused_before_the_lock
         {
-            let decided = result.error.clone();
-            *self.record.tail() = Some(Tail::open(&self.telemetry, room_id, decided));
+            *self.record.tail() = Some(Tail::open(&self.telemetry, room_id));
         }
     }
 

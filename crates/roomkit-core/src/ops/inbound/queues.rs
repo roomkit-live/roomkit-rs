@@ -41,7 +41,7 @@ use super::stream::{self, PendingRow, Read, StreamEnd, StreamJob, StreamRead};
 use super::{Machine, Stage};
 use crate::model::{Metadata, RoomEvent, RoomId};
 use crate::ops::io::Io;
-use crate::ops::protocol::{EffectId, Entry, EntryId, Notice, Outcome};
+use crate::ops::protocol::{EffectId, Entry, EntryId, Notice, Outcome, SpanNote};
 use crate::ops::{Cx, Progress, RefusedOperation};
 use crate::rules::chain_depth::{self, Draw, ReentryBudget};
 use crate::rules::hook_chain::HookChain;
@@ -571,6 +571,9 @@ impl Machine {
         };
         stream::report_failure(cx, &end.job, &context, &error);
         if own {
+            let told = error.clone();
+            cx.io
+                .notify(Notice::Span(SpanNote::StreamFailed { error: told }));
             self.trigger.note_error(Some(error));
         }
     }

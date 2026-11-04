@@ -81,10 +81,10 @@ pub(super) struct NamedRoom {
     channel: Box<ChannelConfig>,
     /// The message's sender, as routing names them (RFC §10.4).
     sender: Sender,
-    /// The message's sender id, as the channel wrote it: the participant a
-    /// session the creation starts names.
     /// The adopted entry the step is, `None` for the call's own.
     entry: Option<EntryId>,
+    /// The message's sender id, as the channel wrote it: the participant a
+    /// session the creation starts names.
     sender_id: String,
     mode: Mode,
     /// The call's deadline (RFC §13.6).

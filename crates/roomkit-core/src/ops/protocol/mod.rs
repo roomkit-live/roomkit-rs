@@ -33,7 +33,9 @@ pub use results::{InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED};
 use thiserror::Error;
 
 use super::{Environment, FrameworkEvent};
-use crate::model::{ChannelId, EventId, Metadata, RoomContext, RoomEvent, RoomId, Timestamp};
+use crate::model::{
+    ChannelId, ErrorRecord, EventId, Metadata, RoomContext, RoomEvent, RoomId, Timestamp,
+};
 use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_registry::{HookId, HookTrigger};
 
@@ -259,9 +261,17 @@ pub enum SpanNote {
         /// The turns that answered with a stream to read (what Python's
         /// `cascade.add_streams` keeps).
         streams: usize,
+        /// The first failure of an agent's turn in the set (what Python's
+        /// `cascade.record_error` keeps).
+        error: Option<ErrorRecord>,
         /// Whether the set is of the call's own cascade, not an adopted
         /// entry's.
         own: bool,
+    },
+    /// A stream of the call's own cascade failed as it was read.
+    StreamFailed {
+        /// What failed it.
+        error: ErrorRecord,
     },
 }
 

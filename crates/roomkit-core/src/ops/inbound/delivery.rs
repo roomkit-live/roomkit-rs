@@ -639,6 +639,7 @@ impl DeliverySet {
             } else {
                 self.outcome.streams.len()
             },
+            error: self.outcome.error.clone(),
             own: self.lineage == Lineage::Call,
         }));
     }
