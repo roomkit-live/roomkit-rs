@@ -2,14 +2,14 @@
 
 use std::collections::HashMap;
 
-use roomkit::model::Metadata;
+use roomkit::model::{Metadata, ResponseMetadata};
 use roomkit_core::rules::transcript::{Image, Message, Part, Role};
 
 use crate::tools::{AiTool, ToolResult};
 
 /// What one generation is asked (RFC §6.7): Python's `AIContext(*,
 /// messages=[], system_prompt=None, temperature=0.7, max_tokens=None,
-/// tools=[], metadata={})`.
+/// tools=[], metadata={}, response_metadata=...)`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AiContext {
     /// The conversation, oldest first, the turn's rounds so far included.
@@ -38,6 +38,9 @@ pub struct AiContext {
     pub tools: Vec<AiTool>,
     /// The turn's data for the provider.
     pub metadata: Metadata,
+    /// The turn's one record (RFC §6.7), shared by every writer of the turn:
+    /// a generation hook writes it here.
+    pub response_metadata: ResponseMetadata,
 }
 
 impl Default for AiContext {
@@ -52,6 +55,7 @@ impl Default for AiContext {
             reasoning_effort: None,
             tools: Vec::new(),
             metadata: Metadata::new(),
+            response_metadata: ResponseMetadata::default(),
         }
     }
 }

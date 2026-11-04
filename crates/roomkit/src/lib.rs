@@ -86,6 +86,7 @@ mod tool_call_scope;
 mod tool_calls;
 mod transport;
 mod turn;
+mod turn_record;
 mod turn_runners;
 mod turns;
 mod unwind;
@@ -103,12 +104,12 @@ pub mod model {
         HookResult, IdentificationStatus, Identity, IdentityHookResult, IdentityId, IdentityResult,
         InboundMessage, InjectedEvent, Latitude, LocationContent, Longitude, MediaContent,
         Metadata, ModelError, Observation, ObservationId, Participant, ParticipantId,
-        ParticipantRole, ParticipantStatus, ProviderResult, RateLimit, RetryPolicy, RichContent,
-        RichFormat, Room, RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, SystemContent,
-        Task, TaskId, TaskStatus, TemplateContent, TextContent, ThreadSummary, Timestamp,
-        ToolCallContent, ToolCallOutcome, ToolCallStatus, Verification, VerificationPolicy,
-        VerificationRequest, VerificationRequestStatus, VerificationStatus, VideoContent,
-        Visibility,
+        ParticipantRole, ParticipantStatus, ProviderResult, RateLimit, ResponseMetadata,
+        RetryPolicy, RichContent, RichFormat, Room, RoomContext, RoomEvent, RoomId, RoomStatus,
+        RoomTimers, SystemContent, Task, TaskId, TaskStatus, TemplateContent, TextContent,
+        ThreadSummary, Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus, Verification,
+        VerificationPolicy, VerificationRequest, VerificationRequestStatus, VerificationStatus,
+        VideoContent, Visibility,
     };
 
     pub use crate::delivery::outcome::{DeliveryOutcome, DeliveryOutcomeStatus};
@@ -236,6 +237,7 @@ pub use self::transport::{TransportChannel, TransportChannelOptions};
 #[doc(hidden)]
 pub use self::turn::TurnChain;
 pub use self::turn::{PostStatusOptions, ToolGate, TurnHost, WaitTaskOptions, current_turn_host};
+pub use self::turn_record::{Scoped, TurnRecord, current_turn_record};
 // For the AI channel's turn alone: the answer of a tool the owner serves.
 pub use self::kit::{
     ClaimRoomStrategyOptions, InstallStrategyOptions, RoomStrategyOptions, UninstallStrategyOptions,

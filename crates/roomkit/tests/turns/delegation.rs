@@ -574,10 +574,10 @@ impl Channel for EndsAtMaxRounds {
         }
         let end = roomkit::model::LoopEndMarker::new(roomkit::model::LoopEndReason::MaxRounds);
         let items = Items(VecDeque::from([Ok(ResponseItem::LoopEnd(end))]));
-        let mut output = current_turn_host()
+        let output = current_turn_host()
             .unwrap()
             .respond_with_stream(Box::pin(items));
-        output.response_metadata.extend(self.metadata.clone());
+        output.response_metadata.update(self.metadata.clone());
         ready(Ok(output))
     }
 }

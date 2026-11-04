@@ -125,7 +125,8 @@ pub use self::steering::SteerOptions;
 pub use self::tool_search::{TOOL_FIND_TOOLS, TOOL_LIST_TOOLS, TOOL_SEARCH_INFRA_TOOL_NAMES};
 pub use self::tools::{
     AiTool, Tool, ToolCallContext, ToolEntry, ToolError, ToolFuture, ToolHandler, ToolPolicy,
-    ToolResult, ToolResultPart, compose_tool_handlers, current_tool_actor_id, current_tool_call,
+    ToolResult, ToolResultPart, compose_tool_handlers, current_response_metadata,
+    current_tool_actor_id, current_tool_call,
 };
 #[doc(hidden)]
 pub use self::tools::{ToolContext, Tools, alias_server, arguments, served_tool_name};

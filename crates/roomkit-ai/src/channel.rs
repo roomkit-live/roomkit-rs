@@ -14,7 +14,9 @@ use roomkit::model::{
     EventDirection, EventSource, EventType, InboundMessage, Participant, RetryPolicy, RoomContext,
     RoomEvent, RoomId, SteeringDirective, Visibility,
 };
-use roomkit::{Channel, ChannelDeclaration, ChannelError, ClassedError, current_turn_host};
+use roomkit::{
+    Channel, ChannelDeclaration, ChannelError, ClassedError, TurnRecord, current_turn_host,
+};
 use roomkit_core::rules::edits::opens_no_turn;
 use roomkit_core::rules::transcript::{
     Message, TurnMemory, conversation_with_memory, people_taking_part, replayed_rounds,
@@ -1330,6 +1332,128 @@ fn refuse_bracketed(policy: &ToolPolicy) -> Result<(), AiError> {
     }
 }
 
+impl<P: AiProvider> AiChannel<P> {
+    /// The turn's work within its `record`: its settings, its memory, its
+    /// generation hooks, then its loop, as a stream within the kit.
+    async fn answer(
+        &self,
+        event: RoomEvent,
+        binding: ChannelBinding,
+        context: RoomContext,
+        record: TurnRecord,
+    ) -> Result<ChannelOutput, ChannelError> {
+        let turn = current_turn_host();
+        // The tools the room's owner serves this turn join the agent's own
+        // (RFC §10.6.5), before the turn's own, none of which is declared
+        // under their names (RFC §21.1).
+        let owned = crate::tools::owner::with_owner_tools(&self.toolbox, turn.as_ref())?;
+        let configured = self.turn_configs.resolve(&binding, &context).await?;
+        let configured = configured.as_ref();
+        let mut settings = self.turn_settings(&binding, configured)?;
+        let toolbox = self.turn_toolbox(&owned, configured, &binding)?;
+        settings.read_budgets(&binding.metadata)?;
+        let budget = self.budget_of(&settings)?;
+        let stands_alone = stands_alone(&event);
+        let in_kit = turn.is_some();
+        let (toolbox, search) = self.turn_search(toolbox, &context, (stands_alone, in_kit))?;
+        let system_prompt = self.turn_system_prompt(
+            &binding,
+            configured,
+            &context,
+            (stands_alone, search.active()),
+        );
+        let tools = ToolContext::new(context.room.id.clone(), self.channel_id.clone())
+            .within(turn.clone())
+            .standing_alone(stands_alone)
+            .acting_for(turn_actor(&event, &context.participants));
+        let mut looped = Loop {
+            record: record.clone(),
+            provider: Arc::clone(&self.provider),
+            toolbox,
+            policy: self.policy.clone(),
+            bounds: self.bounds.clone(),
+            budget,
+            resilience: self.resilience.clone(),
+            system_prompt,
+            temperature: settings.temperature,
+            max_tokens: settings.max_tokens,
+            thinking_budget: settings.thinking_budget,
+            enable_thinking: settings.enable_thinking,
+            thinking_publication: self.thinking_publication(&event),
+            reasoning_effort: settings.reasoning_effort.clone(),
+            turn: turn.clone(),
+            context: tools,
+            intents: self.tool_call_intents,
+            intents_required: self.tool_call_intents_required,
+            remembered: Vec::new(),
+            loops: Arc::clone(&self.loops),
+            adopted: Adopted::default(),
+            sent_images: None,
+            tool_usage: Arc::clone(&self.media.tool_usage),
+            media: TurnMedia::replaying(self.turn_images(&context.room.id, stands_alone)),
+            telemetry: TurnTelemetry::current(),
+            turn_span: None,
+            search,
+        };
+        // Measured as the first round sends it, before the memory reads the
+        // room (RFC §20).
+        let people = self.people(&context, stands_alone);
+        let footprint = looped.footprint(&self.replayed(&context, stands_alone), &people);
+        // The event as the model reads it, the media the application keeps
+        // beside its content among its parts, as its history (RFC §6.4).
+        let kit = KitMedia::of(looped.turn.as_ref());
+        let read = with_attached_media(&event, kit.attached.as_ref());
+        let recalled = self
+            .recalled(
+                &read,
+                &context,
+                (stands_alone, footprint),
+                kit.attached.as_ref(),
+            )
+            .await
+            .map_err(rows::provider_failure)?;
+        looped.remembered = recalled.messages;
+        let images = self.author_images(&read, &recalled.history, &kit).await;
+        looped.sent_images = Some(SentImages {
+            refused: Arc::clone(&self.media.refused),
+            room: context.room.id.clone(),
+            keys: images.sent(),
+        });
+        let reader = TurnReader {
+            images: &images,
+            vision: self.provider.supports_vision(),
+            describer: self.media.describer.as_ref(),
+        };
+        let messages = conversation_with_memory(
+            &self.channel_id,
+            &read,
+            &recalled.history,
+            usize::MAX,
+            |name| self.toolbox.in_tool_memory(name),
+            &recalled.memory,
+            |said| reader.read(said),
+        );
+        // The context takes the settings once the conversation is read, as
+        // Python's AIContext validates them.
+        settings.validated()?;
+        looped.place_turn_images(&messages);
+        // What the turn's generation hooks leave is its context; a block
+        // runs no generation (RFC §6.4).
+        if !looped.before_generation(&event, &messages).await {
+            return Ok(ChannelOutput::empty());
+        }
+        let items = record.clone().scope_stream(looped.run(messages));
+        match turn {
+            // Within the kit, the turn is one stream, read as it is written.
+            Some(turn) => Ok(ChannelOutput {
+                response_metadata: record.current(),
+                ..turn.respond_with_stream(rows::response(items))
+            }),
+            None => Ok(rows::collect(self.source(), &event, items, record).await?),
+        }
+    }
+}
+
 impl<P: AiProvider> Channel for AiChannel<P> {
     fn channel_id(&self) -> ChannelId {
         self.channel_id.clone()
@@ -1413,111 +1537,13 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         if !self.answers(&event) {
             return Ok(ChannelOutput::default());
         }
-        let turn = current_turn_host();
-        // The tools the room's owner serves this turn join the agent's own
-        // (RFC §10.6.5), before the turn's own, none of which is declared
-        // under their names (RFC §21.1).
-        let owned = crate::tools::owner::with_owner_tools(&self.toolbox, turn.as_ref())?;
-        let configured = self.turn_configs.resolve(&binding, &context).await?;
-        let configured = configured.as_ref();
-        let mut settings = self.turn_settings(&binding, configured)?;
-        let toolbox = self.turn_toolbox(&owned, configured, &binding)?;
-        settings.read_budgets(&binding.metadata)?;
-        let budget = self.budget_of(&settings)?;
-        let stands_alone = stands_alone(&event);
-        let in_kit = turn.is_some();
-        let (toolbox, search) = self.turn_search(toolbox, &context, (stands_alone, in_kit))?;
-        let system_prompt = self.turn_system_prompt(
-            &binding,
-            configured,
-            &context,
-            (stands_alone, search.active()),
-        );
-        let tools = ToolContext::new(context.room.id.clone(), self.channel_id.clone())
-            .within(turn.clone())
-            .standing_alone(stands_alone)
-            .acting_for(turn_actor(&event, &context.participants));
-        let mut looped = Loop {
-            provider: Arc::clone(&self.provider),
-            toolbox,
-            policy: self.policy.clone(),
-            bounds: self.bounds.clone(),
-            budget,
-            resilience: self.resilience.clone(),
-            system_prompt,
-            temperature: settings.temperature,
-            max_tokens: settings.max_tokens,
-            thinking_budget: settings.thinking_budget,
-            enable_thinking: settings.enable_thinking,
-            thinking_publication: self.thinking_publication(&event),
-            reasoning_effort: settings.reasoning_effort.clone(),
-            turn: turn.clone(),
-            context: tools,
-            intents: self.tool_call_intents,
-            intents_required: self.tool_call_intents_required,
-            remembered: Vec::new(),
-            loops: Arc::clone(&self.loops),
-            adopted: Adopted::default(),
-            sent_images: None,
-            tool_usage: Arc::clone(&self.media.tool_usage),
-            media: TurnMedia::replaying(self.turn_images(&context.room.id, stands_alone)),
-            telemetry: TurnTelemetry::current(),
-            turn_span: None,
-            search,
-        };
-        // Measured as the first round sends it, before the memory reads the
-        // room (RFC §20).
-        let people = self.people(&context, stands_alone);
-        let footprint = looped.footprint(&self.replayed(&context, stands_alone), &people);
-        // The event as the model reads it, the media the application keeps
-        // beside its content among its parts, as its history (RFC §6.4).
-        let kit = KitMedia::of(looped.turn.as_ref());
-        let read = with_attached_media(&event, kit.attached.as_ref());
-        let recalled = self
-            .recalled(
-                &read,
-                &context,
-                (stands_alone, footprint),
-                kit.attached.as_ref(),
-            )
+        // The turn's one record, alive from its first moment to its last
+        // event: its memory, its hooks and its tools write it (RFC §6.7).
+        let record = TurnRecord::default();
+        record
+            .clone()
+            .scope(self.answer(event, binding, context, record))
             .await
-            .map_err(rows::provider_failure)?;
-        looped.remembered = recalled.messages;
-        let images = self.author_images(&read, &recalled.history, &kit).await;
-        looped.sent_images = Some(SentImages {
-            refused: Arc::clone(&self.media.refused),
-            room: context.room.id.clone(),
-            keys: images.sent(),
-        });
-        let reader = TurnReader {
-            images: &images,
-            vision: self.provider.supports_vision(),
-            describer: self.media.describer.as_ref(),
-        };
-        let messages = conversation_with_memory(
-            &self.channel_id,
-            &read,
-            &recalled.history,
-            usize::MAX,
-            |name| self.toolbox.in_tool_memory(name),
-            &recalled.memory,
-            |said| reader.read(said),
-        );
-        // The context takes the settings once the conversation is read, as
-        // Python's AIContext validates them.
-        settings.validated()?;
-        looped.place_turn_images(&messages);
-        // What the turn's generation hooks leave is its context; a block
-        // runs no generation (RFC §6.4).
-        if !looped.before_generation(&event, &messages).await {
-            return Ok(ChannelOutput::empty());
-        }
-        let items = looped.run(messages);
-        match turn {
-            // Within the kit, the turn is one stream, read as it is written.
-            Some(turn) => Ok(turn.respond_with_stream(rows::response(items))),
-            None => Ok(rows::collect(self.source(), &event, items).await?),
-        }
     }
 
     /// Whether its turns in a room run one after the other

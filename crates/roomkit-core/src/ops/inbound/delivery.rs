@@ -543,13 +543,17 @@ impl DeliverySet {
         self.outcome.tasks.extend(output.tasks);
         self.outcome.observations.extend(output.observations);
         // Every target's turn that writes a record replies, a transport's
-        // too (Python's `_settle_buffered_replies`, RMK-1248).
-        reply_record::record_reply(
-            &mut self.outcome.response_metadata,
-            &responder.channel_id,
-            (&output.response_metadata, &output.response_events),
-            streamed.is_none(),
-        );
+        // too; a stream's stays live until it is read, and is merged there:
+        // copying it here would freeze what its tools write later (Python's
+        // `_settle_buffered_replies`, RMK-1248).
+        if streamed.is_none() {
+            reply_record::record_reply(
+                &mut self.outcome.response_metadata,
+                &responder.channel_id,
+                &output.response_metadata.to_metadata(),
+                &output.response_events,
+            );
+        }
         if let Some(mut error) = output.error.filter(|_| is_agent) {
             // A failure its own turn reported already (Python's
             // `mark_reported`): handed on to the caller, never reported

@@ -9,8 +9,9 @@ use serde_json::{Value, json};
 
 use crate::model::{LoopEndMarker, LoopEndReason};
 
-use super::support::{Streaming, kit_with, room_id, says};
+use super::support::{Step, Streaming, Stuck, Timed, bind, kit_with, room_id, says};
 use crate::ConversationStore;
+use crate::turns::observe::Carried;
 
 /// The turn's error, and the metadata of the agent's last message, for an
 /// agent of its own whose stream ends on `end`.
@@ -78,6 +79,168 @@ async fn a_loop_end_writes_its_record_whatever_crosses_the_backend() {
             )
         )
     );
+}
+
+/// Each message the agent stored: its text, and `key` of its metadata.
+async fn messages(kit: &crate::RoomKit, key: &str) -> Vec<(String, Option<Value>)> {
+    kit.store()
+        .list_events(&room_id(), received())
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| {
+            event.r#type == EventType::Message && event.source.channel_id.as_str() == "ai"
+        })
+        .map(|event| {
+            let text = match &event.content {
+                roomkit_core::model::EventContent::Text(text) => text.body.clone(),
+                _ => String::new(),
+            };
+            (text, event.metadata.get(key).cloned())
+        })
+        .collect()
+}
+
+/// Runs an agent's `steps`; what the caller's record says of `key`, and each
+/// message the agent stored with it.
+async fn read(steps: Vec<Step>, key: &str) -> (Option<Value>, Vec<(String, Option<Value>)>) {
+    let kit = kit_with(Streaming::scripted(steps)).await;
+    let result = says(&kit, "Hi").await.unwrap();
+    crate::testing::idle(&kit).await;
+    let stored = messages(&kit, key).await;
+    kit.close().await.unwrap();
+    (result.response_metadata.get(key).cloned(), stored)
+}
+
+// Python: tests/test_turns_backend.py::test_a_record_written_mid_stream_reaches_the_owner_before_the_next_item
+// Python: tests/test_turns_pull.py::test_the_record_a_reader_reads_is_the_one_sent_before_its_item
+#[tokio::test(start_paused = true)]
+async fn the_record_a_reader_reads_is_the_one_sent_before_its_item() {
+    let (caller, stored) = read(
+        vec![
+            Step::Text("a"),
+            Step::Write("x", json!(1)),
+            Step::Text("b"),
+            Step::Break,
+            Step::Write("x", json!(2)),
+            Step::Text("c"),
+            Step::Write("x", json!(3)),
+        ],
+        "x",
+    )
+    .await;
+    assert_eq!(
+        stored,
+        vec![
+            ("ab".to_owned(), Some(json!(1))),
+            ("c".to_owned(), Some(json!(3)))
+        ]
+    );
+    assert_eq!(caller, Some(json!(3)));
+}
+
+// Python: tests/test_turns_record_changes.py::test_a_change_before_a_call_s_start_or_end_reaches_the_owner_before_it
+#[tokio::test(start_paused = true)]
+async fn a_change_before_a_call_s_start_or_end_reaches_the_owner_before_it() {
+    let (caller, stored) = read(
+        vec![
+            Step::Text("Looking it up."),
+            Step::Write("sources", json!(["a"])),
+            Step::Append("sources", "b"),
+            Step::Start("c1"),
+            // Inside a value the record holds: none of its keys is written.
+            Step::Append("sources", "c"),
+            Step::End("c1"),
+            Step::Text("Found it."),
+        ],
+        "sources",
+    )
+    .await;
+    assert_eq!(
+        stored,
+        vec![
+            ("Looking it up.".to_owned(), Some(json!(["a", "b"]))),
+            ("Found it.".to_owned(), Some(json!(["a", "b", "c"]))),
+        ]
+    );
+    assert_eq!(caller, Some(json!(["a", "b", "c"])));
+}
+
+// Python: tests/test_turns_record_changes.py::test_a_change_inside_a_value_between_deltas_reaches_the_owner_before_its_segment_ends
+#[tokio::test(start_paused = true)]
+async fn a_change_inside_a_value_between_deltas_reaches_the_owner_before_its_segment_ends() {
+    let (_, stored) = read(
+        vec![
+            Step::Write("sources", json!(["a"])),
+            Step::Text("One, "),
+            Step::Wait,
+            Step::Append("sources", "b"),
+            Step::Text("two."),
+            Step::Break,
+        ],
+        "sources",
+    )
+    .await;
+    assert_eq!(
+        stored,
+        vec![("One, two.".to_owned(), Some(json!(["a", "b"])))]
+    );
+}
+
+// Python: tests/test_turns_record_changes.py::test_a_change_inside_a_value_reaches_the_owner_however_the_stream_stops[error]
+#[tokio::test(start_paused = true)]
+async fn a_change_inside_a_value_reaches_the_caller_when_the_stream_fails() {
+    let (caller, _) = read(
+        vec![
+            Step::Write("sources", json!(["a"])),
+            Step::Text("One, "),
+            Step::Append("sources", "b"),
+            Step::Fail("down"),
+        ],
+        "sources",
+    )
+    .await;
+    assert_eq!(caller, Some(json!(["a", "b"])));
+}
+
+// Python: tests/test_turns_pull.py::test_a_reader_that_stops_after_its_turn_ended_reads_the_turn_s_last_record
+// Python: tests/test_turns_record_changes.py::test_a_change_inside_a_value_reaches_the_owner_however_the_stream_stops[close]
+// A stream dropped as its reader closes it writes last, as Python's generator
+// does in its `finally`: the owner reads it before the caller does.
+#[tokio::test(start_paused = true)]
+async fn a_reader_that_stops_reads_the_turn_s_last_record() {
+    let kit = kit_with(Streaming::scripted(vec![
+        Step::Text("One, "),
+        Step::Wait,
+        Step::Text("two, "),
+        Step::Hold,
+    ]))
+    .await;
+    bind(&kit, Stuck::returning(1)).await;
+    let result = says(&kit, "Hi").await.unwrap();
+    crate::testing::idle(&kit).await;
+    kit.close().await.unwrap();
+    assert_eq!(result.response_metadata.get("final"), Some(&json!(true)));
+}
+
+// Python: tests/test_turns_record_changes.py::test_a_turn_copies_its_record_no_more_often_for_more_deltas
+#[tokio::test(start_paused = true)]
+async fn a_turn_sends_its_record_no_more_often_for_more_deltas() {
+    let mut counts = Vec::new();
+    for deltas in [4, 40] {
+        let mut steps = vec![Step::Write("sources", json!(["a"]))];
+        steps.extend(std::iter::repeat_n(Step::Text("word "), deltas));
+        steps.push(Step::Write("usage", json!({ "deltas": deltas })));
+        steps.push(Step::Text("end"));
+        let kit = kit_with(Streaming::scripted(steps)).await;
+        let timed = Timed::on(&kit, tokio::time::Instant::now());
+        says(&kit, "Hi").await.unwrap();
+        crate::testing::idle(&kit).await;
+        counts.push(timed.count(Carried::Frame, "record"));
+        kit.close().await.unwrap();
+    }
+    assert_eq!(counts[0], counts[1]);
+    assert!(counts[0] > 0);
 }
 
 /// Every event of a room's timeline the room received.

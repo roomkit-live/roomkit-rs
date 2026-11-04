@@ -113,6 +113,7 @@ impl<P: AiProvider> Loop<P> {
         self.enable_thinking = left.enable_thinking;
         self.reasoning_effort = left.reasoning_effort;
         self.adopted.metadata = left.metadata;
+        self.record.adopt(left.response_metadata);
         if left.tools != built.tools {
             let adopted = self.toolbox.as_left(&left.tools);
             // A tool it adds is declared at every round, never hidden (RFC §6.4).

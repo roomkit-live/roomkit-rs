@@ -172,9 +172,10 @@ pub(super) async fn read_kept<S: ConversationStore>(
         direction: EventDirection::Outbound,
         ..EventSource::new(responder.channel_id.clone(), responder.channel_type.clone())
     };
+    let live = kept.turn.record();
     let mut producer = Producer {
         room_id: answers.room_id.clone(),
-        segments: Segments::new(source, answers, correlation_id),
+        segments: Segments::new(source, answers, correlation_id).reading(live.clone()),
         stream: Some(kept.turn),
         cut: None,
         reader_cut: false,
@@ -203,13 +204,16 @@ pub(super) async fn read_kept<S: ConversationStore>(
     };
     let read = producer.read_by(reader, pulled, reader_done, stops).await;
     let mut output = producer.finish(read).await;
-    // How the turn ended reaches the operation under the caller's `turns`,
-    // as Python's `_add_turn` puts it there (RFC §6.4); a `turns` the
-    // target's own output says is not its caller's.
-    output.response_metadata.shift_remove(TURNS);
+    // The turn's record reaches the operation once its stream is read, how
+    // it ended under the caller's `turns`, as Python's `_add_turn` puts it
+    // there (RFC §6.4); a `turns` the turn wrote is not its caller's, nor
+    // anything of the target's own output.
+    let mut record = live.to_metadata();
+    record.shift_remove(TURNS);
     if let Some(entry) = producer.segments.turn_entry() {
-        add_turn(&mut output.response_metadata, &responder.channel_id, entry);
+        add_turn(&mut record, &responder.channel_id, entry);
     }
+    output.response_metadata = record.into();
     if let Some(answer) = producer.kept_out.take() {
         let pass = first_pass_of(
             answer,
@@ -231,11 +235,10 @@ pub(super) async fn read_kept<S: ConversationStore>(
 /// stopped it (Python's `_handed_on`, RFC §6.4).
 fn first_pass_of(
     answer: String,
-    record: Option<&Metadata>,
+    record: Metadata,
     responder: &ChannelBinding,
     room_id: &RoomId,
 ) -> FirstPass {
-    let record = record.cloned().unwrap_or_default();
     let end = record
         .get("loop_end_reason")
         .and_then(Value::as_str)
@@ -630,12 +633,20 @@ impl Producer {
             error => error,
         };
         self.close_open(error).await;
-        self.stream = None;
+        self.close_stream().await;
         if !ended {
             self.segments.stopped();
         }
         if let Some(row) = self.segments.last_text(true) {
             self.commit(row).await;
+        }
+    }
+
+    /// Closes the turn's response and waits for its end, the turn's record
+    /// its last (RFC §10.6.4).
+    async fn close_stream(&mut self) {
+        if let Some(mut turn) = self.stream.take() {
+            turn.close_stream().await;
         }
     }
 
@@ -662,7 +673,7 @@ impl Producer {
             _ => TURN_FAILED,
         };
         self.close_open(error).await;
-        self.stream = None;
+        self.close_stream().await;
         if let Some(row) = self.segments.last_text(false) {
             self.commit(row).await;
         }

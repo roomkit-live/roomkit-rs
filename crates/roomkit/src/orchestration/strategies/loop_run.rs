@@ -88,7 +88,7 @@ pub(super) async fn run_loop<S: ConversationStore>(
         // No output at all: the turn has no answer, and the caller reads why.
         return Ok(ChannelOutput {
             error: failure,
-            response_metadata: record,
+            response_metadata: record.into(),
             ..ChannelOutput::empty()
         });
     }
@@ -101,7 +101,7 @@ pub(super) async fn run_loop<S: ConversationStore>(
             &outcome,
         )],
         error: failure,
-        response_metadata: record,
+        response_metadata: record.into(),
         ..ChannelOutput::empty()
     })
 }

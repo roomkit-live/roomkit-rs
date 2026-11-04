@@ -128,7 +128,7 @@ impl Channel for Counting {
             std::future::pending::<()>().await;
         }
         Ok(ChannelOutput {
-            response_metadata: self.says.clone(),
+            response_metadata: self.says.clone().into(),
             ..ChannelOutput::default()
         })
     }

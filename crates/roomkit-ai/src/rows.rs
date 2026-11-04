@@ -12,7 +12,8 @@ use roomkit::model::{
     ChannelOutput, ErrorRecord, EventContent, EventSource, EventType, LoopEndMarker, Metadata,
     RoomEvent, TextContent, ToolCall, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
-use roomkit::{ChannelError, ClassedError, ResponseItem, ResponseStream};
+use roomkit::{ChannelError, ClassedError, ResponseItem, ResponseStream, Scoped, TurnRecord};
+use roomkit_core::rules::transcript::is_blank;
 use serde_json::Value;
 
 use crate::provider::ProviderError;
@@ -23,6 +24,8 @@ use crate::tool_loop::{ToolEnd, TurnItem, TurnItems};
 struct Rows<'a> {
     trigger: &'a RoomEvent,
     source: EventSource,
+    /// The turn's record, which rides each message as it stands then.
+    record: TurnRecord,
     events: Vec<RoomEvent>,
     /// The text of the segment the model is writing.
     segment: String,
@@ -41,11 +44,13 @@ struct Rows<'a> {
 pub(crate) async fn collect(
     source: EventSource,
     trigger: &RoomEvent,
-    mut turn: TurnItems<'_>,
+    mut turn: Scoped<TurnItems<'_>>,
+    record: TurnRecord,
 ) -> Result<ChannelOutput, ProviderError> {
     let mut rows = Rows {
         trigger,
         source,
+        record,
         events: Vec::new(),
         segment: String::new(),
         last_message: None,
@@ -86,11 +91,14 @@ impl Rows<'_> {
     /// The segment written so far, as a MESSAGE, when it says something.
     fn end_segment(&mut self) {
         let text = std::mem::take(&mut self.segment);
-        if text.trim().is_empty() {
+        if is_blank(&text) {
             return;
         }
         self.last_message = Some(self.events.len());
         self.push(EventType::Message, TextContent::new(text).into());
+        if let Some(message) = self.events.last_mut() {
+            message.metadata = self.record.current().to_metadata();
+        }
     }
 
     /// The turn's record on its last MESSAGE: its final text's, or the last
@@ -130,6 +138,7 @@ impl Rows<'_> {
                 ..ChannelOutput::empty()
             }
         };
+        output.response_metadata = self.record.current();
         // Recorded under its class's name, as Python's `ProviderError` is
         // reported, not as a channel's.
         output.error = error.map(|error| {
@@ -146,13 +155,13 @@ impl Rows<'_> {
 /// The turn's response, its loop's items as the kit reads them (RFC §6.1
 /// `response_stream`): text, each call's start and end rows, the turn's
 /// record, or the provider's error that ends it.
-pub(crate) fn response(turn: TurnItems<'static>) -> ResponseStream {
+pub(crate) fn response(turn: Scoped<TurnItems<'static>>) -> ResponseStream {
     Box::pin(Responding { turn })
 }
 
 /// A turn's items read as its response.
 struct Responding {
-    turn: TurnItems<'static>,
+    turn: Scoped<TurnItems<'static>>,
 }
 
 impl Stream for Responding {

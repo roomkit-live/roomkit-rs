@@ -38,7 +38,7 @@ pub use self::builder::Tools;
 pub(crate) use self::handler::served_by;
 pub use self::handler::{
     Tool, ToolCallContext, ToolEntry, ToolFuture, ToolHandler, compose_tool_handlers,
-    current_tool_actor_id, current_tool_call,
+    current_response_metadata, current_tool_actor_id, current_tool_call,
 };
 pub use self::policy::ToolPolicy;
 #[doc(hidden)]

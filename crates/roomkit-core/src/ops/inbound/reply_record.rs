@@ -16,26 +16,30 @@ const LOOP_END_REASON: &str = "loop_end_reason";
 /// What a turn spent, in its record.
 const AI_USAGE: &str = "ai_usage";
 
-/// Merges the reply of `channel_id`, an agent or a transport, its record `reply`
-/// and the `responses` it returned, into `record`, its caller's: every
-/// key of `reply` but the turn's own (`turns`, `loop_end_reason`,
-/// `ai_usage`); a `buffered` reply's end and usage then under `turns`, by
-/// its channel, read off `reply` or else its last message. A stream's end
-/// goes there once read.
-pub(super) fn record_reply(
-    record: &mut Metadata,
-    channel_id: &ChannelId,
-    (reply, responses): (&Metadata, &[RoomEvent]),
-    buffered: bool,
-) {
+/// Merges a replying channel's record, `reply`, into `record`, its caller's:
+/// every key but the turn's own (`turns`, `loop_end_reason`, `ai_usage`),
+/// which the caller reads under `turns` alone (Python's
+/// `merge_channel_record`).
+pub(super) fn merge_channel_record(record: &mut Metadata, reply: &Metadata) {
     let kept = reply
         .iter()
         .filter(|(key, _)| ![TURNS, LOOP_END_REASON, AI_USAGE].contains(&key.as_str()))
         .map(|(key, value)| (key.clone(), value.clone()));
     record.extend(kept);
-    if !buffered {
-        return;
-    }
+}
+
+/// Merges the buffered reply of `channel_id`, an agent or a transport, its
+/// record `reply` and the `responses` it returned, into `record`, its
+/// caller's: [`merge_channel_record`], then its end and usage under `turns`,
+/// by its channel, read off `reply` or else its last message. A stream is
+/// merged once read.
+pub(super) fn record_reply(
+    record: &mut Metadata,
+    channel_id: &ChannelId,
+    reply: &Metadata,
+    responses: &[RoomEvent],
+) {
+    merge_channel_record(record, reply);
     let Some(entry) = reply_turn_entry(reply, responses) else {
         return;
     };

@@ -24,6 +24,7 @@
 
 mod inputs;
 mod link;
+mod record;
 mod work;
 
 use std::future::{Future, pending};
@@ -35,6 +36,7 @@ use roomkit_core::rules::chain_depth::response_depth;
 pub(crate) use self::inputs::{ExecutorInputs, InputSettler};
 pub(crate) use self::link::HostLink;
 use self::link::{FrameSender, TurnFacts};
+use self::record::RecordChanges;
 use self::work::{Flow, work};
 use super::error::{TurnError, one};
 use super::pipe::{LinkFailure, MAX_MESSAGE_BYTES, PipeReceiver, Uncarried};
@@ -140,9 +142,11 @@ impl Executor {
             turn_id: request.turn_id.clone(),
             sender: Arc::clone(&self.sender),
         };
+        let changes = Arc::new(RecordChanges::default());
         let work: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(work(
             Arc::clone(&self.turn),
             Arc::clone(&self.sender),
+            Arc::clone(&changes),
             host.clone(),
             Arc::clone(&flow),
             request,
@@ -153,6 +157,9 @@ impl Executor {
             .watch(&mut controls, work, &flow, (&link, &steering))
             .await;
         drop(beating);
+        // What the stream's close or cut wrote: no item follows it (RFC
+        // §10.6.4).
+        drop(changes.report(&self.sender, false));
         self.end(cut, &host, &link);
         panicked.disarm();
     }

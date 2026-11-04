@@ -40,7 +40,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit::model::{LoopEndMarker, LoopEndReason, Metadata, ToolCall, ToolCallOutcome};
-use roomkit::{ToolCallReport, TurnHost};
+use roomkit::{ToolCallReport, TurnHost, TurnRecord};
 use roomkit_core::rules::transcript::{Message, Role};
 use serde_json::Value;
 use spans::TurnSpan;
@@ -144,6 +144,8 @@ impl Bounds {
 /// One turn's loop: what it calls and how, owned, so that the turn's
 /// stream outlives the turn's `on_event()`, which hands it to the kit.
 pub(crate) struct Loop<P> {
+    /// The turn's one record, which a generation hook may replace (RFC §6.7).
+    pub(crate) record: TurnRecord,
     pub(crate) provider: Arc<P>,
     pub(crate) toolbox: Arc<Toolbox>,
     pub(crate) policy: ToolPolicy,
@@ -502,6 +504,7 @@ impl<P: AiProvider> Loop<P> {
             reasoning_effort: self.reasoning_effort.clone(),
             tools: Vec::new(),
             metadata: self.adopted.metadata.clone(),
+            response_metadata: self.record.current(),
         }
     }
 

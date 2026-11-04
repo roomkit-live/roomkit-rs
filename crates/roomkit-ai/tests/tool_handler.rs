@@ -30,7 +30,7 @@ fn recording(answer: &'static str, ran: &Arc<Mutex<Vec<String>>>) -> ToolHandler
 }
 
 /// One turn of `agent` on a message.
-async fn turn(agent: &AiChannel<ScriptedProvider>) {
+async fn turn(agent: &AiChannel<ScriptedProvider>) -> roomkit::model::ChannelOutput {
     let event = RoomEvent::new(
         room_id(),
         EventSource::new(ChannelId::new("sms1").unwrap(), ChannelType::SMS),
@@ -41,7 +41,7 @@ async fn turn(agent: &AiChannel<ScriptedProvider>) {
         ..ChannelBinding::new(ChannelId::new("ai1").unwrap(), room_id(), ChannelType::AI)
     };
     let context = RoomContext::new(Room::new(room_id()));
-    agent.on_event(event, binding, context).await.unwrap();
+    agent.on_event(event, binding, context).await.unwrap()
 }
 
 /// The tool results the model read, in order.
@@ -147,4 +147,54 @@ async fn a_task_the_handler_spawns_with_keep_context_reads_the_call() {
     let agent = AiChannel::new(ChannelId::new("ai1").unwrap(), model, options).unwrap();
     turn(&agent).await;
     assert_eq!(seen.lock().unwrap().clone(), [Some("c1".to_owned()), None]);
+}
+
+// Python: tests/test_response_metadata.py::TestLiveRecord::test_accessor_is_none_outside_a_turn
+#[test]
+fn no_record_is_read_outside_a_turn() {
+    assert!(roomkit_ai::current_response_metadata().is_none());
+}
+
+// Python: tests/test_response_metadata.py::TestResponseMetadataDirect::test_streaming_tool_loop_output_carries_response_metadata,
+// TestLiveRecord::test_tool_handler_write_lands_on_the_answer
+#[tokio::test]
+async fn a_handler_s_write_lands_on_the_answer_and_a_task_it_spawns_with_keep_context_writes_too() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("Let me read.", [("c1", "lookup", "{}")]),
+        ScriptedRound::answering("Done."),
+    ]);
+    let handler = ToolHandler::new(move |_name, _arguments| async move {
+        let record = roomkit_ai::current_response_metadata().expect("a turn's record");
+        record.insert("cited", "doc-1".into());
+        tokio::spawn(roomkit::keep_context(async {
+            let record = roomkit_ai::current_response_metadata().expect("kept");
+            record.insert("kept", true.into());
+        }))
+        .await
+        .unwrap();
+        let plain = tokio::spawn(async { roomkit_ai::current_response_metadata().is_none() });
+        record.insert("plain_reads_none", plain.await.unwrap().into());
+        Ok(ToolResult::Text("ok".to_owned()))
+    });
+    let options = AiChannelOptions {
+        tools: vec![AiTool::new("lookup", "Looks up").unwrap().into()],
+        tool_handler: Some(handler),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(ChannelId::new("ai1").unwrap(), model, options).unwrap();
+    let output = turn(&agent).await;
+
+    let record = &output.response_metadata;
+    assert_eq!(record.get("cited"), Some("doc-1".into()));
+    assert_eq!(record.get("kept"), Some(true.into()));
+    assert_eq!(record.get("plain_reads_none"), Some(true.into()));
+    let messages: Vec<_> = output
+        .response_events
+        .iter()
+        .filter(|event| event.r#type == roomkit::model::EventType::Message)
+        .collect();
+    // The segment written before the call carries what was known then; the
+    // answer, written after, what the handler wrote.
+    assert_eq!(messages[0].metadata.get("cited"), None);
+    assert_eq!(messages[1].metadata.get("cited"), Some(&"doc-1".into()));
 }

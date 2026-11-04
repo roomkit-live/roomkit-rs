@@ -17,7 +17,7 @@ pub(crate) fn encode_output(output: ChannelOutput) -> WireOutput {
     WireOutput {
         responded: output.responded,
         response_events: output.response_events,
-        response_metadata: output.response_metadata,
+        response_metadata: output.response_metadata.to_metadata(),
         tasks: output.tasks,
         observations: output.observations,
         metadata_updates: output.metadata_updates,
@@ -30,7 +30,7 @@ pub(crate) fn decode_output(wire: WireOutput) -> ChannelOutput {
     ChannelOutput {
         responded: wire.responded,
         response_events: wire.response_events,
-        response_metadata: wire.response_metadata,
+        response_metadata: wire.response_metadata.into(),
         provider_result: None,
         tasks: wire.tasks,
         observations: wire.observations,

@@ -537,19 +537,26 @@ impl Machine {
 
     /// A stream is read: its failure, the response's or the target's, fires
     /// `ON_ERROR` and is the call's error when the stream is the call's own
-    /// (RFC §12.2 step 13s): a chained stream's is not its caller's. How
-    /// its turn ended goes under the call's `turns`, the stream the call's
-    /// own (RFC §6.4, Python's `_add_turn`). Nothing else of the streaming
-    /// target's output is kept, as Python's `_deliver_segments` keeps
-    /// nothing of `deliver_stream()` (RFC §10.1 step 15): the rows the
+    /// (RFC §12.2 step 13s): a chained stream's is not its caller's. The
+    /// turn's record goes to the call once its stream is read, the stream
+    /// the call's own, and how the turn ended under the call's `turns` (RFC
+    /// §6.4, Python's `merge_channel_record` and `_add_turn`). Nothing of the
+    /// streaming target's own output is kept, as Python's `_deliver_segments`
+    /// keeps nothing of `deliver_stream()` (RFC §10.1 step 15): the rows the
     /// stream commits are delivered to the others, whose outputs are.
     fn stream_over(&mut self, cx: &mut Cx<'_>, end: StreamEnd) {
-        let (Some(mut output), Some(context)) = (end.output, end.context) else {
+        let (Some(output), Some(context)) = (end.output, end.context) else {
             return;
         };
         let own = !end.job.chained && end.job.lineage == Lineage::Call;
-        if let (true, Some(turns)) = (own, output.response_metadata.shift_remove(TURNS)) {
-            add_turns(&mut self.trigger.result.response_metadata, turns);
+        if own {
+            let mut record = output.response_metadata.to_metadata();
+            let turns = record.shift_remove(TURNS);
+            let caller = &mut self.trigger.result.response_metadata;
+            super::reply_record::merge_channel_record(caller, &record);
+            if let Some(turns) = turns {
+                add_turns(caller, turns);
+            }
         }
         let Some(error) = output.error else {
             return;

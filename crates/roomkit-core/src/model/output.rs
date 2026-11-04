@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Metadata, Observation, ProviderResult, RoomEvent, Task};
+use super::{Metadata, Observation, ProviderResult, ResponseMetadata, RoomEvent, Task};
 
 /// A channel's answer to `deliver()` or `on_event()` (RFC §6.1).
 ///
@@ -16,8 +16,9 @@ pub struct ChannelOutput {
     pub responded: bool,
     /// The response events, subject to permissions.
     pub response_events: Vec<RoomEvent>,
-    /// The turn's response-metadata record (RFC §6.7).
-    pub response_metadata: Metadata,
+    /// The turn's response-metadata record (RFC §6.7), shared with whoever
+    /// writes it as the turn runs.
+    pub response_metadata: ResponseMetadata,
     /// A transport delivery's provider answer.
     pub provider_result: Option<ProviderResult>,
     /// Tasks, always collected.

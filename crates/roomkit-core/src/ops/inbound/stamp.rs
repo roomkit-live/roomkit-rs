@@ -252,6 +252,9 @@ pub(crate) fn stamp_response(
     response.idempotency_key = None;
     without_internal(&mut response, responder);
     instructions::mark_response(&mut response, trigger);
+    // `turns` is the framework's key: a value a turn wrote there is on no
+    // message (RFC §6.7, Python's `response_metadata`).
+    response.metadata.shift_remove("turns");
     reset_commit_fields(response)
 }
 

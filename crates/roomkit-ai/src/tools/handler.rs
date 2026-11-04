@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use roomkit::model::{ChannelId, Metadata, RoomId};
+use roomkit::model::{ChannelId, Metadata, ResponseMetadata, RoomId};
 use roomkit_core::rules::python_repr;
 use serde_json::Value;
 
@@ -205,6 +205,22 @@ pub fn current_tool_call() -> Option<ToolCallContext> {
 pub fn current_tool_actor_id() -> Option<String> {
     let scope = roomkit::current_tool_call_scope()?;
     scope.downcast_ref::<CallScope>()?.actor_id.clone()
+}
+
+/// The record of the turn the caller runs within (RFC §6.7): Python's
+/// `current_response_metadata()`. The one record a memory writing it while
+/// the context is built, a generation hook writing
+/// `event.ai_context.response_metadata`, and a tool handler or a
+/// `BEFORE_TOOL_USE` hook writing here all reach, the one
+/// `InboundResult::response_metadata` gives the caller, the turn answered or
+/// failed. A tool handler is the case this exists for: a document it read
+/// is a fact about the turn, not about the tool's result.
+///
+/// `None` outside a turn, and in a tool the room's owner serves, whose turn's
+/// record is on its executor. A task the handler spawns reads it when spawned
+/// with [`roomkit::keep_context`].
+pub fn current_response_metadata() -> Option<ResponseMetadata> {
+    roomkit::current_turn_record()
 }
 
 /// What a tool's call runs within: the call, and who woke its turn.

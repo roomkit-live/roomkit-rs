@@ -1225,7 +1225,7 @@ impl roomkit::Channel for Unanswering {
             source,
             roomkit::model::TextContent::new("Found it."),
         );
-        let mut output = ChannelOutput {
+        let output = ChannelOutput {
             responded: false,
             response_events: vec![reply],
             ..ChannelOutput::empty()

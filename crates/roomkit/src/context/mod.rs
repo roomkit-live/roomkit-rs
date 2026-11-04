@@ -668,6 +668,7 @@ where
     // The tool call a handler runs within rides along, as Python's
     // `create_task` copies its `ContextVar` (RFC §21.4).
     let future = crate::tool_call_scope::within_current_tool_call(future);
+    let future = crate::turn_record::within_current_turn_record(future);
     let future = crate::telemetry::within_current_span(future);
     CONTEXT.scope(
         ExecutionContext::current(),

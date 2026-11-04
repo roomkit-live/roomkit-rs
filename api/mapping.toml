@@ -233,6 +233,12 @@ approved = "2026-10-27"
 reason = "a variant carries a foreign error, the cause kept: what Python propagates as the store driver raised it (the architecture table, Errors)"
 
 [[exception]]
+rust = "roomkit::model::ResponseMetadata"
+members = ["get", "contains_key", "len", "is_empty", "insert", "pop", "setdefault", "update", "clear", "with_value", "to_metadata"]
+approved = "2026-11-04"
+reason = "language: Python's MutableMapping, record[key] = value among its forms, has no Rust operator on a shared record: methods of its names (HITL 5f1b8943)"
+
+[[exception]]
 rust = "roomkit_openai::TokenSource"
 approved = "2026-10-30"
 reason = "Rust host credential source for reusable authentication; Python integration is a separate follow-up (architecture: Renewable provider credentials)"
@@ -779,10 +785,15 @@ members = ["room_vision"]
 reason = "not in 0.x: vision"
 
 [[missing]]
+python = "roomkit.ResponseMetadata.__init__"
+params = ["initial"]
+reason = "language: a record holding keys is ResponseMetadata::from(keys), an empty one ResponseMetadata::new() (HITL 5f1b8943)"
+
+[[missing]]
 python = "roomkit.providers.ai.AIContext.__init__"
 params = [
     "response_schema",
-    "room", "target_capabilities", "target_media_types", "response_metadata",
+    "room", "target_capabilities", "target_media_types",
 ]
 reason = "not in 0.x: response schemas, the context's room and its targets' capabilities"
 

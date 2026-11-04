@@ -27,6 +27,7 @@ mod media_url;
 mod output;
 mod participant;
 mod positive;
+mod response_metadata;
 
 #[doc(hidden)]
 pub use positive::python_float;
@@ -67,6 +68,7 @@ pub use participant::{
     IdentificationStatus, Participant, ParticipantRole, ParticipantStatus, VerificationStatus,
 };
 pub use post::Post;
+pub use response_metadata::ResponseMetadata;
 pub use room::{AgentResponsePolicy, Room, RoomStatus, RoomTimers};
 pub use side_effects::{Confidence, Observation, Task, TaskStatus};
 pub use time::Timestamp;

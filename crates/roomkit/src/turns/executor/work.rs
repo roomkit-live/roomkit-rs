@@ -12,6 +12,7 @@ use std::task::Poll;
 use tokio::sync::Notify;
 
 use super::link::FrameSender;
+use super::record::RecordChanges;
 use crate::channel::DynChannel;
 use crate::stream::{ResponseItem, ResponseStream};
 use crate::turn::TurnHost;
@@ -63,6 +64,7 @@ impl Flow {
 pub(super) async fn work(
     turn: Arc<MemoryTurn>,
     sender: Arc<FrameSender>,
+    changes: Arc<RecordChanges>,
     host: TurnHost,
     flow: Arc<Flow>,
     request: TurnRequest,
@@ -88,6 +90,7 @@ pub(super) async fn work(
         }
     };
     let stream = host.take_stream();
+    changes.watch(&output.response_metadata);
     let frame = Frame::Output {
         output: encode_output(output),
         streams: stream.is_some(),
@@ -99,6 +102,7 @@ pub(super) async fn work(
         let mut pump = Pump {
             turn: &turn,
             sender: &sender,
+            changes: &changes,
             host: &host,
             flow: &flow,
         };
@@ -113,6 +117,7 @@ type Read = Option<Result<ResponseItem, crate::channel::ChannelError>>;
 struct Pump<'a> {
     turn: &'a MemoryTurn,
     sender: &'a FrameSender,
+    changes: &'a RecordChanges,
     host: &'a TurnHost,
     flow: &'a Flow,
 }
@@ -133,6 +138,13 @@ impl Pump<'_> {
             }
             let (read, closing, flushed) = self.read(&mut stream).await;
             if let Err(why) = flushed {
+                return refuse(self.sender, "stream item", &why);
+            }
+            let delta = matches!(
+                read,
+                Some(Ok(ResponseItem::Text(_) | ResponseItem::Thinking(_)))
+            );
+            if let Err(why) = self.changes.report(self.sender, delta) {
                 return refuse(self.sender, "stream item", &why);
             }
             let reported = self
@@ -231,7 +243,10 @@ impl Pump<'_> {
             Some(Ok(ResponseItem::LoopEnd(marker))) => {
                 let (whole, item) = encode_loop_end(&marker);
                 let recorded = match whole {
-                    Some(record) => self.sender.send(&Frame::Record { record }).map(drop),
+                    Some(end) => {
+                        let record = self.changes.with(end);
+                        self.sender.send(&Frame::Record { record }).map(drop)
+                    }
                     None => Ok(()),
                 };
                 recorded.and_then(|()| self.sender.send(&Frame::Item { item }).map(drop))

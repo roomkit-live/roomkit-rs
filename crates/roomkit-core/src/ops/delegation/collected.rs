@@ -81,14 +81,14 @@ impl Collected {
                 // output that did not answer stores no rows, and its end
                 // and text are not the task's, as Python's
                 // `_buffered_outcome` keeps nothing of it (RFC §23.3 step 6).
-                answer.record = response_metadata;
+                answer.record = response_metadata.to_metadata();
                 if responded {
                     self.buffered.push((slot, binding, response_events));
                 }
             }
             Some(Outcome::Channel(ChannelOutcome::Streamed(output))) => {
                 answer.responded = true;
-                answer.record.clone_from(&output.response_metadata);
+                answer.record = output.response_metadata.to_metadata();
                 self.tasks.extend(output.tasks);
                 self.observations.extend(output.observations);
                 self.keep_metadata(&binding.channel_id, output.metadata_updates);

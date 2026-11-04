@@ -2,8 +2,9 @@
 //! the reader read, cut into the rows the store holds.
 //!
 //! A text segment ends at a call's start, and at the response's end; a
-//! blank one writes nothing. The turn's record rides the segment the turn
-//! ends on; when the turn ends on no text, it is owed to the last message
+//! blank one writes nothing. The turn's live record rides each message as it
+//! stands when the message is written; how the turn ended rides the segment
+//! the turn ends on; when the turn ends on no text, it is owed to the last message
 //! the turn wrote, which is updated once the response is over. A response
 //! its reader stopped once it began ends `cancelled`, its text kept and
 //! marked so; a call it opened and did not end gets its end, `failed`.
@@ -17,9 +18,10 @@
 //! a call's start and end by (RFC §6.4).
 
 use roomkit_core::model::{
-    EventContent, EventId, EventSource, EventType, Metadata, RoomEvent, TextContent,
-    ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    EventContent, EventId, EventSource, EventType, Metadata, ResponseMetadata, RoomEvent,
+    TextContent, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
+use roomkit_core::rules::transcript::is_blank;
 use serde_json::Value;
 
 /// The record's key that says how the turn ended (RFC §6.4).
@@ -50,7 +52,11 @@ pub(super) struct Segments {
     correlation_id: String,
     /// The text of the segment the reader is reading.
     text: String,
-    /// The turn's record, once its end was read.
+    /// The turn's live record (RFC §6.7), which rides each message as it
+    /// stands when the message is written.
+    live: ResponseMetadata,
+    /// How the turn ended, once its end was read: `loop_end_reason`,
+    /// `ai_usage`.
     record: Option<Metadata>,
     /// Whether no stored row carries the record yet.
     owed: bool,
@@ -71,12 +77,20 @@ impl Segments {
             answers,
             correlation_id,
             text: String::new(),
+            live: ResponseMetadata::default(),
             record: None,
             owed: false,
             began: false,
             open: Vec::new(),
             last_message: None,
         }
+    }
+
+    /// The rows read `live`, the turn's record, as it stands when each
+    /// message is written.
+    pub(super) fn reading(mut self, live: ResponseMetadata) -> Self {
+        self.live = live;
+        self
     }
 
     /// The reader was handed an item.
@@ -201,16 +215,23 @@ impl Segments {
         self.last_message = Some(row.clone());
     }
 
-    /// The turn's record, once its end was read or its reader stopped it.
-    pub(super) fn record(&self) -> Option<&Metadata> {
-        self.record.as_ref()
+    /// The turn's record whole: its live record, with how it ended once
+    /// its end was read or its reader stopped it (Python's `stream_record`).
+    pub(super) fn record(&self) -> Metadata {
+        let mut whole = self.live.to_metadata();
+        whole.extend(
+            self.record
+                .iter()
+                .flatten()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        whole
     }
 
-    /// The turn's entry under its caller's `turns`, once its end was read
-    /// or its reader stopped it: its end and usage (Python's
-    /// `stream_turn_entry`, RFC §6.4).
+    /// The turn's entry under its caller's `turns`, once its record names
+    /// its end: its end and usage (Python's `stream_turn_entry`, RFC §6.4).
     pub(super) fn turn_entry(&self) -> Option<Metadata> {
-        let record = self.record.as_ref()?;
+        let record = self.record();
         let end = record.get(LOOP_END_REASON)?;
         let mut entry = Metadata::new();
         entry.insert(LOOP_END_REASON.to_owned(), end.clone());
@@ -236,10 +257,11 @@ impl Segments {
     /// reader stopped or the turn ended so.
     fn segment(&mut self, cancelled: bool) -> Option<RoomEvent> {
         let text = std::mem::take(&mut self.text);
-        if text.trim().is_empty() {
+        if is_blank(&text) {
             return None;
         }
         let mut row = self.draft(EventType::Message, TextContent::new(text).into());
+        row.metadata = self.live.to_metadata();
         if let Some(record) = self.record.as_ref().filter(|_| self.owed) {
             row.metadata.extend(record.clone());
             if is_cancelled(record) {

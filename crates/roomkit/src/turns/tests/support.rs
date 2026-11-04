@@ -2,6 +2,7 @@
 //! through the kit's turn backend, the faults a transport could make set on
 //! it, and a tap that notes when each message crossed.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -9,7 +10,8 @@ use std::time::Duration;
 use futures_core::Stream;
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
+    EventDirection, EventSource, InboundMessage, ResponseMetadata, RoomContext, RoomEvent, RoomId,
+    TextContent, ToolCallContent,
 };
 use roomkit_core::ops::ChannelConfig;
 use serde_json::Value;
@@ -303,6 +305,94 @@ pub(super) struct Streaming {
     deltas: usize,
     end: LoopEndMarker,
     pub(super) produced: Arc<AtomicUsize>,
+    /// The turn's stream instead of its deltas, writing the turn's record.
+    script: Option<Vec<Step>>,
+}
+
+/// A step of a [`Streaming`] agent's scripted stream.
+#[derive(Clone)]
+pub(super) enum Step {
+    /// A text delta.
+    Text(&'static str),
+    /// Writes a key of the turn's record.
+    Write(&'static str, Value),
+    /// Changes a list the record holds, no key written.
+    Append(&'static str, &'static str),
+    /// A call's start.
+    Start(&'static str),
+    /// A call's end.
+    End(&'static str),
+    /// The segment ends.
+    Break,
+    /// The stream waits, its burst sent, then goes on.
+    Wait,
+    /// The stream fails.
+    Fail(&'static str),
+    /// The stream waits forever; dropped there, it writes the record's `final`.
+    Hold,
+}
+
+/// A [`Streaming`] agent's scripted stream.
+struct Scripted {
+    steps: VecDeque<Step>,
+    record: ResponseMetadata,
+    holding: bool,
+}
+
+impl Drop for Scripted {
+    fn drop(&mut self) {
+        if self.holding {
+            self.record.insert("final", Value::Bool(true));
+        }
+    }
+}
+
+impl Stream for Scripted {
+    type Item = Result<ResponseItem, ChannelError>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll::{Pending, Ready};
+        let this = self.get_mut();
+        loop {
+            let Some(step) = this.steps.pop_front() else {
+                if this.holding {
+                    return Pending;
+                }
+                return Ready(None);
+            };
+            let item = match step {
+                Step::Text(text) => ResponseItem::Text(text.to_owned()),
+                Step::Write(key, value) => {
+                    this.record.insert(key, value);
+                    continue;
+                }
+                Step::Append(key, value) => {
+                    this.record.with_value(key, |list| {
+                        if let Value::Array(list) = list {
+                            list.push(Value::from(value));
+                        }
+                    });
+                    continue;
+                }
+                Step::Start(id) => ResponseItem::ToolCallStart(ToolCallContent::new("t", id)),
+                Step::End(id) => ResponseItem::ToolCallEnd(ToolCallContent::new("t", id)),
+                Step::Break => ResponseItem::SegmentBreak,
+                Step::Wait => {
+                    context.waker().wake_by_ref();
+                    return Pending;
+                }
+                Step::Fail(message) => return Ready(Some(Err(message.into()))),
+                Step::Hold => {
+                    this.holding = true;
+                    continue;
+                }
+            };
+            return Ready(Some(Ok(item)));
+        }
+    }
 }
 
 impl Streaming {
@@ -322,6 +412,15 @@ impl Streaming {
             deltas,
             end,
             produced: Arc::default(),
+            script: None,
+        }
+    }
+
+    /// The agent, its stream `steps` and no end, writing the turn's record.
+    pub(super) fn scripted(steps: Vec<Step>) -> Self {
+        Self {
+            script: Some(steps),
+            ..Self::new(0)
         }
     }
 }
@@ -411,14 +510,26 @@ impl Channel for Streaming {
             produced: Arc::clone(&self.produced),
             end: Some(self.end.clone()),
         };
+        let script = self.script.clone();
         // The turn's host is read as the turn runs, within it.
         async move {
             if own {
                 return Ok(ChannelOutput::default());
             }
-            Ok(current_turn_host()
-                .unwrap()
-                .respond_with_stream(Box::pin(deltas)))
+            let host = current_turn_host().unwrap();
+            let Some(steps) = script else {
+                return Ok(host.respond_with_stream(Box::pin(deltas)));
+            };
+            let record = ResponseMetadata::default();
+            let stream = Scripted {
+                steps: steps.into(),
+                record: record.clone(),
+                holding: false,
+            };
+            Ok(ChannelOutput {
+                response_metadata: record,
+                ..host.respond_with_stream(Box::pin(stream))
+            })
         }
     }
 
@@ -446,6 +557,7 @@ impl Channel for Streaming {
 pub(super) struct Stuck {
     declaration: ChannelConfig,
     reads: usize,
+    returns: bool,
 }
 
 impl Stuck {
@@ -458,7 +570,20 @@ impl Stuck {
         );
         declaration.supports_streaming_delivery = true;
         declaration.recipient_key = None;
-        Self { declaration, reads }
+        Self {
+            declaration,
+            reads,
+            returns: false,
+        }
+    }
+
+    /// A transport whose reader reads `reads` items, then stops reading and
+    /// returns: the reader's close.
+    pub(super) fn returning(reads: usize) -> Self {
+        Self {
+            returns: true,
+            ..Self::new(reads)
+        }
     }
 }
 
@@ -520,6 +645,9 @@ impl Channel for Stuck {
     ) -> Result<ChannelOutput, ChannelError> {
         for _ in 0..self.reads {
             stream.next().await;
+        }
+        if self.returns {
+            return Ok(ChannelOutput::empty());
         }
         std::future::pending().await
     }

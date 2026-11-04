@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use roomkit_core::model::{
-    ChannelOutput, Metadata, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    ChannelOutput, Metadata, ResponseMetadata, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use tokio::sync::{mpsc, watch};
 
@@ -19,6 +19,9 @@ use crate::turns::error::{RemoteError, TurnError, TurnFailure};
 use crate::turns::lock;
 use crate::turns::pulls::PullWindow;
 use crate::turns::wire::{Control, Item};
+
+/// A turn's record's key naming how its loop ended.
+const LOOP_END_REASON: &str = "loop_end_reason";
 
 /// Where the reader stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +60,8 @@ pub(crate) struct OwnerTurn {
     /// The calls whose start was read and whose end was not: the start's
     /// frame, and the start.
     open: Vec<(u64, ToolCallContent)>,
+    /// The turn's one record, its output's, updated in place.
+    live: ResponseMetadata,
     /// The turn's record as the last `record` frame gave it: the record a
     /// loop's end ends the turn on.
     record: Option<Metadata>,
@@ -70,6 +75,7 @@ impl OwnerTurn {
             stage: Stage::Output,
             window: PullWindow::default(),
             open: Vec::new(),
+            live: ResponseMetadata::default(),
             record: None,
         }
     }
@@ -102,7 +108,9 @@ impl OwnerTurn {
                     if streams {
                         self.stage = Stage::Stream;
                     }
-                    return Ok((decode_output(output), streams));
+                    let output = decode_output(output);
+                    self.live = output.response_metadata.clone();
+                    return Ok((output, streams));
                 }
                 Some(Main::Error(error)) => return Err(TurnFailure::crossed(&error)),
                 Some(Main::Failed(error)) => Err(error.to_record()),
@@ -142,7 +150,7 @@ impl OwnerTurn {
             let read = match next {
                 Some(Main::Item(seq, item)) => self.read(seq, item),
                 Some(Main::Record(record)) => {
-                    self.record = Some(record);
+                    self.take_record(record);
                     Read::Skipped
                 }
                 Some(Main::Error(error)) => Read::Failed(Box::new(RemoteError(error))),
@@ -290,9 +298,54 @@ impl OwnerTurn {
                     budget_usd,
                 };
                 let record = self.record.take();
-                Read::Item(RemoteItem::Item(decode_loop_end(end, record.as_ref())))
+                let item = decode_loop_end(end, record.as_ref());
+                self.keep_out_the_end(record.as_ref(), &item);
+                Read::Item(RemoteItem::Item(item))
             }
             Item::StreamEnd => Read::Ended,
+        }
+    }
+
+    /// The turn's record as `record`, a frame's, gives it: the one the
+    /// items after it read (RFC §10.6.4).
+    fn take_record(&mut self, record: Metadata) {
+        self.live.replace(record.clone());
+        self.record = Some(record);
+    }
+
+    /// A frame that holds the turn's end carried the loop's own keys over
+    /// the turn's record (RMK-1029): they are its end's, not its record's.
+    fn keep_out_the_end(&self, frame: Option<&Metadata>, item: &ResponseItem) {
+        let (Some(frame), ResponseItem::LoopEnd(marker)) = (frame, item) else {
+            return;
+        };
+        if frame.contains_key(LOOP_END_REASON) {
+            for key in marker.record().keys() {
+                self.live.pop(key);
+            }
+        }
+    }
+
+    /// The turn's one record, its output's, kept as the executor sends it.
+    pub(crate) fn record(&self) -> ResponseMetadata {
+        self.live.clone()
+    }
+
+    /// Closes the stream: the executor closes the channel's, a running call
+    /// let finish (RFC §12.2 step 13s), and its end is waited for, the
+    /// record's last write read.
+    pub(crate) async fn close_stream(&mut self) {
+        if self.stage == Stage::Stream && !*self.state.over.borrow() {
+            self.put(&Control::Close);
+        }
+        self.stage = Stage::Done;
+        loop {
+            match self.main.recv().await {
+                Some(Main::Record(record)) => self.take_record(record),
+                Some(Main::Item(seq, item)) => drop(self.read(seq, item)),
+                Some(Main::End | Main::Failed(_)) | None => return,
+                Some(Main::Output(..) | Main::Error(_)) => {}
+            }
         }
     }
 

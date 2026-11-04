@@ -747,12 +747,8 @@ impl Operation for DelegatedTurn {
 /// The record of `channel_id`'s turn a stream's read reports under its
 /// caller's `turns`: how the turn ended and its usage (RFC §6.4).
 fn stream_record(output: &ChannelOutput, channel_id: &ChannelId) -> Option<Metadata> {
-    let entry = output
-        .response_metadata
-        .get("turns")?
-        .get(channel_id.as_str())?
-        .as_object()?;
-    Some(entry.clone())
+    let turns = output.response_metadata.get("turns")?;
+    turns.get(channel_id.as_str())?.as_object().cloned()
 }
 
 /// The protocol error of `outcome`, which does not answer `effect`.
