@@ -46,8 +46,53 @@ pub struct ResponseMetadata {
 struct Inner {
     data: Metadata,
     writes: u64,
-    /// The thread that wrote a key last, which `with_value` reads.
-    last_writer: Option<ThreadId>,
+    /// The changes running on a value it holds ([`ResponseMetadata::with_value`]).
+    changes: Vec<Change>,
+    /// The id of the next of them.
+    next_change: u64,
+}
+
+/// A [`ResponseMetadata::with_value`] running on the value under `key`.
+struct Change {
+    id: u64,
+    key: String,
+    thread: ThreadId,
+    /// Whether another thread wrote `key` since it read the value: it runs
+    /// again, on what that thread left.
+    overwritten: bool,
+}
+
+impl Inner {
+    /// The current thread wrote the keys `wrote` names: another thread's
+    /// change of one of them is overwritten.
+    fn wrote(&mut self, wrote: impl Fn(&str) -> bool) {
+        let me = thread::current().id();
+        for change in &mut self.changes {
+            if change.thread != me && wrote(&change.key) {
+                change.overwritten = true;
+            }
+        }
+    }
+
+    /// Change `id` is over: whether it was overwritten.
+    fn end_change(&mut self, id: u64) -> bool {
+        let Some(position) = self.changes.iter().position(|change| change.id == id) else {
+            return false;
+        };
+        self.changes.remove(position).overwritten
+    }
+}
+
+/// A change running, its entry taken back however it ends, a panic included.
+struct Running<'record> {
+    record: &'record ResponseMetadata,
+    id: u64,
+}
+
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        self.record.lock().end_change(self.id);
+    }
 }
 
 impl ResponseMetadata {
@@ -94,9 +139,10 @@ impl ResponseMetadata {
     /// `record[key] = value`.
     pub fn insert(&self, key: impl Into<String>, value: Value) -> Option<Value> {
         let mut inner = self.lock();
+        let key = key.into();
         inner.writes += 1;
-        inner.last_writer = Some(thread::current().id());
-        inner.data.insert(key.into(), value)
+        inner.wrote(|written| written == key);
+        inner.data.insert(key, value)
     }
 
     /// Removes `key`, returning its value; removing no key is no write:
@@ -106,7 +152,7 @@ impl ResponseMetadata {
         let removed = inner.data.shift_remove(key);
         if removed.is_some() {
             inner.writes += 1;
-            inner.last_writer = Some(thread::current().id());
+            inner.wrote(|written| written == key);
         }
         removed
     }
@@ -120,7 +166,7 @@ impl ResponseMetadata {
             return value.clone();
         }
         inner.writes += 1;
-        inner.last_writer = Some(thread::current().id());
+        inner.wrote(|written| written == key);
         inner.data.insert(key, default.clone());
         default
     }
@@ -129,7 +175,7 @@ impl ResponseMetadata {
     pub fn update(&self, keys: Metadata) {
         let mut inner = self.lock();
         inner.writes += u64::try_from(keys.len()).unwrap_or(u64::MAX);
-        inner.last_writer = Some(thread::current().id());
+        inner.wrote(|written| keys.contains_key(written));
         inner.data.extend(keys);
     }
 
@@ -137,33 +183,64 @@ impl ResponseMetadata {
     pub fn clear(&self) {
         let mut inner = self.lock();
         inner.writes += u64::try_from(inner.data.len()).unwrap_or(u64::MAX);
-        inner.last_writer = Some(thread::current().id());
+        inner.wrote(|_| true);
         inner.data.clear();
     }
 
     /// Changes the value under `key`, when it holds one: Python's
     /// `record[key].append(...)`, no write of a key. `change` runs with the
-    /// record free, so it may read it; another thread's write meanwhile runs
-    /// it again on what that thread left, no update lost. A write `change`
-    /// itself makes under `key` gives way to what it leaves in the value.
+    /// record free, so it may read and write it. Another thread's write of
+    /// `key` meanwhile runs it again on what that thread left, no update lost,
+    /// as often as other threads write the key. A write of its own thread
+    /// under `key`, a `with_value` of its own among them, runs nothing again
+    /// and gives way to what `change` leaves in the value.
     pub fn with_value(&self, key: &str, mut change: impl FnMut(&mut Value)) {
-        let me = thread::current().id();
         loop {
-            let Some(before) = self.get(key) else {
+            let Some((mut value, running)) = self.start_change(key) else {
                 return;
             };
-            let mut after = before.clone();
-            change(&mut after);
-            let mut inner = self.lock();
-            let last_writer = inner.last_writer;
-            let Some(value) = inner.data.get_mut(key) else {
-                return;
-            };
-            if *value == before || last_writer == Some(me) {
-                *value = after;
+            change(&mut value);
+            if self.commit_change(key, running, value) {
                 return;
             }
         }
+    }
+
+    /// The value a change of `key` runs on, the change noted for the writes
+    /// it may meet; `None` when it holds no such key.
+    fn start_change(&self, key: &str) -> Option<(Value, Running<'_>)> {
+        let mut inner = self.lock();
+        let value = inner.data.get(key)?.clone();
+        let id = inner.next_change;
+        inner.next_change += 1;
+        inner.changes.push(Change {
+            id,
+            key: key.to_owned(),
+            thread: thread::current().id(),
+            overwritten: false,
+        });
+        Some((value, Running { record: self, id }))
+    }
+
+    /// Writes what the change `running` left in the value of `key`; whether
+    /// it is over, `false` for one to run again. A key gone is no value to
+    /// change.
+    fn commit_change(&self, key: &str, running: Running<'_>, value: Value) -> bool {
+        let over = {
+            let mut inner = self.lock();
+            let overwritten = inner.end_change(running.id);
+            match inner.data.get_mut(key) {
+                Some(_) if overwritten => false,
+                Some(held) => {
+                    *held = value;
+                    inner.wrote(|written| written == key);
+                    true
+                }
+                None => true,
+            }
+        };
+        drop(running);
+        over
     }
 
     /// A copy of its keys as they stand: Python's `dict(record)`.
@@ -177,7 +254,7 @@ impl ResponseMetadata {
     pub fn replace(&self, keys: Metadata) {
         let mut inner = self.lock();
         inner.writes += 1;
-        inner.last_writer = Some(thread::current().id());
+        inner.wrote(|_| true);
         inner.data = keys;
     }
 
@@ -191,8 +268,7 @@ impl From<Metadata> for ResponseMetadata {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 data,
-                writes: 0,
-                last_writer: None,
+                ..Inner::default()
             })),
         }
     }
@@ -304,6 +380,82 @@ mod tests {
         });
         assert_eq!(record.get("sources"), Some(json!("mine")));
         assert_eq!(runs, 1);
+    }
+
+    // Python: a change that calls `with_value` on its own key, as a helper of
+    // the handler's may, is two appends to one list, and ends.
+    #[test]
+    fn a_change_that_changes_its_own_key_ends() {
+        let record = ResponseMetadata::from(keys(json!({"sources": []})));
+        let again = record.clone();
+        let mut runs = 0;
+        record.with_value("sources", |sources| {
+            runs += 1;
+            assert!(runs < 100, "the change runs again and again");
+            again.with_value("sources", |sources| {
+                sources.as_array_mut().expect("a list").push(json!("inner"));
+            });
+            sources.as_array_mut().expect("a list").push(json!("outer"));
+        });
+        assert_eq!(runs, 1);
+        assert_eq!(record.get("sources"), Some(json!(["outer"])));
+    }
+
+    // Python: tests/test_response_metadata.py::_citing_handler,
+    // record.setdefault("cited", []).append(...), from threads that each write
+    // a key of their own too: one thread in Python, so nothing is lost.
+    #[test]
+    fn the_citing_idiom_loses_nothing_between_threads_that_write_other_keys() {
+        const WRITERS: usize = 8;
+        const WRITES: usize = 200;
+        let record = ResponseMetadata::new();
+        thread::scope(|scope| {
+            for writer in 0..WRITERS {
+                let record = record.clone();
+                scope.spawn(move || {
+                    for write in 0..WRITES {
+                        record.setdefault("cited", json!([]));
+                        record.with_value("cited", |cited| {
+                            let list = cited.as_array_mut().expect("a list");
+                            list.push(json!([writer, write]));
+                        });
+                        record.insert(format!("writer-{writer}"), json!(write));
+                    }
+                });
+            }
+        });
+        let cited = record.get("cited").expect("the list");
+        assert_eq!(cited.as_array().map(Vec::len), Some(WRITERS * WRITES));
+        for writer in 0..WRITERS {
+            let last = record.get(&format!("writer-{writer}"));
+            assert_eq!(last, Some(json!(WRITES - 1)));
+        }
+    }
+
+    // A change that writes a key of its own makes no other thread's change of
+    // the value it holds its own to overwrite.
+    #[test]
+    fn a_change_that_writes_another_key_loses_no_other_thread_s_change() {
+        const WRITERS: usize = 8;
+        const WRITES: usize = 200;
+        let record = ResponseMetadata::from(keys(json!({"cited": []})));
+        thread::scope(|scope| {
+            for writer in 0..WRITERS {
+                let record = record.clone();
+                scope.spawn(move || {
+                    let again = record.clone();
+                    for write in 0..WRITES {
+                        record.with_value("cited", |cited| {
+                            again.insert(format!("writer-{writer}"), json!(write));
+                            let list = cited.as_array_mut().expect("a list");
+                            list.push(json!([writer, write]));
+                        });
+                    }
+                });
+            }
+        });
+        let cited = record.get("cited").expect("the list");
+        assert_eq!(cited.as_array().map(Vec::len), Some(WRITERS * WRITES));
     }
 
     // Python: one thread, so record["sources"].append(x) never loses one.
