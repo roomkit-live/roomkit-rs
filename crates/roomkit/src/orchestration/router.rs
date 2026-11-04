@@ -246,7 +246,9 @@ impl ConversationRouter {
     fn route(&self, event: RoomEvent, context: &RoomContext) -> Result<HookResult, HookError> {
         if let Some(addressed) = &event.addressed_to {
             return Ok(match &self.supervisor_id {
-                Some(supervisor) if !addressed.contains(supervisor) => {
+                Some(supervisor)
+                    if !addressed.contains(supervisor) && watches(addressed, context)? =>
+                {
                     let always = Value::from(vec![supervisor.as_str()]);
                     modified(stamped(event, [(ALWAYS_PROCESS, always)]))
                 }
@@ -277,6 +279,20 @@ impl ConversationRouter {
         ];
         Ok(modified(stamped(event, marks)))
     }
+}
+
+/// Whether the supervisor is asked beside the address `addressed`: always, but
+/// while the room is held for a human only when the address names an agent,
+/// since no other acts on it (RFC §19.4 step 4).
+fn watches(addressed: &[ChannelId], context: &RoomContext) -> Result<bool, HookError> {
+    if !get_conversation_state(&context.room)?.human_hold {
+        return Ok(true);
+    }
+    Ok(addressed.iter().any(|channel| {
+        context
+            .get_binding(channel)
+            .is_some_and(|binding| binding.category == ChannelCategory::Intelligence)
+    }))
 }
 
 /// Whether `event` comes from an intelligence channel the room binds.
