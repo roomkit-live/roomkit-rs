@@ -78,7 +78,7 @@ pub use protocol::{
     Delivered, DiscussionOutcome, DiscussionRequest, DiscussionTurn, Effect, EffectId, Entry,
     EntryId, HoldOutcome, HoldRequest, HookAnswer, HookRequest, IdentityAnswer, IdentityRequest,
     KIT_CLOSED, LANE_CANCELLED, Next, Notice, Operation, Outcome, ProtocolError, ROW_HIDDEN,
-    ROW_WITHHELD, Raised, Request, Settled, SpanNote, Step, StoreOutcome, StoreRequest,
+    ROW_WITHHELD, Raised, Request, RouteEnd, Settled, SpanNote, Step, StoreOutcome, StoreRequest,
     StreamTarget, TURN_CUT,
 };
 

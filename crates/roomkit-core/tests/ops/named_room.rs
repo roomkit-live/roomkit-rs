@@ -12,7 +12,7 @@ use roomkit_core::model::{
     ErrorRecord, InboundMessage, Participant, ParticipantId, Room, RoomId, RoomStatus, TextContent,
     Timestamp, Visibility,
 };
-use roomkit_core::ops::{ChannelConfig, FrameworkEvent, InboundError};
+use roomkit_core::ops::{ChannelConfig, FrameworkEvent, InboundError, RouteEnd, SpanNote};
 use roomkit_core::rules::addresses::CountryCode;
 use roomkit_core::rules::hook_registry::HookTrigger;
 use serde_json::json;
@@ -949,4 +949,55 @@ mod the_lane {
             ["enter lane room_2 evt_5", "leave lane room_2 evt_5"]
         );
     }
+}
+
+/// What the driver's spans are told of a message's way (RFC §15.7): it starts
+/// before anything is read, and is over with the room step 2 has, before the
+/// hooks a session's start holds it for, which `framework.route` does not read.
+#[test]
+fn its_way_tells_its_spans_the_room_it_came_to() {
+    let mut sim = no_room_yet();
+    sim.observer("audit", HookTrigger::OnSessionStarted);
+    sim.send(Sim::message("sms", "Bonjour")).unwrap();
+    let notes = &sim.span_notes;
+    assert!(
+        matches!(
+            notes.first(),
+            Some(SpanNote::RouteStarts { entry: None, .. })
+        ),
+        "{notes:?}"
+    );
+    let over: Vec<&RouteEnd> = notes
+        .iter()
+        .filter_map(|note| match note {
+            SpanNote::RouteOver { end, .. } => Some(end),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(over, [&RouteEnd::Room(room_id())]);
+}
+
+/// Another organization's room is no room: its way ends on the refusal, as
+/// Python's span reads `RoomNotFoundError`.
+#[test]
+fn its_way_tells_its_spans_what_failed_it() {
+    let mut sim = Sim::new();
+    sim.transport("sms");
+    sim.room.organization_id = Some("other".to_owned());
+    let refused = sim.send_to("room_1", Some("mine"), Sim::message("sms", "Bonjour"));
+    assert!(refused.is_err());
+    let over: Vec<&RouteEnd> = sim
+        .span_notes
+        .iter()
+        .filter_map(|note| match note {
+            SpanNote::RouteOver { end, .. } => Some(end),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        over,
+        [&RouteEnd::Failed(Box::new(InboundError::RoomNotFound(
+            room_id()
+        )))]
+    );
 }

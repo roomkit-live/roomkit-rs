@@ -425,9 +425,6 @@ fn refusal_of(entry: &Entry) -> impl FnOnce(InboundError) -> RoomKitError + use<
     }
 }
 
-/// The event an injection committed: once the kit's close cut it before
-/// its commit, nothing of it stored, [`RoomKitError::KitClosed`] (RFC
-/// §12.10.4).
 /// What a call under `span` that injects an event came to, and the span's
 /// end.
 pub(super) fn injected_under(
@@ -442,6 +439,9 @@ pub(super) fn injected_under(
     result
 }
 
+/// The event an injection committed: once the kit's close cut it before
+/// its commit, nothing of it stored, [`RoomKitError::KitClosed`] (RFC
+/// §12.10.4).
 pub(super) fn event_of(result: InboundResult) -> Result<RoomEvent, RoomKitError> {
     match result.event {
         Some(event) => Ok(event),

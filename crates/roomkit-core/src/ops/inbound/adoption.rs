@@ -453,7 +453,8 @@ impl Machine {
             Err(error) => return self.settle_entry(cx, &adopted, Err(error)),
         };
         let mut arrival = Box::new(
-            Arrival::adopted(room_id, organization_id, channel, message).answered(answers),
+            Arrival::adopted(adopted.id, room_id, organization_id, channel, message)
+                .answered(answers),
         );
         within(cx, &adopted, |cx| arrival.start(cx));
         self.adopted.running.push(AdoptedRun {

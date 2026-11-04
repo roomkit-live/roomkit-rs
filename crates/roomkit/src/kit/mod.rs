@@ -311,6 +311,14 @@ impl<S> std::fmt::Debug for Inner<S> {
     }
 }
 
+/// `T`'s name, without its path or its generics: Python's
+/// `type(store).__name__`.
+fn short_type_name<T: ?Sized>() -> &'static str {
+    let name = std::any::type_name::<T>();
+    let plain = name.split('<').next().unwrap_or(name);
+    plain.rsplit("::").next().unwrap_or(plain)
+}
+
 /// Warns when a store other processes may share is paired with an in-process
 /// lock (RFC §10.1 step 12, §13.5), as Python's kit: per-process locks do not
 /// coordinate the whole inbound pipeline, its idempotency decisions or the
@@ -327,7 +335,7 @@ fn warn_of_a_process_local_lock<S: ConversationStore>(
              the store is shared across processes (e.g. a load-balanced deployment), use a \
              distributed lock manager such as PostgresAdvisoryLockManager with PostgresStore, or \
              two processes may give two senders whose names read alike one rank.",
-            std::any::type_name::<S>().rsplit("::").next().unwrap_or("The store"),
+            short_type_name::<S>(),
         );
     }
 }

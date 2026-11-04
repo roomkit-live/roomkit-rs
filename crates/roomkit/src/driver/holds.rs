@@ -454,10 +454,15 @@ impl Drop for Held<'_> {
 /// holds.
 pub(super) fn reentrant(room_id: &RoomId) -> ErrorRecord {
     ErrorRecord::new(
-        "Reentrant",
+        REENTRANT,
         format!(
             "room {room_id}'s lock or admission order is held by the call this one runs \
              within: it would wait for itself"
         ),
     )
 }
+
+/// The error type of a wait the run refused, what would wait for the run
+/// itself: Python's `ReentrantCallError`, which the call reads as
+/// [`RoomKitError::ReentrantCall`](crate::error::RoomKitError).
+pub(super) const REENTRANT: &str = "Reentrant";

@@ -37,7 +37,9 @@ use crate::model::{
     ChannelType, EventId, EventType, Identity, InboundMessage, RoomContext, RoomEvent, RoomId,
 };
 use crate::ops::io::Bound;
-use crate::ops::protocol::{ChannelRequest, EffectId, Outcome, Request, StoreRequest};
+use crate::ops::protocol::{
+    ChannelRequest, EffectId, EntryId, Notice, Outcome, Request, RouteEnd, SpanNote, StoreRequest,
+};
 use crate::ops::{ChannelConfig, Cx, KitConfig, Progress};
 use crate::rules::chain_depth::Draw;
 use crate::rules::instructions::InstructionRefusal;
@@ -159,6 +161,8 @@ pub(super) struct Arrival {
     /// handed (RFC §10.4).
     identity: Option<Identity>,
     /// How many times the router was asked.
+    /// The adopted entry the arrival is, `None` for the call's own.
+    entry: Option<EntryId>,
     routes: u8,
     /// The room step 2 works on or arrived in; `None` while the message is
     /// routed.
@@ -226,6 +230,7 @@ impl Arrival {
             sender,
             identity: None,
             routes: 0,
+            entry: None,
             room: None,
             charge: DeliveryCharge::new(None),
             chain_floor: 0,
@@ -267,18 +272,28 @@ impl Arrival {
     /// adopted by the operation whose work called into its room (RFC
     /// §13.5, gap G-070): it carries no deadline.
     pub(super) fn adopted(
+        entry: EntryId,
         room_id: RoomId,
         organization_id: Option<String>,
         channel: ChannelConfig,
         message: InboundMessage,
     ) -> Self {
-        Self::new(
+        let mut arrival = Self::new(
             InboundTarget::Room(room_id),
             organization_id,
             channel,
             message,
             Bound::Unbounded,
-        )
+        );
+        arrival.entry = Some(entry);
+        arrival
+    }
+
+    /// Tells the message's `framework.route` what its way came to.
+    fn tell_route(&self, cx: &mut Cx<'_>, end: RouteEnd) {
+        let entry = self.entry;
+        cx.io
+            .notify(Notice::Span(SpanNote::RouteOver { entry, end }));
     }
 
     /// The room the arrival works on: the room step 2 works on or arrived
@@ -307,6 +322,11 @@ impl Arrival {
         if !matches!(self.state, State::Start) {
             return;
         }
+        cx.io.notify(Notice::Span(SpanNote::RouteStarts {
+            entry: self.entry,
+            channel_id: self.message.channel_id.clone(),
+            sender_id: self.message.sender_id.clone(),
+        }));
         match self.target.clone() {
             InboundTarget::Room(room_id) => self.enter(cx, room_id, Mode::Named),
             InboundTarget::Routed => self.resolve_identity(cx),
@@ -450,7 +470,11 @@ impl Arrival {
                 Progress::Waiting
             }
             Ok(None) => self.enter_fresh(cx),
-            Err(error) => failed(InboundError::Routing(error)),
+            Err(error) => {
+                let error = InboundError::Routing(error);
+                self.tell_route(cx, RouteEnd::Failed(Box::new(error.clone())));
+                failed(error)
+            }
         }
     }
 
@@ -459,6 +483,7 @@ impl Arrival {
     /// before the room is created.
     fn enter_fresh(&mut self, cx: &mut Cx<'_>) -> Arriving {
         if !self.charge.charge_once() {
+            self.tell_route(cx, RouteEnd::PastTheBudget);
             return Progress::Done(Err(Stopped::PastBudget));
         }
         let room_id = cx.env.new_room_id();
@@ -484,7 +509,8 @@ impl Arrival {
                 self.bound,
             )
             .sent_by(self.message.sender_id.clone())
-            .opening_on(opening),
+            .opening_on(opening)
+            .told_as(self.entry),
         );
         step.start(cx);
         self.state = State::Naming(step);
@@ -500,9 +526,15 @@ impl Arrival {
                 }
                 self.parse(cx, context)
             }
-            Named::Failed(error) => failed(error),
+            Named::Failed(error) => {
+                self.tell_route(cx, RouteEnd::Failed(Box::new(error.clone())));
+                failed(error)
+            }
             Named::Expired => Progress::Done(Err(Stopped::Expired)),
-            Named::PastBudget => Progress::Done(Err(Stopped::PastBudget)),
+            Named::PastBudget => {
+                self.tell_route(cx, RouteEnd::PastTheBudget);
+                Progress::Done(Err(Stopped::PastBudget))
+            }
             Named::Rerouted => {
                 tracing::debug!(
                     target: "roomkit::core::inbound",

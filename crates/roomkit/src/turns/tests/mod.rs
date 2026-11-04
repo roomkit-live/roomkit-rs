@@ -6,4 +6,5 @@ mod cut_reads;
 mod liveness;
 mod records;
 mod support;
+mod trace;
 mod window;

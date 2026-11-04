@@ -1,6 +1,7 @@
 //! A span the kit opened: Python's pair of `start_span` and `end_span`
 //! around a piece of its work, with the span made current for that work.
 
+use std::any::Any;
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -255,6 +256,10 @@ pub(crate) struct Late {
     options: Mutex<Option<StartSpanOptions>>,
     span: Mutex<Option<OpenSpan>>,
     id: OnceLock<String>,
+    /// The provider's own context of the span, read as it opens: a provider
+    /// forgets a span it ended, and what the work opens later stays in its
+    /// trace.
+    context: OnceLock<Option<Arc<dyn Any + Send + Sync>>>,
 }
 
 /// `mutex`'s value, a panic that poisoned it past.
@@ -274,9 +279,17 @@ impl Late {
             return;
         };
         let span = OpenSpan::start(&self.telemetry, self.kind, self.name, options);
+        let context = self.telemetry.provider.get_span_context(span.id());
         if self.id.set(span.id().to_owned()).is_ok() {
+            drop(self.context.set(context));
             *lock(&self.span) = Some(span);
         }
+    }
+
+    /// The provider's own context of the span, once it opened.
+    #[cfg(feature = "opentelemetry")]
+    pub(super) fn context(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.context.get().cloned().flatten()
     }
 
     /// The span, if it opened, for its end; none opens from here on.
@@ -305,6 +318,7 @@ impl LateSpan {
             options: Mutex::new(Some(options)),
             span: Mutex::new(None),
             id: OnceLock::new(),
+            context: OnceLock::new(),
         }))
     }
 

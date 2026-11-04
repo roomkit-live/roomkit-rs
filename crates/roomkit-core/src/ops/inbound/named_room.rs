@@ -55,7 +55,7 @@ use crate::model::{ChannelBinding, ChannelType, ErrorRecord, Room, RoomContext, 
 use crate::ops::io::Bound;
 use crate::ops::lifecycle::locked::{LockedSection, SectionError, SectionResult};
 use crate::ops::lifecycle::report::{self, Reported, SessionStarted};
-use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
+use crate::ops::protocol::{EffectId, EntryId, Notice, Outcome, RouteEnd, SpanNote, StoreRequest};
 use crate::ops::{ChannelConfig, Cx, Progress};
 use crate::rules::addresses::SYSTEM_SENDER;
 use crate::rules::chain_depth::Draw;
@@ -83,6 +83,8 @@ pub(super) struct NamedRoom {
     sender: Sender,
     /// The message's sender id, as the channel wrote it: the participant a
     /// session the creation starts names.
+    /// The adopted entry the step is, `None` for the call's own.
+    entry: Option<EntryId>,
     sender_id: String,
     mode: Mode,
     /// The call's deadline (RFC §13.6).
@@ -164,6 +166,7 @@ impl NamedRoom {
             channel,
             sender,
             sender_id: String::new(),
+            entry: None,
             mode,
             bound,
             opening: None,
@@ -171,6 +174,13 @@ impl NamedRoom {
             created: false,
             state: State::Start,
         }
+    }
+
+    /// The same step, of the adopted entry `entry`, `None` for the call's
+    /// own: what its span is told by.
+    pub(super) fn told_as(mut self, entry: Option<EntryId>) -> Self {
+        self.entry = entry;
+        self
     }
 
     /// The same step, of a message whose sender id is `sender_id`.
@@ -317,6 +327,16 @@ impl NamedRoom {
         }
     }
 
+    /// The room is the message's, step 2's last write behind it: what its
+    /// `framework.route` reads. A session's hooks wait after it, as Python's
+    /// span ends before them.
+    fn tell_room(&self, cx: &mut Cx<'_>) {
+        cx.io.notify(Notice::Span(SpanNote::RouteOver {
+            entry: self.entry,
+            end: RouteEnd::Room(self.room_id.clone()),
+        }));
+    }
+
     /// A room that exists: the caller's, then its channel attached unless
     /// rule 7 refuses (gap G-053), or the routed sender recorded (gap
     /// G-061).
@@ -340,6 +360,7 @@ impl NamedRoom {
             }
             Mode::Named | Mode::Fresh => {
                 if !attachment::may_attach_automatically(&context, &self.channel.channel_id) {
+                    self.tell_room(cx);
                     return Progress::Done(Named::Arrived(context));
                 }
                 let binding = self.channel.binding(self.room_id.clone(), cx.env.now());
@@ -478,6 +499,7 @@ impl NamedRoom {
             Ok(recorded) => recorded.into_context(),
             Err(error) => return Progress::Done(Named::Failed(change_failure(error))),
         };
+        self.tell_room(cx);
         if !created || !starts_session(&self.channel.channel_type) {
             return Progress::Done(Named::Arrived(context));
         }

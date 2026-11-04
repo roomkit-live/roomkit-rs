@@ -1086,3 +1086,169 @@ async fn an_adopted_send_event_opens_its_span_as_it_goes_in() {
     assert!(!spans.is_empty());
     assert!(spans.iter().all(|span| span.status == "ok"), "{spans:?}");
 }
+
+/// A transport that answers each event with `error` on its output.
+#[derive(Clone)]
+struct FailsItsOutput;
+
+impl Channel for FailsItsOutput {
+    fn channel_id(&self) -> ChannelId {
+        id("output")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::SMS
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        None
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        let source = roomkit::model::EventSource::new(id("output"), ChannelType::SMS);
+        ready(Ok(RoomEvent::new(context.room.id, source, message.content)))
+    }
+
+    fn on_event(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let mut output = ChannelOutput::empty();
+        output.error = Some(roomkit::model::ErrorRecord::new("ValueError", "refused"));
+        ready(Ok(output))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
+}
+
+// Python: core/event_router.py `_process_target`: an output's error is one of
+// the set's, and its send still goes.
+#[tokio::test]
+async fn a_broadcast_counts_a_transport_s_output_error_as_failed() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    kit.register_channel(FailsItsOutput).unwrap();
+    kit.attach_channel(&room(), &id("output"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    inbound(&kit).await;
+    let broadcast = message_s_broadcast(&mock);
+    assert_eq!(broadcast.attributes["target_count"], json!(2));
+    assert_eq!(broadcast.attributes["delivered_count"], json!(2));
+    assert_eq!(broadcast.attributes["failed_count"], json!(1));
+    kit.close().await.unwrap();
+}
+
+// Python: core/mixins/injected_events.py: a hook's injected event reads its
+// target's failure on its broadcast, which its delivery results do not report.
+#[tokio::test]
+async fn an_injected_event_s_broadcast_counts_its_target_s_failure() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    kit.register_channel(FailsItsOutput).unwrap();
+    kit.attach_channel(&room(), &id("output"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |event: RoomEvent, _| {
+            let body = serde_json::to_value(&event.content).unwrap();
+            let injected = (body["body"] == "hello").then(|| {
+                let source = roomkit::model::EventSource::new(id("src"), ChannelType::SMS);
+                let noted = RoomEvent::new(room(), source, TextContent::new("Noted."));
+                vec![roomkit::model::InjectedEvent {
+                    target_channel_ids: Some(vec![id("output")]),
+                    ..roomkit::model::InjectedEvent::new(noted)
+                }]
+            });
+            ready(HookResult::allow(AllowOptions {
+                injected,
+                ..AllowOptions::default()
+            }))
+        },
+        HookOptions {
+            name: "injects".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    inbound(&kit).await;
+    kit.close().await.unwrap();
+    let spans = mock.get_spans(SpanKind::Broadcast);
+    assert!(
+        spans.iter().any(
+            |span| span.attributes.get("failed_count") == Some(&json!(1))
+                && span.attributes["target_count"] == json!(1)
+        ),
+        "{spans:?}"
+    );
+}
+
+// Python: core/framework.py `_inject`: an adopted event's broadcast sits under
+// its `framework.send_event`, its reply's too.
+#[tokio::test]
+async fn an_adopted_event_s_broadcast_hangs_under_its_send_event() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    with_agent(&kit, "agent").await;
+    let hooked = kit.clone();
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let kit = hooked.clone();
+            async move {
+                let body = serde_json::to_value(&event.content).unwrap();
+                if body["body"] == "hello" {
+                    kit.send_event(
+                        &room(),
+                        &id("src"),
+                        TextContent::new("adopted"),
+                        SendEventOptions::default(),
+                    )
+                    .await
+                    .unwrap();
+                }
+                HookResult::allow(AllowOptions::default())
+            }
+        },
+        HookOptions {
+            name: "sends".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    inbound(&kit).await;
+    kit.close().await.unwrap();
+    let spans = mock.completed_spans();
+    let send = named(&spans, "framework.send_event");
+    let under_it: Vec<&Span> = spans
+        .iter()
+        .filter(|span| {
+            span.name == "framework.broadcast" && span.parent_id.as_deref() == Some(&send.id)
+        })
+        .collect();
+    assert!(under_it.len() >= 2, "{spans:?}");
+}
+
+// A set with no target: its span still reads its room and its channel.
+#[tokio::test]
+async fn a_set_that_reaches_nobody_reads_its_room_and_its_channel() {
+    let (kit, mock, _) = kit_with_room(None).await;
+    kit.detach_channel(&room(), &id("out"), DetachChannelOptions::default())
+        .await
+        .unwrap();
+    inbound(&kit).await;
+    let broadcast = message_s_broadcast(&mock);
+    assert_eq!(broadcast.room_id.as_deref(), Some("r1"));
+    kit.close().await.unwrap();
+}

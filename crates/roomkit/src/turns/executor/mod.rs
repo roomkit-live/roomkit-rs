@@ -70,6 +70,14 @@ pub(super) fn take(
         turn,
         kit: Arc::clone(kit),
     };
+    #[cfg(test)]
+    if turns
+        .executor_apart
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        let run = executor.run(controls, carried);
+        return kit.spawn(Box::pin(crate::telemetry::within_no_span(run)));
+    }
     kit.spawn(Box::pin(executor.run(controls, carried)))
 }
 

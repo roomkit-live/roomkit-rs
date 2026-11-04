@@ -238,6 +238,13 @@ impl DelegatedTurn {
         let Some(message) = self.committed.clone() else {
             return;
         };
+        self.notices.push(Notice::Span(SpanNote::SetStarts {
+            event_id: message.id.clone(),
+            room_id: message.room_id.clone(),
+            source: message.source.channel_id.clone(),
+            session: None,
+            entry: None,
+        }));
         for binding in &context.bindings {
             if binding.category != ChannelCategory::Intelligence
                 || !permissions::receives(binding, &message)

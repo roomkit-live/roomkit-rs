@@ -19,7 +19,7 @@
 //! served by another process may be, and an intelligence target is reported
 //! `delivery_failed`, since the turn it was owed is never taken.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::delivery_record::DeliveryRecord;
 use super::queues::Lineage;
@@ -204,9 +204,9 @@ pub(super) struct DeliverySet {
     record: Option<DeliveryRecord>,
     /// Whom the event reaches, asked or not, for the set's span.
     reached: usize,
-    /// The targets of an injected set that failed, which its outcome does
-    /// not report, for the set's span.
-    unreported: usize,
+    /// The targets that failed and that its outcome does not report, an
+    /// injected set's or a transport's output's, for the set's span.
+    unreported: BTreeSet<ChannelId>,
 }
 
 impl DeliverySet {
@@ -248,7 +248,7 @@ impl DeliverySet {
             turns_cut: false,
             record: None,
             reached,
-            unreported: 0,
+            unreported: BTreeSet::new(),
         }
     }
 
@@ -387,6 +387,17 @@ impl DeliverySet {
     /// Calls every registered target's `on_event()` at once; a target
     /// whose channel is not registered is not called (gap G-048).
     fn deliver(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
+        let entry = match self.lineage {
+            Lineage::Call => None,
+            Lineage::Entry(entry) => Some(entry),
+        };
+        cx.io.notify(Notice::Span(SpanNote::SetStarts {
+            event_id: self.event.id.clone(),
+            room_id: self.event.room_id.clone(),
+            source: self.event.source.channel_id.clone(),
+            session: voice_session(&self.event),
+            entry,
+        }));
         for index in 0..self.targets.len() {
             let Some(target) = self.targets.get(index) else {
                 continue;
@@ -616,12 +627,18 @@ impl DeliverySet {
         if self.outcome.cancelled.is_some() || self.outcome.refused {
             return;
         }
+        let failed = self.outcome.failures.keys().chain(&self.unreported);
         cx.io.notify(Notice::Span(SpanNote::SetOver {
             event_id: self.event.id.clone(),
             targets: self.reached,
             delivered: self.outcome.delivered.len(),
-            failed: self.outcome.failures.len() + self.unreported,
-            streams: self.outcome.streams.len(),
+            failed: failed.collect::<BTreeSet<_>>().len(),
+            // A stream its cut turn left is closed unread: nobody keeps it.
+            streams: if self.turns_cut {
+                0
+            } else {
+                self.outcome.streams.len()
+            },
             own: self.lineage == Lineage::Call,
         }));
     }
@@ -641,6 +658,9 @@ impl DeliverySet {
         };
         let responder = target.binding.clone();
         let is_agent = target.role == Role::Agent;
+        if output.error.is_some() && (!is_agent || self.kind == SetKind::Injected) {
+            self.unreported.insert(responder.channel_id.clone());
+        }
         self.collect_metadata(&responder.channel_id, output.metadata_updates);
         if self.kind == SetKind::Injected {
             self.outcome.tasks.extend(output.tasks);
@@ -722,7 +742,7 @@ impl DeliverySet {
             return;
         };
         if self.kind == SetKind::Injected {
-            self.unreported += 1;
+            self.unreported.insert(target.binding.channel_id.clone());
             return;
         }
         let failed = DeliveryResult::raised(target.binding.channel_id.clone(), error);
@@ -741,7 +761,7 @@ impl DeliverySet {
             return;
         };
         if self.kind == SetKind::Injected {
-            self.unreported += 1;
+            self.unreported.insert(target.binding.channel_id.clone());
             return;
         }
         let failed = DeliveryResult::refused(target.binding.channel_id.clone(), result);
@@ -764,7 +784,7 @@ impl DeliverySet {
             return;
         };
         if self.kind == SetKind::Injected {
-            self.unreported += 1;
+            self.unreported.insert(target.binding.channel_id.clone());
             return;
         }
         let failed = DeliveryResult {
@@ -1001,6 +1021,15 @@ impl DeliverySet {
                 .insert(target.binding.channel_id.clone(), message);
         }
     }
+}
+
+/// The voice session `event`'s metadata names, if any.
+fn voice_session(event: &RoomEvent) -> Option<String> {
+    event
+        .metadata
+        .get("voice_session_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
 }
 
 /// The error of a delivery refused for want of a recipient (RFC §10.2 step

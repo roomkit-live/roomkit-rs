@@ -165,6 +165,17 @@ async fn text_held_back_to_the_end_records_its_first_token() {
     assert_eq!(metrics.len(), 1, "{metrics:?}");
 }
 
+// Python: providers/ai/base.py `FirstToken`: "at its first text or reasoning".
+#[tokio::test]
+async fn a_stream_of_reasoning_alone_records_its_first_token() {
+    let chunks = Reply::events(&[
+        json!({ "choices": [{ "index": 0, "delta": { "reasoning_content": "Hm." } }] }),
+        json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] }),
+    ]);
+    let metrics = recorded(Mode::Stream, OpenAiApi::ChatCompletions, chunks).await;
+    assert_eq!(metrics.len(), 1, "{metrics:?}");
+}
+
 // Python: providers/ai/base.py `FirstToken`: recorded once, its reasoning first.
 #[tokio::test]
 async fn a_stream_records_its_first_token_once_at_its_reasoning() {

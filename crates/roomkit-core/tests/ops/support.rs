@@ -56,7 +56,8 @@ use roomkit_core::ops::{
     DiscussionOutcome, DiscussionRequest, Effect, EffectId, Entry, Environment, FrameworkEvent,
     HoldOutcome, HoldRequest, HookAnswer, HookRequest, IdentityRequest, Inbound, InboundError,
     InboundResult, InboundTarget, KitConfig, MutationError, Notice, Outcome, Request,
-    SequentialEnvironment, Settled, StoreOutcome, StoreRequest, UpdateEvent, default_inbound_event,
+    SequentialEnvironment, Settled, SpanNote, StoreOutcome, StoreRequest, UpdateEvent,
+    default_inbound_event,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTrigger};
@@ -187,6 +188,9 @@ pub(crate) struct Sim {
     /// `fire <trigger>`.
     pub(crate) journal: Vec<String>,
     pub(crate) notices: Vec<Notice>,
+    /// What the operations told the driver's spans, in order: no part of
+    /// their journal.
+    pub(crate) span_notes: Vec<SpanNote>,
     /// Each trigger whose hooks an operation fired, with whether its run
     /// held the room's lock as it did.
     pub(crate) fired: Vec<(HookTrigger, bool)>,
@@ -350,6 +354,7 @@ impl Sim {
             trace: Vec::new(),
             journal: Vec::new(),
             notices: Vec::new(),
+            span_notes: Vec::new(),
             fired: Vec::new(),
             channels: BTreeMap::new(),
             hooks: BTreeMap::new(),

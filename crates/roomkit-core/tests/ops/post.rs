@@ -5,8 +5,8 @@
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit_core::model::{Post, TextContent};
-use roomkit_core::ops::{ChannelConfig, Inbound, InboundError, InboundResult};
+use roomkit_core::model::{ChannelCategory, ChannelDirection, ChannelType, Post, TextContent};
+use roomkit_core::ops::{ChannelConfig, Inbound, InboundError, InboundResult, SpanNote};
 
 use crate::support::{Sim, channel, room_id};
 
@@ -119,4 +119,46 @@ fn a_first_post_whose_caller_leaves_once_the_lock_is_held_attaches_to_its_end() 
         // The attach's record alone (gap G-046).
         (true, 1)
     );
+}
+
+/// What the driver's spans are told of an injection (RFC §15.7): it goes in,
+/// its set starts and is over, what it reached and came to.
+#[test]
+fn a_post_tells_its_spans_it_goes_in_then_its_set() {
+    let mut sim = room();
+    post(&mut sim, "Hello").unwrap();
+    let notes = &sim.span_notes;
+    assert!(
+        matches!(notes.first(), Some(SpanNote::Injecting { entry: None })),
+        "{notes:?}"
+    );
+    let over = notes.iter().find_map(|note| match note {
+        SpanNote::SetOver {
+            targets,
+            delivered,
+            failed,
+            streams,
+            own,
+            ..
+        } => Some((*targets, *delivered, *failed, *streams, *own)),
+        _ => None,
+    });
+    assert_eq!(over, Some((1, 1, 0, 0, true)));
+}
+
+/// A post refused before it goes in tells its spans nothing.
+#[test]
+fn a_post_refused_tells_its_spans_nothing() {
+    let mut sim = room();
+    sim.declare(ChannelConfig::new(
+        channel("not-a-host"),
+        ChannelType::SMS,
+        ChannelCategory::Transport,
+        ChannelDirection::Bidirectional,
+    ));
+    let mut refused = Post::new(TextContent::new("Hello"));
+    refused.channel_id = Some(channel("not-a-host"));
+    let operation = Inbound::post(sim.shared_config(), room_id(), None, refused);
+    assert!(sim.run(operation).is_err());
+    assert_eq!(sim.span_notes, vec![]);
 }

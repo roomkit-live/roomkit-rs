@@ -198,4 +198,24 @@ mod tests {
             .collect();
         assert_eq!(reported, ["provider_send_failed"]);
     }
+
+    /// An agent not registered ran no turn to report, and fails its set all
+    /// the same (Python's `CHANNEL_NOT_REGISTERED` among `result.errors`).
+    #[test]
+    fn an_agent_not_registered_is_counted_not_reported() {
+        let worker = ChannelBinding::at(
+            ChannelId::new("worker").unwrap(),
+            RoomId::new("r::task-1").unwrap(),
+            ChannelType::AI,
+            ChannelCategory::Intelligence,
+            ChannelDirection::Bidirectional,
+            Timestamp::UNIX_EPOCH,
+        );
+        let gone = ErrorRecord::new(CHANNEL_NOT_REGISTERED, "worker");
+        let mut collected = Collected::default();
+
+        collected.take(EffectId::first(), worker, Some(Outcome::Failed(gone)), 0);
+
+        assert_eq!((collected.failures.len(), collected.unreached), (0, 1));
+    }
 }

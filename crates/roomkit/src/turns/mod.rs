@@ -118,6 +118,10 @@ pub(crate) struct Turns {
     /// The open human-input requests of the turns, and the answers held
     /// for ones not open yet (RFC §10.6.5).
     pub(crate) inputs: OwnerInputs,
+    /// A test's: the executor starts in a context of its own, as one in
+    /// another process does.
+    #[cfg(test)]
+    pub(crate) executor_apart: AtomicBool,
 }
 
 impl Default for Turns {
@@ -133,6 +137,8 @@ impl Default for Turns {
             cut: watch::Sender::new(false),
             started: Mutex::new(StartedTurns::default()),
             inputs: OwnerInputs::default(),
+            #[cfg(test)]
+            executor_apart: AtomicBool::new(false),
         }
     }
 }

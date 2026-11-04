@@ -29,7 +29,7 @@
 //! its creation never within the call's bound.
 
 use std::fmt;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll};
 
 use roomkit_core::model::{ErrorRecord, EventId, EventStatus, Metadata, RoomEvent, RoomId};
@@ -113,6 +113,8 @@ pub(crate) struct Record {
     answers: StoredAnswers,
     /// The commit that decides the call, once it started.
     in_flight: InFlight,
+    /// What the caller, answered at the decision, did not wait for.
+    tail: Mutex<Option<Tail>>,
 }
 
 /// The answers a call's cascade commits, each with what its write came to:
@@ -164,7 +166,13 @@ impl Record {
             cut_read_left: Mutex::new(None),
             answers: StoredAnswers::default(),
             in_flight: InFlight::default(),
+            tail: Mutex::new(None),
         }
+    }
+
+    /// The call's tail, to change or to end.
+    fn tail(&self) -> MutexGuard<'_, Option<Tail>> {
+        self.tail.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Asks for the cut of the call's turns, for `reason`: whether this
@@ -208,6 +216,10 @@ impl Record {
         if let Some(record) = self.left_by_the_cut_read() {
             result.response_metadata = record;
         }
+        // What the caller did not wait for is cut with its turns, a send
+        // still under way no part of it, as Python's reader is.
+        let tail = self.tail().take();
+        drop(tail);
         self.cancelled.send_replace(Some(result));
     }
 
@@ -237,6 +249,17 @@ impl Record {
     /// What ends the wait for the read the cut stopped however the run ends:
     /// a cut seen in the step that ends the run tells nothing, nothing polling
     /// the operation after it.
+    fn tail_over_with_the_run(self: &Arc<Self>) -> impl Drop + Send + use<> {
+        struct RunOver(Arc<Record>);
+        impl Drop for RunOver {
+            fn drop(&mut self) {
+                let tail = self.0.tail().take();
+                drop(tail);
+            }
+        }
+        RunOver(Arc::clone(self))
+    }
+
     fn read_over_with_the_run(self: &Arc<Self>) -> impl Drop + Send + use<> {
         struct RunOver(Arc<Record>);
         impl Drop for RunOver {
@@ -361,8 +384,6 @@ pub(super) struct Caller {
     /// it (`Inbound::under_lock`).
     pub(super) hand: Option<Under>,
     telemetry: KitTelemetry,
-    /// What the caller, answered at the decision, did not wait for.
-    tail: Option<Tail>,
 }
 
 /// A call's `framework.detached`, Python's span of what a caller did not wait
@@ -374,6 +395,9 @@ struct Tail {
     span: Option<OpenSpan>,
     /// How many of the call's turns answered with a stream.
     streams: usize,
+    /// The error the call was decided with, a failed release's: its caller's,
+    /// and no failure of what it did not wait for.
+    decided: Option<ErrorRecord>,
 }
 
 impl fmt::Debug for Tail {
@@ -387,7 +411,11 @@ impl fmt::Debug for Tail {
 const CANCELLED: &str = "cancelled";
 
 impl Tail {
-    fn open(telemetry: &KitTelemetry, room_id: Option<&RoomId>) -> Self {
+    fn open(
+        telemetry: &KitTelemetry,
+        room_id: Option<&RoomId>,
+        decided: Option<ErrorRecord>,
+    ) -> Self {
         let span = OpenSpan::start(
             telemetry,
             SpanKind::InboundPipeline,
@@ -400,6 +428,7 @@ impl Tail {
         Self {
             span: Some(span),
             streams: 0,
+            decided,
         }
     }
 
@@ -429,7 +458,11 @@ impl Tail {
         };
         if cut || result.cancellation_reason.is_some() {
             span.fail(CANCELLED, attributes);
-        } else if let Some(error) = &result.error {
+        } else if let Some(error) = result
+            .error
+            .as_ref()
+            .filter(|error| Some(*error) != self.decided.as_ref())
+        {
             span.fail_error(&error.error_type, &error.message, attributes);
         } else {
             span.end(attributes);
@@ -501,13 +534,12 @@ impl Caller {
             record,
             hand: None,
             telemetry,
-            tail: None,
         }
     }
 
     /// `streams` of the call's turns answered with a stream.
-    pub(super) fn streams_started(&mut self, streams: usize) {
-        if let Some(tail) = &mut self.tail {
+    pub(super) fn streams_started(&self, streams: usize) {
+        if let Some(tail) = self.record.tail().as_mut() {
             tail.streams += streams;
         }
     }
@@ -516,14 +548,18 @@ impl Caller {
     /// measured from now, unless its call was refused before the room's lock
     /// and has nothing left.
     fn open_tail(&mut self, room_id: Option<&RoomId>, answered: &InboundOutput) {
-        if matches!(answered, Ok(Ok(result)) if !result.refused_before_the_lock) {
-            self.tail = Some(Tail::open(&self.telemetry, room_id));
+        if let Ok(Ok(result)) = answered
+            && !result.refused_before_the_lock
+        {
+            let decided = result.error.clone();
+            *self.record.tail() = Some(Tail::open(&self.telemetry, room_id, decided));
         }
     }
 
     /// The run is over, as `output` reads, `cut` by the kit's close or not.
-    fn end_tail(&mut self, output: &InboundOutput, cut: bool) {
-        if let Some(tail) = self.tail.take() {
+    fn end_tail(&self, output: &InboundOutput, cut: bool) {
+        let tail = self.record.tail().take();
+        if let Some(tail) = tail {
             tail.end(output, cut);
         }
     }
@@ -798,8 +834,10 @@ async fn run_leased<S: ConversationStore>(
     let mut caller = Caller::new(answer, defer, Arc::clone(&record), kit.telemetry.clone());
     caller.hand = hand;
     let read_over = record.read_over_with_the_run();
+    let tail_over = record.tail_over_with_the_run();
     let run = async move {
         let _read_over = read_over;
+        let _tail_over = tail_over;
         // The key names the delivery until the run is over.
         let _named = named;
         // A room activity: the kit's subscription to its bus first.

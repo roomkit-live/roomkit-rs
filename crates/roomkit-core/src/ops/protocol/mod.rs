@@ -33,7 +33,7 @@ pub use results::{InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED};
 use thiserror::Error;
 
 use super::{Environment, FrameworkEvent};
-use crate::model::{EventId, Metadata, RoomContext, RoomEvent, RoomId, Timestamp};
+use crate::model::{ChannelId, EventId, Metadata, RoomContext, RoomEvent, RoomId, Timestamp};
 use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_registry::{HookId, HookTrigger};
 
@@ -205,13 +205,44 @@ pub enum Notice {
 }
 
 /// What the operation tells the driver's spans: nothing depends on it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SpanNote {
     /// A direct injection goes in, its refusals before the room's lock
     /// behind it: from here it is a `framework.send_event`, as Python's
     /// `_inject` opens it.
     Injecting {
         /// The adopted entry it is, `None` for the call's own.
+        entry: Option<EntryId>,
+    },
+    /// A message starts finding its room: `framework.route`, as Python's
+    /// `_route_to_room` opens it.
+    RouteStarts {
+        /// The adopted entry it is, `None` for the call's own.
+        entry: Option<EntryId>,
+        /// The channel it came on.
+        channel_id: ChannelId,
+        /// Its sender.
+        sender_id: String,
+    },
+    /// The message's way to its room is over.
+    RouteOver {
+        /// The adopted entry it is, `None` for the call's own.
+        entry: Option<EntryId>,
+        /// What it came to.
+        end: RouteEnd,
+    },
+    /// A delivery set starts: `framework.broadcast`, as Python's
+    /// `EventRouter.execute_plan` opens it.
+    SetStarts {
+        /// The event.
+        event_id: EventId,
+        /// The event's room.
+        room_id: RoomId,
+        /// The channel the event came from.
+        source: ChannelId,
+        /// The voice session its metadata names, if any.
+        session: Option<String>,
+        /// The adopted entry whose cascade it is, `None` for the call's own.
         entry: Option<EntryId>,
     },
     /// The targets of `event_id`'s delivery set are over.
@@ -225,13 +256,24 @@ pub enum SpanNote {
         delivered: usize,
         /// The targets that failed (`len(result.errors)`).
         failed: usize,
-        /// The turns that answered with a stream (what Python's
-        /// `cascade.add_streams` adds).
+        /// The turns that answered with a stream to read (what Python's
+        /// `cascade.add_streams` keeps).
         streams: usize,
         /// Whether the set is of the call's own cascade, not an adopted
         /// entry's.
         own: bool,
     },
+}
+
+/// What a message's way to its room came to.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RouteEnd {
+    /// Step 2 has its room.
+    Room(RoomId),
+    /// What failed it, nothing of it written.
+    Failed(Box<InboundError>),
+    /// It would open a room past the budget of the work that sent it.
+    PastTheBudget,
 }
 
 /// The work the body of an ASYNC hook is while it runs, when a cascade

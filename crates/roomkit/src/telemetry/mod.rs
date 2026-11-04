@@ -29,6 +29,8 @@ pub use config::TelemetryConfig;
 pub use console::{ConsoleTelemetryProvider, ConsoleTelemetryProviderOptions};
 pub use context::get_current_span;
 pub(crate) use context::within_current_span;
+#[cfg(test)]
+pub(crate) use context::within_no_span;
 pub(crate) use context::{
     current_call_goes_in, current_kit_telemetry, current_late_span, current_trace,
     within_turn_trace,

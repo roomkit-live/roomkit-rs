@@ -147,7 +147,7 @@ async fn a_turn_s_generation_is_a_child_of_the_broadcast_it_runs_under() {
     assert_eq!(parent.name, "roomkit.framework.broadcast");
 }
 
-// Python: core/mixins/inbound... `_inject`: a post's span opens as it goes in,
+// Python: core/framework.py `_inject`: a post's span opens as it goes in,
 // and what follows nests under it in the trace.
 #[tokio::test]
 async fn a_post_s_broadcast_is_a_child_of_its_send_event() {

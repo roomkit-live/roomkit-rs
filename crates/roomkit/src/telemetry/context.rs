@@ -38,9 +38,8 @@ impl Current {
     /// The provider's own context of the current span.
     #[cfg(feature = "opentelemetry")]
     fn span_context(&self) -> Option<Arc<dyn Any + Send + Sync>> {
-        let late = self.late.as_ref().and_then(|late| late.id());
-        match late {
-            Some(span_id) => self.telemetry.provider.get_span_context(span_id),
+        match self.late.as_deref().filter(|late| late.id().is_some()) {
+            Some(late) => late.context(),
             None => self.context.clone(),
         }
     }
@@ -145,6 +144,12 @@ pub(crate) fn within_turn_trace<F: Future>(
         _ => held,
     };
     CURRENT.scope(current, work)
+}
+
+/// `work` under no span and no telemetry: a task of another process's.
+#[cfg(test)]
+pub(crate) fn within_no_span<F: Future>(work: F) -> impl Future<Output = F::Output> {
+    CURRENT.scope(None, work)
 }
 
 /// The late span of the call the current work is, if it has one: for the run

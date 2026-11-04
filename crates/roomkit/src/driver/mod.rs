@@ -925,9 +925,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         if let Request::Store(StoreRequest::Commit { event, .. }) = &request {
             commit = Some(((**event).clone(), answers.map(|of| (of, (**event).clone()))));
             self.indexes.committing(id, event);
-            self.spans.committing(event);
         }
-        let span = self.spans.requested(id, &request);
+        let span = self.spans.requested(&request);
         if self.cut_now && !matches!(&request, Request::Hold(_) | Request::Store(_)) {
             // A run the close cut past its decision calls nothing more; a
             // write it asks is refused at its spawn, the grace run out.
@@ -1288,7 +1287,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
         };
         let effect = self.effect_of_task.remove(&task)?;
-        self.spans.answered(effect, &outcome);
+        self.spans.answered(&outcome);
         self.locate(&outcome);
         self.call_of_effect.remove(&effect);
         self.written.extend(self.writing.remove(&effect));
@@ -1311,10 +1310,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             cancel,
             named,
             late,
+            span,
         } = adoption;
         match operation.adopt(entry, origin) {
             Ok(id) => {
-                self.spans.adopted(id, late);
+                self.spans.adopted(id, late, span);
                 if let Some(named) = named {
                     self.entry_named.insert(id, (named, Arc::clone(&cancel)));
                 }
@@ -1392,7 +1392,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// The operation's output, or the refusal of a wait on what the run's
     /// own context holds.
     fn finish<T>(mut self, output: T) -> Result<T, Stop> {
-        self.spans.over();
+        self.spans.over(self.refused.as_ref());
         match self.refused.take() {
             Some(room_id) => Err(RoomKitError::ReentrantCall { room_id }.into()),
             None => Ok(output),

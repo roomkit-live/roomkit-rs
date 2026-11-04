@@ -10,6 +10,7 @@
 use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -17,13 +18,16 @@ use futures_core::Stream;
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{
-    ChannelId, ChannelType, EventType, HookResult, InboundMessage, RoomEvent, RoomId, TextContent,
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, ErrorRecord, EventSource, EventType,
+    HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::telemetry::{MockTelemetryProvider, Span, TelemetryConfig};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CancelDeliveryOptions, CancelOptions, CreateRoomOptions, HookExecution,
-    HookOptions, HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    AttachChannelOptions, CancelDeliveryOptions, CancelOptions, Channel, ChannelError,
+    CreateRoomOptions, HookExecution, HookOptions, HookTrigger, InMemoryLockManager, InboundResult,
+    ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, RoomLock, RoomLockManager,
+    SendEventOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -401,5 +405,201 @@ async fn a_deferred_call_a_hook_blocks_has_its_tail_too() {
     let tail = tail_of(&mock).unwrap();
     assert_eq!(tail.status, "ok");
     assert_eq!(tail.attributes["streams"], json!(0));
+    kit.close().await.unwrap();
+}
+
+/// A lock manager whose releases fail while `failing`.
+struct LostLock {
+    inner: InMemoryLockManager,
+    failing: Arc<AtomicBool>,
+}
+
+struct HeldLock {
+    lock: Box<dyn RoomLock>,
+    failing: Arc<AtomicBool>,
+}
+
+type Answer<'a, T> = Pin<Box<dyn Future<Output = Result<T, RoomKitError>> + Send + 'a>>;
+
+impl RoomLockManager for LostLock {
+    fn locked<'a>(&'a self, room_id: &'a RoomId) -> Answer<'a, Box<dyn RoomLock>> {
+        Box::pin(async move {
+            let held: Box<dyn RoomLock> = Box::new(HeldLock {
+                lock: self.inner.locked(room_id).await?,
+                failing: Arc::clone(&self.failing),
+            });
+            Ok(held)
+        })
+    }
+}
+
+impl RoomLock for HeldLock {
+    fn release(self: Box<Self>) -> Answer<'static, ()> {
+        let failing = self.failing.load(Ordering::SeqCst);
+        let lock = self.lock;
+        Box::pin(async move {
+            lock.release().await?;
+            if failing {
+                let lost = ErrorRecord::new("LockReleaseFailedError", "the lease expired");
+                return Err(RoomKitError::Lock(lost));
+            }
+            Ok(())
+        })
+    }
+}
+
+// Python: core/mixins/lane_execution.py `_end_tail`: a failed release is on the
+// call's result; the tail reads its cascade's error alone, and it has none.
+#[tokio::test]
+async fn a_failed_release_is_no_failure_of_the_tail() {
+    let mock = Arc::new(MockTelemetryProvider::default());
+    let failing = Arc::new(AtomicBool::new(false));
+    let kit = RoomKit::new(RoomKitOptions {
+        telemetry: Some(TelemetryConfig::from(Arc::clone(&mock))),
+        lock_manager: Some(Arc::new(LostLock {
+            inner: InMemoryLockManager::default(),
+            failing: Arc::clone(&failing),
+        })),
+        ..RoomKitOptions::default()
+    });
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    kit.attach_channel(&room(), &id("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    failing.store(true, Ordering::SeqCst);
+    let result = say(&kit, true).await;
+    let delivery = result.delivery.unwrap();
+    tokio::time::timeout(BOUND, delivery.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    failing.store(false, Ordering::SeqCst);
+    let tail = tail_of(&mock).unwrap();
+    assert_eq!(tail.status, "ok", "{tail:?}");
+    kit.close().await.unwrap();
+}
+
+/// A transport whose send of "Hello" waits until the test lets it.
+#[derive(Clone)]
+struct HeldSend(Arc<Notify>);
+
+impl Channel for HeldSend {
+    fn channel_id(&self) -> ChannelId {
+        id("held")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::SMS
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        None
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        let source = EventSource::new(id("held"), ChannelType::SMS);
+        ready(Ok(RoomEvent::new(context.room.id, source, message.content)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let gate = Arc::clone(&self.0);
+        async move {
+            gate.notified().await;
+            Ok(ChannelOutput::empty())
+        }
+    }
+}
+
+// Python: core/lanes.py `add_streams`: a stream a cancelled cascade is handed is
+// closed unread, and no stream of it.
+#[tokio::test]
+async fn a_stream_the_cancel_drops_is_not_counted() {
+    let model = ScriptedProvider::new([ScriptedRound::answering("Yes.")]);
+    let (kit, mock) = kit_with(model).await;
+    let gate = Arc::new(Notify::new());
+    kit.register_channel(HeldSend(Arc::clone(&gate))).unwrap();
+    kit.attach_channel(&room(), &id("held"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let result = say(&kit, true).await;
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let delivery = result.delivery.unwrap();
+    tokio::time::timeout(BOUND, delivery.cancel(CancelOptions::default()))
+        .await
+        .unwrap()
+        .unwrap();
+    // The send goes on, and is no part of what the caller's cancel cut.
+    let tail = tail_of(&mock).unwrap();
+    assert_eq!(tail.error_message.as_deref(), Some("cancelled"));
+    assert_eq!(tail.attributes["streams"], json!(0));
+    gate.notify_one();
+    tokio::time::timeout(BOUND, delivery.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    kit.close().await.unwrap();
+}
+
+// Python: core/mixins/lane_execution.py: `len(cascade.streams)` is the caller's
+// own cascade's: the stream of an event its hook sends is another's.
+#[tokio::test]
+async fn an_adopted_event_s_stream_is_not_the_caller_s() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::answering("One."),
+        ScriptedRound::answering("Two."),
+    ]);
+    let (kit, mock) = kit_with(model).await;
+    let hooked = kit.clone();
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let kit = hooked.clone();
+            async move {
+                let body = serde_json::to_value(&event.content).unwrap();
+                if body["body"] == "Hello" {
+                    kit.send_event(
+                        &room(),
+                        &id("sms"),
+                        TextContent::new("adopted"),
+                        SendEventOptions::default(),
+                    )
+                    .await
+                    .unwrap();
+                }
+                HookResult::allow(AllowOptions::default())
+            }
+        },
+        HookOptions {
+            name: "sends".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    let result = say(&kit, true).await;
+    tokio::time::timeout(BOUND, result.delivery.unwrap().wait())
+        .await
+        .unwrap()
+        .unwrap();
+    let tail = tail_of(&mock).unwrap();
+    assert_eq!(tail.attributes["streams"], json!(1), "{tail:?}");
     kit.close().await.unwrap();
 }

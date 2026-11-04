@@ -24,11 +24,10 @@ impl<S> RoomKit<S> {
     }
 }
 
-/// Ends a `framework.route` span, the room found, if any.
-pub(crate) fn end_route_span(span: OpenSpan, room_id: Option<&RoomId>) {
-    let room = room_id.map(ToString::to_string).unwrap_or_default();
+/// Ends a `framework.route` span, the room found.
+pub(crate) fn end_route_span(span: OpenSpan, room_id: &RoomId) {
     let mut attributes = Metadata::new();
-    attributes.insert(Attr::ROOM_ID.to_owned(), Value::from(room));
+    attributes.insert(Attr::ROOM_ID.to_owned(), Value::from(room_id.as_str()));
     span.end(attributes);
 }
 
@@ -79,9 +78,7 @@ pub(super) fn telemetry_of(config: Option<TelemetryConfig>) -> KitTelemetry {
 }
 
 impl<S> Inner<S> {
-    /// The span of a call to `process_inbound`, Python's `framework.inbound`,
-    /// and, for a call that names its room, its `framework.route` read: the
-    /// router's own opens in the driver (`RunSpans`).
+    /// The span of a call to `process_inbound`, Python's `framework.inbound`.
     pub(crate) fn inbound_span(
         &self,
         message: &InboundMessage,
@@ -92,7 +89,7 @@ impl<S> Inner<S> {
         if let Some(session) = message.metadata.get("voice_session_id") {
             attributes.insert(Attr::SESSION_ID.to_owned(), session.clone());
         }
-        let span = OpenSpan::start(
+        OpenSpan::start(
             &self.telemetry,
             SpanKind::InboundPipeline,
             "framework.inbound",
@@ -102,15 +99,7 @@ impl<S> Inner<S> {
                 attributes,
                 ..StartSpanOptions::default()
             },
-        );
-        if let Some(room_id) = room_id {
-            let parent = Some(span.id().to_owned());
-            let route = self
-                .telemetry
-                .route_span(parent, &message.channel_id, sender_id);
-            end_route_span(route, Some(room_id));
-        }
-        span
+        )
     }
 
     /// The span of the resolver's answer, Python's

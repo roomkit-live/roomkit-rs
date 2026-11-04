@@ -433,10 +433,7 @@ pub(crate) fn plan_turn(
         .iter()
         .find(|binding| &binding.channel_id == agent && receives(binding, event))?;
     let mut plan = DeliveryPlan {
-        reached: bindings
-            .iter()
-            .filter(|binding| receives(binding, event))
-            .count(),
+        reached: 1,
         ..DeliveryPlan::default()
     };
     if !chain_depth::reaches_limit(event.chain_depth, max_depth) {
