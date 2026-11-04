@@ -10,7 +10,7 @@
 use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -18,8 +18,9 @@ use futures_core::Stream;
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ChannelType, ErrorRecord, EventSource, EventType,
-    HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, ErrorRecord,
+    EventSource, EventType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    TextContent,
 };
 use roomkit::telemetry::{MockTelemetryProvider, Span, TelemetryConfig};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
@@ -534,6 +535,174 @@ async fn a_failed_release_hides_no_failure_of_the_tail() {
     assert_eq!(
         tail.error_message.as_deref(),
         Some("ProviderError"),
+        "{tail:?}"
+    );
+    kit.close().await.unwrap();
+}
+
+/// An agent whose turn raises on the text `.1`, and answers no other.
+#[derive(Clone)]
+struct RaisesOn(ChannelId, &'static str);
+
+impl Channel for RaisesOn {
+    fn channel_id(&self) -> ChannelId {
+        self.0.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        let source = EventSource::new(self.0.clone(), ChannelType::AI);
+        ready(Ok(RoomEvent::new(context.room.id, source, message.content)))
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let raises = serde_json::to_value(&event.content).unwrap()["body"] == self.1;
+        ready(if raises {
+            Err(ChannelError::from("turn exploded"))
+        } else {
+            Ok(ChannelOutput::empty())
+        })
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
+}
+
+// Python: core/lanes.py `record_error`: the first one stands. A buffered agent's
+// failure, then another's stream's, read the buffered one's.
+#[tokio::test]
+async fn the_tail_reads_the_first_failure_a_buffered_turn_s_before_a_stream_s() {
+    let model = ScriptedProvider::new([ScriptedRound::answering("").failing("stream exploded")]);
+    let (kit, mock) = kit_with(model).await;
+    let raises = RaisesOn(id("raises"), "Hello");
+    kit.register_channel(raises).unwrap();
+    kit.attach_channel(&room(), &id("raises"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let result = say(&kit, true).await;
+    tokio::time::timeout(BOUND, result.delivery.unwrap().wait())
+        .await
+        .unwrap()
+        .unwrap();
+    let tail = tail_of(&mock).unwrap();
+    assert_eq!(tail.status, "error", "{tail:?}");
+    assert_eq!(
+        tail.error_message.as_deref(),
+        Some("ChannelError"),
+        "{tail:?}"
+    );
+    kit.close().await.unwrap();
+}
+
+// Python: core/mixins/lane_execution.py `_report_root_pass`: the caller-facing
+// error describes the trigger's own set, never a reentry's. An answer's set
+// failing is no failure of the tail, and none on the call's result.
+#[tokio::test]
+async fn an_answer_s_failed_turn_is_no_failure_of_the_tail() {
+    let model = ScriptedProvider::new([ScriptedRound::answering("Yes.")]);
+    let (kit, mock) = kit_with(model).await;
+    let raises = RaisesOn(id("raises"), "Yes.");
+    kit.register_channel(raises).unwrap();
+    kit.attach_channel(&room(), &id("raises"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let result = say(&kit, true).await;
+    let ended = tokio::time::timeout(BOUND, result.delivery.unwrap().wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ended.error, None);
+    let tail = tail_of(&mock).unwrap();
+    assert_eq!(tail.status, "ok", "{tail:?}");
+    kit.close().await.unwrap();
+}
+
+/// A lock manager that refuses its `.1`th grant, counted from 1, and that one
+/// alone.
+struct RefusesOneGrant(InMemoryLockManager, usize, AtomicUsize);
+
+impl RoomLockManager for RefusesOneGrant {
+    fn locked<'a>(&'a self, room_id: &'a RoomId) -> Answer<'a, Box<dyn RoomLock>> {
+        let grant = self.2.fetch_add(1, Ordering::SeqCst) + 1;
+        if grant == self.1 {
+            return Box::pin(ready(Err(RoomKitError::Runtime(
+                "no lock for Jean Dupont".to_owned(),
+            ))));
+        }
+        self.0.locked(room_id)
+    }
+}
+
+// Python: core/lanes.py `_finish`: a failure past the decision, an answer's commit
+// refused its lock, is the cascade's: the result carries it, the tail reads it.
+#[tokio::test]
+async fn a_failure_past_the_decision_reads_on_the_tail() {
+    /// The room's creation, its two attaches, the message and the answer's
+    /// commit take the lock in that order.
+    const THE_ANSWER_S_COMMIT: usize = 5;
+    let mock = Arc::new(MockTelemetryProvider::default());
+    let kit = RoomKit::new(RoomKitOptions {
+        telemetry: Some(TelemetryConfig::from(Arc::clone(&mock))),
+        lock_manager: Some(Arc::new(RefusesOneGrant(
+            InMemoryLockManager::default(),
+            THE_ANSWER_S_COMMIT,
+            AtomicUsize::new(0),
+        ))),
+        ..RoomKitOptions::default()
+    });
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let model = ScriptedProvider::new([ScriptedRound::answering("Yes.")]);
+    let agent = AiChannel::new(id("ai"), model, AiChannelOptions::default()).unwrap();
+    kit.register_channel(agent).unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    drop(kit.create_room(create).await);
+    for channel in ["sms", "ai"] {
+        drop(
+            kit.attach_channel(&room(), &id(channel), AttachChannelOptions::default())
+                .await,
+        );
+    }
+    let result = say(&kit, true).await;
+    let ended = tokio::time::timeout(BOUND, result.delivery.unwrap().wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(ended.error, None, "the answer's commit was refused");
+    let tail = tail_of(&mock).unwrap();
+    assert_eq!(tail.status, "error", "{tail:?}");
+    assert_eq!(
+        tail.error_message.as_deref(),
+        Some("RuntimeError"),
         "{tail:?}"
     );
     kit.close().await.unwrap();

@@ -397,9 +397,10 @@ struct Tail {
     span: Option<OpenSpan>,
     /// How many of the call's turns answered with a stream.
     streams: usize,
-    /// The first failure of an agent of the call's own cascade, a turn's or
-    /// its stream's, Python's `cascade.error`: nothing else the call's result
-    /// reports, a failed release, is the tail's.
+    /// The first failure of the call's own cascade past its decision: a turn
+    /// of its own set, a stream, a pass or a record that could not end,
+    /// Python's `cascade.error`. A failed release, on the call's result, is
+    /// not the tail's.
     failure: Option<ErrorRecord>,
 }
 
@@ -555,7 +556,7 @@ impl Caller {
             tail.streams += streams;
             tail.failed(error.as_ref());
         }
-        if let SpanNote::StreamFailed { error } = note {
+        if let SpanNote::CascadeFailed { error } = note {
             tail.failed(Some(error));
         }
     }

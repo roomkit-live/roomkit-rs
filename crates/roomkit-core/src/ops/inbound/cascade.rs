@@ -21,7 +21,7 @@ use super::{InboundError, InboundResult, Machine, Stage, instructions, report, s
 use crate::model::{
     ChannelCategory, ChannelId, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, RoomId,
 };
-use crate::ops::protocol::{EffectId, EntryId};
+use crate::ops::protocol::{EffectId, EntryId, Notice, SpanNote};
 use crate::ops::{Abort, Cx};
 use crate::rules::chain_depth;
 use crate::rules::permissions::DeliveryPlan;
@@ -517,7 +517,11 @@ impl Machine {
             return self.expire(cx, locked_event);
         }
         if self.trigger.decided {
-            return self.trigger.note_error(Some(abort.into_record()));
+            let error = abort.into_record();
+            cx.io.notify(Notice::Span(SpanNote::CascadeFailed {
+                error: error.clone(),
+            }));
+            return self.trigger.note_error(Some(error));
         }
         let error = failure(abort, self.call.room_id.clone());
         self.end(cx, Err(error));

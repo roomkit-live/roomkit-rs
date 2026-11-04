@@ -1328,11 +1328,13 @@ mod tests {
             assert_eq!(ids(&plan.agents), vec!["a"]);
             assert_eq!(ids(&plan.not_asked), Vec::<&str>::new());
             assert_eq!(plan.transports, Vec::new());
+            assert_eq!(plan.reached, 1);
 
             deep.chain_depth = 9;
             let plan = plan_turn(&deep, &bindings, &channel("a"), 10).unwrap();
             assert_eq!(ids(&plan.agents), Vec::<&str>::new());
             assert_eq!(ids(&plan.not_asked), vec!["a"]);
+            assert_eq!(plan.reached, 1);
 
             // One it cannot read, or that is the event's own, takes no turn.
             assert!(plan_turn(&deep, &bindings, &channel("ghost"), 10).is_none());

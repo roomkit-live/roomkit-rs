@@ -114,7 +114,7 @@ impl RunSpans {
                 ..
             } => self.set_over(&event_id, targets, delivered, failed),
             // The caller's tail reads it (`Caller::noted`).
-            SpanNote::StreamFailed { .. } => {}
+            SpanNote::CascadeFailed { .. } => {}
         }
     }
 

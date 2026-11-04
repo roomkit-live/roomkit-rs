@@ -261,15 +261,17 @@ pub enum SpanNote {
         /// The turns that answered with a stream to read (what Python's
         /// `cascade.add_streams` keeps).
         streams: usize,
-        /// The first failure of an agent's turn in the set (what Python's
+        /// The first failure of an agent's turn in the set, when the set is
+        /// the trigger's own or a rerun's, never an answer's (what Python's
         /// `cascade.record_error` keeps).
         error: Option<ErrorRecord>,
         /// Whether the set is of the call's own cascade, not an adopted
         /// entry's.
         own: bool,
     },
-    /// A stream of the call's own cascade failed as it was read.
-    StreamFailed {
+    /// The call's own cascade failed past its decision: a stream as it was
+    /// read, a pass or a record that could not end.
+    CascadeFailed {
         /// What failed it.
         error: ErrorRecord,
     },

@@ -573,7 +573,7 @@ impl Machine {
         if own {
             let told = error.clone();
             cx.io
-                .notify(Notice::Span(SpanNote::StreamFailed { error: told }));
+                .notify(Notice::Span(SpanNote::CascadeFailed { error: told }));
             self.trigger.note_error(Some(error));
         }
     }
