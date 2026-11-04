@@ -171,8 +171,9 @@ impl SkillTools {
     }
 
     /// `activate_skill`: the skill's instructions and references the first
-    /// time in the room, then an acknowledgement saying they are in force
-    /// (RFC §24.4). The activation is recorded once the call is served
+    /// time in the room, and always on a turn standing alone, whose prompt
+    /// carries none; then an acknowledgement saying they are in force (RFC
+    /// §24.4). The activation is recorded once the call is served
     /// ([`DynToolset::settled`]); a skill the registry does not hold is
     /// refused.
     async fn activate(
