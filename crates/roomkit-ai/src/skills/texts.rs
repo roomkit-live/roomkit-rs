@@ -139,7 +139,8 @@ fn string(written: &mut String, text: &str, ascii: bool) {
             '\t' => written.push_str("\\t"),
             '\u{8}' => written.push_str("\\b"),
             '\u{c}' => written.push_str("\\f"),
-            c if u32::from(c) < 0x20 || (ascii && !c.is_ascii()) => {
+            // Python's `ensure_ascii` escapes all but `' '` to `'~'`, DEL too.
+            c if u32::from(c) < 0x20 || (ascii && (!c.is_ascii() || c == '\u{7f}')) => {
                 let mut units = [0_u16; 2];
                 for unit in c.encode_utf16(&mut units) {
                     let _infallible = write!(written, "\\u{unit:04x}");
@@ -174,6 +175,14 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    // Python: json.dumps("a\x7fb") and json.dumps("a\x7fb", ensure_ascii=False)
+    #[test]
+    fn dumps_escapes_a_delete_as_python_s_ensure_ascii_does() {
+        let text = json!("a\u{7f}b");
+        assert_eq!(dumps(&text), "\"a\\u007fb\"");
+        assert_eq!(dumps_unescaped(&text), "\"a\u{7f}b\"");
+    }
 
     /// A float is written as Python's `json.dumps` writes it,
     /// `float.__repr__` (RMK-1262).
