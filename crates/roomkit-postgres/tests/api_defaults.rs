@@ -5,7 +5,7 @@
 
 use roomkit_postgres::{
     DedupeEventIndicesOptions, DropLegacyParentIndexOptions, InitOptions, MigrateOptions,
-    PostgresAdvisoryLockManagerOptions, PostgresStoreOptions,
+    PostgresAdvisoryLockManagerOptions, PostgresKnowledgeSourceOptions, PostgresStoreOptions,
 };
 
 #[test]
@@ -31,11 +31,26 @@ fn postgres_store_options_defaults_as_python() {
 }
 
 #[test]
+fn postgres_knowledge_source_options_defaults_as_python() {
+    let defaults = PostgresKnowledgeSourceOptions::default();
+    // roomkit.knowledge.PostgresKnowledgeSource.__init__(dsn) = None
+    assert!(defaults.dsn.is_none());
+    // roomkit.knowledge.PostgresKnowledgeSource.__init__(pool) = None
+    assert!(defaults.pool.is_none());
+    // roomkit.knowledge.PostgresKnowledgeSource.__init__(source_name) = 'postgres'
+    assert_eq!(defaults.source_name, "postgres");
+    // roomkit.knowledge.PostgresKnowledgeSource.__init__(language) = 'english'
+    assert_eq!(defaults.language, "english");
+}
+
+#[test]
 fn init_options_defaults_as_python() {
     let defaults = InitOptions::default();
     // roomkit.store.PostgresStore.init(min_size) = 2
+    // roomkit.knowledge.PostgresKnowledgeSource.init(min_size) = 2
     assert_eq!(defaults.min_size, 2);
     // roomkit.store.PostgresStore.init(max_size) = 10
+    // roomkit.knowledge.PostgresKnowledgeSource.init(max_size) = 10
     assert_eq!(defaults.max_size, 10);
 }
 

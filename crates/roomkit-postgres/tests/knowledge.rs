@@ -260,7 +260,7 @@ async fn a_document_is_named_and_replaced_as_python_s() {
     );
 }
 
-/// Python's `name` and defaults, without a database.
+/// Python's `name`, without a database.
 #[test]
 fn its_name_holds_the_source_name() {
     let source = PostgresKnowledgeSource::new(PostgresKnowledgeSourceOptions {
@@ -268,11 +268,6 @@ fn its_name_holds_the_source_name() {
         ..PostgresKnowledgeSourceOptions::default()
     });
     assert_eq!(source.name(), "PostgresKnowledgeSource(faq)");
-    let options = PostgresKnowledgeSourceOptions::default();
-    assert_eq!(
-        (options.source_name.as_str(), options.language.as_str()),
-        ("postgres", "english")
-    );
 }
 
 /// A search before `init` fails in Python's words, and no DSN is written by `Debug`.
