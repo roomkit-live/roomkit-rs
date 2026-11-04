@@ -61,54 +61,105 @@ mod tests {
 
     use super::*;
 
-    // Python: providers/ai/model_tags.py, the names its docstring measured on
-    // OpenAI, Gemini and Mistral.
+    /// The ids OpenAI, Gemini and Mistral listed on 2026-10-02, as Python's
+    /// test names them.
+    const TRANSCRIBING: [&str; 13] = [
+        "whisper-1",
+        "gpt-4o-transcribe",
+        "gpt-4o-mini-transcribe-2025-12-15",
+        "gpt-4o-transcribe-diarize",
+        "gpt-transcribe",
+        "gpt-live-transcribe",
+        "gpt-realtime-whisper",
+        "gemini-3.5-transcribe",
+        "gemini-3.5-transcribe-live",
+        "voxtral-mini-transcribe-realtime-2602",
+        "whisper-large-v3-turbo",
+        "cohere-transcribe-03-2026",
+        "openai/whisper-1",
+    ];
+    const SPEAKING: [&str; 8] = [
+        "tts-1",
+        "tts-1-hd-1106",
+        "gpt-4o-mini-tts",
+        "gpt-4o-mini-tts-2025-12-15",
+        "gemini-2.5-flash-preview-tts",
+        "gemini-3.1-flash-tts-preview",
+        "gemini-3.8-flash-lite-tts",
+        "voxtral-mini-tts-latest",
+    ];
+    const NEITHER: [&str; 11] = [
+        "gpt-audio",
+        "gpt-audio-mini-2025-12-15",
+        "gpt-realtime-2.1",
+        "gpt-realtime-translate",
+        "gemini-2.5-flash-native-audio-latest",
+        "lyria-realtime-exp",
+        "voxtral-mini-latest",
+        "voxtral-small-2507",
+        "voxtral-mini-realtime-2602",
+        "gpt-5.4",
+        "qwen-3.8-27b",
+    ];
+
+    // Python: tests/test_providers/test_model_tags.py::test_a_speech_to_text_model_is_tagged_transcription
     #[test]
-    fn a_speech_model_is_told_by_its_name() {
-        let tags = |id: &str| speech_tags(id);
-        for id in [
-            "whisper-1",
-            "gpt-4o-transcribe",
-            "voxtral-mini-transcribe",
-            "openai/whisper-large",
-            "Whisper_1",
-        ] {
-            assert_eq!(tags(id), ["transcription"], "{id}");
-        }
-        for id in [
-            "tts-1",
-            "gpt-4o-mini-tts",
-            "gemini-3-tts",
-            "vendor/TTS-1_hd",
-        ] {
-            assert_eq!(tags(id), ["speech"], "{id}");
-        }
-        for id in [
-            "gpt-audio",
-            "gpt-realtime",
-            "voxtral-small",
-            "whisperer",
-            "stts-1",
-            "tts/1",
-            "gpt-4o",
-        ] {
-            assert_eq!(tags(id), Vec::<String>::new(), "{id}");
+    fn a_speech_to_text_model_is_tagged_transcription() {
+        for id in TRANSCRIBING {
+            assert_eq!(speech_tags(id), [TRANSCRIPTION_CAPABILITY], "{id}");
         }
     }
 
+    // Python: tests/test_providers/test_model_tags.py::test_a_text_to_speech_model_is_tagged_speech
     #[test]
-    fn a_tag_a_listing_reported_stays() {
-        let reported = ModelInfo {
-            capabilities: vec!["tools".to_owned()],
-            ..ModelInfo::new("tts-1")
-        };
-        let tagged = with_speech_tags(vec![reported.clone(), ModelInfo::new("tts-1")]);
+    fn a_text_to_speech_model_is_tagged_speech() {
+        for id in SPEAKING {
+            assert_eq!(speech_tags(id), [SPEECH_CAPABILITY], "{id}");
+        }
+    }
+
+    // Python: tests/test_providers/test_model_tags.py::test_a_model_that_converses_is_not_tagged
+    #[test]
+    fn a_model_that_converses_is_not_tagged() {
+        for id in NEITHER {
+            assert_eq!(speech_tags(id), Vec::<String>::new(), "{id}");
+        }
+    }
+
+    /// Python's patterns, where the listed ids do not reach them: the word
+    /// stands alone between `-`, `_` or a start, a `/` before it counting, in
+    /// any case.
+    #[test]
+    fn a_word_stands_alone_in_a_model_s_name() {
+        for id in ["whisperer", "stts-1", "tts/1", "tts.1"] {
+            assert_eq!(speech_tags(id), Vec::<String>::new(), "{id}");
+        }
+        assert_eq!(speech_tags("Whisper_1"), [TRANSCRIPTION_CAPABILITY]);
+        assert_eq!(speech_tags("vendor/TTS-1_hd"), [SPEECH_CAPABILITY]);
+    }
+
+    // Python: tests/test_providers/test_model_tags.py::test_a_listing_keeps_the_tags_it_reported
+    #[test]
+    fn a_listing_keeps_the_tags_it_reported() {
+        let listed = vec![
+            ModelInfo::new("whisper-1"),
+            ModelInfo {
+                capabilities: vec!["completion".to_owned()],
+                ..ModelInfo::new("tts-1")
+            },
+            ModelInfo::new("gpt-5.4"),
+        ];
+        let tagged: Vec<Vec<String>> = with_speech_tags(listed)
+            .into_iter()
+            .map(|model| model.capabilities)
+            .collect();
         assert_eq!(
-            tagged
-                .iter()
-                .map(|m| &m.capabilities[..])
-                .collect::<Vec<_>>(),
-            [&reported.capabilities[..], &["speech".to_owned()][..]]
+            tagged,
+            [
+                vec!["transcription".to_owned()],
+                vec!["completion".to_owned()],
+                Vec::new()
+            ]
         );
     }
 }
