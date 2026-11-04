@@ -138,8 +138,9 @@ A service depends on `roomkit` and on the crates it needs beside it:
   provider of an OpenAI-compatible Chat Completions endpoint, or stateless
   Responses with `OpenAiConfig { api: OpenAiApi::Responses, .. }`.
   Both support streamed text and function tools.
-- `roomkit-postgres`: `PostgresStore` and `PostgresAdvisoryLockManager`, a store
-  and the room lock across processes in a Postgres database, on the Python
+- `roomkit-postgres`: `PostgresStore`, `PostgresAdvisoryLockManager` and
+  `PostgresKnowledgeSource`, a store, the room lock across processes and a
+  full-text knowledge source in a Postgres database, on the Python
   implementation's tables and lock keys.
 - `roomkit-sqlite`: `SqliteStore`, a store in one SQLite file, on the Python
   implementation's schema, for one process at a time: either
