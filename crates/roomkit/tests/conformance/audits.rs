@@ -160,6 +160,7 @@ pub(crate) fn audit_tools(spec: &Value, run: &Arc<Run>, options: &mut AiChannelO
             let Some(behaviour) = behaviour else {
                 return Err(ToolError::unserved(format!("{name} is not this handler's")));
             };
+            crate::agents::write_record(&behaviour);
             if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
                 run.gates.hold(gate).await;
             }

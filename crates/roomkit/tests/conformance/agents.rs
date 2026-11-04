@@ -507,6 +507,7 @@ fn scripted_handler(tools: Vec<Value>, run: &Arc<Run>) -> ToolHandler {
             let Some(behaviour) = behaviour else {
                 return Err(ToolError::unserved(format!("{name} is not this handler's")));
             };
+            write_record(&behaviour);
             if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
                 run.gates.hold(gate).await;
             }
@@ -672,6 +673,7 @@ fn tools(spec: &Value, run: &Arc<Run>) -> Tools {
             tools.tool(definition, move |_call: ToolCall, _context: ToolContext| {
                 let (behaviour, run) = (behaviour.clone(), Weak::clone(&run));
                 async move {
+                    write_record(&behaviour);
                     if let (Some(gate), Some(run)) = (behaviour["gate"].as_str(), run.upgrade()) {
                         run.gates.hold(gate).await;
                     }
@@ -694,7 +696,6 @@ pub(crate) fn write_record(spec: &Value) {
 
 /// What a scripted tool answers.
 pub(crate) async fn answer(tool: &Value) -> Result<ToolResult, ToolError> {
-    write_record(tool);
     let words = |key: &str| tool[key].as_str().map(str::to_owned);
     if let Some(text) = words("returns") {
         return Ok(ToolResult::Text(text));
