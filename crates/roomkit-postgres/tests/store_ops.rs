@@ -983,6 +983,57 @@ async fn an_add_waiting_on_a_commit_holds_nothing_the_commit_needs() {
     }
 }
 
+/// Python: `test_an_add_holds_its_room_so_that_no_stream_of_them_starves_a_commit`
+/// (HITL 0affbb3b): an add waiting on the sequence holds the room in a mode the next
+/// add cannot share, and that a foreign key can: `FOR NO KEY UPDATE`.
+#[tokio::test]
+async fn an_add_holds_its_room_so_that_no_stream_of_them_starves_a_commit() {
+    for auto_indexed in [false, true] {
+        let Some((schema, store)) = fresh().await else {
+            return;
+        };
+        let room = room_id("r1");
+        store.create_room(Room::new(room.clone())).await.unwrap();
+        store
+            .add_event_auto_index(&room, event("r1", "first"))
+            .await
+            .unwrap();
+        let holder = schema.client().await;
+        holder
+            .batch_execute("BEGIN; SELECT 1 FROM event_sequences WHERE room_id = 'r1' FOR UPDATE")
+            .await
+            .unwrap();
+        let adding = {
+            let (store, room) = (store.clone(), room.clone());
+            tokio::spawn(async move {
+                if auto_indexed {
+                    store.add_event_auto_index(&room, event("r1", "x")).await
+                } else {
+                    let mut own = event("r1", "x");
+                    own.index = 7;
+                    store.add_event(own).await
+                }
+            })
+        };
+        until_blocked_by(&schema, &holder).await;
+        let other = schema.client().await;
+        other
+            .batch_execute("SELECT 1 FROM rooms WHERE id = 'r1' FOR KEY SHARE NOWAIT")
+            .await
+            .unwrap();
+        let refused = other
+            .batch_execute("SELECT 1 FROM rooms WHERE id = 'r1' FOR NO KEY UPDATE NOWAIT")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refused.code(),
+            Some(&tokio_postgres::error::SqlState::LOCK_NOT_AVAILABLE)
+        );
+        holder.batch_execute("COMMIT").await.unwrap();
+        adding.await.unwrap().unwrap();
+    }
+}
+
 /// Python: `test_an_add_to_a_missing_room_stays_the_foreign_key_s_refusal`: holding
 /// the room first finds no row and refuses nothing itself: the refusal is still the
 /// write's (the shared suite's `an_event_added_to_a_missing_room_is_refused`), and
