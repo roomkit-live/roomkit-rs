@@ -231,6 +231,11 @@ impl PostgresKnowledgeSource {
             return;
         };
         pool::close_own_pool(&pool, timeout, "PostgresKnowledgeSource").await;
+        self.clear_a_closed_pool();
+    }
+
+    /// Clears the slot of a closed pool, never of one an `init` opened since.
+    fn clear_a_closed_pool(&self) {
         let mut slot = self
             .shared
             .pool
@@ -424,6 +429,28 @@ impl KnowledgeSource for PostgresKnowledgeSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A close that ends after a later `init` leaves the pool that `init` opened.
+    #[test]
+    fn a_late_close_leaves_a_pool_opened_since() {
+        let config: tokio_postgres::Config =
+            "postgresql://nobody@127.0.0.1:1/none".parse().unwrap();
+        let opened = Pool::builder(deadpool_postgres::Manager::new(
+            config,
+            tokio_postgres::NoTls,
+        ))
+        .max_size(1)
+        .runtime(deadpool_postgres::Runtime::Tokio1)
+        .build()
+        .unwrap();
+        let source = PostgresKnowledgeSource::new(PostgresKnowledgeSourceOptions::default());
+        *source.shared.pool.write().unwrap() = Some(opened.clone());
+        source.clear_a_closed_pool();
+        assert!(source.pool().is_some());
+        opened.close();
+        source.clear_a_closed_pool();
+        assert!(source.pool().is_none());
+    }
 
     /// A future kept and no longer polled holds its connection for ever: the close
     /// warns and returns, here within its short bound, and the pool's slot is free.
