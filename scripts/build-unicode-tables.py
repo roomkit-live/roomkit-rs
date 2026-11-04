@@ -20,6 +20,8 @@ and ranks every author as roomkit does (gap G-089):
 - canonical composition (NFC): each character's full canonical
   decomposition, the canonical combining classes, and the primary
   composites.
+- what `str.casefold()` writes for each character it changes, which tells
+  a discussion's names apart ignoring case (RFC §19.7.5).
 
 Run it with the Python roomkit is tested with, from roomkit's virtual
 environment, on the commit to follow:
@@ -253,6 +255,17 @@ def main() -> None:
         [f"({rust_char(a)}, {rust_char(b)}, {rust_char(c)})" for a, b, c in sorted(compositions)],
         3,
         "The primary composites: a starter, the character that follows it, and\nwhat they compose into, sorted by the pair; Hangul by its algorithm.",
+    ))
+    parts.append(emit(
+        "CASEFOLDS",
+        "(char, &str)",
+        [
+            f"({rust_char(c)}, {rust_str(chr(c).casefold())})"
+            for c in scalar_values()
+            if chr(c).casefold() != chr(c)
+        ],
+        3,
+        "What Python's `str.casefold()` writes for each character it changes,\nsorted by character.",
     ))
     sys.stdout.write("\n\n".join(parts) + "\n")
 

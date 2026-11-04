@@ -4,7 +4,8 @@
 //! characters a person's name keeps, those a name's letters are read past,
 //! what each character reads as in a name and in a phrase, the opening
 //! and closing punctuation, and the characters `str.isprintable()` accepts,
-//! which Python's `repr` of a `str` writes as they are.
+//! which Python's `repr` of a `str` writes as they are, and what
+//! `str.casefold()` writes.
 //! The tables are generated from roomkit and the Unicode data of its
 //! Python (`unicode_data`), so that both implementations read a name alike,
 //! whatever Unicode version Rust's standard library carries.
@@ -13,8 +14,8 @@ use std::cmp::Ordering;
 use std::fmt::Write as _;
 
 use super::unicode_data::{
-    ALNUM, CLOSING, COMBINING_CLASSES, COMPOSITIONS, DECOMPOSITIONS, JOINT, MARKS, NAME_CHARS,
-    OPENING, PHRASE_GAPS, PHRASE_READS, PRINTABLE, READS,
+    ALNUM, CASEFOLDS, CLOSING, COMBINING_CLASSES, COMPOSITIONS, DECOMPOSITIONS, JOINT, MARKS,
+    NAME_CHARS, OPENING, PHRASE_GAPS, PHRASE_READS, PRINTABLE, READS,
 };
 
 /// Whether `ranges`, inclusive and sorted, holds `c`.
@@ -208,6 +209,19 @@ fn compose(first: char, second: char) -> Option<char> {
         .map(|&(_, _, composite)| composite)
 }
 
+/// `text` as Python's `str.casefold()` writes it, with which two names read
+/// as one ignoring case (`Straße` and `STRASSE`).
+pub fn casefold(text: &str) -> String {
+    let mut folded = String::with_capacity(text.len());
+    for c in text.chars() {
+        match CASEFOLDS.binary_search_by(|&(form, _)| form.cmp(&c)) {
+            Ok(found) => folded.push_str(CASEFOLDS.get(found).map_or("", |&(_, read)| read)),
+            Err(_) => folded.push(c),
+        }
+    }
+    folded
+}
+
 /// `text` in Normalization Form C: decomposed, its marks put in canonical
 /// order, then composed again (Unicode Standard Annex #15).
 pub(crate) fn nfc(text: &str) -> String {
@@ -271,6 +285,25 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    /// Values Python 3.13 gives (`str.casefold`).
+    #[test]
+    fn casefold_folds_as_python_does() {
+        let cases = [
+            ("Stra\u{df}e", "strasse"),
+            ("STRASSE", "strasse"),
+            ("\u{17f}am", "sam"),
+            ("\u{fb01}n", "fin"),
+            ("\u{3a3}\u{3a3}", "\u{3c3}\u{3c3}"),
+            ("\u{3c2}", "\u{3c3}"),
+            ("\u{c9}tienne", "\u{e9}tienne"),
+            ("\u{130}", "i\u{307}"),
+            ("agent:1", "agent:1"),
+        ];
+        for (text, folded) in cases {
+            assert_eq!(casefold(text), folded, "{text:?}");
+        }
+    }
 
     /// Values Python 3.13 gives (`unicodedata.normalize("NFC", ...)`).
     #[test]
