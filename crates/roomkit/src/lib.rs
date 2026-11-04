@@ -53,6 +53,7 @@ mod context;
 mod cursors;
 pub mod delivery;
 mod delivery_keys;
+mod discussion_turn;
 mod driver;
 mod environment;
 mod error;
@@ -155,6 +156,7 @@ pub use self::channel::{
 // provider errors' Python class with it, which the kit cannot see.
 #[doc(hidden)]
 pub use self::classed::ClassedError;
+// Outside the public API: what an AI channel reads of a discussion's turn.
 pub use self::context::keep_context;
 pub use self::delivery::backend::{
     DeliveryBackend, DeliveryBackendError, DequeueOptions, GetDeadLetterItemsOptions, NackOptions,
@@ -165,6 +167,8 @@ pub use self::delivery::queued::{Queued, QueuedOptions};
 pub use self::delivery::strategy::{
     DeliveryContext, DeliveryStrategy, Immediate, WaitForIdle, WaitForIdleOptions,
 };
+#[doc(hidden)]
+pub use self::discussion_turn::{discussion_notes, discussion_turn, issue_mark, retire_mark};
 pub use self::error::RoomKitError;
 pub use self::events::FrameworkEvent;
 pub use self::hooks::{

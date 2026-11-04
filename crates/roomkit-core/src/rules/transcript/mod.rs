@@ -272,6 +272,14 @@ pub struct TurnMemory {
     /// lines, `Alice`, `@sms1`): each counts as a speaker toward labelling
     /// the turns, unless a turn's speaker already has it.
     pub speakers: Vec<String>,
+    /// The runtime's own notes for this turn alone, a discussion's (RFC
+    /// §19.7.5 rule 14): blocks of the turn's notes, after the speaker
+    /// note and before the memory's.
+    pub turn_notes: Vec<String>,
+    /// A discussion's turn: its event reads at its place in the history,
+    /// before what was said after it, rounds of tool calls included, rather
+    /// than as the conversation's last message (RFC §19.7.5).
+    pub in_place: bool,
 }
 
 /// [`conversation`], with what the turn's memory adds beside its history
@@ -292,12 +300,20 @@ pub fn conversation_with_memory(
 ) -> Vec<Message> {
     let mut authors = Authors::new(context);
     let mut turns = past_turns(channel_id, event, context, history, &mut authors, &read);
-    if !turns.is_empty() {
-        let rounds = tool_rounds(&context.recent_events, channel_id, &replayed);
-        place(&mut turns, rounds, rounds_before(event));
+    let rounds = tool_rounds(&context.recent_events, channel_id, &replayed);
+    let in_place = memory.in_place && event.index > 0;
+    if !in_place && !turns.is_empty() {
+        place(&mut turns, rounds.clone(), rounds_before(event));
     }
     turns.push(Turn::input(event, &mut authors, &read));
+    // Told apart in the order spoken: the input, read last, whatever its place.
     tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
+    if in_place {
+        read_at_its_place(&mut turns, event.index);
+        if turns.len() > 1 {
+            place(&mut turns, rounds, None);
+        }
+    }
     let speakers: Vec<&Speaker> = turns
         .iter()
         .filter(|turn| turn.role == Role::User && !turn.content.is_blank())
@@ -320,6 +336,7 @@ pub fn conversation_with_memory(
     let notes = Notes {
         labelled,
         people: &people,
+        discussion: &memory.turn_notes,
         remembered: &memory.notes,
     };
     rendered(turns, &notes)
@@ -415,6 +432,19 @@ fn past_turns(
         .collect();
     let skip = turns.len().saturating_sub(history);
     turns.into_iter().skip(skip).collect()
+}
+
+/// `turns`, the input last, with the input at its place, before the first
+/// turn that came after it (index `index`). Python's `_answered_position`.
+fn read_at_its_place(turns: &mut Vec<Turn>, index: u64) {
+    let Some(input) = turns.pop() else {
+        return;
+    };
+    let at = turns
+        .iter()
+        .position(|turn| turn.index > index)
+        .unwrap_or(turns.len());
+    turns.insert(at, input);
 }
 
 /// Where the rounds a turn on `event` replays end: before its event. Index
@@ -553,6 +583,7 @@ pub fn replayed_rounds(
 struct Notes<'a> {
     labelled: bool,
     people: &'a [String],
+    discussion: &'a [String],
     remembered: &'a [String],
 }
 
@@ -564,6 +595,7 @@ impl Notes<'_> {
         speaker_note
             .into_iter()
             .chain(people_note(self.people))
+            .chain(self.discussion.iter().cloned())
             .chain(cleaned_notes(self.remembered))
             .collect()
     }

@@ -1007,7 +1007,11 @@ impl<P: AiProvider> AiChannel<P> {
                 ..context.clone()
             },
             messages: messages.into_iter().map(runtime_or_cleaned).collect(),
-            memory: TurnMemory { notes, speakers },
+            memory: TurnMemory {
+                notes,
+                speakers,
+                ..TurnMemory::default()
+            },
         })
     }
 
@@ -1424,13 +1428,14 @@ impl<P: AiProvider> AiChannel<P> {
             vision: self.provider.supports_vision(),
             describer: self.media.describer.as_ref(),
         };
+        let memory = with_discussion_turn(&event, recalled.memory);
         let messages = conversation_with_memory(
             &self.channel_id,
             &read,
             &recalled.history,
             usize::MAX,
             |name| self.toolbox.in_tool_memory(name),
-            &recalled.memory,
+            &memory,
             |said| reader.read(said),
         );
         // The context takes the settings once the conversation is read, as
@@ -1451,6 +1456,17 @@ impl<P: AiProvider> AiChannel<P> {
             }),
             None => Ok(rows::collect(self.source(), &event, items, record).await?),
         }
+    }
+}
+
+/// `memory`, with what a discussion's turn on `event` adds: its notes, and
+/// its event read at its place (RFC §19.7.5). Python's `discussion_notes` and
+/// `_answered_position`.
+fn with_discussion_turn(event: &RoomEvent, memory: TurnMemory) -> TurnMemory {
+    TurnMemory {
+        turn_notes: roomkit::discussion_notes(event),
+        in_place: roomkit::discussion_turn(event),
+        ..memory
     }
 }
 
@@ -1533,7 +1549,11 @@ impl<P: AiProvider> Channel for AiChannel<P> {
         binding: ChannelBinding,
         context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
-        self.ingest(&event, &context).await;
+        // A discussion handed the event to memory when it committed (RFC
+        // §19.7.5 rule 3): its turn does not hand it again.
+        if !roomkit::discussion_turn(&event) {
+            self.ingest(&event, &context).await;
+        }
         if !self.answers(&event) {
             return Ok(ChannelOutput::default());
         }

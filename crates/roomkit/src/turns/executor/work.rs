@@ -11,9 +11,12 @@ use std::task::Poll;
 
 use tokio::sync::Notify;
 
+use roomkit_core::rules::discussion::TURN_KEY;
+
 use super::link::FrameSender;
 use super::record::RecordChanges;
 use crate::channel::DynChannel;
+use crate::discussion_turn::IssuedMark;
 use crate::stream::{ResponseItem, ResponseStream};
 use crate::turn::TurnHost;
 use crate::turns::codec::{encode_loop_end, encode_output};
@@ -71,11 +74,21 @@ pub(super) async fn work(
     channel: Arc<dyn DynChannel>,
 ) {
     let TurnRequest {
-        event,
+        mut event,
         binding,
         context,
+        notes,
+        in_place,
         ..
     } = request;
+    // A discussion's turn: its notes came in the request, and the mark that
+    // lets the channel read them here is this process's until the turn ends.
+    let mark = in_place.then(|| IssuedMark::new(notes));
+    if let Some(mark) = &mark {
+        event
+            .metadata
+            .insert(TURN_KEY.to_owned(), mark.mark().clone());
+    }
     // `on_event()` is called within the turn and its context, so the work
     // it does before its future, as much as its future's, is the turn's.
     let reaction = host

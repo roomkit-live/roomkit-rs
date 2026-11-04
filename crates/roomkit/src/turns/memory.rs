@@ -15,6 +15,7 @@ use super::pipe::{MAX_MESSAGE_BYTES, Pipe};
 use super::timeouts::TurnTimeouts;
 use super::wire::{Control, Frame, OwnerTool, PreviousTurn};
 use crate::context::ExecutionContext;
+use crate::discussion_turn::{discussion_notes, discussion_turn};
 
 /// One turn in memory: what its two sides share.
 #[derive(Debug)]
@@ -164,8 +165,8 @@ impl Request<'_> {
                 author_register: self.context.author_register.as_ref(),
             },
             strategy_turn: false,
-            notes: [],
-            in_place: false,
+            notes: discussion_notes(self.event),
+            in_place: discussion_turn(self.event),
             owner_tools: self.owner_tools,
             room_hooks: [],
             previous_turn: self.previous,
@@ -183,7 +184,7 @@ struct RestOut<'a> {
     binding: &'a ChannelBinding,
     context: ContextOut<'a>,
     strategy_turn: bool,
-    notes: [String; 0],
+    notes: Vec<String>,
     in_place: bool,
     owner_tools: &'a [OwnerTool],
     room_hooks: [String; 0],
