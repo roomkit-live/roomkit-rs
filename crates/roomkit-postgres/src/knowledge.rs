@@ -24,19 +24,8 @@ use crate::options::{InitOptions, PostgresKnowledgeSourceOptions};
 use crate::pool;
 use crate::values::{execute, query, query_opt};
 
-const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS knowledge_documents (
-    id TEXT PRIMARY KEY,
-    content TEXT NOT NULL,
-    room_id TEXT,
-    source TEXT NOT NULL DEFAULT '',
-    metadata JSONB NOT NULL DEFAULT '{}',
-    tsv tsvector,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_knowledge_tsv ON knowledge_documents USING GIN(tsv);
-CREATE INDEX IF NOT EXISTS idx_knowledge_room ON knowledge_documents(room_id);
-";
+/// Python's `_SCHEMA`, byte for byte.
+const SCHEMA: &str = include_str!("knowledge_schema.sql");
 
 const INSERT: &str = "
 INSERT INTO knowledge_documents (id, content, room_id, source, metadata, tsv)
@@ -72,9 +61,11 @@ const NOT_INITIALIZED: &str = "PostgresKnowledgeSource.init() must be called bef
 /// How long an operation waits for a connection: Python's `_acquire_timeout`.
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long a close waits before it warns of connections still in use, and
-/// waits on: asyncpg's `Pool.close`.
-const CLOSE_WARNING: Duration = Duration::from_secs(60);
+/// How long a close waits for the connections in use: the wait after which
+/// asyncpg's `Pool.close` warns. Past it, a close warns and returns, as a caller's
+/// unfinished future holding a connection would never let it end; each such
+/// connection closes when it comes back.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A full-text keyword search in a Postgres database: Python's
 /// `PostgresKnowledgeSource`, on the same table, so that processes of both
@@ -157,8 +148,8 @@ impl PostgresKnowledgeSource {
     ///
     /// Fails [`StoreError::Value`] for a language the database has no text
     /// search configuration of, the pool it opened closed with the refusal, and
-    /// for sizes or a connection string asyncpg refuses;
-    /// [`StoreError::Unavailable`] for what else fails.
+    /// for sizes or a connection string [`PostgresStore::init`](crate::PostgresStore::init)
+    /// refuses so; [`StoreError::Unavailable`] for what else fails.
     pub async fn init(&self, options: InitOptions) -> Result<(), StoreError> {
         if self.pool().is_none() {
             let (pool, _) = pool::open(
@@ -185,8 +176,8 @@ impl PostgresKnowledgeSource {
         }
         KnowledgeSource::close(self).await;
         Err(StoreError::Value(format!(
-            "PostgreSQL has no text search configuration '{}'",
-            self.shared.language
+            "PostgreSQL has no text search configuration {}",
+            repr(&self.shared.language)
         )))
     }
 
@@ -269,11 +260,15 @@ impl PostgresKnowledgeSource {
     fn result(&self, row: &Row) -> Result<KnowledgeResult, ChannelError> {
         let source: &str = row.try_get("source")?;
         let metadata: &str = row.try_get("metadata")?;
-        // `index` writes an object: another form is a row written directly,
-        // and a passage has only an object to keep.
+        // `index` writes an object: another form is a row written directly, and a
+        // passage has only an object to keep.
         let metadata = match serde_json::from_str(metadata)? {
             Value::Object(metadata) => metadata,
-            _ => Metadata::new(),
+            Value::Null
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::String(_)
+            | Value::Array(_) => Metadata::new(),
         };
         Ok(KnowledgeResult {
             content: row.try_get("content")?,
@@ -289,6 +284,7 @@ impl PostgresKnowledgeSource {
 
     /// Indexes `content` under the id its metadata names, or a new one.
     async fn indexed(&self, content: &str, options: IndexOptions) -> Result<(), ChannelError> {
+        let client = self.client().await?;
         let metadata = options.metadata.unwrap_or_default();
         let id = match document_id(&metadata) {
             Some(named) => text("an id", named)?.to_owned(),
@@ -300,7 +296,6 @@ impl PostgresKnowledgeSource {
             Some(_) => member(&metadata, "source")?,
         };
         let written = serde_json::to_string(&metadata)?;
-        let client = self.client().await?;
         execute(
             &client,
             INSERT,
@@ -317,6 +312,26 @@ impl PostgresKnowledgeSource {
         .map_err(StoreError::from)?;
         Ok(())
     }
+}
+
+/// `text` as Python's `repr` writes it: in single quotes unless it holds one and no
+/// double quote, a backslash doubled.
+fn repr(text: &str) -> String {
+    let quote = if text.contains('\'') && !text.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut written = String::with_capacity(text.len() + 2);
+    written.push(quote);
+    for character in text.chars() {
+        if character == '\\' || character == quote {
+            written.push('\\');
+        }
+        written.push(character);
+    }
+    written.push(quote);
+    written
 }
 
 /// The member of `metadata` that names a document: `event_id`, else `id`, each
@@ -377,23 +392,23 @@ impl KnowledgeSource for PostgresKnowledgeSource {
         Box::pin(self.indexed(content, options))
     }
 
-    /// Closes the pool if the source opened it, once the connections in use
-    /// came back.
+    /// Closes the pool if the source opened it, once the connections in use came
+    /// back, at most [`CLOSE_TIMEOUT`] later. Meanwhile the source refuses any other
+    /// use, its pool closed, and a second close waits too, as Python's.
     fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             if !self.shared.owns_pool {
                 return;
             }
-            let pool = self
+            let Some(pool) = self.pool() else {
+                return;
+            };
+            pool::close_own_pool(&pool, CLOSE_TIMEOUT, "PostgresKnowledgeSource").await;
+            *self
                 .shared
                 .pool
                 .write()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take();
-            if let Some(pool) = pool {
-                while !pool::close_own_pool(&pool, CLOSE_WARNING, "PostgresKnowledgeSource").await {
-                }
-            }
+                .unwrap_or_else(PoisonError::into_inner) = None;
         })
     }
 }

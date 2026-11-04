@@ -1,6 +1,6 @@
 [package]
 name = "roomkit-postgres"
-description = "A Postgres conversation store and lock manager for RoomKit, on the Python implementation's schema"
+description = "A Postgres conversation store, lock manager and knowledge source for RoomKit, on the Python implementation's schema"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
