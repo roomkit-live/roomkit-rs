@@ -244,8 +244,6 @@ pub use self::kit::{
     ClaimRoomStrategyOptions, InstallStrategyOptions, RoomStrategyOptions, UninstallStrategyOptions,
 };
 #[doc(inline)]
-pub use self::orchestration::Discussion;
-#[doc(inline)]
 pub use self::orchestration::Loop;
 #[doc(inline)]
 pub use self::orchestration::Orchestration;

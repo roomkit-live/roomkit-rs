@@ -7,11 +7,6 @@
     not(test),
     expect(dead_code, reason = "read by the running turns, lot 8c")
 )]
-mod config;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "read by the running turns, lot 8c")
-)]
 mod lease;
 mod models;
 #[cfg_attr(
@@ -24,9 +19,6 @@ mod notes;
     expect(dead_code, reason = "read by the running turns, lot 8c")
 )]
 mod queue;
-pub(in crate::orchestration) mod strategy;
 
 #[doc(inline)]
 pub use self::models::{SpeakQueue, SpeakQueueChange, SpeakQueueEvent};
-#[doc(inline)]
-pub use self::strategy::Discussion;

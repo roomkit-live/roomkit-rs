@@ -45,7 +45,6 @@ pub(crate) struct Ask {
 }
 
 /// A turn an agent is owed: one for every event that asked for it.
-#[expect(clippy::struct_excessive_bools, reason = "its stored form is Python's")]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Entry {
     pub(crate) agent: ChannelId,

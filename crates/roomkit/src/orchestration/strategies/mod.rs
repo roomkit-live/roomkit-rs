@@ -12,7 +12,7 @@ pub mod supervisor;
 pub(super) mod swarm;
 
 #[doc(inline)]
-pub use self::discussion::{Discussion, SpeakQueue, SpeakQueueChange, SpeakQueueEvent};
+pub use self::discussion::{SpeakQueue, SpeakQueueChange, SpeakQueueEvent};
 #[doc(inline)]
 pub use self::pipeline::Pipeline;
 #[doc(inline)]
