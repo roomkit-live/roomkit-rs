@@ -228,6 +228,18 @@ fn after_the_span(outcome: Result<(), Failure>) -> Result<Result<(), StoreError>
     }
 }
 
+/// `outcome` for a row the model refuses: Python decodes a read's row once its span
+/// ended, `ok`.
+fn decoded_after_the_span<T>(
+    outcome: Result<T, Failure>,
+) -> Result<Result<T, StoreError>, StoreError> {
+    match outcome {
+        Ok(read) => Ok(Ok(read)),
+        Err(unread @ (Failure::Json(_) | Failure::OutOfRange(_))) => Ok(Err(unread.into())),
+        Err(failure) => Err(failure.into()),
+    }
+}
+
 /// What [`ConversationStore::load_room_context`] reads: Python's `(room,
 /// bindings, participants)`.
 type RoomRead = (Option<Room>, Vec<ChannelBinding>, Vec<Participant>);
@@ -257,9 +269,9 @@ impl ConversationStore for PostgresStore {
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
         self.spanned("get_room", "rooms", async {
             let client = self.client().await?;
-            Ok(rooms::get(&client, room_id).await?)
+            decoded_after_the_span(rooms::get(&client, room_id).await)
         })
-        .await
+        .await?
     }
 
     async fn update_room_if(
@@ -321,9 +333,9 @@ impl ConversationStore for PostgresStore {
     async fn list_rooms(&self, options: ListRoomsOptions) -> Result<Vec<Room>, StoreError> {
         self.spanned("list_rooms", "rooms", async {
             let client = self.client().await?;
-            Ok(lookups::list(&client, options.offset, options.limit).await?)
+            decoded_after_the_span(lookups::list(&client, options.offset, options.limit).await)
         })
-        .await
+        .await?
     }
 
     async fn find_rooms(&self, options: FindRoomsOptions) -> Result<Vec<Room>, StoreError> {
@@ -503,16 +515,20 @@ impl ConversationStore for PostgresStore {
     async fn load_room_context(&self, room_id: &RoomId) -> Result<RoomRead, StoreError> {
         self.spanned("load_room_context", "rooms", async {
             let client = self.client().await?;
-            let Some(room) = rooms::get(&client, room_id).await? else {
-                return Ok((None, Vec::new(), Vec::new()));
-            };
-            Ok((
-                Some(room),
-                members::bindings(&client, room_id).await?,
-                members::participants(&client, room_id).await?,
-            ))
+            let read: Result<RoomRead, Failure> = async {
+                let Some(room) = rooms::get(&client, room_id).await? else {
+                    return Ok((None, Vec::new(), Vec::new()));
+                };
+                Ok((
+                    Some(room),
+                    members::bindings(&client, room_id).await?,
+                    members::participants(&client, room_id).await?,
+                ))
+            }
+            .await;
+            decoded_after_the_span(read)
         })
-        .await
+        .await?
     }
 
     async fn add_participant(&self, participant: Participant) -> Result<Participant, StoreError> {
@@ -778,9 +794,9 @@ impl ConversationStore for PostgresStore {
     async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
         self.spanned("get_event", "events", async {
             let client = self.client().await?;
-            Ok(events::get(&client, event_id).await?)
+            decoded_after_the_span(events::get(&client, event_id).await)
         })
-        .await
+        .await?
     }
 
     async fn update_event(&self, mut event: RoomEvent) -> Result<RoomEvent, StoreError> {
@@ -829,9 +845,9 @@ impl ConversationStore for PostgresStore {
         options.validate()?;
         self.spanned("list_events", "events", async {
             let client = self.client().await?;
-            Ok(timeline::page(&client, room_id, &options).await?)
+            decoded_after_the_span(timeline::page(&client, room_id, &options).await)
         })
-        .await
+        .await?
     }
 
     async fn get_thread_summaries(

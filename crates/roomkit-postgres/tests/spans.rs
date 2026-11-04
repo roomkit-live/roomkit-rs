@@ -12,14 +12,16 @@ use std::sync::Arc;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, EventSource, Identity, IdentityId,
-    InboundMessage, Metadata, Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus,
-    TextContent,
+    InboundMessage, Metadata, Participant, ParticipantId, RateLimit, Room, RoomEvent, RoomId,
+    RoomStatus, TextContent,
 };
 use roomkit::store::{
     AdvanceDeliveredIndexOptions, CommitEventOptions, DeleteEventOptions, FindRoomsOptions,
     GetEventCountOptions, ListEventsOptions, ListRoomsOptions, PatchRoomMetadataOptions,
 };
-use roomkit::telemetry::{MockTelemetryProvider, Span, SpanKind, TelemetryProvider};
+use roomkit::telemetry::{
+    MockTelemetryProvider, Span, SpanKind, TelemetryConfig, TelemetryProvider,
+};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, GetRoomOptions,
@@ -27,6 +29,7 @@ use roomkit::{
 };
 use roomkit_postgres::{PostgresStore, PostgresStoreOptions};
 use serde_json::json;
+use tokio_postgres::NoTls;
 
 use crate::support::{TempSchema, dsn};
 
@@ -420,7 +423,160 @@ async fn what_python_refuses_before_its_span_opens_none() {
         store.get_thread_summaries(&room, &[]).await.unwrap().len(),
         0
     );
+    let at = roomkit::model::Timestamp::UNIX_EPOCH;
+    store
+        .get_event_count(
+            &room,
+            GetEventCountOptions {
+                event_filter: Some(roomkit::EventFilter {
+                    after_time: Some(at),
+                    before_time: Some(at),
+                    ..roomkit::EventFilter::default()
+                }),
+            },
+        )
+        .await
+        .unwrap_err();
+    let mut limited = binding("r1");
+    limited.rate_limit = Some(RateLimit {
+        max_per_second: Some(-1.0),
+        ..RateLimit::default()
+    });
+    store.add_binding(limited.clone()).await.unwrap_err();
+    store.update_binding(limited).await.unwrap_err();
     assert_eq!(provider.spans().len(), before);
+}
+
+/// Python decodes a read's row once its span ended: the span reads `ok`, and the caller
+/// the refusal of a row the model refuses.
+#[tokio::test]
+async fn a_row_the_model_refuses_is_read_after_the_span() {
+    let Some((schema, store, provider)) = reporting(false).await else {
+        return;
+    };
+    let room = room_id("r1");
+    store.create_room(Room::new(room.clone())).await.unwrap();
+    schema
+        .client()
+        .await
+        .batch_execute("UPDATE rooms SET status = 'nope'")
+        .await
+        .unwrap();
+    store.get_room(&room).await.unwrap_err();
+    store
+        .list_rooms(ListRoomsOptions::default())
+        .await
+        .unwrap_err();
+    store.load_room_context(&room).await.unwrap_err();
+    for span in provider.spans() {
+        assert_eq!(
+            (span.status.as_str(), &span.error_message),
+            ("ok", &None),
+            "{span:?}"
+        );
+    }
+}
+
+/// The classes of a failure, by the state the server reports, and with no connection
+/// to be had: `TimeoutError`, which has no text even when asked, and a closed pool.
+#[tokio::test]
+async fn a_failure_reads_asyncpg_s_class() {
+    let Some((schema, store, provider)) = reporting(true).await else {
+        return;
+    };
+    store.create_room(Room::new(room_id("r1"))).await.unwrap();
+    store.add_binding(binding("gone")).await.unwrap_err();
+    let spans = provider.spans();
+    assert_eq!(named(spans.last().unwrap()).0, "add_binding");
+    let config: tokio_postgres::Config = schema.dsn().parse().unwrap();
+    let pool = deadpool_postgres::Pool::builder(deadpool_postgres::Manager::new(config, NoTls))
+        .max_size(1)
+        .build()
+        .unwrap();
+    let store = PostgresStore::new(PostgresStoreOptions {
+        pool: Some(pool.clone()),
+        ..PostgresStoreOptions::default()
+    });
+    let provider = Arc::new(MockTelemetryProvider::default());
+    store.set_telemetry(Arc::<MockTelemetryProvider>::clone(&provider), false);
+    pool.close();
+    store.get_room(&room_id("r1")).await.unwrap_err();
+    assert_eq!(
+        provider.spans()[0].error_message.as_deref(),
+        Some("InterfaceError")
+    );
+}
+
+/// `sqlstates.rs` is asyncpg's table, when `ROOMKIT_PYTHON` names a roomkit checkout's
+/// interpreter.
+#[test]
+fn the_classes_of_the_states_are_asyncpg_s() {
+    let Ok(python) = std::env::var("ROOMKIT_PYTHON") else {
+        return;
+    };
+    let script = r#"
+import inspect, json, asyncpg.exceptions as e
+rows = {}
+for name, cls in inspect.getmembers(e, inspect.isclass):
+    state = getattr(cls, "sqlstate", None)
+    if state and issubclass(cls, e.PostgresError) and cls is not e.PostgresError:
+        rows.setdefault(state, name)
+print(json.dumps(sorted(rows.items())))
+"#;
+    let output = std::process::Command::new(python)
+        .arg("-c")
+        .arg(script)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let theirs: Vec<(String, String)> = serde_json::from_slice(&output.stdout).unwrap();
+    let source: String = include_str!("../src/sqlstates.rs")
+        .split_whitespace()
+        .collect();
+    let ours: Vec<(String, String)> = source
+        .split("(\"")
+        .filter_map(|row| {
+            let (state, rest) = row.split_once('"')?;
+            let class = rest.strip_prefix(",\"")?.split('"').next()?;
+            Some((state.to_owned(), class.to_owned()))
+        })
+        .collect();
+    assert_eq!(ours, theirs);
+}
+
+/// A kit gives the store what its config says: a span reads an error's text only when
+/// `record_sensitive_data` asks, the class by default.
+#[tokio::test]
+async fn a_kit_gives_the_store_its_sensitive_setting() {
+    for (sensitive, quotes) in [(false, false), (true, true)] {
+        let Some((schema, _, _)) = reporting(false).await else {
+            return;
+        };
+        let store = schema.initialized_store().await;
+        let provider = Arc::new(MockTelemetryProvider::default());
+        let handed: Arc<dyn TelemetryProvider> = Arc::<MockTelemetryProvider>::clone(&provider);
+        let mut config = TelemetryConfig::from(handed);
+        config.record_sensitive_data = sensitive;
+        let kit = RoomKit::new(RoomKitOptions {
+            telemetry: Some(config),
+            ..RoomKitOptions::with_store(store.clone())
+        });
+        store.create_room(Room::new(room_id("r1"))).await.unwrap();
+        let mut held = event("r1", "x");
+        held.id = EventId::new("+15145550123").unwrap();
+        held.index = 1;
+        store.add_event(held.clone()).await.unwrap();
+        held.index = 2;
+        store.add_event(held).await.unwrap_err();
+        let spans = provider.spans();
+        let message = spans.last().unwrap().error_message.clone().unwrap();
+        assert_eq!(message.contains("+15145550123"), quotes, "{message}");
+        kit.close().await.unwrap();
+    }
 }
 
 /// A failed wait for a connection is an error span, as Python's: `RuntimeError`

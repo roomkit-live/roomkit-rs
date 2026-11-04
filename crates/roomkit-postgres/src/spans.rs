@@ -5,6 +5,7 @@ use std::error::Error;
 use std::future::Future;
 use std::sync::{Arc, PoisonError, RwLock};
 
+use deadpool_postgres::PoolError;
 use roomkit::StoreError;
 use roomkit::model::Metadata;
 use roomkit::telemetry::{
@@ -13,6 +14,7 @@ use roomkit::telemetry::{
 use serde_json::Value;
 
 use crate::error::NoConnection;
+use crate::sqlstates::class_of_state;
 
 /// Where a store's spans go.
 #[derive(Clone)]
@@ -147,27 +149,33 @@ fn failure_class(cause: &(dyn Error + 'static)) -> &'static str {
             NoConnection::TimedOut => "TimeoutError",
         };
     }
-    let Some(driver) = cause.downcast_ref::<tokio_postgres::Error>() else {
-        return "RuntimeError";
-    };
-    let Some(state) = driver.code() else {
-        return if driver.is_closed() {
-            "ConnectionDoesNotExistError"
+    if let Some(pool) = cause.downcast_ref::<PoolError>() {
+        return if let PoolError::Backend(driver) = pool {
+            driver_class(driver)
         } else {
             "InterfaceError"
         };
-    };
-    match state.code() {
-        "23505" => "UniqueViolationError",
-        "23503" => "ForeignKeyViolationError",
-        "23502" => "NotNullViolationError",
-        "23514" => "CheckViolationError",
-        "40P01" => "DeadlockDetectedError",
-        "40001" => "SerializationError",
-        "42P01" => "UndefinedTableError",
-        "42703" => "UndefinedColumnError",
-        "57014" => "QueryCanceledError",
-        "55P03" => "LockNotAvailableError",
-        _ => "PostgresError",
+    }
+    cause
+        .downcast_ref::<tokio_postgres::Error>()
+        .map_or("RuntimeError", driver_class)
+}
+
+/// The class asyncpg raises for what the client met: its state's, else a connection's.
+fn driver_class(driver: &tokio_postgres::Error) -> &'static str {
+    if let Some(state) = driver.code() {
+        return class_of_state(state.code());
+    }
+    if driver.is_closed() {
+        return "ConnectionDoesNotExistError";
+    }
+    let refused = driver
+        .source()
+        .and_then(|cause| cause.downcast_ref::<std::io::Error>())
+        .is_some_and(|cause| cause.kind() == std::io::ErrorKind::ConnectionRefused);
+    if refused {
+        "ConnectionRefusedError"
+    } else {
+        "InterfaceError"
     }
 }
