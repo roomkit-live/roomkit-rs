@@ -17,11 +17,17 @@ pub(super) struct Identities {
 }
 
 impl Identities {
-    /// Stores `identity`, replacing the one stored under its id, as
-    /// Python's store does, unless another identity of its organization
-    /// uses one of its addresses.
+    /// Stores `identity`, replacing the one stored under its id within its
+    /// organization only, as Python's store does: an identity of another is
+    /// never overwritten (RFC §5.6, §17.2). Refused too when another identity
+    /// of its organization uses one of its addresses.
     pub(super) fn create(&mut self, identity: Identity) -> Result<(), StoreError> {
         let organization = identity.organization_id.as_deref();
+        if self.by_id.get(&identity.id).is_some_and(|held| {
+            held.organization_id.as_deref().unwrap_or_default() != organization.unwrap_or_default()
+        }) {
+            return Err(StoreError::IdentityNotFound(identity.id));
+        }
         for (channel_type, addresses) in &identity.channel_addresses {
             for address in addresses {
                 self.check_free(organization, channel_type, address, &identity.id)?;

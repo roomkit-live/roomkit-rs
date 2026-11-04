@@ -115,6 +115,77 @@ async fn an_address_another_identity_of_the_organization_uses_is_refused() {
     );
 }
 
+/// An identity is never created over an id another organization holds: the
+/// stored one, and where it resolves, stay as they are (RFC §5.6, §17.2).
+#[tokio::test]
+async fn an_id_another_organization_holds_is_refused() {
+    let held = identity("id_alice", Some("acme"));
+    let store = holding(vec![held.clone()]).await;
+    let mut intruder = Identity::new(id("id_alice"));
+    intruder.organization_id = Some("globex".to_owned());
+    assert_eq!(
+        store.create_identity(intruder).await,
+        Err(StoreError::IdentityNotFound(id("id_alice")))
+    );
+    assert_eq!(store.get_identity(&id("id_alice")).await, Ok(Some(held)));
+    assert_eq!(
+        resolved(&store, Some("acme")).await.as_deref(),
+        Some("id_alice")
+    );
+}
+
+/// A replaced identity stops resolving at an address it no longer holds.
+#[tokio::test]
+async fn a_replaced_identity_stops_resolving_at_what_it_no_longer_holds() {
+    let store = holding(vec![identity("id_alice", Some("acme"))]).await;
+    let mut replaced = Identity::new(id("id_alice"));
+    replaced.organization_id = Some("acme".to_owned());
+    replaced.link(ChannelType::SMS, "+15550000002");
+    store.create_identity(replaced).await.unwrap();
+    assert_eq!(resolved(&store, Some("acme")).await, None);
+}
+
+/// No organization counts as another, either way.
+#[tokio::test]
+async fn no_organization_counts_as_another() {
+    for (stored, given) in [(None, Some("acme")), (Some("acme"), None)] {
+        let held = identity("id_alice", stored);
+        let store = holding(vec![held.clone()]).await;
+        let mut other = Identity::new(id("id_alice"));
+        other.organization_id = given.map(str::to_owned);
+        assert_eq!(
+            store.create_identity(other).await,
+            Err(StoreError::IdentityNotFound(id("id_alice")))
+        );
+        assert_eq!(store.get_identity(&id("id_alice")).await, Ok(Some(held)));
+    }
+}
+
+/// One write: a replacement refused for an address another identity holds leaves
+/// what it held.
+#[tokio::test]
+async fn a_replacement_refused_for_an_address_keeps_the_old_ones() {
+    let first = identity("id_alice", Some("acme"));
+    let mut other = Identity::new(id("id_bob"));
+    other.organization_id = Some("acme".to_owned());
+    other.link(ChannelType::SMS, "+15550000002");
+    let store = holding(vec![first.clone(), other]).await;
+    let mut replaced = Identity::new(id("id_alice"));
+    replaced.organization_id = Some("acme".to_owned());
+    replaced.link(ChannelType::SMS, "+15550000002");
+    assert_eq!(
+        store.create_identity(replaced).await,
+        Err(StoreError::AddressLinked {
+            channel_type: ChannelType::SMS,
+        })
+    );
+    assert_eq!(store.get_identity(&id("id_alice")).await, Ok(Some(first)));
+    assert_eq!(
+        resolved(&store, Some("acme")).await.as_deref(),
+        Some("id_alice")
+    );
+}
+
 /// Python's `create_identity`: an identity created under an id the store
 /// holds replaces the stored one.
 #[tokio::test]

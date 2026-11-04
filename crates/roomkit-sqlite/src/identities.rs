@@ -110,8 +110,16 @@ fn index(
 /// store does (`INSERT OR REPLACE`); an address another identity of its
 /// organization uses is refused [`StoreError::AddressLinked`].
 pub(crate) fn create(connection: &Connection, identity: &Identity) -> Result<(), Failure> {
-    let held = stored(connection, &identity.id)?.map(|(_, data)| data);
+    let held = stored(connection, &identity.id)?;
     let organization = identity.organization_id.as_deref();
+    // Within its organization only (RFC §5.6, §17.2): an identity of another is
+    // never overwritten, as Python's store refuses it.
+    if let Some((stored, _)) = &held
+        && scope(stored.organization_id.as_deref()) != scope(organization)
+    {
+        return Err(StoreError::IdentityNotFound(identity.id.clone()).into());
+    }
+    let held = held.map(|(_, data)| data);
     for (channel_type, addresses) in &identity.channel_addresses {
         for address in addresses {
             check_free(
@@ -123,12 +131,10 @@ pub(crate) fn create(connection: &Connection, identity: &Identity) -> Result<(),
             )?;
         }
     }
+    let written = records::written(identity, Kind::Identity, held.as_deref())?;
     connection.execute(
         "INSERT OR REPLACE INTO identities(id, data) VALUES(?, ?)",
-        params![
-            identity.id.as_str(),
-            records::written(identity, Kind::Identity, held.as_deref())?,
-        ],
+        params![identity.id.as_str(), written],
     )?;
     for (channel_type, addresses) in &identity.channel_addresses {
         for address in addresses {
@@ -138,6 +144,49 @@ pub(crate) fn create(connection: &Connection, identity: &Identity) -> Result<(),
                 channel_type,
                 address,
                 organization,
+            )?;
+        }
+    }
+    drop_addresses_no_longer_held(connection, &identity.id, &written, scope(organization))
+}
+
+/// Removes what a replaced identity no longer holds, so that it stops resolving
+/// to it, a row of another scope for an address it keeps among them (RFC §17.2),
+/// as Python's store does. `written` is its JSON, which holds the addresses under
+/// a key the model does not read too.
+fn drop_addresses_no_longer_held(
+    connection: &Connection,
+    identity_id: &IdentityId,
+    written: &str,
+    organization: &str,
+) -> Result<(), Failure> {
+    let written: serde_json::Value = serde_json::from_str(written)?;
+    let declared = |channel_type: &str, address: &str| {
+        written
+            .pointer("/channel_addresses")
+            .and_then(|by_type| by_type.get(channel_type))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|held| held.iter().any(|value| value.as_str() == Some(address)))
+    };
+    let mut statement = connection.prepare(
+        "SELECT channel_type, address, organization_id FROM identity_addresses
+         WHERE identity_id = ?",
+    )?;
+    let rows = statement
+        .query_map([identity_id.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (channel_type, address, held_in) in rows {
+        if held_in != organization || !declared(&channel_type, &address) {
+            connection.execute(
+                "DELETE FROM identity_addresses
+                 WHERE channel_type = ? AND address = ? AND organization_id = ?",
+                [&channel_type, &address, &held_in],
             )?;
         }
     }
