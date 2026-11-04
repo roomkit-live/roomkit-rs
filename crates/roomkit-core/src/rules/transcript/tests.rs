@@ -768,3 +768,25 @@ fn a_standalone_instruction_read_at_its_place_reads_no_round() {
         assert_eq!(roles, [Role::User], "{messages:?}");
     }
 }
+
+// Python: tests/test_discussion_core.py::test_an_instruction_reads_before_a_round_at_its_own_index
+#[test]
+fn an_instruction_with_no_turn_before_it_keeps_a_round_at_its_own_index_alone() {
+    for (at, roles) in [
+        (0, vec![Role::User, Role::Assistant, Role::Tool]),
+        (1, vec![Role::User]),
+    ] {
+        let mut room = numbered();
+        let no_turn = room.context.recent_events[0].clone();
+        let mut instruction = room.instruction("do it", false);
+        lookup(&mut room, &no_turn);
+        let rows = room.context.recent_events.len();
+        // At the round's start, or just after it: the round then comes first.
+        instruction.index = room.context.recent_events[rows - 2].index + at;
+
+        let messages = read_with(&room, &instruction, &in_place());
+
+        let read: Vec<_> = messages.iter().map(|message| message.role).collect();
+        assert_eq!(read, roles, "{messages:?}");
+    }
+}
