@@ -540,6 +540,15 @@ impl<S: ConversationStore> HandoffHandler<S> {
                 "Agent {target} does not hold phase '{phase}'"
             ))));
         }
+        if self.inner.allowed_transitions.is_some()
+            && !self.holds_phase(calling_agent_id.as_str(), &state.phase)
+        {
+            tracing::warn!(target: "roomkit::orchestration", "Handoff rejected: caller {calling_agent_id} does not hold phase {}", state.phase);
+            return Ok(Decided::Rejected(refusal(format!(
+                "Agent {calling_agent_id} does not hold phase '{}'",
+                state.phase
+            ))));
+        }
         if let Some(phase) = request.context.get("next_phase")
             && !phase.is_string()
             && truthy(phase)
@@ -571,21 +580,22 @@ impl<S: ConversationStore> HandoffHandler<S> {
             .map_or_else(|| "handling".to_owned(), Clone::clone)
     }
 
-    /// Whether a handoff under allowed transitions may lead `target` to
-    /// `phase` (RFC §19.6). With no phase map nothing ties an agent to a
-    /// phase. With one, a human or a known target it does not name passes;
-    /// any other holds its own phase and those the router's rules give it, and
-    /// no phase otherwise.
-    fn holds_phase(&self, target: &str, phase: &str) -> bool {
+    /// Whether, under allowed transitions, `agent_id` holds `phase`: as a
+    /// handoff's target, the phase it is led to; as its caller, the room's
+    /// (RFC §19.6). With no phase map nothing ties an agent to a phase. With
+    /// one, a human or a known agent it does not name passes; any other holds
+    /// its own phase and those the router's rules give it, and no phase
+    /// otherwise.
+    fn holds_phase(&self, agent_id: &str, phase: &str) -> bool {
         let inner = &self.inner;
         if inner.phase_map.is_empty() {
             return true;
         }
-        let own = inner.phase_map.get(target);
-        if own.is_none() && (target == HUMAN || inner.known_agents.contains(target)) {
+        let own = inner.phase_map.get(agent_id);
+        if own.is_none() && (agent_id == HUMAN || inner.known_agents.contains(agent_id)) {
             return true;
         }
-        own.is_some_and(|own| own == phase) || inner.router.routes_phase_to(phase, target)
+        own.is_some_and(|own| own == phase) || inner.router.routes_phase_to(phase, agent_id)
     }
 
     /// Whether `target` is a handoff's: an agent the room binds, a human, or
