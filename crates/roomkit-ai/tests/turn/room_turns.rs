@@ -5,21 +5,26 @@
 //! answers since, never a message that came after it.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelType, EventContent, InboundMessage, RoomContext, RoomEvent, TextContent, ToolCall,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
+    EventContent, EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, TextContent,
+    ToolCall,
 };
+use roomkit::orchestration::{LoopOptions, StrategyAgent};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    ConversationStore, DeleteEventOptions, HookOptions, HookTrigger, InboundResult,
-    ProcessInboundOptions, RoomKit, RoomKitOptions, current_turn_host,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
+    DeleteEventOptions, DeliveryStream, HookOptions, HookTrigger, InboundResult, Loop,
+    Orchestration, ProcessInboundOptions, RoomKit, RoomKitOptions, StreamItem, current_turn_host,
 };
 use roomkit_ai::{
-    AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiTool, ProviderError,
-    ToolContext, ToolResult, Tools,
+    Agent, AgentOptions, AiChannel, AiChannelOptions, AiContext, AiProvider, AiResponse, AiTool,
+    MockAiProvider, MockAiProviderOptions, ProviderError, ToolContext, ToolResult, Tools,
 };
 use tokio::sync::watch;
 
@@ -353,6 +358,294 @@ async fn a_waiting_turn_s_answer_is_judged_with_the_answers_before_it() {
     room.kit.close().await.unwrap();
 }
 
+/// An agent that answers task A, its answer delivered with A, once `heard`
+/// opens: Python's `_AnswersA`, which answers before asyncio runs anything
+/// else, where a run here goes on as the next message is sent.
+struct AnswersA {
+    heard: watch::Sender<bool>,
+}
+
+impl Channel for AnswersA {
+    fn channel_id(&self) -> ChannelId {
+        channel("noter")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        ChannelDirection::Bidirectional
+    }
+
+    fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Err("no inbound".into()))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let mut heard = self.heard.subscribe();
+        async move {
+            if !matches!(&event.content, EventContent::Text(text) if text.body == "task A") {
+                return Ok(ChannelOutput::empty());
+            }
+            drop(heard.wait_for(|heard| *heard).await);
+            let source = EventSource {
+                direction: EventDirection::Outbound,
+                ..EventSource::new(channel("noter"), ChannelType::AI)
+            };
+            let answer = RoomEvent::new(event.room_id, source, TextContent::new("noted A"));
+            Ok(ChannelOutput {
+                responded: true,
+                response_events: vec![answer],
+                ..ChannelOutput::empty()
+            })
+        }
+    }
+}
+
+// Python: tests/test_room_turns_in_order.py::test_turns_start_in_the_order_they_were_asked_whichever_delivery_reads_first
+#[tokio::test]
+async fn turns_start_in_the_order_they_were_asked_whichever_delivery_reads_first() {
+    // A's delivery reads another agent's answer to A first, B's has nothing
+    // else to read: B's delivery reaches its turn first, which still waits.
+    let model = Gated::default();
+    let room = serialized(model.clone(), |options| options).await;
+    let heard = watch::Sender::new(false);
+    let noter = AnswersA {
+        heard: heard.clone(),
+    };
+    room.kit.register_channel(noter).unwrap();
+    room.kit
+        .attach_channel(
+            &room_id(),
+            &channel("noter"),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    send(&room.kit, "task A").await;
+    send(&room.kit, "task B").await;
+    heard.send_replace(true);
+    model.until_started("task A").await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert_eq!(model.asked(), ["task A"]);
+
+    model.answer("task A");
+    model.until_started("task B").await;
+    let read = model.read("task B").unwrap();
+    assert_eq!(
+        read.get(read.len() - 3..),
+        Some(&strings(&["task A", "answer to task A", "task B"])[..])
+    );
+    model.answer_all();
+    room.kit.close().await.unwrap();
+}
+
+/// A transport its listener cuts at the agent's first word: Python's
+/// `_StopsAtFirstWord`.
+struct StopsAtFirstWord;
+
+impl Channel for StopsAtFirstWord {
+    fn channel_id(&self) -> ChannelId {
+        channel("sms")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::SMS
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Transport
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        ChannelDirection::Bidirectional
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        true
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
+    }
+
+    async fn deliver_stream(
+        &self,
+        mut stream: DeliveryStream,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        while let Some(item) = stream.next().await {
+            if matches!(item, Ok(StreamItem::Text(_))) {
+                break;
+            }
+        }
+        Ok(ChannelOutput::empty())
+    }
+}
+
+// Python: tests/test_room_turns_in_order.py::test_a_waiting_turn_reads_what_a_cut_turn_said
+#[tokio::test]
+async fn a_waiting_turn_reads_what_a_cut_turn_said() {
+    let model = Gated::default();
+    let agent = AiChannel::new(
+        channel("assistant"),
+        model.clone(),
+        AiChannelOptions {
+            serialize_room_turns: true,
+            ..AiChannelOptions::default()
+        },
+    )
+    .unwrap();
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(StopsAtFirstWord).unwrap();
+    kit.register_channel(agent).unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..CreateRoomOptions::default()
+    })
+    .await
+    .unwrap();
+    for id in ["sms", "assistant"] {
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let a = send(&kit, "task A").await;
+    model.until_started("task A").await;
+    let b = send(&kit, "task B").await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+
+    model.answer("task A");
+    model.until_started("task B").await;
+    assert_eq!(
+        model.read("task B").unwrap(),
+        strings(&["task A", "answer to task A", "task B"])
+    );
+    model.answer_all();
+    for result in [a, b] {
+        delivered(&result).await;
+    }
+    kit.close().await.unwrap();
+}
+
+// Python: tests/test_room_turns_in_order.py::test_a_strategy_that_takes_the_agent_s_turns_orders_them_itself
+#[tokio::test]
+async fn a_strategy_that_takes_the_agent_s_turns_orders_them_itself() {
+    let answering = |answer: &str| {
+        MockAiProvider::new(MockAiProviderOptions {
+            responses: vec![answer.to_owned()],
+            ..MockAiProviderOptions::default()
+        })
+    };
+    let producer = Agent::new(
+        channel("prod"),
+        answering("draft"),
+        AgentOptions {
+            role: Some("Writer".to_owned()),
+            ai: AiChannelOptions {
+                serialize_room_turns: true,
+                ..AiChannelOptions::default()
+            },
+            ..AgentOptions::default()
+        },
+    )
+    .unwrap();
+    let reviewer = Agent::new(
+        channel("rev"),
+        answering("APPROVED"),
+        AgentOptions {
+            role: Some("Editor".to_owned()),
+            ..AgentOptions::default()
+        },
+    )
+    .unwrap();
+    let review = Loop::new(
+        StrategyAgent::channel(producer),
+        LoopOptions {
+            reviewer: Some(StrategyAgent::channel(reviewer)),
+            max_iterations: 1,
+            ..LoopOptions::default()
+        },
+    )
+    .unwrap();
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    let review: Arc<dyn Orchestration> = Arc::new(review);
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        orchestration: Some(Some(review)),
+        ..CreateRoomOptions::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room_id(), &channel("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+
+    let result = tokio::time::timeout(WAIT, send_whole(&kit, "go")).await;
+
+    assert!(
+        result.is_ok(),
+        "the loop's turn waited on a line of its own"
+    );
+    // The loop's answer, which no stream carries.
+    assert_eq!(said(&kit, "prod").await, ["draft"]);
+    kit.close().await.unwrap();
+}
+
+/// Sends `body` to the room and waits for all of it.
+async fn send_whole(kit: &RoomKit, body: &str) -> InboundResult {
+    let message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new(body));
+    let options = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..ProcessInboundOptions::default()
+    };
+    kit.process_inbound(message, options).await.unwrap()
+}
+
 // Python: tests/test_room_turns_in_order.py::test_a_muted_agent_still_reads_each_message_at_once
 #[tokio::test]
 async fn a_muted_agent_still_reads_each_message_at_once() {
@@ -620,7 +913,7 @@ async fn an_agent_asked_again_in_the_same_delivery_is_not_held_by_its_first_turn
         .attach_channel(
             &room_id(),
             &channel("planner"),
-            roomkit::AttachChannelOptions::default(),
+            AttachChannelOptions::default(),
         )
         .await
         .unwrap();

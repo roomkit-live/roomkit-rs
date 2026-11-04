@@ -5,6 +5,7 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
@@ -18,8 +19,8 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
-    ProcessInboundOptions, ResponseItem, RoomKit, RoomKitError, RoomKitOptions, SteerOptions,
-    current_turn_host,
+    DeliveryStream, ProcessInboundOptions, ResponseItem, RoomKit, RoomKitError, RoomKitOptions,
+    SteerOptions, StreamItem, current_turn_host,
 };
 use tokio::sync::watch;
 
@@ -37,6 +38,9 @@ struct Held {
     steered: Arc<Mutex<Vec<(SteeringDirective, String)>>>,
     turn_ids: Arc<Mutex<Vec<String>>>,
     started: watch::Sender<usize>,
+    /// How many of its streams finished their cleanup, a stream's `Drop`
+    /// standing for Python's `finally`.
+    cleaned: Arc<AtomicUsize>,
 }
 
 impl Held {
@@ -49,6 +53,7 @@ impl Held {
             steered: Arc::default(),
             turn_ids: Arc::default(),
             started: watch::Sender::new(0),
+            cleaned: Arc::default(),
         }
     }
 
@@ -82,6 +87,13 @@ struct HeldStream {
     after: VecDeque<ResponseItem>,
     waiting: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     started: Option<watch::Sender<usize>>,
+    cleaned: Arc<AtomicUsize>,
+}
+
+impl Drop for HeldStream {
+    fn drop(&mut self) {
+        self.cleaned.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 impl Stream for HeldStream {
@@ -172,6 +184,7 @@ impl Channel for Held {
                     drop(release.wait_for(|release| *release).await);
                 })),
                 started: Some(held.started),
+                cleaned: Arc::clone(&held.cleaned),
             };
             Ok(turn.respond_with_stream(Box::pin(stream)))
         }
@@ -289,6 +302,110 @@ async fn a_cancel_for_a_channel_without_steering_cuts_its_turn() {
     assert_eq!(reached, 1);
     assert_eq!(agent_rows(&kit).await.0, ["first"]);
     kit.close().await.unwrap();
+}
+
+// Python: tests/test_turns_control.py::test_a_close_after_a_cut_lets_the_channel_finish_its_cleanup.
+// A stream's cleanup is its `Drop`, which nothing can cancel again, so the
+// wait Python's finalizer goes through has no form here: the cleanup runs once,
+// and the kit's close comes after it.
+#[tokio::test]
+async fn a_close_after_a_cut_lets_the_channel_finish_its_cleanup() {
+    let agent = Held::new(false);
+    let kit = kit(agent.clone()).await;
+    let turn = asked(&kit, "hello");
+    agent.started(1).await;
+
+    assert_eq!(steer(&kit, Cancel::default(), in_room()).await, 1);
+    turn.await.unwrap();
+    kit.close().await.unwrap();
+
+    assert_eq!(agent.cleaned.load(Ordering::SeqCst), 1);
+}
+
+/// A streaming transport that stops reading at the agent's first word: the
+/// stream's close Python's test calls.
+struct StopsReading;
+
+impl Channel for StopsReading {
+    fn channel_id(&self) -> roomkit::model::ChannelId {
+        channel("sms")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::SMS
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Transport
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        ChannelDirection::Bidirectional
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        true
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
+    }
+
+    async fn deliver_stream(
+        &self,
+        mut stream: DeliveryStream,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        while let Some(item) = stream.next().await {
+            if matches!(item, Ok(StreamItem::Text(_))) {
+                break;
+            }
+        }
+        Ok(ChannelOutput::empty())
+    }
+}
+
+// Python: tests/test_turns_control.py::test_a_cut_after_a_close_lets_the_channel_finish_its_cleanup.
+// The reader's stop, then a cut: the cut reaches nothing, the cleanup, a
+// stream's `Drop`, ran once.
+#[tokio::test]
+async fn a_cut_after_a_close_lets_the_channel_finish_its_cleanup() {
+    let agent = Held::new(false);
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(StopsReading).unwrap();
+    kit.register_channel(agent.clone()).unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["sms", "ai"] {
+        kit.attach_channel(&room(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+
+    asked(&kit, "hello").await.unwrap();
+    steer(&kit, Cancel::default(), in_room()).await;
+    kit.close().await.unwrap();
+
+    assert_eq!(agent.cleaned.load(Ordering::SeqCst), 1);
 }
 
 // Python: tests/test_turns_control.py::test_a_directive_other_than_cancel_reaches_no_channel_without_steering
