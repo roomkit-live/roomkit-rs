@@ -479,7 +479,7 @@ async fn ended_or_dropped(left: Left) -> (bool, bool) {
 /// RFC §12.2 step 13s, §12.10.4 (RMK-1326, HITL c109350b): a target the
 /// close finds reading reads the stream's end, and what it does past it
 /// stands for Python's `finally`, which the close lets run within its grace
-/// (close 0.203 s, kept=['flushed'], for a `finally` of 0.2 s). It replaces
+/// (close 0.203 s, `kept=['flushed']`, for a `finally` of 0.2 s). It replaces
 /// RMK-1017's target dropped there, never reading an end. N1's stream and
 /// tool shapes, the target pulling each item at once.
 #[tokio::test(start_paused = true)]

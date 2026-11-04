@@ -239,10 +239,7 @@ async fn closed_past_a_cancel(target: &ReadingOn) -> (Duration, InboundResult, V
 async fn a_close_past_a_cancel_lets_the_target_finish_and_keeps_the_cancel_s_reason() {
     let flush = Duration::from_millis(200);
     let (closed_in, waited, kept) = closed_past_a_cancel(&ReadingOn::flushing(flush)).await;
-    assert!(
-        at(closed_in, flush - Duration::from_millis(1)),
-        "{closed_in:?}"
-    );
+    assert!(at(closed_in, Duration::from_millis(199)), "{closed_in:?}");
     assert_eq!(kept, ["flushed"]);
     assert_eq!(waited.cancellation_reason.as_deref(), Some("stopped"));
     assert_eq!(read(&waited), cited_and("cancelled"));
@@ -316,16 +313,16 @@ impl Channel for Buffering {
         std::future::ready(Ok(crate::default_inbound_event(self, &message, &context)))
     }
 
-    async fn deliver(
+    fn deliver(
         &self,
         event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
-    ) -> Result<ChannelOutput, ChannelError> {
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         if let EventContent::Text(text) = &event.content {
             self.delivered.lock().unwrap().push(text.body.clone());
         }
-        Ok(ChannelOutput::empty())
+        std::future::ready(Ok(ChannelOutput::empty()))
     }
 }
 
