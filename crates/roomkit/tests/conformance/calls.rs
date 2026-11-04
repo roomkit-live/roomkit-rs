@@ -562,6 +562,25 @@ pub(crate) async fn create_room(
     Ok(finish(run, "create_room", outcome, dump))
 }
 
+/// Writes a setup room's `store_metadata` through the store: how a scenario
+/// seeds a key only the framework writes, which a room's creation drops.
+pub(crate) async fn patch_store_metadata(
+    run: &std::sync::Arc<Run>,
+    room: &Value,
+) -> Result<(), String> {
+    let Some(patch) = optional::<Metadata>(room, "store_metadata").map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    let id: RoomId = field(room, "id").map_err(|e| e.to_string())?;
+    run.kit()
+        .store()
+        .patch_room_metadata(&id, patch, roomkit::store::PatchRoomMetadataOptions::default())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Attaches a setup's binding.
 pub(crate) async fn attach_binding(
     run: &std::sync::Arc<Run>,

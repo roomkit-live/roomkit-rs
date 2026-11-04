@@ -174,6 +174,7 @@ async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
         if let Err(error) = calls::create_room(run, room, None).await? {
             return Err(format!("create {room}: {error}"));
         }
+        calls::patch_store_metadata(run, room).await?;
         for binding in room["bindings"].as_array().into_iter().flatten() {
             calls::attach_binding(run, room, binding).await?;
         }

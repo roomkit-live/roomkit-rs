@@ -249,6 +249,7 @@ const ROOM: &[&str] = &[
     "id",
     "organization_id",
     "metadata",
+    "store_metadata",
     "timers",
     "bindings",
     "participants",
