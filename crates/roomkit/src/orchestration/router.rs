@@ -227,8 +227,8 @@ impl ConversationRouter {
 
     /// The router's `BEFORE_BROADCAST` sync hook: it stamps the selected
     /// agent under `_routed_to` and the supervisor under `_always_process`,
-    /// `_none_` on an agent's own output, and nothing when it selects no
-    /// agent for another source. On an addressed event it stamps the
+    /// `_none_` on an agent's own output and while the room is held for a
+    /// human, and nothing when it selects no agent for another source. On an addressed event it stamps the
     /// supervisor alone, unless the address names it (RFC §19.4 steps 0
     /// and 4).
     pub fn as_hook(
@@ -266,7 +266,10 @@ impl ConversationRouter {
             routed_to = %routed_to,
             "routed event"
         );
-        let always: Vec<&str> = self.supervisor_id.iter().map(ChannelId::as_str).collect();
+        // With no address, no agent acts in a room held for a human: nothing
+        // to watch, and no turn (RFC §19.4).
+        let supervisor = self.supervisor_id.as_ref().filter(|_| !state.human_hold);
+        let always: Vec<&str> = supervisor.iter().map(|id| id.as_str()).collect();
         let always = Value::from(always);
         let marks = [
             (ROUTED_TO, Value::from(routed_to)),
