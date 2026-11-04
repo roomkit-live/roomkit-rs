@@ -1,6 +1,8 @@
 //! A discussion whose stored queue cannot be written (RFC §19.7.5): its driver
 //! backs off, as Python's `_drive`, rather than give and end a turn at once.
 
+#![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
