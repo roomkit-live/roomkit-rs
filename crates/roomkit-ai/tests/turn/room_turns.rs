@@ -367,10 +367,30 @@ async fn a_muted_agent_still_reads_each_message_at_once() {
         )
         .await
         .unwrap();
+    let read: Arc<Mutex<Vec<String>>> = Arc::default();
+    let reads = Arc::clone(&read);
+    room.kit
+        .hook(
+            HookTrigger::BeforeAiGeneration,
+            move |event: roomkit_ai::AiGenerationEvent, _context: roomkit::model::RoomContext| {
+                let reads = Arc::clone(&reads);
+                async move {
+                    if let Some(message) = event.ai_context.messages.last() {
+                        reads.lock().unwrap().push(format!("{:?}", message.content));
+                    }
+                    roomkit::model::HookResult::allow(roomkit::model::hook::AllowOptions::default())
+                }
+            },
+            HookOptions::default(),
+        )
+        .unwrap();
 
     tokio::time::timeout(WAIT, room.says("hi")).await.unwrap();
 
-    assert_eq!(model.asked(), ["hi"]);
+    // It read the message at once; its stream is closed unread: no model asked.
+    assert_eq!(read.lock().unwrap().len(), 1);
+    assert!(read.lock().unwrap()[0].contains("hi"));
+    assert_eq!(model.asked(), Vec::<String>::new());
     assert_eq!(said(&room.kit, "assistant").await, Vec::<String>::new());
     room.kit.close().await.unwrap();
 }

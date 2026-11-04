@@ -598,6 +598,15 @@ async fn run_turn<S: ConversationStore>(
     let answered = inner.turns.run(&kit, &binding, event, context, cut).await;
     let outcome = match answered {
         Ok(Answer::Output(output)) => checked_output(output),
+        // Muting silences the voice, a streaming one included: its stream is
+        // closed unread, so its reply is never generated (RFC §7.5, §10.6.4).
+        Ok(Answer::Streamed(output, mut turn)) if binding.muted => {
+            turn.close_stream().await;
+            checked_output(Box::new(ChannelOutput {
+                observations: output.observations,
+                ..ChannelOutput::empty()
+            }))
+        }
         Ok(Answer::Streamed(output, turn)) => {
             shared.keep_stream(effect, KeptStream { turn, then: None });
             ChannelOutcome::Streamed(output).into()
