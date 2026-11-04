@@ -5,9 +5,9 @@
 //! A try that could not reach the endpoint is tried again, and one answered
 //! with a status [`should_retry`] says is worth it, each after [`delay`]. A
 //! whole answer's body counts in the try, a stream's does not, read once its
-//! head came. An answer to a whole request that is no JSON reads as a stream
-//! here, so its body is out of the try where the SDK's is in it: the SDK can
-//! do nothing with such a body but fail.
+//! head came. An answer to a whole request under another content type than
+//! JSON's reads as a stream here, so its body is out of the try where the
+//! SDK's is in it (RMK-1353).
 
 use std::hash::{BuildHasher, Hasher};
 use std::time::Duration;
@@ -94,16 +94,18 @@ fn python_float(text: &str) -> Option<f64> {
 )]
 fn date_seconds(text: &str) -> Option<f64> {
     let text = text.trim();
-    let date = match text.split_once(", ") {
-        Some((_, dated)) => DateTimeParser::new()
-            .parse_timestamp(dated)
-            .ok()
-            .or_else(|| obsolete_date("%d-%b-%y %H:%M:%S GMT", dated)),
-        // `Sun Nov  6 08:49:37 1994`.
-        None => text
-            .split_once(' ')
-            .and_then(|(_, dated)| obsolete_date("%b %e %H:%M:%S %Y", dated.trim_start())),
-    };
+    let dated = text
+        .split_once(',')
+        .map_or(text, |(_, dated)| dated.trim_start());
+    let date = DateTimeParser::new()
+        .parse_timestamp(dated)
+        .ok()
+        .or_else(|| obsolete_date("%d-%b-%y %H:%M:%S GMT", dated))
+        .or_else(|| {
+            // `Sun Nov  6 08:49:37 1994`.
+            let (_, dated) = text.split_once(' ')?;
+            obsolete_date("%b %e %H:%M:%S %Y", dated)
+        });
     Some(date?.as_second() as f64)
 }
 
@@ -213,6 +215,9 @@ mod tests {
             "Tue, 12 Jan 1970 13:46:49 GMT",
             "Monday, 12-Jan-70 13:46:49 GMT",
             "Mon Jan 12 13:46:49 1970",
+            "12 Jan 1970 13:46:49 GMT",
+            "Mon,12 Jan 1970 13:46:49 GMT",
+            "12 Jan 1970 13:46:49 +0000",
         ] {
             assert_eq!(read(&[("retry-after", date)]), Some(9.0), "{date}");
         }

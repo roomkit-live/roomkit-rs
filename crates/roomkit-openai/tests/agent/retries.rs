@@ -277,13 +277,16 @@ async fn a_whole_completion_s_body_counts_in_the_try_a_stream_s_does_not() {
         Reply::dropped_before_its_first_event(),
         answering(true, "never"),
     ];
+    let stream_refused = vec![Reply::dropped_in_its_body(400), answering(true, "never")];
     let (answered, answered_fake) = on(answered, 1).await;
     let (refused, refused_fake) = on(refused, 1).await;
     let (stream, stream_fake) = on(stream, 1).await;
-    let (answered, refused, stream) = tokio::join!(
+    let (stream_refused, stream_refused_fake) = on(stream_refused, 1).await;
+    let (answered, refused, stream, stream_refused) = tokio::join!(
         answer(&answered, false),
         answer(&refused, false),
-        answer(&stream, true)
+        answer(&stream, true),
+        answer(&stream_refused, true)
     );
     assert_eq!(answered.unwrap(), "Recovered");
     assert_eq!(answered_fake.requests().len(), 2);
@@ -291,6 +294,8 @@ async fn a_whole_completion_s_body_counts_in_the_try_a_stream_s_does_not() {
     assert_eq!(refused_fake.requests().len(), 2);
     assert_eq!(status_of(&stream.unwrap_err()), (true, None));
     assert_eq!(stream_fake.requests().len(), 1);
+    assert!(stream_refused.is_err());
+    assert_eq!(stream_refused_fake.requests().len(), 1);
 }
 
 // Python: tests/test_providers/test_ai_models.py::test_openai_list_models_maps_and_merges

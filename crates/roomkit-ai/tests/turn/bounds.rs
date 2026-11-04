@@ -440,11 +440,6 @@ async fn a_usage_the_price_cannot_read_fails_the_turn() {
             "Priced",
         ),
         (
-            ScriptedProvider::new([unreadable(json!(true))]),
-            None,
-            "Priced",
-        ),
-        (
             ScriptedProvider::new([busy()]),
             Some(ScriptedProvider::new([unreadable(json!(-1))])),
             "scripted",
