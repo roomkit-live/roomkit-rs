@@ -7,6 +7,7 @@ mod context;
 mod date;
 mod dynamic;
 mod error;
+mod model_tags;
 mod response;
 
 use std::future::Future;
@@ -15,7 +16,7 @@ use std::pin::Pin;
 use futures_core::Stream;
 
 pub(crate) use self::catalog::BILLED_USAGE_COUNTERS;
-pub use self::catalog::{ModelInfo, ModelPricing};
+pub use self::catalog::{ModelInfo, ModelPricing, listing};
 pub use self::context::{
     AiContentPart, AiContext, AiImagePart, AiMessage, AiMessageContent, AiRole, AiTextPart,
     AiToolCallPart, AiToolResultPart,
@@ -24,6 +25,9 @@ pub(crate) use self::context::{ai_messages, ai_messages_with};
 pub use self::date::Date;
 pub use self::dynamic::DynAiProvider;
 pub use self::error::{ProviderError, ProviderErrorOptions, is_context_overflow_message};
+pub use self::model_tags::{
+    SPEECH_CAPABILITY, TRANSCRIPTION_CAPABILITY, speech_tags, with_speech_tags,
+};
 pub use self::response::{
     AiResponse, AiToolCall, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta,
     StreamToolCall, read_tool_calls, tool_arguments,
@@ -70,6 +74,15 @@ pub trait AiProvider: Send + Sync + 'static {
     /// by default.
     fn available_models() -> Vec<ModelInfo> {
         Vec::new()
+    }
+
+    /// The models the provider's API reports live: the discovery surface,
+    /// the only answer that reflects the caller's own account, unlike
+    /// [`available_models`](Self::available_models), which it falls back to
+    /// for a provider whose API has no models endpoint (Python's
+    /// `list_models()`).
+    fn list_models(&self) -> impl Future<Output = Result<Vec<ModelInfo>, ProviderError>> + Send {
+        std::future::ready(Ok(Self::available_models()))
     }
 
     /// The catalogue's entry for the configured model (Python's

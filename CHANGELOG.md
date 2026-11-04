@@ -7,6 +7,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - `HandoffHandler::send_greeting` (RFC §19.6), as Python's, its text path: the room's active agent says the line the handler's greeting map gives it, as that agent's message; no active agent, no line or no channel named, nothing is said; a room missing is not found (RMK-1314).
+- `AiProvider::list_models`, the models an endpoint reports live, as Python's: a provider answers its catalogue unless it asks its endpoint; a listing's speech models are tagged (`speech_tags`, `with_speech_tags`, `TRANSCRIPTION_CAPABILITY`, `SPEECH_CAPABILITY`) (RMK-1278).
 - A provider's stream is read to its end, as Python's: a failure after its done event fails the turn as a stream under way (no retry, no compaction, no fallback), what the done event reported counting on the turn's usage (RMK-1271).
 - A delivery set with a failure is recorded on its event under the room's lock, every target's outcome, as Python's: a set that all succeeded, a response's, a greeting's, a hook's injected event's and one the kit's close cut write nothing, and a record that fails is logged (RMK-1117). A turn the close cuts is no failed delivery of its call, as Python's.
 - `update_binding_metadata` names its correspondent as an attach does, as Python's: the recipient and the correspondent in the channel's form, a binding naming no one taking its recipient (RMK-1124).

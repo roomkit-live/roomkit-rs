@@ -2,11 +2,14 @@
 //! Python's `ModelInfo` and `ModelPricing`, the entries of a provider's
 //! curated catalogue ([`AiProvider::available_models`](super::AiProvider::available_models)).
 
+use std::collections::HashMap;
+
 use roomkit::model::Metadata;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::date::Date;
+use super::model_tags::with_speech_tags;
 use crate::AiError;
 
 /// The counters a response's usage bills, disjoint, a token counted under
@@ -67,6 +70,46 @@ impl ModelInfo {
             pricing: None,
         }
     }
+}
+
+/// `live` as every [`AiProvider::list_models`](super::AiProvider::list_models)
+/// returns it: backfilled from the provider's `curated` catalogue, its speech
+/// models tagged. Python's `AIProvider._listing`, for a provider of another
+/// crate.
+#[doc(hidden)]
+pub fn listing(live: Vec<ModelInfo>, curated: &[ModelInfo]) -> Vec<ModelInfo> {
+    with_speech_tags(merge_curated(live, curated))
+}
+
+/// What a live endpoint left out filled from the `curated` catalogue, for
+/// each model of `live` it carries, what the endpoint did report kept: a
+/// display name, a context window, whether it takes images, its price. A
+/// catalogue's capabilities stay out: most carry internal routing flags, not
+/// a public tag set. Python's `AIProvider._merge_curated`.
+fn merge_curated(live: Vec<ModelInfo>, curated: &[ModelInfo]) -> Vec<ModelInfo> {
+    let index: HashMap<&str, &ModelInfo> = curated
+        .iter()
+        .map(|model| (model.id.as_str(), model))
+        .collect();
+    live.into_iter()
+        .map(|model| match index.get(model.id.as_str()) {
+            Some(known) => ModelInfo {
+                // Python's `or`: an empty name and a window of 0 are none.
+                display_name: model
+                    .display_name
+                    .filter(|name| !name.is_empty())
+                    .or_else(|| known.display_name.clone()),
+                context_window: model
+                    .context_window
+                    .filter(|window| *window != 0)
+                    .or(known.context_window),
+                supports_vision: model.supports_vision.or(known.supports_vision),
+                pricing: model.pricing.or_else(|| known.pricing.clone()),
+                ..model
+            },
+            None => model,
+        })
+        .collect()
 }
 
 /// The list price of one model, per million tokens, as its vendor
