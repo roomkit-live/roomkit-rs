@@ -580,11 +580,11 @@ async fn two_replacements_swapping_addresses_are_refused_without_a_deadlock() {
                     .await
                     .unwrap();
             }
+            // Its own first: filed in that order, each would hold its own row
+            // while it waited on the other's.
             let taking = |name: &str, own: &str, other: &str| {
-                let mut taker = identity(name, None, Some(other));
-                if keeping {
-                    taker.link(ChannelType::SMS, own);
-                }
+                let mut taker = identity(name, None, keeping.then_some(own));
+                taker.link(ChannelType::SMS, other);
                 taker
             };
             let (taken_by_one, taken_by_two) = tokio::join!(
