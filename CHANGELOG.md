@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `AiChannel::new` names a person's tool under a host's name before a definition the person gave twice, as Python's (RMK-1290).
 - A turn's live record (RFC §6.7, §10.6.4), as Python's: `ResponseMetadata`, `roomkit_ai::current_response_metadata`, `AiContext::response_metadata`, and `ChannelOutput::response_metadata` now a record shared with its writers: what a memory, a generation hook, a `BEFORE_TOOL_USE` hook or a tool handler writes rides the messages stored after it and reaches the caller's result once the stream is read, a deferred wait, a reader's stop and a failed turn included; a value written under `turns` stays off every message (RMK-1254, RMK-1248).
 - A blank stretch reaches no reader as text, as Python's now does: `ON_AI_RESPONSE`'s segments skip it and a buffering channel's `deliver_stream` delivers no text for it; a blank reads as Python's `str.strip` reads it, `\x1c` to `\x1f` included (RMK-1300).
 - A binding's `enable_thinking` written otherwise than `false` (`"off"`, `"no"`, `0`) turns off a budget a less specific level set, as `false` does, the value read before it is compared, as Python's now does (RFC §6.7, Appendix A.9).

@@ -601,6 +601,39 @@ fn a_channel_refuses_in_python_s_order() {
 // Python: channels/ai.py _init_tool_surface, _served_tools.py
 // refuse_host_tools: a registry reserves the skill tools' names against a
 // person's tools, and names the host's tool first as they are declared.
+// Python: AIChannel(tools=[b], human_input_handler=HumanInputToolHandler({a, b},
+// tool_definitions=[a, a, b])) names b: refuse_host_tools reads the person's
+// tools as a set, then ChannelHumanInput.refuse_collisions the definitions (RMK-1290).
+#[test]
+fn a_person_s_tool_under_a_host_s_name_is_named_before_a_definition_given_twice() {
+    let tool = |name: &str| AiTool::new(name, "Mine").unwrap();
+    let person = HumanInputToolHandler::new(
+        ["a", "b"],
+        HumanInputToolHandlerOptions {
+            tool_definitions: vec![tool("a"), tool("a"), tool("b")],
+            ..HumanInputToolHandlerOptions::default()
+        },
+    )
+    .unwrap();
+    let refused = AiChannel::new(
+        channel("assistant"),
+        ScriptedProvider::new(Vec::<ScriptedRound>::new()),
+        AiChannelOptions {
+            tools: vec![tool("b").into()],
+            human_input_handler: Some(person),
+            ..AiChannelOptions::default()
+        },
+    )
+    .err()
+    .unwrap();
+    assert_eq!(
+        refused,
+        AiError::DuplicateTool {
+            name: "b".to_owned()
+        }
+    );
+}
+
 #[test]
 fn a_registry_reserves_its_names_against_every_tool() {
     let refused = |options: AiChannelOptions| {

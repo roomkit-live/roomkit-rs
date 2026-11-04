@@ -81,6 +81,16 @@ impl Toolbox {
         toolset: Arc<dyn DynToolset>,
         declared: Vec<AiTool>,
     ) -> Result<(), AiError> {
+        // A name the agent serves already is named before one given twice,
+        // as Python refuses the host's tools first.
+        if let Some(served) = declared
+            .iter()
+            .find(|tool| self.served.contains_key(&tool.name))
+        {
+            return Err(AiError::DuplicateTool {
+                name: served.name.clone(),
+            });
+        }
         let names: Vec<String> = declared.iter().map(|tool| tool.name.clone()).collect();
         self.insert(toolset, declared, false)?;
         self.person_tools.extend(names);
