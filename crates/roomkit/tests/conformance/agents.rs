@@ -934,8 +934,8 @@ impl ToolHook {
         let Some(reaction) = self.reactions.pick(&json!({ "room_id": room_id })) else {
             return Ok(allow());
         };
-        perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
         write_record(&reaction);
+        perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
         match reaction.get("result") {
             Some(result) => Ok(tool_hook_result(result, event)?),
             None => Ok(allow()),

@@ -281,8 +281,8 @@ pub(crate) fn turn_hook_handler<P: Scripted>(
             let Some(reaction) = reactions.pick(&json!({ "room_id": room_id })) else {
                 return Ok(allow);
             };
-            perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
             payload.write_record(&reaction);
+            perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
             match reaction.get("result") {
                 Some(result) => Ok(turn_hook_result(result, payload)?),
                 None => Ok(allow),
