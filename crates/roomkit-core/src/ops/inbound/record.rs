@@ -18,6 +18,7 @@
 //! is stored (gap G-069).
 
 use super::direct::DirectCall;
+use super::queues::Lineage;
 use super::{cascade, commit, report};
 use crate::model::{ChannelId, ErrorRecord, EventStatus, Room, RoomContext, RoomEvent, RoomId};
 use crate::ops::protocol::{EffectId, KeyHeld, Outcome, StoreRequest};
@@ -53,6 +54,8 @@ pub(super) struct RecordReport {
 #[derive(Debug)]
 pub(super) struct RecordPass {
     section: Section<RecordWork>,
+    /// Whose cascade the record belongs to.
+    lineage: Lineage,
 }
 
 /// What a record's commit does under the room's lock.
@@ -125,7 +128,19 @@ impl RecordPass {
         };
         Self {
             section: Section::new(room_id, work),
+            lineage: Lineage::Call,
         }
+    }
+
+    /// The same record, of the cascade of `lineage`.
+    pub(super) fn within(mut self, lineage: Lineage) -> Self {
+        self.lineage = lineage;
+        self
+    }
+
+    /// Whose cascade the record belongs to.
+    pub(super) fn lineage(&self) -> Lineage {
+        self.lineage
     }
 
     /// The record of a direct injection for `direct`, which the room refuses

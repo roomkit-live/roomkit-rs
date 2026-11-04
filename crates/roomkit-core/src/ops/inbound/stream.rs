@@ -316,6 +316,12 @@ impl StreamRead {
         }))
     }
 
+    /// Whether the stream is the call's own, neither an answer's nor an
+    /// adopted entry's: its failure is its caller's.
+    pub(super) fn is_own(&self) -> bool {
+        !self.job.chained && self.job.lineage == Lineage::Call
+    }
+
     /// The pass of `event`, a row the stream ended, handed back as the
     /// entry `entry`: a response to the event the stream answers, within
     /// where its answers may go (RFC §8.5), and the channel its delivery

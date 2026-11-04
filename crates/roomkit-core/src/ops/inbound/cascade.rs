@@ -21,7 +21,7 @@ use super::{InboundError, InboundResult, Machine, Stage, instructions, report, s
 use crate::model::{
     ChannelCategory, ChannelId, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, RoomId,
 };
-use crate::ops::protocol::{EffectId, EntryId, Notice, SpanNote};
+use crate::ops::protocol::{EffectId, EntryId};
 use crate::ops::{Abort, Cx};
 use crate::rules::chain_depth;
 use crate::rules::permissions::DeliveryPlan;
@@ -282,7 +282,7 @@ impl Machine {
                 let mut event = event;
                 event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
                 Job::Record(
-                    Box::new(RecordPass::injected(event, targets)),
+                    Box::new(RecordPass::injected(event, targets).within(lineage)),
                     RecordNote::Refused,
                 )
             };
@@ -380,7 +380,7 @@ impl Machine {
             let id = cx.env.new_event_id();
             let record = chain_depth::not_asked_record(id, event, &agent, cx.env.now());
             self.cascade.queue(Job::Record(
-                Box::new(RecordPass::new(record)),
+                Box::new(RecordPass::new(record).within(set.lineage())),
                 RecordNote::NotAsked {
                     agent: Box::new(agent),
                     trigger: Box::new(event.clone()),
@@ -484,7 +484,7 @@ impl Machine {
             if at_limit && responder.category == ChannelCategory::Transport {
                 // Only a transport is asked at the limit; what it answers is
                 // stored refused (RFC §8.3).
-                self.queue_refused(event, chain_depth::CHAIN_DEPTH_LIMIT);
+                self.queue_refused(event, chain_depth::CHAIN_DEPTH_LIMIT, set.lineage());
             } else if self.cascade.budget.take_pass() {
                 let origin = PassOrigin::Response {
                     answers_within: set.answers_within().cloned(),
@@ -492,15 +492,20 @@ impl Machine {
                 let pass = CommitPass::new(origin.clone(), event).within(set.lineage());
                 self.cascade.queue(Job::Pass(Box::new(pass), origin));
             } else {
-                self.queue_refused(event, chain_depth::REENTRY_LOOP_CAP);
+                self.queue_refused(event, chain_depth::REENTRY_LOOP_CAP, set.lineage());
             }
         }
     }
 
-    pub(super) fn queue_refused(&mut self, mut event: RoomEvent, blocked_by: &str) {
+    pub(super) fn queue_refused(
+        &mut self,
+        mut event: RoomEvent,
+        blocked_by: &str,
+        lineage: Lineage,
+    ) {
         event.blocked_by = Some(blocked_by.to_owned());
         self.cascade.queue(Job::Record(
-            Box::new(RecordPass::new(event)),
+            Box::new(RecordPass::new(event).within(lineage)),
             RecordNote::Refused,
         ));
     }
@@ -517,11 +522,7 @@ impl Machine {
             return self.expire(cx, locked_event);
         }
         if self.trigger.decided {
-            let error = abort.into_record();
-            cx.io.notify(Notice::Span(SpanNote::CascadeFailed {
-                error: error.clone(),
-            }));
-            return self.trigger.note_error(Some(error));
+            return self.trigger.note_error(Some(abort.into_record()));
         }
         let error = failure(abort, self.call.room_id.clone());
         self.end(cx, Err(error));

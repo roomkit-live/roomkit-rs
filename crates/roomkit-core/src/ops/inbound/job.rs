@@ -1,9 +1,10 @@
 //! The passes of the cascade through the room lock, and how one advances.
 
 use super::pass::{CommitPass, PassOrigin, PassReport};
+use super::queues::Lineage;
 use super::record::{RecordPass, RecordReport};
 use crate::model::{ChannelBinding, ChannelId, RoomEvent};
-use crate::ops::protocol::{EffectId, EntryId, Outcome};
+use crate::ops::protocol::{EffectId, EntryId, Notice, Outcome, SpanNote};
 use crate::ops::{Abort, Cx, Progress};
 
 /// One pass of the cascade.
@@ -26,6 +27,9 @@ pub(super) struct RowNote {
     /// The channel its delivery skips: the stream's target, which read it
     /// in the stream.
     pub(super) skips: Option<ChannelId>,
+    /// Whether its stream is the call's own: a chained stream's failure, or an
+    /// adopted entry's, is not its caller's (Python's `if sr.chained: continue`).
+    pub(super) own: bool,
 }
 
 /// What a stored record stands for.
@@ -84,16 +88,36 @@ impl Job {
         match self {
             Self::Pass(mut pass, origin) => match pass.accept(cx, effect, outcome) {
                 Progress::Waiting => Run::Running(Self::Pass(pass, origin)),
-                Progress::Done(result) => Run::Finished(Box::new(Finished::Pass(result, origin))),
+                Progress::Done(result) => {
+                    tell_failure(cx, &result, pass.lineage() == Lineage::Call);
+                    Run::Finished(Box::new(Finished::Pass(result, origin)))
+                }
             },
             Self::Record(mut pass, note) => match pass.accept(cx, effect, outcome) {
                 Progress::Waiting => Run::Running(Self::Record(pass, note)),
-                Progress::Done(result) => Run::Finished(Box::new(Finished::Record(result, note))),
+                Progress::Done(result) => {
+                    tell_failure(cx, &result, pass.lineage() == Lineage::Call);
+                    Run::Finished(Box::new(Finished::Record(result, note)))
+                }
             },
             Self::Row(mut pass, note) => match pass.accept(cx, effect, outcome) {
                 Progress::Waiting => Run::Running(Self::Row(pass, note)),
-                Progress::Done(result) => Run::Finished(Box::new(Finished::Row(result, note))),
+                Progress::Done(result) => {
+                    tell_failure(cx, &result, note.own);
+                    Run::Finished(Box::new(Finished::Row(result, note)))
+                }
             },
         }
+    }
+}
+
+/// Tells the call's tail of a job of its `own` cascade that failed, as Python's
+/// `cascade.record_error`: a failure before the call's decision has no tail to
+/// reach yet.
+fn tell_failure<T>(cx: &mut Cx<'_>, result: &Result<T, Abort>, own: bool) {
+    if let (true, Err(abort)) = (own, result) {
+        let error = abort.clone().into_record();
+        cx.io
+            .notify(Notice::Span(SpanNote::CascadeFailed { error }));
     }
 }

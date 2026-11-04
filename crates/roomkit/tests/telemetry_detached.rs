@@ -23,7 +23,9 @@ use roomkit::model::{
     TextContent,
 };
 use roomkit::telemetry::{MockTelemetryProvider, Span, TelemetryConfig};
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+};
 use roomkit::{
     AttachChannelOptions, CancelDeliveryOptions, CancelOptions, Channel, ChannelError,
     CreateRoomOptions, HookExecution, HookOptions, HookTrigger, InMemoryLockManager, InboundResult,
@@ -655,8 +657,60 @@ impl RoomLockManager for RefusesOneGrant {
     }
 }
 
-// Python: core/lanes.py `_finish`: a failure past the decision, an answer's commit
-// refused its lock, is the cascade's: the result carries it, the tail reads it.
+// Python: core/lanes.py `_finish`: a buffered answer's commit refused its lock
+// past the decision is the cascade's: the result carries it, the tail reads it.
+#[tokio::test]
+async fn a_buffered_answer_refused_its_lock_reads_on_the_tail() {
+    /// The room's creation, its two attaches, the message and the answer's
+    /// commit take the lock in that order.
+    const THE_ANSWER_S_COMMIT: usize = 5;
+    let mock = Arc::new(MockTelemetryProvider::default());
+    let kit = RoomKit::new(RoomKitOptions {
+        telemetry: Some(TelemetryConfig::from(Arc::clone(&mock))),
+        lock_manager: Some(Arc::new(RefusesOneGrant(
+            InMemoryLockManager::default(),
+            THE_ANSWER_S_COMMIT,
+            AtomicUsize::new(0),
+        ))),
+        ..RoomKitOptions::default()
+    });
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let agent = EchoAgent::new(id("ai"), "Yes.", EchoAgentOptions::default());
+    kit.register_channel(agent).unwrap();
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    for channel in ["sms", "ai"] {
+        kit.attach_channel(&room(), &id(channel), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let result = say(&kit, true).await;
+    let ended = tokio::time::timeout(BOUND, result.delivery.unwrap().wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(ended.error, None, "the answer's commit was refused");
+    let tail = tail_of(&mock).unwrap();
+    assert_eq!(tail.status, "error", "{tail:?}");
+    assert_eq!(
+        tail.error_message.as_deref(),
+        Some("RuntimeError"),
+        "{tail:?}"
+    );
+    kit.close().await.unwrap();
+}
+
+// Python: core/mixins/inbound_streaming.py: a row's commit that raises is its
+// stream's failure, which the cascade records: the result carries it, the tail
+// reads it.
 #[tokio::test]
 async fn a_failure_past_the_decision_reads_on_the_tail() {
     /// The room's creation, its two attaches, the message and the answer's
@@ -706,6 +760,126 @@ async fn a_failure_past_the_decision_reads_on_the_tail() {
         "{tail:?}"
     );
     kit.close().await.unwrap();
+}
+
+// Python: core/mixins/inbound_streaming.py `if sr.chained: continue`: a chained
+// stream's failure is not its caller's. The room's creation, its attaches, the
+// message and the rows take the lock in that order: the 10th is `Three.`'s.
+#[tokio::test]
+async fn a_chained_row_refused_its_lock_is_no_failure_of_the_tail() {
+    let (error, tail) = a_call_refused_one_grant(10, Some("ai2"), false).await;
+    assert_eq!(
+        error.as_deref(),
+        Some("RuntimeError"),
+        "the grant was refused"
+    );
+    assert_eq!(tail.status, "ok", "{tail:?}");
+}
+
+// Python: core/lanes.py `record_error` is the entry's own cascade's: what the
+// answer to an event a hook sends fails with is not the call's. The 6th grant
+// is that answer's row.
+#[tokio::test]
+async fn an_adopted_event_s_answer_refused_its_lock_is_no_failure_of_the_tail() {
+    let (error, tail) = a_call_refused_one_grant(6, None, true).await;
+    assert_eq!(
+        error.as_deref(),
+        Some("RuntimeError"),
+        "the grant was refused"
+    );
+    assert_eq!(tail.status, "ok", "{tail:?}");
+}
+
+/// The error a deferred call reads at its end and its tail, the kit's lock
+/// manager refusing its `grant`th grant: a room of `sms` and a scripted agent,
+/// and `second`, a second one that answers the first; a hook of the kit sends
+/// an event into its own room when `adopting`.
+async fn a_call_refused_one_grant(
+    grant: usize,
+    second: Option<&str>,
+    adopting: bool,
+) -> (Option<String>, Span) {
+    let mock = Arc::new(MockTelemetryProvider::default());
+    let kit = RoomKit::new(RoomKitOptions {
+        telemetry: Some(TelemetryConfig::from(Arc::clone(&mock))),
+        lock_manager: Some(Arc::new(RefusesOneGrant(
+            InMemoryLockManager::default(),
+            grant,
+            AtomicUsize::new(0),
+        ))),
+        ..RoomKitOptions::default()
+    });
+    let sms = RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    let model = ScriptedProvider::new([
+        ScriptedRound::answering("One."),
+        ScriptedRound::answering("Two."),
+    ]);
+    let agent = AiChannel::new(id("ai"), model, AiChannelOptions::default()).unwrap();
+    kit.register_channel(agent).unwrap();
+    let mut channels = vec!["sms", "ai"];
+    if let Some(second) = second {
+        let model = ScriptedProvider::new([ScriptedRound::answering("Three.")]);
+        let agent = AiChannel::new(id(second), model, AiChannelOptions::default()).unwrap();
+        kit.register_channel(agent).unwrap();
+        channels.push(second);
+    }
+    let create = CreateRoomOptions {
+        room_id: Some(room()),
+        ..CreateRoomOptions::default()
+    };
+    kit.create_room(create).await.unwrap();
+    for channel in channels {
+        kit.attach_channel(&room(), &id(channel), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    if adopting {
+        sends_an_event_on_hello(&kit);
+    }
+    let result = say(&kit, true).await;
+    let ended = tokio::time::timeout(BOUND, result.delivery.unwrap().wait())
+        .await
+        .unwrap()
+        .unwrap();
+    let tail = tail_of(&mock).unwrap();
+    kit.close().await.unwrap();
+    (ended.error.map(|error| error.error_type), tail)
+}
+
+/// A hook that sends `adopted` into the room as `Hello` goes through it.
+fn sends_an_event_on_hello(kit: &RoomKit) {
+    let hooked = kit.clone();
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let kit = hooked.clone();
+            async move {
+                let body = serde_json::to_value(&event.content).unwrap();
+                if body["body"] == "Hello" {
+                    drop(
+                        kit.send_event(
+                            &room(),
+                            &id("sms"),
+                            TextContent::new("adopted"),
+                            SendEventOptions::default(),
+                        )
+                        .await,
+                    );
+                }
+                HookResult::allow(AllowOptions::default())
+            }
+        },
+        HookOptions {
+            name: "sends".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
 }
 
 /// A transport whose send of the text `.1` waits until the test lets it.

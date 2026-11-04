@@ -504,6 +504,7 @@ impl Machine {
             let note = RowNote {
                 entry: row.entry,
                 skips,
+                own: read.is_own(),
             };
             self.cascade.lead(Job::Row(Box::new(pass), note));
         }
@@ -522,7 +523,7 @@ impl Machine {
                     job.answers_within.as_ref(),
                     &job.bindings,
                 );
-                self.queue_refused(record, chain_depth::REENTRY_LOOP_CAP);
+                self.queue_refused(record, chain_depth::REENTRY_LOOP_CAP, job.lineage);
             }
         }
     }
