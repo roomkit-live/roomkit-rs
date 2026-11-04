@@ -3,7 +3,7 @@
 //! [`SqliteStore`] with nothing lost, and what Python reads beside the
 //! records is kept right.
 //!
-//! The file is `tests/fixtures/python-v13.db`, written by
+//! The file is `tests/fixtures/python-v14.db`, written by
 //! `tests/fixtures/make_fixture.py` (`make sqlite-fixture`), at the roomkit
 //! commit `tests/fixtures/ROOMKIT_COMMIT` names. Each test opens a copy.
 //! The other direction, Python reading a file this crate wrote, is for
@@ -40,7 +40,7 @@ fn fixtures() -> PathBuf {
 }
 
 fn fixture() -> PathBuf {
-    fixtures().join("python-v13.db")
+    fixtures().join("python-v14.db")
 }
 
 /// A copy of the fixture, which a test may write.
@@ -583,7 +583,7 @@ fn schema(path: &Path) -> (Vec<Entry>, i64) {
 }
 
 /// A new file holds the schema Python creates, statement for statement, at
-/// version 13.
+/// version 14.
 #[tokio::test]
 async fn a_new_file_is_created_as_python_creates_it() {
     let file = TempFile::new("created");
@@ -612,7 +612,7 @@ async fn opening_failure(store: &SqliteStore) -> Option<StoreError> {
 #[tokio::test]
 async fn a_file_of_another_schema_version_is_refused() {
     let mut refused = Vec::new();
-    for version in [14, 11] {
+    for version in [15, 11] {
         let file = copy();
         Connection::open(file.path())
             .unwrap()
@@ -634,7 +634,7 @@ async fn a_file_of_another_schema_version_is_refused() {
         [
             (
                 Some(
-                    "SQLite schema version 14 is newer than supported version 13; upgrade \
+                    "SQLite schema version 15 is newer than supported version 14; upgrade \
                      RoomKit before opening this file"
                         .to_owned()
                 ),
@@ -642,7 +642,7 @@ async fn a_file_of_another_schema_version_is_refused() {
             ),
             (
                 Some(
-                    "SQLite schema version 11 is older than supported version 13: open it \
+                    "SQLite schema version 11 is older than supported version 14: open it \
                      once with the Python implementation's SQLiteStore, which migrates it"
                         .to_owned()
                 ),
@@ -712,7 +712,7 @@ async fn a_version_12_file_is_migrated_as_python_migrates_it() {
             1,
             Vec::<String>::new(),
             vec![invoice.as_str().to_owned()],
-            13,
+            14,
             0
         )
     );
@@ -889,7 +889,7 @@ async fn a_search_finds_what_python_s_search_finds_in_the_file_python_wrote() {
                 .collect::<Vec<_>>(),
         );
     }
-    let invoice = vec!["9d8e82f7674847b7b334fa11c8193f94".to_owned()];
+    let invoice = vec!["811ff92ecc4841949da4567beef91d01".to_owned()];
     assert_eq!(
         found,
         [
@@ -898,8 +898,8 @@ async fn a_search_finds_what_python_s_search_finds_in_the_file_python_wrote() {
             vec![],
             vec![],
             vec![
-                "87250e36c69845f8be3f8480bfc26bdb".to_owned(),
-                "ada2c0cae00441e3a2f3e59c0b1cc63f".to_owned()
+                "78813bf9d62d43ab8fc4f555462f019e".to_owned(),
+                "0f3d8db793b64aa098f907a96188f3c2".to_owned()
             ],
             vec![],
             vec![],

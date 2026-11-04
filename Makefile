@@ -133,9 +133,9 @@ sqlite-fixture:
 		echo "roomkit $$commit is not on origin/main: push it and fetch first"; exit 1; \
 	fi && \
 	PYTHONDONTWRITEBYTECODE=1 "$$ROOMKIT_DIR/.venv/bin/python" -I \
-		$(SQLITE_FIXTURES)/make_fixture.py $(SQLITE_FIXTURES)/python-v13.db && \
+		$(SQLITE_FIXTURES)/make_fixture.py $(SQLITE_FIXTURES)/python-v14.db && \
 	echo "$$commit" > $(SQLITE_FIXTURES)/ROOMKIT_COMMIT && \
-	sha256sum $(SQLITE_FIXTURES)/python-v13.db | cut -c1-64 > $(SQLITE_FIXTURES)/FIXTURE_SHA256 && \
+	sha256sum $(SQLITE_FIXTURES)/python-v14.db | cut -c1-64 > $(SQLITE_FIXTURES)/FIXTURE_SHA256 && \
 	echo "sqlite fixture written by roomkit $$commit"
 
 # roomkit-postgres against a real server. `make test` runs its tests too, and

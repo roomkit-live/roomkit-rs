@@ -245,13 +245,8 @@ pub(crate) fn unlink(
     write(connection, &identity, &data)?;
     connection.execute(
         "DELETE FROM identity_addresses
-         WHERE channel_type = ? AND address = ? AND identity_id = ? AND organization_id = ?",
-        params![
-            channel_type.as_str(),
-            address,
-            identity_id.as_str(),
-            scope(organization)
-        ],
+         WHERE channel_type = ? AND address = ? AND identity_id = ?",
+        params![channel_type.as_str(), address, identity_id.as_str()],
     )?;
     Ok(())
 }

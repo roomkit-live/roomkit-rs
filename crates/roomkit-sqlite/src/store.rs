@@ -52,13 +52,13 @@ struct File {
 impl SqliteStore {
     /// The store of the file `options.path`, which it opens at its first
     /// operation, as Python's store does: no I/O happens here. The file is
-    /// created at schema version 13, as the Python implementation creates
+    /// created at schema version 14, as the Python implementation creates
     /// it, when it does not exist or holds no schema, and its directory
     /// when it is missing. A leading `~` reads as the home directory.
     ///
     /// The first operation fails [`StoreError::Unavailable`] when the file
     /// cannot be opened: its cause is a [`SqliteSchemaError`](crate::SqliteSchemaError)
-    /// for a file of another schema version but 12, which it migrates as
+    /// for a file of another schema version but 12 or 13, which it migrates as
     /// Python does, left as it is, else what
     /// failed (SQLite's error, through the source chain). The next
     /// operation tries again.

@@ -76,3 +76,122 @@ async fn a_replacement_keeps_the_row_of_a_key_the_model_does_not_read() {
     assert_eq!(kept, 1);
     store.close().await;
 }
+
+/// Python: `test_opening_moves_an_unscoped_address_to_its_identity_s_organization`
+/// (HITL 0f96a597, RFC §17.2): a row version 3's migration left unscoped moves to
+/// the organization of its identity, once, if the identity still declares the
+/// address; one whose organization holds the address already yields to that row. A
+/// link since revoked is not restored: its row goes (HITL 6928c418). An identity of
+/// no organization keeps its unscoped row, and a row of another organization is left
+/// alone, which no read serves.
+#[tokio::test]
+async fn opening_moves_an_unscoped_address_to_its_identity_s_organization() {
+    let file = TempFile::new("identity-unscoped");
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
+    for (id, organization, address) in [
+        ("alice", Some("acme"), None),
+        ("bob", Some("acme"), Some("+2")),
+        ("carol", None, Some("+3")),
+    ] {
+        let mut identity = Identity::new(IdentityId::new(id).unwrap());
+        identity.organization_id = organization.map(str::to_owned);
+        if let Some(address) = address {
+            identity.link(ChannelType::SMS, address);
+        }
+        store.create_identity(identity).await.unwrap();
+    }
+    store.close().await;
+    {
+        let connection = Connection::open(file.path()).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id)
+                 VALUES ('sms', '+1', 'alice', ''), ('sms', '+2', 'alice', ''),
+                        ('sms', '+4', 'alice', 'globex'), ('sms', '+5', 'alice', '');
+                 UPDATE identities SET data = json_set(data, '$.channel_addresses',
+                     json('{\"sms\": [\"+1\", \"+2\"]}')) WHERE id = 'alice';
+                 PRAGMA user_version = 13;",
+            )
+            .unwrap();
+    }
+    let reopened = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
+    assert!(
+        reopened
+            .get_identity(&IdentityId::new("alice").unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    reopened.close().await;
+    let connection = Connection::open(file.path()).unwrap();
+    let stored: Vec<(String, String, String)> = connection
+        .prepare(
+            "SELECT address, identity_id, organization_id FROM identity_addresses ORDER BY 1, 3",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let row = |address: &str, id: &str, organization: &str| {
+        (address.to_owned(), id.to_owned(), organization.to_owned())
+    };
+    assert_eq!(
+        stored,
+        [
+            row("+1", "alice", "acme"),
+            row("+2", "bob", "acme"),
+            row("+3", "carol", ""),
+            row("+4", "alice", "globex"),
+        ]
+    );
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 14);
+}
+
+/// Python: `test_an_unlink_removes_the_identity_s_rows_in_every_scope`: a link
+/// revoked is revoked, a row a file's migration left in another scope with it, so
+/// that no later rewrite can restore it (RFC §5.6).
+#[tokio::test]
+async fn an_unlink_removes_the_identity_s_rows_in_every_scope() {
+    let file = TempFile::new("identity-unlink");
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
+    let mut identity = Identity::new(IdentityId::new("i1").unwrap());
+    identity.organization_id = Some("acme".to_owned());
+    identity.link(ChannelType::SMS, "+1");
+    store.create_identity(identity.clone()).await.unwrap();
+    let connection = Connection::open(file.path()).unwrap();
+    connection
+        .execute(
+            "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id)
+             VALUES ('sms', '+1', 'i1', '')",
+            [],
+        )
+        .unwrap();
+    store
+        .unlink_address(
+            &identity.id,
+            &ChannelType::SMS,
+            "+1",
+            roomkit::store::UnlinkAddressOptions {
+                organization_id: Some("acme".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+    let left: i64 = connection
+        .query_row("SELECT count(*) FROM identity_addresses", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(left, 0);
+    store.close().await;
+}

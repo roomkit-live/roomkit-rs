@@ -1,5 +1,5 @@
-//! The Python implementation's schema, version 13, which a file is created
-//! at or checked against when it is opened; a version 12 file is migrated.
+//! The Python implementation's schema, version 14, which a file is created
+//! at or checked against when it is opened; a version 12 or 13 file is migrated.
 
 use std::time::Duration;
 
@@ -10,8 +10,8 @@ use roomkit::StoreError;
 use crate::error::{OpenFailure, SqliteSchemaError};
 
 /// The schema version this crate reads and writes: the Python
-/// implementation's `SQLiteStore` at its version 13.
-pub(crate) const SCHEMA_VERSION: i64 = 13;
+/// implementation's `SQLiteStore` at its version 14.
+pub(crate) const SCHEMA_VERSION: i64 = 14;
 
 /// Gives each full-text row its event row's rowid, the one key FTS5 indexes,
 /// and drops a row naming no stored event: Python's `_migrate_v12_to_v13`
@@ -25,6 +25,43 @@ DELETE FROM events_fts;
 INSERT INTO events_fts(rowid, text, event_id, room_id)
     SELECT event_rowid, text, event_id, room_id FROM fts_by_event;
 DROP TABLE fts_by_event;
+";
+
+/// An address version 3's migration left unscoped for an identity of an
+/// organization moves to that organization, if the identity still declares it; one
+/// whose organization holds the address already yields to that row; one it no longer
+/// declares, a link since revoked, goes, and the address is free: Python's
+/// `_migrate_v13_to_v14` (HITL 0f96a597, 6928c418; RFC §17.2).
+const MIGRATE_13_TO_14: &str = "
+DELETE FROM identity_addresses
+WHERE organization_id = ''
+  AND EXISTS (
+      SELECT 1 FROM identities i JOIN identity_addresses held
+        ON held.channel_type = identity_addresses.channel_type
+       AND held.address = identity_addresses.address
+       AND held.organization_id = json_extract(i.data, '$.organization_id')
+      WHERE i.id = identity_addresses.identity_id
+        AND COALESCE(json_extract(i.data, '$.organization_id'), '') <> '');
+UPDATE identity_addresses
+SET organization_id = (
+    SELECT json_extract(i.data, '$.organization_id') FROM identities i
+    WHERE i.id = identity_addresses.identity_id)
+WHERE organization_id = ''
+  AND COALESCE((
+      SELECT json_extract(i.data, '$.organization_id') FROM identities i
+      WHERE i.id = identity_addresses.identity_id), '') <> ''
+  AND EXISTS (
+      SELECT 1 FROM identities i,
+           json_each(i.data, '$.channel_addresses') declared,
+           json_each(declared.value) held
+      WHERE i.id = identity_addresses.identity_id
+        AND declared.key = identity_addresses.channel_type
+        AND held.value = identity_addresses.address);
+DELETE FROM identity_addresses
+WHERE organization_id = ''
+  AND COALESCE((
+      SELECT json_extract(i.data, '$.organization_id') FROM identities i
+      WHERE i.id = identity_addresses.identity_id), '') <> '';
 ";
 
 /// The tables and indexes, as the Python implementation writes them
@@ -80,7 +117,11 @@ pub(crate) fn prepare(connection: &mut Connection) -> Result<(), StoreError> {
     match version {
         0 => create(connection).map_err(OpenFailure::Database)?,
         SCHEMA_VERSION => repair(connection).map_err(OpenFailure::Database)?,
-        12 => migrate_12_to_13(connection).map_err(OpenFailure::Database)?,
+        12 => {
+            migrate(connection, 13, MIGRATE_12_TO_13).map_err(OpenFailure::Database)?;
+            migrate(connection, 14, MIGRATE_13_TO_14).map_err(OpenFailure::Database)?;
+        }
+        13 => migrate(connection, 14, MIGRATE_13_TO_14).map_err(OpenFailure::Database)?,
         newer if newer > SCHEMA_VERSION => {
             return Err(SqliteSchemaError::newer(newer, SCHEMA_VERSION).into());
         }
@@ -107,15 +148,14 @@ fn create(connection: &mut Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Migrates a version 12 file to version 13, in one transaction, as Python
-/// does on open; a file another connection migrated meanwhile is left as it
-/// is.
-fn migrate_12_to_13(connection: &mut Connection) -> rusqlite::Result<()> {
+/// Runs `step` and stamps the file `version`, in one transaction, as Python does
+/// on open; a file another connection migrated meanwhile is left as it is.
+fn migrate(connection: &mut Connection, version: i64, step: &str) -> rusqlite::Result<()> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version < SCHEMA_VERSION {
-        transaction.execute_batch(MIGRATE_12_TO_13)?;
-        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    let found: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if found < version {
+        transaction.execute_batch(step)?;
+        transaction.pragma_update(None, "user_version", version)?;
     }
     transaction.commit()?;
     Ok(())
