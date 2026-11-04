@@ -57,7 +57,7 @@ pub fn own_record_id(channel_id: &str, sender_id: &str) -> String {
 
 /// The id `identity` names its sender by; none for an identity under the
 /// framework's own name, which is no sender's (RFC §10.4).
-pub fn identity_name(identity: Option<&Identity>) -> Option<IdentityId> {
+pub(crate) fn identity_name(identity: Option<&Identity>) -> Option<IdentityId> {
     identity
         .filter(|identity| identity.id.as_str() != SYSTEM_SENDER)
         .map(|identity| identity.id.clone())
@@ -228,6 +228,9 @@ pub enum Refusal {
     /// The framework's own sender `system`, on a binding not declared
     /// `group`.
     System,
+    /// A message with no address, on a binding not declared `group`: the next
+    /// sender admitted there would read what it left.
+    NoAddress,
     /// The binding names another participant.
     NamesAnother,
     /// The binding delivers to someone else: it is their conversation.
@@ -545,9 +548,8 @@ pub fn sole_bound<'room>(
 /// - no participant other than the sender was reached through the channel;
 /// - the room has heard no one else on the channel.
 ///
-/// The framework's own sender `system` is admitted by a `group` binding
-/// only. A message with no address is held to the same conditions, so it is
-/// admitted only where no one is named, joined or heard.
+/// The framework's own sender `system`, and a message with no address, are
+/// admitted by a `group` binding only.
 ///
 /// # Errors
 ///
@@ -631,6 +633,9 @@ fn admission(
     participants: &[Participant],
     heard: &[ParticipantId],
 ) -> Result<(), Refusal> {
+    if sender.address.is_none() {
+        return Err(Refusal::NoAddress);
+    }
     let channel_id = &binding.channel_id;
     let named_by = |id: &str| sender.named_by(id, form, channel_id, participants);
     if let Some(named) = &binding.participant_id
@@ -1385,15 +1390,14 @@ mod tests {
             assert_eq!(admits(&query, &room), Ok(()));
         }
 
+        // Python: tests/test_inbound_routing_ambiguity.py::TestStepThreeAdmitsOneConversation::test_a_sender_with_no_address_is_admitted_through_a_group_binding_only
         #[test]
-        fn a_message_with_no_address_is_admitted_where_no_one_is_named_joined_or_heard() {
-            assert_eq!(admits(&query(""), &bound(room("room_1", 0))), Ok(()));
-        }
-
-        #[test]
-        fn a_message_with_no_address_is_refused_where_someone_was_heard() {
-            let room = having_heard(bound(room("room_1", 0)), ALICE);
-            assert_eq!(admits(&query(""), &room), Err(Refusal::HeardAnother));
+        fn a_message_with_no_address_is_admitted_through_a_group_binding_only() {
+            assert_eq!(
+                admits(&query(""), &bound(room("room_1", 0))),
+                Err(Refusal::NoAddress)
+            );
+            assert_eq!(admits(&query(""), &grouped(room("room_1", 0))), Ok(()));
         }
     }
 

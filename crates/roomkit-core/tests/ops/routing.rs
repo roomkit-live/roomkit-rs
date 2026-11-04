@@ -279,12 +279,14 @@ mod a_routed_sender {
     }
 
     /// RFC §10.4, gap G-057: a chat message that does not carry its chat
-    /// has no address: no identity is read, and nothing is recorded.
+    /// has no address: no identity is read, and nothing is recorded, in the
+    /// one kind of room that takes it, a `group` binding's.
     #[test]
     fn with_no_address_reads_no_identity_and_is_not_recorded() {
         let mut sim = Sim::new();
         sim.unbound_transport("telegram", ChannelType::TELEGRAM);
         sim.attach("telegram");
+        sim.bindings[0].group = true;
         sim.routes_to(Some("room_1"));
         sim.route(None, message_from("telegram", "4242", "Hi"))
             .unwrap();

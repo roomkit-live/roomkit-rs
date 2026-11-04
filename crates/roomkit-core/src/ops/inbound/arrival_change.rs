@@ -9,10 +9,10 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 
 use crate::model::{ChannelBinding, ErrorRecord, ParticipantId, RoomContext};
-use crate::ops::Cx;
 use crate::ops::lifecycle::change::{self, Attached, Decision, SectionChange, Updated};
 use crate::ops::lifecycle::report::Reported;
 use crate::ops::protocol::{Outcome, Request, StoreRequest};
+use crate::ops::{ChannelConfig, Cx};
 use crate::rules::addresses::{AddressForm, SYSTEM_SENDER};
 use crate::rules::attachment;
 use crate::rules::routing::{self, Recording, Sender};
@@ -98,10 +98,16 @@ impl SectionChange for ArrivalChange {
     fn decide(
         &self,
         context: Box<RoomContext>,
-        _cx: &Cx<'_>,
+        cx: &Cx<'_>,
     ) -> Result<Decision<Recorded>, Infallible> {
         Ok(match self {
-            Self::AttachAutomatically(binding) => attach_automatically(binding, context),
+            Self::AttachAutomatically(binding) => {
+                let form = cx
+                    .config
+                    .channel(&binding.channel_id)
+                    .map(ChannelConfig::form);
+                attach_automatically(binding, context, form.as_ref())
+            }
             Self::RecordSender(record) => record_sender(record, context),
         })
     }
@@ -177,9 +183,10 @@ impl SectionChange for ArrivalChange {
 fn attach_automatically(
     binding: &ChannelBinding,
     mut context: Box<RoomContext>,
+    form: Option<&AddressForm>,
 ) -> Decision<Recorded> {
     if !attachment::may_attach_automatically(&context, &binding.channel_id) {
-        return close_hook_s_binding(binding, context);
+        return close_hook_s_binding(binding, context, form);
     }
     context.bindings.push(binding.clone());
     let writes = VecDeque::from([StoreRequest::StoreBinding {
@@ -199,16 +206,22 @@ fn attach_automatically(
 /// unless `binding`, the one step 2 would have made, names the name no sender
 /// is, for a routed message with no address (RFC §5.7, §10.4), and the room's
 /// names no one and is open: one an `ON_ROOM_CREATED` hook made, which left
-/// unnamed would pass step 3 for the next sender, gets the name too.
-fn close_hook_s_binding(binding: &ChannelBinding, context: Box<RoomContext>) -> Decision<Recorded> {
+/// unnamed would pass step 3 for the next sender, gets the name too. A binding
+/// holding a recipient names them, or no sender, already (`form` reads it).
+fn close_hook_s_binding(
+    binding: &ChannelBinding,
+    context: Box<RoomContext>,
+    form: Option<&AddressForm>,
+) -> Decision<Recorded> {
+    let closing = binding.participant_id.as_ref().map(ParticipantId::as_str) == Some(SYSTEM_SENDER)
+        && context.room.status.accepts_events();
     let current = context.get_binding(&binding.channel_id).cloned();
     match current {
         Some(current)
-            if binding.participant_id.as_ref().map(ParticipantId::as_str)
-                == Some(SYSTEM_SENDER)
-                && current.participant_id.is_none()
+            if closing
                 && !current.group
-                && context.room.status.accepts_events() =>
+                && current.participant_id.is_none()
+                && form.is_none_or(|form| routing::correspondent(&current, form).is_none()) =>
         {
             let mut closed = current.clone();
             closed.participant_id.clone_from(&binding.participant_id);
@@ -241,7 +254,7 @@ fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision<R
         return Decision::unwritten(Recorded::Rerouted(context));
     }
     let Some(current) = current else {
-        return attach_automatically(&record.binding, context);
+        return attach_automatically(&record.binding, context, Some(&record.form));
     };
     let recording = routing::recording(
         &current,

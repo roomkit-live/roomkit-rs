@@ -201,8 +201,13 @@ impl<S: ConversationStore> DefaultInboundRoomRouter<S> {
             .map_or_else(as_written, |channel| channel.form());
         let sender_id = options.participant_id.unwrap_or_default();
         let address =
-            (!sender_id.is_empty() && sender_id != SYSTEM_SENDER).then(|| sender_id.clone());
-        let identity_id = routing::identity_name(options.identity.as_ref());
+            (!sender_id.trim().is_empty() && sender_id != SYSTEM_SENDER).then(|| sender_id.clone());
+        // An identity under the framework's own name names no sender (RFC §10.4).
+        let identity_id = options
+            .identity
+            .as_ref()
+            .filter(|identity| identity.id.as_str() != SYSTEM_SENDER)
+            .map(|identity| identity.id.clone());
         RouteQuery {
             channel_id: channel_id.clone(),
             channel_type: channel_type.clone(),
