@@ -110,10 +110,12 @@ async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_c
     kit.close().await.unwrap();
     let asked = asking.await.unwrap();
     let crossed = crossed(&tap);
+    // The arguments the running call runs with cross before the turn's end,
+    // no read having returned while it ran (RFC §10.6.4).
     let tail: Vec<&str> = crossed
         .iter()
         .rev()
-        .take(2)
+        .take(3)
         .rev()
         .map(String::as_str)
         .collect();
@@ -141,7 +143,7 @@ async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_c
         ),
         (
             Ok((true, Some("kit_closed".to_owned()))),
-            vec!["control cancel kit_closed", "frame end"],
+            vec!["control cancel kit_closed", "frame tool_args", "frame end"],
             vec!["cut"],
             vec![(true, Some("cancelled: kit_closed".to_owned()))],
             Some((
