@@ -101,7 +101,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 # as `StreamItem`'s) and `LoopEnd(LoopEndMarker)`, Python's private
 # tool markers hidden. Rust names the stream types and their items;
 # `next()` is `__anext__`.
-"roomkit::DeliveryStream" = { python = "AsyncIterator", members = ["next"] }
+"roomkit::DeliveryStream" = { python = "AsyncIterator", members = ["next", "cut"] }
 "roomkit::ResponseStream" = { python = "AsyncIterator" }
 "roomkit::StreamItem" = { python = "str" }
 "roomkit::ResponseItem" = { python = "str" }

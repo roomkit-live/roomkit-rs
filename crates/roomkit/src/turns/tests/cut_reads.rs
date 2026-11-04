@@ -123,7 +123,7 @@ async fn a_cut_target_s_work_runs_to_its_end_and_its_caller_reads_the_whole_reco
         let kept = target.kept.lock().unwrap().clone();
         kit.close().await.unwrap();
         assert!(at(elapsed, flush), "{elapsed:?} for a flush of {flush:?}");
-        assert_eq!(kept, ["flushed"]);
+        assert_eq!(kept, ["cut", "flushed"]);
         assert_eq!(read(&cut), cited_and("cancelled"));
     }
 }
@@ -139,7 +139,7 @@ async fn a_cancel_past_its_timeout_leaves_the_target_working_and_wait_reads_the_
     let start = Instant::now();
     let cancel = handle.cancel(with_timeout(Duration::from_millis(1))).await;
     let timed_out_at = start.elapsed();
-    let kept_at_the_timeout = target.kept.lock().unwrap().len();
+    let kept_at_the_timeout = target.kept.lock().unwrap().clone();
     let waited = handle.wait().await.unwrap();
     let elapsed = start.elapsed();
     let kept = target.kept.lock().unwrap().clone();
@@ -149,9 +149,9 @@ async fn a_cancel_past_its_timeout_leaves_the_target_working_and_wait_reads_the_
         at(timed_out_at, Duration::from_millis(1)),
         "{timed_out_at:?}"
     );
-    assert_eq!(kept_at_the_timeout, 0);
+    assert_eq!(kept_at_the_timeout, ["cut"]);
     assert!(at(elapsed, flush), "{elapsed:?}");
-    assert_eq!(kept, ["flushed"]);
+    assert_eq!(kept, ["cut", "flushed"]);
     assert_eq!(read(&waited), cited_and("cancelled"));
 }
 
@@ -240,7 +240,7 @@ async fn a_close_past_a_cancel_lets_the_target_finish_and_keeps_the_cancel_s_rea
     let flush = Duration::from_millis(200);
     let (closed_in, waited, kept) = closed_past_a_cancel(&ReadingOn::flushing(flush)).await;
     assert!(at(closed_in, Duration::from_millis(199)), "{closed_in:?}");
-    assert_eq!(kept, ["flushed"]);
+    assert_eq!(kept, ["cut", "flushed"]);
     assert_eq!(waited.cancellation_reason.as_deref(), Some("stopped"));
     assert_eq!(read(&waited), cited_and("cancelled"));
 }
@@ -260,7 +260,7 @@ async fn a_close_finding_a_target_reading_lets_it_finish() {
     let waited = handle.wait().await.unwrap();
     let kept = target.kept.lock().unwrap().clone();
     assert!(at(closed_in, flush), "{closed_in:?}");
-    assert_eq!(kept, ["flushed"]);
+    assert_eq!(kept, ["cut", "flushed"]);
     assert_eq!(waited.cancellation_reason.as_deref(), Some("kit_closed"));
     assert_eq!(read(&waited), cited_and("cancelled"));
 }
@@ -302,7 +302,7 @@ async fn a_target_that_fails_on_the_close_s_cut_leaves_the_call_no_error() {
 async fn a_close_past_a_cancel_drops_a_blocked_target_at_its_grace_s_end() {
     let (closed_in, waited, kept) = closed_past_a_cancel(&ReadingOn::blocked()).await;
     assert!(at(closed_in, Duration::from_secs(5)), "{closed_in:?}");
-    assert_eq!(kept, Vec::<&str>::new());
+    assert_eq!(kept, ["cut"]);
     assert_eq!(waited.cancellation_reason.as_deref(), Some("stopped"));
     assert_eq!(read(&waited), cited_and("cancelled"));
 }

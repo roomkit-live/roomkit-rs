@@ -615,6 +615,9 @@ impl ReadingOn {
             }
         }
         self.past_the_end.notify_one();
+        if stream.cut() {
+            self.kept.lock().unwrap().push("cut");
+        }
         if self.fails {
             return Err("the target failed".into());
         }

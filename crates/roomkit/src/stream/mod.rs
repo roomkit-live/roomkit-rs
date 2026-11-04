@@ -154,14 +154,19 @@ impl DeliveryStream {
         }
     }
 
-    /// Whether its read was stopped from outside: the end it reads is no end
-    /// of the response.
-    pub(crate) fn cut(&self) -> bool {
+    /// Whether its read was stopped from outside, a delivery cancelled, a
+    /// held task cut or the kit's close, once [`next`](Self::next) read its
+    /// end: that end is no end of the response. What Python's channel reads by
+    /// the cancel raised in its read: what it keeps for a response that ended
+    /// goes behind this check.
+    #[must_use]
+    pub fn cut(&self) -> bool {
         self.cut
     }
 
     /// The next item: text, a row, or the response's failure, its last;
-    /// `None` once the response is over or its read was stopped from outside.
+    /// `None` once the response is over or its read was stopped from outside,
+    /// which [`cut`](Self::cut) tells apart.
     /// It reads the response one item further, as polling the stream does.
     pub async fn next(&mut self) -> Option<Result<StreamItem, ChannelError>> {
         std::future::poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await

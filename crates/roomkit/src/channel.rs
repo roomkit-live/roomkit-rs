@@ -495,9 +495,11 @@ pub trait Channel: Send + Sync + 'static {
     /// A delivery cancelled, a held task cut or the kit's close (RFC §10.1
     /// "Explicit delivery cancellation", §23.3, §12.10.4) ends the stream of
     /// a channel reading it: what the channel does past that end stands for
-    /// Python's `finally`, which a future dropped could not run. It runs to
-    /// its end, however long: the cancel's caller waits for it within its own
-    /// timeout; the kit's close waits for it within its grace, then drops it.
+    /// Python's `finally`, which a future dropped could not run, and
+    /// [`DeliveryStream::cut`] tells that end from the response's own. It runs
+    /// to its end, however long: the cancel's caller waits for it within its
+    /// own timeout; the kit's close waits for it within its grace, then drops
+    /// it.
     /// A channel past the stream already is dropped where it waits, with no
     /// async cleanup: one that must release what it holds does so in a `Drop`.
     ///
