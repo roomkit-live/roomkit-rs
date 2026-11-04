@@ -501,6 +501,15 @@ async fn a_target_that_fails_flushing_leaves_what_the_cut_stored() {
             json!("cancelled"),
             "{delivers_in:?}"
         );
+        let said = result
+            .response_events
+            .iter()
+            .find(|row| row.r#type == EventType::Message);
+        assert_eq!(
+            said.and_then(|row| row.metadata.get("loop_end_reason")),
+            Some(&json!("cancelled")),
+            "{delivers_in:?}"
+        );
         timeout(LONG, cut.reported.notified()).await.unwrap();
         assert_eq!(rows_of(&cut.kit, &cut.a).await, cut_in_a_call());
         cut.kit.close().await.unwrap();
