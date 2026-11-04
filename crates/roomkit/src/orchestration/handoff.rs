@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, PoisonError, RwLock};
 
-use roomkit_core::model::{ChannelId, Metadata, Room, RoomId};
+use roomkit_core::model::{ChannelCategory, ChannelId, Metadata, Room, RoomId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -160,8 +160,8 @@ impl<S> std::fmt::Debug for HandoffHandler<S> {
 
 struct Inner<S> {
     kit: WeakRoomKit<S>,
-    /// Kept as Python's handler keeps it: nothing reads it.
-    _router: ConversationRouter,
+    /// Its rules say the phases an agent holds.
+    router: ConversationRouter,
     aliases: HashMap<String, String>,
     phase_map: HashMap<String, String>,
     allowed_transitions: Option<HashMap<String, HashSet<String>>>,
@@ -201,7 +201,7 @@ impl<S: ConversationStore> HandoffHandler<S> {
         Self {
             inner: Arc::new(Inner {
                 kit: kit.downgrade(),
-                _router: router,
+                router,
                 aliases: agent_aliases.unwrap_or_default(),
                 phase_map: phase_map.unwrap_or_default(),
                 allowed_transitions,
@@ -534,6 +534,12 @@ impl<S: ConversationStore> HandoffHandler<S> {
                 state.phase
             ))));
         }
+        if self.inner.allowed_transitions.is_some() && !self.holds_phase(target, &phase) {
+            tracing::warn!(target: "roomkit::orchestration", "Handoff rejected: agent {target} does not hold phase {phase}");
+            return Ok(Decided::Rejected(refusal(format!(
+                "Agent {target} does not hold phase '{phase}'"
+            ))));
+        }
         if let Some(phase) = request.context.get("next_phase")
             && !phase.is_string()
             && truthy(phase)
@@ -565,7 +571,21 @@ impl<S: ConversationStore> HandoffHandler<S> {
             .map_or_else(|| "handling".to_owned(), Clone::clone)
     }
 
-    /// Whether `target` is a handoff's: bound in the room, a human, or known.
+    /// Whether a handoff under allowed transitions may lead `target` to
+    /// `phase`: one the phase map does not know may (a human, a host's own
+    /// target); one it knows holds its own phase and those the router's rules
+    /// give it (RFC §19.6).
+    fn holds_phase(&self, target: &str, phase: &str) -> bool {
+        match self.inner.phase_map.get(target) {
+            Some(own) if !own.is_empty() && own != phase => {
+                self.inner.router.routes_phase_to(phase, target)
+            }
+            _ => true,
+        }
+    }
+
+    /// Whether `target` is a handoff's: an agent the room binds, a human, or
+    /// known. A transport the room binds answers nothing: it is not found.
     async fn finds(
         &self,
         kit: &RoomKit<S>,
@@ -578,7 +598,8 @@ impl<S: ConversationStore> HandoffHandler<S> {
         let Ok(channel) = ChannelId::new(target) else {
             return Ok(false);
         };
-        Ok(kit.store().get_binding(room_id, &channel).await?.is_some())
+        let binding = kit.store().get_binding(room_id, &channel).await?;
+        Ok(binding.is_some_and(|binding| binding.category == ChannelCategory::Intelligence))
     }
 }
 

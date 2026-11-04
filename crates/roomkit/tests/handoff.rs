@@ -15,16 +15,17 @@ use roomkit::model::{
     Metadata, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::orchestration::{
-    ConversationRouterOptions, ConversationState, HandoffHandlerOptions, InstallOptions,
-    OnHandoffComplete, StrategyAgent, StrategyFuture, get_conversation_state,
-    set_conversation_state,
+    ConversationPipelineOptions, ConversationRouterOptions, ConversationState,
+    HandoffHandlerOptions, InstallOptions, OnHandoffComplete, StrategyAgent, StrategyFuture,
+    get_conversation_state, pipeline, set_conversation_state,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AgentIdentity, AttachChannelOptions, Channel, ChannelDeclaration, ChannelError,
-    ConversationRouter, CreateRoomOptions, GetRoomOptions, GetTimelineOptions, HandoffHandler,
-    HandoffRequest, HandoffResult, HookExecution, HookOptions, HookTrigger, InstallStrategyOptions,
-    Orchestration, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, Swarm,
+    ConversationPipeline, ConversationRouter, CreateRoomOptions, GetRoomOptions,
+    GetTimelineOptions, HandoffHandler, HandoffRequest, HandoffResult, HookExecution, HookOptions,
+    HookTrigger, InstallStrategyOptions, Orchestration, PipelineStage, ProcessInboundOptions,
+    RoomKit, RoomKitError, RoomKitOptions, Swarm,
 };
 use roomkit_ai::{
     Agent, AgentOptions, AiChannel, AiChannelOptions, MockAiProvider, MockAiProviderOptions,
@@ -441,6 +442,23 @@ async fn a_channel_that_takes_no_owner_tool_serves_no_handoff() {
     assert!(matches!(refused, Err(RoomKitError::Value(_))));
     // Nothing was installed for "a": its handoff is still free to set up.
     setup_handoff(id("a"), &handler, SetupHandoffOptions::default()).unwrap();
+    kit.close().await.unwrap();
+}
+
+// Python: tests/orchestration/test_pipeline.py::test_an_install_refused_on_an_agent_sets_nothing_up
+#[tokio::test]
+async fn a_pipeline_s_install_refused_on_an_agent_sets_nothing_up() {
+    let kit = kit_with_room().await;
+    kit.register_channel(NoOwnerTools).unwrap();
+    let stages = vec![PipelineStage::new("a", id("a"))];
+    let chain = ConversationPipeline::new(stages, ConversationPipelineOptions::default()).unwrap();
+    let agents = [StrategyAgent::from(id("a")), StrategyAgent::from(id("acp"))];
+
+    let refused = chain.install(&kit, &agents, pipeline::InstallOptions::default());
+
+    assert!(matches!(refused, Err(RoomKitError::Value(_))));
+    let again = chain.install(&kit, &agents[..1], pipeline::InstallOptions::default());
+    assert!(again.is_ok());
     kit.close().await.unwrap();
 }
 

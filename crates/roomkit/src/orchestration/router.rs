@@ -181,6 +181,18 @@ impl ConversationRouter {
         }
     }
 
+    /// Whether a rule of this router asks `agent_id` in `phase`.
+    pub(super) fn routes_phase_to(&self, phase: &str, agent_id: &str) -> bool {
+        self.rules.iter().any(|rule| {
+            rule.agent_id.as_str() == agent_id
+                && rule
+                    .conditions
+                    .phases
+                    .as_ref()
+                    .is_some_and(|phases| phases.contains(phase))
+        })
+    }
+
     /// The agent an unaddressed `event` goes to: none for an agent's own
     /// output; the state's active agent while the room binds it (sticky
     /// affinity); else the first rule that applies; else the default agent.
