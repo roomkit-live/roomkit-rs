@@ -68,6 +68,29 @@ jobs:
       # The tests of the rustdoc reader and of the parity report.
       - run: make api-test
 
+  postgres:
+    name: Postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-throwaway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      POSTGRES_DSN: postgresql://postgres:ci-throwaway@127.0.0.1:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+      # Installs the toolchain pinned in rust-toolchain.toml
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: make postgres-test
+
   api-parity:
     name: Public API parity gate
     runs-on: ubuntu-latest

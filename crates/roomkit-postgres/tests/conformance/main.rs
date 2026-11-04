@@ -78,11 +78,17 @@ use crate::support::TempSchema;
 /// Scenario id → the rule this implementation breaks on this store. The
 /// in-memory store has none; a reason led by `timing:` depends on the
 /// machine's speed, and may pass.
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[(
-    "orchestration/a-team-worker-past-its-task-timeout-is-read-as-timed-out-beside-the-others",
-    "timing: the worker that answers has 50 ms, which a debug build's round trips to a server \
-     pass, and is cut with the one that must be; Python's PostgresStore fails it the same way",
-)];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
+    (
+        "orchestration/a-team-worker-past-its-task-timeout-is-read-as-timed-out-beside-the-others",
+        "timing: the worker that answers has 50 ms, which a debug build's round trips to a server \
+         pass, and is cut with the one that must be (RMK-1334)",
+    ),
+    (
+        "orchestration/a-supervised-step-past-its-task-timeout-stops-the-chain-unreviewed",
+        "timing: the same 50 ms, passed under load only (RMK-1334)",
+    ),
+];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.

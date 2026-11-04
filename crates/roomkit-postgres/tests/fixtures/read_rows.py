@@ -53,6 +53,23 @@ async def main(dsn: str, schema: str) -> None:
     read["identities"] = [
         (await store.get_identity(row["id"])).model_dump(mode="json") for row in identities
     ]
+    read["read_markers"] = {room.id: await store.list_read_markers(room.id) for room in rooms}
+    read["private_state"] = {
+        f"{row['room_id']}/{row['key']}": await store.get_private_state(row["room_id"], row["key"])
+        for row in await pool.fetch("SELECT room_id, key FROM private_state ORDER BY 1, 2")
+    }
+    read["verifications"] = [
+        (
+            await store.get_verification(row["identity_id"], row["organization_id"] or None)
+        ).model_dump(mode="json")
+        for row in await pool.fetch(
+            "SELECT identity_id, organization_id FROM verifications ORDER BY 1, 2"
+        )
+    ]
+    read["verification_requests"] = [
+        (await store.get_verification_request(row["id"])).model_dump(mode="json")
+        for row in await pool.fetch("SELECT id FROM verification_requests ORDER BY id")
+    ]
     await pool.close()
     print(json.dumps(read, sort_keys=True))
 

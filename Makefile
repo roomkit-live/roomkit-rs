@@ -7,7 +7,7 @@ MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"$$/\1/p' Cargo.toml).0
 # The examples: every file of examples/, each declared in examples/Cargo.toml.
 EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
-.PHONY: all fmt fmt-check clippy test test-core doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture postgres-fixture turns-fixture api-sync api-check-pin api-test api-parity models-sync models-check
+.PHONY: all fmt fmt-check clippy test test-core doc deny check-core-deps examples msrv postgres-test msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture postgres-fixture turns-fixture api-sync api-check-pin api-test api-parity models-sync models-check
 
 all: conformance-check api-check-pin models-check api-test fmt-check clippy test test-core doc api-parity deny check-core-deps examples
 
@@ -137,6 +137,15 @@ sqlite-fixture:
 	echo "$$commit" > $(SQLITE_FIXTURES)/ROOMKIT_COMMIT && \
 	sha256sum $(SQLITE_FIXTURES)/python-v13.db | cut -c1-64 > $(SQLITE_FIXTURES)/FIXTURE_SHA256 && \
 	echo "sqlite fixture written by roomkit $$commit"
+
+# roomkit-postgres against a real server. `make test` runs its tests too, and
+# without POSTGRES_DSN they skip themselves and prove only that they compile:
+# this target fails then. With ROOMKIT_PYTHON naming a roomkit checkout's
+# interpreter, Python reads the rows the crate wrote, and its schema is compared
+# with Python's. One test binary runs at a time on one database.
+postgres-test:
+	@test -n "$$POSTGRES_DSN" || { echo "postgres-test: POSTGRES_DSN is not set"; exit 1; }
+	$(CARGO) test --locked --package roomkit-postgres -- --test-threads=4
 
 # The cross-read fixture of roomkit-postgres (RMK-989): the rows the Python
 # implementation's PostgresStore writes, as JSON, which
