@@ -7,7 +7,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - `HandoffHandler::send_greeting` (RFC §19.6), as Python's, its text path: the room's active agent says the line the handler's greeting map gives it, as that agent's message; no active agent, no line or no channel named, nothing is said; a room missing is not found (RMK-1314).
-- `AiProvider::list_models`, the models an endpoint reports live, as Python's: a provider answers its catalogue unless it asks its endpoint; a listing's speech models are tagged (`speech_tags`, `with_speech_tags`, `TRANSCRIPTION_CAPABILITY`, `SPEECH_CAPABILITY`) (RMK-1278).
 - `AiProvider::list_models`, the models an endpoint reports live, as Python's: `OpenAiAiProvider` asks `GET /models`, the catalogue's metadata backfilled and its speech models tagged (`speech_tags`, `with_speech_tags`, `TRANSCRIPTION_CAPABILITY`, `SPEECH_CAPABILITY`); any other provider answers its catalogue (RMK-1278).
 - `OpenAiConfig::max_retries`, the retries Python's openai SDK takes on its own, 0 by default: a connection failure, a timeout or a status worth it, after the wait the endpoint asks or the SDK's backoff (RMK-1269).
 - A provider's stream is read to its end, as Python's: a failure after its done event fails the turn as a stream under way (no retry, no compaction, no fallback), what the done event reported counting on the turn's usage (RMK-1271).
