@@ -70,6 +70,36 @@ fn tool_results(model: &ScriptedProvider) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// A round goes back to the model with what its provider keeps for its
+/// replay, never with what its response said of itself, the model that
+/// answered and a refusal (Python's `answered_by`): Python's round message
+/// carries no metadata (`channels/_ai_streaming.py`, the round's
+/// `AIMessage`), so neither the next request nor a generation hook reads
+/// them there.
+#[tokio::test]
+async fn a_round_goes_back_without_what_its_response_said_of_itself() {
+    let mut calling = ScriptedRound::calling("", [("c1", "lookup_order", r#"{"order": "1"}"#)]);
+    for (key, value) in [
+        ("model", "gpt-answered"),
+        ("refusal", "No."),
+        ("kept", "replay"),
+    ] {
+        calling.done.metadata.insert(key.to_owned(), value.into());
+    }
+    let model = ScriptedProvider::new([calling, ScriptedRound::answering("Shipped.")]);
+    let room = Room::new(model.clone(), served()).await;
+    room.says("Where is order 1?").await;
+    let requests = model.requests();
+    let replayed: Vec<Value> = requests[1]
+        .messages
+        .iter()
+        .filter(|message| message.role == roomkit_ai::AiRole::Assistant)
+        .map(|message| Value::Object(message.metadata.clone()))
+        .collect();
+    assert_eq!(replayed, [json!({ "kept": "replay" })]);
+    room.kit.close().await.unwrap();
+}
+
 /// An AI agent takes no inbound message, as the reference
 /// implementation's refuses one: nothing enters the room under the
 /// agent's id, which its history would read as the agent's own words.

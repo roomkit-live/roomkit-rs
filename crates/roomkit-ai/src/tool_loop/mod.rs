@@ -397,7 +397,7 @@ impl<P: AiProvider> Loop<P> {
     ) -> bool {
         let said = generation.said();
         let mut answer = Message::new(Role::Assistant, generation.text);
-        answer.metadata = generation.done.metadata;
+        answer.metadata = replayed(generation.done.metadata);
         let at = messages.len();
         let again = steering.read_after_answer(messages, system_prompt, answer);
         if again {
@@ -737,7 +737,7 @@ impl<P: AiProvider> Loop<P> {
             .map(|called| called.call)
             .collect();
         let mut assistant = Message::assistant_calls(generation.text, made);
-        assistant.metadata = generation.done.metadata;
+        assistant.metadata = replayed(generation.done.metadata);
         let mut read = vec![assistant];
         // Before the next round's calls, which may read what these left.
         for end in &ends {
@@ -877,6 +877,17 @@ impl Spent {
         self.complete &= reports_counters(last);
         self.last.clone_from(last);
     }
+}
+
+/// What a generation's end keeps for its round's replay: its provider's own
+/// data, without what the response said of itself, the model that answered
+/// and a refusal (Python's `answered_by`), which Python's round message
+/// never carries.
+fn replayed(mut metadata: Metadata) -> Metadata {
+    for key in ["model", "refusal"] {
+        metadata.remove(key);
+    }
+    metadata
 }
 
 #[cfg(test)]
