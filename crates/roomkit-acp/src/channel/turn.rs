@@ -50,7 +50,7 @@ struct Hold<T: AcpTransport> {
 /// The turn's work, as its stream polls it: its outcome, and what it holds
 /// once it took the room.
 type Work<T> =
-    Pin<Box<dyn Future<Output = (Result<Answered, ChannelError>, Option<Hold<T>>)> + Send>>;
+    Pin<Box<dyn Future<Output = (Result<Option<Answered>, ChannelError>, Option<Hold<T>>)> + Send>>;
 
 /// The stream of a turn: nothing runs until it is read; the turn's work
 /// then runs as it is read, the agent's text handed on as it comes.
@@ -58,7 +58,7 @@ pub(super) struct TurnStream<T: AcpTransport> {
     work: Option<Work<T>>,
     text: mpsc::UnboundedReceiver<String>,
     said: Vec<String>,
-    ending: Option<Result<Answered, ChannelError>>,
+    ending: Option<Result<Option<Answered>, ChannelError>>,
     hold: Option<Hold<T>>,
     channel_id: ChannelId,
     room_id: RoomId,
@@ -157,12 +157,13 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
         }
         this.done = true;
         let ending = match this.ending.take() {
-            Some(Ok(answered)) => {
+            Some(Ok(Some(answered))) => {
                 this.report(&answered);
                 Poll::Ready(None)
             }
             Some(Err(failure)) => Poll::Ready(Some(Err(failure))),
-            None => Poll::Ready(None),
+            // A turn stopped by the channel's close ends quietly.
+            Some(Ok(None)) | None => Poll::Ready(None),
         };
         // The turn is over once its end is read: its room and its count
         // go, as Python's turn lets them go when its stream ends.
@@ -180,7 +181,7 @@ async fn run<T: AcpTransport>(
     prompt: String,
     record: ResponseMetadata,
     text: mpsc::UnboundedSender<String>,
-) -> (Result<Answered, ChannelError>, Option<Hold<T>>) {
+) -> (Result<Option<Answered>, ChannelError>, Option<Hold<T>>) {
     let room = shared.room_lock(&room_id).lock_owned().await;
     let active = shared.active();
     let (outcome, room) = prompted(&shared, &room_id, event_id, prompt, &record, &text, room).await;
@@ -203,7 +204,10 @@ async fn prompted<T: AcpTransport>(
     record: &ResponseMetadata,
     text: &mpsc::UnboundedSender<String>,
     room: OwnedMutexGuard<()>,
-) -> (Result<Answered, ChannelError>, Option<OwnedMutexGuard<()>>) {
+) -> (
+    Result<Option<Answered>, ChannelError>,
+    Option<OwnedMutexGuard<()>>,
+) {
     let connection = match shared.connector.connection().await {
         Ok(connection) => connection,
         Err(error) => return (Err(raised(error)), Some(room)),
@@ -221,7 +225,6 @@ async fn prompted<T: AcpTransport>(
         session: session.clone(),
         text: text.clone(),
     };
-    shared.connector.turns.register(&session, text.clone());
     let started = Instant::now();
     let mut meta = Map::new();
     meta.insert("roomkit.live/eventId".to_owned(), json!(event_id));
@@ -240,6 +243,10 @@ async fn prompted<T: AcpTransport>(
             answer
         })
     };
+    shared
+        .connector
+        .turns
+        .register(&session, text.clone(), task.abort_handle());
     let mut prompting = Prompting {
         task: Some(task),
         connection,
@@ -247,18 +254,24 @@ async fn prompted<T: AcpTransport>(
         record: record.clone(),
         room: Some(room),
     };
-    let joined = match prompting.task.as_mut() {
-        Some(task) => task.await,
-        None => return (Err(provider_error("ACP agent prompt failed")), None),
+    let Some(task) = prompting.task.as_mut() else {
+        return (Err(provider_error("ACP agent prompt failed")), None);
     };
+    let joined = task.await;
     let room = prompting.finish();
     drop(registered);
     let outcome = match joined {
-        Ok(Ok(answer)) => Ok(Answered {
+        Ok(Ok(answer)) => Ok(Some(Answered {
             usage: usage_of(&answer),
             started,
-        }),
+        })),
         Ok(Err(error)) => Err(provider_error(&format!("ACP agent prompt failed: {error}"))),
+        // Stopped by the channel's close: the turn ends quietly, marked
+        // interrupted, as Python's cancelled runner ends it.
+        Err(failed) if failed.is_cancelled() => {
+            interrupted(record);
+            Ok(None)
+        }
         Err(failed) => {
             interrupted(record);
             Err(provider_error(&format!(

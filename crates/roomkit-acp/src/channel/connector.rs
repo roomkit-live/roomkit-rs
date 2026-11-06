@@ -102,10 +102,9 @@ impl<T: AcpTransport> Connector<T> {
         let handshake = self.handshake(client).await;
         opening.transport = None;
         let handshake = match handshake {
-            // A close that ran meanwhile leaves no connection open after it,
-            // as Python's re-checks under its lock.
+            // A close that came meanwhile, waiting for this lock to close
+            // the transport, finds no connection to keep.
             Ok(_) if self.lock().closed => {
-                self.transport.close().await;
                 Err(AcpError::Runtime("ACPChannel is closed".to_owned()))
             }
             other => other,
@@ -252,13 +251,16 @@ impl<T: AcpTransport> Connector<T> {
             transport: Some(Arc::clone(&self.transport)),
         };
         if let Some(connection) = connection {
-            let prompting = self.turns.sessions();
+            let prompting = self.turns.stop();
             let closing = if closes { sessions } else { Vec::new() };
             // An agent that stopped answering cannot hold the close.
             let _late =
                 tokio::time::timeout(SHUTDOWN_GRACE, goodbye(connection, prompting, closing)).await;
         }
         teardown.transport = None;
+        // Under the connecting lock, as Python's teardown: a handshake under
+        // way, or the close of one that was cut, ends first.
+        let _connecting = self.connecting.lock().await;
         self.transport.close().await;
     }
 }

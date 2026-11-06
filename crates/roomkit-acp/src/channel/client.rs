@@ -11,6 +11,7 @@ use agent_client_protocol_schema::v1::{
     RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate,
 };
 use tokio::sync::mpsc;
+use tokio::task::AbortHandle;
 
 use crate::client::AcpClient;
 use crate::error::AcpError;
@@ -19,24 +20,38 @@ use crate::error::AcpError;
 /// updates for that session go.
 #[derive(Default)]
 pub(super) struct Turns {
-    by_session: Mutex<HashMap<String, mpsc::UnboundedSender<String>>>,
+    by_session: Mutex<HashMap<String, Registered>>,
 }
 
 impl Turns {
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, mpsc::UnboundedSender<String>>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Registered>> {
         self.by_session
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The turn prompting `session` from now on, which takes its text.
-    pub(super) fn register(&self, session: &str, text: mpsc::UnboundedSender<String>) {
-        self.lock().insert(session.to_owned(), text);
+    pub(super) fn register(
+        &self,
+        session: &str,
+        text: mpsc::UnboundedSender<String>,
+        prompt: AbortHandle,
+    ) {
+        self.lock()
+            .insert(session.to_owned(), Registered { text, prompt });
     }
 
-    /// The sessions a turn prompts now.
-    pub(super) fn sessions(&self) -> Vec<String> {
-        self.lock().keys().cloned().collect()
+    /// Stops each prompt in flight, as Python's close cancels its runners:
+    /// its turn ends quietly, marked interrupted. The sessions they
+    /// prompted.
+    pub(super) fn stop(&self) -> Vec<String> {
+        self.lock()
+            .iter()
+            .map(|(session, turn)| {
+                turn.prompt.abort();
+                session.clone()
+            })
+            .collect()
     }
 
     /// The turn holding `text` stops prompting `session`; a later turn
@@ -45,7 +60,7 @@ impl Turns {
         let mut turns = self.lock();
         if turns
             .get(session)
-            .is_some_and(|turn| turn.same_channel(text))
+            .is_some_and(|turn| turn.text.same_channel(text))
         {
             turns.remove(session);
         }
@@ -54,9 +69,15 @@ impl Turns {
     fn text(&self, session: &str, text: String) {
         if let Some(turn) = self.lock().get(session) {
             // A turn whose stream went takes nothing more.
-            let _gone = turn.send(text);
+            let _gone = turn.text.send(text);
         }
     }
+}
+
+/// A turn prompting a session: where its text goes, and its prompt.
+struct Registered {
+    text: mpsc::UnboundedSender<String>,
+    prompt: AbortHandle,
 }
 
 /// The client the channel opens its transport with.
