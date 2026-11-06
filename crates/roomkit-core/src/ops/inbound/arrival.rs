@@ -370,7 +370,10 @@ impl Arrival {
                     Progress::Waiting
                 }
                 Progress::Done(named) => {
-                    self.charge.after_step_two(step.charged(), step.created());
+                    // A room created then left is not the message's: its
+                    // cascade does not draw on the delivery's budget there.
+                    let kept = step.created() && !matches!(named, Named::Rerouted);
+                    self.charge.after_step_two(step.charged(), kept);
                     self.on_named(cx, step.room_id(), named)
                 }
             },
@@ -567,7 +570,7 @@ impl Arrival {
 
     /// Routes the message once more, or gives it a new room once it was
     /// (gap G-055). When that last room is no longer the message's either,
-    /// every room opened for it naming someone else, the message is refused
+    /// no room opened for it being its own, the message is refused
     /// `room_taken`, nothing of it stored (RFC §10.1 step 2, HITL ef0ef858,
     /// RMK-1396).
     fn route_again(&mut self, cx: &mut Cx<'_>) -> Arriving {
@@ -579,7 +582,7 @@ impl Arrival {
             tracing::warn!(
                 target: "roomkit::core::inbound",
                 channel_id = %self.message.channel_id,
-                "every room opened for a routed message names someone else: refused"
+                "no room opened for a routed message is still its own: refused"
             );
             self.tell_route(cx, RouteEnd::RoomTaken);
             return Progress::Done(Err(Stopped::Refused(Box::new(result::room_taken()))));

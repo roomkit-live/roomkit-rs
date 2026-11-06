@@ -291,7 +291,7 @@ pub enum RouteEnd {
     Failed(Box<InboundError>),
     /// It would open a room past the budget of the work that sent it.
     PastTheBudget,
-    /// Every room opened for it names someone else (RMK-1396).
+    /// No room opened for it is still its own (RMK-1396).
     RoomTaken,
 }
 

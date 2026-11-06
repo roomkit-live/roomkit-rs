@@ -27,9 +27,9 @@ pub(super) fn reserved_sender() -> InboundResult {
     }
 }
 
-/// The result of a routed message every room opened for which names someone
-/// else once its creation hooks are over (RFC §10.1 step 2, RMK-1396):
-/// refused before its parse, with no event.
+/// The result of a routed message no room opened for which is still its own
+/// once its creation hooks are over (RFC §10.1 step 2, RMK-1396): refused
+/// before its parse, with no event.
 pub(super) fn room_taken() -> InboundResult {
     InboundResult {
         blocked: true,
