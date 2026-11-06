@@ -302,10 +302,10 @@ impl Cascade {
             && self.rows.is_empty()
     }
 
-    /// Whether the cascade runs no pass nor set, and none is queued that
-    /// `runs` lets start: a stream is read only then (RFC §10.1 step 14).
-    fn is_between_streams(&self, runs: impl Fn(Lineage) -> bool) -> bool {
-        self.passes.iter().all(|job| !runs(job.lineage()))
+    /// Whether the cascade runs no pass nor set, and none is queued: a
+    /// stream is read only then (RFC §10.1 step 14).
+    fn is_between_streams(&self) -> bool {
+        self.passes.is_empty()
             && self.sets.is_empty()
             && self.pass.is_none()
             && self.delivery.is_none()
@@ -432,9 +432,8 @@ impl Machine {
 
     /// Starts the next pass, once the trigger's is queued or for an adopted
     /// entry, and the next set while none of each runs, the call ending
-    /// included; once both queues
-    /// are empty and no adopted entry may still add to them, the cascade
-    /// ends.
+    /// included; once both queues are empty and no adopted entry may still
+    /// add to them, the cascade ends.
     pub(super) fn run_queues(&mut self, cx: &mut Cx<'_>) {
         self.start_rows(cx);
         loop {
@@ -445,12 +444,12 @@ impl Machine {
             let passing = matches!(self.stage.current(), Stage::Cascade | Stage::Ending(_));
             let runs = |lineage: Lineage| passing || matches!(lineage, Lineage::Entry(_));
             if self.cascade.pass.is_none()
-                && let Some(at) = self
+                && self
                     .cascade
                     .passes
-                    .iter()
-                    .position(|job| runs(job.lineage()))
-                && let Some(mut job) = self.cascade.passes.remove(at)
+                    .front()
+                    .is_some_and(|job| runs(job.lineage()))
+                && let Some(mut job) = self.cascade.passes.pop_front()
             {
                 job.start(cx);
                 self.cascade.pass = Some(job);
@@ -465,14 +464,14 @@ impl Machine {
                 }
                 continue;
             }
-            if self.cascade.is_between_streams(runs)
+            if self.cascade.is_between_streams()
                 && self.adopted.is_idle()
-                && let Some(at) = self
+                && self
                     .cascade
                     .streams
-                    .iter()
-                    .position(|job| runs(job.lineage))
-                && let Some(job) = self.cascade.streams.remove(at)
+                    .front()
+                    .is_some_and(|job| runs(job.lineage))
+                && let Some(job) = self.cascade.streams.pop_front()
             {
                 self.start_stream(cx, job);
                 continue;
