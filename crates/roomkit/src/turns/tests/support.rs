@@ -682,6 +682,12 @@ impl Stuck {
             ..Self::new(reads)
         }
     }
+
+    /// The transport under the channel id `id`, beside another.
+    pub(super) fn named(mut self, id: &str) -> Self {
+        self.declaration.channel_id = channel(id);
+        self
+    }
 }
 
 impl Channel for Stuck {

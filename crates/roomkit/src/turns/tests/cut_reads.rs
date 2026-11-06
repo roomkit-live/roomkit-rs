@@ -284,13 +284,17 @@ async fn two_answers(target: &ReadingOn) -> RoomKit {
 // the other answered and never read. Python's cleanup cuts the target where it
 // waits, then closes the unread stream and waits for its end with no bound of
 // its own (lanes.py _cleanup, the owner's close_stream): its executor deaf to
-// the close, cancel(timeout=1) raises TimeoutError at 1 s; its executor ending
-// it, cancel returns at once (RMK-1442).
+// the close, cancel(timeout=1) raises TimeoutError at 1 s, whether the call's
+// delivery is over or goes on, a transport still delivering the answer; its
+// executor ending it, cancel returns at once (RMK-1442).
 #[tokio::test(start_paused = true)]
 async fn a_cancelled_cascade_waits_for_the_end_of_a_stream_it_never_read() {
-    for stuck in [true, false] {
+    for (stuck, delivering) in [(true, false), (true, true), (false, false)] {
         let target = ReadingOn::flushing(Duration::from_millis(100));
         let kit = two_answers(&target).await;
+        if delivering {
+            bind(&kit, Stuck::holding_answers().named("ws2")).await;
+        }
         if stuck {
             stuck_executor(&kit);
         }
@@ -301,7 +305,10 @@ async fn a_cancelled_cascade_waits_for_the_end_of_a_stream_it_never_read() {
         let elapsed = start.elapsed();
         kit.close().await.unwrap();
         if stuck {
-            assert!(matches!(cancel, Err(RoomKitError::Timeout)), "{cancel:?}");
+            assert!(
+                matches!(cancel, Err(RoomKitError::Timeout)),
+                "delivering: {delivering}, {cancel:?}"
+            );
             assert!(at(elapsed, Duration::from_secs(1)), "{elapsed:?}");
         } else {
             let reason = cancel.unwrap().cancellation_reason;
