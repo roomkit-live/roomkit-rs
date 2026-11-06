@@ -176,47 +176,61 @@ fn members(body: &Value, keys: &[&str]) -> Value {
     Value::Object(picked)
 }
 
-// Python: tests/test_providers/test_minimax_kimi.py::test_what_a_turn_states_of_its_reasoning
-#[tokio::test]
-async fn what_a_turn_states_of_its_reasoning() {
-    let kimi = |model: &'static str| {
-        move |url: &str| {
-            KimiAiProvider::new(KimiConfig {
-                base_url: url.to_owned(),
-                ..KimiConfig::new(API_KEY, model)
-            })
-            .unwrap()
-        }
-    };
-    let minimax = |model: &'static str| {
-        move |url: &str| {
-            MiniMaxAiProvider::new(MiniMaxConfig {
-                base_url: url.to_owned(),
-                ..MiniMaxConfig::new(API_KEY, model)
-            })
-            .unwrap()
-        }
-    };
-    let deepseek = |url: &str| {
-        DeepSeekAiProvider::new(DeepSeekConfig {
+/// Kimi's provider for `model` on a server's URL.
+fn kimi(model: &'static str) -> impl FnOnce(&str) -> KimiAiProvider {
+    move |url: &str| {
+        KimiAiProvider::new(KimiConfig {
             base_url: url.to_owned(),
-            supports_custom_temperature: false,
-            ..DeepSeekConfig::new(API_KEY, "deepseek-v4-pro")
+            ..KimiConfig::new(API_KEY, model)
         })
         .unwrap()
-    };
-    let with_tool = |context: AiContext| AiContext {
+    }
+}
+
+/// MiniMax's provider for `model` on a server's URL.
+fn minimax(model: &'static str) -> impl FnOnce(&str) -> MiniMaxAiProvider {
+    move |url: &str| {
+        MiniMaxAiProvider::new(MiniMaxConfig {
+            base_url: url.to_owned(),
+            ..MiniMaxConfig::new(API_KEY, model)
+        })
+        .unwrap()
+    }
+}
+
+/// DeepSeek's provider on a server's URL, sending no temperature.
+fn deepseek(url: &str) -> DeepSeekAiProvider {
+    DeepSeekAiProvider::new(DeepSeekConfig {
+        base_url: url.to_owned(),
+        supports_custom_temperature: false,
+        ..DeepSeekConfig::new(API_KEY, "deepseek-v4-pro")
+    })
+    .unwrap()
+}
+
+/// `context`, declaring a tool.
+fn with_tool(context: AiContext) -> AiContext {
+    AiContext {
         tools: vec![AiTool {
             parameters: json!({ "type": "object" }),
             ..AiTool::new("get_weather", "The weather.").unwrap()
         }],
         ..context
-    };
-    let turn = |effort: Option<&str>, enable: Option<bool>| AiContext {
+    }
+}
+
+/// A turn stating `effort` and `enable`.
+fn turn(effort: Option<&str>, enable: Option<bool>) -> AiContext {
+    AiContext {
         reasoning_effort: effort.map(str::to_owned),
         enable_thinking: enable,
         ..hello()
-    };
+    }
+}
+
+// Python: tests/test_providers/test_minimax_kimi.py::test_what_a_turn_states_of_its_reasoning
+#[tokio::test]
+async fn what_a_turn_states_of_its_reasoning() {
     let keys = ["reasoning_effort", "thinking", "temperature"];
     let cases = [
         // Each cannot stop reasoning: a turn that states off gets the least it takes.
