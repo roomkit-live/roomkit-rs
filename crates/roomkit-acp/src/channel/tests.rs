@@ -199,8 +199,9 @@ async fn a_turn_is_counted_from_its_room_to_the_end_of_its_stream() {
         .await;
     let (_texts, failed) = drained(&mut stream).await;
     assert!(!failed);
-    // Counted until the stream is over.
-    assert_eq!(channel.active_turns(), 1);
+    // Counted until the stream is over, as Python's: none once its end
+    // was read.
+    assert_eq!(channel.active_turns(), 0);
     drop(stream);
     assert_eq!(channel.active_turns(), 0);
 }

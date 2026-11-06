@@ -156,14 +156,18 @@ impl<T: AcpTransport> Stream for TurnStream<T> {
             Poll::Pending => return Poll::Pending,
         }
         this.done = true;
-        match this.ending.take() {
+        let ending = match this.ending.take() {
             Some(Ok(answered)) => {
                 this.report(&answered);
                 Poll::Ready(None)
             }
             Some(Err(failure)) => Poll::Ready(Some(Err(failure))),
             None => Poll::Ready(None),
-        }
+        };
+        // The turn is over once its end is read: its room and its count
+        // go, as Python's turn lets them go when its stream ends.
+        this.hold = None;
+        ending
     }
 }
 
@@ -178,14 +182,19 @@ async fn run<T: AcpTransport>(
     text: mpsc::UnboundedSender<String>,
 ) -> (Result<Answered, ChannelError>, Option<Hold<T>>) {
     let room = shared.room_lock(&room_id).lock_owned().await;
-    let hold = Hold {
+    let active = shared.active();
+    let (outcome, room) = prompted(&shared, &room_id, event_id, prompt, &record, &text, room).await;
+    let hold = room.map(|room| Hold {
         _room: room,
-        _active: shared.active(),
-    };
-    let outcome = prompted(&shared, &room_id, event_id, prompt, &record, &text).await;
-    (outcome, Some(hold))
+        _active: active,
+    });
+    (outcome, hold)
 }
 
+/// The connection, the room's session and the prompt, holding `room`, the
+/// room's turn lock, which it hands back once the prompt ended. The prompt
+/// runs as a task of its own, as Python's runner does: it ends, and writes
+/// its end on the record, whether the stream is read or not.
 async fn prompted<T: AcpTransport>(
     shared: &Arc<Shared<T>>,
     room_id: &RoomId,
@@ -193,13 +202,20 @@ async fn prompted<T: AcpTransport>(
     prompt: String,
     record: &ResponseMetadata,
     text: &mpsc::UnboundedSender<String>,
-) -> Result<Answered, ChannelError> {
-    let connection = shared.connector.connection().await.map_err(raised)?;
-    let session = shared
+    room: OwnedMutexGuard<()>,
+) -> (Result<Answered, ChannelError>, Option<OwnedMutexGuard<()>>) {
+    let connection = match shared.connector.connection().await {
+        Ok(connection) => connection,
+        Err(error) => return (Err(raised(error)), Some(room)),
+    };
+    let session = match shared
         .connector
         .session(room_id, &connection, &shared.cwd)
         .await
-        .map_err(raised)?;
+    {
+        Ok(session) => session,
+        Err(error) => return (Err(raised(error)), Some(room)),
+    };
     let registered = Registered {
         shared: Arc::clone(shared),
         session: session.clone(),
@@ -210,27 +226,47 @@ async fn prompted<T: AcpTransport>(
     let mut meta = Map::new();
     meta.insert("roomkit.live/eventId".to_owned(), json!(event_id));
     let request = PromptRequest::new(session.clone(), vec![prompt.into()]).meta(meta);
+    let task = {
+        let connection = Arc::clone(&connection);
+        let record = record.clone();
+        tokio::spawn(async move {
+            let answer = connection.prompt(request).await;
+            match &answer {
+                Ok(answer) => answered(&record, answer),
+                // The prompt never returned, so no stop reason exists to
+                // record: the turn ended on the way.
+                Err(_) => interrupted(&record),
+            }
+            answer
+        })
+    };
     let mut prompting = Prompting {
-        connection: Some(Arc::clone(&connection)),
+        task: Some(task),
+        connection,
         session,
         record: record.clone(),
+        room: Some(room),
     };
-    let answer = connection.prompt(request).await;
-    prompting.connection = None;
+    let joined = match prompting.task.as_mut() {
+        Some(task) => task.await,
+        None => return (Err(provider_error("ACP agent prompt failed")), None),
+    };
+    let room = prompting.finish();
     drop(registered);
-    match answer {
-        Ok(answer) => {
-            answered(record, &answer);
-            Ok(Answered {
-                usage: usage_of(&answer),
-                started,
-            })
-        }
-        Err(error) => {
+    let outcome = match joined {
+        Ok(Ok(answer)) => Ok(Answered {
+            usage: usage_of(&answer),
+            started,
+        }),
+        Ok(Err(error)) => Err(provider_error(&format!("ACP agent prompt failed: {error}"))),
+        Err(failed) => {
             interrupted(record);
-            Err(provider_error(&format!("ACP agent prompt failed: {error}")))
+            Err(provider_error(&format!(
+                "ACP agent prompt failed: {failed}"
+            )))
         }
-    }
+    };
+    (outcome, room)
 }
 
 /// The prompt's end on the turn's record (RFC §6.4): it returned, and the
@@ -310,15 +346,30 @@ fn provider_error(message: &str) -> ChannelError {
 /// session's opening) under the Python class it stands for (the names
 /// table, `AcpError`).
 fn raised(error: AcpError) -> ChannelError {
+    let mut attributes = Metadata::new();
     let class = match &error {
-        AcpError::Rpc { .. } => "RequestError",
+        AcpError::Rpc { code, data, .. } => {
+            attributes.insert("code".to_owned(), Value::from(*code));
+            attributes.insert("data".to_owned(), data.clone().unwrap_or(Value::Null));
+            "RequestError"
+        }
         AcpError::ConnectionClosed => "ConnectionError",
         AcpError::Value(_) => "ValueError",
-        AcpError::Spawn { .. } => "OSError",
+        // Python's OSError subclass for the spawn's failure.
+        AcpError::Spawn { source, .. } => {
+            let kind = source.kind();
+            if kind == std::io::ErrorKind::NotFound {
+                "FileNotFoundError"
+            } else if kind == std::io::ErrorKind::PermissionDenied {
+                "PermissionError"
+            } else {
+                "OSError"
+            }
+        }
         AcpError::InvalidResponse { .. } => "ValidationError",
         AcpError::Runtime(_) => "RuntimeError",
     };
-    Box::new(ClassedError::new(class, error))
+    Box::new(ClassedError::new(class, error).with_attributes(attributes))
 }
 
 /// The turn prompting its session, until its prompt ended: it unregisters
@@ -338,26 +389,46 @@ impl<T: AcpTransport> Drop for Registered<T> {
     }
 }
 
-/// A prompt out: dropped before it returned (its reader went, the turn was
-/// cut), the turn is marked interrupted and the agent told to cancel the
-/// prompt, as Python's turn records and cancels it.
+/// A prompt out, and the room's turn lock its turn holds. Dropped before
+/// the prompt ended (its reader went, the turn was cut), the prompt is
+/// stopped, the turn marked interrupted, and the agent told to cancel it,
+/// the room's lock released only once that is written, so that the room's
+/// next prompt comes after the cancel: Python awaits the cancel within the
+/// room's lock. A prompt that ended already is left as it ended.
 struct Prompting<C: AcpConnection> {
-    connection: Option<Arc<C>>,
+    task: Option<tokio::task::JoinHandle<Result<PromptResponse, AcpError>>>,
+    connection: Arc<C>,
     session: String,
     record: ResponseMetadata,
+    room: Option<OwnedMutexGuard<()>>,
+}
+
+impl<C: AcpConnection> Prompting<C> {
+    /// The prompt ended: the room's lock, handed back.
+    fn finish(&mut self) -> Option<OwnedMutexGuard<()>> {
+        self.task = None;
+        self.room.take()
+    }
 }
 
 impl<C: AcpConnection> Drop for Prompting<C> {
     fn drop(&mut self) {
-        let Some(connection) = self.connection.take() else {
+        let Some(task) = self.task.take() else {
             return;
         };
+        if task.is_finished() {
+            return;
+        }
+        task.abort();
         interrupted(&self.record);
+        let connection = Arc::clone(&self.connection);
         let session = std::mem::take(&mut self.session);
+        let room = self.room.take();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
                 // An agent already gone has nothing to cancel.
                 let _gone = connection.cancel(CancelNotification::new(session)).await;
+                drop(room);
             });
         }
     }

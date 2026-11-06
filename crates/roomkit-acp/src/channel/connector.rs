@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use agent_client_protocol_schema::ProtocolVersion;
 use agent_client_protocol_schema::v1::{
-    AuthenticateRequest, ClientCapabilities, CloseSessionRequest, FileSystemCapabilities,
-    Implementation, InitializeRequest, InitializeResponse, NewSessionRequest,
+    AuthenticateRequest, CancelNotification, ClientCapabilities, CloseSessionRequest,
+    FileSystemCapabilities, Implementation, InitializeRequest, InitializeResponse,
+    NewSessionRequest,
 };
 use roomkit::model::RoomId;
 use serde_json::{Map, Value, json};
@@ -27,7 +28,7 @@ pub(super) struct Connector<T: AcpTransport> {
     authentication_method: Option<String>,
     pub(super) turns: Arc<Turns>,
     /// One connection at a time.
-    connecting: tokio::sync::Mutex<()>,
+    connecting: Arc<tokio::sync::Mutex<()>>,
     state: Mutex<State<T::Connection>>,
     /// Each room's lock its session is opened under.
     openings: Mutex<HashMap<RoomId, Arc<tokio::sync::Mutex<()>>>>,
@@ -40,8 +41,6 @@ struct State<C> {
     sessions: HashMap<RoomId, String>,
     /// No turn connects any more.
     closed: bool,
-    /// The transport was closed by the channel's close.
-    torn_down: bool,
 }
 
 impl<T: AcpTransport> Connector<T> {
@@ -50,14 +49,13 @@ impl<T: AcpTransport> Connector<T> {
             transport: Arc::new(transport),
             authentication_method,
             turns: Arc::new(Turns::default()),
-            connecting: tokio::sync::Mutex::new(()),
+            connecting: Arc::new(tokio::sync::Mutex::new(())),
             state: Mutex::new(State {
                 connection: None,
                 agent_info: None,
                 closes_sessions: true,
                 sessions: HashMap::new(),
                 closed: false,
-                torn_down: false,
             }),
             openings: Mutex::new(HashMap::new()),
         }
@@ -80,7 +78,7 @@ impl<T: AcpTransport> Connector<T> {
         if let Some(connection) = self.live()? {
             return Ok(connection);
         }
-        let _connecting = self.connecting.lock().await;
+        let connecting = Arc::clone(&self.connecting).lock_owned().await;
         if let Some(connection) = self.live()? {
             return Ok(connection);
         }
@@ -95,12 +93,23 @@ impl<T: AcpTransport> Connector<T> {
             turns: Arc::clone(&self.turns),
         });
         // A turn dropped part-way through the handshake closes what it
-        // opened, as Python's closes on any exception.
+        // opened, as Python's closes on any exception, still under the
+        // connecting lock, so that no turn opens before the close ran.
         let mut opening = Opening {
             transport: Some(Arc::clone(&self.transport)),
+            connecting: Some(connecting),
         };
         let handshake = self.handshake(client).await;
         opening.transport = None;
+        let handshake = match handshake {
+            // A close that ran meanwhile leaves no connection open after it,
+            // as Python's re-checks under its lock.
+            Ok(_) if self.lock().closed => {
+                self.transport.close().await;
+                Err(AcpError::Runtime("ACPChannel is closed".to_owned()))
+            }
+            other => other,
+        };
         match handshake {
             Ok((connection, answer)) => {
                 let connection = Arc::new(connection);
@@ -222,15 +231,16 @@ impl<T: AcpTransport> Connector<T> {
         )
     }
 
-    /// Closes the channel's sessions where the agent takes `session/close`,
-    /// within [`SHUTDOWN_GRACE`], then its transport, whatever the agent
-    /// answered; nothing opens after. A close cut short before its
-    /// transport was closed closes it at the next call. Never fails.
-    /// Python's `close()`.
+    /// Closes the channel, as Python's `close()`: the prompts in flight
+    /// cancelled and the sessions closed where the agent takes
+    /// `session/close`, at once and within [`SHUTDOWN_GRACE`], then the
+    /// transport, whatever the agent answered; nothing opens after. A
+    /// second close does nothing; a close cut short still closes the
+    /// transport, in the background. Never fails.
     pub(super) async fn close(&self) {
         let (connection, sessions, closes) = {
             let mut state = self.lock();
-            if state.torn_down {
+            if state.closed {
                 return;
             }
             state.closed = true;
@@ -238,21 +248,61 @@ impl<T: AcpTransport> Connector<T> {
                 state.sessions.drain().map(|(_, session)| session).collect();
             (state.connection.take(), sessions, state.closes_sessions)
         };
-        if let Some(connection) = connection.filter(|_| closes) {
-            let goodbye = async {
-                for session in sessions {
-                    // An agent that refuses keeps the session until the
-                    // connection closes, which it does now.
-                    let _refused = connection
-                        .close_session(CloseSessionRequest::new(session))
-                        .await;
-                }
-            };
+        let mut teardown = Teardown {
+            transport: Some(Arc::clone(&self.transport)),
+        };
+        if let Some(connection) = connection {
+            let prompting = self.turns.sessions();
+            let closing = if closes { sessions } else { Vec::new() };
             // An agent that stopped answering cannot hold the close.
-            let _late = tokio::time::timeout(SHUTDOWN_GRACE, goodbye).await;
+            let _late =
+                tokio::time::timeout(SHUTDOWN_GRACE, goodbye(connection, prompting, closing)).await;
         }
+        teardown.transport = None;
         self.transport.close().await;
-        self.lock().torn_down = true;
+    }
+}
+
+/// The graceful half of a close: each prompt in flight cancelled, then
+/// each session closed, at once, as Python's `_say_goodbye` gathers them.
+async fn goodbye<C: AcpConnection>(
+    connection: Arc<C>,
+    prompting: Vec<String>,
+    sessions: Vec<String>,
+) {
+    for session in prompting {
+        // An agent already gone has nothing to cancel.
+        let _gone = connection.cancel(CancelNotification::new(session)).await;
+    }
+    let mut closing = tokio::task::JoinSet::new();
+    for session in sessions {
+        let connection = Arc::clone(&connection);
+        closing.spawn(async move {
+            // An agent that refuses keeps the session until the connection
+            // closes, which it does now.
+            let _refused = connection
+                .close_session(CloseSessionRequest::new(session))
+                .await;
+        });
+    }
+    while closing.join_next().await.is_some() {}
+}
+
+/// A close under way: dropped before its transport was closed, it closes
+/// it in the background, as Python's `finally` tears it down when its
+/// caller is cancelled.
+struct Teardown<T: AcpTransport> {
+    transport: Option<Arc<T>>,
+}
+
+impl<T: AcpTransport> Drop for Teardown<T> {
+    fn drop(&mut self) {
+        let Some(transport) = self.transport.take() else {
+            return;
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move { transport.close().await });
+        }
     }
 }
 
@@ -261,9 +311,10 @@ impl<T: AcpTransport> Connector<T> {
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A handshake under way: dropped before it ended, it closes the transport
-/// it opened.
+/// it opened, holding the connecting lock until the close ran.
 struct Opening<T: AcpTransport> {
     transport: Option<Arc<T>>,
+    connecting: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
 impl<T: AcpTransport> Drop for Opening<T> {
@@ -271,8 +322,12 @@ impl<T: AcpTransport> Drop for Opening<T> {
         let Some(transport) = self.transport.take() else {
             return;
         };
+        let connecting = self.connecting.take();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move { transport.close().await });
+            runtime.spawn(async move {
+                transport.close().await;
+                drop(connecting);
+            });
         }
     }
 }

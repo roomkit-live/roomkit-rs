@@ -34,6 +34,11 @@ impl Turns {
         self.lock().insert(session.to_owned(), text);
     }
 
+    /// The sessions a turn prompts now.
+    pub(super) fn sessions(&self) -> Vec<String> {
+        self.lock().keys().cloned().collect()
+    }
+
     /// The turn holding `text` stops prompting `session`; a later turn
     /// registered under the same session keeps its own.
     pub(super) fn unregister(&self, session: &str, text: &mpsc::UnboundedSender<String>) {
