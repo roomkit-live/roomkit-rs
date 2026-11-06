@@ -589,7 +589,10 @@ impl Arrival {
         }
         // The call's deadline bounds the routing a creation's hooks leave
         // it to, the last new room's opening included (RFC §13.6).
+        // It names no room, as an expiry in the router does: the message
+        // left the one it was in.
         if self.bound.has_passed(cx.env.now()) {
+            self.room = None;
             return Progress::Done(Err(Stopped::Expired));
         }
         self.given_last_room = true;
