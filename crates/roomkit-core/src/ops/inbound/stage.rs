@@ -16,7 +16,8 @@
 //!   holds (`ReleasingTicket`) and goes back to its cascade, as it releases
 //!   it first when it ends holding it;
 //! - once nothing is queued or running, step 15's write of what no delivery
-//!   set stored, a record's side effects (`Persisting`);
+//!   set stored: a record's side effects, a dropped set's hooks', a
+//!   discussion's stopped turn's observation (`Persisting`);
 //! - the call ends from any stage: it waits for the entries it adopted and
 //!   its delivery sets (`Ending`), then is over (`Done`).
 //!

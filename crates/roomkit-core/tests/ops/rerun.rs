@@ -82,6 +82,36 @@ fn a_rerun_whose_room_closed_while_it_waited_runs_no_agent() {
     );
 }
 
+// Python: core/mixins/lane_execution.py::_refuse_closed_rerun, whose empty
+// result leaves no record nor observation of an agent the depth limit
+// stops (review of RMK-1454): a regeneration past the limit whose room
+// closed while it waited stores nothing, and is refused once.
+#[test]
+fn a_rerun_past_the_depth_limit_whose_room_closed_while_it_waited_stores_nothing() {
+    let mut sim = Sim::new();
+    sim.transport("sms");
+    sim.echo_agent("ai", "answer");
+    let mut message = notice_event("evt_0", "Did my transfer go through?");
+    message.source.channel_id = "sms".parse().unwrap();
+    message.status = EventStatus::Delivered;
+    message.chain_depth = 4;
+    sim.seed(message);
+    sim.status_at_lane_turn = Some(RoomStatus::Closed);
+    let operation = rerun(&sim);
+
+    sim.run(operation).unwrap();
+
+    let refusals = sim
+        .framework_events()
+        .into_iter()
+        .filter(|event| matches!(event, FrameworkEvent::RoomRefusedEvent { .. }))
+        .count();
+    assert_eq!(
+        (sim.traced("persist"), sim.timeline.len(), refusals),
+        (Vec::<&str>::new(), 1, 1)
+    );
+}
+
 // Python: core/lanes.py::_execute, core/mixins/lane_execution.py::
 // _refuse_closed_rerun (RMK-1195): the room's read failing when the lane
 // takes the regeneration, the failure is recorded on its cascade, the

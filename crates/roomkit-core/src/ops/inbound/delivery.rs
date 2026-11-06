@@ -578,6 +578,10 @@ impl DeliverySet {
         }
         report::room_refused_as(cx, &self.event, RefusedOperation::Regenerate, status);
         self.outcome.refused = true;
+        // Nobody was asked, nor left unasked: Python's refused rerun returns
+        // an empty result, with no record nor observation of the depth
+        // limit (`_refuse_closed_rerun`).
+        self.outcome.not_asked.clear();
         self.progress(cx)
     }
 

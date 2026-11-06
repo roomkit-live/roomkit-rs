@@ -318,7 +318,8 @@ impl Machine {
 
     /// A record is over: the call's own, past the reentry budget it draws
     /// on, decides the call; a channel's not asked at the chain-depth limit
-    /// gets its observation and its framework event (RFC §8.3).
+    /// gets its framework event, and its observation unless its set stored
+    /// it already (RFC §8.3, §10.1 step 15).
     pub(super) fn on_record(&mut self, cx: &mut Cx<'_>, report: RecordReport, note: RecordNote) {
         let RecordNote::NotAsked {
             agent,
