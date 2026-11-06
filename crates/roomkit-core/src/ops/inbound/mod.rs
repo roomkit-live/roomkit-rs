@@ -318,8 +318,9 @@ impl Inbound {
     /// The room's agents run again on `event_id`, an event `room_id`
     /// stores, as on a new message of its author (RFC §11.7.6, §10.1 step
     /// 14): Python's `_rerun_agents_on`, which a held message's release
-    /// makes. The room's lock is waited for within `process_timeout`, past
-    /// which the call is refused `process_timeout`; a room whose status
+    /// makes. The room's lock is waited for, and the room and the event read
+    /// under it, within `process_timeout`, past which the call is refused
+    /// `process_timeout`; a room whose status
     /// refuses new events refuses it `room_closed` before any agent runs
     /// (RFC §5.1). An event that is not in the room, is deleted or is a
     /// change itself (RFC §10.3), or whose source binding is gone, is no
@@ -341,8 +342,8 @@ impl Inbound {
 
     /// The room's agents answer its last message again (RFC §13.6):
     /// Python's `regenerate_response` in a room no discussion holds. Under
-    /// the room's lock, waited for within `process_timeout`, the message is
-    /// chosen as [`regeneration::target`](crate::rules::regeneration::target)
+    /// the room's lock, its wait and its read of the room within
+    /// `process_timeout`, the message is chosen as [`regeneration::target`](crate::rules::regeneration::target)
     /// chooses it, from the room as the lock finds it, its due timers
     /// applied. A room whose status refuses new events refuses the call
     /// `room_closed` first, whether or not it holds such a message (RFC

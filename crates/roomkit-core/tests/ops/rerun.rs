@@ -217,10 +217,41 @@ fn a_regeneration_whose_room_read_passes_its_timeout_is_refused() {
     assert_eq!(regenerating(&sim), [&expected]);
     assert_eq!(sim.traced("on_event"), Vec::<&str>::new());
     assert_eq!(
-        sim.traced("load_context room_1 deadline passed").len()
-            + sim.traced("release room_1").len(),
-        2
+        (
+            sim.traced("load_context room_1 deadline passed").len(),
+            sim.traced("release room_1").len()
+        ),
+        (1, 1)
     );
+}
+
+// Python: tests/test_regenerate_off_lock.py::test_a_held_release_read_past_process_timeout_runs_no_agent:
+// `_rerun_agents_on` bounds its reads of the room and of the event with its
+// wait for the lock: a held message's release whose read passes the
+// deadline asks no agent, emits process_timeout naming the regenerate
+// operation, and releases the lock.
+#[test]
+fn a_release_whose_reads_pass_their_timeout_asks_no_agent() {
+    for read in ["load_context room_1", "get_event evt_0"] {
+        let mut sim = room();
+        sim.config.process_timeout = Some(TIMEOUT);
+        sim.durations.push((read, TIMEOUT + Duration::from_secs(1)));
+        let operation = rerun(&sim);
+
+        let result = sim.run(operation).unwrap();
+
+        assert_eq!(
+            (
+                result.blocked,
+                result.reason.as_deref(),
+                sim.traced("on_event"),
+                regenerating(&sim).len(),
+                sim.traced("release room_1").len(),
+            ),
+            (true, Some("process_timeout"), Vec::<&str>::new(), 1, 1),
+            "{read}"
+        );
+    }
 }
 
 // Python: core/mixins/regenerate.py::regenerate_response, its

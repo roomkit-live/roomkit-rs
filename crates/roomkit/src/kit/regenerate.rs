@@ -87,8 +87,8 @@ impl<S: ConversationStore> RoomKit<S> {
     /// inbound event: the message keeps its id, index and time, and its
     /// own hooks, delivery report and `event_processed` do not run again.
     ///
-    /// Under the room's lock, waited for within `process_timeout`, the
-    /// message is chosen as [`regenerate_target`](Self::regenerate_target)
+    /// Under the room's lock, its wait and its read of the room within
+    /// `process_timeout`, the message is chosen as [`regenerate_target`](Self::regenerate_target)
     /// chooses it; it is handed to the room's intelligence channels alone
     /// (no transport receives it again), in the room's delivery lane behind
     /// every event committed, off the lock and unbounded (RFC §13.5,

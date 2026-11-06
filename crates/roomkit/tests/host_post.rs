@@ -1830,3 +1830,76 @@ fn every_row() -> store::ListEventsOptions {
         ..store::ListEventsOptions::default()
     }
 }
+
+// Python: tests/test_regenerate_off_lock.py::test_a_room_read_past_process_timeout_refuses_the_regeneration
+// (RMK-1443 F6), through the kit's driver, its lock and a store whose room
+// read outlasts process_timeout: the regeneration is refused
+// process_timeout, no agent answers, and the lock is free again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_regeneration_whose_room_read_passes_its_timeout_is_refused() {
+    let (kit, _sms) = gated_room(Duration::from_millis(100)).await;
+    let agent = roomkit::testing::EchoAgent::new(
+        channel("ai"),
+        "answer",
+        roomkit::testing::EchoAgentOptions::default(),
+    );
+    kit.register_channel(agent).unwrap();
+    let intelligence = AttachChannelOptions {
+        category: Some(ChannelCategory::Intelligence),
+        ..Default::default()
+    };
+    kit.attach_channel(&room_id(), &channel("ai"), intelligence)
+        .await
+        .unwrap();
+    let message = |body: &str| InboundMessage::new(channel("sms"), CUSTOMER, text(body));
+    let into_room = || ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    let first = kit
+        .process_inbound(message("Hello?"), into_room())
+        .await
+        .unwrap();
+    roomkit::testing::idle(&kit).await;
+    let tap = EventTap::on(&kit, &["process_timeout"]);
+    kit.store().read.arm();
+    let regenerating = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            let options = roomkit::RegenerateResponseOptions::default();
+            kit.regenerate_response(&room_id(), options).await
+        })
+    };
+    kit.store().read.reached.notified().await;
+    let result = tokio::time::timeout(Duration::from_secs(5), regenerating)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let again = kit.process_inbound(message("Again?"), into_room());
+    let after = tokio::time::timeout(Duration::from_secs(5), again)
+        .await
+        .unwrap()
+        .unwrap();
+    roomkit::testing::idle(&kit).await;
+    let answers = kit
+        .store()
+        .list_events(&room_id(), every_row())
+        .await
+        .unwrap()
+        .iter()
+        .filter(|event| event.source.channel_id.as_str() == "ai")
+        .count();
+    assert_eq!(
+        (
+            first.blocked,
+            result.blocked,
+            result.reason.as_deref(),
+            after.blocked,
+            answers,
+            tap.events().len()
+        ),
+        (false, true, Some("process_timeout"), false, 2, 1)
+    );
+}
