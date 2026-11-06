@@ -243,8 +243,8 @@ async fn a_turn_sends_its_record_no_more_often_for_more_deltas() {
 }
 
 // Python: models/delivery.py DeliveryHandle.cancel reads the cascade's record,
-// its stream read and its transport still sending (RFC 6.7, 10.1). The shared
-// scenario comes with the next sync.
+// its stream read and its transport still sending (RFC 6.7, 10.1); the shared
+// scenario is delivery/a-cut-call-reads-its-record-while-a-transport-still-sends.
 #[tokio::test(start_paused = true)]
 async fn a_cut_call_reads_its_record_while_a_transport_still_sends() {
     let kit = kit_with(Streaming::scripted(vec![
