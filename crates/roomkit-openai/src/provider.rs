@@ -16,6 +16,7 @@ use crate::reasoning;
 use crate::request::Request;
 use crate::retry;
 use crate::stream;
+use crate::vendor::Vendor;
 use crate::wire::{self, CompletionRequest};
 
 /// The longest answer a generation reads, in bytes: far more than a
@@ -45,6 +46,9 @@ pub struct OpenAiAiProvider {
     /// Whether the provider warned of an effort a turn with tools left out
     /// unsaid, which it does once (Python's `_reasoning_left_out_logged`).
     left_out_warned: Arc<AtomicBool>,
+    /// The vendor whose rules it applies: OpenAI's, or a vendor provider's
+    /// ([`crate::deepseek`], [`crate::minimax`], [`crate::kimi`]).
+    vendor: Vendor,
 }
 
 impl OpenAiAiProvider {
@@ -56,6 +60,15 @@ impl OpenAiAiProvider {
     /// HTTP URL or carries a query or a fragment, and for an HTTP client
     /// that cannot be built.
     pub fn new(config: OpenAiConfig) -> Result<Self, ProviderError> {
+        Self::for_vendor(config, Vendor::OpenAi)
+    }
+
+    /// The provider `config` configures, applying `vendor`'s rules.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub(crate) fn for_vendor(config: OpenAiConfig, vendor: Vendor) -> Result<Self, ProviderError> {
         let endpoint = endpoint(config.base_url(), config.api)?;
         let models_endpoint = joined(config.base_url(), MODELS_PATH)?;
         // An API endpoint has no use for a redirect, which could carry the
@@ -78,7 +91,29 @@ impl OpenAiAiProvider {
             models_endpoint,
             client,
             left_out_warned: Arc::new(AtomicBool::new(false)),
+            vendor,
         })
+    }
+
+    /// The vendor whose rules the provider applies.
+    pub(crate) fn vendor(&self) -> Vendor {
+        self.vendor
+    }
+
+    /// `error` as the loop reads it, naming the provider's vendor (Python's
+    /// `_provider_name`).
+    pub(crate) fn failed(&self, error: OpenAiError) -> ProviderError {
+        let mut failed = ProviderError::from(error);
+        failed.provider = self.vendor.provider().to_owned();
+        failed
+    }
+
+    /// The configured model's entry in the vendor's catalogue, wherever its
+    /// endpoint: a vendor's provider reads its own catalogue whatever the
+    /// URL, as Python's `catalog_entry`.
+    pub(crate) fn vendor_entry(&self) -> Option<&'static ModelInfo> {
+        let model = self.config.model.as_str();
+        self.vendor.models().iter().find(|entry| entry.id == model)
     }
 
     /// The catalogue's entry for the configured model where the endpoint
@@ -206,12 +241,22 @@ impl OpenAiAiProvider {
         }
         let tools = !request.tools.is_empty();
         reasoning::check_model_serves(&self.config.model, self.official_entry(), tools)?;
-        let completion = CompletionRequest::new(&self.config, request, streamed);
+        let dialect = self.vendor.dialect();
+        let completion = CompletionRequest::new(&self.config, request, streamed, dialect);
         let mut value = serde_json::to_value(completion).map_err(|_| OpenAiError::Malformed {
             reason: "could not encode request".into(),
         })?;
-        let turn = request.reasoning_effort.as_deref();
-        if let Some(effort) = self.reasoning_effort(turn, request.thinking_off, tools)
+        let effort = if self.vendor == Vendor::OpenAi {
+            let turn = request.reasoning_effort.as_deref();
+            self.reasoning_effort(turn, request.thinking_off, tools)
+        } else {
+            let configured = self.config.reasoning_effort.as_deref();
+            let sampling = self
+                .vendor
+                .sampling(self.vendor_entry(), request, configured);
+            sampling.effort
+        };
+        if let Some(effort) = effort
             && let Some(fields) = value.as_object_mut()
         {
             fields.insert("reasoning_effort".into(), effort.into());
@@ -230,10 +275,35 @@ impl OpenAiAiProvider {
         // Python's order: the model's refusal, then the effort (and its
         // one warning), then the tools' names.
         let body = self.body(request, streamed)?;
-        crate::names::check(self.config.base_url(), &request.tools)?;
+        self.check_names(request)?;
         let body = with_extra_body(body, self.config.extra_body.as_ref());
+        // A vendor's own members, the turn's, win over the configured ones
+        // (Python's `_apply_extra_body`).
+        let body = if self.vendor == Vendor::OpenAi || self.config.api != OpenAiApi::ChatCompletions
+        {
+            body
+        } else {
+            let configured = self.config.reasoning_effort.as_deref();
+            let sampling = self
+                .vendor
+                .sampling(self.vendor_entry(), request, configured);
+            with_extra_body(body, Some(&sampling.extra))
+        };
         let call = || self.client.post(self.endpoint.clone()).json(&body);
         self.send(&call, !streamed).await
+    }
+
+    /// Refuses, before the request, a tool name the endpoint's vendor
+    /// refuses: OpenAI's rule on OpenAI's endpoint, a vendor's on its own;
+    /// behind another base URL the server decides (RFC §6.7).
+    fn check_names(&self, request: &Request) -> Result<(), OpenAiError> {
+        let base_url = self.config.base_url();
+        match self.vendor {
+            Vendor::OpenAi => crate::names::check(base_url, &request.tools),
+            vendor => vendor
+                .name_rule(base_url)
+                .map_or(Ok(()), |rule| rule.check(&request.tools)),
+        }
     }
 
     /// Sends what `call` builds, tried again up to the configuration's
@@ -386,7 +456,7 @@ impl AiProvider for OpenAiAiProvider {
     /// Python's class name, `OpenAIAIProvider`, as Python's provider
     /// names itself.
     fn name(&self) -> &'static str {
-        "OpenAIAIProvider"
+        self.vendor.name()
     }
 
     fn model_name(&self) -> &str {
@@ -394,7 +464,11 @@ impl AiProvider for OpenAiAiProvider {
     }
 
     fn supports_vision(&self) -> bool {
-        self.config.vision
+        if self.vendor == Vendor::OpenAi {
+            return self.config.vision;
+        }
+        self.vendor
+            .sees_images(self.vendor_entry(), self.config.base_url())
     }
 
     /// OpenAI's curated catalogue, Python's (`catalog/models.json`).
@@ -403,7 +477,7 @@ impl AiProvider for OpenAiAiProvider {
     }
 
     fn catalog_entry(&self) -> Option<ModelInfo> {
-        crate::models::entry(&self.config.model).cloned()
+        self.vendor_entry().cloned()
     }
 
     /// Every model id the configured endpoint exposes, `GET /models`, as
@@ -411,8 +485,11 @@ impl AiProvider for OpenAiAiProvider {
     /// models the catalogue knows is backfilled from it, and the non-chat
     /// models (embeddings, audio) pass through, its speech models tagged.
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
-        let live = self.live_models().await.map_err(OpenAiError::of_listing)?;
-        Ok(roomkit_ai::listing(live, crate::models::models()))
+        let live = self
+            .live_models()
+            .await
+            .map_err(|error| self.failed(error.of_listing()))?;
+        Ok(roomkit_ai::listing(live, self.vendor.models()))
     }
 
     fn supports_streaming(&self) -> bool {
@@ -429,7 +506,7 @@ impl AiProvider for OpenAiAiProvider {
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
         let events = match Request::of(context) {
             Ok(request) => stream::answer(self, request, false),
-            Err(error) => stream::refused(error),
+            Err(error) => stream::refused(self.failed(error)),
         };
         stream::whole(events).await
     }
@@ -441,7 +518,7 @@ impl AiProvider for OpenAiAiProvider {
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
         match Request::of(context) {
             Ok(request) => stream::answer(self, request, true),
-            Err(error) => stream::refused(error),
+            Err(error) => stream::refused(self.failed(error)),
         }
     }
 }

@@ -16,6 +16,7 @@ mod reasoning;
 mod responses;
 mod retries;
 mod thinking;
+mod vendors;
 
 use std::time::Duration;
 
@@ -95,6 +96,23 @@ impl Room {
         adjust: impl FnOnce(OpenAiConfig) -> OpenAiConfig,
         equip: impl FnOnce(AiChannelOptions) -> AiChannelOptions,
     ) -> Self {
+        let provider = |base_url: &str| {
+            let config = adjust(OpenAiConfig {
+                base_url: Some(base_url.to_owned()),
+                ..OpenAiConfig::new(api_key, "fake-model")
+            });
+            OpenAiAiProvider::new(config).unwrap()
+        };
+        Self::with_provider(replies, provider, equip).await
+    }
+
+    /// The room, its agent running on the provider `provider` builds for
+    /// the fake's base URL.
+    async fn with_provider<P: AiProvider>(
+        replies: Vec<Reply>,
+        provider: impl FnOnce(&str) -> P,
+        equip: impl FnOnce(AiChannelOptions) -> AiChannelOptions,
+    ) -> Self {
         let fake = FakeOpenAi::start(replies).await;
         let kit = kit_with_environment(
             RoomKitOptions::default(),
@@ -110,15 +128,11 @@ impl Room {
             ChannelType::WEBSOCKET,
             RecordingTransportOptions::default(),
         );
-        let config = adjust(OpenAiConfig {
-            base_url: Some(fake.base_url().to_owned()),
-            ..OpenAiConfig::new(api_key, "fake-model")
-        });
         let options = equip(AiChannelOptions {
             system_prompt: Some(SYSTEM_PROMPT.into()),
             ..AiChannelOptions::default()
         });
-        let provider = OpenAiAiProvider::new(config).unwrap();
+        let provider = provider(fake.base_url());
         let agent = AiChannel::new(channel("assistant"), provider, options).unwrap();
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(web.clone()).unwrap();

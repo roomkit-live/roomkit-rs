@@ -71,6 +71,25 @@ pub(crate) fn floored_effort(
     }
 }
 
+/// The level of `levels` (least to most) nearest to `effort` on `scale`, the
+/// lower one on a tie; `None` for an effort outside `scale`, `none`
+/// included, or a model that takes no level (Python's `nearest_level`, RFC
+/// §6.7).
+pub(crate) fn nearest_level<'a>(
+    effort: Option<&str>,
+    levels: &[&'a str],
+    scale: &[&str],
+) -> Option<&'a str> {
+    let rank = |level: &str| scale.iter().position(|step| *step == level);
+    let wanted = rank(effort?)?;
+    levels
+        .iter()
+        .copied()
+        .filter_map(|level| rank(level).map(|at| (wanted.abs_diff(at), at, level)))
+        .min_by_key(|(distance, at, _)| (*distance, *at))
+        .map(|(_, _, level)| level)
+}
+
 /// Refuses, before the request, a Chat Completions turn OpenAI's endpoint
 /// refuses `model`, as its catalogue `entry` states it: a model Chat
 /// Completions does not serve, or function tools for one that takes none

@@ -4,6 +4,7 @@
 //! (`catalog/ROOMKIT_COMMIT`), never edited here; `make models-check` fails
 //! when the copy is not that commit's catalogue.
 
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use roomkit_ai::ModelInfo;
@@ -11,24 +12,30 @@ use serde_json::Value;
 
 use crate::error::OpenAiError;
 
-/// The catalogue as Python writes it.
+/// The catalogues as Python writes them, by provider.
 const CATALOG: &str = include_str!("../catalog/models.json");
 
-/// The catalogue, read once. An empty one would quietly lift the floors,
+/// The catalogues, read once. An empty one would quietly lift the floors,
 /// the tool-turn tags and the model refusals: a copy that does not read
 /// is a defect of this crate, which `the_catalogue_reads_whole` and
 /// `make models-check` keep from being built.
-static MODELS: LazyLock<Vec<ModelInfo>> = LazyLock::new(|| {
+static CATALOGUES: LazyLock<BTreeMap<String, Vec<ModelInfo>>> = LazyLock::new(|| {
     #[expect(
         clippy::expect_used,
         reason = "the embedded copy is checked to read whole by the_catalogue_reads_whole"
     )]
-    read().expect("the embedded OpenAI catalogue reads")
+    read().expect("the embedded catalogues read")
 });
 
-/// Reads the catalogue's copy.
-pub(crate) fn read() -> Result<Vec<ModelInfo>, serde_json::Error> {
+/// Reads the catalogues' copy, by provider.
+pub(crate) fn read() -> Result<BTreeMap<String, Vec<ModelInfo>>, serde_json::Error> {
     serde_json::from_str(CATALOG)
+}
+
+/// The curated catalogue of `provider` (`openai`, `deepseek`, `minimax`,
+/// `kimi`), in Python's order; empty for a provider the copy lacks.
+pub(crate) fn catalogue(provider: &str) -> &'static [ModelInfo] {
+    CATALOGUES.get(provider).map_or(&[], Vec::as_slice)
 }
 
 /// The models the `body` of a `GET /models` answer lists: a page of models,
@@ -50,14 +57,14 @@ pub(crate) fn listed(body: &[u8]) -> Result<Vec<ModelInfo>, OpenAiError> {
         .collect()
 }
 
-/// Every entry of the catalogue, in Python's order.
+/// Every entry of OpenAI's catalogue, in Python's order.
 pub(crate) fn models() -> &'static [ModelInfo] {
-    &MODELS
+    catalogue("openai")
 }
 
-/// The catalogue's entry for `model`, if it carries one.
+/// OpenAI's catalogue entry for `model`, if it carries one.
 pub(crate) fn entry(model: &str) -> Option<&'static ModelInfo> {
-    MODELS.iter().find(|entry| entry.id == model)
+    models().iter().find(|entry| entry.id == model)
 }
 
 #[cfg(test)]

@@ -56,18 +56,26 @@ fn accepted(name: &str) -> bool {
 /// scheme's default port written out or not, a trailing slash or not; a URL
 /// carrying credentials is another endpoint.
 pub(crate) fn is_openai_endpoint(base_url: &str) -> bool {
-    let (Ok(url), Ok(openai)) = (
+    same_endpoint(base_url, OPENAI_BASE_URL)
+}
+
+/// Whether `base_url` names the endpoint `official` does, as the reference
+/// implementation compares them (Python's `is_vendor_endpoint`): scheme,
+/// host and path, case aside, the scheme's default port written out or
+/// not, a trailing slash or not; a URL carrying credentials is another.
+pub(crate) fn same_endpoint(base_url: &str, official: &str) -> bool {
+    let (Ok(url), Ok(official)) = (
         reqwest::Url::parse(base_url.trim()),
-        reqwest::Url::parse(OPENAI_BASE_URL),
+        reqwest::Url::parse(official),
     ) else {
         return false;
     };
     url.username().is_empty()
         && url.password().is_none()
-        && url.scheme() == openai.scheme()
-        && url.host_str() == openai.host_str()
-        && url.port_or_known_default() == openai.port_or_known_default()
-        && url.path().trim_end_matches('/') == openai.path()
+        && url.scheme() == official.scheme()
+        && url.host_str() == official.host_str()
+        && url.port_or_known_default() == official.port_or_known_default()
+        && url.path().trim_end_matches('/') == official.path().trim_end_matches('/')
 }
 
 #[cfg(test)]

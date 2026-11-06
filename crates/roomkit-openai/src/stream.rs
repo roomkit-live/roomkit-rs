@@ -58,8 +58,8 @@ pub(crate) fn answer(
 
 /// A generation refused before its request was sent: its error, then
 /// nothing.
-pub(crate) fn refused<'a>(error: OpenAiError) -> ProviderStream<'a> {
-    Box::pin(Refused(Some(error.into())))
+pub(crate) fn refused<'a>(error: ProviderError) -> ProviderStream<'a> {
+    Box::pin(Refused(Some(error)))
 }
 
 /// The error a refused generation hands, once.
@@ -148,7 +148,7 @@ impl<'a> Reading<'a> {
                 return Some((Ok(event), self));
             }
             if let Some(error) = self.failure.take() {
-                return Some((Err(error.into()), self));
+                return Some((Err(self.provider.failed(error)), self));
             }
             let advanced = match std::mem::replace(&mut self.phase, Phase::Over) {
                 Phase::Over => return None,
@@ -191,7 +191,11 @@ impl<'a> Reading<'a> {
                 self.phase = Phase::Streaming(Box::new(Streamed {
                     response,
                     events: Events::new(ANSWER_LIMIT),
-                    folding: Folding::new(self.provider.api(), self.provider.namespace()),
+                    folding: Folding::new(
+                        self.provider.api(),
+                        self.provider.namespace(),
+                        self.provider.vendor().reads_cache_hits(),
+                    ),
                 }));
                 return Ok(());
             }
@@ -208,8 +212,16 @@ impl<'a> Reading<'a> {
             // which Python's client reads as its status; a stream answered
             // with JSON holds no event for Python's client, and an error
             // object there is no completion.
-            OpenAiApi::ChatCompletions if !self.streamed => wire::completion(&body, &self.secret)?,
-            OpenAiApi::ChatCompletions => wire::response(&body, &self.secret)?,
+            OpenAiApi::ChatCompletions if !self.streamed => wire::completion(
+                &body,
+                &self.secret,
+                self.provider.vendor().reads_cache_hits(),
+            )?,
+            OpenAiApi::ChatCompletions => wire::response(
+                &body,
+                &self.secret,
+                self.provider.vendor().reads_cache_hits(),
+            )?,
             OpenAiApi::Responses => {
                 crate::responses::body(&body, &self.secret, self.provider.namespace())?
             }

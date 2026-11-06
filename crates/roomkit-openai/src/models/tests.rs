@@ -14,10 +14,16 @@ use crate::{OpenAiAiProvider, OpenAiConfig};
 /// Python's entries is lost or added in the reading.
 #[test]
 fn the_catalogue_reads_whole() {
-    let models = read().unwrap();
+    let catalogues = read().unwrap();
     let python: Value = serde_json::from_str(CATALOG).unwrap();
-    assert_eq!(serde_json::to_value(&models).unwrap(), python);
-    assert_eq!(models.len(), self::models().len());
+    assert_eq!(serde_json::to_value(&catalogues).unwrap(), python);
+    assert_eq!(catalogues["openai"].len(), models().len());
+    for provider in ["openai", "deepseek", "minimax", "kimi"] {
+        assert!(
+            !catalogue(provider).is_empty(),
+            "{provider} has no catalogue"
+        );
+    }
 }
 
 // Python: tests/test_providers/test_ai_models.py::test_curated_catalog_is_nonempty_and_unique

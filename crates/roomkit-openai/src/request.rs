@@ -19,6 +19,10 @@ use crate::reasoning::thinking_switch;
 pub(crate) struct Request {
     pub(crate) system_prompt: Option<String>,
     pub(crate) messages: Vec<Message>,
+    /// Each message's reasoning, by its place in `messages`: an assistant's
+    /// thinking parts joined, empty for any other. A vendor's dialect reads
+    /// it ([`crate::dialect::ChatDialect`]); OpenAI's sends none.
+    pub(crate) reasoning: Vec<String>,
     pub(crate) tools: Vec<AiTool>,
     /// The turn's temperature, when it gives one.
     pub(crate) temperature: Option<f64>,
@@ -28,6 +32,9 @@ pub(crate) struct Request {
     pub(crate) reasoning_effort: Option<String>,
     /// Whether the turn states off (RFC §6.7), its budget or its switch.
     pub(crate) thinking_off: bool,
+    /// Whether the turn states the model reasons, as its budget, its
+    /// switch or an effort of `none` says (Python's `thinking_switch`).
+    pub(crate) thinking_switch: Option<bool>,
 }
 
 impl Request {
@@ -39,23 +46,48 @@ impl Request {
     /// read: the request is never sent.
     pub(crate) fn of(context: &AiContext) -> Result<Self, OpenAiError> {
         let mut written = Vec::new();
+        let mut reasoning = Vec::new();
         for message in &context.messages {
-            written.extend(messages(message)?);
+            let rendered = messages(message)?;
+            let thought = reasoning_of(message);
+            reasoning.extend(rendered.iter().map(|_| thought.clone()));
+            written.extend(rendered);
         }
+        let switch = thinking_switch(
+            context.thinking_budget,
+            context.enable_thinking,
+            context.reasoning_effort.as_deref(),
+        );
         Ok(Self {
             system_prompt: context.system_prompt.clone(),
             messages: written,
+            reasoning,
             tools: context.tools.clone(),
             temperature: Some(context.temperature),
             max_tokens: context.max_tokens,
             reasoning_effort: context.reasoning_effort.clone(),
-            thinking_off: thinking_switch(
-                context.thinking_budget,
-                context.enable_thinking,
-                context.reasoning_effort.as_deref(),
-            ) == Some(false),
+            thinking_off: switch == Some(false),
+            thinking_switch: switch,
         })
     }
+}
+
+/// What an assistant's `message` reasoned, its thinking parts joined in
+/// order (Python's `chat_request._thinking`); nothing for any other role.
+fn reasoning_of(message: &AiMessage) -> String {
+    let AiMessageContent::Parts(parts) = &message.content else {
+        return String::new();
+    };
+    if message.role != AiRole::Assistant {
+        return String::new();
+    }
+    parts
+        .iter()
+        .filter_map(|part| match part {
+            AiContentPart::Thinking(part) => Some(part.thinking.as_str()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The transcript messages `message` is: a round's tool message is one per

@@ -222,7 +222,7 @@ impl fmt::Debug for OpenAiConfig {
 
 /// `url` as it may be shown: its scheme, host and port, never its user
 /// information, path or query, which may carry credentials.
-fn shown_url(url: &str) -> String {
+pub(crate) fn shown_url(url: &str) -> String {
     let Ok(parsed) = reqwest::Url::parse(url) else {
         return "(not a URL)".to_owned();
     };

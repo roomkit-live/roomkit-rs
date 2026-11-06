@@ -3,6 +3,7 @@
 
 use crate::call_slots::{CallSlots, Fragment};
 use crate::config::OpenAiConfig;
+use crate::dialect::ChatDialect;
 use crate::request::{RawCall, Request, Whole, done as finished};
 use reqwest::StatusCode;
 use roomkit::model::Metadata;
@@ -62,6 +63,9 @@ struct WireMessage<'a> {
     tool_calls: Vec<WireCall<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<&'a str>,
+    /// The vendor's reasoning field, when its dialect writes one.
+    #[serde(flatten)]
+    reasoning: serde_json::Map<String, Value>,
 }
 
 /// A call an assistant's message made, as the wire writes it: its
@@ -103,7 +107,12 @@ impl<'a> CompletionRequest<'a> {
     /// `max_completion_tokens` when the configuration says, the stream's
     /// usage when it asks for it. `streamed` false asks for the completion
     /// whole, as Python's `generate` does.
-    pub(crate) fn new(config: &'a OpenAiConfig, request: &'a Request, streamed: bool) -> Self {
+    pub(crate) fn new(
+        config: &'a OpenAiConfig,
+        request: &'a Request,
+        streamed: bool,
+        dialect: ChatDialect,
+    ) -> Self {
         let model = config.model.as_str();
         let system = request
             .system_prompt
@@ -114,10 +123,18 @@ impl<'a> CompletionRequest<'a> {
                 content: Some(Value::String(prompt.into())),
                 tool_calls: Vec::new(),
                 tool_call_id: None,
+                reasoning: serde_json::Map::new(),
             });
+        let thinking = request.reasoning.iter().map(String::as_str);
         let messages = system
             .into_iter()
-            .chain(request.messages.iter().map(wire_message))
+            .chain(
+                request
+                    .messages
+                    .iter()
+                    .zip(thinking.chain(std::iter::repeat("")))
+                    .map(|(message, thinking)| wire_message(message, thinking, dialect)),
+            )
             .collect();
         let tools = request
             .tools
@@ -153,8 +170,9 @@ impl<'a> CompletionRequest<'a> {
     }
 }
 
-/// `message` as the wire writes it.
-fn wire_message(message: &Message) -> WireMessage<'_> {
+/// `message` as the wire writes it, an assistant's `thinking` in the
+/// field `dialect` reads it from, if any.
+fn wire_message<'a>(message: &'a Message, thinking: &str, dialect: ChatDialect) -> WireMessage<'a> {
     let calls: Vec<WireCall<'_>> = message
         .tool_calls
         .iter()
@@ -191,11 +209,18 @@ fn wire_message(message: &Message) -> WireMessage<'_> {
         );
         Some(Value::Array(parts))
     };
+    let mut reasoning = serde_json::Map::new();
+    if message.role == Role::Assistant
+        && let Some((field, value)) = dialect.field(thinking, !calls.is_empty())
+    {
+        reasoning.insert(field.to_owned(), Value::String(value));
+    }
     WireMessage {
         role: role(message.role),
         content,
         tool_calls: calls,
         tool_call_id: message.tool_call_id.as_deref(),
+        reasoning,
     }
 }
 
@@ -286,6 +311,11 @@ struct Usage {
     completion_tokens: Option<u64>,
     #[serde(default)]
     prompt_tokens_details: Option<PromptDetails>,
+    /// DeepSeek's cache hits and misses, beside OpenAI's details.
+    #[serde(default)]
+    prompt_cache_hit_tokens: Option<u64>,
+    #[serde(default)]
+    prompt_cache_miss_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -362,13 +392,16 @@ where
 ///
 /// Returns [`OpenAiError::Malformed`] when `body` is no chat completion,
 /// saying why without `secret`, the API key.
-pub(crate) fn response(body: &[u8], secret: &str) -> Result<Whole, OpenAiError> {
+pub(crate) fn response(body: &[u8], secret: &str, cache_hits: bool) -> Result<Whole, OpenAiError> {
     let malformed = |reason: String| OpenAiError::Malformed {
         reason: cleaned(&reason, secret, MESSAGE_LIMIT),
     };
     let completion: Completion =
         serde_json::from_slice(body).map_err(|error| malformed(error.to_string()))?;
-    let usage = completion.usage.map(usage_of).unwrap_or_default();
+    let usage = completion
+        .usage
+        .map(|usage| usage_of(usage, cache_hits))
+        .unwrap_or_default();
     let choice = completion
         .choices
         .into_iter()
@@ -469,9 +502,20 @@ pub(crate) struct Folding {
     /// Sorts the text into reasoning and answer, a tag split across chunks
     /// included.
     tags: ThinkTagParser,
+    /// Whether the usage reports its cache hits as DeepSeek does.
+    cache_hits: bool,
 }
 
 impl Folding {
+    /// The folding of a stream whose usage reports its cache hits as
+    /// DeepSeek does when `cache_hits`.
+    pub(crate) fn new(cache_hits: bool) -> Self {
+        Self {
+            cache_hits,
+            ..Self::default()
+        }
+    }
+
     /// Takes the chunk `data`: the reasoning and the text it settles, in
     /// order; each delta's reasoning field before its content, as Python's
     /// `generate_structured_stream` reads them.
@@ -500,7 +544,7 @@ impl Folding {
             });
         }
         if let Some(usage) = chunk.usage {
-            self.usage = usage_of(usage);
+            self.usage = usage_of(usage, self.cache_hits);
         }
         let mut segments = Vec::new();
         for choice in chunk.choices.into_iter().filter(|choice| choice.index == 0) {
@@ -564,8 +608,27 @@ impl Folding {
     }
 }
 
-/// A completion's usage as the turn's record counts it.
-fn usage_of(usage: Usage) -> Metadata {
+/// A completion's usage as the turn's record counts it; with `cache_hits`,
+/// the cache as DeepSeek reports it, where it does (Python's
+/// `DeepSeekAIProvider._usage_from`): its misses are the input, its hits
+/// the cache read, a miss count it leaves out the prompt less the hits.
+fn usage_of(usage: Usage, cache_hits: bool) -> Metadata {
+    if cache_hits && let Some(hit) = usage.prompt_cache_hit_tokens {
+        let prompt = usage.prompt_tokens.unwrap_or_default();
+        let miss = usage
+            .prompt_cache_miss_tokens
+            .unwrap_or_else(|| prompt.saturating_sub(hit));
+        let mut counted = Metadata::new();
+        counted.insert("input_tokens".to_owned(), Value::from(miss));
+        counted.insert(
+            "output_tokens".to_owned(),
+            Value::from(usage.completion_tokens.unwrap_or_default()),
+        );
+        if hit > 0 {
+            counted.insert("cache_read_input_tokens".to_owned(), Value::from(hit));
+        }
+        return counted;
+    }
     let cached = usage
         .prompt_tokens_details
         .map(|details| details.cached_tokens)
@@ -723,7 +786,11 @@ fn truthy(value: &Value) -> bool {
 /// # Errors
 ///
 /// [`OpenAiError::Answered`] for an error object, else as [`response`].
-pub(crate) fn completion(body: &[u8], secret: &str) -> Result<Whole, OpenAiError> {
+pub(crate) fn completion(
+    body: &[u8],
+    secret: &str,
+    cache_hits: bool,
+) -> Result<Whole, OpenAiError> {
     let value: Option<Value> = serde_json::from_slice(body).ok();
     if let Some(error) = value
         .as_ref()
@@ -732,7 +799,7 @@ pub(crate) fn completion(body: &[u8], secret: &str) -> Result<Whole, OpenAiError
     {
         return Err(answered(error, secret));
     }
-    response(body, secret)
+    response(body, secret, cache_hits)
 }
 
 /// The failure an error object answered in place of a completion stands
@@ -800,14 +867,21 @@ mod tests {
             let request = Request {
                 system_prompt: None,
                 messages: Vec::new(),
+                reasoning: Vec::new(),
                 tools: Vec::new(),
                 temperature: None,
                 max_tokens: turn,
                 reasoning_effort: None,
                 thinking_off: false,
+                thinking_switch: None,
             };
-            let body =
-                serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
+            let body = serde_json::to_value(CompletionRequest::new(
+                &config,
+                &request,
+                true,
+                crate::dialect::OPENAI_CHAT,
+            ))
+            .unwrap();
             (
                 body.get("max_tokens").cloned(),
                 body.get("max_completion_tokens").cloned(),
@@ -834,11 +908,13 @@ mod tests {
         let request = Request {
             system_prompt: None,
             messages: Vec::new(),
+            reasoning: Vec::new(),
             tools: Vec::new(),
             temperature: Some(0.7),
             max_tokens: None,
             reasoning_effort: None,
             thinking_off: false,
+            thinking_switch: None,
         };
         let set = |base_url: Option<&str>, model: &str, switches: (Option<bool>, Option<bool>)| {
             let config = OpenAiConfig {
@@ -847,8 +923,13 @@ mod tests {
                 supports_custom_temperature: switches.1,
                 ..OpenAiConfig::new("sk-1", model)
             };
-            let body =
-                serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
+            let body = serde_json::to_value(CompletionRequest::new(
+                &config,
+                &request,
+                true,
+                crate::dialect::OPENAI_CHAT,
+            ))
+            .unwrap();
             (
                 body.get("max_completion_tokens").is_some(),
                 body.get("temperature").is_some(),
@@ -906,7 +987,7 @@ mod tests {
     fn a_completion_without_text_says_nothing() {
         let body = br#"{"choices": [{"message": {"role": "assistant", "content": null}}]}"#;
         assert_eq!(
-            response(body, "sk-1").map(|read| read.text),
+            response(body, "sk-1", false).map(|read| read.text),
             Ok(String::new())
         );
     }
@@ -918,7 +999,7 @@ mod tests {
                 "function": {"name": "lookup", "arguments": "{\"order\": \"42\"}"}}]}}],
             "usage": {"prompt_tokens": 100, "completion_tokens": 7,
                 "prompt_tokens_details": {"cached_tokens": 40}}}"#;
-        let read = response(body, "sk-1").unwrap();
+        let read = response(body, "sk-1", false).unwrap();
         assert_eq!(
             (
                 read.calls,
@@ -947,7 +1028,7 @@ mod tests {
                     "function": {"name": "lookup", "arguments": null}}]}}],
             "usage": {"prompt_tokens": null, "completion_tokens": 7, "total_tokens": null,
                 "prompt_tokens_details": {"cached_tokens": null}}}"#;
-        let read = response(body, "sk-1").unwrap();
+        let read = response(body, "sk-1", false).unwrap();
         assert_eq!(
             (read.calls, Value::Object(read.done.usage)),
             (
@@ -961,7 +1042,7 @@ mod tests {
     fn a_message_with_null_calls_says_its_text() {
         let body = br#"{"choices": [{"message": {"content": "Hi", "tool_calls": null}}],
             "usage": null}"#;
-        let read = response(body, "sk-1").unwrap();
+        let read = response(body, "sk-1", false).unwrap();
         assert_eq!((read.text.as_str(), read.calls.len()), ("Hi", 0));
     }
 
@@ -1150,7 +1231,7 @@ mod tests {
                 {"id": 7, "function": {"name": "now", "arguments": "{}"}},
                 {"id": 0, "function": {"name": "now", "arguments": "{}"}}]}}]}"#;
         assert_eq!(
-            response(body, "sk-1").unwrap().calls,
+            response(body, "sk-1", false).unwrap().calls,
             [
                 RawCall::new("7", "now", "{}"),
                 RawCall::new("", "now", "{}")
@@ -1192,7 +1273,7 @@ mod tests {
                 {"id": "a", "type": "custom", "custom": {"name": "x"}},
                 {"id": "b", "function": {"name": "now", "arguments": "{}"}}]}}]}"#;
         assert_eq!(
-            response(body, "sk-1").unwrap().calls,
+            response(body, "sk-1", false).unwrap().calls,
             [RawCall::new("b", "now", "{}")]
         );
     }
@@ -1278,7 +1359,7 @@ mod tests {
     #[test]
     fn a_completion_with_no_choice_is_malformed() {
         assert_eq!(
-            response(br#"{"id": "chatcmpl-1", "choices": []}"#, "sk-1"),
+            response(br#"{"id": "chatcmpl-1", "choices": []}"#, "sk-1", false),
             Err(OpenAiError::Malformed {
                 reason: "it has no choice".to_owned()
             })
@@ -1288,7 +1369,7 @@ mod tests {
     #[test]
     fn a_malformed_answer_s_reason_holds_no_key() {
         let body = br#"{"choices": "sk-1"}"#;
-        let error = response(body, "sk-1").unwrap_err();
+        let error = response(body, "sk-1", false).unwrap_err();
         assert!(!error.to_string().contains("sk-1"), "{error}");
     }
 }
@@ -1309,18 +1390,26 @@ mod image_tests {
         let request = Request {
             system_prompt: None,
             messages: vec![message],
+            reasoning: Vec::new(),
             tools: vec![],
             temperature: None,
             max_tokens: None,
             reasoning_effort: None,
             thinking_off: false,
+            thinking_switch: None,
         };
         let config = OpenAiConfig {
             base_url: Some("http://localhost/v1".into()),
             vision: true,
             ..OpenAiConfig::new("", "vision-fixture")
         };
-        let chat = serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
+        let chat = serde_json::to_value(CompletionRequest::new(
+            &config,
+            &request,
+            true,
+            crate::dialect::OPENAI_CHAT,
+        ))
+        .unwrap();
         assert_eq!(
             chat.pointer("/messages/0/content/0/text"),
             Some(&Value::String("Describe this image".into()))
@@ -1367,7 +1456,13 @@ mod image_tests {
             vision: true,
             ..OpenAiConfig::new("", "vision-fixture")
         };
-        let chat = serde_json::to_value(CompletionRequest::new(&config, &request, true)).unwrap();
+        let chat = serde_json::to_value(CompletionRequest::new(
+            &config,
+            &request,
+            true,
+            crate::dialect::OPENAI_CHAT,
+        ))
+        .unwrap();
         assert_eq!(
             chat.pointer("/messages/0/content"),
             Some(&serde_json::json!([

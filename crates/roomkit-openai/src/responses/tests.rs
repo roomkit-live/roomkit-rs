@@ -20,11 +20,13 @@ fn request(message: Message) -> Result<Value, crate::error::OpenAiError> {
         &Request {
             system_prompt: None,
             messages: vec![message],
+            reasoning: Vec::new(),
             tools: vec![],
             temperature: None,
             max_tokens: None,
             reasoning_effort: None,
             thinking_off: false,
+            thinking_switch: None,
         },
     )
 }

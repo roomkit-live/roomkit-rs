@@ -58,7 +58,11 @@
 mod call_slots;
 mod config;
 mod credentials;
+pub mod deepseek;
+mod dialect;
 mod error;
+pub mod kimi;
+pub mod minimax;
 mod models;
 mod names;
 mod provider;
@@ -69,6 +73,7 @@ mod retry;
 mod sse;
 mod stream;
 mod think_tags;
+mod vendor;
 mod wire;
 
 pub use self::config::{OpenAiApi, OpenAiConfig};
