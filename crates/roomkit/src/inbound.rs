@@ -189,6 +189,11 @@ enum Ended {
     /// The run failed past the commit, a defect of this crate: the first
     /// wait takes the error, the next ones read the result at the commit.
     Failed(std::sync::Mutex<Option<RoomKitError>>),
+    /// The call was cut and a turn of its is over for its owner without its
+    /// executor's end: its cleanup is not known to be done, and each wait
+    /// reads [`RoomKitError::Timeout`], Python's `TimeoutError` (RFC
+    /// §10.6.8).
+    CleanupIncomplete,
 }
 
 /// What a handle waits for.
@@ -358,6 +363,7 @@ impl DeliveryHandle {
                 }
                 shared.decided.clone()
             }
+            Ended::CleanupIncomplete => return Err(RoomKitError::Timeout),
         };
         Ok(self.with_handle(result))
     }
@@ -424,11 +430,17 @@ impl Shared {
                     // turns are: the delivery goes on, detached (RFC §10.1
                     // "Explicit delivery cancellation").
                     result = driver::cancelled_end(record) => {
-                        return Ended::Over(Box::new(result));
+                        return result.map_or(Ended::CleanupIncomplete, |result| {
+                            Ended::Over(Box::new(result))
+                        });
                     }
                 };
                 *run = None;
-                match driver::ended(joined, record, &self.tasks) {
+                let output = driver::ended(joined, record, &self.tasks);
+                if record.cleanup_incomplete().is_some() {
+                    return Ended::CleanupIncomplete;
+                }
+                match output {
                     Ok(Ok(result)) => Ended::Over(Box::new(result)),
                     Ok(Err(error)) => Ended::Failed(std::sync::Mutex::new(Some(error.into()))),
                     Err(error) => Ended::Failed(std::sync::Mutex::new(Some(error))),

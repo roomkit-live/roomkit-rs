@@ -17,8 +17,8 @@ use roomkit_core::model::{
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
-use super::support::{ReadingOn, Step, Streaming, Stuck, Timed, bind, kit_with, room_id};
-use crate::turns::observe::Carried;
+use super::support::{ReadingOn, Step, Streaming, Stuck, Timed, bind, kit_with, of_type, room_id};
+use crate::turns::observe::{Carried, Fate};
 use crate::{
     CancelOptions, Channel, ChannelError, DeliveryHandle, InboundResult, ProcessInboundOptions,
     RoomKit, RoomKitError,
@@ -78,6 +78,13 @@ fn ending() -> Vec<Step> {
         Step::Completed,
     ]
 }
+
+/// A message that never leaves its side.
+const UNSENT: Fate = Fate {
+    unsent: true,
+    lost: false,
+    duplicated: false,
+};
 
 fn with_timeout(timeout: Duration) -> CancelOptions {
     CancelOptions {
@@ -153,6 +160,41 @@ async fn a_cancel_past_its_timeout_leaves_the_target_working_and_wait_reads_the_
     assert!(at(elapsed, flush), "{elapsed:?}");
     assert_eq!(kept, ["cut", "flushed"]);
     assert_eq!(read(&waited), cited_and("cancelled"));
+}
+
+// Python: tests/test_turns_cleanup.py::test_a_cancelled_cascade_reports_its_cleanup_incomplete_while_an_end_is_owed
+// A cut turn over for its owner at its cancel bound, its executor's end never
+// come, leaves what the executor cleans up not known to be done (RFC
+// §10.6.8): cancel(timeout=30) raises TimeoutError at the bound, and each
+// wait() after it the same (lanes.py _cleanup, wait_drained). The cancel is
+// lost on its way, as an executor stuck in a blocking call never reads it
+// (RMK-1328).
+#[tokio::test(start_paused = true)]
+async fn a_cut_whose_turn_s_end_is_owed_reports_its_cleanup_incomplete() {
+    let target = ReadingOn::flushing(Duration::ZERO);
+    let kit = room(holding(), &target).await;
+    // An executor stuck in a blocking call reads neither the cut nor the
+    // reader's close.
+    kit.inner.turns.set_fault(Arc::new(|carried, raw: &str| {
+        let stuck = [of_type("cancel"), of_type("close")];
+        if carried == Carried::Control && stuck.iter().any(|marks| raw.contains(marks)) {
+            UNSENT
+        } else {
+            Fate::default()
+        }
+    }));
+    let handle = deferred(&kit).await;
+    target.read.notified().await;
+    let start = Instant::now();
+    let cancel = handle.cancel(with_timeout(Duration::from_secs(30))).await;
+    let elapsed = start.elapsed();
+    let waits = [handle.wait().await, handle.wait().await];
+    kit.close().await.unwrap();
+    assert!(at(elapsed, Duration::from_secs(5)), "{elapsed:?}");
+    assert!(matches!(cancel, Err(RoomKitError::Timeout)), "{cancel:?}");
+    for waited in waits {
+        assert!(matches!(waited, Err(RoomKitError::Timeout)), "{waited:?}");
+    }
 }
 
 // Python: the cancel reaches the turn and the target's `finally` together:

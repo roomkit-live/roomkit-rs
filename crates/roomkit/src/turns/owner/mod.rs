@@ -21,7 +21,7 @@ mod steering;
 mod verbs;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use roomkit_core::model::{ChannelBinding, ChannelId, Metadata, Room, RoomEvent, RoomId};
@@ -100,6 +100,12 @@ pub(super) struct OwnerState {
     /// steering: the owner waits for its end without the cancel bound, and
     /// its reader reads it to its end as after a close (RFC §10.6.8).
     pub(super) steer_cut: AtomicBool,
+    /// Set once the turn is over for the owner without its executor's end:
+    /// its cancel bound passed, its link failed or its executor fell silent.
+    /// What the executor cleans up is then not known to be done (RFC
+    /// §10.6.8), Python's `end_owed`; a turn the kit's close abandons owes
+    /// nothing.
+    pub(super) end_owed: AtomicBool,
 }
 
 /// What cuts a turn from outside its reader: the run whose call the turn
@@ -122,6 +128,12 @@ impl Canceller {
         let mut over = self.state.over.subscribe();
         drop(over.wait_for(|over| *over).await);
     }
+
+    /// Whether the turn is over for the owner without its executor's end,
+    /// what the executor cleans up not known to be done (RFC §10.6.8).
+    pub(crate) fn end_owed(&self) -> bool {
+        self.state.end_owed.load(Ordering::Acquire)
+    }
 }
 
 /// The owner's side of `turn`, and the pump to run as a task of the kit's.
@@ -142,6 +154,7 @@ pub(crate) fn open(
         over: watch::Sender::new(false),
         steers: Steers::default(),
         steer_cut: AtomicBool::new(false),
+        end_owed: AtomicBool::new(false),
     });
     let (main, received) = mpsc::unbounded_channel();
     let pump = Pump::new(Arc::clone(&state), frames, main, kit, turns);

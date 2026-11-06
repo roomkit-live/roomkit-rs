@@ -96,6 +96,7 @@ pub(super) fn of_type(kind: &'static str) -> &'static str {
     match kind {
         "heartbeat" => "\"message\":{\"type\":\"heartbeat\"",
         "cancel" => "\"message\":{\"type\":\"cancel\"",
+        "close" => "\"message\":{\"type\":\"close\"",
         "accepted" => "\"message\":{\"type\":\"accepted\"",
         other => panic!("no mark for {other}"),
     }

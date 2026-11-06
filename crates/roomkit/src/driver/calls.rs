@@ -564,6 +564,9 @@ async fn read_stream<S: ConversationStore>(
         },
         None => shared.take_stream(turn),
     };
+    if let Some(kept) = &kept {
+        shared.reads_turn(kept.turn.canceller());
+    }
     // The kit's close waits, within its grace, for the read of a turn it
     // cut to store what the turn said.
     let _reading = kept.as_ref().map(|_| inner.turns.reading());

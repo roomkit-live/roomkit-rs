@@ -29,6 +29,7 @@
 //! its creation never within the call's bound.
 
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll};
 
@@ -43,7 +44,7 @@ use tokio::task::{JoinError, JoinHandle};
 use super::calls::{self, Written};
 use super::in_flight::InFlight;
 use super::{Committed, Driven, Leases, Stop};
-use crate::context::{ExecutionContext, Lease};
+use crate::context::{ExecutionContext, Lease, RunShared};
 use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::{RoomKitError, with_causes};
 use crate::kit::Inner;
@@ -115,6 +116,10 @@ pub(crate) struct Record {
     in_flight: InFlight,
     /// What the caller, answered at the decision, did not wait for.
     tail: Mutex<Option<Tail>>,
+    /// Set once a turn the call's cut cut, or one whose stream its run read,
+    /// is over for its owner without its executor's end: the cut call's
+    /// cleanup is not known to be done (RFC §10.6.8).
+    cleanup_owed: AtomicBool,
 }
 
 /// What the read a call's cut stopped left the call.
@@ -194,6 +199,7 @@ impl Record {
             answers: StoredAnswers::default(),
             in_flight: InFlight::default(),
             tail: Mutex::new(None),
+            cleanup_owed: AtomicBool::new(false),
         }
     }
 
@@ -211,6 +217,20 @@ impl Record {
     /// Why the call's turns are cut, once asked.
     fn cancel_reason(&self) -> Option<String> {
         self.cancel.reason()
+    }
+
+    /// A turn of the call's is over for its owner without its executor's
+    /// end (RFC §10.6.8).
+    pub(super) fn owe_cleanup(&self) {
+        self.cleanup_owed.store(true, Ordering::Release);
+    }
+
+    /// What a waiter on the cut call reads in place of its result: Python's
+    /// `TimeoutError`, its cleanup incomplete, while a turn's end is owed;
+    /// a call not cut reads its result (RFC §10.6.8).
+    pub(crate) fn cleanup_incomplete(&self) -> Option<RoomKitError> {
+        let owed = self.cleanup_owed.load(Ordering::Acquire);
+        (owed && self.cancel_reason().is_some()).then_some(RoomKitError::Timeout)
     }
 
     /// The call's room is read, of `organization_id`: its delivery's key,
@@ -357,14 +377,22 @@ impl Record {
 /// The call `record` records as its cancellation ends it, once its turns
 /// are cut and over ([`Record::end_cancelled`]); never, for a call not
 /// cancelled.
-pub(crate) async fn cancelled_end(record: &Record) -> InboundResult {
+///
+/// # Errors
+///
+/// [`RoomKitError::Timeout`] when a turn's end is owed: its cleanup is not
+/// known to be done (RFC §10.6.8).
+pub(crate) async fn cancelled_end(record: &Record) -> Result<InboundResult, RoomKitError> {
     let mut cancelled = record.cancelled.subscribe();
     let ended = cancelled
         .wait_for(Option::is_some)
         .await
         .map(|result| result.clone());
     match ended {
-        Ok(result) => result.unwrap_or_default(),
+        Ok(result) => match record.cleanup_incomplete() {
+            Some(incomplete) => Err(incomplete),
+            None => Ok(result.unwrap_or_default()),
+        },
         // The record outlives every wait on it: never closed.
         Err(_closed) => std::future::pending().await,
     }
@@ -946,7 +974,7 @@ async fn run_leased<S: ConversationStore>(
         // lane, is not its turns' work (RFC §10.1 "Explicit delivery
         // cancellation"). The run goes on, detached.
         result = cancelled_end(&cancelled) => Ran {
-            output: Ok(Ok(result)),
+            output: result.map(Ok),
             delivery: defer.then_some((task, record)),
         },
     }
@@ -957,14 +985,23 @@ async fn run_leased<S: ConversationStore>(
 /// cancellation": the cancellation joins the turns it cuts) and it was told
 /// what they left, at the cut or once the read the cut stopped is over,
 /// however long that takes: a waiter's own timeout bounds that waiter only,
-/// and what it reads then is the whole record.
-pub(super) async fn end_once_over(record: Arc<Record>, turns: Vec<Canceller>) {
+/// and what it reads then is the whole record. A turn over without its
+/// executor's end, one of `turns` or one whose stream the run `shared`
+/// read, leaves the call's cleanup incomplete (RFC §10.6.8).
+pub(super) async fn end_once_over(
+    record: Arc<Record>,
+    turns: Vec<Canceller>,
+    shared: Arc<RunShared>,
+) {
     for turn in &turns {
         turn.ended().await;
     }
     let mut read_over = record.cut_read_over.subscribe();
     // The record holds the sender: never closed.
     drop(read_over.wait_for(|over| *over).await);
+    if turns.iter().any(Canceller::end_owed) || shared.a_read_turn_s_end_is_owed() {
+        record.owe_cleanup();
+    }
     record.end_cancelled();
 }
 
@@ -1111,7 +1148,9 @@ pub(crate) fn ended(
     tasks: &Tasks,
 ) -> InboundOutput {
     match joined {
-        Ok(output) => output,
+        // A cut call whose turn's end is owed reads its cleanup incomplete,
+        // however its run ended (RFC §10.6.8).
+        Ok(output) => record.cleanup_incomplete().map_or(output, Err),
         // A panic of the driver's own loop is a defect of this crate: the
         // caller receives it as it would from a run it drove itself.
         Err(failure) if failure.is_panic() => std::panic::resume_unwind(failure.into_panic()),

@@ -64,6 +64,9 @@ pub(crate) struct RunShared {
     /// the room, by their turn's effect, until their stream is read (RFC
     /// §6.4): one never read gives its place up.
     queued: Mutex<HashMap<EffectId, Queued>>,
+    /// The turns whose stream the run read, or reads: a cut call reads
+    /// whether one's end is owed (RFC §10.6.8).
+    read_turns: Mutex<Vec<Canceller>>,
 }
 
 /// A claim on one tenure of a room's lock, which code run under that lock
@@ -88,6 +91,7 @@ impl RunShared {
             stops: Mutex::new(HashMap::new()),
             turns: Mutex::new(HashMap::new()),
             queued: Mutex::new(HashMap::new()),
+            read_turns: Mutex::new(Vec::new()),
         });
         (shared, received)
     }
@@ -207,6 +211,24 @@ impl RunShared {
             .remove(&effect)?;
         turn.cancel("cancelled");
         Some(turn)
+    }
+
+    /// The run reads the stream of the turn `turn` cuts.
+    pub(crate) fn reads_turn(&self, turn: Canceller) {
+        self.read_turns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(turn);
+    }
+
+    /// Whether a turn whose stream the run read is over for its owner
+    /// without its executor's end (RFC §10.6.8).
+    pub(crate) fn a_read_turn_s_end_is_owed(&self) -> bool {
+        self.read_turns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(Canceller::end_owed)
     }
 
     /// Keeps the stream the turn of `effect` answered with, until it is read.

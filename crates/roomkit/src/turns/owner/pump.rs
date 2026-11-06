@@ -370,8 +370,12 @@ impl Pump {
     }
 
     /// The turn is over for the owner: its reader learns why; dropped, the
-    /// pump cancels its verbs and drops later frames.
+    /// pump cancels its verbs and drops later frames. Over without its
+    /// executor's end, the turn's end is owed, told before it is over.
     fn finish(self, ending: Ending) {
+        if !matches!(ending, Ending::Ended) {
+            self.state.end_owed.store(true, Ordering::Release);
+        }
         match ending {
             Ending::Ended => {}
             Ending::GaveUp => {
