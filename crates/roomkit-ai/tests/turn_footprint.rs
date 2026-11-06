@@ -450,6 +450,7 @@ fn windowed(kind: &str, window: usize) -> Arc<dyn MemoryProvider> {
 #[tokio::test]
 async fn the_window_holds_the_turn_its_history_and_its_reply() {
     let (window, reply) = (32_000, 6000);
+    let mut overflowing = Vec::new();
     for kind in ["budget_aware", "compacting", "summarizing"] {
         let model = ScriptedProvider::new([ScriptedRound::answering("ok")]);
         let handler =
@@ -510,9 +511,10 @@ async fn the_window_holds_the_turn_its_history_and_its_reply() {
         assert!(tools > 8000, "{kind}: {tools} tokens of tools");
         assert!(sent.messages.len() > 2, "{kind}: no history kept");
         let request = estimate_context_tokens(&sent);
-        assert!(
-            request + reply as usize <= window,
-            "{kind}: {request} tokens sent and a reply of {reply} in a window of {window}"
-        );
+        if request + reply as usize > window {
+            overflowing.push(format!("{kind}: {request} tokens sent"));
+        }
     }
+    // A reply of 6,000 tokens in a window of 32,000.
+    assert_eq!(overflowing, Vec::<String>::new());
 }
