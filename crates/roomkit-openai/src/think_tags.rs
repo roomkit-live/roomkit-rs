@@ -248,6 +248,69 @@ mod tests {
         }
     }
 
+    // Python: tests/test_providers/test_openai.py::TestThinkTagParser::test_where_a_think_tag_stands
+    // (RMK-1327): one generation's tags by where they stand, streamed in
+    // chunks and read whole alike.
+    #[test]
+    fn where_a_think_tag_stands() {
+        let bom = '\u{feff}';
+        let after_a_bom = format!("{bom}<think>a</think>answer");
+        let answer_after_a_bom = format!("{bom}answer");
+        let cases: [(&[&str], Option<&str>, &str); 10] = [
+            // A tag the answer writes.
+            (
+                &["The parser reads the <think> tag at the start. Everything after is lost."],
+                Some(" tag at the start. Everything after is lost."),
+                "The parser reads the ",
+            ),
+            // An open block alone.
+            (&["<think>weighing"], Some("weighing"), ""),
+            // A block at the start.
+            (&["<think>a</think>answer"], Some("a"), "answer"),
+            // Whitespace before the block.
+            (&["\n \n<think>a</think>answer"], Some("a"), "\n \nanswer"),
+            // A BOM before the block.
+            (&[&after_a_bom], Some("a"), &answer_after_a_bom),
+            // A tag split at the start.
+            (&["<thi", "nk>a</th", "ink>answer"], Some("a"), "answer"),
+            // A tag split in the answer.
+            (
+                &["The parser reads the <thi", "nk> tag."],
+                Some(" tag."),
+                "The parser reads the ",
+            ),
+            // A second block after the answer.
+            (
+                &["<think>a</think>answer <think>b</think> more"],
+                Some("ab"),
+                "answer  more",
+            ),
+            // A second block right after the first.
+            (
+                &["<think>a</think><think>b</think>answer"],
+                Some("ab"),
+                "answer",
+            ),
+            // A second block after whitespace.
+            (
+                &["<think>a</think>\n\n<think>b</think>answer"],
+                Some("ab"),
+                "\n\nanswer",
+            ),
+        ];
+        for (chunks, reasoning, answer) in cases {
+            let expected = (reasoning.map(str::to_owned), answer.to_owned());
+            let (streamed, said) = read(chunks);
+            let streamed = Some(streamed).filter(|read| !read.is_empty());
+            assert_eq!((streamed, said), expected, "streamed: {chunks:?}");
+            assert_eq!(
+                extract_think_tags(&chunks.concat()),
+                expected,
+                "whole: {chunks:?}"
+            );
+        }
+    }
+
     // Python: providers/ai/openai_dialect.py ThinkTagParser, which works on
     // characters: a multi-byte text around a tag stays whole.
     #[test]

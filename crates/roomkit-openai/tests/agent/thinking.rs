@@ -7,13 +7,16 @@ use std::pin::Pin;
 use futures_core::Stream;
 use pretty_assertions::assert_eq;
 use roomkit::ProcessInboundOptions;
-use roomkit::model::{InboundMessage, MediaContent};
-use roomkit_ai::{AiContext, AiMessage, AiProvider, AiRole, StreamEvent};
+use roomkit::model::{EventType, InboundMessage, MediaContent};
+use roomkit_ai::{
+    AiContext, AiMessage, AiProvider, AiRole, AiTool, StreamEvent, ToolResult, Tools,
+};
+use roomkit_core::rules::transcoding::text_of;
 use roomkit_openai::{OpenAiAiProvider, OpenAiApi, OpenAiConfig};
 use serde_json::{Value, json};
 
 use super::fake::{FakeOpenAi, Reply};
-use super::{API_KEY, Room, channel, messages, room_id};
+use super::{API_KEY, Room, channel, chunk, ending, messages, room_id};
 
 async fn provider(api: OpenAiApi, reply: Reply) -> (OpenAiAiProvider, FakeOpenAi) {
     let fake = FakeOpenAi::start(vec![reply]).await;
@@ -309,4 +312,41 @@ async fn a_round_s_reasoning_reaches_no_request_and_is_not_stored() {
         let stored = format!("{:?}", room.timeline().await);
         assert!(!stored.contains("Why."), "{stored}");
     }
+}
+
+/// What the room stored of the agent's messages.
+async fn answers(room: &Room) -> Vec<String> {
+    let timeline = room.timeline().await;
+    let answers = timeline.iter().filter(|event| {
+        event.source.channel_id == channel("assistant") && event.r#type == EventType::Message
+    });
+    answers.map(|event| text_of(&event.content)).collect()
+}
+
+// Python: tests/test_providers/test_openai.py::TestThinkTagsInARoom::test_each_round_of_a_tool_loop_reads_its_own_start
+/// RMK-1327: each round of a tool loop is its own generation, its opening
+/// block reasoning, stored nowhere and sent back in no request.
+#[tokio::test]
+async fn each_round_of_a_tool_loop_reads_its_own_start() {
+    let mut first = vec![
+        chunk(&json!({ "content": "<think>WHY-1</think>" })),
+        chunk(
+            &json!({ "tool_calls": [{ "index": 0, "id": "c1", "type": "function",
+            "function": { "name": "lookup", "arguments": "{}" } }] }),
+        ),
+    ];
+    first.extend(ending("tool_calls", 1, 1));
+    let mut second = vec![chunk(&json!({ "content": "<think>WHY-2</think>Sunny." }))];
+    second.extend(ending("stop", 1, 1));
+    let lookup = AiTool::new("lookup", "Look it up.").unwrap();
+    let tools = Tools::new().tool(lookup, |_call, _context| async move {
+        Ok(ToolResult::Text("sunny".to_owned()))
+    });
+    let room = Room::serving(vec![Reply::events(&first), Reply::events(&second)], tools).await;
+    room.says(&room.web, "alice", "Alice", "weather?").await;
+
+    assert_eq!(answers(&room).await, ["Sunny."]);
+    let replayed = Value::Array(messages(&room.fake, 1)).to_string();
+    assert!(!replayed.contains("WHY-1"), "{replayed}");
+    assert!(!replayed.contains("<think>"), "{replayed}");
 }
