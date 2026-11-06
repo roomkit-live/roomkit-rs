@@ -264,7 +264,9 @@ impl<S: ConversationStore> DelegateHandler<S> {
     /// # Errors
     ///
     /// As [`RoomKit::delegate`]; [`RoomKitError::KitClosed`] once the kit
-    /// is gone; [`RoomKitError::Value`] for a `task` that is no text.
+    /// is gone; [`RoomKitError::Value`] for a `task` that is no text or a
+    /// `share_channels` that is no list; [`RoomKitError::ChannelNotRegistered`]
+    /// for an `agent` that is no text.
     pub async fn handle(
         &self,
         room_id: &RoomId,
@@ -275,21 +277,20 @@ impl<S: ConversationStore> DelegateHandler<S> {
         // refuses it where Python's does.
         let kit = self.kit()?;
         let task = task_of(arguments)?;
-        let agent = match agent_of(arguments) {
-            Ok(agent) => agent,
-            Err(unregistered) => {
-                // As the kit reads a delegation: the room first.
-                kit.get_room(room_id, GetRoomOptions::default()).await?;
-                return Err(unregistered);
-            }
+        let named = agent_of(arguments)?;
+        let share_channels = share_channels_of(arguments)?
+            .unwrap_or_else(|| self.inner.default_share_channels.clone());
+        let Ok(agent) = ChannelId::new(named.as_str()) else {
+            // As the kit reads a delegation: the room first.
+            kit.get_room(room_id, GetRoomOptions::default()).await?;
+            return Err(unregistered(&named));
         };
         let call = Call {
             agent,
             task,
             passed: passed_context(arguments.get("context")),
             count: asked_conversation(arguments.get("conversation"), self.inner.max_conversation),
-            share_channels: share_channels_of(arguments)
-                .unwrap_or_else(|| self.inner.default_share_channels.clone()),
+            share_channels,
         };
         // Gap 13: a call that hands the room's last messages over reads them
         // as they stand now.
@@ -410,16 +411,23 @@ impl<S: ConversationStore> DelegateHandler<S> {
     /// [`RoomKitError::Runtime`] when delegation is already set up on the
     /// agent; [`RoomKitError::ChannelNotRegistered`] for an id naming no
     /// channel of the kit; [`RoomKitError::ToolNameCollision`] for the name
-    /// one of its own tools takes; [`RoomKitError::KitClosed`] once the kit
-    /// is gone or closing.
+    /// one of its own tools takes, nothing registered then;
+    /// [`RoomKitError::Value`] for a tool whose list of agents is no list;
+    /// [`RoomKitError::KitClosed`] once the kit is gone.
     #[doc(hidden)]
     pub fn serve_tool(
         &self,
         agent: &StrategyAgent,
         definition: Option<Value>,
     ) -> Result<(), RoomKitError> {
+        let definition = served_tool(
+            definition.unwrap_or_else(|| delegate_tool_definition(&[])),
+            self.inner.max_conversation,
+        );
+        let serve = self.served_delegation(agent.channel_id().clone(), &definition)?;
         let kit = self.kit()?;
         kit.takes_handoff(agent)?;
+        kit.refuse_own_tool_name(agent, DELEGATE_TOOL_NAME)?;
         kit.register_strategy_agents(std::slice::from_ref(agent))?;
         let channel = agent.channel_id();
         if kit.inner.owner_tools.serves(channel, DELEGATE_TOOL_NAME) {
@@ -427,12 +435,8 @@ impl<S: ConversationStore> DelegateHandler<S> {
                 "setup_delegation() already called for channel '{channel}'"
             )));
         }
-        let definition = served_tool(
-            definition.unwrap_or_else(|| delegate_tool_definition(&[])),
-            self.inner.max_conversation,
-        );
         let entry = OwnerToolEntry {
-            serve: self.served_delegation(channel.clone(), &definition),
+            serve,
             definition,
             waits: true,
             owner: None,
@@ -442,15 +446,26 @@ impl<S: ConversationStore> DelegateHandler<S> {
 
     /// What serves a call of the tool `definition`: refused when it names a
     /// worker outside the list the tool declares, since a list a model can
-    /// ignore holds nothing (RFC §23.4); a tool with no list takes any.
-    /// Python's `_served_delegation`.
-    fn served_delegation(&self, calling: ChannelId, definition: &Value) -> OwnerServe<S> {
-        let listed: Option<Vec<Value>> = definition
-            .pointer("/parameters/properties/agent/enum")
-            .and_then(Value::as_array)
-            .cloned();
+    /// ignore holds nothing (RFC §23.4); a tool with no list takes any, and a
+    /// list that is no list is refused, [`RoomKitError::Value`]. Python's
+    /// `_served_delegation`.
+    fn served_delegation(
+        &self,
+        calling: ChannelId,
+        definition: &Value,
+    ) -> Result<OwnerServe<S>, RoomKitError> {
+        let listed: Option<Vec<Value>> =
+            match definition.pointer("/parameters/properties/agent/enum") {
+                None => None,
+                Some(Value::Array(listed)) => Some(listed.clone()),
+                Some(_) => {
+                    return Err(RoomKitError::Value(
+                        "the delegate tool's agent enum must be a list".to_owned(),
+                    ));
+                }
+            };
         let handler = self.clone();
-        Arc::new(move |_kit, call| {
+        Ok(Arc::new(move |_kit, call| {
             let (handler, listed, calling) = (handler.clone(), listed.clone(), calling.clone());
             Box::pin(async move {
                 if let Some(listed) = &listed
@@ -481,7 +496,7 @@ impl<S: ConversationStore> DelegateHandler<S> {
                     },
                 }
             })
-        })
+        }))
     }
 }
 
@@ -635,19 +650,14 @@ async fn shares_an_agent<S: ConversationStore>(
     Ok(false)
 }
 
-/// The worker a call names: only a text names one, as the kit's channels
-/// are named, Python's `agent_id not in _channels`; anything else, and an id
-/// no channel can hold, is named as a kit names a channel it does not hold.
-fn agent_of(arguments: &Metadata) -> Result<ChannelId, RoomKitError> {
-    let (named, text) = match arguments.get("agent") {
-        None => (String::new(), true),
-        Some(Value::String(agent)) => (agent.clone(), true),
-        Some(other) => (other.to_string(), false),
-    };
-    if !text {
-        return Err(unregistered(&named));
+/// The worker a call names, `""` when it names none: only a text names one,
+/// as the kit's channels are named; anything else is no channel of the kit.
+fn agent_of(arguments: &Metadata) -> Result<String, RoomKitError> {
+    match arguments.get("agent") {
+        None => Ok(String::new()),
+        Some(Value::String(agent)) => Ok(agent.clone()),
+        Some(other) => Err(unregistered(&other.to_string())),
     }
-    ChannelId::new(named.as_str()).map_err(|_| unregistered(&named))
 }
 
 /// The refusal of a worker no channel of the kit is: Python's
@@ -709,24 +719,26 @@ pub(super) fn asked_conversation(asked: Option<&Value>, maximum: u64) -> u64 {
 }
 
 /// The channels a call names to share: `None`, the handler's default, when
-/// it names none (Python's truth test). A list keeps what can name a
-/// channel; any other value shares nothing, as Python's reading a string by
-/// its characters comes to.
-fn share_channels_of(arguments: &Metadata) -> Option<Vec<ChannelId>> {
+/// it names none or an empty list; in a list, only a text names a channel.
+/// Python's `_named_channels`.
+///
+/// # Errors
+///
+/// [`RoomKitError::Value`] for a value that is no list.
+fn share_channels_of(arguments: &Metadata) -> Result<Option<Vec<ChannelId>>, RoomKitError> {
     match arguments.get("share_channels") {
-        None | Some(Value::Null | Value::Bool(false)) => None,
-        Some(Value::Array(items)) if items.is_empty() => None,
-        Some(Value::String(text)) if text.is_empty() => None,
-        Some(Value::Object(members)) if members.is_empty() => None,
-        Some(Value::Number(number)) if number.as_f64() == Some(0.0) => None,
-        Some(Value::Array(items)) => Some(
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) if items.is_empty() => Ok(None),
+        Some(Value::Array(items)) => Ok(Some(
             items
                 .iter()
                 .filter_map(Value::as_str)
                 .filter_map(|channel| ChannelId::new(channel).ok())
                 .collect(),
-        ),
-        Some(_) => Some(Vec::new()),
+        )),
+        Some(_) => Err(RoomKitError::Value(
+            "share_channels must be a list of channel ids".to_owned(),
+        )),
     }
 }
 

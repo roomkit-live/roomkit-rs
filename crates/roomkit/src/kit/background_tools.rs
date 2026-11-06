@@ -195,6 +195,30 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(())
     }
 
+    /// Refuses `name` on `agent` when one of its own tools takes it, read off
+    /// the agent given live when the kit holds no channel under its id: what
+    /// [`register_owner_tools`](Self::register_owner_tools) refuses, before
+    /// the agent is registered, so that a refused setup leaves nothing
+    /// behind (HITL 76eb88d0).
+    pub(crate) fn refuse_own_tool_name(
+        &self,
+        agent: &crate::orchestration::StrategyAgent,
+        name: &str,
+    ) -> Result<(), RoomKitError> {
+        let channel = agent.channel_id();
+        let own = match self.inner.channel(channel) {
+            Some(held) => held.own_tool_names(),
+            None => agent
+                .live()
+                .map(|live| live.channel.own_tool_names())
+                .unwrap_or_default(),
+        };
+        if own.iter().any(|own| own == name) {
+            return Err(collision(name, "one of the channel's own tools", channel));
+        }
+        Ok(())
+    }
+
     /// Sets up `entries` for `agent`, all or none: a name one of the
     /// agent's own tools takes, or one the owner serves it already, is
     /// refused (RFC §21.1), as Python's registry's `register_all`.

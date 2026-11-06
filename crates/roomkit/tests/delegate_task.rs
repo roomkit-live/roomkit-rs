@@ -243,5 +243,79 @@ async fn a_setup_is_refused_twice() {
         "{twice:?}"
     );
 
+    // A tool whose list of agents is no list is refused, nothing set up.
+    let mut malformed = build_delegate_tool(&[]);
+    malformed.parameters["properties"]["agent"]["enum"] = json!("worker");
+    let refused = setup_delegation(
+        id("other"),
+        &handler,
+        SetupDelegationOptions {
+            tool: Some(malformed),
+        },
+    );
+    assert!(
+        matches!(&refused, Err(RoomKitError::Value(_))),
+        "{refused:?}"
+    );
+    setup_delegation(id("other"), &handler, SetupDelegationOptions::default()).unwrap();
+
+    kit.close().await.unwrap();
+}
+
+/// An agent whose own tools take `name`.
+fn holding(name: &str) -> roomkit_ai::AiChannel<MockAiProvider> {
+    let own = roomkit_ai::AiTool {
+        name: name.to_owned(),
+        description: "Mine.".to_owned(),
+        parameters: json!({"type": "object"}),
+        tags: Vec::new(),
+    };
+    let model = MockAiProvider::new(MockAiProviderOptions::default());
+    roomkit_ai::AiChannel::new(
+        id("holding"),
+        model,
+        roomkit_ai::AiChannelOptions {
+            tools: vec![own.into()],
+            ..roomkit_ai::AiChannelOptions::default()
+        },
+    )
+    .unwrap()
+}
+
+// HITL 76eb88d0: a setup refused on a live agent's own tool leaves nothing
+// behind, the handoff's as the delegation's.
+#[tokio::test]
+async fn a_setup_refused_on_a_live_agent_registers_nothing() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    in_room(&kit).await;
+    let handler = DelegateHandler::new(&kit, DelegateHandlerOptions::default());
+    let refused = setup_delegation(
+        roomkit::orchestration::StrategyAgent::channel(holding("delegate_task")),
+        &handler,
+        SetupDelegationOptions::default(),
+    );
+    assert!(
+        matches!(&refused, Err(RoomKitError::ToolNameCollision(_))),
+        "{refused:?}"
+    );
+    assert!(kit.get_channel(&id("holding")).is_none());
+
+    let handoff = roomkit::HandoffHandler::new(
+        &kit,
+        roomkit::ConversationRouter::new(
+            roomkit::orchestration::ConversationRouterOptions::default(),
+        ),
+        roomkit::orchestration::HandoffHandlerOptions::default(),
+    );
+    let refused = roomkit_ai::setup_handoff(
+        roomkit::orchestration::StrategyAgent::channel(holding("handoff_conversation")),
+        &handoff,
+        roomkit_ai::SetupHandoffOptions::default(),
+    );
+    assert!(
+        matches!(&refused, Err(RoomKitError::ToolNameCollision(_))),
+        "{refused:?}"
+    );
+    assert!(kit.get_channel(&id("holding")).is_none());
     kit.close().await.unwrap();
 }

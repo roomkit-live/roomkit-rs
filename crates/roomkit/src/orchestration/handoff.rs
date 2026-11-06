@@ -415,6 +415,7 @@ impl<S: ConversationStore> HandoffHandler<S> {
     ) -> Result<(), RoomKitError> {
         let kit = self.kit()?;
         kit.takes_handoff(agent)?;
+        kit.refuse_own_tool_name(agent, HANDOFF_TOOL_NAME)?;
         kit.register_strategy_agents(std::slice::from_ref(agent))?;
         let channel = agent.channel_id();
         if kit.serves_handoff(channel, room_id) {
