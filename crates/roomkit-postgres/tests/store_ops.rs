@@ -1285,6 +1285,91 @@ async fn an_add_holds_a_room_whose_id_came_back_before_its_sequence() {
     }
 }
 
+/// Python: `test_a_missing_room_s_refusal_holds_the_room_that_came_back` (RMK-1394): an
+/// add's first statement finds no room; the room is created before the refusal's
+/// statement, with no sequence, and a commit holds it and reserves its index. The
+/// refusal holds that room before it writes anything: had it written the sequence
+/// first, it would wait on the room through the foreign key while the commit waits on
+/// that sequence, and the server kills one. The trigger stops the add after its first
+/// statement, once per transaction; the commit's session passes it.
+#[tokio::test]
+async fn a_missing_room_s_refusal_holds_the_room_that_came_back() {
+    // This test's alone: "RMK1395".
+    const KEY: i64 = 0x0052_4d4b_3133_3935;
+    for auto_indexed in [false, true] {
+        let Some((schema, store)) = fresh().await else {
+            return;
+        };
+        let outside = schema.client().await;
+        outside
+            .batch_execute(&format!(
+                "CREATE FUNCTION rk_test_stop_once() RETURNS trigger AS $$ BEGIN \
+                 IF current_setting('rk_test.stopped', true) IS DISTINCT FROM 'yes' THEN \
+                 PERFORM set_config('rk_test.stopped', 'yes', true); \
+                 PERFORM pg_advisory_xact_lock({KEY}); END IF; RETURN NULL; END \
+                 $$ LANGUAGE plpgsql; \
+                 CREATE TRIGGER rk_test_stop_once AFTER INSERT ON event_sequences \
+                 FOR EACH STATEMENT EXECUTE FUNCTION rk_test_stop_once(); \
+                 SELECT pg_advisory_lock({KEY})"
+            ))
+            .await
+            .unwrap();
+        let room = room_id("r1");
+        let adding = {
+            let (store, room) = (store.clone(), room.clone());
+            tokio::spawn(async move {
+                if auto_indexed {
+                    store.add_event_auto_index(&room, event("r1", "x")).await
+                } else {
+                    let mut own = event("r1", "x");
+                    own.index = 7;
+                    store.add_event(own).await
+                }
+            })
+        };
+        until_blocked_by(&schema, &outside).await;
+        let committer = schema.client().await;
+        committer
+            .batch_execute("SET rk_test.stopped = 'yes'")
+            .await
+            .unwrap();
+        committer
+            .batch_execute("INSERT INTO rooms (id) VALUES ('r1')")
+            .await
+            .unwrap();
+        committer
+            .batch_execute("BEGIN; SELECT 1 FROM rooms WHERE id = 'r1' FOR UPDATE")
+            .await
+            .unwrap();
+        outside
+            .batch_execute(&format!("SELECT pg_advisory_unlock({KEY})"))
+            .await
+            .unwrap();
+        until_blocked_by(&schema, &committer).await;
+        committer
+            .batch_execute(
+                "INSERT INTO event_sequences(room_id, next_index) VALUES('r1', 1) \
+                 ON CONFLICT(room_id) DO UPDATE SET next_index = event_sequences.next_index + 1; \
+                 COMMIT",
+            )
+            .await
+            .unwrap();
+        let stored = tokio::time::timeout(std::time::Duration::from_secs(3), adding)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let events = store
+            .list_events(&room, roomkit::store::ListEventsOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            events.iter().map(|event| &event.id).collect::<Vec<_>>(),
+            [&stored.id]
+        );
+    }
+}
+
 /// Python: `test_a_room_deleted_and_created_again_under_its_adds_never_deadlocks`
 /// (RMK-1394): adds at full pace on one room id, which a loop deletes and creates
 /// again: an add is refused, or stored, and never killed (measured 6 kills in 3 s
