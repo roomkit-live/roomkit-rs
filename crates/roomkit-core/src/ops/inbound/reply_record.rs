@@ -69,8 +69,8 @@ pub(super) fn record_reply(
 /// A buffered reply's entry under its caller's `turns`: the end the first
 /// of its record `reply` and its messages' metadata, last first, names,
 /// with that record's usage; `None` when none names an end (Python's
-/// `turn_summary`). Python's `recorded_turn_end` also reads an ACP
-/// agent's `acp` record, which roomkit-rs has no channel to write.
+/// `turn_summary`), each end read as `recorded_turn_end` reads it, an ACP
+/// agent's `acp` record among them.
 fn reply_turn_entry(reply: &Metadata, responses: &[RoomEvent]) -> Option<Metadata> {
     let messages = responses
         .iter()
@@ -78,9 +78,9 @@ fn reply_turn_entry(reply: &Metadata, responses: &[RoomEvent]) -> Option<Metadat
         .filter(|event| event.r#type == EventType::Message)
         .map(|event| &event.metadata);
     std::iter::once(reply).chain(messages).find_map(|record| {
-        let end = record.get(LOOP_END_REASON).filter(|end| !end.is_null())?;
+        let end = crate::rules::turn_end::recorded_turn_end(record)?;
         let mut entry = Metadata::new();
-        entry.insert(LOOP_END_REASON.to_owned(), end.clone());
+        entry.insert(LOOP_END_REASON.to_owned(), end);
         if let Some(usage) = record.get(AI_USAGE).filter(|usage| !usage.is_null()) {
             entry.insert(AI_USAGE.to_owned(), usage.clone());
         }

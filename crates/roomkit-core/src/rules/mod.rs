@@ -62,6 +62,7 @@ pub mod timers;
 pub mod tool_intent;
 pub mod transcoding;
 pub mod transcript;
+pub mod turn_end;
 mod unicode;
 mod unicode_data;
 pub mod verification;

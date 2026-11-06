@@ -25,6 +25,7 @@ use roomkit_core::model::{
     TextContent, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use roomkit_core::rules::transcript::is_blank;
+use roomkit_core::rules::turn_end::recorded_turn_end;
 use serde_json::Value;
 
 use super::UsageMarker;
@@ -285,9 +286,9 @@ impl Segments {
     /// its end: its end and usage (Python's `stream_turn_entry`, RFC §6.4).
     pub(super) fn turn_entry(&self) -> Option<Metadata> {
         let record = self.record();
-        let end = record.get(LOOP_END_REASON).filter(|end| !end.is_null())?;
+        let end = recorded_turn_end(&record)?;
         let mut entry = Metadata::new();
-        entry.insert(LOOP_END_REASON.to_owned(), end.clone());
+        entry.insert(LOOP_END_REASON.to_owned(), end);
         if let Some(usage) = record.get(AI_USAGE).filter(|usage| !usage.is_null()) {
             entry.insert(AI_USAGE.to_owned(), usage.clone());
         }
