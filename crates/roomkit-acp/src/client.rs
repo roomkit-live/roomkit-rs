@@ -17,7 +17,12 @@ use crate::error::AcpError;
 /// the agent sent them, one after the other and apart from the other
 /// sessions', and each `session/request_permission` request to
 /// [`request_permission`](Self::request_permission), the reading going on
-/// meanwhile: a callback may ask the connection and wait for its answer. It refuses every other request of the agent with
+/// meanwhile: a callback may ask the connection and wait for its answer. A
+/// prompt of a session, sent from one of that session's updates, does not
+/// wait for the update it is sent from; sent from a task the update spawns
+/// and waits for, it waits behind the update, which never ends: a tokio
+/// task-local, as `roomkit::current_tool_call`, does not pass to a task
+/// spawned plainly (HITL 1e62db43). It refuses every other request of the agent with
 /// JSON-RPC's `method_not_found`, as the Python implementation's client
 /// refuses the file system, the terminals, elicitation and extensions, and
 /// ignores every other notification.

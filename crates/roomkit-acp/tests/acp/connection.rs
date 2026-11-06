@@ -8,10 +8,9 @@ use std::time::Duration;
 
 use agent_client_protocol_schema::ProtocolVersion;
 use agent_client_protocol_schema::v1::{
-    CancelNotification, CloseSessionRequest, InitializeRequest, PromptRequest, StopReason,
-};
-use agent_client_protocol_schema::v1::{
-    RequestPermissionRequest, RequestPermissionResponse, SessionNotification,
+    CancelNotification, CloseSessionRequest, ContentBlock, InitializeRequest, PromptRequest,
+    RequestPermissionRequest, RequestPermissionResponse, SessionNotification, SessionUpdate,
+    StopReason,
 };
 use pretty_assertions::assert_eq;
 use roomkit_acp::{AcpClient, AcpConnection, AcpError, ClientSideConnection};
@@ -19,7 +18,7 @@ use serde_json::{Value, json};
 use tokio::io::{
     AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines, ReadHalf, WriteHalf,
 };
-use tokio::sync::Notify;
+use tokio::sync::Semaphore;
 
 use crate::support::{PATIENCE, Recorder};
 
@@ -420,14 +419,42 @@ async fn a_request_whose_parameters_are_not_valid_is_answered_invalid_params() {
     assert_eq!(client.permissions().len(), 0);
 }
 
-/// A client whose updates do what their session's id says: `held` waits
-/// until released, `panics` panics, `asks` asks the connection to close a
-/// session and keeps its answer; any other is kept.
-#[derive(Default)]
+/// A client whose updates do what their text says: `hold` waits for a
+/// permit, `panic` panics, `ask` asks the connection to close a session,
+/// `reprompt` prompts its own session; each keeps its text once done. Its
+/// permissions panic.
 struct Behaving {
     connection: OnceLock<ClientSideConnection>,
-    release: Notify,
+    permits: Semaphore,
     kept: Mutex<Vec<String>>,
+}
+
+impl Default for Behaving {
+    fn default() -> Self {
+        Self {
+            connection: OnceLock::new(),
+            permits: Semaphore::new(0),
+            kept: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl Behaving {
+    fn kept(&self) -> Vec<String> {
+        self.kept.lock().unwrap().clone()
+    }
+
+    async fn holding(&self, count: usize) {
+        let deadline = tokio::time::Instant::now() + PATIENCE;
+        while self.kept().len() < count {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "kept {:?}",
+                self.kept()
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
 }
 
 impl AcpClient for Behaving {
@@ -437,11 +464,17 @@ impl AcpClient for Behaving {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             let session = notification.session_id.0.to_string();
-            match session.as_str() {
-                "held" => self.release.notified().await,
-                "panics" => std::panic::resume_unwind(Box::new("a client's update panicked")),
-                "asks" => {
-                    let connection = self.connection.get().unwrap();
+            let SessionUpdate::AgentMessageChunk(chunk) = notification.update else {
+                return;
+            };
+            let ContentBlock::Text(text) = chunk.content else {
+                return;
+            };
+            let connection = self.connection.get().unwrap();
+            match text.text.as_str() {
+                "hold" => self.permits.acquire().await.unwrap().forget(),
+                "panic" => std::panic::resume_unwind(Box::new("a client's update panicked")),
+                "ask" => {
                     let answer = connection
                         .close_session(CloseSessionRequest::new("other"))
                         .await;
@@ -450,9 +483,16 @@ impl AcpClient for Behaving {
                         .unwrap()
                         .push(format!("asked: {}", answer.is_ok()));
                 }
+                "reprompt" => {
+                    let answer = connection.prompt(PromptRequest::new(session, vec![])).await;
+                    self.kept
+                        .lock()
+                        .unwrap()
+                        .push(format!("reprompted: {}", answer.is_ok()));
+                }
                 _ => {}
             }
-            self.kept.lock().unwrap().push(session);
+            self.kept.lock().unwrap().push(text.text);
         })
     }
 
@@ -461,7 +501,7 @@ impl AcpClient for Behaving {
         _request: RequestPermissionRequest,
     ) -> Pin<Box<dyn Future<Output = Result<RequestPermissionResponse, AcpError>> + Send + '_>>
     {
-        Box::pin(async { Err(AcpError::Value("no permission".to_owned())) })
+        Box::pin(async { std::panic::resume_unwind(Box::new("a client's permission panicked")) })
     }
 }
 
@@ -480,7 +520,8 @@ fn behaving_pipe(buffer: usize) -> (Arc<Behaving>, ClientSideConnection, Agent) 
     (client, connection, agent)
 }
 
-async fn update(agent: &mut Agent, session: &str) {
+/// One message chunk of `text` in `session`.
+async fn said(agent: &mut Agent, session: &str, text: &str) {
     agent
         .send(&json!({
             "jsonrpc": "2.0",
@@ -489,7 +530,7 @@ async fn update(agent: &mut Agent, session: &str) {
                 "sessionId": session,
                 "update": {
                     "sessionUpdate": "agent_message_chunk",
-                    "content": { "type": "text", "text": "x" },
+                    "content": { "type": "text", "text": text },
                 },
             },
         }))
@@ -505,7 +546,7 @@ async fn answered<T>(request: impl Future<Output = T>) -> T {
 #[tokio::test]
 async fn a_slow_update_of_one_session_holds_back_no_answer() {
     let (client, connection, mut agent) = behaving_pipe(64 * 1024);
-    update(&mut agent, "held").await;
+    said(&mut agent, "slow", "hold").await;
     let agent_side = async {
         let request = agent.read().await;
         agent
@@ -516,34 +557,128 @@ async fn a_slow_update_of_one_session_holds_back_no_answer() {
     let (answer, ()) =
         answered(async { tokio::join!(connection.initialize(initialize()), agent_side) }).await;
     answer.unwrap();
-    client.release.notify_one();
+    client.permits.add_permits(1);
+}
+
+#[tokio::test]
+async fn a_prompt_returns_once_its_sessions_updates_before_its_answer_were_taken() {
+    let (client, connection, mut agent) = behaving_pipe(64 * 1024);
+    let prompting = tokio::spawn({
+        let connection = connection.clone();
+        async move { connection.prompt(prompt("go")).await }
+    });
+    let request = agent.read().await;
+    said(&mut agent, "session-1", "hold").await;
+    said(&mut agent, "session-1", "after").await;
+    agent
+        .answer(&request["id"], json!({ "stopReason": "end_turn" }))
+        .await;
+    // The answer is read, the updates before it are not all taken.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!prompting.is_finished(), "returned before its updates");
+    client.permits.add_permits(1);
+    answered(prompting).await.unwrap().unwrap();
+    assert_eq!(client.kept(), ["hold", "after"]);
+}
+
+#[tokio::test]
+async fn a_prompt_sent_from_its_own_sessions_update_does_not_wait_for_it() {
+    let (client, _connection, mut agent) = behaving_pipe(64 * 1024);
+    said(&mut agent, "session-1", "reprompt").await;
+    let request = agent.read().await;
+    assert_eq!(request["method"], "session/prompt");
+    // An update of the session queued behind the one prompting.
+    said(&mut agent, "session-1", "behind").await;
+    agent
+        .answer(&request["id"], json!({ "stopReason": "end_turn" }))
+        .await;
+    client.holding(3).await;
+    assert_eq!(client.kept(), ["reprompted: true", "reprompt", "behind"]);
 }
 
 #[tokio::test]
 async fn an_update_that_asks_the_connection_is_answered() {
     let (client, _connection, mut agent) = behaving_pipe(64 * 1024);
-    update(&mut agent, "asks").await;
+    said(&mut agent, "session-1", "ask").await;
     let request = agent.read().await;
     assert_eq!(request["method"], "session/close");
     agent.answer(&request["id"], json!({})).await;
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    while client.kept.lock().unwrap().len() < 2 {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the update never ended"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    assert_eq!(*client.kept.lock().unwrap(), ["asked: true", "asks"]);
+    client.holding(2).await;
+    assert_eq!(client.kept(), ["asked: true", "ask"]);
 }
 
 #[tokio::test]
-async fn an_update_that_panics_leaves_the_connection_working() {
+async fn an_update_that_panics_lets_its_session_go_on() {
     let (client, connection, mut agent) = behaving_pipe(64 * 1024);
-    update(&mut agent, "panics").await;
-    update(&mut agent, "panics").await;
+    let prompting = tokio::spawn({
+        let connection = connection.clone();
+        async move { connection.prompt(prompt("go")).await }
+    });
+    let request = agent.read().await;
+    said(&mut agent, "session-1", "panic").await;
+    said(&mut agent, "session-1", "after").await;
+    agent
+        .answer(&request["id"], json!({ "stopReason": "end_turn" }))
+        .await;
+    // The prompt waits for no update the panic left behind.
+    answered(prompting).await.unwrap().unwrap();
+    assert_eq!(client.kept(), ["after"]);
+}
+
+#[tokio::test]
+async fn a_permission_that_panics_is_answered_an_internal_error() {
+    let (_client, _connection, mut agent) = behaving_pipe(64 * 1024);
+    agent
+        .send(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "session-1",
+                "toolCall": { "toolCallId": "tool-1" },
+                "options": [{ "optionId": "allow-once", "name": "Allow once", "kind": "allow_once" }],
+            },
+        }))
+        .await;
+    assert_eq!(
+        agent.read().await,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": { "details": "the client's request_permission panicked" },
+            },
+        })
+    );
+}
+
+#[tokio::test]
+async fn close_returns_while_an_agent_that_stopped_reading_holds_a_write() {
+    let (_client, connection, _agent) = behaving_pipe(64);
+    let stuck = tokio::spawn({
+        let connection = connection.clone();
+        async move { connection.prompt(prompt(&"x".repeat(256 * 1024))).await }
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    answered(connection.close()).await;
+    let answer = answered(stuck).await.unwrap();
+    assert!(
+        matches!(answer, Err(AcpError::ConnectionClosed)),
+        "{answer:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_error_for_no_waiting_request_is_left_unread() {
+    let client = Recorder::new();
+    let (connection, mut agent) = pipe(&client);
     let agent_side = async {
         let request = agent.read().await;
+        agent
+            .send(&json!({ "jsonrpc": "2.0", "id": 99, "error": "boom" }))
+            .await;
         agent
             .answer(&request["id"], json!({ "protocolVersion": 1 }))
             .await;
@@ -551,16 +686,24 @@ async fn an_update_that_panics_leaves_the_connection_working() {
     let (answer, ()) =
         answered(async { tokio::join!(connection.initialize(initialize()), agent_side) }).await;
     answer.unwrap();
-    // The next update of the session is taken all the same.
-    update(&mut agent, "kept").await;
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    while client.kept.lock().unwrap().is_empty() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no update taken after the panic"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+}
+
+#[tokio::test]
+async fn a_response_whose_id_is_a_list_ends_the_connection() {
+    let client = Recorder::new();
+    let (connection, mut agent) = pipe(&client);
+    let agent_side = async {
+        agent.read().await;
+        agent
+            .send(&json!({ "jsonrpc": "2.0", "id": [0], "result": {} }))
+            .await;
+    };
+    let (answer, ()) =
+        answered(async { tokio::join!(connection.initialize(initialize()), agent_side) }).await;
+    assert!(
+        matches!(answer, Err(AcpError::ConnectionClosed)),
+        "{answer:?}"
+    );
 }
 
 #[tokio::test]
@@ -607,6 +750,22 @@ async fn a_request_whose_method_is_no_text_is_method_not_found() {
             "jsonrpc": "2.0",
             "id": request["id"],
             "error": { "code": -32601, "message": "Method not found", "data": { "method": 5 } },
+        })
+    );
+    // A method the SDK cannot look up is its internal error.
+    agent
+        .send(&json!({ "jsonrpc": "2.0", "id": "m", "method": [1] }))
+        .await;
+    assert_eq!(
+        agent.read().await,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "m",
+            "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": { "details": "unhashable type: 'list'" },
+            },
         })
     );
     // The client's request is still waiting for its own answer.

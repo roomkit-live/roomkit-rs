@@ -52,13 +52,15 @@ type Answer = Result<Value, AcpError>;
 /// one that is JSON but no object ends the connection, as the SDK's reader
 /// ends on it.
 ///
-/// Each message is written whole by a task of its own, as the SDK's sender
-/// writes it, so a request its caller drops mid-write is still written
-/// whole. The connection's requests are numbered from 0. Once the agent's
-/// stream ends, or the connection is [closed](Self::close), every request
-/// still waiting fails with [`AcpError::ConnectionClosed`], and so does
-/// every later one. A clone is the same connection; dropping the last one
-/// stops its reader, its writer and the tasks answering the agent.
+/// The connection's one writer task writes each message whole, in order,
+/// as the SDK's sender writes it, so a request its caller drops mid-write
+/// is still written whole. The connection's requests are numbered from 0.
+/// Once the agent's stream ends, or the connection is
+/// [closed](Self::close), every request still waiting fails with
+/// [`AcpError::ConnectionClosed`], and so does every later one. A clone is
+/// the same connection; dropping the last one stops its reader, its writer
+/// and the tasks answering the agent. A client that keeps a clone of its
+/// own connection keeps it alive: such a connection ends at its close.
 #[derive(Clone)]
 pub struct ClientSideConnection {
     shared: Arc<Shared>,
@@ -147,6 +149,9 @@ impl ClientSideConnection {
     /// for, then the writer goes, which shuts the stream to the agent; a
     /// message it could not write yet is dropped, so that an agent that
     /// stopped reading cannot hold the close. A second call does nothing.
+    /// Called from within one of the client's callbacks, the close stops
+    /// the task running that callback, which does not resume: a callback
+    /// leaves the close to the connection's owner.
     pub async fn close(&self) {
         self.shared.end();
         let outbox = self
@@ -359,22 +364,35 @@ impl Shared {
     }
 
     /// Gives the response `message` to the request waiting for it, if one
-    /// is: its `result`, else its `error`, else none. An error that is not
-    /// an object ends the connection, as it ends the SDK's reader, every
+    /// is, as the SDK reads a response: its request first, none waiting
+    /// leaving the response unread; then its `result`, else its `error`,
+    /// else none. An error that is no object, or an id that is a list or an
+    /// object, ends the connection, as it ends the SDK's reader, every
     /// request waiting failing with it (HITL db51d363).
     fn answer(&self, message: &Map<String, Value>) -> Result<(), Ended> {
-        let Some(id) = message.get("id").and_then(request_id) else {
+        let Some(id) = message.get("id") else {
+            return Ok(());
+        };
+        if id.is_array() || id.is_object() {
+            return Err(Ended);
+        }
+        let Some(id) = request_id(id) else {
+            return Ok(());
+        };
+        let Some(waiting) = self.lock().pending.remove(&id) else {
             return Ok(());
         };
         let answer = if let Some(result) = message.get("result") {
             Ok(result.clone())
         } else if let Some(error) = message.get("error") {
-            Err(reader::error_of(error).ok_or(Ended)?)
+            let Some(error) = reader::error_of(error) else {
+                // A request whose caller went has no one to tell.
+                let _gone = waiting.send(Err(AcpError::ConnectionClosed));
+                return Err(Ended);
+            };
+            Err(error)
         } else {
             Ok(Value::Null)
-        };
-        let Some(waiting) = self.lock().pending.remove(&id) else {
-            return Ok(());
         };
         // A request whose caller went has no one to tell.
         let _gone = waiting.send(answer);
