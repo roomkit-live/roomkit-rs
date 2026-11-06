@@ -27,6 +27,18 @@ pub(super) fn reserved_sender() -> InboundResult {
     }
 }
 
+/// The result of a routed message every room opened for which names someone
+/// else once its creation hooks are over (RFC §10.1 step 2, RMK-1396):
+/// refused before its parse, with no event.
+pub(super) fn room_taken() -> InboundResult {
+    InboundResult {
+        blocked: true,
+        reason: Some(addresses::ROOM_TAKEN.to_owned()),
+        refused_before_the_lock: true,
+        ..InboundResult::default()
+    }
+}
+
 /// A direct injection's result read as its caller receives it (RFC §10.5):
 /// the committed event's result, a record stored `BLOCKED` included, or an
 /// instruction's, uncommitted (RFC §10.1.1). A result with no event was

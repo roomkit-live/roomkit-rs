@@ -22,30 +22,10 @@ use crate::rules::routing::{self, Recording, Sender};
 pub(super) enum ArrivalChange {
     /// The framework's own attach for a message arriving on the channel,
     /// made only where rule 7 allows it (gap G-053).
-    AttachAutomatically(Box<AutomaticAttach>),
+    AttachAutomatically(Box<ChannelBinding>),
     /// The record of a routed message's sender on the room's binding of the
     /// channel (gap G-061).
     RecordSender(Box<SenderRecord>),
-}
-
-/// What the framework's own attach needs (RFC §10.1 step 2, §7.5 rule 7).
-#[derive(Clone, Debug)]
-pub(super) struct AutomaticAttach {
-    /// The binding it makes: the channel's defaults, naming the sender when
-    /// step 2 created the room.
-    pub(super) binding: ChannelBinding,
-    /// Who the room's binding delivers to, once the channel is asked.
-    pub(super) recipient: RecipientRead,
-}
-
-impl AutomaticAttach {
-    /// The attach of `binding`, the room's binding not read yet.
-    pub(super) fn of(binding: ChannelBinding) -> Box<Self> {
-        Box::new(Self {
-            binding,
-            recipient: RecipientRead::default(),
-        })
-    }
 }
 
 /// What the channel answered, under the lock, of who the room's binding
@@ -91,6 +71,10 @@ pub(super) struct SenderRecord {
     pub(super) heard: Heard,
     /// Who the room's binding delivers to, once the channel is asked.
     pub(super) recipient: RecipientRead,
+    /// Whether step 2 created the room for the message, its creation hooks
+    /// over: a room they closed or left unbound takes the attach as any room
+    /// step 2 creates (RFC §10.1 step 2, RMK-1396).
+    pub(super) created: bool,
 }
 
 impl SenderRecord {
@@ -171,16 +155,10 @@ impl SectionChange for ArrivalChange {
     fn decide(
         &self,
         context: Box<RoomContext>,
-        cx: &Cx<'_>,
+        _cx: &Cx<'_>,
     ) -> Result<Decision<Recorded>, Infallible> {
         Ok(match self {
-            Self::AttachAutomatically(attach) => {
-                let form = cx
-                    .config
-                    .channel(&attach.binding.channel_id)
-                    .map(|channel| answered_form(channel.form(), &attach.recipient));
-                attach_automatically(&attach.binding, context, form.as_ref())
-            }
+            Self::AttachAutomatically(binding) => attach_automatically(binding, context),
             Self::RecordSender(record) => record_sender(record, context),
         })
     }
@@ -193,12 +171,8 @@ impl SectionChange for ArrivalChange {
     /// to comes first, as the channel answers it (RFC §5.7, RMK-1129): all that
     /// follows reads it.
     fn next_read(&self, context: &RoomContext) -> Option<Request> {
-        let record = match self {
-            Self::AttachAutomatically(attach) => {
-                return closing_binding(&attach.binding, context)
-                    .and_then(|current| attach.recipient.request(current));
-            }
-            Self::RecordSender(record) => record,
+        let Self::RecordSender(record) = self else {
+            return None;
         };
         if let Some(request) = record.recipient_request(context) {
             return Some(request);
@@ -216,9 +190,8 @@ impl SectionChange for ArrivalChange {
     }
 
     fn take_read(&mut self, context: &RoomContext, outcome: Outcome) -> Result<(), ErrorRecord> {
-        let record = match self {
-            Self::AttachAutomatically(attach) => return attach.recipient.take(outcome),
-            Self::RecordSender(record) => record,
+        let Self::RecordSender(record) = self else {
+            return Ok(());
         };
         if record.recipient_request(context).is_some() {
             return record.recipient.take(outcome);
@@ -267,10 +240,9 @@ impl SectionChange for ArrivalChange {
 fn attach_automatically(
     binding: &ChannelBinding,
     mut context: Box<RoomContext>,
-    form: Option<&AddressForm>,
 ) -> Decision<Recorded> {
     if !attachment::may_attach_automatically(&context, &binding.channel_id) {
-        return close_hook_s_binding(binding, context, form);
+        return Decision::unwritten(Recorded::Kept(context));
     }
     context.bindings.push(binding.clone());
     let writes = VecDeque::from([StoreRequest::StoreBinding {
@@ -286,44 +258,6 @@ fn attach_automatically(
     }
 }
 
-/// The room's binding an attach of `binding` may close (`close_hook_s_binding`):
-/// `binding`, the one step 2 would have made, names the name no sender is,
-/// for a routed message with no address (RFC §5.7, §10.4), and the room's
-/// names no one and is open. `None` otherwise.
-fn closing_binding<'room>(
-    binding: &ChannelBinding,
-    context: &'room RoomContext,
-) -> Option<&'room ChannelBinding> {
-    let closing = binding.participant_id.as_ref().map(ParticipantId::as_str) == Some(SYSTEM_SENDER)
-        && context.room.status.accepts_events();
-    context
-        .get_binding(&binding.channel_id)
-        .filter(|current| closing && !current.group && current.participant_id.is_none())
-}
-
-/// What an attach that may not be made leaves. A binding is kept as it is,
-/// unless it is one an `ON_ROOM_CREATED` hook made ([`closing_binding`]),
-/// which left unnamed would pass step 3 for the next sender: it gets the name
-/// no sender is too. A binding holding a recipient names them, or no sender,
-/// already (`form` reads it).
-fn close_hook_s_binding(
-    binding: &ChannelBinding,
-    context: Box<RoomContext>,
-    form: Option<&AddressForm>,
-) -> Decision<Recorded> {
-    let current = closing_binding(binding, &context)
-        .filter(|current| form.is_none_or(|form| routing::correspondent(current, form).is_none()))
-        .cloned();
-    match current {
-        Some(current) => {
-            let mut closed = current.clone();
-            closed.participant_id.clone_from(&binding.participant_id);
-            change::store_updated(&current, closed, context).map(Recorded::Updated)
-        }
-        None => Decision::unwritten(Recorded::Kept(context)),
-    }
-}
-
 /// Records a routed message's sender on the room as the lock finds it (RFC
 /// §10.1 step 2, §10.4, gap G-061). A room whose status no longer keeps it
 /// the message's ([`routing::kept_by_status`]), whose binding names another
@@ -336,6 +270,12 @@ fn close_hook_s_binding(
 fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision<Recorded> {
     let form = record.answered_form();
     let current = context.get_binding(&record.binding.channel_id).cloned();
+    // A room step 2 created that its hooks closed, or left without a binding
+    // of the channel, is the message's: attached unless its status refuses
+    // events, step 6 refusing the message then (RFC §10.1 step 2).
+    if record.created && (current.is_none() || !context.room.status.accepts_events()) {
+        return attach_automatically(&record.binding, context);
+    }
     let kept = routing::kept_by_status(
         context.room.status,
         &record.sender,
@@ -348,8 +288,11 @@ fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision<R
         return Decision::unwritten(Recorded::Rerouted(context));
     }
     let Some(current) = current else {
-        return attach_automatically(&record.binding, context, Some(&form));
+        return attach_automatically(&record.binding, context);
     };
+    if record.created && record.sender.address.is_none() {
+        return created_with_no_address(current, context, &form);
+    }
     let recording = routing::recording(&current, &record.sender, &form, &context.participants);
     match recording {
         Recording::Kept if still_admitted(record, &current, &context) => {
@@ -367,6 +310,28 @@ fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision<R
             Decision::unwritten(Recorded::Rerouted(context))
         }
     }
+}
+
+/// What a message with no address does with `current`, the binding made
+/// while step 2 created its room (RFC §5.7, §10.4, RMK-1396): a `group`
+/// binding takes it; one naming no one and holding no recipient, which left
+/// unnamed would pass step 3 for the next sender, takes the name no sender
+/// is; one naming anyone else is someone's conversation, and the message is
+/// routed once more.
+fn created_with_no_address(
+    current: ChannelBinding,
+    context: Box<RoomContext>,
+    form: &AddressForm,
+) -> Decision<Recorded> {
+    if current.group {
+        return Decision::unwritten(Recorded::Kept(context));
+    }
+    if current.participant_id.is_some() || routing::correspondent(&current, form).is_some() {
+        return Decision::unwritten(Recorded::Rerouted(context));
+    }
+    let mut closed = current.clone();
+    closed.participant_id = ParticipantId::new(SYSTEM_SENDER).ok();
+    change::store_updated(&current, closed, context).map(Recorded::Updated)
 }
 
 /// Whether the room as `context` holds it, kept by its status, tells by who

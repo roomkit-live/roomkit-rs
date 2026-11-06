@@ -50,9 +50,7 @@ use std::convert::Infallible;
 use std::mem;
 
 use super::InboundError;
-use super::arrival_change::{
-    ArrivalChange, AutomaticAttach, Heard, RecipientRead, Recorded, SenderRecord,
-};
+use super::arrival_change::{ArrivalChange, Heard, RecipientRead, Recorded, SenderRecord};
 use crate::model::{
     ChannelBinding, ChannelType, ErrorRecord, ParticipantId, Room, RoomContext, RoomId,
 };
@@ -359,6 +357,7 @@ impl NamedRoom {
                     form: self.channel.form(),
                     heard: Heard::default(),
                     recipient: RecipientRead::default(),
+                    created: false,
                 };
                 self.change(cx, ArrivalChange::RecordSender(Box::new(record)), false)
             }
@@ -370,7 +369,7 @@ impl NamedRoom {
                 let binding = self.channel.binding(self.room_id.clone(), cx.env.now());
                 self.change(
                     cx,
-                    ArrivalChange::AttachAutomatically(AutomaticAttach::of(binding)),
+                    ArrivalChange::AttachAutomatically(Box::new(binding)),
                     false,
                 )
             }
@@ -447,14 +446,27 @@ impl NamedRoom {
     }
 
     /// Attaches the channel to the room step 2 created, its binding naming
-    /// the sender.
+    /// the sender. A room the message was routed to, or given fresh, is held
+    /// to the check of any routed room once its `ON_ROOM_CREATED` hooks are
+    /// over (RFC §10.1 step 2, RMK-1396): a binding made meanwhile, a
+    /// concurrent sender's or a hook's, may name someone else. A room the
+    /// caller named keeps a binding made by then as it is.
     fn attach_sender(&mut self, cx: &mut Cx<'_>) -> Progress<Named> {
         let binding = self.sender_binding(cx);
-        self.change(
-            cx,
-            ArrivalChange::AttachAutomatically(AutomaticAttach::of(binding)),
-            true,
-        )
+        let change = if self.mode == Mode::Named {
+            ArrivalChange::AttachAutomatically(Box::new(binding))
+        } else {
+            let record = SenderRecord {
+                binding,
+                sender: self.sender.clone(),
+                form: self.channel.form(),
+                heard: Heard::default(),
+                recipient: RecipientRead::default(),
+                created: true,
+            };
+            ArrivalChange::RecordSender(Box::new(record))
+        };
+        self.change(cx, change, true)
     }
 
     /// The channel's binding at its defaults, with the sender recorded as a

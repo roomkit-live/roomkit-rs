@@ -30,6 +30,9 @@ const REENTRANT_CALL: &str = "ReentrantCallError";
 
 /// What Python's `_PastTheCapError` reads.
 const PAST_THE_CAP: &str = "_PastTheCapError";
+/// The class Python's route span names when every room opened for a routed
+/// message names someone else (RMK-1396).
+const ROOM_TAKEN: &str = "_RoomTakenError";
 
 /// What Python's `_RoutingTimeoutError` reads.
 const ROUTING_TIMEOUT: &str = "_RoutingTimeoutError";
@@ -193,6 +196,11 @@ impl RunSpans {
                 routing
                     .span
                     .fail_error(PAST_THE_CAP, String::new(), Metadata::new());
+            }
+            RouteEnd::RoomTaken => {
+                routing
+                    .span
+                    .fail_error(ROOM_TAKEN, String::new(), Metadata::new());
             }
         }
     }

@@ -291,6 +291,8 @@ pub enum RouteEnd {
     Failed(Box<InboundError>),
     /// It would open a room past the budget of the work that sent it.
     PastTheBudget,
+    /// Every room opened for it names someone else (RMK-1396).
+    RoomTaken,
 }
 
 /// The work the body of an ASYNC hook is while it runs, when a cascade

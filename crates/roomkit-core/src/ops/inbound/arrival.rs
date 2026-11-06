@@ -164,6 +164,9 @@ pub(super) struct Arrival {
     entry: Option<EntryId>,
     /// How many times the router was asked.
     routes: u8,
+    /// Whether the message was given its last new room, once routed as
+    /// many times as step 2 asks the router (gap G-055).
+    given_last_room: bool,
     /// The room step 2 works on or arrived in; `None` while the message is
     /// routed.
     room: Option<RoomId>,
@@ -230,6 +233,7 @@ impl Arrival {
             sender,
             identity: None,
             routes: 0,
+            given_last_room: false,
             entry: None,
             room: None,
             charge: DeliveryCharge::new(None),
@@ -562,14 +566,26 @@ impl Arrival {
     }
 
     /// Routes the message once more, or gives it a new room once it was
-    /// (gap G-055).
+    /// (gap G-055). When that last room is no longer the message's either,
+    /// every room opened for it naming someone else, the message is refused
+    /// `room_taken`, nothing of it stored (RFC §10.1 step 2, HITL ef0ef858,
+    /// RMK-1396).
     fn route_again(&mut self, cx: &mut Cx<'_>) -> Arriving {
         if self.routes < ROUTES {
             self.route(cx);
-            Progress::Waiting
-        } else {
-            self.enter_fresh(cx)
+            return Progress::Waiting;
         }
+        if self.given_last_room {
+            tracing::warn!(
+                target: "roomkit::core::inbound",
+                channel_id = %self.message.channel_id,
+                "every room opened for a routed message names someone else: refused"
+            );
+            self.tell_route(cx, RouteEnd::RoomTaken);
+            return Progress::Done(Err(Stopped::Refused(Box::new(result::room_taken()))));
+        }
+        self.given_last_room = true;
+        self.enter_fresh(cx)
     }
 
     /// Hands the room's context to the channel's `handle_inbound()` (RFC

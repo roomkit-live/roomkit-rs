@@ -66,6 +66,10 @@ pub(crate) const SYSTEM_SENDER: &str = "system";
 /// step 2): the framework names the room it writes to.
 pub(crate) const RESERVED_SENDER: &str = "reserved_sender";
 
+/// The reason a routed message is refused when every room opened for it
+/// names someone else (RFC §10.1 step 2, RMK-1396).
+pub(crate) const ROOM_TAKEN: &str = "room_taken";
+
 /// The most digits a phone number holds (ITU-T E.164).
 const MAX_DIGITS: usize = 15;
 
