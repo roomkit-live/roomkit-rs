@@ -25,8 +25,9 @@ pub struct ProviderError {
     pub context_overflow: Option<bool>,
     /// Whether the provider refused before sending any request, for
     /// something other than the content the request carries (a response
-    /// schema the model does not take, a model or tools its endpoint does
-    /// not serve, a tool name the vendor refuses): nothing reached the
+    /// schema the model does not take or outside the portable subset, a
+    /// model or tools its endpoint does not serve, a tool name the vendor
+    /// refuses): nothing reached the
     /// vendor, so the failure says nothing of the turn's images (RFC
     /// §6.4). An image the provider cannot send is not one.
     pub before_request: bool,
