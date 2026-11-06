@@ -433,7 +433,7 @@ async fn a_listen_only_racing_an_uninstall_returns_once_the_turn_is_cut() {
     let listening = {
         let (kit, room) = (kit.clone(), room.clone());
         tokio::spawn(async move {
-            let started = std::time::Instant::now();
+            let started = tokio::time::Instant::now();
             let options = roomkit::ListenOnlyOptions::default();
             let listened = kit.listen_only(&room, &[id("a")], options).await;
             (listened, started.elapsed())
@@ -477,7 +477,7 @@ async fn listen_only_on_a_turn_given_returns_once_it_is_cut() {
                 let Some(kit) = kit.filter(|_| event.change == SpeakQueueChange::TurnGiven) else {
                     return;
                 };
-                let started = std::time::Instant::now();
+                let started = tokio::time::Instant::now();
                 let options = roomkit::ListenOnlyOptions::default();
                 let listened = kit.listen_only(&event.room_id, &[id("a")], options).await;
                 telling.send_replace(Some((listened.is_ok(), started.elapsed())));
