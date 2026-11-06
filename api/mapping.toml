@@ -46,6 +46,9 @@ roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skill
 "roomkit_ai::memory" = ["roomkit.memory", "roomkit"]
 "roomkit_ai::knowledge" = ["roomkit.knowledge"]
 roomkit_openai = ["roomkit.providers.openai"]
+"roomkit_openai::deepseek" = ["roomkit.providers.deepseek"]
+"roomkit_openai::minimax" = ["roomkit.providers.minimax"]
+"roomkit_openai::kimi" = ["roomkit.providers.kimi"]
 roomkit_mcp = ["roomkit.tools"]
 roomkit_sqlite = ["roomkit", "roomkit.store"]
 roomkit_postgres = ["roomkit.store", "roomkit.knowledge"]
@@ -1034,6 +1037,45 @@ reason = "not in 0.x: MCP Apps' structured results"
 python = "roomkit.providers.openai.OpenAIAIProvider.__init__"
 params = ["transport"]
 reason = "not in 0.x: an injected HTTP transport; the provider builds its own client"
+
+[[missing]]
+python = "roomkit.providers.deepseek.DeepSeekAIProvider.__init__"
+params = ["transport"]
+reason = "not in 0.x: an injected HTTP transport; the provider builds its own client, as OpenAI's"
+
+[[missing]]
+python = "roomkit.providers.deepseek.DeepSeekConfig.__init__"
+params = [
+    "supports_response_schema",
+    "supports_response_schema_with_tools",
+]
+reason = "not in 0.x: response schemas, as OpenAIConfig's"
+
+[[missing]]
+python = "roomkit.providers.minimax.MiniMaxAIProvider.__init__"
+params = ["transport"]
+reason = "not in 0.x: an injected HTTP transport; the provider builds its own client, as OpenAI's"
+
+[[missing]]
+python = "roomkit.providers.minimax.MiniMaxConfig.__init__"
+params = [
+    "supports_response_schema",
+    "supports_response_schema_with_tools",
+]
+reason = "not in 0.x: response schemas, as OpenAIConfig's"
+
+[[missing]]
+python = "roomkit.providers.kimi.KimiAIProvider.__init__"
+params = ["transport"]
+reason = "not in 0.x: an injected HTTP transport; the provider builds its own client, as OpenAI's"
+
+[[missing]]
+python = "roomkit.providers.kimi.KimiConfig.__init__"
+params = [
+    "supports_response_schema",
+    "supports_response_schema_with_tools",
+]
+reason = "not in 0.x: response schemas, as OpenAIConfig's"
 
 [[missing]]
 python = "roomkit.tools.MCPToolProvider"

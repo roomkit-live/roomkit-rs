@@ -915,6 +915,10 @@
     "sniff_mime_type",
     "to_data_uri"
   ],
+  "roomkit.providers.kimi": [
+    "KimiAIProvider",
+    "KimiConfig"
+  ],
   "roomkit.providers.litellm": [
     "LiteLLMAIProvider",
     "LiteLLMConfig"
@@ -935,6 +939,10 @@
     "MetaConfig",
     "MetaImageConfig",
     "MetaImageProvider"
+  ],
+  "roomkit.providers.minimax": [
+    "MiniMaxAIProvider",
+    "MiniMaxConfig"
   ],
   "roomkit.providers.mistral": [
     "MistralAIProvider",
@@ -1786,6 +1794,8 @@
     "ReasoningCutShortError",
     "ReasoningOutput",
     "ReasoningRequest",
+    "RimeRealtimeConfig",
+    "RimeRealtimeProvider",
     "SIPRealtimeTransport",
     "ToolCallResult",
     "TranscriptLine",
@@ -1816,6 +1826,9 @@
     "MockSTTProvider",
     "Qwen3ASRConfig",
     "Qwen3ASRProvider",
+    "RimeSTTConfig",
+    "RimeSTTError",
+    "RimeSTTProvider",
     "STTProvider",
     "SherpaOnnxSTTConfig",
     "SherpaOnnxSTTProvider",
@@ -1869,6 +1882,9 @@
     "Qwen3TTSConfig",
     "Qwen3TTSProvider",
     "Qwen3VoiceCloneConfig",
+    "RimeTTSConfig",
+    "RimeTTSError",
+    "RimeTTSProvider",
     "SherpaOnnxTTSConfig",
     "SherpaOnnxTTSProvider",
     "StripBrackets",
