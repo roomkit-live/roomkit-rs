@@ -314,7 +314,7 @@ impl<P: AiProvider> Loop<P> {
             let mut generation = match read {
                 Ok(generation) => generation,
                 Err(failure) => {
-                    self.refused(round == 0 && !failure.streamed, &failure.error, &messages);
+                    self.refused(round == 0 && !failure.received, &failure.error, &messages);
                     let ending = (&limits, &steering, &out);
                     let failed = (had_tool_round, tool_rounds, spent);
                     return self.failed(failed, failure, ending).await;
@@ -540,6 +540,7 @@ impl<P: AiProvider> Loop<P> {
         Err(Failed {
             error: ProviderError::new(error.to_string(), options).with_source(error),
             streamed: true,
+            received: true,
             delivered: generation.delivered,
             reports: Vec::new(),
         })

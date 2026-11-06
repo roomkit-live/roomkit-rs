@@ -75,7 +75,13 @@ impl Called {
 /// handed anything before it, and what the room was handed of its text.
 pub(super) struct Failed {
     pub(super) error: ProviderError,
+    /// The read passed on an event before the failure: never read again by
+    /// a retry, a replay or the fallback. Text a response schema held is
+    /// none (Python's `emitted`, counted after `hold_until_checked`).
     pub(super) streamed: bool,
+    /// The provider handed an event before the failure, held text included:
+    /// it took the request (Python's `received`, RFC §6.4).
+    pub(super) received: bool,
     /// The text delivered before the failure, which the room keeps: the
     /// turn's last segment when the failure ends it `error` (RFC §6.4).
     pub(super) delivered: String,
@@ -90,6 +96,7 @@ impl Failed {
         Self {
             error,
             streamed: false,
+            received: false,
             delivered: String::new(),
             reports: Vec::new(),
         }
@@ -136,7 +143,7 @@ impl Generation {
         let mut calls = Vec::new();
         let mut done = StreamDone::default();
         let mut reports = Vec::new();
-        let mut streamed = false;
+        let (mut streamed, mut received) = (false, false);
         let mut unpriced = false;
         while let Some(event) = next(&mut stream).await {
             if steering.cancelled() {
@@ -150,12 +157,14 @@ impl Generation {
                     return Err(Failed {
                         error,
                         streamed,
+                        received,
                         delivered,
                         reports,
                     });
                 }
             };
-            streamed = true;
+            received = true;
+            streamed = streamed || !(held && matches!(event, StreamEvent::TextDelta(_)));
             let read = (&mut transcript, &mut replayed, &mut delivered);
             match event {
                 StreamEvent::TextDelta(delta) if held => holding.push(delta.text),
