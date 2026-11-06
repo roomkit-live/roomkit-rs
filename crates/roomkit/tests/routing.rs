@@ -1254,3 +1254,78 @@ async fn a_router_is_told_no_address_as_none() {
         [None, None, Some("bob".to_owned())]
     );
 }
+
+/// RFC §10.1 step 2, §10.4: the default router admits Bob at step 3 to the
+/// room Alice's first message created, a hook having attached the number to
+/// it while her creation hooks run; once they are over her message leaves
+/// the room, which stays Bob's, and nothing of hers is stored there or sent
+/// to his number (RMK-1396). The hook attaches, then waits, in that order: a
+/// conformance scenario's hooks run at once.
+// Python: tests/test_shared_channel_routing.py::TestARoomBeingCreated::test_a_sender_step_three_admits_meanwhile_keeps_the_room
+#[tokio::test]
+async fn a_sender_step_three_admits_meanwhile_keeps_the_room() {
+    let (kit, sms) = kit_with_agent();
+    let rooms: Arc<Mutex<Vec<RoomId>>> = Arc::default();
+    let (held, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let hook_kit = kit.clone();
+    let (hook_rooms, hook_held, hook_release) =
+        (Arc::clone(&rooms), Arc::clone(&held), Arc::clone(&release));
+    kit.hook(
+        HookTrigger::OnRoomCreated,
+        move |event: RoomEvent, _| {
+            let (kit, rooms) = (hook_kit.clone(), Arc::clone(&hook_rooms));
+            let (held, release) = (Arc::clone(&hook_held), Arc::clone(&hook_release));
+            async move {
+                kit.attach_channel(
+                    &event.room_id,
+                    &channel("sms"),
+                    AttachChannelOptions::default(),
+                )
+                .await
+                .unwrap();
+                let first = {
+                    let mut rooms = rooms.lock().unwrap_or_else(PoisonError::into_inner);
+                    rooms.push(event.room_id.clone());
+                    rooms.len() == 1
+                };
+                if first {
+                    held.notify_one();
+                    release.notified().await;
+                }
+            }
+        },
+        HookOptions {
+            name: "bind_then_hold".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    let alice = {
+        let kit = kit.clone();
+        tokio::spawn(async move { routed(&kit, message(ALICE, "alice: my secret")).await })
+    };
+    held.notified().await;
+    let bobs = routed(&kit, message(BOB, "bob: my secret")).await;
+    release.notify_one();
+    let alices = alice.await.unwrap();
+    let first = rooms.lock().unwrap_or_else(PoisonError::into_inner)[0].clone();
+    assert_eq!(bobs, first);
+    assert_ne!(alices, first);
+    assert_eq!(correspondent(&kit, &first).await, Some(BOB.to_owned()));
+    let in_bobs = texts(&kit, &first).await;
+    assert!(
+        in_bobs.iter().all(|text| !text.contains("alice")),
+        "{in_bobs:?}"
+    );
+    let to_bob = sms
+        .sent
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert!(
+        to_bob
+            .iter()
+            .all(|(to, text)| to != BOB || !text.contains("alice")),
+        "{to_bob:?}"
+    );
+}
