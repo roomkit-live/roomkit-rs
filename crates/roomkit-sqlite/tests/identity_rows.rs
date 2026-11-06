@@ -560,3 +560,50 @@ async fn the_rewrite_takes_only_a_list_for_a_declaration() {
         .unwrap();
     assert_eq!(left, 0);
 }
+
+/// Python: `test_resolve_participant_checks_the_room_and_the_participant_first` (HITL
+/// 70fef50d): the room's organization and the participant are checked before the
+/// identity is read, so that a caller of another organization, or one naming a
+/// participant the room lacks, learns nothing of an identity that cannot be read.
+#[tokio::test]
+async fn resolve_participant_checks_the_room_and_the_participant_first() {
+    let room = RoomId::new("r1").unwrap();
+    let p1 = ParticipantId::new("p1").unwrap();
+    for missing in ["room", "participant"] {
+        let (_file, store) = with_unreadable(&unreadable_records()[2]).await;
+        let mut held = Room::new(room.clone());
+        held.organization_id = Some(if missing == "room" { "globex" } else { "acme" }.to_owned());
+        store.create_room(held).await.unwrap();
+        if missing == "room" {
+            store
+                .add_participant(Participant::new(
+                    p1.clone(),
+                    room.clone(),
+                    ChannelId::new("sms").unwrap(),
+                ))
+                .await
+                .unwrap();
+        }
+        let kit = RoomKit::new(RoomKitOptions::with_store(store.clone()));
+        let refused = kit
+            .resolve_participant(
+                &room,
+                &p1,
+                &IdentityId::new("i1").unwrap(),
+                ResolveParticipantOptions {
+                    organization_id: Some("acme".to_owned()),
+                    ..ResolveParticipantOptions::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        kit.close().await.unwrap();
+        store.close().await;
+        let expected = if missing == "room" {
+            matches!(refused, RoomKitError::RoomNotFound(_))
+        } else {
+            matches!(refused, RoomKitError::ParticipantNotFound { .. })
+        };
+        assert!(expected, "{missing}: {refused:?}");
+    }
+}

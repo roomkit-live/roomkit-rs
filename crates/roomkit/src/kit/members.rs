@@ -156,11 +156,15 @@ impl<S: ConversationStore> RoomKit<S> {
         identity_id: &IdentityId,
         options: ResolveParticipantOptions,
     ) -> Result<Participant, RoomKitError> {
-        let identity = self
-            .store()
-            .get_identity(identity_id)
-            .await
-            .map_err(|error| self.read_failed(error))?;
+        // Read before the lock, its failure told only once the room and the
+        // participant are found, as Python reads the identity after them: a
+        // caller of another organization, or naming a participant the room
+        // lacks, learns nothing of an identity whose record cannot be read
+        // (HITL 70fef50d).
+        let (identity, unread) = match self.store().get_identity(identity_id).await {
+            Ok(identity) => (identity, None),
+            Err(error) => (None, Some(error)),
+        };
         let change = MemberChange::Resolve {
             participant_id: participant_id.clone(),
             identity_id: identity_id.clone(),
@@ -168,13 +172,18 @@ impl<S: ConversationStore> RoomKit<S> {
             resolved_by: options.resolved_by,
             organization_id: options.organization_id.clone(),
         };
-        self.change_member(
-            room_id,
-            options.organization_id,
-            change,
-            "resolve_participant",
-        )
-        .await
+        let resolved = self
+            .change_member(
+                room_id,
+                options.organization_id,
+                change,
+                "resolve_participant",
+            )
+            .await;
+        match (resolved, unread) {
+            (Err(RoomKitError::IdentityNotFound(_)), Some(error)) => Err(self.read_failed(error)),
+            (resolved, _) => resolved,
+        }
     }
 
     /// Adds `participant_id`, written in the channel's form

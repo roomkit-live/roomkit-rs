@@ -6,6 +6,7 @@ use deadpool_postgres::{GenericClient, Object, Transaction};
 use roomkit::StoreError;
 use roomkit::model::{ChannelType, Identity, IdentityId};
 use serde_json::Value;
+use tokio_postgres::Row;
 
 use crate::error::Failure;
 use crate::rows::{self, IDENTITY_COLUMNS};
@@ -207,6 +208,22 @@ fn declared_addresses(addresses: &Value) -> Vec<(&str, &str)> {
         .collect()
 }
 
+/// The identity a row holds; a row the model cannot read is refused with its
+/// id alone, as `SqliteStore` refuses one: the model's error quotes the row,
+/// which may be another organization's (HITL 47b7dfc6, 70fef50d).
+fn identity_of(row: &Row) -> Result<Identity, Failure> {
+    rows::identity(row).map_err(|failure| {
+        let id = row
+            .try_get::<_, &str>("id")
+            .ok()
+            .and_then(|id| IdentityId::new(id).ok());
+        match (failure, id) {
+            (Failure::Json(_) | Failure::OutOfRange(_), Some(id)) => Failure::Unreadable(id),
+            (failure, _) => failure,
+        }
+    })
+}
+
 /// The identity `identity_id`.
 pub(crate) async fn get<C: GenericClient>(
     client: &C,
@@ -218,7 +235,7 @@ pub(crate) async fn get<C: GenericClient>(
         &[&identity_id.as_str()],
     )
     .await?;
-    row.as_ref().map(rows::identity).transpose()
+    row.as_ref().map(identity_of).transpose()
 }
 
 /// The identity holding `address` in `organization`, in its own organization
@@ -243,7 +260,18 @@ pub(crate) async fn resolve<C: GenericClient>(
         ],
     )
     .await?;
-    row.as_ref().map(rows::identity).transpose()
+    match row.as_ref().map(identity_of).transpose() {
+        Err(Failure::Unreadable(id)) => {
+            // It serves no read, and the row is quoted nowhere: it may be
+            // another organization's (HITL 4ee4d298, 70fef50d).
+            tracing::warn!(
+                target: "roomkit::store::postgres",
+                "Identity {id} has a record the model cannot read"
+            );
+            Ok(None)
+        }
+        read => read,
+    }
 }
 
 /// The addresses of the identity an address is linked to or unlinked from,
@@ -257,7 +285,7 @@ async fn locked_addresses(
 ) -> Result<Value, Failure> {
     let row = query_opt(
         transaction,
-        "SELECT organization_id, channel_addresses FROM identities WHERE id = $1 FOR UPDATE",
+        &format!("SELECT {IDENTITY_COLUMNS} FROM identities WHERE id = $1 FOR UPDATE"),
         &[&identity_id.as_str()],
     )
     .await?;
@@ -267,6 +295,9 @@ async fn locked_addresses(
     if held.unwrap_or_default() != organization.unwrap_or_default() {
         return Err(not_found().into());
     }
+    // A row the model cannot read is refused, the id alone, as `SqliteStore`
+    // refuses it; the addresses are rewritten from the row itself.
+    identity_of(&row)?;
     Ok(row.try_get("channel_addresses")?)
 }
 
