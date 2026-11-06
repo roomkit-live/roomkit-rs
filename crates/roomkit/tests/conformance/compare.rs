@@ -183,6 +183,16 @@ impl Comparison<'_> {
 
     fn models(&mut self) {
         let expect = self.expect;
+        for (strategy, expected) in expect["dispatch_turns"].as_object().into_iter().flatten() {
+            let turns = self
+                .observed
+                .dispatch_turns
+                .get(strategy)
+                .cloned()
+                .unwrap_or_default();
+            let path = format!("dispatch_turns.{strategy}");
+            self.check(expected, Some(&Value::Array(turns)), &path);
+        }
         if let Some(expected) = expect.get("resolver") {
             let calls = Value::Array(self.observed.resolver.clone());
             self.check(expected, Some(&calls), "resolver");

@@ -55,6 +55,19 @@ impl Scripted for roomkit::SpeakQueueEvent {
     }
 }
 
+impl Scripted for roomkit::DispatchDecisionEvent {
+    const MEMBER: &'static str = "dispatch_decision";
+
+    fn record(&self) -> Value {
+        crate::discussion_calls::dispatch_decision_event(self)
+    }
+
+    /// An observer's: a modify is no answer of its.
+    fn patched(self, _patch: &Value) -> Result<Self, String> {
+        Ok(self)
+    }
+}
+
 impl Scripted for AiGenerationEvent {
     const MEMBER: &'static str = "generation";
 

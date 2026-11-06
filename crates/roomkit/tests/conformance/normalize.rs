@@ -54,6 +54,8 @@ pub(crate) struct Observed {
     /// Per room and scripted agent with a scripted memory, the events its
     /// memory was handed.
     pub(crate) ingested: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
+    /// Per strategy with a scripted dispatch policy, the turns it was handed.
+    pub(crate) dispatch_turns: BTreeMap<String, Vec<Value>>,
     pub(crate) observations: BTreeMap<String, Vec<Value>>,
     pub(crate) thinking_events: BTreeMap<String, Vec<Value>>,
     pub(crate) text_events: BTreeMap<String, Vec<Value>>,
@@ -287,6 +289,7 @@ fn observed_values(observed: &Observed) -> Value {
     all.extend(observed.actions.values().flatten().cloned());
     all.extend(observed.framework_events.iter().cloned());
     all.extend(observed.hooks.values().flatten().cloned());
+    all.extend(observed.dispatch_turns.values().flatten().cloned());
     for per_room in observed
         .turns
         .values()

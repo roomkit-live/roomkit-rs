@@ -291,6 +291,19 @@ impl Run {
             .push(serde_json::to_value(event).unwrap_or_default());
     }
 
+    /// A turn the scripted dispatch policy of the strategy `strategy` was
+    /// handed.
+    pub(crate) fn record_dispatch_turn(&self, strategy: &str, turn: Value) {
+        if !self.recording.load(Ordering::SeqCst) {
+            return;
+        }
+        lock(&self.observed)
+            .dispatch_turns
+            .entry(strategy.to_owned())
+            .or_default()
+            .push(turn);
+    }
+
     /// One event a scripted memory of `channel_id` was handed in `room_id`.
     pub(crate) fn record_ingested(
         &self,

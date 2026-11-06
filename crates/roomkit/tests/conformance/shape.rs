@@ -338,6 +338,7 @@ const EXPECT: &[&str] = &[
     "contexts",
     "turns",
     "ingested",
+    "dispatch_turns",
     "observations",
     "thinking_events",
     "text_events",
@@ -535,6 +536,12 @@ fn strategies(setup: &Value, found: &mut Vec<String>) {
             &strategy["discussion"],
             DISCUSSION,
             &format!("{path}.discussion"),
+            found,
+        );
+        optional(
+            &strategy["discussion"]["dispatch"],
+            crate::discussion_calls::DISPATCH,
+            &format!("{path}.discussion.dispatch"),
             found,
         );
         optional(
