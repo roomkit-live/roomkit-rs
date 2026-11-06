@@ -37,7 +37,7 @@
 
 use std::collections::BTreeSet;
 
-use roomkit::model::{ChannelId, LoopEndReason, Metadata, RoomEvent, RoomId, Timestamp};
+use roomkit::model::{ChannelId, Metadata, RoomEvent, RoomId, Timestamp};
 use roomkit::{HookTrigger, TurnPayload};
 use roomkit_core::ops::{Environment, SystemEnvironment};
 use roomkit_core::rules::transcript::is_blank;
@@ -303,8 +303,11 @@ pub struct AiResponseEvent {
     pub thinking: String,
     /// The rounds of calls the turn ran.
     pub round_count: u32,
-    /// The rule that ended the turn.
-    pub loop_end_reason: Option<LoopEndReason>,
+    /// How the turn ended, Python's `LoopEndReason | str`: an AI channel's
+    /// loop end, as `LoopEndReason` writes it, or an ACP agent's end as its
+    /// record names it (`completed`, a stop reason such as `max_tokens`)
+    /// (HITL e680d98d).
+    pub loop_end_reason: Option<String>,
     /// How long the turn took, in milliseconds.
     pub latency_ms: u64,
     /// Whether the response was streamed.

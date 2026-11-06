@@ -184,7 +184,7 @@ impl<P: AiProvider> Loop<P> {
             tool_calls_count: spent.calls,
             usage,
             round_count: rounds,
-            loop_end_reason: Some(reason),
+            loop_end_reason: Some(reason.to_string()),
             latency_ms,
             streaming: true,
             segments,

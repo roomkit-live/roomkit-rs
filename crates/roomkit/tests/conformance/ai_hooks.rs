@@ -244,7 +244,7 @@ impl Scripted for AiResponseEvent {
             "segments": self.segments,
             "tool_calls_count": self.tool_calls_count,
             "round_count": self.round_count,
-            "loop_end_reason": self.loop_end_reason.map(|reason| reason.to_string()),
+            "loop_end_reason": self.loop_end_reason,
             "usage": self.usage,
             "streaming": self.streaming,
             "thinking": self.thinking,
