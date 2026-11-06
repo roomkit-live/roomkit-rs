@@ -85,7 +85,10 @@ fn reasoning_of(message: &AiMessage) -> String {
         .iter()
         .filter_map(|part| match part {
             AiContentPart::Thinking(part) => Some(part.thinking.as_str()),
-            _ => None,
+            AiContentPart::Text(_)
+            | AiContentPart::Image(_)
+            | AiContentPart::ToolCall(_)
+            | AiContentPart::ToolResult(_) => None,
         })
         .collect()
 }

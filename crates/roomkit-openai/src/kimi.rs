@@ -80,6 +80,10 @@ impl KimiConfig {
     }
 
     /// The vendor, with what of its rules the configuration states.
+    #[expect(
+        clippy::unused_self,
+        reason = "the providers' macro asks every vendor's configuration, DeepSeek's reading its own"
+    )]
     pub(crate) fn vendor(&self) -> Vendor {
         Vendor::Kimi
     }

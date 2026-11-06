@@ -1,5 +1,5 @@
 //! DeepSeek's provider: its catalogue and its usage.
-//! Python: tests/test_providers/test_deepseek.py.
+//! Python: `tests/test_providers/test_deepseek.py`.
 
 use pretty_assertions::assert_eq;
 use roomkit_ai::AiProvider;
@@ -25,7 +25,7 @@ fn the_catalogue_is_python_s_and_reads_no_image() {
     );
 }
 
-fn usage(usage: Value) -> Value {
+fn usage(usage: &Value) -> Value {
     let body = json!({
         "id": "c",
         "choices": [{ "index": 0, "message": { "role": "assistant", "content": "Hi" },
@@ -41,16 +41,16 @@ fn usage(usage: Value) -> Value {
 fn cache_hits_are_not_billed_as_input() {
     assert_eq!(
         [
-            usage(json!({ "prompt_tokens": 1000, "completion_tokens": 50,
+            usage(&json!({ "prompt_tokens": 1000, "completion_tokens": 50,
                 "prompt_cache_hit_tokens": 960, "prompt_cache_miss_tokens": 40 })),
             // The miss counter derived when it is left out.
-            usage(json!({ "prompt_tokens": 1000, "completion_tokens": 50,
+            usage(&json!({ "prompt_tokens": 1000, "completion_tokens": 50,
                 "prompt_cache_hit_tokens": 960 })),
             // A zero hit reports no cache counter.
-            usage(json!({ "prompt_tokens": 100, "completion_tokens": 5,
+            usage(&json!({ "prompt_tokens": 100, "completion_tokens": 5,
                 "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 100 })),
             // OpenAI's shape, from a server that reports no hits.
-            usage(json!({ "prompt_tokens": 100, "completion_tokens": 5,
+            usage(&json!({ "prompt_tokens": 100, "completion_tokens": 5,
                 "prompt_tokens_details": { "cached_tokens": 80 } })),
         ],
         [

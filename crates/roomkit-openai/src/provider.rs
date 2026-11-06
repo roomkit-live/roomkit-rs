@@ -104,7 +104,7 @@ impl OpenAiAiProvider {
     /// `_provider_name`).
     pub(crate) fn failed(&self, error: OpenAiError) -> ProviderError {
         let mut failed = ProviderError::from(error);
-        failed.provider = self.vendor.provider().to_owned();
+        self.vendor.provider().clone_into(&mut failed.provider);
         failed
     }
 
@@ -300,7 +300,7 @@ impl OpenAiAiProvider {
         let base_url = self.config.base_url();
         match self.vendor {
             Vendor::OpenAi => crate::names::check(base_url, &request.tools),
-            vendor => vendor
+            vendor @ (Vendor::DeepSeek { .. } | Vendor::MiniMax | Vendor::Kimi) => vendor
                 .name_rule(base_url)
                 .map_or(Ok(()), |rule| rule.check(&request.tools)),
         }

@@ -1,7 +1,7 @@
 //! The vendor providers of the OpenAI wire on a fake of it: what a host
 //! writes to select a vendor's dialect, on the vendor's API or on a server
 //! of its own, and what each request then carries.
-//! Python: tests/test_providers/test_minimax_kimi.py and test_deepseek.py.
+//! Python: `tests/test_providers/test_minimax_kimi.py` and `test_deepseek.py`.
 
 use pretty_assertions::assert_eq;
 use roomkit_ai::{

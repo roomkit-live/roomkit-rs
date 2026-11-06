@@ -12,7 +12,7 @@ allow-print-in-tests = true
 large-error-threshold = 136
 
 # Product names read as words in documentation, not as code.
-doc-valid-idents = ["RoomKit", "PyO3", "WhatsApp", "OpenAI", "OpenRouter", "DeepSeek", ".."]
+doc-valid-idents = ["RoomKit", "PyO3", "WhatsApp", "OpenAI", "OpenRouter", "DeepSeek", "MiniMax", ".."]
 
 # The clock is the operations' environment's (docs/architecture.md, "The
 # core"). The core's own clippy.toml (crates/roomkit-core) bans the system

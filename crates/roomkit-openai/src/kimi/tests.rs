@@ -1,5 +1,5 @@
 //! Kimi's provider: its catalogue.
-//! Python: tests/test_providers/test_minimax_kimi.py.
+//! Python: `tests/test_providers/test_minimax_kimi.py`.
 
 use pretty_assertions::assert_eq;
 use roomkit_ai::AiProvider;
