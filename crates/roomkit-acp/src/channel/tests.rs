@@ -92,7 +92,11 @@ impl Agent {
         if initialize {
             let request = self.read().await;
             assert_eq!(request["method"], "initialize");
-            self.answer(&request, json!({ "protocolVersion": 1 })).await;
+            let announced = json!({
+                "protocolVersion": 1,
+                "agentCapabilities": { "sessionCapabilities": { "close": {} } },
+            });
+            self.answer(&request, announced).await;
         }
         let request = self.read().await;
         assert_eq!(request["method"], "session/new");
