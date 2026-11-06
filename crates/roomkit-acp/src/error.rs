@@ -11,8 +11,9 @@ use serde_json::Value;
 #[non_exhaustive]
 pub enum AcpError {
     /// The agent answered a request with a JSON-RPC error: the SDK's
-    /// `RequestError`, its code, message and data as the agent sent them.
-    #[error("{message} ({code})")]
+    /// `RequestError`, its code, message and data as the agent sent them,
+    /// its text the message alone, as `str()` reads a `RequestError`.
+    #[error("{message}")]
     Rpc {
         /// The JSON-RPC error code.
         code: i32,

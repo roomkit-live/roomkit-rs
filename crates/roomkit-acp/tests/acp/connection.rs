@@ -133,6 +133,11 @@ async fn an_error_answer_is_the_agents_error() {
             .await;
     };
     let (answer, ()) = tokio::join!(connection.initialize(initialize()), agent_side);
+    // Its text is the agent's message alone, as the SDK's `str(RequestError)`.
+    assert_eq!(
+        answer.as_ref().map_err(ToString::to_string).err().as_deref(),
+        Some("Authentication required")
+    );
     match answer {
         Err(AcpError::Rpc {
             code,
