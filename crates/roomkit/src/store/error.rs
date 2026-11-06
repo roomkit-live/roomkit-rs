@@ -151,7 +151,9 @@ pub enum StoreError {
     /// A read's arguments cannot be served together, the Python
     /// implementation's `ValueError`: a timeline read's two cursors,
     /// which exclude each other (RFC §14.1), or a filter that admits
-    /// nothing by construction ([`ListEventsOptions::validate`]).
+    /// nothing by construction ([`ListEventsOptions::validate`]). Also a
+    /// record the model cannot read, its id alone told, as `SqliteStore`
+    /// refuses one by id (HITL 47b7dfc6).
     ///
     /// [`ListEventsOptions::validate`]: super::ListEventsOptions::validate
     #[error("{0}")]

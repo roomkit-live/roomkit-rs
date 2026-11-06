@@ -13,7 +13,9 @@ use roomkit::model::{
     ChannelId, ChannelType, Identity, IdentityId, Participant, ParticipantId, Room, RoomId,
 };
 use roomkit::store::{LinkAddressOptions, ResolveIdentityOptions, UnlinkAddressOptions};
-use roomkit::{ConversationStore, ResolveParticipantOptions, RoomKit, RoomKitOptions, StoreError};
+use roomkit::{
+    ConversationStore, ResolveParticipantOptions, RoomKit, RoomKitError, RoomKitOptions, StoreError,
+};
 use roomkit_sqlite::{SqliteStore, SqliteStoreOptions};
 use rusqlite::Connection;
 use rusqlite::types::Value as Column;
@@ -29,6 +31,7 @@ fn unreadable_records() -> Vec<Column> {
         Column::Text(
             r#"{"id": "i1", "email": "a@globex.example", "channel_addresses": "x"}"#.to_owned(),
         ),
+        Column::Text(r#"{"id": "i1", "channel_addresses": "a@globex.example"}"#.to_owned()),
         Column::Text(r#"["a@globex.example"]"#.to_owned()),
         Column::Text("not json, a@globex.example".to_owned()),
         Column::Blob(b"\xff{\"id\": \"i1\", \"email\": \"a@globex.example\"}".to_vec()),
@@ -421,7 +424,7 @@ async fn a_record_the_model_cannot_read_serves_no_read() {
 /// Python: `test_a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it` (HITL
 /// 47b7dfc6): the read fails with a fixed error, the id alone, whatever the caller's
 /// organization: the record may be another organization's. Python's `ValueError` is
-/// [`StoreError::Value`].
+/// [`StoreError::Value`], and the kit's `RoomKitError::Value`.
 #[tokio::test]
 async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
     const FIXED: &str = "Identity i1 has a record the model cannot read";
@@ -436,17 +439,22 @@ async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
             "resolve_participant",
         ] {
             let (_file, store) = with_unreadable(&record).await;
+            let fixed = StoreError::Value(FIXED.to_owned());
             let refused: String = match door {
-                "get_identity" => full_text(&store.get_identity(&i1).await.unwrap_err()),
+                "get_identity" => {
+                    let refused = store.get_identity(&i1).await.unwrap_err();
+                    assert_eq!(refused, fixed, "{record:?}");
+                    full_text(&refused)
+                }
                 "create_identity" => {
                     let mut again = Identity::new(i1.clone());
                     again.organization_id = acme();
                     let refused = store.create_identity(again).await.unwrap_err();
-                    assert_eq!(refused, StoreError::Value(FIXED.to_owned()), "{record:?}");
+                    assert_eq!(refused, fixed, "{record:?}");
                     full_text(&refused)
                 }
-                "link_address" => full_text(
-                    &store
+                "link_address" => {
+                    let refused = store
                         .link_address(
                             &i1,
                             &ChannelType::SMS,
@@ -456,10 +464,12 @@ async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
                             },
                         )
                         .await
-                        .unwrap_err(),
-                ),
-                "unlink_address" => full_text(
-                    &store
+                        .unwrap_err();
+                    assert_eq!(refused, fixed, "{record:?}");
+                    full_text(&refused)
+                }
+                "unlink_address" => {
+                    let refused = store
                         .unlink_address(
                             &i1,
                             &ChannelType::SMS,
@@ -469,8 +479,10 @@ async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
                             },
                         )
                         .await
-                        .unwrap_err(),
-                ),
+                        .unwrap_err();
+                    assert_eq!(refused, fixed, "{record:?}");
+                    full_text(&refused)
+                }
                 _ => {
                     let room = RoomId::new("r1").unwrap();
                     let mut held = Room::new(room.clone());
@@ -498,6 +510,10 @@ async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
                         .await
                         .unwrap_err();
                     kit.close().await.unwrap();
+                    assert!(
+                        matches!(&refused, RoomKitError::Value(text) if text == FIXED),
+                        "{record:?}: {refused:?}"
+                    );
                     full_text(&refused)
                 }
             };
