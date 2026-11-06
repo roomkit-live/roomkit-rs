@@ -173,16 +173,7 @@ async fn a_cancel_past_its_timeout_leaves_the_target_working_and_wait_reads_the_
 async fn a_cut_whose_turn_s_end_is_owed_reports_its_cleanup_incomplete() {
     let target = ReadingOn::flushing(Duration::ZERO);
     let kit = room(holding(), &target).await;
-    // An executor stuck in a blocking call reads neither the cut nor the
-    // reader's close.
-    kit.inner.turns.set_fault(Arc::new(|carried, raw: &str| {
-        let stuck = [of_type("cancel"), of_type("close")];
-        if carried == Carried::Control && stuck.iter().any(|marks| raw.contains(marks)) {
-            UNSENT
-        } else {
-            Fate::default()
-        }
-    }));
+    stuck_executor(&kit);
     let handle = deferred(&kit).await;
     target.read.notified().await;
     let start = Instant::now();
@@ -195,6 +186,52 @@ async fn a_cut_whose_turn_s_end_is_owed_reports_its_cleanup_incomplete() {
     for waited in waits {
         assert!(matches!(waited, Err(RoomKitError::Timeout)), "{waited:?}");
     }
+}
+
+// Python: core/mixins/lane_execution.py joins a cancelled cascade's cleanup
+// (wait_drained) before an awaited call returns: one its key cut, a turn's end
+// owed, raises the cleanup's TimeoutError (RMK-1328).
+#[tokio::test(start_paused = true)]
+async fn an_awaited_call_its_key_cut_whose_turn_s_end_is_owed_times_out() {
+    let target = ReadingOn::flushing(Duration::ZERO);
+    let kit = room(holding(), &target).await;
+    stuck_executor(&kit);
+    let mut message = InboundMessage::new(
+        ChannelId::new("sms").unwrap(),
+        "+15550001",
+        TextContent::new("Hi"),
+    );
+    message.delivery_key = Some("key-1".to_owned());
+    let options = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    let call = tokio::spawn({
+        let kit = kit.clone();
+        async move { kit.process_inbound(message, options).await }
+    });
+    target.read.notified().await;
+    let cut = kit
+        .cancel_delivery("key-1", crate::CancelDeliveryOptions::default())
+        .await;
+    let called = call.await.unwrap();
+    kit.close().await.unwrap();
+    assert_eq!(cut, 1);
+    assert!(matches!(called, Err(RoomKitError::Timeout)), "{called:?}");
+}
+
+/// Makes `kit`'s turns run on an executor stuck in a blocking call: it reads
+/// neither a turn's cut nor its reader's close, and the turn's end never
+/// comes.
+fn stuck_executor(kit: &RoomKit) {
+    kit.inner.turns.set_fault(Arc::new(|carried, raw: &str| {
+        let stuck = [of_type("cancel"), of_type("close")];
+        if carried == Carried::Control && stuck.iter().any(|marks| raw.contains(marks)) {
+            UNSENT
+        } else {
+            Fate::default()
+        }
+    }));
 }
 
 // Python: the cancel reaches the turn and the target's `finally` together:
