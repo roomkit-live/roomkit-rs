@@ -15,8 +15,8 @@
 use pretty_assertions::assert_eq;
 use roomkit::model::{ChannelId, ChannelType, Metadata, ParticipantId, RoomId};
 use roomkit::{
-    AttachChannelOptions, CountryCode, CreateRoomOptions, RoomKit, RoomKitOptions,
-    TransportChannel, TransportChannelOptions,
+    AddMemberOptions, AttachChannelOptions, CountryCode, CreateRoomOptions, RoomKit,
+    RoomKitOptions, TransportChannel, TransportChannelOptions,
 };
 
 const ALICE: &str = "+15550000001";
@@ -26,8 +26,7 @@ fn room(id: &str) -> RoomId {
     RoomId::new(id).unwrap()
 }
 
-/// Python: `tests/test_transport_recipient.py::test_a_host_address_is_written_in_e164`,
-/// its attaches (roomkit-rs has no `add_member`).
+/// Python: `tests/test_transport_recipient.py::test_a_host_address_is_written_in_e164`.
 #[tokio::test]
 async fn a_host_address_is_written_in_e164() {
     let kit = RoomKit::new(RoomKitOptions::default());
@@ -60,6 +59,15 @@ async fn a_host_address_is_written_in_e164() {
         )
         .await
         .unwrap();
+    let member = kit
+        .add_member(
+            &room("r1"),
+            &sms,
+            &ParticipantId::new("1 (555) 000-0002").unwrap(),
+            AddMemberOptions::default(),
+        )
+        .await
+        .unwrap();
     let mut metadata = Metadata::new();
     metadata.insert("phone_number".to_owned(), "555.000.0002".into());
     let recipient_only = kit
@@ -76,11 +84,13 @@ async fn a_host_address_is_written_in_e164() {
     assert_eq!(
         (
             binding.participant_id.map(String::from),
+            String::from(member.id),
             recipient_only.participant_id.map(String::from),
             recipient_only.metadata.get("phone_number").cloned()
         ),
         (
             Some(ALICE.to_owned()),
+            BOB.to_owned(),
             Some(BOB.to_owned()),
             Some(BOB.into())
         )

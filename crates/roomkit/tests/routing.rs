@@ -220,11 +220,15 @@ fn kit_wrapping_the_default(
 
 /// [`kit_with_agent`], built with `options`.
 fn kit_with_agent_on(options: RoomKitOptions) -> (RoomKit, Provider) {
+    kit_with_agent_over(options, Provider::new("sms", ChannelType::SMS))
+}
+
+/// [`kit_with_agent_on`], its transport `sms` in place of the SMS number.
+fn kit_with_agent_over(options: RoomKitOptions, sms: Provider) -> (RoomKit, Provider) {
     let kit = kit_with_environment(
         options,
         SequentialEnvironment::new(Timestamp::from_unix_millis(1_792_677_780_000).unwrap()),
     );
-    let sms = Provider::new("sms", ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(EchoAgent::new(
         channel("ai"),
@@ -330,6 +334,46 @@ async fn a_first_message_opens_a_room_bound_to_its_sender_and_is_answered_there(
             vec![(ALICE.to_owned(), "You said: Bonjour".to_owned())]
         )
     );
+}
+
+/// The WhatsApp and email cases of the test above: a room opened for a
+/// sender names them under the channel's recipient key and answers them
+/// there.
+// Python: tests/test_transport_recipient.py::test_room_opened_for_a_sender_replies_to_them
+#[tokio::test]
+async fn a_room_opened_for_a_sender_replies_to_them() {
+    let cases = [
+        (ChannelType::WHATSAPP, "phone_number", ALICE),
+        (ChannelType::EMAIL, "email_address", "a@x.test"),
+    ];
+    for (channel_type, key, sender) in cases {
+        let provider = Provider::new("ch", channel_type.clone());
+        let (kit, ch) = kit_with_agent_over(RoomKitOptions::default(), provider);
+        let message = InboundMessage::new(channel("ch"), sender, TextContent::new("Hi"));
+        let landed = routed(&kit, message).await;
+        let binding = kit
+            .store()
+            .list_bindings(&landed)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|binding| binding.channel_id == channel("ch"))
+            .unwrap();
+        assert_eq!(
+            (
+                binding.participant_id.map(String::from),
+                binding.metadata.get(key).cloned(),
+                ch.sent()
+            ),
+            (
+                Some(sender.to_owned()),
+                Some(sender.into()),
+                vec![(sender.to_owned(), "You said: Hi".to_owned())]
+            ),
+            "{channel_type:?}"
+        );
+        kit.close().await.unwrap();
+    }
 }
 
 /// RFC §10.4's example: alice and bob on one SMS number each get a room of
@@ -1312,6 +1356,7 @@ async fn a_sender_step_three_admits_meanwhile_keeps_the_room() {
     assert_eq!(bobs, first);
     assert_ne!(alices, first);
     assert_eq!(correspondent(&kit, &first).await, Some(BOB.to_owned()));
+    assert_eq!(correspondent(&kit, &alices).await, Some(ALICE.to_owned()));
     let in_bobs = texts(&kit, &first).await;
     assert!(
         in_bobs.iter().all(|text| !text.contains("alice")),
