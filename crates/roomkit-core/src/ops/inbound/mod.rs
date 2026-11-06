@@ -318,8 +318,8 @@ impl Inbound {
     /// The room's agents run again on `event_id`, an event `room_id`
     /// stores, as on a new message of its author (RFC §11.7.6, §10.1 step
     /// 14): Python's `_rerun_agents_on`, which a held message's release
-    /// makes. The room's lock is waited for, and the room and the event read
-    /// under it, within `process_timeout`, past which the call is refused
+    /// makes. The room's lock is waited for, and the room read under it,
+    /// within `process_timeout`, past which the call is refused
     /// `process_timeout`; a room whose status
     /// refuses new events refuses it `room_closed` before any agent runs
     /// (RFC §5.1). An event that is not in the room, is deleted or is a

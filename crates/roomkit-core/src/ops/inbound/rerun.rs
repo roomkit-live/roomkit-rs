@@ -5,10 +5,10 @@
 //! lock first (`_plan_regeneration`).
 //!
 //! The call takes the room's lock and reads, under it, the room as the
-//! lock finds it and the event again, all within its `process_timeout`;
-//! the room's due timers are applied, and a room whose status refuses new
-//! events is refused, as the inbound gate does, before any agent runs (RFC
-//! §5.1). An event that is no longer one
+//! lock finds it, both within its `process_timeout`; the room's due timers
+//! are applied, a release reads its event again, and a room whose status
+//! refuses new events is refused, as the inbound gate does, before any
+//! agent runs (RFC §5.1). An event that is no longer one
 //! the agents may answer runs nothing: not in the room, deleted or itself
 //! a change (RFC §10.3), or its source binding gone, not a transport, or
 //! unable to write. Otherwise its delivery set is planned for the room's
@@ -31,7 +31,6 @@ use crate::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelType, EventId, Room, RoomContext,
     RoomEvent, RoomId, Visibility,
 };
-use crate::ops::io::Bound;
 use crate::ops::protocol::{
     DiscussionRequest, DiscussionTurn, EffectId, HoldOutcome, HoldRequest, Outcome, StoppedTurn,
     StoreRequest,
@@ -55,8 +54,8 @@ pub(super) enum Reran {
     /// A regeneration's caller named a trigger the choice under the lock
     /// is not (RFC §13.6): refused before any agent runs.
     Moved,
-    /// A read of the room or the event under the lock passed the call's
-    /// deadline (RFC §13.6): refused `process_timeout` before any agent runs.
+    /// The read of the room under the lock passed the call's deadline (RFC
+    /// §13.6): refused `process_timeout` before any agent runs.
     Expired,
     /// The event's delivery set, planned for the agents and placed in the
     /// room's lane.
@@ -86,10 +85,6 @@ pub(super) struct Planned {
 #[derive(Debug)]
 pub(super) struct RerunWork {
     asked: Asked,
-    /// What bounds the work's reads under the lock: the call's bound, as
-    /// Python bounds a regeneration's and a release's reads with its wait
-    /// for the lock; none for a discussion's turn.
-    bound: Bound,
     context: Option<Box<RoomContext>>,
     waiting: Waiting,
 }
@@ -261,7 +256,10 @@ impl SectionWork for RerunWork {
                 let request = StoreRequest::GetEvent {
                     event_id: event_id.clone(),
                 };
-                let effect = cx.io.issue_under(request, self.bound, Some(room_id));
+                // Read once the due timers are applied, unbounded: Python reads
+                // the event within the call's bound, before applying them
+                // (RMK-1491).
+                let effect = cx.io.issue_locked(request, room_id);
                 self.waiting = Waiting::Event(effect);
             }
             Asked::Turn => {
@@ -287,10 +285,6 @@ impl SectionWork for RerunWork {
         outcome: Outcome,
     ) -> Progress<Result<Reran, Abort>> {
         match std::mem::replace(&mut self.waiting, Waiting::Nothing) {
-            // The read of the event passed the call's deadline (RFC §13.6).
-            Waiting::Event(_) if outcome == Outcome::DeadlinePassed => {
-                Progress::Done(Ok(Reran::Expired))
-            }
             Waiting::Event(_) => self.on_event(cx, outcome),
             Waiting::Turn(_) => self.on_turn(cx, outcome),
             Waiting::Placing { mut planned, .. } => {
@@ -315,7 +309,7 @@ impl SectionWork for RerunWork {
     fn report(&self, _cx: &mut Cx<'_>, _result: &Result<Reran, Abort>) {}
 
     /// Python's `_plan_regeneration` and `_rerun_agents_on` bound their
-    /// reads of the room with the wait for the lock.
+    /// read of the room with the wait for the lock.
     fn read_expired(&self) -> Option<Result<Reran, Abort>> {
         Some(Ok(Reran::Expired))
     }
@@ -451,13 +445,12 @@ impl Machine {
         let bound = (!matches!(asked, Asked::Turn)).then_some(self.call.bound);
         let work = RerunWork {
             asked,
-            bound: bound.unwrap_or(Bound::Unbounded),
             context: None,
             waiting: Waiting::Nothing,
         };
         let section = Section::new(room_id, work);
-        // Its reads of the room are bounded with its wait for the lock, as
-        // Python's `_plan_regeneration` and `_rerun_agents_on` bound them.
+        // Its read of the room is bounded with its wait for the lock, as
+        // Python's `_plan_regeneration` and `_rerun_agents_on` bound it.
         let mut section = Box::new(match bound {
             Some(bound) => section.waiting_within(bound).reading_within(bound),
             None => section,
