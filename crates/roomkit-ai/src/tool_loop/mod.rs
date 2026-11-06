@@ -470,7 +470,7 @@ impl<P: AiProvider> Loop<P> {
     ) {
         steering.close();
         if let Some(span) = &self.turn_span {
-            span.failed(error.to_string());
+            span.failed(&error);
         }
         out.give(Err(error)).await;
     }
@@ -580,7 +580,7 @@ impl<P: AiProvider> Loop<P> {
             for report in &reports {
                 span.generation_used(report);
             }
-            span.failed(error.to_string());
+            span.failed(&error);
         }
         if interrupted {
             let end = LoopEndMarker {

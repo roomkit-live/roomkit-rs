@@ -17,7 +17,7 @@ use roomkit::{ChannelError, ClassedError, ResponseItem, ResponseStream, Scoped, 
 use roomkit_core::rules::transcript::is_blank;
 use serde_json::Value;
 
-use crate::provider::ProviderError;
+use crate::provider::{ProviderError, ResponseSchemaError};
 use crate::stream::next;
 use crate::tool_loop::{ToolEnd, TurnItem, TurnItems};
 
@@ -143,7 +143,7 @@ impl Rows<'_> {
         // Recorded under its class's name, as Python's `ProviderError` is
         // reported, not as a channel's.
         output.error = error.map(|error| {
-            let raised = ClassedError::new(PROVIDER_ERROR, error.clone());
+            let raised = ClassedError::new(class_of(error), error.clone());
             ErrorRecord {
                 attributes: Box::new(attributes_of(error)),
                 ..ErrorRecord::new(raised.class(), error.to_string())
@@ -180,12 +180,25 @@ impl Stream for Responding {
 /// The class a provider's failure is raised as, Python's.
 const PROVIDER_ERROR: &str = "roomkit.providers.ai.base:ProviderError";
 
+/// The class a response schema's failure is raised as, Python's.
+const RESPONSE_SCHEMA_ERROR: &str = "roomkit.providers.ai.response_schema:ResponseSchemaError";
+
+/// The Python class `error` is raised as: `ResponseSchemaError` for a
+/// response schema's failure, `ProviderError` otherwise.
+fn class_of(error: &ProviderError) -> &'static str {
+    if ResponseSchemaError::of(error).is_some() {
+        RESPONSE_SCHEMA_ERROR
+    } else {
+        PROVIDER_ERROR
+    }
+}
+
 /// A provider's failure as the turn raises it: under its Python class,
 /// which the kit records (RMK-1208), with its attributes, Python's
 /// `ProviderError` instance's, which its record keeps (RMK-1239).
 fn raised(error: ProviderError) -> ChannelError {
     let attributes = attributes_of(&error);
-    Box::new(ClassedError::new(PROVIDER_ERROR, error).with_attributes(attributes))
+    Box::new(ClassedError::new(class_of(&error), error).with_attributes(attributes))
 }
 
 /// A provider's failure's attributes, as Python's `error_record` reads a
@@ -199,6 +212,9 @@ fn attributes_of(error: &ProviderError) -> Metadata {
         "context_overflow".to_owned(),
         Value::from(error.context_overflow),
     );
+    if let Some(failure) = ResponseSchemaError::of(error) {
+        attributes.insert("reason".to_owned(), Value::from(failure.reason.as_str()));
+    }
     attributes
 }
 

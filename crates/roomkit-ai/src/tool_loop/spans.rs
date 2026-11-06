@@ -16,6 +16,8 @@ use serde_json::{Value, json};
 
 use roomkit::model::LoopEndReason;
 
+use crate::provider::{ProviderError, ResponseSchemaError};
+
 /// Where a turn reports: the kit's provider and the span the turn runs
 /// under, as read when the turn started.
 #[derive(Clone, Default)]
@@ -147,11 +149,15 @@ impl TurnSpan {
         self.finish(status, None);
     }
 
-    /// Ends it `error`, the provider's failure saying `text`: the class's
-    /// name alone, unless the kit records what can hold personal data.
-    pub(super) fn failed(&self, text: String) {
+    /// Ends it `error`, on the provider's failure `error`: its Python
+    /// class's name alone, `ResponseSchemaError` for a response schema's,
+    /// unless the kit records what can hold personal data, its text then.
+    pub(super) fn failed(&self, error: &ProviderError) {
+        let text = error.to_string();
         let message = if self.sensitive && !text.is_empty() {
             text
+        } else if ResponseSchemaError::of(error).is_some() {
+            "ResponseSchemaError".to_owned()
         } else {
             "ProviderError".to_owned()
         };

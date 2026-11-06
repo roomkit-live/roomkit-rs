@@ -796,3 +796,71 @@ async fn a_turn_s_request_names_the_broadcast_it_runs_under() {
     let generate = one(mock.get_spans(SpanKind::LlmGenerate));
     assert_eq!(generate.parent_id.as_deref(), Some(span_id));
 }
+
+// Python: tests/test_schema_turn_on_every_door.py::test_a_cut_schema_room_turn_fails_its_span
+// The turn under a response schema its round cap cuts fails `truncated`:
+// its span ends in error, named after Python's class, and the caller reads
+// the failure recorded under it, its reason among its attributes.
+#[tokio::test]
+async fn a_cut_schema_room_turn_fails_its_span() {
+    let (kit, mock) = room_of(false, Vec::new()).await;
+    let call = AiResponse {
+        finish_reason: Some("tool_calls".to_owned()),
+        tool_calls: vec![AiToolCall::new("c", "lookup")],
+        ..AiResponse::new("")
+    };
+    let looping = roomkit_ai::MockAiProvider::new(roomkit_ai::MockAiProviderOptions {
+        ai_responses: Some(vec![call]),
+        streaming: true,
+        response_schema: true,
+        response_schema_with_tools: true,
+        ..roomkit_ai::MockAiProviderOptions::default()
+    });
+    let Value::Object(schema) = json!({
+        "type": "object",
+        "properties": { "answer": { "type": "string" } },
+        "required": ["answer"],
+        "additionalProperties": false,
+    }) else {
+        unreachable!("an object")
+    };
+    let lookup = Tools::new().tool(
+        AiTool::new("lookup", "Look it up.").unwrap(),
+        |_, _| async { Ok(ToolResult::Text("found".to_owned())) },
+    );
+    let options = AiChannelOptions {
+        tools: lookup.into(),
+        max_tool_rounds: 1,
+        response_schema: Some(schema),
+        ..AiChannelOptions::default()
+    };
+    kit.unregister_channel(&id("ai")).unwrap();
+    kit.register_channel(AiChannel::new(id("ai"), looping, options).unwrap())
+        .unwrap();
+    kit.attach_channel(&room(), &id("ai"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let message = InboundMessage::new(id("sms"), "+15550000001", TextContent::new("go"));
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..ProcessInboundOptions::default()
+    };
+    let result = kit.process_inbound(message, options).await.unwrap();
+    let span = one(mock.get_spans(SpanKind::LlmGenerate));
+    let error = result.error.unwrap();
+    assert_eq!(
+        (
+            span.status.as_str(),
+            span.error_message.as_deref(),
+            error.error_type.as_str(),
+            error.attributes.get("reason"),
+        ),
+        (
+            "error",
+            Some("ResponseSchemaError"),
+            "ResponseSchemaError",
+            Some(&json!("truncated")),
+        )
+    );
+    kit.close().await.unwrap();
+}
