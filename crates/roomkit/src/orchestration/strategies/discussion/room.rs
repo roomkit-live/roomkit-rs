@@ -545,10 +545,9 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                     None if dispatched => {
                         if let Some((agents, event_id)) =
                             self.leave_for_dispatch(state, event, &who, reach)
+                            && !agents.is_empty()
                         {
-                            if !agents.is_empty() {
-                                changes.push((SpeakQueueChange::Queued, agents, Some(event_id)));
-                            }
+                            changes.push((SpeakQueueChange::Queued, agents, Some(event_id)));
                         }
                         Vec::new()
                     }

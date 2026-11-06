@@ -918,4 +918,54 @@ mod tests {
         let given = room.planned_turn(context).await.unwrap();
         assert_eq!(given.turn.map(|turn| turn.agent), Some(agent));
     }
+
+    // Python: tests/orchestration/test_discussion_dispatch.py::test_a_message_the_peek_missed_asks_done_first[waiting-for-dispatch]:
+    // a message left to the policy between the peek and the plan is planned
+    // once done was asked, which ends the discussion before any decision.
+    #[tokio::test]
+    async fn a_message_the_peek_missed_asks_done_first() {
+        let room_id = RoomId::new("r1").unwrap();
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let options = CreateRoomOptions {
+            room_id: Some(room_id.clone()),
+            ..Default::default()
+        };
+        let created = kit.create_room(options).await.unwrap();
+        let config: DiscussionConfig = serde_json::from_value(serde_json::json!({
+            "agents": ["a"], "max_depth": 5, "dispatch": true
+        }))
+        .unwrap();
+        let room = DiscussionRoom::new(&kit, room_id.clone(), None, config, None, None);
+        room.load().await.unwrap();
+        room.editing(&kit, |state, _| {
+            let pending = super::super::queue::Pending {
+                event_id: "m1".to_owned(),
+                depth: 0,
+                asker: "ops".to_owned(),
+                index: 1,
+                candidates: vec![ChannelId::new("a").unwrap()],
+                asked: Vec::new(),
+                seq: state.reserve_seq(),
+            };
+            drop(state.wait_for_decision(pending));
+        })
+        .await
+        .unwrap();
+        let context = RoomContext::new(created);
+
+        // The peek held nothing: done was not asked, so nothing is decided.
+        room.state().done = None;
+        let missed = room.planned_turn(context.clone()).await.unwrap();
+        assert!(missed.turn.is_none());
+        assert!(room.state().deciding.is_none());
+        assert!(room.woken.load(Ordering::SeqCst));
+
+        // The next look asked done, which holds: over, nothing decided.
+        room.state().done = Some(true);
+        room.planned_turn(context).await.unwrap();
+        assert!(room.state().deciding.is_none());
+        let stored = kit.store().get_room(&room_id).await.unwrap().unwrap();
+        let queue = read_queue(&stored.metadata);
+        assert!(queue.over && queue.dispatching.is_empty());
+    }
 }

@@ -4,7 +4,7 @@
 //! other by `@handle`, and one agent speaks at a time.
 
 mod config;
-mod dispatch;
+pub(in crate::orchestration) mod dispatch;
 mod dispatching;
 mod driver;
 mod lease;
@@ -16,8 +16,8 @@ pub(in crate::orchestration) mod strategy;
 
 #[doc(inline)]
 pub use self::dispatch::{
-    DispatchCandidate, DispatchDecision, DispatchDecisionEvent, DispatchError, DispatchFuture,
-    DispatchPolicy, DispatchTurn, MockDispatchPolicy, MockDispatchPolicyOptions,
+    DispatchCandidate, DispatchDecision, DispatchDecisionEvent, DispatchPolicy, DispatchTurn,
+    MockDispatchPolicy,
 };
 #[doc(inline)]
 pub use self::models::{SpeakQueue, SpeakQueueChange, SpeakQueueEvent};

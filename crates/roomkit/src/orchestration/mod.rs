@@ -63,12 +63,15 @@ pub use self::status::{
     HasCompletedOptions, PostAsyncOptions, PostOptions, RecentOptions, StatusBus, StatusBusOptions,
     StatusEntry, StatusLevel,
 };
+#[doc(inline)]
+pub use self::strategies::discussion::dispatch::{
+    DispatchError, DispatchFuture, MockDispatchPolicyOptions,
+};
 pub use self::strategies::discussion::strategy::{DiscussionOptions, DoneFn};
 #[doc(inline)]
 pub use self::strategies::discussion::{
-    Discussion, DispatchCandidate, DispatchDecision, DispatchDecisionEvent, DispatchError,
-    DispatchFuture, DispatchPolicy, DispatchTurn, MockDispatchPolicy, MockDispatchPolicyOptions,
-    SpeakQueue, SpeakQueueChange, SpeakQueueEvent,
+    Discussion, DispatchCandidate, DispatchDecision, DispatchDecisionEvent, DispatchPolicy,
+    DispatchTurn, MockDispatchPolicy, SpeakQueue, SpeakQueueChange, SpeakQueueEvent,
 };
 pub use self::strategies::pipeline::Pipeline;
 pub use self::strategies::pipeline::PipelineOptions;

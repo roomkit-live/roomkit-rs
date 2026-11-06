@@ -143,11 +143,12 @@ impl ScriptedDispatch {
             .map(decision_of)
             .collect::<Result<Vec<_>, _>>()?;
         let options = MockDispatchPolicyOptions {
+            decisions,
             delay: Duration::from_millis(optional::<u64>(spec, "delay_ms")?.unwrap_or(0)),
             error: optional(spec, "error")?,
         };
         Ok(Arc::new(Self {
-            mock: MockDispatchPolicy::new(decisions, options),
+            mock: MockDispatchPolicy::new(options),
             gate: optional(spec, "gate")?,
             recorder,
         }))

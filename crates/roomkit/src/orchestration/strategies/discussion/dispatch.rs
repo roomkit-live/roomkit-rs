@@ -147,14 +147,38 @@ pub struct DispatchDecisionEvent {
     pub duration_ms: u64,
 }
 
+impl DispatchDecisionEvent {
+    /// The decision on `event`, taken in no time yet: Python's default
+    /// `duration_ms=0`.
+    #[must_use]
+    pub fn new(
+        room_id: RoomId,
+        event: RoomEvent,
+        candidates: Vec<ChannelId>,
+        decision: DispatchDecision,
+    ) -> Self {
+        Self {
+            room_id,
+            event,
+            candidates,
+            decision,
+            duration_ms: 0,
+        }
+    }
+}
+
 impl TurnPayload for DispatchDecisionEvent {
     const TRIGGER: HookTrigger = HookTrigger::OnDispatchDecision;
 }
 
-/// What [`MockDispatchPolicy::new`] takes beside its decisions: Python's
+/// What [`MockDispatchPolicy::new`] takes: Python's
 /// `MockDispatchPolicy(decisions=(), *, delay=0.0, error=None)`.
 #[derive(Clone, Debug, Default)]
 pub struct MockDispatchPolicyOptions {
+    /// The decisions, in order, the last one repeating; none: each message
+    /// asks what it asks with no policy. Python's channel-id shortcut is a
+    /// decision with the reason `scripted`.
+    pub decisions: Vec<DispatchDecision>,
     /// How long each decision is held back.
     pub delay: Duration,
     /// The message of the error each decision raises instead.
@@ -175,10 +199,15 @@ pub struct MockDispatchPolicy {
 }
 
 impl MockDispatchPolicy {
-    /// The policy deciding `decisions` in order, the last one repeating.
+    /// The policy deciding `options.decisions` in order, the last one
+    /// repeating.
     #[must_use]
-    pub fn new(decisions: Vec<DispatchDecision>, options: MockDispatchPolicyOptions) -> Self {
-        let MockDispatchPolicyOptions { delay, error } = options;
+    pub fn new(options: MockDispatchPolicyOptions) -> Self {
+        let MockDispatchPolicyOptions {
+            decisions,
+            delay,
+            error,
+        } = options;
         Self {
             decisions,
             delay,
