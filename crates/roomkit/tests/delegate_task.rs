@@ -171,8 +171,11 @@ async fn delegations_of_a_room_start_one_at_a_time() {
             let handler = handler.clone();
             tokio::spawn(async move { handler.handle(&room(), &id("boss"), &call("b")).await })
         };
-        // The second call runs as far as it can while the first is held.
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        // The second call runs as far as it can while the first is held: on
+        // this test's one thread, until it waits for something.
+        for _ in 0..200 {
+            tokio::task::yield_now().await;
+        }
         assert_eq!(
             runner.asked.load(Ordering::SeqCst),
             started_meanwhile,
@@ -257,7 +260,17 @@ async fn a_setup_is_refused_twice() {
         matches!(&refused, Err(RoomKitError::Value(_))),
         "{refused:?}"
     );
-    setup_delegation(id("other"), &handler, SetupDelegationOptions::default()).unwrap();
+    // A null list is none, as Python reads it: any agent.
+    let mut unlisted = build_delegate_tool(&[]);
+    unlisted.parameters["properties"]["agent"]["enum"] = serde_json::Value::Null;
+    setup_delegation(
+        id("other"),
+        &handler,
+        SetupDelegationOptions {
+            tool: Some(unlisted),
+        },
+    )
+    .unwrap();
 
     kit.close().await.unwrap();
 }
@@ -318,4 +331,22 @@ async fn a_setup_refused_on_a_live_agent_registers_nothing() {
     );
     assert!(kit.get_channel(&id("holding")).is_none());
     kit.close().await.unwrap();
+}
+
+// Python: a closed kit answers what it would answer open until `delegate`
+// refuses it: a call naming no agent is refused as the kit is closed.
+#[tokio::test]
+async fn a_closed_kit_refuses_a_call_naming_no_agent_as_closed() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    in_room(&kit).await;
+    let handler = DelegateHandler::new(&kit, DelegateHandlerOptions::default());
+    kit.close().await.unwrap();
+
+    let named_none = Metadata::from_iter([("task".to_owned(), json!("T"))]);
+    let refused = handler.handle(&room(), &id("boss"), &named_none).await;
+
+    assert!(
+        matches!(&refused, Err(RoomKitError::KitClosed)),
+        "{refused:?}"
+    );
 }

@@ -281,7 +281,8 @@ impl<S: ConversationStore> DelegateHandler<S> {
         let share_channels = share_channels_of(arguments)?
             .unwrap_or_else(|| self.inner.default_share_channels.clone());
         let Ok(agent) = ChannelId::new(named.as_str()) else {
-            // As the kit reads a delegation: the room first.
+            // As the kit reads a delegation: open, then the room.
+            kit.inner.open()?;
             kit.get_room(room_id, GetRoomOptions::default()).await?;
             return Err(unregistered(&named));
         };
@@ -456,7 +457,7 @@ impl<S: ConversationStore> DelegateHandler<S> {
     ) -> Result<OwnerServe<S>, RoomKitError> {
         let listed: Option<Vec<Value>> =
             match definition.pointer("/parameters/properties/agent/enum") {
-                None => None,
+                None | Some(Value::Null) => None,
                 Some(Value::Array(listed)) => Some(listed.clone()),
                 Some(_) => {
                     return Err(RoomKitError::Value(

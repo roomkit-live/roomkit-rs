@@ -297,11 +297,19 @@ mod tests {
                 serde_json::json!({"deep": [{"x": ["\u{ff02}end"]}]}),
                 "'end",
             ),
+            (
+                serde_json::json!({"deep": {"k\u{201d}": {"\u{201c}j": "\u{2033}v"}}}),
+                "'j\": \"'v",
+            ),
+            (
+                serde_json::json!({"context": "as a string\u{201d}"}),
+                "as a string'",
+            ),
         ] {
             let block = context_block(passed.as_object().expect("an object")).expect("a block");
             assert!(block.contains(written), "{block}");
             assert!(
-                !block.contains(['\u{201c}', '\u{201d}', '\u{ff02}']),
+                !block.contains(['\u{201c}', '\u{201d}', '\u{ff02}', '\u{2033}']),
                 "{block}"
             );
         }
