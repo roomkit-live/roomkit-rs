@@ -1,8 +1,10 @@
 //! A connection string read as asyncpg reads it, and its defaults for what it
 //! leaves out (HITL fa9dd934, 22f38d15), on a real server: Python's tests of
-//! the same names in `tests/test_store_postgres.py`. Each case opens a store in a child process
-//! whose environment holds no `PG*` variable of the parent's, and whose `HOME`
-//! is a directory of the test's: no test reads the real `~/.pgpass`. Each test
+//! the same names in `tests/test_store_postgres.py`. A case that reads what a
+//! string leaves out opens its store in a child process whose environment
+//! holds no `PG*` variable of the parent's, and whose `HOME` is a directory of
+//! the test's: no test reads the real `~/.pgpass`; one on the string's own
+//! parameters opens it here, on `POSTGRES_DSN`, which names a password. Each test
 //! skips itself without `POSTGRES_DSN`; those on the server's Unix socket also
 //! without `POSTGRES_SOCKET_DIR`, the directory that holds it, where the server
 //! asks no password while TCP asks one.
@@ -695,7 +697,7 @@ async fn a_parameter_asyncpg_does_not_read_goes_to_the_server() {
 
 /// Python: `test_a_tcp_user_timeout_is_the_server_s_setting` (HITL 22f38d15,
 /// point C). asyncpg passes `tcp_user_timeout` to the server, which takes it
-/// for its own setting of the session: the store opens.
+/// for its own setting of the session, with its unit (`1s`): the store opens.
 #[tokio::test]
 async fn a_tcp_user_timeout_is_the_server_s_setting() {
     let Some(server) = dsn() else {
@@ -703,7 +705,7 @@ async fn a_tcp_user_timeout_is_the_server_s_setting() {
     };
     let schema = TempSchema::new().await;
     drop(server);
-    let store = store_with(&schema.dsn(), "tcp_user_timeout=1000");
+    let store = store_with(&schema.dsn(), "tcp_user_timeout=1s");
     store
         .init(InitOptions {
             min_size: 1,

@@ -42,6 +42,12 @@ fn with_settings(config: &mut Config, settings: &[(String, String)]) {
         return;
     }
     let mut options = config.get_options().unwrap_or_default().to_owned();
+    // A backslash that ends the string's own options escapes nothing, and the
+    // server drops it; before a setting, it would escape the space between.
+    let trailing = options.chars().rev().take_while(|c| *c == '\\').count();
+    if trailing % 2 == 1 {
+        options.pop();
+    }
     for (name, value) in settings {
         let value: String = value
             .chars()
@@ -88,6 +94,8 @@ fn with_environment(config: &mut Config) {
     }
     // Each host's connect: the whole is bounded by the pool's create timeout.
     config.connect_timeout(CONNECT_TIMEOUT);
+    // asyncpg's socket asks no keepalive: it sets `TCP_NODELAY` alone.
+    config.keepalives(false);
 }
 
 /// `dsn`'s string cut, after its scheme is checked.
@@ -388,6 +396,34 @@ mod tests {
             read.config.get_options(),
             Some("-cx=y -c search_path=tenant -c statement_timeout=5\\ s")
         );
+        // HITL 22f38d15: asyncpg reads none of these, and passes each to the
+        // server (Python: `test_a_parameter_asyncpg_does_not_read_goes_to_the_server`,
+        // `test_a_tcp_user_timeout_is_the_server_s_setting`).
+        let sent = target(Some(
+            "postgresql://u:p@h/d?connect_timeout=3&tcp_user_timeout=1s&keepalives=1\
+             &keepalives_idle=30&keepalives_interval=10&keepalives_retries=3\
+             &channel_binding=prefer&load_balance_hosts=random",
+        ))
+        .unwrap();
+        assert_eq!(
+            sent.config.get_options(),
+            Some(
+                "-c connect_timeout=3 -c tcp_user_timeout=1s -c keepalives=1 \
+                 -c keepalives_idle=30 -c keepalives_interval=10 -c keepalives_retries=3 \
+                 -c channel_binding=prefer -c load_balance_hosts=random"
+            )
+        );
+        assert_eq!(sent.config.get_tcp_user_timeout(), None);
+        // A backslash ending the string's own options does not escape the
+        // space before a setting.
+        let ending = target(Some(
+            "postgresql://u:p@h/d?options=-c%20search_path%3Dpublic%5C&tcp_user_timeout=1s",
+        ))
+        .unwrap();
+        assert_eq!(
+            ending.config.get_options(),
+            Some("-c search_path=public -c tcp_user_timeout=1s")
+        );
         let named = target(Some("postgresql://u:p@h?database=mine")).unwrap();
         assert_eq!(named.config.get_dbname(), Some("mine"));
         let beside_a_path = target(Some("postgresql://u:p@h/path?database=mine")).unwrap();
@@ -435,34 +471,16 @@ mod tests {
     }
 
     /// A connection that never answers does not hang `init`: asyncpg's 60 s,
-    /// for each host as for the whole.
-    #[test]
-    fn a_connection_has_asyncpg_s_timeout() {
+    /// for each host as for the whole; and, as asyncpg's socket, it asks no
+    /// keepalive.
+    #[tokio::test]
+    async fn a_connection_has_asyncpg_s_timeout_and_no_keepalive() {
         let read = target(Some("postgresql://u:p@h1,h2/d")).unwrap();
         assert_eq!(read.config.get_connect_timeout(), Some(&CONNECT_TIMEOUT));
-    }
-
-    /// Python: `test_a_tcp_user_timeout_is_the_server_s_setting` and
-    /// `test_a_parameter_asyncpg_does_not_read_goes_to_the_server` (HITL
-    /// 22f38d15): asyncpg reads none of these, and passes each to the server.
-    #[test]
-    fn a_parameter_asyncpg_does_not_read_is_a_setting_for_the_server() {
-        let read = target(Some(
-            "postgresql://u:p@h/d?connect_timeout=3&tcp_user_timeout=1000&keepalives=1\
-             &keepalives_idle=30&keepalives_interval=10&keepalives_retries=3\
-             &channel_binding=prefer&load_balance_hosts=random",
-        ))
-        .unwrap();
-        assert_eq!(
-            read.config.get_options(),
-            Some(
-                "-c connect_timeout=3 -c tcp_user_timeout=1000 -c keepalives=1 \
-                 -c keepalives_idle=30 -c keepalives_interval=10 -c keepalives_retries=3 \
-                 -c channel_binding=prefer -c load_balance_hosts=random"
-            )
-        );
-        assert_eq!(read.config.get_connect_timeout(), Some(&CONNECT_TIMEOUT));
-        assert_eq!(read.config.get_tcp_user_timeout(), None);
+        assert!(!read.config.get_keepalives());
+        let manager = Manager::from_config(Config::new(), tokio_postgres::NoTls, manager_config());
+        let pool = pool_of(manager, 1, CONNECT_TIMEOUT).unwrap();
+        assert_eq!(pool.timeouts().create, Some(CONNECT_TIMEOUT));
     }
 
     /// `error`'s message, each of its causes' after it.

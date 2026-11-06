@@ -32,11 +32,13 @@ pub struct PostgresStoreOptions {
     /// others can access is not read, and warned of (HITL fa9dd934). A
     /// connection is given 60 s, asyncpg's `timeout`, whichever hosts it tries.
     ///
-    /// Not read, as asyncpg reads none of them: `sslcert`, `sslkey`, `hostaddr`,
+    /// Not read: `sslcert` and `sslkey`, a client certificate asyncpg reads and
+    /// this crate does not; and, as asyncpg reads none of them, `hostaddr`,
     /// `connect_timeout`, `keepalives` and its kin, `channel_binding` and
-    /// `load_balance_hosts`, which are sent to the server as settings, and which
-    /// it refuses; `tcp_user_timeout`, sent too, which it takes for its own
-    /// setting (HITL 22f38d15).
+    /// `load_balance_hosts`. Each is sent to the server as a setting, which it
+    /// refuses; `tcp_user_timeout` is sent too, the server's own setting, in
+    /// milliseconds (HITL 22f38d15). As asyncpg's, the connection asks no TCP
+    /// keepalive.
     /// A certificate that is its own root and a CA (the recipe of Postgres's
     /// documentation) is refused under a mode that checks the chain: rustls
     /// takes no CA as an end entity; give the server one issued by that CA.
