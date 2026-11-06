@@ -23,7 +23,6 @@ pub(crate) const KEPT_ASKERS: usize = 16;
 
 /// Messages that may wait for a dispatch decision; past them, the oldest
 /// asks every candidate, as a decision not taken in time does (rule 18).
-#[cfg_attr(not(test), expect(dead_code, reason = "the dispatch policy, lot 9"))]
 pub(crate) const KEPT_PENDING: usize = 16;
 
 /// An event that asked for an agent's turn.
@@ -169,7 +168,6 @@ pub(crate) struct Pending {
 impl Pending {
     /// What the message asks with no policy (rule 8): the agents that asked
     /// the person, else every candidate.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the dispatch policy, lot 9"))]
     pub(crate) fn undecided(&self) -> Vec<ChannelId> {
         if self.asked.is_empty() {
             self.candidates.clone()
@@ -250,7 +248,6 @@ impl SpeakQueueState {
     /// Leave `pending` to the dispatch policy; the oldest message waiting,
     /// once more than [`KEPT_PENDING`] wait, is returned for its candidates
     /// to take.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the dispatch policy, lot 9"))]
     pub(crate) fn wait_for_decision(&mut self, pending: Pending) -> Option<Pending> {
         self.dispatching.push(pending);
         (self.dispatching.len() > KEPT_PENDING).then(|| self.dispatching.remove(0))
@@ -258,7 +255,6 @@ impl SpeakQueueState {
 
     /// The agents a decision picked for `pending`: at the front, at the
     /// message's place, as a person's message puts the agents it asks for.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the dispatch policy, lot 9"))]
     pub(crate) fn queue_picked(&mut self, pending: &Pending, agents: &[ChannelId]) {
         for agent in agents {
             let ask = Ask {
@@ -303,7 +299,10 @@ impl SpeakQueueState {
 
     /// A regenerated answer to the event `ask` names: a turn of its own, at
     /// the front, once per agent and event; whether it was queued.
-    #[cfg_attr(not(test), expect(dead_code, reason = "regeneration, lot 9"))]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "regeneration, lot 10 of stream I")
+    )]
     pub(crate) fn queue_regeneration(&mut self, agent: &ChannelId, ask: Ask) -> bool {
         let queued = self.entries.iter().any(|entry| {
             entry.regenerate
@@ -501,7 +500,13 @@ impl SpeakQueueState {
 
     /// Remove the instruction turns, whose text a stopped process held; the
     /// turns removed.
-    #[cfg_attr(not(test), expect(dead_code, reason = "a restart, lot 8d"))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Python's drop_instructions, which no Python code calls"
+        )
+    )]
     pub(crate) fn drop_instructions(&mut self) -> Vec<Entry> {
         let (dropped, kept) = std::mem::take(&mut self.entries)
             .into_iter()
@@ -513,7 +518,13 @@ impl SpeakQueueState {
     /// Forget `agents`, which the discussion no longer holds: their turns,
     /// their listening, what they asked people and their place among a
     /// message's candidates; the instruction turns it dropped (rule 1).
-    #[cfg_attr(not(test), expect(dead_code, reason = "a replacement, lot 9"))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "a replacement over a discussion, lot 10 of stream I"
+        )
+    )]
     pub(crate) fn drop_agents(&mut self, agents: &[ChannelId]) -> Vec<Entry> {
         let dropped = self
             .entries
@@ -560,7 +571,6 @@ impl SpeakQueueState {
     }
 
     /// A place among the front requests, for a request served later.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the dispatch policy, lot 9"))]
     pub(crate) fn reserve_seq(&mut self) -> u64 {
         self.next_seq()
     }

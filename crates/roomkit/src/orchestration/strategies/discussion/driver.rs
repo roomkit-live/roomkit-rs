@@ -172,7 +172,18 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             let _over = TurnOver(self);
             kit.run_discussion_turn(&self.room_id, named).await
         };
-        let given = self.state().turn.take();
+        let (given, deciding) = {
+            let mut live = self.state();
+            (live.turn.take(), live.deciding.take())
+        };
+        if let Some(pending) = deciding {
+            ran?;
+            // Off the lock, before any other turn: the policy may take its
+            // bound.
+            self.decide(&kit, pending).await;
+            self.rouse();
+            return Ok(Looked::Ran);
+        }
         let Some(given) = given else {
             ran?;
             return Ok(Looked::Nothing);
@@ -242,8 +253,14 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         // asked, the next look asks it, which this one's version must not
         // read as nothing new.
         let unasked = done.is_none() && holds_work(&state);
+        let pending =
+            Self::waiting_decision(&state, done == Some(true), self.max_turns_given(&state));
         let next = if unasked {
             self.rouse();
+            NextTurn::default()
+        } else if let Some(pending) = pending {
+            // Decided by the look once this plan is over, off the lock.
+            self.state().deciding = Some(pending);
             NextTurn::default()
         } else {
             self.pick(&kit, &mut state, &context, done == Some(true), &mut changes)
@@ -271,6 +288,19 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         }
         self.fire_all(changes);
         Ok(next)
+    }
+
+    /// The first message waiting for the dispatch policy, unless the
+    /// discussion is over or ends now, its queue dropped with them.
+    fn waiting_decision(
+        state: &SpeakQueueState,
+        done: bool,
+        max_turns_given: bool,
+    ) -> Option<super::queue::Pending> {
+        if state.over || done || max_turns_given {
+            return None;
+        }
+        state.dispatching.first().cloned()
     }
 
     async fn store_queue(
@@ -841,7 +871,7 @@ mod tests {
             "agents": ["a"], "max_depth": 5
         }))
         .unwrap();
-        let room = DiscussionRoom::new(&kit, room_id.clone(), None, config, None);
+        let room = DiscussionRoom::new(&kit, room_id.clone(), None, config, None, None);
         room.load().await.unwrap();
         room.editing(&kit, |state, _| {
             let ask = Ask {

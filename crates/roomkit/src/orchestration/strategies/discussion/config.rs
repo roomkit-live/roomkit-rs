@@ -23,7 +23,7 @@ pub(crate) fn config_of(strategy: &Discussion, default_depth: u32) -> Discussion
         max_depth: strategy.max_depth.unwrap_or(default_depth),
         silent_token: strategy.silent_token.clone(),
         rules: strategy.rules.clone(),
-        dispatch: false,
+        dispatch: strategy.dispatch.is_some(),
         attached: Vec::new(),
     }
 }

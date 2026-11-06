@@ -32,7 +32,7 @@ use crate::error::RoomKitError;
 use crate::events::FrameworkEvent;
 use crate::hooks::{self, HookHandler, Kept};
 use crate::orchestration::backend::StatusCallback;
-use crate::orchestration::{SpeakQueueEvent, StatusBus, StatusEntry};
+use crate::orchestration::{DispatchDecisionEvent, SpeakQueueEvent, StatusBus, StatusEntry};
 use crate::store::ConversationStore;
 use crate::tasks::Kind;
 use crate::telemetry::within_kit;
@@ -350,6 +350,22 @@ impl ObservedPayload for SpeakQueueEvent {
     }
 }
 
+impl ObservedPayload for DispatchDecisionEvent {
+    fn handler(kept: &Kept) -> Option<Arc<dyn HookHandler<Self>>> {
+        match kept {
+            Kept::Turn(hook) => hook.handler::<Self>(),
+            Kept::Event(_)
+            | Kept::Router(_)
+            | Kept::ToolCall(_)
+            | Kept::Session(_)
+            | Kept::Status(_)
+            | Kept::StatusEntry(_)
+            | Kept::Observation(_)
+            | Kept::Input(_) => None,
+        }
+    }
+}
+
 impl ObservedPayload for RoomEvent {
     fn handler(kept: &Kept) -> Option<Arc<dyn HookHandler<Self>>> {
         match kept {
@@ -548,6 +564,30 @@ impl<S: ConversationStore> Inner<S> {
         let handlers = observers
             .iter()
             .filter(|(_, kept)| SpeakQueueEvent::handler(kept).is_some())
+            .count();
+        let (started, mut starting) = tokio::sync::mpsc::unbounded_channel();
+        self.observe_telling(observers, event, context, async {}, Some(started));
+        for _ in 0..handlers {
+            if starting.recv().await.is_none() {
+                return;
+            }
+        }
+    }
+
+    /// Starts the `ON_DISPATCH_DECISION` hooks on one decision of a room's
+    /// dispatch policy, and returns once they started, as
+    /// [`observe_speak_queue`](Self::observe_speak_queue).
+    pub(crate) async fn observe_dispatch_decision(self: &Arc<Self>, event: DispatchDecisionEvent) {
+        let observers = self.observers(HookTrigger::OnDispatchDecision, &event.room_id);
+        if observers.is_empty() {
+            return;
+        }
+        let Some(context) = self.observed_context(&event.room_id).await else {
+            return;
+        };
+        let handlers = observers
+            .iter()
+            .filter(|(_, kept)| DispatchDecisionEvent::handler(kept).is_some())
             .count();
         let (started, mut starting) = tokio::sync::mpsc::unbounded_channel();
         self.observe_telling(observers, event, context, async {}, Some(started));

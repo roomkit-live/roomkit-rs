@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use roomkit_core::model::{ChannelId, ChannelType, RoomId};
 use roomkit_core::rules::casefold;
@@ -17,6 +18,7 @@ use crate::orchestration::{Orchestration, StrategyAgent, StrategyFuture};
 use crate::store::ConversationStore;
 
 use super::config::config_of;
+use super::dispatch::DispatchPolicy;
 use super::room::{DiscussionRoom, NAMES, SILENT};
 
 /// `done(room_id)`: whether the discussion is over. Python's `DoneFn`, sync
@@ -26,7 +28,8 @@ pub type DoneFn = Arc<dyn Fn(RoomId) -> BoxFuture<'static, bool> + Send + Sync>;
 /// What [`Discussion::new`] takes beside the agents: Python's
 /// `Discussion(agents, *, handles=None, people=None, addressed_only=False,
 /// everyone=None, max_turns=None, max_depth=None, done=None,
-/// silent_token='(silent)', rules=None)`.
+/// silent_token='(silent)', rules=None, dispatch=None,
+/// dispatch_timeout=5.0)`.
 #[derive(Clone)]
 pub struct DiscussionOptions {
     /// The name each agent is addressed by (`@handle`), by channel id. An
@@ -65,6 +68,13 @@ pub struct DiscussionOptions {
     /// `silent_token`. `None`: the default, which tells the agent to end its
     /// message with the handle of the agent that must act next.
     pub rules: Option<String>,
+    /// Decides which agents take a person's message that names none and
+    /// answers none, in place of asking `everyone` (rule 18). Not with
+    /// `addressed_only`, where such a message asks no agent.
+    pub dispatch: Option<Arc<dyn DispatchPolicy>>,
+    /// How long a decision may take; past it, or when the policy fails, the
+    /// message asks `everyone` it reaches.
+    pub dispatch_timeout: Duration,
 }
 
 impl Default for DiscussionOptions {
@@ -79,6 +89,8 @@ impl Default for DiscussionOptions {
             done: None,
             silent_token: "(silent)".to_owned(),
             rules: None,
+            dispatch: None,
+            dispatch_timeout: Duration::from_secs(5),
         }
     }
 }
@@ -96,6 +108,8 @@ impl fmt::Debug for DiscussionOptions {
             .field("done", &self.done.is_some())
             .field("silent_token", &self.silent_token)
             .field("rules", &self.rules)
+            .field("dispatch", &self.dispatch.is_some())
+            .field("dispatch_timeout", &self.dispatch_timeout)
             .finish()
     }
 }
@@ -149,6 +163,8 @@ pub struct Discussion {
     pub(super) done: Option<DoneFn>,
     pub(super) silent_token: String,
     pub(super) rules: Option<String>,
+    pub(super) dispatch: Option<Arc<dyn DispatchPolicy>>,
+    pub(super) dispatch_timeout: Duration,
 }
 
 impl Discussion {
@@ -161,7 +177,8 @@ impl Discussion {
     /// agent, two agents under one channel id, an `everyone` or a `handles`
     /// naming a channel that is no agent, a `max_turns` under 1, a `max_depth`
     /// under 2, a blank `silent_token` or `rules`, a handle that cannot name
-    /// an agent, an agent without one, or two handles reading alike.
+    /// an agent, an agent without one, two handles reading alike, a
+    /// `dispatch` with `addressed_only`, or a zero `dispatch_timeout`.
     /// [`RoomKitError::Type`] for a channel given live that is no AI channel.
     pub fn new(
         agents: Vec<StrategyAgent>,
@@ -177,11 +194,14 @@ impl Discussion {
             done,
             silent_token,
             rules,
+            dispatch,
+            dispatch_timeout,
         } = options;
         check_agents(&agents)?;
         check_everyone(&agents, everyone.as_deref())?;
         check_bounds(max_turns, max_depth)?;
         check_texts(&silent_token, rules.as_deref())?;
+        check_dispatch(dispatch.is_some(), dispatch_timeout, addressed_only)?;
         let given = handles.unwrap_or_default();
         check_given(&agents, &given)?;
         // An agent named by an id that is no handle is addressed by the name
@@ -208,6 +228,8 @@ impl Discussion {
             done,
             silent_token,
             rules,
+            dispatch,
+            dispatch_timeout,
         })
     }
 
@@ -255,6 +277,8 @@ impl fmt::Debug for Discussion {
             .field("done", &self.done.is_some())
             .field("silent_token", &self.silent_token)
             .field("rules", &self.rules)
+            .field("dispatch", &self.dispatch.is_some())
+            .field("dispatch_timeout", &self.dispatch_timeout)
             .finish()
     }
 }
@@ -287,6 +311,9 @@ impl Discussion {
             organization_id,
             config,
             self.done.clone(),
+            self.dispatch
+                .clone()
+                .map(|policy| (policy, self.dispatch_timeout)),
         );
         // Before the configuration is stored: from then on a message is told
         // to it, and to nobody without it.
@@ -363,6 +390,28 @@ impl<S: ConversationStore> Orchestration<S> for Discussion {
     ) -> StrategyFuture<'call> {
         Box::pin(self.uninstall_in(kit, room_id))
     }
+}
+
+/// Refuses a dispatch policy with `addressed_only`, which gives a message
+/// naming nobody to no agent, and a bound that is not positive.
+fn check_dispatch(
+    dispatch: bool,
+    timeout: Duration,
+    addressed_only: bool,
+) -> Result<(), RoomKitError> {
+    if dispatch && addressed_only {
+        return Err(RoomKitError::Value(
+            "A dispatch policy decides who takes a message that names nobody, which \
+             addressed_only gives to no agent: use one or the other"
+                .to_owned(),
+        ));
+    }
+    if timeout.is_zero() {
+        return Err(RoomKitError::Value(
+            "dispatch_timeout must be positive".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Refuses no agent, a channel given live that is no AI channel, and two

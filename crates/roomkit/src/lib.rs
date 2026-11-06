@@ -269,9 +269,12 @@ pub use self::orchestration::{
     set_conversation_state,
 };
 #[doc(inline)]
-pub use self::orchestration::{HandoffHandler, HandoffRequest, HandoffResult};
+pub use self::orchestration::{
+    DispatchCandidate, DispatchDecision, DispatchDecisionEvent, DispatchPolicy, DispatchTurn,
+    MockDispatchPolicy, SpeakQueue, SpeakQueueChange, SpeakQueueEvent,
+};
 #[doc(inline)]
-pub use self::orchestration::{SpeakQueue, SpeakQueueChange, SpeakQueueEvent};
+pub use self::orchestration::{HandoffHandler, HandoffRequest, HandoffResult};
 pub use self::tasks::result_tool::ResultTool;
 #[doc(hidden)]
 pub use self::turn::OwnerToolAnswer;

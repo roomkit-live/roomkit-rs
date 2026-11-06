@@ -169,6 +169,10 @@ pub enum HookTrigger {
     /// A room's speak queue changed (RFC §19.7.5): its payload is a
     /// `SpeakQueueEvent`, observed.
     OnSpeakQueue,
+    /// A discussion's dispatch policy decided who takes a person's message
+    /// (RFC §19.7.5 rule 18): its payload is a `DispatchDecisionEvent`,
+    /// observed.
+    OnDispatchDecision,
 }
 
 impl HookTrigger {
@@ -219,7 +223,8 @@ impl HookTrigger {
             | Self::OnVerificationEnded
             | Self::OnAiResponse
             | Self::OnAiThinking
-            | Self::OnSpeakQueue => HookExecution::Async,
+            | Self::OnSpeakQueue
+            | Self::OnDispatchDecision => HookExecution::Async,
         }
     }
 
@@ -268,6 +273,7 @@ impl HookTrigger {
             | Self::OnAiResponse
             | Self::OnAiThinking
             | Self::OnSpeakQueue
+            | Self::OnDispatchDecision
             | Self::OnVerificationRequired => false,
         }
     }
@@ -300,6 +306,7 @@ impl HookTrigger {
             | Self::OnAiResponse
             | Self::OnAiThinking => true,
             Self::OnSpeakQueue
+            | Self::OnDispatchDecision
             | Self::BeforeBroadcast
             | Self::AfterBroadcast
             | Self::OnEventUpdated
@@ -350,6 +357,7 @@ impl HookTrigger {
                 | Self::OnStatusPosted
                 | Self::OnFeedback
                 | Self::OnSpeakQueue
+                | Self::OnDispatchDecision
         )
     }
 
@@ -1086,6 +1094,8 @@ fn payload_of(trigger: HookTrigger) -> &'static str {
         "a ThinkingEvent"
     } else if trigger == HookTrigger::OnSpeakQueue {
         "a SpeakQueueEvent"
+    } else if trigger == HookTrigger::OnDispatchDecision {
+        "a DispatchDecisionEvent"
     } else {
         "a RoomEvent"
     }

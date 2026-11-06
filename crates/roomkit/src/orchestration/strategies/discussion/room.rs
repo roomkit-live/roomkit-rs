@@ -7,6 +7,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::Duration;
 
 use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit_core::model::{
@@ -25,8 +26,9 @@ use serde_json::Value;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
+use super::dispatch::{DispatchDecisionEvent, DispatchPolicy};
 use super::driver::now;
-use super::queue::{Ask, Entry, SpeakQueueState};
+use super::queue::{Ask, Entry, Pending, SpeakQueueState};
 use super::{DoneFn, SpeakQueue, SpeakQueueChange, SpeakQueueEvent};
 use crate::channel::BoxFuture;
 use crate::context::{ExecutionContext, Section};
@@ -48,7 +50,7 @@ pub(super) const NAMES: &str = "discussion_names";
 
 /// How long a cut waits for the turn it cut to be over, as Python's
 /// `cancel_and_wait`.
-const CUT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+const CUT_WAIT: Duration = Duration::from_secs(5);
 
 /// A turn given and not ended yet.
 #[derive(Clone, Debug)]
@@ -73,6 +75,9 @@ pub(super) struct Live {
     pub(super) seen_version: Option<u64>,
     /// What cuts the delivery of the look's turn, while it runs.
     pub(super) cutter: Option<Arc<Named>>,
+    /// The message waiting for the dispatch policy the look's plan found
+    /// first, which the look has decided off the room's lock (rule 18).
+    pub(super) deciding: Option<Pending>,
     pub(super) closed: bool,
     pub(super) forgotten: bool,
 }
@@ -90,6 +95,8 @@ pub(crate) struct DiscussionRoom<S> {
     pub(super) config: DiscussionConfig,
     pub(super) silent: SilentToken,
     pub(super) done: Option<DoneFn>,
+    /// The dispatch policy the host gave, and its bound (rule 18).
+    pub(super) dispatch: Option<(Arc<dyn DispatchPolicy>, Duration)>,
     pub(super) live: Mutex<Live>,
     pub(super) wake: Notify,
     /// A wake not read yet.
@@ -106,19 +113,29 @@ pub(crate) struct DiscussionRoom<S> {
 /// The changes still to tell, and whether a task tells them.
 #[derive(Debug, Default)]
 struct Announcing {
-    queued: VecDeque<SpeakQueueEvent>,
+    queued: VecDeque<Announcement>,
     running: bool,
+}
+
+/// What the room tells its hooks, in the order it happened.
+#[derive(Debug)]
+enum Announcement {
+    /// A change of the speak queue, to `ON_SPEAK_QUEUE`.
+    Queue(SpeakQueueEvent),
+    /// A dispatch decision applied, to `ON_DISPATCH_DECISION`.
+    Decision(Box<DispatchDecisionEvent>),
 }
 
 impl<S: ConversationStore> DiscussionRoom<S> {
     /// The discussion the host installs in this process, configured by
-    /// `config`, `done` the host's.
+    /// `config`, `done` and `dispatch` (its policy and bound) the host's.
     pub(crate) fn new(
         kit: &RoomKit<S>,
         room_id: RoomId,
         organization_id: Option<String>,
         config: DiscussionConfig,
         done: Option<DoneFn>,
+        dispatch: Option<(Arc<dyn DispatchPolicy>, Duration)>,
     ) -> Arc<Self> {
         Arc::new(Self {
             kit: kit.downgrade(),
@@ -128,6 +145,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             silent: SilentToken::new(config.silent_token.clone()),
             config,
             done,
+            dispatch,
             live: Mutex::new(Live::default()),
             wake: Notify::new(),
             woken: AtomicBool::new(false),
@@ -504,8 +522,9 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     }
 
     /// A person's message: the agents it addresses first; with no address
-    /// and no name, the agents that asked that person, else `everyone`; each
-    /// only when the message reaches it.
+    /// and no name, the agents that asked that person, else `everyone`, or
+    /// those the dispatch policy picks; each only when the message reaches
+    /// it.
     async fn route_person(
         &self,
         event: &RoomEvent,
@@ -520,7 +539,19 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                 if takes_nothing(state, live) {
                     return Vec::new();
                 }
+                let mut changes: Vec<Change> = Vec::new();
+                let dispatched = self.config.dispatch && unaddressed;
                 let asks: Vec<ChannelId> = match &event.addressed_to {
+                    None if dispatched => {
+                        if let Some((agents, event_id)) =
+                            self.leave_for_dispatch(state, event, &who, reach)
+                        {
+                            if !agents.is_empty() {
+                                changes.push((SpeakQueueChange::Queued, agents, Some(event_id)));
+                            }
+                        }
+                        Vec::new()
+                    }
                     Some(address) => address
                         .iter()
                         .filter(|agent| self.config.agents.contains(agent))
@@ -555,7 +586,6 @@ impl<S: ConversationStore> DiscussionRoom<S> {
                 let answered = self.config.addressed_only.then_some(agents.as_slice());
                 state.clear_asked(Some(&who), answered);
                 let was_waiting = state.person_wrote();
-                let mut changes: Vec<Change> = Vec::new();
                 if !agents.is_empty() {
                     changes.push((SpeakQueueChange::Queued, agents, Some(event.id.to_string())));
                 }
@@ -567,6 +597,57 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             .await?;
         self.fire_all(changes);
         Ok(())
+    }
+
+    /// Leaves an unaddressed message to the dispatch policy: the process
+    /// holding the lease decides, off the lock, before its next turn (rule
+    /// 18). The candidates are the agents that asked its author, then
+    /// `everyone`. Once too many wait, the oldest asks what it asks with no
+    /// policy; those agents and that message are returned.
+    fn leave_for_dispatch(
+        &self,
+        state: &mut SpeakQueueState,
+        event: &RoomEvent,
+        who: &str,
+        reach: &[ChannelId],
+    ) -> Option<(Vec<ChannelId>, String)> {
+        let asked: Vec<ChannelId> = state
+            .asking(Some(who))
+            .into_iter()
+            .filter(|agent| reach.contains(agent))
+            .collect();
+        let mut candidates: Vec<ChannelId> = Vec::new();
+        for agent in asked.iter().chain(&self.everyone()) {
+            if reach.contains(agent) && !candidates.contains(agent) {
+                candidates.push(agent.clone());
+            }
+        }
+        if candidates.is_empty() {
+            return None;
+        }
+        let pending = Pending {
+            event_id: event.id.to_string(),
+            depth: event.chain_depth,
+            asker: who.to_owned(),
+            index: event.index,
+            candidates,
+            asked,
+            seq: state.reserve_seq(),
+        };
+        let oldest = state.wait_for_decision(pending)?;
+        tracing::warn!(
+            target: "roomkit::orchestration::discussion",
+            room_id = %self.room_id,
+            event_id = %oldest.event_id,
+            "too many messages wait for a dispatch decision; the oldest goes undecided"
+        );
+        let agents: Vec<ChannelId> = oldest
+            .undecided()
+            .into_iter()
+            .filter(|agent| !state.listening.contains(agent))
+            .collect();
+        state.queue_picked(&oldest, &agents);
+        Some((agents, oldest.event_id))
     }
 
     /// A message with no address and no name, which `addressed_only` does
@@ -587,7 +668,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         names.people.is_empty()
     }
 
-    fn everyone(&self) -> Vec<ChannelId> {
+    pub(super) fn everyone(&self) -> Vec<ChannelId> {
         self.config
             .everyone
             .clone()
@@ -759,20 +840,45 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         let mut event = SpeakQueueEvent::new(self.room_id.clone(), queue, change);
         event.channel_ids = channel_ids;
         event.event_id = event_id.and_then(|id| roomkit_core::model::EventId::new(id).ok());
+        self.announce(&kit, Announcement::Queue(event));
+    }
+
+    /// Tells `ON_DISPATCH_DECISION` of a decision applied, in the order of
+    /// the queue's changes.
+    pub(super) fn tell_decision(&self, event: DispatchDecisionEvent) {
+        let Some(kit) = self.kit.upgrade() else {
+            return;
+        };
+        let options = HasHooksOptions {
+            trigger: Some(HookTrigger::OnDispatchDecision),
+        };
+        if kit.hook_engine().has_hooks(options) {
+            self.announce(&kit, Announcement::Decision(Box::new(event)));
+        }
+    }
+
+    /// Runs `announcement`'s hooks once the announcements before it have
+    /// started, without holding up the turns.
+    fn announce(&self, kit: &RoomKit<S>, announcement: Announcement) {
         let start = {
             let mut announcing = self
                 .announcing
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            announcing.queued.push_back(event);
+            announcing.queued.push_back(announcement);
             !std::mem::replace(&mut announcing.running, true)
         };
         if start {
             let inner = Arc::clone(&kit.inner);
             let announcing = Arc::clone(&self.announcing);
             let telling = async move {
-                while let Some(event) = next_announcement(&announcing) {
-                    inner.observe_speak_queue(event).await;
+                while let Some(announcement) = next_announcement(&announcing) {
+                    match announcement {
+                        Announcement::Queue(event) => inner.observe_speak_queue(event).await,
+                        Announcement::Decision(event) => {
+                            inner.observe_dispatch_decision(*event).await;
+                        }
+                    }
                 }
             };
             kit.inner.tasks.spawn(Kind::Observer, telling);
@@ -843,7 +949,7 @@ pub(super) fn read_queue(metadata: &Metadata) -> SpeakQueueState {
 }
 
 /// The next change to tell; none left, the telling ends.
-fn next_announcement(announcing: &Mutex<Announcing>) -> Option<SpeakQueueEvent> {
+fn next_announcement(announcing: &Mutex<Announcing>) -> Option<Announcement> {
     let mut announcing = announcing.lock().unwrap_or_else(PoisonError::into_inner);
     let next = announcing.queued.pop_front();
     if next.is_none() {

@@ -154,6 +154,18 @@ pub fn visible_events(context: &RoomContext, channel_id: &ChannelId) -> Vec<Room
         .collect()
 }
 
+/// `events` as a history a channel is handed holds them (RFC §7.5 rule 8,
+/// §10.3), Python's `withheld`: a deleted event, and an edit of one, stay in
+/// their place with what they said withheld.
+#[must_use]
+pub fn withheld_history(events: &[RoomEvent]) -> Vec<RoomEvent> {
+    let deleted = deleted_events(events);
+    events
+        .iter()
+        .map(|event| withheld(event, &deleted))
+        .collect()
+}
+
 /// The events `timeline` shows deleted (RFC §10.3), as the Python
 /// implementation's `withheld` reads them: those carrying the mark an
 /// accepted delete's commit leaves on its target and on each edit of it,
