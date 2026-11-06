@@ -224,11 +224,22 @@ impl OpenAiAiProvider {
     /// Completions, refused first for a model OpenAI's endpoint does not
     /// serve so (Python's `_check_model_serves`), then carrying the effort
     /// the turn sends ([`Self::reasoning_effort`]).
+    #[cfg(test)]
     pub(crate) fn body(
         &self,
         request: &Request,
         streamed: bool,
     ) -> Result<serde_json::Value, OpenAiError> {
+        self.written(request, streamed).map(|(body, _)| body)
+    }
+
+    /// [`Self::body`], and the vendor's own members the request carries
+    /// beside it, which win over a configured `extra_body`.
+    fn written(
+        &self,
+        request: &Request,
+        streamed: bool,
+    ) -> Result<(serde_json::Value, roomkit::model::Metadata), OpenAiError> {
         if self.config.api == OpenAiApi::Responses {
             let mut value = crate::responses::request(&self.config, request)?;
             let turn = request.reasoning_effort.as_deref();
@@ -237,7 +248,7 @@ impl OpenAiAiProvider {
             {
                 fields.insert("reasoning".into(), serde_json::json!({ "effort": effort }));
             }
-            return Ok(value);
+            return Ok((value, roomkit::model::Metadata::new()));
         }
         let tools = !request.tools.is_empty();
         reasoning::check_model_serves(&self.config.model, self.official_entry(), tools)?;
@@ -246,22 +257,24 @@ impl OpenAiAiProvider {
         let mut value = serde_json::to_value(completion).map_err(|_| OpenAiError::Malformed {
             reason: "could not encode request".into(),
         })?;
-        let effort = if self.vendor == Vendor::OpenAi {
+        let sampling = if self.vendor == Vendor::OpenAi {
             let turn = request.reasoning_effort.as_deref();
-            self.reasoning_effort(turn, request.thinking_off, tools)
+            let effort = self.reasoning_effort(turn, request.thinking_off, tools);
+            crate::vendor::Sampling {
+                effort,
+                extra: roomkit::model::Metadata::new(),
+            }
         } else {
             let configured = self.config.reasoning_effort.as_deref();
-            let sampling = self
-                .vendor
-                .sampling(self.vendor_entry(), request, configured);
-            sampling.effort
+            self.vendor
+                .sampling(self.vendor_entry(), request, configured)
         };
-        if let Some(effort) = effort
+        if let Some(effort) = sampling.effort
             && let Some(fields) = value.as_object_mut()
         {
             fields.insert("reasoning_effort".into(), effort.into());
         }
-        Ok(value)
+        Ok((value, sampling.extra))
     }
 
     /// Sends `request`: its body as the configured API writes it, under
@@ -274,21 +287,12 @@ impl OpenAiAiProvider {
     ) -> Result<(Answered, String), OpenAiError> {
         // Python's order: the model's refusal, then the effort (and its
         // one warning), then the tools' names.
-        let body = self.body(request, streamed)?;
+        let (body, vendor_members) = self.written(request, streamed)?;
         self.check_names(request)?;
         let body = with_extra_body(body, self.config.extra_body.as_ref());
         // A vendor's own members, the turn's, win over the configured ones
         // (Python's `_apply_extra_body`).
-        let body = if self.vendor == Vendor::OpenAi || self.config.api != OpenAiApi::ChatCompletions
-        {
-            body
-        } else {
-            let configured = self.config.reasoning_effort.as_deref();
-            let sampling = self
-                .vendor
-                .sampling(self.vendor_entry(), request, configured);
-            with_extra_body(body, Some(&sampling.extra))
-        };
+        let body = with_extra_body(body, Some(&vendor_members));
         let call = || self.client.post(self.endpoint.clone()).json(&body);
         self.send(&call, !streamed).await
     }
@@ -467,8 +471,11 @@ impl AiProvider for OpenAiAiProvider {
         if self.vendor == Vendor::OpenAi {
             return self.config.vision;
         }
-        self.vendor
-            .sees_images(self.vendor_entry(), self.config.base_url())
+        self.vendor.sees_images(
+            self.vendor_entry(),
+            &self.config.model,
+            self.config.base_url(),
+        )
     }
 
     /// OpenAI's curated catalogue, Python's (`catalog/models.json`).

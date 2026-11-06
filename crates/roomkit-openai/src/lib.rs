@@ -54,6 +54,22 @@
 //! This path supports text and function
 //! tools and opt-in author image input, not hosted tools. OAuth login, token refresh and
 //! credential persistence are host responsibilities.
+//!
+//! Three vendors read a model's earlier reasoning back on the same wire, each
+//! with a provider of its own, as Python's: [`deepseek::DeepSeekAiProvider`],
+//! [`minimax::MiniMaxAiProvider`] and [`kimi::KimiAiProvider`]. The class is
+//! the choice, on the vendor's API or behind a base URL; `OpenAiAiProvider`
+//! sends no reasoning back (RFC §6.4).
+//!
+//! ```
+//! use roomkit_openai::kimi::{KimiAiProvider, KimiConfig};
+//! let provider = KimiAiProvider::new(KimiConfig {
+//!     base_url: "http://gpu:8000/v1".into(),
+//!     ..KimiConfig::new("unused", "moonshotai/Kimi-K3")
+//! })?;
+//! # let _ = provider;
+//! # Ok::<(), roomkit_ai::ProviderError>(())
+//! ```
 
 mod call_slots;
 mod config;

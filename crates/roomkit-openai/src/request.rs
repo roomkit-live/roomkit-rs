@@ -139,9 +139,11 @@ fn messages(message: &AiMessage) -> Result<Vec<Message>, OpenAiError> {
 /// `message`, which carries no tool result, as the transcript writes it:
 /// its text, its images, its calls; a message of text and images keeps its
 /// parts in order, each image at its place (Python's `chat_request._plain`).
-/// A model's reasoning is not written (RFC §6.4): a generic Chat Completions
-/// server would read it as text the model said, and its prompt cache would not
-/// survive it. Responses keeps its reasoning items in the round's metadata.
+/// A model's reasoning is not written here (RFC §6.4): a generic Chat
+/// Completions server would read it as text the model said, and its prompt
+/// cache would not survive it; a vendor's dialect writes it in its own field
+/// from [`Request::reasoning`]. Responses keeps its reasoning items in the
+/// round's metadata.
 fn message(message: &AiMessage) -> Result<Message, OpenAiError> {
     let parts: &[AiContentPart] = match &message.content {
         AiMessageContent::Text(text) => {

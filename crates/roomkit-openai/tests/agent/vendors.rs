@@ -3,9 +3,13 @@
 //! of its own, and what each request then carries.
 //! Python: `tests/test_providers/test_minimax_kimi.py` and `test_deepseek.py`.
 
+use std::pin::Pin;
+
+use futures_core::Stream;
 use pretty_assertions::assert_eq;
 use roomkit_ai::{
-    AiChannelOptions, AiContext, AiMessage, AiProvider, AiRole, AiTool, ToolResult, Tools,
+    AiChannelOptions, AiContext, AiMessage, AiProvider, AiRole, AiTool, StreamEvent, ToolResult,
+    Tools,
 };
 use roomkit_openai::deepseek::{DeepSeekAiProvider, DeepSeekConfig};
 use roomkit_openai::kimi::{KimiAiProvider, KimiConfig};
@@ -193,6 +197,21 @@ async fn what_a_turn_states_of_its_reasoning() {
             .unwrap()
         }
     };
+    let deepseek = |url: &str| {
+        DeepSeekAiProvider::new(DeepSeekConfig {
+            base_url: url.to_owned(),
+            supports_custom_temperature: false,
+            ..DeepSeekConfig::new(API_KEY, "deepseek-v4-pro")
+        })
+        .unwrap()
+    };
+    let with_tool = |context: AiContext| AiContext {
+        tools: vec![AiTool {
+            parameters: json!({ "type": "object" }),
+            ..AiTool::new("get_weather", "The weather.").unwrap()
+        }],
+        ..context
+    };
     let turn = |effort: Option<&str>, enable: Option<bool>| AiContext {
         reasoning_effort: effort.map(str::to_owned),
         enable_thinking: enable,
@@ -243,6 +262,23 @@ async fn what_a_turn_states_of_its_reasoning() {
         (
             sent(minimax("MiniMaxAI/MiniMax-M3"), turn(Some("none"), None)).await,
             json!({ "reasoning_effort": "none" }),
+        ),
+        // A turn with tools sends its effort too, where the generic provider sends none.
+        (
+            sent(kimi("kimi-k3"), with_tool(turn(Some("high"), None))).await,
+            json!({ "reasoning_effort": "high" }),
+        ),
+        (
+            sent(
+                minimax("MiniMax-M3.1-Flash"),
+                with_tool(turn(Some("high"), None)),
+            )
+            .await,
+            json!({ "reasoning_effort": "high" }),
+        ),
+        (
+            sent(deepseek, with_tool(turn(Some("high"), None))).await,
+            json!({ "thinking": { "type": "enabled", "reasoning_effort": "high" } }),
         ),
     ];
     for ((body, answered), expected) in cases {
@@ -440,4 +476,185 @@ async fn a_vendor_s_tool_names_are_checked_on_its_own_endpoint_alone() {
         .await
         .unwrap_err();
     assert_eq!(refused.provider, "deepseek");
+}
+
+/// A whole completion carrying `usage`.
+fn used(usage: &Value) -> Reply {
+    let body = json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "choices": [{ "index": 0, "message": { "role": "assistant", "content": "Hi" },
+            "finish_reason": "stop" }],
+        "usage": usage,
+    });
+    Reply::status(200, &body.to_string())
+}
+
+// Python: tests/test_providers/test_deepseek.py::TestUsage::test_cache_hits_are_not_billed_as_input
+/// DeepSeek's cache hits are read through its provider, answered whole and
+/// streamed.
+#[tokio::test]
+async fn deepseek_s_cache_hits_are_not_billed_as_input() {
+    let usage = json!({ "prompt_tokens": 1000, "completion_tokens": 50,
+        "prompt_cache_hit_tokens": 960, "prompt_cache_miss_tokens": 40 });
+    let deepseek = |url: &str| {
+        DeepSeekAiProvider::new(DeepSeekConfig {
+            base_url: url.to_owned(),
+            ..DeepSeekConfig::new(API_KEY, "deepseek-v4-pro")
+        })
+        .unwrap()
+    };
+    let fake = FakeOpenAi::start(vec![used(&usage)]).await;
+    let whole = deepseek(fake.base_url())
+        .generate(&hello())
+        .await
+        .unwrap()
+        .usage;
+    let chunks = [
+        chunk(&json!({ "content": "Hi" })),
+        json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] }),
+        json!({ "choices": [], "usage": usage }),
+    ];
+    let streamed_fake = FakeOpenAi::start(vec![Reply::events(&chunks)]).await;
+    let streaming = deepseek(streamed_fake.base_url());
+    let context = hello();
+    let mut events = streaming.generate_structured_stream(&context);
+    let mut streamed = None;
+    while let Some(event) = std::future::poll_fn(|cx| Pin::new(&mut events).poll_next(cx)).await {
+        if let StreamEvent::Done(done) = event.unwrap() {
+            streamed = Some(done.usage);
+        }
+    }
+    let expected =
+        json!({ "input_tokens": 40, "output_tokens": 50, "cache_read_input_tokens": 960 });
+    assert_eq!(serde_json::to_value(whole).unwrap(), expected);
+    assert_eq!(serde_json::to_value(streamed.unwrap()).unwrap(), expected);
+}
+
+// Python: tests/test_providers/test_deepseek.py::TestDeepSeekThinking::test_config_extra_body_survives_thinking
+#[tokio::test]
+async fn a_configured_extra_body_survives_and_the_turn_s_thinking_wins() {
+    let mut extra = roomkit::model::Metadata::new();
+    extra.insert("top_k".to_owned(), json!(5));
+    extra.insert("thinking".to_owned(), json!({ "type": "enabled" }));
+    let (body, answered) = sent(
+        |url: &str| {
+            DeepSeekAiProvider::new(DeepSeekConfig {
+                base_url: url.to_owned(),
+                extra_body: Some(extra),
+                ..DeepSeekConfig::new(API_KEY, "deepseek-v4-pro")
+            })
+            .unwrap()
+        },
+        AiContext {
+            enable_thinking: Some(false),
+            ..hello()
+        },
+    )
+    .await;
+    assert_eq!(answered, Ok(()));
+    assert_eq!(
+        members(&body, &["top_k", "thinking"]),
+        json!({ "top_k": 5, "thinking": { "type": "disabled" } })
+    );
+}
+
+// Python: tests/test_providers/test_minimax_kimi.py::test_the_temperature_goes_where_the_server_takes_it
+#[tokio::test]
+async fn a_temperature_goes_where_the_config_says_the_server_takes_it() {
+    let (kimi, _) = sent(
+        |url: &str| {
+            KimiAiProvider::new(KimiConfig {
+                base_url: url.to_owned(),
+                supports_custom_temperature: true,
+                ..KimiConfig::new(API_KEY, "kimi-k3")
+            })
+            .unwrap()
+        },
+        hello(),
+    )
+    .await;
+    let (minimax, _) = sent(
+        |url: &str| {
+            MiniMaxAiProvider::new(MiniMaxConfig {
+                base_url: url.to_owned(),
+                supports_custom_temperature: true,
+                ..MiniMaxConfig::new(API_KEY, "MiniMax-M3")
+            })
+            .unwrap()
+        },
+        hello(),
+    )
+    .await;
+    assert_eq!(
+        (kimi["temperature"].clone(), minimax["temperature"].clone()),
+        (json!(0.2), json!(0.2))
+    );
+}
+
+// Python: tests/test_providers/test_deepseek.py::TestDeepSeekProvider::test_sdk_error_wrapped_with_deepseek_provider
+#[tokio::test]
+async fn a_vendor_s_failure_names_the_vendor() {
+    let answer = Reply::status(429, r#"{"error": {"message": "slow down"}}"#);
+    let fake = FakeOpenAi::start(vec![answer]).await;
+    let deepseek = DeepSeekAiProvider::new(DeepSeekConfig {
+        base_url: fake.base_url().to_owned(),
+        ..DeepSeekConfig::new(API_KEY, "deepseek-v4-pro")
+    })
+    .unwrap();
+    let failed = deepseek.generate(&hello()).await.unwrap_err();
+    assert_eq!(
+        (
+            failed.provider.as_str(),
+            failed.retryable,
+            failed.status_code
+        ),
+        ("deepseek", true, Some(429))
+    );
+}
+
+// Python: OpenAIAIProvider._listing, a vendor's catalogue backfilling its listing
+#[tokio::test]
+async fn a_vendor_s_listing_reads_its_own_catalogue() {
+    let fake = FakeOpenAi::start(vec![Reply::models(&["kimi-k3", "other"])]).await;
+    let kimi = KimiAiProvider::new(KimiConfig {
+        base_url: fake.base_url().to_owned(),
+        ..KimiConfig::new(API_KEY, "kimi-k3")
+    })
+    .unwrap();
+    let windows: Vec<(String, Option<u64>)> = kimi
+        .list_models()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|model| (model.id, model.context_window))
+        .collect();
+    assert_eq!(
+        windows,
+        [
+            ("kimi-k3".to_owned(), Some(1_048_576)),
+            ("other".to_owned(), None)
+        ]
+    );
+}
+
+// Python: DeepSeekAIProvider inherits OpenAIAIProvider.supports_vision
+#[test]
+fn deepseek_reads_a_model_it_does_not_name_as_openai_does() {
+    let deepseek = |model: &str| {
+        DeepSeekAiProvider::new(DeepSeekConfig {
+            base_url: "http://gateway:8000/v1".to_owned(),
+            ..DeepSeekConfig::new(API_KEY, model)
+        })
+        .unwrap()
+        .supports_vision()
+    };
+    assert_eq!(
+        [
+            deepseek("deepseek/deepseek-v4-pro"),
+            deepseek("gpt-4o-mini"),
+            deepseek("deepseek-v4-pro"),
+        ],
+        [false, true, false]
+    );
 }

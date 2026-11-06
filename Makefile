@@ -280,9 +280,10 @@ api-check-pin:
 		fi; \
 	done
 
-# The OpenAI model catalogue roomkit-openai embeds (HITL e7768b18): the
-# Python implementation's `OpenAIAIProvider.available_models()` at one commit
-# of roomkit's origin/main, written as JSON by
+# The model catalogues roomkit-openai embeds (HITL e7768b18): the
+# Python implementation's `available_models()` of `OpenAIAIProvider` and of
+# the DeepSeek, MiniMax and Kimi providers, by provider, at one commit of
+# roomkit's origin/main, written as JSON by
 # crates/roomkit-openai/catalog/export.py, with the interpreter of a roomkit
 # checkout (ROOMKIT_DIR), on that commit's source extracted apart, into
 # catalog/models.json; the commit recorded in catalog/ROOMKIT_COMMIT and the
