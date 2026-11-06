@@ -197,7 +197,8 @@ async fn stored<S: ConversationStore>(store: &S, event: &RoomEvent) -> RoomEvent
 /// its event at its place, before what was said after it, so the room's
 /// latest whatever `event` (RFC §19.7.5). An instruction, never
 /// stored, holds the index the room's next event takes; an event the store
-/// never numbered bounds nothing.
+/// never numbered (index 0) bounds nothing when the pipeline handed no
+/// read, and the read's newest event otherwise.
 fn messages_up_to(
     event: &RoomEvent,
     filter: EventFilter,
@@ -214,8 +215,9 @@ fn messages_up_to(
         // The window before the event, and the event itself.
         limit: u64::try_from(window).unwrap_or(u64::MAX).saturating_add(1),
         event_filter: Some(filter),
-        // A turn's bound on the room's first event bounds nothing, but a
-        // regeneration's read, which holds later events, still bounds it.
+        // An event the store never numbered bounds nothing, unless the
+        // pipeline handed its turn a read: the room's first message, a
+        // regeneration's or a release's, reads no message committed after it.
         before_index: ((event.index > 0 || read_through.is_some()) && !discussion_turn(event))
             .then_some(bound),
         newest_first: true,
@@ -374,6 +376,16 @@ mod tests {
         context.recent_events = read.to_vec();
         let read = turn_context(store, &agent, trigger, context, 50).await;
         read.recent_events.iter().map(|event| event.index).collect()
+    }
+
+    // Python: channels/ai.py, a turn reads its pipeline's context, the
+    // event joined to it: a turn on the room's first message reads no
+    // message committed after its pass, as a turn on a later one.
+    #[tokio::test]
+    async fn a_turn_on_the_first_message_reads_no_message_committed_after_its_pass() {
+        let events: Vec<RoomEvent> = (0..2).map(|index| event(index, None)).collect();
+        let store = store(events.clone()).await;
+        assert_eq!(regenerated(&store, &events[0], &events[..1]).await, vec![0]);
     }
 
     // Python: core/mixins/regenerate.py::_plan_regeneration, the context
