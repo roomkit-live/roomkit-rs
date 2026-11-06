@@ -84,7 +84,7 @@ impl Scripted for AiGenerationEvent {
     }
 
     /// The replacement event: its context's `system_prompt`, `messages`,
-    /// `reasoning_effort`, `thinking_budget`, `enable_thinking` and `response_metadata` the patch's, its `tools` those of the context the patch names, and
+    /// `reasoning_effort`, `thinking_budget`, `enable_thinking`, `response_schema` and `response_metadata` the patch's, its `tools` those of the context the patch names, and
     /// each tool `define` gives in place of the tool of its name, or after
     /// them.
     fn write_record(&self, reaction: &Value) {
@@ -107,6 +107,7 @@ impl Scripted for AiGenerationEvent {
                 }
                 "thinking_budget" => context.thinking_budget = value.as_i64(),
                 "enable_thinking" => context.enable_thinking = value.as_bool(),
+                "response_schema" => context.response_schema = value.as_object().cloned(),
                 "messages" => context.messages = patched_messages(value)?,
                 "tools" => {
                     let kept: Vec<&str> = value
