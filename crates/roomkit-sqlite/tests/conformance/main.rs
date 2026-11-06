@@ -21,6 +21,8 @@ mod calls;
 mod chat_wire;
 #[path = "../../../roomkit/tests/conformance/compare.rs"]
 mod compare;
+#[path = "../../../roomkit/tests/conformance/delegate_calls.rs"]
+mod delegate_calls;
 #[path = "../../../roomkit/tests/conformance/discussion_calls.rs"]
 mod discussion_calls;
 #[path = "../../../roomkit/tests/conformance/errors.rs"]
