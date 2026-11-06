@@ -51,8 +51,8 @@ impl DynToolset for OwnerToolset {
 }
 
 /// `toolbox`, with the tools the owner serves `turn` after the host's and
-/// before a person's and the skills'; `toolbox` itself outside a turn, or for a
-/// turn served none.
+/// before a person's and the skills', in the order the turn lists them;
+/// `toolbox` itself outside a turn, or for a turn served none.
 ///
 /// # Errors
 ///
@@ -89,15 +89,8 @@ pub(crate) fn with_owner_tools(
     if declared.is_empty() {
         return Ok(Arc::clone(toolbox));
     }
-    let waiting = turn.owner_tools_waiting();
-    let (waits, bounded): (Vec<AiTool>, Vec<AiTool>) = declared
-        .into_iter()
-        .partition(|tool| waiting.contains(&tool.name));
     let mut extended = Toolbox::clone(toolbox);
-    for (waits, tools) in [(false, bounded), (true, waits)] {
-        if tools.is_empty() {
-            continue;
-        }
+    for (waits, tools) in runs(declared, &turn.owner_tools_waiting()) {
         let served = Arc::new(OwnerToolset {
             turn: turn.clone(),
             waits,
@@ -105,4 +98,20 @@ pub(crate) fn with_owner_tools(
         extended.add_injected(served, tools)?;
     }
     Ok(Arc::new(extended))
+}
+
+/// `declared` in its order, cut into runs of tools that all wait by design
+/// (named in `waiting`) or all do not, each with whether it waits: the
+/// toolbox declares them as the turn lists them, the owner's set-up order,
+/// as Python's registry keeps its entries (RFC §6.4).
+fn runs(declared: Vec<AiTool>, waiting: &[String]) -> Vec<(bool, Vec<AiTool>)> {
+    let mut runs: Vec<(bool, Vec<AiTool>)> = Vec::new();
+    for tool in declared {
+        let waits = waiting.contains(&tool.name);
+        match runs.last_mut() {
+            Some((run_waits, tools)) if *run_waits == waits => tools.push(tool),
+            _ => runs.push((waits, vec![tool])),
+        }
+    }
+    runs
 }
