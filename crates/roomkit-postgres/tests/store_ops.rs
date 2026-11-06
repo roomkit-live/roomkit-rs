@@ -1595,7 +1595,7 @@ async fn an_event_added_beside_the_kit_holds_its_next_delivery_and_loses_none() 
             from..=to
         })
         .collect();
-    assert_ne!(skipped, [] as [u64; 0]);
+    assert_ne!(skipped, Vec::<u64>::new());
     assert!(
         skipped.iter().all(|index| added.contains(index)),
         "{skipped:?} of {added:?}"
