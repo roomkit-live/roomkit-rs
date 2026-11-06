@@ -214,7 +214,10 @@ fn messages_up_to(
         // The window before the event, and the event itself.
         limit: u64::try_from(window).unwrap_or(u64::MAX).saturating_add(1),
         event_filter: Some(filter),
-        before_index: (event.index > 0 && !discussion_turn(event)).then_some(bound),
+        // A turn's bound on the room's first event bounds nothing, but a
+        // regeneration's read, which holds later events, still bounds it.
+        before_index: ((event.index > 0 || read_through.is_some()) && !discussion_turn(event))
+            .then_some(bound),
         newest_first: true,
         ..ListEventsOptions::default()
     }
@@ -355,6 +358,45 @@ mod tests {
         unknown.id = EventId::new("evt_unknown").unwrap();
         let read = turn_context(&store, &agent, &unknown, context, 50).await;
         assert_eq!(read.recent_events.last(), Some(&unknown));
+    }
+
+    /// A regeneration's turn reads the room as the regeneration's read
+    /// under the lock found it (Python's context): the answers given since
+    /// its message, never a message committed after that read.
+    async fn regenerated(
+        store: &InMemoryStore,
+        trigger: &RoomEvent,
+        read: &[RoomEvent],
+    ) -> Vec<u64> {
+        let agent = binding("agent", ChannelType::AI);
+        let mut context = RoomContext::new(Room::new(room_id()));
+        context.bindings = vec![binding("sms", ChannelType::SMS), agent.clone()];
+        context.recent_events = read.to_vec();
+        let read = turn_context(store, &agent, trigger, context, 50).await;
+        read.recent_events.iter().map(|event| event.index).collect()
+    }
+
+    // Python: core/mixins/regenerate.py::_plan_regeneration, the context
+    // its turn reads built under the room's lock.
+    #[tokio::test]
+    async fn a_regeneration_reads_no_message_committed_after_its_read() {
+        let events: Vec<RoomEvent> = (0..4).map(|index| event(index, None)).collect();
+        let store = store(events.clone()).await;
+        assert_eq!(
+            regenerated(&store, &events[1], &events[..3]).await,
+            vec![0, 1, 2]
+        );
+    }
+
+    // Python: as above, the message the room's first event.
+    #[tokio::test]
+    async fn a_regeneration_of_the_first_message_reads_no_message_committed_after_its_read() {
+        let events: Vec<RoomEvent> = (0..3).map(|index| event(index, None)).collect();
+        let store = store(events.clone()).await;
+        assert_eq!(
+            regenerated(&store, &events[0], &events[..2]).await,
+            vec![0, 1]
+        );
     }
 
     /// An instruction, never stored, holds the index the room's next event

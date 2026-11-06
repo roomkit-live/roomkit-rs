@@ -19,7 +19,7 @@ const REGENERATE: &str = "regenerate_response";
 
 /// What [`RoomKit::regenerate_response`] takes beside the room: Python's
 /// `regenerate_response(room_id, *, trigger_id=None, organization_id=None)`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RegenerateResponseOptions {
     /// The message the caller read as the one to answer again
     /// ([`RoomKit::regenerate_target`]): a choice under the room's lock that
@@ -33,7 +33,7 @@ pub struct RegenerateResponseOptions {
 
 /// What [`RoomKit::regenerate_target`] takes beside the room: Python's
 /// `regenerate_target(room_id, *, organization_id=None)`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RegenerateTargetOptions {
     /// Scopes the read to one tenant (RFC §17.2): a room of another is
     /// refused before anything of it is read.
