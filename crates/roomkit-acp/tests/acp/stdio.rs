@@ -159,16 +159,7 @@ async fn the_agent_is_refused_what_the_client_does_not_serve_and_asked_its_permi
             refused("fs/read_text_file", "fs/read_text_file"),
             refused("fs/write_text_file", "fs/write_text_file"),
             refused("terminal/create", "terminal/create"),
-            json!({
-                "method": "elicitation/create",
-                "answer": {
-                    "error": {
-                        "code": -32602,
-                        "message": "Invalid params",
-                        "data": answers[3]["answer"]["error"]["data"],
-                    },
-                },
-            }),
+            refused("elicitation/create", "elicitation/create"),
             refused("_vendor/extension", "_vendor/extension"),
             json!({
                 "method": "session/request_permission",
@@ -217,4 +208,55 @@ async fn a_protocol_version_the_agent_selects_reaches_the_caller() {
     let answer = initialized(&connection).await;
     transport.close().await;
     assert_eq!(answer.protocol_version.as_u16(), 2);
+}
+
+#[tokio::test]
+async fn the_agents_standard_error_never_blocks_it() {
+    let client = Recorder::new();
+    let transport = transport("stderr-flood", StdioAcpTransportOptions::default());
+    let connection = transport.open(client.client()).await.unwrap();
+    initialized(&connection).await;
+    transport.close().await;
+}
+
+#[tokio::test]
+async fn an_open_never_awaited_starts_nothing() {
+    let transport = transport("echo", StdioAcpTransportOptions::default());
+    drop(transport.open(Recorder::new().client()));
+    assert_eq!(transport.process(), None);
+}
+
+/// Whether the process `pid` is still there, as Linux lists it.
+#[cfg(target_os = "linux")]
+async fn gone(pid: u32) {
+    let deadline = Instant::now() + PATIENCE;
+    while std::path::Path::new(&format!("/proc/{pid}")).exists() {
+        assert!(Instant::now() < deadline, "the agent {pid} is still there");
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_transport_dropped_without_a_close_kills_its_agent() {
+    let transport = transport("echo", StdioAcpTransportOptions::default());
+    let connection = transport.open(Recorder::new().client()).await.unwrap();
+    initialized(&connection).await;
+    let pid = transport.process().unwrap();
+    drop(transport);
+    gone(pid).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn opening_again_lets_the_first_agent_go() {
+    let transport = transport("echo", StdioAcpTransportOptions::default());
+    let first = transport.open(Recorder::new().client()).await.unwrap();
+    initialized(&first).await;
+    let pid = transport.process().unwrap();
+    let second = transport.open(Recorder::new().client()).await.unwrap();
+    initialized(&second).await;
+    assert_ne!(transport.process(), Some(pid));
+    gone(pid).await;
+    transport.close().await;
 }

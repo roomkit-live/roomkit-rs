@@ -13,10 +13,11 @@ use crate::error::AcpError;
 /// to the two calls RoomKit's client serves (HITL e6f3decd).
 ///
 /// A connection hands each `session/update` notification to
-/// [`session_update`](Self::session_update), in the order the agent sent
-/// them, and each `session/request_permission` request to
+/// [`session_update`](Self::session_update), each session's in the order
+/// the agent sent them, one after the other and apart from the other
+/// sessions', and each `session/request_permission` request to
 /// [`request_permission`](Self::request_permission), the reading going on
-/// while it is answered. It refuses every other request of the agent with
+/// meanwhile: a callback may ask the connection and wait for its answer. It refuses every other request of the agent with
 /// JSON-RPC's `method_not_found`, as the Python implementation's client
 /// refuses the file system, the terminals, elicitation and extensions, and
 /// ignores every other notification.
@@ -26,9 +27,9 @@ use crate::error::AcpError;
 ///
 /// [`AcpTransport::open`]: crate::AcpTransport::open
 pub trait AcpClient: Send + Sync + 'static {
-    /// Takes one of the agent's session updates. The connection reads its
-    /// next message once this returns, so the updates of a prompt are all
-    /// taken before the prompt's answer is.
+    /// Takes one of the agent's session updates. The session's next update
+    /// waits until this returns, and a prompt of the session returns once
+    /// the updates the agent sent before its answer were taken.
     fn session_update(
         &self,
         notification: SessionNotification,

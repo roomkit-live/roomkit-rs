@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -156,11 +155,12 @@ impl AcpTransport for StdioAcpTransport {
         "stdio"
     }
 
-    fn open(
-        &self,
-        client: Arc<dyn AcpClient>,
-    ) -> impl Future<Output = Result<ClientSideConnection, AcpError>> + Send {
-        std::future::ready(self.spawn(client))
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait's open is a future: nothing starts until it is awaited"
+    )]
+    async fn open(&self, client: Arc<dyn AcpClient>) -> Result<ClientSideConnection, AcpError> {
+        self.spawn(client)
     }
 
     async fn close(&self) {

@@ -5,9 +5,9 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::Path;
+use std::process::ExitStatus;
 use std::process::Stdio;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use tokio::io::AsyncReadExt;
@@ -23,6 +23,9 @@ use crate::error::AcpError;
 /// is sent `SIGTERM`, before it is killed.
 pub(crate) const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
+/// How a process exited, none until it was waited for.
+type Status = Arc<Mutex<Option<ExitStatus>>>;
+
 /// A started agent: its process and the two pipes the protocol runs on.
 pub(crate) struct Started {
     pub(crate) process: AgentProcess,
@@ -37,7 +40,8 @@ pub(crate) struct Started {
 /// at once; and if the runtime is gone, its handle's drop kills it.
 pub(crate) struct AgentProcess {
     pid: Option<u32>,
-    exited: Arc<AtomicBool>,
+    /// How the process exited, once it was waited for.
+    status: Status,
     stop: Option<oneshot::Sender<Duration>>,
     watcher: Option<JoinHandle<()>>,
     stderr: JoinHandle<()>,
@@ -74,7 +78,18 @@ impl AgentProcess {
             program: program.to_owned(),
             source: Arc::new(source),
         };
-        let mut child = command.spawn().map_err(spawn_error)?;
+        let mut child = command.spawn().map_err(|source: std::io::Error| {
+            // Python's error names the directory that is missing, not the
+            // program.
+            if cwd.is_dir() {
+                spawn_error(source)
+            } else {
+                spawn_error(std::io::Error::new(
+                    source.kind(),
+                    format!("{source}: {}", cwd.display()),
+                ))
+            }
+        })?;
         let (Some(stdin), Some(stdout), Some(stderr)) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take())
         else {
@@ -84,13 +99,13 @@ impl AgentProcess {
             )));
         };
         let pid = child.id();
-        let exited = Arc::new(AtomicBool::new(false));
+        let status = Status::default();
         let (stop, stopped) = oneshot::channel();
-        let watcher = tokio::spawn(watch(child, Arc::clone(&exited), stopped));
+        let watcher = tokio::spawn(watch(child, Arc::clone(&status), stopped));
         Ok(Started {
             process: Self {
                 pid,
-                exited,
+                status,
                 stop: Some(stop),
                 watcher: Some(watcher),
                 stderr: tokio::spawn(drain(stderr)),
@@ -107,7 +122,10 @@ impl AgentProcess {
 
     /// Whether the process has exited and was waited for.
     pub(crate) fn has_exited(&self) -> bool {
-        self.exited.load(Ordering::Acquire)
+        self.status
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
     }
 
     /// Stops the process, its input closed already: `grace` to exit, then
@@ -135,8 +153,8 @@ impl Drop for AgentProcess {
 
 /// Holds `child` until it exits on its own, or until it is asked to stop it
 /// with a grace, or its order's sender is dropped, which kills it; then
-/// waits for it and says so in `exited`.
-async fn watch(mut child: Child, exited: Arc<AtomicBool>, stopped: oneshot::Receiver<Duration>) {
+/// waits for it and keeps how it exited in `status`.
+async fn watch(mut child: Child, status: Status, stopped: oneshot::Receiver<Duration>) {
     let order = tokio::select! {
         _exited = child.wait() => None,
         order = stopped => Some(order.ok()),
@@ -146,7 +164,9 @@ async fn watch(mut child: Child, exited: Arc<AtomicBool>, stopped: oneshot::Rece
         Some(Some(grace)) => stop_gracefully(&mut child, grace).await,
         Some(None) => kill(&mut child).await,
     }
-    exited.store(true, Ordering::Release);
+    // Waited for already, the process answers its status at once.
+    let exited = child.wait().await.ok();
+    *status.lock().unwrap_or_else(PoisonError::into_inner) = exited.or(Some(ExitStatus::default()));
 }
 
 /// The SDK's stop: `grace` for the process to exit, its input closed, then
@@ -233,14 +253,25 @@ mod tests {
         assert!(begun.elapsed() < Duration::from_secs(5));
     }
 
+    /// The signal that ended the process, once it was waited for.
+    fn signal(status: &Status) -> Option<i32> {
+        use std::os::unix::process::ExitStatusExt;
+        status
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .and_then(|status| status.signal())
+    }
+
     #[tokio::test]
     async fn an_agent_that_stays_is_sent_sigterm_after_the_grace() {
         let Started { process, stdin, .. } = start("sleep", &["30"]).unwrap();
+        let status = Arc::clone(&process.status);
         drop(stdin);
         let begun = Instant::now();
         process.stop(SHORT).await;
         let took = begun.elapsed();
         assert!(took >= SHORT && took < Duration::from_secs(5), "{took:?}");
+        assert_eq!(signal(&status), Some(15), "ended by SIGTERM");
     }
 
     #[tokio::test]
@@ -255,6 +286,7 @@ mod tests {
         // The trap is set before the stop begins.
         let mut ready = [0_u8; 6];
         stdout.read_exact(&mut ready).await.unwrap();
+        let status = Arc::clone(&process.status);
         let begun = Instant::now();
         process.stop(SHORT).await;
         let took = begun.elapsed();
@@ -262,18 +294,33 @@ mod tests {
             took >= SHORT * 2 && took < Duration::from_secs(5),
             "{took:?}"
         );
+        assert_eq!(signal(&status), Some(9), "ended by SIGKILL");
     }
 
     #[tokio::test]
     async fn an_agent_let_go_of_is_killed() {
         let Started { process, stdin, .. } = start("sleep", &["30"]).unwrap();
-        let exited = Arc::clone(&process.exited);
+        let status = Arc::clone(&process.status);
         drop(process);
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !exited.load(Ordering::Acquire) {
+        while status.lock().unwrap().is_none() {
             assert!(Instant::now() < deadline, "the process was not killed");
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         drop(stdin);
+        assert_eq!(signal(&status), Some(9), "killed");
+    }
+
+    #[tokio::test]
+    async fn a_missing_directory_is_named_in_the_error() {
+        let started =
+            AgentProcess::start("true", &[], Path::new("/nonexistent/roomkit-acp-cwd"), None);
+        let Err(error) = started else {
+            panic!("started in a missing directory");
+        };
+        assert!(
+            error.to_string().contains("/nonexistent/roomkit-acp-cwd"),
+            "{error}"
+        );
     }
 }

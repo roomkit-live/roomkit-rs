@@ -69,11 +69,11 @@ impl AcpError {
 
     /// The error the SDK's `RequestError.method_not_found(method)` is:
     /// `-32601`, `Method not found`, the method in its data.
-    pub(crate) fn method_not_found(method: &str) -> Self {
+    pub(crate) fn method_not_found(method: impl Into<Value>) -> Self {
         Self::rpc(
             METHOD_NOT_FOUND,
             "Method not found",
-            Some(serde_json::json!({ "method": method })),
+            Some(serde_json::json!({ "method": method.into() })),
         )
     }
 

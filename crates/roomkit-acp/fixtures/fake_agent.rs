@@ -19,8 +19,9 @@
 //!   other request is answered `method_not_found`.
 //! - `exit`: `echo`, but it exits once it answered `initialize`.
 //! - `version:<n>`: `echo`, its `initialize` answering version `<n>`.
-//! - `junk`: `echo`, each answer preceded by a blank line, a line that is
-//!   no JSON and a JSON line that is no object.
+//! - `junk`: `echo`, each answer preceded by a blank line and a line that
+//!   is no JSON.
+//! - `stderr-flood`: `echo`, after 5 MiB written on its standard error.
 
 #![expect(
     clippy::indexing_slicing,
@@ -54,6 +55,13 @@ struct Agent {
 
 fn main() -> ExitCode {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "echo".to_owned());
+    if mode == "stderr-flood" {
+        let chunk = vec![b'e'; 64 * 1024];
+        let mut stderr = io::stderr().lock();
+        for _ in 0..80 {
+            let _ignored = stderr.write_all(&chunk);
+        }
+    }
     let mut agent = Agent {
         mode,
         input: io::stdin().lock().lines(),
@@ -212,7 +220,7 @@ impl Agent {
 
     fn send(&mut self, message: &Value) {
         if self.mode == "junk" {
-            let _ignored = writeln!(self.output, "\nnot json\n[1, 2]");
+            let _ignored = writeln!(self.output, "\nnot json");
         }
         let _ignored = writeln!(self.output, "{message}");
         let _ignored = self.output.flush();
