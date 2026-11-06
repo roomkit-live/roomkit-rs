@@ -21,7 +21,7 @@ use roomkit_core::rules::edits::opens_no_turn;
 use roomkit_core::rules::transcript::{
     Message, TurnMemory, conversation_with_memory, people_taking_part, replayed_rounds,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::agent::{IdentityPrompt, room_language};
 use crate::author_images::{
@@ -34,7 +34,7 @@ use crate::memory::{
     IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions, SlidingWindowMemory,
     SlidingWindowMemoryOptions, TurnFootprint, measured, runtime_or_cleaned,
 };
-use crate::provider::{AiContentPart, AiMessage, AiProvider, DynAiProvider};
+use crate::provider::{AiContentPart, AiMessage, AiProvider, DynAiProvider, check_portable_schema};
 use crate::rows;
 use crate::server_instructions::ServerInstructions;
 use crate::skills::SkillRegistry;
@@ -180,6 +180,15 @@ pub struct AiChannelOptions {
     /// under the effort a binding's metadata sets and over the provider's
     /// configured one: Python's `reasoning_effort`; `None` sets none.
     pub reasoning_effort: Option<String>,
+    /// The JSON Schema each turn's answer satisfies (RFC §6.7), under the one
+    /// a binding's metadata or the turn's configuration sets: within the
+    /// portable subset of [`check_portable_schema`](crate::check_portable_schema),
+    /// on a provider that takes one (beside the turn's tools when it has
+    /// some). The turn's answer is then one JSON document, held until the
+    /// provider checked it, or the turn fails with a
+    /// [`ResponseSchemaError`](crate::ResponseSchemaError). Python's
+    /// `response_schema`; `None` sets none.
+    pub response_schema: Option<Map<String, Value>>,
     /// What configures each turn (RFC Appendix A.9, per-turn settings):
     /// called with the turn's binding and room context at the start of
     /// every turn, its [`AiChannelTurnConfig`]'s settings sit under the
@@ -297,6 +306,7 @@ impl Default for AiChannelOptions {
             turn_budget_tokens: None,
             turn_budget_usd: None,
             reasoning_effort: None,
+            response_schema: None,
             config_provider: None,
             describe_empty_event: None,
             max_author_images: Some(DEFAULT_MAX_AUTHOR_IMAGES),
@@ -404,6 +414,7 @@ pub struct AiChannel<P> {
     text_deltas: Option<(f64, usize)>,
     publish_thinking_text: bool,
     reasoning_effort: Option<String>,
+    response_schema: Option<Map<String, Value>>,
     /// What configures each turn (RFC Appendix A.9).
     turn_configs: TurnConfigs,
     server_instructions: ServerInstructions,
@@ -524,6 +535,7 @@ impl<P> Clone for AiChannel<P> {
             text_deltas: self.text_deltas,
             publish_thinking_text: self.publish_thinking_text,
             reasoning_effort: self.reasoning_effort.clone(),
+            response_schema: self.response_schema.clone(),
             turn_configs: self.turn_configs.clone(),
             server_instructions: self.server_instructions.clone(),
             memory: Arc::clone(&self.memory),
@@ -556,7 +568,8 @@ impl<P: AiProvider> AiChannel<P> {
     /// zero and [`AiError::UnpricedModel`] for one on a model with no
     /// catalogue price (RFC §6.4); [`AiError::ServerLabel`] for a server
     /// label that is no identifier and [`AiError::DuplicateServer`] for one
-    /// given twice; [`AiError::ToolTimeout`] for a tool's call bounded by zero
+    /// given twice; [`AiError::ResponseSchema`] for a response schema outside
+    /// the portable subset (RFC §6.7); [`AiError::ToolTimeout`] for a tool's call bounded by zero
     /// (RFC §21.6); [`AiError::DuplicateTool`] for a tool given twice, or one
     /// under a skill tool's name (RFC §21.1).
     pub fn new(
@@ -577,6 +590,7 @@ impl<P: AiProvider> AiChannel<P> {
             publish_text_deltas,
             publish_thinking_text,
             reasoning_effort,
+            response_schema,
             config_provider,
             max_context_events,
             memory,
@@ -621,6 +635,7 @@ impl<P: AiProvider> AiChannel<P> {
         let fallback = resilience.fallback_provider.as_deref();
         check_budgets(turn_budget_tokens, turn_budget_usd, &provider, fallback)?;
         let instructions = instructions_of(&server_instructions)?;
+        response_schema.as_ref().map(portable).transpose()?;
         refuse_zero_bounds(tool_timeout, &tool_timeouts)?;
         let search = ToolSearch::checked(mode, pinned, (count, share, tokens), miss_hint)?;
         let skilled = (skills, skills_in_prompt);
@@ -633,14 +648,11 @@ impl<P: AiProvider> AiChannel<P> {
             toolbox: Arc::new(surface.toolbox),
             tool_handler: surface.tool_handler,
             policy,
-            bounds: Bounds {
-                max_rounds: max_tool_rounds,
-                loop_timeout: tool_loop_timeout.filter(|timeout| !timeout.is_zero()),
-                warn_after: tool_loop_warn_after,
+            bounds: loop_bounds(
+                (max_tool_rounds, tool_loop_timeout, tool_loop_warn_after),
                 max_empty_retries,
-                tool_timeout,
-                tool_timeouts,
-            },
+                (tool_timeout, tool_timeouts),
+            ),
             turn_budget_tokens,
             turn_budget_usd,
             resilience,
@@ -654,6 +666,7 @@ impl<P: AiProvider> AiChannel<P> {
             text_deltas: publish_text_deltas.then_some((text_coalesce_ms, text_coalesce_chars)),
             publish_thinking_text,
             reasoning_effort,
+            response_schema,
             turn_configs: TurnConfigs::new(config_provider),
             server_instructions: instructions,
             memory: memory.unwrap_or_else(|| sliding_window(max_context_events)),
@@ -810,6 +823,9 @@ impl<P: AiProvider> AiChannel<P> {
             configured
                 .and_then(|turn| turn.reasoning_effort.as_deref())
                 .or(self.reasoning_effort.as_deref()),
+            configured
+                .and_then(|turn| turn.response_schema.as_ref())
+                .or(self.response_schema.as_ref()),
             ReasoningLevels {
                 budget: (
                     configured.and_then(|turn| turn.thinking_budget),
@@ -1498,6 +1514,7 @@ impl<P: AiProvider> AiChannel<P> {
             thinking_publication: self.thinking_publication(&event),
             text_publication: self.text_publication(&event),
             reasoning_effort: settings.reasoning_effort.clone(),
+            response_schema: settings.response_schema.clone(),
             turn: turn.clone(),
             context: tools,
             intents: self.tool_call_intents,
@@ -1558,6 +1575,30 @@ impl<P: AiProvider> AiChannel<P> {
             }),
             None => Ok(rows::collect(self.source(), &event, items, record).await?),
         }
+    }
+}
+
+/// A schema the channel is built with, refused outside the portable subset
+/// (RFC §6.7), as Python's constructor raises `ValueError`.
+fn portable(schema: &Map<String, Value>) -> Result<(), AiError> {
+    check_portable_schema(&Value::Object(schema.clone()))
+}
+
+/// The bounds of a channel's loops: its round bound, its deadline (none for
+/// zero) and when it warns it still runs, how many times a round with no call
+/// is tried again, and its calls' bounds.
+fn loop_bounds(
+    (max_rounds, loop_timeout, warn_after): (u32, Option<Duration>, u32),
+    max_empty_retries: u32,
+    (tool_timeout, tool_timeouts): (Option<Duration>, BTreeMap<String, Option<Duration>>),
+) -> Bounds {
+    Bounds {
+        max_rounds,
+        loop_timeout: loop_timeout.filter(|timeout| !timeout.is_zero()),
+        warn_after,
+        max_empty_retries,
+        tool_timeout,
+        tool_timeouts,
     }
 }
 

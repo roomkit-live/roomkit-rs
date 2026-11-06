@@ -8,14 +8,17 @@ use roomkit::model::Metadata;
 use serde_json::Value;
 
 use crate::provider::{
-    AiContext, AiProvider, AiResponse, ModelInfo, ProviderError, ProviderStream, StreamEvent,
-    TextStream, response_events,
+    AiContext, AiProvider, AiResponse, ModelInfo, ProviderError, ProviderStream, StreamDone,
+    StreamEvent, TextStream, check_schema_answer, checked_stream, is_malformed_call,
+    response_events, schema_for_generate,
 };
-use crate::stream::{Yielder, items};
+use crate::stream::{Yielder, items, next};
 
 /// What [`MockAiProvider::new`] takes: Python's `responses=None, *,
-/// vision=False, ai_responses=None, streaming=False`.
+/// vision=False, ai_responses=None, streaming=False, response_schema=False,
+/// response_schema_with_tools=False`.
 #[derive(Clone, Debug, Default)]
+#[expect(clippy::struct_excessive_bools, reason = "Python's keywords")]
 pub struct MockAiProviderOptions {
     /// The texts it answers, round-robin; empty answers `Hello from AI`.
     pub responses: Vec<String>,
@@ -28,6 +31,16 @@ pub struct MockAiProviderOptions {
     /// `supports_structured_streaming`); either way its structured stream
     /// sends each response as its events.
     pub streaming: bool,
+    /// Whether it honours [`AiContext::response_schema`] as a real provider
+    /// must (RFC §6.7), streaming included: the answer must be a JSON
+    /// document satisfying the schema, a response ending `refusal` is a
+    /// refusal and one that ran out of room is truncated, each failing with
+    /// its [`ResponseSchemaError`](crate::ResponseSchemaError);
+    /// `supports_response_schema`.
+    pub response_schema: bool,
+    /// Whether it takes a response schema beside tools
+    /// (`supports_response_schema_with_tools`).
+    pub response_schema_with_tools: bool,
 }
 
 /// A provider answering each generation with the next of its responses,
@@ -57,6 +70,8 @@ pub struct MockAiProvider {
     responses: Arc<Vec<AiResponse>>,
     vision: bool,
     streaming: bool,
+    /// `response_schema` and `response_schema_with_tools`.
+    schema: (bool, bool),
     shared: Arc<Mutex<Asked>>,
 }
 
@@ -75,6 +90,8 @@ impl MockAiProvider {
             vision,
             ai_responses,
             streaming,
+            response_schema,
+            response_schema_with_tools,
         } = options;
         let responses = match ai_responses.filter(|whole| !whole.is_empty()) {
             Some(whole) => whole,
@@ -89,6 +106,7 @@ impl MockAiProvider {
             responses: Arc::new(responses),
             vision,
             streaming,
+            schema: (response_schema, response_schema_with_tools),
             shared: Arc::default(),
         }
     }
@@ -108,6 +126,29 @@ impl MockAiProvider {
             .get(at)
             .cloned()
             .unwrap_or_else(|| text_response("Hello from AI"))
+    }
+
+    /// Refuses, before `context` is kept, a schema it cannot take.
+    fn refuse_unsupported(&self, context: &AiContext) -> Result<(), ProviderError> {
+        let (supported, with_tools) = self.schema;
+        schema_for_generate(context, supported, with_tools, "mock").map(|_| ())
+    }
+
+    /// The next response to `context`, a constrained answer checked as a
+    /// real provider checks it: a response that calls, or that ended on a
+    /// call its provider could not hand over, is no answer (RFC §6.4).
+    fn checked_answer(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
+        self.refuse_unsupported(context)?;
+        let response = self.answer(context);
+        let finish = response.finish_reason.as_deref();
+        if let Some(schema) = &context.response_schema
+            && response.tool_calls.is_empty()
+            && !is_malformed_call(finish)
+        {
+            let refusal = (finish == Some("refusal")).then_some("refusal");
+            check_schema_answer(&response.content, schema, "mock", refusal, finish)?;
+        }
+        Ok(response)
     }
 
     fn lock(&self) -> MutexGuard<'_, Asked> {
@@ -151,37 +192,73 @@ impl AiProvider for MockAiProvider {
         self.streaming
     }
 
+    fn supports_response_schema(&self) -> bool {
+        self.schema.0
+    }
+
+    fn supports_response_schema_with_tools(&self) -> bool {
+        self.schema.1
+    }
+
     fn generate<'a>(
         &'a self,
         context: &'a AiContext,
     ) -> impl Future<Output = Result<AiResponse, ProviderError>> + Send + 'a {
-        std::future::ready(Ok(self.answer(context)))
+        std::future::ready(self.checked_answer(context))
     }
 
     /// Each response as its events, text first, the way a streaming
     /// provider sends them and Python's mock wraps its `generate` for one
-    /// that does not.
+    /// that does not. A streaming mock checks a constrained answer before
+    /// its done event, as a real provider's stream does.
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
-        Box::pin(items(
+        let streamed = self.streaming && context.response_schema.is_some();
+        let events: ProviderStream<'a> = Box::pin(items(
             move |out: Yielder<Result<StreamEvent, ProviderError>>| async move {
-                for event in response_events(self.answer(context)) {
-                    out.give(Ok(event)).await;
+                let response = if streamed {
+                    // Unchecked here: the check comes at the done event.
+                    self.refuse_unsupported(context)
+                        .map(|()| self.answer(context))
+                } else {
+                    self.checked_answer(context)
+                };
+                match response {
+                    Ok(response) => {
+                        for event in response_events(response) {
+                            out.give(Ok(event)).await;
+                        }
+                    }
+                    Err(error) => out.give(Err(error)).await,
                 }
             },
-        ))
+        ));
+        if !streamed {
+            return events;
+        }
+        checked_stream(events, context, "mock", refused)
     }
 
-    /// The text of each response, as one piece.
+    /// The text of each response, as one piece, read off its structured
+    /// stream, a constrained answer's check included.
     fn generate_stream<'a>(&'a self, context: &'a AiContext) -> TextStream<'a> {
+        let mut events = self.generate_structured_stream(context);
         Box::pin(items(
             move |out: Yielder<Result<String, ProviderError>>| async move {
-                let response = self.answer(context);
-                if !response.content.is_empty() {
-                    out.give(Ok(response.content)).await;
+                while let Some(event) = next(&mut events).await {
+                    match event {
+                        Ok(StreamEvent::TextDelta(delta)) => out.give(Ok(delta.text)).await,
+                        Ok(_) => {}
+                        Err(error) => return out.give(Err(error)).await,
+                    }
                 }
             },
         ))
     }
+}
+
+/// Why a scripted response declined: its `refusal` ending.
+fn refused(done: &StreamDone) -> Option<String> {
+    (done.finish_reason.as_deref() == Some("refusal")).then(|| "refusal".to_owned())
 }
 
 /// A response saying `text`, ending `stop`, with Python's mock usage.

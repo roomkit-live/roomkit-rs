@@ -120,6 +120,12 @@ pub use self::provider::{
 };
 #[doc(hidden)]
 pub use self::provider::{FirstToken, listing, read_tool_calls};
+pub use self::provider::{
+    ResponseSchemaError, ResponseSchemaErrorOptions, ResponseSchemaFailure, SchemaMismatchOptions,
+    check_portable_schema, schema_mismatch,
+};
+#[doc(hidden)]
+pub use self::provider::{check_schema_answer, checked_stream, schema_for_generate};
 #[doc(hidden)]
 pub use self::skills::dumps;
 pub use self::skills::{DiscoverOptions, Skill, SkillError, SkillMetadata, SkillRegistry};

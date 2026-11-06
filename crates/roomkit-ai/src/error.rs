@@ -132,6 +132,14 @@ pub enum AiError {
         /// Python's words.
         reason: String,
     },
+    /// A response schema outside the portable subset (RFC §6.7), as
+    /// Python's `check_portable_schema` raises `ValueError`, in its words:
+    /// the path of the first subschema that is not portable, and why.
+    #[error("{reason}")]
+    ResponseSchema {
+        /// Python's words.
+        reason: String,
+    },
     /// A turn's cost budget is not above 0 (RFC §6.4): Python's
     /// `ValueError`, a budget being a positive number.
     #[error("turn_budget_usd must be a positive number, got {shown}")]

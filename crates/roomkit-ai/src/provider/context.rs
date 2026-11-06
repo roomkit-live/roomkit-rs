@@ -4,12 +4,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use roomkit::model::{Metadata, ResponseMetadata};
 use roomkit_core::rules::transcript::{Image, Message, Part, Role};
+use serde_json::{Map, Value};
 
 use crate::tools::{AiTool, ToolResult};
 
 /// What one generation is asked (RFC §6.7): Python's `AIContext(*,
 /// messages=[], system_prompt=None, temperature=0.7, max_tokens=None,
-/// tools=[], metadata={}, response_metadata=...)`.
+/// tools=[], response_schema=None, metadata={}, response_metadata=...)`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AiContext {
     /// The conversation, oldest first, the turn's rounds so far included.
@@ -36,6 +37,13 @@ pub struct AiContext {
     pub reasoning_effort: Option<String>,
     /// The tools the model may call, in the toolset's order.
     pub tools: Vec<AiTool>,
+    /// The JSON Schema the answer satisfies (RFC §6.7), within the portable
+    /// subset of [`check_portable_schema`](crate::check_portable_schema):
+    /// `generate` then returns one JSON document in its `content`, or fails
+    /// with a [`ResponseSchemaError`](crate::ResponseSchemaError); a
+    /// provider never ignores it. One outside the subset is refused before
+    /// any request. Python's `response_schema`.
+    pub response_schema: Option<Map<String, Value>>,
     /// The turn's data for the provider.
     pub metadata: Metadata,
     /// The turn's one record (RFC §6.7), shared by every writer of the turn:
@@ -54,6 +62,7 @@ impl Default for AiContext {
             enable_thinking: None,
             reasoning_effort: None,
             tools: Vec::new(),
+            response_schema: None,
             metadata: Metadata::new(),
             response_metadata: ResponseMetadata::default(),
         }

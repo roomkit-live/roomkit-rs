@@ -11,7 +11,10 @@ use tokio::time::Instant;
 
 use super::Bounds;
 use crate::error::AiError;
-use crate::provider::ran_out_of_room;
+use crate::provider::{
+    ProviderError, ResponseSchemaError, ResponseSchemaErrorOptions, ResponseSchemaFailure,
+    is_malformed_call, ran_out_of_room,
+};
 use crate::turn_budget::TurnBudget;
 
 /// What a model whose round of calls was followed by an empty answer is told
@@ -34,10 +37,6 @@ it did not run. Use one of the declared tools, or answer in plain text.";
 /// The ending of a response whose call its provider did not hand over:
 /// one to a tool the request did not enable.
 const UNEXPECTED_CALL: &str = "unexpected_tool_call";
-
-/// The endings of a response whose call its provider did not hand over:
-/// one it could not parse, or one to a tool the request did not enable.
-const MALFORMED_CALL: [&str; 2] = ["malformed_function_call", UNEXPECTED_CALL];
 
 /// The limits one turn's loop runs under, and the tries it has spent.
 #[derive(Debug)]
@@ -206,6 +205,22 @@ fn empty_round_nudge(
     Some(EMPTY_RETRY_NUDGE)
 }
 
+/// The failure of a turn constrained to a response schema whose loop ended
+/// for `reason` short of its answer (RFC §6.7, Appendix A.9): Python's
+/// `require_schema_answer`. Every end but `completed` and `cancelled`,
+/// which someone chose, leaves the turn no checked document to deliver, its
+/// last text the narration of a round. `None` for a turn under no schema,
+/// or one that answered.
+pub(super) fn unanswered(constrained: bool, reason: LoopEndReason) -> Option<ProviderError> {
+    if !constrained || matches!(reason, LoopEndReason::Completed | LoopEndReason::Cancelled) {
+        return None;
+    }
+    let message =
+        format!("the tool loop stopped ({reason}) before a final answer in the response schema");
+    let options = ResponseSchemaErrorOptions::default();
+    Some(ResponseSchemaError::new(message, ResponseSchemaFailure::Truncated, options).into())
+}
+
 /// Why a loop whose round made no call to run ends there (roomkit's
 /// `final_round_reason`): a call its provider did not hand over is no
 /// answer; text, or a turn that ran no call, completes; after a round of
@@ -227,15 +242,6 @@ pub(super) fn final_round_reason(
         return LoopEndReason::Truncated;
     }
     limit.unwrap_or(LoopEndReason::EmptyResponse)
-}
-
-/// Whether a response ended on a call its provider did not hand over.
-fn is_malformed_call(finish_reason: Option<&str>) -> bool {
-    finish_reason.is_some_and(|reason| {
-        MALFORMED_CALL
-            .iter()
-            .any(|malformed| reason.eq_ignore_ascii_case(malformed))
-    })
 }
 
 #[cfg(test)]

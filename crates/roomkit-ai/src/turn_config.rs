@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit::model::{ChannelBinding, Metadata, RoomContext};
 use roomkit::{ChannelError, ClassedError};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::skills::SkillRegistry;
 use crate::tools::{AiTool, ToolHandler};
@@ -43,6 +43,11 @@ pub struct AiChannelTurnConfig {
     pub enable_thinking: Option<bool>,
     /// How hard a reasoning model thinks (RFC §6.7).
     pub reasoning_effort: Option<String>,
+    /// The JSON Schema the turn's answer satisfies (RFC §6.7): its last
+    /// message is then one JSON document, or the turn fails with a
+    /// [`ResponseSchemaError`](crate::ResponseSchemaError). One outside the
+    /// portable subset fails the turn before its model is asked.
+    pub response_schema: Option<Map<String, Value>>,
     /// The turn's budget of billed tokens (RFC §6.4), more than zero.
     pub turn_budget_tokens: Option<u64>,
     /// The turn's cost budget at the model's catalogue price (RFC §6.4),
@@ -72,6 +77,7 @@ impl fmt::Debug for AiChannelTurnConfig {
             .field("thinking_budget", &self.thinking_budget)
             .field("enable_thinking", &self.enable_thinking)
             .field("reasoning_effort", &self.reasoning_effort)
+            .field("response_schema", &self.response_schema)
             .field("turn_budget_tokens", &self.turn_budget_tokens)
             .field("turn_budget_usd", &self.turn_budget_usd)
             .field("tool_handler", &self.tool_handler.is_some())

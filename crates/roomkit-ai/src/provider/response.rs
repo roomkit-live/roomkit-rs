@@ -258,6 +258,20 @@ fn cuts_calls(finish_reason: Option<&str>) -> bool {
     })
 }
 
+/// The endings of a response whose call its provider did not hand over:
+/// one it could not parse, or one to a tool the request did not enable.
+const MALFORMED_CALL: [&str; 2] = ["malformed_function_call", "unexpected_tool_call"];
+
+/// Whether a response ended on a call its provider did not hand over:
+/// Python's `is_malformed_call`.
+pub(crate) fn is_malformed_call(finish_reason: Option<&str>) -> bool {
+    finish_reason.is_some_and(|reason| {
+        MALFORMED_CALL
+            .iter()
+            .any(|malformed| reason.eq_ignore_ascii_case(malformed))
+    })
+}
+
 /// Whether a response that ended for `finish_reason` ran out of room.
 pub(crate) fn ran_out_of_room(finish_reason: Option<&str>) -> bool {
     finish_reason.is_some_and(|reason| OUT_OF_ROOM.contains(&reason.to_ascii_lowercase().as_str()))

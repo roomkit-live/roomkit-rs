@@ -7,6 +7,7 @@ use roomkit::model::{Metadata, ToolCall};
 
 use super::TurnItem;
 use super::resilience::Reading;
+use super::text_window::RoundWindows;
 use crate::provider::{
     AiToolCall, ProviderError, ProviderStream, RoundTranscript, StreamDone, StreamEvent,
     StreamToolCall,
@@ -114,6 +115,10 @@ impl Generation {
     /// at the next event, which is dropped with the stream (RFC §21.3); a
     /// done event whose usage the turn's price cannot read stops it there,
     /// the count that raises as Python's does at that event following.
+    /// A generation under a response schema (`held`) holds its text until
+    /// its first call or its end, which its provider checked: a failure, a
+    /// stop or an end before either hands none of it (RFC §6.7, Python's
+    /// `hold_until_checked`).
     ///
     /// # Errors
     ///
@@ -122,10 +127,12 @@ impl Generation {
     pub(super) async fn read(
         mut stream: ProviderStream<'_>,
         (steering, out, prefix, window, limits): Reading<'_>,
+        held: bool,
     ) -> Result<Self, Failed> {
         let mut transcript = RoundTranscript::new();
         let mut delivered = String::new();
         let mut replayed = Replayed::new(prefix);
+        let mut holding = Vec::new();
         let mut calls = Vec::new();
         let mut done = StreamDone::default();
         let mut reports = Vec::new();
@@ -149,22 +156,22 @@ impl Generation {
                 }
             };
             streamed = true;
+            let read = (&mut transcript, &mut replayed, &mut delivered);
             match event {
+                StreamEvent::TextDelta(delta) if held => holding.push(delta.text),
                 StreamEvent::TextDelta(delta) => {
-                    window.thinking.end();
-                    transcript.add_text(&delta.text);
-                    let released = replayed.add(delta.text);
-                    window.text.add(&released);
-                    deliver(released, &mut delivered, out).await;
+                    read_text(vec![delta.text], read, window, out).await;
                 }
                 // A whole call closes no reasoning window: a fragment would (Python's
                 // `StreamToolCallDelta`), which no provider here hands.
                 StreamEvent::ToolCall(call) => {
+                    read_text(std::mem::take(&mut holding), read, window, out).await;
                     window.text.flush();
                     transcript.add_call(call.id.clone());
                     calls.push(call);
                 }
                 StreamEvent::Done(ended) => {
+                    read_text(std::mem::take(&mut holding), read, window, out).await;
                     unpriced = limits.cannot_price(&ended.usage);
                     take_done(ended, &mut done, &mut reports);
                     if unpriced {
@@ -253,6 +260,24 @@ fn take_done(mut ended: StreamDone, done: &mut StreamDone, reports: &mut Vec<Met
         reports.push(ended.usage.clone());
     }
     *done = ended;
+}
+
+/// Reads the generation's `texts`, in order, into its `transcript`, past
+/// what it `replayed` of the round before, handing the room what it
+/// releases.
+async fn read_text(
+    texts: Vec<String>,
+    (transcript, replayed, delivered): (&mut RoundTranscript, &mut Replayed<'_>, &mut String),
+    window: &mut RoundWindows,
+    out: &Yielder<Result<TurnItem, ProviderError>>,
+) {
+    for text in texts {
+        window.thinking.end();
+        transcript.add_text(&text);
+        let released = replayed.add(text);
+        window.text.add(&released);
+        deliver(released, delivered, out).await;
+    }
 }
 
 /// Hands `pieces` to the room, each in turn, and keeps them in

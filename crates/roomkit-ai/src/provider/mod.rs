@@ -8,8 +8,10 @@ mod date;
 mod dynamic;
 mod error;
 mod first_token;
+mod json_schema;
 mod model_tags;
 mod response;
+mod response_schema;
 mod round_parts;
 mod thinking_blocks;
 
@@ -30,6 +32,7 @@ pub use self::dynamic::DynAiProvider;
 pub use self::error::{ProviderError, ProviderErrorOptions, is_context_overflow_message};
 #[doc(hidden)]
 pub use self::first_token::FirstToken;
+pub use self::json_schema::{SchemaMismatchOptions, check_portable_schema, schema_mismatch};
 pub use self::model_tags::{
     SPEECH_CAPABILITY, TRANSCRIPTION_CAPABILITY, speech_tags, with_speech_tags,
 };
@@ -37,7 +40,12 @@ pub use self::response::{
     AiResponse, AiToolCall, CallIds, StreamDone, StreamEvent, StreamTextDelta, StreamThinkingDelta,
     StreamToolCall, read_tool_calls, thinking_parts_of, tool_arguments,
 };
-pub(crate) use self::response::{ran_out_of_room, response_events};
+pub(crate) use self::response::{is_malformed_call, ran_out_of_room, response_events};
+pub use self::response_schema::{
+    ResponseSchemaError, ResponseSchemaErrorOptions, ResponseSchemaFailure,
+};
+#[doc(hidden)]
+pub use self::response_schema::{check_schema_answer, checked_stream, schema_for_generate};
 pub use self::round_parts::{RoundTranscript, round_parts};
 pub use self::thinking_blocks::ThinkingBlocks;
 use crate::stream::{Yielder, items, next};
@@ -118,6 +126,27 @@ pub trait AiProvider: Send + Sync + 'static {
     /// Whether [`generate_structured_stream`](Self::generate_structured_stream)
     /// streams, rather than wrap a whole response.
     fn supports_structured_streaming(&self) -> bool {
+        false
+    }
+
+    /// Whether [`generate`](Self::generate) and the streams honour
+    /// [`AiContext::response_schema`] (RFC §6.7): Python's
+    /// `supports_response_schema`, false by default. A provider default,
+    /// not a fact about every model it reaches. The contract is the
+    /// implementation's to keep: refuse a schema it cannot carry before
+    /// sending anything, and never return an answer that does not satisfy
+    /// it.
+    fn supports_response_schema(&self) -> bool {
+        false
+    }
+
+    /// Whether a response schema may ride a turn that also carries tools
+    /// (RFC §6.7): the model then calls tools or answers in the schema,
+    /// only the final answer checked. Python's
+    /// `supports_response_schema_with_tools`, false by default, as wherever
+    /// the constraint is a decoding grammar, which keeps the model from
+    /// calling a tool.
+    fn supports_response_schema_with_tools(&self) -> bool {
         false
     }
 

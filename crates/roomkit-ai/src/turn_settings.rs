@@ -15,9 +15,10 @@ use std::num::IntErrorKind;
 
 use roomkit::model::Metadata;
 use roomkit::{ChannelError, ClassedError};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::memory::repr::repr;
+use crate::provider::check_portable_schema;
 
 /// Python's class of a context's refused field.
 const VALIDATION_ERROR: &str = "pydantic_core:ValidationError";
@@ -56,6 +57,9 @@ pub(crate) struct TurnSettings {
     /// The effort the turn asks the model for (RFC §6.7); `None` sets
     /// none.
     pub(crate) reasoning_effort: Option<String>,
+    /// The JSON Schema the turn's answer satisfies (RFC §6.7); `None` sets
+    /// none.
+    pub(crate) response_schema: Option<Map<String, Value>>,
     /// The context's fields the binding sets to a value pydantic refuses,
     /// in `AIContext`'s order: the turn fails once its context is built.
     refused: Vec<Refusal>,
@@ -64,7 +68,8 @@ pub(crate) struct TurnSettings {
 impl TurnSettings {
     /// The settings `metadata`, a binding's, sets over the channel's own
     /// `temperature`, `max_tokens`, `turn_budget_tokens` and
-    /// `turn_budget_usd` (`budgets`), and `reasoning_effort`. A field the
+    /// `turn_budget_usd` (`budgets`), `reasoning_effort`, and the response
+    /// schema the turn's configuration, else the channel, sets. A field the
     /// binding sets to a value pydantic refuses keeps the channel's, and
     /// [`Self::validated`] then fails the turn.
     ///
@@ -80,6 +85,7 @@ impl TurnSettings {
         max_tokens: Option<u32>,
         (turn_budget_tokens, turn_budget_usd): (Option<u64>, Option<f64>),
         reasoning_effort: Option<&str>,
+        response_schema: Option<&Map<String, Value>>,
         reasoning: ReasoningLevels,
     ) -> Result<Self, ChannelError> {
         let mut settings = Self {
@@ -90,6 +96,7 @@ impl TurnSettings {
             turn_budget_tokens,
             turn_budget_usd,
             reasoning_effort: reasoning_effort.map(str::to_owned),
+            response_schema: None,
             refused: Vec::new(),
         };
         let prompt = set(metadata, "system_prompt").filter(|prompt| !prompt.is_string());
@@ -111,6 +118,7 @@ impl TurnSettings {
         }
         settings.read_reasoning(metadata, reasoning);
         settings.read_effort(metadata);
+        settings.read_schema(metadata, response_schema);
         if prompt.is_some() {
             settings.validated()?;
         }
@@ -175,6 +183,34 @@ impl TurnSettings {
         } else {
             let refusal = Refusal::new("string_type", "Input should be a valid string", value);
             self.refused.push(refusal.of("reasoning_effort"));
+        }
+    }
+
+    /// The response schema `metadata` sets over `inherited`, the turn's
+    /// configuration's else the channel's, as pydantic reads `AIContext`'s
+    /// `response_schema: dict | None` and its validator checks it (RFC
+    /// §6.7): an object within the portable subset, any other value
+    /// refused.
+    fn read_schema(&mut self, metadata: &Metadata, inherited: Option<&Map<String, Value>>) {
+        let bound = set(metadata, "response_schema");
+        let Some(value) = bound
+            .cloned()
+            .or_else(|| inherited.cloned().map(Value::Object))
+        else {
+            return;
+        };
+        let Value::Object(schema) = &value else {
+            let refusal = Refusal::new("dict_type", "Input should be a valid dictionary", &value);
+            self.refused.push(refusal.of("response_schema"));
+            return;
+        };
+        match check_portable_schema(&value) {
+            Ok(()) => self.response_schema = Some(schema.clone()),
+            Err(refused) => {
+                let words = format!("Value error, {refused}");
+                let refusal = Refusal::new("value_error", words, &value);
+                self.refused.push(refusal.of("response_schema"));
+            }
         }
     }
 
@@ -558,8 +594,9 @@ mod tests {
             budget: (None, None),
             enabled: (None, None),
         };
-        let mut settings = TurnSettings::read(&metadata, 0.7, None, (None, None), None, levels)
-            .map_err(|error| error.to_string())?;
+        let mut settings =
+            TurnSettings::read(&metadata, 0.7, None, (None, None), None, None, levels)
+                .map_err(|error| error.to_string())?;
         settings
             .read_budgets(&metadata)
             .map_err(|error| error.to_string())?;

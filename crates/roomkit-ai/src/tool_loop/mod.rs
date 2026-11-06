@@ -49,7 +49,7 @@ use roomkit::model::{
 };
 use roomkit::{ToolCallReport, TurnHost, TurnRecord};
 use roomkit_core::rules::transcript::{Message, Role};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use spans::TurnSpan;
 pub(crate) use spans::TurnTelemetry;
 use tokio::time::Instant;
@@ -60,7 +60,7 @@ use self::hooks::Ran;
 use self::repeat_guard::FORCE_STOP_NUDGE;
 pub(crate) use self::repeat_guard::RepeatGuard;
 pub(crate) use self::resilience::Resilience;
-use self::rules::{Limits, final_round_reason};
+use self::rules::{Limits, final_round_reason, unanswered};
 pub(crate) use self::text_window::TextPublication;
 use self::text_window::{RoundWindows, TextWindow};
 pub(crate) use self::thinking::ThinkingPublication;
@@ -70,7 +70,7 @@ use crate::loop_events::DeclaredTool;
 use crate::memory::after_memory;
 use crate::provider::{
     AiContentPart, AiContext, AiMessage, AiProvider, AiToolResultPart, ProviderError,
-    ProviderErrorOptions, ai_messages, ai_messages_with,
+    ProviderErrorOptions, ResponseSchemaError, ai_messages, ai_messages_with,
 };
 use crate::steering::{Loops, Steering};
 use crate::stream::{Items, Yielder, items, join_all};
@@ -179,6 +179,10 @@ pub(crate) struct Loop<P> {
     pub(crate) thinking_publication: ThinkingPublication,
     pub(crate) text_publication: TextPublication,
     pub(crate) reasoning_effort: Option<String>,
+    /// The JSON Schema the turn's answer satisfies (RFC §6.7), handed to the
+    /// provider: its text is held until checked, and a loop that stops short
+    /// of its answer fails `truncated`.
+    pub(crate) response_schema: Option<Map<String, Value>>,
     /// The kit's turn, whose hooks each call runs; `None` outside the kit.
     pub(crate) turn: Option<TurnHost>,
     pub(crate) context: ToolContext,
@@ -436,6 +440,9 @@ impl<P: AiProvider> Loop<P> {
     /// `steering` holds no more (RFC §21.3), then tells `out`.
     async fn end(&self, reason: LoopEndReason, rounds: u32, spent: Spent, ending: Ending<'_>) {
         let (limits, steering, out) = ending;
+        if let Some(error) = unanswered(self.response_schema.is_some(), reason) {
+            return self.fail_unanswered(error, steering, out).await;
+        }
         steering.close();
         if let Some(span) = &self.turn_span {
             span.ended(reason);
@@ -450,6 +457,22 @@ impl<P: AiProvider> Loop<P> {
         // Once the reader read past the end, as Python's turn reports it
         // when its stream is read to its close.
         self.report(reason, rounds, &spent);
+    }
+
+    /// Fails a turn under a response schema whose loop stopped short of its
+    /// answer with `error` (RFC §6.7): the turn delivers no answer and
+    /// reports none, its span ending in error.
+    async fn fail_unanswered(
+        &self,
+        error: ProviderError,
+        steering: &Steering,
+        out: &Yielder<Result<TurnItem, ProviderError>>,
+    ) {
+        steering.close();
+        if let Some(span) = &self.turn_span {
+            span.failed(error.to_string());
+        }
+        out.give(Err(error)).await;
     }
 
     /// The provider failed with `error` on a request on `messages`, the
@@ -527,7 +550,9 @@ impl<P: AiProvider> Loop<P> {
     /// turn is reported, the text the failed round handed the room its last
     /// segment, what its done events reported counted; then the error.
     /// `failed` is whether a round ran, the rounds of calls and what the
-    /// turn spent.
+    /// turn spent. A response schema's check refusing the answer is the
+    /// answer failing, no interruption; a turn under a schema interrupted
+    /// has no answer to deliver, and fails `truncated` (RFC Appendix A.9).
     async fn failed(
         &self,
         (after_round, rounds, mut spent): (bool, u32, Spent),
@@ -542,6 +567,11 @@ impl<P: AiProvider> Loop<P> {
             reports,
             ..
         } = failure;
+        let interrupted = after_round && ResponseSchemaError::of(&error).is_none();
+        let constrained = self.response_schema.is_some();
+        let unanswered = unanswered(constrained && interrupted, LoopEndReason::Error);
+        let interrupted = interrupted && unanswered.is_none();
+        let error = unanswered.unwrap_or(error);
         spent.segments.push(delivered);
         for report in &reports {
             add_usage(&mut spent.usage, report);
@@ -552,7 +582,7 @@ impl<P: AiProvider> Loop<P> {
             }
             span.failed(error.to_string());
         }
-        if after_round {
+        if interrupted {
             let end = LoopEndMarker {
                 usage: spent.usage.clone(),
                 usage_complete: Some(false),
@@ -596,6 +626,7 @@ impl<P: AiProvider> Loop<P> {
             enable_thinking: self.enable_thinking,
             reasoning_effort: self.reasoning_effort.clone(),
             tools: Vec::new(),
+            response_schema: self.response_schema.clone(),
             metadata: self.adopted.metadata.clone(),
             response_metadata: self.record.current(),
         }
