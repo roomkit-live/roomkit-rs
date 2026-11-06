@@ -446,12 +446,20 @@ fn windowed(kind: &str, window: usize) -> Arc<dyn MemoryProvider> {
 /// A 32K window, a 12K system prompt, 8K of tools and a 6K reply: a
 /// memory that keeps the turn within the window sizes the history to what
 /// the rest of the turn leaves, so what the model is sent and the reply it
-/// may write fit the window, some history kept (RMK-450).
+/// may write fit the window, some history kept (RMK-450). Past its floor,
+/// with longer events, a summarizing memory's tier 2 keeps its
+/// `min_events`, more than that budget: its last cut keeps the window.
 #[tokio::test]
 async fn the_window_holds_the_turn_its_history_and_its_reply() {
     let (window, reply) = (32_000, 6000);
     let mut overflowing = Vec::new();
-    for kind in ["budget_aware", "compacting", "summarizing"] {
+    let cases = [
+        ("budget_aware", 400),
+        ("compacting", 400),
+        ("summarizing", 400),
+        ("summarizing", 1500),
+    ];
+    for (kind, words) in cases {
         let model = ScriptedProvider::new([ScriptedRound::answering("ok")]);
         let handler =
             ToolHandler::new(|_name, _arguments| async { Ok(ToolResult::Text("ok".into())) });
@@ -485,7 +493,7 @@ async fn the_window_holds_the_turn_its_history_and_its_reply() {
                         EventSource::new(channel("agent"), ChannelType::AI),
                     )
                 };
-                let body = format!("{said} {n} {}", "word ".repeat(400));
+                let body = format!("{said} {n} {}", "word ".repeat(words));
                 RoomEvent::new(
                     room_id(),
                     source,
@@ -512,7 +520,7 @@ async fn the_window_holds_the_turn_its_history_and_its_reply() {
         assert!(sent.messages.len() > 2, "{kind}: no history kept");
         let request = estimate_context_tokens(&sent);
         if request + reply as usize > window {
-            overflowing.push(format!("{kind}: {request} tokens sent"));
+            overflowing.push(format!("{kind} ({words} words): {request} tokens sent"));
         }
     }
     // A reply of 6,000 tokens in a window of 32,000.

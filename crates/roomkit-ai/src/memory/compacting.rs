@@ -83,8 +83,8 @@ pub struct CompactingMemory<P> {
 }
 
 impl<P: AiProvider> CompactingMemory<P> {
-    /// `inner`, its oldest events summarized by `provider` past a window of
-    /// `max_context_tokens`.
+    /// `inner`, its oldest events summarized by `provider` past what the
+    /// turn leaves of a window of `max_context_tokens`, the model's.
     pub fn new(
         inner: Arc<dyn MemoryProvider>,
         provider: P,

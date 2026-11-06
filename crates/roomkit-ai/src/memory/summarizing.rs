@@ -32,9 +32,11 @@ const MAX_CACHE_ENTRIES: usize = 200;
 /// summarizer and its window: Python's keywords and their defaults.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SummarizingMemoryOptions {
-    /// The share of the window past which tier 1 truncates: 0.50.
+    /// The share of the history's budget, what the turn leaves of the
+    /// window, past which tier 1 truncates: 0.50.
     pub tier1_ratio: f64,
-    /// The share of the window past which tier 2 summarizes: 0.85.
+    /// The share of the history's budget past which tier 2 summarizes:
+    /// 0.85.
     pub tier2_ratio: f64,
     /// The most characters an older event's body keeps in tier 1: 2,000.
     pub truncate_chars: usize,
@@ -91,8 +93,9 @@ pub struct SummarizingMemory<P> {
 }
 
 impl<P: AiProvider> SummarizingMemory<P> {
-    /// `inner`, kept to a window of `max_context_tokens`, its older events
-    /// summarized by `provider`.
+    /// `inner`, kept to what the turn leaves of a window of
+    /// `max_context_tokens`, the model's, its older events summarized by
+    /// `provider`.
     pub fn new(
         inner: Arc<dyn MemoryProvider>,
         provider: P,
