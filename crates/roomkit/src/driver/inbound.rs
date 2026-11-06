@@ -50,6 +50,7 @@ use crate::error::{RoomKitError, with_causes};
 use crate::kit::Inner;
 use crate::locks::HeldLock;
 use crate::store::ConversationStore;
+use crate::stream::KeptStream;
 use crate::tasks::{Kind, Marks, Tasks};
 use crate::telemetry::{KitTelemetry, OpenSpan, SpanKind, StartSpanOptions};
 use crate::turns::Canceller;
@@ -124,6 +125,9 @@ pub(crate) struct Record {
     /// cascade cut by the close, as Python's close cancels every cascade in
     /// flight (RFC §12.10.4).
     closed_under_way: AtomicBool,
+    /// Whether the closing of the streams the call's cut left unread is
+    /// over; nothing to close reads as over.
+    unread_closed: watch::Sender<bool>,
 }
 
 /// What the read a call's cut stopped left the call.
@@ -205,6 +209,7 @@ impl Record {
             tail: Mutex::new(None),
             cleanup_owed: AtomicBool::new(false),
             closed_under_way: AtomicBool::new(false),
+            unread_closed: watch::Sender::new(true),
         }
     }
 
@@ -233,6 +238,22 @@ impl Record {
     /// The call's run ended while the kit's close was under way.
     fn closed_under_way(&self) {
         self.closed_under_way.store(true, Ordering::Release);
+    }
+
+    /// The streams the call's cut left unread are being closed: over once
+    /// what this returns is dropped, however the closing ends.
+    pub(super) fn closes_unread(self: &Arc<Self>) -> UnreadClosing {
+        self.unread_closed.send_replace(false);
+        UnreadClosing(Arc::clone(self))
+    }
+
+    /// Returns once the streams the call's cut left unread are closed, each
+    /// one's end come, as Python's cleanup closes them before it reports
+    /// (RFC §10.1 "Explicit delivery cancellation", §10.6.8).
+    pub(crate) async fn unread_closed(&self) {
+        let mut closed = self.unread_closed.subscribe();
+        // The record holds the sender: never closed.
+        drop(closed.wait_for(|closed| *closed).await);
     }
 
     /// What a deferred call's handle reads in place of its result: Python's
@@ -414,6 +435,17 @@ pub(crate) fn cut_before_its_commit() -> InboundResult {
         // No deferred tail, and its caller's cancellation does not name it.
         refused_before_the_lock: true,
         ..InboundResult::default()
+    }
+}
+
+/// The closing of the streams a call's cut left unread: over once dropped,
+/// the task that closes them ended or aborted ([`Record::closes_unread`]).
+#[derive(Debug)]
+pub(super) struct UnreadClosing(Arc<Record>);
+
+impl Drop for UnreadClosing {
+    fn drop(&mut self) {
+        self.0.unread_closed.send_replace(true);
     }
 }
 
@@ -1020,11 +1052,16 @@ async fn run_leased<S: ConversationStore>(
 /// and what it reads then is the whole record. A turn whose stream the run
 /// read, `read_turns` says, over without its executor's end leaves the
 /// call's cleanup incomplete; a turn cut before its output does not, as
-/// Python's cleanup reads only its cascade's streams (RFC §10.6.8).
+/// Python's cleanup reads only its cascade's streams (RFC §10.6.8). Then the
+/// streams the cut left `unread` are closed, each waiting for its end, one
+/// owed leaving the cleanup incomplete too; `closing` is dropped once they
+/// are: a deferred call's handle waits for that, an awaited call does not,
+/// as Python's `_read_streams` returns at the cut.
 pub(super) async fn end_once_over(
     record: Arc<Record>,
     turns: Vec<Canceller>,
     read_turns: ReadTurns,
+    (unread, closing): (Vec<KeptStream>, Option<UnreadClosing>),
 ) {
     for turn in &turns {
         turn.ended().await;
@@ -1036,6 +1073,26 @@ pub(super) async fn end_once_over(
         record.owe_cleanup();
     }
     record.end_cancelled();
+    if close_unread(unread).await {
+        record.owe_cleanup();
+    }
+    drop(closing);
+}
+
+/// Closes `unread`, the streams a cut left that no read took, one after the
+/// other, each waiting for its end with no bound of its own, as Python's
+/// cascade cleanup closes them (`close_stream`): whether one of their turns
+/// is over without its executor's end, its cleanup not known to be done
+/// (RFC §10.6.8).
+pub(super) async fn close_unread(unread: Vec<KeptStream>) -> bool {
+    let mut owed = false;
+    for mut kept in unread {
+        let turn = kept.turn.canceller();
+        kept.turn.close_stream().await;
+        turn.ended().await;
+        owed |= turn.owed_end().is_owed();
+    }
+    owed
 }
 
 /// `output`, a run's at its end, as the kit's close leaves it, once it

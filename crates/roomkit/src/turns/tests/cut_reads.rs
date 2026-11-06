@@ -270,6 +270,83 @@ async fn a_wait_past_the_kit_s_close_whose_turn_s_end_is_owed_times_out() {
     }
 }
 
+/// A room whose two agents, `ai` then `ai2`, answer with a stream that ends,
+/// and whose streaming target reads one of them to its end, then works on
+/// past it as `target` does, the other answered and not read yet.
+async fn two_answers(target: &ReadingOn) -> RoomKit {
+    let kit = room(ending(), target).await;
+    bind(&kit, Streaming::scripted(ending()).named("ai2")).await;
+    kit
+}
+
+// Python: tests/test_turns_cleanup.py::test_a_cancelled_cascade_waits_for_the_end_of_a_stream_it_never_read
+// The cut finds one stream read to its end, its target flushing past it, and
+// the other answered and never read. Python's cleanup cuts the target where it
+// waits, then closes the unread stream and waits for its end with no bound of
+// its own (lanes.py _cleanup, the owner's close_stream): its executor deaf to
+// the close, cancel(timeout=1) raises TimeoutError at 1 s; its executor ending
+// it, cancel returns at once (RMK-1442).
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_cascade_waits_for_the_end_of_a_stream_it_never_read() {
+    for stuck in [true, false] {
+        let target = ReadingOn::flushing(Duration::from_millis(100));
+        let kit = two_answers(&target).await;
+        if stuck {
+            stuck_executor(&kit);
+        }
+        let handle = deferred(&kit).await;
+        target.past_the_end.notified().await;
+        let start = Instant::now();
+        let cancel = handle.cancel(with_timeout(Duration::from_secs(1))).await;
+        let elapsed = start.elapsed();
+        kit.close().await.unwrap();
+        if stuck {
+            assert!(matches!(cancel, Err(RoomKitError::Timeout)), "{cancel:?}");
+            assert!(at(elapsed, Duration::from_secs(1)), "{elapsed:?}");
+        } else {
+            let reason = cancel.unwrap().cancellation_reason;
+            assert_eq!(reason.as_deref(), Some("caller_cancelled"));
+            assert!(at(elapsed, Duration::ZERO), "{elapsed:?}");
+        }
+    }
+}
+
+// Python: core/mixins/lane_execution.py reads an awaited call's streams through
+// _read_streams, which returns at the cut: the cleanup's close of a stream the
+// call never read is no part of its wait (RMK-1442).
+#[tokio::test(start_paused = true)]
+async fn an_awaited_call_cut_reads_its_result_while_a_stream_it_never_read_does_not_end() {
+    let target = ReadingOn::flushing(Duration::from_millis(100));
+    let kit = two_answers(&target).await;
+    stuck_executor(&kit);
+    let mut message = InboundMessage::new(
+        ChannelId::new("sms").unwrap(),
+        "+15550001",
+        TextContent::new("Hi"),
+    );
+    message.delivery_key = Some("key-1".to_owned());
+    let options = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    let call = tokio::spawn({
+        let kit = kit.clone();
+        async move { kit.process_inbound(message, options).await }
+    });
+    target.past_the_end.notified().await;
+    let cut = kit
+        .cancel_delivery("key-1", crate::CancelDeliveryOptions::default())
+        .await;
+    let called = tokio::time::timeout(Duration::from_secs(1), call).await;
+    kit.close().await.unwrap();
+    assert_eq!(cut, 1);
+    let called = called.expect("the call returns").unwrap().unwrap();
+    assert_eq!(
+        called.cancellation_reason.as_deref(),
+        Some("caller_cancelled")
+    );
+}
+
 /// Makes `kit`'s turns run on an executor stuck in a blocking call: it reads
 /// neither a turn's cut nor its reader's close, and the turn's end never
 /// comes.

@@ -186,6 +186,11 @@ impl StreamRead {
         self.job.lineage
     }
 
+    /// The turn whose stream it is: its `OnEvent` effect.
+    pub(super) fn turn(&self) -> EffectId {
+        self.job.turn
+    }
+
     /// The effect reading the stream, once it is read.
     pub(super) fn reading(&self) -> Option<EffectId> {
         match self.state {

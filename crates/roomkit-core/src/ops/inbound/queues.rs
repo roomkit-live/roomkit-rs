@@ -259,7 +259,9 @@ impl Cascade {
     /// of that cascade queued do not re-enter. Its events are still
     /// delivered to every other target, and the other cascades keep their
     /// turns. Returns the turns given up on, which the driver cuts and
-    /// never answers.
+    /// never answers, then the turns of that cascade whose stream no read
+    /// took, which the driver closes (Python's cascade cleanup closes each
+    /// stream its turns answered).
     pub(super) fn cut_turns(&mut self, io: &mut Io, lineage: Lineage) -> Vec<EffectId> {
         if !self.is_cut(lineage) {
             self.cut.push(lineage);
@@ -275,25 +277,39 @@ impl Cascade {
                 delivery.set.cut();
             }
         }
+        let mut unread: Vec<EffectId> = self
+            .streams
+            .iter()
+            .filter(|job| job.lineage == lineage)
+            .map(|job| job.turn)
+            .collect();
         self.streams.retain(|job| job.lineage != lineage);
         // The stream being read is a turn of the cascade: its reader is
         // stopped, the text it was handed stored marked cancelled (RFC
-        // §12.2 step 13s), and the read answered as any.
-        if let Some(reading) = self
+        // §12.2 step 13s), and the read answered as any. One whose read is
+        // only asked yet is never read.
+        if let Some(read) = self
             .stream
             .as_ref()
             .filter(|read| read.lineage() == lineage)
-            .and_then(StreamRead::reading)
         {
-            io.notify(Notice::StopReading { effect: reading });
+            match read.reading() {
+                Some(reading) => io.notify(Notice::StopReading { effect: reading }),
+                None => unread.push(read.turn()),
+            }
         }
-        match self.delivery.as_mut() {
+        // The streams the turns of a set still running answered are never
+        // queued, and the run drops them unread, as Python's cancelled
+        // cascade drops the streams a delivery set hands it once over.
+        let mut cut = match self.delivery.as_mut() {
             Some(delivery) if delivery.set.lineage() == lineage => {
                 let turns = delivery.set.cut();
                 io.cut(&turns)
             }
             Some(_) | None => Vec::new(),
-        }
+        };
+        cut.extend(unread);
+        cut
     }
 
     /// Whether the cascade of `lineage` has work queued or running: a

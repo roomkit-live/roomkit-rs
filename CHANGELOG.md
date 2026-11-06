@@ -6,6 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A deferred call's cut closes each stream its turns answered that no read took and waits for its end, as Python's cascade cleanup does (RFC §10.1, §10.6.8, RMK-1442): with an executor that never ends that turn, `DeliveryHandle::cancel` returns `RoomKitError::Timeout` at its `timeout`, where it returned the call as over and the stream was closed only with the run, unwaited. An awaited call reads its result at the cut as before.
 - An answer streams to the first transport the room lists among those it reaches that stream, as Python's (RFC §12.2 step 11s, RMK-1125): with two streaming transports bound `st2` then `st1`, it streamed to `st1`, the first by its id, and delivered `st2` the answer whole.
 - A call's result carries a room lock's failed release as its `error`, as Python's (RFC §13.5, RMK-1443): a call refused `process_timeout` under the lock, awaited, and deferred at its decision and on its handle's wait; and a message whose step 2 attached its channel under a lock whose release failed, committed or refused, where the error was `None`.
 - A Chat Completions answer names its model on `metadata["model"]`, the one the server says answered, else the one the configuration asked for, whole and at a stream's end, as Python's `answered_by` (RMK-1434). A round goes back to the model without it, nor its refusal, as Python's round message carries no metadata: a generation hook read them on the round's message, where Python's reads none.

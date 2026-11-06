@@ -440,6 +440,7 @@ impl Shared {
                     // turns are: the delivery goes on, detached (RFC §10.1
                     // "Explicit delivery cancellation").
                     result = driver::cancelled_end(record) => {
+                        record.unread_closed().await;
                         if record.cleanup_incomplete().is_some() {
                             return Ended::CleanupIncomplete;
                         }
@@ -448,6 +449,9 @@ impl Shared {
                 };
                 *run = None;
                 let output = driver::ended(joined, record, &self.tasks);
+                // A cut's cleanup closes the streams it left unread, which
+                // may outlive the run.
+                record.unread_closed().await;
                 if record.cleanup_incomplete().is_some() {
                     return Ended::CleanupIncomplete;
                 }

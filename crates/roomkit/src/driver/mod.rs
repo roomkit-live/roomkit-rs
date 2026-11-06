@@ -68,6 +68,7 @@ use crate::error::RoomKitError;
 use crate::gaps::{CursorTurn, Turned};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
+use crate::stream::KeptStream;
 use crate::tasks::{CUT_UNWIND, Kind, Marks, Phase};
 use crate::telemetry::within_kit;
 use crate::turns::Canceller;
@@ -389,6 +390,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         refused: None,
         caller,
         cut: Vec::new(),
+        unread: Vec::new(),
         answered: None,
         writing: HashMap::new(),
         written: Vec::new(),
@@ -468,6 +470,9 @@ struct Driver<'kit, S> {
     /// The turns the run cut as it gave their calls up, whose end it joins
     /// before it ends (RFC §10.1 "Explicit delivery cancellation").
     cut: Vec<Canceller>,
+    /// The streams the cut turns answered that no read took, until they are
+    /// closed: Python's cascade cleanup closes each and waits for its end.
+    unread: Vec<KeptStream>,
     /// The outcome an inbound call answers its caller with before the
     /// entries it adopted are over (`Notice::Answered`), until its step's
     /// decision is offered.
@@ -671,6 +676,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                     self.entry_cut.insert(entry, reason);
                     let cut = operation.cancel_entry_turns(entry);
                     self.give_up(&cut);
+                    self.close_unread_alone();
                     return Ok(());
                 }
                 Some(Event::Waited(id, waited)) => {
@@ -868,20 +874,43 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// Reports the call as its cancellation ends it once the turns it cut
     /// are over, once its delivery cancelled and the call decided: its
     /// caller then reads it without waiting for the delivery that goes on
-    /// (RFC §10.1 "Explicit delivery cancellation").
+    /// (RFC §10.1 "Explicit delivery cancellation"), then closes the streams
+    /// the cut left unread, which the call's handle waits for. A cut nobody
+    /// reads as cancelled closes them alone.
     fn end_cancelled_once_over(&mut self) {
-        let Some(caller) = self.caller.as_deref_mut() else {
-            return;
+        let ends = self
+            .caller
+            .as_deref_mut()
+            .is_some_and(Caller::ends_cancelled);
+        let record = self.caller.as_deref().filter(|_| ends).map(Caller::record);
+        let Some(record) = record.map(Arc::clone) else {
+            return self.close_unread_alone();
         };
-        if !caller.ends_cancelled() {
-            return;
-        }
+        let unread = std::mem::take(&mut self.unread);
+        // Told before the run can end: its caller's end waits for the
+        // closing, however the task that closes ends.
+        let closing = (!unread.is_empty()).then(|| record.closes_unread());
         let ending = inbound::end_once_over(
-            Arc::clone(caller.record()),
+            record,
             self.cut.clone(),
             self.shared.read_turns(),
+            (unread, closing),
         );
         drop(self.inner.tasks.spawn_alone(Kind::Turn, ending));
+    }
+
+    /// Closes the streams the cut left unread one after the other, each
+    /// waiting for its end, on a task of the kit's nobody waits for: the
+    /// cut of a call no caller reads as cancelled, or of an adopted entry.
+    fn close_unread_alone(&mut self) {
+        let unread = std::mem::take(&mut self.unread);
+        if unread.is_empty() {
+            return;
+        }
+        let closing = async move {
+            inbound::close_unread(unread).await;
+        };
+        drop(self.inner.tasks.spawn_alone(Kind::Turn, closing));
     }
 
     /// Locates the call's delivery once `outcome`, a call's, reads its
@@ -931,6 +960,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 call.abort();
                 self.effect_of_task.remove(&call.id());
                 self.shared.answered(*effect);
+            } else {
+                // A turn over that answered with a stream no read took: the
+                // stream is closed. One a turn in flight answers is dropped
+                // unread with the run, as Python's cancelled cascade drops a
+                // stream it is handed.
+                self.unread.extend(self.shared.take_unread_stream(*effect));
             }
             self.writing.remove(effect);
         }

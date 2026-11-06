@@ -416,6 +416,12 @@ impl Streaming {
             ..Self::new(0)
         }
     }
+
+    /// The agent under the channel id `id`, beside another.
+    pub(super) fn named(mut self, id: &str) -> Self {
+        self.declaration.channel_id = channel(id);
+        self
+    }
 }
 
 /// The deltas of a [`Streaming`] agent's answer, each counted as it is read.
@@ -481,7 +487,9 @@ impl Channel for Streaming {
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        let own = event.source.channel_id == self.declaration.channel_id;
+        // An agent's answer, its own or another agent's beside it, is not
+        // answered: two agents in a room start no chain.
+        let own = event.source.channel_type == self.declaration.channel_type;
         let deltas = Deltas {
             left: self.deltas,
             produced: Arc::clone(&self.produced),

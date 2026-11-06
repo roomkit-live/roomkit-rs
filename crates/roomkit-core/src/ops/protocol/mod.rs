@@ -445,8 +445,10 @@ pub trait Operation {
     /// none of its turns starts.
     ///
     /// Returns the effects the operation gives up on, the turns in flight:
-    /// the driver cuts them, joins them, and never answers them. An
-    /// operation that runs no turn gives up on nothing.
+    /// the driver cuts them, joins them, and never answers them; then the
+    /// turns of the cascade whose stream no read took, which the driver
+    /// closes and waits for the end of, as a cancellation joins the turns it
+    /// cuts. An operation that runs no turn gives up on nothing.
     fn cancel_turns(&mut self) -> Vec<EffectId> {
         Vec::new()
     }
@@ -459,8 +461,10 @@ pub trait Operation {
     /// on, and no response of it re-enters; the call's own cascade, and the
     /// other entries', keep theirs.
     ///
-    /// Returns the effects the operation gives up on, the turns in flight.
-    /// An operation that adopts nothing gives up on nothing.
+    /// Returns the effects the operation gives up on, the turns in flight,
+    /// then the turns of that cascade whose stream no read took, as
+    /// [`cancel_turns`](Self::cancel_turns) does. An operation that adopts
+    /// nothing gives up on nothing.
     fn cancel_entry_turns(&mut self, entry: EntryId) -> Vec<EffectId> {
         let _ = entry;
         Vec::new()

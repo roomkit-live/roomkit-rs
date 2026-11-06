@@ -288,6 +288,17 @@ impl RunShared {
             .remove(&effect)
     }
 
+    /// The stream the turn of `effect` answered with, that no read took,
+    /// taken to be closed: a strategy's first pass, read under a cascade of
+    /// its own, is left (RFC §19.7.3).
+    pub(crate) fn take_unread_stream(&self, effect: EffectId) -> Option<KeptStream> {
+        let mut streams = self.streams.lock().unwrap_or_else(PoisonError::into_inner);
+        if streams.get(&effect)?.then.is_some() {
+            return None;
+        }
+        streams.remove(&effect)
+    }
+
     /// The lease on the lock of `room_id` the run holds, by its own tenure
     /// or by the lease it was granted on.
     pub(super) fn lease_of(self: &Arc<Self>, room_id: &RoomId) -> Option<Lease> {
