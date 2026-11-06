@@ -258,7 +258,9 @@ impl Abort {
                 locked_event,
                 release_failure: failure,
             },
-            abort => abort,
+            abort @ (Self::RoomNotFound | Self::Store(_) | Self::Lock(_) | Self::Refused(_)) => {
+                abort
+            }
         }
     }
 
