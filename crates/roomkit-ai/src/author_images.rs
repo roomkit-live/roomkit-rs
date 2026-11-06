@@ -408,12 +408,14 @@ pub(crate) fn refuses_content(error: &ProviderError) -> bool {
 }
 
 /// Whether `error` is a provider's refusal of a response schema outside the
-/// portable subset (RFC §6.7).
+/// portable subset (RFC §6.7), however deep a provider wrapped it.
 fn outside_the_subset(error: &ProviderError) -> bool {
-    error
-        .source()
-        .and_then(|source| source.downcast_ref::<AiError>())
-        .is_some_and(|source| matches!(source, AiError::ResponseSchema { .. }))
+    std::iter::successors(error.source(), |&source| source.source()).any(|source| {
+        matches!(
+            source.downcast_ref::<AiError>(),
+            Some(AiError::ResponseSchema { .. })
+        )
+    })
 }
 
 /// The text that takes an image's place, naming it as its author did: its
@@ -757,6 +759,19 @@ mod tests {
         sent.refused_by(&error(Some(400), false));
         assert_eq!(refused.of(&room), sent.keys);
         assert!(refused.of(&RoomId::new("other").unwrap()).is_empty());
+    }
+
+    /// A response schema outside the portable subset, refused before any
+    /// request, is no refusal of the content, however deep a provider
+    /// wrapped the refusal (HITL 17bfa822).
+    #[test]
+    fn a_schema_outside_the_subset_is_no_content_refusal() {
+        let refused =
+            crate::check_portable_schema(&serde_json::json!({ "type": "string" })).unwrap_err();
+        let options = crate::provider::ProviderErrorOptions::default;
+        let direct = ProviderError::new(refused.to_string(), options()).with_source(refused);
+        let wrapped = ProviderError::new("an integrator's provider", options()).with_source(direct);
+        assert!(!refuses_content(&wrapped));
     }
 
     // Python: tests/test_attached_media.py::TestNotSeen::test_a_reader_that_fails_names_none
