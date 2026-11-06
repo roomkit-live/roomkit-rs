@@ -113,7 +113,7 @@ impl<P: AiProvider> Loop<P> {
         self.enable_thinking = left.enable_thinking;
         self.reasoning_effort = left.reasoning_effort;
         // A schema outside the subset is its provider's to refuse, before any
-        // request, as for a context built by hand (HITL 85eb4aa0).
+        // request, as for a context built by hand (HITL 85eb4aa0, 17bfa822).
         self.response_schema = left.response_schema;
         self.adopted.metadata = left.metadata;
         self.record.adopt(left.response_metadata);
