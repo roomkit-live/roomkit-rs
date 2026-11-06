@@ -176,7 +176,7 @@ impl Name {
     }
 }
 
-/// Every dash Unicode 16.0 lists (Dash_Punctuation), the minus sign, and
+/// Every dash Unicode 16.0 lists (`Dash_Punctuation`), the minus sign, and
 /// what reads as a dash or a minus (HITL eb4462f6): Python's
 /// `_lookalike._DASHES`. U+FE31, a vertical em dash, is left out: Unicode's
 /// confusables read it as `l`, and a name's `l` reads it.
