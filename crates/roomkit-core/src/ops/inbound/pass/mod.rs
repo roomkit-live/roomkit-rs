@@ -592,11 +592,13 @@ impl CommitPass {
             State::Placing { result, .. } => self.on_placed(cx, result, outcome),
             State::TellingDiscussion { result, .. } => self.on_told(cx, result, outcome),
             State::Releasing { result, .. } => {
+                let released = outcome.into_released();
+                let failure = released.as_ref().err().cloned();
                 let (result, release_error) =
-                    ops::after_release(&self.event.room_id, result, outcome.into_released());
+                    ops::after_release(&self.event.room_id, result, released);
                 self.release_error = release_error;
                 mem::take(&mut self.timer_hooks).fire(cx);
-                State::Finished(result)
+                State::Finished(result.map_err(|abort| abort.released_with(failure)))
             }
             state @ (State::Start | State::Finished(_) | State::Reported) => state,
         };
@@ -646,7 +648,7 @@ impl CommitPass {
     /// dropped with the pass.
     fn expire(&mut self, cx: &mut Cx<'_>) -> State {
         match mem::replace(&mut self.state, State::Reported) {
-            State::Locking(_) => State::Finished(Err(Abort::DeadlinePassed(None))),
+            State::Locking(_) => State::Finished(Err(Abort::expired())),
             State::LoadingContext(_)
             | State::ApplyingTimers { .. }
             | State::CheckingKey { .. }
@@ -656,7 +658,10 @@ impl CommitPass {
             | State::Rereading { .. }
             | State::RootingHookParent { .. }
             | State::RereadingTarget { .. } => {
-                let expired = Abort::DeadlinePassed(Some(self.event.id.clone()));
+                let expired = Abort::DeadlinePassed {
+                    locked_event: Some(self.event.id.clone()),
+                    release_failure: None,
+                };
                 self.release(cx, Err(expired))
             }
             // The commit, the place and the release carry no deadline (RFC

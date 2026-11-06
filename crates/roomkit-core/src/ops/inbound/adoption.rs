@@ -208,7 +208,7 @@ impl AdoptedRun {
                 Progress::Done(Err(Stopped::Expired)) => {
                     // An adopted message carries no deadline (gap G-070).
                     Advanced::Stopped(Box::new(Err(InboundError::Store(
-                        Abort::DeadlinePassed(None).into_record(),
+                        Abort::expired().into_record(),
                     ))))
                 }
                 // An adopted message is charged as its arrival starts.
@@ -229,7 +229,7 @@ impl AdoptedRun {
                 Progress::Done(Err(
                     Stopped::Expired | Stopped::PastBudget | Stopped::Refused(_),
                 )) => Advanced::Stopped(Box::new(Err(InboundError::Store(
-                    Abort::DeadlinePassed(None).into_record(),
+                    Abort::expired().into_record(),
                 )))),
             },
             RunState::ReadingWork(read) => match read.accept(cx, effect, outcome) {
@@ -243,7 +243,7 @@ impl AdoptedRun {
                 Progress::Done(Err(
                     Stopped::Expired | Stopped::PastBudget | Stopped::Refused(_),
                 )) => Advanced::Stopped(Box::new(Err(InboundError::Store(
-                    Abort::DeadlinePassed(None).into_record(),
+                    Abort::expired().into_record(),
                 )))),
             },
             RunState::Passing(pass) => match pass.accept(cx, effect, outcome) {

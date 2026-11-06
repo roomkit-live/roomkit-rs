@@ -223,10 +223,15 @@ pub(crate) enum Abort {
     RoomNotFound,
     Store(ErrorRecord),
     Lock(ErrorRecord),
-    /// The call's deadline passed before its pass decided (RFC §13.6),
-    /// naming the event when the pass held the room lock by then, which it
-    /// released; `None` before the lock.
-    DeadlinePassed(Option<EventId>),
+    /// The call's deadline passed before its pass decided (RFC §13.6).
+    DeadlinePassed {
+        /// The event, when the pass held the room lock by then, which it
+        /// released; `None` before the lock.
+        locked_event: Option<EventId>,
+        /// That release's failure, which the call's refusal carries as its
+        /// error (RFC §13.5).
+        release_failure: Option<ErrorRecord>,
+    },
     /// A direct injection the room refused before its hooks, nothing
     /// written: the room is another organization's, or binds no channel
     /// the event names (gap G-069).
@@ -234,12 +239,35 @@ pub(crate) enum Abort {
 }
 
 impl Abort {
+    /// The call's deadline passed before the room lock was held.
+    pub(crate) fn expired() -> Self {
+        Self::DeadlinePassed {
+            locked_event: None,
+            release_failure: None,
+        }
+    }
+
+    /// The abort once its section's lock was released, `failure` the
+    /// release's: a refusal at the deadline keeps it, which its result
+    /// carries as Python's does (RFC §13.5); any other abort fails the call,
+    /// its own failure the one reported.
+    #[must_use]
+    pub(crate) fn released_with(self, failure: Option<ErrorRecord>) -> Self {
+        match self {
+            Self::DeadlinePassed { locked_event, .. } => Self::DeadlinePassed {
+                locked_event,
+                release_failure: failure,
+            },
+            abort => abort,
+        }
+    }
+
     /// The failure as a result's `error` records it.
     pub(crate) fn into_record(self) -> ErrorRecord {
         match self {
             Self::RoomNotFound => ErrorRecord::new("RoomNotFound", "the room disappeared"),
             Self::Store(error) | Self::Lock(error) => error,
-            Self::DeadlinePassed(_) => {
+            Self::DeadlinePassed { .. } => {
                 ErrorRecord::new("ProcessTimeout", "the call passed its process_timeout")
             }
             Self::Refused(error) => ErrorRecord::new("Refused", error.to_string()),

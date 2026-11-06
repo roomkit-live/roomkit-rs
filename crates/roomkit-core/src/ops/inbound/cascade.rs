@@ -518,8 +518,14 @@ impl Machine {
     /// the deadline only the call's own cascade stops: an entry its
     /// admission adopted runs its cascade to its end (`expire`).
     pub(super) fn abort(&mut self, cx: &mut Cx<'_>, abort: Abort) {
-        if let Abort::DeadlinePassed(locked_event) = abort {
+        if let Abort::DeadlinePassed {
+            locked_event,
+            release_failure,
+        } = abort
+        {
             // Only the trigger's pass carries a deadline, and it is undecided.
+            // Its lock's failed release is the refusal's error (RFC §13.5).
+            self.trigger.note_error(release_failure);
             return self.expire(cx, locked_event);
         }
         self.cascade.stop();
@@ -737,7 +743,7 @@ pub(super) fn failure(abort: Abort, room_id: Option<RoomId>) -> InboundError {
         (Abort::Store(error), _) => InboundError::Store(error),
         (Abort::Lock(error), _) => InboundError::Lock(error),
         (Abort::Refused(error), _) => error,
-        (abort @ (Abort::RoomNotFound | Abort::DeadlinePassed(_)), _) => {
+        (abort @ (Abort::RoomNotFound | Abort::DeadlinePassed { .. }), _) => {
             InboundError::Store(abort.into_record())
         }
     }
