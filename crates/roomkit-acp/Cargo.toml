@@ -1,0 +1,42 @@
+[package]
+name = "roomkit-acp"
+description = "An external ACP coding agent for a RoomKit room: the client side of the Agent Client Protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The protocol's types (HITL 0e261e51, parity stream L): the schema crate
+# alone; the JSON-RPC connection is this crate's.
+agent-client-protocol-schema.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The agent's process, its pipes, the connection's reader and the bounds on
+# closing.
+tokio = { workspace = true, features = ["process", "io-util", "time"] }
+tracing.workspace = true
+
+# `SIGTERM` to the agent's process at its close, as the Python SDK's
+# `terminate()` sends it.
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "test-util"] }
+
+# A stand-in ACP agent the tests start over stdio, one behaviour per mode
+# (fixtures/fake_agent.rs). A dependent never builds it.
+[[bin]]
+name = "fake-acp-agent"
+path = "fixtures/fake_agent.rs"
+test = false
+doc = false
+bench = false
+
+[lints]
+workspace = true

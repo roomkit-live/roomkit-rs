@@ -15,6 +15,7 @@ publish = false
 
 [workspace.dependencies]
 roomkit = { path = "crates/roomkit" }
+roomkit-acp = { path = "crates/roomkit-acp" }
 roomkit-ai = { path = "crates/roomkit-ai" }
 roomkit-core = { path = "crates/roomkit-core" }
 roomkit-mcp = { path = "crates/roomkit-mcp" }
@@ -22,6 +23,10 @@ roomkit-openai = { path = "crates/roomkit-openai" }
 roomkit-postgres = { path = "crates/roomkit-postgres" }
 roomkit-sqlite = { path = "crates/roomkit-sqlite" }
 
+# The Agent Client Protocol's types (HITL 0e261e51, parity stream L): the
+# schema crate alone, its minor version pinned, without its JSON Schema
+# derive; roomkit-acp writes its own JSON-RPC connection on tokio.
+agent-client-protocol-schema = { version = "~1.15", default-features = false }
 # The `Stream` an AI provider's response is read as (step 4, decision 11),
 # with no default features: the trait alone.
 # MCP's client over stdio (step 4, decisions 11 and 12), for roomkit-mcp

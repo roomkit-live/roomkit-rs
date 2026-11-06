@@ -23,7 +23,7 @@
 
 [rules]
 # Rust's casing of an acronym in a type's name (rust-lang RFC 430).
-acronyms = { Ai = "AI", OpenAi = "OpenAI", Mcp = "MCP", Sqlite = "SQLite", Jsonl = "JSONL" }
+acronyms = { Ai = "AI", OpenAi = "OpenAI", Mcp = "MCP", Acp = "ACP", Sqlite = "SQLite", Jsonl = "JSONL" }
 # What a `Duration` drops from a Python name (decision 3).
 duration_suffix = "_seconds"
 # The error variants a Python builtin exception stands for (convention 5),
@@ -50,6 +50,7 @@ roomkit_openai = ["roomkit.providers.openai"]
 "roomkit_openai::minimax" = ["roomkit.providers.minimax"]
 "roomkit_openai::kimi" = ["roomkit.providers.kimi"]
 roomkit_mcp = ["roomkit.tools"]
+roomkit_acp = ["roomkit"]
 roomkit_sqlite = ["roomkit", "roomkit.store"]
 roomkit_postgres = ["roomkit.store", "roomkit.knowledge"]
 "roomkit::realtime" = ["roomkit.realtime"]
@@ -1001,6 +1002,32 @@ rust = "roomkit_ai::AiChannelOptions"
 members = ["image_resolver"]
 approved = "2026-10-30"
 reason = "Async host-owned room-scoped image resolution (architecture: Author images)"
+
+[[exception]]
+rust = "roomkit_acp::AcpConnection"
+approved = "2026-11-06"
+reason = "the methods of the Python ACP SDK's ClientSideConnection the channel calls, which ACPTransport.open returns: the SDK's names, not roomkit's, taking and returning the schema crate's types (HITL 3592a76c; architecture: ACP)"
+
+[[exception]]
+rust = "roomkit_acp::ClientSideConnection"
+approved = "2026-11-06"
+reason = "the Python ACP SDK's ClientSideConnection, JSON-RPC over a byte stream, which roomkit-acp writes itself on tokio (HITL 0e261e51, 3592a76c; architecture: ACP)"
+
+[[exception]]
+rust = "roomkit_acp::AcpClient"
+approved = "2026-11-06"
+reason = "the Python ACP SDK's acp.Client interface the agent calls back into, reduced to session_update and request_permission (HITL 3592a76c, e6f3decd; architecture: ACP)"
+
+[[exception]]
+rust = "roomkit_acp::AcpError"
+approved = "2026-11-06"
+reason = "the error type a Result needs for the exceptions the Python ACP SDK raises (RequestError, ConnectionError) and the channel's ValueError and RuntimeError, as McpError for MCP (HITL 3592a76c; architecture: ACP)"
+
+[[exception]]
+python = "roomkit.ACPTransport.open"
+params = ["queue"]
+approved = "2026-11-06"
+reason = "the Python ACP SDK's message queue, None from SDK 0.12.1 on: the connection roomkit-acp writes has none (HITL 3592a76c; architecture: ACP)"
 
 [[exception]]
 rust = "roomkit_mcp::McpToolProvider"

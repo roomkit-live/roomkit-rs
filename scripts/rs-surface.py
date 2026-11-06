@@ -41,6 +41,7 @@ CRATES = (
     "roomkit_sqlite",
     "roomkit_postgres",
     "roomkit_mcp",
+    "roomkit_acp",
 )
 
 # The sections of all.html, and the heading each kind's page opens with.
