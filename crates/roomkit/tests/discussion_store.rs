@@ -1,6 +1,7 @@
 //! A discussion whose store refuses or holds what it asks (RFC §19.7.5): its
 //! driver backs off, as Python's `_drive`, rather than give and end a turn at
-//! once, and a stop waits for the plan under way.
+//! once, and a stop waits for the plan under way. A queue the store holds
+//! outlives the process that wrote it (rule 16).
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
@@ -401,4 +402,77 @@ async fn an_uninstall_during_a_plan_s_write_tells_the_turn_given_then_its_end() 
         [SpeakQueueChange::TurnGiven, SpeakQueueChange::TurnEnded]
     );
     kit.close().await.unwrap();
+}
+
+/// A kit on `store` holding `ops`, `a` answering `@b your turn` and `b`
+/// answering `b says`.
+fn kit_on(store: &Arc<InMemoryStore>, b_says: &str) -> RoomKit {
+    let kit = RoomKit::new(RoomKitOptions {
+        store: Arc::clone(store),
+        ..RoomKitOptions::default()
+    });
+    kit.register_channel(RecordingTransport::new(
+        id("ops"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    for (agent, says) in [("a", "@b your turn"), ("b", b_says)] {
+        let echo = EchoAgent::new(id(agent), says, EchoAgentOptions::default());
+        kit.register_channel(echo).unwrap();
+    }
+    kit
+}
+
+/// The discussion of `a` and `b`, its turns stopped at `max_depth`.
+fn discussion(max_depth: Option<u32>) -> Arc<Discussion> {
+    let options = DiscussionOptions {
+        max_depth,
+        ..DiscussionOptions::default()
+    };
+    Arc::new(Discussion::new(vec![id("a").into(), id("b").into()], options).unwrap())
+}
+
+// Python: tests/orchestration/test_strategy_discussion.py::test_the_queue_outlives_the_process_but_not_who_speaks
+#[tokio::test]
+async fn the_queue_outlives_the_process_but_not_who_speaks() {
+    let room = RoomId::new("r1").unwrap();
+    let store = Arc::new(InMemoryStore::default());
+    let kit = kit_on(&store, "b");
+    let created = CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    };
+    kit.create_room(created).await.unwrap();
+    kit.attach_channel(&room, &id("ops"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let options = InstallStrategyOptions::default();
+    kit.install_strategy(&room, discussion(Some(2)), options)
+        .await
+        .unwrap();
+    kit.process_inbound(say("@a start"), ProcessInboundOptions::default())
+        .await
+        .unwrap();
+    idle(&kit).await;
+    let queue = kit.speak_queue(&room, roomkit::SpeakQueueOptions::default());
+    // b's turn at depth 2 is stopped by max_depth=2: b stays queued.
+    assert_eq!(queue.map(|queue| queue.queue), Some(vec![id("b")]));
+    kit.close().await.unwrap();
+
+    let again = kit_on(&store, "b resumes");
+    let options = InstallStrategyOptions::default();
+    again
+        .install_strategy(&room, discussion(None), options)
+        .await
+        .unwrap();
+    let restored = again
+        .speak_queue(&room, roomkit::SpeakQueueOptions::default())
+        .unwrap();
+
+    assert_eq!(
+        (restored.queue, restored.speaking, restored.waiting),
+        (vec![id("b")], None, true)
+    );
+    again.close().await.unwrap();
 }
