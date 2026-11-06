@@ -212,7 +212,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// `uninstall_strategy(room_id, *, organization_id=None)`: whether the
     /// room held a strategy. The room answers by its
     /// `agent_response_policy` again and may take another strategy. An
-    /// install under way is waited for, then taken back.
+    /// install under way is waited for, then taken back. A discussion is
+    /// uninstalled from any process serving the room, one where no host
+    /// installed it included, for every process, the agents its installs
+    /// attached detached (RFC §19.7.5 rule 16).
     ///
     /// # Errors
     ///
@@ -270,7 +273,10 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// Returns [`RoomKitError::RoomNotFound`] when `options` names an
     /// organization and the room is missing or another organization's, and
-    /// [`RoomKitError::Value`] when the room holds another strategy.
+    /// [`RoomKitError::Value`] when the room holds another strategy, or a
+    /// discussion, another process's included, that `strategy` does not
+    /// take the place of. The room is read first, with no organization
+    /// named too (RFC §19.7.5 rule 16).
     pub async fn claim_room_strategy(
         &self,
         room_id: &RoomId,
@@ -344,13 +350,23 @@ impl<S: ConversationStore> RoomKit<S> {
         options: RoomStrategyIsCurrentOptions,
     ) -> Result<bool, RoomKitError> {
         if kind != TypeId::of::<Discussion>() {
-            return Err(RoomKitError::Type(format!(
+            return Err(RoomKitError::Type(
                 "room_strategy_is_current() takes a strategy class stored with the room \
-                 (Discussion), not {kind:?}: it is not a strategy stored with the room"
-            )));
+                 (Discussion), not another type: it is not a strategy stored with the room"
+                    .to_owned(),
+            ));
         }
         let RoomStrategyIsCurrentOptions { organization_id } = options;
         self.discussion_is_current(room_id, organization_id).await
+    }
+
+    /// Whether an install of a strategy runs in `room_id` now.
+    pub(super) fn installing_strategy(&self, room_id: &RoomId) -> bool {
+        self.inner
+            .room_strategies
+            .rooms()
+            .get(room_id)
+            .is_some_and(|installed| installed.installing)
     }
 
     /// Drops the record of `room_id`'s strategy when it is a discussion,

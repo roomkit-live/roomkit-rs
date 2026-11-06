@@ -692,7 +692,7 @@ impl Run {
         Box::pin(async move {
             let resolved = run.resolve(spec.clone(), &scope).await;
             let name = spec["call"].as_str().unwrap_or_default().to_owned();
-            match tokio::time::timeout(CALL_BOUND, calls::call(&run, &resolved)).await {
+            match tokio::time::timeout(CALL_BOUND, calls::checked_call(&run, &resolved)).await {
                 Err(_) => {
                     run.problem(format!("{name} did not return within {CALL_BOUND:?}"));
                     json!({ "result": null, "error": { "name": "<hung>" } })

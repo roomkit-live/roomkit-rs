@@ -140,10 +140,14 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             live.seen_version
         };
         let time = now(&kit);
-        if DiscussionConfig::stored(&metadata).is_none()
-            || peek.over
-            || peek.held_elsewhere(&self.me, time)
-        {
+        if DiscussionConfig::stored(&metadata).is_none() {
+            // Another process uninstalled the discussion: this process leaves
+            // it, writing nothing back (rule 16).
+            let this = std::ptr::from_ref(self).cast::<()>() as usize;
+            let left = kit.leave_uninstalled_here(&self.room_id, this).await;
+            return Ok(if left { Looked::Gone } else { Looked::Nothing });
+        }
+        if peek.over || peek.held_elsewhere(&self.me, time) {
             return Ok(Looked::Nothing);
         }
         if seen == Some(peek.version)

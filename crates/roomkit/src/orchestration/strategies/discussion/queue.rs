@@ -518,13 +518,6 @@ impl SpeakQueueState {
     /// Forget `agents`, which the discussion no longer holds: their turns,
     /// their listening, what they asked people and their place among a
     /// message's candidates; the instruction turns it dropped (rule 1).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "a replacement over a discussion, lot 10 of stream I"
-        )
-    )]
     pub(crate) fn drop_agents(&mut self, agents: &[ChannelId]) -> Vec<Entry> {
         let dropped = self
             .entries

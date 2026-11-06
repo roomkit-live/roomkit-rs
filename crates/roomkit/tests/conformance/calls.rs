@@ -112,6 +112,18 @@ pub(crate) fn finish<T>(
     }
 }
 
+/// Makes the call `spec` names, its references already resolved; a call
+/// that takes no kit is refused one (README, "Calls").
+pub(crate) async fn checked_call(
+    run: &std::sync::Arc<Run>,
+    spec: &Value,
+) -> Result<(Called, Option<String>), Unreadable> {
+    if spec.get("kit").is_some() {
+        run.kit_of(spec)?;
+    }
+    call(run, spec).await
+}
+
 /// Makes the call `spec` names, its references already resolved.
 pub(crate) async fn call(
     run: &std::sync::Arc<Run>,

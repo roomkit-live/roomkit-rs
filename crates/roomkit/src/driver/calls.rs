@@ -1352,7 +1352,7 @@ fn unregistered_channel(channel_id: &ChannelId) -> Outcome {
 /// to answer, and no turn to give. What the discussion raises is answered
 /// as a failure: logged for a committed message, the call's for the rest.
 pub(super) async fn discussion<S: ConversationStore>(
-    inner: &Arc<Inner<S>>,
+    inner: &Inner<S>,
     request: DiscussionRequest,
 ) -> Outcome {
     let room_id = match &request {
@@ -1360,20 +1360,7 @@ pub(super) async fn discussion<S: ConversationStore>(
         | DiscussionRequest::Instruction { room_id, .. }
         | DiscussionRequest::Turn { room_id, .. } => room_id,
     };
-    let seam = match inner.discussions.get(room_id) {
-        Some(seam) => Some(seam),
-        // Stored by another process, read since this process last built a
-        // context of the room: followed from now on (rule 16).
-        None => match &request {
-            DiscussionRequest::Committed { context, .. }
-            | DiscussionRequest::Turn { context, .. } => {
-                follow_discussion(inner, &context.room);
-                inner.discussions.get(room_id)
-            }
-            DiscussionRequest::Instruction { .. } => None,
-        },
-    };
-    let Some(seam) = seam else {
+    let Some(seam) = inner.discussions.get(room_id) else {
         tracing::warn!(
             target: "roomkit::discussion",
             %room_id,

@@ -307,7 +307,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// rule 16): a room another process gave a discussion is followed here,
     /// by the configuration it stores now, and one whose discussion is gone
     /// is left when this process only followed it. Run for every context the
-    /// kit builds: Python's `_follow_discussion`.
+    /// pipeline builds, before a `process_inbound` naming its room, and by
+    /// the strategy calls: Python's `_follow_discussion`, which every context
+    /// the kit builds runs.
     pub(crate) fn follow_discussion(&self, room: &Room) {
         let config = DiscussionConfig::stored(&room.metadata);
         let held = self.inner.discussions.get(&room.id);
@@ -323,6 +325,24 @@ impl<S: ConversationStore> RoomKit<S> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Reads `room_id` and follows the discussion it stores now, when this
+    /// process only follows one there: a host call routes by the
+    /// configuration another process's install may have replaced (rule 16,
+    /// Python's `editing`, which follows the stored configuration).
+    async fn follow_stored(&self, room_id: &RoomId) {
+        let follows = self
+            .inner
+            .discussions
+            .get(room_id)
+            .is_some_and(|seam| seam.follows().is_some());
+        if !follows {
+            return;
+        }
+        if let Ok(Some(room)) = self.store().get_room(room_id).await {
+            self.follow_discussion(&room);
         }
     }
 
@@ -433,7 +453,9 @@ impl<S: ConversationStore> RoomKit<S> {
             return Ok(false);
         };
         let Some(stored) = DiscussionConfig::stored(&room.metadata) else {
-            if same_seam(seen.as_ref(), Some(&held)) {
+            // An install of this process under way has not stored its
+            // configuration yet: it is not current, and stays.
+            if same_seam(seen.as_ref(), Some(&held)) && !self.installing_strategy(&room.id) {
                 self.leave_uninstalled(&room.id, &held).await;
             }
             return Ok(false);
@@ -441,15 +463,31 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(held.drives(&stored))
     }
 
+    /// Leaves the discussion of `room_id` another process uninstalled when
+    /// `this`, a discussion's address, is the one this process holds for
+    /// it, its driver having read
+    /// it so: Python's `_forget_discussion` from `_next_turn`. Whether it was
+    /// left.
+    pub(crate) async fn leave_uninstalled_here(&self, room_id: &RoomId, this: usize) -> bool {
+        let Some(held) = self.inner.discussions.get(room_id) else {
+            return false;
+        };
+        if Arc::as_ptr(&held).cast::<()>() as usize != this || self.installing_strategy(room_id) {
+            return false;
+        }
+        self.leave_uninstalled(room_id, &held).await
+    }
+
     /// Leaves `held`, the discussion of `room_id` another process
     /// uninstalled, and the strategy record with it, writing nothing back.
     /// Python's `_leave_uninstalled`.
-    async fn leave_uninstalled(&self, room_id: &RoomId, held: &Arc<dyn DiscussionSeam>) {
+    async fn leave_uninstalled(&self, room_id: &RoomId, held: &Arc<dyn DiscussionSeam>) -> bool {
         if !self.leave_discussion(room_id, held) {
-            return;
+            return false;
         }
         self.drop_discussion_record(room_id);
         held.leave().await;
+        true
     }
 
     /// The speak queue of the discussion `room_id` holds in this process, or
@@ -487,6 +525,7 @@ impl<S: ConversationStore> RoomKit<S> {
         options: ListenOnlyOptions,
     ) -> Result<(), RoomKitError> {
         let ListenOnlyOptions { organization_id } = options;
+        self.follow_stored(room_id).await;
         self.discussion_of(room_id, organization_id.as_deref())?
             .listen_only(channel_ids.to_vec())
             .await
@@ -509,6 +548,7 @@ impl<S: ConversationStore> RoomKit<S> {
         options: TalkAgainOptions,
     ) -> Result<(), RoomKitError> {
         let TalkAgainOptions { organization_id } = options;
+        self.follow_stored(room_id).await;
         self.discussion_of(room_id, organization_id.as_deref())?
             .talk_again(channel_ids.to_vec())
             .await

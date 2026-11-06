@@ -202,23 +202,52 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     /// turn comes.
     pub(crate) async fn load(&self) -> Result<(), RoomKitError> {
         let kit = self.kit()?;
-        let config = serde_json::to_value(&self.config)
+        // Taking the place of the discussion the room stores, it keeps the
+        // queue and the agents its installs attached, but for the agents it
+        // lets go (rule 1, Python's `take_over`).
+        let room = kit.store().get_room(&self.room_id).await?;
+        let stored = room.and_then(|room| DiscussionConfig::stored(&room.metadata));
+        let (gone, attached) = stored.map_or_else(Default::default, |stored| {
+            let gone: Vec<ChannelId> = stored
+                .agents
+                .into_iter()
+                .filter(|agent| !self.config.agents.contains(agent))
+                .collect();
+            let attached = stored
+                .attached
+                .into_iter()
+                .filter(|agent| !gone.contains(agent))
+                .collect();
+            (gone, attached)
+        });
+        let storing = DiscussionConfig {
+            attached,
+            ..self.config.clone()
+        };
+        let config = serde_json::to_value(&storing)
             .map_err(|error| RoomKitError::Value(error.to_string()))?;
         let patch = Metadata::from_iter([(CONFIG_KEY.to_owned(), config)]);
         kit.store()
             .patch_room_metadata(&self.room_id, patch, PatchRoomMetadataOptions::default())
             .await?;
-        let (legacy, state) = self
+        let (legacy, dropped, ended, state) = self
             .editing(&kit, |state, _| {
                 let (legacy, kept): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut state.entries)
                     .into_iter()
                     .partition(|entry| entry.instruction.is_some() && entry.holder.is_none());
                 state.entries = kept;
-                (legacy, state.clone())
+                let dropped = state.drop_agents(&gone);
+                // The wait may have been for an agent that left.
+                let ended = state.end_wait_for_nobody();
+                (legacy, dropped, ended, state.clone())
             })
             .await?;
         let mut changes = Vec::new();
         self.drop_instructions(&legacy, &state, &mut changes);
+        self.drop_instructions(&dropped, &state, &mut changes);
+        if ended {
+            changes.push((SpeakQueueChange::Waiting, Vec::new(), None));
+        }
         self.fire_all(changes);
         Ok(())
     }
