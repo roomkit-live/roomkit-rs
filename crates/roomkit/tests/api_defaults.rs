@@ -34,6 +34,8 @@ use roomkit::PauseRoomOptions;
 use roomkit::PostOptions;
 use roomkit::PostStatusOptions;
 use roomkit::ProcessInboundOptions;
+use roomkit::RegenerateResponseOptions;
+use roomkit::RegenerateTargetOptions;
 use roomkit::RemoveRoomHookOptions;
 use roomkit::ReopenRoomOptions;
 use roomkit::ResumeRoomOptions;
@@ -577,6 +579,22 @@ fn route_options_defaults_as_python() {
     assert!(defaults.organization_id.is_none());
     // roomkit.InboundRoomRouter.route(participant_id) = None
     assert!(defaults.participant_id.is_none());
+}
+
+#[test]
+fn regenerate_response_options_defaults_as_python() {
+    let defaults = RegenerateResponseOptions::default();
+    // roomkit.RoomKit.regenerate_response(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+    // roomkit.RoomKit.regenerate_response(trigger_id) = None
+    assert!(defaults.trigger_id.is_none());
+}
+
+#[test]
+fn regenerate_target_options_defaults_as_python() {
+    let defaults = RegenerateTargetOptions::default();
+    // roomkit.RoomKit.regenerate_target(organization_id) = None
+    assert!(defaults.organization_id.is_none());
 }
 
 #[test]

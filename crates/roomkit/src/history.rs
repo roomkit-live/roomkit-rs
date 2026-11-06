@@ -41,7 +41,8 @@ pub(crate) async fn turn_context<S: ConversationStore>(
     context: RoomContext,
     window: usize,
 ) -> RoomContext {
-    match read(store, binding, event, window).await {
+    let read_through = context.recent_events.iter().map(|known| known.index).max();
+    match read(store, binding, event, window, read_through).await {
         Ok(history) => {
             let whole = RoomContext {
                 recent_events: history,
@@ -122,16 +123,21 @@ pub(crate) async fn turn_context_as_asked<S: ConversationStore>(
     }
 }
 
-/// The room's latest messages up to `event`, `event` among them when it
-/// is no message, then `binding`'s channel's latest tool-call rows, merged
-/// in timeline order. The Python implementation's turn reads its trigger as
-/// the newest event of its context (`provisional`); an instruction, never
-/// stored, is not there.
+/// The room's latest messages up to `event`, or up to `read_through`, the
+/// newest the pipeline had read when it handed the turn, when that is later,
+/// `event` among them when it is no message, then `binding`'s channel's
+/// latest tool-call rows, merged in timeline order. The Python
+/// implementation's turn reads its trigger as the newest event of its
+/// context (`provisional`); an instruction, never stored, is not there. A
+/// regeneration's turn reads the room as the regeneration found it, the
+/// answers given since its event among them, as Python's context read
+/// under the lock holds them.
 async fn read<S: ConversationStore>(
     store: &S,
     binding: &ChannelBinding,
     event: &RoomEvent,
     window: usize,
+    read_through: Option<u64>,
 ) -> Result<Vec<RoomEvent>, StoreError> {
     let messages = EventFilter {
         event_types: Some(vec![EventType::Message]),
@@ -144,7 +150,10 @@ async fn read<S: ConversationStore>(
         ..EventFilter::default()
     };
     let mut history = store
-        .list_events(&event.room_id, messages_up_to(event, messages, window))
+        .list_events(
+            &event.room_id,
+            messages_up_to(event, messages, window, read_through),
+        )
         .await?;
     if !matches!(event.r#type, EventType::Message | EventType::Instruction) {
         history.push(stored(store, event).await);
@@ -182,17 +191,25 @@ async fn stored<S: ConversationStore>(store: &S, event: &RoomEvent) -> RoomEvent
 }
 
 /// The query of the room's latest messages that `event`'s turn reads:
-/// those up to `event`, which came before its turn; a discussion's turn reads
+/// those up to `event`, which came before its turn, or up to
+/// `read_through` when the pipeline read later ones (a regeneration's
+/// turn); a discussion's turn reads
 /// its event at its place, before what was said after it, so the room's
 /// latest whatever `event` (RFC §19.7.5). An instruction, never
 /// stored, holds the index the room's next event takes; an event the store
 /// never numbered bounds nothing.
-fn messages_up_to(event: &RoomEvent, filter: EventFilter, window: usize) -> ListEventsOptions {
+fn messages_up_to(
+    event: &RoomEvent,
+    filter: EventFilter,
+    window: usize,
+    read_through: Option<u64>,
+) -> ListEventsOptions {
     let bound = if event.r#type == EventType::Instruction {
         event.index
     } else {
         event.index.saturating_add(1)
     };
+    let bound = read_through.map_or(bound, |newest| bound.max(newest.saturating_add(1)));
     ListEventsOptions {
         // The window before the event, and the event itself.
         limit: u64::try_from(window).unwrap_or(u64::MAX).saturating_add(1),

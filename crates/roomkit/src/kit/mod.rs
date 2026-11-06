@@ -44,6 +44,7 @@ mod options;
 mod output;
 mod post;
 mod read_markers;
+mod regenerate;
 mod registry;
 mod room_hooks;
 mod rooms;
@@ -110,6 +111,7 @@ pub use self::options::{
 };
 pub use self::output::{MuteOutputOptions, UnmuteOutputOptions};
 pub use self::read_markers::{ListReadMarkersOptions, MarkAllReadOptions, MarkReadOptions};
+pub use self::regenerate::{RegenerateResponseOptions, RegenerateTargetOptions};
 pub use self::room_hooks::{AddRoomHookOptions, RemoveRoomHookOptions};
 pub use self::start_task::StartTaskOptions;
 pub use self::status::{

@@ -221,6 +221,7 @@ pub use self::kit::{
     PublishPresenceOptions, PublishReactionOptions, PublishReadReceiptOptions,
     PublishToolCallOptions, PublishTypingOptions, SubscribeRoomOptions,
 };
+pub use self::kit::{RegenerateResponseOptions, RegenerateTargetOptions};
 pub use self::media::{AttachedMedia, MediaResolver};
 pub use self::registered::RegisteredChannel;
 pub use self::router::{
