@@ -49,7 +49,7 @@ use super::silence::Hold;
 use super::{DeliveryStream, Pulled, ResponseItem, StreamItem, UsageMarker};
 use crate::RoomKit;
 use crate::channel::ChannelError;
-use crate::context::{self, Adopting, ExecutionContext};
+use crate::context::{self, Adopting, ExecutionContext, ReadTurns};
 use crate::error::RoomKitError;
 use crate::kit::Inner;
 use crate::room_turns::Place;
@@ -177,6 +177,11 @@ pub(super) async fn read_kept<S: ConversationStore>(
     } = read;
     if as_trace {
         kept.turn.read_as_trace();
+    }
+    // A strategy's first pass is read as Python reads it, under a cascade of
+    // its own: its turn's end is not its caller's (RFC §10.6.8, §19.7.3).
+    if !first_pass {
+        stops.read_turns.reads(kept.turn.canceller().owed_end());
     }
     let target = target.filter(|_| !first_pass);
     let (pulls, pulled) = mpsc::unbounded_channel();
@@ -338,6 +343,8 @@ pub(crate) struct Stops {
     pub(crate) kit: watch::Receiver<bool>,
     /// The reason the task the read runs within is cut with, once it is.
     pub(crate) task: Option<watch::Receiver<Option<&'static str>>>,
+    /// Where the read tells whether its turn owes its end (RFC §10.6.8).
+    pub(crate) read_turns: ReadTurns,
 }
 
 impl Stops {

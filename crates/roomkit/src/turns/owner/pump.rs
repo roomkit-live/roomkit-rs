@@ -374,7 +374,7 @@ impl Pump {
     /// executor's end, the turn's end is owed, told before it is over.
     fn finish(self, ending: Ending) {
         if !matches!(ending, Ending::Ended) {
-            self.state.end_owed.store(true, Ordering::Release);
+            self.state.end_owed.owe();
         }
         match ending {
             Ending::Ended => {}

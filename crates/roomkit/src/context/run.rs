@@ -19,7 +19,7 @@ use tokio::sync::{Notify, mpsc, watch};
 use super::adoption::Adoption;
 use crate::room_turns::Queued;
 use crate::stream::KeptStream;
-use crate::turns::Canceller;
+use crate::turns::{Canceller, OwedEnd};
 
 /// What a run holds now, as the calls it makes read it.
 #[derive(Debug, Default)]
@@ -64,9 +64,36 @@ pub(crate) struct RunShared {
     /// the room, by their turn's effect, until their stream is read (RFC
     /// §6.4): one never read gives its place up.
     queued: Mutex<HashMap<EffectId, Queued>>,
-    /// The turns whose stream the run read, or reads: a cut call reads
-    /// whether one's end is owed (RFC §10.6.8).
-    read_turns: Mutex<Vec<Canceller>>,
+    /// Whether each turn whose stream the run read, or reads, owes its end:
+    /// a cut call reads it (RFC §10.6.8). Never cleared, a cut call's end
+    /// reading it once the run is over.
+    read_turns: ReadTurns,
+}
+
+/// Whether each turn whose stream a run read owes its end (RFC §10.6.8),
+/// as Python's cascade reads `end_owed` on each of its `streams`: a turn
+/// cut before its output, a strategy's first pass read under a cascade of
+/// its own, is none of them.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ReadTurns(Arc<Mutex<Vec<OwedEnd>>>);
+
+impl ReadTurns {
+    /// The run reads the stream of a turn whose end `owed` tells.
+    pub(crate) fn reads(&self, owed: OwedEnd) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(owed);
+    }
+
+    /// Whether one of them owes its end.
+    pub(crate) fn any_owed(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(OwedEnd::is_owed)
+    }
 }
 
 /// A claim on one tenure of a room's lock, which code run under that lock
@@ -91,7 +118,7 @@ impl RunShared {
             stops: Mutex::new(HashMap::new()),
             turns: Mutex::new(HashMap::new()),
             queued: Mutex::new(HashMap::new()),
-            read_turns: Mutex::new(Vec::new()),
+            read_turns: ReadTurns::default(),
         });
         (shared, received)
     }
@@ -213,22 +240,15 @@ impl RunShared {
         Some(turn)
     }
 
-    /// The run reads the stream of the turn `turn` cuts.
-    pub(crate) fn reads_turn(&self, turn: Canceller) {
-        self.read_turns
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(turn);
+    /// Where each read of the run tells whether its turn owes its end.
+    pub(crate) fn read_turns(&self) -> ReadTurns {
+        self.read_turns.clone()
     }
 
     /// Whether a turn whose stream the run read is over for its owner
     /// without its executor's end (RFC §10.6.8).
     pub(crate) fn a_read_turn_s_end_is_owed(&self) -> bool {
-        self.read_turns
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .any(Canceller::end_owed)
+        self.read_turns.any_owed()
     }
 
     /// Keeps the stream the turn of `effect` answered with, until it is read.

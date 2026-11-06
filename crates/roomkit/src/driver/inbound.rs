@@ -44,7 +44,7 @@ use tokio::task::{JoinError, JoinHandle};
 use super::calls::{self, Written};
 use super::in_flight::InFlight;
 use super::{Committed, Driven, Leases, Stop};
-use crate::context::{ExecutionContext, Lease, RunShared};
+use crate::context::{ExecutionContext, Lease, ReadTurns};
 use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::{RoomKitError, with_causes};
 use crate::kit::Inner;
@@ -116,10 +116,14 @@ pub(crate) struct Record {
     in_flight: InFlight,
     /// What the caller, answered at the decision, did not wait for.
     tail: Mutex<Option<Tail>>,
-    /// Set once a turn the call's cut cut, or one whose stream its run read,
-    /// is over for its owner without its executor's end: the cut call's
-    /// cleanup is not known to be done (RFC §10.6.8).
+    /// Set once a turn whose stream the call's run read is over for its
+    /// owner without its executor's end: a cut call's cleanup is not known
+    /// to be done (RFC §10.6.8).
     cleanup_owed: AtomicBool,
+    /// Set once the run ended while the kit's close was under way: its
+    /// cascade cut by the close, as Python's close cancels every cascade in
+    /// flight (RFC §12.10.4).
+    closed_under_way: AtomicBool,
 }
 
 /// What the read a call's cut stopped left the call.
@@ -200,6 +204,7 @@ impl Record {
             in_flight: InFlight::default(),
             tail: Mutex::new(None),
             cleanup_owed: AtomicBool::new(false),
+            closed_under_way: AtomicBool::new(false),
         }
     }
 
@@ -219,18 +224,26 @@ impl Record {
         self.cancel.reason()
     }
 
-    /// A turn of the call's is over for its owner without its executor's
-    /// end (RFC §10.6.8).
+    /// A turn whose stream the call's run read is over for its owner
+    /// without its executor's end (RFC §10.6.8).
     pub(super) fn owe_cleanup(&self) {
         self.cleanup_owed.store(true, Ordering::Release);
     }
 
-    /// What a waiter on the cut call reads in place of its result: Python's
-    /// `TimeoutError`, its cleanup incomplete, while a turn's end is owed;
-    /// a call not cut reads its result (RFC §10.6.8).
+    /// The call's run ended while the kit's close was under way.
+    fn closed_under_way(&self) {
+        self.closed_under_way.store(true, Ordering::Release);
+    }
+
+    /// What a deferred call's handle reads in place of its result: Python's
+    /// `TimeoutError`, its cleanup incomplete, once the call was cut, by its
+    /// caller or by the kit's close, and a turn whose stream it read owes
+    /// its end (RFC §10.6.8); a call not cut reads its result. An awaited
+    /// call reads its result, as Python's caller does.
     pub(crate) fn cleanup_incomplete(&self) -> Option<RoomKitError> {
         let owed = self.cleanup_owed.load(Ordering::Acquire);
-        (owed && self.cancel_reason().is_some()).then_some(RoomKitError::Timeout)
+        let cut = self.cancel_reason().is_some() || self.closed_under_way.load(Ordering::Acquire);
+        (owed && cut).then_some(RoomKitError::Timeout)
     }
 
     /// The call's room is read, of `organization_id`: its delivery's key,
@@ -377,22 +390,14 @@ impl Record {
 /// The call `record` records as its cancellation ends it, once its turns
 /// are cut and over ([`Record::end_cancelled`]); never, for a call not
 /// cancelled.
-///
-/// # Errors
-///
-/// [`RoomKitError::Timeout`] when a turn's end is owed: its cleanup is not
-/// known to be done (RFC §10.6.8).
-pub(crate) async fn cancelled_end(record: &Record) -> Result<InboundResult, RoomKitError> {
+pub(crate) async fn cancelled_end(record: &Record) -> InboundResult {
     let mut cancelled = record.cancelled.subscribe();
     let ended = cancelled
         .wait_for(Option::is_some)
         .await
         .map(|result| result.clone());
     match ended {
-        Ok(result) => match record.cleanup_incomplete() {
-            Some(incomplete) => Err(incomplete),
-            None => Ok(result.unwrap_or_default()),
-        },
+        Ok(result) => result.unwrap_or_default(),
         // The record outlives every wait on it: never closed.
         Err(_closed) => std::future::pending().await,
     }
@@ -942,6 +947,9 @@ async fn run_leased<S: ConversationStore>(
         )
         .await;
         let closing = kit.tasks.is_closing();
+        if closing {
+            caller.record.closed_under_way();
+        }
         let cut = matches!(output, Err(Stop::Cut(_)));
         let mut output = closed_at_its_end(output, closing);
         if caller.departure.turns_cut
@@ -974,7 +982,7 @@ async fn run_leased<S: ConversationStore>(
         // lane, is not its turns' work (RFC §10.1 "Explicit delivery
         // cancellation"). The run goes on, detached.
         result = cancelled_end(&cancelled) => Ran {
-            output: result.map(Ok),
+            output: Ok(Ok(result)),
             delivery: defer.then_some((task, record)),
         },
     }
@@ -985,13 +993,14 @@ async fn run_leased<S: ConversationStore>(
 /// cancellation": the cancellation joins the turns it cuts) and it was told
 /// what they left, at the cut or once the read the cut stopped is over,
 /// however long that takes: a waiter's own timeout bounds that waiter only,
-/// and what it reads then is the whole record. A turn over without its
-/// executor's end, one of `turns` or one whose stream the run `shared`
-/// read, leaves the call's cleanup incomplete (RFC §10.6.8).
+/// and what it reads then is the whole record. A turn whose stream the run
+/// read, `read_turns` says, over without its executor's end leaves the
+/// call's cleanup incomplete; a turn cut before its output does not, as
+/// Python's cleanup reads only its cascade's streams (RFC §10.6.8).
 pub(super) async fn end_once_over(
     record: Arc<Record>,
     turns: Vec<Canceller>,
-    shared: Arc<RunShared>,
+    read_turns: ReadTurns,
 ) {
     for turn in &turns {
         turn.ended().await;
@@ -999,7 +1008,7 @@ pub(super) async fn end_once_over(
     let mut read_over = record.cut_read_over.subscribe();
     // The record holds the sender: never closed.
     drop(read_over.wait_for(|over| *over).await);
-    if turns.iter().any(Canceller::end_owed) || shared.a_read_turn_s_end_is_owed() {
+    if read_turns.any_owed() {
         record.owe_cleanup();
     }
     record.end_cancelled();
@@ -1148,9 +1157,7 @@ pub(crate) fn ended(
     tasks: &Tasks,
 ) -> InboundOutput {
     match joined {
-        // A cut call whose turn's end is owed reads its cleanup incomplete,
-        // however its run ended (RFC §10.6.8).
-        Ok(output) => record.cleanup_incomplete().map_or(output, Err),
+        Ok(output) => output,
         // A panic of the driver's own loop is a defect of this crate: the
         // caller receives it as it would from a run it drove itself.
         Err(failure) if failure.is_panic() => std::panic::resume_unwind(failure.into_panic()),

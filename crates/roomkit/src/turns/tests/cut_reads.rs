@@ -17,7 +17,9 @@ use roomkit_core::model::{
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
-use super::support::{ReadingOn, Step, Streaming, Stuck, Timed, bind, kit_with, of_type, room_id};
+use super::support::{
+    ReadingOn, Step, Streaming, Stuck, Timed, Waiting, bind, kit_with, of_type, room_id,
+};
 use crate::turns::observe::{Carried, Fate};
 use crate::{
     CancelOptions, Channel, ChannelError, DeliveryHandle, InboundResult, ProcessInboundOptions,
@@ -188,11 +190,12 @@ async fn a_cut_whose_turn_s_end_is_owed_reports_its_cleanup_incomplete() {
     }
 }
 
-// Python: core/mixins/lane_execution.py joins a cancelled cascade's cleanup
-// (wait_drained) before an awaited call returns: one its key cut, a turn's end
-// owed, raises the cleanup's TimeoutError (RMK-1328).
+// Python: core/mixins/lane_execution.py reads an awaited call's streams through
+// _read_streams, which returns at the cut: the cleanup's TimeoutError reaches
+// no caller (lanes.py _cleanup_ended logs it). The call reads its result, its
+// turn's end owed (RMK-1328).
 #[tokio::test(start_paused = true)]
-async fn an_awaited_call_its_key_cut_whose_turn_s_end_is_owed_times_out() {
+async fn an_awaited_call_its_key_cut_reads_its_result_while_its_turn_s_end_is_owed() {
     let target = ReadingOn::flushing(Duration::ZERO);
     let kit = room(holding(), &target).await;
     stuck_executor(&kit);
@@ -217,7 +220,54 @@ async fn an_awaited_call_its_key_cut_whose_turn_s_end_is_owed_times_out() {
     let called = call.await.unwrap();
     kit.close().await.unwrap();
     assert_eq!(cut, 1);
-    assert!(matches!(called, Err(RoomKitError::Timeout)), "{called:?}");
+    let called = called.unwrap();
+    assert_eq!(
+        called.cancellation_reason.as_deref(),
+        Some("caller_cancelled")
+    );
+}
+
+// Python: lanes.py _cleanup reads end_owed on the cascade's streams only: a
+// turn cut before its output, never read, leaves the cleanup done, and
+// cancel() returns the result (RMK-1328).
+#[tokio::test(start_paused = true)]
+async fn a_cut_whose_turn_had_not_answered_reads_its_result_with_its_end_owed() {
+    let kit = kit_with(Waiting::new(Duration::from_secs(3600))).await;
+    stuck_executor(&kit);
+    let handle = deferred(&kit).await;
+    // Paused time: the turn runs before the cut.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let cancel = handle.cancel(with_timeout(Duration::from_secs(30))).await;
+    let waited = handle.wait().await;
+    kit.close().await.unwrap();
+    let cancel = cancel.unwrap();
+    assert_eq!(
+        cancel.cancellation_reason.as_deref(),
+        Some("caller_cancelled")
+    );
+    assert!(waited.is_ok(), "{waited:?}");
+}
+
+// Python: the kit's close cancels every cascade in flight (core/_closing.py),
+// and wait() joins a cancelled cascade's cleanup (models/delivery.py,
+// lanes.py wait_drained): a turn read when the close cut it, its end owed,
+// fails the wait with TimeoutError (RMK-1328).
+#[tokio::test(start_paused = true)]
+async fn a_wait_past_the_kit_s_close_whose_turn_s_end_is_owed_times_out() {
+    let target = ReadingOn::flushing(Duration::ZERO);
+    let kit = room(holding(), &target).await;
+    kit.inner.turns.set_timeouts(crate::turns::TurnTimeouts {
+        cancel: Duration::from_millis(50),
+        ..Default::default()
+    });
+    stuck_executor(&kit);
+    let handle = deferred(&kit).await;
+    target.read.notified().await;
+    kit.close().await.unwrap();
+    let waits = [handle.wait().await, handle.wait().await];
+    for waited in waits {
+        assert!(matches!(waited, Err(RoomKitError::Timeout)), "{waited:?}");
+    }
 }
 
 /// Makes `kit`'s turns run on an executor stuck in a blocking call: it reads

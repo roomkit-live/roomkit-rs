@@ -299,8 +299,8 @@ async fn a_host_s_own_model_and_provider_outlive_a_loop_end_that_names_none() {
         Step::Completed,
     ];
     let (caller, stored) = read(steps.clone(), "ai_model").await;
-    let (_, provider) = read(steps, "ai_provider").await;
-    assert_eq!(caller, None);
+    let (caller_provider, provider) = read(steps, "ai_provider").await;
+    assert_eq!((caller, caller_provider), (None, None));
     assert_eq!(stored, [("Hi".to_owned(), Some(json!("its-model")))]);
     assert_eq!(provider, [("Hi".to_owned(), Some(json!("its-provider")))]);
 }

@@ -63,7 +63,7 @@ use self::memory::Request;
 pub(crate) use self::memory::{CarriedRequest, MemoryTurn};
 use self::observe::Observers;
 pub(crate) use self::observe::{Carried, Tap};
-pub(crate) use self::owner::{Canceller, OwnerTurn, RemoteItem};
+pub(crate) use self::owner::{Canceller, OwedEnd, OwnerTurn, RemoteItem};
 pub(crate) use self::owner_inputs::InputTurn;
 use self::owner_inputs::OwnerInputs;
 use self::pipe::{MAX_MESSAGE_BYTES, pipe};

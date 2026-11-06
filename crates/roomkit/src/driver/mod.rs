@@ -867,7 +867,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let ending = inbound::end_once_over(
             Arc::clone(caller.record()),
             self.cut.clone(),
-            Arc::clone(&self.shared),
+            self.shared.read_turns(),
         );
         drop(self.inner.tasks.spawn_alone(Kind::Turn, ending));
     }
@@ -892,14 +892,15 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// over.
     async fn join_given_up(&mut self) {
         while self.calls.join_next().await.is_some() {}
-        let mut owed = self.shared.a_read_turn_s_end_is_owed();
         for turn in std::mem::take(&mut self.cut) {
             turn.ended().await;
-            owed |= turn.end_owed();
         }
-        // A turn over without its executor's end leaves a cut call's cleanup
-        // incomplete, told before the run ends (RFC §10.6.8).
-        if owed && let Some(caller) = self.caller.as_deref() {
+        // A turn whose stream the run read, over without its executor's
+        // end, leaves a cut call's cleanup incomplete, told before the run
+        // ends (RFC §10.6.8).
+        if self.shared.a_read_turn_s_end_is_owed()
+            && let Some(caller) = self.caller.as_deref()
+        {
             caller.record().owe_cleanup();
         }
     }

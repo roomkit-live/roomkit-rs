@@ -105,7 +105,25 @@ pub(super) struct OwnerState {
     /// What the executor cleans up is then not known to be done (RFC
     /// §10.6.8), Python's `end_owed`; a turn the kit's close abandons owes
     /// nothing.
-    pub(super) end_owed: AtomicBool,
+    pub(super) end_owed: OwedEnd,
+}
+
+/// Whether a turn is over for its owner without its executor's end, what
+/// the executor cleans up not known to be done (RFC §10.6.8): readable
+/// once the turn is gone, holding nothing else of it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OwedEnd(Arc<AtomicBool>);
+
+impl OwedEnd {
+    /// Whether the turn's end is owed.
+    pub(crate) fn is_owed(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    /// The turn is over without its executor's end.
+    pub(super) fn owe(&self) {
+        self.0.store(true, Ordering::Release);
+    }
 }
 
 /// What cuts a turn from outside its reader: the run whose call the turn
@@ -129,10 +147,9 @@ impl Canceller {
         drop(over.wait_for(|over| *over).await);
     }
 
-    /// Whether the turn is over for the owner without its executor's end,
-    /// what the executor cleans up not known to be done (RFC §10.6.8).
-    pub(crate) fn end_owed(&self) -> bool {
-        self.state.end_owed.load(Ordering::Acquire)
+    /// Whether the turn's end is owed, as it is and as it will be.
+    pub(crate) fn owed_end(&self) -> OwedEnd {
+        self.state.end_owed.clone()
     }
 }
 
@@ -154,7 +171,7 @@ pub(crate) fn open(
         over: watch::Sender::new(false),
         steers: Steers::default(),
         steer_cut: AtomicBool::new(false),
-        end_owed: AtomicBool::new(false),
+        end_owed: OwedEnd::default(),
     });
     let (main, received) = mpsc::unbounded_channel();
     let pump = Pump::new(Arc::clone(&state), frames, main, kit, turns);
