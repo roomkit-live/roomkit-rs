@@ -421,7 +421,7 @@ pub(crate) fn response(body: &[u8], secret: &str, cache_hits: bool) -> Result<Wh
         serde_json::from_slice(body).map_err(|error| malformed(error.to_string()))?;
     let usage = completion
         .usage
-        .map(|usage| usage_of(usage, cache_hits))
+        .map(|usage| usage_of(&usage, cache_hits))
         .unwrap_or_default();
     let choice = completion
         .choices
@@ -593,7 +593,7 @@ impl Folding {
             });
         }
         if let Some(usage) = chunk.usage {
-            self.usage = usage_of(usage, self.cache_hits);
+            self.usage = usage_of(&usage, self.cache_hits);
         }
         let mut segments = Vec::new();
         for choice in chunk.choices.into_iter().filter(|choice| choice.index == 0) {
@@ -669,7 +669,7 @@ impl Folding {
 /// not 0. With `cache_hits`, the cache as DeepSeek reports it, where it does
 /// (Python's `DeepSeekAIProvider._usage_from`): its misses are the input, its
 /// hits the cache read, a miss count it leaves out the prompt less the hits.
-fn usage_of(usage: Usage, cache_hits: bool) -> Metadata {
+fn usage_of(usage: &Usage, cache_hits: bool) -> Metadata {
     let prompt = usage.prompt_tokens.unwrap_or_default();
     let mut counted = Metadata::new();
     if cache_hits && let Some(hit) = usage.prompt_cache_hit_tokens {
@@ -677,11 +677,11 @@ fn usage_of(usage: Usage, cache_hits: bool) -> Metadata {
             .prompt_cache_miss_tokens
             .unwrap_or_else(|| prompt.saturating_sub(hit));
         counted.insert("input_tokens".to_owned(), Value::from(miss));
-        counted.insert("output_tokens".to_owned(), Value::from(output_of(&usage)));
+        counted.insert("output_tokens".to_owned(), Value::from(output_of(usage)));
         if hit > 0 {
             counted.insert("cache_read_input_tokens".to_owned(), Value::from(hit));
         }
-        return with_reasoning(counted, &usage);
+        return with_reasoning(counted, usage);
     }
     let details = usage.prompt_tokens_details.as_ref();
     let cached = details
@@ -694,7 +694,7 @@ fn usage_of(usage: Usage, cache_hits: bool) -> Metadata {
         .unwrap_or_default();
     let fresh = prompt.saturating_sub(cached).saturating_sub(written);
     counted.insert("input_tokens".to_owned(), Value::from(fresh));
-    counted.insert("output_tokens".to_owned(), Value::from(output_of(&usage)));
+    counted.insert("output_tokens".to_owned(), Value::from(output_of(usage)));
     if cached > 0 {
         counted.insert("cache_read_input_tokens".to_owned(), Value::from(cached));
     }
@@ -704,7 +704,7 @@ fn usage_of(usage: Usage, cache_hits: bool) -> Metadata {
             Value::from(written),
         );
     }
-    with_reasoning(counted, &usage)
+    with_reasoning(counted, usage)
 }
 
 /// The output a usage reports, 0 where it gives none.
