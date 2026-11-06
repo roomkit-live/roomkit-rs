@@ -99,6 +99,10 @@ pub(super) struct NamedRoom {
     charged: bool,
     /// Whether step 2 created the room.
     created: bool,
+    /// The failure of the release of the lock its change took, which the
+    /// call's result carries as its error when it met none before (RFC
+    /// §13.5).
+    release_error: Option<ErrorRecord>,
     state: State,
 }
 
@@ -174,6 +178,7 @@ impl NamedRoom {
             opening: None,
             charged: false,
             created: false,
+            release_error: None,
             state: State::Start,
         }
     }
@@ -207,6 +212,12 @@ impl NamedRoom {
     /// work of the delivery whose budget opened it (gap G-070).
     pub(super) fn created(&self) -> bool {
         self.created
+    }
+
+    /// The failure of the release of the lock step 2's change took, taken
+    /// for the call's result.
+    pub(super) fn take_release_error(&mut self) -> Option<ErrorRecord> {
+        self.release_error.take()
     }
 
     /// The room step 2 works on.
@@ -289,7 +300,10 @@ impl NamedRoom {
                     self.state = State::Changing { section, created };
                     Progress::Waiting
                 }
-                Progress::Done(changed) => self.on_changed(cx, changed.result, created),
+                Progress::Done(changed) => {
+                    self.release_error = self.release_error.take().or(changed.release_error);
+                    self.on_changed(cx, changed.result, created)
+                }
             },
             State::Starting {
                 effect: expected,

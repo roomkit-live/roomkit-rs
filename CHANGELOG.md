@@ -6,7 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- A call refused `process_timeout` under a room lock whose release fails carries the failure as its `error`, as Python's (RFC §13.5, RMK-1443): awaited, and deferred at its decision and on its handle's wait, where the error was `None`.
+- A call's result carries a room lock's failed release as its `error`, as Python's (RFC §13.5, RMK-1443): a call refused `process_timeout` under the lock, awaited, and deferred at its decision and on its handle's wait; and a message whose step 2 attached its channel under a lock whose release failed, committed or refused, where the error was `None`.
 - A Chat Completions answer names its model on `metadata["model"]`, the one the server says answered, else the one the configuration asked for, whole and at a stream's end, as Python's `answered_by` (RMK-1434). A round goes back to the model without it, nor its refusal, as Python's round message carries no metadata: a generation hook read them on the round's message, where Python's reads none.
 - A Chat completion with no choice is an empty answer that reports its usage, as Python's (RMK-1434), where it failed `Malformed` and its usage was lost. A stream answered with such a completion's JSON in place of its events still fails.
 - A streamed call id that is no text reads as Python's (RMK-1372): a nameless fragment opening another call under an id read as false (`0`, `false`, `[]`, `{}`) is a call with no name, for the loop to refuse, where it ran as a second call to the held tool; any id that is no text on a call named under no id of the server's, or a number or `true` on an entry with no function, changes nothing, where the read failed `Malformed`.

@@ -34,7 +34,8 @@ use super::named_room::{Mode, Named, NamedRoom};
 use super::verification::{self, Verifying};
 use super::{InboundError, InboundResult, result, stamp};
 use crate::model::{
-    ChannelType, EventId, EventType, Identity, InboundMessage, RoomContext, RoomEvent, RoomId,
+    ChannelType, ErrorRecord, EventId, EventType, Identity, InboundMessage, RoomContext, RoomEvent,
+    RoomId,
 };
 use crate::ops::io::Bound;
 use crate::ops::protocol::{
@@ -179,6 +180,10 @@ pub(super) struct Arrival {
     chain_floor: u32,
     /// What step 5 decided of the sender, once the message arrived.
     identified: Option<Identified>,
+    /// The first failure of the release of a lock step 2 took, which the
+    /// call's result carries as its error when it met none before (RFC
+    /// §13.5), as Python's call collects its failed releases.
+    release_error: Option<ErrorRecord>,
     /// The key the delivery path publishes the message under, the one key
     /// of the publication namespace its event may keep (RFC §22.1).
     publication: Option<String>,
@@ -239,6 +244,7 @@ impl Arrival {
             charge: DeliveryCharge::new(None),
             chain_floor: 0,
             identified: None,
+            release_error: None,
             publication: None,
             state: State::Start,
         }
@@ -370,6 +376,9 @@ impl Arrival {
                     Progress::Waiting
                 }
                 Progress::Done(named) => {
+                    if self.release_error.is_none() {
+                        self.release_error = step.take_release_error();
+                    }
                     // A room created then left is not the message's: its
                     // cascade does not draw on the delivery's budget there.
                     let kept = step.created() && !matches!(named, Named::Rerouted);
@@ -639,6 +648,12 @@ impl Arrival {
     /// What step 5 decided of the message's sender, once it arrived: the
     /// event goes on, with what its pass writes of them, or is held. A
     /// message no resolution ran for goes on.
+    /// The first failure of the release of a lock step 2 took, taken for
+    /// the call's result.
+    pub(super) fn take_release_error(&mut self) -> Option<ErrorRecord> {
+        self.release_error.take()
+    }
+
     pub(super) fn take_identified(&mut self) -> Identified {
         self.identified.take().unwrap_or(Identified::Proceed(None))
     }

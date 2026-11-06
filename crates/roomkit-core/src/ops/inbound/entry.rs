@@ -104,6 +104,9 @@ impl Machine {
             self.stage.enter(Stage::Arriving(arrival));
             return;
         };
+        // Step 2's failed release is the first error the call met (RFC
+        // §13.5), its refusal at the deadline included.
+        self.trigger.note_error(arrival.take_release_error());
         match arrived {
             Ok(arrived) => {
                 self.call.room_id = Some(arrived.event.room_id.clone());
