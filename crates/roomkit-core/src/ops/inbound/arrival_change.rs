@@ -291,7 +291,7 @@ fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision<R
         return attach_automatically(&record.binding, context);
     };
     if record.created && record.sender.address.is_none() {
-        return created_with_no_address(current, context, &form);
+        return created_with_no_address(&current, context, &form);
     }
     let recording = routing::recording(&current, &record.sender, &form, &context.participants);
     match recording {
@@ -319,19 +319,19 @@ fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision<R
 /// is; one naming anyone else is someone's conversation, and the message is
 /// routed once more.
 fn created_with_no_address(
-    current: ChannelBinding,
+    current: &ChannelBinding,
     context: Box<RoomContext>,
     form: &AddressForm,
 ) -> Decision<Recorded> {
     if current.group {
         return Decision::unwritten(Recorded::Kept(context));
     }
-    if current.participant_id.is_some() || routing::correspondent(&current, form).is_some() {
+    if current.participant_id.is_some() || routing::correspondent(current, form).is_some() {
         return Decision::unwritten(Recorded::Rerouted(context));
     }
     let mut closed = current.clone();
     closed.participant_id = ParticipantId::new(SYSTEM_SENDER).ok();
-    change::store_updated(&current, closed, context).map(Recorded::Updated)
+    change::store_updated(current, closed, context).map(Recorded::Updated)
 }
 
 /// Whether the room as `context` holds it, kept by its status, tells by who
