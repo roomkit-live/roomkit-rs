@@ -9,6 +9,8 @@
               missing member and never panics; its own lists are indexed within their length"
 )]
 
+#[path = "../../../roomkit/tests/conformance/acp_agents.rs"]
+mod acp_agents;
 #[path = "../../../roomkit/tests/conformance/agents.rs"]
 mod agents;
 #[path = "../../../roomkit/tests/conformance/ai_hooks.rs"]

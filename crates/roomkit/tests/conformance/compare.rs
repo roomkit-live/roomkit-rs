@@ -222,6 +222,19 @@ impl Comparison<'_> {
                 &format!("models.{channel}"),
             );
         }
+        for (channel, expected) in expect["acp_wire"].as_object().into_iter().flatten() {
+            let requests = self
+                .observed
+                .acp_wire
+                .get(channel)
+                .cloned()
+                .unwrap_or_default();
+            self.check(
+                expected,
+                Some(&Value::Array(requests)),
+                &format!("acp_wire.{channel}"),
+            );
+        }
     }
 
     fn side_effects(&mut self) {

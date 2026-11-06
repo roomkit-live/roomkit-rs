@@ -93,6 +93,7 @@ const CHANNEL: &[&str] = &[
     "on_room_attached",
     "on_room_detached",
     "model",
+    "acp",
     "tools",
     "tool_policy",
     "max_tool_rounds",
@@ -350,6 +351,7 @@ const EXPECT: &[&str] = &[
     "actions",
     "lifecycle",
     "models",
+    "acp_wire",
     "streamed",
     "room_callbacks",
     "participants",
@@ -620,6 +622,28 @@ fn optional(value: &Value, known: &[&str], path: &str, found: &mut Vec<String>) 
     }
 }
 
+/// A scripted ACP agent's members (README, "Scripted ACP agents").
+fn scripted_acp(acp: &Value, path: &str, found: &mut Vec<String>) {
+    use crate::acp_agents::{ACP, AGENT, INITIALIZE, PROMPT};
+    optional(acp, ACP, path, found);
+    let agent = &acp["agent"];
+    optional(agent, AGENT, &format!("{path}.agent"), found);
+    optional(
+        &agent["initialize"],
+        INITIALIZE,
+        &format!("{path}.agent.initialize"),
+        found,
+    );
+    for (index, prompt) in items(&agent["prompts"]) {
+        optional(
+            prompt,
+            PROMPT,
+            &format!("{path}.agent.prompts[{index}]"),
+            found,
+        );
+    }
+}
+
 fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     members(channel, CHANNEL, path, found);
     let human = &channel["human_input"];
@@ -647,6 +671,7 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     for kind in ["model", "fallback_model"] {
         scripted_model(&channel[kind], &format!("{path}.{kind}"), found);
     }
+    scripted_acp(&channel["acp"], &format!("{path}.acp"), found);
     optional(
         &channel["retry_policy"],
         RETRY_POLICY,

@@ -45,6 +45,10 @@ pretty_assertions.workspace = true
 # The conformance runner's scripted agent (roomkit-specs conformance/README.md,
 # "Scripted agents"): roomkit-ai's AI channel over a scripted model.
 roomkit-ai.workspace = true
+# The conformance runner's scripted ACP agent (roomkit-specs
+# conformance/README.md, "Scripted ACP agents"): roomkit-acp's channel over
+# a transport of the runner's own.
+roomkit-acp.workspace = true
 # The conformance runner's `chat_dialect`: a request written through the Chat
 # Completions rendering, to a local server (`net`, `io-util`).
 roomkit-openai.workspace = true

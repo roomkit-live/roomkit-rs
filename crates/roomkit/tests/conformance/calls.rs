@@ -635,6 +635,10 @@ pub(crate) fn register_channel(
             .register_channel(HostChannel::new(roomkit::HostChannelOptions {
                 channel_id: id,
             }))
+    } else if channel.get("acp").is_some() {
+        let (agent, wire) = crate::acp_agents::scripted_acp_channel(channel, id.clone(), run)?;
+        crate::run::lock(&run.acp_wires).insert(id.to_string(), wire);
+        run.kit().register_channel(agent)
     } else if channel.get("model").is_some() {
         let (agent, models) = agents::scripted_agent(channel, run)?;
         crate::run::lock(&run.models).extend(models);

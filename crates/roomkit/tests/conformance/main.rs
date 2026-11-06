@@ -16,6 +16,7 @@
               missing member and never panics; its own lists are indexed within their length"
 )]
 
+mod acp_agents;
 mod agents;
 mod ai_hooks;
 mod audits;

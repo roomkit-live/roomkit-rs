@@ -400,6 +400,10 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
         };
         observed.models.insert(channel.clone(), requests);
     }
+    for (channel, wire) in lock(&run.acp_wires).iter() {
+        let received = lock(wire).clone();
+        observed.acp_wire.insert(channel.clone(), received);
+    }
     (observed.tool_audit, observed.session_audit) = run.auditors.observe(&mut problems);
     lock(&run.problems).extend(problems);
     for ((room_key, timeline), room) in timelines.into_iter().zip(&rooms) {
