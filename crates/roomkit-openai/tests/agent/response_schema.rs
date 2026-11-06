@@ -378,3 +378,37 @@ fn a_response_schema_is_taken_where_the_vendor_documents_it() {
         [(false, true), (true, false), (false, true)]
     );
 }
+
+// Python: tests/text_conformance/test_responses.py::TestResponseSchema::test_entries_with_no_function_are_no_tool_round
+// Under a schema, a round is a step of the loop only when calls reach it:
+// an entry with no function hands none, so the answer is due and checked,
+// whole and streamed.
+#[tokio::test]
+async fn entries_with_no_function_are_no_tool_round() {
+    let entry = json!({ "id": "c1", "type": "custom", "custom": { "name": "x", "input": "" } });
+    let whole = Reply::whole(&json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "model": "fake-model",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "", "tool_calls": [entry] },
+            "finish_reason": "tool_calls",
+        }],
+    }));
+    let streamed = Reply::events(&[
+        json!({ "choices": [{ "index": 0, "delta": { "tool_calls": [{ "index": 0, "id": "c1" }] } }] }),
+        json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }] }),
+    ]);
+    let (provider, _fake) = provider(vec![whole, streamed], |config| config).await;
+    let context = asked(Vec::new());
+    let answered = provider.generate(&context).await.unwrap_err();
+    let (_, read) = drain(provider.generate_structured_stream(&context)).await;
+    assert_eq!(
+        (reason(&answered), reason(&read.unwrap())),
+        (
+            Some(ResponseSchemaFailure::InvalidJson),
+            Some(ResponseSchemaFailure::InvalidJson)
+        )
+    );
+}
