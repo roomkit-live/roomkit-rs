@@ -294,7 +294,10 @@ impl DeliveryHandle {
     ///
     /// [`RoomKitError::Timeout`] when the cut turns are not over within
     /// `timeout`: their cleanup still runs, and [`wait`](Self::wait) joins
-    /// it; [`RoomKitError::Runtime`] when called, the delivery not done,
+    /// it; the same, from this cancel and every wait after it, when a turn
+    /// it cut is over for its owner without its executor's end (its cancel
+    /// bound passed, its link failed): what the executor cleans up is not
+    /// known to be done (RFC §10.6.8); [`RoomKitError::Runtime`] when called, the delivery not done,
     /// from the room's own work where its cleanup would wait for this call,
     /// a turn or a delivery in the room, or a hook under its lock: nothing is
     /// cancelled; what [`wait`](Self::wait) fails with.
@@ -347,7 +350,9 @@ impl DeliveryHandle {
     /// Returns what a call that waited would have returned past its commit:
     /// a defect of this crate, as [`RoomKitError::Internal`], to the first
     /// wait that reads it; another wait then reads the result the call
-    /// returned at its commit.
+    /// returned at its commit. A cut call whose turn's end is owed returns
+    /// [`RoomKitError::Timeout`] to every wait, its cleanup incomplete (RFC
+    /// §10.6.8).
     pub async fn wait(&self) -> Result<InboundResult, RoomKitError> {
         let shared = &self.shared;
         if !self.done() && shared.waits_for_itself() {
