@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit_core::model::{ChannelId, EventStatus, EventType, RoomContext, RoomEvent};
-use roomkit_core::rules::discussion::people::sees;
+use roomkit_core::rules::discussion::people::{labelled, sees};
 use roomkit_core::rules::transcript::turn_labels;
 use roomkit_core::rules::verification::release::withdrawn;
 use roomkit_core::rules::withheld_history;
@@ -232,10 +232,12 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         let mut speakers = BTreeMap::new();
         for (said, label) in said.iter().zip(labels) {
             let author = &said.source.channel_id;
+            // A person named like one of an agent's own labels reads as a
+            // participant, as the transcript of Python's turn_labels has it.
             let label = if self.config.agents.contains(author) {
                 Some(self.config.label(author))
             } else {
-                label
+                label.filter(|label| !label.is_empty()).map(labelled)
             };
             if let Some(label) = label.filter(|label| !label.is_empty()) {
                 speakers.insert(said.id.clone(), label);
@@ -346,7 +348,8 @@ fn within<S: ConversationStore>(
     decision
 }
 
-/// `elapsed` in whole milliseconds, rounded as Python's `round()`.
+/// `elapsed` in whole milliseconds, a half rounded up (Python's `round()`
+/// rounds it to even: they differ under a millisecond only).
 fn millis(elapsed: Duration) -> u64 {
     let micros = elapsed.as_micros();
     u64::try_from((micros + 500) / 1000).unwrap_or(u64::MAX)

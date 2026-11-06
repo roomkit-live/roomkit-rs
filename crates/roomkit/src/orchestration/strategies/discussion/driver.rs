@@ -968,4 +968,50 @@ mod tests {
         let queue = read_queue(&stored.metadata);
         assert!(queue.over && queue.dispatching.is_empty());
     }
+
+    // Python: tests/orchestration/test_discussion_dispatch.py::test_a_message_the_peek_missed_asks_done_first[addressed]:
+    // a turn queued between the peek and the plan is given only once done
+    // was asked, which ends the discussion first.
+    #[tokio::test]
+    async fn a_turn_the_peek_missed_asks_done_first() {
+        let room_id = RoomId::new("r1").unwrap();
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let options = CreateRoomOptions {
+            room_id: Some(room_id.clone()),
+            ..Default::default()
+        };
+        let created = kit.create_room(options).await.unwrap();
+        let config: DiscussionConfig = serde_json::from_value(serde_json::json!({
+            "agents": ["a"], "max_depth": 5, "dispatch": true
+        }))
+        .unwrap();
+        let room = DiscussionRoom::new(&kit, room_id.clone(), None, config, None, None);
+        room.load().await.unwrap();
+        room.editing(&kit, |state, _| {
+            let ask = Ask {
+                event_id: "m1".to_owned(),
+                depth: 0,
+                asker: "ops".to_owned(),
+                index: 1,
+                person: true,
+                named: true,
+            };
+            state.ask(&ChannelId::new("a").unwrap(), ask, true, None);
+        })
+        .await
+        .unwrap();
+        let context = RoomContext::new(created);
+
+        room.state().done = None;
+        let missed = room.planned_turn(context.clone()).await.unwrap();
+        assert!(missed.turn.is_none());
+        assert!(room.woken.load(Ordering::SeqCst));
+
+        room.state().done = Some(true);
+        let ended = room.planned_turn(context).await.unwrap();
+        assert!(ended.turn.is_none());
+        let stored = kit.store().get_room(&room_id).await.unwrap().unwrap();
+        let queue = read_queue(&stored.metadata);
+        assert!(queue.over && queue.entries.is_empty());
+    }
 }

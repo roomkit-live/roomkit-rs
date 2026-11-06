@@ -41,7 +41,8 @@ fn agent_labels() -> &'static BTreeSet<String> {
 /// the transcript leaves out (docs/rfc-gaps.md, §6.4) and which keeps such a
 /// sender from being addressed. A nameless sender's label (`@sms`) has no
 /// name to read.
-fn labelled(label: String) -> String {
+#[must_use]
+pub fn labelled(label: String) -> String {
     if !label.starts_with('@') && !skeletons(label_name(&label)).is_disjoint(agent_labels()) {
         return format!("{label}{A_PARTICIPANT}");
     }

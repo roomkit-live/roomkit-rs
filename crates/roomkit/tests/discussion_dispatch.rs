@@ -229,7 +229,6 @@ async fn past_the_messages_that_may_wait_the_oldest_asks_its_candidates() {
         .filter_map(|entry| entry["agent"].as_str())
         .collect();
     assert_eq!(queued, AGENTS);
-    // The decision under way finds its message gone, and applies nothing.
-    policy.release.notify_one();
+    // The close cuts the decision under way.
     kit.close().await.unwrap();
 }
