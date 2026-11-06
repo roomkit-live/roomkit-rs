@@ -547,6 +547,8 @@ pub(super) struct Stuck {
     returns: bool,
     /// The channel whose events' delivery never ends, if any.
     holds: Option<&'static str>,
+    /// How long it holds, when it holds for a while only.
+    holds_for: Option<Duration>,
     reading_on: Option<ReadingOn>,
 }
 
@@ -654,6 +656,7 @@ impl Stuck {
             reads,
             returns: false,
             holds: None,
+            holds_for: None,
             reading_on: None,
         }
     }
@@ -676,6 +679,15 @@ impl Stuck {
     /// written by SMS never ends.
     pub(super) fn holding_messages() -> Self {
         Self::holding("sms")
+    }
+
+    /// A transport that does not stream, and whose delivery of an agent's
+    /// answer takes `wait`.
+    pub(super) fn holding_answers_for(wait: Duration) -> Self {
+        Self {
+            holds_for: Some(wait),
+            ..Self::holding("ai")
+        }
     }
 
     fn holding(source: &'static str) -> Self {
@@ -768,7 +780,10 @@ impl Channel for Stuck {
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
         if self.holds == Some(event.source.channel_id.as_str()) {
-            std::future::pending::<()>().await;
+            match self.holds_for {
+                Some(wait) => tokio::time::sleep(wait).await,
+                None => std::future::pending::<()>().await,
+            }
         }
         Ok(ChannelOutput::empty())
     }

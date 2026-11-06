@@ -192,7 +192,8 @@ enum Ended {
     /// The call was cut and a turn of its is over for its owner without its
     /// executor's end: its cleanup is not known to be done, and each wait
     /// reads [`RoomKitError::Timeout`], Python's `TimeoutError` (RFC
-    /// §10.6.8).
+    /// §10.6.8). One of the turns whose unread stream the cut closes may owe
+    /// its end later: each wait reads the record again once they are closed.
     CleanupIncomplete,
 }
 
@@ -257,10 +258,11 @@ impl DeliveryHandle {
     }
 
     /// Whether the delivery will make no further progress: it ran to its
-    /// end, or the kit's close ended it.
+    /// end, or the kit's close ended it, and a cut's cleanup closed the
+    /// streams it left unread.
     pub fn done(&self) -> bool {
         let shared = &self.shared;
-        shared.ended.initialized()
+        let over = shared.ended.initialized()
             || match &shared.following {
                 Following::Run { finished, .. } => finished.is_finished(),
                 Following::Adopted(completion) => {
@@ -268,7 +270,8 @@ impl DeliveryHandle {
                     delivered.borrow().is_some() || delivered.has_changed().is_err()
                 }
                 Following::Nothing => true,
-            }
+            };
+        over && shared.unread_are_closed()
     }
 
     /// Stops this call's turns and waits for them to be over (RFC §10.1
@@ -285,7 +288,9 @@ impl DeliveryHandle {
     ///
     /// A streaming target it finds reading is handed the stream's end, and
     /// what it does past it is part of the cleanup (Python's `finally`); one
-    /// past the stream already is dropped where it waits.
+    /// past the stream already is dropped where it waits. A stream a turn
+    /// answered with that no read took is closed, and its end waited for
+    /// with no bound of its own, as after any close (RFC §10.6.8).
     ///
     /// Dropped before it returns, the cancel stands: the cut turns end
     /// without this caller, and [`wait`](Self::wait) joins them.
@@ -293,14 +298,15 @@ impl DeliveryHandle {
     /// # Errors
     ///
     /// [`RoomKitError::Timeout`] when the cut turns are not over within
-    /// `timeout`: their cleanup still runs, and [`wait`](Self::wait) joins
-    /// it.
+    /// `timeout`, or the streams the cut left unread not closed: their
+    /// cleanup still runs, [`done`](Self::done) is false meanwhile, and
+    /// [`wait`](Self::wait) joins it.
     ///
     /// [`RoomKitError::Timeout`] too, from this cancel and every wait after
-    /// it, when a turn whose stream the call read is over for its owner
-    /// without its executor's end (its cancel bound passed, its link
-    /// failed): what the executor cleans up is not known to be done (RFC
-    /// §10.6.8).
+    /// it, when a turn whose stream the call read, or whose unread stream
+    /// the cut closed, is over for its owner without its executor's end (its
+    /// cancel bound passed, its link failed): what the executor cleans up is
+    /// not known to be done (RFC §10.6.8).
     ///
     /// [`RoomKitError::Runtime`] when called, the delivery not done, from
     /// the room's own work where its cleanup would wait for this call, a
@@ -356,14 +362,21 @@ impl DeliveryHandle {
     /// a defect of this crate, as [`RoomKitError::Internal`], to the first
     /// wait that reads it; another wait then reads the result the call
     /// returned at its commit. A call cut, by a cancel, its key or the kit's
-    /// close, whose read turn's end is owed returns [`RoomKitError::Timeout`]
-    /// to every wait, its cleanup incomplete (RFC §10.6.8).
+    /// close, whose read turn's end is owed, or the end of a turn whose
+    /// unread stream the cut closed, returns [`RoomKitError::Timeout`] to
+    /// every wait, its cleanup incomplete (RFC §10.6.8); a wait first waits
+    /// for that closing, however long it takes.
     pub async fn wait(&self) -> Result<InboundResult, RoomKitError> {
         let shared = &self.shared;
         if !self.done() && shared.waits_for_itself() {
             return Ok(self.with_handle(shared.decided.clone()));
         }
         let ended = shared.ended.get_or_init(|| shared.end()).await;
+        // A cut's cleanup closes the streams it left unread, which may
+        // outlive the run, before it reports (RFC §10.1, §10.6.8).
+        if shared.cleanup_incomplete_once_closed().await {
+            return Err(RoomKitError::Timeout);
+        }
         let result = match ended {
             Ended::Over(result) => (**result).clone(),
             Ended::Failed(error) => {
@@ -416,6 +429,26 @@ impl Shared {
         }
     }
 
+    /// Whether a cut's cleanup closed the streams it left unread: nothing to
+    /// close reads as closed.
+    fn unread_are_closed(&self) -> bool {
+        match &self.following {
+            Following::Run { record, .. } => record.unread_are_closed(),
+            Following::Adopted(_) | Following::Nothing => true,
+        }
+    }
+
+    /// Waits until a cut's cleanup closed the streams it left unread, each
+    /// one's end come: whether the cleanup is then incomplete, a turn among
+    /// those the call read or closed over without its executor's end.
+    async fn cleanup_incomplete_once_closed(&self) -> bool {
+        let Following::Run { record, .. } = &self.following else {
+            return false;
+        };
+        record.unread_closed().await;
+        record.cleanup_incomplete().is_some()
+    }
+
     /// Whether a wait in the current task's context would wait for itself:
     /// the context is work of the event's room that the delivery waits for.
     fn waits_for_itself(&self) -> bool {
@@ -440,7 +473,6 @@ impl Shared {
                     // turns are: the delivery goes on, detached (RFC §10.1
                     // "Explicit delivery cancellation").
                     result = driver::cancelled_end(record) => {
-                        record.unread_closed().await;
                         if record.cleanup_incomplete().is_some() {
                             return Ended::CleanupIncomplete;
                         }
@@ -449,9 +481,6 @@ impl Shared {
                 };
                 *run = None;
                 let output = driver::ended(joined, record, &self.tasks);
-                // A cut's cleanup closes the streams it left unread, which
-                // may outlive the run.
-                record.unread_closed().await;
                 if record.cleanup_incomplete().is_some() {
                     return Ended::CleanupIncomplete;
                 }

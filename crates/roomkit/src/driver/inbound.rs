@@ -247,6 +247,12 @@ impl Record {
         UnreadClosing(Arc::clone(self))
     }
 
+    /// Whether the streams the call's cut left unread are closed, or there
+    /// were none.
+    pub(crate) fn unread_are_closed(&self) -> bool {
+        *self.unread_closed.borrow()
+    }
+
     /// Returns once the streams the call's cut left unread are closed, each
     /// one's end come, as Python's cleanup closes them before it reports
     /// (RFC §10.1 "Explicit delivery cancellation", §10.6.8).
@@ -258,9 +264,10 @@ impl Record {
 
     /// What a deferred call's handle reads in place of its result: Python's
     /// `TimeoutError`, its cleanup incomplete, once the call was cut, by its
-    /// caller or by the kit's close, and a turn whose stream it read owes
-    /// its end (RFC §10.6.8); a call not cut reads its result. An awaited
-    /// call reads its result, as Python's caller does.
+    /// caller or by the kit's close, and a turn whose stream it read, or
+    /// whose unread stream the cut closed, owes its end (RFC §10.6.8); a
+    /// call not cut reads its result. An awaited call reads its result, as
+    /// Python's caller does.
     pub(crate) fn cleanup_incomplete(&self) -> Option<RoomKitError> {
         let owed = self.cleanup_owed.load(Ordering::Acquire);
         let cut = self.cancel_reason().is_some() || self.closed_under_way.load(Ordering::Acquire);
@@ -1026,13 +1033,15 @@ async fn run_leased<S: ConversationStore>(
         return Ran::ended(Err(RoomKitError::KitClosed));
     };
     let cancelled = Arc::clone(&record);
-    tokio::select! {
+    let ran = tokio::select! {
         biased;
         joined = &mut task => Ran::ended(ended(joined, &record, &inner.tasks)),
-        Ok(answer) = decided => Ran {
-            output: answer,
-            delivery: defer.then_some((task, record)),
-        },
+        Ok(answer) = decided => {
+            return Ran {
+                output: answer,
+                delivery: defer.then_some((task, record)),
+            };
+        }
         // Its delivery cancelled, the call returns once its turns are over:
         // the delivery going on, or its set still waiting in the room's
         // lane, is not its turns' work (RFC §10.1 "Explicit delivery
@@ -1041,7 +1050,14 @@ async fn run_leased<S: ConversationStore>(
             output: Ok(Ok(result)),
             delivery: defer.then_some((task, record)),
         },
+    };
+    // An awaited call its cut ended returns once the streams the cut left
+    // unread are closed, each one's end come, as Python's reader closes them
+    // before the call returns; a deferred call's handle waits for them.
+    if !defer {
+        cancelled.unread_closed().await;
     }
+    ran
 }
 
 /// Reports `record`'s call as its cancellation ends it once each of `turns`,
@@ -1055,8 +1071,8 @@ async fn run_leased<S: ConversationStore>(
 /// Python's cleanup reads only its cascade's streams (RFC §10.6.8). Then the
 /// streams the cut left `unread` are closed, each waiting for its end, one
 /// owed leaving the cleanup incomplete too; `closing` is dropped once they
-/// are: a deferred call's handle waits for that, an awaited call does not,
-/// as Python's `_read_streams` returns at the cut.
+/// are, which a deferred call's handle and an awaited call both wait for, as
+/// Python's reader closes every stream of its cascade before it returns.
 pub(super) async fn end_once_over(
     record: Arc<Record>,
     turns: Vec<Canceller>,

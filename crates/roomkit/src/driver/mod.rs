@@ -875,8 +875,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// are over, once its delivery cancelled and the call decided: its
     /// caller then reads it without waiting for the delivery that goes on
     /// (RFC §10.1 "Explicit delivery cancellation"), then closes the streams
-    /// the cut left unread, which the call's handle waits for. A cut nobody
-    /// reads as cancelled closes them alone.
+    /// the cut left unread, which the call and its handle wait for. A cut
+    /// nobody reads as cancelled closes them alone.
     fn end_cancelled_once_over(&mut self) {
         let ends = self
             .caller
