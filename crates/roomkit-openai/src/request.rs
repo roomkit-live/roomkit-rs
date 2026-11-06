@@ -20,9 +20,12 @@ pub(crate) struct Request {
     pub(crate) system_prompt: Option<String>,
     pub(crate) messages: Vec<Message>,
     /// Each message's reasoning, by its place in `messages`: an assistant's
-    /// thinking parts joined, empty for any other. A vendor's dialect reads
-    /// it ([`crate::dialect::ChatDialect`]); OpenAI's sends none.
-    pub(crate) reasoning: Vec<String>,
+    /// thinking parts joined, `None` for a message no assistant wrote, which
+    /// never carries a reasoning field, its call round's included (Python's
+    /// `_with_thinking_field` reads the message's own role). A vendor's
+    /// dialect reads it ([`crate::dialect::ChatDialect`]); OpenAI's sends
+    /// none.
+    pub(crate) reasoning: Vec<Option<String>>,
     pub(crate) tools: Vec<AiTool>,
     /// The turn's temperature, when it gives one.
     pub(crate) temperature: Option<f64>,
@@ -77,15 +80,15 @@ impl Request {
 }
 
 /// What an assistant's `message` reasoned, its thinking parts joined in
-/// order (Python's `chat_request._thinking`); nothing for any other role.
-fn reasoning_of(message: &AiMessage) -> String {
-    let AiMessageContent::Parts(parts) = &message.content else {
-        return String::new();
-    };
+/// order (Python's `chat_request._thinking`); `None` for any other role.
+fn reasoning_of(message: &AiMessage) -> Option<String> {
     if message.role != AiRole::Assistant {
-        return String::new();
+        return None;
     }
-    parts
+    let AiMessageContent::Parts(parts) = &message.content else {
+        return Some(String::new());
+    };
+    let thought = parts
         .iter()
         .filter_map(|part| match part {
             AiContentPart::Thinking(part) => Some(part.thinking.as_str()),
@@ -94,7 +97,8 @@ fn reasoning_of(message: &AiMessage) -> String {
             | AiContentPart::ToolCall(_)
             | AiContentPart::ToolResult(_) => None,
         })
-        .collect()
+        .collect();
+    Some(thought)
 }
 
 /// The transcript messages `message` is: a round's tool message is one per

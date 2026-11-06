@@ -125,14 +125,14 @@ impl<'a> CompletionRequest<'a> {
                 tool_call_id: None,
                 reasoning: serde_json::Map::new(),
             });
-        let thinking = request.reasoning.iter().map(String::as_str);
+        let thinking = request.reasoning.iter().map(Option::as_deref);
         let messages = system
             .into_iter()
             .chain(
                 request
                     .messages
                     .iter()
-                    .zip(thinking.chain(std::iter::repeat("")))
+                    .zip(thinking.chain(std::iter::repeat(None)))
                     .map(|(message, thinking)| wire_message(message, thinking, dialect)),
             )
             .collect();
@@ -171,8 +171,13 @@ impl<'a> CompletionRequest<'a> {
 }
 
 /// `message` as the wire writes it, an assistant's `thinking` in the
-/// field `dialect` reads it from, if any.
-fn wire_message<'a>(message: &'a Message, thinking: &str, dialect: ChatDialect) -> WireMessage<'a> {
+/// field `dialect` reads it from, if any; a message no assistant wrote
+/// (`thinking` `None`) carries none.
+fn wire_message<'a>(
+    message: &'a Message,
+    thinking: Option<&str>,
+    dialect: ChatDialect,
+) -> WireMessage<'a> {
     let calls: Vec<WireCall<'_>> = message
         .tool_calls
         .iter()
@@ -211,6 +216,7 @@ fn wire_message<'a>(message: &'a Message, thinking: &str, dialect: ChatDialect) 
     };
     let mut reasoning = serde_json::Map::new();
     if message.role == Role::Assistant
+        && let Some(thinking) = thinking
         && let Some((field, value)) = dialect.field(thinking, !calls.is_empty())
     {
         reasoning.insert(field.to_owned(), Value::String(value));
@@ -1181,6 +1187,43 @@ mod tests {
                     "cache_read_input_tokens": 40
                 })
             )
+        );
+    }
+
+    // Python: tests/test_providers/test_chat_request.py::test_a_call_round_s_required_reasoning_field_is_the_assistants_alone
+    #[test]
+    fn a_call_round_s_required_reasoning_field_is_the_assistants_alone() {
+        use roomkit_ai::AiToolResultPart;
+        use roomkit_ai::{AiContentPart, AiContext, AiMessage, AiRole, AiToolCallPart};
+        let config = OpenAiConfig::new("sk-1", "m");
+        let field = |role: AiRole| {
+            let held = vec![
+                AiContentPart::ToolResult(AiToolResultPart::new("c1", "lookup", "found")),
+                AiContentPart::ToolCall(AiToolCallPart::new("c1", "lookup")),
+            ];
+            let context = AiContext {
+                messages: vec![AiMessage::new(role, held)],
+                ..AiContext::default()
+            };
+            let request = Request::of(&context).unwrap();
+            let body = serde_json::to_value(CompletionRequest::new(
+                &config,
+                &request,
+                false,
+                crate::dialect::DEEPSEEK_CHAT,
+            ))
+            .unwrap();
+            (
+                body["messages"][0]["role"].clone(),
+                body["messages"][0].get("reasoning_content").cloned(),
+            )
+        };
+        assert_eq!(
+            [field(AiRole::Assistant), field(AiRole::Tool)],
+            [
+                (Value::from("assistant"), Some(Value::from(""))),
+                (Value::from("assistant"), None),
+            ]
         );
     }
 
