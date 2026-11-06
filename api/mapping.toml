@@ -565,7 +565,7 @@ reason = "decision 12: Python's class attributes channel_type, category and dire
 [[missing]]
 python = "roomkit.Channel"
 members = [
-    "active_turns", "channel_call", "connect_session", "disconnect_session",
+    "channel_call", "connect_session", "disconnect_session",
     "emit_trace", "on_trace", "resolve_trace_room",
     "restore_room_state", "room_state", "trace_enabled", "update_binding",
 ]
@@ -1028,6 +1028,20 @@ python = "roomkit.ACPTransport.open"
 params = ["queue"]
 approved = "2026-11-06"
 reason = "the Python ACP SDK's message queue, None from SDK 0.12.1 on: the connection roomkit-acp writes has none (HITL 3592a76c; architecture: ACP)"
+
+[[missing]]
+python = "roomkit.ACPChannel.__init__"
+params = [
+    "additional_directories", "mcp_servers", "session_config", "publish_thinking_text",
+    "external_tool_handler", "room_history", "context_contributor",
+    "name", "role", "description", "instructions",
+]
+reason = "not in 0.x yet: parity stream L's later lots (RMK-1429): thinking, permissions, session setup, the catch-up and instructions, the discussion"
+
+[[missing]]
+python = "roomkit.ACPChannel"
+members = ["cancel", "close_session", "config_options", "session_config", "set_config_option", "steer"]
+reason = "not in 0.x yet: parity stream L's later lots (RMK-1429): session setup and the kit's verbs"
 
 [[exception]]
 rust = "roomkit_mcp::McpToolProvider"

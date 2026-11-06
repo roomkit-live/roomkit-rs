@@ -348,6 +348,14 @@ pub trait Channel: Send + Sync + 'static {
         self.steers_room_turns()
     }
 
+    /// How many turns the channel is running right now: what a caller
+    /// retiring the channel needs to know, since a channel taken out of the
+    /// kit may still answer a turn that holds it. Python's `active_turns`;
+    /// 0 by default, a channel that counts none.
+    fn active_turns(&self) -> usize {
+        0
+    }
+
     /// Whether a message for a room where the channel's turn runs is handed
     /// to that turn, which reads it at its next stop (between two rounds of
     /// tool calls, or once it has answered), rather than a turn of its own

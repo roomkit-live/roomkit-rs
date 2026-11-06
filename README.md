@@ -148,6 +148,10 @@ A service depends on `roomkit` and on the crates it needs beside it:
   types are ones Python lists, but the two never share a file live. A type
   of your own (`ChannelType::new("slack")`) makes its room unreadable to
   Python until Python opens its type (RMK-986).
+- `roomkit-acp`: `AcpChannel`, Python's `ACPChannel`, an external coding
+  agent spoken to over the Agent Client Protocol as a room's intelligence
+  channel, spawned without a shell or reached through a transport of the
+  host's; its tools, permissions and session setup are still to come.
 - `roomkit-mcp`: `McpToolProvider`, Python's `MCPToolProvider`, the tools of
   an MCP server over stdio or Streamable HTTP and the handler an AI channel
   serves them through; the host connects and closes it.

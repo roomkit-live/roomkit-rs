@@ -34,6 +34,14 @@ async fn initialized(connection: &ClientSideConnection) -> InitializeResponse {
         .unwrap()
 }
 
+/// The session the agent opens first, `session-1`.
+async fn opened(connection: &ClientSideConnection) {
+    connection
+        .new_session(NewSessionRequest::new(CWD))
+        .await
+        .unwrap();
+}
+
 /// The agent's `_meta` member `key`, as its `initialize` answer reports it.
 fn reported(answer: &InitializeResponse, key: &str) -> Value {
     answer
@@ -138,6 +146,7 @@ async fn the_agent_is_refused_what_the_client_does_not_serve_and_asked_its_permi
     let transport = transport("echo", StdioAcpTransportOptions::default());
     let connection = transport.open(client.client()).await.unwrap();
     initialized(&connection).await;
+    opened(&connection).await;
     let prompt = PromptRequest::new("session-1", vec!["ask the client".into()]);
     connection.prompt(prompt).await.unwrap();
     transport.close().await;
@@ -176,6 +185,7 @@ async fn lines_that_are_no_message_are_skipped() {
     let transport = transport("junk", StdioAcpTransportOptions::default());
     let connection = transport.open(client.client()).await.unwrap();
     initialized(&connection).await;
+    opened(&connection).await;
     let prompt = PromptRequest::new("session-1", vec!["still here".into()]);
     connection.prompt(prompt).await.unwrap();
     transport.close().await;

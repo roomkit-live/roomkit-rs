@@ -17,6 +17,9 @@
 //! - [`AcpClient`]: what the agent calls back into, the Python SDK's
 //!   `acp.Client`: its session updates and its permission requests.
 //! - [`AcpError`]: what they fail with.
+//! - [`AcpChannel`], Python's `ACPChannel`: the agent as a room's
+//!   intelligence channel, one session per room; [`acp_event_text`], what
+//!   the agent reads of an event.
 //!
 //! ```no_run
 //! use std::future::Future;
@@ -70,6 +73,7 @@
 //! # }
 //! ```
 
+mod channel;
 mod client;
 mod client_side;
 mod connection;
@@ -77,11 +81,15 @@ mod env;
 mod error;
 mod process;
 mod stdio;
+mod text;
 mod transport;
+
+pub use self::channel::{AcpChannel, AcpChannelOptions};
 
 pub use self::client::AcpClient;
 pub use self::client_side::ClientSideConnection;
 pub use self::connection::AcpConnection;
 pub use self::error::AcpError;
 pub use self::stdio::{StdioAcpTransport, StdioAcpTransportOptions};
+pub use self::text::acp_event_text;
 pub use self::transport::AcpTransport;

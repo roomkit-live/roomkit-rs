@@ -11,7 +11,17 @@ publish.workspace = true
 [dependencies]
 # The protocol's types (HITL 0e261e51, parity stream L): the schema crate
 # alone; the JSON-RPC connection is this crate's.
-agent-client-protocol-schema.workspace = true
+# PromptResponse's usage, which Python's SDK reads as a stable field (HITL
+# 044fd485).
+agent-client-protocol-schema = { workspace = true, features = ["unstable_end_turn_token_usage"] }
+# The channel: the kit's Channel and its turn, the AI channel's
+# ON_AI_RESPONSE payload and provider error, the core's rules on an
+# event's text and a turn's end.
+roomkit.workspace = true
+roomkit-ai.workspace = true
+roomkit-core.workspace = true
+# The Stream a turn's response is read as.
+futures-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

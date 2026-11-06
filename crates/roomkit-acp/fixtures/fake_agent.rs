@@ -9,7 +9,8 @@
 //! - `echo` (the default): `initialize` answers the client's version, with
 //!   `session/close` announced, `agentInfo` `fake-acp-agent` and, in its
 //!   `_meta`, the agent's `cwd` and `env`; `session/new` answers
-//!   `session-1`, `session-2`...; `session/prompt` answers `end_turn` after
+//!   `session-1`, `session-2`...; `session/prompt` refuses a session it did
+//!   not open, and answers `end_turn` after
 //!   one `agent_message_chunk` per text block of the prompt, its text
 //!   echoed, or, for the text `ask the client`, after asking the client
 //!   each of the methods of [`ASKED`] and one `agent_message_chunk` per
@@ -100,6 +101,14 @@ impl Agent {
                 Ok(json!({ "sessionId": format!("session-{}", self.sessions) }))
             }
             "session/prompt" => {
+                let session = params["sessionId"].as_str().unwrap_or_default();
+                let known = session
+                    .strip_prefix("session-")
+                    .and_then(|number| number.parse::<u64>().ok())
+                    .is_some_and(|number| (1..=self.sessions).contains(&number));
+                if !known {
+                    return Err(json!({ "code": -32602, "message": "Unknown session" }));
+                }
                 self.prompted(params);
                 Ok(json!({ "stopReason": "end_turn" }))
             }
