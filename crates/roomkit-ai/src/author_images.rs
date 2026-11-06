@@ -27,6 +27,7 @@
 //! else the kit's [`MediaResolver`].
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::error::Error as _;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -37,6 +38,7 @@ use roomkit_core::rules::edits::is_deleted;
 use roomkit_core::rules::transcoding::text_of;
 use roomkit_core::rules::transcript::{Image, Part, media_type, quoted};
 
+use crate::error::AiError;
 use crate::provider::ProviderError;
 use crate::stream::join_all;
 
@@ -392,11 +394,26 @@ impl SentImages {
 /// or rate limit (RFC §6.4). Only the turn's first request, before
 /// anything streamed, can say so: a later round, or a stream under way,
 /// shows the content was taken. Python's `refuses_content`.
+///
+/// A response schema outside the portable subset, which a provider refuses
+/// before any request, says nothing of the content either: Python refuses
+/// it where it is set, in the hook or the context that writes it, and no
+/// provider sees it (HITL 17bfa822).
 pub(crate) fn refuses_content(error: &ProviderError) -> bool {
     !error.retryable
         && !error
             .status_code
             .is_some_and(|status| NOT_CONTENT_STATUSES.contains(&status))
+        && !outside_the_subset(error)
+}
+
+/// Whether `error` is a provider's refusal of a response schema outside the
+/// portable subset (RFC §6.7).
+fn outside_the_subset(error: &ProviderError) -> bool {
+    error
+        .source()
+        .and_then(|source| source.downcast_ref::<AiError>())
+        .is_some_and(|source| matches!(source, AiError::ResponseSchema { .. }))
 }
 
 /// The text that takes an image's place, naming it as its author did: its
