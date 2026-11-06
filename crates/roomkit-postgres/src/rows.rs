@@ -184,7 +184,7 @@ pub(crate) fn participant(row: &Row) -> Result<Participant, Failure> {
 
 /// Whether `value` is a list of strings, what Python's model reads under each
 /// key of an identity's addresses.
-fn is_address_list(value: &Value) -> bool {
+pub(crate) fn is_address_list(value: &Value) -> bool {
     value
         .as_array()
         .is_some_and(|addresses| addresses.iter().all(Value::is_string))

@@ -213,3 +213,26 @@ async fn a_row_with_an_empty_id_serves_no_read() {
         1
     );
 }
+
+/// Python: `test_a_replacement_repairs_a_row_the_model_cannot_read`: a
+/// replacement of an identity whose row holds a member the model refuses,
+/// under a key that is no channel type's name, writes the addresses it
+/// declares, and the row reads again.
+#[tokio::test]
+async fn a_replacement_repairs_a_row_the_model_cannot_read() {
+    if support::dsn().is_none() {
+        return;
+    }
+    let (_schema, store) = with_unreadable(
+        "channel_addresses",
+        r#"{"sms": ["+1555"], "SMS": "a@globex.example"}"#,
+    )
+    .await;
+    let mut i1 = Identity::new(IdentityId::new("i1").unwrap());
+    i1.organization_id = Some("globex".to_owned());
+    i1.link(ChannelType::SMS, "+1555");
+    store.create_identity(i1.clone()).await.unwrap();
+    let read = store.get_identity(&i1.id).await;
+    store.close().await;
+    assert_eq!(read, Ok(Some(i1)));
+}

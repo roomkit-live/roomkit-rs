@@ -98,13 +98,15 @@ async fn take_a_row_no_read_serves(
 }
 
 /// Puts back in `addresses` those `stored` keeps under keys that are no
-/// channel type's name, which the model never read.
+/// channel type's name, which the model never read: a list of strings each, as
+/// Python's model reads one; another member is dropped, as Python's
+/// replacement drops what it does not declare, which repairs the row.
 fn keep_unread_addresses(stored: &Value, addresses: &mut Value) {
     let (Value::Object(stored), Value::Object(addresses)) = (stored, addresses) else {
         return;
     };
     for (channel_type, kept) in stored {
-        if ChannelType::new(channel_type.as_str()).is_err() {
+        if ChannelType::new(channel_type.as_str()).is_err() && rows::is_address_list(kept) {
             addresses.insert(channel_type.clone(), kept.clone());
         }
     }

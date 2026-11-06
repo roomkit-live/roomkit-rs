@@ -514,7 +514,7 @@ impl ConversationStore for SqliteStore {
                 // The record is quoted nowhere: it may be another organization's
                 // (HITL 4ee4d298). Logged here, on the caller's task.
                 tracing::warn!(
-                    target: "roomkit::store::sqlite",
+                    target: "roomkit.store.sqlite",
                     "Identity {id} has a record the model cannot read"
                 );
                 None
