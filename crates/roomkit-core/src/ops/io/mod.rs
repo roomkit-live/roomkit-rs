@@ -19,7 +19,9 @@
 //! call expires before it, its caller gone (`expire`), here: it is
 //! answered `DeadlinePassed` as the driver would answer it, and so is every
 //! one asked for afterwards. A write, a release and a commit are never
-//! within it.
+//! within it. An entry adopted from the call's work before its decision
+//! carries the call's deadline up to its own commit (`Bound::Adopted`),
+//! given up on past it by the driver alone.
 
 mod locks;
 
@@ -49,6 +51,12 @@ pub(crate) enum Bound {
     /// given up on past it, and when the call expires before it, its caller
     /// gone ([`Io::expire`]).
     Call(Option<Timestamp>),
+    /// The deadline of the call whose work, before its decision, adopted
+    /// the entry asking, which the entry carries up to its own commit (RFC
+    /// §13.6, §9.5.1 Reentrance): given up on past it, as that work is, but
+    /// not when the call's caller stops waiting, the entry's caller being
+    /// the code that made it.
+    Adopted(Option<Timestamp>),
 }
 
 impl Bound {
@@ -58,11 +66,21 @@ impl Bound {
         self.deadline().is_some_and(|deadline| now >= deadline)
     }
 
+    /// The bound of an entry adopted from work asked within `self` (RFC
+    /// §9.5.1 Reentrance): that work's deadline, carried up to the entry's
+    /// commit, none for work after the call's decision.
+    pub(crate) fn adopted(self) -> Self {
+        match self {
+            Self::Unbounded => Self::Unbounded,
+            Self::Call(deadline) | Self::Adopted(deadline) => Self::Adopted(deadline),
+        }
+    }
+
     /// The deadline the effect carries (`Effect::deadline`).
     fn deadline(self) -> Option<Timestamp> {
         match self {
             Self::Unbounded => None,
-            Self::Call(deadline) => deadline,
+            Self::Call(deadline) | Self::Adopted(deadline) => deadline,
         }
     }
 }
@@ -75,7 +93,7 @@ struct Outstanding {
     /// `DeadlinePassed` past.
     bounded: bool,
     /// The bound it was asked within: the call's, given up on when the
-    /// call expires, or none.
+    /// call expires, an adopted entry's, or none.
     bound: Bound,
     locked: Option<RoomId>,
     admitted: Option<RoomId>,
@@ -463,8 +481,9 @@ impl Io {
     }
 
     /// The bound `effect`, an effect not answered yet, was asked within
-    /// (RFC §13.6): the call's for a request before its decision, none for
-    /// any other.
+    /// (RFC §13.6): the call's for a request of its own before its
+    /// decision, an adopted entry's for one of the entry's before its
+    /// commit, none for any other.
     pub(crate) fn bound_of(&self, effect: EffectId) -> Bound {
         self.outstanding
             .get(&effect)

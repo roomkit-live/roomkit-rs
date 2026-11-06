@@ -98,8 +98,9 @@ struct Adopted {
     /// once its message arrived: its result's error when it met none
     /// before (RFC §13.5), as Python's nested call collects its own.
     release_error: Option<ErrorRecord>,
-    /// What bounds the entry up to its commit: its origin's, the call's
-    /// deadline for an origin before the call's decision (RFC §13.6).
+    /// What bounds the entry up to its commit: the deadline of the work
+    /// its origin is, the call's for work before the call's decision (RFC
+    /// §13.6), none after it.
     bound: Bound,
 }
 
@@ -351,7 +352,7 @@ impl Machine {
             nested,
             direct: matches!(entry, Entry::Direct { .. } | Entry::Post { .. }),
             release_error: None,
-            bound: io.bound_of(origin),
+            bound: io.bound_of(origin).adopted(),
         };
         self.adopted.adopted.push((adopted, Box::new(entry)));
         Ok(id)
@@ -428,7 +429,8 @@ impl Machine {
             RunState::Passing(pass)
         } else {
             event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
-            let mut record = Box::new(RecordPass::refusing(event, RefusedOperation::Inbound));
+            let record = RecordPass::refusing(event, RefusedOperation::Inbound);
+            let mut record = Box::new(record.waiting_within(adopted.bound));
             within(cx, &adopted, |cx| record.start(cx));
             RunState::Recording(record)
         };
@@ -568,7 +570,9 @@ impl Machine {
             RunState::Passing(pass)
         } else {
             event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
-            let record = RecordPass::refusing(event, RefusedOperation::Inbound).checking(direct);
+            let record = RecordPass::refusing(event, RefusedOperation::Inbound)
+                .checking(direct)
+                .waiting_within(adopted.bound);
             let mut record = Box::new(record);
             within(cx, &adopted, |cx| record.start(cx));
             RunState::Recording(record)
@@ -613,6 +617,10 @@ impl Machine {
             Advanced::Stopped(stopped) => self.settle_entry(cx, &adopted, *stopped),
             Advanced::Passed(Ok(report)) => self.on_adopted_pass(cx, &adopted, report),
             Advanced::Passed(Err(Abort::DeadlinePassed {
+                locked_event,
+                release_failure,
+            }))
+            | Advanced::Recorded(Err(Abort::DeadlinePassed {
                 locked_event,
                 release_failure,
             })) => {

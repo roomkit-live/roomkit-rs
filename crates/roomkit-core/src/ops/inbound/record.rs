@@ -21,6 +21,7 @@ use super::direct::DirectCall;
 use super::queues::Lineage;
 use super::{cascade, commit, report};
 use crate::model::{ChannelId, ErrorRecord, EventStatus, Room, RoomContext, RoomEvent, RoomId};
+use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, KeyHeld, Outcome, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::section::{Failure, Section, SectionWork};
@@ -151,6 +152,15 @@ impl RecordPass {
         self
     }
 
+    /// The same record, its wait for the room's lock within `bound`: an
+    /// entry's adopted from the call's work before its decision, which the
+    /// call's deadline cuts before its commit, nothing stored (RFC §13.6,
+    /// §9.5.1 Reentrance). Its writes carry no deadline.
+    pub(super) fn waiting_within(mut self, bound: Bound) -> Self {
+        self.section = self.section.waiting_within(bound);
+        self
+    }
+
     /// The record of the call's own event, whose commit decides the call.
     pub(super) fn deciding(mut self) -> Self {
         self.section.work_mut().decides = true;
@@ -182,6 +192,11 @@ impl RecordPass {
         effect: EffectId,
         outcome: Outcome,
     ) -> Progress<Result<RecordReport, Abort>> {
+        // Only the wait for the lock carries a deadline, which nothing held
+        // yet (`waiting_within`).
+        if outcome == Outcome::DeadlinePassed && self.awaits(effect) {
+            return Progress::Done(Err(Abort::expired()));
+        }
         match self.section.accept(cx, effect, outcome) {
             Progress::Waiting => Progress::Waiting,
             Progress::Done(ended) => Progress::Done(ended.result.map(|result| RecordReport {
