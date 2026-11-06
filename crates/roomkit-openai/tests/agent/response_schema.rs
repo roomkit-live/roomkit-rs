@@ -412,3 +412,53 @@ async fn entries_with_no_function_are_no_tool_round() {
         )
     );
 }
+
+// Python: tests/text_conformance/test_refusal.py::test_a_refusal_reads_the_same_streamed_or_not
+#[tokio::test]
+async fn a_refusal_reads_the_same_streamed_or_not() {
+    const REFUSAL: &str = "I cannot help with that.";
+    let whole = answered("", "stop", Some(REFUSAL));
+    let (provider, _fake) =
+        provider(vec![whole, streamed("", Some(REFUSAL))], |config| config).await;
+    let context = AiContext {
+        response_schema: None,
+        ..asked(Vec::new())
+    };
+    let response = provider.generate(&context).await.unwrap();
+    let (events, error) = drain(provider.generate_structured_stream(&context)).await;
+    assert!(error.is_none(), "{error:?}");
+    let Some(StreamEvent::Done(done)) = events.last() else {
+        panic!("the stream ends with its done event: {events:?}");
+    };
+    assert_eq!(
+        (
+            response.content.as_str(),
+            response.metadata.get("refusal"),
+            text_of(&events).as_str(),
+            done.metadata.get("refusal"),
+        ),
+        ("", Some(&json!(REFUSAL)), "", Some(&json!(REFUSAL)))
+    );
+}
+
+// Python: tests/text_conformance/test_refusal.py::test_a_refusal_that_is_not_text_is_not_reported
+#[tokio::test]
+async fn a_refusal_that_is_not_text_is_not_reported() {
+    let reply = Reply::whole(&json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "model": "fake-model",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": null, "refusal": true },
+            "finish_reason": "stop",
+        }],
+    }));
+    let (provider, _fake) = provider(vec![reply], |config| config).await;
+    let context = AiContext {
+        response_schema: None,
+        ..asked(Vec::new())
+    };
+    let response = provider.generate(&context).await.unwrap();
+    assert_eq!(response.metadata.get("refusal"), None);
+}
