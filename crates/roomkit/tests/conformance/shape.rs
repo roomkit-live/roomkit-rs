@@ -122,6 +122,7 @@ const CHANNEL: &[&str] = &[
     "retry_policy",
     "fallback_model",
     "max_author_images",
+    "evict_threshold_tokens",
     "describe_empty_event",
     "serialize_room_turns",
     "steer_room_turns",

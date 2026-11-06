@@ -270,6 +270,11 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
             Some(usize::try_from(bound).map_err(|e| e.to_string())?)
         };
     }
+    if let Some(threshold) = spec.get("evict_threshold_tokens") {
+        options.evict_threshold_tokens = threshold
+            .as_u64()
+            .ok_or("evict_threshold_tokens: not a count")?;
+    }
     if let Some(describer) = spec.get("describe_empty_event") {
         let says = describer["says"].as_str().map(str::to_owned);
         options.describe_empty_event = Some(Arc::new(move |_| says.clone()));
