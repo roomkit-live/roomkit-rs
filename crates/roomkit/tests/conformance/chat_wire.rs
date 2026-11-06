@@ -4,6 +4,9 @@
 //! its rounds; the rendering is read once the run is over.
 
 use roomkit_ai::{AiContext, AiProvider};
+use roomkit_openai::deepseek::{DeepSeekAiProvider, DeepSeekConfig};
+use roomkit_openai::kimi::{KimiAiProvider, KimiConfig};
+use roomkit_openai::minimax::{MiniMaxAiProvider, MiniMaxConfig};
 use roomkit_openai::{OpenAiAiProvider, OpenAiConfig};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -17,20 +20,11 @@ const ANSWER: &str = r#"{"choices":[{"index":0,"finish_reason":"stop","message":
 ///
 /// A dialect this implementation does not have, or a request that fails.
 pub(crate) async fn chat_messages(dialect: &str, context: &AiContext) -> Result<Value, String> {
-    if dialect != "openai" {
-        return Err(format!(
-            "chat_dialect {dialect}: roomkit-rs renders the openai one alone (RMK-1361)"
-        ));
-    }
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let config = OpenAiConfig {
-        base_url: Some(format!("http://127.0.0.1:{port}/v1")),
-        ..OpenAiConfig::new("scripted", "scripted")
-    };
-    let provider = OpenAiAiProvider::new(config).map_err(|e| e.to_string())?;
+    let base_url = format!("http://127.0.0.1:{port}/v1");
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
         let body = read_request(&mut stream).await?;
@@ -44,10 +38,47 @@ pub(crate) async fn chat_messages(dialect: &str, context: &AiContext) -> Result<
             .map_err(|e| e.to_string())?;
         serde_json::from_slice::<Value>(&body).map_err(|e| e.to_string())
     });
-    provider
-        .generate(context)
-        .await
-        .map_err(|e| e.to_string())?;
+    let failed = |error: roomkit_ai::ProviderError| error.to_string();
+    match dialect {
+        "openai" => {
+            let config = OpenAiConfig {
+                base_url: Some(base_url),
+                ..OpenAiConfig::new("scripted", "scripted")
+            };
+            let provider = OpenAiAiProvider::new(config).map_err(failed)?;
+            provider.generate(context).await.map_err(failed)?;
+        }
+        "deepseek" => {
+            let config = DeepSeekConfig {
+                base_url,
+                ..DeepSeekConfig::new("scripted", "scripted")
+            };
+            let provider = DeepSeekAiProvider::new(config).map_err(failed)?;
+            provider.generate(context).await.map_err(failed)?;
+        }
+        "minimax" => {
+            let config = MiniMaxConfig {
+                base_url,
+                ..MiniMaxConfig::new("scripted", "scripted")
+            };
+            let provider = MiniMaxAiProvider::new(config).map_err(failed)?;
+            provider.generate(context).await.map_err(failed)?;
+        }
+        "kimi" => {
+            let config = KimiConfig {
+                base_url,
+                ..KimiConfig::new("scripted", "scripted")
+            };
+            let provider = KimiAiProvider::new(config).map_err(failed)?;
+            provider.generate(context).await.map_err(failed)?;
+        }
+        other => {
+            server.abort();
+            return Err(format!(
+                "chat_dialect {other}: roomkit-rs has no such rendering"
+            ));
+        }
+    }
     let mut sent = server.await.map_err(|e| e.to_string())??;
     Ok(sent["messages"].take())
 }

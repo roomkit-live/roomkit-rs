@@ -88,10 +88,6 @@ use crate::support::TempSchema;
 /// machine's speed, and may pass.
 pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
-        "reasoning/deepseek-s-dialect-sends-a-round-s-reasoning-in-its-field",
-        "§6.4: no DeepSeek provider yet (HITL d8098b42, RMK-1361)",
-    ),
-    (
         "orchestration/a-team-worker-past-its-task-timeout-is-read-as-timed-out-beside-the-others",
         "timing: the worker that answers has 50 ms, which a debug build's round trips to a server \
          pass, and is cut with the one that must be (RMK-1334)",

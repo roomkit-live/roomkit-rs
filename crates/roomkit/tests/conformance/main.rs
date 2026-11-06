@@ -72,10 +72,7 @@ pub(crate) async fn new_kit(configure: impl FnOnce(RoomKitOptions) -> RoomKitOpt
 
 /// Scenario id → the rule this implementation breaks (roomkit-specs
 /// `conformance/README.md`, "Known failures").
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[(
-    "reasoning/deepseek-s-dialect-sends-a-round-s-reasoning-in-its-field",
-    "§6.4: no DeepSeek provider yet (HITL d8098b42, RMK-1361)",
-)];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.

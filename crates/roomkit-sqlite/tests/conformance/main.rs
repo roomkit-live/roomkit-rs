@@ -81,10 +81,7 @@ use crate::support::TempFile;
 
 /// Scenario id → the rule this implementation breaks on this store: the
 /// in-memory store's (crates/roomkit/tests/conformance), none beyond.
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[(
-    "reasoning/deepseek-s-dialect-sends-a-round-s-reasoning-in-its-field",
-    "§6.4: no DeepSeek provider yet (HITL d8098b42, RMK-1361)",
-)];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.
