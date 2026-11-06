@@ -156,6 +156,10 @@ name = "agent_fallback"
 path = "agent_fallback.rs"
 
 [[example]]
+name = "ai_response_schema"
+path = "ai_response_schema.rs"
+
+[[example]]
 name = "agent_tools"
 path = "agent_tools.rs"
 
