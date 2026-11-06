@@ -100,8 +100,20 @@ fn reasoning_of(message: &AiMessage) -> String {
 /// The transcript messages `message` is: a round's tool message is one per
 /// result, each answering its call with its text, then the results' images
 /// on a user message: a tool message carries text only, an image part is a
-/// user's (Python's `chat_request._tool_messages`); any other is one.
+/// user's (Python's `chat_request._tool_messages`); any other is one. A
+/// message that calls is the round that called, whatever results it also
+/// holds, which are left out (Python's `chat_request._rendered`, RMK-1408).
 fn messages(message: &AiMessage) -> Result<Vec<Message>, OpenAiError> {
+    let parts = match &message.content {
+        AiMessageContent::Parts(parts) => parts.as_slice(),
+        AiMessageContent::Text(_) => &[],
+    };
+    if parts
+        .iter()
+        .any(|part| matches!(part, AiContentPart::ToolCall(_)))
+    {
+        return Ok(vec![self::message(message)?]);
+    }
     let results: Vec<_> = match &message.content {
         AiMessageContent::Parts(parts) => parts
             .iter()
@@ -140,9 +152,11 @@ fn messages(message: &AiMessage) -> Result<Vec<Message>, OpenAiError> {
     Ok(written)
 }
 
-/// `message`, which carries no tool result, as the transcript writes it:
-/// its text, its images, its calls; a message of text and images keeps its
-/// parts in order, each image at its place (Python's `chat_request._plain`).
+/// `message` as the transcript writes it, its tool results left out: its
+/// text, its images, its calls; a message of text and images keeps its
+/// parts in order, each image at its place (Python's `chat_request._plain`);
+/// one that calls is the assistant's round, whatever its role (Python's
+/// `chat_request._call_round`).
 /// A model's reasoning is not written here (RFC §6.4): a generic Chat
 /// Completions server would read it as text the model said, and its prompt
 /// cache would not survive it; a vendor's dialect writes it in its own field
@@ -177,7 +191,8 @@ fn message(message: &AiMessage) -> Result<Message, OpenAiError> {
             AiContentPart::ToolCall(call) => {
                 calls.push(ToolCall::new(&call.id, &call.name, call.arguments.clone()));
             }
-            // A message with a result is written by `messages`.
+            // A message of results alone is written by `messages`; a round
+            // that called leaves its results out.
             AiContentPart::ToolResult(_) | AiContentPart::Thinking(_) => {}
         }
     }
@@ -185,8 +200,8 @@ fn message(message: &AiMessage) -> Result<Message, OpenAiError> {
     let mut written = Message::assistant_calls(text, calls);
     if plain {
         written.parts = ordered;
+        written.role = role(message.role);
     }
-    written.role = role(message.role);
     written.images = images;
     written.metadata.clone_from(&message.metadata);
     Ok(written)
@@ -415,6 +430,30 @@ mod tests {
             let message = written(parts);
             assert_eq!(message.text, read);
             assert_eq!(message.tool_calls.len(), 1);
+        }
+    }
+
+    // Python: tests/test_providers/test_chat_request.py::test_a_message_holding_a_call_and_its_result_sends_the_call_alone
+    #[test]
+    fn a_message_holding_a_call_and_its_result_sends_the_call_alone() {
+        for held in [AiRole::Assistant, AiRole::Tool] {
+            let result = AiContentPart::ToolResult(AiToolResultPart::new("c1", "lookup", "found"));
+            let context = AiContext {
+                messages: vec![AiMessage::new(held, vec![result, call_part()])],
+                ..AiContext::default()
+            };
+            let written = Request::of(&context).unwrap().messages;
+            let read: Vec<(Role, usize, Option<String>)> = written
+                .iter()
+                .map(|message| {
+                    (
+                        message.role,
+                        message.tool_calls.len(),
+                        message.tool_call_id.clone(),
+                    )
+                })
+                .collect();
+            assert_eq!(read, [(Role::Assistant, 1, None)], "{held:?}");
         }
     }
 
