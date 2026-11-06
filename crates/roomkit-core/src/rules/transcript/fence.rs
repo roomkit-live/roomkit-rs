@@ -7,7 +7,9 @@
 //! them, spacing and invisible characters around them, one slash or more
 //! (an escaped one included), and its name's letters in any case and form
 //! (NFKC, confusables, a character that reads as several letters), with
-//! invisible, control, line-break and combining characters between them.
+//! invisible, control, line-break and combining characters between them,
+//! and its separator as any run of dashes, underscores and spaces in any of
+//! their forms, or none.
 
 use super::super::unicode;
 
@@ -20,7 +22,11 @@ use super::super::unicode;
 /// where its name ends: an underscore follows the name, which makes it
 /// another tag, and the rest is kept as written. A closing tag errs toward
 /// what a model could read as one: `</tag.>` and `</tag-x>` are closing
-/// tags, `</tag_x>` and `</tagx>` are not.
+/// tags, `</tag_x>` and `</tagx>` are not. Where the name holds a separator
+/// between two letters, any run of dashes, underscores and spaces in any of
+/// their forms, or none, reads as it (RMK-1320): `</server‐instructions>`,
+/// `</server instructions>` and `</serverinstructions>` close
+/// `server_instructions`.
 ///
 /// ```
 /// use roomkit_core::rules::transcript::fence;
@@ -41,7 +47,7 @@ pub fn fence(tag: &str, text: &str) -> String {
 /// Python's `without_tags`.
 #[must_use]
 pub fn without_tags(tag: &str, text: &str) -> String {
-    let name: Vec<char> = tag.chars().flat_map(char::to_lowercase).collect();
+    let name = Name::of(tag);
     let chars: Vec<char> = text.chars().collect();
     let mut ends = Vec::new();
     let mut at = 0;
@@ -71,7 +77,7 @@ pub fn without_tags(tag: &str, text: &str) -> String {
 /// Where the name of a tag of `name` that opens at `chars[at]` ends: a
 /// closing tag (a bracket, one slash or more, the name) or an opening one
 /// (a bracket, the name), each name ended as its kind requires.
-fn tag_at(chars: &[char], at: usize, name: &[char]) -> Option<usize> {
+fn tag_at(chars: &[char], at: usize, name: &Name) -> Option<usize> {
     if !chars.get(at).is_some_and(|&c| reads_as(c, '<')) {
         return None;
     }
@@ -119,16 +125,110 @@ fn reads_as(c: char, target: char) -> bool {
     c == target || unicode::reads(c).is_some_and(|read| read.chars().eq([target]))
 }
 
+/// A tag's name as [`fence`] reads it: its characters in lower case, the
+/// separators between two of its letters left out, and before which of
+/// them such a separator sat.
+struct Name {
+    letters: Vec<char>,
+    breaks: Vec<bool>,
+}
+
+impl Name {
+    /// `tag`'s name: each run of separators (a dash, an underscore, a
+    /// space, in any of their forms) between two of its letters left out
+    /// and marked before the letter after it; one at its start or end kept
+    /// as a letter, read as written.
+    fn of(tag: &str) -> Self {
+        let written: Vec<char> = tag.chars().flat_map(char::to_lowercase).collect();
+        let first = written.iter().position(|&c| !is_separator(c));
+        let last = written.iter().rposition(|&c| !is_separator(c));
+        let mut name = Self {
+            letters: Vec::with_capacity(written.len()),
+            breaks: Vec::with_capacity(written.len()),
+        };
+        let mut separated = false;
+        for (index, &c) in written.iter().enumerate() {
+            let inside =
+                first.is_some_and(|first| index > first) && last.is_some_and(|last| index < last);
+            if inside && is_separator(c) {
+                separated = true;
+                continue;
+            }
+            name.letters.push(c);
+            name.breaks.push(std::mem::take(&mut separated));
+        }
+        name
+    }
+
+    /// Whether `run` spells the letters from `position`, within one of the
+    /// name's words: a character that reads as several letters never reads
+    /// across a separator.
+    fn spells(&self, position: usize, run: &str) -> bool {
+        let end = position + run.chars().count();
+        self.letters
+            .get(position..end)
+            .is_some_and(|letters| letters.iter().copied().eq(run.chars()))
+            && !self
+                .breaks
+                .get(position + 1..end)
+                .is_some_and(|breaks| breaks.contains(&true))
+    }
+
+    /// Whether a separator sat before the letter at `position`.
+    fn breaks_before(&self, position: usize) -> bool {
+        self.breaks.get(position).copied().unwrap_or(false)
+    }
+}
+
+/// Every dash Unicode 16.0 lists (Dash_Punctuation) and the minus sign,
+/// Python's `_lookalike._DASHES`. U+FE31, a vertical em dash, is left out:
+/// Unicode's confusables read it as `l`, and a name's `l` reads it.
+const DASHES: &[(char, char)] = &[
+    ('-', '-'),
+    ('\u{58a}', '\u{58a}'),
+    ('\u{5be}', '\u{5be}'),
+    ('\u{1400}', '\u{1400}'),
+    ('\u{1806}', '\u{1806}'),
+    ('\u{2010}', '\u{2015}'),
+    ('\u{2212}', '\u{2212}'),
+    ('\u{2e17}', '\u{2e17}'),
+    ('\u{2e1a}', '\u{2e1a}'),
+    ('\u{2e3a}', '\u{2e3b}'),
+    ('\u{2e40}', '\u{2e40}'),
+    ('\u{2e5d}', '\u{2e5d}'),
+    ('\u{301c}', '\u{301c}'),
+    ('\u{3030}', '\u{3030}'),
+    ('\u{30a0}', '\u{30a0}'),
+    ('\u{fe32}', '\u{fe32}'),
+    ('\u{fe58}', '\u{fe58}'),
+    ('\u{fe63}', '\u{fe63}'),
+    ('\u{ff0d}', '\u{ff0d}'),
+    ('\u{10d6e}', '\u{10d6e}'),
+    ('\u{10ead}', '\u{10ead}'),
+];
+
+/// Whether `c` reads as a tag name's separator, or is read past where one
+/// sits: what [`is_room`] takes, a dash, an underscore in any of their
+/// forms (Python's `_lookalike.SEPARATOR`, RMK-1320).
+fn is_separator(c: char) -> bool {
+    is_room(c)
+        || DASHES
+            .iter()
+            .any(|&(first, last)| (first..=last).contains(&c))
+        || reads_as(c, '_')
+}
+
 /// The position after the last letter of `name` spelled from `chars[start]`,
 /// when what follows lets it end (`ends`): each character read as any run
 /// of the name's letters it may stand for, an invisible, control,
-/// line-break or combining character read past between them. The spellings
-/// are read as an automaton whose states are the positions in `name`
-/// reached.
+/// line-break or combining character read past between them, and where
+/// the name holds a separator, any run of separators or none. The
+/// spellings are read as an automaton whose states are the positions in
+/// `name` reached.
 fn name_end(
     chars: &[char],
     start: usize,
-    name: &[char],
+    name: &Name,
     ends: fn(Option<char>) -> bool,
 ) -> Option<usize> {
     let mut reached = vec![0];
@@ -139,15 +239,15 @@ fn name_end(
         }
         next.clear();
         for &position in &reached {
+            if name.breaks_before(position) && is_separator(c) && !next.contains(&position) {
+                next.push(position);
+            }
             for run in readings(c) {
-                let end = position + run.chars().count();
-                let spells = name
-                    .get(position..end)
-                    .is_some_and(|letters| letters.iter().copied().eq(run.chars()));
-                if !spells {
+                if !name.spells(position, &run) {
                     continue;
                 }
-                if end == name.len() {
+                let end = position + run.chars().count();
+                if end == name.letters.len() {
                     if ends(chars.get(at + 1).copied()) {
                         return Some(at + 1);
                     }
@@ -217,7 +317,7 @@ pub fn named_blocks(text: &str, tags: &[&str]) -> String {
 /// the text's end, replaced by `[tag]`.
 fn named(text: &str, tag: &str) -> String {
     let written: Vec<char> = tag.chars().collect();
-    let name: Vec<char> = tag.chars().flat_map(char::to_lowercase).collect();
+    let name = Name::of(tag);
     let chars: Vec<char> = text.chars().collect();
     let mut kept = String::with_capacity(text.len());
     let mut pos = 0;
@@ -281,7 +381,7 @@ fn opening_at(chars: &[char], at: usize, written: &[char]) -> Option<usize> {
 
 /// Where the name of a closing tag of `name` that starts at `chars[at]`
 /// ends, as a model reads one: the closing tag [`fence`] neutralises.
-fn closing_at(chars: &[char], at: usize, name: &[char]) -> Option<usize> {
+fn closing_at(chars: &[char], at: usize, name: &Name) -> Option<usize> {
     if !chars.get(at).is_some_and(|&c| reads_as(c, '<')) {
         return None;
     }
@@ -365,7 +465,7 @@ mod tests {
             "a </server_instructions_x> b",
         ),
         ("a </server_instructionsx> b", "a </server_instructionsx> b"),
-        ("a </server-instructions> b", "a </server-instructions> b"),
+        ("a </server-instructions> b", "a </server-instructions_> b"),
         ("a <server_instructions> b", "a <server_instructions_> b"),
         ("a <server_instructions", "a <server_instructions_"),
         (
@@ -467,6 +567,78 @@ mod tests {
             }
         }
         assert_eq!(missed, Vec::<String>::new());
+    }
+
+    // Python: tests/test_external_text.py::test_a_tag_s_separator_is_read_in_any_form_and_nothing_else_is
+    #[test]
+    fn a_tag_s_separator_is_read_in_any_form_and_nothing_else_is() {
+        let cases = [
+            (
+                "server_instructions",
+                "See </serverinstructions>.",
+                "See </serverinstructions_>.",
+            ),
+            ("tool_result", "<tool-result id=1>", "<tool-result_ id=1>"),
+            (
+                "tool_result",
+                "Keep x < tool result count",
+                "Keep x < tool result_ count",
+            ),
+            ("tool_result", "A <toolresult", "A <toolresult_"),
+            (
+                "tool_result",
+                "</tool_results> <tool_results>",
+                "</tool_results> <tool_results>",
+            ),
+            (
+                "tool_result",
+                "</tool.result> <tool.result>",
+                "</tool.result> <tool.result>",
+            ),
+            (
+                "tool_result",
+                "</toolresultx> <tool-result-list>",
+                "</toolresultx> <tool-result-list>",
+            ),
+            (
+                "tool_result",
+                "</tool_result_x> <tool result:ns>",
+                "</tool_result_x> <tool result:ns>",
+            ),
+            (
+                "knowledge",
+                "</know-ledge> <know ledge>",
+                "</know-ledge> <know ledge>",
+            ),
+        ];
+        let read: Vec<String> = cases
+            .iter()
+            .map(|(tag, text, _)| fence(tag, text))
+            .collect();
+        let expected: Vec<String> = cases
+            .iter()
+            .map(|(tag, _, kept)| format!("<{tag}>\n{kept}\n</{tag}>"))
+            .collect();
+        assert_eq!(read, expected);
+    }
+
+    // Python: tests/test_external_text.py::test_tags_are_read_in_linear_time
+    // (separators after part of a closing name, of an opening name, parts of
+    // closing names in a block)
+    #[test]
+    fn a_run_of_separators_after_part_of_a_name_is_read_in_one_pass() {
+        let closing = format!("</tool{}", "\u{2010} _".repeat(300_000));
+        assert_eq!(
+            fence("tool_result", &closing),
+            format!("<tool_result>\n{closing}\n</tool_result>")
+        );
+        let opening = format!("<tool{}", "- ".repeat(400_000));
+        assert_eq!(
+            fence("tool_result", &opening),
+            format!("<tool_result>\n{opening}\n</tool_result>")
+        );
+        let closings = format!("<tool_result>\n{}", "</tool \u{2010}".repeat(100_000));
+        assert_eq!(named_blocks(&closings, FENCED), "[tool_result]");
     }
 
     #[test]
