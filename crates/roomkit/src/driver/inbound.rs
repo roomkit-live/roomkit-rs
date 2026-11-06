@@ -460,6 +460,10 @@ pub(super) struct Caller {
     /// it (`Inbound::under_lock`).
     pub(super) hand: Option<Under>,
     telemetry: KitTelemetry,
+    /// The name the call's delivery key gives its delivery, until the run
+    /// is over or the caller answered before the entries the call adopted
+    /// (RFC §10.1 "Explicit delivery cancellation", §9.5.1 Reentrance).
+    named: Option<NamedGuard>,
 }
 
 /// A call's `framework.detached`, Python's span of what a caller did not wait
@@ -611,6 +615,7 @@ impl Caller {
             record,
             hand: None,
             telemetry,
+            named: None,
         }
     }
 
@@ -722,6 +727,9 @@ impl Caller {
     /// run going on for the entries the call adopted (RFC §9.5.1
     /// Reentrance, §13.6); a caller answered already reads nothing more.
     pub(super) fn answer_now(&mut self, outcome: Result<InboundResult, InboundError>) {
+        // The call returned: its key names no delivery any more, as
+        // Python's name is released once its call returned.
+        drop(self.named.take());
         let Some(answer) = self.answer.take() else {
             return;
         };
@@ -938,13 +946,14 @@ async fn run_leased<S: ConversationStore>(
     let kit = Arc::clone(inner);
     let mut caller = Caller::new(answer, defer, Arc::clone(&record), kit.telemetry.clone());
     caller.hand = hand;
+    // The key names the delivery until the run is over, or until the call's
+    // caller is answered before the entries it adopted.
+    caller.named = named;
     let read_over = record.read_over_with_the_run();
     let tail_over = record.tail_over_with_the_run();
     let run = async move {
         let _read_over = read_over;
         let _tail_over = tail_over;
-        // The key names the delivery until the run is over.
-        let _named = named;
         // A room activity: the kit's subscription to its bus first.
         kit.subscribed().await;
         // A deferred delivery goes on apart from its caller, as Python's

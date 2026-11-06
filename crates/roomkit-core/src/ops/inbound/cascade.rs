@@ -514,13 +514,15 @@ impl Machine {
     /// it was written and the message fails, or is refused once past its
     /// deadline; after it, the event stands and the result carries the
     /// error (RFC §13.6). Either way the cascade stops: no pass runs any
-    /// more, and the events committed already are still delivered.
+    /// more, and the events committed already are still delivered. Past
+    /// the deadline only the call's own cascade stops: an entry its
+    /// admission adopted runs its cascade to its end (`expire`).
     pub(super) fn abort(&mut self, cx: &mut Cx<'_>, abort: Abort) {
-        self.cascade.stop();
         if let Abort::DeadlinePassed(locked_event) = abort {
             // Only the trigger's pass carries a deadline, and it is undecided.
             return self.expire(cx, locked_event);
         }
+        self.cascade.stop();
         if self.trigger.decided {
             return self.trigger.note_error(Some(abort.into_record()));
         }

@@ -44,8 +44,8 @@ use std::task::Poll;
 use roomkit_core::model::{ErrorRecord, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::{
     AnswerOf, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest,
-    InboundResult, KIT_CLOSED, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled,
-    StoreOutcome, StoreRequest,
+    InboundError, InboundResult, KIT_CLOSED, Next, Notice, Operation, Outcome, ProtocolError,
+    Request, Settled, StoreOutcome, StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinHandle, JoinSet};
@@ -389,6 +389,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         refused: None,
         caller,
         cut: Vec::new(),
+        answered: None,
         writing: HashMap::new(),
         written: Vec::new(),
         phases: inner.tasks.phases(),
@@ -467,6 +468,10 @@ struct Driver<'kit, S> {
     /// The turns the run cut as it gave their calls up, whose end it joins
     /// before it ends (RFC §10.1 "Explicit delivery cancellation").
     cut: Vec<Canceller>,
+    /// The outcome an inbound call answers its caller with before the
+    /// entries it adopted are over (`Notice::Answered`), until its step's
+    /// decision is offered.
+    answered: Option<Result<InboundResult, InboundError>>,
     /// An inbound run's hold on each write it asked for, by its effect,
     /// until the operation takes the write's outcome.
     writing: HashMap<EffectId, WentOn>,
@@ -560,6 +565,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 // A caller gone before a commit in flight decided the call.
                 self.cut_turns_once_gone(&mut operation);
                 self.end_cancelled_once_over();
+            }
+            if let Some(outcome) = self.answered.take()
+                && let Some(caller) = self.caller.as_deref_mut()
+            {
+                caller.answer_now(outcome);
             }
             let effects = match step.next {
                 Next::Ready(output) => {
@@ -822,11 +832,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 }
                 self.spans.noted(note);
             }
-            Notice::Answered(outcome) => {
-                if let Some(caller) = self.caller.as_deref_mut() {
-                    caller.answer_now(*outcome);
-                }
-            }
+            // Answered once the step's decision is offered (`drive`).
+            Notice::Answered(outcome) => self.answered = Some(*outcome),
             notice @ (Notice::FrameworkEvent(_) | Notice::AsyncHooks { .. }) => {
                 if let Some(handled) = calls::perform(self.inner, notice) {
                     handled.wait().await;

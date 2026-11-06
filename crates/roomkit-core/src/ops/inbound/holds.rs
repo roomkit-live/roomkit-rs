@@ -90,7 +90,10 @@ impl Machine {
         outcome: Result<InboundResult, InboundError>,
     ) {
         if !self.is_settled() {
-            if self.answers_before_its_entries {
+            // Only an entry's work answers before the end, never a handed
+            // lock's release alone.
+            let entries_work = !self.adopted.is_idle() || !self.cascade.is_idle();
+            if self.answers_before_its_entries && entries_work {
                 let answered = self.for_caller(outcome.clone());
                 cx.io.notify(Notice::Answered(Box::new(answered)));
             }

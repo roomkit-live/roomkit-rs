@@ -397,7 +397,14 @@ impl Entered {
         }
         let decided = result.clone();
         let tasks = Arc::clone(tasks);
+        // Refused at its deadline, the call delivers nothing of its own: its
+        // handle waits for no entry it adopted, whose cascade goes on as its
+        // own, as Python's (RFC §9.5.1 Reentrance, §13.6).
+        let refused_at_its_deadline = result.blocked
+            && result.event.is_none()
+            && result.reason.as_deref() == Some("process_timeout");
         let handle = match following {
+            _ if refused_at_its_deadline => DeliveryHandle::over(decided, tasks),
             Following::Run(run, record) => DeliveryHandle::of_run(decided, run, record, tasks),
             Following::Adopted(completion) => DeliveryHandle::adopted(decided, completion, tasks),
             Following::Nothing => DeliveryHandle::over(decided, tasks),
