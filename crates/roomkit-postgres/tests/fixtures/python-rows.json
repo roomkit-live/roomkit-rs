@@ -200,7 +200,7 @@
   },
   {
    "access": "read_write",
-   "attached_at": "2026-11-04T16:39:40.394345+00:00",
+   "attached_at": "2026-11-06T01:45:44.74536+00:00",
    "capabilities": {
     "custom": {},
     "max_audio_duration_seconds": null,
@@ -260,249 +260,6 @@
  ],
  "events": [
   {
-   "addressed_to": [
-    "ai"
-   ],
-   "blocked_by": null,
-   "chain_depth": 0,
-   "channel_data": {
-    "external_id": null,
-    "extra": {},
-    "provider": null,
-    "thread_id": null
-   },
-   "content": {
-    "body": "for the agent",
-    "language": null,
-    "type": "text"
-   },
-   "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.44841+00:00",
-   "delivery_results": {},
-   "id": "0a6836b2e9f642c6b3922777b8c99f28",
-   "idempotency_key": null,
-   "index": 14,
-   "metadata": {},
-   "parent_event_id": null,
-   "responds_to": null,
-   "response_visibility": "transport",
-   "room_id": "room-full",
-   "source_channel_id": "ws-user",
-   "source_channel_type": "websocket",
-   "source_direction": "inbound",
-   "source_extra": {},
-   "source_participant_id": "user-1",
-   "source_provider": null,
-   "status": "delivered",
-   "type": "message",
-   "visibility": "ws-user"
-  },
-  {
-   "addressed_to": null,
-   "blocked_by": null,
-   "chain_depth": 0,
-   "channel_data": {
-    "external_id": null,
-    "extra": {},
-    "provider": null,
-    "thread_id": null
-   },
-   "content": {
-    "body": "**Bold**",
-    "buttons": [
-     {
-      "id": "b1",
-      "label": "Yes"
-     }
-    ],
-    "cards": [
-     {
-      "title": "Card"
-     }
-    ],
-    "format": "markdown",
-    "plain_text": "Bold",
-    "quick_replies": [
-     "yes",
-     "no"
-    ],
-    "type": "rich"
-   },
-   "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.41923+00:00",
-   "delivery_results": {},
-   "id": "4b988d3bccf4453e9c514ed9ae32335f",
-   "idempotency_key": "key-1",
-   "index": 4,
-   "metadata": {
-    "author": {
-     "name": "Alice",
-     "rank": 1,
-     "source": "d2507e01b4d3ea12"
-    },
-    "sender_name": "Alice"
-   },
-   "parent_event_id": null,
-   "responds_to": null,
-   "response_visibility": null,
-   "room_id": "room-full",
-   "source_channel_id": "ws-user",
-   "source_channel_type": "websocket",
-   "source_direction": "inbound",
-   "source_extra": {
-    "provider_message_id": "pm-1",
-    "raw_payload": {
-     "n": 1
-    }
-   },
-   "source_participant_id": "user-1",
-   "source_provider": null,
-   "status": "delivered",
-   "type": "message",
-   "visibility": "all"
-  },
-  {
-   "addressed_to": null,
-   "blocked_by": null,
-   "chain_depth": 0,
-   "channel_data": {
-    "external_id": null,
-    "extra": {},
-    "provider": null,
-    "thread_id": null
-   },
-   "content": {
-    "edit_source": null,
-    "new_content": {
-     "body": "Hello, my invoice for March is wrong",
-     "language": null,
-     "type": "text"
-    },
-    "target_event_id": "d7308dc26bd747c6aa44d7a2871103cb",
-    "type": "edit"
-   },
-   "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.442699+00:00",
-   "delivery_results": {},
-   "id": "501f73d19be749bfa2aea843be4ac379",
-   "idempotency_key": null,
-   "index": 12,
-   "metadata": {},
-   "parent_event_id": null,
-   "responds_to": null,
-   "response_visibility": null,
-   "room_id": "room-full",
-   "source_channel_id": "ws-user",
-   "source_channel_type": "websocket",
-   "source_direction": "inbound",
-   "source_extra": {},
-   "source_participant_id": "user-1",
-   "source_provider": null,
-   "status": "delivered",
-   "type": "edit",
-   "visibility": "all"
-  },
-  {
-   "addressed_to": null,
-   "blocked_by": null,
-   "chain_depth": 0,
-   "channel_data": {
-    "external_id": null,
-    "extra": {},
-    "provider": null,
-    "thread_id": null
-   },
-   "content": {
-    "address": "1 Main St",
-    "label": "Office",
-    "latitude": 45.5,
-    "longitude": -73.6,
-    "type": "location"
-   },
-   "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.425729+00:00",
-   "delivery_results": {},
-   "id": "5052b4c8f8bf42a091fec8d09f9ea34b",
-   "idempotency_key": "key-3",
-   "index": 6,
-   "metadata": {
-    "author": {
-     "name": "Alice",
-     "rank": 1,
-     "source": "d2507e01b4d3ea12"
-    },
-    "sender_name": "Alice"
-   },
-   "parent_event_id": null,
-   "responds_to": null,
-   "response_visibility": null,
-   "room_id": "room-full",
-   "source_channel_id": "ws-user",
-   "source_channel_type": "websocket",
-   "source_direction": "inbound",
-   "source_extra": {
-    "provider_message_id": "pm-3",
-    "raw_payload": {
-     "n": 3
-    }
-   },
-   "source_participant_id": "user-1",
-   "source_provider": null,
-   "status": "delivered",
-   "type": "message",
-   "visibility": "all"
-  },
-  {
-   "addressed_to": null,
-   "blocked_by": null,
-   "chain_depth": 0,
-   "channel_data": {
-    "external_id": null,
-    "extra": {},
-    "provider": null,
-    "thread_id": null
-   },
-   "content": {
-    "duration_seconds": 3.5,
-    "mime_type": "audio/ogg",
-    "transcript": "hi",
-    "type": "audio",
-    "url": "https://example.com/a.ogg"
-   },
-   "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.428877+00:00",
-   "delivery_results": {},
-   "id": "5a0cf908c983453099f2b14995ae9524",
-   "idempotency_key": "key-4",
-   "index": 7,
-   "metadata": {
-    "author": {
-     "name": "Alice",
-     "rank": 1,
-     "source": "d2507e01b4d3ea12"
-    },
-    "sender_name": "Alice"
-   },
-   "parent_event_id": null,
-   "responds_to": null,
-   "response_visibility": null,
-   "room_id": "room-full",
-   "source_channel_id": "ws-user",
-   "source_channel_type": "websocket",
-   "source_direction": "inbound",
-   "source_extra": {
-    "provider_message_id": "pm-4",
-    "raw_payload": {
-     "n": 4
-    }
-   },
-   "source_participant_id": "user-1",
-   "source_provider": null,
-   "status": "delivered",
-   "type": "message",
-   "visibility": "all"
-  },
-  {
    "addressed_to": null,
    "blocked_by": null,
    "chain_depth": 0,
@@ -520,9 +277,9 @@
     "url": "https://example.com/v.mp4"
    },
    "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.432186+00:00",
+   "created_at": "2026-11-06T01:45:44.807915+00:00",
    "delivery_results": {},
-   "id": "6fed5d919ac54745a819b3b2c83f8a3f",
+   "id": "00d70cbb3ab84eba84de229ff6e60617",
    "idempotency_key": "key-5",
    "index": 8,
    "metadata": {
@@ -563,6 +320,47 @@
     "thread_id": null
    },
    "content": {
+    "edit_source": null,
+    "new_content": {
+     "body": "Hello, my invoice for March is wrong",
+     "language": null,
+     "type": "text"
+    },
+    "target_event_id": "138918412efc42f49d60105faa641bdb",
+    "type": "edit"
+   },
+   "correlation_id": null,
+   "created_at": "2026-11-06T01:45:44.82217+00:00",
+   "delivery_results": {},
+   "id": "0567360242344ca8be9072674d0c4b08",
+   "idempotency_key": null,
+   "index": 12,
+   "metadata": {},
+   "parent_event_id": null,
+   "responds_to": null,
+   "response_visibility": null,
+   "room_id": "room-full",
+   "source_channel_id": "ws-user",
+   "source_channel_type": "websocket",
+   "source_direction": "inbound",
+   "source_extra": {},
+   "source_participant_id": "user-1",
+   "source_provider": null,
+   "status": "delivered",
+   "type": "edit",
+   "visibility": "all"
+  },
+  {
+   "addressed_to": null,
+   "blocked_by": null,
+   "chain_depth": 0,
+   "channel_data": {
+    "external_id": null,
+    "extra": {},
+    "provider": null,
+    "thread_id": null
+   },
+   "content": {
     "body": "Channel ws-user attached (read_write, all)",
     "code": "channel_attached",
     "data": {
@@ -573,9 +371,9 @@
     "type": "system"
    },
    "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.395886+00:00",
+   "created_at": "2026-11-06T01:45:44.747239+00:00",
    "delivery_results": {},
-   "id": "74982cbc2bac416184211fbf367cd75a",
+   "id": "0e576e132d7b452db8c6511ee9632e5b",
    "idempotency_key": null,
    "index": 0,
    "metadata": {},
@@ -604,94 +402,14 @@
     "thread_id": null
    },
    "content": {
-    "body": "Channel ws-gone attached (read_write, all)",
-    "code": "channel_attached",
-    "data": {
-     "access": "read_write",
-     "channel_id": "ws-gone",
-     "visibility": "all"
-    },
-    "type": "system"
-   },
-   "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.400604+00:00",
-   "delivery_results": {},
-   "id": "784fdfdd4d9248349fb728309eaed1a9",
-   "idempotency_key": null,
-   "index": 1,
-   "metadata": {},
-   "parent_event_id": null,
-   "responds_to": null,
-   "response_visibility": null,
-   "room_id": "room-full",
-   "source_channel_id": "system",
-   "source_channel_type": "system",
-   "source_direction": "inbound",
-   "source_extra": {},
-   "source_participant_id": null,
-   "source_provider": null,
-   "status": "delivered",
-   "type": "channel_attached",
-   "visibility": "internal"
-  },
-  {
-   "addressed_to": null,
-   "blocked_by": null,
-   "chain_depth": 0,
-   "channel_data": {
-    "external_id": null,
-    "extra": {},
-    "provider": null,
-    "thread_id": null
-   },
-   "content": {
-    "body": "Channel ws-gone detached",
-    "code": "channel_detached",
-    "data": {
-     "channel_id": "ws-gone"
-    },
-    "type": "system"
-   },
-   "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.404846+00:00",
-   "delivery_results": {},
-   "id": "7d4b11227fea46619692ef2d8525e1ba",
-   "idempotency_key": null,
-   "index": 2,
-   "metadata": {},
-   "parent_event_id": null,
-   "responds_to": null,
-   "response_visibility": null,
-   "room_id": "room-full",
-   "source_channel_id": "system",
-   "source_channel_type": "system",
-   "source_direction": "inbound",
-   "source_extra": {},
-   "source_participant_id": null,
-   "source_provider": null,
-   "status": "delivered",
-   "type": "channel_detached",
-   "visibility": "internal"
-  },
-  {
-   "addressed_to": null,
-   "blocked_by": null,
-   "chain_depth": 0,
-   "channel_data": {
-    "external_id": null,
-    "extra": {},
-    "provider": null,
-    "thread_id": null
-   },
-   "content": {
     "body": "Hello, my invoice for March is wrong",
     "language": null,
     "type": "text"
    },
    "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.412965+00:00",
+   "created_at": "2026-11-06T01:45:44.773587+00:00",
    "delivery_results": {},
-   "id": "d7308dc26bd747c6aa44d7a2871103cb",
+   "id": "138918412efc42f49d60105faa641bdb",
    "idempotency_key": "key-0",
    "index": 3,
    "metadata": {
@@ -733,6 +451,156 @@
     "thread_id": null
    },
    "content": {
+    "body": "**Bold**",
+    "buttons": [
+     {
+      "id": "b1",
+      "label": "Yes"
+     }
+    ],
+    "cards": [
+     {
+      "title": "Card"
+     }
+    ],
+    "format": "markdown",
+    "plain_text": "Bold",
+    "quick_replies": [
+     "yes",
+     "no"
+    ],
+    "type": "rich"
+   },
+   "correlation_id": null,
+   "created_at": "2026-11-06T01:45:44.786896+00:00",
+   "delivery_results": {},
+   "id": "17253be6172e47a79d5e0f4801944e77",
+   "idempotency_key": "key-1",
+   "index": 4,
+   "metadata": {
+    "author": {
+     "name": "Alice",
+     "rank": 1,
+     "source": "d2507e01b4d3ea12"
+    },
+    "sender_name": "Alice"
+   },
+   "parent_event_id": null,
+   "responds_to": null,
+   "response_visibility": null,
+   "room_id": "room-full",
+   "source_channel_id": "ws-user",
+   "source_channel_type": "websocket",
+   "source_direction": "inbound",
+   "source_extra": {
+    "provider_message_id": "pm-1",
+    "raw_payload": {
+     "n": 1
+    }
+   },
+   "source_participant_id": "user-1",
+   "source_provider": null,
+   "status": "delivered",
+   "type": "message",
+   "visibility": "all"
+  },
+  {
+   "addressed_to": null,
+   "blocked_by": null,
+   "chain_depth": 0,
+   "channel_data": {
+    "external_id": null,
+    "extra": {},
+    "provider": null,
+    "thread_id": null
+   },
+   "content": {
+    "body": "a reply",
+    "language": null,
+    "type": "text"
+   },
+   "correlation_id": null,
+   "created_at": "2026-11-06T01:45:44.818043+00:00",
+   "delivery_results": {},
+   "id": "44d427fd42fb410b994224ab54bbb317",
+   "idempotency_key": null,
+   "index": 11,
+   "metadata": {},
+   "parent_event_id": "138918412efc42f49d60105faa641bdb",
+   "responds_to": null,
+   "response_visibility": null,
+   "room_id": "room-full",
+   "source_channel_id": "ws-user",
+   "source_channel_type": "websocket",
+   "source_direction": "inbound",
+   "source_extra": {},
+   "source_participant_id": "user-1",
+   "source_provider": null,
+   "status": "delivered",
+   "type": "message",
+   "visibility": "all"
+  },
+  {
+   "addressed_to": null,
+   "blocked_by": null,
+   "chain_depth": 0,
+   "channel_data": {
+    "external_id": null,
+    "extra": {},
+    "provider": null,
+    "thread_id": null
+   },
+   "content": {
+    "duration_seconds": 3.5,
+    "mime_type": "audio/ogg",
+    "transcript": "hi",
+    "type": "audio",
+    "url": "https://example.com/a.ogg"
+   },
+   "correlation_id": null,
+   "created_at": "2026-11-06T01:45:44.80273+00:00",
+   "delivery_results": {},
+   "id": "9563ee43bc674d40bb4a5196bb223d3d",
+   "idempotency_key": "key-4",
+   "index": 7,
+   "metadata": {
+    "author": {
+     "name": "Alice",
+     "rank": 1,
+     "source": "d2507e01b4d3ea12"
+    },
+    "sender_name": "Alice"
+   },
+   "parent_event_id": null,
+   "responds_to": null,
+   "response_visibility": null,
+   "room_id": "room-full",
+   "source_channel_id": "ws-user",
+   "source_channel_type": "websocket",
+   "source_direction": "inbound",
+   "source_extra": {
+    "provider_message_id": "pm-4",
+    "raw_payload": {
+     "n": 4
+    }
+   },
+   "source_participant_id": "user-1",
+   "source_provider": null,
+   "status": "delivered",
+   "type": "message",
+   "visibility": "all"
+  },
+  {
+   "addressed_to": null,
+   "blocked_by": null,
+   "chain_depth": 0,
+   "channel_data": {
+    "external_id": null,
+    "extra": {},
+    "provider": null,
+    "thread_id": null
+   },
+   "content": {
     "caption": "invoice",
     "filename": "a.pdf",
     "mime_type": "application/pdf",
@@ -741,9 +609,9 @@
     "url": "https://example.com/a.pdf"
    },
    "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.422814+00:00",
+   "created_at": "2026-11-06T01:45:44.790623+00:00",
    "delivery_results": {},
-   "id": "e468e8a21b514ee0ba417bc1741765aa",
+   "id": "9e97321c17df4c649199a47edbb98135",
    "idempotency_key": "key-2",
    "index": 5,
    "metadata": {
@@ -775,6 +643,44 @@
    "visibility": "all"
   },
   {
+   "addressed_to": [
+    "ai"
+   ],
+   "blocked_by": null,
+   "chain_depth": 0,
+   "channel_data": {
+    "external_id": null,
+    "extra": {},
+    "provider": null,
+    "thread_id": null
+   },
+   "content": {
+    "body": "for the agent",
+    "language": null,
+    "type": "text"
+   },
+   "correlation_id": null,
+   "created_at": "2026-11-06T01:45:44.831971+00:00",
+   "delivery_results": {},
+   "id": "d4cf13df58c1419486597ded1780b921",
+   "idempotency_key": null,
+   "index": 14,
+   "metadata": {},
+   "parent_event_id": null,
+   "responds_to": null,
+   "response_visibility": "transport",
+   "room_id": "room-full",
+   "source_channel_id": "ws-user",
+   "source_channel_type": "websocket",
+   "source_direction": "inbound",
+   "source_extra": {},
+   "source_participant_id": "user-1",
+   "source_provider": null,
+   "status": "delivered",
+   "type": "message",
+   "visibility": "ws-user"
+  },
+  {
    "addressed_to": null,
    "blocked_by": null,
    "chain_depth": 0,
@@ -785,34 +691,18 @@
     "thread_id": null
    },
    "content": {
-    "parts": [
-     {
-      "body": "part one",
-      "language": null,
-      "type": "text"
-     },
-     {
-      "parts": [
-       {
-        "caption": null,
-        "filename": null,
-        "mime_type": "image/png",
-        "size_bytes": null,
-        "type": "media",
-        "url": "https://example.com/i.png"
-       }
-      ],
-      "type": "composite"
-     }
-    ],
-    "type": "composite"
+    "address": "1 Main St",
+    "label": "Office",
+    "latitude": 45.5,
+    "longitude": -73.6,
+    "type": "location"
    },
    "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.434846+00:00",
+   "created_at": "2026-11-06T01:45:44.796359+00:00",
    "delivery_results": {},
-   "id": "e87fccc75f1045b9bcfffea7a15d31c5",
-   "idempotency_key": "key-6",
-   "index": 9,
+   "id": "dd1ad69dc74f468fb03643e899a67d26",
+   "idempotency_key": "key-3",
+   "index": 6,
    "metadata": {
     "author": {
      "name": "Alice",
@@ -829,9 +719,9 @@
    "source_channel_type": "websocket",
    "source_direction": "inbound",
    "source_extra": {
-    "provider_message_id": "pm-6",
+    "provider_message_id": "pm-3",
     "raw_payload": {
-     "n": 6
+     "n": 3
     }
    },
    "source_participant_id": "user-1",
@@ -851,31 +741,74 @@
     "thread_id": null
    },
    "content": {
-    "delete_type": "sender",
-    "reason": "oops",
-    "target_event_id": "e468e8a21b514ee0ba417bc1741765aa",
-    "type": "delete"
+    "body": "Channel ws-gone attached (read_write, all)",
+    "code": "channel_attached",
+    "data": {
+     "access": "read_write",
+     "channel_id": "ws-gone",
+     "visibility": "all"
+    },
+    "type": "system"
    },
    "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.445682+00:00",
+   "created_at": "2026-11-06T01:45:44.754062+00:00",
    "delivery_results": {},
-   "id": "ef928473f15e4d688f8fffccd1be3429",
+   "id": "e6308d92dda445d2b5420f0e337c61b9",
    "idempotency_key": null,
-   "index": 13,
+   "index": 1,
    "metadata": {},
    "parent_event_id": null,
    "responds_to": null,
    "response_visibility": null,
    "room_id": "room-full",
-   "source_channel_id": "ws-user",
-   "source_channel_type": "websocket",
+   "source_channel_id": "system",
+   "source_channel_type": "system",
    "source_direction": "inbound",
    "source_extra": {},
-   "source_participant_id": "user-1",
+   "source_participant_id": null,
    "source_provider": null,
    "status": "delivered",
-   "type": "delete",
-   "visibility": "all"
+   "type": "channel_attached",
+   "visibility": "internal"
+  },
+  {
+   "addressed_to": null,
+   "blocked_by": null,
+   "chain_depth": 0,
+   "channel_data": {
+    "external_id": null,
+    "extra": {},
+    "provider": null,
+    "thread_id": null
+   },
+   "content": {
+    "body": "Channel ws-gone detached",
+    "code": "channel_detached",
+    "data": {
+     "channel_id": "ws-gone"
+    },
+    "type": "system"
+   },
+   "correlation_id": null,
+   "created_at": "2026-11-06T01:45:44.759953+00:00",
+   "delivery_results": {},
+   "id": "eeee27d481194684b99988c29a642e99",
+   "idempotency_key": null,
+   "index": 2,
+   "metadata": {},
+   "parent_event_id": null,
+   "responds_to": null,
+   "response_visibility": null,
+   "room_id": "room-full",
+   "source_channel_id": "system",
+   "source_channel_type": "system",
+   "source_direction": "inbound",
+   "source_extra": {},
+   "source_participant_id": null,
+   "source_provider": null,
+   "status": "delivered",
+   "type": "channel_detached",
+   "visibility": "internal"
   },
   {
    "addressed_to": null,
@@ -1145,18 +1078,85 @@
     "thread_id": null
    },
    "content": {
-    "body": "a reply",
-    "language": null,
-    "type": "text"
+    "parts": [
+     {
+      "body": "part one",
+      "language": null,
+      "type": "text"
+     },
+     {
+      "parts": [
+       {
+        "caption": null,
+        "filename": null,
+        "mime_type": "image/png",
+        "size_bytes": null,
+        "type": "media",
+        "url": "https://example.com/i.png"
+       }
+      ],
+      "type": "composite"
+     }
+    ],
+    "type": "composite"
    },
    "correlation_id": null,
-   "created_at": "2026-11-04T16:39:40.439593+00:00",
+   "created_at": "2026-11-06T01:45:44.812342+00:00",
    "delivery_results": {},
-   "id": "fdc5b2c08f4f4e15be5974568442a53d",
+   "id": "fc05c39eb6184fe78853624e74cd44ed",
+   "idempotency_key": "key-6",
+   "index": 9,
+   "metadata": {
+    "author": {
+     "name": "Alice",
+     "rank": 1,
+     "source": "d2507e01b4d3ea12"
+    },
+    "sender_name": "Alice"
+   },
+   "parent_event_id": null,
+   "responds_to": null,
+   "response_visibility": null,
+   "room_id": "room-full",
+   "source_channel_id": "ws-user",
+   "source_channel_type": "websocket",
+   "source_direction": "inbound",
+   "source_extra": {
+    "provider_message_id": "pm-6",
+    "raw_payload": {
+     "n": 6
+    }
+   },
+   "source_participant_id": "user-1",
+   "source_provider": null,
+   "status": "delivered",
+   "type": "message",
+   "visibility": "all"
+  },
+  {
+   "addressed_to": null,
+   "blocked_by": null,
+   "chain_depth": 0,
+   "channel_data": {
+    "external_id": null,
+    "extra": {},
+    "provider": null,
+    "thread_id": null
+   },
+   "content": {
+    "delete_type": "sender",
+    "reason": "oops",
+    "target_event_id": "9e97321c17df4c649199a47edbb98135",
+    "type": "delete"
+   },
+   "correlation_id": null,
+   "created_at": "2026-11-06T01:45:44.825987+00:00",
+   "delivery_results": {},
+   "id": "fe52af4c4402484289aa6bdee8f7072b",
    "idempotency_key": null,
-   "index": 11,
+   "index": 13,
    "metadata": {},
-   "parent_event_id": "d7308dc26bd747c6aa44d7a2871103cb",
+   "parent_event_id": null,
    "responds_to": null,
    "response_visibility": null,
    "room_id": "room-full",
@@ -1167,7 +1167,7 @@
    "source_participant_id": "user-1",
    "source_provider": null,
    "status": "delivered",
-   "type": "message",
+   "type": "delete",
    "visibility": "all"
   }
  ],
@@ -1313,7 +1313,7 @@
   {
    "agent_response_policy": "agent_chain",
    "closed_at": "2026-10-22T14:00:00.25+00:00",
-   "created_at": "2026-11-04T16:39:40.38955+00:00",
+   "created_at": "2026-11-06T01:45:44.739951+00:00",
    "delivered_index": -1,
    "event_count": 0,
    "id": "room-closed",
@@ -1325,14 +1325,14 @@
    "timers": {
     "closed_after_seconds": 86400,
     "inactive_after_seconds": 1800,
-    "last_activity_at": "2026-11-04T16:39:40.449138Z"
+    "last_activity_at": "2026-11-06T01:45:44.833894Z"
    },
-   "updated_at": "2026-11-04T16:39:40.403582+00:00"
+   "updated_at": "2026-11-06T01:45:44.757903+00:00"
   },
   {
    "agent_response_policy": "agent_chain",
    "closed_at": null,
-   "created_at": "2026-11-04T16:39:40.38955+00:00",
+   "created_at": "2026-11-06T01:45:44.739951+00:00",
    "delivered_index": 14,
    "event_count": 21,
    "id": "room-full",
@@ -1357,9 +1357,9 @@
    "timers": {
     "closed_after_seconds": 86400,
     "inactive_after_seconds": 1800,
-    "last_activity_at": "2026-11-04T16:39:40.449138Z"
+    "last_activity_at": "2026-11-06T01:45:44.833894Z"
    },
-   "updated_at": "2026-11-04T16:39:40.403582+00:00"
+   "updated_at": "2026-11-06T01:45:44.757903+00:00"
   }
  ],
  "tasks": [
