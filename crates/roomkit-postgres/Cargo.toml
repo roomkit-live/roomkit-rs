@@ -23,6 +23,7 @@ tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-postgres-rustls.workspace = true
 tracing.workspace = true
+whoami.workspace = true
 
 [dev-dependencies]
 # The conformance runner's paced model, which the suite includes from

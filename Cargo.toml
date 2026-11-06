@@ -93,6 +93,11 @@ rcgen = "0.14"
 # A TIMESTAMPTZ's wire form (roomkit-postgres): the type the client's `ToSql`
 # writes to, already in the graph through the client.
 bytes = "1"
+# The user's name a connection string leaves out, from the account database
+# once LOGNAME, USER, LNAME and USERNAME name none, as Python's
+# `getpass.getuser` reads it (roomkit-postgres, HITL 7b637a02): already in
+# the graph through tokio-postgres, with its features.
+whoami = "2"
 # The advisory lock's key, Python's `hashlib.blake2b(digest_size=8)`, so that
 # processes of both implementations exclude each other (roomkit-postgres).
 blake2 = { version = "0.11", default-features = false }

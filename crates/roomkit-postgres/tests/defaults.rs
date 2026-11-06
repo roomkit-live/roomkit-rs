@@ -455,6 +455,45 @@ async fn a_password_file_others_can_read_is_not_read() {
     );
 }
 
+/// Python: `test_a_short_password_file_line_before_a_match_fails_init` (HITL
+/// 8142aaf2). asyncpg cuts each line of the file into five fields and raises
+/// on one with fewer, met before the line that matches: `init` fails,
+/// `StoreError::Value`.
+#[tokio::test]
+async fn a_short_password_file_line_before_a_match_fails_init() {
+    if ran_as_child().await {
+        return;
+    }
+    let Some(server) = Server::new().await else {
+        return;
+    };
+    let home = TempDir::new();
+    home.file(
+        ".pgpass",
+        &format!("short:line\n*:*:*:*:{}\n", server.password),
+        0o600,
+    );
+    let dsn = format!(
+        "postgresql://{}{}:{}/{}{}",
+        server.user(),
+        server.host,
+        server.port,
+        server.database,
+        server.query
+    );
+    let opened = open_in_child(
+        "a_short_password_file_line_before_a_match_fails_init",
+        &home.0,
+        &dsn,
+        &[],
+    );
+    assert!(!opened.connected, "{opened:?}");
+    assert!(
+        opened.refusal.contains("fields where five are expected"),
+        "{opened:?}"
+    );
+}
+
 /// Python: `test_an_empty_pgpassword_is_a_password`. asyncpg takes an empty
 /// `PGPASSWORD` for the password, and reads no password file then: a
 /// matching `~/.pgpass` is not read, and the server refuses the empty one.

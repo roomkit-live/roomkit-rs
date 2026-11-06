@@ -56,17 +56,24 @@ fn with_settings(config: &mut Config, settings: &[(String, String)]) {
     config.options(options.trim_start());
 }
 
+/// The user's name a connection string leaves out, as asyncpg takes it:
+/// `PGUSER`, then Python's `getpass.getuser`, the first of `LOGNAME`, `USER`,
+/// `LNAME` and `USERNAME` that names one, else the account database's
+/// (HITL 7b637a02).
+fn user_name(environment: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    ["PGUSER", "LOGNAME", "USER", "LNAME", "USERNAME"]
+        .into_iter()
+        .find_map(environment)
+        .or_else(|| whoami::username().ok())
+}
+
 /// Fills in what `config` leaves out from the `PG*` environment variables, as
 /// asyncpg reads them; its hosts and ports are [`hosts::addresses`]'.
 fn with_environment(config: &mut Config) {
-    if config.get_user().is_none() {
-        // Python's `getpass.getuser`, after `PGUSER`.
-        let user = ["PGUSER", "LOGNAME", "USER", "LNAME", "USERNAME"]
-            .into_iter()
-            .find_map(variable);
-        if let Some(user) = user {
-            config.user(user);
-        }
+    if config.get_user().is_none()
+        && let Some(user) = user_name(&variable)
+    {
+        config.user(user);
     }
     // asyncpg takes an empty `PGPASSWORD` for a password, and reads no file then.
     if config.get_password().is_none()
@@ -426,6 +433,17 @@ mod tests {
             panic!("a mysql string was read");
         };
         assert!(!refused.to_string().contains("secret"), "{refused}");
+    }
+
+    /// Python (`getpass.getuser`): with none of its variables, the account
+    /// database names the user, whom a password file's line is looked up for.
+    #[test]
+    fn with_no_variable_the_account_names_the_user() {
+        let none = |_: &str| None;
+        assert_eq!(user_name(&none), whoami::username().ok());
+        assert!(user_name(&none).is_some());
+        let named = |name: &str| (name == "USER").then(|| "ann".to_owned());
+        assert_eq!(user_name(&named).as_deref(), Some("ann"));
     }
 
     /// A `connect_timeout` bounds each host, the whole given 60 s unless it is

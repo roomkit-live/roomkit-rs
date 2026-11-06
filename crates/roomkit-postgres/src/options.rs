@@ -16,7 +16,8 @@ pub struct PostgresStoreOptions {
     /// `passfile`, a parameter the client does not read passed to the server as
     /// a setting (`?search_path=tenant`). What it leaves out is read from these
     /// `PG*` environment variables, the only ones this crate reads: `PGHOST`,
-    /// `PGPORT`, `PGUSER` (else `LOGNAME`, `USER`, `LNAME` or `USERNAME`),
+    /// `PGPORT`, `PGUSER` (else `LOGNAME`, `USER`, `LNAME` or `USERNAME`, else
+    /// the account database's),
     /// `PGPASSWORD`, `PGPASSFILE`, `PGDATABASE`, `PGSSLMODE`, `PGSSLROOTCERT` and
     /// `PGSSLCRL`. `None` takes the whole connection from them (HITL 78cd4240).
     ///
