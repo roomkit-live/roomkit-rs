@@ -62,6 +62,59 @@ fn cache_hits_are_not_billed_as_input() {
     );
 }
 
+// Python: tests/test_providers/test_deepseek.py::TestUsage::test_reasoning_tokens_are_exposed_as_a_detail_of_output
+#[test]
+fn reasoning_tokens_are_exposed_as_a_detail_of_output() {
+    assert_eq!(
+        usage(&json!({ "prompt_tokens": 100, "completion_tokens": 500,
+            "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 100,
+            "completion_tokens_details": { "reasoning_tokens": 450 } })),
+        json!({ "input_tokens": 100, "output_tokens": 500, "reasoning_tokens": 450 })
+    );
+}
+
+/// What a generic provider reads of `usage`, OpenAI's shape.
+fn generic(usage: &Value) -> Value {
+    let body = json!({
+        "id": "c",
+        "choices": [{ "index": 0, "message": { "role": "assistant", "content": "Hi" },
+            "finish_reason": "stop" }],
+        "usage": usage,
+    });
+    let read = crate::wire::response(body.to_string().as_bytes(), "", false).unwrap();
+    serde_json::to_value(read.done.usage).unwrap()
+}
+
+// Python: tests/test_providers/test_openai.py::TestOpenAIAIProvider::test_generate_reports_cache_writes_apart_from_fresh_input,
+// and tests/text_conformance/test_responses.py::TestUsage::test_cache_writes_are_counted_apart
+// (OpenRouter's shape, the write in the details) and test_reasoning_tokens_are_a_detail_of_output.
+#[test]
+fn cache_writes_and_reasoning_are_counted_apart() {
+    assert_eq!(
+        [
+            generic(&json!({ "prompt_tokens": 1000, "completion_tokens": 20,
+                "prompt_tokens_details": { "cached_tokens": 300, "cache_write_tokens": 500 } })),
+            // A write the usage reports beside its details.
+            generic(&json!({ "prompt_tokens": 1000, "completion_tokens": 20,
+                "prompt_tokens_details": { "cached_tokens": 300 }, "cache_write_tokens": 500 })),
+            generic(&json!({ "prompt_tokens": 11, "completion_tokens": 7,
+                "prompt_tokens_details": { "cached_tokens": 0 },
+                "completion_tokens_details": { "reasoning_tokens": 3 } })),
+            // A usage without its prompt counts no input, as Python's
+            // `prompt_tokens or 0`.
+            generic(&json!({ "completion_tokens": 7 })),
+        ],
+        [
+            json!({ "input_tokens": 200, "output_tokens": 20,
+                "cache_read_input_tokens": 300, "cache_creation_input_tokens": 500 }),
+            json!({ "input_tokens": 200, "output_tokens": 20,
+                "cache_read_input_tokens": 300, "cache_creation_input_tokens": 500 }),
+            json!({ "input_tokens": 11, "output_tokens": 7, "reasoning_tokens": 3 }),
+            json!({ "input_tokens": 0, "output_tokens": 7 }),
+        ]
+    );
+}
+
 // Python: OpenAIAIProvider reads only OpenAI's shape: hits a generic server
 // reports are input there.
 #[test]
