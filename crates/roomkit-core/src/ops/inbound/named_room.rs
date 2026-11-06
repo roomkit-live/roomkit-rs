@@ -301,7 +301,13 @@ impl NamedRoom {
                     Progress::Waiting
                 }
                 Progress::Done(changed) => {
-                    self.release_error = self.release_error.take().or(changed.release_error);
+                    // A room step 2 created that another took is refused
+                    // within its lock, whose release's failure Python's
+                    // `_claim_created` leaves to its log, never the call's.
+                    let taken = created && matches!(changed.result, Ok(Recorded::Rerouted(_)));
+                    if !taken {
+                        self.release_error = self.release_error.take().or(changed.release_error);
+                    }
                     self.on_changed(cx, changed.result, created)
                 }
             },

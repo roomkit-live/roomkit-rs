@@ -625,6 +625,8 @@ impl Machine {
             blocked: true,
             reason: Some(held.reason),
             refused_before_the_lock: true,
+            // Step 2's failed release, the first error the call met (RFC §13.5).
+            error: self.trigger.result.error.take(),
             ..InboundResult::default()
         };
         self.trigger.decided = true;

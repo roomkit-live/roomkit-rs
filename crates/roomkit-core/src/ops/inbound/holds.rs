@@ -50,7 +50,19 @@ impl Machine {
     /// none was: the ticket the call holds is released at once, and the
     /// operation is over once every entry it adopted is settled and every
     /// event it committed delivered.
-    pub(super) fn end(&mut self, cx: &mut Cx<'_>, outcome: Result<InboundResult, InboundError>) {
+    pub(super) fn end(
+        &mut self,
+        cx: &mut Cx<'_>,
+        mut outcome: Result<InboundResult, InboundError>,
+    ) {
+        // A result made apart, a refusal before the pass, carries the first
+        // error the call met, a failed release of step 2 (RFC §13.5), as
+        // Python's call fills any result that carries none.
+        if let Ok(result) = outcome.as_mut()
+            && result.error.is_none()
+        {
+            result.error.clone_from(&self.trigger.result.error);
+        }
         self.release_hand(cx);
         self.publish(cx, &outcome);
         self.cascade.stop();

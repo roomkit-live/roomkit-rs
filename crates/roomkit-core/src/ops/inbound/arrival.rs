@@ -645,15 +645,15 @@ impl Arrival {
         })
     }
 
-    /// What step 5 decided of the message's sender, once it arrived: the
-    /// event goes on, with what its pass writes of them, or is held. A
-    /// message no resolution ran for goes on.
     /// The first failure of the release of a lock step 2 took, taken for
     /// the call's result.
     pub(super) fn take_release_error(&mut self) -> Option<ErrorRecord> {
         self.release_error.take()
     }
 
+    /// What step 5 decided of the message's sender, once it arrived: the
+    /// event goes on, with what its pass writes of them, or is held. A
+    /// message no resolution ran for goes on.
     pub(super) fn take_identified(&mut self) -> Identified {
         self.identified.take().unwrap_or(Identified::Proceed(None))
     }
