@@ -431,9 +431,10 @@ impl InboundRoomRouter for Fresh {
     }
 }
 
-// Python: `_still_within` raises _RoutingTimeoutError before the last new
-// room, the deadline passed in the second new room's creation hooks, each
-// room bound by a hook to another number (RMK-1396).
+// Python: tests/test_shared_channel_routing.py::TestARoomBeingCreated::test_a_deadline_passed_in_the_second_room_s_hooks_opens_no_third;
+// `_still_within` raises _RoutingTimeoutError before the last new room, the
+// deadline passed in the second new room's creation hooks, each room bound by
+// a hook to another number (RMK-1396).
 #[tokio::test]
 async fn a_deadline_passed_before_the_last_new_room_reads_its_timeout() {
     let (kit, mock) = kit_of(RoomKitOptions {
