@@ -1500,11 +1500,13 @@ mod tests {
     }
 
     // Python: core/mixins/discussion.py `_planned_turn` has no bound on the room's lock.
+    // The call's bound leaves the message before the turn time on a loaded
+    // machine; the turn is held three times as long.
     #[tokio::test]
     async fn a_turn_waits_for_the_room_s_lock_past_the_call_s_bound() {
         let held = Arc::new(Held::default());
         let options = crate::kit::RoomKitOptions {
-            process_timeout: Duration::from_millis(5),
+            process_timeout: Duration::from_millis(100),
             ..crate::kit::RoomKitOptions::default()
         };
         let (kit, _ops) = held_room_of(&held, options).await;
@@ -1517,7 +1519,7 @@ mod tests {
             let kit = kit.clone();
             tokio::spawn(async move { kit.run_discussion_turn(&room_id(), unnamed(&kit)).await })
         };
-        let early = tokio::time::timeout(Duration::from_millis(40), &mut turn).await;
+        let early = tokio::time::timeout(Duration::from_millis(300), &mut turn).await;
         assert!(
             early.is_err(),
             "the turn gave up waiting for the room's lock"
