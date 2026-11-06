@@ -215,6 +215,14 @@ pub(crate) async fn dedupe_event_indices(
         return Ok(state("noop", unique));
     }
     if !rooms.is_empty() {
+        // Before the events: a commit with a target holds its room, then that event,
+        // and this writes the room's counters below.
+        execute(
+            &transaction,
+            "SELECT 1 FROM rooms WHERE id = ANY($1::text[]) ORDER BY id FOR NO KEY UPDATE",
+            &[&rooms],
+        )
+        .await?;
         execute(
             &transaction,
             "WITH renum AS (\

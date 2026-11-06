@@ -167,24 +167,71 @@ async fn a_held_id_as_such(
     })
 }
 
+/// A reservation of a room's next index that takes the room's row first, in the
+/// same statement: Python's `_RESERVE_THROUGH_THE_ROOM`.
+const RESERVE_THROUGH_THE_ROOM: &str = "\
+WITH held AS MATERIALIZED (SELECT id FROM rooms WHERE id = $1 FOR NO KEY UPDATE) \
+INSERT INTO event_sequences(room_id, next_index) SELECT id, $2::integer FROM held \
+ON CONFLICT(room_id) DO UPDATE SET next_index = event_sequences.next_index + 1 \
+RETURNING next_index";
+
+/// An index given seen by a room's sequence, the room's row taken first in the same
+/// statement: Python's `_OBSERVE_THROUGH_THE_ROOM`.
+const OBSERVE_THROUGH_THE_ROOM: &str = "\
+WITH held AS MATERIALIZED (SELECT id FROM rooms WHERE id = $1 FOR NO KEY UPDATE) \
+INSERT INTO event_sequences(room_id, next_index) SELECT id, $2::integer FROM held \
+ON CONFLICT(room_id) DO UPDATE \
+SET next_index = GREATEST(event_sequences.next_index, EXCLUDED.next_index) \
+RETURNING next_index";
+
+/// Writes a room's sequence by `statement`, the room's row taken first in the same
+/// statement, the order of a commit; the mark it now stands at. Python's
+/// `_write_sequence`.
+///
+/// The event's foreign key would otherwise take the room after, and a commit holding
+/// it would wait on the sequence this write holds, while this write waits on the room:
+/// the server kills one of them. In one statement, as a hold of its own could find no
+/// row, the room being deleted, and its id come back with a sequence by the next: that
+/// one would be taken with nothing held. `FOR NO KEY UPDATE`, not the key share the
+/// foreign key needs: adds would share that one past a waiting `FOR UPDATE`, which a
+/// stream of them would starve.
+///
+/// A room not there to hold leaves the sequence alone, and its refusal stays the
+/// foreign key's. Should that statement find a sequence after all, the id has come back
+/// again, which only another session's deletion, creation and write since can do.
+async fn write_sequence(
+    transaction: &Transaction<'_>,
+    statement: &str,
+    room_id: &RoomId,
+    first: i32,
+) -> Result<i32, Failure> {
+    loop {
+        let mut row = query_opt(transaction, statement, &[&room_id.as_str(), &first]).await?;
+        if row.is_none() {
+            let refused = query_opt(
+                transaction,
+                "INSERT INTO event_sequences(room_id, next_index) VALUES($1, $2) \
+                 ON CONFLICT(room_id) DO NOTHING RETURNING next_index",
+                &[&room_id.as_str(), &first],
+            )
+            .await;
+            row = match refused {
+                Ok(row) => row,
+                Err(Failure::Database(error)) => return Err(room_gone(error, room_id)),
+                Err(other) => return Err(other),
+            };
+        }
+        if let Some(row) = row {
+            return Ok(row.try_get("next_index")?);
+        }
+    }
+}
+
 /// Atomically reserves and returns a room's next monotonic index, never given
 /// again when its event is deleted.
 async fn reserve_index(transaction: &Transaction<'_>, room_id: &RoomId) -> Result<u64, Failure> {
-    let row = query_opt(
-        transaction,
-        "INSERT INTO event_sequences(room_id, next_index) VALUES($1, 1) \
-         ON CONFLICT(room_id) DO UPDATE SET next_index = event_sequences.next_index + 1 \
-         RETURNING next_index - 1 AS event_index",
-        &[&room_id.as_str()],
-    )
-    .await;
-    let row = match row {
-        Ok(row) => row,
-        Err(Failure::Database(error)) => return Err(room_gone(error, room_id)),
-        Err(other) => return Err(other),
-    };
-    let row = row.ok_or(Failure::OutOfRange("a reserved index"))?;
-    crate::rooms::counter(row.try_get("event_index")?)
+    let next = write_sequence(transaction, RESERVE_THROUGH_THE_ROOM, room_id, 1).await?;
+    crate::rooms::counter(next - 1)
 }
 
 /// Keeps automatic assignment ahead of an index the caller supplied.
@@ -192,36 +239,25 @@ async fn observe_index(transaction: &Transaction<'_>, event: &RoomEvent) -> Resu
     let next = integer(event.index)?
         .checked_add(1)
         .ok_or(Failure::OutOfRange("an index"))?;
-    let observed = execute(
-        transaction,
-        "INSERT INTO event_sequences(room_id, next_index) VALUES($1, $2) \
-         ON CONFLICT(room_id) DO UPDATE \
-         SET next_index = GREATEST(event_sequences.next_index, EXCLUDED.next_index)",
-        &[&event.room_id.as_str(), &next],
-    )
-    .await;
-    match observed {
-        Ok(_) => Ok(()),
-        Err(Failure::Database(error)) => Err(room_gone(error, &event.room_id)),
-        Err(other) => Err(other),
-    }
+    write_sequence(transaction, OBSERVE_THROUGH_THE_ROOM, &event.room_id, next).await?;
+    Ok(())
 }
 
-/// Takes the room's row before its sequence, the order of a commit, as Python's
-/// `_hold_room_first`. The event's foreign key would otherwise take it after, and a
-/// commit holding the room would wait on the sequence this write holds, while this
-/// write waits on the room: the server kills one of them. `FOR NO KEY UPDATE`, not
-/// the key share the foreign key needs: adds would share that one past a waiting
-/// `FOR UPDATE`, which a stream of them would starve. A missing room stays the
-/// foreign key's refusal, in the next statement.
-async fn hold_room_first(transaction: &Transaction<'_>, room_id: &RoomId) -> Result<(), Failure> {
-    execute(
+/// Takes the room's row before its events, the order of its deletion and of a commit;
+/// whether the room is there to hold. Python's `_hold_room_first`.
+///
+/// A deletion holds the room, then takes its events in the order it finds them, and a
+/// message edited twice sits after its first edit: a write of a message and its edits
+/// holding them first would wait on what the deletion holds, and the deletion on them,
+/// and the server kills one. `FOR NO KEY UPDATE`, as [`write_sequence`].
+async fn hold_room_first(transaction: &Transaction<'_>, room_id: &RoomId) -> Result<bool, Failure> {
+    let held = query_opt(
         transaction,
         "SELECT 1 FROM rooms WHERE id = $1 FOR NO KEY UPDATE",
         &[&room_id.as_str()],
     )
     .await?;
-    Ok(())
+    Ok(held.is_some())
 }
 
 /// Stores `event` as it is, its index the caller's, the room's counters
@@ -236,7 +272,6 @@ pub(crate) async fn add(client: &mut Object, mut event: RoomEvent) -> Result<Roo
 
 async fn add_in_transaction(client: &mut Object, event: RoomEvent) -> Result<RoomEvent, Failure> {
     let transaction = client.transaction().await?;
-    hold_room_first(&transaction, &event.room_id).await?;
     observe_index(&transaction, &event).await?;
     insert(&transaction, &event).await?;
     transaction.commit().await?;
@@ -262,7 +297,6 @@ async fn auto_indexed_in_transaction(
     mut event: RoomEvent,
 ) -> Result<RoomEvent, Failure> {
     let transaction = client.transaction().await?;
-    hold_room_first(&transaction, room_id).await?;
     event.index = reserve_index(&transaction, room_id).await?;
     insert(&transaction, &event).await?;
     transaction.commit().await?;
@@ -466,9 +500,10 @@ pub(crate) async fn write_target(
     target: RoomEvent,
 ) -> Result<(), Failure> {
     let transaction = client.transaction().await?;
-    if update_row(&transaction, &target, Some(room_id))
-        .await?
-        .is_none()
+    if !hold_room_first(&transaction, room_id).await?
+        || update_row(&transaction, &target, Some(room_id))
+            .await?
+            .is_none()
     {
         return Err(StoreError::EventNotFound(target.id).into());
     }
@@ -525,6 +560,9 @@ pub(crate) async fn delete(
     cascade_replies: bool,
 ) -> Result<Vec<RoomEvent>, Failure> {
     let transaction = client.transaction().await?;
+    if !hold_room_first(&transaction, room_id).await? {
+        return Ok(Vec::new());
+    }
     let root = query_opt(
         &transaction,
         "SELECT 1 FROM events WHERE room_id = $1 AND id = $2",

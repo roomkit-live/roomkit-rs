@@ -1284,11 +1284,11 @@ async fn an_add_holds_a_room_whose_id_came_back_before_its_sequence() {
             .await
             .unwrap();
         let both = async { (adding.await.unwrap(), deleting.await.unwrap()) };
-        let (added, deleted) = tokio::time::timeout(std::time::Duration::from_secs(3), both)
+        let (added, removed) = tokio::time::timeout(std::time::Duration::from_secs(3), both)
             .await
             .unwrap();
         assert_eq!(added.unwrap().id, stopped.id);
-        assert!(deleted.unwrap());
+        assert!(removed.unwrap());
     }
 }
 
@@ -1595,7 +1595,7 @@ async fn an_event_added_beside_the_kit_holds_its_next_delivery_and_loses_none() 
             from..=to
         })
         .collect();
-    assert!(!skipped.is_empty());
+    assert_ne!(skipped, [] as [u64; 0]);
     assert!(
         skipped.iter().all(|index| added.contains(index)),
         "{skipped:?} of {added:?}"
