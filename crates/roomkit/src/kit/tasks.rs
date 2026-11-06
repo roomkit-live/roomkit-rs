@@ -226,9 +226,9 @@ impl TaskEnd {
 
     /// Logs the failure the task's turn ended on, if any, once, as `what`
     /// failed, at the level its error calls for (RFC §15.2), the task's
-    /// line: a worker's stream read in its room logged it at DEBUG, one
-    /// read as its trace not at all (Python's `log_failure` of the task's
-    /// runner).
+    /// line: a worker's stream read in its room logged a provider's error
+    /// at DEBUG and any other at its level, one read as its trace nothing
+    /// (Python's `log_failure` of the task's runner).
     pub(crate) fn log_failure(&self, what: impl FnOnce() -> String) {
         if let Some(exception) = &self.exception {
             failure_log::log_failure(Log::Tasks, exception, &what(), false);

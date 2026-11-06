@@ -58,7 +58,7 @@ use crate::room_turns::Place;
 use crate::store::ConversationStore;
 use crate::tasks::{Kind, Marks, Tasks, Unit};
 use crate::turn_runners::{FirstPass, Then};
-use crate::turns::{OwnerTurn, RemoteError, RemoteItem, record_of};
+use crate::turns::{OwnerTurn, RemoteError, RemoteItem, TurnError, record_of};
 
 /// The error of a call a stream's reader stopped before it ended.
 const CANCELLED: &str = "cancelled";
@@ -816,11 +816,13 @@ impl Producer {
 
     /// Whether `error` is the very failure the reader was handed, raised
     /// again, as Python's `is` tells it: the response's failure, which only
-    /// the kit makes, at the address the reader was handed it at. The
-    /// address alone could be another error's, made by the reader where it
-    /// freed the one it was handed.
+    /// the kit makes (a turn's error that crossed, or the turn's link's),
+    /// at the address the reader was handed it at. The address alone could
+    /// be another error's, made by the reader where it freed the one it was
+    /// handed.
     fn handed_back(&self, error: &ChannelError) -> bool {
-        error.downcast_ref::<RemoteError>().is_some() && self.failed_at == Some(address_of(error))
+        let the_kit_s = error.is::<RemoteError>() || error.is::<TurnError>();
+        the_kit_s && self.failed_at == Some(address_of(error))
     }
 
     /// Settles the response once its reader is done, read `read` returned
@@ -851,7 +853,11 @@ impl Producer {
         };
         match (failure, target_error) {
             (Some(failure), target_error) => {
-                if let Some(target_error) = &target_error {
+                // Only a streaming target raises an error of its own:
+                // the driver's drain raises what it is handed.
+                if let Some(target_error) = &target_error
+                    && self.reads != Reads::Nobody
+                {
                     failure_log::log_failure(Log::Framework, target_error, &handling(), false);
                 }
                 output.error = Some(failure);
