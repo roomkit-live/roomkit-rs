@@ -1585,6 +1585,10 @@ fn discussion_options_defaults_as_python() {
     assert!(defaults.done.is_none());
     // roomkit.Discussion.__init__(silent_token) = '(silent)'
     assert_eq!(defaults.silent_token, "(silent)");
+    // roomkit.Discussion.__init__(dispatch) = None
+    assert!(defaults.dispatch.is_none());
+    // roomkit.Discussion.__init__(dispatch_timeout) = 5.0
+    assert_eq!(defaults.dispatch_timeout, Duration::from_secs(5));
     // roomkit.Discussion.__init__(rules) = None
     assert!(defaults.rules.is_none());
 }
@@ -1639,4 +1643,15 @@ fn completed_task_cache_method_options_defaults_as_python() {
     assert!(roomkit::tasks::GetOptions::default().context.is_none());
     // roomkit.tasks.CompletedTaskCache.recent_context(limit) = 5
     assert_eq!(roomkit::tasks::RecentContextOptions::default().limit, 5);
+}
+
+#[test]
+fn mock_dispatch_policy_options_defaults_as_python() {
+    let defaults = orchestration::MockDispatchPolicyOptions::default();
+    // roomkit.MockDispatchPolicy.__init__(decisions) = ()
+    assert_eq!(defaults.decisions, Vec::new());
+    // roomkit.MockDispatchPolicy.__init__(delay) = 0.0
+    assert_eq!(defaults.delay, Duration::ZERO);
+    // roomkit.MockDispatchPolicy.__init__(error) = None
+    assert!(defaults.error.is_none());
 }

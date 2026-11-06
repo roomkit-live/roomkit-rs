@@ -132,10 +132,11 @@ async fn answers(store: &InMemoryStore) -> Vec<ChannelId> {
         .collect()
 }
 
+/// Returns once the policy is asked; fails past 5 s.
 async fn decision_starts(policy: &Held) {
     tokio::time::timeout(Duration::from_secs(5), policy.deciding.notified())
         .await
-        .expect("the policy is asked");
+        .unwrap();
 }
 
 // Python: tests/orchestration/test_discussion_dispatch.py::test_a_decision_another_process_took_first_is_neither_applied_nor_reported

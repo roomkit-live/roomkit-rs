@@ -76,6 +76,8 @@ roomkit_postgres = ["roomkit.store", "roomkit.knowledge"]
 "roomkit::ChannelError" = { python = "Exception" }
 "roomkit::RouterError" = { python = "Exception" }
 "roomkit::identity::IdentityError" = { python = "Exception" }
+# A dispatch policy's raise (HITL 7a38cb9c).
+"roomkit::orchestration::DispatchError" = { python = "Exception" }
 "roomkit::DeliveryBackendError" = { python = "Exception" }
 "roomkit::model::RoomId" = { python = "str", members = ["new", "as_str"] }
 "roomkit::model::EventId" = { python = "str", members = ["new", "as_str"] }
@@ -486,6 +488,29 @@ approved = "2026-10-27"
 reason = "the kit holds its router as a trait object: InboundRoomRouter::route returns a boxed future"
 
 [[exception]]
+rust = "roomkit::MockDispatchPolicy"
+members = ["turns"]
+approved = "2026-11-06"
+reason = "Python's instance attribute turns, set in __init__, which the snapshot does not list: a method (HITL 7a38cb9c)"
+
+[[exception]]
+rust = "roomkit::orchestration::MockDispatchPolicy"
+members = ["turns"]
+approved = "2026-11-06"
+reason = "as roomkit::MockDispatchPolicy (HITL 7a38cb9c)"
+
+[[exception]]
+rust = "roomkit::orchestration::strategies::discussion::MockDispatchPolicy"
+members = ["turns"]
+approved = "2026-11-06"
+reason = "as roomkit::MockDispatchPolicy (HITL 7a38cb9c)"
+
+[[exception]]
+rust = "roomkit::orchestration::DispatchFuture"
+approved = "2026-11-06"
+reason = "the discussion holds its dispatch policy as a trait object, as the kit its identity resolver: DispatchPolicy::decide returns a boxed future (HITL 7a38cb9c)"
+
+[[exception]]
 rust = "roomkit::identity::IdentityFuture"
 approved = "2026-11-01"
 reason = "the kit holds its identity resolver as a trait object, as its router: IdentityResolver::resolve returns a boxed future (parity stream E, RMK-1134)"
@@ -620,11 +645,6 @@ rust = "roomkit::orchestration::OnHandoffComplete"
 approved = "2026-11-03"
 reason = "the callback's type, Python's Callable[[str, HandoffResult], Awaitable[None]]: an Arc of a closure returning a future, as delegate's on_complete (HITL 884fc415)"
 
-[[missing]]
-python = "roomkit.Discussion.__init__"
-params = ["dispatch", "dispatch_timeout"]
-reason = "not yet: the dispatch policy, lot 9 of stream I (RMK-1233)"
-
 [[exception]]
 rust = "roomkit::orchestration::DoneFn"
 approved = "2026-11-03"
@@ -653,7 +673,7 @@ members = [
     "ON_CONFERENCE_PARTICIPANT_LEFT", "ON_CONFERENCE_TRACK_MUTED",
     "ON_CONFERENCE_TRACK_PUBLISHED", "ON_CONFERENCE_TRACK_UNMUTED",
     "ON_CONFERENCE_TRACK_UNPUBLISHED", "ON_CONNECTION_QUALITY_CHANGED",
-    "ON_DISPATCH_DECISION", "ON_DTMF",
+    "ON_DTMF",
     "ON_INPUT_AUDIO_LEVEL",
     "ON_OUTPUT_AUDIO_LEVEL", "ON_PARTIAL_TRANSCRIPTION",
     "ON_PLAN_UPDATED", "ON_PROTOCOL_TRACE", "ON_REALTIME_DELEGATION",
@@ -667,7 +687,7 @@ members = [
     "ON_VIDEO_SESSION_STARTED", "ON_VIDEO_TRACK_ADDED",
     "ON_VIDEO_TRACK_REMOVED", "ON_VISION_RESULT",
 ]
-reason = "not in 0.x: the 58 hook triggers Rust lacks"
+reason = "not in 0.x: the 57 hook triggers Rust lacks"
 
 [[missing]]
 python = "roomkit.InboundMessage.__init__"
