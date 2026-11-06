@@ -52,6 +52,7 @@
 //! ```
 
 mod connect;
+mod dsn;
 mod error;
 mod events;
 mod hosts;

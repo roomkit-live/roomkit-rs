@@ -5,7 +5,6 @@
 use std::collections::hash_map::RandomState;
 use std::future::Future;
 use std::hash::BuildHasher;
-use std::net::IpAddr;
 use std::pin::Pin;
 
 use deadpool_postgres::Connect;
@@ -43,21 +42,27 @@ impl MakeTlsConnect<Socket> for Tls {
 /// How a pool's connections are made: its addresses, what a TCP one connects
 /// with, and the password file a connection with no password reads.
 pub(crate) struct Connector {
+    /// Never empty: [`crate::hosts::addresses`] falls back on the local defaults.
     pub(crate) addresses: Vec<Address>,
-    /// The string's `hostaddr`, each the IP of the address at its place.
-    pub(crate) host_ips: Vec<IpAddr>,
     pub(crate) tls: Option<Tls>,
     pub(crate) passfile: Option<Lookup>,
 }
 
 /// Whether `error` says its address could not be reached, which asyncpg passes
-/// for the next: an `OSError` there (no socket, no route, refused, a timeout,
-/// a TLS handshake that failed, a host not of the session asked for), or a
-/// server that cannot take a connection yet (`57P03`).
+/// for the next: the socket's connect (no socket, no route, refused, a timeout,
+/// a host not of the session asked for) or its TLS upgrade (refused, a
+/// handshake that failed), an `OSError` there; or a server that cannot take a
+/// connection yet (`57P03`). Past those, a server that answered and refused, or
+/// a connection lost, ends the list, as asyncpg's `ConnectionDoesNotExistError`
+/// does. The client tells these phases apart by its error's kind alone, which it
+/// shows only in its text.
 fn unreachable(error: &Error) -> bool {
-    error.code() == Some(&SqlState::CANNOT_CONNECT_NOW)
-        || std::error::Error::source(error)
-            .is_some_and(<dyn std::error::Error>::is::<std::io::Error>)
+    if error.code() == Some(&SqlState::CANNOT_CONNECT_NOW) {
+        return true;
+    }
+    let text = error.to_string();
+    text.starts_with("error connecting to server")
+        || text.starts_with("error performing TLS handshake")
 }
 
 /// `connection` run on a task of its own, as deadpool's own connector runs it.
@@ -73,7 +78,7 @@ where
 }
 
 /// `addresses` in a random order, for a string's `load_balance_hosts=random`.
-fn shuffled(addresses: &mut [(usize, &Address)]) {
+fn shuffled(addresses: &mut [&Address]) {
     let random = RandomState::new();
     for at in (1..addresses.len()).rev() {
         let pick = usize::try_from(random.hash_one(at)).unwrap_or(at) % (at + 1);
@@ -82,17 +87,13 @@ fn shuffled(addresses: &mut [(usize, &Address)]) {
 }
 
 impl Connector {
-    /// A connection of `base` at `address`, the `at`th of the list.
+    /// A connection of `base` at `address`.
     async fn connect_at(
         &self,
         base: &Config,
-        at: usize,
         address: &Address,
     ) -> Result<(Client, JoinHandle<()>), Error> {
         let mut config = base.clone();
-        if let Some(ip) = self.host_ips.get(at) {
-            config.hostaddr(*ip);
-        }
         match address {
             Address::Socket { directory, port } => {
                 #[cfg(unix)]
@@ -140,29 +141,35 @@ impl Connector {
             // A file broken since `init` read it: the connection goes with no
             // password, and the server says why it refuses it.
             Ok(Err(refused)) => tracing::warn!(target: "roomkit.store", "{refused}"),
-            Err(_) => {}
+            Err(lost) => tracing::warn!(
+                target: "roomkit.store",
+                "the password file's read did not finish: {lost}"
+            ),
         }
         config
     }
 
+    /// A connection of `base` at the first of the addresses that answers, in
+    /// their order (a random one for `load_balance_hosts=random`).
     async fn first_answer(&self, base: &Config) -> Result<(Client, JoinHandle<()>), Error> {
         let config = self.with_password(base).await;
-        let mut order: Vec<(usize, &Address)> = self.addresses.iter().enumerate().collect();
+        let mut order: Vec<&Address> = self.addresses.iter().collect();
         if config.get_load_balance_hosts() == LoadBalanceHosts::Random {
             shuffled(&mut order);
         }
         let Some((last, before)) = order.split_last() else {
-            // No address: the client's own refusal ("host missing").
+            // No address, which `addresses` never gives: the client's own
+            // refusal ("both host and hostaddr are missing").
             let (client, connection) = config.connect(NoTls).await?;
             return Ok((client, spawned(connection)));
         };
-        for (at, address) in before {
-            match self.connect_at(&config, *at, address).await {
+        for address in before {
+            match self.connect_at(&config, address).await {
                 Err(error) if unreachable(&error) => {}
                 answered => return answered,
             }
         }
-        self.connect_at(&config, last.0, last.1).await
+        self.connect_at(&config, last).await
     }
 }
 
@@ -173,5 +180,111 @@ impl Connect for Connector {
     ) -> Pin<Box<dyn Future<Output = Result<(Client, JoinHandle<()>), Error>> + Send + '_>> {
         let base = base.clone();
         Box::pin(async move { self.first_answer(&base).await })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    use super::*;
+    use crate::tls::{Encryption, Files, tls_config};
+
+    /// What a fake server does with the one connection it takes.
+    #[derive(Clone, Copy)]
+    enum Fake {
+        /// Answers `N` to the TLS request.
+        RefusesTls,
+        /// Waits for the startup message, then closes with it unread: a reset.
+        Resets,
+        /// Answers the startup message with an error of this state.
+        Fails(&'static str),
+    }
+
+    /// The port of a fake server that does `fake` once.
+    fn fake(fake: Fake) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut first = [0_u8; 8];
+            match fake {
+                Fake::RefusesTls => {
+                    stream.read_exact(&mut first).ok();
+                    stream.write_all(b"N").ok();
+                    stream.read_to_end(&mut Vec::new()).ok();
+                }
+                Fake::Resets => {
+                    // Unread data at its close makes the kernel reset it.
+                    stream.peek(&mut first).ok();
+                }
+                Fake::Fails(state) => {
+                    stream.read_exact(&mut first).ok();
+                    let fields = format!("SFATAL\0VFATAL\0C{state}\0Mrefused\0\0");
+                    let mut message = vec![b'E'];
+                    let length = u32::try_from(fields.len() + 4).unwrap();
+                    message.extend_from_slice(&length.to_be_bytes());
+                    message.extend_from_slice(fields.as_bytes());
+                    stream.write_all(&message).ok();
+                    // Until the client closes: a close with its bytes unread
+                    // would reset the connection under the answer.
+                    stream.read_to_end(&mut Vec::new()).ok();
+                }
+            }
+        });
+        port
+    }
+
+    /// The client's error connecting to 127.0.0.1 at `port` under `mode`.
+    async fn refusal(port: u16, mode: Encryption) -> Error {
+        let tls = MakeRustlsConnect::new(tls_config(mode, &Files::default()).unwrap());
+        let mut config = Config::new();
+        config
+            .host("127.0.0.1")
+            .port(port)
+            .user("u")
+            .password("p")
+            .ssl_mode(mode.client_mode());
+        config.connect(tls).await.err().unwrap()
+    }
+
+    /// Python (`_connect`, `__connect_addr`): asyncpg passes a host for the
+    /// next on an `OSError` (refused, a TLS upgrade refused) or `57P03`; a
+    /// connection lost once open, or a server's refusal, ends the list.
+    #[tokio::test]
+    async fn only_a_host_that_cannot_be_reached_is_passed_for_the_next() {
+        let dead = {
+            let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+            probe.local_addr().unwrap().port()
+        };
+        let cases = [
+            ("refused", dead, Encryption::Disable, true),
+            (
+                "TLS refused",
+                fake(Fake::RefusesTls),
+                Encryption::Require,
+                true,
+            ),
+            (
+                "starting up",
+                fake(Fake::Fails("57P03")),
+                Encryption::Disable,
+                true,
+            ),
+            ("reset", fake(Fake::Resets), Encryption::Disable, false),
+            (
+                "password",
+                fake(Fake::Fails("28P01")),
+                Encryption::Disable,
+                false,
+            ),
+        ];
+        for (case, port, mode, passed) in cases {
+            let error = refusal(port, mode).await;
+            assert_eq!(unreachable(&error), passed, "{case}: {error}");
+        }
     }
 }

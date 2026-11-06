@@ -119,7 +119,7 @@ fn host_list(
     };
     let decoded = |text: &str| {
         if unquote {
-            crate::pool::percent_decoded(text)
+            crate::dsn::percent_decoded(text)
         } else {
             text.to_owned()
         }
@@ -148,26 +148,71 @@ fn host_list(
 }
 
 /// Where `host` at `port` is reached: a path is a socket's directory, or the
-/// socket itself when it names one (`/run/postgresql/.s.PGSQL.5433`).
-fn address(host: String, port: u16) -> Address {
+/// socket itself when it holds `.s.PGSQL.`, as asyncpg takes it. The client
+/// joins a directory and a port, so such a path is its parent and the port
+/// its name ends with; one no port names as the client would write it
+/// (`.s.PGSQL.05432`) is refused.
+fn address(host: String, port: u16) -> Result<Address, StoreError> {
     if !host.starts_with('/') {
-        return Address::Tcp { host, port };
+        return Ok(Address::Tcp { host, port });
+    }
+    if !host.contains(".s.PGSQL.") {
+        return Ok(Address::Socket {
+            directory: PathBuf::from(host),
+            port,
+        });
     }
     let path = PathBuf::from(&host);
     let named = path
         .file_name()
         .and_then(|name| name.to_str())
         .and_then(|name| name.strip_prefix(".s.PGSQL."))
-        .and_then(|port| port.parse().ok());
+        .and_then(|digits| {
+            digits
+                .parse::<u16>()
+                .ok()
+                .filter(|port| port.to_string() == digits)
+        });
     match (named, path.parent()) {
-        (Some(port), Some(directory)) => Address::Socket {
+        (Some(port), Some(directory)) => Ok(Address::Socket {
             directory: directory.to_path_buf(),
             port,
-        },
-        _ => Address::Socket {
-            directory: path,
-            port,
-        },
+        }),
+        _ => Err(refused(
+            "a Unix socket's path names no port the client can join",
+        )),
+    }
+}
+
+/// The hosts `given` names and their ports, else `PGHOST`'s: the netloc's
+/// first, its ports leaving the `port` parameter unread, then the `host`
+/// parameter's, then the variable's; no host, and the ports the parameter
+/// names if any, when none of them names one.
+fn named_hosts(
+    given: &Given,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<(Vec<String>, Option<Vec<u16>>), StoreError> {
+    if !given.netloc.is_empty() {
+        let (hosts, ports) = host_list(&given.netloc, None, true, environment)?;
+        return Ok((hosts, Some(ports)));
+    }
+    let ports = given
+        .port
+        .as_deref()
+        .filter(|port| !port.is_empty())
+        .map(ports_of)
+        .transpose()?;
+    let host = given
+        .host
+        .clone()
+        .filter(|host| !host.is_empty())
+        .or_else(|| environment("PGHOST"));
+    match host {
+        Some(host) => {
+            let (hosts, ports) = host_list(&host, ports.as_deref(), false, environment)?;
+            Ok((hosts, Some(ports)))
+        }
+        None => Ok((Vec::new(), ports)),
     }
 }
 
@@ -177,29 +222,7 @@ pub(crate) fn addresses(
     given: &Given,
     environment: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Addresses, StoreError> {
-    let mut hosts = Vec::new();
-    let mut ports: Option<Vec<u16>> = None;
-    if !given.netloc.is_empty() {
-        let (listed, at) = host_list(&given.netloc, None, true, environment)?;
-        (hosts, ports) = (listed, Some(at));
-    }
-    if ports.is_none()
-        && let Some(port) = given.port.as_deref().filter(|port| !port.is_empty())
-    {
-        ports = Some(ports_of(port)?);
-    }
-    if hosts.is_empty()
-        && let Some(host) = given.host.as_deref().filter(|host| !host.is_empty())
-    {
-        let (listed, at) = host_list(host, ports.as_deref(), false, environment)?;
-        (hosts, ports) = (listed, Some(at));
-    }
-    if hosts.is_empty()
-        && let Some(host) = environment("PGHOST")
-    {
-        let (listed, at) = host_list(&host, ports.as_deref(), false, environment)?;
-        (hosts, ports) = (listed, Some(at));
-    }
+    let (mut hosts, ports) = named_hosts(given, environment)?;
     let local = hosts.is_empty();
     if local {
         hosts = LOCAL_HOSTS.iter().map(|host| (*host).to_owned()).collect();
@@ -232,7 +255,7 @@ pub(crate) fn addresses(
             .into_iter()
             .zip(ports)
             .map(|(host, port)| address(host, port))
-            .collect(),
+            .collect::<Result<_, _>>()?,
     })
 }
 
@@ -276,20 +299,21 @@ mod tests {
     }
 
     /// Python (asyncpg's `_parse_hostlist`): each host of the netloc its own
-    /// port, else `PGPORT`'s, else 5432, an IPv6 address in brackets.
+    /// port, else `PGPORT`'s, else 5432, an IPv6 address in brackets (first:
+    /// `urlsplit` takes a bracket there only).
     #[test]
     fn a_netloc_list_gives_each_host_its_port() {
         let read = addresses(
-            &netloc("h1:5433,h2,[::1]:5434,%2Frun%2Fpg"),
+            &netloc("[::1]:5434,h1:5433,h2,%2Frun%2Fpg"),
             &environment(&[]),
         )
         .unwrap();
         assert_eq!(
             read.tried,
             [
+                tcp("::1", 5434),
                 tcp("h1", 5433),
                 tcp("h2", 5432),
-                tcp("::1", 5434),
                 socket("/run/pg", 5432)
             ]
         );
@@ -367,18 +391,20 @@ mod tests {
     }
 
     /// Python: a path that names the socket itself is that socket, whatever
-    /// the port.
+    /// the port; one the client cannot join from a directory and a port is
+    /// refused.
     #[test]
     fn a_socket_s_own_path_is_that_socket() {
-        let read = addresses(
-            &Given {
-                host: Some("/run/pg/.s.PGSQL.6543".to_owned()),
-                ..Given::default()
-            },
-            &environment(&[]),
-        )
-        .unwrap();
+        let host = |path: &str| Given {
+            host: Some(path.to_owned()),
+            ..Given::default()
+        };
+        let read = addresses(&host("/run/pg/.s.PGSQL.6543"), &environment(&[])).unwrap();
         assert_eq!(read.tried, [socket("/run/pg", 6543)]);
+        for odd in ["/run/pg/.s.PGSQL.05432", "/run/pg/.s.PGSQL.5432x/sub"] {
+            let read = addresses(&host(odd), &environment(&[]));
+            assert!(matches!(read, Err(StoreError::Value(_))), "{odd}: {read:?}");
+        }
     }
 
     /// Python: asyncpg refuses ports that do not match the hosts, a port that

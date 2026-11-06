@@ -1,7 +1,6 @@
 //! A pool from a connection string, read as Python's asyncpg reads it; and the
 //! close of a pool a component opened itself.
 
-use std::net::IpAddr;
 use std::time::Duration;
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
@@ -10,32 +9,14 @@ use tokio_postgres::Config;
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::connect::{Connector, Tls};
-use crate::hosts::{self, Address, Addresses, Given};
+use crate::dsn::{self, Query};
+use crate::hosts::{self, Address, Addresses};
 use crate::passfile::{self, Lookup};
 use crate::tls::{Encryption, Files, tls_config};
 
-/// asyncpg's default `timeout`, for a server that accepts and never answers.
+/// asyncpg's default `timeout`, which bounds the whole of a connection: each
+/// host it tries, and a server that accepts and never answers.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// The DSN parameters the client reads itself, besides those read here.
-/// asyncpg passes any other to the server as a setting (`search_path=tenant`).
-const CLIENT_PARAMS: [&str; 15] = [
-    "user",
-    "password",
-    "dbname",
-    "options",
-    "application_name",
-    "sslnegotiation",
-    "connect_timeout",
-    "tcp_user_timeout",
-    "keepalives",
-    "keepalives_idle",
-    "keepalives_interval",
-    "keepalives_retries",
-    "target_session_attrs",
-    "channel_binding",
-    "load_balance_hosts",
-];
 
 /// A connection string read: the client's configuration, and what the client
 /// does not read itself.
@@ -45,157 +26,8 @@ struct Target {
     encryption: Encryption,
     files: Files,
     addresses: Addresses,
-    host_ips: Vec<IpAddr>,
     /// Where a connection with no password looks one up.
     passfile: Option<Lookup>,
-}
-
-/// A connection string's query, split into what the client reads and what it
-/// does not.
-#[derive(Debug, Default, PartialEq, Eq)]
-struct Query {
-    /// The string the client parses.
-    dsn: String,
-    mode: Option<String>,
-    root_certificate: Option<String>,
-    revocation_list: Option<String>,
-    /// Each setting for the server, its value read.
-    settings: Vec<(String, String)>,
-    /// The `database` parameter, which names the database if the path does not.
-    database: Option<String>,
-    /// What the string says of its hosts.
-    hosts: Given,
-    /// The `hostaddr` parameter: the client's, not asyncpg's.
-    hostaddr: Option<String>,
-    /// The `passfile` parameter.
-    passfile: Option<String>,
-    /// The netloc's user and password, which a parameter does not override.
-    user: Option<String>,
-    password: Option<String>,
-}
-
-/// `value` with its `%XX` escapes read.
-pub(crate) fn percent_decoded(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut at = 0;
-    while let Some(&byte) = bytes.get(at) {
-        let escape = (byte == b'%')
-            .then(|| bytes.get(at + 1..at + 3))
-            .flatten()
-            .and_then(|hex| std::str::from_utf8(hex).ok())
-            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
-        if let Some(value) = escape {
-            decoded.push(value);
-            at += 3;
-        } else {
-            decoded.push(byte);
-            at += 1;
-        }
-    }
-    String::from_utf8_lossy(&decoded).into_owned()
-}
-
-/// Whether `key` can be a parameter's name. What is left of an authority after
-/// a raw `?` in a password cannot be one (`ss@host/db`): asyncpg refuses such a
-/// string, and reading its tail as a query would drop the `sslmode` it holds.
-fn is_param_name(key: &str) -> bool {
-    !key.is_empty()
-        && key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
-}
-
-/// `text` with each `@` escaped: the client takes a string's credentials up
-/// to its first `@`, wherever it is, and reads the escape back in a path and
-/// a parameter.
-fn at_escaped(text: &str) -> String {
-    text.replace('@', "%40")
-}
-
-/// What a connection string's netloc says, as Python's `urlparse` and asyncpg
-/// cut it: the netloc ends at the first `/`, its credentials at its first `@`,
-/// the user's name at their first `:`, an empty name or password none.
-#[derive(Debug, Default, PartialEq, Eq)]
-struct Netloc {
-    /// The string with no netloc: the client reads neither asyncpg's hosts nor
-    /// its credentials.
-    rest: String,
-    hosts: String,
-    user: Option<String>,
-    password: Option<String>,
-}
-
-/// `base`'s netloc, and the string without it.
-fn netloc(base: &str) -> Netloc {
-    let Some((scheme, after)) = base.split_once("://") else {
-        return Netloc {
-            rest: base.to_owned(),
-            ..Netloc::default()
-        };
-    };
-    let (netloc, path) = after.split_at(after.find('/').unwrap_or(after.len()));
-    let (credentials, hosts) = netloc.split_once('@').unwrap_or(("", netloc));
-    let (user, password) = credentials.split_once(':').unwrap_or((credentials, ""));
-    let given = |text: &str| (!text.is_empty()).then(|| percent_decoded(text));
-    Netloc {
-        rest: format!("{scheme}://{}", at_escaped(path)),
-        hosts: hosts.to_owned(),
-        user: given(user),
-        password: given(password),
-    }
-}
-
-/// `dsn`'s query read. The refusal does not repeat the string.
-fn read_query(dsn: &str) -> Result<Query, StoreError> {
-    let (dsn, query) = dsn.split_once('?').unwrap_or((dsn, ""));
-    let Netloc {
-        rest: base,
-        hosts,
-        user,
-        password,
-    } = netloc(dsn);
-    let mut read = Query {
-        hosts: Given {
-            netloc: hosts,
-            ..Given::default()
-        },
-        user,
-        password,
-        ..Query::default()
-    };
-    let mut kept = Vec::new();
-    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
-        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        if !is_param_name(key) {
-            return Err(StoreError::Value(
-                "invalid DSN: a parameter has no name; a ? in a password must be written %3F"
-                    .to_owned(),
-            ));
-        }
-        match key {
-            "sslmode" => read.mode = Some(percent_decoded(value)),
-            "sslrootcert" => read.root_certificate = Some(percent_decoded(value)),
-            "sslcrl" => read.revocation_list = Some(percent_decoded(value)),
-            "database" => read.database = Some(percent_decoded(value)),
-            // Python's `parse_qs` leaves out a parameter with no value.
-            "host" | "port" | "passfile" | "hostaddr" if value.is_empty() => {}
-            "host" => read.hosts.host = Some(percent_decoded(value)),
-            "port" => read.hosts.port = Some(percent_decoded(value)),
-            "passfile" => read.passfile = Some(percent_decoded(value)),
-            "hostaddr" => read.hostaddr = Some(percent_decoded(value)),
-            known if CLIENT_PARAMS.contains(&known) => kept.push(at_escaped(pair)),
-            setting => read
-                .settings
-                .push((setting.to_owned(), percent_decoded(value))),
-        }
-    }
-    read.dsn = if kept.is_empty() {
-        base
-    } else {
-        format!("{base}?{}", kept.join("&"))
-    };
-    Ok(read)
 }
 
 /// The value of the environment variable `name`, if it holds one.
@@ -236,8 +68,9 @@ fn with_environment(config: &mut Config) {
             config.user(user);
         }
     }
+    // asyncpg takes an empty `PGPASSWORD` for a password, and reads no file then.
     if config.get_password().is_none()
-        && let Some(password) = variable("PGPASSWORD")
+        && let Ok(password) = std::env::var("PGPASSWORD")
     {
         config.password(password);
     }
@@ -251,21 +84,24 @@ fn with_environment(config: &mut Config) {
     }
 }
 
-/// What `dsn` names, what it leaves out read from the `PG*` environment
-/// variables. A bad string is told without its text, which holds a password.
-fn target(dsn: Option<&str>) -> Result<Target, StoreError> {
-    let query = match dsn {
-        Some(dsn) => {
-            if !dsn.starts_with("postgresql://") && !dsn.starts_with("postgres://") {
-                return Err(StoreError::Value(
-                    "invalid DSN: scheme is expected to be either \"postgresql\" or \"postgres\""
-                        .to_owned(),
-                ));
-            }
-            read_query(dsn)?
-        }
-        None => Query::default(),
+/// `dsn`'s string cut, after its scheme is checked.
+fn query_of(dsn: Option<&str>) -> Result<Query, StoreError> {
+    let Some(dsn) = dsn else {
+        return Ok(Query::default());
     };
+    if !dsn.starts_with("postgresql://") && !dsn.starts_with("postgres://") {
+        return Err(StoreError::Value(
+            "invalid DSN: scheme is expected to be either \"postgresql\" or \"postgres\""
+                .to_owned(),
+        ));
+    }
+    dsn::read(dsn)
+}
+
+/// The client's configuration of `query`: the string it parses, the settings,
+/// the netloc's credentials, the database, then the `PG*` variables and the
+/// TLS mode `encryption` names.
+fn client_config(query: &mut Query, encryption: Encryption) -> Result<Config, StoreError> {
     let mut config = if query.dsn.is_empty() {
         Config::new()
     } else {
@@ -275,48 +111,53 @@ fn target(dsn: Option<&str>) -> Result<Target, StoreError> {
             .map_err(StoreError::unavailable)?
     };
     with_settings(&mut config, &query.settings);
-    if let Some(user) = query.user {
+    if let Some(user) = query.user.take() {
         config.user(user);
     }
-    if let Some(password) = query.password {
+    if let Some(password) = query.password.take() {
         config.password(password);
     }
     if config.get_dbname().is_none()
-        && let Some(database) = query.database
+        && let Some(database) = query.database.take()
     {
         config.dbname(database);
     }
     with_environment(&mut config);
-    let mode = query.mode.or_else(|| variable("PGSSLMODE"));
+    config.ssl_mode(encryption.client_mode());
+    Ok(config)
+}
+
+/// Where `config`, which has no password, looks one up: `passfile`, else
+/// `PGPASSFILE` as it is (an empty one is a path too), else `~/.pgpass`; for
+/// `addresses`' hosts, the database and the user.
+fn password_lookup(
+    config: &Config,
+    passfile: Option<String>,
+    addresses: &Addresses,
+) -> Option<Lookup> {
+    if config.get_password().is_some() {
+        return None;
+    }
+    let file = passfile::file(passfile.or_else(|| std::env::var("PGPASSFILE").ok()))?;
+    Some(Lookup {
+        file,
+        hosts: addresses.for_password.clone(),
+        database: config.get_dbname().map(str::to_owned),
+        user: config.get_user().map(str::to_owned),
+    })
+}
+
+/// What `dsn` names, what it leaves out read from the `PG*` environment
+/// variables. A bad string is told without its text, which holds a password.
+fn target(dsn: Option<&str>) -> Result<Target, StoreError> {
+    let mut query = query_of(dsn)?;
+    let mode = query.mode.take().or_else(|| variable("PGSSLMODE"));
     let encryption = mode
         .as_deref()
         .map_or(Ok(Encryption::Prefer), Encryption::named)?;
-    config.ssl_mode(encryption.client_mode());
+    let config = client_config(&mut query, encryption)?;
     let addresses = hosts::addresses(&query.hosts, &variable)?;
-    let host_ips = query
-        .hostaddr
-        .as_deref()
-        .map_or(Ok(Vec::new()), |ips| {
-            ips.split(',')
-                .map(str::parse)
-                .collect::<Result<Vec<IpAddr>, _>>()
-        })
-        .map_err(|_| {
-            StoreError::Value("invalid DSN: a hostaddr is not an IP address".to_owned())
-        })?;
-    let passfile = if config.get_password().is_none() {
-        // asyncpg reads `PGPASSFILE` as it is, an empty one a path too.
-        passfile::file(query.passfile.or_else(|| std::env::var("PGPASSFILE").ok())).map(|file| {
-            Lookup {
-                file,
-                hosts: addresses.for_password.clone(),
-                database: config.get_dbname().map(str::to_owned),
-                user: config.get_user().map(str::to_owned),
-            }
-        })
-    } else {
-        None
-    };
+    let passfile = password_lookup(&config, query.passfile, &addresses);
     Ok(Target {
         config,
         encryption,
@@ -325,7 +166,6 @@ fn target(dsn: Option<&str>) -> Result<Target, StoreError> {
             revocation_list: query.revocation_list.or_else(|| variable("PGSSLCRL")),
         },
         addresses,
-        host_ips,
         passfile,
     })
 }
@@ -350,10 +190,47 @@ fn manager_config() -> ManagerConfig {
     }
 }
 
+/// Reads the password file `lookup` names once, so that one asyncpg refuses
+/// fails `init`, and warns of one left unread; each connection reads it again.
+async fn password_file_checked(lookup: Option<Lookup>) -> Result<(), StoreError> {
+    let Some(lookup) = lookup else {
+        return Ok(());
+    };
+    let found = tokio::task::spawn_blocking(move || passfile::password(&lookup))
+        .await
+        .map_err(StoreError::unavailable)??;
+    if let Some(warning) = found.warning {
+        passfile::warn_once(&warning);
+    }
+    Ok(())
+}
+
+/// What `addresses`' TCP connections, and their cancel requests, connect with:
+/// none for sockets alone, which asyncpg asks no TLS of, no certificate read.
+async fn tls_for(
+    addresses: &Addresses,
+    encryption: Encryption,
+    files: Files,
+) -> Result<Option<Tls>, StoreError> {
+    let any_tcp = addresses
+        .tried
+        .iter()
+        .any(|address| matches!(address, Address::Tcp { .. }));
+    if !any_tcp {
+        return Ok(None);
+    }
+    // The certificates are files, read off the runtime's threads.
+    let tls = tokio::task::spawn_blocking(move || tls_config(encryption, &files))
+        .await
+        .map_err(StoreError::unavailable)??;
+    Ok(Some(Tls(MakeRustlsConnect::new(tls))))
+}
+
 /// A pool for `dsn`, with what a cancel request connects with when TLS may be
 /// in use; `min_size` of its connections opened at once, so that a server out
 /// of reach fails here rather than at the first operation, as asyncpg's
-/// `create_pool`.
+/// `create_pool`. A connection is given asyncpg's 60 s whichever hosts it
+/// tries, each host the string's `connect_timeout` if it names a longer one.
 pub(crate) async fn open(
     dsn: Option<&str>,
     min_size: usize,
@@ -374,40 +251,15 @@ pub(crate) async fn open(
         encryption,
         files,
         addresses,
-        host_ips,
         passfile,
     } = target(dsn)?;
-    if let Some(lookup) = passfile.clone() {
-        // A file asyncpg refuses fails here; each connection reads it again.
-        let found = tokio::task::spawn_blocking(move || passfile::password(&lookup))
-            .await
-            .map_err(StoreError::unavailable)??;
-        if let Some(warning) = found.warning {
-            passfile::warn_once(&warning);
-        }
-    }
-    // asyncpg asks no TLS of a Unix socket: with sockets alone, no
-    // certificate is read.
-    let any_tcp = addresses
-        .tried
-        .iter()
-        .any(|address| matches!(address, Address::Tcp { .. }));
-    let tls = if any_tcp {
-        // The certificates are files, read off the runtime's threads.
-        let tls = tokio::task::spawn_blocking(move || tls_config(encryption, &files))
-            .await
-            .map_err(StoreError::unavailable)??;
-        Some(Tls(MakeRustlsConnect::new(tls)))
-    } else {
-        None
-    };
+    password_file_checked(passfile.clone()).await?;
+    let tls = tls_for(&addresses, encryption, files).await?;
     let timeout = config
         .get_connect_timeout()
-        .copied()
-        .unwrap_or(CONNECT_TIMEOUT);
+        .map_or(CONNECT_TIMEOUT, |each| (*each).max(CONNECT_TIMEOUT));
     let connector = Connector {
         addresses: addresses.tried,
-        host_ips,
         tls: tls.clone(),
         passfile,
     };
@@ -452,41 +304,23 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn the_tls_params_leave_the_string_the_client_reads() {
-        let read = read_query(
-            "postgresql://u:p@h/d?sslmode=verify-full&sslrootcert=%2Fetc%2Fca.pem&sslcrl=%2Fetc%2Fca.crl&connect_timeout=3",
-        )
-        .unwrap();
-        assert_eq!(read.dsn, "postgresql:///d?connect_timeout=3");
-        assert_eq!(read.hosts.netloc, "h");
-        assert_eq!(
-            (read.user.as_deref(), read.password.as_deref()),
-            (Some("u"), Some("p"))
-        );
-        assert_eq!(read.mode.as_deref(), Some("verify-full"));
-        assert_eq!(read.root_certificate.as_deref(), Some("/etc/ca.pem"));
-        assert_eq!(read.revocation_list.as_deref(), Some("/etc/ca.crl"));
-        assert_eq!(
-            read_query("postgresql://u:p@h/d?sslmode=disable")
-                .unwrap()
-                .dsn,
-            "postgresql:///d"
-        );
-    }
-
     /// The client never reads a host: an `@` past the credentials does not
     /// make the string's path or a parameter a host of its, and is read back.
     #[test]
     fn the_client_reads_no_host_of_the_string() {
-        for dsn in [
-            "postgresql://h/d@b?application_name=a@b",
-            "postgresql://u:p@h:1,k/d@b?application_name=a@b&host=x&hostaddr=127.0.0.1",
+        for (dsn, settings) in [
+            ("postgresql://h/d@b?application_name=a@b", None),
+            (
+                "postgresql://u:p@h:1,k/d@b?application_name=a@b&host=x&hostaddr=127.0.0.1",
+                // asyncpg reads no `hostaddr`: a setting for the server.
+                Some("-c hostaddr=127.0.0.1"),
+            ),
         ] {
             let read = target(Some(dsn)).unwrap();
             assert!(read.config.get_hosts().is_empty(), "{dsn}");
             assert!(read.config.get_ports().is_empty(), "{dsn}");
             assert!(read.config.get_hostaddrs().is_empty(), "{dsn}");
+            assert_eq!(read.config.get_options(), settings, "{dsn}");
             assert_eq!(read.config.get_dbname(), Some("d@b"), "{dsn}");
             assert_eq!(read.config.get_application_name(), Some("a@b"), "{dsn}");
         }
@@ -502,7 +336,7 @@ mod tests {
         .unwrap();
         assert_eq!(read.config.get_user(), Some("u@x"));
         assert_eq!(read.config.get_password(), Some(&b"p:w"[..]));
-        let empty = netloc("postgresql://:@h/d");
+        let empty = dsn::netloc("postgresql://:@h/d").unwrap();
         assert_eq!((empty.user, empty.password), (None, None));
         assert_eq!(empty.rest, "postgresql:///d");
     }

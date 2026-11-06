@@ -165,6 +165,49 @@ async fn a_wait_dropped_leaves_nothing_taken() {
     until_locks_are(&schema, (0, 0)).await;
 }
 
+/// A wait dropped on a Unix socket, in a list that also names a TCP host under
+/// `sslmode=require`, is cancelled on the server as a TCP one is: the cancel
+/// request of a socket's connection asks no TLS. Runs with
+/// `POSTGRES_SOCKET_DIR`, the directory of the server's socket.
+#[tokio::test]
+async fn a_wait_dropped_on_a_socket_beside_a_tcp_host_is_cancelled() {
+    let Some(server) = dsn() else {
+        return;
+    };
+    let Some(directory) = std::env::var("POSTGRES_SOCKET_DIR").ok() else {
+        return;
+    };
+    let config: tokio_postgres::Config = server.parse().unwrap();
+    let port = *config.get_ports().first().unwrap_or(&5432);
+    if !std::path::Path::new(&directory)
+        .join(format!(".s.PGSQL.{port}"))
+        .exists()
+    {
+        return;
+    }
+    let schema = TempSchema::new().await;
+    let first = manager(&schema).await;
+    // A password, or the store would read the real ~/.pgpass.
+    let password = String::from_utf8(config.get_password().unwrap_or(b"unused").to_vec()).unwrap();
+    let second = PostgresAdvisoryLockManager::new(PostgresAdvisoryLockManagerOptions {
+        dsn: Some(format!(
+            "postgresql://{}:{password}@/{}?host={directory},127.0.0.1&port={port}&sslmode=require",
+            config.get_user().unwrap_or("postgres"),
+            config.get_dbname().unwrap_or("postgres"),
+        )),
+        max_size: 2,
+        ..PostgresAdvisoryLockManagerOptions::default()
+    });
+    second.init().await.unwrap();
+    let held = first.locked(&room("r1")).await.unwrap();
+    let waited = room("r1");
+    let cut = tokio::time::timeout(Duration::from_millis(100), second.locked(&waited)).await;
+    assert!(cut.is_err(), "the wait was granted while the lock was held");
+    until_locks_are(&schema, (1, 0)).await;
+    held.release().await.unwrap();
+    until_locks_are(&schema, (0, 0)).await;
+}
+
 /// A lock dropped unreleased, its holder cut, is released on the server, with
 /// no statement and no task of its own.
 #[tokio::test]

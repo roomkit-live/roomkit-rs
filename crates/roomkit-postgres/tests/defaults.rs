@@ -13,6 +13,7 @@ mod support;
 #[path = "../../roomkit/tests/support/warnings.rs"]
 mod warnings;
 
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -251,6 +252,41 @@ fn dead_port() -> u16 {
     probe.local_addr().unwrap().port()
 }
 
+/// What a fake server does with each connection it takes.
+#[derive(Clone, Copy)]
+enum Fake {
+    /// Answers `N` to the TLS request.
+    RefusesTls,
+    /// Waits for the client's first bytes, then closes with them unread: the
+    /// kernel resets the connection.
+    Resets,
+}
+
+/// The port of a local fake server that answers as `fake` says.
+fn fake_server(fake: Fake) -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                return;
+            };
+            let mut first = [0_u8; 8];
+            match fake {
+                Fake::RefusesTls => {
+                    stream.read_exact(&mut first).ok();
+                    stream.write_all(b"N").ok();
+                    stream.read_to_end(&mut Vec::new()).ok();
+                }
+                Fake::Resets => {
+                    stream.peek(&mut first).ok();
+                }
+            }
+        }
+    });
+    port
+}
+
 /// Python: `test_a_store_with_no_host_tries_the_local_sockets`. With no host in
 /// the string nor `PGHOST`, asyncpg tries the sockets of `/run/postgresql`,
 /// `/var/run/postgresql`, `/tmp` and `/private/tmp` before `localhost`: the
@@ -286,7 +322,16 @@ async fn a_store_with_no_host_tries_the_local_sockets() {
     );
     assert!(named.connected, "{named:?}");
     let link = Path::new("/tmp").join(format!(".s.PGSQL.{port}"));
-    if link.symlink_metadata().is_ok() {
+    // A socket of that port before /tmp's, or someone else's there: the
+    // defaults would reach another server.
+    let elsewhere = ["/run/postgresql", "/var/run/postgresql"]
+        .iter()
+        .any(|directory| {
+            Path::new(directory)
+                .join(link.file_name().unwrap())
+                .exists()
+        });
+    if elsewhere || link.symlink_metadata().is_ok() {
         return;
     }
     std::os::unix::fs::symlink(Path::new(&directory).join(link.file_name().unwrap()), &link)
@@ -448,10 +493,42 @@ async fn a_host_list_goes_past_a_dead_host() {
     }
 }
 
+/// Python: `test_a_host_refusing_tls_is_passed_for_the_next`. A host that
+/// refuses the TLS `sslmode=require` asks for is one asyncpg cannot reach: it
+/// tries the next, here the server's socket, which asks no TLS.
+#[tokio::test]
+async fn a_host_refusing_tls_is_passed_for_the_next() {
+    if ran_as_child().await {
+        return;
+    }
+    let Some(server) = Server::new().await else {
+        return;
+    };
+    let Some(directory) = socket_directory(server.port) else {
+        return;
+    };
+    let home = TempDir::new();
+    let fake = fake_server(Fake::RefusesTls);
+    let dsn = format!(
+        "postgresql://{}/{}{}&host=127.0.0.1,{directory}&port={fake},{}&sslmode=require",
+        server.user(),
+        server.database,
+        server.query,
+        server.port,
+    );
+    let opened = open_in_child(
+        "a_host_refusing_tls_is_passed_for_the_next",
+        &home.0,
+        &dsn,
+        &[],
+    );
+    assert!(opened.connected, "{opened:?}");
+}
+
 /// Python: `test_a_refusal_on_a_host_ends_the_list`. asyncpg goes to the next
 /// host only when a host cannot be reached: a server that refuses the
-/// connection ends the list, though the server's socket next in it would let
-/// the store in with no password.
+/// connection, or a connection lost once open, ends the list, though the
+/// server's socket next in it would let the store in with no password.
 #[tokio::test]
 async fn a_refusal_on_a_host_ends_the_list() {
     if ran_as_child().await {
@@ -468,19 +545,35 @@ async fn a_refusal_on_a_host_ends_the_list() {
     }
     let home = TempDir::new();
     let dsn = format!(
-        "postgresql://{}/{}{}",
+        "postgresql://{}/{}{}&sslmode=disable",
         server.user(),
         server.database,
         server.query
     );
-    let hosts = format!("{},{directory}", server.host);
-    let port = server.port.to_string();
-    let opened = open_in_child(
-        "a_refusal_on_a_host_ends_the_list",
-        &home.0,
-        &dsn,
-        &[("PGHOST", &hosts), ("PGPORT", &port)],
-    );
-    assert!(!opened.connected, "{opened:?}");
-    assert!(opened.refusal.contains("password"), "{opened:?}");
+    let resets = fake_server(Fake::Resets);
+    let cases = [
+        (
+            "refuses",
+            server.host.clone(),
+            server.port.to_string(),
+            "password",
+        ),
+        (
+            "resets",
+            "127.0.0.1".to_owned(),
+            format!("{resets},{}", server.port),
+            "error communicating with the server",
+        ),
+    ];
+    for (first, host, ports, why) in cases {
+        let hosts = format!("{host},{directory}");
+        let opened = open_in_child(
+            "a_refusal_on_a_host_ends_the_list",
+            &home.0,
+            &dsn,
+            &[("PGHOST", &hosts), ("PGPORT", &ports)],
+        );
+        assert!(!opened.connected, "{first}: {opened:?}");
+        assert!(opened.refusal.contains(why), "{first}: {opened:?}");
+    }
 }

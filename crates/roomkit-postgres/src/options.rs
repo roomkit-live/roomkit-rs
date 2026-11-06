@@ -28,10 +28,12 @@ pub struct PostgresStoreOptions {
     /// `localhost`. With no password, the first line of `~/.pgpass` (or of the
     /// file `passfile` or `PGPASSFILE` names) that matches the host, port,
     /// database and user, read at each new connection; a file the group or
-    /// others can access is not read, and warned of (HITL fa9dd934).
+    /// others can access is not read, and warned of (HITL fa9dd934). A
+    /// connection is given 60 s, asyncpg's `timeout`, whichever hosts it tries;
+    /// `connect_timeout` bounds each host, and the whole when longer.
     ///
-    /// Not read: `sslcert` and `sslkey`, which would be sent to the server as
-    /// settings, and which it refuses.
+    /// Not read: `sslcert`, `sslkey` and `hostaddr`, which are sent to the
+    /// server as settings, and which it refuses.
     /// A certificate that is its own root and a CA (the recipe of Postgres's
     /// documentation) is refused under a mode that checks the chain: rustls
     /// takes no CA as an end entity; give the server one issued by that CA.

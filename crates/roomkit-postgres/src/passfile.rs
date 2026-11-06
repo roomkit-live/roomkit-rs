@@ -181,4 +181,62 @@ mod tests {
             ]
         );
     }
+
+    /// A file of `text` in a directory of the test's, owner-only.
+    fn file_of(text: &str) -> (PathBuf, impl Drop) {
+        struct Removed(PathBuf);
+        impl Drop for Removed {
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.0).ok();
+            }
+        }
+        static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let directory =
+            std::env::temp_dir().join(format!("rk-passfile-{}-{made}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("pgpass");
+        std::fs::write(&file, text).unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        (file, Removed(directory))
+    }
+
+    fn lookup(file: PathBuf, hosts: &[(&str, u16)], database: Option<&str>) -> Lookup {
+        Lookup {
+            file,
+            hosts: hosts
+                .iter()
+                .map(|(host, port)| ((*host).to_owned(), *port))
+                .collect(),
+            database: database.map(str::to_owned),
+            user: Some("ann".to_owned()),
+        }
+    }
+
+    /// Python (`_read_password_from_pgpass`): the hosts in their order, each
+    /// against every line in its order; a database nobody named is the
+    /// user's; `*` matches any value.
+    #[test]
+    fn the_first_line_for_the_first_host_gives_the_password() {
+        let (file, _removed) =
+            file_of("b:2:*:ann:for-b\na:1:ann:ann:for-a-as-ann\na:1:*:*:for-a\n");
+        let found = password(&lookup(file.clone(), &[("a", 1), ("b", 2)], None)).unwrap();
+        assert_eq!(found.password.as_deref(), Some("for-a-as-ann"));
+        let named = password(&lookup(file.clone(), &[("a", 1)], Some("other"))).unwrap();
+        assert_eq!(named.password.as_deref(), Some("for-a"));
+        let none = password(&lookup(file, &[("c", 3)], None)).unwrap();
+        assert_eq!((none.password, none.warning), (None, None));
+    }
+
+    /// Python: a line of fewer than five fields raises once the lookup meets
+    /// it, and not if a line before it matched.
+    #[test]
+    fn a_short_line_met_before_a_match_is_refused() {
+        let (file, _removed) = file_of("a:1:*:ann:first\nshort:line\n");
+        let found = password(&lookup(file.clone(), &[("a", 1)], None)).unwrap();
+        assert_eq!(found.password.as_deref(), Some("first"));
+        let refused = password(&lookup(file, &[("b", 2)], None));
+        assert!(matches!(refused, Err(StoreError::Value(_))), "{refused:?}");
+    }
 }
