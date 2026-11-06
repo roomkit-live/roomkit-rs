@@ -116,6 +116,14 @@ impl Reply {
         }
     }
 
+    /// A chat completion answered whole, its body `body`.
+    pub(crate) fn whole(body: &Value) -> Self {
+        Self {
+            body: body.to_string(),
+            ..Self::completion("")
+        }
+    }
+
     /// A chat completion whose one choice says `text` and calls `name`
     /// with the argument text `arguments`, as the call `id`.
     pub(crate) fn calling(text: &str, id: &str, name: &str, arguments: &str) -> Self {

@@ -13,6 +13,7 @@ mod fake;
 mod first_token;
 mod generate;
 mod reasoning;
+mod response_schema;
 mod responses;
 mod retries;
 mod thinking;

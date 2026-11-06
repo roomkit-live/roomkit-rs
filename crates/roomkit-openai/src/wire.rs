@@ -280,6 +280,10 @@ struct AnswerMessage {
     reasoning: Option<Value>,
     #[serde(default, deserialize_with = "nullable")]
     tool_calls: Vec<AnswerCall>,
+    /// Why the model withheld its answer, where a structured output's
+    /// refusal lands on this dialect.
+    #[serde(default)]
+    refusal: Option<Value>,
 }
 
 /// A call the answer makes.
@@ -415,6 +419,11 @@ pub(crate) fn response(body: &[u8], secret: &str, cache_hits: bool) -> Result<Wh
             choice.message.reasoning.as_ref(),
         ),
     );
+    let mut done = finished(choice.finish_reason, usage);
+    keep_refusal(
+        &mut done,
+        choice.message.refusal.as_ref().and_then(Value::as_str),
+    );
     let calls = choice
         .message
         .tool_calls
@@ -432,7 +441,25 @@ pub(crate) fn response(body: &[u8], secret: &str, cache_hits: bool) -> Result<Wh
             Some(RawCall::new(call.id, function.name, arguments))
         })
         .collect();
-    Ok(Whole::new(text, calls, finished(choice.finish_reason, usage)).with_thinking(thinking))
+    Ok(Whole::new(text, calls, done).with_thinking(thinking))
+}
+
+/// Keeps on `done` the refusal an answer carried as text, when it carried
+/// one (Python's `answered_by`).
+fn keep_refusal(done: &mut StreamDone, refusal: Option<&str>) {
+    if let Some(refusal) = refusal.filter(|refusal| !refusal.is_empty()) {
+        done.metadata
+            .insert("refusal".to_owned(), Value::from(refusal));
+    }
+}
+
+/// The `response_format` that constrains an answer to `schema`, strictly
+/// (RFC §6.7, Python's `json_schema_format`).
+pub(crate) fn json_schema_format(schema: &serde_json::Map<String, Value>) -> Value {
+    serde_json::json!({
+        "type": "json_schema",
+        "json_schema": { "name": "response", "schema": schema, "strict": true },
+    })
 }
 
 /// One chunk of a streamed completion, as far as a turn reads it: its first
@@ -469,6 +496,9 @@ struct Delta {
     reasoning: Option<Value>,
     #[serde(default, deserialize_with = "nullable")]
     tool_calls: Vec<DeltaCall>,
+    /// A piece of the refusal the model gives in place of its answer.
+    #[serde(default)]
+    refusal: Option<Value>,
 }
 
 /// A fragment of a call, which the call's `index` names across chunks.
@@ -504,6 +534,8 @@ pub(crate) struct Folding {
     tags: ThinkTagParser,
     /// Whether the usage reports its cache hits as DeepSeek does.
     cache_hits: bool,
+    /// The refusal the deltas carried, in their order.
+    refusal: String,
 }
 
 impl Folding {
@@ -554,6 +586,9 @@ impl Folding {
             let Some(delta) = choice.delta else {
                 continue;
             };
+            if let Some(refusal) = delta.refusal.as_ref().and_then(Value::as_str) {
+                self.refusal.push_str(refusal);
+            }
             for call in delta.tool_calls {
                 self.fold(call);
             }
@@ -601,10 +636,9 @@ impl Folding {
     /// came, each with its argument text, which the loop reads, and how it
     /// ended.
     pub(crate) fn finish(self) -> (Vec<RawCall>, StreamDone) {
-        (
-            self.calls.finish(),
-            finished(self.finish_reason, self.usage),
-        )
+        let mut done = finished(self.finish_reason, self.usage);
+        keep_refusal(&mut done, Some(&self.refusal));
+        (self.calls.finish(), done)
     }
 }
 
@@ -874,6 +908,7 @@ mod tests {
                 reasoning_effort: None,
                 thinking_off: false,
                 thinking_switch: None,
+                response_schema: None,
             };
             let body = serde_json::to_value(CompletionRequest::new(
                 &config,
@@ -915,6 +950,7 @@ mod tests {
             reasoning_effort: None,
             thinking_off: false,
             thinking_switch: None,
+            response_schema: None,
         };
         let set = |base_url: Option<&str>, model: &str, switches: (Option<bool>, Option<bool>)| {
             let config = OpenAiConfig {
@@ -1397,6 +1433,7 @@ mod image_tests {
             reasoning_effort: None,
             thinking_off: false,
             thinking_switch: None,
+            response_schema: None,
         };
         let config = OpenAiConfig {
             base_url: Some("http://localhost/v1".into()),

@@ -27,6 +27,7 @@ fn request(message: Message) -> Result<Value, crate::error::OpenAiError> {
             reasoning_effort: None,
             thinking_off: false,
             thinking_switch: None,
+            response_schema: None,
         },
     )
 }

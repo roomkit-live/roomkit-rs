@@ -48,6 +48,15 @@ pub struct KimiConfig {
     /// Refused when set, as Python's config refuses it: the provider applies
     /// its vendor's own rule on a turn with tools (RFC §6.7).
     pub supports_reasoning_effort_with_tools: Option<bool>,
+    /// Whether the server honours a `json_schema` response format (RFC
+    /// §6.7, Python's `supports_response_schema`): `None` leaves it to the
+    /// provider's default, which a server behind a base URL may not keep.
+    pub supports_response_schema: Option<bool>,
+    /// Whether the server takes a `json_schema` response format beside
+    /// function tools (RFC §6.7): `None` leaves it on OpenAI's own endpoint
+    /// alone, a grammar-constrained server (vLLM, llama.cpp) unable to call
+    /// a tool under the constraint.
+    pub supports_response_schema_with_tools: Option<bool>,
     /// The headers every request carries beside the bearer token.
     pub default_headers: Option<BTreeMap<String, String>>,
     /// Members merged into every request's body, the turn's own winning.
@@ -74,6 +83,8 @@ impl KimiConfig {
             supports_custom_temperature: false,
             reasoning_effort: None,
             supports_reasoning_effort_with_tools: None,
+            supports_response_schema: None,
+            supports_response_schema_with_tools: None,
             default_headers: None,
             extra_body: None,
         }

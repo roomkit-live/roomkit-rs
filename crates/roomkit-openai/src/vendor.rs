@@ -149,6 +149,17 @@ impl Vendor {
         crate::models::catalogue(self.provider())
     }
 
+    /// Whether the vendor's endpoint honours a `json_schema` response format
+    /// when the configuration does not say (Python's
+    /// `_response_schema_default`): DeepSeek's and MiniMax's do not
+    /// document one for their models, OpenAI's and Kimi's do.
+    pub(crate) fn takes_response_schema(self) -> bool {
+        match self {
+            Self::OpenAi | Self::Kimi => true,
+            Self::DeepSeek { .. } | Self::MiniMax => false,
+        }
+    }
+
     /// Whether `base_url` is the vendor's own endpoint, whose rules the
     /// provider knows (Python's `is_vendor_endpoint`).
     pub(crate) fn is_own_endpoint(self, base_url: &str) -> bool {

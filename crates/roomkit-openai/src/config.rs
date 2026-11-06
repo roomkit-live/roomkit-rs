@@ -118,6 +118,15 @@ pub struct OpenAiConfig {
     /// Members every request's body carries, which win over RoomKit's own,
     /// as Python's client merges them last.
     pub extra_body: Option<Metadata>,
+    /// Whether the server honours a `json_schema` response format (RFC
+    /// §6.7, Python's `supports_response_schema`): `None` leaves it to the
+    /// provider's default, which a server behind a base URL may not keep.
+    pub supports_response_schema: Option<bool>,
+    /// Whether the server takes a `json_schema` response format beside
+    /// function tools (RFC §6.7): `None` leaves it on OpenAI's own endpoint
+    /// alone, a grammar-constrained server (vLLM, llama.cpp) unable to call
+    /// a tool under the constraint.
+    pub supports_response_schema_with_tools: Option<bool>,
     /// Where the bearer token comes from before each request, each try of
     /// it under `max_retries` included, in place of `api_key`: a renewable
     /// credential.
@@ -150,6 +159,8 @@ impl OpenAiConfig {
             supports_reasoning_effort_with_tools: None,
             default_headers: None,
             extra_body: None,
+            supports_response_schema: None,
+            supports_response_schema_with_tools: None,
             token_source: None,
             vision: false,
             api: OpenAiApi::default(),

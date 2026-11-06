@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use roomkit_ai::{
-    AiContext, AiProvider, AiResponse, ModelInfo, ProviderError, ProviderStream, TextStream,
+    AiContext, AiProvider, AiResponse, ModelInfo, ProviderError, ProviderStream, StreamDone,
+    TextStream, checked_stream, schema_for_generate,
 };
 
 use crate::config::{OpenAiApi, OpenAiConfig};
@@ -257,6 +258,11 @@ impl OpenAiAiProvider {
         let mut value = serde_json::to_value(completion).map_err(|_| OpenAiError::Malformed {
             reason: "could not encode request".into(),
         })?;
+        if let Some(schema) = &request.response_schema
+            && let Some(fields) = value.as_object_mut()
+        {
+            fields.insert("response_format".into(), wire::json_schema_format(schema));
+        }
         let sampling = if self.vendor == Vendor::OpenAi {
             let turn = request.reasoning_effort.as_deref();
             let effort = self.reasoning_effort(turn, request.thinking_off, tools);
@@ -507,15 +513,40 @@ impl AiProvider for OpenAiAiProvider {
         true
     }
 
+    /// The configuration's answer when it gives one, else the vendor's
+    /// default (Python's `supports_response_schema`): a server behind a
+    /// base URL decides for itself whether it applies a `json_schema`
+    /// response format, which the host that knows it states. The Responses
+    /// API carries none (HITL 9090e5f5).
+    fn supports_response_schema(&self) -> bool {
+        if self.config.api == OpenAiApi::Responses {
+            return false;
+        }
+        self.config
+            .supports_response_schema
+            .unwrap_or_else(|| self.vendor.takes_response_schema())
+    }
+
+    /// The configuration's answer when it gives one, else whether a schema
+    /// is taken on OpenAI's own endpoint, which takes one beside function
+    /// tools (Python's `supports_response_schema_with_tools`).
+    fn supports_response_schema_with_tools(&self) -> bool {
+        if self.config.api == OpenAiApi::Responses {
+            return false;
+        }
+        self.config
+            .supports_response_schema_with_tools
+            .unwrap_or_else(|| {
+                self.supports_response_schema()
+                    && crate::names::is_openai_endpoint(self.config.base_url())
+            })
+    }
+
     /// The whole answer to `context`: on Chat Completions, one completion
     /// not streamed, as Python's `generate` sends it; on Responses, its
     /// stream read to its end.
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
-        let events = match Request::of(context) {
-            Ok(request) => stream::answer(self, request, false),
-            Err(error) => stream::refused(self.failed(error)),
-        };
-        stream::whole(events).await
+        stream::whole(self.answer(context, false)).await
     }
 
     fn generate_stream<'a>(&'a self, context: &'a AiContext) -> TextStream<'a> {
@@ -523,11 +554,54 @@ impl AiProvider for OpenAiAiProvider {
     }
 
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
-        match Request::of(context) {
-            Ok(request) => stream::answer(self, request, true),
-            Err(error) => stream::refused(self.failed(error)),
-        }
+        self.answer(context, true)
     }
+}
+
+impl OpenAiAiProvider {
+    /// The generation answering `context`, `streamed` or asked whole: a
+    /// response schema the call cannot carry refused before any request,
+    /// after the model refusal Python's `_check_model_serves` gives first,
+    /// and a constrained answer checked before its done event (RFC §6.7).
+    fn answer<'a>(&'a self, context: &'a AiContext, streamed: bool) -> ProviderStream<'a> {
+        if let Err(error) = self.refuse_schema(context) {
+            return stream::refused(error);
+        }
+        let events = match Request::of(context) {
+            Ok(request) => stream::answer(self, request, streamed),
+            Err(error) => return stream::refused(self.failed(error)),
+        };
+        checked_stream(events, context, self.vendor.provider(), refusal)
+    }
+
+    /// Refuses a response schema on `context` the call cannot carry.
+    fn refuse_schema(&self, context: &AiContext) -> Result<(), ProviderError> {
+        if context.response_schema.is_none() {
+            return Ok(());
+        }
+        if self.config.api == OpenAiApi::ChatCompletions {
+            let tools = !context.tools.is_empty();
+            reasoning::check_model_serves(&self.config.model, self.official_entry(), tools)
+                .map_err(|error| self.failed(error))?;
+        }
+        let supported = self.supports_response_schema();
+        let with_tools = self.supports_response_schema_with_tools();
+        schema_for_generate(context, supported, with_tools, self.vendor.provider()).map(|_| ())
+    }
+}
+
+/// Why a constrained answer was withheld: the refusal its message or its
+/// deltas carried, or a content filter's stop (Python's `choice_refusal`
+/// and `_streamed_refusal`).
+fn refusal(done: &StreamDone) -> Option<String> {
+    let refused = done
+        .metadata
+        .get("refusal")
+        .and_then(serde_json::Value::as_str);
+    if let Some(refused) = refused.filter(|refused| !refused.is_empty()) {
+        return Some(refused.to_owned());
+    }
+    (done.finish_reason.as_deref() == Some("content_filter")).then(|| "content_filter".to_owned())
 }
 
 impl fmt::Debug for OpenAiAiProvider {

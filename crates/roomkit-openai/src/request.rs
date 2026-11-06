@@ -35,6 +35,9 @@ pub(crate) struct Request {
     /// Whether the turn states the model reasons, as its budget, its
     /// switch or an effort of `none` says (Python's `thinking_switch`).
     pub(crate) thinking_switch: Option<bool>,
+    /// The JSON Schema the answer satisfies (RFC §6.7), which the provider
+    /// checked it can carry.
+    pub(crate) response_schema: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl Request {
@@ -68,6 +71,7 @@ impl Request {
             reasoning_effort: context.reasoning_effort.clone(),
             thinking_off: switch == Some(false),
             thinking_switch: switch,
+            response_schema: context.response_schema.clone(),
         })
     }
 }

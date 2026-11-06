@@ -66,6 +66,14 @@ macro_rules! vendor_provider {
                 true
             }
 
+            fn supports_response_schema(&self) -> bool {
+                self.inner.supports_response_schema()
+            }
+
+            fn supports_response_schema_with_tools(&self) -> bool {
+                self.inner.supports_response_schema_with_tools()
+            }
+
             async fn generate(
                 &self,
                 context: &roomkit_ai::AiContext,
@@ -110,6 +118,8 @@ macro_rules! into_openai {
             reasoning_effort: config.reasoning_effort,
             default_headers: config.default_headers,
             extra_body: config.extra_body,
+            supports_response_schema: config.supports_response_schema,
+            supports_response_schema_with_tools: config.supports_response_schema_with_tools,
             ..$crate::OpenAiConfig::new(config.api_key, config.model)
         }
     }};
