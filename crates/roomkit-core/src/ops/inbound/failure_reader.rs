@@ -55,21 +55,31 @@ mod tests {
         RoomId::new("r1").unwrap()
     }
 
+    /// Python's `regenerate_response` and a verification's release read
+    /// their streams with `caller_logs=True`, as `process_inbound` does.
     #[test]
-    fn a_message_s_and_a_rerun_s_caller_receives_a_failure_no_target_rendered() {
+    fn a_rerun_s_and_a_regeneration_s_caller_receives_a_failure_no_target_rendered() {
         let rerun = Call::Rerun {
             room_id: room_id(),
             event_id: EventId::new("evt_1").unwrap(),
             floor: 0,
         };
-        let reader = FailureReader::of(&rerun);
+        let regeneration = Call::Regenerate {
+            room_id: room_id(),
+            trigger_id: None,
+            floor: 0,
+        };
+        let readers = [FailureReader::of(&rerun), FailureReader::of(&regeneration)];
+        let received: Vec<(bool, bool)> = readers
+            .iter()
+            .map(|reader| (reader.receives(true, false), reader.receives(true, true)))
+            .collect();
         assert_eq!(
+            (readers, received),
             (
-                reader,
-                reader.receives(true, false),
-                reader.receives(true, true)
-            ),
-            (FailureReader::Caller, true, false)
+                [FailureReader::Caller, FailureReader::Caller],
+                vec![(true, false), (true, false)]
+            )
         );
     }
 
