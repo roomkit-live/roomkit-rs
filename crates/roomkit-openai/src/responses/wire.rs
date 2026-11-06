@@ -59,9 +59,12 @@ pub(crate) fn request(config: &OpenAiConfig, request: &Request) -> Result<Value,
         "include": ["reasoning.encrypted_content"], "tools": tools });
     // A response schema constrains the answer's text strictly, as OpenAI
     // documents it for this API (RFC §6.7, HITL 78f2cb96).
-    if let Some(schema) = &request.response_schema {
-        body["text"] = json!({ "format": {
-            "type": "json_schema", "name": "response", "schema": schema, "strict": true } });
+    if let Some(schema) = &request.response_schema
+        && let Some(fields) = body.as_object_mut()
+    {
+        let format = json!({ "type": "json_schema", "name": "response", "schema": schema,
+            "strict": true });
+        fields.insert("text".into(), json!({ "format": format }));
     }
     // The reasoning effort is the provider's to write (`OpenAiAiProvider::body`).
     if let Some(fields) = body.as_object_mut()

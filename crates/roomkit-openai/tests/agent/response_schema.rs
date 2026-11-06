@@ -439,7 +439,9 @@ async fn a_responses_refusal_without_a_schema_is_text_its_end_naming_it() {
     assert!(error.is_none(), "{error:?}");
     let refusal = events.iter().find_map(|event| match event {
         StreamEvent::Done(done) => done.metadata.get("refusal").cloned(),
-        _ => None,
+        StreamEvent::TextDelta(_) | StreamEvent::ToolCall(_) | StreamEvent::ThinkingDelta(_) => {
+            None
+        }
     });
     assert_eq!(
         (text_of(&events), refusal),
