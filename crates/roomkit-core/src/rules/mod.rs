@@ -56,6 +56,7 @@ pub mod organizations;
 pub(crate) mod permissions;
 pub mod publications;
 pub(crate) mod records;
+pub mod regeneration;
 pub mod routing;
 pub(crate) mod threads;
 pub mod timers;

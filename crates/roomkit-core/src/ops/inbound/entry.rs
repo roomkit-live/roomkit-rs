@@ -45,6 +45,11 @@ impl Machine {
                 event_id,
                 floor,
             } => self.begin_rerun(cx, room_id, event_id, floor),
+            Call::Regenerate {
+                room_id,
+                trigger_id,
+                floor,
+            } => self.begin_regenerate(cx, room_id, trigger_id, floor),
             Call::Greeting {
                 room_id,
                 agent_id,

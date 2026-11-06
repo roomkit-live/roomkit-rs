@@ -7,7 +7,7 @@ use super::delivery::SetOutcome;
 use super::pass::PassOrigin;
 use crate::model::{
     ChannelBinding, ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventStatus,
-    EventType, Metadata, RoomContext, RoomEvent, RoomStatus, SystemContent, Task, TaskId,
+    EventType, Metadata, RoomContext, RoomEvent, RoomId, RoomStatus, SystemContent, Task, TaskId,
     Visibility,
 };
 use crate::ops::{ChainDepthData, Cx, FrameworkEvent, Notice, RefusedOperation};
@@ -212,10 +212,31 @@ pub(super) fn room_refused_as(
         cx,
         FrameworkEvent::RoomRefusedEvent {
             room_id: event.room_id.clone(),
-            event_id: event.id.clone(),
+            event_id: Some(event.id.clone()),
             status: status.into(),
             operation,
-            event_type: event.r#type,
+            event_type: Some(event.r#type),
+        },
+    );
+}
+
+/// Reports a regeneration of `room_id` refused by the room's `status`,
+/// naming `trigger`, the message it would have answered again, or no event
+/// when the room holds none (RFC §8.2 `room_refused_event`).
+pub(super) fn regeneration_refused(
+    cx: &mut Cx<'_>,
+    room_id: &RoomId,
+    trigger: Option<&RoomEvent>,
+    status: RoomStatus,
+) {
+    notify(
+        cx,
+        FrameworkEvent::RoomRefusedEvent {
+            room_id: room_id.clone(),
+            event_id: trigger.map(|event| event.id.clone()),
+            status: Some(status),
+            operation: RefusedOperation::Regenerate,
+            event_type: trigger.map(|event| event.r#type),
         },
     );
 }

@@ -1,7 +1,8 @@
 //! The room's agents run again on a stored event, as on a new one (RFC
 //! §11.7.6, §10.1 step 14): the Python implementation's
 //! `_rerun_agents_on`, which a held message's release calls once it is
-//! restored, and `regenerate_response` would share.
+//! restored, and `regenerate_response`, which chooses the message under the
+//! lock first (`_plan_regeneration`).
 //!
 //! The call takes the room's lock within its `process_timeout`, reads the
 //! room as the lock finds it (its due timers applied) and the event again,
@@ -38,6 +39,7 @@ use crate::ops::{Abort, Cx, Progress, RefusedOperation};
 use crate::rules::chain_depth::{self, ReentryBudget};
 use crate::rules::discussion;
 use crate::rules::permissions::{self, DeliveryPlan};
+use crate::rules::regeneration;
 use crate::rules::verification::release;
 
 /// What a rerun's section came to.
@@ -48,6 +50,9 @@ pub(super) enum Reran {
     /// The room's status refuses new events: refused before any agent
     /// runs (RFC §5.1).
     Refused,
+    /// A regeneration's caller named a trigger the choice under the lock
+    /// is not (RFC §13.6): refused before any agent runs.
+    Moved,
     /// The event's delivery set, planned for the agents and placed in the
     /// room's lane.
     Planned(Box<Planned>),
@@ -87,6 +92,12 @@ enum Asked {
     /// least depth of their answers: the depth of the work the call is made
     /// in (RFC §8.3).
     Event { event_id: EventId, floor: u32 },
+    /// The room's last message, as [`regeneration::target`] chooses it,
+    /// at least `floor` deep; when `trigger_id` names one, only that one.
+    Newest {
+        trigger_id: Option<EventId>,
+        floor: u32,
+    },
     /// The turn the discussion holding the room gives now, if any (RFC
     /// §19.7.5).
     Turn,
@@ -151,6 +162,41 @@ impl RerunWork {
         }
     }
 
+    /// A regeneration's choice, under the lock (Python's
+    /// `_refuse_regeneration`): a room whose status refuses new events
+    /// refuses it first, naming the message it would have answered again,
+    /// if any; then a named trigger that is not the choice; then no message
+    /// runs nothing.
+    fn choose(
+        &mut self,
+        cx: &mut Cx<'_>,
+        context: Box<RoomContext>,
+        trigger_id: Option<&EventId>,
+        floor: u32,
+    ) -> Progress<Result<Reran, Abort>> {
+        let trigger = regeneration::target(&context).cloned();
+        let status = context.room.status;
+        if !status.accepts_events() {
+            report::regeneration_refused(cx, &context.room.id, trigger.as_ref(), status);
+            return Progress::Done(Ok(Reran::Refused));
+        }
+        if let Some(trigger_id) = trigger_id
+            && trigger.as_ref().map(|trigger| &trigger.id) != Some(trigger_id)
+        {
+            tracing::info!(
+                target: "roomkit::core::inbound",
+                room_id = %context.room.id,
+                event_id = %trigger_id,
+                "regeneration refused: its trigger is no longer the room's choice"
+            );
+            return Progress::Done(Ok(Reran::Moved));
+        }
+        let Some(trigger) = trigger else {
+            return Progress::Done(Ok(Reran::Nothing));
+        };
+        self.placing(cx, plan(cx, trigger, context, floor))
+    }
+
     /// The set takes its place in the room's lane, behind every event
     /// committed.
     fn placing(&mut self, cx: &mut Cx<'_>, planned: Planned) -> Progress<Result<Reran, Abort>> {
@@ -198,6 +244,10 @@ impl SectionWork for RerunWork {
     ) -> Progress<Result<Reran, Abort>> {
         let room_id = context.room.id.clone();
         match &self.asked {
+            Asked::Newest { trigger_id, floor } => {
+                let (trigger_id, floor) = (trigger_id.clone(), *floor);
+                return self.choose(cx, context, trigger_id.as_ref(), floor);
+            }
             Asked::Event { event_id, .. } => {
                 let request = StoreRequest::GetEvent {
                     event_id: event_id.clone(),
@@ -357,6 +407,19 @@ impl Machine {
         self.begin_section(cx, room_id, Asked::Event { event_id, floor });
     }
 
+    /// Starts the regeneration of `room_id`'s last message, the one named
+    /// `trigger_id` when it is given: its section waits for the room's lock
+    /// within the call's bound.
+    pub(super) fn begin_regenerate(
+        &mut self,
+        cx: &mut Cx<'_>,
+        room_id: RoomId,
+        trigger_id: Option<EventId>,
+        floor: u32,
+    ) {
+        self.begin_section(cx, room_id, Asked::Newest { trigger_id, floor });
+    }
+
     /// Starts the turn the discussion holding `room_id` gives now, if any.
     pub(super) fn begin_turn(&mut self, cx: &mut Cx<'_>, room_id: RoomId) {
         self.begin_section(cx, room_id, Asked::Turn);
@@ -403,6 +466,7 @@ impl Machine {
         match ended.result {
             Ok(Reran::Nothing) => self.end(cx, Ok(InboundResult::default())),
             Ok(Reran::Refused) => self.end(cx, Ok(room_closed())),
+            Ok(Reran::Moved) => self.end(cx, Ok(refused("trigger_moved"))),
             Ok(Reran::Planned(planned)) => {
                 self.trigger.note_error(ended.release_error);
                 self.queue_rerun(cx, *planned);
@@ -522,9 +586,15 @@ impl Machine {
 /// What a rerun refused by the room's status reads: blocked `room_closed`,
 /// nothing written.
 fn room_closed() -> InboundResult {
+    refused("room_closed")
+}
+
+/// A rerun refused for `reason` before any agent ran: blocked, no event,
+/// nothing written.
+fn refused(reason: &str) -> InboundResult {
     InboundResult {
         blocked: true,
-        reason: Some("room_closed".to_owned()),
+        reason: Some(reason.to_owned()),
         ..InboundResult::default()
     }
 }

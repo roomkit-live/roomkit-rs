@@ -75,15 +75,17 @@ pub enum FrameworkEvent {
     RoomRefusedEvent {
         /// The room.
         room_id: RoomId,
-        /// The refused event's id, which names nothing in the store.
-        event_id: EventId,
+        /// The refused event's id, which names nothing in the store, or the
+        /// message a refused regeneration would have answered again; none
+        /// for a regeneration in a room that holds no such message.
+        event_id: Option<EventId>,
         /// The status that refused it; none for a room gone, which refuses
         /// every event (RFC §5.1).
         status: Option<RoomStatus>,
         /// The path that met the gate.
         operation: RefusedOperation,
-        /// The refused event's type.
-        event_type: EventType,
+        /// The refused event's type; none when it names no event.
+        event_type: Option<EventType>,
     },
     /// A channel was attached to a room.
     #[non_exhaustive]
@@ -356,10 +358,10 @@ impl FrameworkEvent {
     ) -> Self {
         Self::RoomRefusedEvent {
             room_id,
-            event_id,
+            event_id: Some(event_id),
             status: status.into(),
             operation,
-            event_type,
+            event_type: Some(event_type),
         }
     }
 

@@ -337,6 +337,33 @@ impl Inbound {
         Self::calling(config, call)
     }
 
+    /// The room's agents answer its last message again (RFC §13.6):
+    /// Python's `regenerate_response` in a room no discussion holds. Under
+    /// the room's lock, waited for within `process_timeout`, the message is
+    /// chosen as [`regeneration::target`](crate::rules::regeneration::target)
+    /// chooses it, from the room as the lock finds it, its due timers
+    /// applied. A room whose status refuses new events refuses the call
+    /// `room_closed` first, whether or not it holds such a message (RFC
+    /// §5.1); then a call naming `trigger_id`, the message its caller read,
+    /// is refused `trigger_moved` when the choice is another or none,
+    /// nothing run nor written. With no message to answer, the result names
+    /// no event and is not blocked. Otherwise the message is handed to the
+    /// room's agents as [`rerun`](Self::rerun) hands its event, at least
+    /// `floor` deep, and the result names it and holds their answers.
+    pub fn regenerate(
+        config: Arc<KitConfig>,
+        room_id: RoomId,
+        trigger_id: Option<EventId>,
+        floor: u32,
+    ) -> Self {
+        let call = Call::Regenerate {
+            room_id,
+            trigger_id,
+            floor,
+        };
+        Self::calling(config, call)
+    }
+
     /// The turn the discussion holding `room_id` gives now, if any (RFC
     /// §19.7.5 rule 9): under the room's lock, the discussion edits its
     /// queue and names the turn, which is planned for its one agent and
@@ -408,7 +435,10 @@ impl Inbound {
     fn calling(config: Arc<KitConfig>, call: Call) -> Self {
         let budget = ReentryBudget::new(config.max_chain_depth);
         let entry = match call {
-            Call::Message { .. } | Call::Rerun { .. } | Call::Turn { .. } => EntryKind::Message,
+            Call::Message { .. }
+            | Call::Rerun { .. }
+            | Call::Regenerate { .. }
+            | Call::Turn { .. } => EntryKind::Message,
             Call::Direct { .. } | Call::Post { .. } => EntryKind::Direct,
             Call::Responses { .. } => EntryKind::Responses,
             Call::Greeting { .. } => EntryKind::Greeting,
@@ -523,6 +553,12 @@ enum Call {
     Rerun {
         room_id: RoomId,
         event_id: EventId,
+        floor: u32,
+    },
+    /// The room's agents answer its last message again (RFC §13.6).
+    Regenerate {
+        room_id: RoomId,
+        trigger_id: Option<EventId>,
         floor: u32,
     },
     /// The turn a room's discussion gives now, if any (RFC §19.7.5).
