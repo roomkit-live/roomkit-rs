@@ -1,5 +1,6 @@
 //! A model's reasoning as OpenAI-compatible servers write it (RFC §6.7):
-//! inside `<think>` tags before the answer, or in a field beside `content`.
+//! inside the `<think>` block that opens the answer, or in a field beside
+//! `content`.
 //! Python's `ThinkTagParser`, `extract_think_tags`, `field_reasoning` and
 //! `merge_thinking`.
 
@@ -17,11 +18,31 @@ pub(crate) enum Segment {
 const OPEN: &str = "<think>";
 const CLOSE: &str = "</think>";
 
-/// Classes a text stream's chunks into [`Segment`]s, a tag split across
-/// chunks included: a suffix that may start a tag waits for the next chunk.
+/// What may stand before the block that opens a generation: spaces, tabs
+/// and line breaks, which stay the answer's (Python's `_LEADING_SPACE`).
+const LEADING_SPACE: [char; 4] = [' ', '\t', '\r', '\n'];
+
+/// Where a generation's text stands against the block that may open it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Place {
+    /// Nothing but leading spaces yet: a `<think>` here opens the block.
+    #[default]
+    Start,
+    /// Inside the opening block, up to its `</think>`.
+    Block,
+    /// The answer, a `<think>` it writes included.
+    Answer,
+}
+
+/// Classes one generation's text stream into [`Segment`]s (RFC §6.7): only
+/// a block that opens the generation, after nothing but spaces, tabs and
+/// line breaks, is reasoning; once the text says anything else, or the block
+/// closes, the rest is the answer. A tag split across chunks reads as it does
+/// whole: a start that may still become `<think>`, and a suffix that may
+/// start `</think>`, wait for the next chunk.
 #[derive(Debug, Default)]
 pub(crate) struct ThinkTagParser {
-    in_thinking: bool,
+    place: Place,
     held: String,
 }
 
@@ -30,42 +51,69 @@ impl ThinkTagParser {
     pub(crate) fn feed(&mut self, chunk: &str) -> Vec<Segment> {
         self.held.push_str(chunk);
         let mut segments = Vec::new();
-        while !self.held.is_empty() {
-            let tag = if self.in_thinking { CLOSE } else { OPEN };
-            if let Some(at) = self.held.find(tag) {
-                let before = self.held.drain(..at).collect::<String>();
-                self.held.drain(..tag.len());
-                self.push(&mut segments, before);
-                self.in_thinking = !self.in_thinking;
-                continue;
-            }
-            let hold = partial_tag_len(&self.held, tag);
-            let settled = self.held.len() - hold;
-            let emit = self.held.drain(..settled).collect::<String>();
-            self.push(&mut segments, emit);
-            break;
+        if self.place == Place::Start {
+            self.read_start(&mut segments);
+        }
+        if self.place == Place::Block {
+            self.read_block(&mut segments);
+        }
+        if self.place == Place::Answer {
+            push(&mut segments, Segment::Text(std::mem::take(&mut self.held)));
         }
         segments
     }
 
-    /// What is still held once the stream is over, a partial tag read as
-    /// the text it was.
+    /// Settles whether the generation opens with a block: its leading
+    /// spaces are text, and a start that may still become the tag is held.
+    fn read_start(&mut self, segments: &mut Vec<Segment>) {
+        let spaces = self.held.len() - self.held.trim_start_matches(LEADING_SPACE).len();
+        push(segments, Segment::Text(self.held.drain(..spaces).collect()));
+        if self.held.starts_with(OPEN) {
+            self.held.drain(..OPEN.len());
+            self.place = Place::Block;
+        } else if !OPEN.starts_with(self.held.as_str()) {
+            self.place = Place::Answer;
+        }
+    }
+
+    /// Hands on the block's reasoning up to its close, holding a suffix
+    /// that may start the close.
+    fn read_block(&mut self, segments: &mut Vec<Segment>) {
+        if let Some(at) = self.held.find(CLOSE) {
+            push(segments, Segment::Thinking(self.held.drain(..at).collect()));
+            self.held.drain(..CLOSE.len());
+            self.place = Place::Answer;
+            return;
+        }
+        let settled = self.held.len() - partial_tag_len(&self.held, CLOSE);
+        push(
+            segments,
+            Segment::Thinking(self.held.drain(..settled).collect()),
+        );
+    }
+
+    /// What is still held once the stream is over: a start that never
+    /// became the tag is text, the end of a block never closed reasoning.
     pub(crate) fn flush(&mut self) -> Vec<Segment> {
         let held = std::mem::take(&mut self.held);
         let mut segments = Vec::new();
-        self.push(&mut segments, held);
+        push(
+            &mut segments,
+            if self.place == Place::Block {
+                Segment::Thinking(held)
+            } else {
+                Segment::Text(held)
+            },
+        );
         segments
     }
+}
 
-    fn push(&self, segments: &mut Vec<Segment>, text: String) {
-        if text.is_empty() {
-            return;
-        }
-        segments.push(if self.in_thinking {
-            Segment::Thinking(text)
-        } else {
-            Segment::Text(text)
-        });
+/// `segment` added to `segments`, unless it is empty.
+fn push(segments: &mut Vec<Segment>, segment: Segment) {
+    let (Segment::Thinking(text) | Segment::Text(text)) = &segment;
+    if !text.is_empty() {
+        segments.push(segment);
     }
 }
 
@@ -79,9 +127,9 @@ fn partial_tag_len(text: &str, tag: &str) -> usize {
 }
 
 /// A whole answer's `text` split as [`ThinkTagParser`] splits a stream, so
-/// that it reads the same streamed or not (RFC §6.4): a block it stopped
-/// before closing is reasoning too. The reasoning is `None` for no tags or
-/// an empty block.
+/// that it reads the same streamed or not (RFC §6.4, §6.7): a block it
+/// stopped before closing is reasoning too, and a tag the answer writes is
+/// answer. The reasoning is `None` for no opening block or an empty one.
 pub(crate) fn extract_think_tags(text: &str) -> (Option<String>, String) {
     if !text.contains(OPEN) {
         return (None, text.to_owned());
@@ -255,13 +303,12 @@ mod tests {
     fn where_a_think_tag_stands() {
         let bom = '\u{feff}';
         let after_a_bom = format!("{bom}<think>a</think>answer");
-        let answer_after_a_bom = format!("{bom}answer");
         let cases: [(&[&str], Option<&str>, &str); 10] = [
             // A tag the answer writes.
             (
                 &["The parser reads the <think> tag at the start. Everything after is lost."],
-                Some(" tag at the start. Everything after is lost."),
-                "The parser reads the ",
+                None,
+                "The parser reads the <think> tag at the start. Everything after is lost.",
             ),
             // An open block alone.
             (&["<think>weighing"], Some("weighing"), ""),
@@ -270,32 +317,32 @@ mod tests {
             // Whitespace before the block.
             (&["\n \n<think>a</think>answer"], Some("a"), "\n \nanswer"),
             // A BOM before the block.
-            (&[&after_a_bom], Some("a"), &answer_after_a_bom),
+            (&[&after_a_bom], None, &after_a_bom),
             // A tag split at the start.
             (&["<thi", "nk>a</th", "ink>answer"], Some("a"), "answer"),
             // A tag split in the answer.
             (
                 &["The parser reads the <thi", "nk> tag."],
-                Some(" tag."),
-                "The parser reads the ",
+                None,
+                "The parser reads the <think> tag.",
             ),
             // A second block after the answer.
             (
                 &["<think>a</think>answer <think>b</think> more"],
-                Some("ab"),
-                "answer  more",
+                Some("a"),
+                "answer <think>b</think> more",
             ),
             // A second block right after the first.
             (
                 &["<think>a</think><think>b</think>answer"],
-                Some("ab"),
-                "answer",
+                Some("a"),
+                "<think>b</think>answer",
             ),
             // A second block after whitespace.
             (
                 &["<think>a</think>\n\n<think>b</think>answer"],
-                Some("ab"),
-                "\n\nanswer",
+                Some("a"),
+                "\n\n<think>b</think>answer",
             ),
         ];
         for (chunks, reasoning, answer) in cases {

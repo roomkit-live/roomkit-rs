@@ -350,3 +350,61 @@ async fn each_round_of_a_tool_loop_reads_its_own_start() {
     assert!(!replayed.contains("WHY-1"), "{replayed}");
     assert!(!replayed.contains("<think>"), "{replayed}");
 }
+
+// Python: tests/text_conformance/test_responses.py::TestReasoningReceived::test_a_think_tag_the_answer_writes_is_answer
+/// RMK-1327: a `<think>` the answer writes after its start is words the
+/// model said, streamed or not, the model having reasoned first in the
+/// field beside it or not.
+#[tokio::test]
+async fn a_think_tag_the_answer_writes_is_answer() {
+    let said = "The parser reads the <think> tag at the start. Everything after is lost.";
+    for reasoning in [None, Some("why")] {
+        let mut message = json!({ "content": said });
+        if let Some(reasoning) = reasoning {
+            message["reasoning_content"] = json!(reasoning);
+        }
+        let whole = generated(&message).await;
+        assert_eq!(whole, (reasoning.map(str::to_owned), said.to_owned()));
+        let mut deltas = Vec::new();
+        if let Some(reasoning) = reasoning {
+            deltas.push(json!({ "reasoning_content": reasoning }));
+        }
+        deltas.push(json!({ "content": said }));
+        let read = streamed(OpenAiApi::ChatCompletions, chunks(&deltas)).await;
+        let mut expected: Vec<Piece> = reasoning.map(thinking).into_iter().collect();
+        expected.push(text(said));
+        assert_eq!(read, expected);
+    }
+}
+
+// Python: tests/test_providers/test_openai.py::TestThinkTagsInARoom::test_a_think_tag_the_answer_writes_is_stored_and_sent_back
+/// RMK-1327, the card's answer: what follows the tag is lost neither to the
+/// room nor to the next turn's request.
+#[tokio::test]
+async fn a_think_tag_the_answer_writes_is_stored_and_sent_back() {
+    // The tag split across two chunks, as a stream may cut it.
+    let (head, tail) = (
+        "The parser reads the <thi",
+        "nk> tag at the start. Everything after is lost.",
+    );
+    let said = format!("{head}{tail}");
+    let mut first = vec![
+        chunk(&json!({ "content": head })),
+        chunk(&json!({ "content": tail })),
+    ];
+    first.extend(ending("stop", 1, 1));
+    let mut second = vec![chunk(&json!({ "content": "Yes." }))];
+    second.extend(ending("stop", 1, 1));
+    let room = Room::new(vec![Reply::events(&first), Reply::events(&second)], API_KEY).await;
+    room.says(&room.web, "alice", "Alice", "how does it read?")
+        .await;
+    room.says(&room.web, "alice", "Alice", "really?").await;
+
+    assert_eq!(answers(&room).await, [said.clone(), "Yes.".to_owned()]);
+    let sent_back: Vec<Value> = messages(&room.fake, 1)
+        .into_iter()
+        .filter(|message| message["role"] == "assistant")
+        .map(|message| message["content"].clone())
+        .collect();
+    assert_eq!(sent_back, [json!(said)]);
+}
