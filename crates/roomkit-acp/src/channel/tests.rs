@@ -349,3 +349,108 @@ async fn a_turn_outside_a_kit_is_read_whole_as_one_message() {
         Some(&json!({ "protocol_version": 1, "prompt_returned": true }))
     );
 }
+
+/// Whether `agent` writes nothing more within a short wait.
+async fn quiet(agent: &mut Agent) -> bool {
+    tokio::time::timeout(Duration::from_millis(100), agent.lines.next_line())
+        .await
+        .is_err()
+}
+
+#[tokio::test]
+async fn a_cut_turns_cancel_reaches_the_agent_before_the_rooms_next_prompt() {
+    let (channel, mut agents, _closed) = channel();
+    let (mut first, _) = turn(&channel, "room-1");
+    poll_once(&mut first).await;
+    let mut agent = Agent::new(agents.recv().await.unwrap());
+    while_agent(&mut first, agent.prompted(true)).await;
+    let (mut second, _) = turn(&channel, "room-1");
+    drop(first);
+    poll_once(&mut second).await;
+    let next = while_agent(&mut second, agent.read()).await;
+    assert_eq!(next["method"], "session/cancel");
+    let next = while_agent(&mut second, agent.read()).await;
+    assert_eq!(next["method"], "session/prompt");
+}
+
+#[tokio::test]
+async fn a_turn_cut_once_the_agent_answered_is_left_as_it_ended() {
+    let (channel, mut agents, _closed) = channel();
+    let (mut stream, record) = turn(&channel, "room-1");
+    poll_once(&mut stream).await;
+    let mut agent = Agent::new(agents.recv().await.unwrap());
+    let prompt = while_agent(&mut stream, agent.prompted(true)).await;
+    agent
+        .answer(&prompt, json!({ "stopReason": "end_turn" }))
+        .await;
+    // The answer is read by the prompt's own task, the stream never read
+    // again.
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while record
+        .get("acp")
+        .and_then(|acp| acp.get("prompt_returned").cloned())
+        .is_none()
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the answer was not read"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    drop(stream);
+    assert_eq!(
+        record.get("acp"),
+        Some(json!({ "protocol_version": 1, "prompt_returned": true }))
+    );
+    assert!(
+        quiet(&mut agent).await,
+        "the agent was told to cancel an answered prompt"
+    );
+}
+
+#[tokio::test]
+async fn a_handshake_cut_part_way_closes_the_transport_and_the_next_turn_reconnects() {
+    let (channel, mut agents, closed) = channel();
+    let (mut first, _) = turn(&channel, "room-1");
+    poll_once(&mut first).await;
+    let mut agent = Agent::new(agents.recv().await.unwrap());
+    let initialize = while_agent(&mut first, agent.read()).await;
+    assert_eq!(initialize["method"], "initialize");
+    drop(first);
+    let (mut second, _) = turn(&channel, "room-1");
+    // The second turn waits for the cut handshake's close, then opens.
+    let opened = while_agent(&mut second, agents.recv()).await;
+    assert_eq!(closed.load(Ordering::SeqCst), 1);
+    let mut agent = Agent::new(opened.unwrap());
+    let prompt = while_agent(&mut second, agent.prompted(true)).await;
+    agent
+        .answer(&prompt, json!({ "stopReason": "end_turn" }))
+        .await;
+    let (_texts, failed) = drained(&mut second).await;
+    assert!(!failed);
+}
+
+#[tokio::test]
+async fn close_cancels_a_prompt_in_flight_and_a_cut_close_still_closes_the_transport() {
+    let (channel, mut agents, closed) = channel();
+    let (mut stream, _) = turn(&channel, "room-1");
+    poll_once(&mut stream).await;
+    let mut agent = Agent::new(agents.recv().await.unwrap());
+    while_agent(&mut stream, agent.prompted(true)).await;
+    // The close is cut while the agent leaves its session/close unanswered.
+    let cut = tokio::time::timeout(Duration::from_millis(50), channel.close()).await;
+    assert!(cut.is_err());
+    assert_eq!(agent.read().await["method"], "session/cancel");
+    assert_eq!(agent.read().await["method"], "session/close");
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while closed.load(Ordering::SeqCst) == 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the transport stayed open"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // A second close does nothing.
+    channel.close().await;
+    assert_eq!(closed.load(Ordering::SeqCst), 1);
+}
