@@ -496,7 +496,8 @@ impl ConversationStore for SqliteStore {
         options: ResolveIdentityOptions,
     ) -> Result<Option<Identity>, StoreError> {
         let (channel_type, address) = (channel_type.clone(), address.to_owned());
-        self.database()
+        let resolved = self
+            .database()
             .await?
             .read(move |connection| {
                 identities::resolve(
@@ -506,7 +507,19 @@ impl ConversationStore for SqliteStore {
                     options.organization_id.as_deref(),
                 )
             })
-            .await
+            .await?;
+        Ok(match resolved {
+            Ok(found) => found,
+            Err(id) => {
+                // The record is quoted nowhere: it may be another organization's
+                // (HITL 4ee4d298). Logged here, on the caller's task.
+                tracing::warn!(
+                    target: "roomkit::store::sqlite",
+                    "Identity {id} has a record the model cannot read"
+                );
+                None
+            }
+        })
     }
 
     async fn link_address(

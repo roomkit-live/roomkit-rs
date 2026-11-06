@@ -1,6 +1,7 @@
 //! Why a file could not be opened, and what a store operation meets.
 
 use roomkit::StoreError;
+use roomkit::model::IdentityId;
 use thiserror::Error;
 
 /// A file of a schema this crate does not open: Python's
@@ -78,6 +79,9 @@ pub(crate) enum Failure {
     Json(serde_json::Error),
     /// A value the store holds is out of the range the model takes.
     OutOfRange(&'static str),
+    /// The identity's record is one the model cannot read: its id alone is
+    /// told, as the record may be another organization's (HITL 47b7dfc6).
+    Unreadable(IdentityId),
 }
 
 impl From<StoreError> for Failure {
@@ -105,6 +109,10 @@ impl From<Failure> for StoreError {
             Failure::Database(error) => Self::unavailable(error),
             Failure::Json(error) => Self::unavailable(error),
             Failure::OutOfRange(what) => Self::unavailable(format!("{what} is out of range")),
+            // Python's `ValueError`, its text the same.
+            Failure::Unreadable(id) => {
+                Self::Value(format!("Identity {id} has a record the model cannot read"))
+            }
         }
     }
 }

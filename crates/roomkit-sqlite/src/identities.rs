@@ -15,20 +15,31 @@ fn scope(organization: Option<&str>) -> &str {
     organization.unwrap_or_default()
 }
 
-/// The identity `identity_id`, with its row's JSON.
+/// The identity `identity_id`, with its row's JSON, as Python's `_x_get_identity`
+/// reads it: a record the model cannot read, or text that is no UTF-8, is
+/// [`Failure::Unreadable`], whose error quotes no part of it (HITL 47b7dfc6).
 fn stored(
     connection: &Connection,
     identity_id: &IdentityId,
 ) -> Result<Option<(Identity, String)>, Failure> {
-    let data: Option<String> = connection
+    // As bytes, as Python reads them: a text column's read refuses text that is no UTF-8.
+    let data: Option<Vec<u8>> = connection
         .query_row(
-            "SELECT data FROM identities WHERE id = ?",
+            "SELECT CAST(data AS BLOB) FROM identities WHERE id = ?",
             [identity_id.as_str()],
             |row| row.get(0),
         )
         .optional()?;
-    data.map(|data| Ok((records::read_identity(&data)?, data)))
-        .transpose()
+    let Some(data) = data else {
+        return Ok(None);
+    };
+    let unreadable = || Failure::Unreadable(identity_id.clone());
+    let data = String::from_utf8(data).map_err(|_| unreadable())?;
+    match records::read_identity(&data) {
+        Ok(identity) => Ok(Some((identity, data))),
+        Err(Failure::Json(_)) => Err(unreadable()),
+        Err(failure) => Err(failure),
+    }
 }
 
 /// The identity `identity_id`.
@@ -39,6 +50,11 @@ pub(crate) fn get(
     Ok(stored(connection, identity_id)?.map(|(identity, _)| identity))
 }
 
+/// What a read by address finds: the identity of the organization that uses the
+/// address, if one does; or the id of one whose record the model cannot read, which
+/// serves no read, its caller logging the id alone (HITL 4ee4d298).
+pub(crate) type Resolved = Result<Option<Identity>, IdentityId>;
+
 /// The identity of `organization` that uses `address` on channels of
 /// `channel_type`.
 pub(crate) fn resolve(
@@ -46,12 +62,17 @@ pub(crate) fn resolve(
     channel_type: &ChannelType,
     address: &str,
     organization: Option<&str>,
-) -> Result<Option<Identity>, Failure> {
+) -> Result<Resolved, Failure> {
     let Some(holder) = holder(connection, channel_type, address, organization)? else {
-        return Ok(None);
+        return Ok(Ok(None));
     };
-    Ok(get(connection, &holder)?
-        .filter(|identity| scope(identity.organization_id.as_deref()) == scope(organization)))
+    match get(connection, &holder) {
+        Ok(found) => Ok(Ok(found.filter(|identity| {
+            scope(identity.organization_id.as_deref()) == scope(organization)
+        }))),
+        Err(Failure::Unreadable(id)) => Ok(Err(id)),
+        Err(failure) => Err(failure),
+    }
 }
 
 /// The identity of `organization` the index files `address` under.
@@ -93,7 +114,7 @@ fn check_free(
     let held = match get(connection, &holder) {
         Ok(identity) => identity
             .is_some_and(|held| scope(held.organization_id.as_deref()) == scope(organization)),
-        Err(Failure::Json(_)) => true,
+        Err(Failure::Unreadable(_)) => true,
         Err(other) => return Err(other),
     };
     if held {
