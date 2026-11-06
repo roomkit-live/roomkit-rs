@@ -77,8 +77,18 @@ impl QuerySpans {
         let mut on_panic = EndOnPanic {
             provider: Arc::clone(&provider),
             span: Some(span.clone()),
+            polling: false,
         };
-        let outcome = work.await;
+        let mut work = std::pin::pin!(work);
+        // Marked while the operation runs only: a panic beside it, its caller's,
+        // cancels it, as Python's sibling exception cancels an awaited call.
+        let outcome = std::future::poll_fn(|cx| {
+            on_panic.polling = true;
+            let polled = work.as_mut().poll(cx);
+            on_panic.polling = false;
+            polled
+        })
+        .await;
         on_panic.span = None;
         let end = match &outcome {
             Ok(_) => EndSpanOptions::default(),
@@ -95,16 +105,20 @@ impl QuerySpans {
 
 /// Ends the span of an operation that panics, `error`, as Python's `_query_span` ends
 /// one on any `Exception` (HITL 69e3f386). An operation dropped unfinished, its
-/// caller gone, leaves its span as Python leaves a `CancelledError`'s.
+/// caller gone or panicking beside it, leaves its span as Python leaves a
+/// `CancelledError`'s.
 struct EndOnPanic {
     provider: Arc<dyn TelemetryProvider>,
     /// The span, until the operation is over.
     span: Option<String>,
+    /// Whether the operation is being polled: a panic then is its own.
+    polling: bool,
 }
 
 impl Drop for EndOnPanic {
     fn drop(&mut self) {
         if let Some(span) = self.span.take()
+            && self.polling
             && std::thread::panicking()
         {
             let end = EndSpanOptions {
@@ -243,5 +257,33 @@ mod tests {
         let ended = provider.completed_spans();
         assert_eq!(ended.len(), 1);
         assert_eq!(ended[0].status, "error");
+    }
+
+    /// Python: an exception beside an awaited `_query_span` cancels it, which its
+    /// `except Exception` lets by, the span left open: so is it here when the
+    /// operation's holder panics while the operation waits.
+    #[tokio::test]
+    async fn a_panic_beside_a_pending_operation_leaves_its_span_as_a_cancellation_does() {
+        let provider = Arc::new(MockTelemetryProvider::default());
+        let reported: Arc<dyn TelemetryProvider> = Arc::<MockTelemetryProvider>::clone(&provider);
+        let spans = Arc::new(QuerySpans::default());
+        spans.set(reported, false);
+        let holder = {
+            let spans = Arc::clone(&spans);
+            tokio::spawn(async move {
+                let waiting = spans.around(
+                    "get_room",
+                    "rooms",
+                    std::future::pending::<Result<(), StoreError>>(),
+                );
+                let mut waiting = std::pin::pin!(waiting);
+                let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+                assert!(waiting.as_mut().poll(&mut context).is_pending());
+                panic!("a defect beside the operation");
+            })
+        };
+        assert!(holder.await.unwrap_err().is_panic());
+        assert_eq!(provider.get_active_spans().len(), 1);
+        assert_eq!(provider.completed_spans().len(), 0);
     }
 }

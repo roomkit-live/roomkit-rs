@@ -238,6 +238,14 @@ mod tests {
             retry_after(&headers(&[("retry-after-ms", "1_000")]), 1_000_000.0),
             None
         );
+        // The next header is read instead, where the SDK waits one second.
+        assert_eq!(
+            retry_after(
+                &headers(&[("retry-after-ms", "1_000"), ("retry-after", "9")]),
+                1_000_000.0
+            ),
+            Some(9.0)
+        );
         // `parsedate_tz` reads a date with no time zone, and a four-digit year in
         // the obsolete form.
         assert_eq!(read("Mon, 12 Jan 1970 00:00:00"), None);

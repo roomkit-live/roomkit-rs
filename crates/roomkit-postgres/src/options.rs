@@ -14,11 +14,12 @@ pub struct PostgresStoreOptions {
     /// The connection string, `postgresql://user:password@host:port/database`,
     /// read as Python's asyncpg reads it: `sslmode`, `sslrootcert` and `sslcrl`,
     /// a parameter the client does not read passed to the server as a setting
-    /// (`?search_path=tenant`), and what it leaves out read from the `PG*`
-    /// environment variables: `PGHOST` (else `localhost`), `PGPORT`, `PGUSER`
-    /// (else `USER` or `LOGNAME`), `PGPASSWORD`, `PGDATABASE`, `PGSSLMODE`,
-    /// `PGSSLROOTCERT` and `PGSSLCRL`. `None` takes the whole connection from
-    /// them, `PGPASSWORD` included (HITL 78cd4240). Not read: `passfile`,
+    /// (`?search_path=tenant`). What it leaves out is read from these `PG*`
+    /// environment variables, the only ones this crate reads: `PGHOST` (else
+    /// `localhost`), `PGPORT`, `PGUSER` (else `USER` or `LOGNAME`), `PGPASSWORD`,
+    /// `PGDATABASE`, `PGSSLMODE`, `PGSSLROOTCERT` and `PGSSLCRL`. `None` takes
+    /// the whole connection from them, `PGPASSWORD` included (HITL 78cd4240).
+    /// Not read: `passfile`,
     /// `sslcert` and `sslkey`, which would be sent to the server as settings,
     /// and which it refuses.
     /// A certificate that is its own root and a CA (the recipe of Postgres's
