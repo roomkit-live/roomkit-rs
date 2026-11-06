@@ -9,7 +9,7 @@ use crate::think_tags::Segment;
 use std::collections::VecDeque;
 
 pub(super) enum Folding {
-    Chat(wire::Folding),
+    Chat(Box<wire::Folding>),
     Responses(responses::Folding),
 }
 
@@ -22,7 +22,9 @@ impl Folding {
         model: &str,
     ) -> Self {
         match api {
-            OpenAiApi::ChatCompletions => Self::Chat(wire::Folding::new(cache_hits, model)),
+            OpenAiApi::ChatCompletions => {
+                Self::Chat(Box::new(wire::Folding::new(cache_hits, model)))
+            }
             OpenAiApi::Responses => {
                 let mut folding = responses::Folding::default();
                 folding.namespace = namespace.map(str::to_owned);
@@ -40,7 +42,7 @@ impl Folding {
         match self {
             Self::Chat(folding) => {
                 if data == "[DONE]" {
-                    finish_chat(std::mem::take(folding), ready)?;
+                    finish_chat(*std::mem::take(folding), ready)?;
                     return Ok(true);
                 }
                 push_segments(ready, folding.take(data, secret)?);
@@ -52,7 +54,7 @@ impl Folding {
 
     pub(super) fn eof(self, ready: &mut VecDeque<StreamEvent>) -> Result<(), OpenAiError> {
         match self {
-            Self::Chat(folding) => finish_chat(folding, ready),
+            Self::Chat(folding) => finish_chat(*folding, ready),
             Self::Responses(_) => Err(OpenAiError::Malformed {
                 reason: "Responses stream ended before its terminal event".into(),
             }),

@@ -130,7 +130,7 @@ impl CallSlots {
                 FragmentId::True(id @ (Value::Array(_) | Value::Object(_))) => {
                     return Err(format!("a call's id is no text: {id}"));
                 }
-                FragmentId::True(id) if !self.taken_odd.contains(id) => {
+                FragmentId::True(id) if !self.taken_odd.iter().any(|held| same_odd(held, id)) => {
                     slot.odd_id = Some(id.clone());
                     self.taken_odd.push(id.clone());
                 }
@@ -145,7 +145,13 @@ impl CallSlots {
             name.clone_into(&mut slot.name);
         }
         slot.arguments.push_str(fragment.arguments);
-        slot.announced |= !slot.name.is_empty() && (first_name || !fragment.arguments.is_empty());
+        let announces = !slot.name.is_empty() && (first_name || !fragment.arguments.is_empty());
+        // Python's composition event names the call by its id, which a number
+        // or `true` fails as it is built.
+        if announces && let Some(id) = &slot.odd_id {
+            return Err(format!("a call's id is no text: {id}"));
+        }
+        slot.announced |= announces;
         Ok(())
     }
 
@@ -202,7 +208,7 @@ impl Slot {
     fn holds(&self, id: FragmentId<'_>) -> bool {
         match id {
             FragmentId::Text(id) => self.odd_id.is_none() && id == self.id,
-            FragmentId::True(id) => self.odd_id.as_ref() == Some(id),
+            FragmentId::True(id) => self.odd_id.as_ref().is_some_and(|held| same_odd(held, id)),
             FragmentId::None | FragmentId::False => false,
         }
     }
@@ -213,5 +219,49 @@ impl Slot {
     /// text and reads as false names no call.
     fn is_continued_by(&self, id: FragmentId<'_>) -> bool {
         matches!(id, FragmentId::None) || self.holds(id)
+    }
+}
+
+/// Whether two ids that are no text are one as Python compares them: a
+/// number or `true` by its value, `true` being 1 (`1 == True`, `7 == 7.0`).
+fn same_odd(held: &Value, id: &Value) -> bool {
+    match (python_number(held), python_number(id)) {
+        (Some(Number::Int(held)), Some(Number::Int(id))) => held == id,
+        (Some(held), Some(id)) => held.as_f64().total_cmp(&id.as_f64()).is_eq(),
+        _ => held == id,
+    }
+}
+
+/// A number as Python holds it: a whole one exactly, else a float.
+#[derive(Clone, Copy)]
+enum Number {
+    Int(i128),
+    Float(f64),
+}
+
+impl Number {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Python compares a whole number with a float as floats do past 2^53"
+    )]
+    fn as_f64(self) -> f64 {
+        match self {
+            Self::Int(whole) => whole as f64,
+            Self::Float(float) => float,
+        }
+    }
+}
+
+/// `id` as the number Python reads it, `true` being 1.
+fn python_number(id: &Value) -> Option<Number> {
+    match id {
+        Value::Bool(flag) => Some(Number::Int(i128::from(*flag))),
+        Value::Number(number) => number
+            .as_i64()
+            .map(i128::from)
+            .or_else(|| number.as_u64().map(i128::from))
+            .map(Number::Int)
+            .or_else(|| number.as_f64().map(Number::Float)),
+        Value::Null | Value::String(_) | Value::Array(_) | Value::Object(_) => None,
     }
 }

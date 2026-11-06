@@ -403,7 +403,8 @@ where
 /// `cache_read_input_tokens`, `cache_creation_input_tokens`,
 /// `reasoning_tokens`); its end names the model that answered, else
 /// `asked` ([`answered_by`]). A completion with no choice is an empty
-/// answer, which still billed its input (Python's `_response_of`).
+/// answer, which still billed its input (Python's `_response_of`); a body
+/// that is no JSON object is no completion (Python's `_completion_of`).
 ///
 /// # Errors
 ///
@@ -418,8 +419,14 @@ pub(crate) fn response(
     let malformed = |reason: String| OpenAiError::Malformed {
         reason: cleaned(&reason, secret, MESSAGE_LIMIT),
     };
-    let completion: Completion =
+    let value: Value =
         serde_json::from_slice(body).map_err(|error| malformed(error.to_string()))?;
+    // An array would fill a completion with its members' defaults.
+    if !value.is_object() {
+        return Err(malformed("not a chat completion".to_owned()));
+    }
+    let completion: Completion =
+        serde_json::from_value(value).map_err(|error| malformed(error.to_string()))?;
     let usage = completion
         .usage
         .map(|usage| usage_of(&usage, cache_hits))
@@ -465,8 +472,9 @@ pub(crate) fn response(
 
 /// What a stream answered with a completion's JSON in place of its events
 /// gives: the completion as [`response`] reads it, but one with no choice
-/// is no answer, as an error object there is none, which Python's client,
-/// finding no event in the body, fails.
+/// is no answer, as an error object there is none. Python's client finds no
+/// event in any such body and fails it, a completion with a choice too:
+/// that one is read here as the answer (RMK-1446).
 ///
 /// # Errors
 ///
@@ -1444,6 +1452,69 @@ mod tests {
             assert!(
                 matches!(read, Err(OpenAiError::Malformed { .. })),
                 "{entry}: {read:?}"
+            );
+        }
+    }
+
+    // Python: tests/test_providers/test_chat_response_reading.py::test_a_body_that_is_no_object_is_no_completion
+    #[test]
+    fn a_body_that_is_no_object_is_no_completion() {
+        for body in ["[]", "[[]]"] {
+            assert_eq!(
+                response(body.as_bytes(), "sk-1", false, "m"),
+                Err(OpenAiError::Malformed {
+                    reason: "not a chat completion".to_owned()
+                }),
+                "{body}"
+            );
+        }
+    }
+
+    /// Python's `NAMED`: a whole call to `lookup` on index 1, under no id.
+    fn named() -> Value {
+        serde_json::json!({ "index": 1, "type": "function",
+            "function": { "name": "lookup", "arguments": "{}" } })
+    }
+
+    // Python: tests/test_providers/test_chat_response_reading.py::test_an_id_that_is_no_text_another_entry_holds_is_not_taken_again
+    #[test]
+    fn an_id_that_is_no_text_another_entry_holds_is_not_taken_again() {
+        let pairs = [
+            (serde_json::json!(1), serde_json::json!(true)),
+            (serde_json::json!(true), serde_json::json!(1)),
+            (serde_json::json!(7), serde_json::json!(7.0)),
+            (serde_json::json!(7), serde_json::json!(7)),
+        ];
+        for (held, again) in pairs {
+            let entry = serde_json::json!({ "index": 0, "id": held, "type": "custom" });
+            let mut call = named();
+            call["id"] = again.clone();
+            assert_eq!(
+                streamed(&[entry, call]),
+                Ok(vec![RawCall::new("", "lookup", "{}")]),
+                "{held} then {again}"
+            );
+        }
+    }
+
+    // Python: tests/test_providers/test_chat_response_reading.py::test_a_call_named_under_an_id_that_is_no_text_fails_where_it_is_named
+    #[test]
+    fn a_call_named_under_an_id_that_is_no_text_fails_where_it_is_named() {
+        for again in [Value::Null, serde_json::json!(7)] {
+            let mut folding = Folding::default();
+            let entry = serde_json::json!({ "index": 0, "id": 7, "type": "custom" });
+            let mut call = named();
+            call["index"] = 0.into();
+            call["id"] = again.clone();
+            let chunk = |call: &Value| {
+                serde_json::json!({ "choices": [{ "index": 0, "delta": { "tool_calls": [call] } }] })
+                    .to_string()
+            };
+            assert_eq!(folding.take(&chunk(&entry), "sk-1"), Ok(Vec::new()));
+            let read = folding.take(&chunk(&call), "sk-1");
+            assert!(
+                matches!(read, Err(OpenAiError::Malformed { .. })),
+                "{again}: {read:?}"
             );
         }
     }
