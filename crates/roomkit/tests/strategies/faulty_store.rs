@@ -19,6 +19,8 @@ pub(crate) struct AbstractOnly {
     pub(crate) fail_removes: std::sync::atomic::AtomicBool,
     /// `update_room` fails while set.
     pub(crate) fail_updates: std::sync::atomic::AtomicBool,
+    /// The next `get_event` fails once set.
+    pub(crate) fail_next_event_read: std::sync::atomic::AtomicBool,
     /// `add_binding` waits while a test holds it written.
     pub(crate) binding_gate: tokio::sync::RwLock<()>,
     /// Told as an `add_binding` reaches the gate.
@@ -182,6 +184,12 @@ impl ConversationStore for AbstractOnly {
     }
 
     async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
+        if self
+            .fail_next_event_read
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(StoreError::Value("get_event fails".into()));
+        }
         self.store.get_event(event_id).await
     }
 

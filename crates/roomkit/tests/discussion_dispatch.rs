@@ -1,8 +1,12 @@
 //! A discussion's dispatch policy where a scenario cannot reach (RFC §19.7.5
 //! rule 18): a decision another process took first, a close while the
-//! policy decides, and more messages waiting than the queue keeps.
+//! policy decides, more messages waiting than the queue keeps, and a store
+//! read failing before the policy is asked.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+
+#[path = "strategies/faulty_store.rs"]
+mod faulty_store;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -63,6 +67,15 @@ async fn installed(store: &Arc<InMemoryStore>, policy: Arc<Held>) -> RoomKit {
         store: Arc::clone(store),
         ..RoomKitOptions::default()
     });
+    discussing(kit, policy).await
+}
+
+/// `kit` holding `ops` and the three agents, `r1` given to their
+/// discussion deciding by `policy`, `ops` bound.
+async fn discussing<S: ConversationStore>(
+    kit: RoomKit<S>,
+    policy: Arc<dyn DispatchPolicy>,
+) -> RoomKit<S> {
     kit.register_channel(RecordingTransport::new(
         id("ops"),
         ChannelType::SMS,
@@ -102,7 +115,7 @@ async fn installed(store: &Arc<InMemoryStore>, policy: Arc<Held>) -> RoomKit {
     kit
 }
 
-async fn say(kit: &RoomKit, text: &str) -> RoomEvent {
+async fn say<S: ConversationStore>(kit: &RoomKit<S>, text: &str) -> RoomEvent {
     let message = InboundMessage::new(id("ops"), "oncall", TextContent::new(text));
     let said = kit
         .process_inbound(message, ProcessInboundOptions::default())
@@ -230,5 +243,40 @@ async fn past_the_messages_that_may_wait_the_oldest_asks_its_candidates() {
         .collect();
     assert_eq!(queued, AGENTS);
     // The close cuts the decision under way.
+    kit.close().await.unwrap();
+}
+
+// Python: tests/orchestration/test_discussion_dispatch.py::test_a_decision_whose_message_cannot_be_read_asks_every_candidate_unreported
+#[tokio::test]
+async fn a_decision_whose_message_cannot_be_read_asks_every_candidate_unreported() {
+    let policy = Arc::new(Held::default());
+    let kit = RoomKit::new(RoomKitOptions::with_store(
+        faulty_store::AbstractOnly::default(),
+    ));
+    let deciding: Arc<Held> = Arc::clone(&policy);
+    let kit = discussing(kit, deciding).await;
+    let told = Arc::new(AtomicU32::new(0));
+    let telling = Arc::clone(&told);
+    kit.hook(
+        HookTrigger::OnDispatchDecision,
+        move |_event: DispatchDecisionEvent, _context: RoomContext| {
+            telling.fetch_add(1, Ordering::SeqCst);
+            async {}
+        },
+        HookOptions::default(),
+    )
+    .unwrap();
+
+    kit.store()
+        .fail_next_event_read
+        .store(true, Ordering::SeqCst);
+    say(&kit, "anyone?").await;
+    idle(&kit).await;
+
+    let mut answered = answers(&kit.store().store).await;
+    answered.sort();
+    assert_eq!(answered, [id("dev"), id("investigator"), id("sre")]);
+    assert_eq!(policy.asked.load(Ordering::SeqCst), 0);
+    assert_eq!(told.load(Ordering::SeqCst), 0);
     kit.close().await.unwrap();
 }
