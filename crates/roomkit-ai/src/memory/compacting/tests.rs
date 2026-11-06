@@ -5,9 +5,13 @@
 use pretty_assertions::assert_eq;
 
 use super::*;
+use crate::memory::footprint::{TurnFootprint, measured};
 use crate::memory::summary::is_summary;
 use crate::memory::testing::{Summarizer, context, event, room};
-use crate::memory::{MockMemoryProvider, MockMemoryProviderOptions};
+use crate::memory::token_estimator::{estimate_message_tokens, estimate_notes_tokens};
+use crate::memory::{
+    MockMemoryProvider, MockMemoryProviderOptions, SlidingWindowMemory, SlidingWindowMemoryOptions,
+};
 
 fn inner(messages: Vec<AiMessage>, events: Vec<RoomEvent>) -> Arc<MockMemoryProvider> {
     Arc::new(MockMemoryProvider::new(MockMemoryProviderOptions {
@@ -221,4 +225,40 @@ async fn it_carries_the_inner_notes_and_pays_for_them() {
         + estimate_notes_tokens(&result.notes);
     assert_eq!(result.notes, notes);
     assert!(carried <= 40_000);
+}
+
+// Python: tests/test_turn_footprint.py::test_the_reply_is_reserved_once_the_larger_of_the_margin_and_its_budget
+// (compacting)
+#[tokio::test]
+async fn the_reply_is_reserved_once_the_larger_of_the_margin_and_its_budget() {
+    let window = SlidingWindowMemory::new(SlidingWindowMemoryOptions { max_events: 100 });
+    let memory = memory(
+        Arc::new(window),
+        &Summarizer::answering(&["summary"]),
+        20_000,
+        CompactingMemoryOptions::default(),
+    );
+    let current = event("now", "current");
+    let mut recent_events: Vec<RoomEvent> = (0..80)
+        .map(|n| event(&"history ".repeat(200), &format!("e{n}")))
+        .collect();
+    recent_events.push(current.clone());
+    let context = RoomContext {
+        recent_events,
+        ..context()
+    };
+    let kept = |reply_tokens: usize| {
+        let footprint = TurnFootprint::new(1000, reply_tokens);
+        let room = room();
+        let (memory, current, context) = (&memory, &current, &context);
+        async move {
+            let read = memory.retrieve(&room, current, context, RetrieveOptions::default());
+            measured(footprint, read).await.unwrap().events.len()
+        }
+    };
+    // The margin is 3,000 of 20,000.
+    let within_margin = kept(2000).await;
+    let over_margin = kept(9000).await;
+    assert_eq!(within_margin, kept(0).await);
+    assert!(over_margin < within_margin);
 }

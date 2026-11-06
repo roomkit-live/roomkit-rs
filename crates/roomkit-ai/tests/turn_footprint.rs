@@ -21,8 +21,10 @@ use roomkit::{
     RoomKitOptions,
 };
 use roomkit_ai::memory::{
-    MemoryProvider, MemoryResult, RetrieveOptions, TurnFootprint, current_turn_footprint,
-    estimate_message_tokens, estimate_tokens,
+    BudgetAwareMemory, BudgetAwareMemoryOptions, CompactingMemory, CompactingMemoryOptions,
+    MemoryProvider, MemoryResult, RetrieveOptions, SlidingWindowMemory, SlidingWindowMemoryOptions,
+    SummarizingMemory, SummarizingMemoryOptions, TurnFootprint, current_turn_footprint,
+    estimate_context_tokens, estimate_message_tokens, estimate_tokens,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiChannel, AiChannelOptions, AiContentPart, AiTool, ToolHandler, ToolResult};
@@ -409,4 +411,108 @@ async fn the_replayed_images_count_in_the_turn_s_measure() {
     let footprints = memory.0.lock().unwrap().clone();
     let (first, second) = (footprints[0].unwrap(), footprints[1].unwrap());
     assert!(second.input_tokens - first.input_tokens >= 1000);
+}
+
+/// A memory of `kind` that keeps the turn within `window`, its defaults
+/// otherwise.
+fn windowed(kind: &str, window: usize) -> Arc<dyn MemoryProvider> {
+    let inner = Arc::new(SlidingWindowMemory::new(SlidingWindowMemoryOptions {
+        max_events: 200,
+    }));
+    let summarizer =
+        ScriptedProvider::new([ScriptedRound::answering("The person asked many things.")]);
+    match kind {
+        "budget_aware" => Arc::new(BudgetAwareMemory::new(
+            inner,
+            window,
+            BudgetAwareMemoryOptions::default(),
+        )),
+        "compacting" => Arc::new(CompactingMemory::new(
+            inner,
+            summarizer,
+            window,
+            CompactingMemoryOptions::default(),
+        )),
+        _ => Arc::new(SummarizingMemory::new(
+            inner,
+            summarizer,
+            window,
+            SummarizingMemoryOptions::default(),
+        )),
+    }
+}
+
+// Python: tests/test_turn_footprint.py::test_the_window_holds_the_turn_its_history_and_its_reply
+/// A 32K window, a 12K system prompt, 8K of tools and a 6K reply: a
+/// memory that keeps the turn within the window sizes the history to what
+/// the rest of the turn leaves, so what the model is sent and the reply it
+/// may write fit the window, some history kept (RMK-450).
+#[tokio::test]
+async fn the_window_holds_the_turn_its_history_and_its_reply() {
+    let (window, reply) = (32_000, 6000);
+    for kind in ["budget_aware", "compacting", "summarizing"] {
+        let model = ScriptedProvider::new([ScriptedRound::answering("ok")]);
+        let handler =
+            ToolHandler::new(|_name, _arguments| async { Ok(ToolResult::Text("ok".into())) });
+        let options = AiChannelOptions {
+            system_prompt: Some("Follow the house rules. ".repeat(2000)),
+            max_tokens: Some(reply),
+            tools: (0..8)
+                .map(|n| {
+                    AiTool::new(format!("tool_{n}"), "Looks things up. ".repeat(235))
+                        .unwrap()
+                        .into()
+                })
+                .collect(),
+            tool_handler: Some(handler),
+            tool_search: Some(false),
+            memory: Some(windowed(kind, window)),
+            ..AiChannelOptions::default()
+        };
+        let agent = AiChannel::new(channel("agent"), model.clone(), options).unwrap();
+        let mut context = context_of(Vec::new());
+        context.recent_events = (0..120)
+            .map(|n| {
+                let (said, source) = if n % 2 == 0 {
+                    (
+                        "message",
+                        EventSource::new(channel("member"), ChannelType::WEBSOCKET),
+                    )
+                } else {
+                    (
+                        "answer",
+                        EventSource::new(channel("agent"), ChannelType::AI),
+                    )
+                };
+                let body = format!("{said} {n} {}", "word ".repeat(400));
+                RoomEvent::new(
+                    room_id(),
+                    source,
+                    EventContent::Text(TextContent::new(body)),
+                )
+            })
+            .collect();
+        let current = RoomEvent::new(
+            room_id(),
+            EventSource::new(channel("member"), ChannelType::WEBSOCKET),
+            EventContent::Text(TextContent::new("What did we decide?")),
+        );
+        context.recent_events.push(current.clone());
+        let binding = ChannelBinding {
+            category: ChannelCategory::Intelligence,
+            ..ChannelBinding::new(channel("agent"), room_id(), ChannelType::AI)
+        };
+        agent.on_event(current, binding, context).await.unwrap();
+
+        let sent = model.requests().remove(0);
+        let tools: usize = sent.tools.iter().map(tool_tokens).sum();
+        assert!(estimate_tokens(sent.system_prompt.as_deref().unwrap_or("")) > 12_000);
+        assert!(tools > 8000, "{kind}: {tools} tokens of tools");
+        assert!(sent.messages.len() > 2, "{kind}: no history kept");
+        let request = estimate_context_tokens(&sent);
+        assert!(
+            request + reply as usize <= window,
+            "{kind}: {request} tokens sent and a reply of {reply} in a window of {window}"
+        );
+    }
 }
