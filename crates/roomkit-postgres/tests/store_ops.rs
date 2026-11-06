@@ -1579,19 +1579,31 @@ const NO_DSN_CHILD: &str = "ROOMKIT_TEST_NO_DSN_CHILD";
 /// Python: `test_a_store_with_no_dsn_reads_the_pg_variables` (HITL 78cd4240): with
 /// `dsn: None` the connection comes from the `PG*` environment variables,
 /// `PGPASSWORD` included. The test runs itself again in a process whose environment
-/// holds them, and no `POSTGRES_DSN`.
+/// holds them, and no `POSTGRES_DSN`; the room the child stores is read in the
+/// database `PGDATABASE` names, in its schema `public`, where a store with no
+/// `search_path` writes, the store's tables left there.
 #[tokio::test]
 async fn a_store_with_no_dsn_reads_the_pg_variables() {
     if std::env::var_os(NO_DSN_CHILD).is_some() {
         let store = PostgresStore::new(PostgresStoreOptions::default());
         store.init(SMALL_POOL).await.unwrap();
-        assert!(!store.room_exists(&room_id("nobody")).await.unwrap());
+        store
+            .create_room(Room::new(room_id("no-dsn-child")))
+            .await
+            .unwrap();
         store.close().await;
         return;
     }
     let Some(server) = dsn() else {
         return;
     };
+    // Its turn on the database, as every test's: the child's init reads catalogs.
+    let _turn = TempSchema::new().await;
+    let (reader, connection) = tokio_postgres::connect(&server, NoTls).await.unwrap();
+    tokio::spawn(connection);
+    let clear = "DO $$ BEGIN IF to_regclass('public.rooms') IS NOT NULL THEN \
+                 DELETE FROM public.rooms WHERE id = 'no-dsn-child'; END IF; END $$";
+    reader.batch_execute(clear).await.unwrap();
     let config: tokio_postgres::Config = server.parse().unwrap();
     let host = match &config.get_hosts()[0] {
         tokio_postgres::config::Host::Tcp(host) => host.clone(),
@@ -1625,6 +1637,16 @@ async fn a_store_with_no_dsn_reads_the_pg_variables() {
         "{ran}{}",
         String::from_utf8_lossy(&child.stderr)
     );
+    let stored: i64 = reader
+        .query_one(
+            "SELECT count(*) FROM public.rooms WHERE id = 'no-dsn-child'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    reader.batch_execute(clear).await.unwrap();
+    assert_eq!(stored, 1);
 }
 
 /// The kit runs on the store, its close closing the pool the store opened.

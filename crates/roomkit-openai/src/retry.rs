@@ -232,8 +232,12 @@ mod tests {
     #[test]
     fn a_wait_the_sdk_reads_and_this_crate_does_not() {
         let read = |after: &str| retry_after(&headers(&[("retry-after", after)]), 1_000_000.0);
-        // Python's `float()` reads an underscore between digits.
+        // Python's `float()` reads an underscore between digits, in either header.
         assert_eq!(read("1_000"), None);
+        assert_eq!(
+            retry_after(&headers(&[("retry-after-ms", "1_000")]), 1_000_000.0),
+            None
+        );
         // `parsedate_tz` reads a date with no time zone, and a four-digit year in
         // the obsolete form.
         assert_eq!(read("Mon, 12 Jan 1970 00:00:00"), None);

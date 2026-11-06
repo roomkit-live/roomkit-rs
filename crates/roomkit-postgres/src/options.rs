@@ -15,13 +15,15 @@ pub struct PostgresStoreOptions {
     /// read as Python's asyncpg reads it: `sslmode`, `sslrootcert` and `sslcrl`,
     /// a parameter the client does not read passed to the server as a setting
     /// (`?search_path=tenant`), and what it leaves out read from the `PG*`
-    /// environment variables. Not read: `passfile`, `sslcert` and `sslkey`, which
-    /// would be sent to the server as settings, and which it refuses.
+    /// environment variables: `PGHOST` (else `localhost`), `PGPORT`, `PGUSER`
+    /// (else `USER` or `LOGNAME`), `PGPASSWORD`, `PGDATABASE`, `PGSSLMODE`,
+    /// `PGSSLROOTCERT` and `PGSSLCRL`. `None` takes the whole connection from
+    /// them, `PGPASSWORD` included (HITL 78cd4240). Not read: `passfile`,
+    /// `sslcert` and `sslkey`, which would be sent to the server as settings,
+    /// and which it refuses.
     /// A certificate that is its own root and a CA (the recipe of Postgres's
     /// documentation) is refused under a mode that checks the chain: rustls
     /// takes no CA as an end entity; give the server one issued by that CA.
-    /// `None` takes the whole connection from the `PG*` environment variables,
-    /// `PGPASSWORD` included, as Python's asyncpg does (HITL 78cd4240).
     pub dsn: Option<String>,
     /// A pool of the integrator's, which stays theirs: the store never closes
     /// it.
