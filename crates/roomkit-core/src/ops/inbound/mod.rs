@@ -767,10 +767,9 @@ impl Machine {
                 effect: expected,
                 then,
             } if expected == effect => self.on_ticket_released(cx, *then, outcome),
-            Stage::Persisting {
-                side_effects,
-                metadata,
-            } => self.on_persisting(cx, side_effects, metadata, effect, outcome),
+            Stage::Persisting { side_effects } => {
+                self.on_persisting(cx, side_effects, effect, outcome);
+            }
             stage @ (Stage::Start(_)
             | Stage::Cascade
             | Stage::ReleasingTicket { .. }

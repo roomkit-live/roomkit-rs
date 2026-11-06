@@ -62,10 +62,9 @@ pub(super) enum Stage {
         effect: EffectId,
         then: Box<AfterTicket>,
     },
-    /// Step 15's writes, each outstanding until answered.
+    /// Step 15's write of what no set stored, outstanding until answered.
     Persisting {
-        side_effects: Option<(EffectId, Vec<Task>)>,
-        metadata: Option<EffectId>,
+        side_effects: (EffectId, Vec<Task>),
     },
     /// The call's outcome waits for every entry it adopted to be settled,
     /// and every event committed to be delivered.

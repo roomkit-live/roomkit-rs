@@ -199,8 +199,16 @@ impl Machine {
             | PassResult::Duplicate { .. }
             | PassResult::EditRefused { .. } => (None, None),
         };
-        self.side_effects
-            .collect(report.tasks, report.observations, context, made_for);
+        // A delivered event's hooks' side effects are stored with its set's,
+        // before its AFTER_BROADCAST hooks run (RFC §10.1 steps 15 and 16).
+        let delivered = matches!(report.result, PassResult::Delivered { .. });
+        let mut hook_effects = (Vec::new(), Vec::new());
+        if delivered {
+            hook_effects = (report.tasks, report.observations);
+        } else {
+            self.side_effects
+                .collect(report.tasks, report.observations, context, made_for);
+        }
         self.trigger.note_error(report.release_error);
         let injected = match &report.result {
             PassResult::Delivered { event, .. }
@@ -249,6 +257,7 @@ impl Machine {
         };
         let budget = self.cascade.budget.clone();
         let lineage = report.lineage;
+        let (tasks, observations) = hook_effects;
         let mut set = DeliverySet::new(
             kind,
             *event,
@@ -257,7 +266,8 @@ impl Machine {
             report.placement,
             budget,
             lineage,
-        );
+        )
+        .with_hook_effects(tasks, observations);
         if self.cascade.is_cut(lineage) {
             set.cut();
         }
@@ -352,8 +362,16 @@ impl Machine {
     /// re-enter, and the records of the channels not asked are queued (RFC
     /// §10.1 steps 14 to 17). The call's own deliveries are written into its
     /// result, an entry's kept for its caller.
-    pub(super) fn on_set(&mut self, cx: &mut Cx<'_>, outcome: SetOutcome, set: &DeliverySet) {
+    pub(super) fn on_set(&mut self, cx: &mut Cx<'_>, mut outcome: SetOutcome, set: &DeliverySet) {
         if let Some(reason) = outcome.cancelled {
+            // What its event's hooks gave is stored at the cascade's end.
+            let context = Some(set.context());
+            self.side_effects.collect(
+                outcome.tasks,
+                outcome.observations,
+                context,
+                Some(set.event()),
+            );
             return self.dropped(cx, reason, set);
         }
         let event = set.event();
@@ -380,17 +398,21 @@ impl Machine {
             }
             SetKind::Response | SetKind::Injected => false,
         };
+        // What the set stored, its event's hooks' side effects included:
+        // their observers run before its AFTER_BROADCAST hooks, which read
+        // them stored (RFC §10.1 steps 15 and 16).
+        let written = std::mem::take(&mut outcome.written);
+        self.trigger.note_error(written.error);
+        let made_for = written
+            .tasks
+            .iter()
+            .map(|task| (task.id.clone(), event.clone()))
+            .collect();
+        report::tasks_created(cx, &written.tasks, &made_for, set.context());
         // A rerun repeats nothing of its event's first pass (RFC §11.7.6).
         if set.kind() != SetKind::Rerun {
             report::after_broadcast(cx, event, set.context(), &self.cascade.budget, processed);
         }
-        self.side_effects.collect(
-            outcome.tasks,
-            outcome.observations,
-            Some(set.context()),
-            Some(event),
-        );
-        self.side_effects.update_metadata(outcome.metadata_updates);
         for agent in outcome.not_asked {
             let id = cx.env.new_event_id();
             let record = chain_depth::not_asked_record(id, event, &agent, cx.env.now());

@@ -218,15 +218,26 @@ mod an_allowed_message {
         sim
     }
 
+    /// RFC §10.1 step 15: each event's set stores what its hooks produced
+    /// once it is over, the message's then the answer's.
     #[test]
-    fn persists_the_side_effects_its_hooks_produced() {
+    fn persists_the_side_effects_its_hooks_produced_with_each_set() {
         let mut sim = triaging_room();
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
-        assert_eq!(sim.traced("persist"), ["persist 2 tasks, 0 observations"]);
+        assert_eq!(
+            sim.traced("persist"),
+            [
+                "persist 1 tasks, 0 observations",
+                "persist 1 tasks, 0 observations"
+            ]
+        );
     }
 
+    /// RFC §10.1 steps 15 and 16: an event's tasks are stored, and their
+    /// observers started, before its AFTER_BROADCAST hooks, which read them
+    /// stored (Python's `_post_plan_effects`).
     #[test]
-    fn fires_on_task_created_for_each_task_once_they_are_stored() {
+    fn fires_on_task_created_for_each_task_once_stored_before_after_broadcast() {
         let mut sim = triaging_room();
         sim.observer("audit", HookTrigger::AfterBroadcast);
         sim.observer("follow_up", HookTrigger::OnTaskCreated);
@@ -234,10 +245,10 @@ mod an_allowed_message {
         assert_eq!(
             sim.async_triggers(),
             [
-                HookTrigger::AfterBroadcast,
+                HookTrigger::OnTaskCreated,
                 HookTrigger::AfterBroadcast,
                 HookTrigger::OnTaskCreated,
-                HookTrigger::OnTaskCreated,
+                HookTrigger::AfterBroadcast,
             ]
         );
     }

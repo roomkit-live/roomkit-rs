@@ -22,6 +22,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::delivery_record::DeliveryRecord;
+use super::persist::{SetEffects, Written};
 use super::queues::Lineage;
 use super::{reply_record, report, stamp};
 use crate::model::{
@@ -117,6 +118,11 @@ pub(super) struct SetOutcome {
     /// A rerun's set the room refused when its turn came, its status
     /// refusing new events: it asked no agent (RFC §5.1, §11.7.6).
     pub(super) refused: bool,
+    /// What the set stored once over, before its event's `AFTER_BROADCAST`
+    /// hooks run (RFC §10.1 steps 15 and 16): its tasks, observations and
+    /// room metadata updates, its event's hooks' included, which its
+    /// `tasks`, `observations` and `metadata_updates` then no longer hold.
+    pub(super) written: Written,
 }
 
 #[derive(Debug)]
@@ -207,6 +213,9 @@ pub(super) struct DeliverySet {
     /// The targets that failed and that its outcome does not report, an
     /// injected set's or a transport's output's, for the set's span.
     unreported: BTreeSet<ChannelId>,
+    /// What it stores once over, its event's hooks' side effects with its
+    /// targets' (RFC §10.1 step 15).
+    effects: SetEffects,
 }
 
 impl DeliverySet {
@@ -249,7 +258,21 @@ impl DeliverySet {
             record: None,
             reached,
             unreported: BTreeSet::new(),
+            effects: SetEffects::default(),
         }
+    }
+
+    /// The same set, storing once over the `tasks` and `observations` its
+    /// event's `BEFORE_BROADCAST` hooks gave, with its targets', before its
+    /// event's `AFTER_BROADCAST` hooks run (RFC §10.1 steps 15 and 16).
+    #[must_use]
+    pub(super) fn with_hook_effects(
+        mut self,
+        tasks: Vec<Task>,
+        observations: Vec<Observation>,
+    ) -> Self {
+        self.effects = SetEffects::of_hooks(tasks, observations);
+        self
     }
 
     /// Whose cascade the set belongs to.
@@ -304,6 +327,9 @@ impl DeliverySet {
 
     /// Whether the set waits for `effect`.
     pub(super) fn awaits(&self, effect: EffectId) -> bool {
+        if self.effects.writing() {
+            return self.effects.awaits(effect);
+        }
         if let Some(record) = &self.record {
             return record.awaits(effect);
         }
@@ -365,7 +391,7 @@ impl DeliverySet {
             Place::Taken => {}
             Place::Closed => {
                 self.outcome.cancelled = Some(KIT_CLOSED);
-                return Progress::Done(std::mem::take(&mut self.outcome));
+                return self.finish(cx);
             }
             Place::Missing
             | Place::Awaiting(_)
@@ -427,6 +453,9 @@ impl DeliverySet {
         effect: EffectId,
         outcome: Outcome,
     ) -> Progress<SetOutcome> {
+        if self.effects.writing() {
+            return self.on_written(effect, outcome);
+        }
         if self.record.is_some() {
             return self.on_record(cx, outcome);
         }
@@ -581,9 +610,47 @@ impl DeliverySet {
             Progress::Waiting => Progress::Waiting,
             Progress::Done(()) => {
                 self.record = None;
-                Progress::Done(std::mem::take(&mut self.outcome))
+                self.finish(cx)
             }
         }
+    }
+
+    /// Ends the set, over: what it and its event's hooks collected is
+    /// stored first, before its event's `AFTER_BROADCAST` hooks run (RFC
+    /// §10.1 steps 15 and 16, Python's `_post_plan_effects`). A set that
+    /// delivered nothing stores nothing: its event's hooks' side effects
+    /// go back in its outcome, for the end of the cascade.
+    fn finish(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
+        let (tasks, observations) = self.effects.take_hooks();
+        if self.outcome.cancelled.is_some() {
+            self.outcome.tasks.splice(0..0, tasks);
+            self.outcome.observations.splice(0..0, observations);
+            return Progress::Done(std::mem::take(&mut self.outcome));
+        }
+        self.effects = SetEffects::of_hooks(tasks, observations);
+        let own = (
+            std::mem::take(&mut self.outcome.tasks),
+            std::mem::take(&mut self.outcome.observations),
+        );
+        let metadata = std::mem::take(&mut self.outcome.metadata_updates);
+        match self.effects.write(cx, &self.event.room_id, own, metadata) {
+            Progress::Waiting => Progress::Waiting,
+            Progress::Done(written) => self.written(written),
+        }
+    }
+
+    /// Takes the answer of one of the set's writes.
+    fn on_written(&mut self, effect: EffectId, outcome: Outcome) -> Progress<SetOutcome> {
+        match self.effects.accept(effect, outcome) {
+            Progress::Waiting => Progress::Waiting,
+            Progress::Done(written) => self.written(written),
+        }
+    }
+
+    /// The set is over, its writes answered.
+    fn written(&mut self, written: Written) -> Progress<SetOutcome> {
+        self.outcome.written = written;
+        Progress::Done(std::mem::take(&mut self.outcome))
     }
 
     /// Off its place in the room's lane, the set reports its deliveries when
@@ -600,7 +667,7 @@ impl DeliverySet {
                 return Progress::Waiting;
             }
         }
-        Progress::Done(std::mem::take(&mut self.outcome))
+        self.finish(cx)
     }
 
     /// Once every target answered, the set leaves its place in the room's
