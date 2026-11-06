@@ -30,6 +30,8 @@ const PATIENCE: Duration = Duration::from_secs(10);
 struct Piped {
     agents: mpsc::UnboundedSender<DuplexStream>,
     closed: Arc<AtomicUsize>,
+    /// The opens and closes, in order; a close takes a few yields.
+    log: Arc<std::sync::Mutex<Vec<&'static str>>>,
 }
 
 impl AcpTransport for Piped {
@@ -44,6 +46,7 @@ impl AcpTransport for Piped {
         reason = "the trait's open is a future"
     )]
     async fn open(&self, client: Arc<dyn AcpClient>) -> Result<ClientSideConnection, AcpError> {
+        self.log.lock().unwrap().push("open");
         let (ours, theirs) = tokio::io::duplex(1 << 16);
         self.agents.send(theirs).unwrap();
         let (reader, writer) = tokio::io::split(ours);
@@ -51,7 +54,12 @@ impl AcpTransport for Piped {
     }
 
     async fn close(&self) {
+        self.log.lock().unwrap().push("close-start");
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
         self.closed.fetch_add(1, Ordering::SeqCst);
+        self.log.lock().unwrap().push("close-end");
     }
 }
 
@@ -123,6 +131,7 @@ fn channel() -> (
     let transport = Piped {
         agents,
         closed: Arc::clone(&closed),
+        log: Arc::default(),
     };
     let options = AcpChannelOptions {
         transport: Some(transport),
@@ -421,6 +430,16 @@ async fn a_handshake_cut_part_way_closes_the_transport_and_the_next_turn_reconne
     // The second turn waits for the cut handshake's close, then opens.
     let opened = while_agent(&mut second, agents.recv()).await;
     assert_eq!(closed.load(Ordering::SeqCst), 1);
+    // The next open comes once the cut handshake's close ended.
+    let log = channel
+        .shared
+        .connector
+        .transport
+        .log
+        .lock()
+        .unwrap()
+        .clone();
+    assert_eq!(log, ["open", "close-start", "close-end", "open"]);
     let mut agent = Agent::new(opened.unwrap());
     let prompt = while_agent(&mut second, agent.prompted(true)).await;
     agent
@@ -453,4 +472,53 @@ async fn close_cancels_a_prompt_in_flight_and_a_cut_close_still_closes_the_trans
     // A second close does nothing.
     channel.close().await;
     assert_eq!(closed.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_turn_stopped_by_the_close_ends_quietly_marked_interrupted() {
+    let (channel, mut agents, _closed) = channel();
+    let (mut stream, record) = turn(&channel, "room-1");
+    poll_once(&mut stream).await;
+    let mut agent = Agent::new(agents.recv().await.unwrap());
+    while_agent(&mut stream, agent.prompted(true)).await;
+    // The agent leaves its session/close unanswered: the close's bound
+    // passes on a paused clock.
+    tokio::time::pause();
+    let closing = channel.close();
+    let reading = drained(&mut stream);
+    let ((), (texts, failed)) = tokio::join!(closing, reading);
+    assert_eq!(texts.len(), 0);
+    assert!(!failed, "a turn the close stopped ends with no error");
+    assert_eq!(
+        record.get("acp"),
+        Some(json!({ "protocol_version": 1, "interrupted": true }))
+    );
+}
+
+#[tokio::test]
+async fn a_program_that_is_missing_fails_the_turn_as_file_not_found() {
+    let options = AcpChannelOptions {
+        command: Some(vec!["/nonexistent/roomkit-acp-agent".to_owned()]),
+        ..AcpChannelOptions::default()
+    };
+    let channel: AcpChannel =
+        AcpChannel::new(ChannelId::new("claude").unwrap(), "/srv", options).unwrap();
+    let record = ResponseMetadata::new();
+    let ask = Ask {
+        room_id: RoomId::new("room-1").unwrap(),
+        event_id: "e".to_owned(),
+        text: "hello".to_owned(),
+        record,
+        host: None,
+    };
+    let mut stream = TurnStream::new(Arc::clone(&channel.shared), ask);
+    let failure = loop {
+        match poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await {
+            Some(Err(failure)) => break failure,
+            Some(Ok(_)) => {}
+            None => panic!("the turn did not fail"),
+        }
+    };
+    let classed = failure.downcast_ref::<roomkit::ClassedError>().unwrap();
+    assert_eq!(classed.class(), "FileNotFoundError");
 }
