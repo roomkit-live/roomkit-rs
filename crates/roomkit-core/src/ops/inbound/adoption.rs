@@ -30,12 +30,15 @@
 //!
 //! Either way the entry takes no admission ticket and runs every hook under
 //! the lock: the operation it joins stands in the room's order already (RFC
-//! §9.5.1). Made before the call's decision, by work its deadline bounds,
-//! it carries that deadline up to its commit, as that work does: past it,
-//! the hook whose code made it is cut, and the entry with it, nothing of it
-//! stored and nothing reported, as the Python implementation cancels the
-//! hook's body and the call it awaits (RFC §13.6); an entry committed by
-//! then goes on. It draws on the operation's reentry budget, past which it is
+//! §9.5.1). It has a deadline of its own, its `process_timeout` from its
+//! adoption, as every call's runs from its start: past it, before its
+//! commit, it is refused `process_timeout` and reports it (RFC §13.6). It
+//! follows its caller, the code that waits for its answer: once that code
+//! is gone (the hook that made it cut at the call's deadline or at its own
+//! timeout, or dropped with the call's caller), the entry ends with it
+//! before its commit, nothing of it stored and nothing reported, as the
+//! Python implementation cancels a hook's body and the call it awaits; an
+//! entry committed by then goes on. It draws on the operation's reentry budget, past which it is
 //! stored `BLOCKED` with `reentry_loop_cap` (RFC §8.3); a message is charged
 //! first thing, before its channel is looked up, and refused with no event
 //! past the budget (RFC §10.1 step 1). Its caller receives its result at
@@ -47,11 +50,12 @@
 //! room refuses and a replay draw nothing (RFC §9.5.1 Past the cap, §13.4,
 //! §17.2).
 
+use std::collections::BTreeSet;
 use std::mem;
 
 use super::arrival::{self, Arrival};
 use super::cascade::{self, entry_result, replay_result};
-use super::deadline::{PROCESS_TIMEOUT, Stopped};
+use super::deadline::{self, PROCESS_TIMEOUT, Stopped};
 use super::direct::{self, DirectCall};
 use super::greeting;
 use super::host_post::HostPost;
@@ -61,10 +65,13 @@ use super::queues::Lineage;
 use super::record::{RecordPass, RecordReport};
 use super::work_read::{Read, WorkRead};
 use super::{InboundError, InboundResult, Machine, MessageAnswers, result};
-use crate::model::{ErrorRecord, InboundMessage, InjectedEvent, Post, RoomEvent, RoomId};
+use crate::model::{
+    ChannelId, ErrorRecord, EventId, InboundMessage, InjectedEvent, Post, RoomEvent, RoomId,
+    Timestamp,
+};
 use crate::ops::io::{Bound, Io};
 use crate::ops::protocol::{EffectId, Entry, EntryId, Notice, Outcome, SpanNote};
-use crate::ops::{Abort, Cx, Progress, RefusedOperation};
+use crate::ops::{Abort, Cx, FrameworkEvent, KitConfig, Progress, RefusedOperation};
 use crate::rules::chain_depth::{self, Draw};
 
 /// The entries adopted from the operation's own work.
@@ -78,9 +85,12 @@ pub(super) struct Adoptions {
     /// The answers of the hooks entries are nested under, held back until
     /// those entries are settled.
     deferred: Vec<(EffectId, Outcome)>,
-    /// The entries the call's deadline cut, their results held back until
-    /// the effect whose code made each one is answered too.
+    /// The entries cut for their caller gone, their results held back
+    /// until the effect whose code made each one is answered too.
     cut: Vec<(Adopted, InboundResult)>,
+    /// The entries whose caller is gone (`Machine::entry_caller_gone`): cut
+    /// before their commit, they end without a report.
+    gone: BTreeSet<EntryId>,
 }
 
 /// What the operation knows of an entry it adopted.
@@ -101,10 +111,34 @@ struct Adopted {
     /// once its message arrived: its result's error when it met none
     /// before (RFC §13.5), as Python's nested call collects its own.
     release_error: Option<ErrorRecord>,
-    /// What bounds the entry up to its commit: the deadline of the work
-    /// its origin is, the call's for work before the call's decision (RFC
-    /// §13.6), none after it.
+    /// What bounds the entry up to its commit, set once it is stamped: its
+    /// own deadline, from its adoption (RFC §13.6), or, for an entry that
+    /// follows its origin, that origin's deadline when it has one.
     bound: Bound,
+    /// Whose deadline `bound` holds.
+    deadline: Deadline,
+    /// The deadline of the work its origin is, when it has one: the call's
+    /// for work before the call's decision, an entry's for that entry's.
+    origin_deadline: Option<Timestamp>,
+    /// The channel its event comes from, which its `process_timeout` names
+    /// before the room lock (RFC §8.2).
+    channel_id: Option<ChannelId>,
+}
+
+/// Whose deadline bounds an adopted entry up to its commit (RFC §13.6,
+/// §9.5.1 Reentrance).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Deadline {
+    /// None yet: it is set on the poll after the adoption. `follows` says
+    /// whether the code of the entry's origin made it in its own task, and
+    /// awaits it (`Machine::entry_follows_its_origin`).
+    Unset { follows: bool },
+    /// Its own, its `process_timeout` from its adoption: past it, it reports
+    /// its `process_timeout`.
+    Own,
+    /// Its origin's, which cuts the origin's code with it: past it, nothing
+    /// reports the entry.
+    Borrowed,
 }
 
 /// One adopted entry at work.
@@ -307,6 +341,75 @@ fn cut_at_the_deadline(locked: bool, release_failure: Option<ErrorRecord>) -> In
     }
 }
 
+/// Reports the expiry of `adopted`, past its own deadline before its commit
+/// (RFC §13.6, §8.2): `process_timeout`, naming the channel its event comes
+/// from before the room lock and `locked_event`, the event whose pass held
+/// the lock, under it, as a call's own expiry does.
+fn report_entry_expiry(cx: &mut Cx<'_>, adopted: &Adopted, locked_event: Option<EventId>) {
+    let timeout = cx
+        .config
+        .process_timeout
+        .map_or(0.0, |timeout| timeout.as_secs_f64());
+    let channel_id = match locked_event {
+        Some(_) => None,
+        None => adopted.channel_id.clone(),
+    };
+    tracing::info!(
+        target: "roomkit::core::inbound",
+        room_id = %adopted.room_id,
+        channel_id = ?channel_id,
+        event_id = ?locked_event,
+        timeout,
+        "a call the room's work adopted passed its process_timeout before its commit; nothing of its event is written"
+    );
+    cx.io
+        .notify(Notice::FrameworkEvent(FrameworkEvent::ProcessTimeout {
+            room_id: Some(adopted.room_id.clone()),
+            channel_id,
+            event_id: locked_event,
+            timeout,
+            operation: None,
+        }));
+}
+
+/// The channel the event of `entry` comes from, as its call names it.
+fn channel_of(entry: &Entry) -> Option<ChannelId> {
+    match entry {
+        Entry::Message { message, .. } => Some(message.channel_id.clone()),
+        Entry::Direct { event, .. } => Some(event.channel_id.clone()),
+        Entry::Post { post, .. } => post.channel_id.clone(),
+        Entry::Greeting { .. } | Entry::Row { .. } => None,
+    }
+}
+
+impl Adopted {
+    /// Sets the entry's bound, once: its own deadline, its
+    /// `process_timeout` from `now`, its adoption's poll, as every call's
+    /// runs from its start (RFC §13.6), none for a greeting, which takes
+    /// none (RFC §19.1); for an entry that follows its origin, that
+    /// origin's deadline when it has one, which passes first and cuts the
+    /// origin's code with the entry, as Python's outer deadline cancels the
+    /// call its hook awaits before that call's own.
+    fn stamp(&mut self, config: &KitConfig, now: Timestamp, entry: &Entry) {
+        let Deadline::Unset { follows } = self.deadline else {
+            return;
+        };
+        let own = match entry {
+            Entry::Greeting { .. } => None,
+            Entry::Message { .. }
+            | Entry::Direct { .. }
+            | Entry::Post { .. }
+            | Entry::Row { .. } => deadline::of_call(config, now),
+        };
+        let (deadline, at) = match self.origin_deadline {
+            Some(origin) if follows => (Deadline::Borrowed, Some(origin)),
+            Some(_) | None => (Deadline::Own, own),
+        };
+        self.deadline = deadline;
+        self.bound = Bound::Adopted(self.id, at);
+    }
+}
+
 /// Runs `advance` for `adopted`: nested under the lock of the section its
 /// origin runs under, its requests for that lock answered at once, or beside
 /// the operation's work, every request it makes in the room's admission
@@ -357,7 +460,10 @@ impl Machine {
             nested,
             direct: matches!(entry, Entry::Direct { .. } | Entry::Post { .. }),
             release_error: None,
-            bound: io.bound_of(origin).adopted(),
+            bound: Bound::Adopted(id, None),
+            deadline: Deadline::Unset { follows: false },
+            origin_deadline: io.bound_of(origin).deadline(),
+            channel_id: channel_of(&entry),
         };
         self.adopted.adopted.push((adopted, Box::new(entry)));
         Ok(id)
@@ -367,6 +473,18 @@ impl Machine {
     /// under a call another entry nested under it still runs for: it waits
     /// for that one's settlement.
     pub(super) fn start_adopted(&mut self, cx: &mut Cx<'_>) {
+        let now = cx.env.now();
+        for (adopted, entry) in &mut self.adopted.adopted {
+            adopted.stamp(cx.config, now, entry);
+        }
+        // An entry whose caller left before it started ends unstarted.
+        let (gone, waiting): (Vec<_>, Vec<_>) = mem::take(&mut self.adopted.adopted)
+            .into_iter()
+            .partition(|(adopted, _)| self.adopted.gone.contains(&adopted.id));
+        self.adopted.adopted = waiting;
+        for (adopted, _) in gone {
+            self.settle_cut(cx, adopted, cut_at_the_deadline(false, None), None);
+        }
         // One at a time: the others stay adopted, and hold back the answer
         // of the call they are nested under, while one starts.
         while let Some(index) = self.adopted.adopted.iter().position(|(adopted, _)| {
@@ -620,7 +738,7 @@ impl Machine {
             Advanced::Posted => self.on_entry_posted(cx, adopted, run),
             Advanced::WorkRead(read) => self.on_entry_key(cx, adopted, run, read),
             Advanced::Stopped(stopped) => self.settle_entry(cx, &adopted, *stopped),
-            Advanced::Cut(cut) => self.settle_cut(cx, adopted, *cut),
+            Advanced::Cut(cut) => self.settle_cut(cx, adopted, *cut, None),
             Advanced::Passed(Ok(report)) => self.on_adopted_pass(cx, &adopted, report),
             Advanced::Passed(Err(Abort::DeadlinePassed {
                 locked_event,
@@ -631,7 +749,7 @@ impl Machine {
                 release_failure,
             })) => {
                 let cut = cut_at_the_deadline(locked_event.is_some(), release_failure);
-                self.settle_cut(cx, adopted, cut);
+                self.settle_cut(cx, adopted, cut, locked_event);
             }
             Advanced::Passed(Err(abort)) | Advanced::Recorded(Err(abort)) => {
                 let error = cascade::failure(abort, self.call.room_id.clone());
@@ -679,19 +797,67 @@ impl Machine {
         self.settle_entry(cx, adopted, Ok(cascade::record_result(report)));
     }
 
-    /// Settles an entry the call's deadline cut, `cut`, once the effect
-    /// whose code made it is answered too: the driver gives that effect up
-    /// at the same deadline, its code dropped, so that the code never reads
-    /// the entry's refusal and runs on past the deadline, where the Python
-    /// implementation cancels it with its hook (RFC §13.6). A call that code
-    /// left running in a task of its own, its effect answered already, is
-    /// answered at once.
-    fn settle_cut(&mut self, cx: &mut Cx<'_>, adopted: Adopted, cut: InboundResult) {
-        if cx.io.is_outstanding(adopted.origin) {
+    /// Settles an entry cut before its commit, `cut`, `locked_event` the
+    /// event whose pass held the room lock then. Past its own deadline it
+    /// reports its `process_timeout` and its caller reads the refusal at
+    /// once, as the Python implementation's call refused at its deadline
+    /// (RFC §13.6). Cut for its caller gone, it reports nothing, and is
+    /// settled once the effect whose code made it is answered too: that
+    /// code is dropped, so that it never reads the entry's refusal and runs
+    /// on, where the Python implementation cancels it with its hook.
+    fn settle_cut(
+        &mut self,
+        cx: &mut Cx<'_>,
+        adopted: Adopted,
+        cut: InboundResult,
+        locked_event: Option<EventId>,
+    ) {
+        let gone = self.adopted.gone.remove(&adopted.id);
+        if !gone && adopted.deadline == Deadline::Own {
+            report_entry_expiry(cx, &adopted, locked_event);
+        } else if cx.io.is_outstanding(adopted.origin) {
             self.adopted.cut.push((adopted, cut));
             return;
         }
         self.settle_entry(cx, &adopted, Ok(cut));
+    }
+
+    /// The entry `entry`, not started yet, was made by its origin's code in
+    /// that code's own task, which awaits it: it follows that code, its
+    /// deadline the origin's when it has one (RFC §9.5.1 Reentrance).
+    pub(super) fn entry_follows_its_origin(&mut self, entry: EntryId) {
+        if let Some((adopted, _)) = self
+            .adopted
+            .adopted
+            .iter_mut()
+            .find(|(adopted, _)| adopted.id == entry)
+            && let Deadline::Unset { follows } = &mut adopted.deadline
+        {
+            *follows = true;
+        }
+    }
+
+    /// The caller of the entry `entry` is gone before its answer (RFC
+    /// §9.5.1 Reentrance, §13.6): the entry ends before its commit, every
+    /// request within its bound given up on, nothing of it stored and
+    /// nothing reported, as the Python implementation cancels a call with
+    /// the code that awaits it. An entry committed by then, or settled,
+    /// goes on. Returns the effects the driver holds among those given up.
+    pub(super) fn entry_caller_gone(&mut self, io: &mut Io, entry: EntryId) -> Vec<EffectId> {
+        let queued = self
+            .adopted
+            .adopted
+            .iter()
+            .any(|(adopted, _)| adopted.id == entry);
+        let running = self.adopted.running.iter().any(|run| run.entry.id == entry);
+        if !queued && !running {
+            return Vec::new();
+        }
+        self.adopted.gone.insert(entry);
+        if queued {
+            return Vec::new();
+        }
+        io.expire_entry(entry)
     }
 
     /// Settles the cut entries whose origin is answered by now.

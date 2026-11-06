@@ -517,6 +517,19 @@ impl Operation for Inbound {
         true
     }
 
+    /// Ends `entry`, an entry the operation adopted, before its commit, its
+    /// caller gone (RFC §9.5.1 Reentrance, §13.6): nothing of it stored and
+    /// nothing reported; an entry committed by then goes on.
+    fn entry_caller_gone(&mut self, entry: EntryId) -> Vec<EffectId> {
+        self.machine.entry_caller_gone(&mut self.io, entry)
+    }
+
+    /// Makes `entry`, adopted and not started yet, follow the code of its
+    /// origin, which made it in its own task (RFC §9.5.1 Reentrance).
+    fn entry_follows_its_origin(&mut self, entry: EntryId) {
+        self.machine.entry_follows_its_origin(entry);
+    }
+
     /// Cuts the turns of the cascade of `entry`, an entry the operation
     /// adopted, whose delivery was cancelled (RFC §10.1 "Explicit delivery
     /// cancellation"); the call's own cascade keeps its turns.

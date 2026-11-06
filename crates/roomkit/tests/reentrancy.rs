@@ -2165,13 +2165,11 @@ async fn a_call_dropped_after_its_hook_s_event_committed_delivers_that_event() {
 
 /// RFC §13.6, §9.5.1 Reentrance: the call's lock request, held back while
 /// an entry its off-lock hook made holds the lock, is given up on once the
-/// call's `process_timeout` passed meanwhile, not granted; the entry, not
-/// committed by then, ends with that deadline, nothing of it stored, and its
-/// caller, a task the hook started and never awaited, is refused.
-/// Python: `tests/test_reentrance.py`, the test of the same name, where that
-/// adopted call's own `process_timeout` is reported too (two
-/// `process_timeout` events, one here: HITL 35d1efa7 chose Python's, not
-/// ported yet).
+/// call's `process_timeout` passed meanwhile, not granted; the entry, made
+/// by a task the hook started and never awaited, is not committed by its
+/// own deadline either, and is refused at it, reported too: two
+/// `process_timeout` events, nothing of either stored (HITL 35d1efa7).
+/// Python: `tests/test_reentrance.py`, the test of the same name.
 #[tokio::test]
 async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
     let (kit, _) = room_with(RoomKitOptions {
@@ -2238,7 +2236,7 @@ async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
                 "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
                 "#2 system delivered Channel audit attached (read_write, all)".to_owned(),
             ],
-            1
+            2
         )
     );
 }
@@ -2416,10 +2414,11 @@ async fn a_call_a_hook_s_task_makes_outlives_the_event_s_caller_gone() {
     );
 }
 
-/// RFC §9.3, §13.5: a hook that times out while the entry it made still
-/// works under its lock is heard only once the entry is settled: the entry
-/// commits and is delivered, then the event the hook decided on, the hook
-/// failing open.
+/// RFC §9.3, §13.5, §9.5.1 Reentrance: a hook that times out while the
+/// entry it awaits still works under its lock ends that entry with its
+/// body, before the entry's commit, nothing of it stored; the event the
+/// hook decided on commits, the hook failing open (HITL 35d1efa7).
+/// Python: `tests/test_reentrance.py`, the test of the same name.
 #[tokio::test]
 async fn a_hook_that_times_out_while_its_entry_works_is_heard_after_it() {
     let (kit, audit) = room().await;
@@ -2465,9 +2464,159 @@ async fn a_hook_that_times_out_while_its_entry_works_is_heard_after_it() {
             result.event.map(|event| (event.index, event.status)),
             audit.texts()
         ),
+        (Some((3, EventStatus::Delivered)), vec!["hello".to_owned()])
+    );
+}
+
+/// RFC §13.6 "A caller that stops waiting", §9.5.1 Reentrance: an off-lock
+/// hook awaits the call it makes, adopted beside the check; the event's
+/// caller stops waiting before any deadline: the hook is dropped, and the
+/// call it awaits ends with it before its commit, nothing of it stored. A
+/// message sent once the call's locked hook let go commits alone (HITL
+/// 35d1efa7).
+/// Python: `tests/test_reentrance.py`, the test of the same name.
+#[tokio::test]
+async fn a_call_a_hook_awaits_ends_with_the_event_s_caller_gone() {
+    let (kit, _) = room_with(RoomKitOptions {
+        process_timeout: Duration::from_secs(10),
+        ..Default::default()
+    })
+    .await;
+    let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (on_entry, gate) = (Arc::clone(&entered), Arc::clone(&release));
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (on_entry, gate) = (Arc::clone(&on_entry), Arc::clone(&gate));
+            async move {
+                if text_of(&event.content) == "Heads up" {
+                    on_entry.notify_one();
+                    gate.notified().await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        before_broadcast("slow", true),
+    )
+    .unwrap();
+    let hook_kit = kit.clone();
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let kit = hook_kit.clone();
+            async move {
+                if text_of(&event.content) == "hello" {
+                    kit.send_event(
+                        &room_id(),
+                        &channel("ws"),
+                        TextContent::new("Heads up"),
+                        SendEventOptions::default(),
+                    )
+                    .await?;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        before_broadcast("notifier", false),
+    )
+    .unwrap();
+    let caller_kit = kit.clone();
+    let caller = tokio::spawn(async move { send(&caller_kit, "hello").await });
+    tokio::time::timeout(BOUND, entered.notified())
+        .await
+        .unwrap();
+    caller.abort();
+    drop(caller.await);
+    release.notify_one();
+    let bye = tokio::time::timeout(BOUND, send(&kit, "bye"))
+        .await
+        .unwrap()
+        .unwrap();
+    let messages: Vec<String> = timeline(&kit)
+        .await
+        .into_iter()
+        .filter(|line| !line.contains(" system "))
+        .collect();
+    assert_eq!(
+        (bye.blocked, messages),
+        (false, vec!["#3 sms delivered bye".to_owned()])
+    );
+}
+
+/// RFC §13.6, §9.5.1 Reentrance: a task an off-lock hook starts, 100 ms
+/// into the event's work, and never awaits makes a call, adopted beside the
+/// check; its locked hook holds it past the event's `process_timeout`: the
+/// event is refused, and the call, whose own deadline runs from its own
+/// adoption, commits once its hook lets it (HITL 35d1efa7).
+/// Python: `tests/test_reentrance.py`, the test of the same name.
+#[tokio::test]
+async fn a_call_a_hook_s_task_makes_keeps_its_own_deadline() {
+    let (kit, _) = room_with(RoomKitOptions {
+        process_timeout: Duration::from_millis(200),
+        ..Default::default()
+    })
+    .await;
+    let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (on_entry, gate) = (Arc::clone(&entered), Arc::clone(&release));
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (on_entry, gate) = (Arc::clone(&on_entry), Arc::clone(&gate));
+            async move {
+                if text_of(&event.content) == "Heads up" {
+                    on_entry.notify_one();
+                    gate.notified().await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        before_broadcast("slow", true),
+    )
+    .unwrap();
+    let hook_kit = kit.clone();
+    let started = Arc::new(Mutex::new(Vec::new()));
+    let (tasks, waits_entry) = (Arc::clone(&started), Arc::clone(&entered));
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, tasks) = (hook_kit.clone(), Arc::clone(&tasks));
+            let entered = Arc::clone(&waits_entry);
+            async move {
+                if text_of(&event.content) == "hello" {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    // Started and never awaited: the entry runs beside the check.
+                    let task = tokio::spawn(keep_context(async move {
+                        kit.send_event(
+                            &room_id(),
+                            &channel("ws"),
+                            TextContent::new("Heads up"),
+                            SendEventOptions::default(),
+                        )
+                        .await
+                    }));
+                    tasks.lock().unwrap().push(task);
+                    entered.notified().await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        before_broadcast("notifier", false),
+    )
+    .unwrap();
+    let result = send(&kit, "hello").await.unwrap();
+    release.notify_one();
+    let task = started.lock().unwrap().pop().unwrap();
+    let sent = tokio::time::timeout(BOUND, task).await.unwrap().unwrap();
+    assert_eq!(
         (
-            Some((4, EventStatus::Delivered)),
-            vec!["Heads up".to_owned(), "hello".to_owned()]
+            result.reason,
+            sent.map(|event| event.index),
+            timeline(&kit).await.pop()
+        ),
+        (
+            Some("process_timeout".to_owned()),
+            Ok(3),
+            Some("#3 ws delivered Heads up".to_owned())
         )
     );
 }

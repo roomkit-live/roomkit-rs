@@ -247,6 +247,15 @@ pub enum HoldRequest {
         /// The room.
         room_id: RoomId,
     },
+    /// Wait for nothing until the effect's deadline, then answer
+    /// [`Outcome::DeadlinePassed`]: the deadline of an acquire of the room's
+    /// lock the operation holds back behind another of its sections, which
+    /// the driver never sees otherwise (RFC §13.6). Issued with a deadline
+    /// only; the operation may stop caring for it before it passes.
+    Expiry {
+        /// The room.
+        room_id: RoomId,
+    },
 }
 
 /// A read or a write of the store (RFC §14), answered by a

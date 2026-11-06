@@ -307,6 +307,11 @@ impl<'kit> Held<'kit> {
                 self.tickets.remove(&room_id);
                 Hold::Now(HoldOutcome::TicketReleased.into())
             }
+            // Nothing to wait for but the deadline (RFC §13.6).
+            HoldRequest::Expiry { .. } => Hold::Wait(Box::pin(async move {
+                super::within(deadline, std::future::pending::<()>()).await;
+                (effect, Waited::Answered(Outcome::DeadlinePassed))
+            })),
         }
     }
 

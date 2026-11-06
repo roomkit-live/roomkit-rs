@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use roomkit_core::ops::{EffectId, Entry, InboundError, InboundResult};
 use tokio::sync::{oneshot, watch};
+use tokio::task;
 
 use super::{ExecutionContext, Frame};
 use crate::delivery_keys::{CancelRequest, Named};
@@ -57,6 +58,11 @@ pub(crate) struct Adoption {
     /// The span the call was made under, which what the run opens for it
     /// hangs under.
     pub(crate) span: Option<String>,
+    /// The task the call was made in: the call follows the code of its
+    /// origin when that code makes it in its own task (RFC §9.5.1
+    /// Reentrance), as a Python call awaited in a hook's body is cancelled
+    /// with that body.
+    pub(crate) task: Option<task::Id>,
 }
 
 /// The answer of the run a call into its room was handed to.
@@ -132,6 +138,7 @@ async fn hand(frame: &Frame, entry: Entry, named: Option<Arc<Named>>) -> Adoptin
         named,
         late: current_late_span(),
         span: get_current_span(),
+        task: task::try_id(),
     };
     if let Err(unsent) = frame.run.hand(adoption) {
         // The run is over: it holds nothing of the room any more.

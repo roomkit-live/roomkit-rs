@@ -24,6 +24,7 @@ pub(crate) enum RequestKind {
     TakeTicket,
     AwaitTicket,
     ReleaseTicket,
+    Expiry,
     LoadContext,
     GetEventByIdempotencyKey,
     GetEvent,
@@ -103,6 +104,7 @@ impl HoldRequest {
             Self::TakeTicket { .. } => RequestKind::TakeTicket,
             Self::AwaitTicket { .. } => RequestKind::AwaitTicket,
             Self::ReleaseTicket { .. } => RequestKind::ReleaseTicket,
+            Self::Expiry { .. } => RequestKind::Expiry,
         }
     }
 }
@@ -155,6 +157,7 @@ impl RequestKind {
             Self::TakeTicket => "Ticketed",
             Self::AwaitTicket => "Admitted",
             Self::ReleaseTicket => "TicketReleased",
+            Self::Expiry => "DeadlinePassed",
             Self::LoadContext => "Context or RoomNotFound",
             Self::GetEventByIdempotencyKey => "Idempotent or KeySeen",
             Self::GetEvent => "Event",
@@ -200,6 +203,8 @@ impl RequestKind {
             Self::TakeTicket => matches!(outcome, Outcome::Hold(HoldOutcome::Ticketed)),
             Self::AwaitTicket => matches!(outcome, Outcome::Hold(HoldOutcome::Admitted)),
             Self::ReleaseTicket => matches!(outcome, Outcome::Hold(HoldOutcome::TicketReleased)),
+            // Answered past its deadline only.
+            Self::Expiry => false,
             Self::LoadContext => matches!(
                 outcome,
                 Outcome::Store(StoreOutcome::Context(_) | StoreOutcome::RoomNotFound)

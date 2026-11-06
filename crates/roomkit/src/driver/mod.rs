@@ -379,6 +379,8 @@ async fn drive<S: ConversationStore, O: Operation>(
         effect_of_task: HashMap::new(),
         call_of_effect: HashMap::new(),
         callers: HashMap::new(),
+        following: HashMap::new(),
+        muted: Vec::new(),
         deliveries: HashMap::new(),
         entry_answers: HashMap::new(),
         entry_cancels: HashMap::new(),
@@ -440,6 +442,14 @@ struct Driver<'kit, S> {
     call_of_effect: HashMap<EffectId, AbortHandle>,
     /// The callers of the entries the operation adopted, until settled.
     callers: HashMap<EntryId, oneshot::Sender<Reply>>,
+    /// The origin of each entry the operation adopted whose call that
+    /// origin's code made in its own task, until settled: the entry follows
+    /// that code, given up with it (RFC §9.5.1 Reentrance).
+    following: HashMap<EntryId, EffectId>,
+    /// The callers of the entries cut as the code that made them was given
+    /// up, never answered: that code is dropped as it is aborted, and never
+    /// reads the entry's refusal, until the run ends.
+    muted: Vec<oneshot::Sender<Reply>>,
     /// Where the delivery's end of each entry the operation adopted goes,
     /// until its cascade is over.
     deliveries: HashMap<EntryId, watch::Sender<Option<InboundResult>>>,
@@ -543,6 +553,9 @@ enum Event<'kit> {
     Adoption(Adoption),
     /// The caller of an inbound call stopped waiting.
     CallerGone,
+    /// The caller of an entry the operation adopted stopped waiting for its
+    /// answer.
+    EntryCallerGone(EntryId),
     /// The delivery of an entry the operation adopted was cancelled, for
     /// this reason.
     EntryCancelled(EntryId, String),
@@ -664,13 +677,19 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 Some(Event::CallerGone) => {
                     if self.caller.as_deref_mut().is_some_and(Caller::expires) {
                         let given_up = operation.expire();
-                        self.give_up(&given_up);
+                        self.give_up_with_followers(operation, given_up);
                         return Ok(());
                     }
                     if self.cut_turns_once_gone(operation) {
                         self.end_cancelled_once_over();
                         return Ok(());
                     }
+                }
+                Some(Event::EntryCallerGone(entry)) => {
+                    self.following.remove(&entry);
+                    let given_up = operation.entry_caller_gone(entry);
+                    self.give_up_with_followers(operation, given_up);
+                    return Ok(());
                 }
                 Some(Event::EntryCancelled(entry, reason)) => {
                     self.entry_cut.insert(entry, reason);
@@ -946,6 +965,30 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         }
     }
 
+    /// Gives up on `effects` ([`give_up`](Self::give_up)), then on every
+    /// entry whose call the code of one of them made in its own task: that
+    /// code is aborted, and the entry it awaits ends with it before its
+    /// commit (RFC §9.5.1 Reentrance), its caller never answered; and so on
+    /// for what each such entry gives up.
+    fn give_up_with_followers<O: Operation>(&mut self, operation: &mut O, effects: Vec<EffectId>) {
+        let mut effects = effects;
+        while !effects.is_empty() {
+            self.give_up(&effects);
+            let followers: Vec<EntryId> = self
+                .following
+                .iter()
+                .filter(|(_, origin)| effects.contains(origin))
+                .map(|(entry, _)| *entry)
+                .collect();
+            effects = Vec::new();
+            for entry in followers {
+                self.following.remove(&entry);
+                self.muted.extend(self.callers.remove(&entry));
+                effects.extend(operation.entry_caller_gone(entry));
+            }
+        }
+    }
+
     /// Drops the waits and the calls of `effects`, which the operation gave
     /// up on: a call is aborted, its frame standing in no admission order
     /// any more, and neither is ever answered.
@@ -1079,7 +1122,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             | HoldRequest::EnterLane { .. }
             | HoldRequest::LeaveLane { .. }
             | HoldRequest::TakeTicket { .. }
-            | HoldRequest::ReleaseTicket { .. } => Wait::Other,
+            | HoldRequest::ReleaseTicket { .. }
+            | HoldRequest::Expiry { .. } => Wait::Other,
         };
         let over = self.turns_over(&request);
         let across = self.across_processes(&request);
@@ -1151,7 +1195,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             | HoldRequest::AwaitLane { .. }
             | HoldRequest::TakeTicket { .. }
             | HoldRequest::AwaitTicket { .. }
-            | HoldRequest::ReleaseTicket { .. } => return None,
+            | HoldRequest::ReleaseTicket { .. }
+            | HoldRequest::Expiry { .. } => return None,
         };
         (!over.is_empty()).then(|| (room_id.clone(), over))
     }
@@ -1279,6 +1324,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             calls,
             adoptions,
             caller,
+            callers,
             entry_cancels,
             phases,
             phase,
@@ -1298,6 +1344,15 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 && caller.poll_gone(cx).is_ready()
             {
                 return Poll::Ready(Some(Event::CallerGone));
+            }
+            // Before any answer: the code a call's end dropped no longer
+            // waits for the entries it made (RFC §9.5.1 Reentrance).
+            let gone = callers
+                .iter_mut()
+                .find_map(|(entry, reply)| reply.poll_closed(cx).is_ready().then_some(*entry));
+            if let Some(entry) = gone {
+                callers.remove(&entry);
+                return Poll::Ready(Some(Event::EntryCallerGone(entry)));
             }
             let cancelled = entry_cancels
                 .iter()
@@ -1376,9 +1431,16 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             named,
             late,
             span,
+            task,
         } = adoption;
         match operation.adopt(entry, origin) {
             Ok(id) => {
+                // Made by its origin's code in that code's own task, not in
+                // a task the code spawned: it follows that code.
+                if task.is_some_and(|task| self.effect_of_task.get(&task) == Some(&origin)) {
+                    self.following.insert(id, origin);
+                    operation.entry_follows_its_origin(id);
+                }
                 self.spans.adopted(id, late, span);
                 if let Some(named) = named {
                     self.entry_named.insert(id, (named, Arc::clone(&cancel)));
@@ -1427,6 +1489,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// delivery is named.
     fn answer(&mut self, settled: Settled) {
         self.name_settled(&settled);
+        self.following.remove(&settled.entry);
         let Some(caller) = self.callers.remove(&settled.entry) else {
             return;
         };

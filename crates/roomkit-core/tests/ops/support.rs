@@ -1093,6 +1093,7 @@ impl Sim {
             Request::Hold(HoldRequest::ReleaseTicket { room_id }) => {
                 format!("release ticket {room_id}")
             }
+            Request::Hold(HoldRequest::Expiry { room_id }) => format!("expiry {room_id}"),
             Request::Store(StoreRequest::LoadContext { room_id, .. }) => {
                 format!("load_context {room_id}")
             }
@@ -1224,6 +1225,9 @@ impl Sim {
             }
             Request::Hold(HoldRequest::TakeTicket { room_id }) => self.take_ticket(room_id),
             Request::Hold(HoldRequest::ReleaseTicket { room_id }) => self.release_ticket(&room_id),
+            // Answered past its deadline only, which no simulated wait
+            // reaches: an acquire held back here is let go before it.
+            Request::Hold(HoldRequest::Expiry { .. }) => return None,
             Request::Channel(ChannelRequest::HandleInbound {
                 channel_id,
                 message,
@@ -1536,7 +1540,8 @@ impl Sim {
             Request::Hold(
                 HoldRequest::ReleaseLock { .. }
                 | HoldRequest::ReleaseTicket { .. }
-                | HoldRequest::LeaveLane { .. },
+                | HoldRequest::LeaveLane { .. }
+                | HoldRequest::Expiry { .. },
             )
             | Request::Store(
                 StoreRequest::LoadContext { .. }

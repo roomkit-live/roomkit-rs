@@ -453,6 +453,34 @@ pub trait Operation {
         Vec::new()
     }
 
+    /// Tells the operation that `entry`, a call into the room it adopted
+    /// and has not polled since, was made by the code of its origin in that
+    /// code's own task, which awaits it (RFC §9.5.1 Reentrance): the entry
+    /// follows that code. Its deadline is that code's when it has one,
+    /// which cuts both, and nothing reports the entry then; one made in a
+    /// task that code spawned has its own deadline, from its adoption, and
+    /// reports it, as a Python call a task makes outlives the hook that
+    /// started the task.
+    fn entry_follows_its_origin(&mut self, entry: EntryId) {
+        let _ = entry;
+    }
+
+    /// The caller of `entry`, a call into the room the operation adopted,
+    /// stopped waiting for its answer before the operation settled it (RFC
+    /// §9.5.1 Reentrance, §13.6): the code that made it was cut, or dropped
+    /// it. An entry not committed yet ends with that code, as the Python
+    /// implementation cancels a call with the code that awaits it: nothing
+    /// of it is stored, and nothing reports it. One committed by then goes
+    /// on to its end.
+    ///
+    /// Returns the effects the operation gives up on, requests within the
+    /// entry's bound it was waiting for: the driver drops them and never
+    /// answers them. An operation that adopts nothing gives up on nothing.
+    fn entry_caller_gone(&mut self, entry: EntryId) -> Vec<EffectId> {
+        let _ = entry;
+        Vec::new()
+    }
+
     /// Cuts the turns of the cascade of `entry`, a call into the room the
     /// operation adopted (RFC §9.5.1 Reentrance), whose delivery is
     /// cancelled (RFC §10.1 "Explicit delivery cancellation"), as

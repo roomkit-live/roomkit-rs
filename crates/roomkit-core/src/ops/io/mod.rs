@@ -25,7 +25,7 @@
 
 mod locks;
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use self::locks::RoomLocks;
 use super::protocol::{
@@ -51,12 +51,13 @@ pub(crate) enum Bound {
     /// given up on past it, and when the call expires before it, its caller
     /// gone ([`Io::expire`]).
     Call(Option<Timestamp>),
-    /// The deadline of the call whose work, before its decision, adopted
-    /// the entry asking, which the entry carries up to its own commit (RFC
-    /// §13.6, §9.5.1 Reentrance): given up on past it, as that work is, but
-    /// not when the call's caller stops waiting, the entry's caller being
-    /// the code that made it.
-    Adopted(Option<Timestamp>),
+    /// The bound of the adopted entry `.0`, up to its commit: its own
+    /// deadline, `.1`, from its adoption, as every call's runs from its
+    /// start (RFC §13.6, §9.5.1 Reentrance), and its caller: a request
+    /// within it is given up on past that deadline, and once the entry's
+    /// caller is gone ([`Io::expire_entry`]), not when the call's caller
+    /// stops waiting.
+    Adopted(EntryId, Option<Timestamp>),
 }
 
 impl Bound {
@@ -66,21 +67,11 @@ impl Bound {
         self.deadline().is_some_and(|deadline| now >= deadline)
     }
 
-    /// The bound of an entry adopted from work asked within `self` (RFC
-    /// §9.5.1 Reentrance): that work's deadline, carried up to the entry's
-    /// commit, none for work after the call's decision.
-    pub(crate) fn adopted(self) -> Self {
-        match self {
-            Self::Unbounded => Self::Unbounded,
-            Self::Call(deadline) | Self::Adopted(deadline) => Self::Adopted(deadline),
-        }
-    }
-
     /// The deadline the effect carries (`Effect::deadline`).
-    fn deadline(self) -> Option<Timestamp> {
+    pub(crate) fn deadline(self) -> Option<Timestamp> {
         match self {
             Self::Unbounded => None,
-            Self::Call(deadline) | Self::Adopted(deadline) => deadline,
+            Self::Call(deadline) | Self::Adopted(_, deadline) => deadline,
         }
     }
 }
@@ -132,6 +123,13 @@ pub(crate) struct Io {
     /// Whether the call expired before its decision, its caller gone: a
     /// request within its bound is answered `DeadlinePassed` at once.
     expired: bool,
+    /// The adopted entries whose caller is gone: a request within an
+    /// entry's bound is answered `DeadlinePassed` at once.
+    expired_entries: BTreeSet<EntryId>,
+    /// The acquire each `HoldRequest::Expiry` the driver holds stands for:
+    /// one held back behind another section, whose deadline only that
+    /// expiry tells.
+    expiries: BTreeMap<EffectId, EffectId>,
 }
 
 impl Io {
@@ -152,6 +150,8 @@ impl Io {
             admitted: None,
             work: None,
             expired: false,
+            expired_entries: BTreeSet::new(),
+            expiries: BTreeMap::new(),
         }
     }
 
@@ -260,7 +260,11 @@ impl Io {
             return id;
         }
         let within_call = matches!(bound, Bound::Call(_));
-        if self.expired && within_call {
+        let within_gone_entry = matches!(
+            bound,
+            Bound::Adopted(entry, _) if self.expired_entries.contains(&entry)
+        );
+        if (self.expired && within_call) || within_gone_entry {
             self.inbox.push_back((id, Outcome::DeadlinePassed));
             return id;
         }
@@ -285,10 +289,58 @@ impl Io {
             decides: None,
             answers: None,
         };
-        if let Some(effect) = self.locks.admit(effect) {
-            self.issued.push(effect);
+        let held_back_until = if let Request::Hold(
+            HoldRequest::AcquireLock { room_id } | HoldRequest::AcquireLockForRecord { room_id },
+        ) = &effect.request
+        {
+            effect.deadline.map(|deadline| (room_id.clone(), deadline))
+        } else {
+            None
+        };
+        match self.locks.admit(effect) {
+            Some(effect) => self.issued.push(effect),
+            None => {
+                if let Some((room_id, deadline)) = held_back_until {
+                    self.expire_held_back(id, room_id, deadline);
+                }
+            }
         }
         id
+    }
+
+    /// Asks the driver to tell when `deadline` passes for `acquire`, an
+    /// acquire of `room_id`'s lock held back behind another section of the
+    /// operation: past it, the acquire leaves the queue it waits in and is
+    /// answered `DeadlinePassed`, as one the driver waits for is (RFC
+    /// §13.6).
+    fn expire_held_back(&mut self, acquire: EffectId, room_id: RoomId, deadline: Timestamp) {
+        let id = self.next_id;
+        self.next_id = id.next();
+        self.expiries.insert(id, acquire);
+        self.issued.push(Effect {
+            id,
+            request: HoldRequest::Expiry { room_id }.into(),
+            deadline: Some(deadline),
+            locked: None,
+            admitted: None,
+            budget: None,
+            decides: None,
+            answers: None,
+        });
+    }
+
+    /// Takes the driver's answer to `expiry`, a `HoldRequest::Expiry`: the
+    /// acquire it stands for, still held back, is given up on.
+    fn expired_held_back(&mut self, expiry: EffectId) -> bool {
+        let Some(acquire) = self.expiries.remove(&expiry) else {
+            return false;
+        };
+        if self.locks.withdraw(acquire) && self.outstanding.remove(&acquire).is_some() {
+            let next = self.locks.answered(acquire, &Outcome::DeadlinePassed);
+            self.issued.extend(next);
+            self.inbox.push_back((acquire, Outcome::DeadlinePassed));
+        }
+        true
     }
 
     /// The answer a nested section's lock request gets at once: the lock is
@@ -314,7 +366,8 @@ impl Io {
             | HoldRequest::LeaveLane { .. }
             | HoldRequest::TakeTicket { .. }
             | HoldRequest::AwaitTicket { .. }
-            | HoldRequest::ReleaseTicket { .. } => return None,
+            | HoldRequest::ReleaseTicket { .. }
+            | HoldRequest::Expiry { .. } => return None,
         };
         Some(answer.into())
     }
@@ -423,10 +476,26 @@ impl Io {
     /// answers them.
     pub(crate) fn expire(&mut self) -> Vec<EffectId> {
         self.expired = true;
+        self.give_up_within(|bound| matches!(bound, Bound::Call(_)))
+    }
+
+    /// Expires the adopted entry `entry` before its commit, its caller gone
+    /// (RFC §9.5.1 Reentrance, §13.6): every request within its bound not
+    /// answered yet is given up on and answered `DeadlinePassed` here, and
+    /// so is every one it asks for from now on, as [`Io::expire`] does for
+    /// the call's. Returns the effects the driver holds among them.
+    pub(crate) fn expire_entry(&mut self, entry: EntryId) -> Vec<EffectId> {
+        self.expired_entries.insert(entry);
+        self.give_up_within(|bound| matches!(bound, Bound::Adopted(of, _) if of == entry))
+    }
+
+    /// Gives up on every effect not answered yet whose bound `within`
+    /// holds, answering it `DeadlinePassed`; returns those the driver holds.
+    fn give_up_within(&mut self, within: impl Fn(Bound) -> bool) -> Vec<EffectId> {
         let given_up: Vec<EffectId> = self
             .outstanding
             .iter()
-            .filter(|(_, outstanding)| matches!(outstanding.bound, Bound::Call(_)))
+            .filter(|(_, outstanding)| within(outstanding.bound))
             .map(|(id, _)| *id)
             .collect();
         // The acquires held back leave first: the answer to the one the
@@ -499,6 +568,9 @@ impl Io {
     /// Accepts the driver's answer to `id`, once and only if it answers the
     /// effect's request.
     pub(crate) fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
+        if self.expired_held_back(id) {
+            return Ok(());
+        }
         let outstanding = self
             .outstanding
             .get(&id)
@@ -558,6 +630,44 @@ mod tests {
     use super::*;
     use crate::model::EventId;
     use crate::ops::protocol::StoreRequest;
+    use crate::ops::protocol::{Next, Request, Step};
+
+    // RMK-1472: an acquire held back behind another section of the
+    // operation is given up on at its own deadline, which an expiry tells.
+    #[test]
+    fn an_acquire_held_back_is_given_up_on_at_its_deadline() {
+        let room_id = RoomId::new("room_1").unwrap();
+        let deadline = Timestamp::from_unix_millis(100).unwrap();
+        let mut io = Io::new();
+        let first = io.issue(HoldRequest::AcquireLock {
+            room_id: room_id.clone(),
+        });
+        let held_back = io.issue_within(
+            HoldRequest::AcquireLock {
+                room_id: room_id.clone(),
+            },
+            Bound::Call(Some(deadline)),
+        );
+        let Step { next, .. } = io.step::<()>(None);
+        let Next::Effects(effects) = next else {
+            panic!("no effect issued");
+        };
+        let ids: Vec<(EffectId, Option<Timestamp>)> = effects
+            .iter()
+            .map(|effect| (effect.id, effect.deadline))
+            .collect();
+        let expiry = effects
+            .iter()
+            .find(|effect| matches!(effect.request, Request::Hold(HoldRequest::Expiry { .. })))
+            .map(|effect| effect.id)
+            .expect("an expiry for the held-back acquire");
+        io.complete(expiry, Outcome::DeadlinePassed).unwrap();
+
+        assert_eq!(
+            (ids.len(), io.next_outcome(), first < held_back),
+            (2, Some((held_back, Outcome::DeadlinePassed)), true)
+        );
+    }
 
     // RMK-1185: a nested operation handed a turn under its caller's id
     // never issues that id itself.
