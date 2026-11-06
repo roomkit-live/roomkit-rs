@@ -1052,11 +1052,11 @@ params = [
     "continuation",
     "script_executor", "sandbox",
     "external_tool_handler",
-    "evict_threshold_tokens", "enable_planning",
+    "enable_planning",
     "speak_policy", "speak_timeout", "thinker",
     "think_wait",
 ]
-reason = "not in 0.x: continuation, thinking, scripts and sandbox, external and human tools, eviction, planning, tool search, speaking turns and the thinker"
+reason = "not in 0.x: continuation, thinking, scripts and sandbox, external and human tools, planning, tool search, speaking turns and the thinker"
 
 [[missing]]
 python = "roomkit.AIChannel"

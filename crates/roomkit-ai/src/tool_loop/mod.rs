@@ -74,6 +74,7 @@ use crate::provider::{
 };
 use crate::steering::{Loops, Steering};
 use crate::stream::{Items, Yielder, items, join_all};
+use crate::tool_eviction::ToolEviction;
 use crate::tool_search::TurnSearch;
 use crate::tool_usage::{ToolUsageMemory, TurnMedia, carries_turn_images};
 use crate::tools::ToolContext;
@@ -219,6 +220,13 @@ pub(crate) struct Loop<P> {
     pub(crate) said: HashMap<usize, Vec<AiContentPart>>,
     /// What the turn's calls and answers repeated (RFC §6.4).
     pub(crate) repeat_guard: RepeatGuard,
+    /// The channel's stored results, which bound what the model reads of
+    /// each call (RFC §21.5).
+    pub(crate) eviction: Arc<ToolEviction>,
+    /// Whether the room stored a result when the turn began: its generation
+    /// hooks then see `read_stored_result`, which every round declares
+    /// either way (RFC §6.4).
+    pub(crate) reread_shown: bool,
 }
 
 impl<P: AiProvider> Loop<P> {

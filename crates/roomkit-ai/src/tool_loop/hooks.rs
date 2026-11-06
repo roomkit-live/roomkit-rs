@@ -68,7 +68,7 @@ impl<P: AiProvider> Loop<P> {
             return true;
         };
         let built = AiContext {
-            tools: self.declared(),
+            tools: self.hook_tools(),
             ..self.round_context(messages, self.system_prompt.clone())
         };
         let event = AiGenerationEvent {
@@ -148,7 +148,11 @@ impl<P: AiProvider> Loop<P> {
             return Vec::new();
         }
         let event = ToolRoundEvent {
-            tools: self.declared().into_iter().map(|tool| tool.name).collect(),
+            tools: self
+                .hook_tools()
+                .into_iter()
+                .map(|tool| tool.name)
+                .collect(),
             ..ToolRoundEvent::new(
                 self.context.channel_id.clone(),
                 Some(self.context.room_id.clone()),
@@ -211,17 +215,50 @@ impl<P: AiProvider> Loop<P> {
             .collect()
     }
 
+    /// The turn's toolset as its generation and round hooks read it: what
+    /// [`declared`](Self::declared) gives, `read_stored_result` last once the
+    /// room stored a result when the turn began (RFC §6.4: the rounds declare
+    /// it from the first either way). Python's `_hook_toolset`.
+    pub(super) fn hook_tools(&self) -> Vec<AiTool> {
+        let mut tools = self.declared();
+        if self.reread_shown {
+            tools.extend(self.reread_kept());
+        }
+        tools
+    }
+
+    /// `read_stored_result`, unless the turn withdrew it.
+    fn reread_kept(&self) -> Option<AiTool> {
+        self.toolbox
+            .reread()
+            .filter(|tool| !self.adopted.withdrawn.contains(&tool.name))
+            .cloned()
+    }
+
+    /// `tools`, a round's declaration, with `read_stored_result` last when
+    /// they declare a tool or the room stores a result: declared from the
+    /// first round of such a turn, so that the declaration does not change
+    /// when a result is stored (RFC §6.4, §21.5). Python's
+    /// `with_reread_tool`.
+    fn with_reread(&self, mut tools: Vec<AiTool>) -> Vec<AiTool> {
+        if tools.is_empty() && !self.eviction.has_evicted(self.context.room_id.as_str()) {
+            return tools;
+        }
+        tools.extend(self.reread_kept());
+        tools
+    }
+
     /// What the first round declares: the toolset, collapsed when Tool Search
-    /// hides its catalogue.
+    /// hides its catalogue, then `read_stored_result`.
     pub(super) fn first_declaration(&self) -> Vec<AiTool> {
-        self.search.collapsed(self.declared())
+        self.with_reread(self.search.collapsed(self.declared()))
     }
 
     /// What this round's request shows, each tool's schema with the intent
     /// property when the agent asks for one, the round's declaration joining
     /// what the turn reports (RFC §6.4).
     pub(super) fn round_tools(&self, spent: &mut Spent) -> Vec<AiTool> {
-        let round = self.search.round_declaration(self.declared());
+        let round = self.with_reread(self.search.round_declaration(self.declared()));
         spent.declare(round.iter().map(|tool| {
             let origin = self.search.origin(&tool.name);
             DeclaredTool::from_tool(tool, FromToolOptions { origin })

@@ -90,6 +90,7 @@ mod stream;
 #[doc(hidden)]
 pub mod testing;
 mod texts;
+mod tool_eviction;
 mod tool_loop;
 mod tool_search;
 mod tool_usage;

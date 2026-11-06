@@ -263,16 +263,23 @@ async fn a_later_turn_is_measured_again_with_the_rounds_it_replays() {
 #[tokio::test]
 async fn the_footprint_measures_the_tools_own_schemas_when_intents_are_on() {
     let declared: Vec<AiTool> = (0..3).map(|n| tool(&format!("tool_{n}"))).collect();
-    let handler = ToolHandler::new(|_name, _arguments| async { Ok(ToolResult::Text("ok".into())) });
-    let options = AiChannelOptions {
-        tools: declared.iter().cloned().map(Into::into).collect(),
-        tool_handler: Some(handler),
-        tool_call_intents: true,
-        ..AiChannelOptions::default()
+    let options = |intents: bool| {
+        let handler =
+            ToolHandler::new(|_name, _arguments| async { Ok(ToolResult::Text("ok".into())) });
+        AiChannelOptions {
+            tools: declared.iter().cloned().map(Into::into).collect(),
+            tool_handler: Some(handler),
+            tool_call_intents: intents,
+            ..AiChannelOptions::default()
+        }
     };
-    let (footprints, model) = Box::pin(measured(options)).await;
+    let (footprints, model) = Box::pin(measured(options(true))).await;
+    // The tools' own schemas, as a request without intents declares them:
+    // the re-read of stored results after them (RFC §21.5).
+    let (_, plain) = Box::pin(measured(options(false))).await;
 
-    let own: usize = declared.iter().map(tool_tokens).sum();
+    let own: usize = plain.requests()[0].tools.iter().map(tool_tokens).sum();
+    assert_eq!(plain.requests()[0].tools.len(), declared.len() + 1);
     let shown: usize = model.requests()[0].tools.iter().map(tool_tokens).sum();
     assert!(shown > own, "the request shows the intent property");
     // No system prompt: an empty text's estimate.
@@ -301,8 +308,8 @@ async fn under_tool_search_the_footprint_counts_what_the_first_round_declares() 
     let sent = model.requests().remove(0);
     assert_eq!(
         sent.tools.len(),
-        3,
-        "the pinned tool and the discovery tools"
+        4,
+        "the pinned tool, the discovery tools and the re-read of stored results"
     );
     let tools: usize = sent.tools.iter().map(tool_tokens).sum();
     let prompt = estimate_tokens(sent.system_prompt.as_deref().unwrap_or(""));

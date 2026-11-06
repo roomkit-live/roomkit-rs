@@ -8,6 +8,7 @@ use roomkit::model::{ToolCall, ToolCallOutcome};
 
 use super::{AiTool, DynToolset, ToolContext, ToolPolicy};
 use crate::error::AiError;
+use crate::tool_eviction::{REREAD_TOOL, ToolEviction};
 use crate::tool_search::search_tool_defs;
 use crate::turn_config::Collisions;
 
@@ -43,6 +44,10 @@ pub(crate) struct Toolbox {
     /// The names a registry given keeps for them, a tool under one refused as
     /// any tool under a name served.
     skill_names: HashSet<String>,
+    /// The re-read of stored results, once the agent serves it, and where
+    /// its toolset is: never among the tools a round declares in their
+    /// order, since it is declared last of all (RFC §21.5).
+    reread: Option<(AiTool, usize)>,
 }
 
 impl std::fmt::Debug for Toolbox {
@@ -190,6 +195,25 @@ impl Toolbox {
             turn.tools.push((tool, position));
         }
         turn
+    }
+
+    /// Serves `read_stored_result` with `toolset` (RFC §21.5): a tool of the
+    /// agent's own that the policy does not govern (RFC §21.1), which Tool
+    /// Search never hides and no other tool may take. Before any tool is
+    /// added, so that a host's tool under its name is refused.
+    pub(crate) fn add_reread(&mut self, agent: &str, toolset: Arc<dyn DynToolset>) {
+        agent.clone_into(&mut self.agent);
+        let position = self.toolsets.len();
+        self.toolsets.push(toolset);
+        self.served.insert(REREAD_TOOL.to_owned(), position);
+        self.exempt.insert(REREAD_TOOL.to_owned());
+        self.reserved.insert(REREAD_TOOL.to_owned());
+        self.reread = Some((ToolEviction::tool_definition(), position));
+    }
+
+    /// The definition of `read_stored_result`, when the agent serves it.
+    pub(crate) fn reread(&self) -> Option<&AiTool> {
+        self.reread.as_ref().map(|(tool, _)| tool)
     }
 
     /// The toolbox with `search` serving Tool Search's tools, declared after
@@ -373,7 +397,7 @@ impl Toolbox {
 
     /// The refusal of a tool under `name`, a name kept for the agent's own.
     fn refused_name(&self, name: &str) -> AiError {
-        if self.skill_names.contains(name) {
+        if self.skill_names.contains(name) || name == REREAD_TOOL {
             return AiError::DuplicateTool {
                 name: name.to_owned(),
             };
@@ -431,9 +455,11 @@ impl Toolbox {
     /// The tool `name`, and the toolset serving it.
     pub(crate) fn find(&self, name: &str) -> Option<(&AiTool, Arc<dyn DynToolset>)> {
         let position = *self.served.get(name)?;
+        let reread = self.reread.iter().filter(|(_, at)| *at == position);
         let tool = self
             .tools
             .iter()
+            .chain(reread)
             .find(|(tool, _)| tool.name == name)
             .map(|(tool, _)| tool)?;
         let toolset = self.toolsets.get(position)?;

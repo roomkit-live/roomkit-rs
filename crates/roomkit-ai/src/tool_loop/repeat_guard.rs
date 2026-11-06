@@ -84,14 +84,17 @@ impl RepeatGuard {
         self.force_stop.load(Ordering::SeqCst)
     }
 
-    /// `result`, what `name` answered, with a note once it gave that answer a
-    /// third time this turn. The guard's own words are left as they are,
-    /// uncounted.
-    pub(super) fn noted(&self, name: &str, result: String) -> String {
+    /// `result`, the model's copy of what `name` answered, with a note once
+    /// it gave that answer a third time this turn, counted on `answer`, what
+    /// the tool gave, when the model's copy differs from it: a stored
+    /// result's placeholder carries an id of its own per call (RFC §21.5).
+    /// The guard's own words are left as they are, uncounted. Python's
+    /// `_repeated_result_note`.
+    pub(super) fn noted(&self, name: &str, result: String, answer: Option<&str>) -> String {
         if result.contains(ADVISORY_MARKER) {
             return result;
         }
-        let key = (name.to_owned(), result.clone());
+        let key = (name.to_owned(), answer.unwrap_or(&result).to_owned());
         let count = {
             let mut counts = lock(&self.results);
             let count = counts.entry(key).or_insert(0);
@@ -163,9 +166,9 @@ mod tests {
     #[test]
     fn the_first_two_identical_answers_pass_unremarked() {
         let guard = RepeatGuard::default();
-        assert_eq!(guard.noted("boards", "same".to_owned()), "same");
-        assert_eq!(guard.noted("boards", "same".to_owned()), "same");
-        let third = guard.noted("boards", "same".to_owned());
+        assert_eq!(guard.noted("boards", "same".to_owned(), None), "same");
+        assert_eq!(guard.noted("boards", "same".to_owned(), None), "same");
+        let third = guard.noted("boards", "same".to_owned(), None);
         assert!(third.contains(NOTE) && third.starts_with("same"), "{third}");
     }
 
@@ -174,7 +177,7 @@ mod tests {
     fn a_different_result_never_accumulates() {
         let guard = RepeatGuard::default();
         for i in 0..10 {
-            let read = guard.noted("boards", format!("row-{i}"));
+            let read = guard.noted("boards", format!("row-{i}"), None);
             assert!(!read.contains(NOTE), "{read}");
         }
     }
@@ -184,10 +187,10 @@ mod tests {
     fn two_tools_returning_the_same_string_are_counted_apart() {
         let guard = RepeatGuard::default();
         for _ in 0..2 {
-            guard.noted("todos", "ok".to_owned());
-            guard.noted("boards", "ok".to_owned());
+            guard.noted("todos", "ok".to_owned(), None);
+            guard.noted("boards", "ok".to_owned(), None);
         }
-        assert_eq!(guard.noted("notes", "ok".to_owned()), "ok");
+        assert_eq!(guard.noted("notes", "ok".to_owned(), None), "ok");
     }
 
     // Python: tests/test_repeated_result_note.py::test_the_advisory_error_is_not_itself_annotated
@@ -195,7 +198,7 @@ mod tests {
     fn the_advisory_error_is_not_itself_annotated() {
         let guard = RepeatGuard::default();
         for _ in 0..5 {
-            let read = guard.noted("boards", texts::repeated_call("boards", 2));
+            let read = guard.noted("boards", texts::repeated_call("boards", 2), None);
             assert_eq!(read, texts::repeated_call("boards", 2));
         }
     }
@@ -206,7 +209,7 @@ mod tests {
         for n in [3, 8, 23] {
             let guard = RepeatGuard::default();
             let read = (0..n).fold(String::new(), |_, _| {
-                guard.noted("boards", "same".to_owned())
+                guard.noted("boards", "same".to_owned(), None)
             });
             assert!(read.contains(&format!("{n} times this turn")), "{read}");
         }

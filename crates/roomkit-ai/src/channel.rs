@@ -40,6 +40,7 @@ use crate::server_instructions::ServerInstructions;
 use crate::skills::SkillRegistry;
 use crate::skills::tools::{SkillTools, SkillTurn};
 use crate::steering::{Loops, SteerOptions};
+use crate::tool_eviction::{DEFAULT_EVICT_THRESHOLD_TOKENS, Reread, ToolEviction};
 use crate::tool_loop::TurnTelemetry;
 use crate::tool_loop::{
     Adopted, Bounds, Loop, RepeatGuard, Resilience, TextPublication, ThinkingPublication,
@@ -213,6 +214,12 @@ pub struct AiChannelOptions {
     /// earlier image not shown (RFC §6.4); `None` bounds nothing. Python's
     /// `max_author_images`, 4 by default.
     pub max_author_images: Option<usize>,
+    /// The estimated tokens (a quarter of the characters, plus one) past
+    /// which an outcome of a call reaches the model as a preview of its
+    /// first and last lines, its whole text stored in the room for
+    /// `read_stored_result` to page through or search (RFC §21.5). Python's
+    /// `evict_threshold_tokens`, 5000 by default.
+    pub evict_threshold_tokens: u64,
     /// The skills the channel serves (RFC §24). A registry with no skill
     /// serves none, and lets a turn's configuration give its own (RFC §24.3).
     pub skills: Option<SkillRegistry>,
@@ -310,6 +317,7 @@ impl Default for AiChannelOptions {
             config_provider: None,
             describe_empty_event: None,
             max_author_images: Some(DEFAULT_MAX_AUTHOR_IMAGES),
+            evict_threshold_tokens: DEFAULT_EVICT_THRESHOLD_TOKENS,
             skills: None,
             skills_in_prompt: true,
             tool_policy: None,
@@ -434,6 +442,8 @@ pub struct AiChannel<P> {
     human_input: Option<(HumanInputToolHandler, Arc<AtomicU64>)>,
     /// What decides a turn's Tool Search (RFC §6.4).
     tool_search: Arc<ToolSearch>,
+    /// The results of its calls stored for re-reading, per room (RFC §21.5).
+    eviction: Arc<ToolEviction>,
     /// The identity block an [`Agent`](crate::Agent) writes at the end of
     /// its turns' system prompt.
     identity: Option<IdentityPrompt>,
@@ -547,6 +557,7 @@ impl<P> Clone for AiChannel<P> {
             room_turns: self.room_turns,
             human_input: self.human_input.clone(),
             tool_search: Arc::clone(&self.tool_search),
+            eviction: Arc::clone(&self.eviction),
             identity: self.identity.clone(),
         }
     }
@@ -624,6 +635,7 @@ impl<P: AiProvider> AiChannel<P> {
             tool_search_threshold_pct: share,
             tool_search_miss_hint: miss_hint,
             tool_search_threshold_tokens: tokens,
+            evict_threshold_tokens,
         } = options;
         // Python's ToolPolicy, RetryPolicy and AITool refuse as they are
         // built, before its constructor runs.
@@ -639,7 +651,7 @@ impl<P: AiProvider> AiChannel<P> {
         refuse_zero_bounds(tool_timeout, &tool_timeouts)?;
         let search = ToolSearch::checked(mode, pinned, (count, share, tokens), miss_hint)?;
         let skilled = (skills, skills_in_prompt);
-        let setup = (&channel_id, &search);
+        let setup = (&channel_id, &search, evict_threshold_tokens);
         let surface = tool_surface(setup, tool_handler, tools, human_input_handler, skilled)?;
         Ok(Self {
             capabilities: ai_channel_capabilities(),
@@ -656,9 +668,7 @@ impl<P: AiProvider> AiChannel<P> {
             turn_budget_tokens,
             turn_budget_usd,
             resilience,
-            system_prompt: Arc::new(RwLock::new(
-                system_prompt.filter(|prompt| !prompt.is_empty()),
-            )),
+            system_prompt: Arc::new(RwLock::new(system_prompt.filter(|text| !text.is_empty()))),
             temperature,
             max_tokens,
             thinking: (thinking_budget, enable_thinking),
@@ -678,6 +688,7 @@ impl<P: AiProvider> AiChannel<P> {
             room_turns: RoomTurns::of(serialize_room_turns, steer_room_turns),
             human_input: surface.human_input,
             tool_search: Arc::new(search),
+            eviction: surface.eviction,
             identity: None,
         })
     }
@@ -1370,10 +1381,12 @@ struct ToolSurface {
     tool_handler: Arc<RwLock<Option<ToolHandler>>>,
     human_input: Option<(HumanInputToolHandler, Arc<AtomicU64>)>,
     skills: Option<Arc<SkillTools>>,
+    /// The store of large results the re-read serves (RFC §21.5).
+    eviction: Arc<ToolEviction>,
 }
 
-/// The channel's tool surface, the host's tools first, then a person's and
-/// the skills'.
+/// The channel's tool surface, the re-read of stored results reserved
+/// first, then the host's tools, a person's and the skills'.
 ///
 /// # Errors
 ///
@@ -1381,13 +1394,16 @@ struct ToolSurface {
 /// the channel serves itself, [`AiError::ToolSearchName`] for one under a name
 /// Tool Search keeps (RFC §21.1).
 fn tool_surface(
-    (channel_id, search): (&ChannelId, &ToolSearch),
+    (channel_id, search, evict_threshold_tokens): (&ChannelId, &ToolSearch, u64),
     tool_handler: Option<ToolHandler>,
     tools: Vec<ToolEntry>,
     human_input_handler: Option<HumanInputToolHandler>,
     (skills, skills_in_prompt): (Option<SkillRegistry>, bool),
 ) -> Result<ToolSurface, AiError> {
     let mut toolbox = Toolbox::default();
+    // The re-read of stored results, which no tool may take (RFC §21.5).
+    let eviction = Arc::new(ToolEviction::new(evict_threshold_tokens));
+    toolbox.add_reread(channel_id.as_str(), Arc::new(Reread(Arc::clone(&eviction))));
     // The names Tool Search keeps for itself, before any tool takes one.
     if search.reserves_names() {
         let names = TOOL_SEARCH_INFRA_TOOL_NAMES.map(str::to_owned);
@@ -1419,6 +1435,7 @@ fn tool_surface(
         tool_handler,
         human_input,
         skills,
+        eviction,
     })
 }
 
@@ -1530,6 +1547,8 @@ impl<P: AiProvider> AiChannel<P> {
             search,
             said: HashMap::new(),
             repeat_guard: RepeatGuard::default(),
+            reread_shown: self.eviction.has_evicted(context.room.id.as_str()),
+            eviction: Arc::clone(&self.eviction),
         };
         // Measured as the first round sends it, before the memory reads the
         // room (RFC §20).

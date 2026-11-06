@@ -14,6 +14,7 @@ use super::{Loop, ToolEnd};
 use crate::provider::AiProvider;
 use crate::skills::ACTIVATE_SKILL;
 use crate::texts;
+use crate::tool_eviction::kept_whole;
 use crate::tool_search::TOOL_SEARCH_INFRA_TOOL_NAMES;
 use crate::tools::{ToolContext, ToolError, ToolResult, read_tool_result, repair, schema};
 
@@ -47,6 +48,7 @@ impl<P: AiProvider> Loop<P> {
             }
             Gated::Refused(refused) => (self.refused_again(called, refused), None),
         };
+        let own = ended.result.clone();
         let ended = match &self.turn {
             Some(turn) => turn.on_tool_call(ended).await,
             None => ended,
@@ -56,6 +58,11 @@ impl<P: AiProvider> Loop<P> {
         }
         let result = self.for_model(read_tool_result(&ended.result));
         let outcome = ended.outcome.unwrap_or(ToolCallOutcome::Failed);
+        // The call's own answer, neither replaced nor withheld by a hook.
+        let served = outcome == ToolCallOutcome::Served && ended.result == own;
+        // The observers read the whole outcome, as the hooks did; the model
+        // and the end row its bounded copy (RFC §21.5).
+        let shown = self.bounded(&ended.call, result.clone(), served);
         let reported = ended.ended(outcome, result.clone().into_value());
         log_failure(&reported);
         if let Some(turn) = &self.turn {
@@ -69,9 +76,9 @@ impl<P: AiProvider> Loop<P> {
             self.search
                 .settle(&reported.call.id, &reported.call.name, outcome);
             self.remember(&reported.call.name, &asked, outcome, &result);
-            self.with_repeat_note(&reported.call.name, result)
+            self.with_repeat_note(&reported.call.name, shown, &result)
         } else {
-            result
+            shown
         };
         ToolEnd {
             outcome,
@@ -114,13 +121,30 @@ impl<P: AiProvider> Loop<P> {
     }
 
     /// `result`, what the model reads of a call past its gate, noted when its
-    /// tool already gave that answer this turn; a result of parts a model that
+    /// tool already gave `answer` this turn; a result of parts a model that
     /// sees reads is not compared (Python's `_model_part`).
-    fn with_repeat_note(&self, name: &str, result: ToolResult) -> ToolResult {
+    fn with_repeat_note(&self, name: &str, result: ToolResult, answer: &ToolResult) -> ToolResult {
+        let answer = match answer {
+            ToolResult::Text(answer) => Some(answer.as_str()),
+            ToolResult::Json(_) | ToolResult::Parts(_) => None,
+        };
         match result {
-            ToolResult::Text(text) => ToolResult::Text(self.repeat_guard.noted(name, text)),
+            ToolResult::Text(text) => ToolResult::Text(self.repeat_guard.noted(name, text, answer)),
             ToolResult::Json(_) | ToolResult::Parts(_) => result,
         }
+    }
+
+    /// `result`, the model's copy of an outcome of `call`, bounded as every
+    /// outcome is, after the hooks read it whole (RFC §21.5): stored and
+    /// previewed when past the agent's threshold, save a skill's
+    /// instructions its activation `served` itself, which the model reads
+    /// whole (RFC §24.4). Python's `_bound_tool_result`.
+    fn bounded(&self, call: &ToolCall, result: ToolResult, served: bool) -> ToolResult {
+        if served && kept_whole(&call.name) {
+            return result;
+        }
+        self.eviction
+            .bounded(self.context.room_id.as_str(), result, &call.id)
     }
 
     /// `result` as the model reads it: parts as they are for a model that

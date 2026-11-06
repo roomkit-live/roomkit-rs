@@ -190,5 +190,6 @@ async fn a_channel_driven_outside_a_kit_reads_no_stored_row() {
         .iter()
         .map(|tool| tool.name.clone())
         .collect();
-    assert_eq!(names, TOOL_SEARCH_INFRA_TOOL_NAMES);
+    // The re-read of stored results is declared after them (RFC §21.5).
+    assert_eq!(names, ["find_tools", "list_tools", "read_stored_result"]);
 }

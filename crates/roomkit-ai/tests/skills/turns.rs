@@ -79,7 +79,8 @@ fn body() -> String {
 
 /// RFC §24.3, §6.4: the manifest follows the agent's own system prompt,
 /// after the preamble, and the two tools are declared as the reference
-/// implementation declares them.
+/// implementation declares them, the re-read of stored results after them
+/// (RFC §21.5).
 #[tokio::test]
 async fn the_manifest_follows_the_system_prompt_and_both_tools_are_declared() {
     let tree = TempDir::new();
@@ -102,7 +103,11 @@ async fn the_manifest_follows_the_system_prompt_and_both_tools_are_declared() {
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>(),
-        ["activate_skill", "read_skill_reference"]
+        [
+            "activate_skill",
+            "read_skill_reference",
+            "read_stored_result"
+        ]
     );
     assert_eq!(
         declared[1].parameters,
@@ -240,7 +245,14 @@ async fn the_policy_does_not_govern_the_skill_tools() {
         .iter()
         .map(|tool| tool.name.clone())
         .collect();
-    assert_eq!(declared, ["activate_skill", "read_skill_reference"]);
+    assert_eq!(
+        declared,
+        [
+            "activate_skill",
+            "read_skill_reference",
+            "read_stored_result"
+        ]
+    );
     assert_eq!(
         tool_results(&model)[1],
         [
