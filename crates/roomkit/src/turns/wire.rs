@@ -729,7 +729,7 @@ mod tests {
         let sent = written["message"]
             .as_object_mut()
             .unwrap()
-            .remove("event")
+            .shift_remove("event")
             .unwrap();
 
         assert_eq!(
@@ -744,7 +744,7 @@ mod tests {
         python["message"]
             .as_object_mut()
             .unwrap()
-            .remove("room_hooks");
+            .shift_remove("room_hooks");
         let read: ChannelControlEnvelope = serde_json::from_value(python).unwrap();
         assert_eq!(read, envelope);
     }

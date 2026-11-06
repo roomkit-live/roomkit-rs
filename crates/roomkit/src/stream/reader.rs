@@ -696,9 +696,9 @@ impl Producer {
         let Some(hold) = self.hold.as_mut() else {
             return;
         };
-        let held = hold.end(self.segments.segment_text());
-        if let Some(held) = held.filter(|_| self.reads == Reads::Target) {
-            self.ready.push_back(Ok(StreamItem::Text(held)));
+        let start = hold.end(self.segments.segment_text());
+        if let Some(start) = start.filter(|_| self.reads == Reads::Target) {
+            self.ready.push_back(Ok(StreamItem::Text(start)));
             self.precounted = true;
         }
     }

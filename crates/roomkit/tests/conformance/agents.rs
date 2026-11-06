@@ -229,22 +229,8 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
         options.fallback_provider = Some(Arc::new(paced));
     }
     if let Some(memory) = spec.get("memory") {
-        let summarizer = match memory.get("summarizer") {
-            Some(summarizer) => {
-                let rounds = summarizer["rounds"].as_array().into_iter().flatten();
-                let summarizer =
-                    ScriptedProvider::new(rounds.map(round).collect::<Result<Vec<_>, _>>()?);
-                models.push((format!("{id}/summarizer"), summarizer.clone()));
-                Some(summarizer)
-            }
-            None => None,
-        };
-        options.memory = Some(scripted_memory(
-            memory,
-            options.max_context_events,
-            summarizer,
-            (id.clone(), run),
-        )?);
+        let memory = agent_memory(memory, (&id, run), options.max_context_events, &mut models)?;
+        options.memory = Some(memory);
     }
     options.tool_handler = undeclared_tools(spec, run);
     crate::audits::audit_tools(spec, run, &mut options);
@@ -273,6 +259,27 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
     };
     let agent = Agent::new(id, paced, agent_options).map_err(|e| e.to_string())?;
     Ok((Scripted::Agent(Box::new(agent)), models))
+}
+
+/// The scripted memory `memory` of the agent `id`, recorded on `run`, its
+/// summarizer among `models`.
+fn agent_memory(
+    memory: &Value,
+    (id, run): (&ChannelId, &Arc<Run>),
+    max_context_events: usize,
+    models: &mut Models,
+) -> Result<Arc<dyn roomkit_ai::memory::MemoryProvider>, String> {
+    let summarizer = match memory.get("summarizer") {
+        Some(summarizer) => {
+            let rounds = summarizer["rounds"].as_array().into_iter().flatten();
+            let summarizer =
+                ScriptedProvider::new(rounds.map(round).collect::<Result<Vec<_>, _>>()?);
+            models.push((format!("{id}/summarizer"), summarizer.clone()));
+            Some(summarizer)
+        }
+        None => None,
+    };
+    scripted_memory(memory, max_context_events, summarizer, (id.clone(), run))
 }
 
 /// A scripted agent's bounds and budgets (README, "Scripted agents").

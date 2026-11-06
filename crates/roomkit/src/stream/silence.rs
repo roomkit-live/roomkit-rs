@@ -90,7 +90,7 @@ mod tests {
         let mut hold = Hold::new(SilentToken::default());
         let (handed, read) =
             read_through(&mut hold, &["(", "S", "i", "l", "e", "n", "t", ")", "."]);
-        assert!(handed.is_empty());
+        assert_eq!(handed, Vec::<String>::new());
         assert_eq!(hold.end(&read), None);
 
         hold.next_segment();
@@ -103,7 +103,7 @@ mod tests {
     fn a_start_that_ends_as_no_silence_is_handed_at_its_end() {
         let mut hold = Hold::new(SilentToken::default());
         let (handed, read) = read_through(&mut hold, &["(", "si"]);
-        assert!(handed.is_empty());
+        assert_eq!(handed, Vec::<String>::new());
         assert_eq!(hold.end(&read).as_deref(), Some("(si"));
     }
 
@@ -113,7 +113,7 @@ mod tests {
     fn a_start_past_the_limit_is_released() {
         let mut hold = Hold::new(SilentToken::default());
         let (handed, _) = read_through(&mut hold, &[&" ".repeat(HOLD_LIMIT)]);
-        assert!(handed.is_empty());
+        assert_eq!(handed, Vec::<String>::new());
         let (handed, _) = read_through(&mut hold, &[" "]);
         assert_eq!(handed, [" ".repeat(HOLD_LIMIT + 1)]);
     }
