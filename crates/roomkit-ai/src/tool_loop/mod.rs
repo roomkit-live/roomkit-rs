@@ -885,7 +885,7 @@ impl Spent {
 /// never carries.
 fn replayed(mut metadata: Metadata) -> Metadata {
     for key in ["model", "refusal"] {
-        metadata.remove(key);
+        metadata.shift_remove(key);
     }
     metadata
 }

@@ -279,6 +279,10 @@ async fn a_steered_answer_keeps_what_its_provider_keeps_for_its_replay() {
     let kept = serde_json::json!({ "output": [] });
     let kept = kept.as_object().cloned().unwrap();
     answer.done.metadata.clone_from(&kept);
+    // What the response says of itself goes no further (Python's `answered_by`).
+    for (key, value) in [("model", "gpt-answered"), ("refusal", "No.")] {
+        answer.done.metadata.insert(key.to_owned(), value.into());
+    }
     let model = Gated::new([answer, ScriptedRound::answering("a.py")], 0);
     let room = Arc::new(with_tools(model.clone(), Paused::new().tools()).await);
     let turn = first_turn(&room);

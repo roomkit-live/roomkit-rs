@@ -34,8 +34,10 @@ pub struct AiResponse {
     /// What it used: integer counters by name (`input_tokens`,
     /// `output_tokens`...), which the turn's record sums.
     pub usage: Metadata,
-    /// Provider-owned data for replaying a tool round, which the loop
-    /// copies to the assistant message, never to the room.
+    /// What the response says of itself, `model` the model that answered
+    /// and `refusal` the refusal it carried (Python's `answered_by`), and
+    /// provider-owned data for replaying a tool round, which the loop copies
+    /// to the assistant message without those two keys, never to the room.
     pub metadata: Metadata,
     /// The calls it made, in order.
     pub tool_calls: Vec<AiToolCall>,
@@ -413,7 +415,9 @@ pub struct StreamDone {
     pub finish_reason: Option<String>,
     /// What it used.
     pub usage: Metadata,
-    /// Provider-owned data for replaying a tool round.
+    /// As [`AiResponse::metadata`]: what the response says of itself
+    /// (`model`, `refusal`) and provider-owned data for replaying a tool
+    /// round, which the loop keeps without those two keys.
     pub metadata: Metadata,
 }
 
