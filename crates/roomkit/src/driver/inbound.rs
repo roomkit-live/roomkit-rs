@@ -718,6 +718,21 @@ impl Caller {
         }
     }
 
+    /// Answers the caller now with `outcome`, the call's own work over, the
+    /// run going on for the entries the call adopted (RFC §9.5.1
+    /// Reentrance, §13.6); a caller answered already reads nothing more.
+    pub(super) fn answer_now(&mut self, outcome: Result<InboundResult, InboundError>) {
+        let Some(answer) = self.answer.take() else {
+            return;
+        };
+        if answer.send(Ok(outcome)).is_err() {
+            tracing::debug!(
+                target: "roomkit::driver",
+                "the caller of a call stopped waiting; its adopted entries go on"
+            );
+        }
+    }
+
     /// Ready once the run sees that its caller stopped waiting, once: never
     /// for a caller answered at the decision already.
     pub(super) fn poll_gone(&mut self, cx: &mut Context<'_>) -> Poll<()> {

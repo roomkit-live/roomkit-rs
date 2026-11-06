@@ -425,6 +425,7 @@ impl Inbound {
                 adopted_deliveries: BTreeMap::new(),
                 side_effects: SideEffects::default(),
                 outcome: None,
+                answers_before_its_entries: false,
             }),
         }
     }
@@ -567,6 +568,10 @@ struct Machine {
     adopted_deliveries: BTreeMap<EntryId, InboundResult>,
     side_effects: SideEffects,
     outcome: Option<Result<InboundResult, InboundError>>,
+    /// Whether the call, once its own work is over, answers its caller
+    /// without waiting for the entries it adopted: a call past its deadline
+    /// (RFC §13.6, §9.5.1 Reentrance).
+    answers_before_its_entries: bool,
 }
 
 /// What the call is, learned as it goes: its room, its kind, its channel,

@@ -320,7 +320,8 @@ mod a_hook_s_body {
                 Notice::FrameworkEvent(_)
                 | Notice::StopReading { .. }
                 | Notice::CutReadOver { .. }
-                | Notice::Span(_) => None,
+                | Notice::Span(_)
+                | Notice::Answered(_) => None,
             })
             .collect();
         assert_eq!(works, [(HookTrigger::AfterBroadcast, Some(3))]);

@@ -60,7 +60,11 @@ impl Machine {
     /// caller stopped waiting then (gap G-076): it reports it, then ends
     /// `blocked` with the reason `process_timeout` and no event, once its
     /// ticket is released, and the events it committed, an adopted entry's,
-    /// are delivered. The pass that held the lock released it already.
+    /// are delivered. The pass that held the lock released it already. An
+    /// entry its admission adopted runs its cascade to its end, its answers
+    /// committed, as the Python implementation's adopted call, whose cascade
+    /// is its own, does; the call's caller does not wait for it (RFC §9.5.1
+    /// Reentrance).
     pub(super) fn expire(&mut self, cx: &mut Cx<'_>, locked_event: Option<EventId>) {
         self.expire_as(cx, locked_event, None);
     }
@@ -84,7 +88,7 @@ impl Machine {
             refused_before_the_lock: before_the_lock,
             ..std::mem::take(&mut self.trigger.result)
         };
-        self.end(cx, Ok(refused));
+        self.end_past_the_deadline(cx, Ok(refused));
     }
 
     /// Reports the call's expiry: `process_timeout`, naming the message's

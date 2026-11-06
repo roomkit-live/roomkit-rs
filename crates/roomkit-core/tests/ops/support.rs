@@ -956,7 +956,8 @@ impl Sim {
                 Notice::AsyncHooks { then: None, .. }
                 | Notice::StopReading { .. }
                 | Notice::CutReadOver { .. }
-                | Notice::Span(_) => None,
+                | Notice::Span(_)
+                | Notice::Answered(_) => None,
             })
             .collect()
     }
@@ -978,7 +979,8 @@ impl Sim {
                 Notice::FrameworkEvent(_)
                 | Notice::StopReading { .. }
                 | Notice::CutReadOver { .. }
-                | Notice::Span(_) => None,
+                | Notice::Span(_)
+                | Notice::Answered(_) => None,
             })
             .collect()
     }
@@ -992,7 +994,8 @@ impl Sim {
                 Notice::FrameworkEvent(_)
                 | Notice::StopReading { .. }
                 | Notice::CutReadOver { .. }
-                | Notice::Span(_) => None,
+                | Notice::Span(_)
+                | Notice::Answered(_) => None,
             })
             .collect()
     }
@@ -1006,7 +1009,8 @@ impl Sim {
                 Notice::FrameworkEvent(_)
                 | Notice::StopReading { .. }
                 | Notice::CutReadOver { .. }
-                | Notice::Span(_) => None,
+                | Notice::Span(_)
+                | Notice::Answered(_) => None,
             })
             .collect()
     }
@@ -2123,6 +2127,7 @@ fn journal_line(notice: &Notice) -> String {
         ),
         Notice::StopReading { effect } => format!("stop reading {effect:?}"),
         Notice::CutReadOver { .. } => "cut read over".to_owned(),
+        Notice::Answered(_) => "answered".to_owned(),
     }
 }
 

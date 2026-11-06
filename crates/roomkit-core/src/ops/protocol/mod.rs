@@ -209,6 +209,12 @@ pub enum Notice {
     /// What the driver's spans read of the operation (Python's
     /// `framework.send_event` and `framework.broadcast`).
     Span(SpanNote),
+    /// The call's caller is answered now with this outcome, the call's own
+    /// work over: the operation goes on only for the entries the call's
+    /// admission adopted, whose cascades run to their end as if the call
+    /// had never waited for them (RFC §9.5.1 Reentrance, §13.6). A call past
+    /// its deadline while an adopted call's answer is still read.
+    Answered(Box<Result<InboundResult, InboundError>>),
 }
 
 /// What the operation tells the driver's spans: nothing depends on it.

@@ -87,6 +87,10 @@ pub(super) struct Cascade {
     /// Whether the cascade stopped, failed or past its deadline: no pass
     /// runs any more, committed events are still delivered.
     stopping: bool,
+    /// The cascades that stopped while the others go on: the call's own,
+    /// past its deadline, its adopted entries' running to their end (RFC
+    /// §13.6, §9.5.1 Reentrance).
+    stopped: Vec<Lineage>,
     /// The cascades whose turns are cut: the call's own, its caller gone
     /// once the call was decided or its delivery cancelled, and those of
     /// the entries whose delivery was cancelled. No turn of such a cascade
@@ -124,6 +128,7 @@ impl Cascade {
             sets: VecDeque::new(),
             delivery: None,
             stopping: false,
+            stopped: Vec::new(),
             cut: Vec::new(),
             budget,
             drawn: None,
@@ -172,7 +177,7 @@ impl Cascade {
     /// Queues `job` behind the cascade's passes; once the cascade stops, no
     /// pass is queued.
     pub(super) fn queue(&mut self, job: Job) {
-        if !self.stopping {
+        if !self.stops(job.lineage()) {
             self.passes.push_back(job);
         }
     }
@@ -180,7 +185,7 @@ impl Cascade {
     /// Queues a committed event's delivery set, which runs whatever comes
     /// next; once the cascade stops, the passes it holds are dropped.
     pub(super) fn queue_set(&mut self, mut delivery: Delivery) {
-        if self.stopping {
+        if self.stops(delivery.set.lineage()) {
             delivery.then.clear();
         }
         self.sets.push_back(delivery);
@@ -194,7 +199,7 @@ impl Cascade {
     /// Queues the stream of a turn to be read, once the cascade's passes
     /// and sets are over; once the cascade stops, it is never read.
     pub(super) fn queue_stream(&mut self, job: StreamJob) {
-        if !self.stopping {
+        if !self.stops(job.lineage) {
             self.streams.push_back(job);
         }
     }
@@ -211,6 +216,28 @@ impl Cascade {
         for delivery in self.sets.iter_mut().chain(self.delivery.as_mut()) {
             delivery.then.clear();
         }
+    }
+
+    /// Stops the cascade of `lineage` alone, as [`stop`](Self::stop) stops
+    /// them all: its passes and its streams waiting dropped, its events
+    /// committed still delivered, the rows of its stream being read refused;
+    /// the other cascades go on.
+    pub(super) fn stop_lineage(&mut self, lineage: Lineage) {
+        if !self.stopped.contains(&lineage) {
+            self.stopped.push(lineage);
+        }
+        self.passes.retain(|job| job.lineage() != lineage);
+        self.streams.retain(|job| job.lineage != lineage);
+        for delivery in self.sets.iter_mut().chain(self.delivery.as_mut()) {
+            if delivery.set.lineage() == lineage {
+                delivery.then.clear();
+            }
+        }
+    }
+
+    /// Whether the cascade of `lineage` stopped, alone or with them all.
+    fn stops(&self, lineage: Lineage) -> bool {
+        self.stopping || self.stopped.contains(&lineage)
     }
 
     /// Whether a read of a stream of the cascade of `lineage` is under way.
@@ -505,7 +532,7 @@ impl Machine {
                     .settle(row.entry, Ok(stream::row_refused("stream_over")));
                 continue;
             };
-            if self.cascade.stopping {
+            if self.cascade.stops(read.lineage()) {
                 cx.io
                     .settle(row.entry, Ok(stream::row_refused(STOPPED_REASON)));
                 continue;

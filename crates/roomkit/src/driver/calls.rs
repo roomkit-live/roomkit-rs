@@ -1044,7 +1044,10 @@ pub(super) fn perform<S: ConversationStore>(
     match notice {
         Notice::FrameworkEvent(event) => return inner.emit(event),
         // The run's own: the driver stops its read (`Driver::notice`).
-        Notice::StopReading { .. } | Notice::CutReadOver { .. } | Notice::Span(_) => {}
+        Notice::StopReading { .. }
+        | Notice::CutReadOver { .. }
+        | Notice::Span(_)
+        | Notice::Answered(_) => {}
         Notice::AsyncHooks {
             trigger,
             hooks,

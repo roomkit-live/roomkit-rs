@@ -27,10 +27,11 @@
 //! G-025).
 
 use super::job::Finished;
+use super::queues::Lineage;
 use super::{InboundError, InboundResult, Machine, Stage};
 use crate::model::ErrorRecord;
 use crate::ops::Cx;
-use crate::ops::protocol::{HoldRequest, Outcome};
+use crate::ops::protocol::{HoldRequest, Notice, Outcome};
 
 /// What a call does once its ticket is released.
 #[derive(Debug)]
@@ -56,13 +57,43 @@ impl Machine {
         if self.trigger.ticket.is_some() {
             return self.release_ticket(cx, AfterTicket::End(Box::new(outcome)));
         }
-        self.end_after_the_cascade(outcome);
+        self.end_after_the_cascade(cx, outcome);
+    }
+
+    /// [`end`](Self::end) for a call past its deadline (RFC §13.6): only the
+    /// call's own cascade stops. An entry its admission adopted runs its
+    /// cascade to its end, the rows of its stream committed, and the call's
+    /// caller is answered once the ticket is released, without waiting for
+    /// it, as the Python implementation's adopted call runs a cascade of its
+    /// own (RFC §9.5.1 Reentrance).
+    pub(super) fn end_past_the_deadline(
+        &mut self,
+        cx: &mut Cx<'_>,
+        outcome: Result<InboundResult, InboundError>,
+    ) {
+        self.release_hand(cx);
+        self.publish(cx, &outcome);
+        self.cascade.stop_lineage(Lineage::Call);
+        self.answers_before_its_entries = true;
+        if self.trigger.ticket.is_some() {
+            return self.release_ticket(cx, AfterTicket::End(Box::new(outcome)));
+        }
+        self.end_after_the_cascade(cx, outcome);
     }
 
     /// Ends with `outcome` once the last adopted entry is settled and the
-    /// last committed event delivered.
-    fn end_after_the_cascade(&mut self, outcome: Result<InboundResult, InboundError>) {
+    /// last committed event delivered; a call that answers before its
+    /// entries answers its caller now.
+    fn end_after_the_cascade(
+        &mut self,
+        cx: &mut Cx<'_>,
+        outcome: Result<InboundResult, InboundError>,
+    ) {
         if !self.is_settled() {
+            if self.answers_before_its_entries {
+                let answered = self.for_caller(outcome.clone());
+                cx.io.notify(Notice::Answered(Box::new(answered)));
+            }
             self.stage.enter(Stage::Ending(Box::new(outcome)));
             return;
         }
@@ -166,7 +197,7 @@ impl Machine {
                     }
                     result
                 });
-                self.end_after_the_cascade(outcome);
+                self.end_after_the_cascade(cx, outcome);
             }
         }
     }

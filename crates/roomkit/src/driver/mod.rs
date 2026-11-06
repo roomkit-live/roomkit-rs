@@ -822,6 +822,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 }
                 self.spans.noted(note);
             }
+            Notice::Answered(outcome) => {
+                if let Some(caller) = self.caller.as_deref_mut() {
+                    caller.answer_now(*outcome);
+                }
+            }
             notice @ (Notice::FrameworkEvent(_) | Notice::AsyncHooks { .. }) => {
                 if let Some(handled) = calls::perform(self.inner, notice) {
                     handled.wait().await;

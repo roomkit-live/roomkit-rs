@@ -1597,7 +1597,8 @@ mod a_mutation_trigger {
                 | Notice::FrameworkEvent(_)
                 | Notice::StopReading { .. }
                 | Notice::CutReadOver { .. }
-                | Notice::Span(_) => None,
+                | Notice::Span(_)
+                | Notice::Answered(_) => None,
             })
             .unwrap()
     }
@@ -1760,7 +1761,8 @@ mod a_mutation_trigger {
                 | Notice::FrameworkEvent(_)
                 | Notice::StopReading { .. }
                 | Notice::CutReadOver { .. }
-                | Notice::Span(_) => None,
+                | Notice::Span(_)
+                | Notice::Answered(_) => None,
             })
             .collect();
         assert_eq!(fired, [vec![of_the_target]]);
