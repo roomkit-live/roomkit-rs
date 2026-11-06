@@ -185,12 +185,12 @@ fn target(dsn: Option<&str>) -> Result<Target, StoreError> {
 }
 
 /// A pool of `manager`, at most `max_size` connections, a connection given
-/// `timeout` to be made whichever addresses it tries, as asyncpg's `timeout`
-/// bounds the whole of its `connect`.
-fn pool_of(manager: Manager, max_size: usize, timeout: Duration) -> Result<Pool, StoreError> {
+/// asyncpg's 60 s to be made whichever addresses it tries, as asyncpg's
+/// `timeout` bounds the whole of its `connect`.
+fn pool_of(manager: Manager, max_size: usize) -> Result<Pool, StoreError> {
     Pool::builder(manager)
         .max_size(max_size)
-        .create_timeout(Some(timeout))
+        .create_timeout(Some(CONNECT_TIMEOUT))
         .runtime(Runtime::Tokio1)
         .build()
         .map_err(StoreError::unavailable)
@@ -275,7 +275,7 @@ pub(crate) async fn open(
         passfile,
     };
     let manager = Manager::from_connect(config, connector, manager_config());
-    let pool = pool_of(manager, max_size, CONNECT_TIMEOUT)?;
+    let pool = pool_of(manager, max_size)?;
     let mut opened = Vec::with_capacity(min_size);
     for _ in 0..min_size {
         opened.push(pool.get().await.map_err(StoreError::unavailable)?);
@@ -479,7 +479,7 @@ mod tests {
         assert_eq!(read.config.get_connect_timeout(), Some(&CONNECT_TIMEOUT));
         assert!(!read.config.get_keepalives());
         let manager = Manager::from_config(Config::new(), tokio_postgres::NoTls, manager_config());
-        let pool = pool_of(manager, 1, CONNECT_TIMEOUT).unwrap();
+        let pool = pool_of(manager, 1).unwrap();
         assert_eq!(pool.timeouts().create, Some(CONNECT_TIMEOUT));
     }
 
