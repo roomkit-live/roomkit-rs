@@ -117,6 +117,9 @@ impl<P: AiProvider> Loop<P> {
         });
         let mut compacted = false;
         let mut attempt = 0;
+        // What any try received, held text included: the round's, which
+        // its tries and its fallback share (Python's `note_received`).
+        let mut received = false;
         let last = loop {
             let stream = self.provider.generate_structured_stream(&context);
             let reading = (steering, out, prefix, &mut *window, limits);
@@ -125,6 +128,11 @@ impl<P: AiProvider> Loop<P> {
                 Ok(generation) => return Ok(generation),
                 Err(failure) => failure,
             };
+            received |= failure.received;
+            let failure = Failed {
+                received,
+                ..failure
+            };
             if failure.streamed {
                 return Err(failure);
             }
@@ -132,7 +140,11 @@ impl<P: AiProvider> Loop<P> {
                 // One compacted replay, then the ordinary retries: an error
                 // that only read as an overflow keeps its retries.
                 compacted = true;
-                self.compact(&mut context, messages, &failure.error)?;
+                self.compact(&mut context, messages, &failure.error)
+                    .map_err(|refused| Failed {
+                        received,
+                        ..refused
+                    })?;
                 continue;
             }
             if !failure.error.retryable {
@@ -182,6 +194,7 @@ async fn fall_back(
             tracing::error!(target: "roomkit::ai", error = %failure.error, "the fallback provider failed too");
             Err(Failed {
                 error: primary.error.with_source(failure.error),
+                received: primary.received || failure.received,
                 ..primary
             })
         }
@@ -189,7 +202,10 @@ async fn fall_back(
             by_fallback: true,
             ..generation
         }),
-        Err(failure) => Err(failure),
+        Err(failure) => Err(Failed {
+            received: true,
+            ..failure
+        }),
     }
 }
 
