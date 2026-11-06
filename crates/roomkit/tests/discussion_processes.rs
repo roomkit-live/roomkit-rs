@@ -186,7 +186,8 @@ impl Cluster {
         most
     }
 
-    /// Until `done` holds of the answers, each process's drivers roused.
+    /// Until `done` holds of the answers, each process's drivers roused;
+    /// fails past 10 s.
     async fn until(&self, done: impl Fn(&[String]) -> bool) {
         tokio::time::timeout(Duration::from_secs(10), async {
             while !done(&self.answers().await) {
@@ -197,7 +198,7 @@ impl Cluster {
             }
         })
         .await
-        .expect("the answers came");
+        .unwrap();
     }
 
     async fn close(self) {

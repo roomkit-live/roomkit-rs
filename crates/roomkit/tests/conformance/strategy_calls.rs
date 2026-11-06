@@ -307,7 +307,7 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
             let options = roomkit::RoomStrategyIsCurrentOptions { organization_id };
             match kit.room_strategy_is_current(&room, kind, options).await {
                 // The kind refused is its own error (README, "Errors").
-                Err(roomkit::RoomKitError::Type(_)) => Err(json!({"name": "kind_not_stored"})),
+                Err(RoomKitError::Type(_)) => Err(json!({"name": "kind_not_stored"})),
                 current => finish(run, name, current, |current| json!(current)),
             }
         }
@@ -326,8 +326,8 @@ fn kind_of(kind: &str) -> Result<std::any::TypeId, Unreadable> {
         "Discussion" => TypeId::of::<roomkit::Discussion>(),
         "Pipeline" => TypeId::of::<roomkit::Pipeline>(),
         "Swarm" => TypeId::of::<roomkit::Swarm>(),
-        "Loop" => TypeId::of::<roomkit::Loop>(),
-        "Supervisor" => TypeId::of::<roomkit::Supervisor>(),
+        "Loop" => TypeId::of::<Loop>(),
+        "Supervisor" => TypeId::of::<Supervisor>(),
         other => return Err(format!("kind: no strategy {other:?}")),
     })
 }
