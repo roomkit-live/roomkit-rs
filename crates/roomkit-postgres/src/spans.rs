@@ -74,7 +74,12 @@ impl QuerySpans {
                 ..StartSpanOptions::default()
             },
         );
+        let mut on_panic = EndOnPanic {
+            provider: Arc::clone(&provider),
+            span: Some(span.clone()),
+        };
         let outcome = work.await;
+        on_panic.span = None;
         let end = match &outcome {
             Ok(_) => EndSpanOptions::default(),
             Err(error) => EndSpanOptions {
@@ -85,6 +90,30 @@ impl QuerySpans {
         };
         provider.end_span(&span, end);
         outcome
+    }
+}
+
+/// Ends the span of an operation that panics, `error`, as Python's `_query_span` ends
+/// one on any `Exception` (HITL 69e3f386). An operation dropped unfinished, its
+/// caller gone, leaves its span as Python leaves a `CancelledError`'s.
+struct EndOnPanic {
+    provider: Arc<dyn TelemetryProvider>,
+    /// The span, until the operation is over.
+    span: Option<String>,
+}
+
+impl Drop for EndOnPanic {
+    fn drop(&mut self) {
+        if let Some(span) = self.span.take()
+            && std::thread::panicking()
+        {
+            let end = EndSpanOptions {
+                status: "error".to_owned(),
+                error_message: Some("panic".to_owned()),
+                ..EndSpanOptions::default()
+            };
+            self.provider.end_span(&span, end);
+        }
     }
 }
 
@@ -194,8 +223,9 @@ mod tests {
     #[tokio::test]
     async fn a_panic_inside_an_operation_ends_its_span_as_an_error() {
         let provider = Arc::new(MockTelemetryProvider::default());
+        let reported: Arc<dyn TelemetryProvider> = Arc::<MockTelemetryProvider>::clone(&provider);
         let spans = Arc::new(QuerySpans::default());
-        spans.set(Arc::clone(&provider) as Arc<dyn TelemetryProvider>, false);
+        spans.set(reported, false);
         let operation = {
             let spans = Arc::clone(&spans);
             tokio::spawn(async move {
