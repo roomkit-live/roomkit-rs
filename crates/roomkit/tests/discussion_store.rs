@@ -404,6 +404,116 @@ async fn an_uninstall_during_a_plan_s_write_tells_the_turn_given_then_its_end() 
     kit.close().await.unwrap();
 }
 
+// Python: _driver.py `cut`, which reads the turn the driver clears as its
+// task is cancelled, and `_abandon`'s wait on the turn's cleanup: a
+// listen_only racing an uninstall cuts a turn the stop already let go of, and
+// returns once it is.
+#[tokio::test]
+async fn a_listen_only_racing_an_uninstall_returns_once_the_turn_is_cut() {
+    let store = FlakyStore::default();
+    let (write_held, writing, write_on) = (
+        Arc::clone(&store.write_held),
+        Arc::clone(&store.writing),
+        Arc::clone(&store.write_on),
+    );
+    let kit = installed(store, DiscussionOptions::default()).await;
+    let room = RoomId::new("r1").unwrap();
+    write_held.store(true, Ordering::SeqCst);
+    let saying = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            kit.process_inbound(hello(), ProcessInboundOptions::default())
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), writing.notified())
+        .await
+        .expect("the plan writes its queue");
+
+    let listening = {
+        let (kit, room) = (kit.clone(), room.clone());
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            let options = roomkit::ListenOnlyOptions::default();
+            let listened = kit.listen_only(&room, &[id("a")], options).await;
+            (listened, started.elapsed())
+        })
+    };
+    tokio::task::yield_now().await;
+    let uninstalling = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            kit.uninstall_strategy(&room, UninstallStrategyOptions::default())
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    write_on.notify_one();
+    let (listened, took) = tokio::time::timeout(Duration::from_secs(10), listening)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(uninstalling.await.unwrap().unwrap());
+    drop(saying.await);
+
+    listened.unwrap();
+    assert!(took < Duration::from_secs(1), "listen_only took {took:?}");
+    kit.close().await.unwrap();
+}
+
+// Python: tests/orchestration/test_discussion_edges.py::test_listen_only_on_a_turn_given_but_not_started_cuts_it,
+// bounded as its `wait_for(held.wait(), 5)`: the cut waits for the turn's end,
+// which comes at once, never for its whole bound.
+#[tokio::test]
+async fn listen_only_on_a_turn_given_returns_once_it_is_cut() {
+    let kit = installed(FlakyStore::default(), DiscussionOptions::default()).await;
+    let (telling, mut told) = watch::channel(None);
+    let weak = kit.downgrade();
+    kit.hook(
+        HookTrigger::OnSpeakQueue,
+        move |event: SpeakQueueEvent, _context: RoomContext| {
+            let (kit, telling) = (weak.upgrade(), telling.clone());
+            async move {
+                let Some(kit) = kit.filter(|_| event.change == SpeakQueueChange::TurnGiven) else {
+                    return;
+                };
+                let started = std::time::Instant::now();
+                let options = roomkit::ListenOnlyOptions::default();
+                let listened = kit.listen_only(&event.room_id, &[id("a")], options).await;
+                telling.send_replace(Some((listened.is_ok(), started.elapsed())));
+            }
+        },
+        HookOptions::default(),
+    )
+    .unwrap();
+
+    kit.process_inbound(hello(), ProcessInboundOptions::default())
+        .await
+        .unwrap();
+    let (listened, took) =
+        tokio::time::timeout(Duration::from_secs(10), told.wait_for(Option::is_some))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    idle(&kit).await;
+
+    assert!(listened);
+    assert!(took < Duration::from_secs(1), "listen_only took {took:?}");
+    let room = RoomId::new("r1").unwrap();
+    let events = kit
+        .store()
+        .list_events(&room, store::ListEventsOptions::default())
+        .await
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .all(|event| event.source.channel_id != id("a"))
+    );
+    kit.close().await.unwrap();
+}
+
 /// A kit on `store` holding `ops`, `a` answering `@b your turn` and `b`
 /// answering `b says`.
 fn kit_on(store: &Arc<InMemoryStore>, b_says: &str) -> RoomKit {

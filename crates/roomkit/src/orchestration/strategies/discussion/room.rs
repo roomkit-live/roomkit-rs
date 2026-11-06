@@ -327,9 +327,9 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     /// listen; the turn one of them takes in this process is cut.
     async fn listen(&self, channel_ids: Vec<ChannelId>) -> Result<(), RoomKitError> {
         let kit = self.kit()?;
-        let time = now(&kit);
         let (agents, speaking) = self
             .editing(&kit, |state, _| {
+                let time = now(&kit);
                 let agents: Vec<ChannelId> = channel_ids
                     .into_iter()
                     .filter(|agent| {
@@ -384,8 +384,9 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     }
 
     /// Cancels the delivery of `agent`'s turn when this process gave it,
-    /// and waits for it to be over, briefly: never from a caller holding
-    /// the room's lock or standing in its lane, which the turn may wait for.
+    /// and waits for it to be over, briefly: never from a caller the wait
+    /// would wait for itself, one holding the room's lock or delivering in
+    /// it (Python's `waiter_would_deadlock`).
     async fn cut_given(&self, agent: &ChannelId, reason: &str) {
         let over = self.turn_over.notified();
         let mut over = std::pin::pin!(over);
@@ -401,8 +402,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             return;
         };
         cutter.cut(reason);
-        let context = ExecutionContext::current();
-        if context.lease(&self.room_id).is_some() || context.is_admitted_to(&self.room_id) {
+        if ExecutionContext::current().waits_for_itself(&self.room_id) {
             return;
         }
         if tokio::time::timeout(CUT_WAIT, over).await.is_err() {

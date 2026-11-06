@@ -57,6 +57,17 @@ pub(super) fn now<S: ConversationStore>(kit: &RoomKit<S>) -> f64 {
         .map_or(0.0, |elapsed| elapsed.as_secs_f64())
 }
 
+/// The end of a look's run: its cut is no longer the turn's, and a cut
+/// waiting for it is told, however the run ends.
+struct TurnOver<'room, S: ConversationStore>(&'room DiscussionRoom<S>);
+
+impl<S: ConversationStore> Drop for TurnOver<'_, S> {
+    fn drop(&mut self) {
+        self.0.state().cutter = None;
+        self.0.turn_over.notify_waiters();
+    }
+}
+
 /// Whether `state` holds a turn to give or a message waiting for a dispatch
 /// policy: what the discussion's `done` is asked about.
 fn holds_work(state: &SpeakQueueState) -> bool {
@@ -156,13 +167,12 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         // `_abandon`).
         let named = kit.inner.delivery_keys.naming(None, None);
         self.state().cutter = Some(Arc::clone(named.named()));
-        let ran = kit.run_discussion_turn(&self.room_id, named).await;
-        let given = {
-            let mut live = self.state();
-            live.cutter = None;
-            live.turn.take()
+        let ran = {
+            // Over however the run ends, a stop's abort included.
+            let _over = TurnOver(self);
+            kit.run_discussion_turn(&self.room_id, named).await
         };
-        self.turn_over.notify_waiters();
+        let given = self.state().turn.take();
         let Some(given) = given else {
             ran?;
             return Ok(Looked::Nothing);
