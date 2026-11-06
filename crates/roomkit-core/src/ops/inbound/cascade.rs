@@ -75,10 +75,11 @@ impl Machine {
     /// its delivery set first, since the release waits while an entry the
     /// call adopted works under the room's lock, and the set's place comes
     /// before that entry's; a pass that failed is settled once the ticket
-    /// is released, but one past the call's deadline while such an entry
-    /// works, settled at once: the call is refused on time, as Python's
-    /// returns at its deadline, the ticket's release following (RFC
-    /// §13.6).
+    /// is released, but one past the call's deadline while another of the
+    /// call's sections holds the room's lock (an entry it adopted, or a pass
+    /// of that entry's cascade), settled at once: the call is refused on
+    /// time, as Python's returns at its deadline, the ticket's release
+    /// following that section's (RFC §13.6).
     pub(super) fn settle(&mut self, cx: &mut Cx<'_>, finished: Finished) {
         if matches!(finished, Finished::Pass(_, PassOrigin::Trigger)) {
             // Before its decision and its set: what follows is asked
@@ -94,7 +95,12 @@ impl Machine {
                 finished @ Finished::Pass(
                     Err(Abort::DeadlinePassed { .. }),
                     PassOrigin::Trigger,
-                ) if !self.adopted.is_idle() => {
+                ) if self
+                    .trigger
+                    .ticket
+                    .as_ref()
+                    .is_some_and(|room_id| cx.io.holds_lock_of(room_id)) =>
+                {
                     return self.settle_released(cx, finished);
                 }
                 finished @ Finished::Pass(Err(_), PassOrigin::Trigger) => {

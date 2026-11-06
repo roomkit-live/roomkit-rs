@@ -78,8 +78,10 @@ impl Machine {
     /// commit, the rows of its stream committed once it committed, as the
     /// Python implementation's adopted call runs a cascade of its own (RFC
     /// §9.5.1 Reentrance). The call's caller is answered now, without
-    /// waiting for it, nor for the ticket's release that an entry holding
-    /// the room's lock holds back, as Python's call returns at its deadline.
+    /// waiting for it, nor for the ticket's release that another of its
+    /// sections holding the room's lock holds back, as Python's call
+    /// returns at its deadline; a failed release of that ticket is then
+    /// logged only (gap G-025).
     pub(super) fn end_past_the_deadline(
         &mut self,
         cx: &mut Cx<'_>,
@@ -89,8 +91,8 @@ impl Machine {
         self.publish(cx, &outcome);
         self.cascade.stop_lineage(Lineage::Call);
         self.answers_before_its_entries = true;
-        if self.trigger.ticket.is_some() {
-            if !self.adopted.is_idle() {
+        if let Some(room_id) = &self.trigger.ticket {
+            if cx.io.holds_lock_of(room_id) {
                 let answered = self.for_caller(outcome.clone());
                 cx.io.notify(Notice::Answered(Box::new(answered)));
             }

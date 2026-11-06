@@ -549,6 +549,13 @@ impl Io {
         self.outstanding.get(&effect)?.locked.as_ref()
     }
 
+    /// Whether a section of the operation holds `room_id`'s lock, or waits
+    /// for it, through the driver: a release of the room's ticket waits for
+    /// it (RFC §9.5.1).
+    pub(crate) fn holds_lock_of(&self, room_id: &RoomId) -> bool {
+        self.locks.holds(room_id)
+    }
+
     /// The bound `effect`, an effect not answered yet, was asked within
     /// (RFC §13.6): the call's for a request of its own before its
     /// decision, an adopted entry's for one of the entry's before its

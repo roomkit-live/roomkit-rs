@@ -80,6 +80,12 @@ impl RoomLocks {
         self.rooms.entry(room_id).or_default();
     }
 
+    /// Whether the operation holds `room_id`'s lock, or waits for it,
+    /// through the driver: a release of the room's ticket is held back.
+    pub(super) fn holds(&self, room_id: &RoomId) -> bool {
+        self.rooms.contains_key(room_id)
+    }
+
     /// Withdraws `effect`, an acquire held back here, from the queue it
     /// waits in: it never goes out. Whether it was held back.
     pub(super) fn withdraw(&mut self, effect: EffectId) -> bool {

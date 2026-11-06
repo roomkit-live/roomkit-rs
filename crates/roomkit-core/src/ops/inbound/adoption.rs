@@ -386,10 +386,11 @@ impl Adopted {
     /// Sets the entry's bound, once: its own deadline, its
     /// `process_timeout` from `now`, its adoption's poll, as every call's
     /// runs from its start (RFC §13.6), none for a greeting, which takes
-    /// none (RFC §19.1); for an entry that follows its origin, that
-    /// origin's deadline when it has one, which passes first and cuts the
-    /// origin's code with the entry, as Python's outer deadline cancels the
-    /// call its hook awaits before that call's own.
+    /// none (RFC §19.1); for an entry that follows its origin, or is nested
+    /// in the section its origin runs in, that origin's deadline when it
+    /// has one, which passes first and cuts the origin's code with the
+    /// entry, as Python's outer deadline cancels the call its hook awaits
+    /// before that call's own.
     fn stamp(&mut self, config: &KitConfig, now: Timestamp, entry: &Entry) {
         let Deadline::Unset { follows } = self.deadline else {
             return;
@@ -401,8 +402,11 @@ impl Adopted {
             | Entry::Post { .. }
             | Entry::Row { .. } => deadline::of_call(config, now),
         };
+        // One nested under its origin's lock holds that section, which
+        // cannot outlive the origin's deadline.
+        let borrows = follows || self.nested.is_some();
         let (deadline, at) = match self.origin_deadline {
-            Some(origin) if follows => (Deadline::Borrowed, Some(origin)),
+            Some(origin) if borrows => (Deadline::Borrowed, Some(origin)),
             Some(_) | None => (Deadline::Own, own),
         };
         self.deadline = deadline;
