@@ -73,7 +73,18 @@ pub(crate) async fn new_kit(configure: impl FnOnce(RoomKitOptions) -> RoomKitOpt
 
 /// Scenario id → the rule this implementation breaks (roomkit-specs
 /// `conformance/README.md`, "Known failures").
-pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
+    (
+        "memory/a-compacting-memory-summarizes-what-it-trims",
+        "§20.3: the copy, synced from roomkit-specs 247e409, is behind; roomkit-specs f5949ff \
+         replaces this scenario, which the next sync brings (RMK-450)",
+    ),
+    (
+        "memory/a-summary-stands-for-the-older-turns",
+        "§20.3: the copy, synced from roomkit-specs 247e409, is behind; roomkit-specs f5949ff \
+         replaces this scenario, which the next sync brings (RMK-450)",
+    ),
+];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.
