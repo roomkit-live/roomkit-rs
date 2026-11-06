@@ -189,10 +189,6 @@ mod tests {
 
     use super::*;
 
-    fn thinking(text: &str) -> Segment {
-        Segment::Thinking(text.to_owned())
-    }
-
     fn text(text: &str) -> Segment {
         Segment::Text(text.to_owned())
     }
@@ -220,40 +216,11 @@ mod tests {
         assert_eq!(parser.flush(), []);
     }
 
-    // Python: tests/test_providers/test_openai.py::TestThinkTagParser::test_complete_tag_single_chunk
-    #[test]
-    fn complete_tag_single_chunk() {
-        let mut parser = ThinkTagParser::default();
-        let segments = parser.feed("<think>reasoning</think>answer");
-        assert_eq!(segments, [thinking("reasoning"), text("answer")]);
-    }
-
-    // Python: tests/test_providers/test_openai.py::TestThinkTagParser::test_tag_split_across_chunks
-    #[test]
-    fn tag_split_across_chunks() {
-        let read = read(&["<thi", "nk>reason", "</think>ans"]);
-        assert_eq!(read, ("reason".to_owned(), "ans".to_owned()));
-    }
-
-    // Python: tests/test_providers/test_openai.py::TestThinkTagParser::test_close_tag_split
-    #[test]
-    fn close_tag_split() {
-        let read = read(&["<think>ok</th", "ink>done"]);
-        assert_eq!(read, ("ok".to_owned(), "done".to_owned()));
-    }
-
     // Python: tests/test_providers/test_openai.py::TestThinkTagParser::test_empty_think_block
     #[test]
     fn empty_think_block() {
         let mut parser = ThinkTagParser::default();
         assert_eq!(parser.feed("<think></think>answer"), [text("answer")]);
-    }
-
-    // Python: tests/test_providers/test_openai.py::TestThinkTagParser::test_only_thinking_no_text
-    #[test]
-    fn only_thinking_no_text() {
-        let read = read(&["<think>just thinking"]);
-        assert_eq!(read, ("just thinking".to_owned(), String::new()));
     }
 
     // Python: tests/test_providers/test_openai.py::TestThinkTagParser::test_multiple_small_chunks
@@ -303,7 +270,7 @@ mod tests {
     fn where_a_think_tag_stands() {
         let bom = '\u{feff}';
         let after_a_bom = format!("{bom}<think>a</think>answer");
-        let cases: [(&[&str], Option<&str>, &str); 10] = [
+        let cases: [(&[&str], Option<&str>, &str); 12] = [
             // A tag the answer writes.
             (
                 &["The parser reads the <think> tag at the start. Everything after is lost."],
@@ -315,7 +282,19 @@ mod tests {
             // A block at the start.
             (&["<think>a</think>answer"], Some("a"), "answer"),
             // Whitespace before the block.
-            (&["\n \n<think>a</think>answer"], Some("a"), "\n \nanswer"),
+            (
+                &[" \t\r\n<think>a</think>answer"],
+                Some("a"),
+                " \t\r\nanswer",
+            ),
+            // Whitespace, then a split tag.
+            (&["\n", "<th", "ink>a</think>b"], Some("a"), "\nb"),
+            // Another tag at the start.
+            (
+                &["<thinking>x</thinking>y"],
+                None,
+                "<thinking>x</thinking>y",
+            ),
             // A BOM before the block.
             (&[&after_a_bom], None, &after_a_bom),
             // A tag split at the start.
@@ -356,6 +335,16 @@ mod tests {
                 "whole: {chunks:?}"
             );
         }
+    }
+
+    // Python: tests/test_providers/test_openai.py::TestThinkTagParser::test_a_start_that_cannot_be_the_tag_streams_at_once
+    // (RMK-1327): only a start that may still become `<think>` waits.
+    #[test]
+    fn a_start_that_cannot_be_the_tag_streams_at_once() {
+        let mut parser = ThinkTagParser::default();
+        assert_eq!(parser.feed("<"), []);
+        assert_eq!(parser.feed("b>bold"), [text("<b>bold")]);
+        assert_eq!(parser.feed(" <"), [text(" <")]);
     }
 
     // Python: providers/ai/openai_dialect.py ThinkTagParser, which works on
