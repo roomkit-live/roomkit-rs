@@ -14,11 +14,12 @@ use roomkit::model::{ChannelId, Metadata, ResponseMetadata, RoomId};
 use roomkit::{ChannelError, ClassedError, ResponseItem, TurnHost};
 use roomkit_ai::{AiResponseEvent, ProviderError, ProviderErrorOptions, response_transcript};
 use serde_json::{Map, Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedMutexGuard, mpsc};
 use tokio::time::Instant;
 
-use super::Shared;
+use super::{Active, Shared};
 use crate::connection::AcpConnection;
+use crate::error::AcpError;
 use crate::transport::AcpTransport;
 
 /// What a turn asks: its room, its event, its text, and the record it writes.
@@ -27,7 +28,9 @@ pub(super) struct Ask {
     pub(super) event_id: String,
     pub(super) text: String,
     pub(super) record: ResponseMetadata,
-    pub(super) host: TurnHost,
+    /// The kit's turn, which `ON_AI_RESPONSE` fires through; none outside a
+    /// kit, where nothing fires.
+    pub(super) host: Option<TurnHost>,
 }
 
 /// How the turn's prompt ended, once it returned.
@@ -36,25 +39,36 @@ struct Answered {
     started: Instant,
 }
 
-/// The turn's work, as its stream polls it.
-type Work = Pin<Box<dyn Future<Output = Result<Answered, ChannelError>> + Send>>;
+/// What the turn holds until its stream is over, as Python's turn holds
+/// them around its whole stream: the room's turn lock, its count among the
+/// channel's turns in flight.
+struct Hold<T: AcpTransport> {
+    _room: OwnedMutexGuard<()>,
+    _active: Active<T>,
+}
+
+/// The turn's work, as its stream polls it: its outcome, and what it holds
+/// once it took the room.
+type Work<T> =
+    Pin<Box<dyn Future<Output = (Result<Answered, ChannelError>, Option<Hold<T>>)> + Send>>;
 
 /// The stream of a turn: nothing runs until it is read; the turn's work
 /// then runs as it is read, the agent's text handed on as it comes.
-pub(super) struct TurnStream {
-    work: Option<Work>,
+pub(super) struct TurnStream<T: AcpTransport> {
+    work: Option<Work<T>>,
     text: mpsc::UnboundedReceiver<String>,
     said: Vec<String>,
     ending: Option<Result<Answered, ChannelError>>,
+    hold: Option<Hold<T>>,
     channel_id: ChannelId,
     room_id: RoomId,
     record: ResponseMetadata,
-    host: TurnHost,
+    host: Option<TurnHost>,
     done: bool,
 }
 
-impl TurnStream {
-    pub(super) fn new<T: AcpTransport>(shared: Arc<Shared<T>>, ask: Ask) -> Self {
+impl<T: AcpTransport> TurnStream<T> {
+    pub(super) fn new(shared: Arc<Shared<T>>, ask: Ask) -> Self {
         let (sender, text) = mpsc::unbounded_channel();
         let Ask {
             room_id,
@@ -77,6 +91,7 @@ impl TurnStream {
             text,
             said: Vec::new(),
             ending: None,
+            hold: None,
             channel_id,
             room_id,
             record,
@@ -88,8 +103,11 @@ impl TurnStream {
     /// Reports the turn that ran to its end to `ON_AI_RESPONSE`'s hooks,
     /// then emits `ai_response` (RFC §8.2, §9.2), as Python's
     /// `_report_response`: its text, its end as its record names it, the
-    /// counters the agent returned, unaltered.
+    /// counters the agent returned, unaltered. Outside a kit nothing fires.
     fn report(&self, answered: &Answered) {
+        let Some(host) = &self.host else {
+            return;
+        };
         let (segments, content) = response_transcript(
             std::iter::once(self.said.concat()).filter(|text| !text.is_empty()),
         );
@@ -108,13 +126,12 @@ impl TurnStream {
         data.insert("tool_calls_count".to_owned(), Value::from(0));
         data.insert("latency_ms".to_owned(), Value::from(latency_ms));
         data.insert("streaming".to_owned(), Value::Bool(true));
-        let host = self.host.clone();
-        self.host
-            .observe_turn(&event, move || host.emit_turn_event("ai_response", data));
+        let emitter = host.clone();
+        host.observe_turn(&event, move || emitter.emit_turn_event("ai_response", data));
     }
 }
 
-impl Stream for TurnStream {
+impl<T: AcpTransport> Stream for TurnStream<T> {
     type Item = Result<ResponseItem, ChannelError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -123,17 +140,18 @@ impl Stream for TurnStream {
             return Poll::Ready(None);
         }
         if let Some(work) = this.work.as_mut()
-            && let Poll::Ready(ending) = work.as_mut().poll(cx)
+            && let Poll::Ready((ending, hold)) = work.as_mut().poll(cx)
         {
             this.work = None;
             this.ending = Some(ending);
+            this.hold = hold;
         }
         match this.text.poll_recv(cx) {
             Poll::Ready(Some(text)) => {
                 this.said.push(text.clone());
                 return Poll::Ready(Some(Ok(ResponseItem::Text(text))));
             }
-            // The work holds the sender: the text ends once the work did.
+            // The work holds a sender until it ends: the text ends then.
             Poll::Ready(None) => {}
             Poll::Pending => return Poll::Pending,
         }
@@ -158,20 +176,36 @@ async fn run<T: AcpTransport>(
     prompt: String,
     record: ResponseMetadata,
     text: mpsc::UnboundedSender<String>,
+) -> (Result<Answered, ChannelError>, Option<Hold<T>>) {
+    let room = shared.room_lock(&room_id).lock_owned().await;
+    let hold = Hold {
+        _room: room,
+        _active: shared.active(),
+    };
+    let outcome = prompted(&shared, &room_id, event_id, prompt, &record, &text).await;
+    (outcome, Some(hold))
+}
+
+async fn prompted<T: AcpTransport>(
+    shared: &Arc<Shared<T>>,
+    room_id: &RoomId,
+    event_id: String,
+    prompt: String,
+    record: &ResponseMetadata,
+    text: &mpsc::UnboundedSender<String>,
 ) -> Result<Answered, ChannelError> {
-    let lock = shared.room_lock(&room_id);
-    let _turn = lock.lock().await;
-    let _active = shared.active();
-    let connection = shared.connector.connection().await?;
+    let connection = shared.connector.connection().await.map_err(raised)?;
     let session = shared
         .connector
-        .session(&room_id, &connection, &shared.cwd)
-        .await?;
+        .session(room_id, &connection, &shared.cwd)
+        .await
+        .map_err(raised)?;
     let registered = Registered {
-        shared: Arc::clone(&shared),
+        shared: Arc::clone(shared),
         session: session.clone(),
+        text: text.clone(),
     };
-    shared.connector.turns.register(&session, text);
+    shared.connector.turns.register(&session, text.clone());
     let started = Instant::now();
     let mut meta = Map::new();
     meta.insert("roomkit.live/eventId".to_owned(), json!(event_id));
@@ -179,22 +213,21 @@ async fn run<T: AcpTransport>(
     let mut prompting = Prompting {
         connection: Some(Arc::clone(&connection)),
         session,
+        record: record.clone(),
     };
     let answer = connection.prompt(request).await;
     prompting.connection = None;
     drop(registered);
     match answer {
         Ok(answer) => {
-            answered(&record, &answer);
+            answered(record, &answer);
             Ok(Answered {
                 usage: usage_of(&answer),
                 started,
             })
         }
         Err(error) => {
-            record.with_value("acp", |acp| {
-                acp["interrupted"] = Value::Bool(true);
-            });
+            interrupted(record);
             Err(provider_error(&format!("ACP agent prompt failed: {error}")))
         }
     }
@@ -210,6 +243,13 @@ fn answered(record: &ResponseMetadata, answer: &PromptResponse) {
         {
             acp["stop_reason"] = reason;
         }
+    });
+}
+
+/// The turn ended on the way, its prompt never returned (RFC §6.4).
+fn interrupted(record: &ResponseMetadata) {
+    record.with_value("acp", |acp| {
+        acp["interrupted"] = Value::Bool(true);
     });
 }
 
@@ -266,23 +306,45 @@ fn provider_error(message: &str) -> ChannelError {
     Box::new(ClassedError::new("ProviderError", error).with_attributes(attributes))
 }
 
-/// The turn prompting its session, until its prompt ended.
+/// A failure before the prompt (the connection, the handshake, the
+/// session's opening) under the Python class it stands for (the names
+/// table, `AcpError`).
+fn raised(error: AcpError) -> ChannelError {
+    let class = match &error {
+        AcpError::Rpc { .. } => "RequestError",
+        AcpError::ConnectionClosed => "ConnectionError",
+        AcpError::Value(_) => "ValueError",
+        AcpError::Spawn { .. } => "OSError",
+        AcpError::InvalidResponse { .. } => "ValidationError",
+        AcpError::Runtime(_) => "RuntimeError",
+    };
+    Box::new(ClassedError::new(class, error))
+}
+
+/// The turn prompting its session, until its prompt ended: it unregisters
+/// its own entry alone, as Python pops only its own turn.
 struct Registered<T: AcpTransport> {
     shared: Arc<Shared<T>>,
     session: String,
+    text: mpsc::UnboundedSender<String>,
 }
 
 impl<T: AcpTransport> Drop for Registered<T> {
     fn drop(&mut self) {
-        self.shared.connector.turns.unregister(&self.session);
+        self.shared
+            .connector
+            .turns
+            .unregister(&self.session, &self.text);
     }
 }
 
-/// A prompt out: dropped before it returned (its reader went), the agent is
-/// told to cancel it, as Python's turn cancels it in its session.
+/// A prompt out: dropped before it returned (its reader went, the turn was
+/// cut), the turn is marked interrupted and the agent told to cancel the
+/// prompt, as Python's turn records and cancels it.
 struct Prompting<C: AcpConnection> {
     connection: Option<Arc<C>>,
     session: String,
+    record: ResponseMetadata,
 }
 
 impl<C: AcpConnection> Drop for Prompting<C> {
@@ -290,6 +352,7 @@ impl<C: AcpConnection> Drop for Prompting<C> {
         let Some(connection) = self.connection.take() else {
             return;
         };
+        interrupted(&self.record);
         let session = std::mem::take(&mut self.session);
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {

@@ -45,6 +45,7 @@ pub(crate) fn scripted_acp_channel(
         wire: Arc::clone(&wire),
         run: Arc::downgrade(run),
         serving: Mutex::new(None),
+        counts: Arc::default(),
     };
     let options = AcpChannelOptions {
         transport: Some(transport),
@@ -60,6 +61,15 @@ pub(crate) struct ScriptedTransport {
     wire: Wire,
     run: Weak<Run>,
     serving: Mutex<Option<JoinHandle<()>>>,
+    /// The sessions and prompts the agent counts, over the whole run: a
+    /// reconnect goes on counting (README, "of the run").
+    counts: Arc<Counts>,
+}
+
+#[derive(Default)]
+struct Counts {
+    sessions: Mutex<u64>,
+    prompts: Mutex<usize>,
 }
 
 impl AcpTransport for ScriptedTransport {
@@ -80,8 +90,7 @@ impl AcpTransport for ScriptedTransport {
             spec: self.agent.clone(),
             wire: Arc::clone(&self.wire),
             run: Weak::clone(&self.run),
-            sessions: Mutex::new(0),
-            prompts: Mutex::new(0),
+            counts: Arc::clone(&self.counts),
         };
         let serving = tokio::spawn(serve(Arc::new(agent), theirs));
         if let Some(old) = self
@@ -115,8 +124,7 @@ struct Agent {
     spec: Value,
     wire: Wire,
     run: Weak<Run>,
-    sessions: Mutex<u64>,
-    prompts: Mutex<usize>,
+    counts: Arc<Counts>,
 }
 
 type Writer = Arc<AsyncMutex<WriteHalf<tokio::io::DuplexStream>>>;
@@ -157,6 +165,7 @@ async fn serve(agent: Arc<Agent>, stream: tokio::io::DuplexStream) {
 impl Agent {
     fn next_prompt(&self) -> Value {
         let mut prompts = self
+            .counts
             .prompts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -194,6 +203,7 @@ async fn answer(agent: Arc<Agent>, message: Value, prompt: Option<Value>, writer
         ("initialize", _) => Ok(agent.initialized(params)),
         ("session/new", _) => {
             let mut sessions = agent
+                .counts
                 .sessions
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);

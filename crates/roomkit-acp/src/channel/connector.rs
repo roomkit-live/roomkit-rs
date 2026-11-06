@@ -23,7 +23,7 @@ pub(super) const PROTOCOL_VERSION: u16 = 1;
 /// The connection, its agent's answer to `initialize`, and the rooms'
 /// sessions on it.
 pub(super) struct Connector<T: AcpTransport> {
-    pub(super) transport: T,
+    pub(super) transport: Arc<T>,
     authentication_method: Option<String>,
     pub(super) turns: Arc<Turns>,
     /// One connection at a time.
@@ -38,13 +38,16 @@ struct State<C> {
     agent_info: Option<Value>,
     closes_sessions: bool,
     sessions: HashMap<RoomId, String>,
+    /// No turn connects any more.
     closed: bool,
+    /// The transport was closed by the channel's close.
+    torn_down: bool,
 }
 
 impl<T: AcpTransport> Connector<T> {
     pub(super) fn new(transport: T, authentication_method: Option<String>) -> Self {
         Self {
-            transport,
+            transport: Arc::new(transport),
             authentication_method,
             turns: Arc::new(Turns::default()),
             connecting: tokio::sync::Mutex::new(()),
@@ -54,6 +57,7 @@ impl<T: AcpTransport> Connector<T> {
                 closes_sessions: true,
                 sessions: HashMap::new(),
                 closed: false,
+                torn_down: false,
             }),
             openings: Mutex::new(HashMap::new()),
         }
@@ -90,7 +94,14 @@ impl<T: AcpTransport> Connector<T> {
         let client = Arc::new(ChannelClient {
             turns: Arc::clone(&self.turns),
         });
-        match self.handshake(client).await {
+        // A turn dropped part-way through the handshake closes what it
+        // opened, as Python's closes on any exception.
+        let mut opening = Opening {
+            transport: Some(Arc::clone(&self.transport)),
+        };
+        let handshake = self.handshake(client).await;
+        opening.transport = None;
+        match handshake {
             Ok((connection, answer)) => {
                 let connection = Arc::new(connection);
                 let mut state = self.lock();
@@ -212,11 +223,14 @@ impl<T: AcpTransport> Connector<T> {
     }
 
     /// Closes the channel's sessions where the agent takes `session/close`,
-    /// then its transport; nothing opens after. Never fails.
+    /// within [`SHUTDOWN_GRACE`], then its transport, whatever the agent
+    /// answered; nothing opens after. A close cut short before its
+    /// transport was closed closes it at the next call. Never fails.
+    /// Python's `close()`.
     pub(super) async fn close(&self) {
         let (connection, sessions, closes) = {
             let mut state = self.lock();
-            if state.closed {
+            if state.torn_down {
                 return;
             }
             state.closed = true;
@@ -225,14 +239,40 @@ impl<T: AcpTransport> Connector<T> {
             (state.connection.take(), sessions, state.closes_sessions)
         };
         if let Some(connection) = connection.filter(|_| closes) {
-            for session in sessions {
-                // An agent that refuses keeps the session until the
-                // connection closes, which it does now.
-                let _refused = connection
-                    .close_session(CloseSessionRequest::new(session))
-                    .await;
-            }
+            let goodbye = async {
+                for session in sessions {
+                    // An agent that refuses keeps the session until the
+                    // connection closes, which it does now.
+                    let _refused = connection
+                        .close_session(CloseSessionRequest::new(session))
+                        .await;
+                }
+            };
+            // An agent that stopped answering cannot hold the close.
+            let _late = tokio::time::timeout(SHUTDOWN_GRACE, goodbye).await;
         }
         self.transport.close().await;
+        self.lock().torn_down = true;
+    }
+}
+
+/// How long the agent is given to acknowledge the sessions' closes:
+/// Python's `_SHUTDOWN_TIMEOUT`.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A handshake under way: dropped before it ended, it closes the transport
+/// it opened.
+struct Opening<T: AcpTransport> {
+    transport: Option<Arc<T>>,
+}
+
+impl<T: AcpTransport> Drop for Opening<T> {
+    fn drop(&mut self) {
+        let Some(transport) = self.transport.take() else {
+            return;
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move { transport.close().await });
+        }
     }
 }

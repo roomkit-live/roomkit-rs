@@ -34,8 +34,16 @@ impl Turns {
         self.lock().insert(session.to_owned(), text);
     }
 
-    pub(super) fn unregister(&self, session: &str) {
-        self.lock().remove(session);
+    /// The turn holding `text` stops prompting `session`; a later turn
+    /// registered under the same session keeps its own.
+    pub(super) fn unregister(&self, session: &str, text: &mpsc::UnboundedSender<String>) {
+        let mut turns = self.lock();
+        if turns
+            .get(session)
+            .is_some_and(|turn| turn.same_channel(text))
+        {
+            turns.remove(session);
+        }
     }
 
     fn text(&self, session: &str, text: String) {

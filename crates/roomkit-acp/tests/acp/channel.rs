@@ -251,6 +251,8 @@ fn info_reports_the_transport_in_use() {
     .unwrap();
     assert_eq!(spawned.info()["transport"], "stdio");
     assert_eq!(spawned.info()["connected"], false);
+    // No SDK speaks for the channel: the key is there, empty.
+    assert_eq!(spawned.info().get("sdk_version"), Some(&Value::Null));
     let watched = AcpChannel::new(
         id("acp"),
         CWD,

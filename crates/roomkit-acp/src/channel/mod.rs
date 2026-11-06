@@ -15,14 +15,21 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelMediaType, ChannelOutput, ChannelType, EventType, InboundMessage, Metadata,
-    ResponseMetadata, RoomContext, RoomEvent, RoomId,
+    ChannelMediaType, ChannelOutput, ChannelType, ErrorRecord, EventDirection, EventSource,
+    EventType, InboundMessage, Metadata, ResponseMetadata, RoomContext, RoomEvent, RoomId,
+    TextContent,
 };
-use roomkit::{Channel, ChannelError, current_turn_host};
+use roomkit::{Channel, ChannelError, ClassedError, ResponseItem, current_turn_host};
 use roomkit_core::rules::edits::opens_no_turn;
+use roomkit_core::rules::instructions::is_standalone;
+use roomkit_core::rules::transcript::{is_blank, mark_instruction};
 use serde_json::{Value, json};
 
 use self::connector::{Connector, PROTOCOL_VERSION};
+
+/// The room messages a channel declares it reads: Python's `room_history`
+/// default.
+const ROOM_HISTORY: usize = 20;
 use self::turn::{Ask, TurnStream};
 use crate::env::absolute_path;
 use crate::error::AcpError;
@@ -146,7 +153,7 @@ impl<T: AcpTransport> Shared<T> {
     }
 }
 
-/// A turn counted in [`AcpChannel::active_turns`].
+/// A turn counted in the channel's `active_turns`.
 struct Active<T: AcpTransport>(Arc<Shared<T>>);
 
 impl<T: AcpTransport> Drop for Active<T> {
@@ -231,6 +238,14 @@ impl<T: AcpTransport> AcpChannel<T> {
         })
     }
 
+    /// The source of the channel's answers.
+    fn source(&self) -> EventSource {
+        EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(self.shared.channel_id.clone(), ChannelType::AI)
+        }
+    }
+
     /// The ACP session of `room_id`, none before the room's first turn
     /// opened it. Python's `session_id`.
     pub fn session_id(&self, room_id: &RoomId) -> Option<String> {
@@ -274,6 +289,12 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
         ChannelDirection::Bidirectional
     }
 
+    /// The room messages the channel reads, its catch-up's window (RFC
+    /// §19.3.2): Python's `room_history`, 20 by default.
+    fn recent_events_window(&self) -> usize {
+        ROOM_HISTORY
+    }
+
     /// The turns in flight: from the moment a turn holds its room until
     /// its stream is over. Python's `active_turns`.
     fn active_turns(&self) -> usize {
@@ -298,6 +319,9 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
             json!(self.shared.connector.transport.name()),
         );
         info.insert("protocol_version".to_owned(), json!(PROTOCOL_VERSION));
+        // No SDK speaks for the channel: its connection is this crate's
+        // (HITL c7b3c7a3).
+        info.insert("sdk_version".to_owned(), Value::Null);
         info.insert("connected".to_owned(), json!(connected));
         info.insert("agent".to_owned(), agent.unwrap_or(Value::Null));
         info.insert("session_count".to_owned(), json!(sessions));
@@ -319,10 +343,6 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
     /// stream read as the agent answers; nothing for the channel's own
     /// events, an event that opens no turn (RFC §10.3) or one whose text
     /// is blank.
-    #[expect(
-        clippy::unused_async_trait_impl,
-        reason = "the turn's host is read in the body, which the kit polls within the turn"
-    )]
     async fn on_event(
         &self,
         event: RoomEvent,
@@ -332,15 +352,23 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
         if event.source.channel_id == self.shared.channel_id || opens_no_turn(&event) {
             return Ok(ChannelOutput::empty());
         }
-        let text = acp_event_text(&event);
-        if text.trim().is_empty() || event.r#type == EventType::Instruction {
+        let mut text = acp_event_text(&event);
+        if is_blank(&text) {
             return Ok(ChannelOutput::empty());
         }
-        let Some(host) = current_turn_host() else {
-            return Err("an ACP channel's turn runs within a kit's".into());
-        };
+        if event.r#type == EventType::Instruction {
+            // A standalone instruction's session of its own comes with
+            // parity stream L's lot 8.
+            if is_standalone(&event) {
+                return Ok(ChannelOutput::empty());
+            }
+            // The application's direction, never a participant's line (RFC
+            // §10.1.1 step 6).
+            text = mark_instruction(&text);
+        }
         let record = ResponseMetadata::new();
         record.insert("acp", json!({ "protocol_version": PROTOCOL_VERSION }));
+        let host = current_turn_host();
         let stream = TurnStream::new(
             Arc::clone(&self.shared),
             Ask {
@@ -351,10 +379,15 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
                 host: host.clone(),
             },
         );
-        Ok(ChannelOutput {
-            response_metadata: record,
-            ..host.respond_with_stream(Box::pin(stream))
-        })
+        match host {
+            // Within the kit, the turn is one stream, read as it is written.
+            Some(host) => Ok(ChannelOutput {
+                response_metadata: record,
+                ..host.respond_with_stream(Box::pin(stream))
+            }),
+            // Outside one, it is read whole, as an AI channel's is.
+            None => buffered(stream, &event, self.source(), record).await,
+        }
     }
 
     fn deliver(
@@ -372,3 +405,64 @@ impl<T: AcpTransport> Channel for AcpChannel<T> {
         self.shared.connector.close().await;
     }
 }
+
+/// A turn read whole, outside a kit: its text one message answering
+/// `trigger`, the turn's record on it, as an AI channel's turn is read
+/// outside one (HITL c2e5eb96); a failure with nothing said is the turn's
+/// error, one after some text the output's.
+async fn buffered<T: AcpTransport>(
+    mut stream: TurnStream<T>,
+    trigger: &RoomEvent,
+    source: EventSource,
+    record: ResponseMetadata,
+) -> Result<ChannelOutput, ChannelError> {
+    let mut said = String::new();
+    let mut failure = None;
+    while let Some(item) = std::future::poll_fn(|cx| {
+        futures_core::Stream::poll_next(std::pin::Pin::new(&mut stream), cx)
+    })
+    .await
+    {
+        match item {
+            Ok(ResponseItem::Text(text)) => said.push_str(&text),
+            Ok(_) => {}
+            Err(error) => failure = Some(error),
+        }
+    }
+    drop(stream);
+    if is_blank(&said) {
+        return match failure {
+            Some(failure) => Err(failure),
+            None => Ok(ChannelOutput {
+                response_metadata: record,
+                ..ChannelOutput::empty()
+            }),
+        };
+    }
+    let mut message = RoomEvent::at(
+        trigger.id.clone(),
+        trigger.room_id.clone(),
+        EventType::Message,
+        source,
+        TextContent::new(said),
+        trigger.created_at,
+    );
+    message.metadata = record.to_metadata();
+    let error = failure.map(|failure| match failure.downcast_ref::<ClassedError>() {
+        Some(classed) => ErrorRecord {
+            attributes: Box::new(classed.attributes().clone()),
+            ..ErrorRecord::new(classed.class(), classed.error().to_string())
+        },
+        None => ErrorRecord::new("Exception", failure.to_string()),
+    });
+    Ok(ChannelOutput {
+        responded: true,
+        response_events: vec![message],
+        response_metadata: record,
+        error,
+        ..ChannelOutput::empty()
+    })
+}
+
+#[cfg(test)]
+mod tests;

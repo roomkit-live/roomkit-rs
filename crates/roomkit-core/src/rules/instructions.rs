@@ -104,7 +104,7 @@ pub(crate) fn stamp(instruction: &mut RoomEvent, caller: &Metadata, standalone: 
 
 /// Whether `event` is an instruction that stands alone (RFC §10.1.1 rule
 /// 7).
-pub(crate) fn is_standalone(event: &RoomEvent) -> bool {
+pub fn is_standalone(event: &RoomEvent) -> bool {
     event.r#type == EventType::Instruction
         && event.metadata.get(STANDALONE) == Some(&Value::Bool(true))
 }

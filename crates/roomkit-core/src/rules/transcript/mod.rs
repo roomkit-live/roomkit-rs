@@ -772,6 +772,12 @@ pub fn people_count(context: &RoomContext, channel_id: &ChannelId) -> usize {
     people_taking_part(context, channel_id).len()
 }
 
+/// The application's instruction as a model reads it (RFC §10.1.1 rule
+/// 6): marked, never attributed. Python's `mark_instruction`.
+pub fn mark_instruction(text: &str) -> String {
+    format!("{INSTRUCTION_MARK}\n{text}")
+}
+
 /// `text` with each copy of a runtime mark it holds replaced (RFC §6.4):
 /// a message a host steers into a turn (RFC §21.3) reads as no mark of
 /// the runtime's. Python's `without_mark_copies`.
