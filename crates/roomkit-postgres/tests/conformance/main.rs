@@ -91,12 +91,12 @@ use crate::support::TempSchema;
 pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
         "memory/a-compacting-memory-summarizes-what-it-trims",
-        "§20.3: the copy, synced from roomkit-specs 247e409, is behind; roomkit-specs f5949ff \
+        "§20.3: the copy, synced from roomkit-specs d7b0ce2, is behind; roomkit-specs f5949ff \
          replaces this scenario, which the next sync brings (RMK-450)",
     ),
     (
         "memory/a-summary-stands-for-the-older-turns",
-        "§20.3: the copy, synced from roomkit-specs 247e409, is behind; roomkit-specs f5949ff \
+        "§20.3: the copy, synced from roomkit-specs d7b0ce2, is behind; roomkit-specs f5949ff \
          replaces this scenario, which the next sync brings (RMK-450)",
     ),
     (
