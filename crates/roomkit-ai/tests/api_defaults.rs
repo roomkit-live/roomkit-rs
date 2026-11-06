@@ -30,6 +30,12 @@ fn mock_memory_and_knowledge_options_defaults_as_python() {
 }
 
 #[test]
+fn schema_mismatch_options_defaults_as_python() {
+    // roomkit.providers.ai.schema_mismatch(path) = '$'
+    assert_eq!(roomkit_ai::SchemaMismatchOptions::default().path, "$");
+}
+
+#[test]
 fn from_tool_options_defaults_as_python() {
     // roomkit.DeclaredTool.from_tool(origin) = 'always'
     assert_eq!(
@@ -94,6 +100,8 @@ fn ai_channel_options_defaults_as_python() {
     assert!(defaults.turn_budget_usd.is_none());
     // roomkit.AIChannel.__init__(reasoning_effort) = None
     assert!(defaults.reasoning_effort.is_none());
+    // roomkit.AIChannel.__init__(response_schema) = None
+    assert!(defaults.response_schema.is_none());
     // roomkit.AIChannel.__init__(thinking_budget) = None
     assert!(defaults.thinking_budget.is_none());
     // roomkit.AIChannel.__init__(enable_thinking) = None
@@ -254,6 +262,10 @@ fn mock_ai_provider_options_defaults_as_python() {
     assert_eq!(defaults.responses, Vec::<String>::new());
     // roomkit.providers.ai.MockAIProvider.__init__(streaming) = False
     assert!(!defaults.streaming);
+    // roomkit.providers.ai.MockAIProvider.__init__(response_schema) = False
+    assert!(!defaults.response_schema);
+    // roomkit.providers.ai.MockAIProvider.__init__(response_schema_with_tools) = False
+    assert!(!defaults.response_schema_with_tools);
     // roomkit.providers.ai.MockAIProvider.__init__(vision) = False
     assert!(!defaults.vision);
 }
