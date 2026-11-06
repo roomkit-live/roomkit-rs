@@ -9,19 +9,24 @@ mod support;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelCapabilities, ChannelId, ChannelType, EventSource, Identity, IdentityId,
-    Metadata, Participant, ParticipantId, Room, RoomEvent, RoomId, RoomStatus, TextContent,
-    Verification,
+    ChannelBinding, ChannelCapabilities, ChannelId, ChannelType, EditContent, EventContent,
+    EventSource, EventType, Identity, IdentityId, InboundMessage, Metadata, Participant,
+    ParticipantId, Room, RoomEvent, RoomId, RoomStatus, TextContent, Verification,
 };
 use roomkit::store::{
-    CommitEventOptions, LinkAddressOptions, PatchRoomMetadataOptions, ResolveIdentityOptions,
+    CommitEventOptions, DeleteEventOptions, LinkAddressOptions, PatchRoomMetadataOptions,
+    ResolveIdentityOptions,
 };
-use roomkit::{ConversationStore, RoomKit, RoomKitOptions, StoreError};
+use roomkit::testing::{EventTap, RecordingTransport, RecordingTransportOptions};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
+    RoomKitOptions, StoreError,
+};
 use roomkit_postgres::{InitOptions, PostgresStore, PostgresStoreOptions};
 use serde_json::{Value, json};
 use tokio_postgres::NoTls;
 
-use crate::support::{SMALL_POOL, TempSchema, dsn, full_text};
+use crate::support::{SMALL_POOL, TempSchema, dsn, full_text, until_a_session, until_blocked_by};
 
 fn room_id(id: &str) -> RoomId {
     RoomId::new(id).unwrap()
@@ -912,32 +917,6 @@ async fn a_commit_and_a_verification_keep_what_the_model_does_not_read() {
     assert_eq!(data["later"], json!(2));
 }
 
-/// Returns once a session waits on a lock `holder`'s transaction holds.
-async fn until_blocked_by(schema: &TempSchema, holder: &tokio_postgres::Client) {
-    let pid: i32 = holder
-        .query_one("SELECT pg_backend_pid()", &[])
-        .await
-        .unwrap()
-        .get(0);
-    let watcher = schema.client().await;
-    let mut blocked = 0_i64;
-    for _ in 0..400 {
-        blocked = watcher
-            .query_one(
-                "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
-                &[&pid],
-            )
-            .await
-            .unwrap()
-            .get(0);
-        if blocked > 0 {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    }
-    assert!(blocked > 0, "no session ever waited on the holder");
-}
-
 /// Python: `test_an_add_waiting_on_a_commit_holds_nothing_the_commit_needs` (RMK-1365):
 /// a commit holds the room, then its sequence. An add takes them in that order too,
 /// so that it waits on the room with the sequence free: in the other order, each
@@ -1057,6 +1036,323 @@ async fn an_add_to_a_missing_room_stays_the_foreign_key_s_refusal() {
         .unwrap()
         .get(0);
     assert_eq!(left, 0);
+}
+
+/// `message` as a delete leaves it, its edits to be marked.
+fn marked_deleted(message: &RoomEvent) -> RoomEvent {
+    let mut target = message.clone();
+    target.metadata.insert("deleted".to_owned(), json!(true));
+    target
+}
+
+/// An edit of `message`, for its room's next commit.
+fn edit_of(message: &RoomEvent) -> RoomEvent {
+    let mut edit = event(message.room_id.as_str(), "edit");
+    edit.r#type = EventType::Edit;
+    edit.content = EventContent::Edit(EditContent::new(
+        message.id.clone(),
+        TextContent::new("edited"),
+    ));
+    edit
+}
+
+/// Python: `test_a_write_of_a_message_and_its_edits_waits_on_the_room_holding_none_of_them`
+/// (RMK-1394): a room's deletion holds the room, then takes its events in the order it
+/// finds them, a message edited twice after its first edit. A write of a message and
+/// its edits waits on the room first, so that it holds nothing the deletion needs: in
+/// the other order each waits on what the other holds, and the server kills one.
+#[tokio::test]
+async fn a_write_of_a_message_and_its_edits_waits_on_the_room_holding_none_of_them() {
+    for deleting in [true, false] {
+        let Some((schema, store)) = fresh().await else {
+            return;
+        };
+        let room = room_id("r1");
+        store.create_room(Room::new(room.clone())).await.unwrap();
+        let message = store
+            .commit_event(&room, event("r1", "x"), CommitEventOptions::default())
+            .await
+            .unwrap();
+        let deleter = schema.client().await;
+        deleter
+            .batch_execute("BEGIN; SELECT 1 FROM rooms WHERE id = 'r1' FOR UPDATE")
+            .await
+            .unwrap();
+        let writing = {
+            let (store, room) = (store.clone(), room.clone());
+            tokio::spawn(async move {
+                if deleting {
+                    store
+                        .delete_event(&room, &message.id, DeleteEventOptions::default())
+                        .await
+                        .map(|deleted| deleted.len())
+                } else {
+                    store
+                        .write_change_target(&room, marked_deleted(&message))
+                        .await
+                        .map(|()| 1)
+                }
+            })
+        };
+        until_blocked_by(&schema, &deleter).await;
+        deleter
+            .batch_execute("DELETE FROM rooms WHERE id = 'r1'; COMMIT")
+            .await
+            .unwrap();
+        let written = tokio::time::timeout(std::time::Duration::from_secs(2), writing)
+            .await
+            .unwrap()
+            .unwrap();
+        if deleting {
+            assert_eq!(written.unwrap(), 0);
+        } else {
+            assert!(
+                matches!(written, Err(StoreError::EventNotFound(_))),
+                "{written:?}"
+            );
+        }
+    }
+}
+
+/// Python: `test_a_room_deleted_under_a_message_and_its_edits_never_deadlocks` (RMK-1394):
+/// unmodified calls, a message edited twice, its writer racing the room's deletion, on a
+/// table small enough for the deletion to read it in heap order, where the first edit
+/// comes before the message. RMK-1394 measured 135 and 288 of 3200 killed before.
+#[tokio::test]
+async fn a_room_deleted_under_a_message_and_its_edits_never_deadlocks() {
+    for deleting in [true, false] {
+        let Some((schema, _)) = fresh().await else {
+            return;
+        };
+        let store = schema.store();
+        store
+            .init(InitOptions {
+                min_size: 1,
+                max_size: 40,
+            })
+            .await
+            .unwrap();
+        schema
+            .client()
+            .await
+            .batch_execute("ANALYZE events")
+            .await
+            .unwrap();
+        let mut failures = Vec::new();
+        for batch in 0_u64..80 {
+            let mut rooms = tokio::task::JoinSet::new();
+            for number in batch * 40..batch * 40 + 40 {
+                let store = store.clone();
+                rooms.spawn(async move {
+                    let room = room_id(&format!("r{number}"));
+                    store.create_room(Room::new(room.clone())).await.unwrap();
+                    let message = store
+                        .commit_event(
+                            &room,
+                            event(room.as_str(), "x"),
+                            CommitEventOptions::default(),
+                        )
+                        .await
+                        .unwrap();
+                    for _ in 0..2 {
+                        let options = CommitEventOptions {
+                            target: Some(message.clone()),
+                            ..CommitEventOptions::default()
+                        };
+                        store
+                            .commit_event(&room, edit_of(&message), options)
+                            .await
+                            .unwrap();
+                    }
+                    let deleted_later = async {
+                        tokio::time::sleep(std::time::Duration::from_millis(number % 5)).await;
+                        store.delete_room(&room).await.map(|_| ())
+                    };
+                    let written = async {
+                        if deleting {
+                            store
+                                .delete_event(&room, &message.id, DeleteEventOptions::default())
+                                .await
+                                .map(|_| ())
+                        } else {
+                            match store
+                                .write_change_target(&room, marked_deleted(&message))
+                                .await
+                            {
+                                Err(StoreError::EventNotFound(_)) => Ok(()),
+                                other => other,
+                            }
+                        }
+                    };
+                    let (written, deleted) = tokio::join!(written, deleted_later);
+                    [written, deleted]
+                });
+            }
+            while let Some(pair) = rooms.join_next().await {
+                for outcome in pair.unwrap() {
+                    if let Err(failure) = outcome {
+                        failures.push(full_text(&failure));
+                    }
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} of 6400 calls killed: {:?}",
+            failures.len(),
+            failures.first()
+        );
+    }
+}
+
+/// Python: `test_an_add_holds_a_room_whose_id_came_back_before_its_sequence` (RMK-1394):
+/// an add waits on a room being deleted, its id created again meanwhile with a sequence:
+/// its wait finds no row. Had it gone on to the sequence holding nothing, it would then
+/// wait on the room through the event's foreign key, and a deletion holding the new room
+/// would wait on that sequence: the server kills one. The trigger stops the add at its
+/// insert, the moment that deletion needs.
+#[tokio::test]
+async fn an_add_holds_a_room_whose_id_came_back_before_its_sequence() {
+    // This test's alone: "RMK1394".
+    const KEY: i64 = 0x0052_4d4b_3133_3934;
+    for auto_indexed in [false, true] {
+        let Some((schema, store)) = fresh().await else {
+            return;
+        };
+        let room = room_id("r1");
+        store.create_room(Room::new(room.clone())).await.unwrap();
+        store
+            .add_event_auto_index(&room, event("r1", "first"))
+            .await
+            .unwrap();
+        let outside = schema.client().await;
+        outside
+            .batch_execute(&format!(
+                "CREATE FUNCTION rk_test_stop_insert() RETURNS trigger AS $$ \
+                 BEGIN PERFORM pg_advisory_xact_lock({KEY}); RETURN NEW; END $$ \
+                 LANGUAGE plpgsql; \
+                 CREATE TRIGGER rk_test_stop_insert BEFORE INSERT ON events FOR EACH ROW \
+                 WHEN (NEW.source_participant_id = 'stopped') \
+                 EXECUTE FUNCTION rk_test_stop_insert(); \
+                 SELECT pg_advisory_lock({KEY})"
+            ))
+            .await
+            .unwrap();
+        let deleter = schema.client().await;
+        deleter
+            .batch_execute("BEGIN; DELETE FROM rooms WHERE id = 'r1'")
+            .await
+            .unwrap();
+        let mut stopped = event("r1", "stopped");
+        stopped.index = 7;
+        stopped.source.participant_id = Some(ParticipantId::new("stopped").unwrap());
+        let adding = {
+            let (store, room, stopped) = (store.clone(), room.clone(), stopped.clone());
+            tokio::spawn(async move {
+                if auto_indexed {
+                    store.add_event_auto_index(&room, stopped).await
+                } else {
+                    store.add_event(stopped).await
+                }
+            })
+        };
+        until_blocked_by(&schema, &deleter).await;
+        deleter
+            .batch_execute(
+                "INSERT INTO rooms (id) VALUES ('r1'); \
+                 INSERT INTO event_sequences (room_id, next_index) VALUES ('r1', 5); COMMIT",
+            )
+            .await
+            .unwrap();
+        until_a_session(
+            &schema,
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted",
+        )
+        .await;
+        let deleting = {
+            let (store, room) = (store.clone(), room.clone());
+            tokio::spawn(async move { store.delete_room(&room).await })
+        };
+        until_a_session(
+            &schema,
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() \
+             AND wait_event_type = 'Lock' AND query LIKE 'DELETE FROM rooms%'",
+        )
+        .await;
+        outside
+            .batch_execute(&format!("SELECT pg_advisory_unlock({KEY})"))
+            .await
+            .unwrap();
+        let both = async { (adding.await.unwrap(), deleting.await.unwrap()) };
+        let (added, deleted) = tokio::time::timeout(std::time::Duration::from_secs(3), both)
+            .await
+            .unwrap();
+        assert_eq!(added.unwrap().id, stopped.id);
+        assert!(deleted.unwrap());
+    }
+}
+
+/// Python: `test_a_room_deleted_and_created_again_under_its_adds_never_deadlocks`
+/// (RMK-1394): adds at full pace on one room id, which a loop deletes and creates
+/// again: an add is refused, or stored, and never killed (measured 6 kills in 3 s
+/// before). Three seconds here, Python's stress run eight.
+#[tokio::test]
+async fn a_room_deleted_and_created_again_under_its_adds_never_deadlocks() {
+    let Some((schema, _)) = fresh().await else {
+        return;
+    };
+    let store = schema.store();
+    store
+        .init(InitOptions {
+            min_size: 1,
+            max_size: 12,
+        })
+        .await
+        .unwrap();
+    let room = room_id("r1");
+    store.create_room(Room::new(room.clone())).await.unwrap();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut work = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        let (store, room, stop) = (store.clone(), room.clone(), std::sync::Arc::clone(&stop));
+        work.spawn(async move {
+            let mut killed = Vec::new();
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                match store.add_event_auto_index(&room, event("r1", "x")).await {
+                    Ok(_) | Err(StoreError::RoomNotFound(_)) => {}
+                    Err(other) => killed.push(full_text(&other)),
+                }
+            }
+            killed
+        });
+    }
+    {
+        let (store, room, stop) = (store.clone(), room.clone(), std::sync::Arc::clone(&stop));
+        work.spawn(async move {
+            let mut killed = Vec::new();
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Err(failure) = store.delete_room(&room).await {
+                    killed.push(full_text(&failure));
+                }
+                if let Err(failure) = store.create_room(Room::new(room.clone())).await {
+                    killed.push(full_text(&failure));
+                }
+            }
+            killed
+        });
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut killed = Vec::new();
+    while let Some(done) = work.join_next().await {
+        killed.extend(done.unwrap());
+    }
+    assert!(
+        killed.is_empty(),
+        "{} calls killed: {:?}",
+        killed.len(),
+        killed.first()
+    );
 }
 
 /// Python: `test_a_stream_of_adds_starves_nothing_on_its_room` (HITL 0affbb3b): four
@@ -1210,4 +1506,98 @@ async fn the_kit_closes_the_store_it_runs_on() {
         store.room_exists(&room_id("r1")).await,
         Err(StoreError::Unavailable(_))
     ));
+}
+
+/// Python: `test_an_event_added_beside_the_kit_holds_its_next_delivery_and_loses_none`
+/// (RMK-1394): `add_event_auto_index` beside a kit's commits on one room. Each index it
+/// takes is a hole of the delivery cursor no lane runs: the kit's next delivery waits
+/// out the gap timeout, then skips the hole (RFC §13.5). Every message the kit took is
+/// delivered once, in index order, and only added indexes are skipped.
+#[tokio::test]
+async fn an_event_added_beside_the_kit_holds_its_next_delivery_and_loses_none() {
+    let Some((_schema, store)) = fresh().await else {
+        return;
+    };
+    let kit = RoomKit::new(RoomKitOptions {
+        delivery_gap_timeout: std::time::Duration::from_millis(50),
+        ..RoomKitOptions::with_store(store.clone())
+    });
+    let out = RecordingTransport::new(
+        ChannelId::new("out").unwrap(),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    let source = RecordingTransport::new(
+        ChannelId::new("src").unwrap(),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(source).unwrap();
+    kit.register_channel(out.clone()).unwrap();
+    let room = room_id("r1");
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..CreateRoomOptions::default()
+    })
+    .await
+    .unwrap();
+    for id in ["src", "out"] {
+        kit.attach_channel(
+            &room,
+            &ChannelId::new(id).unwrap(),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    let tap = EventTap::on(&kit, &["delivery_skipped"]);
+    let mut sending = tokio::task::JoinSet::new();
+    let mut adding = tokio::task::JoinSet::new();
+    for number in 0..16 {
+        let kit = kit.clone();
+        sending.spawn(async move {
+            let message = InboundMessage::new(
+                ChannelId::new("src").unwrap(),
+                "u1",
+                TextContent::new(format!("m{number}")),
+            );
+            let result = kit
+                .process_inbound(message, ProcessInboundOptions::default())
+                .await
+                .unwrap();
+            result.event.unwrap().index
+        });
+        let (store, room) = (store.clone(), room.clone());
+        adding.spawn(async move {
+            store
+                .add_event_auto_index(&room, event("r1", "added"))
+                .await
+                .unwrap()
+                .index
+        });
+    }
+    let mut sent = sending.join_all().await;
+    let added = adding.join_all().await;
+    kit.close().await.unwrap();
+    sent.sort_unstable();
+    let delivered: Vec<u64> = out
+        .deliveries()
+        .iter()
+        .map(|delivery| delivery.event.index)
+        .collect();
+    assert_eq!(delivered, sent);
+    let skipped: Vec<u64> = tap
+        .events()
+        .iter()
+        .flat_map(|skip| {
+            let from = skip.data["from_index"].as_u64().unwrap();
+            let to = skip.data["to_index"].as_u64().unwrap();
+            from..=to
+        })
+        .collect();
+    assert!(!skipped.is_empty());
+    assert!(
+        skipped.iter().all(|index| added.contains(index)),
+        "{skipped:?} of {added:?}"
+    );
 }

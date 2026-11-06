@@ -23,7 +23,7 @@ use roomkit_postgres::{
 use serde_json::{Value, json};
 use tokio_postgres::NoTls;
 
-use crate::support::{SMALL_POOL, TempSchema, dsn};
+use crate::support::{SMALL_POOL, TempSchema, dsn, until_blocked_by};
 
 fn room_id(id: &str) -> RoomId {
     RoomId::new(id).unwrap()
@@ -900,6 +900,98 @@ async fn a_dedupe_repairs_and_enforces_unique() {
         .await
         .unwrap_err();
     assert!(matches!(refused, StoreError::Unavailable(_)), "{refused:?}");
+}
+
+/// Python: `test_a_dedupe_waiting_on_a_room_holds_nothing_its_commit_needs` (RMK-1394):
+/// a commit with a target holds the room, then that event. A repair of duplicate
+/// indexes holds the room first too: renumbering its events first, it would hold what
+/// the commit needs while it waits on the room for its counters.
+#[tokio::test]
+async fn a_dedupe_waiting_on_a_room_holds_nothing_its_commit_needs() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    duplicates(&store, &schema.client().await).await;
+    let committer = schema.client().await;
+    committer
+        .batch_execute("BEGIN; SELECT 1 FROM rooms WHERE id = 'r1' FOR UPDATE")
+        .await
+        .unwrap();
+    let repair = tokio::spawn({
+        let store = store.clone();
+        async move {
+            store
+                .dedupe_event_indices(DedupeEventIndicesOptions { dry_run: false })
+                .await
+        }
+    });
+    until_blocked_by(&schema, &committer).await;
+    committer
+        .batch_execute("UPDATE events SET metadata = '{}'; COMMIT")
+        .await
+        .unwrap();
+    let report = tokio::time::timeout(std::time::Duration::from_secs(2), repair)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(report["action"], json!("repaired"));
+}
+
+/// Python: `test_a_boot_waiting_on_a_room_holds_nothing_its_commit_needs` (RMK-1394): a
+/// commit with a target holds the room, then that event. The boot that rewrites a
+/// room's events (version 3), then its register (version 4), holds the room first: the
+/// other way, it would hold what the commit needs while it waits on the room.
+#[tokio::test]
+async fn a_boot_waiting_on_a_room_holds_nothing_its_commit_needs() {
+    let Some((schema, store)) = fresh().await else {
+        return;
+    };
+    store.create_room(Room::new(room_id("r1"))).await.unwrap();
+    let mut narrowed = ChannelBinding::new(
+        ChannelId::new("ch1").unwrap(),
+        room_id("r1"),
+        ChannelType::SMS,
+    );
+    narrowed.visibility = Visibility::Internal;
+    store.add_binding(narrowed).await.unwrap();
+    store
+        .add_event(event("r1", "under the binding"))
+        .await
+        .unwrap();
+    let committer = schema.client().await;
+    committer
+        .batch_execute(
+            "UPDATE events SET visibility = 'all'; \
+             UPDATE rooms SET metadata = '{\"author_register\": {\"version\": 3}}'; \
+             DELETE FROM schema_version WHERE version >= 3",
+        )
+        .await
+        .unwrap();
+    committer
+        .batch_execute("BEGIN; SELECT 1 FROM rooms WHERE id = 'r1' FOR UPDATE")
+        .await
+        .unwrap();
+    let boot = tokio::spawn({
+        let store = store.clone();
+        async move { store.init(SMALL_POOL).await }
+    });
+    until_blocked_by(&schema, &committer).await;
+    committer
+        .batch_execute("UPDATE events SET channel_data = '{}'; COMMIT")
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), boot)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let visibility: String = committer
+        .query_one("SELECT visibility FROM events", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(visibility, "internal");
 }
 
 /// Python: `test_init_serializes_its_ddl_under_the_migration_advisory_lock`:
