@@ -957,7 +957,8 @@ impl Sim {
                 | Notice::StopReading { .. }
                 | Notice::CutReadOver { .. }
                 | Notice::Span(_)
-                | Notice::Answered(_) => None,
+                | Notice::Answered(_)
+                | Notice::StreamFailed { .. } => None,
             })
             .collect()
     }
@@ -980,7 +981,8 @@ impl Sim {
                 | Notice::StopReading { .. }
                 | Notice::CutReadOver { .. }
                 | Notice::Span(_)
-                | Notice::Answered(_) => None,
+                | Notice::Answered(_)
+                | Notice::StreamFailed { .. } => None,
             })
             .collect()
     }
@@ -995,7 +997,8 @@ impl Sim {
                 | Notice::StopReading { .. }
                 | Notice::CutReadOver { .. }
                 | Notice::Span(_)
-                | Notice::Answered(_) => None,
+                | Notice::Answered(_)
+                | Notice::StreamFailed { .. } => None,
             })
             .collect()
     }
@@ -1010,7 +1013,8 @@ impl Sim {
                 | Notice::StopReading { .. }
                 | Notice::CutReadOver { .. }
                 | Notice::Span(_)
-                | Notice::Answered(_) => None,
+                | Notice::Answered(_)
+                | Notice::StreamFailed { .. } => None,
             })
             .collect()
     }
@@ -2133,6 +2137,7 @@ fn journal_line(notice: &Notice) -> String {
         Notice::StopReading { effect } => format!("stop reading {effect:?}"),
         Notice::CutReadOver { .. } => "cut read over".to_owned(),
         Notice::Answered(_) => "answered".to_owned(),
+        Notice::StreamFailed { what, .. } => format!("{what} failed"),
     }
 }
 

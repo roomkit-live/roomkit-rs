@@ -443,11 +443,12 @@ impl Inbound {
             Call::Responses { .. } => EntryKind::Responses,
             Call::Greeting { .. } => EntryKind::Greeting,
         };
+        let failures = FailureReader::of(&call);
         Self {
             config,
             io: Io::new(),
             machine: Box::new(Machine {
-                call: CallFacts::new(entry),
+                call: CallFacts::new(entry, failures),
                 stage: CallStage::new(call),
                 trigger: Trigger::default(),
                 cascade: Cascade::new(budget),
@@ -647,11 +648,55 @@ struct CallFacts {
     /// The room whose lock the call's caller holds and hands the call's
     /// run (`Inbound::under_lock`).
     under_lock: Option<RoomId>,
+    /// Who receives the failure of the call's own stream.
+    failures: FailureReader,
+}
+
+/// Who receives the failure of a call's own stream, and so logs it, the
+/// framework's line then a DEBUG one (RFC §15.2; Python's `caller_logs` and
+/// `streamed_too`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailureReader {
+    /// Nobody: a direct injection's or a host post's caller has the stored
+    /// event, a greeting's and a discussion turn's have nothing.
+    Nobody,
+    /// The caller, on its result, unless a streaming target rendered it,
+    /// whose line is kept (RMK-403): a message's, a regeneration's, a
+    /// verification's release.
+    Caller,
+    /// The caller, rendered or not: a delegation, whose task logs every
+    /// failure of its turn.
+    Delegation,
+}
+
+impl FailureReader {
+    /// Who receives the failure of `call`'s own stream.
+    fn of(call: &Call) -> Self {
+        match call {
+            Call::Message { .. } | Call::Rerun { .. } | Call::Regenerate { .. } => Self::Caller,
+            Call::Responses { .. } => Self::Delegation,
+            Call::Direct { .. } | Call::Post { .. } | Call::Turn { .. } | Call::Greeting { .. } => {
+                Self::Nobody
+            }
+        }
+    }
+
+    /// Whether it receives the failure of a stream, `own` the call's, which
+    /// a streaming target read when `rendered`: never a chained or adopted
+    /// one's, which is not the call's (Python's `caller_logs_failure_of`).
+    fn receives(self, own: bool, rendered: bool) -> bool {
+        own && match self {
+            Self::Nobody => false,
+            Self::Caller => !rendered,
+            Self::Delegation => true,
+        }
+    }
 }
 
 impl CallFacts {
-    /// The facts of a call bringing `entry`, before it learned anything.
-    fn new(entry: EntryKind) -> Self {
+    /// The facts of a call bringing `entry`, whose own stream's failure
+    /// `failures` receives, before it learned anything.
+    fn new(entry: EntryKind, failures: FailureReader) -> Self {
         Self {
             room_id: None,
             entry,
@@ -660,6 +705,7 @@ impl CallFacts {
             bound: Bound::Unbounded,
             participation: None,
             under_lock: None,
+            failures,
         }
     }
 }

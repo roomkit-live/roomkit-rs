@@ -622,8 +622,8 @@ impl Machine {
     /// stream commits are delivered to the others, whose outputs are. The
     /// read's answer holds in `response_events` the rows it wrote the turn's
     /// record on, as stored.
-    fn stream_over(&mut self, cx: &mut Cx<'_>, end: StreamEnd) {
-        let (Some(output), Some(context)) = (end.output, end.context) else {
+    fn stream_over(&mut self, cx: &mut Cx<'_>, mut end: StreamEnd) {
+        let (Some(output), Some(context)) = (end.output.take(), end.context.take()) else {
             return;
         };
         let own = !end.job.chained && end.job.lineage == Lineage::Call;
@@ -633,6 +633,11 @@ impl Machine {
             return;
         };
         stream::report_failure(cx, &end.job, &context, &error);
+        cx.io.notify(Notice::StreamFailed {
+            what: end.failed_what(),
+            error: error.clone(),
+            caller_logs: self.call.failures.receives(own, end.target.is_some()),
+        });
         if own {
             let told = error.clone();
             cx.io

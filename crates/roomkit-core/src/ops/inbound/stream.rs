@@ -150,6 +150,24 @@ pub(super) struct StreamEnd {
     pub(super) context: Option<Box<RoomContext>>,
     /// The target's output, the stream's failure in its `error`.
     pub(super) output: Option<ChannelOutput>,
+    /// The streaming target's channel, when one read the stream.
+    pub(super) target: Option<ChannelId>,
+}
+
+impl StreamEnd {
+    /// What failed when the stream did, as its log line names it (Python's
+    /// `_report_stream_failure`): its delivery to the streaming target that
+    /// read it, else its consumption with none.
+    pub(super) fn failed_what(&self) -> String {
+        let source = &self.job.responder.channel_id;
+        let room_id = &self.job.answers.room_id;
+        match &self.target {
+            Some(target) => {
+                format!("streaming delivery of {source} to {target} for room {room_id}")
+            }
+            None => format!("stream consumption (no targets) of {source} for room {room_id}"),
+        }
+    }
 }
 
 impl StreamRead {
@@ -253,6 +271,7 @@ impl StreamRead {
                     job: self.job,
                     context: self.context,
                     output,
+                    target: self.target,
                 }))
             }
         }
@@ -319,6 +338,7 @@ impl StreamRead {
             job: self.job,
             context: None,
             output: None,
+            target: None,
         }))
     }
 

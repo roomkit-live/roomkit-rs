@@ -215,6 +215,20 @@ pub enum Notice {
     /// had never waited for them (RFC §9.5.1 Reentrance, §13.6). A call past
     /// its deadline while an adopted call's answer is still read.
     Answered(Box<Result<InboundResult, InboundError>>),
+    /// A turn's stream failed, the response's own failure or its streaming
+    /// target's: the driver logs it once, as `what` failed, at the level
+    /// its error calls for (RFC §15.2, §15.3), at DEBUG when `caller_logs`
+    /// and the call's caller still reads its output, which carries the
+    /// failure (Python's `_report_stream_failure`).
+    StreamFailed {
+        /// What failed, as the line names it.
+        what: String,
+        /// The failure.
+        error: ErrorRecord,
+        /// Whether the call's caller receives the failure on its result,
+        /// if it still reads it.
+        caller_logs: bool,
+    },
 }
 
 /// What the operation tells the driver's spans: nothing depends on it.

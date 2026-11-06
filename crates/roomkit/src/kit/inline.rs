@@ -35,6 +35,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let (kit, held_task, held_options) = (self.clone(), task.clone(), options.clone());
         let work = move |claim: Claim| async move {
             let ended = kit.inline_turn(&held_task, &held_options).await;
+            ended.log_failure(|| format!("Inline task {}", held_task.id));
             // Unless a cut took its end first, it ends as it ran.
             if let Some(ending) = claim.take() {
                 let result = ended.into_result(&held_task);

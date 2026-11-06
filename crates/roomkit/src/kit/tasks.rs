@@ -25,6 +25,7 @@ use super::RoomKit;
 use super::inline::Unstarted;
 use crate::context::ExecutionContext;
 use crate::error::{RoomKitError, repr};
+use crate::failure_log::{self, Log};
 use crate::orchestration::StatusLevel;
 use crate::orchestration::lifecycle::post_agent_lifecycle;
 use crate::store::ConversationStore;
@@ -220,6 +221,16 @@ impl TaskEnd {
             error,
             exception,
             metadata,
+        }
+    }
+
+    /// Logs the failure the task's turn ended on, if any, once, as `what`
+    /// failed, at the level its error calls for (RFC §15.2): the worker's
+    /// own stream logged it at DEBUG, for the task to log (Python's
+    /// `log_failure` of the task's runner).
+    pub(crate) fn log_failure(&self, what: impl FnOnce() -> String) {
+        if let Some(exception) = &self.exception {
+            failure_log::log_failure(Log::Tasks, exception, &what(), false);
         }
     }
 
@@ -698,7 +709,9 @@ impl<S: ConversationStore> RoomKit<S> {
             ended.error = Some(format!("Child room {} not found", task.child_room_id));
             return ended;
         }
-        Box::pin(self.delegated_turn(task, context)).await
+        let ended = Box::pin(self.delegated_turn(task, context)).await;
+        ended.log_failure(|| format!("Task {}", task.id));
+        ended
     }
 
     /// Ends a background task with `ended`: its child room's status, its
@@ -730,9 +743,6 @@ impl<S: ConversationStore> RoomKit<S> {
             Err(failure) => return failed(failure, context),
         };
         let outcome = task_outcome(&answers, &task.agent_id);
-        if let Some(failure) = &outcome.failure {
-            tracing::warn!(target: "roomkit::tasks", task = %task.id, error = %failure.message, "a delegated task failed");
-        }
         TaskEnd::finished(outcome.response, outcome.failure, context, outcome.turns)
     }
 

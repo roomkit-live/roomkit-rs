@@ -65,6 +65,7 @@ use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::RoomKitError;
+use crate::failure_log::{self, Log};
 use crate::gaps::{CursorTurn, Turned};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
@@ -859,6 +860,16 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
             // Answered once the step's decision is offered (`drive`).
             Notice::Answered(outcome) => self.answered = Some(*outcome),
+            Notice::StreamFailed {
+                what,
+                error,
+                caller_logs,
+            } => {
+                // A caller answered at the decision, or gone, never reads
+                // the failure: the line is the framework's (RFC §15.2).
+                let receives = caller_logs && self.caller.as_deref().is_none_or(Caller::reads);
+                failure_log::log_failure(Log::Framework, &error, &what, receives);
+            }
             notice @ (Notice::FrameworkEvent(_) | Notice::AsyncHooks { .. }) => {
                 if let Some(handled) = calls::perform(self.inner, notice) {
                     handled.wait().await;

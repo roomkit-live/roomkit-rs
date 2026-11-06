@@ -31,6 +31,7 @@
 //! fires) made in the room's work; the read's answer holds that row.
 
 use std::collections::VecDeque;
+use std::error::Error;
 use std::future::{Future, poll_fn};
 use std::pin::{Pin, pin};
 use std::sync::Arc;
@@ -51,6 +52,7 @@ use crate::RoomKit;
 use crate::channel::ChannelError;
 use crate::context::{self, Adopting, ExecutionContext, ReadTurns};
 use crate::error::RoomKitError;
+use crate::failure_log::{self, Log};
 use crate::kit::Inner;
 use crate::room_turns::Place;
 use crate::store::ConversationStore;
@@ -215,6 +217,7 @@ pub(super) async fn read_kept<S: ConversationStore>(
         reads: channel.as_ref().map_or(Reads::Nobody, |_| Reads::Target),
         ready: VecDeque::new(),
         over: None,
+        failed_at: None,
         read_through: false,
         in_flight: None,
         kept_out: first_pass.then(String::new),
@@ -241,7 +244,16 @@ pub(super) async fn read_kept<S: ConversationStore>(
     let read = producer
         .read_by(reader, pulled, reader_done, inner, stops)
         .await;
-    let mut output = producer.finish(read).await;
+    let room_id = producer.room_id.clone();
+    let handling = || {
+        let target = target.as_ref().map(|target| &target.binding.channel_id);
+        let target = target.map(ToString::to_string).unwrap_or_default();
+        let source = &responder.channel_id;
+        format!(
+            "streaming channel {target} handling the failed response of {source} in room {room_id}"
+        )
+    };
+    let mut output = producer.finish(read, handling).await;
     // The turn's record reaches the operation once its stream is read, how
     // it ended under the caller's `turns`, as Python's `_add_turn` puts it
     // there (RFC §6.4); a `turns` the turn wrote is not its caller's, nor
@@ -310,6 +322,14 @@ fn add_turn(record: &mut Metadata, channel_id: &ChannelId, entry: Metadata) {
     if let Value::Object(turns) = turns {
         turns.insert(channel_id.to_string(), Value::Object(entry));
     }
+}
+
+/// Where `error` lives, which tells the very error handed to a reader when
+/// it raises it again, as Python's `is` does.
+fn address_of(error: &ChannelError) -> usize {
+    std::ptr::from_ref::<dyn Error + Send + Sync>(&**error)
+        .cast::<()>()
+        .addr()
 }
 
 /// The driver's reader of a stream no channel streams: read to its end.
@@ -414,6 +434,9 @@ struct Producer {
     ready: VecDeque<Result<StreamItem, ChannelError>>,
     /// How the response ended, once it did.
     over: Option<Over>,
+    /// Where the failure handed to the reader lives, once it was: the
+    /// reader that raises it again raises no error of its own.
+    failed_at: Option<usize>,
     /// Whether the reader was handed the stream's end, or its failure.
     read_through: bool,
     /// What a read in flight when the reader stopped gave.
@@ -774,6 +797,7 @@ impl Producer {
                     self.commit(row).await;
                 }
                 let record = record_of(&*error);
+                self.failed_at = Some(address_of(&error));
                 self.ready.push_back(Err(error));
                 self.over = Some(Over::Failed(record));
             }
@@ -792,10 +816,22 @@ impl Producer {
 
     /// Settles the response once its reader is done, read `read` returned
     /// with, unless a cut did already. Returns what answers the operation's
-    /// read: its `error` the response's failure, else the target's.
-    async fn finish(&mut self, read: Result<ChannelOutput, ChannelError>) -> ChannelOutput {
+    /// read: its `error` the response's failure, else the target's. The
+    /// target, `handling` the response when it raises another error than
+    /// the response's failure, has that error logged (Python's
+    /// `_stream_to_target`): the turn's failure stays the response's.
+    async fn finish(
+        &mut self,
+        read: Result<ChannelOutput, ChannelError>,
+        handling: impl FnOnce() -> String,
+    ) -> ChannelOutput {
         let (mut output, target_error) = match read {
             Ok(output) => (output, None),
+            // The response's own failure, raised again: no error of the
+            // reader's.
+            Err(error) if self.failed_at == Some(address_of(&error)) => {
+                (ChannelOutput::default(), None)
+            }
             Err(error) => {
                 let record = ErrorRecord::new("ChannelError", error.to_string());
                 (ChannelOutput::default(), Some(record))
@@ -809,12 +845,7 @@ impl Producer {
         match (failure, target_error) {
             (Some(failure), target_error) => {
                 if let Some(target_error) = &target_error {
-                    tracing::warn!(
-                        target: "roomkit::driver",
-                        room_id = %self.room_id,
-                        error = %target_error.message,
-                        "the streaming channel failed on a response that failed"
-                    );
+                    failure_log::log_failure(Log::Framework, target_error, &handling(), false);
                 }
                 output.error = Some(failure);
             }

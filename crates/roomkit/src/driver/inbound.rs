@@ -840,6 +840,12 @@ impl Caller {
         &self.record
     }
 
+    /// Whether the caller still reads the run's output, its error included:
+    /// it was not answered at the decision and still waits.
+    pub(super) fn reads(&self) -> bool {
+        !self.unread()
+    }
+
     /// Whether nobody reads the run's output: its caller was answered at
     /// the decision, or stopped waiting.
     fn unread(&self) -> bool {
