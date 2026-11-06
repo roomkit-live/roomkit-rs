@@ -76,8 +76,8 @@ impl Machine {
     /// call adopted works under the room's lock, and the set's place comes
     /// before that entry's; a pass that failed is settled once the ticket
     /// is released, but one past the call's deadline while another of the
-    /// call's sections holds the room's lock (an entry it adopted, or a pass
-    /// of that entry's cascade), settled at once: the call is refused on
+    /// call's sections holds the room's lock (an entry it adopted, or a
+    /// delivery set's record), settled at once: the call is refused on
     /// time, as Python's returns at its deadline, the ticket's release
     /// following that section's (RFC §13.6).
     pub(super) fn settle(&mut self, cx: &mut Cx<'_>, finished: Finished) {

@@ -2414,6 +2414,76 @@ async fn a_call_a_hook_s_task_makes_outlives_the_event_s_caller_gone() {
     );
 }
 
+/// RFC §13.6, §9.5.1 Reentrance: a task an off-lock hook starts and never
+/// awaits makes a call, adopted beside the check, whose locked hook injects
+/// an event; that event's pass holds the room's lock, its locked hook
+/// slow, when the event's `process_timeout` passes in its off-lock check:
+/// the event is answered then, refused, without waiting for the ticket's
+/// release that pass holds back; the call and its injected event commit.
+/// Python: `tests/test_reentrance.py`, the test of the same name.
+#[tokio::test]
+async fn the_event_is_answered_at_its_deadline_while_an_injection_holds_the_lock() {
+    let (kit, _) = room_with(RoomKitOptions {
+        process_timeout: Duration::from_millis(200),
+        ..Default::default()
+    })
+    .await;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |event: RoomEvent, _| async move {
+            let text = text_of(&event.content);
+            if text == "Follow-up" {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+            }
+            let injected = (text == "Heads up").then(|| {
+                let source = EventSource::new(channel("ws"), ChannelType::WEBSOCKET);
+                let follow_up = RoomEvent::new(room_id(), source, TextContent::new("Follow-up"));
+                vec![roomkit::model::InjectedEvent::new(follow_up)]
+            });
+            Ok(HookResult::allow(AllowOptions { injected }))
+        },
+        before_broadcast("slow", true),
+    )
+    .unwrap();
+    let hook_kit = kit.clone();
+    let started = Arc::new(Mutex::new(Vec::new()));
+    let tasks = Arc::clone(&started);
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, tasks) = (hook_kit.clone(), Arc::clone(&tasks));
+            async move {
+                if text_of(&event.content) == "hello" {
+                    // Started and never awaited: the entry runs beside the check.
+                    let task = tokio::spawn(keep_context(async move {
+                        kit.send_event(
+                            &room_id(),
+                            &channel("ws"),
+                            TextContent::new("Heads up"),
+                            SendEventOptions::default(),
+                        )
+                        .await
+                    }));
+                    tasks.lock().unwrap().push(task);
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        before_broadcast("notifier", false),
+    )
+    .unwrap();
+    let sent_at = tokio::time::Instant::now();
+    let result = send(&kit, "hello").await.unwrap();
+    let on_time = sent_at.elapsed() < Duration::from_millis(320);
+    let task = started.lock().unwrap().pop().unwrap();
+    let sent = tokio::time::timeout(BOUND, task).await.unwrap().unwrap();
+    assert_eq!(
+        (result.reason, on_time, sent.map(|event| event.index)),
+        (Some("process_timeout".to_owned()), true, Ok(3))
+    );
+}
+
 /// RFC §13.6, §9.5.1 Reentrance: a task a locked hook starts, in the
 /// hook's context, 150 ms into the event's 200 ms, makes a call nested under
 /// the lock; held by its own locked hook for 500 ms, the call is refused
