@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::model::{LoopEndMarker, LoopEndReason};
 
-use super::support::{Step, Streaming, Stuck, Timed, bind, kit_with, room_id, says};
+use super::support::{ReadingOn, Step, Streaming, Stuck, Timed, bind, kit_with, room_id, says};
 use crate::ConversationStore;
 use crate::turns::observe::Carried;
 
@@ -285,6 +285,74 @@ async fn a_cut_call_reads_its_record_while_a_transport_still_sends() {
         .unwrap();
     kit.close().await.unwrap();
     assert_eq!(cut.response_metadata.get("cited"), Some(json!(1)));
+}
+
+// Python: core/mixins/_streaming_segments.py _ended_record writes `ai_model`
+// and `ai_provider` only from a loop end that names them: a host's own stay on
+// its last message, never on its caller's record (RMK-1323).
+#[tokio::test(start_paused = true)]
+async fn a_host_s_own_model_and_provider_outlive_a_loop_end_that_names_none() {
+    let steps = vec![
+        Step::Write("ai_model", json!("its-model")),
+        Step::Write("ai_provider", json!("its-provider")),
+        Step::Text("Hi"),
+        Step::Completed,
+    ];
+    let (caller, stored) = read(steps.clone(), "ai_model").await;
+    let (_, provider) = read(steps, "ai_provider").await;
+    assert_eq!(caller, None);
+    assert_eq!(stored, [("Hi".to_owned(), Some(json!("its-model")))]);
+    assert_eq!(provider, [("Hi".to_owned(), Some(json!("its-provider")))]);
+}
+
+// Python: tests/test_turns_pull.py::test_a_steering_cut_s_last_record_reaches_its_reader
+// The stream dropped by the cut writes last, as Python's generator does in its
+// `finally`: its caller reads it (RMK-1323).
+#[tokio::test(start_paused = true)]
+async fn a_steering_cut_s_last_record_reaches_its_reader() {
+    let kit = kit_with(Streaming::scripted(vec![
+        Step::Text("text"),
+        Step::Break,
+        Step::Hold,
+    ]))
+    .await;
+    let target = ReadingOn::flushing(std::time::Duration::ZERO);
+    bind(&kit, Stuck::reading_on(&target)).await;
+    let message = roomkit_core::model::InboundMessage::new(
+        roomkit_core::model::ChannelId::new("sms").unwrap(),
+        "+15550001",
+        roomkit_core::model::TextContent::new("Hi"),
+    );
+    let result = kit
+        .process_inbound(
+            message,
+            crate::ProcessInboundOptions {
+                room_id: Some(room_id()),
+                defer_delivery: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    target.read.notified().await;
+    // Paused time: the break is read before the cut, as Python's 20 ms.
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let reached = kit
+        .steer(
+            crate::steering::Cancel::default(),
+            &roomkit_core::model::ChannelId::new("ai").unwrap(),
+            crate::SteerOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let handle = result.delivery.expect("a handle");
+    let waited = handle.wait().await.unwrap();
+    kit.close().await.unwrap();
+    assert_eq!(reached, 1);
+    assert_eq!(waited.response_metadata.get("final"), Some(json!(true)));
 }
 
 // Python: models/delivery.py report_cascade merges into the record the call
