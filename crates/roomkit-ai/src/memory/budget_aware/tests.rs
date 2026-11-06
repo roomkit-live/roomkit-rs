@@ -7,7 +7,7 @@ use roomkit::model::{ChannelId, ChannelType, EventContent, EventSource, Room, Te
 
 use super::*;
 use crate::memory::footprint::{TurnFootprint, measured};
-use crate::memory::token_estimator::estimate_message_tokens;
+use crate::memory::token_estimator::{estimate_message_tokens, estimate_notes_tokens};
 use crate::memory::{
     MockMemoryProvider, MockMemoryProviderOptions, SlidingWindowMemory, SlidingWindowMemoryOptions,
 };

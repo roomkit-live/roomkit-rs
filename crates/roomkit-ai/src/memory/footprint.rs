@@ -1,7 +1,13 @@
 //! What a turn takes of the context window besides its history (RFC §20):
-//! Python's `TurnFootprint` and `current_turn_footprint()`.
+//! Python's `TurnFootprint` and `current_turn_footprint()`, and what a
+//! memory's window leaves the history once the turn is paid for.
 
 use std::future::Future;
+
+use roomkit::model::RoomEvent;
+
+use super::MemoryResult;
+use super::token_estimator::{HistoryBudgetOptions, estimate_notes_tokens, history_budget};
 
 /// What a turn takes of the context window besides its history (RFC §20),
 /// measured by the AI channel as the turn's first round will send it,
@@ -46,6 +52,35 @@ pub fn current_turn_footprint() -> Option<TurnFootprint> {
 /// Runs `read`, a memory's read for a turn, with the turn's `footprint`.
 pub(crate) async fn measured<F: Future>(footprint: TurnFootprint, read: F) -> F::Output {
     FOOTPRINT.scope(footprint, read).await
+}
+
+/// [`history_budget`] for the turn whose memory reads the room (RFC §20):
+/// Python's `turn_history_budget` (`roomkit/memory/_turn_budget.py`).
+///
+/// The turn's input the AI channel measured ([`current_turn_footprint`])
+/// is reserved, or `reserved_tokens` when larger: a floor on that same
+/// input, never added to it. The reply is reserved once, the larger of the
+/// safety margin and the turn's reply budget. `carried` is what a wrapped
+/// memory returned: its messages and its notes occupy the window and no
+/// trimming cuts them. Outside a turn nothing is measured.
+pub(crate) fn turn_history_budget(
+    max_context_tokens: usize,
+    safety_margin_ratio: f64,
+    current_event: &RoomEvent,
+    reserved_tokens: usize,
+    carried: Option<&MemoryResult>,
+) -> usize {
+    let footprint = current_turn_footprint();
+    let measured = footprint.map_or(0, |footprint| footprint.input_tokens);
+    let notes = carried.map_or(0, |carried| estimate_notes_tokens(&carried.notes));
+    let options = HistoryBudgetOptions {
+        safety_margin_ratio,
+        reserved_tokens: reserved_tokens.max(measured) + notes,
+        messages: carried.map(|carried| carried.messages.as_slice()),
+        current_event: Some(current_event),
+        reply_tokens: footprint.map_or(0, |footprint| footprint.reply_tokens),
+    };
+    history_budget(max_context_tokens, options)
 }
 
 #[cfg(test)]

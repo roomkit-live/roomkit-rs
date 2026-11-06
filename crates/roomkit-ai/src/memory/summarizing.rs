@@ -13,6 +13,7 @@ use roomkit::ChannelError;
 use roomkit::model::{EventContent, RoomContext, RoomEvent, RoomId, TextContent};
 use tokio::time::Instant;
 
+use super::footprint::turn_history_budget;
 use super::summary::{
     SUMMARIZER_PROMPT, SUMMARY_FAILED, SummaryLines, is_summary, prior_summary, summary_message,
     unavailable,
@@ -61,7 +62,13 @@ impl Default for SummarizingMemoryOptions {
 /// Wraps a memory and keeps what it retrieved within a window of tokens
 /// in two tiers (RFC §20.3): Python's `SummarizingMemory`.
 ///
-/// - Tier 1, past `tier1_ratio` of the window: the text bodies of the
+/// The history's budget is what `max_context_tokens`, the model's window,
+/// leaves once the rest of the turn is in it (RFC §20): the turn's input
+/// the channel measured
+/// ([`current_turn_footprint`](super::current_turn_footprint)), its reply
+/// budget and the current event. The tiers are fractions of that budget:
+///
+/// - Tier 1, past `tier1_ratio` of it: the text bodies of the
 ///   older half of the events are cut to `truncate_chars`, with no model
 ///   call.
 /// - Tier 2, past `tier2_ratio`: the older events are summarized by
@@ -69,7 +76,7 @@ impl Default for SummarizingMemoryOptions {
 ///   new one, the latest events kept whole, `min_events` of them at least;
 ///   the summary's message replaces the prior one (RFC §6.4).
 ///
-/// Then the oldest events are dropped until the result fits the window.
+/// Then the oldest events are dropped until the result fits the budget.
 /// The inner memory's messages and notes are paid for first and handed on
 /// as they are. A summary is reused for the same lines, for
 /// `summary_cache_ttl`. A summarizer that fails, or answers nothing, leaves
@@ -101,26 +108,28 @@ impl<P: AiProvider> SummarizingMemory<P> {
         }
     }
 
-    /// The memory's result for `events`, `inner` the inner memory's.
+    /// The memory's result, `inner` the inner memory's, kept within the
+    /// history's `budget`.
     async fn reduced(
         &self,
         room_id: &RoomId,
         inner: MemoryResult,
+        budget: usize,
         lines: SummaryLines<'_>,
     ) -> MemoryResult {
         let injected = injected_tokens(&inner);
         let mut events = inner.events.clone();
         let mut total = injected + events_tokens(&events);
-        if total > share(self.max_context_tokens, self.options.tier1_ratio) && events.len() > 1 {
+        if total > share(budget, self.options.tier1_ratio) && events.len() > 1 {
             events = self.truncated(events);
             total = injected + events_tokens(&events);
         }
-        let tier2 = share(self.max_context_tokens, self.options.tier2_ratio);
+        let tier2 = share(budget, self.options.tier2_ratio);
         if total > tier2 && events.len() > self.options.min_events {
             let summarized = self.summarized(room_id, events, inner, tier2, lines).await;
-            return self.within_window(summarized);
+            return within_budget(summarized, budget);
         }
-        self.within_window(MemoryResult { events, ..inner })
+        within_budget(MemoryResult { events, ..inner }, budget)
     }
 
     /// Tier 1: the text bodies of the older half of `events` cut to
@@ -292,29 +301,27 @@ impl<P: AiProvider> SummarizingMemory<P> {
     fn cache_lock(&self) -> std::sync::MutexGuard<'_, Vec<(String, Instant, String)>> {
         self.cache.lock().unwrap_or_else(PoisonError::into_inner)
     }
-
-    /// `result` with its oldest events dropped until it fits the window,
-    /// one at least kept.
-    fn within_window(&self, mut result: MemoryResult) -> MemoryResult {
-        let injected = injected_tokens(&result);
-        while injected + events_tokens(&result.events) > self.max_context_tokens
-            && result.events.len() > 1
-        {
-            result.events.remove(0);
-        }
-        result
-    }
 }
 
-/// `max_context_tokens * ratio`, cut toward zero, as Python's `int()`.
-fn share(max_context_tokens: usize, ratio: f64) -> usize {
+/// `result` with its oldest events dropped until it fits `budget`, one at
+/// least kept.
+fn within_budget(mut result: MemoryResult, budget: usize) -> MemoryResult {
+    let injected = injected_tokens(&result);
+    while injected + events_tokens(&result.events) > budget && result.events.len() > 1 {
+        result.events.remove(0);
+    }
+    result
+}
+
+/// `budget * ratio`, cut toward zero, as Python's `int()`.
+fn share(budget: usize, ratio: f64) -> usize {
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_precision_loss,
         clippy::cast_sign_loss,
-        reason = "Python's int(max_context_tokens * ratio) of a ratio not below 0"
+        reason = "Python's int(budget * ratio) of a ratio not below 0"
     )]
-    let share = (max_context_tokens as f64 * ratio).max(0.0) as usize;
+    let share = (budget as f64 * ratio).max(0.0) as usize;
     share
 }
 
@@ -363,13 +370,16 @@ impl<P: AiProvider> MemoryProvider for SummarizingMemory<P> {
                 .inner
                 .retrieve(room_id, current_event, context, options)
                 .await?;
+            // What the turn leaves the history of the window: no margin,
+            // the tiers' ratios are the headroom when no reply budget is set.
+            let budget = turn_history_budget(self.max_context_tokens, 0.0, current_event, 0, None);
             let lines = SummaryLines {
                 context,
                 current: Some(current_event),
                 channel_id: channel_id.as_ref(),
                 kept: Vec::new(),
             };
-            Ok(self.reduced(room_id, inner, lines).await)
+            Ok(self.reduced(room_id, inner, budget, lines).await)
         })
     }
 

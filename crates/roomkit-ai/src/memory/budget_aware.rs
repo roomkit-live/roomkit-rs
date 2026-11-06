@@ -9,11 +9,8 @@ use std::sync::Arc;
 use roomkit::ChannelError;
 use roomkit::model::{RoomContext, RoomEvent, RoomId};
 
-use super::footprint::current_turn_footprint;
-use super::token_estimator::{
-    EstimateEventTokensOptions, HistoryBudgetOptions, estimate_event_tokens, estimate_notes_tokens,
-    history_budget,
-};
+use super::footprint::turn_history_budget;
+use super::token_estimator::{EstimateEventTokensOptions, estimate_event_tokens};
 use super::{IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
 use crate::provider::{ProviderError, ProviderErrorOptions};
 
@@ -47,12 +44,14 @@ impl Default for BudgetAwareMemoryOptions {
 /// §20.3): Python's `BudgetAwareMemory`.
 ///
 /// The history's budget is what is left of the window once the rest of
-/// the turn is paid for ([`history_budget`]): the turn's input the channel
-/// measured ([`current_turn_footprint`]), or the reserved floor when
-/// larger; the inner memory's notes and messages; the current event; and
-/// the reply budget when larger than the safety margin. Events are dropped
-/// from the oldest; the latest `min_events` are kept even when they do not
-/// fit, since an empty history is worse than one that needs compaction.
+/// the turn is paid for ([`history_budget`](super::history_budget)): the
+/// turn's input the channel measured
+/// ([`current_turn_footprint`](super::current_turn_footprint)), or the
+/// reserved floor when larger; the inner memory's notes and messages; the
+/// current event; and the reply budget when larger than the safety margin.
+/// Events are dropped from the oldest; the latest `min_events` are kept
+/// even when they do not fit, since an empty history is worse than one
+/// that needs compaction.
 ///
 /// A current event that alone exceeds a known window fails the read with a
 /// [`ProviderError`] of `context_overflow`, not retryable: no trimming can
@@ -111,19 +110,13 @@ impl BudgetAwareMemory {
     /// What the history may take of the window for `current_event`, once
     /// `inner`'s messages and notes, and the turn, are paid for.
     fn budget(&self, inner: &MemoryResult, current_event: &RoomEvent) -> usize {
-        let footprint = current_turn_footprint();
-        let measured = footprint.map_or(0, |footprint| footprint.input_tokens);
-        let options = HistoryBudgetOptions {
-            safety_margin_ratio: self.options.safety_margin_ratio,
-            // The memory's notes ride the turn's input: they occupy the
-            // window, untrimmable.
-            reserved_tokens: self.options.reserved_tokens.max(measured)
-                + estimate_notes_tokens(&inner.notes),
-            messages: Some(&inner.messages),
-            current_event: Some(current_event),
-            reply_tokens: footprint.map_or(0, |footprint| footprint.reply_tokens),
-        };
-        history_budget(self.max_context_tokens, options)
+        turn_history_budget(
+            self.max_context_tokens,
+            self.options.safety_margin_ratio,
+            current_event,
+            self.options.reserved_tokens,
+            Some(inner),
+        )
     }
 
     /// `events`' latest that fit `budget`, the latest `min_events` always.

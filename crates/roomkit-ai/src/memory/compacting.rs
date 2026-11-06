@@ -12,13 +12,11 @@ use roomkit::ChannelError;
 use roomkit::model::{ChannelId, RoomContext, RoomEvent, RoomId};
 use tokio::time::Instant;
 
+use super::footprint::turn_history_budget;
 use super::summary::{
     SUMMARIZER_PROMPT, SUMMARY_FAILED, SummaryLines, summary_message, unavailable,
 };
-use super::token_estimator::{
-    EstimateEventTokensOptions, estimate_event_tokens, estimate_message_tokens,
-    estimate_notes_tokens,
-};
+use super::token_estimator::{EstimateEventTokensOptions, estimate_event_tokens};
 use super::{IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
 use crate::provider::{AiContext, AiMessage, AiProvider, AiRole};
 
@@ -54,17 +52,24 @@ impl Default for CompactingMemoryOptions {
 /// the summary.
 type Cached = ((RoomId, Option<ChannelId>), Instant, String, String);
 
-/// Wraps a memory and, when its events exceed the window less its safety
-/// margin, has `provider` summarize the oldest, which the summary's
+/// Wraps a memory and, when its events exceed what the window leaves the
+/// history, has `provider` summarize the oldest, which the summary's
 /// message stands for at the start of the conversation (RFC §20.3):
 /// Python's `CompactingMemory`.
 ///
-/// The inner memory's messages and notes are paid for first and handed on.
-/// The latest events that fit the window, less the summary's share, are
-/// kept whole, `min_events` of them at least. A room's summary is reused,
-/// for the agent asking, while the same events are summarized, for
-/// `summary_cache_ttl`; a clear or a close during a summary's making keeps
-/// it out of the cache.
+/// The budget is what `max_context_tokens`, the model's window, leaves
+/// once the rest of the turn is in it, as [`BudgetAwareMemory`] reckons it
+/// (RFC §20): the turn's input the channel measured
+/// ([`current_turn_footprint`](super::current_turn_footprint)), the reply,
+/// the larger of the safety margin and the turn's reply budget, the
+/// current event, and the inner memory's messages and notes, which are
+/// handed on. The latest events that fit the budget, less the summary's
+/// share of the window, are kept whole, `min_events` of them at least. A
+/// room's summary is reused, for the agent asking, while the same events
+/// are summarized, for `summary_cache_ttl`; a clear or a close during a
+/// summary's making keeps it out of the cache.
+///
+/// [`BudgetAwareMemory`]: super::BudgetAwareMemory
 pub struct CompactingMemory<P> {
     inner: Arc<dyn MemoryProvider>,
     provider: P,
@@ -96,23 +101,16 @@ impl<P: AiProvider> CompactingMemory<P> {
         }
     }
 
-    /// The memory's result, `inner` the inner memory's.
+    /// The memory's result, `inner` the inner memory's, its events kept
+    /// within `budget` beside the summary's share.
     async fn compacted(
         &self,
         room_id: &RoomId,
         inner: MemoryResult,
+        budget: usize,
         mut lines: SummaryLines<'_>,
     ) -> MemoryResult {
-        let carried = inner
-            .messages
-            .iter()
-            .map(estimate_message_tokens)
-            .sum::<usize>()
-            + estimate_notes_tokens(&inner.notes);
-        let budget = share(
-            self.max_context_tokens,
-            1.0 - self.options.safety_margin_ratio,
-        ) - to_i64(carried);
+        let budget = to_i64(budget);
         let costs: Vec<i64> = inner
             .events
             .iter()
@@ -270,13 +268,22 @@ impl<P: AiProvider> MemoryProvider for CompactingMemory<P> {
                 .inner
                 .retrieve(room_id, current_event, context, options)
                 .await?;
+            // What the inner memory carries besides its events is not
+            // compacted: it is paid for first, with the rest of the turn.
+            let budget = turn_history_budget(
+                self.max_context_tokens,
+                self.options.safety_margin_ratio,
+                current_event,
+                0,
+                Some(&inner),
+            );
             let lines = SummaryLines {
                 context,
                 current: Some(current_event),
                 channel_id: channel_id.as_ref(),
                 kept: Vec::new(),
             };
-            Ok(self.compacted(room_id, inner, lines).await)
+            Ok(self.compacted(room_id, inner, budget, lines).await)
         })
     }
 
