@@ -189,6 +189,10 @@ mod tests {
 
     use super::*;
 
+    fn thinking(text: &str) -> Segment {
+        Segment::Thinking(text.to_owned())
+    }
+
     fn text(text: &str) -> Segment {
         Segment::Text(text.to_owned())
     }
@@ -214,6 +218,14 @@ mod tests {
         let mut parser = ThinkTagParser::default();
         assert_eq!(parser.feed("hello world"), [text("hello world")]);
         assert_eq!(parser.flush(), []);
+    }
+
+    // Python: tests/test_providers/test_openai.py::TestThinkTagParser::test_complete_tag_single_chunk
+    #[test]
+    fn complete_tag_single_chunk() {
+        let mut parser = ThinkTagParser::default();
+        let segments = parser.feed("<think>reasoning</think>answer");
+        assert_eq!(segments, [thinking("reasoning"), text("answer")]);
     }
 
     // Python: tests/test_providers/test_openai.py::TestThinkTagParser::test_empty_think_block
@@ -270,7 +282,8 @@ mod tests {
     fn where_a_think_tag_stands() {
         let bom = '\u{feff}';
         let after_a_bom = format!("{bom}<think>a</think>answer");
-        let cases: [(&[&str], Option<&str>, &str); 12] = [
+        let after_another_space = "\u{a0}<think>a</think>answer";
+        let cases: [(&[&str], Option<&str>, &str); 13] = [
             // A tag the answer writes.
             (
                 &["The parser reads the <think> tag at the start. Everything after is lost."],
@@ -297,6 +310,8 @@ mod tests {
             ),
             // A BOM before the block.
             (&[&after_a_bom], None, &after_a_bom),
+            // Another space before the block: a no-break space.
+            (&[after_another_space], None, after_another_space),
             // A tag split at the start.
             (&["<thi", "nk>a</th", "ink>answer"], Some("a"), "answer"),
             // A tag split in the answer.
@@ -343,8 +358,8 @@ mod tests {
     fn a_start_that_cannot_be_the_tag_streams_at_once() {
         let mut parser = ThinkTagParser::default();
         assert_eq!(parser.feed("<"), []);
-        assert_eq!(parser.feed("b>bold"), [text("<b>bold")]);
-        assert_eq!(parser.feed(" <"), [text(" <")]);
+        assert_eq!(parser.feed("b"), [text("<b")]);
+        assert_eq!(parser.feed(">bold <"), [text(">bold <")]);
     }
 
     // Python: providers/ai/openai_dialect.py ThinkTagParser, which works on
