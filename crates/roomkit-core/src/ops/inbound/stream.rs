@@ -408,11 +408,12 @@ fn candidates(cx: &Cx<'_>, job: &StreamJob, context: &RoomContext) -> Vec<Channe
 }
 
 /// The streaming target of `job`'s response in the room as `context` holds
-/// it (RFC §6.1, §12.2 step 11s): the first transport its rows reach, as a
-/// text answer from the agent plans (RFC §10.2 steps 2 and 3d), among the
-/// `streaming` channels, those that stream in the room; none when the agent
-/// cannot write (RFC §7.5 rule 2), when it is no longer bound, or when no
-/// such transport is bound.
+/// it (RFC §6.1, §12.2 step 11s): of the transports its rows reach, as a
+/// text answer from the agent plans (RFC §10.2 steps 2 and 3d), and that
+/// stream in the room (`streaming`), the first in the order the room lists
+/// its bindings, as Python's `_find_streaming_targets` reads them; none
+/// when the agent cannot write (RFC §7.5 rule 2), when it is no longer
+/// bound, or when no such transport is bound.
 fn target(
     cx: &Cx<'_>,
     job: &StreamJob,
@@ -420,13 +421,20 @@ fn target(
     streaming: &[ChannelId],
 ) -> Option<StreamTarget> {
     let plan = answer_plan(cx, job, context)?;
-    plan.transports.into_iter().find_map(|transport| {
-        (transport.delivers && streaming.contains(&transport.binding.channel_id)).then(|| {
-            StreamTarget {
-                context: Box::new(permissions::context_for(&transport.binding, context)),
-                binding: transport.binding,
-            }
-        })
+    let reached: Vec<ChannelBinding> = plan
+        .transports
+        .into_iter()
+        .filter(|transport| transport.delivers && streaming.contains(&transport.binding.channel_id))
+        .map(|transport| transport.binding)
+        .collect();
+    let binding = context.bindings.iter().find_map(|bound| {
+        reached
+            .iter()
+            .find(|binding| binding.channel_id == bound.channel_id)
+    })?;
+    Some(StreamTarget {
+        context: Box::new(permissions::context_for(binding, context)),
+        binding: binding.clone(),
     })
 }
 
