@@ -1,0 +1,127 @@
+{
+  "$schema": "../../scenario.schema.json",
+  "id": "routing/a-hook-s-binding-the-channel-s-own-method-reads-keeps-its-recipient",
+  "title": "A binding a hook stored with a recipient the channel's recipient_address reads, in a room a message with no address opened, keeps it: the message leaves it for a closed room",
+  "rules": [
+    "§5.7",
+    "§10.1 step 2",
+    "§10.4"
+  ],
+  "notes": "The value is under a key the declaration does not name. The name no sender is is not written over it, and the message with no address opens a closed room. Bob, with two rooms now bound and step 1 not reading that key, gets a room of his own.",
+  "setup": {
+    "channels": [
+      {
+        "id": "sms",
+        "type": "sms",
+        "category": "transport",
+        "recipient_key": "phone_number",
+        "addresses": {
+          "recipient_at": "reached_at"
+        }
+      }
+    ],
+    "hooks": [
+      {
+        "name": "attach",
+        "trigger": "on_room_created",
+        "execution": "async",
+        "reactions": [
+          {
+            "do": [
+              {
+                "call": "store.add_binding",
+                "binding": {
+                  "room_id": "$room",
+                  "channel_id": "sms",
+                  "channel_type": "sms",
+                  "metadata": {
+                    "reached_at": "+15550000002"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "call": "process_inbound",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "",
+        "content": {
+          "type": "text",
+          "body": "first"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "event": {
+            "room_id": "$r2"
+          }
+        }
+      }
+    },
+    {
+      "call": "process_inbound",
+      "message": {
+        "channel_id": "sms",
+        "sender_id": "+15550000002",
+        "content": {
+          "type": "text",
+          "body": "the recipient answers"
+        }
+      },
+      "expect": {
+        "result": {
+          "blocked": false,
+          "event": {
+            "room_id": "$r3"
+          }
+        }
+      }
+    }
+  ],
+  "expect": {
+    "bindings": {
+      "$r1": {
+        "sms": {
+          "participant_id": null,
+          "metadata": {
+            "reached_at": "+15550000002"
+          }
+        }
+      },
+      "$r2": {
+        "sms": {
+          "participant_id": "system"
+        }
+      },
+      "$r3": {
+        "sms": {
+          "participant_id": "+15550000002"
+        }
+      }
+    },
+    "timeline": {
+      "$r1": [],
+      "$r2": [
+        {
+          "content": {
+            "body": "first"
+          }
+        }
+      ],
+      "$r3": [
+        {
+          "content": {
+            "body": "the recipient answers"
+          }
+        }
+      ]
+    }
+  }
+}
