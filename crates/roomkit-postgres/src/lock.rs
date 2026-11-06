@@ -15,8 +15,8 @@ use roomkit::model::{ErrorRecord, RoomId};
 use roomkit::{RoomKitError, RoomLock, RoomLockManager, StoreError};
 use tokio::sync::Notify;
 use tokio_postgres::NoTls;
-use tokio_postgres_rustls::MakeRustlsConnect;
 
+use crate::connect::Tls;
 use crate::options::PostgresAdvisoryLockManagerOptions;
 use crate::pool;
 use crate::values::Param;
@@ -73,7 +73,7 @@ fn close_connection(client: Object) {
 /// that a wait dropped leaves nothing taken.
 struct Waiting {
     client: Option<Object>,
-    tls: Option<MakeRustlsConnect>,
+    tls: Option<Tls>,
 }
 
 impl Waiting {
@@ -181,7 +181,7 @@ pub struct PostgresAdvisoryLockManager {
 }
 
 /// A pool, and what a cancel request connects with, when the manager opened it.
-type Connections = (Pool, Option<MakeRustlsConnect>);
+type Connections = (Pool, Option<Tls>);
 
 struct Shared {
     options: PostgresAdvisoryLockManagerOptions,

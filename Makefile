@@ -142,7 +142,10 @@ sqlite-fixture:
 # without POSTGRES_DSN they skip themselves and prove only that they compile:
 # this target fails then. With ROOMKIT_PYTHON naming a roomkit checkout's
 # interpreter, Python reads the rows the crate wrote, and its schema is compared
-# with Python's. One test binary runs at a time on one database.
+# with Python's. With POSTGRES_SOCKET_DIR naming the directory of the server's
+# Unix socket, where it asks no password while TCP asks one, the tests of
+# asyncpg's local defaults run too. One test binary runs at a time on one
+# database.
 postgres-test:
 	@test -n "$$POSTGRES_DSN" || { echo "postgres-test: POSTGRES_DSN is not set"; exit 1; }
 	$(CARGO) test --locked --package roomkit-postgres -- --test-threads=4

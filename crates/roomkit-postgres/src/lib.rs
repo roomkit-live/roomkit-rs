@@ -51,8 +51,10 @@
 //! # }
 //! ```
 
+mod connect;
 mod error;
 mod events;
+mod hosts;
 mod identities;
 mod knowledge;
 mod lock;
@@ -60,6 +62,7 @@ mod lookups;
 mod markers;
 mod members;
 mod options;
+mod passfile;
 mod pool;
 mod rooms;
 mod rows;

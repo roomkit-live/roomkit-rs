@@ -12,16 +12,26 @@ use deadpool_postgres::Pool;
 #[derive(Clone, Default)]
 pub struct PostgresStoreOptions {
     /// The connection string, `postgresql://user:password@host:port/database`,
-    /// read as Python's asyncpg reads it: `sslmode`, `sslrootcert` and `sslcrl`,
-    /// a parameter the client does not read passed to the server as a setting
-    /// (`?search_path=tenant`). What it leaves out is read from these `PG*`
-    /// environment variables, the only ones this crate reads: `PGHOST` (else
-    /// `localhost`), `PGPORT`, `PGUSER` (else `USER` or `LOGNAME`), `PGPASSWORD`,
-    /// `PGDATABASE`, `PGSSLMODE`, `PGSSLROOTCERT` and `PGSSLCRL`. `None` takes
-    /// the whole connection from them, `PGPASSWORD` included (HITL 78cd4240).
-    /// Not read: `passfile`,
-    /// `sslcert` and `sslkey`, which would be sent to the server as settings,
-    /// and which it refuses.
+    /// read as Python's asyncpg reads it: `sslmode`, `sslrootcert`, `sslcrl` and
+    /// `passfile`, a parameter the client does not read passed to the server as
+    /// a setting (`?search_path=tenant`). What it leaves out is read from these
+    /// `PG*` environment variables, the only ones this crate reads: `PGHOST`,
+    /// `PGPORT`, `PGUSER` (else `LOGNAME`, `USER`, `LNAME` or `USERNAME`),
+    /// `PGPASSWORD`, `PGPASSFILE`, `PGDATABASE`, `PGSSLMODE`, `PGSSLROOTCERT` and
+    /// `PGSSLCRL`. `None` takes the whole connection from them (HITL 78cd4240).
+    ///
+    /// The hosts may be a list, in the netloc (`h1:5432,h2`), the `host` and
+    /// `port` parameters, or `PGHOST` and `PGPORT`, tried in its order: a host
+    /// that cannot be reached is passed for the next, a server that refuses the
+    /// connection ends the list. With no host anywhere, the Unix sockets of
+    /// `/run/postgresql`, `/var/run/postgresql`, `/tmp` and `/private/tmp`, then
+    /// `localhost`. With no password, the first line of `~/.pgpass` (or of the
+    /// file `passfile` or `PGPASSFILE` names) that matches the host, port,
+    /// database and user, read at each new connection; a file the group or
+    /// others can access is not read, and warned of (HITL fa9dd934).
+    ///
+    /// Not read: `sslcert` and `sslkey`, which would be sent to the server as
+    /// settings, and which it refuses.
     /// A certificate that is its own root and a CA (the recipe of Postgres's
     /// documentation) is refused under a mode that checks the chain: rustls
     /// takes no CA as an end entity; give the server one issued by that CA.
