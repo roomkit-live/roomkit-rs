@@ -2,14 +2,12 @@
 //! `_connect` tries them: an address that cannot be reached is passed for the
 //! next, a server that answers and refuses ends the list (HITL fa9dd934).
 
-use std::collections::hash_map::RandomState;
 use std::future::Future;
-use std::hash::BuildHasher;
 use std::pin::Pin;
 
 use deadpool_postgres::Connect;
 use tokio::task::JoinHandle;
-use tokio_postgres::config::{LoadBalanceHosts, SslMode};
+use tokio_postgres::config::SslMode;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::{Client, Config, Connection, Error, NoTls, Socket};
@@ -79,15 +77,6 @@ where
     })
 }
 
-/// `addresses` in a random order, for a string's `load_balance_hosts=random`.
-fn shuffled(addresses: &mut [&Address]) {
-    let random = RandomState::new();
-    for at in (1..addresses.len()).rev() {
-        let pick = usize::try_from(random.hash_one(at)).unwrap_or(at) % (at + 1);
-        addresses.swap(at, pick);
-    }
-}
-
 impl Connector {
     /// A connection of `base` at `address`.
     async fn connect_at(
@@ -152,14 +141,10 @@ impl Connector {
     }
 
     /// A connection of `base` at the first of the addresses that answers, in
-    /// their order (a random one for `load_balance_hosts=random`).
+    /// their order.
     async fn first_answer(&self, base: &Config) -> Result<(Client, JoinHandle<()>), Error> {
         let config = self.with_password(base).await;
-        let mut order: Vec<&Address> = self.addresses.iter().collect();
-        if config.get_load_balance_hosts() == LoadBalanceHosts::Random {
-            shuffled(&mut order);
-        }
-        let Some((last, before)) = order.split_last() else {
+        let Some((last, before)) = self.addresses.split_last() else {
             // No address, which `addresses` never gives: the client's own
             // refusal ("both host and hostaddr are missing").
             let (client, connection) = config.connect(NoTls).await?;

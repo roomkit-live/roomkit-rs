@@ -9,25 +9,20 @@ use roomkit::StoreError;
 
 use crate::hosts::Given;
 
-/// The parameters the client reads itself, besides those read here. asyncpg
-/// passes any other to the server as a setting (`search_path=tenant`), and
-/// so does this crate.
-const CLIENT_PARAMS: [&str; 15] = [
+/// The parameters the client reads itself, besides those read here, as
+/// asyncpg reads them (`application_name` and `options` it passes to the
+/// server, which the client does too). asyncpg passes any other to the server
+/// as a setting (`search_path=tenant`), and so does this crate: a
+/// `connect_timeout` or a `keepalives` the server refuses, a `tcp_user_timeout`
+/// it takes for its own (HITL 22f38d15).
+const CLIENT_PARAMS: [&str; 7] = [
     "user",
     "password",
     "dbname",
     "options",
     "application_name",
     "sslnegotiation",
-    "connect_timeout",
-    "tcp_user_timeout",
-    "keepalives",
-    "keepalives_idle",
-    "keepalives_interval",
-    "keepalives_retries",
     "target_session_attrs",
-    "channel_binding",
-    "load_balance_hosts",
 ];
 
 /// A connection string, cut into what the client parses and what it does not.
@@ -240,10 +235,10 @@ mod tests {
     #[test]
     fn the_tls_params_leave_the_string_the_client_reads() {
         let query = read(
-            "postgresql://u:p@h/d?sslmode=verify-full&sslrootcert=%2Fetc%2Fca.pem&sslcrl=%2Fetc%2Fca.crl&connect_timeout=3",
+            "postgresql://u:p@h/d?sslmode=verify-full&sslrootcert=%2Fetc%2Fca.pem&sslcrl=%2Fetc%2Fca.crl&application_name=a",
         )
         .unwrap();
-        assert_eq!(query.dsn, "postgresql:///d?connect_timeout=3");
+        assert_eq!(query.dsn, "postgresql:///d?application_name=a");
         assert_eq!(query.hosts.netloc, "h");
         assert_eq!(
             (query.user.as_deref(), query.password.as_deref()),

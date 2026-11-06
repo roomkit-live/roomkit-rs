@@ -86,9 +86,8 @@ fn with_environment(config: &mut Config) {
     {
         config.dbname(database);
     }
-    if config.get_connect_timeout().is_none() {
-        config.connect_timeout(CONNECT_TIMEOUT);
-    }
+    // Each host's connect: the whole is bounded by the pool's create timeout.
+    config.connect_timeout(CONNECT_TIMEOUT);
 }
 
 /// `dsn`'s string cut, after its scheme is checked.
@@ -233,20 +232,11 @@ async fn tls_for(
     Ok(Some(Tls(MakeRustlsConnect::new(tls))))
 }
 
-/// What a connection of `config` is given whichever hosts it tries: asyncpg's
-/// 60 s, or the string's `connect_timeout`, which bounds each host, when it is
-/// longer.
-fn whole_timeout(config: &Config) -> Duration {
-    config
-        .get_connect_timeout()
-        .map_or(CONNECT_TIMEOUT, |each| (*each).max(CONNECT_TIMEOUT))
-}
-
 /// A pool for `dsn`, with what a cancel request connects with when TLS may be
 /// in use; `min_size` of its connections opened at once, so that a server out
 /// of reach fails here rather than at the first operation, as asyncpg's
 /// `create_pool`. A connection is given asyncpg's 60 s whichever hosts it
-/// tries, each host the string's `connect_timeout` if it names a longer one.
+/// tries.
 pub(crate) async fn open(
     dsn: Option<&str>,
     min_size: usize,
@@ -271,14 +261,13 @@ pub(crate) async fn open(
     } = target(dsn)?;
     password_file_checked(passfile.clone()).await?;
     let tls = tls_for(&addresses, encryption, files).await?;
-    let timeout = whole_timeout(&config);
     let connector = Connector {
         addresses: addresses.tried,
         tls: tls.clone(),
         passfile,
     };
     let manager = Manager::from_connect(config, connector, manager_config());
-    let pool = pool_of(manager, max_size, timeout)?;
+    let pool = pool_of(manager, max_size, CONNECT_TIMEOUT)?;
     let mut opened = Vec::with_capacity(min_size);
     for _ in 0..min_size {
         opened.push(pool.get().await.map_err(StoreError::unavailable)?);
@@ -445,34 +434,35 @@ mod tests {
         assert_eq!(user_name(&named).as_deref(), Some("ann"));
     }
 
-    /// A `connect_timeout` bounds each host, the whole given 60 s unless it is
-    /// longer.
+    /// A connection that never answers does not hang `init`: asyncpg's 60 s,
+    /// for each host as for the whole.
     #[test]
-    fn a_connection_is_given_60_s_whichever_hosts_it_tries() {
-        for (named, whole) in [
-            ("", 60),
-            ("?connect_timeout=2", 60),
-            ("?connect_timeout=90", 90),
-        ] {
-            let read = target(Some(&format!("postgresql://u:p@h1,h2/d{named}"))).unwrap();
-            assert_eq!(
-                whole_timeout(&read.config),
-                Duration::from_secs(whole),
-                "{named}"
-            );
-        }
+    fn a_connection_has_asyncpg_s_timeout() {
+        let read = target(Some("postgresql://u:p@h1,h2/d")).unwrap();
+        assert_eq!(read.config.get_connect_timeout(), Some(&CONNECT_TIMEOUT));
     }
 
-    /// A connection that never answers does not hang `init`: asyncpg's 60 s.
+    /// Python: `test_a_tcp_user_timeout_is_the_server_s_setting` and
+    /// `test_a_parameter_asyncpg_does_not_read_goes_to_the_server` (HITL
+    /// 22f38d15): asyncpg reads none of these, and passes each to the server.
     #[test]
-    fn a_connection_has_asyncpg_s_timeout_unless_the_string_names_one() {
-        let default = target(Some("postgresql://u@h/d")).unwrap();
-        assert_eq!(default.config.get_connect_timeout(), Some(&CONNECT_TIMEOUT));
-        let named = target(Some("postgresql://u@h/d?connect_timeout=3")).unwrap();
+    fn a_parameter_asyncpg_does_not_read_is_a_setting_for_the_server() {
+        let read = target(Some(
+            "postgresql://u:p@h/d?connect_timeout=3&tcp_user_timeout=1000&keepalives=1\
+             &keepalives_idle=30&keepalives_interval=10&keepalives_retries=3\
+             &channel_binding=prefer&load_balance_hosts=random",
+        ))
+        .unwrap();
         assert_eq!(
-            named.config.get_connect_timeout(),
-            Some(&Duration::from_secs(3))
+            read.config.get_options(),
+            Some(
+                "-c connect_timeout=3 -c tcp_user_timeout=1000 -c keepalives=1 \
+                 -c keepalives_idle=30 -c keepalives_interval=10 -c keepalives_retries=3 \
+                 -c channel_binding=prefer -c load_balance_hosts=random"
+            )
         );
+        assert_eq!(read.config.get_connect_timeout(), Some(&CONNECT_TIMEOUT));
+        assert_eq!(read.config.get_tcp_user_timeout(), None);
     }
 
     /// `error`'s message, each of its causes' after it.

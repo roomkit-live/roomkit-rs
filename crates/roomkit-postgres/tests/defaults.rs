@@ -1,6 +1,6 @@
-//! asyncpg's defaults for what a connection string leaves out (HITL fa9dd934),
-//! on a real server: Python's tests of the same names in
-//! `tests/test_store_postgres.py`. Each case opens a store in a child process
+//! A connection string read as asyncpg reads it, and its defaults for what it
+//! leaves out (HITL fa9dd934, 22f38d15), on a real server: Python's tests of
+//! the same names in `tests/test_store_postgres.py`. Each case opens a store in a child process
 //! whose environment holds no `PG*` variable of the parent's, and whose `HOME`
 //! is a directory of the test's: no test reads the real `~/.pgpass`. Each test
 //! skips itself without `POSTGRES_DSN`; those on the server's Unix socket also
@@ -649,4 +649,67 @@ async fn a_refusal_on_a_host_ends_the_list() {
         assert!(!opened.connected, "{first}: {opened:?}");
         assert!(opened.refusal.contains(why), "{first}: {opened:?}");
     }
+}
+
+/// A store on `POSTGRES_DSN` with `setting` added to its query.
+fn store_with(server: &str, setting: &str) -> PostgresStore {
+    let separator = if server.contains('?') { '&' } else { '?' };
+    PostgresStore::new(PostgresStoreOptions {
+        dsn: Some(format!("{server}{separator}{setting}")),
+        ..PostgresStoreOptions::default()
+    })
+}
+
+/// Python: `test_a_parameter_asyncpg_does_not_read_goes_to_the_server` (HITL
+/// 22f38d15, point C). asyncpg reads none of these parameters and passes each
+/// to the server as a setting, which refuses the connection.
+#[tokio::test]
+async fn a_parameter_asyncpg_does_not_read_goes_to_the_server() {
+    let Some(server) = dsn() else {
+        return;
+    };
+    for setting in [
+        "connect_timeout=3",
+        "keepalives=1",
+        "keepalives_idle=30",
+        "keepalives_interval=10",
+        "keepalives_retries=3",
+        "channel_binding=prefer",
+        "load_balance_hosts=random",
+    ] {
+        let refused = store_with(&server, setting)
+            .init(InitOptions {
+                min_size: 1,
+                max_size: 1,
+            })
+            .await
+            .err()
+            .unwrap();
+        let text = full_text(&refused);
+        assert!(
+            text.contains("unrecognized configuration parameter"),
+            "{setting}: {text}"
+        );
+    }
+}
+
+/// Python: `test_a_tcp_user_timeout_is_the_server_s_setting` (HITL 22f38d15,
+/// point C). asyncpg passes `tcp_user_timeout` to the server, which takes it
+/// for its own setting of the session: the store opens.
+#[tokio::test]
+async fn a_tcp_user_timeout_is_the_server_s_setting() {
+    let Some(server) = dsn() else {
+        return;
+    };
+    let schema = TempSchema::new().await;
+    drop(server);
+    let store = store_with(&schema.dsn(), "tcp_user_timeout=1000");
+    store
+        .init(InitOptions {
+            min_size: 1,
+            max_size: 1,
+        })
+        .await
+        .unwrap();
+    store.close().await;
 }
