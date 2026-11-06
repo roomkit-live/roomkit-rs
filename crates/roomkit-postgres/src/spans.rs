@@ -181,3 +181,37 @@ fn driver_class(driver: &tokio_postgres::Error) -> &'static str {
         "InterfaceError"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use roomkit::telemetry::MockTelemetryProvider;
+
+    use super::*;
+
+    /// Python: `PostgresStore._query_span` ends its span on any `Exception`, with
+    /// `error` (RMK-1399): a panic of a store operation is the defect Rust has
+    /// for one, and leaves no span open.
+    #[tokio::test]
+    async fn a_panic_inside_an_operation_ends_its_span_as_an_error() {
+        let provider = Arc::new(MockTelemetryProvider::default());
+        let spans = Arc::new(QuerySpans::default());
+        spans.set(Arc::clone(&provider) as Arc<dyn TelemetryProvider>, false);
+        let operation = {
+            let spans = Arc::clone(&spans);
+            tokio::spawn(async move {
+                spans
+                    .around("get_room", "rooms", async {
+                        panic!("a defect inside the operation");
+                        #[expect(unreachable_code, reason = "the operation panics")]
+                        Ok::<(), StoreError>(())
+                    })
+                    .await
+            })
+        };
+        assert!(operation.await.unwrap_err().is_panic());
+        assert_eq!(provider.get_active_spans().len(), 0, "a span left open");
+        let ended = provider.completed_spans();
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].status, "error");
+    }
+}
