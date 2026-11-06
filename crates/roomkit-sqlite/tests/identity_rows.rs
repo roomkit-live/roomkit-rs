@@ -33,6 +33,10 @@ fn unreadable_records() -> Vec<Column> {
         ),
         Column::Text(r#"{"id": "i1", "channel_addresses": "a@globex.example"}"#.to_owned()),
         Column::Text(r#"["a@globex.example"]"#.to_owned()),
+        Column::Text(
+            r#"{"id": "i1", "channel_addresses": {"sms": ["+1555"], "SMS": "a@globex.example"}}"#
+                .to_owned(),
+        ),
         Column::Text("not json, a@globex.example".to_owned()),
         Column::Blob(b"\xff{\"id\": \"i1\", \"email\": \"a@globex.example\"}".to_vec()),
     ]

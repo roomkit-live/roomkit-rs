@@ -213,10 +213,7 @@ fn declared_addresses(addresses: &Value) -> Vec<(&str, &str)> {
 /// which may be another organization's (HITL 47b7dfc6, 70fef50d).
 fn identity_of(row: &Row) -> Result<Identity, Failure> {
     rows::identity(row).map_err(|failure| {
-        let id = row
-            .try_get::<_, &str>("id")
-            .ok()
-            .and_then(|id| IdentityId::new(id).ok());
+        let id = row.try_get::<_, &str>("id").ok().map(str::to_owned);
         match (failure, id) {
             (Failure::Json(_) | Failure::OutOfRange(_), Some(id)) => Failure::Unreadable(id),
             (failure, _) => failure,
@@ -265,7 +262,7 @@ pub(crate) async fn resolve<C: GenericClient>(
             // It serves no read, and the row is quoted nowhere: it may be
             // another organization's (HITL 4ee4d298, 70fef50d).
             tracing::warn!(
-                target: "roomkit::store::postgres",
+                target: "roomkit.store.postgres",
                 "Identity {id} has a record the model cannot read"
             );
             Ok(None)

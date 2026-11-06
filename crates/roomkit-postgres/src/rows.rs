@@ -182,6 +182,14 @@ pub(crate) fn participant(row: &Row) -> Result<Participant, Failure> {
     }))?)
 }
 
+/// Whether `value` is a list of strings, what Python's model reads under each
+/// key of an identity's addresses.
+fn is_address_list(value: &Value) -> bool {
+    value
+        .as_array()
+        .is_some_and(|addresses| addresses.iter().all(Value::is_string))
+}
+
 /// The identity a row holds. The Python implementation takes any key in its
 /// addresses; one that is no channel type's name for roomkit-rs is a member
 /// the model does not read, and stays in the row, whose addresses are
@@ -189,6 +197,11 @@ pub(crate) fn participant(row: &Row) -> Result<Participant, Failure> {
 pub(crate) fn identity(row: &Row) -> Result<Identity, Failure> {
     let mut addresses = jsonb(row, "channel_addresses")?;
     if let Value::Object(addresses) = &mut addresses {
+        // Python's model takes any key, but a list of strings under each: a
+        // member left out must be one it reads.
+        if !addresses.values().all(is_address_list) {
+            return Err(Failure::OutOfRange("an identity's addresses"));
+        }
         addresses.retain(|channel_type, _| ChannelType::new(channel_type.as_str()).is_ok());
     }
     Ok(serde_json::from_value(json!({

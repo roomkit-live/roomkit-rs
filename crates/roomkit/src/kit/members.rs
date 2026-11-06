@@ -148,7 +148,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// room does not have, [`RoomKitError::IdentityNotFound`] for an
     /// identity the store does not hold or another organization's, and
     /// [`RoomKitError::RoomNotFound`] for a room of another organization;
-    /// nothing is written.
+    /// the store's failure to read the identity, a record the model cannot
+    /// read among them (`RoomKitError::Value`), once the room and the
+    /// participant are found; nothing is written.
     pub async fn resolve_participant(
         &self,
         room_id: &RoomId,

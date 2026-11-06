@@ -22,9 +22,13 @@ use crate::warnings::Warnings;
 
 /// Python's `_UNREADABLE_COLUMNS`: a JSONB column of the identity i1 of another
 /// shape than its field's, each quoting an address of globex's.
-const UNREADABLE_COLUMNS: [(&str, &str); 4] = [
+const UNREADABLE_COLUMNS: [(&str, &str); 5] = [
     ("channel_addresses", r#"["a@globex.example"]"#),
     ("channel_addresses", r#"{"sms": "a@globex.example"}"#),
+    (
+        "channel_addresses",
+        r#"{"sms": ["+1555"], "SMS": "a@globex.example"}"#,
+    ),
     ("external_ids", r#""a@globex.example""#),
     ("metadata", r#"["a@globex.example"]"#),
 ];
@@ -166,4 +170,46 @@ async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
             );
         }
     }
+}
+
+/// Python: `test_a_row_with_an_empty_id_serves_no_read`: a row no API writes,
+/// its id empty, which the model refuses: it resolves to nobody, and the log
+/// names its id as it is.
+#[tokio::test]
+async fn a_row_with_an_empty_id_serves_no_read() {
+    if support::dsn().is_none() {
+        return;
+    }
+    let schema = TempSchema::new().await;
+    let store = schema.initialized_store().await;
+    schema
+        .client()
+        .await
+        .batch_execute(
+            "INSERT INTO identities (id, organization_id, channel_addresses) \
+             VALUES ('', 'globex', '{\"sms\": [\"+1555\"]}'); \
+             INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id) \
+             VALUES ('sms', '+1555', '', 'globex')",
+        )
+        .await
+        .unwrap();
+    let (warnings, capture) = Warnings::capture();
+    let resolved = store
+        .resolve_identity(
+            &ChannelType::SMS,
+            "+1555",
+            ResolveIdentityOptions {
+                organization_id: Some("globex".to_owned()),
+            },
+        )
+        .await;
+    drop(capture);
+    store.close().await;
+    assert_eq!(resolved, Ok(None));
+    assert_eq!(
+        warnings
+            .containing("Identity  has a record the model cannot read")
+            .len(),
+        1
+    );
 }

@@ -1,7 +1,6 @@
 //! Why a database could not be opened, and what a store operation meets.
 
 use roomkit::StoreError;
-use roomkit::model::IdentityId;
 use thiserror::Error;
 
 /// A database whose schema needs the explicit, opt-in migration: Python's
@@ -60,8 +59,9 @@ pub(crate) enum Failure {
     /// A value is out of the range its column or the model takes.
     OutOfRange(&'static str),
     /// The identity's row is one the model cannot read: its id alone is told,
-    /// as the row may be another organization's (HITL 47b7dfc6, 70fef50d).
-    Unreadable(IdentityId),
+    /// as the row may be another organization's (HITL 47b7dfc6, 70fef50d),
+    /// as the row holds it, one the model refuses included.
+    Unreadable(String),
 }
 
 impl From<StoreError> for Failure {

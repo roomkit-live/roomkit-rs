@@ -71,6 +71,17 @@ pub(crate) fn read_identity(data: &str) -> Result<Identity, Failure> {
         )));
     }
     if let Some(Value::Object(addresses)) = value.get_mut(ADDRESSES) {
+        // Python's model takes any key, but a list of strings under each: a
+        // member left out must be one it reads.
+        let readable = addresses.values().all(|held| {
+            held.as_array()
+                .is_some_and(|held| held.iter().all(Value::is_string))
+        });
+        if !readable {
+            return Err(Failure::Json(serde::de::Error::custom(
+                "an identity's addresses hold other than lists of strings",
+            )));
+        }
         addresses.retain(|channel_type, _| ChannelType::new(channel_type.as_str()).is_ok());
     }
     Ok(serde_json::from_value(value)?)
