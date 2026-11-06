@@ -320,29 +320,24 @@ struct Usage {
     prompt_cache_hit_tokens: Option<u64>,
     #[serde(default)]
     prompt_cache_miss_tokens: Option<u64>,
-    /// The cache writes some servers report beside the details (OpenRouter's
-    /// gateways).
+    /// The cache writes a server may report beside the details, as
+    /// Python's reader takes them: read only as a whole number.
     #[serde(default)]
-    cache_write_tokens: Option<u64>,
+    cache_write_tokens: Option<Value>,
+    /// What the output counts, its `reasoning_tokens`: read only as a whole
+    /// number, any other shape left unread.
     #[serde(default)]
-    completion_tokens_details: Option<CompletionDetails>,
+    completion_tokens_details: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
 struct PromptDetails {
     #[serde(default, deserialize_with = "nullable")]
     cached_tokens: u64,
-    /// The prompt's tokens written to the cache, which it counts.
+    /// The prompt's tokens written to the cache, which it counts: read only
+    /// as a whole number.
     #[serde(default)]
-    cache_write_tokens: Option<u64>,
-}
-
-/// What a completion's output counts.
-#[derive(Debug, Deserialize)]
-struct CompletionDetails {
-    /// The model's reasoning, which `completion_tokens` counts.
-    #[serde(default)]
-    reasoning_tokens: Option<u64>,
+    cache_write_tokens: Option<Value>,
 }
 
 /// A whole answer's call id as text, whatever the server wrote: Python's
@@ -406,8 +401,9 @@ where
 /// What a completion's first choice answers: its text, empty when it has
 /// none (an empty answer, or a refusal the provider gives apart), its
 /// calls, why it stopped, and what it used, as the turn's record counts it
-/// (`input_tokens` without the cache's, `output_tokens`,
-/// `cache_read_input_tokens`).
+/// ([`usage_of`]: `input_tokens` without the cache's, `output_tokens`,
+/// `cache_read_input_tokens`, `cache_creation_input_tokens`,
+/// `reasoning_tokens`).
 ///
 /// # Errors
 ///
@@ -661,8 +657,9 @@ impl Folding {
 
 /// A completion's usage as the turn's record counts it (Python's
 /// `OpenAIAIProvider._usage_from`): `input_tokens` the prompt less its cache
-/// reads and its cache writes, none below 0, and `output_tokens`, each 0
-/// where the server gives none; `cache_read_input_tokens` and
+/// reads and its cache writes, and `output_tokens`, each where the server
+/// gives it (a count it leaves out stays unknown, RMK-1029);
+/// `cache_read_input_tokens`, bounded by the prompt, and
 /// `cache_creation_input_tokens` apart, when they are not 0, a write read
 /// from `prompt_tokens_details`, else from the usage itself; and
 /// `reasoning_tokens`, a detail of the output, which counts it, when it is
@@ -670,14 +667,17 @@ impl Folding {
 /// (Python's `DeepSeekAIProvider._usage_from`): its misses are the input, its
 /// hits the cache read, a miss count it leaves out the prompt less the hits.
 fn usage_of(usage: &Usage, cache_hits: bool) -> Metadata {
-    let prompt = usage.prompt_tokens.unwrap_or_default();
     let mut counted = Metadata::new();
     if cache_hits && let Some(hit) = usage.prompt_cache_hit_tokens {
+        let prompt = usage.prompt_tokens.unwrap_or_default();
         let miss = usage
             .prompt_cache_miss_tokens
             .unwrap_or_else(|| prompt.saturating_sub(hit));
         counted.insert("input_tokens".to_owned(), Value::from(miss));
-        counted.insert("output_tokens".to_owned(), Value::from(output_of(usage)));
+        counted.insert(
+            "output_tokens".to_owned(),
+            Value::from(usage.completion_tokens.unwrap_or_default()),
+        );
         if hit > 0 {
             counted.insert("cache_read_input_tokens".to_owned(), Value::from(hit));
         }
@@ -688,15 +688,20 @@ fn usage_of(usage: &Usage, cache_hits: bool) -> Metadata {
         .map(|details| details.cached_tokens)
         .unwrap_or_default();
     let written = details
-        .and_then(|details| details.cache_write_tokens)
+        .and_then(|details| counter(details.cache_write_tokens.as_ref()))
         .filter(|written| *written > 0)
-        .or(usage.cache_write_tokens)
+        .or_else(|| counter(usage.cache_write_tokens.as_ref()))
         .unwrap_or_default();
-    let fresh = prompt.saturating_sub(cached).saturating_sub(written);
-    counted.insert("input_tokens".to_owned(), Value::from(fresh));
-    counted.insert("output_tokens".to_owned(), Value::from(output_of(usage)));
-    if cached > 0 {
-        counted.insert("cache_read_input_tokens".to_owned(), Value::from(cached));
+    if let Some(prompt) = usage.prompt_tokens {
+        let cached = cached.min(prompt);
+        let fresh = prompt.saturating_sub(cached).saturating_sub(written);
+        counted.insert("input_tokens".to_owned(), Value::from(fresh));
+        if cached > 0 {
+            counted.insert("cache_read_input_tokens".to_owned(), Value::from(cached));
+        }
+    }
+    if let Some(output) = usage.completion_tokens {
+        counted.insert("output_tokens".to_owned(), Value::from(output));
     }
     if written > 0 {
         counted.insert(
@@ -707,9 +712,9 @@ fn usage_of(usage: &Usage, cache_hits: bool) -> Metadata {
     with_reasoning(counted, usage)
 }
 
-/// The output a usage reports, 0 where it gives none.
-fn output_of(usage: &Usage) -> u64 {
-    usage.completion_tokens.unwrap_or_default()
+/// A counter the server may write as anything: a whole number, else none.
+fn counter(value: Option<&Value>) -> Option<u64> {
+    value.and_then(Value::as_u64)
 }
 
 /// `counted` with the usage's `reasoning_tokens`, when it reports any (Python's
@@ -718,7 +723,7 @@ fn with_reasoning(mut counted: Metadata, usage: &Usage) -> Metadata {
     let reasoning = usage
         .completion_tokens_details
         .as_ref()
-        .and_then(|details| details.reasoning_tokens)
+        .and_then(|details| counter(details.get("reasoning_tokens")))
         .unwrap_or_default();
     if reasoning > 0 {
         counted.insert("reasoning_tokens".to_owned(), Value::from(reasoning));
@@ -1114,8 +1119,7 @@ mod tests {
             (read.calls, Value::Object(read.done.usage)),
             (
                 vec![RawCall::new("", "lookup", "")],
-                // A null prompt counts 0 input, as Python's `prompt_tokens or 0`.
-                serde_json::json!({ "input_tokens": 0, "output_tokens": 7 })
+                serde_json::json!({ "output_tokens": 7 })
             )
         );
     }

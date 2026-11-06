@@ -62,7 +62,7 @@ fn cache_hits_are_not_billed_as_input() {
     );
 }
 
-// Python: tests/test_providers/test_deepseek.py::TestUsage::test_reasoning_tokens_are_exposed_as_a_detail_of_output
+// Python: tests/test_providers/test_deepseek.py::TestDeepSeekUsage::test_reasoning_tokens_are_exposed_as_a_detail_of_output
 #[test]
 fn reasoning_tokens_are_exposed_as_a_detail_of_output() {
     assert_eq!(
@@ -100,9 +100,9 @@ fn cache_writes_and_reasoning_are_counted_apart() {
             generic(&json!({ "prompt_tokens": 11, "completion_tokens": 7,
                 "prompt_tokens_details": { "cached_tokens": 0 },
                 "completion_tokens_details": { "reasoning_tokens": 3 } })),
-            // A usage without its prompt counts no input, as Python's
-            // `prompt_tokens or 0`.
-            generic(&json!({ "completion_tokens": 7 })),
+            // A counter of another shape is left unread.
+            generic(&json!({ "prompt_tokens": 11, "completion_tokens": 7,
+                "cache_write_tokens": "500", "completion_tokens_details": "x" })),
         ],
         [
             json!({ "input_tokens": 200, "output_tokens": 20,
@@ -110,7 +110,7 @@ fn cache_writes_and_reasoning_are_counted_apart() {
             json!({ "input_tokens": 200, "output_tokens": 20,
                 "cache_read_input_tokens": 300, "cache_creation_input_tokens": 500 }),
             json!({ "input_tokens": 11, "output_tokens": 7, "reasoning_tokens": 3 }),
-            json!({ "input_tokens": 0, "output_tokens": 7 }),
+            json!({ "input_tokens": 11, "output_tokens": 7 }),
         ]
     );
 }
