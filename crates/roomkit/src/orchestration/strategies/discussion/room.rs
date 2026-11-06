@@ -25,14 +25,17 @@ use serde_json::Value;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
+use super::driver::now;
 use super::queue::{Ask, Entry, SpeakQueueState};
 use super::{DoneFn, SpeakQueue, SpeakQueueChange, SpeakQueueEvent};
 use crate::channel::BoxFuture;
-use crate::context::Section;
+use crate::context::{ExecutionContext, Section};
+use crate::delivery_keys::Named;
 use crate::error::RoomKitError;
 use crate::hooks::HookRegistration;
 use crate::kit::discussions::DiscussionSeam;
-use crate::kit::{HasHooksOptions, RoomKit, WeakRoomKit};
+use crate::kit::{HasHooksOptions, RoomKit, SteerOptions, WeakRoomKit};
+use crate::steering::Cancel;
 use crate::store::{ConversationStore, PatchRoomMetadataOptions};
 use crate::tasks::Kind;
 use crate::{HookExecution, HookTrigger};
@@ -42,6 +45,10 @@ pub(super) const SILENT: &str = "discussion_silent";
 
 /// The hook that reads the names a message addresses (rule 4).
 pub(super) const NAMES: &str = "discussion_names";
+
+/// How long a cut waits for the turn it cut to be over, as Python's
+/// `cancel_and_wait`.
+const CUT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A turn given and not ended yet.
 #[derive(Clone, Debug)]
@@ -64,6 +71,8 @@ pub(super) struct Live {
     pub(super) done: Option<bool>,
     /// The version of the queue the last look planned from.
     pub(super) seen_version: Option<u64>,
+    /// What cuts the delivery of the look's turn, while it runs.
+    pub(super) cutter: Option<Arc<Named>>,
     pub(super) closed: bool,
     pub(super) forgotten: bool,
 }
@@ -89,6 +98,8 @@ pub(crate) struct DiscussionRoom<S> {
     pub(super) settled: AtomicBool,
     pub(super) stopping: AtomicBool,
     pub(super) task: Mutex<Option<JoinHandle<()>>>,
+    /// Told each time a look's turn is over, run or cut.
+    pub(super) turn_over: Notify,
     announcing: Arc<Mutex<Announcing>>,
 }
 
@@ -123,6 +134,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             settled: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             task: Mutex::new(None),
+            turn_over: Notify::new(),
             announcing: Arc::default(),
         })
     }
@@ -138,7 +150,9 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     }
 
     /// Stores the configuration and reads the queue a previous install left:
-    /// an instruction's turn kept its text in a process gone.
+    /// an instruction that names no process kept its text in one gone, and
+    /// is told dropped; one another process holds is handed over when its
+    /// turn comes.
     pub(crate) async fn load(&self) -> Result<(), RoomKitError> {
         let kit = self.kit()?;
         let config = serde_json::to_value(&self.config)
@@ -147,12 +161,18 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         kit.store()
             .patch_room_metadata(&self.room_id, patch, PatchRoomMetadataOptions::default())
             .await?;
-        self.editing(&kit, |state, _| {
-            state
-                .entries
-                .retain(|entry| entry.instruction.is_none() || entry.holder.is_some());
-        })
-        .await?;
+        let (legacy, state) = self
+            .editing(&kit, |state, _| {
+                let (legacy, kept): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut state.entries)
+                    .into_iter()
+                    .partition(|entry| entry.instruction.is_some() && entry.holder.is_none());
+                state.entries = kept;
+                (legacy, state.clone())
+            })
+            .await?;
+        let mut changes = Vec::new();
+        self.drop_instructions(&legacy, &state, &mut changes);
+        self.fire_all(changes);
         Ok(())
     }
 
@@ -299,6 +319,125 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     ) -> Result<R, RoomKitError> {
         let section = Section::enter(&kit.inner.locks, &self.room_id).await?;
         section.scope(self.edit(kit, change)).await
+    }
+
+    // -- Listening only (rule 12) --
+
+    /// Has `channel_ids`, those of its agents not listening yet, only
+    /// listen; the turn one of them takes in this process is cut.
+    async fn listen(&self, channel_ids: Vec<ChannelId>) -> Result<(), RoomKitError> {
+        let kit = self.kit()?;
+        let time = now(&kit);
+        let (agents, speaking) = self
+            .editing(&kit, |state, _| {
+                let agents: Vec<ChannelId> = channel_ids
+                    .into_iter()
+                    .filter(|agent| {
+                        self.config.agents.contains(agent) && !state.listening.contains(agent)
+                    })
+                    .collect();
+                state.listening.extend(agents.iter().cloned());
+                let speaking = state
+                    .speaking
+                    .clone()
+                    .filter(|_| state.holds(&self.me, time));
+                (agents, speaking)
+            })
+            .await?;
+        if !agents.is_empty() {
+            self.fire(SpeakQueueChange::Listening, agents.clone(), None);
+        }
+        // Here, the turn runs in this process; elsewhere, its holder cuts it
+        // once it reads the queue again.
+        if let Some(speaking) = speaking.filter(|speaking| agents.contains(speaking)) {
+            self.cut(&kit, &speaking, "listen_only").await?;
+        }
+        Ok(())
+    }
+
+    /// Cuts `agent`'s running turn, as a `Cancel` does; a turn given but not
+    /// started yet has no loop a `Cancel` reaches, and its delivery is
+    /// cancelled.
+    async fn cut(
+        &self,
+        kit: &RoomKit<S>,
+        agent: &ChannelId,
+        reason: &str,
+    ) -> Result<(), RoomKitError> {
+        // Its turn runs through the turn backend: the owner steers it.
+        let reached = if kit.inner.channel(agent).is_some() {
+            let cancel = Cancel {
+                reason: reason.to_owned(),
+            };
+            let options = SteerOptions {
+                room_id: Some(self.room_id.clone()),
+                ..SteerOptions::default()
+            };
+            kit.steer(cancel, agent, options).await?
+        } else {
+            0
+        };
+        if reached == 0 {
+            self.cut_given(agent, reason).await;
+        }
+        Ok(())
+    }
+
+    /// Cancels the delivery of `agent`'s turn when this process gave it,
+    /// and waits for it to be over, briefly: never from a caller holding
+    /// the room's lock or standing in its lane, which the turn may wait for.
+    async fn cut_given(&self, agent: &ChannelId, reason: &str) {
+        let over = self.turn_over.notified();
+        let mut over = std::pin::pin!(over);
+        over.as_mut().enable();
+        let cutter = {
+            let live = self.state();
+            live.turn
+                .as_ref()
+                .filter(|turn| &turn.entry.agent == agent)
+                .and(live.cutter.clone())
+        };
+        let Some(cutter) = cutter else {
+            return;
+        };
+        cutter.cut(reason);
+        let context = ExecutionContext::current();
+        if context.lease(&self.room_id).is_some() || context.is_admitted_to(&self.room_id) {
+            return;
+        }
+        if tokio::time::timeout(CUT_WAIT, over).await.is_err() {
+            tracing::warn!(
+                target: "roomkit::orchestration::discussion",
+                room_id = %self.room_id,
+                %agent,
+                "a discussion's turn cut was not over in time"
+            );
+        }
+    }
+
+    /// Ends the listening state of `channel_ids`; a wait that was for them
+    /// ends.
+    async fn talk(&self, channel_ids: Vec<ChannelId>) -> Result<(), RoomKitError> {
+        let kit = self.kit()?;
+        let (agents, ended) = self
+            .editing(&kit, |state, _| {
+                let agents: Vec<ChannelId> = channel_ids
+                    .into_iter()
+                    .filter(|agent| state.listening.contains(agent))
+                    .collect();
+                state.listening.retain(|agent| !agents.contains(agent));
+                // The wait may have been for an agent that only listened.
+                (agents, state.end_wait_for_nobody())
+            })
+            .await?;
+        if !agents.is_empty() {
+            self.fire(SpeakQueueChange::TalkingAgain, agents, None);
+        }
+        if ended {
+            self.fire(SpeakQueueChange::Waiting, Vec::new(), None);
+        }
+        self.rouse();
+        Ok(())
     }
 
     // -- What the room commits --
@@ -705,10 +844,20 @@ impl<S: ConversationStore> DiscussionSeam for DiscussionRoom<S> {
     }
 
     fn view(&self, organization_id: Option<&str>) -> Option<SpeakQueue> {
-        if organization_id.is_some() && self.organization_id.as_deref() != organization_id {
-            return None;
-        }
-        Some(self.state().queue.view())
+        self.in_scope(organization_id)
+            .then(|| self.state().queue.view())
+    }
+
+    fn in_scope(&self, organization_id: Option<&str>) -> bool {
+        organization_id.is_none() || self.organization_id.as_deref() == organization_id
+    }
+
+    fn listen_only(&self, channel_ids: Vec<ChannelId>) -> BoxFuture<'_, Result<(), RoomKitError>> {
+        Box::pin(self.listen(channel_ids))
+    }
+
+    fn talk_again(&self, channel_ids: Vec<ChannelId>) -> BoxFuture<'_, Result<(), RoomKitError>> {
+        Box::pin(self.talk(channel_ids))
     }
 
     fn settled(&self) -> bool {

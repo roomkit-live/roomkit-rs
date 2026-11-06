@@ -280,6 +280,13 @@ impl Named {
     pub(crate) fn has_key(&self) -> bool {
         self.key.is_some()
     }
+
+    /// Cancels the delivery for `reason` from the code that named it, as any
+    /// caller would: whether this call cancelled it. A delivery no run
+    /// delivers yet is cut once one does, before its turns start.
+    pub(crate) fn cut(&self, reason: &str) -> bool {
+        self.cancel(reason, None)
+    }
 }
 
 /// A delivery's name held by the code that runs it: dropped, that code is

@@ -20,6 +20,7 @@ use roomkit_core::rules::discussion::config::DiscussionConfig;
 use super::RoomKit;
 use crate::InboundResult;
 use crate::channel::BoxFuture;
+use crate::delivery_keys::NamedGuard;
 use crate::driver;
 use crate::error::RoomKitError;
 use crate::orchestration::SpeakQueue;
@@ -50,6 +51,22 @@ pub(crate) trait DiscussionSeam: Send + Sync + 'static {
     /// The speak queue as last read, in `organization_id`'s scope (rule 17).
     fn view(&self, _organization_id: Option<&str>) -> Option<SpeakQueue> {
         None
+    }
+
+    /// Whether the room is `organization_id`'s, any caller's when `None`
+    /// (RFC §17.2).
+    fn in_scope(&self, organization_id: Option<&str>) -> bool {
+        organization_id.is_none()
+    }
+
+    /// Has `channel_ids`, those of its agents, only listen (rule 12).
+    fn listen_only(&self, _channel_ids: Vec<ChannelId>) -> BoxFuture<'_, Result<(), RoomKitError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    /// Ends the listening state of `channel_ids` (rule 12).
+    fn talk_again(&self, _channel_ids: Vec<ChannelId>) -> BoxFuture<'_, Result<(), RoomKitError>> {
+        Box::pin(std::future::ready(Ok(())))
     }
 
     /// Whether it has no turn to give for now, and no wake to read.
@@ -85,6 +102,24 @@ pub(crate) trait DiscussionSeam: Send + Sync + 'static {
 pub struct SpeakQueueOptions {
     /// Scopes the read to one tenant (RFC §17.2): a room of another reads as
     /// holding none.
+    pub organization_id: Option<String>,
+}
+
+/// What [`RoomKit::listen_only`] takes beside the room and the agents:
+/// Python's `listen_only(room_id, channel_ids, *, organization_id=None)`.
+#[derive(Clone, Debug, Default)]
+pub struct ListenOnlyOptions {
+    /// Scopes the call to one tenant (RFC §17.2): a room of another holds
+    /// no discussion for it.
+    pub organization_id: Option<String>,
+}
+
+/// What [`RoomKit::talk_again`] takes beside the room and the agents:
+/// Python's `talk_again(room_id, channel_ids, *, organization_id=None)`.
+#[derive(Clone, Debug, Default)]
+pub struct TalkAgainOptions {
+    /// Scopes the call to one tenant (RFC §17.2): a room of another holds
+    /// no discussion for it.
     pub organization_id: Option<String>,
 }
 
@@ -162,6 +197,69 @@ impl<S: ConversationStore> RoomKit<S> {
             .discussions
             .get(room_id)?
             .view(organization_id.as_deref())
+    }
+
+    /// Has agents of the discussion `room_id` holds only listen (RFC §19.7.5
+    /// rule 12): Python's `listen_only(room_id, channel_ids, *,
+    /// organization_id=None)`.
+    ///
+    /// An agent that only listens keeps its place in the queue and takes no
+    /// turn an agent's message asks for; a person's message that names it
+    /// gives it one turn. Setting the state on the agent whose turn runs cuts
+    /// that turn, as a `Cancel` does; what the turn committed stays. A
+    /// channel id that is not one of its agents is left out.
+    ///
+    /// # Errors
+    ///
+    /// [`RoomKitError::Value`], Python's `ValueError`, when the room holds no
+    /// discussion in this process, or none in `organization_id`'s scope; a
+    /// store failure as it comes.
+    pub async fn listen_only(
+        &self,
+        room_id: &RoomId,
+        channel_ids: &[ChannelId],
+        options: ListenOnlyOptions,
+    ) -> Result<(), RoomKitError> {
+        let ListenOnlyOptions { organization_id } = options;
+        self.discussion_of(room_id, organization_id.as_deref())?
+            .listen_only(channel_ids.to_vec())
+            .await
+    }
+
+    /// Ends the listening state of agents of the discussion `room_id` holds
+    /// (RFC §19.7.5 rule 12): Python's `talk_again(room_id, channel_ids, *,
+    /// organization_id=None)`. A wait that was for them ends, and a turn they
+    /// are owed is given.
+    ///
+    /// # Errors
+    ///
+    /// [`RoomKitError::Value`], Python's `ValueError`, when the room holds no
+    /// discussion in this process, or none in `organization_id`'s scope; a
+    /// store failure as it comes.
+    pub async fn talk_again(
+        &self,
+        room_id: &RoomId,
+        channel_ids: &[ChannelId],
+        options: TalkAgainOptions,
+    ) -> Result<(), RoomKitError> {
+        let TalkAgainOptions { organization_id } = options;
+        self.discussion_of(room_id, organization_id.as_deref())?
+            .talk_again(channel_ids.to_vec())
+            .await
+    }
+
+    /// The discussion `room_id` holds in this process, in `organization_id`'s
+    /// scope: Python's `_discussion`.
+    fn discussion_of(
+        &self,
+        room_id: &RoomId,
+        organization_id: Option<&str>,
+    ) -> Result<Arc<dyn DiscussionSeam>, RoomKitError> {
+        self.inner
+            .discussions
+            .get(room_id)
+            .filter(|seam| seam.in_scope(organization_id))
+            .ok_or_else(|| RoomKitError::Value(format!("Room {room_id} holds no discussion")))
     }
 
     /// Refuses what the room binds that a discussion of `config` cannot share
@@ -248,12 +346,15 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Gives the turn the discussion of `room_id` names now, if any, and
     /// waits for it: its agent's answers are the result's, as a new
     /// message's. The result names no event when no turn was given.
+    /// `named` names the turn's delivery, which its cut cancels.
     pub(crate) async fn run_discussion_turn(
         &self,
         room_id: &RoomId,
+        named: NamedGuard,
     ) -> Result<InboundResult, RoomKitError> {
         let turn = Inbound::discussion_turn(self.config(), room_id.clone());
-        let ran = driver::run_rerun(&self.inner, "discussion_turn", room_id, turn, None).await;
+        let ran =
+            driver::run_rerun(&self.inner, "discussion_turn", room_id, turn, Some(named)).await;
         Ok(ran.output??.into())
     }
 }
@@ -288,6 +389,11 @@ mod tests {
 
     fn id(channel: &str) -> ChannelId {
         ChannelId::new(channel).unwrap()
+    }
+
+    /// A turn's delivery, named by no key.
+    fn unnamed(kit: &RoomKit) -> NamedGuard {
+        kit.inner.delivery_keys.naming(None, None)
     }
 
     fn room_id() -> RoomId {
@@ -524,7 +630,7 @@ mod tests {
         });
         let (kit, _ops) = held_room(&held).await;
 
-        let result = kit.run_discussion_turn(&room_id()).await;
+        let result = kit.run_discussion_turn(&room_id(), unnamed(&kit)).await;
 
         assert!(result.is_err(), "{result:?}");
     }
@@ -541,7 +647,10 @@ mod tests {
             .unwrap();
 
         *held.turn.lock().unwrap() = Some(turn_on(asked, "a", 1, &[]));
-        let result = kit.run_discussion_turn(&room_id()).await.unwrap();
+        let result = kit
+            .run_discussion_turn(&room_id(), unnamed(&kit))
+            .await
+            .unwrap();
         crate::testing::idle(&kit).await;
 
         assert_eq!(result, InboundResult::default());
@@ -619,7 +728,7 @@ mod tests {
         *held.turn.lock().unwrap() = Some(turn_on(asked, "a", 1, &[]));
         let mut turn = {
             let kit = Arc::clone(&kit);
-            tokio::spawn(async move { kit.run_discussion_turn(&room_id()).await })
+            tokio::spawn(async move { kit.run_discussion_turn(&room_id(), unnamed(&kit)).await })
         };
 
         let early = tokio::time::timeout(Duration::from_millis(30), &mut turn).await;
@@ -1100,7 +1209,7 @@ mod tests {
 
         let mut turn = {
             let kit = kit.clone();
-            tokio::spawn(async move { kit.run_discussion_turn(&room_id()).await })
+            tokio::spawn(async move { kit.run_discussion_turn(&room_id(), unnamed(&kit)).await })
         };
         let early = tokio::time::timeout(Duration::from_millis(40), &mut turn).await;
         assert!(
@@ -1200,7 +1309,9 @@ mod tests {
         let mut turn = turn_on(asked, "calling", 0, &[]);
         turn.max_depth = 2;
         *held.turn.lock().unwrap() = Some(turn);
-        kit.run_discussion_turn(&room_id()).await.unwrap();
+        kit.run_discussion_turn(&room_id(), unnamed(&kit))
+            .await
+            .unwrap();
 
         // Twice the discussion's limit, in tens; the kit's own would be 50.
         assert_eq!(calling.made.load(Ordering::Relaxed), 20);
@@ -1237,7 +1348,10 @@ mod tests {
 
         // Deeper than the kit's limit, within the discussion's own.
         *held.turn.lock().unwrap() = Some(turn_on(asked.clone(), "a", 7, &["NOTES"]));
-        let answered = kit.run_discussion_turn(&room_id()).await.unwrap();
+        let answered = kit
+            .run_discussion_turn(&room_id(), unnamed(&kit))
+            .await
+            .unwrap();
         crate::testing::idle(&kit).await;
 
         let bodies: Vec<_> = answered
@@ -1251,7 +1365,10 @@ mod tests {
 
         // Past the discussion's own limit: not asked, and recorded blocked.
         *held.turn.lock().unwrap() = Some(turn_on(asked.clone(), "b", 9, &[]));
-        let stopped = kit.run_discussion_turn(&room_id()).await.unwrap();
+        let stopped = kit
+            .run_discussion_turn(&room_id(), unnamed(&kit))
+            .await
+            .unwrap();
         crate::testing::idle(&kit).await;
         assert_eq!(stopped.response_events, Vec::new());
         let timeline = kit
@@ -1284,7 +1401,10 @@ mod tests {
         let held = Arc::new(Held::default());
         let (kit, _ops) = held_room(&held).await;
 
-        let result = kit.run_discussion_turn(&room_id()).await.unwrap();
+        let result = kit
+            .run_discussion_turn(&room_id(), unnamed(&kit))
+            .await
+            .unwrap();
 
         assert_eq!(result, InboundResult::default());
     }

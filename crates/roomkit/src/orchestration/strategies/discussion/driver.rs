@@ -49,7 +49,7 @@ enum Looked {
 }
 
 /// The lease's clock: seconds since the epoch, as Python's `time.time()`.
-fn now<S: ConversationStore>(kit: &RoomKit<S>) -> f64 {
+pub(super) fn now<S: ConversationStore>(kit: &RoomKit<S>) -> f64 {
     kit.inner
         .environment()
         .now()
@@ -152,8 +152,17 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             return Ok(Looked::Nothing);
         }
         self.state().done = done;
-        let ran = kit.run_discussion_turn(&self.room_id).await;
-        let given = self.state().turn.take();
+        // What a cut of the turn this look gives cancels (Python's
+        // `_abandon`).
+        let named = kit.inner.delivery_keys.naming(None, None);
+        self.state().cutter = Some(Arc::clone(named.named()));
+        let ran = kit.run_discussion_turn(&self.room_id, named).await;
+        let given = {
+            let mut live = self.state();
+            live.cutter = None;
+            live.turn.take()
+        };
+        self.turn_over.notify_waiters();
         let Some(given) = given else {
             ran?;
             return Ok(Looked::Nothing);
@@ -617,7 +626,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     }
 
     /// Forgets the text of instruction turns no longer queued, and tells them.
-    fn drop_instructions(
+    pub(super) fn drop_instructions(
         &self,
         dropped: &[Entry],
         state: &SpeakQueueState,
