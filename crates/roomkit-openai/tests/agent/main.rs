@@ -495,6 +495,7 @@ async fn a_provider_error_fails_the_turn_and_fires_on_error() {
         "provider": "openai",
         "status_code": 401,
         "context_overflow": null,
+        "before_request": false,
     });
     assert_eq!(
         result.error,

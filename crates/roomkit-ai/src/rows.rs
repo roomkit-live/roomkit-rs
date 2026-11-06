@@ -212,6 +212,10 @@ fn attributes_of(error: &ProviderError) -> Metadata {
         "context_overflow".to_owned(),
         Value::from(error.context_overflow),
     );
+    attributes.insert(
+        "before_request".to_owned(),
+        Value::from(error.before_request),
+    );
     if let Some(failure) = ResponseSchemaError::of(error) {
         attributes.insert("reason".to_owned(), Value::from(failure.reason.as_str()));
     }
