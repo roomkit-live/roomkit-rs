@@ -689,7 +689,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
     // -- Stopping --
 
     /// Stops the driver: a turn running is cut, what it committed kept.
-    async fn stop_driver(&self) {
+    pub(super) async fn stop_driver(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         self.rouse();
         let task = self

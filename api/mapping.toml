@@ -708,8 +708,8 @@ reason = "not ported: plumbing (lot 2)"
 
 [[missing]]
 python = "roomkit.RoomKit"
-members = ["room_strategy_is_current", "turn_executor"]
-reason = "not in 0.x: a discussion's strategy stored with the room (stream I, RMK-1233) and the turn executor"
+members = ["turn_executor"]
+reason = "not in 0.x: the turn executor"
 
 [[missing]]
 python = "roomkit.RoomKit"

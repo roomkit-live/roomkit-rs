@@ -10,6 +10,7 @@
 //! Recording what changed, rather than asking each strategy what it set up,
 //! holds for the host's own strategies too.
 
+use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::pin::pin;
@@ -22,8 +23,9 @@ use super::RoomKit;
 use crate::context::{ExecutionContext, Section};
 use crate::error::RoomKitError;
 use crate::kit::{AttachChannelOptions, DetachChannelOptions, GetRoomOptions};
-use crate::orchestration::{Orchestration, StrategyAgent};
+use crate::orchestration::{Discussion, Orchestration, StrategyAgent};
 use crate::store::{ConversationStore, PatchRoomMetadataOptions, StoreError};
+use roomkit_core::rules::discussion::config::DiscussionConfig;
 
 /// What [`RoomKit::install_strategy`] takes beside the room and the
 /// strategy: Python's `install_strategy(room_id, strategy, *,
@@ -61,6 +63,16 @@ pub struct ClaimRoomStrategyOptions {
 pub struct RoomStrategyOptions {
     /// Python `organization_id=None`: scopes the read to one tenant (RFC
     /// §17.2): a room of another organization reads as holding none.
+    pub organization_id: Option<String>,
+}
+
+/// What [`RoomKit::room_strategy_is_current`] takes beside the room and the
+/// kind: Python's `room_strategy_is_current(room_id, kind, *,
+/// organization_id=None)`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoomStrategyIsCurrentOptions {
+    /// Python `organization_id=None`: scopes the call to one tenant (RFC
+    /// §17.2): a room of another organization is not found.
     pub organization_id: Option<String>,
 }
 
@@ -188,6 +200,9 @@ impl<S: ConversationStore> RoomKit<S> {
                 },
             )
             .await?;
+        // A discussion another process stored is this room's here too (RFC
+        // §19.7.5 rule 16).
+        self.follow_discussion(&room);
         // Boxed: the install, under its section, makes a large future.
         Box::pin(self.install_on(room_id, strategy, room.organization_id)).await
     }
@@ -211,21 +226,30 @@ impl<S: ConversationStore> RoomKit<S> {
         room_id: &RoomId,
         options: UninstallStrategyOptions,
     ) -> Result<bool, RoomKitError> {
-        self.get_room(
-            room_id,
-            GetRoomOptions {
-                organization_id: options.organization_id,
-            },
-        )
-        .await?;
+        let room = self
+            .get_room(
+                room_id,
+                GetRoomOptions {
+                    organization_id: options.organization_id,
+                },
+            )
+            .await?;
         self.install_over(room_id).await;
         let Some(strategy) = self.recorded_strategy(room_id) else {
-            return Ok(false);
+            // A discussion is uninstalled from any process serving the room,
+            // one where no host installed it included (RFC §19.7.5 rule 16).
+            return self.uninstall_stored_discussion(&room).await;
         };
         strategy.uninstall(self, room_id).await?;
         // Released only once all of it is taken back: a room left with part
         // of a strategy is still that strategy's, never open to a second.
-        let added = self.recorded_added(room_id, &strategy);
+        let mut added = self.recorded_added(room_id, &strategy);
+        // A discussion's agents another process's install attached too.
+        if let Some(stored) = DiscussionConfig::stored(&room.metadata) {
+            added.attached.extend(stored.attached);
+            added.attached.sort();
+            added.attached.dedup();
+        }
         let stayed = self.take_back(room_id, added, &strategy).await?;
         if !stayed.is_empty() {
             return Err(still_binds(room_id, &stayed));
@@ -253,16 +277,92 @@ impl<S: ConversationStore> RoomKit<S> {
         strategy: Arc<dyn Orchestration<S>>,
         options: ClaimRoomStrategyOptions,
     ) -> Result<(), RoomKitError> {
-        if options.organization_id.is_some() {
-            self.get_room(
-                room_id,
-                GetRoomOptions {
-                    organization_id: options.organization_id,
-                },
-            )
-            .await?;
+        // The room is read first, as an install reads it: a discussion
+        // another process stored is this room's here too (RFC §19.7.5 rule
+        // 16).
+        let room = if options.organization_id.is_some() {
+            let options = GetRoomOptions {
+                organization_id: options.organization_id,
+            };
+            Some(self.get_room(room_id, options).await?)
+        } else {
+            self.store()
+                .get_room(room_id)
+                .await
+                .map_err(|error: StoreError| self.read_failed(error))?
+        };
+        if let Some(room) = &room {
+            self.follow_discussion(room);
         }
-        check_claim(&self.inner.room_strategies.rooms(), room_id, &strategy)
+        let rooms = self.inner.room_strategies.rooms();
+        check_claim(&rooms, room_id, &strategy)?;
+        self.check_discussion_claim(&rooms, room_id, strategy.as_ref())
+    }
+
+    /// Refuses `strategy` a room holding a discussion it does not take the
+    /// place of, with no install of this process recorded (RFC §19.7.5
+    /// rule 1): Python's `_check_claim`, its second refusal.
+    fn check_discussion_claim(
+        &self,
+        rooms: &HashMap<RoomId, Installed<S>>,
+        room_id: &RoomId,
+        strategy: &dyn Orchestration<S>,
+    ) -> Result<(), RoomKitError> {
+        if rooms.contains_key(room_id)
+            || self.inner.discussions.get(room_id).is_none()
+            || is_discussion(strategy)
+        {
+            return Ok(());
+        }
+        Err(RoomKitError::Value(format!(
+            "Room {room_id} holds a discussion: no other strategy can join it"
+        )))
+    }
+
+    /// Whether the discussion this process installed in `room_id` is the
+    /// one the room stores now (RFC §19.7.5 rule 16): Python's
+    /// `room_strategy_is_current(room_id, kind, *, organization_id=None)`,
+    /// `kind` the [`TypeId`] of a strategy stored with the room, a
+    /// [`Discussion`]. False when this process installed none, when
+    /// another process's install replaced it with another configuration,
+    /// and once it was uninstalled: an uninstall another process made is
+    /// taken here at once, so [`room_strategy`](Self::room_strategy)
+    /// answers `None` from then on. The room's stored state is read when
+    /// called. A host that finds it false installs again only while its own
+    /// state still wants the discussion, else it would bring back one
+    /// another process took out.
+    ///
+    /// # Errors
+    ///
+    /// [`RoomKitError::Type`], Python's `TypeError`, when `kind` is not a
+    /// strategy stored with the room; [`RoomKitError::RoomNotFound`] for a
+    /// room the call does not reach (RFC §17.2).
+    pub async fn room_strategy_is_current(
+        &self,
+        room_id: &RoomId,
+        kind: TypeId,
+        options: RoomStrategyIsCurrentOptions,
+    ) -> Result<bool, RoomKitError> {
+        if kind != TypeId::of::<Discussion>() {
+            return Err(RoomKitError::Type(format!(
+                "room_strategy_is_current() takes a strategy class stored with the room \
+                 (Discussion), not {kind:?}: it is not a strategy stored with the room"
+            )));
+        }
+        let RoomStrategyIsCurrentOptions { organization_id } = options;
+        self.discussion_is_current(room_id, organization_id).await
+    }
+
+    /// Drops the record of `room_id`'s strategy when it is a discussion,
+    /// which another process uninstalled (RFC §19.7.5 rule 16).
+    pub(super) fn drop_discussion_record(&self, room_id: &RoomId) {
+        let mut rooms = self.inner.room_strategies.rooms();
+        if rooms
+            .get(room_id)
+            .is_some_and(|installed| is_discussion(installed.strategy.as_ref()))
+        {
+            rooms.remove(room_id);
+        }
     }
 
     /// Installs `strategy` in `room_id`, of `organization_id`, the room
@@ -338,9 +438,30 @@ impl<S: ConversationStore> RoomKit<S> {
                 Err(error)
             }
             (Ok(()), None) => {
+                let attached = added.attached.clone();
                 self.record(room_id, strategy, added);
-                Ok(())
+                self.hold_attached(room_id, strategy.as_ref(), attached)
+                    .await
             }
+        }
+    }
+
+    /// Stores `attached`, the agents an install of the discussion
+    /// `strategy` attached to `room_id`, with the configuration the room
+    /// stores, for any process uninstalling it to detach them (RFC §19.7):
+    /// Python's `_hold_attached`.
+    async fn hold_attached(
+        &self,
+        room_id: &RoomId,
+        strategy: &dyn Orchestration<S>,
+        attached: Vec<ChannelId>,
+    ) -> Result<(), RoomKitError> {
+        if attached.is_empty() || !is_discussion(strategy) {
+            return Ok(());
+        }
+        match self.inner.discussions.get(room_id) {
+            Some(seam) if seam.drives() => seam.hold_attached(attached).await,
+            _ => Ok(()),
         }
     }
 
@@ -460,6 +581,7 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Result<(), RoomKitError> {
         let mut rooms = self.inner.room_strategies.rooms();
         check_claim(&rooms, room_id, strategy)?;
+        self.check_discussion_claim(&rooms, room_id, strategy.as_ref())?;
         if rooms.contains_key(room_id) {
             return Err(RoomKitError::Value(format!(
                 "Room {room_id} holds this strategy already"
@@ -659,7 +781,11 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// Detaches each of `channel_ids` from `room_id`, whatever one of them
     /// fails with; the ones still bound.
-    async fn detach_agents(&self, room_id: &RoomId, channel_ids: &[ChannelId]) -> Vec<ChannelId> {
+    pub(super) async fn detach_agents(
+        &self,
+        room_id: &RoomId,
+        channel_ids: &[ChannelId],
+    ) -> Vec<ChannelId> {
         let mut stayed = Vec::new();
         for channel_id in channel_ids {
             let detached = self
@@ -859,6 +985,13 @@ fn added_tools(
                 .map(move |name| (channel_id.clone(), name.clone()))
         })
         .collect()
+}
+
+/// Whether `strategy` is a [`Discussion`], a strategy stored with the room
+/// (RFC §19.7.5 rule 16): Python's `isinstance(strategy, Discussion)`.
+pub(crate) fn is_discussion<S>(strategy: &dyn Orchestration<S>) -> bool {
+    let strategy: &dyn Any = strategy;
+    strategy.is::<Discussion>()
 }
 
 pub(crate) fn strategy_address<S>(strategy: &dyn Orchestration<S>) -> usize {

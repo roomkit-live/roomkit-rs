@@ -1,6 +1,7 @@
 //! A strategy installed on a room (RFC §19.7): Python's `Orchestration`,
 //! the agents it attaches and what its install sets up.
 
+use std::any::Any;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -62,7 +63,7 @@ pub type StrategyFuture<'call> =
 /// # Ok(())
 /// # }
 /// ```
-pub trait Orchestration<S = InMemoryStore>: Send + Sync + 'static {
+pub trait Orchestration<S = InMemoryStore>: Any + Send + Sync {
     /// The agents to register and attach to the room: Python's
     /// `agents()`. An agent given live is registered unless the kit holds a
     /// channel under its id; one named by its id is a channel the kit holds,

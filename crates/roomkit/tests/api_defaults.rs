@@ -1421,6 +1421,13 @@ fn room_strategy_options_defaults_as_python() {
 }
 
 #[test]
+fn room_strategy_is_current_options_defaults_as_python() {
+    let defaults = roomkit::RoomStrategyIsCurrentOptions::default();
+    // roomkit.RoomKit.room_strategy_is_current(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
 fn conversation_router_options_defaults_as_python() {
     let defaults = orchestration::ConversationRouterOptions::default();
     // roomkit.ConversationRouter.__init__(rules) = None

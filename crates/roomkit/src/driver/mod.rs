@@ -1067,7 +1067,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 self.spawn(id, work, deadline, None, writing);
             }
             Request::Store(request) => self.spawn(id, work, deadline, None, async move {
-                calls::store(&*inner.store, request).await
+                calls::store_followed(&inner, request).await
             }),
             Request::Channel(request) => {
                 let shared = Arc::clone(&self.shared);

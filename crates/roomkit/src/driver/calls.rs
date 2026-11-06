@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, EventId, EventUpdates,
-    IdentificationStatus, IdentityResult, InboundMessage, Metadata, ModelError, Observation,
+    IdentificationStatus, IdentityResult, InboundMessage, Metadata, ModelError, Observation, Room,
     RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp,
 };
 use roomkit_core::ops::{
@@ -31,7 +31,7 @@ use crate::error::RoomKitError;
 use crate::events::Handled;
 use crate::hooks;
 use crate::kit::{
-    Inner, end_identity_span, named_correspondent, run_identity_hooks,
+    Inner, RoomKit, end_identity_span, named_correspondent, run_identity_hooks,
     verification_inbound as verification,
 };
 use crate::room_turns::{self, Queued, Started};
@@ -250,6 +250,28 @@ async fn resolve_sender<S>(
 /// The class name a resolver's failure carries, as a router's carries
 /// `RouterError`: a boxed Rust error has none of its own.
 const IDENTITY_ERROR: &str = "IdentityError";
+
+/// Carries out `request` on the store, a context read followed by the
+/// discussion its room stores (RFC §19.7.5 rule 16): Python's
+/// `_build_context`, which follows it for every context the kit builds.
+pub(super) async fn store_followed<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    request: StoreRequest,
+) -> Outcome {
+    let outcome = store(&*inner.store, request).await;
+    if let Outcome::Store(StoreOutcome::Context(context)) = &outcome {
+        follow_discussion(inner, &context.room);
+    }
+    outcome
+}
+
+/// Joins, follows or leaves the discussion `room` stores (rule 16).
+pub(crate) fn follow_discussion<S: ConversationStore>(inner: &Arc<Inner<S>>, room: &Room) {
+    let kit = RoomKit {
+        inner: Arc::clone(inner),
+    };
+    kit.follow_discussion(room);
+}
 
 /// The room's context (RFC §10.1 step 3), as the Python implementation's
 /// kit builds it: the room, its bindings and participants, its latest
@@ -663,7 +685,7 @@ async fn strategy_turn<S: ConversationStore>(
     (binding, event, context): (ChannelBinding, RoomEvent, RoomContext),
     window: usize,
 ) -> Outcome {
-    let kit = crate::kit::RoomKit {
+    let kit = RoomKit {
         inner: Arc::clone(inner),
     };
     match runner.take(kit, event, binding, context) {
@@ -1330,7 +1352,7 @@ fn unregistered_channel(channel_id: &ChannelId) -> Outcome {
 /// to answer, and no turn to give. What the discussion raises is answered
 /// as a failure: logged for a committed message, the call's for the rest.
 pub(super) async fn discussion<S: ConversationStore>(
-    inner: &Inner<S>,
+    inner: &Arc<Inner<S>>,
     request: DiscussionRequest,
 ) -> Outcome {
     let room_id = match &request {
@@ -1338,7 +1360,20 @@ pub(super) async fn discussion<S: ConversationStore>(
         | DiscussionRequest::Instruction { room_id, .. }
         | DiscussionRequest::Turn { room_id, .. } => room_id,
     };
-    let Some(seam) = inner.discussions.get(room_id) else {
+    let seam = match inner.discussions.get(room_id) {
+        Some(seam) => Some(seam),
+        // Stored by another process, read since this process last built a
+        // context of the room: followed from now on (rule 16).
+        None => match &request {
+            DiscussionRequest::Committed { context, .. }
+            | DiscussionRequest::Turn { context, .. } => {
+                follow_discussion(inner, &context.room);
+                inner.discussions.get(room_id)
+            }
+            DiscussionRequest::Instruction { .. } => None,
+        },
+    };
+    let Some(seam) = seam else {
         tracing::warn!(
             target: "roomkit::discussion",
             %room_id,

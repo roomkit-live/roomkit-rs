@@ -120,7 +120,8 @@ pub use self::status::{
 pub use self::steering::SteerOptions;
 pub(crate) use self::strategies::strategy_address;
 pub use self::strategies::{
-    ClaimRoomStrategyOptions, InstallStrategyOptions, RoomStrategyOptions, UninstallStrategyOptions,
+    ClaimRoomStrategyOptions, InstallStrategyOptions, RoomStrategyIsCurrentOptions,
+    RoomStrategyOptions, UninstallStrategyOptions,
 };
 pub use self::task_cancel::CancelTaskOptions;
 pub use self::tasks::DelegateOptions;
@@ -660,6 +661,10 @@ impl<S: ConversationStore> RoomKit<S> {
             .delivery_keys
             .naming(message.delivery_key.as_deref(), organization_id.as_deref());
         let entered = if let Some(room_id) = room_id {
+            // A discussion another process stored is followed before the
+            // pipeline reads its hooks, so its names hook reads this
+            // message's names (RFC §19.7.5 rules 4 and 16).
+            self.follow_stored_discussion(&room_id).await;
             let entry = Entry::Message {
                 room_id,
                 organization_id,

@@ -46,9 +46,15 @@ pub fn kit_with_environment<S: ConversationStore>(
 ///
 /// Work that keeps coming keeps the kit busy: `idle` returns at a moment
 /// nothing runs. Awaited from the kit's own work, a hook or a channel, it
-/// waits for itself: a test awaits it once its calls returned.
+/// waits for itself: a test awaits it once its calls returned. Each
+/// discussion's driver looks at its stored queue first, which another
+/// process sharing the store may have changed, and its turns are waited
+/// for.
 #[doc(hidden)]
 pub async fn idle<S>(kit: &RoomKit<S>) {
+    // A discussion's driver looks first at what another process may have
+    // stored meanwhile (RFC §19.7.5 rule 16).
+    kit.inner.discussions.rouse_all();
     loop {
         kit.inner.tasks.idle().await;
         // A discussion's driver is no task of the kit's: at rest it looks at

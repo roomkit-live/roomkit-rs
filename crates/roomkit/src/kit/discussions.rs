@@ -12,7 +12,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use roomkit_core::model::{
-    ChannelCategory, ChannelId, ChannelType, RoomContext, RoomEvent, RoomId,
+    ChannelCategory, ChannelId, ChannelType, Room, RoomContext, RoomEvent, RoomId,
 };
 use roomkit_core::ops::{Inbound, NextTurn};
 use roomkit_core::rules::discussion::config::DiscussionConfig;
@@ -25,7 +25,9 @@ use crate::delivery_keys::NamedGuard;
 use crate::driver;
 use crate::error::RoomKitError;
 use crate::orchestration::SpeakQueue;
-use crate::orchestration::strategies::discussion::room::binding_refusal;
+use crate::orchestration::strategies::discussion::room::{
+    DiscussionRoom, NAMES, SILENT, binding_refusal,
+};
 use crate::store::ConversationStore;
 
 /// What a discussion running in this process does when the pipeline tells
@@ -79,6 +81,34 @@ pub(crate) trait DiscussionSeam: Send + Sync + 'static {
     /// Whether it has no turn to give for now, and no wake to read.
     fn settled(&self) -> bool {
         true
+    }
+
+    /// Has its driver look at the stored queue now, which another process
+    /// may have changed (rule 16).
+    fn rouse(&self) {}
+
+    /// Whether this process may give the turns: its host installed the
+    /// discussion the room stores (rule 16).
+    fn drives(&self) -> bool {
+        false
+    }
+
+    /// The configuration it routes by when it only follows the discussion
+    /// another process installed, `None` when it gives turns (rule 16).
+    fn follows(&self) -> Option<&DiscussionConfig> {
+        None
+    }
+
+    /// Stores `agents`, which an install attached to the room, with the
+    /// stored configuration (RFC §19.7).
+    fn hold_attached(&self, _agents: Vec<ChannelId>) -> BoxFuture<'_, Result<(), RoomKitError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    /// Leaves the discussion another process uninstalled, writing nothing
+    /// back (rule 16).
+    fn leave(&self) -> BoxFuture<'_, ()> {
+        Box::pin(std::future::ready(()))
     }
 
     /// Stops taking part: its turns stopped, its queue left stored (rule 16).
@@ -173,14 +203,50 @@ impl DiscussionSeams {
         self.rooms().insert(room_id, seam);
     }
 
+    /// `seam` runs the discussion of `room_id` from now on, unless `held`,
+    /// the one this process ran when it read the room, was replaced
+    /// meanwhile; whether it does.
+    fn hold_in_place_of(
+        &self,
+        room_id: RoomId,
+        held: Option<&Arc<dyn DiscussionSeam>>,
+        seam: Arc<dyn DiscussionSeam>,
+    ) -> bool {
+        let mut rooms = self.rooms();
+        if !same_seam(rooms.get(&room_id), held) {
+            return false;
+        }
+        rooms.insert(room_id, seam);
+        true
+    }
+
     /// `room_id`'s discussion runs here no longer; the one it ran.
     pub(crate) fn release(&self, room_id: &RoomId) -> Option<Arc<dyn DiscussionSeam>> {
         self.rooms().remove(room_id)
     }
 
+    /// `held`, the discussion of `room_id`, runs here no longer, unless it
+    /// was replaced meanwhile; whether it was released.
+    fn release_held(&self, room_id: &RoomId, held: &Arc<dyn DiscussionSeam>) -> bool {
+        let mut rooms = self.rooms();
+        if !same_seam(rooms.get(room_id), Some(held)) {
+            return false;
+        }
+        rooms.remove(room_id);
+        true
+    }
+
     /// Whether every discussion here has no turn to give for now.
     pub(crate) fn settled(&self) -> bool {
         self.rooms().values().all(|seam| seam.settled())
+    }
+
+    /// Has every discussion's driver here look at its stored queue now.
+    pub(crate) fn rouse_all(&self) {
+        let seams: Vec<_> = self.rooms().values().cloned().collect();
+        for seam in seams {
+            seam.rouse();
+        }
     }
 
     /// Stops every discussion's turns; their queues stay stored (rule 16).
@@ -192,7 +258,167 @@ impl DiscussionSeams {
     }
 }
 
+/// Whether `seam` and `other` are the same discussion, or both none.
+fn same_seam(
+    seam: Option<&Arc<dyn DiscussionSeam>>,
+    other: Option<&Arc<dyn DiscussionSeam>>,
+) -> bool {
+    match (seam, other) {
+        (Some(seam), Some(other)) => {
+            Arc::as_ptr(seam).cast::<()>() == Arc::as_ptr(other).cast::<()>()
+        }
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 impl<S: ConversationStore> RoomKit<S> {
+    /// Joins, follows or leaves the discussion `room` stores (RFC §19.7.5
+    /// rule 16): a room another process gave a discussion is followed here,
+    /// by the configuration it stores now, and one whose discussion is gone
+    /// is left when this process only followed it. Run for every context the
+    /// kit builds: Python's `_follow_discussion`.
+    pub(crate) fn follow_discussion(&self, room: &Room) {
+        let config = DiscussionConfig::stored(&room.metadata);
+        let held = self.inner.discussions.get(&room.id);
+        let followed = held.as_ref().and_then(|seam| seam.follows().cloned());
+        match (config, followed) {
+            (Some(config), _) if held.is_none() => self.join_stored(room, None, config),
+            (Some(config), Some(followed)) if followed != config => {
+                self.join_stored(room, held.as_ref(), config);
+            }
+            (None, Some(_)) => {
+                if let Some(held) = held {
+                    self.leave_discussion(&room.id, &held);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Reads `room_id` and follows the discussion it stores when this
+    /// process holds none for it (rule 16); a room the store cannot read is
+    /// left to the call that reads it next.
+    pub(crate) async fn follow_stored_discussion(&self, room_id: &RoomId) {
+        if self.inner.discussions.get(room_id).is_some() {
+            return;
+        }
+        if let Ok(Some(room)) = self.store().get_room(room_id).await {
+            self.follow_discussion(&room);
+        }
+    }
+
+    /// Follows the discussion `room` stores, `config`, another process's,
+    /// in place of `held`: this process routes and queues by it (rule 16).
+    /// Python's `_join_stored`.
+    fn join_stored(
+        &self,
+        room: &Room,
+        held: Option<&Arc<dyn DiscussionSeam>>,
+        config: DiscussionConfig,
+    ) {
+        let room_id = room.id.clone();
+        let organization_id = room.organization_id.clone();
+        let follower = DiscussionRoom::following(self, room_id.clone(), organization_id, config);
+        let seam: Arc<dyn DiscussionSeam> = Arc::<DiscussionRoom<S>>::clone(&follower);
+        if !self
+            .inner
+            .discussions
+            .hold_in_place_of(room_id.clone(), held, seam)
+        {
+            return;
+        }
+        for hook in follower.hooks() {
+            if let Err(error) = self.hook_engine().replace_room_hook(&room_id, hook) {
+                tracing::warn!(
+                    target: "roomkit::orchestration::discussion",
+                    %room_id,
+                    %error,
+                    "a followed discussion's hook was not registered"
+                );
+            }
+        }
+    }
+
+    /// Stops following `held`, the discussion of `room_id`: its hooks
+    /// removed. Python's `_leave_discussion`.
+    fn leave_discussion(&self, room_id: &RoomId, held: &Arc<dyn DiscussionSeam>) -> bool {
+        if !self.inner.discussions.release_held(room_id, held) {
+            return false;
+        }
+        for hook in [SILENT, NAMES] {
+            self.hook_engine().remove_room_hook(room_id, hook);
+        }
+        true
+    }
+
+    /// Uninstalls the discussion `room` stores with no install of this
+    /// process recorded, one another process stored included (rule 16), the
+    /// agents its installs attached detached; whether it held one. Python's
+    /// `_uninstall_stored_discussion`.
+    pub(crate) async fn uninstall_stored_discussion(
+        &self,
+        room: &Room,
+    ) -> Result<bool, RoomKitError> {
+        self.follow_discussion(room);
+        let Some(held) = self.inner.discussions.get(&room.id) else {
+            return Ok(false);
+        };
+        if !self.leave_discussion(&room.id, &held) {
+            return Ok(false);
+        }
+        held.forget().await?;
+        let attached = DiscussionConfig::stored(&room.metadata)
+            .map(|config| config.attached)
+            .unwrap_or_default();
+        let stayed = self.detach_agents(&room.id, &attached).await;
+        if !stayed.is_empty() {
+            let stayed: Vec<&str> = stayed.iter().map(ChannelId::as_str).collect();
+            return Err(RoomKitError::Runtime(format!(
+                "Room {} still binds {stayed:?}, which its installs attached",
+                room.id
+            )));
+        }
+        Ok(true)
+    }
+
+    /// Whether the discussion this process installed is the one the room
+    /// stores now, the one it gives turns by (rule 16). One another process
+    /// uninstalled is left here at once, its record with it, so that
+    /// `room_strategy` tells the host it is gone. Python's
+    /// `_discussion_is_current`.
+    pub(crate) async fn discussion_is_current(
+        &self,
+        room_id: &RoomId,
+        organization_id: Option<String>,
+    ) -> Result<bool, RoomKitError> {
+        let seen = self.inner.discussions.get(room_id);
+        let room = self
+            .get_room(room_id, crate::kit::GetRoomOptions { organization_id })
+            .await?;
+        self.follow_discussion(&room);
+        let Some(held) = self.inner.discussions.get(&room.id) else {
+            return Ok(false);
+        };
+        let uninstalled = DiscussionConfig::stored(&room.metadata).is_none();
+        if uninstalled && same_seam(seen.as_ref(), Some(&held)) {
+            self.leave_uninstalled(&room.id, &held).await;
+            return Ok(false);
+        }
+        Ok(held.drives())
+    }
+
+    /// Leaves `held`, the discussion of `room_id` another process
+    /// uninstalled, and the strategy record with it, writing nothing back.
+    /// Python's `_leave_uninstalled`.
+    async fn leave_uninstalled(&self, room_id: &RoomId, held: &Arc<dyn DiscussionSeam>) {
+        if !self.leave_discussion(room_id, held) {
+            return;
+        }
+        self.drop_discussion_record(room_id);
+        held.leave().await;
+    }
+
     /// The speak queue of the discussion `room_id` holds in this process, or
     /// `None` when it holds none (RFC §19.7.5 rule 17): Python's
     /// `speak_queue(room_id, *, organization_id=None)`. `options` scopes the

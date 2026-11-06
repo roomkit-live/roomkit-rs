@@ -43,10 +43,10 @@ use crate::tasks::Kind;
 use crate::{HookExecution, HookTrigger};
 
 /// The `blocked_by` of an agent's row that says nothing (rule 13).
-pub(super) const SILENT: &str = "discussion_silent";
+pub(crate) const SILENT: &str = "discussion_silent";
 
 /// The hook that reads the names a message addresses (rule 4).
-pub(super) const NAMES: &str = "discussion_names";
+pub(crate) const NAMES: &str = "discussion_names";
 
 /// How long a cut waits for the turn it cut to be over, as Python's
 /// `cancel_and_wait`.
@@ -93,6 +93,10 @@ pub(crate) struct DiscussionRoom<S> {
     /// Who this process is, as the lease names it (rule 16).
     pub(super) me: String,
     pub(super) config: DiscussionConfig,
+    /// It only follows the discussion another process installed: it
+    /// queues and routes by the stored configuration, and gives no turn
+    /// (rule 16).
+    pub(super) following: bool,
     pub(super) silent: SilentToken,
     pub(super) done: Option<DoneFn>,
     /// The dispatch policy the host gave, and its bound (rule 18).
@@ -137,6 +141,30 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         done: Option<DoneFn>,
         dispatch: Option<(Arc<dyn DispatchPolicy>, Duration)>,
     ) -> Arc<Self> {
+        Self::of(kit, room_id, organization_id, config, done, dispatch, false)
+    }
+
+    /// The discussion another process installed, `config` as the room
+    /// stores it: this process queues and routes by it, and gives no turn
+    /// (rule 16). Python's `DiscussionRoom.following`.
+    pub(crate) fn following(
+        kit: &RoomKit<S>,
+        room_id: RoomId,
+        organization_id: Option<String>,
+        config: DiscussionConfig,
+    ) -> Arc<Self> {
+        Self::of(kit, room_id, organization_id, config, None, None, true)
+    }
+
+    fn of(
+        kit: &RoomKit<S>,
+        room_id: RoomId,
+        organization_id: Option<String>,
+        config: DiscussionConfig,
+        done: Option<DoneFn>,
+        dispatch: Option<(Arc<dyn DispatchPolicy>, Duration)>,
+        following: bool,
+    ) -> Arc<Self> {
         Arc::new(Self {
             kit: kit.downgrade(),
             room_id,
@@ -144,6 +172,7 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             me: kit.inner.discussions.me(),
             silent: SilentToken::new(config.silent_token.clone()),
             config,
+            following,
             done,
             dispatch,
             live: Mutex::new(Live::default()),
@@ -733,6 +762,12 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             .cloned()
             .collect();
         let id = event.id.to_string();
+        // This process keeps the instruction's text; one that gives no turn
+        // tells it dropped.
+        if self.following {
+            self.fire(SpeakQueueChange::InstructionDropped, agents, Some(id));
+            return Ok(());
+        }
         let taken = self
             .edit(&kit, |state, live| {
                 if takes_nothing(state, live) {
@@ -892,6 +927,46 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         self.wake.notify_one();
     }
 
+    /// Stores `agents`, which an install attached to the room, with the
+    /// configuration, for any process uninstalling the discussion to detach
+    /// them (RFC §19.7). Python's `hold_attached`.
+    async fn attached(&self, agents: Vec<ChannelId>) -> Result<(), RoomKitError> {
+        let kit = self.kit()?;
+        let section = Section::enter(&kit.inner.locks, &self.room_id).await?;
+        section
+            .scope(async {
+                let room = kit.store().get_room(&self.room_id).await?;
+                let metadata = room.map(|room| room.metadata).unwrap_or_default();
+                let Some(mut stored) = DiscussionConfig::stored(&metadata) else {
+                    return Ok(());
+                };
+                stored.attached.extend(agents);
+                stored.attached.sort();
+                stored.attached.dedup();
+                let config = serde_json::to_value(&stored)
+                    .map_err(|error| RoomKitError::Value(error.to_string()))?;
+                let patch = Metadata::from_iter([(CONFIG_KEY.to_owned(), config)]);
+                kit.store()
+                    .patch_room_metadata(&self.room_id, patch, PatchRoomMetadataOptions::default())
+                    .await?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Leaves the discussion another process uninstalled, writing nothing
+    /// back: its queue is gone, so a turn cut on the way records nothing
+    /// (rule 1), and no turn is given here again (rule 16). Python's
+    /// `_leave_uninstalled`, the record dropped by the kit.
+    async fn leave_uninstalled(&self) {
+        {
+            let mut live = self.state();
+            live.closed = true;
+            live.forgotten = true;
+        }
+        self.stop_driver().await;
+    }
+
     fn category_refusal(
         &self,
         channel_id: &ChannelId,
@@ -1000,7 +1075,30 @@ impl<S: ConversationStore> DiscussionSeam for DiscussionRoom<S> {
     }
 
     fn settled(&self) -> bool {
-        self.settled.load(Ordering::SeqCst) || self.stopping.load(Ordering::SeqCst)
+        // A process that only follows has no driver to settle.
+        self.following
+            || self.settled.load(Ordering::SeqCst)
+            || self.stopping.load(Ordering::SeqCst)
+    }
+
+    fn rouse(&self) {
+        DiscussionRoom::rouse(self);
+    }
+
+    fn drives(&self) -> bool {
+        !self.following
+    }
+
+    fn follows(&self) -> Option<&DiscussionConfig> {
+        self.following.then_some(&self.config)
+    }
+
+    fn hold_attached(&self, agents: Vec<ChannelId>) -> BoxFuture<'_, Result<(), RoomKitError>> {
+        Box::pin(self.attached(agents))
+    }
+
+    fn leave(&self) -> BoxFuture<'_, ()> {
+        Box::pin(self.leave_uninstalled())
     }
 
     fn stop(&self) -> BoxFuture<'_, ()> {
