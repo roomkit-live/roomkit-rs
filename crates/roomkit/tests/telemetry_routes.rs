@@ -23,9 +23,10 @@ use roomkit::model::{
 use roomkit::telemetry::{MockTelemetryProvider, TelemetryConfig};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, HookOptions, HookTrigger,
-    InMemoryLockManager, InboundRoomRouter, ProcessInboundOptions, RoomKit, RoomKitError,
-    RoomKitOptions, RoomLock, RoomLockManager, RouteOptions, RouterFuture, SessionStartedEvent,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions, HookOptions,
+    HookTrigger, InMemoryLockManager, InboundRoomRouter, ProcessInboundOptions, RoomKit,
+    RoomKitError, RoomKitOptions, RoomLock, RoomLockManager, RouteOptions, RouterFuture,
+    SessionStartedEvent,
 };
 use serde_json::{Value, json};
 
@@ -471,10 +472,17 @@ async fn a_deadline_passed_before_the_last_new_room_reads_its_timeout() {
         .process_inbound(hello(), ProcessInboundOptions::default())
         .await
         .unwrap();
+    let rooms = kit
+        .store()
+        .list_rooms(roomkit::store::ListRoomsOptions::default())
+        .await
+        .unwrap();
     kit.close().await.unwrap();
     assert_eq!(
         (result.blocked, result.reason.as_deref()),
         (true, Some("process_timeout"))
     );
+    // No third room: the deadline is read before it is opened.
+    assert_eq!(rooms.len(), 2);
     assert_eq!(routes(&mock), vec![failed("_RoutingTimeoutError")]);
 }
