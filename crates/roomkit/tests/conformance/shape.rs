@@ -102,6 +102,7 @@ const CHANNEL: &[&str] = &[
     "tool_timeouts_ms",
     "turn_budget_tokens",
     "reasoning_effort",
+    "response_schema",
     "turn_budget_usd",
     "system_prompt",
     "temperature",
@@ -160,6 +161,7 @@ const TURN_CONFIG: &[&str] = &[
     "temperature",
     "max_tokens",
     "reasoning_effort",
+    "response_schema",
     "turn_budget_tokens",
     "turn_budget_usd",
     "tool_handler",
@@ -176,6 +178,8 @@ const MODEL: &[&str] = &[
     "name",
     "provider",
     "chat_dialect",
+    "response_schema",
+    "response_schema_with_tools",
 ];
 const MODEL_ROUND: &[&str] = &[
     "text",

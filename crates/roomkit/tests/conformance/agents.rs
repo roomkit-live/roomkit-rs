@@ -27,7 +27,8 @@ use roomkit_ai::{
     AiThinkingPart, AiTool, AiToolCall, HumanInputToolHandler, HumanInputToolHandlerOptions,
     ModelInfo, ModelPricing, ProviderError, ProviderStream, StreamDone, StreamEvent,
     StreamTextDelta, StreamThinkingDelta, Tool, ToolContext, ToolEntry, ToolError, ToolHandler,
-    ToolPolicy, ToolResult, ToolResultPart, Tools,
+    ToolPolicy, ToolResult, ToolResultPart, Tools, check_schema_answer, checked_stream,
+    schema_for_generate,
 };
 use serde_json::{Value, json};
 
@@ -55,6 +56,9 @@ pub(crate) struct Paced {
     model_name: String,
     /// The provider's name (README: `model.provider`).
     provider_name: String,
+    /// Whether the model takes a response schema, and one beside tools
+    /// (README: `model.response_schema`, `model.response_schema_with_tools`).
+    schema: (bool, bool),
 }
 
 impl AiProvider for Paced {
@@ -68,6 +72,14 @@ impl AiProvider for Paced {
 
     fn supports_vision(&self) -> bool {
         self.vision
+    }
+
+    fn supports_response_schema(&self) -> bool {
+        self.schema.0
+    }
+
+    fn supports_response_schema_with_tools(&self) -> bool {
+        self.schema.1
     }
 
     /// The model's catalogue entry, with the price and the context window
@@ -84,14 +96,46 @@ impl AiProvider for Paced {
     }
 
     async fn generate(&self, context: &AiContext) -> Result<AiResponse, ProviderError> {
+        let (supported, with_tools) = self.schema;
+        schema_for_generate(context, supported, with_tools, &self.provider_name)?;
         let mut response = self.script.generate(context).await?;
         for call in &mut response.tool_calls {
             labelled(&self.run, &mut call.arguments);
         }
+        let finish = response.finish_reason.as_deref();
+        if let Some(schema) = &context.response_schema
+            && response.tool_calls.is_empty()
+            && !finish.is_some_and(malformed_call)
+        {
+            let refusal = (finish == Some("refusal")).then_some("refusal");
+            check_schema_answer(
+                &response.content,
+                schema,
+                &self.provider_name,
+                refusal,
+                finish,
+            )?;
+        }
         Ok(response)
     }
 
+    /// The round's events, under a response schema refused before the
+    /// request is kept when the model takes none, and checked before its
+    /// done event (README, `model.response_schema`).
     fn generate_structured_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
+        let (supported, with_tools) = self.schema;
+        if let Err(error) = schema_for_generate(context, supported, with_tools, &self.provider_name)
+        {
+            return Box::pin(Refused(Some(error)));
+        }
+        let events = self.scripted_stream(context);
+        checked_stream(events, context, &self.provider_name, refused)
+    }
+}
+
+impl Paced {
+    /// The script's events for `context`, held at its round's gate first.
+    fn scripted_stream<'a>(&'a self, context: &'a AiContext) -> ProviderStream<'a> {
         let position = self.script.requests().len();
         let gate = self.gates.get(position).cloned().flatten();
         let run = Weak::clone(&self.run);
@@ -110,6 +154,30 @@ impl AiProvider for Paced {
             after_text: false,
             run: Weak::clone(&self.run),
         })
+    }
+}
+
+/// Whether a round ended on a call its provider would not hand over.
+fn malformed_call(finish_reason: &str) -> bool {
+    ["malformed_function_call", "unexpected_tool_call"]
+        .iter()
+        .any(|malformed| finish_reason.eq_ignore_ascii_case(malformed))
+}
+
+/// Why a scripted round declined to answer: its `refusal` finish reason.
+fn refused(done: &StreamDone) -> Option<String> {
+    (done.finish_reason.as_deref() == Some("refusal")).then(|| "refusal".to_owned())
+}
+
+/// A stream failing once, with the error a schema's check gave before the
+/// request was made.
+struct Refused(Option<ProviderError>);
+
+impl Stream for Refused {
+    type Item = Result<StreamEvent, ProviderError>;
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.get_mut().0.take().map(Err))
     }
 }
 
@@ -183,13 +251,6 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
         options.tool_policy = Some(tool_policy(policy));
     }
     bounds(spec, &mut options)?;
-    if let Some(effort) = spec
-        .get("reasoning_effort")
-        .filter(|effort| !effort.is_null())
-    {
-        let effort = effort.as_str().ok_or("reasoning_effort: not a text")?;
-        options.reasoning_effort = Some(effort.to_owned());
-    }
     agent_settings(spec, &mut options)?;
     tool_search_settings(spec, &mut options)?;
     if let Some(by_room) = spec.get("config_provider") {
@@ -341,6 +402,10 @@ fn scripted_model(spec: &Value, run: &Arc<Run>) -> Result<(ScriptedProvider, Pac
         context_window: spec["context_window"].as_u64(),
         model_name: spec["name"].as_str().unwrap_or("scripted").to_owned(),
         provider_name: spec["provider"].as_str().unwrap_or("scripted").to_owned(),
+        schema: (
+            spec["response_schema"] == true,
+            spec["response_schema_with_tools"] == true,
+        ),
     };
     Ok((model, paced))
 }
@@ -681,6 +746,20 @@ fn tool_search_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<
 /// A scripted agent's own `system_prompt`, `temperature` and `max_tokens`
 /// (README, "Scripted agents").
 fn agent_settings(spec: &Value, options: &mut AiChannelOptions) -> Result<(), String> {
+    if let Some(effort) = spec
+        .get("reasoning_effort")
+        .filter(|effort| !effort.is_null())
+    {
+        let effort = effort.as_str().ok_or("reasoning_effort: not a text")?;
+        options.reasoning_effort = Some(effort.to_owned());
+    }
+    if let Some(schema) = spec
+        .get("response_schema")
+        .filter(|schema| !schema.is_null())
+    {
+        let schema = schema.as_object().ok_or("response_schema: not an object")?;
+        options.response_schema = Some(schema.clone());
+    }
     if let Some(prompt) = spec.get("system_prompt") {
         let prompt = prompt.as_str().ok_or("system_prompt: not a text")?;
         options.system_prompt = Some(prompt.to_owned());
@@ -798,6 +877,7 @@ fn turn_config(spec: &Value, run: &Arc<Run>) -> Result<AiChannelTurnConfig, Stri
         thinking_budget: spec["thinking_budget"].as_i64(),
         enable_thinking: spec["enable_thinking"].as_bool(),
         reasoning_effort: text("reasoning_effort"),
+        response_schema: spec["response_schema"].as_object().cloned(),
         turn_budget_tokens: spec["turn_budget_tokens"].as_u64(),
         turn_budget_usd: spec["turn_budget_usd"].as_f64(),
         tool_handler: spec["tool_handler"]
@@ -1050,6 +1130,7 @@ fn request(request: &AiContext) -> Value {
         "reasoning_effort": request.reasoning_effort,
         "thinking_budget": request.thinking_budget,
         "enable_thinking": request.enable_thinking,
+        "response_schema": request.response_schema,
         "tools": tools,
     })
 }
