@@ -420,7 +420,16 @@ impl<S: ConversationStore> RoomKit<S> {
         strategy: &Arc<dyn Orchestration<S>>,
         before: &Snapshot,
     ) -> Result<(), RoomKitError> {
-        let installed = match self.attach_agents(room_id, strategy.as_ref()).await {
+        // A discussion taking another's place binds its new agents itself,
+        // once it holds the room (RFC §19.7.5 rule 1).
+        let replacing =
+            is_discussion(strategy.as_ref()) && self.inner.discussions.get(room_id).is_some();
+        let attached = if replacing {
+            Ok(())
+        } else {
+            self.attach_agents(room_id, strategy.as_ref()).await
+        };
+        let installed = match attached {
             Ok(()) => strategy.install(self, room_id).await,
             Err(error) => Err(error),
         };
@@ -460,7 +469,7 @@ impl<S: ConversationStore> RoomKit<S> {
             return Ok(());
         }
         match self.inner.discussions.get(room_id) {
-            Some(seam) if seam.drives() => seam.hold_attached(attached).await,
+            Some(seam) if seam.follows().is_none() => seam.hold_attached(attached).await,
             _ => Ok(()),
         }
     }

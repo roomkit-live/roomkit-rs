@@ -87,9 +87,9 @@ pub(crate) trait DiscussionSeam: Send + Sync + 'static {
     /// may have changed (rule 16).
     fn rouse(&self) {}
 
-    /// Whether this process may give the turns: its host installed the
-    /// discussion the room stores (rule 16).
-    fn drives(&self) -> bool {
+    /// Whether this process may give the turns of the discussion the room
+    /// stores, `stored`: its host installed that one (rule 16).
+    fn drives(&self, _stored: &DiscussionConfig) -> bool {
         false
     }
 
@@ -432,12 +432,13 @@ impl<S: ConversationStore> RoomKit<S> {
         let Some(held) = self.inner.discussions.get(&room.id) else {
             return Ok(false);
         };
-        let uninstalled = DiscussionConfig::stored(&room.metadata).is_none();
-        if uninstalled && same_seam(seen.as_ref(), Some(&held)) {
-            self.leave_uninstalled(&room.id, &held).await;
+        let Some(stored) = DiscussionConfig::stored(&room.metadata) else {
+            if same_seam(seen.as_ref(), Some(&held)) {
+                self.leave_uninstalled(&room.id, &held).await;
+            }
             return Ok(false);
-        }
-        Ok(held.drives())
+        };
+        Ok(held.drives(&stored))
     }
 
     /// Leaves `held`, the discussion of `room_id` another process

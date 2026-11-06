@@ -303,7 +303,6 @@ impl Discussion {
         let room = kit.get_room(room_id, GetRoomOptions::default()).await?;
         let config = config_of(self, kit.inner.config().max_chain_depth);
         kit.check_discussion_room(room_id, &config).await?;
-        kit.bind_discussion_agents(room_id, &config.agents).await?;
         let organization_id = room.organization_id;
         let running = DiscussionRoom::new(
             kit,
@@ -321,6 +320,10 @@ impl Discussion {
             .discussions
             .hold(room_id.clone(), Arc::<DiscussionRoom<S>>::clone(&running));
         let started = async {
+            // Bound once it holds the room: one it takes the place of would
+            // refuse an agent of its own it does not hold (rule 1).
+            kit.bind_discussion_agents(room_id, &running.config.agents)
+                .await?;
             running.load().await?;
             for hook in running.hooks() {
                 kit.hook_engine().replace_room_hook(room_id, hook)?;

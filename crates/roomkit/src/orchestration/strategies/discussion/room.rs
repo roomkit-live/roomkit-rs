@@ -1085,8 +1085,8 @@ impl<S: ConversationStore> DiscussionSeam for DiscussionRoom<S> {
         DiscussionRoom::rouse(self);
     }
 
-    fn drives(&self) -> bool {
-        !self.following
+    fn drives(&self, stored: &DiscussionConfig) -> bool {
+        !self.following && self.config.same_as(Some(stored))
     }
 
     fn follows(&self) -> Option<&DiscussionConfig> {
