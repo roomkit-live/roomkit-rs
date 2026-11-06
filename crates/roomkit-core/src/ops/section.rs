@@ -172,9 +172,10 @@ impl<W: SectionWork> Section<W> {
     }
 
     /// The section waiting for the lock within `bound` at most: past the
-    /// call's deadline, or once its caller is gone, the wait is answered
-    /// `DeadlinePassed`, which the section's caller takes before handing it
-    /// the outcome, since no lock is held then.
+    /// call's deadline, or, for the call's own bound, once its caller is
+    /// gone, the wait is answered `DeadlinePassed`, which the section's
+    /// caller takes before handing it the outcome, since no lock is held
+    /// then.
     pub(crate) fn waiting_within(mut self, bound: Bound) -> Self {
         self.bound = bound;
         self

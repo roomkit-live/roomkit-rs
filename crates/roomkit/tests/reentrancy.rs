@@ -14,7 +14,7 @@
 
 use std::future::{Future, ready};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -2241,6 +2241,104 @@ async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
             1
         )
     );
+}
+
+/// One run of [`a_hook_whose_call_is_cut_at_the_deadline_runs_no_further`]:
+/// whether the hook's code ran past its call's refusal, and whether `x` was
+/// stored.
+async fn cut_while_it_waits_for_the_lock() -> (bool, bool) {
+    let (kit, _) = room_with(RoomKitOptions {
+        process_timeout: Duration::from_millis(50),
+        ..Default::default()
+    })
+    .await;
+    kit.register_channel(EchoAgent::new(
+        channel("ai"),
+        "You said: ",
+        EchoAgentOptions { quote: true },
+    ))
+    .unwrap();
+    kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let (held, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (on_hold, gate) = (Arc::clone(&held), Arc::clone(&release));
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (on_hold, gate) = (Arc::clone(&on_hold), Arc::clone(&gate));
+            async move {
+                if text_of(&event.content).starts_with("You said: c") {
+                    on_hold.notify_one();
+                    gate.notified().await;
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        before_broadcast("holds", true),
+    )
+    .unwrap();
+    let resumed = Arc::new(AtomicBool::new(false));
+    let ran_on = Arc::clone(&resumed);
+    let hook_kit = kit.clone();
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, ran_on) = (hook_kit.clone(), Arc::clone(&ran_on));
+            async move {
+                if text_of(&event.content) == "hello" {
+                    let sent = kit
+                        .send_event(
+                            &room_id(),
+                            &channel("ws"),
+                            TextContent::new("x"),
+                            SendEventOptions::default(),
+                        )
+                        .await;
+                    ran_on.store(true, AtomicOrdering::SeqCst);
+                    drop(sent);
+                }
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        before_broadcast("awaits", false),
+    )
+    .unwrap();
+    let first_kit = kit.clone();
+    let first = tokio::spawn(async move { send(&first_kit, "c").await });
+    tokio::time::timeout(BOUND, held.notified()).await.unwrap();
+    let refused = send(&kit, "hello").await.unwrap();
+    assert_eq!(refused.reason.as_deref(), Some("process_timeout"));
+    release.notify_one();
+    tokio::time::timeout(BOUND, first)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(BOUND, roomkit::testing::idle(&kit))
+        .await
+        .unwrap();
+    let stored = timeline(&kit).await.iter().any(|line| line.ends_with(" x"));
+    kit.close().await.unwrap();
+    (resumed.load(AtomicOrdering::SeqCst), stored)
+}
+
+/// RFC §13.6, §9.5.1 Reentrance: a call an off-lock hook awaits, cut at its
+/// caller's deadline while it waits for the room lock an agent's answer
+/// holds, is answered only once the hook is given up on: the hook's code
+/// never runs past the deadline, as the Python implementation's cancelled
+/// hook body, and nothing of the call is stored. On threads the entry's
+/// answer and the hook's end race at that one deadline: 30 runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hook_whose_call_is_cut_at_the_deadline_runs_no_further() {
+    let mut wrong = Vec::new();
+    for run in 0..30 {
+        let ran = cut_while_it_waits_for_the_lock().await;
+        if ran != (false, false) {
+            wrong.push((run, ran));
+        }
+    }
+    assert_eq!(wrong, Vec::<(i32, (bool, bool))>::new());
 }
 
 /// RFC §13.6 "A caller that stops waiting", §9.5.1 Reentrance: a call a

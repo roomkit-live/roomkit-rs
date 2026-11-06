@@ -633,6 +633,7 @@ impl Machine {
                 self.dispatch(cx, effect, outcome);
             }
             cx.io.work_for(&self.cascade.budget);
+            self.settle_cut_entries(cx);
             self.start_adopted(cx);
             self.run_queues(cx);
             self.report_adopted_deliveries(cx);

@@ -78,6 +78,9 @@ pub(super) struct Adoptions {
     /// The answers of the hooks entries are nested under, held back until
     /// those entries are settled.
     deferred: Vec<(EffectId, Outcome)>,
+    /// The entries the call's deadline cut, their results held back until
+    /// the effect whose code made each one is answered too.
+    cut: Vec<(Adopted, InboundResult)>,
 }
 
 /// What the operation knows of an entry it adopted.
@@ -138,14 +141,16 @@ enum Advanced {
     WorkRead(Read),
     /// The entry stopped before its pass, with what its caller receives.
     Stopped(Box<Result<InboundResult, InboundError>>),
+    /// The call's deadline cut the entry before its pass.
+    Cut(Box<InboundResult>),
     Passed(Result<PassReport, Abort>),
     Recorded(Result<RecordReport, Abort>),
 }
 
 impl Adoptions {
-    /// Whether no entry is adopted or running.
+    /// Whether no entry is adopted, running or cut and not settled yet.
     pub(super) fn is_idle(&self) -> bool {
-        self.adopted.is_empty() && self.running.is_empty()
+        self.adopted.is_empty() && self.running.is_empty() && self.cut.is_empty()
     }
 
     /// Whether a running entry waits for `effect`.
@@ -232,7 +237,7 @@ impl AdoptedRun {
                     Advanced::Stopped(Box::new(Err(error)))
                 }
                 Progress::Done(Err(Stopped::Expired)) => {
-                    Advanced::Stopped(Box::new(Ok(cut_at_the_deadline(false, None))))
+                    Advanced::Cut(Box::new(cut_at_the_deadline(false, None)))
                 }
                 // An adopted message is charged as its arrival starts.
                 Progress::Done(Err(Stopped::PastBudget)) => {
@@ -249,7 +254,7 @@ impl AdoptedRun {
                     Advanced::Stopped(Box::new(Err(error)))
                 }
                 Progress::Done(Err(Stopped::Expired)) => {
-                    Advanced::Stopped(Box::new(Ok(cut_at_the_deadline(false, None))))
+                    Advanced::Cut(Box::new(cut_at_the_deadline(false, None)))
                 }
                 // A post stops expired or failed only.
                 Progress::Done(Err(Stopped::PastBudget | Stopped::Refused(_))) => {
@@ -265,7 +270,7 @@ impl AdoptedRun {
                     Advanced::Stopped(Box::new(Err(error)))
                 }
                 Progress::Done(Err(Stopped::Expired)) => {
-                    Advanced::Stopped(Box::new(Ok(cut_at_the_deadline(false, None))))
+                    Advanced::Cut(Box::new(cut_at_the_deadline(false, None)))
                 }
                 // A read stops expired or failed only.
                 Progress::Done(Err(Stopped::PastBudget | Stopped::Refused(_))) => {
@@ -615,6 +620,7 @@ impl Machine {
             Advanced::Posted => self.on_entry_posted(cx, adopted, run),
             Advanced::WorkRead(read) => self.on_entry_key(cx, adopted, run, read),
             Advanced::Stopped(stopped) => self.settle_entry(cx, &adopted, *stopped),
+            Advanced::Cut(cut) => self.settle_cut(cx, adopted, *cut),
             Advanced::Passed(Ok(report)) => self.on_adopted_pass(cx, &adopted, report),
             Advanced::Passed(Err(Abort::DeadlinePassed {
                 locked_event,
@@ -625,7 +631,7 @@ impl Machine {
                 release_failure,
             })) => {
                 let cut = cut_at_the_deadline(locked_event.is_some(), release_failure);
-                self.settle_entry(cx, &adopted, Ok(cut));
+                self.settle_cut(cx, adopted, cut);
             }
             Advanced::Passed(Err(abort)) | Advanced::Recorded(Err(abort)) => {
                 let error = cascade::failure(abort, self.call.room_id.clone());
@@ -671,6 +677,32 @@ impl Machine {
     /// refused by the room's status.
     fn on_adopted_record(&mut self, cx: &mut Cx<'_>, adopted: &Adopted, report: RecordReport) {
         self.settle_entry(cx, adopted, Ok(cascade::record_result(report)));
+    }
+
+    /// Settles an entry the call's deadline cut, `cut`, once the effect
+    /// whose code made it is answered too: the driver gives that effect up
+    /// at the same deadline, its code dropped, so that the code never reads
+    /// the entry's refusal and runs on past the deadline, where the Python
+    /// implementation cancels it with its hook (RFC §13.6). A call that code
+    /// left running in a task of its own, its effect answered already, is
+    /// answered at once.
+    fn settle_cut(&mut self, cx: &mut Cx<'_>, adopted: Adopted, cut: InboundResult) {
+        if cx.io.is_outstanding(adopted.origin) {
+            self.adopted.cut.push((adopted, cut));
+            return;
+        }
+        self.settle_entry(cx, &adopted, Ok(cut));
+    }
+
+    /// Settles the cut entries whose origin is answered by now.
+    pub(super) fn settle_cut_entries(&mut self, cx: &mut Cx<'_>) {
+        let (answered, held): (Vec<_>, Vec<_>) = mem::take(&mut self.adopted.cut)
+            .into_iter()
+            .partition(|(adopted, _)| !cx.io.is_outstanding(adopted.origin));
+        self.adopted.cut = held;
+        for (adopted, cut) in answered {
+            self.settle_entry(cx, &adopted, Ok(cut));
+        }
     }
 
     /// Answers the entry's caller with `result`, a direct injection's
