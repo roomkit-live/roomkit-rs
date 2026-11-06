@@ -171,7 +171,11 @@ async fn a_supervisor_given_live_agents_delegates_and_answers() {
         ]
     );
     let requests = lead_model.calls();
-    assert_eq!(declared(&requests[0]), ["delegate_to_researcher"]);
+    // The re-read of stored results after it (RFC §21.5).
+    assert_eq!(
+        declared(&requests[0]),
+        ["delegate_to_researcher", "read_stored_result"]
+    );
     let answer = r#"{"status": "completed", "worker": "researcher", "result": "The facts."}"#;
     assert_eq!(tool_results(&requests[1]), [(answer.to_owned(), false)]);
     // The worker is the kit's, never attached to the room.
@@ -208,7 +212,10 @@ async fn a_supervisor_installed_again_in_its_room_serves_its_tool_once() {
         .unwrap();
     ask(&kit, "Hi.").await;
 
-    assert_eq!(declared(&lead_model.calls()[0]), ["delegate_workers"]);
+    assert_eq!(
+        declared(&lead_model.calls()[0]),
+        ["delegate_workers", "read_stored_result"]
+    );
     kit.close().await.unwrap();
 }
 

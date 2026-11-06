@@ -56,7 +56,9 @@ async fn the_server_s_tools_are_declared_and_its_answers_read() {
     let room = Room::with(serving(&model, &server, |options| options)).await;
     room.says("Where is order 42?").await;
     let request = model.requests().remove(0);
-    let names: Vec<String> = request.tools.into_iter().map(|tool| tool.name).collect();
+    let mut names: Vec<String> = request.tools.into_iter().map(|tool| tool.name).collect();
+    // The re-read of stored results is declared after them (RFC §21.5).
+    assert_eq!(names.pop().as_deref(), Some("read_stored_result"));
     assert_eq!(
         (names == declared, outcomes(&room).await),
         (

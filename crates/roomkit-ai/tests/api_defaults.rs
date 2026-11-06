@@ -130,6 +130,8 @@ fn ai_channel_options_defaults_as_python() {
     assert!(defaults.describe_empty_event.is_none());
     // roomkit.AIChannel.__init__(max_author_images) = 4
     assert_eq!(defaults.max_author_images, Some(4));
+    // roomkit.AIChannel.__init__(evict_threshold_tokens) = 5000
+    assert_eq!(defaults.evict_threshold_tokens, 5000);
     // roomkit.AIChannel.__init__(memory) = None
     assert!(defaults.memory.is_none());
     // roomkit.AIChannel.__init__(server_instructions) = None

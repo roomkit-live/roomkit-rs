@@ -84,8 +84,16 @@ async fn a_responses_request_is_stateless_with_instructions_and_flat_tools() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].path, "/v1/responses");
     assert_eq!(requests[0].authorization.as_deref(), Some("Bearer sk-test"));
+    // The re-read of stored results is declared after the agent's tools
+    // (RFC §21.5); the request's shape is the rest.
+    let mut body = requests[0].body.clone();
+    let reread = body["tools"].as_array_mut().and_then(Vec::pop);
     assert_eq!(
-        requests[0].body,
+        reread.map(|tool| tool["name"].clone()),
+        Some(json!("read_stored_result"))
+    );
+    assert_eq!(
+        body,
         json!({"model":"fake-model", "instructions":SYSTEM_PROMPT,
         "input":[{"role":"user", "content":"Is it ready?"}], "stream":true, "store":false,
         "include":["reasoning.encrypted_content"], "reasoning":{"effort":"medium"},

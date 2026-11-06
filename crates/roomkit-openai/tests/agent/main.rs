@@ -313,11 +313,16 @@ async fn a_call_s_result_goes_back_in_the_next_completion() {
     room.says(&room.sms, "+15550001", "Alice", "Where is order 42?")
         .await;
     let requests = room.fake.requests();
+    // The re-read of stored results is declared after the agent's tools
+    // (RFC §21.5).
+    let mut tools = requests[0].body["tools"].clone();
+    let reread = tools.as_array_mut().and_then(Vec::pop);
     assert_eq!(
-        (
-            requests[0].body["tools"].clone(),
-            messages(&room.fake, 1).get(2..).unwrap().to_vec()
-        ),
+        reread.map(|tool| tool["function"]["name"].clone()),
+        Some(json!("read_stored_result"))
+    );
+    assert_eq!(
+        (tools, messages(&room.fake, 1).get(2..).unwrap().to_vec()),
         (
             json!([{
                 "type": "function",

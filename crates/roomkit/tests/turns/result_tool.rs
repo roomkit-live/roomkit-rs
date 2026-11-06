@@ -104,7 +104,8 @@ async fn the_given_tool_is_injected_and_its_call_captured() {
         (
             TaskStatus::Completed,
             Some(r#"{"approved": true, "feedback": "", "next_task": "write it up"}"#),
-            vec![vec!["submit_verdict".to_owned()]; 2]
+            // The re-read of stored results after it (RFC §21.5).
+            vec![vec!["submit_verdict".to_owned(), "read_stored_result".to_owned()]; 2]
         )
     );
 }
