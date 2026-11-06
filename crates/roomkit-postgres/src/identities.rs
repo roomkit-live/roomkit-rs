@@ -132,7 +132,11 @@ pub(crate) async fn create(client: &mut Object, identity: &Identity) -> Result<(
     )
     .await?;
     if let Some(stored) = stored {
-        keep_unread_addresses(&stored.try_get(0)?, &mut addresses);
+        // A JSON string is read as Python reads it; one holding no JSON text
+        // keeps nothing, as Python's replacement reads nothing of the row.
+        if let Ok(stored) = rows::jsonb_value(stored.try_get(0)?) {
+            keep_unread_addresses(&stored, &mut addresses);
+        }
     }
     let written = execute(
         &transaction,
@@ -295,9 +299,10 @@ async fn locked_addresses(
         return Err(not_found().into());
     }
     // A row the model cannot read is refused, the id alone, as `SqliteStore`
-    // refuses it; the addresses are rewritten from the row itself.
+    // refuses it; the addresses are rewritten from the row itself, a JSON
+    // string read as the value it holds, as the read just did.
     identity_of(&row)?;
-    Ok(row.try_get("channel_addresses")?)
+    rows::jsonb_value(row.try_get("channel_addresses")?)
 }
 
 /// Writes the identity's addresses.

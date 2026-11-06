@@ -13,6 +13,25 @@ use tokio_postgres::{Row, Statement};
 
 use crate::error::Failure;
 
+/// A JSONB column in SQL as Python's store reads it (`rows::jsonb_value`): a
+/// JSON string as the value its text holds, so that a merge over a column
+/// held so writes an object, not the string and the object as one array
+/// (HITL f9737c41). A string holding no JSON text fails the statement.
+macro_rules! jsonb_read {
+    ($column:literal) => {
+        concat!(
+            "(CASE jsonb_typeof(",
+            $column,
+            ") WHEN 'string' THEN (",
+            $column,
+            " #>> '{}')::jsonb ELSE ",
+            $column,
+            " END)"
+        )
+    };
+}
+pub(crate) use jsonb_read;
+
 /// Microseconds from the Unix epoch to Postgres's, 2000-01-01.
 const POSTGRES_EPOCH: i64 = 946_684_800_000_000;
 

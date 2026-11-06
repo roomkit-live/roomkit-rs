@@ -57,9 +57,31 @@ fn instant(row: &Row, column: &str) -> Result<Option<String>, Failure> {
     Ok(at.map(|at| at.0.to_string()))
 }
 
-/// A JSONB column.
+/// A JSONB column, as [`jsonb_value`] reads it.
 fn jsonb(row: &Row, column: &str) -> Result<Value, Failure> {
-    Ok(row.try_get(column)?)
+    jsonb_value(row.try_get(column)?)
+}
+
+/// A nullable JSONB column, as [`jsonb_value`] reads it.
+fn nullable_jsonb(row: &Row, column: &str) -> Result<Option<Value>, Failure> {
+    row.try_get::<_, Option<Value>>(column)?
+        .map(jsonb_value)
+        .transpose()
+}
+
+/// A JSONB column's value as Python's store reads it: its pool decodes the
+/// column, and its mappers decode a string once more, so that a JSON string
+/// reads as the value its text holds, and one holding no JSON text fails
+/// (HITL f9737c41). Such a row comes from a write by hand.
+pub(crate) fn jsonb_value(value: Value) -> Result<Value, Failure> {
+    match value {
+        Value::String(text) => Ok(serde_json::from_str(&text)?),
+        value @ (Value::Null
+        | Value::Bool(_)
+        | Value::Number(_)
+        | Value::Array(_)
+        | Value::Object(_)) => Ok(value),
+    }
 }
 
 /// The room a row holds.
@@ -150,8 +172,8 @@ pub(crate) fn binding(row: &Row) -> Result<ChannelBinding, Failure> {
         "attached_at": instant(row, "attached_at")?,
         "capabilities": jsonb(row, "capabilities")?,
         "metadata": jsonb(row, "metadata")?,
-        "rate_limit": row.try_get::<_, Option<Value>>("rate_limit")?,
-        "retry_policy": row.try_get::<_, Option<Value>>("retry_policy")?,
+        "rate_limit": nullable_jsonb(row, "rate_limit")?,
+        "retry_policy": nullable_jsonb(row, "retry_policy")?,
     });
     // The column is nullable; a binding without one takes the model's default.
     if let (Some(visibility), Value::Object(members)) = (text(row, "visibility")?, &mut binding) {

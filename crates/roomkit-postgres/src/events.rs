@@ -15,7 +15,7 @@ use tokio_postgres::error::SqlState;
 
 use crate::error::Failure;
 use crate::rows::{self, EVENT_COLUMNS, ROOM_COLUMNS};
-use crate::values::{Instant, execute, integer, name, query, query_opt};
+use crate::values::{Instant, execute, integer, jsonb_read, name, query, query_opt};
 
 /// The unique index of a key per room and source channel (RFC §13.4, §14.3).
 const KEY_INDEX: &str = "idx_events_idempotency_channel";
@@ -371,8 +371,11 @@ async fn commit_in_transaction(
     }
     execute(
         &transaction,
-        "UPDATE rooms SET event_count = $2, latest_index = $3, timers = timers || $4, \
-         status = $5, paused_at = $6, updated_at = $7 WHERE id = $1",
+        concat!(
+            "UPDATE rooms SET event_count = $2, latest_index = $3, timers = ",
+            jsonb_read!("timers"),
+            " || $4, status = $5, paused_at = $6, updated_at = $7 WHERE id = $1"
+        ),
         &[
             &room_id.as_str(),
             // The increment is free, the row held above: no count of the
@@ -451,7 +454,12 @@ async fn update_row(
     let Some(held) = held else {
         return Ok(None);
     };
-    let content = kept_content(held.try_get("content")?, &event.content)?;
+    // Python's update reads nothing of the row: a column holding no JSON text
+    // is no refusal, and keeps nothing.
+    let stored = |column: &str| -> Result<Value, Failure> {
+        Ok(rows::jsonb_value(held.try_get(column)?).unwrap_or(Value::Null))
+    };
+    let content = kept_content(stored("content")?, &event.content)?;
     let participant = event
         .source
         .participant_id
@@ -481,7 +489,7 @@ async fn update_row(
         ],
     )
     .await?;
-    Ok(Some(match held.try_get("delivery_results")? {
+    Ok(Some(match stored("delivery_results")? {
         Value::Object(results) => results,
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
             Metadata::new()

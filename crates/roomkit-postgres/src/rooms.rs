@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::Failure;
 use crate::rows::{self, ROOM_COLUMNS};
-use crate::values::{Instant, execute, integer, name, query_opt};
+use crate::values::{Instant, execute, integer, jsonb_read, name, query_opt};
 
 /// Python's `_SET_PRIVATE_STATE`: a room's private state written under a key,
 /// and the copy its metadata may still hold removed, in one statement, the
@@ -85,9 +85,12 @@ pub(crate) async fn get<C: GenericClient>(
 pub(crate) async fn write<C: GenericClient>(client: &C, mut room: Room) -> Result<Room, Failure> {
     let stored = query_opt(
         client,
-        "UPDATE rooms SET organization_id=$2, status=$3, metadata=$4, timers=timers || $5,\
-         agent_response_policy=$6, updated_at=$7, closed_at=$8, paused_at=$9 \
-         WHERE id=$1 RETURNING delivered_index, event_count, latest_index",
+        concat!(
+            "UPDATE rooms SET organization_id=$2, status=$3, metadata=$4, timers=",
+            jsonb_read!("timers"),
+            " || $5, agent_response_policy=$6, updated_at=$7, closed_at=$8, paused_at=$9 \
+             WHERE id=$1 RETURNING delivered_index, event_count, latest_index"
+        ),
         &[
             &room.id.as_str(),
             &room.organization_id,

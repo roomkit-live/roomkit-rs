@@ -7,11 +7,12 @@ use roomkit::model::{IdentityId, Verification, VerificationRequest, Verification
 use serde_json::Value;
 
 use crate::error::Failure;
-use crate::values::{execute, name, query, query_opt};
+use crate::rows::jsonb_value;
+use crate::values::{execute, jsonb_read, name, query, query_opt};
 
-/// The record a row's `data` holds.
+/// The record a row's `data` holds, a JSON string read as Python reads it.
 fn read<T: serde::de::DeserializeOwned>(data: Value) -> Result<T, Failure> {
-    Ok(serde_json::from_value(data)?)
+    Ok(serde_json::from_value(jsonb_value(data)?)?)
 }
 
 /// The identity's verification in `organization`.
@@ -36,10 +37,14 @@ pub(crate) async fn put<C: GenericClient>(
 ) -> Result<(), Failure> {
     execute(
         client,
-        "INSERT INTO verifications (identity_id, organization_id, status, data) \
-         VALUES ($1, $2, $3, $4) \
-         ON CONFLICT (identity_id, organization_id) \
-         DO UPDATE SET status = $3, data = verifications.data || $4",
+        concat!(
+            "INSERT INTO verifications (identity_id, organization_id, status, data) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (identity_id, organization_id) \
+             DO UPDATE SET status = $3, data = ",
+            jsonb_read!("verifications.data"),
+            " || $4"
+        ),
         &[
             &verification.identity_id.as_str(),
             &verification.organization_id.as_deref().unwrap_or_default(),
@@ -111,7 +116,11 @@ pub(crate) async fn update_request<C: GenericClient>(
 ) -> Result<(), Failure> {
     execute(
         client,
-        "UPDATE verification_requests SET status = $2, data = data || $3 WHERE id = $1",
+        concat!(
+            "UPDATE verification_requests SET status = $2, data = ",
+            jsonb_read!("data"),
+            " || $3 WHERE id = $1"
+        ),
         &[
             &request.id,
             &name(&request.status)?,

@@ -10,7 +10,7 @@ use crate::error::Failure;
 use crate::events::room_gone;
 use crate::rooms;
 use crate::rows::{self, BINDING_COLUMNS, PARTICIPANT_COLUMNS};
-use crate::values::{Instant, Param, execute, integer, name, query, query_opt};
+use crate::values::{Instant, Param, execute, integer, jsonb_read, name, query, query_opt};
 
 /// A binding's values, each column's form, in the order [`add_binding`] and
 /// [`update_binding`] bind them.
@@ -69,21 +69,26 @@ pub(crate) async fn add_binding<C: GenericClient>(
     let attached_at = Instant(binding.attached_at);
     let written = execute(
         client,
-        "INSERT INTO bindings \
-         (channel_id, room_id, channel_type, category, direction, \
-          access, muted, output_muted, visibility, participant_id, \
-          last_read_index, attached_at, capabilities, metadata, \
-          rate_limit, retry_policy, is_group) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) \
-         ON CONFLICT (room_id, channel_id) DO UPDATE SET \
-          channel_type=$3, category=$4, direction=$5, access=$6, \
-          muted=$7, output_muted=$8, visibility=$9, participant_id=$10, \
-          last_read_index=$11, capabilities=bindings.capabilities || $13, metadata=$14, \
-          rate_limit=CASE WHEN $15::jsonb IS NULL THEN NULL \
-                     ELSE COALESCE(bindings.rate_limit, '{}'::jsonb) || $15 END, \
-          retry_policy=CASE WHEN $16::jsonb IS NULL THEN NULL \
-                       ELSE COALESCE(bindings.retry_policy, '{}'::jsonb) || $16 END, \
-          is_group=$17",
+        concat!(
+            "INSERT INTO bindings \
+             (channel_id, room_id, channel_type, category, direction, \
+              access, muted, output_muted, visibility, participant_id, \
+              last_read_index, attached_at, capabilities, metadata, \
+              rate_limit, retry_policy, is_group) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) \
+             ON CONFLICT (room_id, channel_id) DO UPDATE SET \
+              channel_type=$3, category=$4, direction=$5, access=$6, \
+              muted=$7, output_muted=$8, visibility=$9, participant_id=$10, \
+              last_read_index=$11, capabilities=",
+            jsonb_read!("bindings.capabilities"),
+            " || $13, metadata=$14, \
+              rate_limit=CASE WHEN $15::jsonb IS NULL THEN NULL ELSE COALESCE(",
+            jsonb_read!("bindings.rate_limit"),
+            ", '{}'::jsonb) || $15 END, \
+              retry_policy=CASE WHEN $16::jsonb IS NULL THEN NULL ELSE COALESCE(",
+            jsonb_read!("bindings.retry_policy"),
+            ", '{}'::jsonb) || $16 END, is_group=$17"
+        ),
         &[
             &binding.channel_id.as_str(),
             &binding.room_id.as_str(),
@@ -122,15 +127,20 @@ pub(crate) async fn update_binding<C: GenericClient>(
     let values = BindingValues::of(binding)?;
     let updated = execute(
         client,
-        "UPDATE bindings SET channel_type=$3, category=$4, direction=$5, \
-         access=$6, muted=$7, output_muted=$8, visibility=$9, \
-         participant_id=$10, last_read_index=$11, capabilities=capabilities || $12, metadata=$13, \
-         rate_limit=CASE WHEN $14::jsonb IS NULL THEN NULL \
-                    ELSE COALESCE(rate_limit, '{}'::jsonb) || $14 END, \
-         retry_policy=CASE WHEN $15::jsonb IS NULL THEN NULL \
-                      ELSE COALESCE(retry_policy, '{}'::jsonb) || $15 END, \
-         is_group=$16 \
-         WHERE room_id=$1 AND channel_id=$2",
+        concat!(
+            "UPDATE bindings SET channel_type=$3, category=$4, direction=$5, \
+             access=$6, muted=$7, output_muted=$8, visibility=$9, \
+             participant_id=$10, last_read_index=$11, capabilities=",
+            jsonb_read!("capabilities"),
+            " || $12, metadata=$13, \
+             rate_limit=CASE WHEN $14::jsonb IS NULL THEN NULL ELSE COALESCE(",
+            jsonb_read!("rate_limit"),
+            ", '{}'::jsonb) || $14 END, \
+             retry_policy=CASE WHEN $15::jsonb IS NULL THEN NULL ELSE COALESCE(",
+            jsonb_read!("retry_policy"),
+            ", '{}'::jsonb) || $15 END, is_group=$16 \
+             WHERE room_id=$1 AND channel_id=$2"
+        ),
         &[
             &binding.room_id.as_str(),
             &binding.channel_id.as_str(),
