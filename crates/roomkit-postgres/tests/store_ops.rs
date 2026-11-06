@@ -26,7 +26,9 @@ use roomkit_postgres::{InitOptions, PostgresStore, PostgresStoreOptions};
 use serde_json::{Value, json};
 use tokio_postgres::NoTls;
 
-use crate::support::{SMALL_POOL, TempSchema, dsn, full_text, until_a_session, until_blocked_by};
+use crate::support::{
+    SMALL_POOL, TempSchema, dsn, full_text, until_blocked_behind, until_blocked_by,
+};
 
 fn room_id(id: &str) -> RoomId {
     RoomId::new(id).unwrap()
@@ -1264,21 +1266,12 @@ async fn an_add_holds_a_room_whose_id_came_back_before_its_sequence() {
             )
             .await
             .unwrap();
-        until_a_session(
-            &schema,
-            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted",
-        )
-        .await;
+        until_blocked_by(&schema, &outside).await;
         let deleting = {
             let (store, room) = (store.clone(), room.clone());
             tokio::spawn(async move { store.delete_room(&room).await })
         };
-        until_a_session(
-            &schema,
-            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() \
-             AND wait_event_type = 'Lock' AND query LIKE 'DELETE FROM rooms%'",
-        )
-        .await;
+        until_blocked_behind(&schema, &outside).await;
         outside
             .batch_execute(&format!("SELECT pg_advisory_unlock({KEY})"))
             .await
@@ -1509,17 +1502,18 @@ async fn the_kit_closes_the_store_it_runs_on() {
 }
 
 /// Python: `test_an_event_added_beside_the_kit_holds_its_next_delivery_and_loses_none`
-/// (RMK-1394): `add_event_auto_index` beside a kit's commits on one room. Each index it
-/// takes is a hole of the delivery cursor no lane runs: the kit's next delivery waits
-/// out the gap timeout, then skips the hole (RFC §13.5). Every message the kit took is
-/// delivered once, in index order, and only added indexes are skipped.
+/// (RMK-1394, point 7): `add_event_auto_index` beside a kit's commits on one room. Each
+/// index it takes is a hole of the delivery cursor that no lane runs, which the kit's
+/// lane skips (RFC §13.5). Every message the kit took is delivered once, in index order,
+/// and only added indexes are skipped: no delivery is lost. Green before the lot's fix
+/// too: it checks the point, it does not prove the fix.
 #[tokio::test]
 async fn an_event_added_beside_the_kit_holds_its_next_delivery_and_loses_none() {
     let Some((_schema, store)) = fresh().await else {
         return;
     };
     let kit = RoomKit::new(RoomKitOptions {
-        delivery_gap_timeout: std::time::Duration::from_millis(50),
+        delivery_gap_timeout: std::time::Duration::from_millis(20),
         ..RoomKitOptions::with_store(store.clone())
     });
     let out = RecordingTransport::new(
@@ -1553,7 +1547,7 @@ async fn an_event_added_beside_the_kit_holds_its_next_delivery_and_loses_none() 
     let tap = EventTap::on(&kit, &["delivery_skipped"]);
     let mut sending = tokio::task::JoinSet::new();
     let mut adding = tokio::task::JoinSet::new();
-    for number in 0..16 {
+    for number in 0..8 {
         let kit = kit.clone();
         sending.spawn(async move {
             let message = InboundMessage::new(

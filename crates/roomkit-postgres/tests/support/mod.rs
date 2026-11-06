@@ -152,18 +152,31 @@ pub(crate) async fn until_blocked_by(schema: &TempSchema, holder: &tokio_postgre
     assert!(blocked > 0, "no session ever waited on the holder");
 }
 
-/// Returns once the query `seen`, a count of sessions, finds one.
-pub(crate) async fn until_a_session(schema: &TempSchema, seen: &str) {
+/// Returns once a session waits on one that waits on `holder`.
+pub(crate) async fn until_blocked_behind(schema: &TempSchema, holder: &tokio_postgres::Client) {
+    let pid: i32 = holder
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
     let watcher = schema.client().await;
-    let mut found = 0_i64;
+    let mut behind = 0_i64;
     for _ in 0..400 {
-        found = watcher.query_one(seen, &[]).await.unwrap().get(0);
-        if found > 0 {
+        behind = watcher
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity a, pg_stat_activity b \
+                 WHERE b.pid = ANY(pg_blocking_pids(a.pid)) AND $1 = ANY(pg_blocking_pids(b.pid))",
+                &[&pid],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if behind > 0 {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    assert!(found > 0, "no session matched: {seen}");
+    assert!(behind > 0, "no session ever waited behind the holder");
 }
 
 /// A test's pool: its work takes few connections at once.
