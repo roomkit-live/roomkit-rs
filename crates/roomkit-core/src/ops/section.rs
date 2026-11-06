@@ -92,6 +92,14 @@ pub(crate) trait SectionWork: Debug {
 
     /// Reports what the work did, once the lock is released (gap G-027).
     fn report(&self, cx: &mut Cx<'_>, result: &Result<Self::Output, Self::Error>);
+
+    /// What the work gives when its read of the room, bounded by
+    /// [`Section::reading_within`], passed the call's deadline: the lock is
+    /// released, nothing done. `None` for a work whose read is never
+    /// bounded.
+    fn read_expired(&self) -> Option<Result<Self::Output, Self::Error>> {
+        None
+    }
 }
 
 /// What a section ends with.
@@ -112,6 +120,9 @@ pub(crate) struct Section<W: SectionWork> {
     /// What bounds the wait for the lock: an inbound call's bound (RFC
     /// §10.4, §13.6), `Bound::Unbounded` otherwise.
     bound: Bound,
+    /// What bounds the read of the room under the lock, `Bound::Unbounded`
+    /// unless [`reading_within`](Self::reading_within) sets it.
+    read_bound: Bound,
     work: W,
     state: State<W>,
     /// The timer transitions the gate applied.
@@ -156,6 +167,7 @@ impl<W: SectionWork> Section<W> {
         Self {
             room_id,
             bound: Bound::Unbounded,
+            read_bound: Bound::Unbounded,
             work,
             state: State::Start,
             timers: Vec::new(),
@@ -179,6 +191,20 @@ impl<W: SectionWork> Section<W> {
     pub(crate) fn waiting_within(mut self, bound: Bound) -> Self {
         self.bound = bound;
         self
+    }
+
+    /// The section reading the room under the lock within `bound` too: past
+    /// it, the read is answered `DeadlinePassed`, and the section releases
+    /// the lock and ends with its work's
+    /// [`read_expired`](SectionWork::read_expired).
+    pub(crate) fn reading_within(mut self, bound: Bound) -> Self {
+        self.read_bound = bound;
+        self
+    }
+
+    /// Whether the section still waits for the room's lock, holding none.
+    pub(crate) fn locking(&self) -> bool {
+        matches!(self.state, State::Locking(_))
     }
 
     /// The work, before the section starts it.
@@ -239,10 +265,11 @@ impl<W: SectionWork> Section<W> {
                     if self.work.reads_history() {
                         recent_events = recent_events.read_by_the_caller();
                     }
-                    State::Loading(cx.io.issue(StoreRequest::LoadContext {
+                    let request = StoreRequest::LoadContext {
                         room_id: self.room_id.clone(),
                         recent_events,
-                    }))
+                    };
+                    State::Loading(cx.io.issue_within(request, self.read_bound))
                 }
                 Err(error) => {
                     return Progress::Done(Ended {
@@ -251,6 +278,12 @@ impl<W: SectionWork> Section<W> {
                     });
                 }
             },
+            State::Loading(_) if outcome == Outcome::DeadlinePassed => {
+                match self.work.read_expired() {
+                    Some(expired) => self.release(cx, expired),
+                    None => self.on_loaded(cx, outcome),
+                }
+            }
             State::Loading(_) => self.on_loaded(cx, outcome),
             State::ApplyingTimers { pending, .. } => match pending.stored(cx, outcome) {
                 Ok(Applied::Opened(Opened {

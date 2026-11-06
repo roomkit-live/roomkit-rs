@@ -53,6 +53,9 @@ pub(super) enum Reran {
     /// A regeneration's caller named a trigger the choice under the lock
     /// is not (RFC §13.6): refused before any agent runs.
     Moved,
+    /// A regeneration's read of the room under the lock passed the call's
+    /// deadline (RFC §13.6): refused `process_timeout` before any choice.
+    Expired,
     /// The event's delivery set, planned for the agents and placed in the
     /// room's lane.
     Planned(Box<Planned>),
@@ -300,6 +303,12 @@ impl SectionWork for RerunWork {
     }
 
     fn report(&self, _cx: &mut Cx<'_>, _result: &Result<Reran, Abort>) {}
+
+    /// Python's `_plan_regeneration` bounds its read of the room with the
+    /// wait for the lock.
+    fn read_expired(&self) -> Option<Result<Reran, Abort>> {
+        Some(Ok(Reran::Expired))
+    }
 }
 
 /// Whether `trigger` is an event of the room the agents may answer: not
@@ -430,6 +439,9 @@ impl Machine {
         // A discussion's turn waits for the room's lock as long as it takes:
         // nobody is waiting on its call, whose driver would only ask again.
         let bound = (!matches!(asked, Asked::Turn)).then_some(self.call.bound);
+        // A regeneration's read of the room is bounded with its wait for the
+        // lock (Python's `_plan_regeneration`).
+        let reads_within = matches!(asked, Asked::Newest { .. });
         let work = RerunWork {
             asked,
             context: None,
@@ -437,6 +449,7 @@ impl Machine {
         };
         let section = Section::new(room_id, work);
         let mut section = Box::new(match bound {
+            Some(bound) if reads_within => section.waiting_within(bound).reading_within(bound),
             Some(bound) => section.waiting_within(bound),
             None => section,
         });
@@ -453,10 +466,10 @@ impl Machine {
         effect: EffectId,
         outcome: Outcome,
     ) {
-        if outcome == Outcome::DeadlinePassed {
-            // Only the wait for the lock carries the deadline: no lock is
-            // held, nothing was written (RFC §13.6). Its `process_timeout`
-            // names the operation, as Python's `regenerate` does.
+        if outcome == Outcome::DeadlinePassed && section.locking() {
+            // The wait for the lock passed the deadline: no lock is held,
+            // nothing was written (RFC §13.6). Its `process_timeout` names
+            // the operation, as Python's `regenerate` does.
             return self.expire_as(cx, None, Some(RefusedOperation::Regenerate));
         }
         let ended = match section.accept(cx, effect, outcome) {
@@ -465,8 +478,18 @@ impl Machine {
         };
         match ended.result {
             Ok(Reran::Nothing) => self.end(cx, Ok(InboundResult::default())),
-            Ok(Reran::Refused) => self.end(cx, Ok(room_closed())),
-            Ok(Reran::Moved) => self.end(cx, Ok(refused("trigger_moved"))),
+            // A refusal carries the section's failed release as its error,
+            // as Python's `regenerate_response` collects it (RFC §13.5).
+            Ok(Reran::Refused) => self.end(cx, Ok(with_error(room_closed(), ended.release_error))),
+            Ok(Reran::Moved) => {
+                let moved = refused("trigger_moved");
+                self.end(cx, Ok(with_error(moved, ended.release_error)));
+            }
+            Ok(Reran::Expired) => {
+                // The read passed the deadline under the lock, now released.
+                self.trigger.note_error(ended.release_error);
+                self.expire_as(cx, None, Some(RefusedOperation::Regenerate));
+            }
             Ok(Reran::Planned(planned)) => {
                 self.trigger.note_error(ended.release_error);
                 self.queue_rerun(cx, *planned);
@@ -572,7 +595,9 @@ impl Machine {
         // The room closed while the set waited in its lane: refused as at
         // its start, before any agent ran (RFC §5.1).
         if outcome.refused {
-            self.trigger.result = room_closed();
+            // The planning lock's failed release, noted, stays the error.
+            let error = self.trigger.result.error.take();
+            self.trigger.result = with_error(room_closed(), error);
             return;
         }
         self.trigger
@@ -587,6 +612,15 @@ impl Machine {
 /// nothing written.
 fn room_closed() -> InboundResult {
     refused("room_closed")
+}
+
+/// `result`, carrying `error`, a failed release of the room's lock.
+fn with_error(
+    mut result: InboundResult,
+    error: Option<crate::model::ErrorRecord>,
+) -> InboundResult {
+    result.error = error;
+    result
 }
 
 /// A rerun refused for `reason` before any agent ran: blocked, no event,

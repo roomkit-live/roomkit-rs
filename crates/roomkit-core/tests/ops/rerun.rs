@@ -186,3 +186,68 @@ fn a_rerun_cut_before_its_set_is_planned_asks_no_agent() {
         )
     );
 }
+
+fn regenerate(sim: &Sim) -> Inbound {
+    Inbound::regenerate(sim.shared_config(), room_id(), None, 0)
+}
+
+// Python: tests/test_regenerate_off_lock.py::test_a_room_read_past_process_timeout_refuses_the_regeneration
+// (RMK-1443 F6): process_timeout bounds a regeneration's read of the room
+// under the lock, as `_plan_regeneration` bounds `_regenerate_target`: past
+// it the call is refused process_timeout, its operation regenerate, no agent
+// asked, and the lock released.
+#[test]
+fn a_regeneration_whose_room_read_passes_its_timeout_is_refused() {
+    let mut sim = room();
+    sim.config.process_timeout = Some(TIMEOUT);
+    sim.durations
+        .push(("load_context room_1", TIMEOUT + Duration::from_secs(1)));
+    let operation = regenerate(&sim);
+
+    let result = sim.run(operation).unwrap();
+
+    assert_eq!(
+        (result.blocked, result.reason.as_deref(), result.event),
+        (true, Some("process_timeout"), None)
+    );
+    let mut expected = FrameworkEvent::process_timeout(Some(room_id()), None, None, 10.0);
+    if let FrameworkEvent::ProcessTimeout { operation, .. } = &mut expected {
+        *operation = Some(RefusedOperation::Regenerate);
+    }
+    assert_eq!(regenerating(&sim), [&expected]);
+    assert_eq!(sim.traced("on_event"), Vec::<&str>::new());
+    assert_eq!(
+        sim.traced("load_context room_1 deadline passed").len()
+            + sim.traced("release room_1").len(),
+        2
+    );
+}
+
+// Python: core/mixins/regenerate.py::regenerate_response, its
+// collecting_release_failures (RMK-1443 G3): a regeneration whose room
+// closed while it waited in the lane is refused room_closed, carrying the
+// failed release of the lock its choice was made under as its error.
+#[test]
+fn a_regeneration_refused_in_the_lane_carries_its_lock_s_failed_release() {
+    let mut sim = room();
+    sim.status_at_lane_turn = Some(RoomStatus::Closed);
+    sim.release_fails = true;
+    let operation = regenerate(&sim);
+
+    let result = sim.run(operation).unwrap();
+
+    assert_eq!(
+        (
+            result.blocked,
+            result.reason.as_deref(),
+            result.error.map(|error| error.message),
+            sim.traced("on_event"),
+        ),
+        (
+            true,
+            Some("room_closed"),
+            Some("the lock's lease was lost".to_owned()),
+            Vec::<&str>::new()
+        )
+    );
+}
