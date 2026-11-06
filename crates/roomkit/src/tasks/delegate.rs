@@ -271,8 +271,9 @@ impl<S: ConversationStore> DelegateHandler<S> {
         calling_agent_id: &ChannelId,
         arguments: &Metadata,
     ) -> Result<Metadata, RoomKitError> {
+        // A closed kit still answers a repeat from the cache: `delegate`
+        // refuses it where Python's does.
         let kit = self.kit()?;
-        kit.inner.open()?;
         let task = task_of(arguments)?;
         let agent = match agent_of(arguments) {
             Ok(agent) => agent,
@@ -418,7 +419,6 @@ impl<S: ConversationStore> DelegateHandler<S> {
         definition: Option<Value>,
     ) -> Result<(), RoomKitError> {
         let kit = self.kit()?;
-        kit.inner.open()?;
         kit.takes_handoff(agent)?;
         kit.register_strategy_agents(std::slice::from_ref(agent))?;
         let channel = agent.channel_id();
@@ -635,19 +635,29 @@ async fn shares_an_agent<S: ConversationStore>(
     Ok(false)
 }
 
-/// The worker a call names: an id no channel can hold is named as a kit
-/// names a channel it does not hold, Python's `agent_id not in _channels`.
+/// The worker a call names: only a text names one, as the kit's channels
+/// are named, Python's `agent_id not in _channels`; anything else, and an id
+/// no channel can hold, is named as a kit names a channel it does not hold.
 fn agent_of(arguments: &Metadata) -> Result<ChannelId, RoomKitError> {
-    let named = match arguments.get("agent") {
-        None => String::new(),
-        Some(Value::String(agent)) => agent.clone(),
-        Some(other) => other.to_string(),
+    let (named, text) = match arguments.get("agent") {
+        None => (String::new(), true),
+        Some(Value::String(agent)) => (agent.clone(), true),
+        Some(other) => (other.to_string(), false),
     };
-    ChannelId::new(named.as_str()).map_err(|_| RoomKitError::ChannelNotRegistered {
+    if !text {
+        return Err(unregistered(&named));
+    }
+    ChannelId::new(named.as_str()).map_err(|_| unregistered(&named))
+}
+
+/// The refusal of a worker no channel of the kit is: Python's
+/// `ChannelNotRegisteredError`.
+fn unregistered(named: &str) -> RoomKitError {
+    RoomKitError::ChannelNotRegistered {
         // The id of no agent: what matters is the message, the id named.
         channel_id: ChannelId::system(),
         message: format!("Agent channel '{named}' not registered"),
-    })
+    }
 }
 
 /// The task a call names; `""` when it names none, as Python reads it.
