@@ -157,10 +157,11 @@ impl Default for CancelOptions {
 ///
 /// A call adopted by the room's admission work that made it, an off-lock
 /// hook's body or a parse (RFC §9.5.1 Reentrance), has its whole cascade
-/// run by that work, ahead of the event: its delivery set, its answers and
-/// their streams. A wait from that work, or from anywhere once it ran,
-/// returns with its delivery results, its answers and its turns' ends; a
-/// cancel cuts its turns until then.
+/// run by that work, its delivery set, its answers and their streams, ahead
+/// of the event's own passes: before the event commits when that work waits
+/// for it. A wait from that work, or from anywhere once it ran, returns with
+/// its delivery results, its answers and its turns' ends; a cancel cuts its
+/// turns until then.
 #[derive(Clone)]
 pub struct DeliveryHandle {
     shared: Arc<Shared>,
@@ -198,8 +199,8 @@ enum Following {
         finished: AbortHandle,
         record: Arc<Record>,
     },
-    /// The end of the delivery set of a call the room's work adopted, as
-    /// the adopting run reports it.
+    /// The end of the cascade of a call the room's work adopted, as the
+    /// adopting run reports it.
     Adopted(Completion),
     /// Nothing: the call ended at its decision.
     Nothing,
@@ -454,8 +455,8 @@ impl Shared {
         }
     }
 
-    /// The decided result, with what an adopted call's delivery set
-    /// reported and the answers its cascade delivered, `delivered`; with
+    /// The decided result, with what an adopted call's cascade reported,
+    /// its deliveries, its turns' ends and its answers, `delivered`; with
     /// none, the adopting run over without it, the delivery reads as one
     /// the kit's close dropped, when it closes.
     fn backfilled(&self, delivered: Option<ops::InboundResult>) -> ops::InboundResult {

@@ -44,8 +44,8 @@ use std::task::Poll;
 use roomkit_core::model::{ErrorRecord, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::{
     AnswerOf, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest,
-    InboundResult, KIT_CLOSED, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, StoreOutcome,
-    StoreRequest,
+    InboundResult, KIT_CLOSED, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled,
+    StoreOutcome, StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinHandle, JoinSet};

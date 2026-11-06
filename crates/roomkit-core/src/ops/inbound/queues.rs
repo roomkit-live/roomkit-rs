@@ -8,7 +8,10 @@
 //! may wait for this call's decision, as an agent's turn waits for its call
 //! into the room: the trigger's pass, queued behind the set of an entry its
 //! off-lock hook made, would never run. Passes run once the trigger's pass
-//! is queued, at their head; a set runs as soon as it is queued and the set
+//! is queued, at their head, but those of an entry the call's admission
+//! adopted, which run ahead of it with their streams, so that the entry's
+//! whole cascade is over before the event commits when that work waits for
+//! it (RFC §9.5.1 Reentrance); a set runs as soon as it is queued and the set
 //! before it is over, its record under the room's lock included (RFC §14.3),
 //! whatever the call is doing, the set of an entry its parse or its off-lock
 //! hook made included, so that nothing behind its place waits for the call's
@@ -299,10 +302,10 @@ impl Cascade {
             && self.rows.is_empty()
     }
 
-    /// Whether the cascade runs no pass nor set, and none is queued: a
-    /// stream is read only then (RFC §10.1 step 14).
-    fn is_between_streams(&self) -> bool {
-        self.passes.is_empty()
+    /// Whether the cascade runs no pass nor set, and none is queued that
+    /// `runs` lets start: a stream is read only then (RFC §10.1 step 14).
+    fn is_between_streams(&self, runs: impl Fn(Lineage) -> bool) -> bool {
+        self.passes.iter().all(|job| !runs(job.lineage()))
             && self.sets.is_empty()
             && self.pass.is_none()
             && self.delivery.is_none()
@@ -427,8 +430,9 @@ impl Machine {
         self.on_set(cx, outcome, &set);
     }
 
-    /// Starts the next pass, once the trigger's is queued, and the next set
-    /// while none of each runs, the call ending included; once both queues
+    /// Starts the next pass, once the trigger's is queued or for an adopted
+    /// entry, and the next set while none of each runs, the call ending
+    /// included; once both queues
     /// are empty and no adopted entry may still add to them, the cascade
     /// ends.
     pub(super) fn run_queues(&mut self, cx: &mut Cx<'_>) {
@@ -441,8 +445,12 @@ impl Machine {
             let passing = matches!(self.stage.current(), Stage::Cascade | Stage::Ending(_));
             let runs = |lineage: Lineage| passing || matches!(lineage, Lineage::Entry(_));
             if self.cascade.pass.is_none()
-                && self.cascade.passes.front().is_some_and(|job| runs(job.lineage()))
-                && let Some(mut job) = self.cascade.passes.pop_front()
+                && let Some(at) = self
+                    .cascade
+                    .passes
+                    .iter()
+                    .position(|job| runs(job.lineage()))
+                && let Some(mut job) = self.cascade.passes.remove(at)
             {
                 job.start(cx);
                 self.cascade.pass = Some(job);
@@ -457,10 +465,14 @@ impl Machine {
                 }
                 continue;
             }
-            if self.cascade.is_between_streams()
+            if self.cascade.is_between_streams(runs)
                 && self.adopted.is_idle()
-                && self.cascade.streams.front().is_some_and(|job| runs(job.lineage))
-                && let Some(job) = self.cascade.streams.pop_front()
+                && let Some(at) = self
+                    .cascade
+                    .streams
+                    .iter()
+                    .position(|job| runs(job.lineage))
+                && let Some(job) = self.cascade.streams.remove(at)
             {
                 self.start_stream(cx, job);
                 continue;

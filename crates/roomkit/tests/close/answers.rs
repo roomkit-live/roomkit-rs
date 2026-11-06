@@ -122,7 +122,10 @@ impl Channel for Stuck {
 #[tokio::test(start_paused = true)]
 async fn a_call_the_close_aborts_reads_the_answers_its_cascade_stored() {
     for needs_lock in [true, false] {
-        assert_eq!(answers_under_the_close(needs_lock).await, cut(["hello", "side"]));
+        assert_eq!(
+            answers_under_the_close(needs_lock).await,
+            cut(["hello", "side"])
+        );
     }
 }
 
@@ -134,7 +137,10 @@ async fn a_call_the_close_aborts_reads_the_answers_its_cascade_stored() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_call_the_close_aborts_reads_its_answers_on_threads() {
     for needs_lock in [true, false] {
-        assert_eq!(answers_under_the_close(needs_lock).await, cut(["hello", "side"]));
+        assert_eq!(
+            answers_under_the_close(needs_lock).await,
+            cut(["hello", "side"])
+        );
     }
 }
 

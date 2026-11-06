@@ -567,12 +567,12 @@ impl Machine {
     }
 
     /// The entry's message step 5 held (RFC §10.1 step 5): the challenge a
-    /// hook put to its sender is queued as an injected event of the
-    /// cascade, and its caller answered with the refusal, nothing of the
-    /// message stored.
+    /// hook put to its sender is queued as an injected event of the entry's
+    /// cascade, which runs ahead of the call's own passes, and its caller
+    /// answered with the refusal, nothing of the message stored.
     fn hold_entry(&mut self, cx: &mut Cx<'_>, adopted: &Adopted, held: Held, event: &RoomEvent) {
         let challenge: Vec<InjectedEvent> = held.challenge.into_iter().map(|c| *c).collect();
-        for job in self.injected(cx, challenge, event, Lineage::Call) {
+        for job in self.injected(cx, challenge, event, Lineage::Entry(adopted.id)) {
             self.cascade.queue(job);
         }
         let refused = InboundResult {
