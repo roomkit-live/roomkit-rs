@@ -139,6 +139,11 @@ impl Segments {
         self.text.push_str(delta);
     }
 
+    /// The text of the segment read so far.
+    pub(super) fn segment_text(&self) -> &str {
+        &self.text
+    }
+
     /// A call starts: the text before it, a segment of its own, then its
     /// start row.
     pub(super) fn start(&mut self, start: ToolCallContent) -> Vec<RoomEvent> {

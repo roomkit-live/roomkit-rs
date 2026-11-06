@@ -16,6 +16,7 @@ use roomkit_core::model::{
 };
 use roomkit_core::ops::{Inbound, NextTurn};
 use roomkit_core::rules::discussion::config::DiscussionConfig;
+use roomkit_core::rules::discussion::names::SilentToken;
 
 use super::RoomKit;
 use crate::InboundResult;
@@ -50,6 +51,12 @@ pub(crate) trait DiscussionSeam: Send + Sync + 'static {
 
     /// The speak queue as last read, in `organization_id`'s scope (rule 17).
     fn view(&self, _organization_id: Option<&str>) -> Option<SpeakQueue> {
+        None
+    }
+
+    /// The silence token a stream of `channel_id` is held back on, when it
+    /// is one of its agents (rule 13).
+    fn silence_for(&self, _channel_id: &ChannelId) -> Option<SilentToken> {
         None
     }
 

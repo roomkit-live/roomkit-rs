@@ -875,6 +875,13 @@ impl<S: ConversationStore> DiscussionSeam for DiscussionRoom<S> {
             .then(|| self.state().queue.view())
     }
 
+    fn silence_for(&self, channel_id: &ChannelId) -> Option<SilentToken> {
+        self.config
+            .agents
+            .contains(channel_id)
+            .then(|| self.silent.clone())
+    }
+
     fn in_scope(&self, organization_id: Option<&str>) -> bool {
         organization_id.is_none() || self.organization_id.as_deref() == organization_id
     }

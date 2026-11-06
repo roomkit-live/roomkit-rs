@@ -31,6 +31,7 @@ mod loop_end;
 mod passes;
 mod reader;
 mod segments;
+mod silence;
 
 use std::future::Future;
 use std::pin::Pin;

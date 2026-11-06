@@ -45,6 +45,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::segments::Segments;
+use super::silence::Hold;
 use super::{DeliveryStream, Pulled, ResponseItem, StreamItem, UsageMarker};
 use crate::RoomKit;
 use crate::channel::ChannelError;
@@ -187,6 +188,13 @@ pub(super) async fn read_kept<S: ConversationStore>(
         direction: EventDirection::Outbound,
         ..EventSource::new(responder.channel_id.clone(), responder.channel_type.clone())
     };
+    // Python's `_discussion_silence`: a stream of one of the agents of the
+    // discussion the room holds.
+    let hold = channel
+        .as_ref()
+        .and_then(|_| inner.discussions.get(&answers.room_id))
+        .and_then(|seam| seam.silence_for(&responder.channel_id))
+        .map(Hold::new);
     let live = kept.turn.record();
     let reader_unit = Unit::new();
     let mut producer = Producer {
@@ -205,6 +213,8 @@ pub(super) async fn read_kept<S: ConversationStore>(
         read_through: false,
         in_flight: None,
         kept_out: first_pass.then(String::new),
+        hold,
+        precounted: false,
     };
     let placeholder = producer.segments.placeholder();
     let reader_marks = Marks::current().with(reader_unit);
@@ -404,6 +414,13 @@ struct Producer {
     /// For a strategy's first pass, whose text is kept out of the room: the
     /// last text segment it wrote (Python's `_ToolRowsOnly`).
     kept_out: Option<String>,
+    /// For a discussion's agent, the start of each segment held back from
+    /// the target while it may become the silence token (RFC §19.7.5 rule
+    /// 13).
+    hold: Option<Hold>,
+    /// Whether the next text the reader is handed was counted as read when
+    /// it was held.
+    precounted: bool,
 }
 
 impl Producer {
@@ -631,7 +648,9 @@ impl Producer {
             return false;
         }
         self.segments.handed();
-        if let Some(text) = text {
+        if let Some(text) = text
+            && !std::mem::take(&mut self.precounted)
+        {
             self.segments.text(&text);
         }
         if ends {
@@ -649,6 +668,43 @@ impl Producer {
     /// Takes what a read gave: text for the reader, the rows a call's start
     /// or end writes, the turn's record, the response's end or failure.
     async fn take(&mut self, read: Read) {
+        let marks_a_segment = matches!(
+            read,
+            None | Some(Ok(RemoteItem::SegmentBreak
+                | RemoteItem::Item(
+                    ResponseItem::ToolCallStart(_)
+                        | ResponseItem::ToolCallEnd(_)
+                        | ResponseItem::LoopEnd(_)
+                        | ResponseItem::SegmentBreak
+                )))
+        );
+        if marks_a_segment {
+            self.end_held();
+        }
+        self.take_read(read).await;
+        if marks_a_segment
+            && self.segments.segment_text().is_empty()
+            && let Some(hold) = self.hold.as_mut()
+        {
+            hold.next_segment();
+        }
+    }
+
+    /// The held start of a segment the read ends, handed to the target
+    /// unless it is the silence token (Python's `_end_held`).
+    fn end_held(&mut self) {
+        let Some(hold) = self.hold.as_mut() else {
+            return;
+        };
+        let held = hold.end(self.segments.segment_text());
+        if let Some(held) = held.filter(|_| self.reads == Reads::Target) {
+            self.ready.push_back(Ok(StreamItem::Text(held)));
+            self.precounted = true;
+        }
+    }
+
+    /// [`take`](Self::take), past what holds a discussion's silence back.
+    async fn take_read(&mut self, read: Read) {
         match read {
             None => {
                 if let Some(row) = self.segments.last_text(false) {
@@ -656,9 +712,21 @@ impl Producer {
                 }
                 self.over = Some(Over::End);
             }
-            // The target reads the text as it comes; nobody else does.
+            // The target reads the text as it comes; nobody else does. A
+            // discussion's agent's segment is read as it comes and handed
+            // once it cannot become the silence token.
             Some(Ok(RemoteItem::Item(ResponseItem::Text(delta)))) => match self.reads {
-                Reads::Target => self.ready.push_back(Ok(StreamItem::Text(delta))),
+                Reads::Target => match self.hold.as_mut().filter(|hold| !hold.is_released()) {
+                    Some(hold) => {
+                        self.segments.handed();
+                        self.segments.text(&delta);
+                        if let Some(start) = hold.release(&delta, self.segments.segment_text()) {
+                            self.ready.push_back(Ok(StreamItem::Text(start)));
+                            self.precounted = true;
+                        }
+                    }
+                    None => self.ready.push_back(Ok(StreamItem::Text(delta))),
+                },
                 // Nobody is handed the text: the turn began all the same, and
                 // a cut ends it `cancelled` (RFC §6.4).
                 Reads::Nobody | Reads::Lost => {
