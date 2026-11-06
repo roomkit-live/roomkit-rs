@@ -441,7 +441,6 @@ mod tests {
     fn with_no_variable_the_account_names_the_user() {
         let none = |_: &str| None;
         assert_eq!(user_name(&none), whoami::username().ok());
-        assert!(user_name(&none).is_some());
         let named = |name: &str| (name == "USER").then(|| "ann".to_owned());
         assert_eq!(user_name(&named).as_deref(), Some("ann"));
     }

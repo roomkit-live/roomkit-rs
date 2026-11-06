@@ -72,7 +72,8 @@ fn others_can_access(_: &std::fs::Metadata) -> bool {
 /// at the colons no backslash escapes, at most five, the escapes kept as
 /// asyncpg keeps them (HITL 8142aaf2).
 fn entries(text: &str) -> Vec<Vec<String>> {
-    text.lines()
+    // Python's universal newlines: `\r` ends a line too.
+    text.split(['\n', '\r'])
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .map(|line| {
@@ -174,10 +175,11 @@ mod tests {
     #[test]
     fn a_line_is_cut_at_its_unescaped_colons() {
         assert_eq!(
-            entries("  # a comment\n\nh:5432:db:u:pa:ss  \r\nh\\:x:1:\\\\:u:p\n"),
+            entries("  # a comment\n\nh:5432:db:u:pa:ss  \r\nh\\:x:1:\\\\:u:p\ro:1:d:u:q\n"),
             [
                 vec!["h", "5432", "db", "u", "pa:ss"],
                 vec!["h\\:x", "1", "\\\\", "u", "p"],
+                vec!["o", "1", "d", "u", "q"],
             ]
         );
     }
