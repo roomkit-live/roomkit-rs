@@ -57,6 +57,12 @@ pub(crate) fn request(config: &OpenAiConfig, request: &Request) -> Result<Value,
     };
     let mut body = json!({ "model": config.model, "input": input, "stream": true, "store": false,
         "include": ["reasoning.encrypted_content"], "tools": tools });
+    // A response schema constrains the answer's text strictly, as OpenAI
+    // documents it for this API (RFC §6.7, HITL 78f2cb96).
+    if let Some(schema) = &request.response_schema {
+        body["text"] = json!({ "format": {
+            "type": "json_schema", "name": "response", "schema": schema, "strict": true } });
+    }
     // The reasoning effort is the provider's to write (`OpenAiAiProvider::body`).
     if let Some(fields) = body.as_object_mut()
         && let Some(prompt) = &request.system_prompt
@@ -123,12 +129,13 @@ pub(super) fn response(value: &Value, secret: &str) -> Result<Whole, OpenAiError
         .and_then(Value::as_array)
         .ok_or_else(|| malformed("Responses answer has no output array"))?;
     let mut text = String::new();
+    let mut refusal = String::new();
     let mut thinking = String::new();
     let mut calls = Vec::new();
     let mut replay = Vec::new();
     for item in output {
         match item.get("type").and_then(Value::as_str) {
-            Some("message") => message_text(item, &mut text)?,
+            Some("message") => message_text(item, &mut text, &mut refusal)?,
             Some("function_call") => {
                 let name = item
                     .get("name")
@@ -178,6 +185,11 @@ pub(super) fn response(value: &Value, secret: &str) -> Result<Whole, OpenAiError
     if let Some(model) = value.get("model").and_then(Value::as_str) {
         done.metadata.insert("model".into(), model.into());
     }
+    // A refusal stays the answer's text, and the end names it, as Chat's
+    // `refusal` does: a constrained answer then fails `refusal`.
+    if !refusal.is_empty() {
+        done.metadata.insert("refusal".into(), refusal.into());
+    }
     done.metadata.insert(OUTPUT.into(), replay.into());
     let thinking = Some(thinking).filter(|thinking| !thinking.is_empty());
     Ok(Whole::new(text, calls, done).with_thinking(thinking))
@@ -196,7 +208,13 @@ fn reasoning_text(item: &Value, thinking: &mut String) {
     }
 }
 
-pub(super) fn message_text(message: &Value, text: &mut String) -> Result<(), OpenAiError> {
+/// Adds to `text` what an output `message` says, its refusals included,
+/// which `refusal` also gathers.
+pub(super) fn message_text(
+    message: &Value,
+    text: &mut String,
+    refusal: &mut String,
+) -> Result<(), OpenAiError> {
     if message.get("role").and_then(Value::as_str) != Some("assistant") {
         return Err(malformed("Responses output message has an invalid role"));
     }
@@ -210,11 +228,14 @@ pub(super) fn message_text(message: &Value, text: &mut String) -> Result<(), Ope
             Some("refusal") => "refusal",
             _ => return Err(malformed("unsupported Responses output content")),
         };
-        text.push_str(
-            part.get(field)
-                .and_then(Value::as_str)
-                .ok_or_else(|| malformed("Responses text part has no text"))?,
-        );
+        let said = part
+            .get(field)
+            .and_then(Value::as_str)
+            .ok_or_else(|| malformed("Responses text part has no text"))?;
+        text.push_str(said);
+        if field == "refusal" {
+            refusal.push_str(said);
+        }
     }
     Ok(())
 }

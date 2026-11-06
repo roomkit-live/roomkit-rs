@@ -72,6 +72,7 @@ fn replay(input: &mut Vec<Value>, message: &Message, output: &Value) -> Result<(
         .as_array()
         .ok_or_else(|| malformed("invalid Responses output metadata"))?;
     let mut text = String::new();
+    let mut refusal = String::new();
     let mut calls = message.tool_calls.iter();
     for item in items {
         match item.get("type").and_then(Value::as_str) {
@@ -80,7 +81,7 @@ fn replay(input: &mut Vec<Value>, message: &Message, output: &Value) -> Result<(
                 input.push(item.clone());
             }
             Some("message") => {
-                message_text(item, &mut text)?;
+                message_text(item, &mut text, &mut refusal)?;
                 input.push(item.clone());
             }
             Some("function_call") => {

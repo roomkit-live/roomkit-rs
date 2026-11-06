@@ -5,6 +5,8 @@
 //! sends the schema as a strict `json_schema` response format and checks
 //! the document the model wrote before the room receives it: an answer that
 //! is no such document fails the turn, and nothing of it is stored or sent.
+//! The same agent on OpenAI's Responses API carries the schema as its
+//! `text.format`, and checks the answer the same way.
 //!
 //! The model is a local fake of the OpenAI wire, so it needs no network and
 //! no key. With `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `OPENAI_MODEL` set,
@@ -23,6 +25,7 @@ use std::process::ExitCode;
 use roomkit::model::{ChannelId, InboundMessage, Metadata, RoomId, TextContent};
 use roomkit::{AttachChannelOptions, Channel, CreateRoomOptions, ProcessInboundOptions, RoomKit};
 use roomkit_ai::{AiChannel, AiChannelOptions};
+use roomkit_openai::{OpenAiAiProvider, OpenAiApi, OpenAiConfig};
 use serde_json::{Map, Value, json};
 
 use shared::text_of;
@@ -144,7 +147,61 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         checks.expect("nothing of the prose is stored", stored == [TRIAGED]);
     }
     kit.close().await?;
+    on_the_responses_api(&mut checks).await?;
     Ok(checks.finish())
+}
+
+/// The same triage on OpenAI's Responses API: its schema rides the request's
+/// `text.format`, a document is stored, prose fails the turn.
+async fn on_the_responses_api(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
+    let endpoint = OpenAiEndpoint::from_env(&[TRIAGED, PROSE]).await?;
+    let provider = OpenAiAiProvider::new(OpenAiConfig {
+        api: OpenAiApi::Responses,
+        base_url: Some(endpoint.base_url().to_owned()),
+        ..OpenAiConfig::new(endpoint.api_key(), endpoint.model())
+    })?;
+    let options = AiChannelOptions {
+        system_prompt: Some(SYSTEM_PROMPT.to_owned()),
+        response_schema: Some(triage_schema()),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(ChannelId::new("triage")?, provider, options)?;
+    let agent_id = agent.channel_id();
+    let kit = shared::kit();
+    let sms = SmsNumber::new(ChannelId::new("sms")?);
+    kit.register_channel(sms.clone())?;
+    kit.register_channel(agent)?;
+    let support = RoomId::new("support")?;
+    open(&kit, &support, (sms.id(), &agent_id), Metadata::new()).await?;
+    let triaged = answer(&kit, &sms, &support, &agent_id).await?;
+    println!("On the Responses API, the support room stores: {triaged:?}");
+    let refused = kit
+        .process_inbound(said(&sms, MESSAGE), into(&support))
+        .await?;
+    let failed = refused.error.map(|error| error.message);
+    println!("On the Responses API, a prose answer fails the turn: {failed:?}");
+    if let Some(fake) = endpoint.fake() {
+        let formats: Vec<Option<Value>> = fake
+            .requests()
+            .iter()
+            .map(|request| request.pointer("/text/format/schema").cloned())
+            .collect();
+        let schema = Some(Value::Object(triage_schema()));
+        checks.expect(
+            "each Responses request carries the schema as its text.format",
+            formats == [schema.clone(), schema],
+        );
+        checks.expect(
+            "the Responses answer's document is stored",
+            triaged == [TRIAGED],
+        );
+        checks.expect(
+            "the Responses prose fails the turn as no JSON document",
+            failed.is_some_and(|message| message.contains("the answer is not a JSON document")),
+        );
+    }
+    kit.close().await?;
+    Ok(())
 }
 
 /// Creates `room` and attaches the SMS number and the agent, the agent's

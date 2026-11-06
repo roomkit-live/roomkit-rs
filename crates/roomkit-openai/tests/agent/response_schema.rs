@@ -318,19 +318,178 @@ async fn a_server_behind_base_url_refuses_the_pair_before_the_call() {
     assert_eq!(fake.requests().len(), 0, "no request is sent");
 }
 
-// The Responses API carries no response schema (HITL 9090e5f5): one is
-// refused before any request, whatever the configuration says.
-#[tokio::test]
-async fn the_responses_api_refuses_a_schema_before_the_call() {
-    let (provider, fake) = provider(vec![Reply::completion("{}")], |config| OpenAiConfig {
-        api: OpenAiApi::Responses,
-        supports_response_schema: Some(true),
-        ..config
+/// A Responses stream ending `status`, its message saying `parts` (each an
+/// `output_text` or a `refusal`), cut for `incomplete` when it gives why.
+fn responded(parts: &[(&str, &str)], status: &str, incomplete: Option<&str>) -> Reply {
+    let content: Vec<Value> = parts
+        .iter()
+        .map(|(kind, said)| match *kind {
+            "refusal" => json!({ "type": "refusal", "refusal": said }),
+            _ => json!({ "type": "output_text", "text": said, "annotations": [] }),
+        })
+        .collect();
+    let mut response = json!({
+        "id": "resp_1", "status": status, "model": "fake-model",
+        "output": [{ "type": "message", "role": "assistant", "content": content }],
+    });
+    if let Some(reason) = incomplete {
+        response["incomplete_details"] = json!({ "reason": reason });
+    }
+    Reply::events(&[json!({ "type": format!("response.{status}"), "response": response })])
+}
+
+/// The provider on the Responses API against a fake answering `replies`,
+/// its configuration adjusted by `adjust`.
+async fn on_responses(
+    replies: Vec<Reply>,
+    adjust: impl FnOnce(OpenAiConfig) -> OpenAiConfig,
+) -> (OpenAiAiProvider, FakeOpenAi) {
+    provider(replies, |config| {
+        adjust(OpenAiConfig {
+            api: OpenAiApi::Responses,
+            ..config
+        })
     })
+    .await
+}
+
+// The Responses API carries a response schema as Chat does (HITL 78f2cb96):
+// strictly, in its `text.format`, the answer checked before its end.
+#[tokio::test]
+async fn the_responses_api_carries_the_schema_as_its_text_format() {
+    let replies = vec![responded(
+        &[("text", r#"{"label": "yes"}"#)],
+        "completed",
+        None,
+    )];
+    let (provider, fake) = on_responses(replies, |config| config).await;
+    let response = provider.generate(&asked(Vec::new())).await.unwrap();
+    assert_eq!(response.content, r#"{"label": "yes"}"#);
+    assert_eq!(
+        fake.requests()[0].body["text"],
+        json!({ "format": {
+            "type": "json_schema", "name": "response", "schema": verdict(), "strict": true } })
+    );
+    let context = AiContext {
+        response_schema: None,
+        ..asked(Vec::new())
+    };
+    let (provider, fake) = on_responses(
+        vec![responded(&[("text", "Hi")], "completed", None)],
+        |config| config,
+    )
     .await;
-    assert!(!provider.supports_response_schema());
-    let context = asked(Vec::new());
-    let (_, error) = drain(provider.generate_structured_stream(&context)).await;
+    provider.generate(&context).await.unwrap();
+    assert_eq!(fake.requests()[0].body.get("text"), None);
+}
+
+// The Responses API fails an answer without its document as Chat does
+// (HITL 78f2cb96): a refusal part, an answer cut for its output cap or by a
+// content filter, prose, streamed or whole.
+#[tokio::test]
+async fn a_responses_answer_without_its_document_fails_as_on_chat() {
+    let cases = [
+        (
+            responded(&[("refusal", "I can't help with that.")], "completed", None),
+            ResponseSchemaFailure::Refusal,
+        ),
+        (
+            responded(
+                &[("text", r#"{"label": "y"#)],
+                "incomplete",
+                Some("max_output_tokens"),
+            ),
+            ResponseSchemaFailure::Truncated,
+        ),
+        (
+            responded(&[("text", "")], "incomplete", Some("content_filter")),
+            ResponseSchemaFailure::Refusal,
+        ),
+        (
+            responded(&[("text", "Yes, it is.")], "completed", None),
+            ResponseSchemaFailure::InvalidJson,
+        ),
+    ];
+    for (reply, expected) in cases {
+        let (provider, _fake) = on_responses(vec![reply.clone(), reply], |config| config).await;
+        let error = provider.generate(&asked(Vec::new())).await.unwrap_err();
+        assert_eq!(reason(&error), Some(expected), "{error}");
+        let (events, error) = drain(provider.generate_structured_stream(&asked(Vec::new()))).await;
+        assert_eq!(reason(&error.unwrap()), Some(expected));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Done(_))),
+            "the failure replaces the end"
+        );
+    }
+}
+
+// Without a schema, a refusal on the Responses API stays the answer's text,
+// and its end names it, as on Chat.
+#[tokio::test]
+async fn a_responses_refusal_without_a_schema_is_text_its_end_naming_it() {
+    let reply = responded(&[("refusal", "Cannot help.")], "completed", None);
+    let (provider, _fake) = on_responses(vec![reply], |config| config).await;
+    let context = AiContext {
+        response_schema: None,
+        ..asked(Vec::new())
+    };
+    let (events, error) = drain(provider.generate_structured_stream(&context)).await;
+    assert!(error.is_none(), "{error:?}");
+    let refusal = events.iter().find_map(|event| match event {
+        StreamEvent::Done(done) => done.metadata.get("refusal").cloned(),
+        _ => None,
+    });
+    assert_eq!(
+        (text_of(&events), refusal),
+        ("Cannot help.".to_owned(), Some(json!("Cannot help.")))
+    );
+}
+
+// The Responses API takes Chat's defaults (HITL 78f2cb96): a schema by
+// default whatever the URL, beside tools only on OpenAI's own endpoint, the
+// configuration deciding when it says.
+#[tokio::test]
+async fn the_responses_api_takes_chat_s_defaults() {
+    let read = |stated: Option<bool>, with_tools: Option<bool>| {
+        let provider = OpenAiAiProvider::new(OpenAiConfig {
+            api: OpenAiApi::Responses,
+            base_url: Some("http://127.0.0.1:9/v1".to_owned()),
+            supports_response_schema: stated,
+            supports_response_schema_with_tools: with_tools,
+            ..OpenAiConfig::new("sk-test", "fake-model")
+        })
+        .unwrap();
+        (
+            provider.supports_response_schema(),
+            provider.supports_response_schema_with_tools(),
+        )
+    };
+    let official = OpenAiAiProvider::new(OpenAiConfig {
+        api: OpenAiApi::Responses,
+        ..OpenAiConfig::new("sk-test", "gpt-6-luna")
+    })
+    .unwrap();
+    assert_eq!(
+        [
+            read(None, None),
+            read(Some(false), None),
+            read(None, Some(true)),
+            (
+                official.supports_response_schema(),
+                official.supports_response_schema_with_tools()
+            ),
+        ],
+        [(true, false), (false, false), (true, true), (true, true)]
+    );
+    // Beside tools behind a base URL, refused before any request.
+    let (provider, fake) = on_responses(
+        vec![responded(&[("text", "{}")], "completed", None)],
+        |config| config,
+    )
+    .await;
+    let (_, error) = drain(provider.generate_structured_stream(&asked(vec![lookup()]))).await;
     assert_eq!(
         reason(&error.unwrap()),
         Some(ResponseSchemaFailure::Unsupported)

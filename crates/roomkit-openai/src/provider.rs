@@ -517,11 +517,9 @@ impl AiProvider for OpenAiAiProvider {
     /// default (Python's `supports_response_schema`): a server behind a
     /// base URL decides for itself whether it applies a `json_schema`
     /// response format, which the host that knows it states. The Responses
-    /// API carries none (HITL 9090e5f5).
+    /// API takes the same defaults, its schema as its `text.format` (HITL
+    /// 78f2cb96).
     fn supports_response_schema(&self) -> bool {
-        if self.config.api == OpenAiApi::Responses {
-            return false;
-        }
         self.config
             .supports_response_schema
             .unwrap_or_else(|| self.vendor.takes_response_schema())
@@ -529,11 +527,9 @@ impl AiProvider for OpenAiAiProvider {
 
     /// The configuration's answer when it gives one, else whether a schema
     /// is taken on OpenAI's own endpoint, which takes one beside function
-    /// tools (Python's `supports_response_schema_with_tools`).
+    /// tools (Python's `supports_response_schema_with_tools`), on either
+    /// API.
     fn supports_response_schema_with_tools(&self) -> bool {
-        if self.config.api == OpenAiApi::Responses {
-            return false;
-        }
         self.config
             .supports_response_schema_with_tools
             .unwrap_or_else(|| {

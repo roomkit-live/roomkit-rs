@@ -270,9 +270,36 @@ impl From<&str> for Reply {
     }
 }
 
-/// A local HTTP server speaking the Chat Completions wire: it answers each
-/// request with the next of its replies, the last one again once they are
-/// spent, and keeps the body of each. Stopped when dropped.
+impl Reply {
+    /// The reply as the Responses API streams it: its text word by word,
+    /// then the terminal response, its message and its calls (a request
+    /// with an `input` is one of that API's).
+    fn response_events(&self) -> Vec<Value> {
+        let mut events: Vec<Value> = self
+            .words()
+            .into_iter()
+            .map(|word| json!({ "type": "response.output_text.delta", "delta": word }))
+            .collect();
+        let mut output = Vec::new();
+        if !self.text.is_empty() {
+            output.push(json!({ "type": "message", "role": "assistant",
+                "content": [{ "type": "output_text", "text": self.text, "annotations": [] }] }));
+        }
+        output.extend(self.calls.iter().map(|(id, name, arguments)| {
+            json!({ "type": "function_call", "call_id": id, "name": name,
+                "arguments": arguments, "status": "completed" })
+        }));
+        events.push(json!({ "type": "response.completed", "response": {
+            "id": "resp-fake", "status": "completed", "model": "fake-model", "output": output,
+            "usage": { "input_tokens": 40, "output_tokens": 10 } } }));
+        events
+    }
+}
+
+/// A local HTTP server speaking the Chat Completions wire, and the Responses
+/// API's stream to a request of that API: it answers each request with the
+/// next of its replies, the last one again once they are spent, and keeps
+/// the body of each. Stopped when dropped.
 #[derive(Debug)]
 pub struct FakeOpenAi {
     base_url: String,
@@ -322,6 +349,7 @@ async fn serve(listener: TcpListener, replies: Vec<Reply>, requests: Log<Value>)
         };
         let request: Value = serde_json::from_slice(&body).unwrap_or_default();
         let streams = request.get("stream") == Some(&Value::Bool(true));
+        let responses = request.get("input").is_some();
         requests.push(request);
         let reply = reply.unwrap_or_else(|| Reply::from(""));
         if let Some(status) = reply.refuses {
@@ -339,7 +367,7 @@ async fn serve(listener: TcpListener, replies: Vec<Reply>, requests: Log<Value>)
         // the stream is dropped.
         if streams {
             // One at a time, as a model answers: the next request waits.
-            let _sent = send_events(&mut stream, &reply).await;
+            let _sent = send_events(&mut stream, &reply, responses).await;
             continue;
         }
         let completion = reply.completion(next).to_string();
@@ -353,11 +381,17 @@ async fn serve(listener: TcpListener, replies: Vec<Reply>, requests: Log<Value>)
 }
 
 /// Sends `reply` as a stream of server-sent events, its words `pause`
-/// apart, until it is over or the client stops reading.
-async fn send_events(stream: &mut TcpStream, reply: &Reply) -> io::Result<()> {
+/// apart, until it is over or the client stops reading: Chat Completions'
+/// chunks, or the Responses API's events when `responses`.
+async fn send_events(stream: &mut TcpStream, reply: &Reply, responses: bool) -> io::Result<()> {
     let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
     stream.write_all(head.as_bytes()).await?;
-    for (position, chunk) in reply.chunks().iter().enumerate() {
+    let chunks = if responses {
+        reply.response_events()
+    } else {
+        reply.chunks()
+    };
+    for (position, chunk) in chunks.iter().enumerate() {
         if position > 0 && !reply.pause.is_zero() && position < reply.words().len() {
             tokio::time::sleep(reply.pause).await;
         }
