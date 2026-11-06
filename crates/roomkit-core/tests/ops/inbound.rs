@@ -234,7 +234,7 @@ mod an_allowed_message {
     }
 
     /// RFC §10.1 steps 15 and 16: an event's tasks are stored, and their
-    /// observers started, before its AFTER_BROADCAST hooks, which read them
+    /// observers started, before its `AFTER_BROADCAST` hooks, which read them
     /// stored (Python's `_post_plan_effects`).
     #[test]
     fn fires_on_task_created_for_each_task_once_stored_before_after_broadcast() {
@@ -951,7 +951,7 @@ mod metadata_updates {
     }
 
     #[test]
-    fn are_written_on_the_room_once_the_cascade_is_over() {
+    fn are_written_on_the_room_once_their_set_is_over() {
         let mut sim = tagging_room();
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
@@ -991,10 +991,10 @@ mod metadata_updates {
         assert_eq!((sim.room.event_count, sim.room.latest_index), (1, Some(0)));
     }
 
-    /// RFC §10.1 step 15: a cascade that collected a task and a metadata
-    /// update writes both once it is over, the task first, each answered
-    /// on its own; the call ends once both are, the task stored and the
-    /// room tagged.
+    /// RFC §10.1 step 15: a delivery set that collected a task and a
+    /// metadata update writes both once it is over, the task first, each
+    /// answered on its own; the call ends once both are, the task stored
+    /// and the room tagged.
     #[test]
     fn are_written_after_the_tasks_each_write_answered_on_its_own() {
         let mut sim = Sim::new();

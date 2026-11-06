@@ -584,6 +584,7 @@ impl Machine {
                 RecordNote::NotAsked {
                     agent: Box::new(binding),
                     trigger: answered,
+                    observed: false,
                     limit: max_depth,
                 },
             ));

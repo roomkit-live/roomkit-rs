@@ -15,7 +15,8 @@
 //! - the trigger's pass over, the call releases the admission ticket it
 //!   holds (`ReleasingTicket`) and goes back to its cascade, as it releases
 //!   it first when it ends holding it;
-//! - once nothing is queued or running, step 15's writes (`Persisting`);
+//! - once nothing is queued or running, step 15's write of what no delivery
+//!   set stored, a record's side effects (`Persisting`);
 //! - the call ends from any stage: it waits for the entries it adopted and
 //!   its delivery sets (`Ending`), then is over (`Done`).
 //!
@@ -143,7 +144,7 @@ fn follows(from: StageName, to: StageName) -> bool {
         // releases it first.
         Checking => matches!(to, Checking | Cascade | ReleasingTicket | Ending | Done),
         // The trigger's pass over, its ticket is released; once nothing is
-        // queued or running, step 15's writes.
+        // queued or running, step 15's write of what no set stored.
         Cascade => matches!(to, ReleasingTicket | Persisting | Ending | Done),
         ReleasingTicket => matches!(to, Cascade | Ending | Done),
         Persisting => matches!(to, Persisting | Ending | Done),

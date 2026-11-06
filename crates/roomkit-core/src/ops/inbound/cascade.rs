@@ -323,6 +323,7 @@ impl Machine {
         let RecordNote::NotAsked {
             agent,
             trigger,
+            observed,
             limit,
         } = note
         else {
@@ -335,12 +336,18 @@ impl Machine {
         let RecordResult::Committed(record) = report.result else {
             return;
         };
-        let id = cx.env.new_observation_id();
-        let now = cx.env.now();
-        self.side_effects
-            .observe(chain_depth::not_asked_observation(
-                id, &trigger, &agent, limit, now,
-            ));
+        // A set's record has its observation stored with the set's side
+        // effects, before its event's AFTER_BROADCAST hooks
+        // (`DeliverySet::observe_not_asked`); a discussion's stopped turn's
+        // is stored at the cascade's end.
+        if !observed {
+            let id = cx.env.new_observation_id();
+            let now = cx.env.now();
+            self.side_effects
+                .observe(chain_depth::not_asked_observation(
+                    id, &trigger, &agent, limit, now,
+                ));
+        }
         report::chain_depth_exceeded(cx, &record, &agent, limit);
     }
 
@@ -421,6 +428,7 @@ impl Machine {
                 RecordNote::NotAsked {
                     agent: Box::new(agent),
                     trigger: Box::new(event.clone()),
+                    observed: true,
                     limit: set.depth_limit().unwrap_or(cx.config.max_chain_depth),
                 },
             ));

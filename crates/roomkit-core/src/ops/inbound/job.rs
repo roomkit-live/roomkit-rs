@@ -40,6 +40,9 @@ pub(super) enum RecordNote {
     NotAsked {
         agent: Box<ChannelBinding>,
         trigger: Box<RoomEvent>,
+        /// Whether its observation is stored already: a delivery set's,
+        /// with the set's own side effects (RFC §10.1 step 15).
+        observed: bool,
         /// The chain-depth limit it reached: the kit's, or a discussion's
         /// own for its turn (RFC §19.7.5).
         limit: u32,

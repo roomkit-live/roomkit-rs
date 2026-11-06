@@ -34,7 +34,7 @@ use crate::ops::protocol::{
     HoldRequest, KIT_CLOSED, Notice, Outcome, Raised, SpanNote, StoreRequest, TURN_CUT,
 };
 use crate::ops::{Cx, Progress, RefusedOperation};
-use crate::rules::chain_depth::ReentryBudget;
+use crate::rules::chain_depth::{self, ReentryBudget};
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions::{self, DeliveryPlan};
 use crate::rules::transcoding;
@@ -628,6 +628,7 @@ impl DeliverySet {
             return Progress::Done(std::mem::take(&mut self.outcome));
         }
         self.effects = SetEffects::of_hooks(tasks, observations);
+        self.observe_not_asked(cx);
         let own = (
             std::mem::take(&mut self.outcome.tasks),
             std::mem::take(&mut self.outcome.observations),
@@ -636,6 +637,21 @@ impl DeliverySet {
         match self.effects.write(cx, &self.event.room_id, own, metadata) {
             Progress::Waiting => Progress::Waiting,
             Progress::Done(written) => self.written(written),
+        }
+    }
+
+    /// Keeps, among the set's observations, one for each agent it did not
+    /// ask at the chain-depth limit, which the set stores with its own, as
+    /// Python's router adds it to the set's (`_depth_limit_record`, RFC
+    /// §8.3): its event's `AFTER_BROADCAST` hooks read it stored.
+    fn observe_not_asked(&mut self, cx: &mut Cx<'_>) {
+        let limit = self.depth_limit.unwrap_or(cx.config.max_chain_depth);
+        let now = cx.env.now();
+        for agent in &self.outcome.not_asked {
+            let id = cx.env.new_observation_id();
+            let observation =
+                chain_depth::not_asked_observation(id, &self.event, agent, limit, now);
+            self.outcome.observations.push(observation);
         }
     }
 

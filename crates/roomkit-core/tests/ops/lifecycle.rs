@@ -1371,8 +1371,11 @@ mod the_status_gate {
     }
 
     /// RFC §8.3: the record of an agent not asked at the chain-depth limit
-    /// goes through the gate too, and a closed room stores nothing; the
+    /// goes through the gate too, and a closed room stores no record; the
     /// refusal is reported as the framework's own re-injection (gap G-043).
+    /// The observation of the agent not asked is its set's, stored once the
+    /// set is over, before the record's pass (RFC §10.1 step 15, Python's
+    /// `_depth_limit_record`).
     #[test]
     fn refuses_a_record_whose_room_s_close_fell_due_during_the_delivery() {
         let mut sim = timed_room();
@@ -1404,7 +1407,7 @@ mod the_status_gate {
                 .map(str::to_owned)
                 .to_vec(),
                 [
-                    "leave lane room_1 evt_1",
+                    "persist 0 tasks, 1 observations",
                     "lock room_1",
                     "load_context room_1",
                     "update room room_1 Closed",
