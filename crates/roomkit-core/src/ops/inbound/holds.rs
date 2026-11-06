@@ -73,11 +73,12 @@ impl Machine {
     }
 
     /// [`end`](Self::end) for a call past its deadline (RFC §13.6): only the
-    /// call's own cascade stops. An entry its admission adopted runs its
-    /// cascade to its end, the rows of its stream committed, and the call's
-    /// caller is answered once the ticket is released, without waiting for
-    /// it, as the Python implementation's adopted call runs a cascade of its
-    /// own (RFC §9.5.1 Reentrance).
+    /// call's own cascade stops. An entry its admission adopted that
+    /// committed runs its cascade to its end, the rows of its stream
+    /// committed, and the call's caller is answered once the ticket is
+    /// released, without waiting for it, as the Python implementation's
+    /// adopted call runs a cascade of its own (RFC §9.5.1 Reentrance); one
+    /// not committed yet ends with the same deadline.
     pub(super) fn end_past_the_deadline(
         &mut self,
         cx: &mut Cx<'_>,

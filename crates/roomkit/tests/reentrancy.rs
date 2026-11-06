@@ -2163,9 +2163,14 @@ async fn a_call_dropped_after_its_hook_s_event_committed_delivers_that_event() {
     );
 }
 
-/// RFC §13.6: the call's lock request, held back while an entry its
-/// off-lock hook made holds the lock, is given up on once the call's
-/// `process_timeout` passed meanwhile, not granted.
+/// RFC §13.6, §9.5.1 Reentrance: the call's lock request, held back while
+/// an entry its off-lock hook made holds the lock, is given up on once the
+/// call's `process_timeout` passed meanwhile, not granted; the entry, not
+/// committed by then, ends with that deadline, nothing of it stored, and its
+/// caller, a task the hook started and never awaited, is refused.
+/// Python: `tests/test_reentrance.py`, the test of the same name, where that
+/// adopted call's own `process_timeout` is reported too (two
+/// `process_timeout` events, one here).
 #[tokio::test]
 async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
     let (kit, _) = room_with(RoomKitOptions {
@@ -2173,6 +2178,7 @@ async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
         ..Default::default()
     })
     .await;
+    let tap = EventTap::on(&kit, &["process_timeout"]);
     kit.hook(
         HookTrigger::BeforeBroadcast,
         |event: RoomEvent, _| async move {
@@ -2185,14 +2191,17 @@ async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
     )
     .unwrap();
     let hook_kit = kit.clone();
+    let started = Arc::new(Mutex::new(Vec::new()));
+    let tasks = Arc::clone(&started);
     kit.hook(
         HookTrigger::BeforeBroadcast,
         move |event: RoomEvent, _| {
             let kit = hook_kit.clone();
+            let tasks = Arc::clone(&tasks);
             async move {
                 if event.source.channel_id == channel("sms") {
-                    // Fired and not awaited: the entry runs beside the check.
-                    drop(tokio::spawn(keep_context(async move {
+                    // Started and never awaited: the entry runs beside the check.
+                    let task = tokio::spawn(keep_context(async move {
                         kit.send_event(
                             &room_id(),
                             &channel("ws"),
@@ -2200,7 +2209,8 @@ async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
                             SendEventOptions::default(),
                         )
                         .await
-                    })));
+                    }));
+                    tasks.lock().unwrap().push(task);
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
                 Ok(HookResult::allow(AllowOptions::default()))
@@ -2210,16 +2220,24 @@ async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
     )
     .unwrap();
     let result = send(&kit, "hello").await.unwrap();
+    let task = started.lock().unwrap().pop().unwrap();
+    let sent = tokio::time::timeout(BOUND, task).await.unwrap().unwrap();
     assert_eq!(
-        (result.reason, timeline(&kit).await),
+        (
+            result.reason,
+            sent.err(),
+            timeline(&kit).await,
+            tap.events().len()
+        ),
         (
             Some("process_timeout".to_owned()),
+            Some(RoomKitError::ProcessTimeout { room_id: room_id() }),
             vec![
                 "#0 system delivered Channel sms attached (read_write, all)".to_owned(),
                 "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
                 "#2 system delivered Channel audit attached (read_write, all)".to_owned(),
-                "#3 ws delivered Heads up".to_owned()
-            ]
+            ],
+            1
         )
     );
 }

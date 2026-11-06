@@ -280,20 +280,22 @@ impl Arrival {
 
     /// The arrival of `message`, resolved on `channel`, into `room_id`,
     /// adopted by the operation whose work called into its room (RFC
-    /// §13.5, gap G-070): it carries no deadline.
+    /// §13.5, gap G-070), within `bound`: the call's deadline when that
+    /// work runs before the call's decision, none after it (RFC §13.6).
     pub(super) fn adopted(
         entry: EntryId,
         room_id: RoomId,
         organization_id: Option<String>,
         channel: ChannelConfig,
         message: InboundMessage,
+        bound: Bound,
     ) -> Self {
         let mut arrival = Self::new(
             InboundTarget::Room(room_id),
             organization_id,
             channel,
             message,
-            Bound::Unbounded,
+            bound,
         );
         arrival.entry = Some(entry);
         arrival

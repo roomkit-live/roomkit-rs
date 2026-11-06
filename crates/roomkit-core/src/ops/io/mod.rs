@@ -41,7 +41,7 @@ pub(crate) enum Bound {
     /// Nothing but its own timeouts: a write, a release, a commit, what
     /// completes a room step 2 creates, what follows a call's decision, and
     /// every request of an operation that has no call's bound, an entry
-    /// adopted among them.
+    /// adopted from its work after its decision among them.
     Unbounded,
     /// The call's bound, from its start to its decision: the deadline of
     /// its `process_timeout`, `None` when the kit sets none or the call takes
@@ -74,9 +74,9 @@ struct Outstanding {
     /// Whether it carried a deadline, which the driver may answer
     /// `DeadlinePassed` past.
     bounded: bool,
-    /// Whether it is within the call's bound, given up on when the call
-    /// expires.
-    within_call: bool,
+    /// The bound it was asked within: the call's, given up on when the
+    /// call expires, or none.
+    bound: Bound,
     locked: Option<RoomId>,
     admitted: Option<RoomId>,
 }
@@ -252,7 +252,7 @@ impl Io {
         let outstanding = Outstanding {
             kind: request.kind(),
             bounded: deadline.is_some(),
-            within_call,
+            bound,
             locked: locked.clone(),
             admitted: self.admitted.clone(),
         };
@@ -408,7 +408,7 @@ impl Io {
         let given_up: Vec<EffectId> = self
             .outstanding
             .iter()
-            .filter(|(_, outstanding)| outstanding.within_call)
+            .filter(|(_, outstanding)| matches!(outstanding.bound, Bound::Call(_)))
             .map(|(id, _)| *id)
             .collect();
         // The acquires held back leave first: the answer to the one the
@@ -460,6 +460,15 @@ impl Io {
     /// effect not answered yet (`Effect::locked`).
     pub(crate) fn locked_for(&self, effect: EffectId) -> Option<&RoomId> {
         self.outstanding.get(&effect)?.locked.as_ref()
+    }
+
+    /// The bound `effect`, an effect not answered yet, was asked within
+    /// (RFC §13.6): the call's for a request before its decision, none for
+    /// any other.
+    pub(crate) fn bound_of(&self, effect: EffectId) -> Bound {
+        self.outstanding
+            .get(&effect)
+            .map_or(Bound::Unbounded, |outstanding| outstanding.bound)
     }
 
     /// The room in whose admission order `effect`, an effect not answered

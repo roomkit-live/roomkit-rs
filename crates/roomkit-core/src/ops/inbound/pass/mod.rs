@@ -24,8 +24,10 @@
 //!
 //! The trigger's pass is the end of the call's pre-commit phase: it carries
 //! the call's deadline on every request up to the commit, and a passed
-//! deadline ends it, the lock released, with nothing stored (RFC §13.6). It
-//! also carries the outcome of the trigger's off-lock check, which step 9
+//! deadline ends it, the lock released, with nothing stored (RFC §13.6); so
+//! does the pass of an entry the call's work adopted before its decision,
+//! cut with the hook whose code made it (RFC §9.5.1 Reentrance). It also
+//! carries the outcome of the trigger's off-lock check, which step 9
 //! applies first, running only the hooks that need the lock (RFC §9.5.1).
 
 mod decision;
@@ -279,7 +281,8 @@ pub(super) struct CommitPass {
     /// The edit or the delete step 8a accepted, with its target.
     accepted: Option<Accepted>,
     /// The call's deadline, which the trigger's pass carries up to its
-    /// commit (RFC §13.6).
+    /// commit, and an entry's adopted before the call's decision (RFC
+    /// §13.6).
     bound: Bound,
     /// The chain the trigger's off-lock check left, which step 9 goes on
     /// with (RFC §9.5.1).
@@ -493,6 +496,13 @@ impl CommitPass {
             checked: checked.map(Box::new),
             ..Self::new(PassOrigin::Trigger, event)
         }
+    }
+
+    /// The same pass, bounded by `bound` up to its commit (RFC §13.6): an
+    /// entry adopted from the call's work before its decision carries the
+    /// call's deadline, as the hook whose code made it does.
+    pub(super) fn bounded(self, bound: Bound) -> Self {
+        Self { bound, ..self }
     }
 
     /// The pass of a direct injection for `direct`, whose room the gate

@@ -30,7 +30,12 @@
 //!
 //! Either way the entry takes no admission ticket and runs every hook under
 //! the lock: the operation it joins stands in the room's order already (RFC
-//! §9.5.1). It draws on the operation's reentry budget, past which it is
+//! §9.5.1). Made before the call's decision, by work its deadline bounds,
+//! it carries that deadline up to its commit, as that work does: past it,
+//! the hook whose code made it is cut, and the entry with it, nothing of it
+//! stored and nothing reported, as the Python implementation cancels the
+//! hook's body and the call it awaits (RFC §13.6); an entry committed by
+//! then goes on. It draws on the operation's reentry budget, past which it is
 //! stored `BLOCKED` with `reentry_loop_cap` (RFC §8.3); a message is charged
 //! first thing, before its channel is looked up, and refused with no event
 //! past the budget (RFC §10.1 step 1). Its caller receives its result at
@@ -46,7 +51,7 @@ use std::mem;
 
 use super::arrival::{self, Arrival};
 use super::cascade::{self, entry_result, replay_result};
-use super::deadline::Stopped;
+use super::deadline::{PROCESS_TIMEOUT, Stopped};
 use super::direct::{self, DirectCall};
 use super::greeting;
 use super::host_post::HostPost;
@@ -93,6 +98,9 @@ struct Adopted {
     /// once its message arrived: its result's error when it met none
     /// before (RFC §13.5), as Python's nested call collects its own.
     release_error: Option<ErrorRecord>,
+    /// What bounds the entry up to its commit: its origin's, the call's
+    /// deadline for an origin before the call's decision (RFC §13.6).
+    bound: Bound,
 }
 
 /// One adopted entry at work.
@@ -223,10 +231,7 @@ impl AdoptedRun {
                     Advanced::Stopped(Box::new(Err(error)))
                 }
                 Progress::Done(Err(Stopped::Expired)) => {
-                    // An adopted message carries no deadline (gap G-070).
-                    Advanced::Stopped(Box::new(Err(InboundError::Store(
-                        Abort::expired().into_record(),
-                    ))))
+                    Advanced::Stopped(Box::new(Ok(cut_at_the_deadline(false, None))))
                 }
                 // An adopted message is charged as its arrival starts.
                 Progress::Done(Err(Stopped::PastBudget)) => {
@@ -242,12 +247,15 @@ impl AdoptedRun {
                 Progress::Done(Err(Stopped::Failed(error))) => {
                     Advanced::Stopped(Box::new(Err(error)))
                 }
-                // An adopted entry carries no deadline (gap G-070).
-                Progress::Done(Err(
-                    Stopped::Expired | Stopped::PastBudget | Stopped::Refused(_),
-                )) => Advanced::Stopped(Box::new(Err(InboundError::Store(
-                    Abort::expired().into_record(),
-                )))),
+                Progress::Done(Err(Stopped::Expired)) => {
+                    Advanced::Stopped(Box::new(Ok(cut_at_the_deadline(false, None))))
+                }
+                // A post stops expired or failed only.
+                Progress::Done(Err(Stopped::PastBudget | Stopped::Refused(_))) => {
+                    Advanced::Stopped(Box::new(Err(InboundError::Store(
+                        Abort::expired().into_record(),
+                    ))))
+                }
             },
             RunState::ReadingWork(read) => match read.accept(cx, effect, outcome) {
                 Progress::Waiting => Advanced::Waiting,
@@ -255,13 +263,15 @@ impl AdoptedRun {
                 Progress::Done(Err(Stopped::Failed(error))) => {
                     Advanced::Stopped(Box::new(Err(error)))
                 }
-                // An adopted entry carries no deadline (gap G-070), and is
-                // never refused past the budget before its room is read.
-                Progress::Done(Err(
-                    Stopped::Expired | Stopped::PastBudget | Stopped::Refused(_),
-                )) => Advanced::Stopped(Box::new(Err(InboundError::Store(
-                    Abort::expired().into_record(),
-                )))),
+                Progress::Done(Err(Stopped::Expired)) => {
+                    Advanced::Stopped(Box::new(Ok(cut_at_the_deadline(false, None))))
+                }
+                // A read stops expired or failed only.
+                Progress::Done(Err(Stopped::PastBudget | Stopped::Refused(_))) => {
+                    Advanced::Stopped(Box::new(Err(InboundError::Store(
+                        Abort::expired().into_record(),
+                    ))))
+                }
             },
             RunState::Passing(pass) => match pass.accept(cx, effect, outcome) {
                 Progress::Waiting => Advanced::Waiting,
@@ -272,6 +282,22 @@ impl AdoptedRun {
                 Progress::Done(recorded) => Advanced::Recorded(recorded),
             },
         }
+    }
+}
+
+/// The result of an entry its call's deadline cut before its commit (RFC
+/// §13.6, §9.5.1 Reentrance): refused `process_timeout` with no event,
+/// `locked` when its pass held the room lock by then, that release's failure
+/// its error (RFC §13.5). Nothing reports it: the call's own expiry reports
+/// its `process_timeout`, and the hook whose code made the entry is cut with
+/// it, its caller gone as a rule.
+fn cut_at_the_deadline(locked: bool, release_failure: Option<ErrorRecord>) -> InboundResult {
+    InboundResult {
+        blocked: true,
+        reason: Some(PROCESS_TIMEOUT.to_owned()),
+        refused_before_the_lock: !locked,
+        error: release_failure,
+        ..InboundResult::default()
     }
 }
 
@@ -325,6 +351,7 @@ impl Machine {
             nested,
             direct: matches!(entry, Entry::Direct { .. } | Entry::Post { .. }),
             release_error: None,
+            bound: io.bound_of(origin),
         };
         self.adopted.adopted.push((adopted, Box::new(entry)));
         Ok(id)
@@ -395,8 +422,8 @@ impl Machine {
     /// run and no delivery (RFC §8.3, §19.1).
     fn greet_within(&mut self, cx: &mut Cx<'_>, adopted: Adopted, mut event: RoomEvent) {
         let state = if self.cascade.budget.take_pass() {
-            let mut pass =
-                Box::new(CommitPass::new(PassOrigin::Adopted(adopted.id), event).greeting());
+            let pass = CommitPass::new(PassOrigin::Adopted(adopted.id), event).greeting();
+            let mut pass = Box::new(pass.bounded(adopted.bound));
             within(cx, &adopted, |cx| pass.start(cx));
             RunState::Passing(pass)
         } else {
@@ -431,7 +458,7 @@ impl Machine {
         };
         let call = DirectCall { organization_id };
         let post = within(cx, &adopted, |cx| {
-            HostPost::start(cx, event, call, binding, Bound::Unbounded)
+            HostPost::start(cx, event, call, binding, adopted.bound)
         });
         self.adopted.running.push(AdoptedRun {
             entry: adopted,
@@ -470,10 +497,15 @@ impl Machine {
             }
             Err(error) => return self.settle_entry(cx, &adopted, Err(error)),
         };
-        let mut arrival = Box::new(
-            Arrival::adopted(adopted.id, room_id, organization_id, channel, message)
-                .answered(answers),
+        let arrival = Arrival::adopted(
+            adopted.id,
+            room_id,
+            organization_id,
+            channel,
+            message,
+            adopted.bound,
         );
+        let mut arrival = Box::new(arrival.answered(answers));
         within(cx, &adopted, |cx| arrival.start(cx));
         self.adopted.running.push(AdoptedRun {
             entry: adopted,
@@ -486,7 +518,7 @@ impl Machine {
     /// cap, §13.4, §17.2).
     fn read_key(&mut self, cx: &mut Cx<'_>, adopted: Adopted, event: RoomEvent, call: DirectCall) {
         let read = within(cx, &adopted, |cx| {
-            WorkRead::start(cx, event, call, Bound::Unbounded)
+            WorkRead::start(cx, event, call, adopted.bound)
         });
         self.adopted.running.push(AdoptedRun {
             entry: adopted,
@@ -528,6 +560,7 @@ impl Machine {
                 cx.io.notify(Notice::Span(SpanNote::Injecting { entry }));
             }
             let pass = CommitPass::new(PassOrigin::Adopted(adopted.id), event)
+                .bounded(adopted.bound)
                 .checking(direct)
                 .participating(participation);
             let mut pass = Box::new(pass);
@@ -579,6 +612,13 @@ impl Machine {
             Advanced::WorkRead(read) => self.on_entry_key(cx, adopted, run, read),
             Advanced::Stopped(stopped) => self.settle_entry(cx, &adopted, *stopped),
             Advanced::Passed(Ok(report)) => self.on_adopted_pass(cx, &adopted, report),
+            Advanced::Passed(Err(Abort::DeadlinePassed {
+                locked_event,
+                release_failure,
+            })) => {
+                let cut = cut_at_the_deadline(locked_event.is_some(), release_failure);
+                self.settle_entry(cx, &adopted, Ok(cut));
+            }
             Advanced::Passed(Err(abort)) | Advanced::Recorded(Err(abort)) => {
                 let error = cascade::failure(abort, self.call.room_id.clone());
                 self.settle_entry(cx, &adopted, Err(error));

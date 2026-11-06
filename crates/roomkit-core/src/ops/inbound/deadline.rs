@@ -61,10 +61,11 @@ impl Machine {
     /// `blocked` with the reason `process_timeout` and no event, once its
     /// ticket is released, and the events it committed, an adopted entry's,
     /// are delivered. The pass that held the lock released it already. An
-    /// entry its admission adopted runs its cascade to its end, its answers
-    /// committed, as the Python implementation's adopted call, whose cascade
-    /// is its own, does; the call's caller does not wait for it (RFC §9.5.1
-    /// Reentrance).
+    /// entry its admission adopted that committed runs its cascade to its
+    /// end, its answers committed, as the Python implementation's adopted
+    /// call, whose cascade is its own, does; the call's caller does not wait
+    /// for it (RFC §9.5.1 Reentrance). One not committed yet carries the
+    /// same deadline, and ends with it, nothing of it stored.
     pub(super) fn expire(&mut self, cx: &mut Cx<'_>, locked_event: Option<EventId>) {
         self.expire_as(cx, locked_event, None);
     }
