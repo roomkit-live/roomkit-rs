@@ -1382,6 +1382,20 @@ fn speak_queue_options_defaults_as_python() {
 }
 
 #[test]
+fn listen_only_options_defaults_as_python() {
+    let defaults = roomkit::ListenOnlyOptions::default();
+    // roomkit.RoomKit.listen_only(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
+fn talk_again_options_defaults_as_python() {
+    let defaults = roomkit::TalkAgainOptions::default();
+    // roomkit.RoomKit.talk_again(organization_id) = None
+    assert!(defaults.organization_id.is_none());
+}
+
+#[test]
 fn room_strategy_options_defaults_as_python() {
     let defaults = roomkit::RoomStrategyOptions::default();
     // roomkit.RoomKit.room_strategy(organization_id) = None

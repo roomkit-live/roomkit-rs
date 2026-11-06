@@ -539,10 +539,10 @@ reason = "decision 12: Python's class attributes channel_type, category and dire
 python = "roomkit.Channel"
 members = [
     "active_turns", "channel_call", "connect_session", "disconnect_session",
-    "emit_trace", "on_room_event", "on_trace", "resolve_trace_room",
+    "emit_trace", "on_trace", "resolve_trace_room",
     "restore_room_state", "room_state", "trace_enabled", "update_binding",
 ]
-reason = "not in 0.x: identity resolution, active turns, tracing, sessions, a room's committed events, channel calls, room state (lot 4's list)"
+reason = "not in 0.x: identity resolution, active turns, tracing, sessions, channel calls, room state (lot 4's list)"
 
 [[missing]]
 python = "roomkit.ChannelDeclaration.__init__"
@@ -757,11 +757,6 @@ members = [
     "tts", "voice",
 ]
 reason = "not in 0.x: voice and video"
-
-[[missing]]
-python = "roomkit.RoomKit"
-members = ["listen_only", "talk_again"]
-reason = "the Discussion's, stream I lot 8d (RMK-1233)"
 
 [[missing]]
 python = "roomkit.RoomKit.send_greeting"
