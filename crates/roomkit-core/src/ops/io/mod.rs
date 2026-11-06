@@ -52,6 +52,12 @@ pub(crate) enum Bound {
 }
 
 impl Bound {
+    /// Whether the call's deadline has passed at `now`: nothing passes an
+    /// unbounded request's.
+    pub(crate) fn has_passed(self, now: Timestamp) -> bool {
+        self.deadline().is_some_and(|deadline| now >= deadline)
+    }
+
     /// The deadline the effect carries (`Effect::deadline`).
     fn deadline(self) -> Option<Timestamp> {
         match self {

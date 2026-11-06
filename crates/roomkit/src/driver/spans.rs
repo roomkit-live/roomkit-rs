@@ -30,8 +30,8 @@ const REENTRANT_CALL: &str = "ReentrantCallError";
 
 /// What Python's `_PastTheCapError` reads.
 const PAST_THE_CAP: &str = "_PastTheCapError";
-/// The class Python's route span names when every room opened for a routed
-/// message names someone else (RMK-1396).
+/// The class Python's route span names when no room opened for a routed
+/// message is still its own (RMK-1396).
 const ROOM_TAKEN: &str = "_RoomTakenError";
 
 /// What Python's `_RoutingTimeoutError` reads.

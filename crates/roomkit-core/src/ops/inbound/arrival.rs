@@ -587,6 +587,11 @@ impl Arrival {
             self.tell_route(cx, RouteEnd::RoomTaken);
             return Progress::Done(Err(Stopped::Refused(Box::new(result::room_taken()))));
         }
+        // The call's deadline bounds the routing a creation's hooks leave
+        // it to, the last new room's opening included (RFC §13.6).
+        if self.bound.has_passed(cx.env.now()) {
+            return Progress::Done(Err(Stopped::Expired));
+        }
         self.given_last_room = true;
         self.enter_fresh(cx)
     }
