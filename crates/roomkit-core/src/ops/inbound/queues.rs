@@ -43,6 +43,7 @@ use super::record::RecordPass;
 use super::stream::{self, PendingRow, Read, StreamEnd, StreamJob, StreamRead};
 use super::{Machine, Stage};
 use crate::model::{Metadata, RoomEvent, RoomId};
+use crate::ops::failure_log::Log;
 use crate::ops::io::Io;
 use crate::ops::protocol::{EffectId, Entry, EntryId, Notice, Outcome, SpanNote};
 use crate::ops::{Cx, Progress, RefusedOperation};
@@ -633,7 +634,8 @@ impl Machine {
             return;
         };
         stream::report_failure(cx, &end.job, &context, &error);
-        cx.io.notify(Notice::StreamFailed {
+        cx.io.notify(Notice::Failure {
+            log: Log::Framework,
             what: end.failed_what(),
             error: error.clone(),
             caller_logs: self.call.failures.receives(own, end.target.is_some()),

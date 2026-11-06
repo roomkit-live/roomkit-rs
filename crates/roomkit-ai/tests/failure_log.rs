@@ -21,14 +21,16 @@ use futures_core::Stream;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
+    ErrorRecord, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId, TextContent,
 };
+use roomkit::orchestration::DiscussionOptions;
 use roomkit::tasks::WaitOptions;
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DelegateOptions,
-    DeliveryStream, HookExecution, HookOptions, HookTrigger, InboundResult, ProcessInboundOptions,
-    ResponseItem, RoomKit, RoomKitOptions, SendEventOptions, current_turn_host,
+    DeliveryStream, Discussion, HookExecution, HookOptions, HookTrigger, InboundResult,
+    InstallStrategyOptions, ProcessInboundOptions, ResponseItem, RoomKit, RoomKitOptions,
+    SendEventOptions, current_turn_host,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -841,4 +843,228 @@ async fn a_background_task_failure_is_one_line_at_its_level() {
     assert_eq!(lines.warnings(), [Level::ERROR], "{records:?}");
     let line = format!("Task {} failed (provider=mock, status=503)", task.id);
     assert!(records[0].1.contains(&line), "{records:?}");
+}
+
+/// A kit whose room `r1` binds the transport `email-out`, and, when
+/// `other` names one, that intelligence channel too; the agent `w1` over
+/// `worker` is registered, a delegated task's worker.
+async fn sharing<P: AiProvider>(worker: P, other: Option<impl Channel>) -> RoomKit {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let email = RecordingTransport::new(
+        channel("email-out"),
+        ChannelType::EMAIL,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(email).unwrap();
+    let worker = AiChannel::new(channel("w1"), worker, AiChannelOptions::default()).unwrap();
+    kit.register_channel(worker).unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mut ids = vec!["email-out"];
+    if let Some(other) = other {
+        ids.push("b");
+        kit.register_channel(other).unwrap();
+    }
+    for id in ids {
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    kit
+}
+
+/// Delegates `go` to `w1` in `kit`'s room `r1`, sharing `shared`, and waits
+/// for its end: the task.
+async fn delegated(kit: &RoomKit, shared: &[&str]) -> roomkit::tasks::DelegatedTask {
+    let options = DelegateOptions {
+        wait: true,
+        share_channels: Some(shared.iter().map(|id| channel(id)).collect()),
+        ..Default::default()
+    };
+    let task = kit
+        .delegate(&room_id(), &channel("w1"), "go", options)
+        .await
+        .unwrap();
+    roomkit::testing::idle(kit).await;
+    task
+}
+
+// Python: tests/test_inbound_stream_error_propagation.py::test_a_delegated_turn_failure_in_a_shared_room_is_one_line_at_its_level
+#[tokio::test]
+async fn a_delegated_turn_failure_in_a_shared_room_is_one_line_at_its_level() {
+    let rounds = vec![refusal(
+        ScriptedRound::answering(""),
+        Some(503),
+        "upstream down",
+    )];
+    let kit = sharing(Whole(ScriptedProvider::new(rounds)), None::<Buggy>).await;
+    let (lines, _capturing) = Lines::capture();
+    let task = delegated(&kit, &["email-out"]).await;
+    kit.close().await.unwrap();
+    let records = lines.roomkit(Level::WARN);
+    assert_eq!(lines.warnings(), [Level::ERROR], "{records:?}");
+    let line = format!("Inline task {} failed (provider=mock, status=503)", task.id);
+    assert!(records[0].1.contains(&line), "{records:?}");
+}
+
+// Python: tests/test_inbound_stream_error_propagation.py::test_another_agent_s_streamed_failure_in_a_task_room_is_its_turn_s_line
+#[tokio::test]
+async fn another_agent_s_streamed_failure_in_a_task_room_is_its_turn_s_line() {
+    let other = AiChannel::new(
+        channel("b"),
+        ScriptedProvider::new([
+            refusal(ScriptedRound::answering(""), Some(503), "B's upstream 503").refused_by("b"),
+            refusal(ScriptedRound::answering(""), Some(503), "B's upstream 503").refused_by("b"),
+        ]),
+        AiChannelOptions::default(),
+    )
+    .unwrap();
+    let worker = ScriptedProvider::new([ScriptedRound::answering("Found it.")]);
+    let kit = sharing(worker, Some(other)).await;
+    let (lines, _capturing) = Lines::capture();
+    let task = delegated(&kit, &["b", "email-out"]).await;
+    let result = task.result().unwrap();
+    kit.close().await.unwrap();
+    assert_eq!(result.output.as_deref(), Some("Found it."));
+    let room = result.child_room_id;
+    let records = lines.roomkit(Level::WARN);
+    assert_eq!(
+        lines.warnings(),
+        [Level::ERROR, Level::ERROR],
+        "{records:?}"
+    );
+    let chained = format!(
+        "stream consumption (no targets) of b for room {room} failed (provider=b, status=503): B's upstream 503"
+    );
+    let others = format!(
+        "In {room}, another agent's turn failed (provider=b, status=503): B's upstream 503"
+    );
+    assert!(records[0].1.contains(&chained), "{records:?}");
+    assert!(records[1].1.contains(&others), "{records:?}");
+}
+
+/// A second agent shared into the child room, failing before any end with
+/// a provider's 503 on the task's description (Python's
+/// `_FailsBeforeAnyEnd`).
+#[derive(Clone)]
+struct FailsBeforeAnyEnd;
+
+impl Channel for FailsBeforeAnyEnd {
+    fn channel_id(&self) -> ChannelId {
+        channel("b")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Err("an agent is sent no message".into()))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        if event.source.channel_id.as_str() != "system" {
+            return std::future::ready(Ok(ChannelOutput::empty()));
+        }
+        let mut attributes = Metadata::new();
+        attributes.insert("provider".to_owned(), json!("b"));
+        attributes.insert("status_code".to_owned(), json!(503));
+        let error = ErrorRecord {
+            attributes: Box::new(attributes),
+            ..ErrorRecord::new("ProviderError", "B's upstream 503")
+        };
+        std::future::ready(Ok(ChannelOutput {
+            responded: true,
+            error: Some(error),
+            ..ChannelOutput::empty()
+        }))
+    }
+}
+
+// Python: tests/tasks/test_failed_worker_turn.py::test_another_agent_s_provider_failure_is_logged_once_as_its_turn
+#[tokio::test]
+async fn another_agent_s_provider_failure_is_logged_once_as_its_turn() {
+    for shared in [&["b"][..], &["b", "email-out"][..]] {
+        let worker = ScriptedProvider::new([ScriptedRound::answering("Found it.")]);
+        let kit = sharing(worker, Some(FailsBeforeAnyEnd)).await;
+        let (lines, _capturing) = Lines::capture();
+        let task = delegated(&kit, shared).await;
+        let result = task.result().unwrap();
+        kit.close().await.unwrap();
+        assert_eq!(result.output.as_deref(), Some("Found it."), "{shared:?}");
+        let logged: Vec<(Level, bool)> = lines
+            .containing("b's turn")
+            .into_iter()
+            .map(|(level, line)| (level, line.contains("status=503")))
+            .collect();
+        assert_eq!(logged, [(Level::ERROR, true)], "{shared:?}");
+    }
+}
+
+// Python: tests/test_inbound_stream_error_propagation.py::test_a_discussion_turn_s_failure_is_logged_at_its_level
+#[tokio::test]
+async fn a_discussion_turn_s_failure_is_logged_at_its_level() {
+    let rounds = vec![refusal(
+        ScriptedRound::answering(""),
+        Some(404),
+        "model gone",
+    )];
+    let (kit, _errors) = kit((false, rounds, false), false).await;
+    let discussion =
+        Discussion::new(vec![channel("ai1").into()], DiscussionOptions::default()).unwrap();
+    kit.install_strategy(
+        &room_id(),
+        Arc::new(discussion),
+        InstallStrategyOptions::default(),
+    )
+    .await
+    .unwrap();
+    let (lines, _capturing) = Lines::capture();
+    let mut message = InboundMessage::new(channel("sms1"), SENDER, TextContent::new("go"));
+    message.addressed_to = Some(vec![channel("ai1")]);
+    kit.process_inbound(
+        message,
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    roomkit::testing::idle(&kit).await;
+    kit.close().await.unwrap();
+    let records = lines.roomkit(Level::WARN);
+    assert_eq!(lines.warnings(), [Level::ERROR], "{records:?}");
+    assert!(
+        records[0]
+            .1
+            .contains("stream consumption (no targets) of ai1"),
+        "{records:?}"
+    );
 }

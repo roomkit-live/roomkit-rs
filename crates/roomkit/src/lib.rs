@@ -58,7 +58,6 @@ mod driver;
 mod environment;
 mod error;
 mod events;
-mod failure_log;
 mod gaps;
 mod history;
 mod hooks;

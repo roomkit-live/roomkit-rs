@@ -22,6 +22,7 @@ use std::sync::Arc;
 use self::collected::{Buffered, Collected, Failure, Streamed};
 use self::nested::Nested;
 use super::events::{CommitRecord, MutationError};
+use super::failure_log::{self, Log};
 use super::inbound::{Inbound, InboundError, error_event, stamp_response};
 use super::protocol::{
     ChannelOutcome, ChannelRequest, Delivered, Effect, EffectId, Entry, EntryId, InboundResult,
@@ -599,6 +600,33 @@ impl DelegatedTurn {
         }
     }
 
+    /// Logs, once, the failure of each agent other than the task's own,
+    /// which the task does not carry, as that agent's turn's (RFC §15.2,
+    /// §23.3 step 6; Python's `_log_others`): of an agent whose stream the
+    /// room's reader read, only a provider's error, which that reader logged
+    /// at DEBUG for the task; any other it logged at its level.
+    fn log_others(&mut self) {
+        let Some(agent_id) = &self.agent_id else {
+            return;
+        };
+        let lines: Vec<Notice> = self
+            .answers
+            .iter()
+            .filter(|answer| &answer.channel_id != agent_id)
+            .filter_map(|answer| {
+                let error = answer.error.as_ref()?;
+                let streamed = self.streamers.contains(&answer.channel_id);
+                (!streamed || failure_log::is_provider_error(error)).then(|| Notice::Failure {
+                    log: Log::Tasks,
+                    what: format!("In {}, {}'s turn", self.room_id, answer.channel_id),
+                    error: error.clone(),
+                    caller_logs: false,
+                })
+            })
+            .collect();
+        self.notices.extend(lines);
+    }
+
     fn binding_of(&self, channel_id: &ChannelId) -> Option<ChannelBinding> {
         self.bindings
             .iter()
@@ -646,6 +674,7 @@ impl Operation for DelegatedTurn {
         } else if let Some(error) = self.failed.take() {
             Next::Ready(Err(error))
         } else if self.is_over() {
+            self.log_others();
             Next::Ready(Ok(std::mem::take(&mut self.answers)))
         } else {
             Next::Waiting

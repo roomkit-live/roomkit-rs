@@ -42,6 +42,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use roomkit_core::model::{ErrorRecord, RoomEvent, RoomId, Timestamp};
+use roomkit_core::ops::failure_log;
 use roomkit_core::ops::{
     AnswerOf, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest,
     InboundError, InboundResult, KIT_CLOSED, Next, Notice, Operation, Outcome, ProtocolError,
@@ -65,7 +66,6 @@ use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::RoomKitError;
-use crate::failure_log::{self, Log};
 use crate::gaps::{CursorTurn, Turned};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
@@ -860,7 +860,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
             // Answered once the step's decision is offered (`drive`).
             Notice::Answered(outcome) => self.answered = Some(*outcome),
-            Notice::StreamFailed {
+            Notice::Failure {
+                log,
                 what,
                 error,
                 caller_logs,
@@ -868,7 +869,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 // A caller answered at the decision, or gone, never reads
                 // the failure: the line is the framework's (RFC §15.2).
                 let receives = caller_logs && self.caller.as_deref().is_none_or(Caller::reads);
-                failure_log::log_failure(Log::Framework, &error, &what, receives);
+                failure_log::log_failure(log, &error, &what, receives);
             }
             notice @ (Notice::FrameworkEvent(_) | Notice::AsyncHooks { .. }) => {
                 if let Some(handled) = calls::perform(self.inner, notice) {

@@ -17,6 +17,7 @@ use roomkit_core::model::{
     ChannelCategory, ChannelId, ChannelType, ErrorRecord, EventSource, EventStatus, EventType,
     Metadata, Room, RoomContext, RoomEvent, RoomId, TaskStatus, TextContent, Visibility,
 };
+use roomkit_core::ops::failure_log::{self, Log};
 use roomkit_core::ops::{DelegatedAnswer, DelegatedTurn};
 use roomkit_core::rules::transcript::fence;
 use serde_json::{Value, json};
@@ -25,7 +26,6 @@ use super::RoomKit;
 use super::inline::Unstarted;
 use crate::context::ExecutionContext;
 use crate::error::{RoomKitError, repr};
-use crate::failure_log::{self, Log};
 use crate::orchestration::StatusLevel;
 use crate::orchestration::lifecycle::post_agent_lifecycle;
 use crate::store::ConversationStore;
@@ -225,9 +225,10 @@ impl TaskEnd {
     }
 
     /// Logs the failure the task's turn ended on, if any, once, as `what`
-    /// failed, at the level its error calls for (RFC §15.2): the worker's
-    /// own stream logged it at DEBUG, for the task to log (Python's
-    /// `log_failure` of the task's runner).
+    /// failed, at the level its error calls for (RFC §15.2), the task's
+    /// line: a worker's stream read in its room logged it at DEBUG, one
+    /// read as its trace not at all (Python's `log_failure` of the task's
+    /// runner).
     pub(crate) fn log_failure(&self, what: impl FnOnce() -> String) {
         if let Some(exception) = &self.exception {
             failure_log::log_failure(Log::Tasks, exception, &what(), false);

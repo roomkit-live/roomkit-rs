@@ -56,7 +56,9 @@ use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
 pub(crate) use self::codec::send_event_arguments;
-pub(crate) use self::error::{CHANNEL_ERROR, TURN_LINK_ERROR, record_of, variant_name};
+pub(crate) use self::error::{
+    CHANNEL_ERROR, RemoteError, TURN_LINK_ERROR, record_of, variant_name,
+};
 pub(crate) use self::error::{TurnError, TurnFailure, to_record};
 pub(crate) use self::executor::{ExecutorInputs, HostLink, InputSettler};
 use self::memory::Request;

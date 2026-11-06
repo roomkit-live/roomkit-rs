@@ -32,6 +32,7 @@ pub use results::{InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED};
 
 use thiserror::Error;
 
+use super::failure_log::Log;
 use super::{Environment, FrameworkEvent};
 use crate::model::{
     ChannelId, ErrorRecord, EventId, Metadata, RoomContext, RoomEvent, RoomId, Timestamp,
@@ -215,12 +216,16 @@ pub enum Notice {
     /// had never waited for them (RFC §9.5.1 Reentrance, §13.6). A call past
     /// its deadline while an adopted call's answer is still read.
     Answered(Box<Result<InboundResult, InboundError>>),
-    /// A turn's stream failed, the response's own failure or its streaming
-    /// target's: the driver logs it once, as `what` failed, at the level
-    /// its error calls for (RFC §15.2, §15.3), at DEBUG when `caller_logs`
-    /// and the call's caller still reads its output, which carries the
-    /// failure (Python's `_report_stream_failure`).
-    StreamFailed {
+    /// A turn failed, its stream's or a delegated room's agent's: the
+    /// driver logs it once under `log`, as `what` failed, at the level its
+    /// error calls for (RFC §15.2, §15.3), at DEBUG when `caller_logs` and
+    /// the call's caller still reads its output, which carries the failure
+    /// (Python's `log_failure`, called by `_report_stream_failure` and
+    /// `_log_others`). Logged as the notices come, in the order the
+    /// operation saw the failures.
+    Failure {
+        /// Where the line goes.
+        log: Log,
         /// What failed, as the line names it.
         what: String,
         /// The failure.

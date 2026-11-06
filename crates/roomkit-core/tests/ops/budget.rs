@@ -322,7 +322,7 @@ mod a_hook_s_body {
                 | Notice::CutReadOver { .. }
                 | Notice::Span(_)
                 | Notice::Answered(_)
-                | Notice::StreamFailed { .. } => None,
+                | Notice::Failure { .. } => None,
             })
             .collect();
         assert_eq!(works, [(HookTrigger::AfterBroadcast, Some(3))]);

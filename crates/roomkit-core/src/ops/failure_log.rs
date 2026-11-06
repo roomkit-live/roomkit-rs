@@ -10,19 +10,28 @@
 //! component that raises leaves the line to the one that catches, so an
 //! incident is logged once.
 
-use roomkit_core::model::ErrorRecord;
+use crate::model::ErrorRecord;
 use serde_json::Value;
 use tracing::Level;
 
 /// Where a failure's line goes: Python's logger.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Log {
+pub enum Log {
     /// The framework's, which a turn's stream logs under (Python's
     /// `roomkit.framework`).
     Framework,
     /// The tasks', which a delegated task logs under (Python's
     /// `roomkit.tasks`).
     Tasks,
+}
+
+/// The attribute a provider's error carries, as its record keeps it.
+const PROVIDER: &str = "provider";
+
+/// Whether `error` is a provider's: its record carries the provider's
+/// name, as every `ProviderError` class's does (RFC §10.6.8).
+pub fn is_provider_error(error: &ErrorRecord) -> bool {
+    error.attributes.contains_key(PROVIDER)
 }
 
 /// The types of a turn that ended before its answer: an expected end,
@@ -32,7 +41,7 @@ const CUT_SHORT: [&str; 2] = ["TurnCutShortError", "TaskCutShortError"];
 /// Logs that `what` failed with `error`, once, at the level its cause calls
 /// for; a provider's error at DEBUG when `caller_logs`, the caller
 /// receiving it and owning its line (Python's `log_failure`).
-pub(crate) fn log_failure(log: Log, error: &ErrorRecord, what: &str, caller_logs: bool) {
+pub fn log_failure(log: Log, error: &ErrorRecord, what: &str, caller_logs: bool) {
     let (level, line) = line_of(error, what, caller_logs);
     let (error_type, error) = (error.error_type.as_str(), error.message.as_str());
     macro_rules! emit {
@@ -58,7 +67,7 @@ fn line_of(error: &ErrorRecord, what: &str, caller_logs: bool) -> (Level, String
     if CUT_SHORT.contains(&error.error_type.as_str()) {
         return (Level::WARN, format!("{what} failed: {}", error.message));
     }
-    let Some(provider) = error.attributes.get("provider") else {
+    let Some(provider) = error.attributes.get(PROVIDER) else {
         return (Level::ERROR, format!("{what} failed"));
     };
     let status = error.attributes.get("status_code").and_then(Value::as_u64);
@@ -89,7 +98,8 @@ fn provider_error_level(status: Option<u64>) -> Level {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
-    use roomkit_core::model::Metadata;
+
+    use crate::model::Metadata;
     use serde_json::json;
 
     use super::*;

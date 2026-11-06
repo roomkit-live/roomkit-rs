@@ -1048,7 +1048,7 @@ pub(super) fn perform<S: ConversationStore>(
         | Notice::CutReadOver { .. }
         | Notice::Span(_)
         | Notice::Answered(_)
-        | Notice::StreamFailed { .. } => {}
+        | Notice::Failure { .. } => {}
         Notice::AsyncHooks {
             trigger,
             hooks,

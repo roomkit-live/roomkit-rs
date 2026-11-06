@@ -11,6 +11,8 @@ use super::collected::{Buffered, Streamed};
 use super::nested::Nested;
 use super::{DelegatedAnswer, DelegatedTurn, DelegationError};
 use crate::model::{ChannelBinding, ChannelCategory, EventType, Metadata};
+use crate::ops::Notice;
+use crate::ops::failure_log::Log;
 use crate::ops::inbound::{Inbound, InboundResult, TurnResponses};
 use crate::ops::{Effect, Environment};
 
@@ -93,13 +95,25 @@ impl DelegatedTurn {
         let Some(error) = result.error else {
             return;
         };
-        match self.stream_failed_by() {
-            Some(answer) if answer.error.is_none() => answer.error = Some(error),
-            Some(_) => {}
-            None => {
-                tracing::warn!(target: "roomkit::tasks", room_id = %self.room_id, error = %error.message, "a stream of the delegated room failed");
+        let unattributed = match self.stream_failed_by() {
+            Some(answer) => {
+                answer.error.get_or_insert(error);
+                return;
             }
+            None => error,
+        };
+        if self.agent_id.is_none() {
+            tracing::warn!(target: "roomkit::tasks", room_id = %self.room_id, error = %unattributed.message, "a stream of the delegated room failed");
+            return;
         }
+        // Whose turn it ended is not told: another agent's than the task's,
+        // logged once as its turn's (Python's `_log_others`).
+        self.notices.push(Notice::Failure {
+            log: Log::Tasks,
+            what: format!("In {}, another agent's turn", self.room_id),
+            error: unattributed,
+            caller_logs: false,
+        });
     }
 
     /// The answer whose turn the room's stream failure ended, among the

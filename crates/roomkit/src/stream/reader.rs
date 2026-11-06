@@ -41,6 +41,7 @@ use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, EventContent, EventDirection, EventId,
     EventSource, EventType, EventUpdates, Metadata, RoomEvent, RoomId,
 };
+use roomkit_core::ops::failure_log::{self, Log};
 use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, ROW_HIDDEN, ROW_WITHHELD, StreamTarget};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -52,13 +53,12 @@ use crate::RoomKit;
 use crate::channel::ChannelError;
 use crate::context::{self, Adopting, ExecutionContext, ReadTurns};
 use crate::error::RoomKitError;
-use crate::failure_log::{self, Log};
 use crate::kit::Inner;
 use crate::room_turns::Place;
 use crate::store::ConversationStore;
 use crate::tasks::{Kind, Marks, Tasks, Unit};
 use crate::turn_runners::{FirstPass, Then};
-use crate::turns::{OwnerTurn, RemoteItem, record_of};
+use crate::turns::{OwnerTurn, RemoteError, RemoteItem, record_of};
 
 /// The error of a call a stream's reader stopped before it ended.
 const CANCELLED: &str = "cancelled";
@@ -814,6 +814,15 @@ impl Producer {
         }
     }
 
+    /// Whether `error` is the very failure the reader was handed, raised
+    /// again, as Python's `is` tells it: the response's failure, which only
+    /// the kit makes, at the address the reader was handed it at. The
+    /// address alone could be another error's, made by the reader where it
+    /// freed the one it was handed.
+    fn handed_back(&self, error: &ChannelError) -> bool {
+        error.downcast_ref::<RemoteError>().is_some() && self.failed_at == Some(address_of(error))
+    }
+
     /// Settles the response once its reader is done, read `read` returned
     /// with, unless a cut did already. Returns what answers the operation's
     /// read: its `error` the response's failure, else the target's. The
@@ -829,9 +838,7 @@ impl Producer {
             Ok(output) => (output, None),
             // The response's own failure, raised again: no error of the
             // reader's.
-            Err(error) if self.failed_at == Some(address_of(&error)) => {
-                (ChannelOutput::default(), None)
-            }
+            Err(error) if self.handed_back(&error) => (ChannelOutput::default(), None),
             Err(error) => {
                 let record = ErrorRecord::new("ChannelError", error.to_string());
                 (ChannelOutput::default(), Some(record))

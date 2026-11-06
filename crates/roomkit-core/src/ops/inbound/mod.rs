@@ -75,6 +75,7 @@ mod delivery_record;
 mod direct;
 mod edits;
 mod entry;
+mod failure_reader;
 mod greeting;
 mod holds;
 mod host_post;
@@ -105,6 +106,7 @@ pub use self::answering::TurnResponses;
 pub use self::answers::MessageAnswers;
 pub use self::arrival::InboundTarget;
 use self::cascade::Trigger;
+use self::failure_reader::FailureReader;
 use self::persist::SideEffects;
 use self::queues::{Cascade, Lineage};
 use self::stage::{CallStage, Stage};
@@ -650,47 +652,6 @@ struct CallFacts {
     under_lock: Option<RoomId>,
     /// Who receives the failure of the call's own stream.
     failures: FailureReader,
-}
-
-/// Who receives the failure of a call's own stream, and so logs it, the
-/// framework's line then a DEBUG one (RFC §15.2; Python's `caller_logs` and
-/// `streamed_too`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FailureReader {
-    /// Nobody: a direct injection's or a host post's caller has the stored
-    /// event, a greeting's and a discussion turn's have nothing.
-    Nobody,
-    /// The caller, on its result, unless a streaming target rendered it,
-    /// whose line is kept (RMK-403): a message's, a regeneration's, a
-    /// verification's release.
-    Caller,
-    /// The caller, rendered or not: a delegation, whose task logs every
-    /// failure of its turn.
-    Delegation,
-}
-
-impl FailureReader {
-    /// Who receives the failure of `call`'s own stream.
-    fn of(call: &Call) -> Self {
-        match call {
-            Call::Message { .. } | Call::Rerun { .. } | Call::Regenerate { .. } => Self::Caller,
-            Call::Responses { .. } => Self::Delegation,
-            Call::Direct { .. } | Call::Post { .. } | Call::Turn { .. } | Call::Greeting { .. } => {
-                Self::Nobody
-            }
-        }
-    }
-
-    /// Whether it receives the failure of a stream, `own` the call's, which
-    /// a streaming target read when `rendered`: never a chained or adopted
-    /// one's, which is not the call's (Python's `caller_logs_failure_of`).
-    fn receives(self, own: bool, rendered: bool) -> bool {
-        own && match self {
-            Self::Nobody => false,
-            Self::Caller => !rendered,
-            Self::Delegation => true,
-        }
-    }
 }
 
 impl CallFacts {

@@ -43,6 +43,7 @@ mod config;
 mod delegation;
 mod environment;
 mod events;
+pub mod failure_log;
 mod framework_events;
 mod inbound;
 mod io;
