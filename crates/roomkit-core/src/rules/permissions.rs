@@ -1114,6 +1114,24 @@ mod tests {
             );
         }
 
+        /// A binding changed after the commit changes nothing of the past
+        /// (RFC §7.5 rule 8): its events keep the visibility stamped on
+        /// them, the source binding read at their commit only.
+        // Python: tests/test_context_visibility.py::TestVisibleEvents::test_the_stored_visibility_is_the_whole_answer
+        #[test]
+        fn the_stored_visibility_is_the_whole_answer() {
+            let ws2 = Visibility::channels([channel("ws2")]).unwrap();
+            let ws1 = ChannelBinding {
+                visibility: ws2.clone(),
+                ..transport("ws1")
+            };
+            let events = vec![
+                said("evt_1", &ws1, "hidden", ws2),
+                said("evt_2", &ws1, "shown", Visibility::All),
+            ];
+            assert_eq!(known(transport("reader"), &[ws1], events), ["shown"]);
+        }
+
         #[test]
         fn a_channel_the_room_does_not_bind_knows_none_of_its_events() {
             assert_eq!(
