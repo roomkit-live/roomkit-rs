@@ -155,7 +155,8 @@ fn take(
 async fn serve(shared: &Shared, method: &Value, params: Value) -> Answer {
     let Some(name) = method.as_str() else {
         // The SDK's router looks the method up by it: a list or an object
-        // it cannot look up, any other value it does not find.
+        // it cannot look up, CPython's 3.12 and 3.13 words (those roomkit
+        // supports), any other value it does not find.
         return Err(match method {
             Value::Array(_) => internal("unhashable type: 'list'"),
             Value::Object(_) => internal("unhashable type: 'dict'"),

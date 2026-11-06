@@ -18,8 +18,10 @@ use crate::error::AcpError;
 /// sessions', and each `session/request_permission` request to
 /// [`request_permission`](Self::request_permission), the reading going on
 /// meanwhile: a callback may ask the connection and wait for its answer. A
-/// prompt of a session, sent from one of that session's updates, does not
-/// wait for the update it is sent from; sent from a task the update spawns
+/// prompt of a session, sent from one of that session's updates, returns at
+/// once, before the session's later updates, which wait behind the one it
+/// is sent from (the Python SDK waits for them, which run beside it there);
+/// sent from a task the update spawns
 /// and waits for, it waits behind the update, which never ends: a tokio
 /// task-local, as `roomkit::current_tool_call`, does not pass to a task
 /// spawned plainly (HITL 1e62db43). It refuses every other request of the agent with

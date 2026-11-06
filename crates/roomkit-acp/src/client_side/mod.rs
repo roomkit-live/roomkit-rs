@@ -366,9 +366,11 @@ impl Shared {
     /// Gives the response `message` to the request waiting for it, if one
     /// is, as the SDK reads a response: its request first, none waiting
     /// leaving the response unread; then its `result`, else its `error`,
-    /// else none. An error that is no object, or an id that is a list or an
-    /// object, ends the connection, as it ends the SDK's reader, every
-    /// request waiting failing with it (HITL db51d363).
+    /// else none. An error that is no object and reads as true (`"boom"`),
+    /// or an id that is a list or an object, ends the connection, as it
+    /// ends the SDK's reader, every request waiting failing with it (HITL
+    /// db51d363); one that reads as false (`null`, `""`) is an internal
+    /// error.
     fn answer(&self, message: &Map<String, Value>) -> Result<(), Ended> {
         let Some(id) = message.get("id") else {
             return Ok(());
