@@ -86,7 +86,9 @@ impl CallSlots {
     /// # Errors
     ///
     /// Why the read fails: an id that is no text and that no set can hold
-    /// (a list, an object), where Python asks whether a call holds it.
+    /// (a list, an object), where Python asks whether a call holds it; a call
+    /// named under an id that is no text, as Python's composition event,
+    /// which carries the id, fails as it is built.
     pub(crate) fn fold(&mut self, fragment: &Fragment<'_>) -> Result<(), String> {
         let mut name = fragment.name.map(str::to_owned);
         let mut position = self.by_index.get(&fragment.index).copied();
@@ -226,8 +228,7 @@ impl Slot {
 /// number or `true` by its value, `true` being 1 (`1 == True`, `7 == 7.0`).
 fn same_odd(held: &Value, id: &Value) -> bool {
     match (python_number(held), python_number(id)) {
-        (Some(Number::Int(held)), Some(Number::Int(id))) => held == id,
-        (Some(held), Some(id)) => held.as_f64().total_cmp(&id.as_f64()).is_eq(),
+        (Some(held), Some(id)) => held.equals(id),
         _ => held == id,
     }
 }
@@ -240,16 +241,29 @@ enum Number {
 }
 
 impl Number {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "Python compares a whole number with a float as floats do past 2^53"
-    )]
-    fn as_f64(self) -> f64 {
-        match self {
-            Self::Int(whole) => whole as f64,
-            Self::Float(float) => float,
+    /// Whether the two are one number, exactly, as Python compares an
+    /// integer with a float: a float equal to an integer is whole.
+    fn equals(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Int(one), Self::Int(other)) => one == other,
+            (Self::Float(one), Self::Float(other)) => one.total_cmp(&other).is_eq(),
+            (Self::Int(whole), Self::Float(float)) | (Self::Float(float), Self::Int(whole)) => {
+                whole_of(float) == Some(whole)
+            }
         }
     }
+}
+
+/// `float` as an integer when it is a whole number an `i128` holds.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the float is whole and within i128's range, so the cast is exact"
+)]
+fn whole_of(float: f64) -> Option<i128> {
+    // i128's bounds, as floats: 2^127 is the first float past i128::MAX.
+    const BOUND: f64 = 170_141_183_460_469_231_731_687_303_715_884_105_728.0;
+    (float.is_finite() && float.trunc().total_cmp(&float).is_eq() && float.abs() < BOUND)
+        .then_some(float as i128)
 }
 
 /// `id` as the number Python reads it, `true` being 1.

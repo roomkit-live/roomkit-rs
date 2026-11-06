@@ -419,14 +419,12 @@ pub(crate) fn response(
     let malformed = |reason: String| OpenAiError::Malformed {
         reason: cleaned(&reason, secret, MESSAGE_LIMIT),
     };
-    let value: Value =
-        serde_json::from_slice(body).map_err(|error| malformed(error.to_string()))?;
     // An array would fill a completion with its members' defaults.
-    if !value.is_object() {
+    if body.trim_ascii_start().first() != Some(&b'{') {
         return Err(malformed("not a chat completion".to_owned()));
     }
     let completion: Completion =
-        serde_json::from_value(value).map_err(|error| malformed(error.to_string()))?;
+        serde_json::from_slice(body).map_err(|error| malformed(error.to_string()))?;
     let usage = completion
         .usage
         .map(|usage| usage_of(&usage, cache_hits))
@@ -687,7 +685,8 @@ impl Folding {
 
     /// Adds a call's fragment to the call it belongs to; an object for its
     /// arguments reads as the JSON text it stands for. Fails, saying why, on
-    /// an id the calls cannot hold ([`CallSlots::fold`]).
+    /// an id the calls cannot hold, or a call named under an id that is no
+    /// text ([`CallSlots::fold`]).
     fn fold(&mut self, fragment: DeltaCall) -> Result<(), String> {
         let DeltaCall {
             index,
@@ -1500,21 +1499,28 @@ mod tests {
     // Python: tests/test_providers/test_chat_response_reading.py::test_a_call_named_under_an_id_that_is_no_text_fails_where_it_is_named
     #[test]
     fn a_call_named_under_an_id_that_is_no_text_fails_where_it_is_named() {
-        for again in [Value::Null, serde_json::json!(7)] {
+        let pairs = [
+            (serde_json::json!(7), Value::Null),
+            (serde_json::json!(7), serde_json::json!(7)),
+            (serde_json::json!(7), serde_json::json!(7.0)),
+            (serde_json::json!(1), serde_json::json!(true)),
+            (serde_json::json!(true), serde_json::json!(1)),
+        ];
+        let chunk = |call: &Value| {
+            serde_json::json!({ "choices": [{ "index": 0, "delta": { "tool_calls": [call] } }] })
+                .to_string()
+        };
+        for (held, again) in pairs {
             let mut folding = Folding::default();
-            let entry = serde_json::json!({ "index": 0, "id": 7, "type": "custom" });
+            let entry = serde_json::json!({ "index": 0, "id": held, "type": "custom" });
             let mut call = named();
             call["index"] = 0.into();
             call["id"] = again.clone();
-            let chunk = |call: &Value| {
-                serde_json::json!({ "choices": [{ "index": 0, "delta": { "tool_calls": [call] } }] })
-                    .to_string()
-            };
             assert_eq!(folding.take(&chunk(&entry), "sk-1"), Ok(Vec::new()));
             let read = folding.take(&chunk(&call), "sk-1");
             assert!(
                 matches!(read, Err(OpenAiError::Malformed { .. })),
-                "{again}: {read:?}"
+                "{held} then {again}: {read:?}"
             );
         }
     }
