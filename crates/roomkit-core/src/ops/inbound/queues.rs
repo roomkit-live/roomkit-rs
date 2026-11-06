@@ -266,31 +266,25 @@ impl Cascade {
         }
     }
 
-    /// Whether the cascade of `lineage` has work queued or running that
-    /// goes on in the call's present stage: a delivery set, which runs
-    /// whatever the stage; and, once the call's passes run (`passing`), a
-    /// pass, a stream or a row waiting for its pass, which counts for every
-    /// lineage. Before then a pass waits for the call's own admission,
-    /// which may wait for what the work of `lineage` reports.
-    pub(super) fn holds(&self, lineage: Lineage, passing: bool) -> bool {
+    /// Whether the cascade of `lineage` has work queued or running: a
+    /// delivery set, a pass, a stream, or a row waiting for its pass, which
+    /// counts for every lineage.
+    pub(super) fn holds(&self, lineage: Lineage) -> bool {
         let of = |job: &Job| match job {
             Job::Pass(pass, _) | Job::Row(pass, _) => pass.lineage() == lineage,
             Job::Record(..) => false,
         };
-        let delivering = self
-            .sets
+        self.sets
             .iter()
             .chain(&self.delivery)
-            .any(|delivery| delivery.set.lineage() == lineage);
-        delivering
-            || passing
-                && (self.passes.iter().chain(&self.pass).any(of)
-                    || self.streams.iter().any(|job| job.lineage == lineage)
-                    || self
-                        .stream
-                        .as_ref()
-                        .is_some_and(|read| read.lineage() == lineage)
-                    || !self.rows.is_empty())
+            .any(|delivery| delivery.set.lineage() == lineage)
+            || self.passes.iter().chain(&self.pass).any(of)
+            || self.streams.iter().any(|job| job.lineage == lineage)
+            || self
+                .stream
+                .as_ref()
+                .is_some_and(|read| read.lineage() == lineage)
+            || !self.rows.is_empty()
     }
 
     /// Whether the cascade has nothing queued nor running, no stream to
@@ -440,9 +434,14 @@ impl Machine {
     pub(super) fn run_queues(&mut self, cx: &mut Cx<'_>) {
         self.start_rows(cx);
         loop {
+            // An entry the call's admission adopted runs its whole cascade
+            // ahead of the call's own passes, its answers and their streams
+            // included, so that a wait on it from that work returns with them
+            // (RFC §9.5.1 Reentrance, Python's cascade of its own).
             let passing = matches!(self.stage.current(), Stage::Cascade | Stage::Ending(_));
-            if passing
-                && self.cascade.pass.is_none()
+            let runs = |lineage: Lineage| passing || matches!(lineage, Lineage::Entry(_));
+            if self.cascade.pass.is_none()
+                && self.cascade.passes.front().is_some_and(|job| runs(job.lineage()))
                 && let Some(mut job) = self.cascade.passes.pop_front()
             {
                 job.start(cx);
@@ -458,9 +457,9 @@ impl Machine {
                 }
                 continue;
             }
-            if passing
-                && self.cascade.is_between_streams()
+            if self.cascade.is_between_streams()
                 && self.adopted.is_idle()
+                && self.cascade.streams.front().is_some_and(|job| runs(job.lineage))
                 && let Some(job) = self.cascade.streams.pop_front()
             {
                 self.start_stream(cx, job);
@@ -575,7 +574,7 @@ impl Machine {
         };
         let own = !end.job.chained && end.job.lineage == Lineage::Call;
         self.rewrite_answers(end.job.lineage, &output.response_events);
-        self.keep_stream_end(cx, &end.job, &output);
+        self.keep_stream_end(&end.job, &output);
         let Some(error) = output.error else {
             return;
         };
@@ -590,14 +589,8 @@ impl Machine {
 
     /// What a stream's read leaves its caller: the turn's record, how it ended
     /// under `turns`, and for an adopted entry's own stream its failure, which
-    /// its wait reads (RFC §6.4, §10.1 step 18). An entry told at once, its
-    /// call's passes not running yet, is told again (`report_adopted_deliveries`).
-    fn keep_stream_end(
-        &mut self,
-        cx: &mut Cx<'_>,
-        job: &StreamJob,
-        output: &crate::model::ChannelOutput,
-    ) {
+    /// its wait reads (RFC §6.4, §10.1 step 18).
+    fn keep_stream_end(&mut self, job: &StreamJob, output: &crate::model::ChannelOutput) {
         if job.chained {
             return;
         }
@@ -615,10 +608,6 @@ impl Machine {
         if let Some(delivered) = self.adopted_deliveries.get_mut(&entry) {
             merge(&mut delivered.response_metadata);
             delivered.error = delivered.error.take().or_else(|| output.error.clone());
-        } else if let Some(told) = self.told_adopted.get_mut(&entry) {
-            merge(&mut told.response_metadata);
-            told.error = told.error.take().or_else(|| output.error.clone());
-            cx.io.delivered(entry, told.clone());
         }
     }
 }

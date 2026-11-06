@@ -701,13 +701,10 @@ on_both_runtimes!(
 /// returns unwaited.
 ///
 /// Off the lock, the hook waits for the call during the outer call's
-/// admission: the adopted call's delivery set ends before the outer call's
-/// passes run, so its report is told at once, without its answers, whose
-/// passes wait for the outer call's own pass; the later wait reads that
-/// report. Python's reads `['A1']` both times (probe
-/// `tasks/probes/step5-lot2/adopted_answers_off_lock.py`), which lot 3
-/// brings. A handle kept unwaited by the off-lock hook reads its answers or
-/// not depending on the runtime's scheduling, and is not pinned here.
+/// admission: the adopted call's whole cascade runs ahead of the outer
+/// call's passes, its agent's answer among it, so the hook's wait and the
+/// later one both read that answer, as Python's (RMK-1329; scenario
+/// `delivery/an-adopted-call-waited-in-its-hook-reads-its-turn`).
 async fn adopted_calls_read_their_answers() {
     let under_lock = answers_of_an_adopted_call(true).await;
     let off_lock = answers_of_an_adopted_call(false).await;
@@ -716,7 +713,7 @@ async fn adopted_calls_read_their_answers() {
         (under_lock, off_lock),
         (
             (vec![], answer("side"), answer("hello")),
-            (vec![], vec![], answer("hello"))
+            (answer("side"), answer("side"), answer("hello"))
         )
     );
 }

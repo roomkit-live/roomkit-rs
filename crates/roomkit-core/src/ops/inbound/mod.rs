@@ -423,7 +423,6 @@ impl Inbound {
                 cascade: Cascade::new(budget),
                 adopted: Adoptions::default(),
                 adopted_deliveries: BTreeMap::new(),
-                told_adopted: BTreeMap::new(),
                 side_effects: SideEffects::default(),
                 outcome: None,
             }),
@@ -566,9 +565,6 @@ struct Machine {
     /// its entry's cascade is over, so that it carries the answers that
     /// cascade delivered (Python's `InboundResult.response_events`).
     adopted_deliveries: BTreeMap<EntryId, InboundResult>,
-    /// What each adopted entry told at once, before its streams are read,
-    /// was told: what they add is told again.
-    told_adopted: BTreeMap<EntryId, InboundResult>,
     side_effects: SideEffects,
     outcome: Option<Result<InboundResult, InboundError>>,
 }

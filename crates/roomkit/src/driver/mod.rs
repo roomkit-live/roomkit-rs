@@ -379,9 +379,9 @@ async fn drive<S: ConversationStore, O: Operation>(
         call_of_effect: HashMap::new(),
         callers: HashMap::new(),
         deliveries: HashMap::new(),
-        told_deliveries: HashMap::new(),
         entry_answers: HashMap::new(),
         entry_cancels: HashMap::new(),
+        entry_cut: HashMap::new(),
         entry_named: HashMap::new(),
         entry_names: HashMap::new(),
         clocks: Clocks::read(&*environment),
@@ -438,17 +438,17 @@ struct Driver<'kit, S> {
     /// The callers of the entries the operation adopted, until settled.
     callers: HashMap<EntryId, oneshot::Sender<Reply>>,
     /// Where the delivery's end of each entry the operation adopted goes,
-    /// until its set ran.
+    /// until its cascade is over.
     deliveries: HashMap<EntryId, watch::Sender<Option<InboundResult>>>,
-    /// The handles of the entries told their delivery: a stream read later
-    /// tells them again what it adds.
-    told_deliveries: HashMap<EntryId, watch::Sender<Option<InboundResult>>>,
     /// The answers of each adopted entry's cascade, which its handle reads
     /// when the run ends without telling its delivery's end.
     entry_answers: HashMap<EntryId, Arc<StoredAnswers>>,
     /// The cut each adopted entry's caller may ask of its turns, until
     /// asked (RFC §10.1 "Explicit delivery cancellation").
     entry_cancels: HashMap<EntryId, Arc<CancelRequest>>,
+    /// Why each adopted entry's turns were cut, once asked: its caller's
+    /// `cancellation_reason` (Python's `DeliveryCascade.cancelled`).
+    entry_cut: HashMap<EntryId, String>,
     /// The name each adopted entry's delivery key gives it, with the cut
     /// its caller may ask, until the entry settles.
     entry_named: HashMap<EntryId, (Arc<Named>, Arc<CancelRequest>)>,
@@ -533,8 +533,9 @@ enum Event<'kit> {
     Adoption(Adoption),
     /// The caller of an inbound call stopped waiting.
     CallerGone,
-    /// The delivery of an entry the operation adopted was cancelled.
-    EntryCancelled(EntryId),
+    /// The delivery of an entry the operation adopted was cancelled, for
+    /// this reason.
+    EntryCancelled(EntryId, String),
     /// The kit's close moved on to this phase.
     Phase(Phase),
 }
@@ -656,7 +657,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                         return Ok(());
                     }
                 }
-                Some(Event::EntryCancelled(entry)) => {
+                Some(Event::EntryCancelled(entry, reason)) => {
+                    self.entry_cut.insert(entry, reason);
                     let cut = operation.cancel_entry_turns(entry);
                     self.give_up(&cut);
                     return Ok(());
@@ -1240,10 +1242,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
             let cancelled = entry_cancels
                 .iter()
-                .find_map(|(entry, cancel)| cancel.poll(cx).then_some(*entry));
-            if let Some(entry) = cancelled {
+                .find_map(|(entry, cancel)| cancel.poll(cx).then(|| (*entry, cancel.reason())));
+            if let Some((entry, reason)) = cancelled {
                 entry_cancels.remove(&entry);
-                return Poll::Ready(Some(Event::EntryCancelled(entry)));
+                let reason = reason.unwrap_or_else(|| CALLER_CANCELLED.to_owned());
+                return Poll::Ready(Some(Event::EntryCancelled(entry, reason)));
             }
             let ready = waits
                 .iter_mut()
@@ -1339,21 +1342,20 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     }
 
     /// Tells the caller of an adopted entry its delivery's end (RFC §10.1
-    /// step 18), and stops naming that delivery.
+    /// step 18), its cut's reason among it once asked, and stops naming
+    /// that delivery.
     fn delivered(&mut self, delivered: Delivered) {
-        self.entry_answers.remove(&delivered.entry);
-        self.entry_cancels.remove(&delivered.entry);
-        // Kept: an entry told before its streams are read is told again.
-        let completion = self
-            .deliveries
-            .remove(&delivered.entry)
-            .or_else(|| self.told_deliveries.remove(&delivered.entry));
-        if let Some(completion) = completion {
-            completion.send_replace(Some(delivered.result));
-            self.told_deliveries.insert(delivered.entry, completion);
+        let Delivered { entry, mut result } = delivered;
+        self.entry_answers.remove(&entry);
+        self.entry_cancels.remove(&entry);
+        if let Some(reason) = self.entry_cut.remove(&entry) {
+            result.cancellation_reason.get_or_insert(reason);
         }
-        // Its set ran: the delivery is over, but for an event it holds.
-        self.entry_names.remove(&delivered.entry);
+        if let Some(completion) = self.deliveries.remove(&entry) {
+            completion.send_replace(Some(result));
+        }
+        // Its cascade is over: the delivery is, but for an event it holds.
+        self.entry_names.remove(&entry);
     }
 
     /// Answers the caller of a settled entry, at its commit, once its

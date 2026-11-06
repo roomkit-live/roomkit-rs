@@ -156,9 +156,11 @@ impl Default for CancelOptions {
 /// delivery run on.
 ///
 /// A call adopted by the room's admission work that made it, an off-lock
-/// hook's body or a parse (RFC §9.5.1 Reentrance), has its delivery set
-/// run by that work, ahead of the event: a wait from that work, or from
-/// anywhere once it ran, returns with its delivery results.
+/// hook's body or a parse (RFC §9.5.1 Reentrance), has its whole cascade
+/// run by that work, ahead of the event: its delivery set, its answers and
+/// their streams. A wait from that work, or from anywhere once it ran,
+/// returns with its delivery results, its answers and its turns' ends; a
+/// cancel cuts its turns until then.
 #[derive(Clone)]
 pub struct DeliveryHandle {
     shared: Arc<Shared>,

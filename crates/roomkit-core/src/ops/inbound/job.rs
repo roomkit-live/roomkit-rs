@@ -74,6 +74,14 @@ impl Job {
         }
     }
 
+    /// Whose cascade the pass belongs to.
+    pub(super) fn lineage(&self) -> Lineage {
+        match self {
+            Self::Pass(pass, _) | Self::Row(pass, _) => pass.lineage(),
+            Self::Record(pass, _) => pass.lineage(),
+        }
+    }
+
     /// Whether the pass waits for `effect`.
     pub(super) fn awaits(&self, effect: EffectId) -> bool {
         match self {

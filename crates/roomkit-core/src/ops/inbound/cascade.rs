@@ -17,7 +17,7 @@ use super::pass::{CommitPass, PassOrigin, PassReport, PassResult};
 use super::queues::{Delivery, Lineage};
 use super::record::{RecordPass, RecordReport, RecordResult};
 use super::stream::{self, StreamJob};
-use super::{InboundError, InboundResult, Machine, Stage, instructions, report, stamp};
+use super::{InboundError, InboundResult, Machine, instructions, report, stamp};
 use crate::model::{
     ChannelCategory, ChannelId, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, RoomId,
 };
@@ -565,28 +565,18 @@ impl Machine {
 
     /// Tells the caller of each adopted entry whose cascade is over what
     /// its delivery set reported, with the answers its cascade delivered
-    /// (RFC §10.1 step 18). Whether the report waits for those answers
-    /// depends on the call's stage when the entry's delivery set ends, not
-    /// on where the entry was adopted: while the call's own passes do not
-    /// run yet (its admission, an off-lock hook's wait among it), the
-    /// entry's answers' passes wait for the call's own pass, which may wait
-    /// for this report, so the entry is told at once, without them; once
-    /// they run, the report waits for its answers. Python's report carries
-    /// them whatever the stage (lot 3).
+    /// and its turns' ends (RFC §10.1 step 18), once: an entry its call's
+    /// admission adopted runs its whole cascade ahead of the call's own
+    /// passes (`run_queues`), so the report never waits for them.
     pub(super) fn report_adopted_deliveries(&mut self, cx: &mut Cx<'_>) {
-        let passing = matches!(self.stage.current(), Stage::Cascade | Stage::Ending(_));
         let over: Vec<EntryId> = self
             .adopted_deliveries
             .keys()
             .copied()
-            .filter(|entry| !self.cascade.holds(Lineage::Entry(*entry), passing))
+            .filter(|entry| !self.cascade.holds(Lineage::Entry(*entry)))
             .collect();
         for entry in over {
             if let Some(delivered) = self.adopted_deliveries.remove(&entry) {
-                // Told before its streams are read: they tell it again.
-                if !passing {
-                    self.told_adopted.insert(entry, delivered.clone());
-                }
                 cx.io.delivered(entry, delivered);
             }
         }
