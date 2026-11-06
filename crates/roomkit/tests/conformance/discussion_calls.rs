@@ -281,7 +281,7 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
         let options = roomkit::SpeakQueueOptions {
             organization_id: optional(spec, "organization_id")?,
         };
-        let queue = run.kit().speak_queue(&room, options);
+        let queue = run.kit_of(spec)?.speak_queue(&room, options);
         let result = queue.as_ref().map_or(Value::Null, queue_record);
         return Ok(finish(
             run,
@@ -319,7 +319,7 @@ async fn listening(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, U
     let room: roomkit::model::RoomId = field(spec, "room_id")?;
     let agents: Vec<ChannelId> = field(spec, "channel_ids")?;
     let organization_id: Option<String> = optional(spec, "organization_id")?;
-    let kit = run.kit();
+    let kit = run.kit_of(spec)?;
     let outcome = if name == "listen_only" {
         let options = roomkit::ListenOnlyOptions { organization_id };
         kit.listen_only(&room, &agents, options).await

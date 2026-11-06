@@ -133,7 +133,8 @@ impl RealtimeBackend for TextRecorder {
 
 /// Runs `scenario`; returns every mismatch with its expectations.
 pub(crate) async fn run(scenario: &Value) -> Vec<String> {
-    // The store's file, when it has one, goes once the run is over.
+    // The store's file, when it has one, goes once the run is over; another
+    // process opens it too.
     let setup = scenario.get("setup").cloned().unwrap_or_default();
     let slot = RunSlot::default();
     let backend = delivery_backend(&setup["kit"]);
@@ -144,7 +145,7 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     };
     let mut shared_store = None;
     let text_events = TextEvents::default();
-    let (kit, _store_file) = crate::new_kit(|mut options| {
+    let (kit, store_file) = crate::new_kit(|mut options| {
         shared_store = Some(Arc::clone(&options.store));
         if scenario["expect"].get("text_events").is_some() {
             options.realtime = Some(Arc::new(TextRecorder {
@@ -177,6 +178,16 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     if let Err(problem) = set_up(&run, &setup).await {
         return vec![format!("setup: {problem}")];
     }
+    for process in setup["processes"].as_array().into_iter().flatten() {
+        let id = process["id"].as_str().unwrap_or_default().to_owned();
+        let kit = crate::process_kit(&run.store(), &store_file, run.kit().lock_manager()).await;
+        for channel in setup["channels"].as_array().into_iter().flatten() {
+            if let Err(problem) = calls::register_process_channel(&run, &kit, channel) {
+                return vec![format!("setup: process {id}: {problem}")];
+            }
+        }
+        run.add_process(id, kit);
+    }
     if scenario["expect"].get("thinking_events").is_some() {
         for room in setup["rooms"].as_array().into_iter().flatten() {
             let room = room["id"].as_str().unwrap_or_default();
@@ -203,7 +214,9 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
         }
     }
     let mut observed = observe(&run, step_outcomes).await;
-    run.kit().close().await.unwrap();
+    for kit in run.open_kits() {
+        kit.close().await.unwrap();
+    }
     observed.text_events = std::mem::take(&mut *lock(&text_events));
     let mut found = lock(&run.problems).clone();
     found.extend(compare(&run, scenario, &observed));
@@ -374,7 +387,8 @@ async fn subscribe_thinking(run: &Arc<Run>, room: &str) -> Result<(), String> {
 }
 
 async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
-    let store = run.kit().store();
+    let reader = run.reader();
+    let store = reader.store();
     let rooms = store
         .list_rooms(roomkit::store::ListRoomsOptions::default())
         .await

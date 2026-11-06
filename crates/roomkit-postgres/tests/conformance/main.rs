@@ -141,6 +141,27 @@ pub(crate) async fn new_kit(
     (RoomKit::new(options), schema)
 }
 
+/// Another process serving the rooms (README, `processes`): a kit over a
+/// store of its own on the run's schema and an advisory lock manager of its
+/// own, as another process opens them.
+pub(crate) async fn process_kit(
+    _store: &Arc<PostgresStore>,
+    schema: &TempSchema,
+    _lock_manager: Arc<dyn roomkit::RoomLockManager>,
+) -> Kit {
+    let store = schema.initialized_store().await;
+    let locks = PostgresAdvisoryLockManager::new(PostgresAdvisoryLockManagerOptions {
+        dsn: Some(schema.dsn()),
+        max_size: 8,
+        ..PostgresAdvisoryLockManagerOptions::default()
+    });
+    locks.init().await.unwrap();
+    RoomKit::new(RoomKitOptions {
+        lock_manager: Some(Arc::new(locks)),
+        ..RoomKitOptions::with_store(store)
+    })
+}
+
 /// Every scenario runs; those this implementation fails on this store are
 /// exactly the known failures. Without `POSTGRES_DSN` it skips itself.
 #[test]

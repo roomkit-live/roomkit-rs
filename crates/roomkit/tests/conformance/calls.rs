@@ -127,7 +127,7 @@ pub(crate) async fn call(
                 organization_id: organization_id(spec),
                 defer_delivery: optional::<bool>(spec, "defer_delivery")?.unwrap_or(false),
             };
-            let outcome = run.kit().process_inbound(message, options).await;
+            let outcome = run.kit_of(spec)?.process_inbound(message, options).await;
             keep_handle(run, spec, &outcome);
             let id = outcome
                 .as_ref()
@@ -203,7 +203,7 @@ pub(crate) async fn call(
             crate::verification_calls::call(run, verification, spec).await?
         }
         "cancel_delivery" | "steer" => (cancel_or_steer(run, name, spec).await?, None),
-        "install_strategy" | "uninstall_strategy" | "claim_room_strategy" | "room_strategy" => {
+        strategy if crate::strategy_calls::arguments(strategy).is_some() => {
             (crate::strategy_calls::call(run, name, spec).await?, None)
         }
         "save_conversation_state" => (crate::routing_calls::call(run, name, spec).await?, None),
@@ -250,6 +250,14 @@ async fn regenerate_call(
         result.as_ref().map_or(Value::Null, inbound_result)
     });
     Ok((called, id))
+}
+
+/// `close`: closes the kit the call names, a process that stops (README,
+/// `close`).
+async fn close(run: &std::sync::Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+    let kit = run.kit_of(spec)?;
+    run.closed(spec);
+    Ok(finish(run, name, kit.close().await, |()| Value::Null))
 }
 
 /// `send_greeting`: an agent's greeting (§19.1).
@@ -337,12 +345,16 @@ async fn cancel_or_steer(
     Ok(Ok(json!(cancelled)))
 }
 
-/// A handoff's call, or a call of the room's lifecycle.
+/// A process's close, a discussion's or a handoff's call, or a call of the
+/// room's lifecycle.
 async fn other_call(
     run: &std::sync::Arc<Run>,
     name: &str,
     spec: &Value,
 ) -> Result<Called, Unreadable> {
+    if name == "close" {
+        return close(run, name, spec).await;
+    }
     if crate::discussion_calls::arguments(name).is_some() {
         return crate::discussion_calls::call(run, name, spec).await;
     }
@@ -691,6 +703,31 @@ pub(crate) fn register_channel(
     Ok(finish(run, "register_channel", registered, |()| {
         Value::Null
     }))
+}
+
+/// Registers `channel` on `kit`, another process of the setup: a scripted
+/// agent answers from the model the run's own agent of its id has (README,
+/// `processes`).
+pub(crate) fn register_process_channel(
+    run: &std::sync::Arc<Run>,
+    kit: &crate::Kit,
+    channel: &Value,
+) -> Result<(), Unreadable> {
+    let id = ChannelId::new(channel["id"].as_str().unwrap_or_default())
+        .map_err(|error| error.to_string())?;
+    let registered = if channel["type"] == "host" {
+        kit.register_channel(HostChannel::new(roomkit::HostChannelOptions {
+            channel_id: id,
+        }))
+    } else if channel.get("model").is_some() {
+        match agents::scripted_agent_of(channel, run, true)?.0 {
+            agents::Scripted::Channel(agent) => kit.register_channel(*agent),
+            agents::Scripted::Agent(agent) => kit.register_channel(*agent),
+        }
+    } else {
+        kit.register_channel(ScriptedChannel::new(channel, run)?)
+    };
+    registered.map_err(|error| format!("register {channel}: {error}"))
 }
 
 /// A change of a channel's speech output the scenario names: its mute or

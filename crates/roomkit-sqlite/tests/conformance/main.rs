@@ -124,6 +124,27 @@ pub(crate) async fn new_kit(
     )
 }
 
+/// Another process serving the rooms (README, `processes`): a kit over a
+/// store of its own on the run's file, as another process opens it, and the
+/// run's `lock_manager`.
+#[expect(
+    clippy::unused_async,
+    reason = "every store's process is made the same way, some awaiting their store"
+)]
+pub(crate) async fn process_kit(
+    _store: &std::sync::Arc<SqliteStore>,
+    file: &TempFile,
+    lock_manager: std::sync::Arc<dyn roomkit::RoomLockManager>,
+) -> Kit {
+    let store = SqliteStore::new(SqliteStoreOptions {
+        path: file.path().into(),
+    });
+    RoomKit::new(RoomKitOptions {
+        lock_manager: Some(lock_manager),
+        ..RoomKitOptions::with_store(store)
+    })
+}
+
 /// Every scenario runs; those this implementation fails on this store are
 /// exactly the known failures.
 #[test]

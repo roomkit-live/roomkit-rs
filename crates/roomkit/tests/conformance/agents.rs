@@ -239,8 +239,24 @@ pub(crate) type Models = Vec<(String, ScriptedProvider)>;
 /// The scripted agent `spec` describes, and its models; its gates are
 /// `run`'s.
 pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, Models), String> {
+    scripted_agent_of(spec, run, false)
+}
+
+/// [`scripted_agent`], for another process of the setup when `process`: it
+/// answers from the models the run's own agent of its id has (README,
+/// `processes`).
+pub(crate) fn scripted_agent_of(
+    spec: &Value,
+    run: &Arc<Run>,
+    process: bool,
+) -> Result<(Scripted, Models), String> {
     let id = ChannelId::new(spec["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
-    let (model, paced) = scripted_model(&spec["model"], run)?;
+    let shared = |name: &str| {
+        process
+            .then(|| crate::run::lock(&run.models).get(name).cloned())
+            .flatten()
+    };
+    let (model, paced) = scripted_model(&spec["model"], run, shared(id.as_str()))?;
     let mut options = AiChannelOptions {
         tools: tools(spec, run).into(),
         serialize_room_turns: spec["serialize_room_turns"] == true,
@@ -290,7 +306,7 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
     keep_chat_dialect(&spec["model"], id.to_string(), run);
     if let Some(fallback) = spec.get("fallback_model") {
         keep_chat_dialect(fallback, format!("{id}/fallback"), run);
-        let (fallback, paced) = scripted_model(fallback, run)?;
+        let (fallback, paced) = scripted_model(fallback, run, shared(&format!("{id}/fallback")))?;
         models.push((format!("{id}/fallback"), fallback));
         options.fallback_provider = Some(Arc::new(paced));
     }
@@ -386,7 +402,11 @@ fn keep_chat_dialect(spec: &Value, model: String, run: &Arc<Run>) {
 
 /// The scripted model `spec` describes, and the provider reading it, its
 /// gates `run`'s.
-fn scripted_model(spec: &Value, run: &Arc<Run>) -> Result<(ScriptedProvider, Paced), String> {
+fn scripted_model(
+    spec: &Value,
+    run: &Arc<Run>,
+    shared: Option<ScriptedProvider>,
+) -> Result<(ScriptedProvider, Paced), String> {
     let scripted = spec["rounds"].as_array().into_iter().flatten();
     let rounds = scripted.clone().map(round).collect::<Result<Vec<_>, _>>()?;
     let gates = scripted
@@ -397,7 +417,7 @@ fn scripted_model(spec: &Value, run: &Arc<Run>) -> Result<(ScriptedProvider, Pac
         .map(|pricing| serde_json::from_value(pricing.clone()))
         .transpose()
         .map_err(|e| format!("model.pricing: {e}"))?;
-    let model = ScriptedProvider::new(rounds);
+    let model = shared.unwrap_or_else(|| ScriptedProvider::new(rounds));
     let paced = Paced {
         script: model.clone(),
         gates,

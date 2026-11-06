@@ -71,6 +71,24 @@ pub(crate) async fn new_kit(configure: impl FnOnce(RoomKitOptions) -> RoomKitOpt
     (RoomKit::new(configure(RoomKitOptions::default())), ())
 }
 
+/// Another process serving the rooms (README, `processes`): a kit over the
+/// run's `store` and `lock_manager`.
+#[expect(
+    clippy::unused_async,
+    reason = "every store's process is made the same way, some awaiting their store"
+)]
+pub(crate) async fn process_kit(
+    store: &std::sync::Arc<Store>,
+    _kept: &(),
+    lock_manager: std::sync::Arc<dyn roomkit::RoomLockManager>,
+) -> Kit {
+    RoomKit::new(RoomKitOptions {
+        store: std::sync::Arc::clone(store),
+        lock_manager: Some(lock_manager),
+        ..RoomKitOptions::default()
+    })
+}
+
 /// Scenario id → the rule this implementation breaks (roomkit-specs
 /// `conformance/README.md`, "Known failures").
 pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[

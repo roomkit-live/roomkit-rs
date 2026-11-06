@@ -105,6 +105,12 @@ pub(crate) struct Check {
 /// One run of one scenario.
 pub(crate) struct Run {
     kit: crate::Kit,
+    /// The other processes of `setup.processes`, by id, in setup order
+    /// (README, `processes`).
+    processes: Mutex<Vec<(String, crate::Kit)>>,
+    /// The kits a `close` call closed, by the `kit` it named ("" for the
+    /// run's own).
+    closed: Mutex<BTreeSet<String>>,
     /// What each discussion's `done` answers, by its strategy's id.
     discussion_done: Mutex<HashMap<String, bool>>,
     /// The kit's store, shared: what a router of the run's own is built over.
@@ -182,6 +188,8 @@ impl Run {
             .unwrap_or_default();
         Self {
             kit,
+            processes: Mutex::default(),
+            closed: Mutex::default(),
             store,
             asserted_actions,
             gates: Gates::default(),
@@ -214,6 +222,59 @@ impl Run {
 
     pub(crate) fn kit(&self) -> &crate::Kit {
         &self.kit
+    }
+
+    /// `kit`, another process serving the rooms, known as `id` from now on.
+    pub(crate) fn add_process(&self, id: String, kit: crate::Kit) {
+        lock(&self.processes).push((id, kit));
+    }
+
+    /// The kit a call's `kit` names: a process of the setup, the run's own
+    /// kit when it names none (README, `processes`).
+    pub(crate) fn kit_of(&self, spec: &Value) -> Result<crate::Kit, calls::Unreadable> {
+        let Some(name) = spec.get("kit") else {
+            return Ok(self.kit.clone());
+        };
+        let call = spec["call"].as_str().unwrap_or_default();
+        if !KIT_CALLS.contains(&call) {
+            return Err(format!("{call} takes no kit"));
+        }
+        let name = name.as_str().ok_or("kit: not a process's id")?;
+        lock(&self.processes)
+            .iter()
+            .find(|(id, _)| id == name)
+            .map(|(_, kit)| kit.clone())
+            .ok_or_else(|| format!("no process {name:?} in setup.processes"))
+    }
+
+    /// The kit a call's `kit` names was closed: no wait, no close of it
+    /// again.
+    pub(crate) fn closed(&self, spec: &Value) {
+        let name = spec["kit"].as_str().unwrap_or_default().to_owned();
+        lock(&self.closed).insert(name);
+    }
+
+    /// The kits no `close` call closed, the run's own first.
+    pub(crate) fn open_kits(&self) -> Vec<crate::Kit> {
+        let closed = lock(&self.closed).clone();
+        let own = (!closed.contains("")).then(|| self.kit.clone());
+        own.into_iter()
+            .chain(
+                lock(&self.processes)
+                    .iter()
+                    .filter(|(id, _)| !closed.contains(id))
+                    .map(|(_, kit)| kit.clone()),
+            )
+            .collect()
+    }
+
+    /// The kit the run reads the store through: its own while open, else
+    /// the first process still open.
+    pub(crate) fn reader(&self) -> crate::Kit {
+        self.open_kits()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| self.kit.clone())
     }
 
     pub(crate) fn store(&self) -> Arc<crate::Store> {
@@ -731,7 +792,7 @@ impl Run {
             return Vec::new();
         };
         let mut events: Vec<Value> = self
-            .kit
+            .reader()
             .store()
             .list_events(&room_id, every_row())
             .await
@@ -759,18 +820,23 @@ impl Run {
 
     pub(crate) async fn idle(&self) {
         let waiting = async {
+            if lock(&self.processes).is_empty() {
+                self.quiet(&self.kit).await;
+                return;
+            }
+            // Each kit in turn, each discussion's driver roused by the
+            // wait, until a round changes nothing the store holds of the
+            // rooms (README, `processes`).
+            let mut before = None;
             loop {
-                roomkit::testing::idle(&self.kit).await;
-                let running = lock(&self.background)
-                    .values()
-                    .any(|handle| !handle.is_finished())
-                    || lock(&self.after_turn)
-                        .iter()
-                        .any(|work| !work.is_finished());
-                if !running && !self.backend_busy().await {
+                for kit in self.open_kits() {
+                    self.quiet(&kit).await;
+                }
+                let after = self.rooms_read().await;
+                if before.as_ref() == Some(&after) {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(1)).await;
+                before = Some(after);
             }
         };
         if tokio::time::timeout(CALL_BOUND, waiting).await.is_err() {
@@ -778,7 +844,56 @@ impl Run {
         }
         self.drain_events();
     }
+
+    /// Until `kit` runs nothing in the background, nor the run's own work.
+    async fn quiet(&self, kit: &crate::Kit) {
+        loop {
+            roomkit::testing::idle(kit).await;
+            let running = lock(&self.background)
+                .values()
+                .any(|handle| !handle.is_finished())
+                || lock(&self.after_turn)
+                    .iter()
+                    .any(|work| !work.is_finished());
+            if !running && !self.backend_busy().await {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+
+    /// What the store holds of each room that the processes move: its
+    /// latest index, its discussion's queue version, whether it stores a
+    /// discussion.
+    async fn rooms_read(&self) -> Vec<(String, Option<u64>, Value, bool)> {
+        let options = roomkit::store::ListRoomsOptions::default();
+        let rooms = self.reader().store().list_rooms(options).await;
+        rooms
+            .unwrap_or_default()
+            .into_iter()
+            .map(|room| {
+                let queue = room.metadata.get("_speak_queue");
+                let version = queue.map_or(Value::Null, |queue| queue["version"].clone());
+                let stored = room.metadata.contains_key("_discussion");
+                (room.id.to_string(), room.latest_index, version, stored)
+            })
+            .collect()
+    }
 }
+
+/// The calls a call's `kit` may run on another process (README, "Calls").
+const KIT_CALLS: &[&str] = &[
+    "process_inbound",
+    "install_strategy",
+    "uninstall_strategy",
+    "claim_room_strategy",
+    "room_strategy",
+    "room_strategy_is_current",
+    "speak_queue",
+    "listen_only",
+    "talk_again",
+    "close",
+];
 
 impl Run {
     /// Whether the kit's in-memory delivery backend still holds work: an

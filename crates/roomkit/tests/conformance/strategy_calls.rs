@@ -274,6 +274,7 @@ pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
         "install_strategy" | "claim_room_strategy" => &["room_id", "strategy"],
         "uninstall_strategy" | "room_strategy" => &["room_id"],
+        "room_strategy_is_current" => &["room_id", "kind"],
         _ => return None,
     })
 }
@@ -282,7 +283,7 @@ pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
 pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
     let room = field::<RoomId>(spec, "room_id")?;
     let organization_id = spec["organization_id"].as_str().map(str::to_owned);
-    let kit = run.kit();
+    let kit = run.kit_of(spec)?;
     Ok(match name {
         "install_strategy" => {
             let strategy = named(run, &field::<String>(spec, "strategy")?)?;
@@ -301,10 +302,33 @@ pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Cal
             let uninstalled = kit.uninstall_strategy(&room, options).await;
             finish(run, name, uninstalled, |held| json!(held))
         }
+        "room_strategy_is_current" => {
+            let kind = kind_of(&field::<String>(spec, "kind")?)?;
+            let options = roomkit::RoomStrategyIsCurrentOptions { organization_id };
+            match kit.room_strategy_is_current(&room, kind, options).await {
+                // The kind refused is its own error (README, "Errors").
+                Err(roomkit::RoomKitError::Type(_)) => Err(json!({"name": "kind_not_stored"})),
+                current => finish(run, name, current, |current| json!(current)),
+            }
+        }
         _ => {
             let options = RoomStrategyOptions { organization_id };
             Ok(strategy_id(run, kit.room_strategy(&room, options))?)
         }
+    })
+}
+
+/// The strategy a `room_strategy_is_current` call's `kind` names, by its
+/// type (README, "Calls").
+fn kind_of(kind: &str) -> Result<std::any::TypeId, Unreadable> {
+    use std::any::TypeId;
+    Ok(match kind {
+        "Discussion" => TypeId::of::<roomkit::Discussion>(),
+        "Pipeline" => TypeId::of::<roomkit::Pipeline>(),
+        "Swarm" => TypeId::of::<roomkit::Swarm>(),
+        "Loop" => TypeId::of::<roomkit::Loop>(),
+        "Supervisor" => TypeId::of::<roomkit::Supervisor>(),
+        other => return Err(format!("kind: no strategy {other:?}")),
     })
 }
 

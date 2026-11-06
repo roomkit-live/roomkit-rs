@@ -28,7 +28,9 @@ const SETUP: &[&str] = &[
     "identities",
     "strategies",
     "session_auditor",
+    "processes",
 ];
+const PROCESS: &[&str] = &["id"];
 const KIT: &[&str] = &[
     "max_chain_depth",
     "process_timeout_ms",
@@ -375,6 +377,7 @@ const STEPS: &[(&str, &[&str])] = &[
 /// Each call's arguments, beside `call` and `organization_id`.
 fn arguments(call: &str) -> Option<&'static [&'static str]> {
     Some(match call {
+        "close" => &[],
         "process_inbound" => &["message", "room_id", "defer_delivery"],
         "delivery.cancel" => &["of", "reason", "timeout_ms"],
         "delivery.wait" => &["of"],
@@ -471,6 +474,14 @@ pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
     optional(&setup["kit"], KIT, "setup.kit", &mut found);
     identity(setup, &mut found);
     strategies(setup, &mut found);
+    for (position, process) in items(&setup["processes"]) {
+        members(
+            process,
+            PROCESS,
+            &format!("setup.processes[{position}]"),
+            &mut found,
+        );
+    }
     optional(
         &setup["kit"]["delivery_backend"],
         DELIVERY_BACKEND,
@@ -870,7 +881,7 @@ fn reaction(reaction: &Value, path: &str, found: &mut Vec<String>) {
 
 fn step(step: &Value, path: &str, found: &mut Vec<String>) {
     if step.get("call").is_some() {
-        call(step, &["as", "background", "expect"], path, found);
+        call(step, &["as", "background", "expect", "kit"], path, found);
         return;
     }
     let kinds: Vec<&(&str, &[&str])> = STEPS
@@ -894,7 +905,7 @@ fn step(step: &Value, path: &str, found: &mut Vec<String>) {
     for (index, concurrent) in items(&step["concurrent"]) {
         call(
             concurrent,
-            &["as", "expect"],
+            &["as", "expect", "kit"],
             &format!("{path}.concurrent[{index}]"),
             found,
         );
