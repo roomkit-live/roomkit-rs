@@ -21,9 +21,9 @@ use roomkit::{
     DeliverOptions, DeliveryStrategy, DetachChannelOptions, HookOptions, HookTrigger, HostChannel,
     Immediate, InboundResult, MuteOptions, MuteOutputOptions, PostOptions,
     ProcessDeliveryStatusOptions, ProcessInboundOptions, ProcessWebhookOptions, Queued,
-    RemoveRoomHookOptions, RoomKitError, SendEventOptions, SendGreetingOptions, SetAccessOptions,
-    SetVisibilityOptions, UnmuteOptions, UnmuteOutputOptions, UpdateBindingMetadataOptions,
-    UpdateEventOptions, WaitForIdle,
+    RegenerateResponseOptions, RegenerateTargetOptions, RemoveRoomHookOptions, RoomKitError,
+    SendEventOptions, SendGreetingOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
+    UnmuteOutputOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WaitForIdle,
 };
 use roomkit_ai::{AiGenerationEvent, AiResponseEvent, ThinkingEvent, ToolRoundEvent};
 use serde::de::DeserializeOwned;
@@ -212,9 +212,44 @@ pub(crate) async fn call(
             None,
         ),
         "delivery.cancel" | "delivery.wait" => (handle_call(run, name, spec).await?, None),
-        "send_greeting" => (send_greeting(run, name, spec).await?, None),
+        "regenerate_response" | "regenerate_target" => regenerate_call(run, name, spec).await?,
         _ => (other_call(run, name, spec).await?, None),
     })
+}
+
+/// `regenerate_response` or `regenerate_target` (RFC §13.6), its label
+/// naming the event it answers again.
+async fn regenerate_call(
+    run: &std::sync::Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<(Called, Option<String>), Unreadable> {
+    let room = room_id(spec)?;
+    let organization_id = organization_id(spec);
+    if name == "regenerate_target" {
+        let options = RegenerateTargetOptions { organization_id };
+        let outcome = run.kit().regenerate_target(&room, options).await;
+        let id = outcome
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .map(|event| event.id.to_string());
+        return Ok((finish(run, name, outcome, dump), id));
+    }
+    let options = RegenerateResponseOptions {
+        trigger_id: optional(spec, "trigger_id")?,
+        organization_id,
+    };
+    let outcome = run.kit().regenerate_response(&room, options).await;
+    let id = outcome
+        .as_ref()
+        .ok()
+        .and_then(|result| result.as_ref()?.event.as_ref())
+        .map(|event| event.id.to_string());
+    let called = finish(run, name, outcome, |result| {
+        result.as_ref().map_or(Value::Null, inbound_result)
+    });
+    Ok((called, id))
 }
 
 /// `send_greeting`: an agent's greeting (§19.1).
@@ -313,6 +348,9 @@ async fn other_call(
     }
     if crate::handoff_calls::arguments(name).is_some() {
         return crate::handoff_calls::call(run, name, spec).await;
+    }
+    if name == "send_greeting" {
+        return send_greeting(run, name, spec).await;
     }
     lifecycle_call(run, name, spec).await
 }

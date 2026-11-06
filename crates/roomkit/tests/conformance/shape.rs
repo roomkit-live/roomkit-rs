@@ -377,6 +377,7 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "process_inbound" => &["message", "room_id", "defer_delivery"],
         "delivery.cancel" => &["of", "reason", "timeout_ms"],
         "delivery.wait" => &["of"],
+        "regenerate_response" => &["room_id", "trigger_id"],
         "send_event" => &[
             "room_id",
             "channel_id",
@@ -422,7 +423,7 @@ fn arguments(call: &str) -> Option<&'static [&'static str]> {
         "set_access" => &["room_id", "channel_id", "access"],
         "update_binding_metadata" => &["room_id", "channel_id", "metadata"],
         "set_visibility" => &["room_id", "channel_id", "visibility"],
-        "close_room" | "archive_room" | "check_timers" => &["room_id"],
+        "close_room" | "archive_room" | "check_timers" | "regenerate_target" => &["room_id"],
         "send_greeting" => &["room_id", "channel_id", "agent_id", "greeting"],
         "register_channel" => &["channel"],
         "unregister_channel" => &["channel_id"],
