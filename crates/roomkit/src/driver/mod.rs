@@ -44,7 +44,7 @@ use std::task::Poll;
 use roomkit_core::model::{ErrorRecord, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::{
     AnswerOf, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest,
-    InboundResult, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, StoreOutcome,
+    InboundResult, KIT_CLOSED, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, StoreOutcome,
     StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot, watch};
@@ -1342,13 +1342,19 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     }
 
     /// Tells the caller of an adopted entry its delivery's end (RFC §10.1
-    /// step 18), its cut's reason among it once asked, and stops naming
-    /// that delivery.
+    /// step 18), its cut's reason among it once asked, `kit_closed` for an
+    /// entry the kit's close found under way (RFC §12.10.4), and stops
+    /// naming that delivery.
     fn delivered(&mut self, delivered: Delivered) {
         let Delivered { entry, mut result } = delivered;
         self.entry_answers.remove(&entry);
         self.entry_cancels.remove(&entry);
-        if let Some(reason) = self.entry_cut.remove(&entry) {
+        let closing = self.inner.tasks.is_closing() && !self.inner.tasks.spares(&self.marks);
+        let reason = self
+            .entry_cut
+            .remove(&entry)
+            .or_else(|| closing.then(|| KIT_CLOSED.to_owned()));
+        if let Some(reason) = reason {
             result.cancellation_reason.get_or_insert(reason);
         }
         if let Some(completion) = self.deliveries.remove(&entry) {

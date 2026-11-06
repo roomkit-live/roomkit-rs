@@ -111,16 +111,19 @@ impl Channel for Stuck {
     }
 }
 
-/// A locked `BEFORE_BROADCAST` hook makes the deferred call `side` when it
-/// sees `hello`, keeping its handle; an agent echoes every message, and a
-/// second one's turn on the echo of `side` never ends. Once that turn
-/// started, the kit closes, cutting it at once: the call `hello` reads
-/// the answer its cascade stored, `You said: hello`, and
-/// the adopted call's handle `You said: side`, as Python's do
+/// A `BEFORE_BROADCAST` hook, under the lock or off it, makes the deferred
+/// call `side` when it sees `hello`, keeping its handle; an agent echoes
+/// every message, and a second one's turn on the echo of `side` never ends.
+/// Once that turn started, the kit closes, cutting it at once: the call
+/// `hello` reads the answer its cascade stored, `You said: hello`, and the
+/// adopted call's handle `You said: side`, each `kit_closed`, as Python's do
 /// (`close_while_held.out`).
+// Python: tests/test_kit_close.py::test_a_cut_call_carries_the_answers_already_stored
 #[tokio::test(start_paused = true)]
 async fn a_call_the_close_aborts_reads_the_answers_its_cascade_stored() {
-    assert_eq!(answers_under_the_close().await, said(["hello", "side"]));
+    for needs_lock in [true, false] {
+        assert_eq!(answers_under_the_close(needs_lock).await, cut(["hello", "side"]));
+    }
 }
 
 /// [`a_call_the_close_aborts_reads_the_answers_its_cascade_stored`] on a
@@ -130,7 +133,14 @@ async fn a_call_the_close_aborts_reads_the_answers_its_cascade_stored() {
 /// and ran on demand).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_call_the_close_aborts_reads_its_answers_on_threads() {
-    assert_eq!(answers_under_the_close().await, said(["hello", "side"]));
+    for needs_lock in [true, false] {
+        assert_eq!(answers_under_the_close(needs_lock).await, cut(["hello", "side"]));
+    }
+}
+
+/// The echoes of `texts`, each read with the close's cut.
+fn cut<const N: usize>(texts: [&str; N]) -> [(Vec<String>, Option<String>); N] {
+    said(texts).map(|said| (said, Some("kit_closed".to_owned())))
 }
 
 /// The echoes of `texts`.
@@ -139,8 +149,9 @@ fn said<const N: usize>(texts: [&str; N]) -> [Vec<String>; N] {
 }
 
 /// What the call `hello` and the adopted call's handle read of their
-/// answers, once the close aborted them.
-async fn answers_under_the_close() -> [Vec<String>; 2] {
+/// answers and of their cut, once the close aborted them, the adopting hook
+/// under the lock or off it (`needs_lock`).
+async fn answers_under_the_close(needs_lock: bool) -> [(Vec<String>, Option<String>); 2] {
     let started = Arc::new(Notify::new());
     let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(RecordingTransport::new(
@@ -174,6 +185,7 @@ async fn answers_under_the_close() -> [Vec<String>; 2] {
     let (hook_kit, hook_handles) = (kit.clone(), Arc::clone(&handles));
     let spec = HookOptions {
         name: "side".to_owned(),
+        needs_lock,
         ..Default::default()
     };
     kit.hook(
@@ -219,10 +231,8 @@ async fn answers_under_the_close() -> [Vec<String>; 2] {
         .unwrap()
         .unwrap();
     [outer, adopted].map(|result| {
-        result
-            .response_events
-            .iter()
-            .map(|event| text_of(&event.content))
-            .collect()
+        let texts = result.response_events.iter();
+        let texts = texts.map(|event| text_of(&event.content)).collect();
+        (texts, result.cancellation_reason)
     })
 }
