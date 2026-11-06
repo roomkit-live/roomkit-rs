@@ -452,6 +452,28 @@ impl Turns {
         }
     }
 
+    /// Hands `event`, committed in `room_id`, to `channel_id`'s channel on
+    /// the kit's own executor (RFC §10.6.3 `committed_event`), its memory
+    /// learning it without a turn (a discussion's, RFC §19.7.5 rule 3):
+    /// `channel` the executor's, what it raises logged.
+    pub(crate) async fn committed(
+        &self,
+        channel_id: &ChannelId,
+        room_id: &RoomId,
+        event: &RoomEvent,
+        channel: Option<Arc<dyn DynChannel>>,
+    ) {
+        let message = ChannelControl::CommittedEvent {
+            channel_id: channel_id.clone(),
+            room_id: room_id.clone(),
+            event: Box::new(event.clone()),
+            room_hooks: Vec::new(),
+        };
+        if let Some(message) = self.control(&message) {
+            apply(channel, message).await;
+        }
+    }
+
     /// Carries a channel control message to the kit's own executor: the
     /// message as the executor parses it, `None` when it could not cross.
     fn control(&self, message: &ChannelControl) -> Option<ChannelControl> {
@@ -473,10 +495,10 @@ impl Turns {
     }
 }
 
-/// Applies a room's attach or detach `message` on the executor to
-/// `channel`, the executor's (`None`: none registered), as the Python
-/// implementation's `ExecutorRooms.apply`: what the channel raises is
-/// logged, never returned (RFC §10.6.3).
+/// Applies a room's attach or detach `message`, or a committed event, on
+/// the executor to `channel`, the executor's (`None`: none registered), as
+/// the Python implementation's `ExecutorRooms.apply` and `_hand_event`:
+/// what the channel raises is logged, never returned (RFC §10.6.3).
 async fn apply(channel: Option<Arc<dyn DynChannel>>, message: ChannelControl) {
     let Some(channel) = channel else {
         return;
@@ -496,6 +518,15 @@ async fn apply(channel: Option<Arc<dyn DynChannel>>, message: ChannelControl) {
         } => {
             let applied = channel.on_room_detached(room_id.clone()).await;
             ("room_detached", channel_id, room_id, applied)
+        }
+        ChannelControl::CommittedEvent {
+            channel_id,
+            room_id,
+            event,
+            ..
+        } => {
+            let applied = channel.on_room_event(room_id.clone(), *event).await;
+            ("committed_event", channel_id, room_id, applied)
         }
     };
     if let Err(error) = applied {

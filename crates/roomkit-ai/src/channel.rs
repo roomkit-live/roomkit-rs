@@ -1008,16 +1008,26 @@ impl<P: AiProvider> AiChannel<P> {
         let skipped = event.source.channel_id == self.channel_id
             || matches!(
                 event.r#type,
-                EventType::ToolCallStart | EventType::ToolCallEnd | EventType::Instruction
+                EventType::ToolCallStart | EventType::ToolCallEnd
             );
         if skipped {
+            return;
+        }
+        self.learn(&context.room.id, event).await;
+    }
+
+    /// Hands `event` of `room_id` to the memory, but an instruction, which
+    /// is the application's and not the conversation's (RFC §10.1.1): what
+    /// Python's `_ingest` does. A failure is logged.
+    async fn learn(&self, room_id: &RoomId, event: &RoomEvent) {
+        if event.r#type == EventType::Instruction {
             return;
         }
         let options = IngestOptions {
             channel_id: Some(self.channel_id.clone()),
         };
-        if let Err(error) = self.memory.ingest(&context.room.id, event, options).await {
-            tracing::warn!(target: "roomkit::ai", room_id = %context.room.id, %error, "memory ingestion failed");
+        if let Err(error) = self.memory.ingest(room_id, event, options).await {
+            tracing::warn!(target: "roomkit::ai", room_id = %room_id, %error, "memory ingestion failed");
         }
     }
 
@@ -1622,6 +1632,13 @@ impl<P: AiProvider> Channel for AiChannel<P> {
     ) -> impl Future<Output = Result<(), ChannelError>> + Send {
         self.forget_room(&room_id);
         future::ready(Ok(()))
+    }
+
+    /// A committed event of `room_id` for the memory, a discussion's (RFC
+    /// §19.7.5 rule 3), wherever the channel runs.
+    async fn on_room_event(&self, room_id: RoomId, event: RoomEvent) -> Result<(), ChannelError> {
+        self.learn(&room_id, &event).await;
+        Ok(())
     }
 
     /// An intelligence channel is not delivered to: its turn is its

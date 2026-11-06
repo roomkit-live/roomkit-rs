@@ -473,6 +473,14 @@ impl<P: AiProvider> Channel for Agent<P> {
         self.channel.on_room_detached(room_id)
     }
 
+    fn on_room_event(
+        &self,
+        room_id: RoomId,
+        event: RoomEvent,
+    ) -> impl Future<Output = Result<(), ChannelError>> + Send {
+        self.channel.on_room_event(room_id, event)
+    }
+
     fn deliver(
         &self,
         event: RoomEvent,

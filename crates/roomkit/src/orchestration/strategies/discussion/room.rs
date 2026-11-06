@@ -451,12 +451,13 @@ impl<S: ConversationStore> DiscussionRoom<S> {
         if event.r#type != EventType::Message || event.status == EventStatus::Blocked {
             return Ok(());
         }
+        if self.state().closed {
+            return Ok(());
+        }
+        self.hand_to_memories(&event, &reach).await?;
         let speaker = event.source.channel_id.clone();
         {
             let mut live = self.state();
-            if live.closed {
-                return Ok(());
-            }
             if live
                 .turn
                 .as_ref()
@@ -472,6 +473,32 @@ impl<S: ConversationStore> DiscussionRoom<S> {
             self.rouse();
         } else if self.queue_named(&event, &reach, &speaker).await? {
             self.rouse();
+        }
+        Ok(())
+    }
+
+    /// Hands `event` to the memory of every agent it reaches but its author,
+    /// as a room with no discussion delivers it (rule 3): a memory that
+    /// learns as messages arrive learns the whole conversation. It reaches
+    /// each agent through the turn backend, where the agent runs (RFC
+    /// §10.6.3); what an agent raises is logged there.
+    async fn hand_to_memories(
+        &self,
+        event: &RoomEvent,
+        reach: &[ChannelId],
+    ) -> Result<(), RoomKitError> {
+        let kit = self.kit()?;
+        for agent in &self.config.agents {
+            if *agent == event.source.channel_id || !reach.contains(agent) {
+                continue;
+            }
+            let Some(channel) = kit.inner.channel(agent) else {
+                continue;
+            };
+            kit.inner
+                .turns
+                .committed(agent, &self.room_id, event, Some(channel))
+                .await;
         }
         Ok(())
     }

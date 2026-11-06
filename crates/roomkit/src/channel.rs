@@ -458,6 +458,20 @@ pub trait Channel: Send + Sync + 'static {
         async { Ok(()) }
     }
 
+    /// Takes `event`, committed in `room_id`, as a message the channel's
+    /// memory is handed without a turn: a discussion's (RFC §19.7.5 rule 3),
+    /// through the turn backend, whose executor logs what it raises (RFC
+    /// §10.6.3). Python's `on_room_event`.
+    ///
+    /// The default does nothing.
+    fn on_room_event(
+        &self,
+        _room_id: RoomId,
+        _event: RoomEvent,
+    ) -> impl Future<Output = Result<(), ChannelError>> + Send {
+        async { Ok(()) }
+    }
+
     /// Pushes an event to the channel's external recipient (RFC §6.1).
     fn deliver(
         &self,
@@ -658,6 +672,12 @@ pub(crate) trait DynChannel: Send + Sync {
 
     fn on_room_detached(&self, room_id: RoomId) -> BoxFuture<'_, Result<(), ChannelError>>;
 
+    fn on_room_event(
+        &self,
+        room_id: RoomId,
+        event: RoomEvent,
+    ) -> BoxFuture<'_, Result<(), ChannelError>>;
+
     fn deliver(
         &self,
         event: RoomEvent,
@@ -750,6 +770,14 @@ impl<C: Channel> DynChannel for C {
 
     fn on_room_detached(&self, room_id: RoomId) -> BoxFuture<'_, Result<(), ChannelError>> {
         Box::pin(Channel::on_room_detached(self, room_id))
+    }
+
+    fn on_room_event(
+        &self,
+        room_id: RoomId,
+        event: RoomEvent,
+    ) -> BoxFuture<'_, Result<(), ChannelError>> {
+        Box::pin(Channel::on_room_event(self, room_id, event))
     }
 
     fn deliver(

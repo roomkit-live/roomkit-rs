@@ -485,6 +485,17 @@ pub(crate) enum ChannelControl {
         channel_id: ChannelId,
         room_id: RoomId,
     },
+    /// An event committed in the room that the channel's memory is handed
+    /// (a discussion's, RFC §19.7.5 rule 3), answered by nothing.
+    CommittedEvent {
+        channel_id: ChannelId,
+        room_id: RoomId,
+        event: Box<RoomEvent>,
+        /// The room's hooks on executor triggers, as a turn's request names
+        /// them.
+        #[serde(default)]
+        room_hooks: Vec<String>,
+    },
 }
 
 /// A channel control message in its envelope.
@@ -685,4 +696,56 @@ pub(crate) struct RoomTasks {}
 #[serde(deny_unknown_fields)]
 pub(crate) struct AddObservation {
     pub(crate) observation: Observation,
+}
+
+#[cfg(test)]
+mod tests {
+    use roomkit_core::model::{ChannelType, EventSource, TextContent};
+    use serde_json::json;
+
+    use super::*;
+
+    // Python: roomkit/turns/wire.py CommittedEvent, as ChannelControlEnvelope's
+    // model_dump(mode="json") writes it (roomkit origin/main e9d11fda).
+    #[test]
+    fn a_committed_event_crosses_as_python_writes_it() {
+        let room_id = RoomId::new("r1").unwrap();
+        let ops = ChannelId::new("ops").unwrap();
+        let event = RoomEvent::new(
+            room_id.clone(),
+            EventSource::new(ops, ChannelType::SMS),
+            TextContent::new("hi"),
+        );
+        let envelope = ChannelControlEnvelope {
+            message: ChannelControl::CommittedEvent {
+                channel_id: ChannelId::new("a").unwrap(),
+                room_id,
+                event: Box::new(event.clone()),
+                room_hooks: Vec::new(),
+            },
+        };
+
+        let mut written = serde_json::to_value(&envelope).unwrap();
+        let sent = written["message"]
+            .as_object_mut()
+            .unwrap()
+            .remove("event")
+            .unwrap();
+
+        assert_eq!(
+            written,
+            json!({"message": {
+                "type": "committed_event", "channel_id": "a", "room_id": "r1", "room_hooks": []
+            }})
+        );
+        assert_eq!(sent, serde_json::to_value(&event).unwrap());
+        // Python's form without the room's hooks reads back.
+        let mut python = serde_json::to_value(&envelope).unwrap();
+        python["message"]
+            .as_object_mut()
+            .unwrap()
+            .remove("room_hooks");
+        let read: ChannelControlEnvelope = serde_json::from_value(python).unwrap();
+        assert_eq!(read, envelope);
+    }
 }
