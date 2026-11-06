@@ -14,9 +14,15 @@ pub(super) enum Folding {
 }
 
 impl Folding {
-    pub(super) fn new(api: OpenAiApi, namespace: Option<&str>, cache_hits: bool) -> Self {
+    /// The folding of a stream on `api` asking `model`.
+    pub(super) fn new(
+        api: OpenAiApi,
+        namespace: Option<&str>,
+        cache_hits: bool,
+        model: &str,
+    ) -> Self {
         match api {
-            OpenAiApi::ChatCompletions => Self::Chat(wire::Folding::new(cache_hits)),
+            OpenAiApi::ChatCompletions => Self::Chat(wire::Folding::new(cache_hits, model)),
             OpenAiApi::Responses => {
                 let mut folding = responses::Folding::default();
                 folding.namespace = namespace.map(str::to_owned);
@@ -34,7 +40,7 @@ impl Folding {
         match self {
             Self::Chat(folding) => {
                 if data == "[DONE]" {
-                    finish_chat(std::mem::take(folding), ready);
+                    finish_chat(std::mem::take(folding), ready)?;
                     return Ok(true);
                 }
                 push_segments(ready, folding.take(data, secret)?);
@@ -46,10 +52,7 @@ impl Folding {
 
     pub(super) fn eof(self, ready: &mut VecDeque<StreamEvent>) -> Result<(), OpenAiError> {
         match self {
-            Self::Chat(folding) => {
-                finish_chat(folding, ready);
-                Ok(())
-            }
+            Self::Chat(folding) => finish_chat(folding, ready),
             Self::Responses(_) => Err(OpenAiError::Malformed {
                 reason: "Responses stream ended before its terminal event".into(),
             }),
@@ -57,10 +60,14 @@ impl Folding {
     }
 }
 
-fn finish_chat(mut folding: wire::Folding, ready: &mut VecDeque<StreamEvent>) {
+fn finish_chat(
+    mut folding: wire::Folding,
+    ready: &mut VecDeque<StreamEvent>,
+) -> Result<(), OpenAiError> {
     push_segments(ready, folding.flush());
-    let (calls, done) = folding.finish();
+    let (calls, done) = folding.finish()?;
     push_end(ready, calls, done);
+    Ok(())
 }
 
 /// Queues `segments`, each as the event its kind makes.

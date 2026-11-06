@@ -195,6 +195,7 @@ impl<'a> Reading<'a> {
                         self.provider.api(),
                         self.provider.namespace(),
                         self.provider.vendor().reads_cache_hits(),
+                        self.provider.model_name(),
                     ),
                 }));
                 return Ok(());
@@ -216,11 +217,13 @@ impl<'a> Reading<'a> {
                 &body,
                 &self.secret,
                 self.provider.vendor().reads_cache_hits(),
+                self.provider.model_name(),
             )?,
-            OpenAiApi::ChatCompletions => wire::response(
+            OpenAiApi::ChatCompletions => wire::streamed_completion(
                 &body,
                 &self.secret,
                 self.provider.vendor().reads_cache_hits(),
+                self.provider.model_name(),
             )?,
             OpenAiApi::Responses => {
                 crate::responses::body(&body, &self.secret, self.provider.namespace())?

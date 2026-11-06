@@ -32,7 +32,7 @@ fn usage(usage: &Value) -> Value {
             "finish_reason": "stop" }],
         "usage": usage,
     });
-    let read = crate::wire::response(body.to_string().as_bytes(), "", true).unwrap();
+    let read = crate::wire::response(body.to_string().as_bytes(), "", true, "m").unwrap();
     serde_json::to_value(read.done.usage).unwrap()
 }
 
@@ -81,7 +81,7 @@ fn generic(usage: &Value) -> Value {
             "finish_reason": "stop" }],
         "usage": usage,
     });
-    let read = crate::wire::response(body.to_string().as_bytes(), "", false).unwrap();
+    let read = crate::wire::response(body.to_string().as_bytes(), "", false, "m").unwrap();
     serde_json::to_value(read.done.usage).unwrap()
 }
 
@@ -125,7 +125,7 @@ fn a_generic_provider_reads_no_cache_hits() {
             "finish_reason": "stop" }],
         "usage": { "prompt_tokens": 1000, "completion_tokens": 50, "prompt_cache_hit_tokens": 960 },
     });
-    let read = crate::wire::response(body.to_string().as_bytes(), "", false).unwrap();
+    let read = crate::wire::response(body.to_string().as_bytes(), "", false, "m").unwrap();
     assert_eq!(
         serde_json::to_value(read.done.usage).unwrap(),
         json!({ "input_tokens": 1000, "output_tokens": 50 })

@@ -1,7 +1,7 @@
 //! The Chat Completions wire: the request a turn sends, and what it reads
 //! of the answer.
 
-use crate::call_slots::{CallSlots, Fragment};
+use crate::call_slots::{CallSlots, Fragment, FragmentId};
 use crate::config::OpenAiConfig;
 use crate::dialect::ChatDialect;
 use crate::request::{RawCall, Request, Whole, done as finished};
@@ -259,6 +259,9 @@ struct Completion {
     choices: Vec<Choice>,
     #[serde(default)]
     usage: Option<Usage>,
+    /// The model that answered, as the server names it.
+    #[serde(default)]
+    model: Option<Value>,
 }
 
 /// One choice of a completion.
@@ -359,22 +362,17 @@ where
     })
 }
 
-/// A stream's call id: its text, none for what Python reads as false, and
-/// anything else fails the read, as Python's `ToolCallSlots` refuses it.
-fn streamed_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Value::deserialize(deserializer)?;
-    if reads_false(&value) {
-        return Ok(None);
+/// A stream's call id as Python's `ToolCallSlots` reads what the server
+/// wrote: none for `null` or empty text, the text, and an id that is no text
+/// kept as it reads, false or true, for the fold to judge.
+fn fragment_id(id: Option<&Value>) -> FragmentId<'_> {
+    match id {
+        None | Some(Value::Null) => FragmentId::None,
+        Some(Value::String(id)) if id.is_empty() => FragmentId::None,
+        Some(Value::String(id)) => FragmentId::Text(id),
+        Some(id) if reads_false(id) => FragmentId::False,
+        Some(id) => FragmentId::True(id),
     }
-    if let Value::String(id) = value {
-        return Ok(Some(id));
-    }
-    Err(serde::de::Error::custom(format!(
-        "a call's id is no text: {value}"
-    )))
 }
 
 /// Whether Python reads `value` as false.
@@ -403,13 +401,20 @@ where
 /// calls, why it stopped, and what it used, as the turn's record counts it
 /// ([`usage_of`]: `input_tokens` without the cache's, `output_tokens`,
 /// `cache_read_input_tokens`, `cache_creation_input_tokens`,
-/// `reasoning_tokens`).
+/// `reasoning_tokens`); its end names the model that answered, else
+/// `asked` ([`answered_by`]). A completion with no choice is an empty
+/// answer, which still billed its input (Python's `_response_of`).
 ///
 /// # Errors
 ///
 /// Returns [`OpenAiError::Malformed`] when `body` is no chat completion,
 /// saying why without `secret`, the API key.
-pub(crate) fn response(body: &[u8], secret: &str, cache_hits: bool) -> Result<Whole, OpenAiError> {
+pub(crate) fn response(
+    body: &[u8],
+    secret: &str,
+    cache_hits: bool,
+    asked: &str,
+) -> Result<Whole, OpenAiError> {
     let malformed = |reason: String| OpenAiError::Malformed {
         reason: cleaned(&reason, secret, MESSAGE_LIMIT),
     };
@@ -419,11 +424,11 @@ pub(crate) fn response(body: &[u8], secret: &str, cache_hits: bool) -> Result<Wh
         .usage
         .map(|usage| usage_of(&usage, cache_hits))
         .unwrap_or_default();
-    let choice = completion
-        .choices
-        .into_iter()
-        .next()
-        .ok_or_else(|| malformed("it has no choice".to_owned()))?;
+    let Some(choice) = completion.choices.into_iter().next() else {
+        let mut done = finished(None, usage);
+        answered_by(&mut done, completion.model, asked);
+        return Ok(Whole::new(String::new(), Vec::new(), done));
+    };
     let (inline, text) = extract_think_tags(choice.message.content.as_deref().unwrap_or_default());
     let thinking = merge_thinking(
         inline,
@@ -433,6 +438,7 @@ pub(crate) fn response(body: &[u8], secret: &str, cache_hits: bool) -> Result<Wh
         ),
     );
     let mut done = finished(choice.finish_reason, usage);
+    answered_by(&mut done, completion.model, asked);
     keep_refusal(
         &mut done,
         choice.message.refusal.as_ref().and_then(Value::as_str),
@@ -455,6 +461,45 @@ pub(crate) fn response(body: &[u8], secret: &str, cache_hits: bool) -> Result<Wh
         })
         .collect();
     Ok(Whole::new(text, calls, done).with_thinking(thinking))
+}
+
+/// What a stream answered with a completion's JSON in place of its events
+/// gives: the completion as [`response`] reads it, but one with no choice
+/// is no answer, as an error object there is none, which Python's client,
+/// finding no event in the body, fails.
+///
+/// # Errors
+///
+/// As [`response`], and [`OpenAiError::Malformed`] for a completion with no
+/// choice.
+pub(crate) fn streamed_completion(
+    body: &[u8],
+    secret: &str,
+    cache_hits: bool,
+    asked: &str,
+) -> Result<Whole, OpenAiError> {
+    let chosen = serde_json::from_slice::<Value>(body).ok().map(|value| {
+        value
+            .get("choices")
+            .and_then(Value::as_array)
+            .is_some_and(|choices| !choices.is_empty())
+    });
+    if chosen == Some(false) {
+        return Err(OpenAiError::Malformed {
+            reason: "it has no choice".to_owned(),
+        });
+    }
+    response(body, secret, cache_hits, asked)
+}
+
+/// Names on `done` the model that answered: `answered`, as the server names
+/// it, when Python reads it as true, else `asked` (Python's `answered_by`,
+/// one rule for a whole answer and for a stream's end).
+fn answered_by(done: &mut StreamDone, answered: Option<Value>, asked: &str) {
+    let model = answered
+        .filter(truthy)
+        .unwrap_or_else(|| Value::from(asked));
+    done.metadata.insert("model".to_owned(), model);
 }
 
 /// Keeps on `done` the refusal an answer carried as text, when it carried
@@ -486,6 +531,9 @@ struct Chunk {
     /// What a server that fails mid-stream sends instead.
     #[serde(default)]
     error: Option<Value>,
+    /// The model that answered, as the server names it.
+    #[serde(default)]
+    model: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -519,8 +567,9 @@ struct Delta {
 struct DeltaCall {
     #[serde(default, deserialize_with = "nullable")]
     index: u64,
-    #[serde(default, deserialize_with = "streamed_id")]
-    id: Option<String>,
+    /// The server's id, as it wrote it: [`fragment_id`] reads it.
+    #[serde(default)]
+    id: Option<Value>,
     #[serde(default)]
     function: Option<DeltaFunction>,
 }
@@ -549,14 +598,19 @@ pub(crate) struct Folding {
     cache_hits: bool,
     /// The refusal the deltas carried, in their order.
     refusal: String,
+    /// The model the last chunk naming one says answered.
+    model: Option<Value>,
+    /// The model the request asked for.
+    asked: String,
 }
 
 impl Folding {
-    /// The folding of a stream whose usage reports its cache hits as
-    /// DeepSeek does when `cache_hits`.
-    pub(crate) fn new(cache_hits: bool) -> Self {
+    /// The folding of a stream asking `asked`, whose usage reports its cache
+    /// hits as DeepSeek does when `cache_hits`.
+    pub(crate) fn new(cache_hits: bool, asked: impl Into<String>) -> Self {
         Self {
             cache_hits,
+            asked: asked.into(),
             ..Self::default()
         }
     }
@@ -588,6 +642,9 @@ impl Folding {
                 status: described_status(&error),
             });
         }
+        if let Some(model) = chunk.model.filter(truthy) {
+            self.model = Some(model);
+        }
         if let Some(usage) = chunk.usage {
             self.usage = usage_of(&usage, self.cache_hits);
         }
@@ -603,7 +660,9 @@ impl Folding {
                 self.refusal.push_str(refusal);
             }
             for call in delta.tool_calls {
-                self.fold(call);
+                self.fold(call).map_err(|reason| OpenAiError::Malformed {
+                    reason: cleaned(&reason, secret, MESSAGE_LIMIT),
+                })?;
             }
             let reasoning =
                 field_reasoning(delta.reasoning_content.as_ref(), delta.reasoning.as_ref());
@@ -619,8 +678,9 @@ impl Folding {
     }
 
     /// Adds a call's fragment to the call it belongs to; an object for its
-    /// arguments reads as the JSON text it stands for.
-    fn fold(&mut self, fragment: DeltaCall) {
+    /// arguments reads as the JSON text it stands for. Fails, saying why, on
+    /// an id the calls cannot hold ([`CallSlots::fold`]).
+    fn fold(&mut self, fragment: DeltaCall) -> Result<(), String> {
         let DeltaCall {
             index,
             id,
@@ -638,20 +698,30 @@ impl Folding {
         };
         self.calls.fold(&Fragment {
             index,
-            id: id.as_deref().filter(|id| !id.is_empty()),
+            id: fragment_id(id.as_ref()),
             name: name.filter(|name| !name.is_empty()),
             arguments: &arguments,
             function: function.is_some(),
-        });
+        })
     }
 
     /// The completion once its stream is over: its calls in the order they
     /// came, each with its argument text, which the loop reads, and how it
-    /// ended.
-    pub(crate) fn finish(self) -> (Vec<RawCall>, StreamDone) {
+    /// ended, naming the model that answered ([`answered_by`]).
+    ///
+    /// # Errors
+    ///
+    /// [`OpenAiError::Malformed`] for a call that took an id that is no text
+    /// ([`CallSlots::finish`]).
+    pub(crate) fn finish(self) -> Result<(Vec<RawCall>, StreamDone), OpenAiError> {
+        let calls = self
+            .calls
+            .finish()
+            .map_err(|reason| OpenAiError::Malformed { reason })?;
         let mut done = finished(self.finish_reason, self.usage);
+        answered_by(&mut done, self.model, &self.asked);
         keep_refusal(&mut done, Some(&self.refusal));
-        (self.calls.finish(), done)
+        Ok((calls, done))
     }
 }
 
@@ -874,6 +944,7 @@ pub(crate) fn completion(
     body: &[u8],
     secret: &str,
     cache_hits: bool,
+    asked: &str,
 ) -> Result<Whole, OpenAiError> {
     let value: Option<Value> = serde_json::from_slice(body).ok();
     if let Some(error) = value
@@ -883,7 +954,7 @@ pub(crate) fn completion(
     {
         return Err(answered(error, secret));
     }
-    response(body, secret, cache_hits)
+    response(body, secret, cache_hits, asked)
 }
 
 /// The failure an error object answered in place of a completion stands
@@ -1073,7 +1144,7 @@ mod tests {
     fn a_completion_without_text_says_nothing() {
         let body = br#"{"choices": [{"message": {"role": "assistant", "content": null}}]}"#;
         assert_eq!(
-            response(body, "sk-1", false).map(|read| read.text),
+            response(body, "sk-1", false, "m").map(|read| read.text),
             Ok(String::new())
         );
     }
@@ -1085,7 +1156,7 @@ mod tests {
                 "function": {"name": "lookup", "arguments": "{\"order\": \"42\"}"}}]}}],
             "usage": {"prompt_tokens": 100, "completion_tokens": 7,
                 "prompt_tokens_details": {"cached_tokens": 40}}}"#;
-        let read = response(body, "sk-1", false).unwrap();
+        let read = response(body, "sk-1", false, "m").unwrap();
         assert_eq!(
             (
                 read.calls,
@@ -1114,7 +1185,7 @@ mod tests {
                     "function": {"name": "lookup", "arguments": null}}]}}],
             "usage": {"prompt_tokens": null, "completion_tokens": 7, "total_tokens": null,
                 "prompt_tokens_details": {"cached_tokens": null}}}"#;
-        let read = response(body, "sk-1", false).unwrap();
+        let read = response(body, "sk-1", false, "m").unwrap();
         assert_eq!(
             (read.calls, Value::Object(read.done.usage)),
             (
@@ -1128,7 +1199,7 @@ mod tests {
     fn a_message_with_null_calls_says_its_text() {
         let body = br#"{"choices": [{"message": {"content": "Hi", "tool_calls": null}}],
             "usage": null}"#;
-        let read = response(body, "sk-1", false).unwrap();
+        let read = response(body, "sk-1", false, "m").unwrap();
         assert_eq!((read.text.as_str(), read.calls.len()), ("Hi", 0));
     }
 
@@ -1144,7 +1215,7 @@ mod tests {
             });
             folding.take(&chunk.to_string(), "sk-1").unwrap();
         }
-        folding.finish().0
+        folding.finish().unwrap().0
     }
 
     fn fragment(id: Option<&str>, name: Option<&str>, arguments: &str) -> Value {
@@ -1317,7 +1388,7 @@ mod tests {
                 {"id": 7, "function": {"name": "now", "arguments": "{}"}},
                 {"id": 0, "function": {"name": "now", "arguments": "{}"}}]}}]}"#;
         assert_eq!(
-            response(body, "sk-1", false).unwrap().calls,
+            response(body, "sk-1", false, "m").unwrap().calls,
             [
                 RawCall::new("7", "now", "{}"),
                 RawCall::new("", "now", "{}")
@@ -1325,27 +1396,136 @@ mod tests {
         );
     }
 
-    // Python: providers/ai/openai_dialect.py ToolCallSlots: an id Python reads as
-    // false is no id, and the read goes on; what is no text otherwise is refused.
-    #[test]
-    fn a_streamed_id_that_is_no_text_reads_as_python_s_slots() {
-        let chunk = |id: &str| {
-            format!(
-                r#"{{"choices": [{{"index": 0, "delta": {{"tool_calls": [{{"index": 0,
-                    "id": {id}, "function": {{"name": "now", "arguments": "{{}}"}}}}]}}}}]}}"#
-            )
-        };
-        for id in ["0", "0.0", "false", "[]", "{}"] {
-            let mut folding = Folding::default();
-            folding.take(&chunk(id), "sk-1").unwrap();
-            assert_eq!(folding.finish().0, [RawCall::new("", "now", "{}")], "{id}");
+    /// The calls a stream of one chunk per `fragments`, each a `tool_calls`
+    /// entry of index 0, folds into, or why its read failed.
+    fn streamed(fragments: &[Value]) -> Result<Vec<RawCall>, OpenAiError> {
+        let mut folding = Folding::default();
+        for fragment in fragments {
+            let chunk = serde_json::json!({
+                "choices": [{ "index": 0, "delta": { "tool_calls": [fragment] } }]
+            });
+            folding.take(&chunk.to_string(), "sk-1")?;
         }
-        for id in ["7", "true", "[1]", r#"{"a": 1}"#] {
-            let mut folding = Folding::default();
-            let read = folding.take(&chunk(id), "sk-1");
+        folding.finish().map(|(calls, _)| calls)
+    }
+
+    // Python: providers/ai/openai_dialect.py ToolCallSlots: an id Python reads as
+    // false is no id, and the read goes on.
+    #[test]
+    fn a_streamed_id_that_reads_as_false_is_no_id() {
+        for id in ["0", "0.0", "false", "[]", "{}"] {
+            let entry = serde_json::json!({
+                "index": 0, "id": serde_json::from_str::<Value>(id).unwrap(),
+                "function": { "name": "now", "arguments": "{}" },
+            });
+            assert_eq!(
+                streamed(&[entry]),
+                Ok(vec![RawCall::new("", "now", "{}")]),
+                "{id}"
+            );
+        }
+    }
+
+    // Python: tests/test_providers/test_chat_response_reading.py::test_an_id_that_is_no_text_on_a_new_call_fails_the_read
+    #[test]
+    fn an_id_that_is_no_text_on_a_new_call_fails_the_read() {
+        let named = |id: Value| {
+            serde_json::json!({ "index": 0, "id": id, "type": "function",
+                "function": { "name": "lookup", "arguments": "{}" } })
+        };
+        let entries = [
+            named(serde_json::json!(7)),
+            named(serde_json::json!(true)),
+            named(serde_json::json!([1])),
+            serde_json::json!({ "index": 0, "id": { "a": 1 }, "type": "custom" }),
+        ];
+        for entry in entries {
+            let read = streamed(std::slice::from_ref(&entry));
             assert!(
                 matches!(read, Err(OpenAiError::Malformed { .. })),
-                "{id}: {read:?}"
+                "{entry}: {read:?}"
+            );
+        }
+    }
+
+    /// A whole call to `lookup` under the server's id `c1`, Python's `WHOLE`.
+    fn whole_call() -> Value {
+        serde_json::json!({ "index": 0, "id": "c1", "type": "function",
+            "function": { "name": "lookup", "arguments": "{}" } })
+    }
+
+    // Python: tests/test_providers/test_chat_response_reading.py::test_a_nameless_call_under_an_id_that_is_no_text_takes_no_name
+    #[test]
+    fn a_nameless_call_under_an_id_that_is_no_text_takes_no_name() {
+        for id in [
+            serde_json::json!(0),
+            serde_json::json!([]),
+            serde_json::json!({}),
+            serde_json::json!(false),
+        ] {
+            let second = serde_json::json!({ "index": 0, "id": id,
+                "function": { "arguments": "{\"q\": 1}" } });
+            assert_eq!(
+                streamed(&[whole_call(), second]),
+                Ok(vec![
+                    RawCall::new("c1", "lookup", "{}"),
+                    RawCall::new("", "", r#"{"q": 1}"#),
+                ]),
+                "{id}"
+            );
+        }
+    }
+
+    /// Under no id, or the held call's own, a nameless fragment opening
+    /// another JSON object is a second call to the held call's tool.
+    #[test]
+    fn a_nameless_call_under_no_id_or_the_held_one_s_takes_its_name() {
+        for id in [Value::Null, serde_json::json!(""), serde_json::json!("c1")] {
+            let second = serde_json::json!({ "index": 0, "id": id,
+                "function": { "arguments": "{\"q\": 1}" } });
+            assert_eq!(
+                streamed(&[whole_call(), second]),
+                Ok(vec![
+                    RawCall::new("c1", "lookup", "{}"),
+                    RawCall::new("", "lookup", r#"{"q": 1}"#),
+                ]),
+                "{id}"
+            );
+        }
+    }
+
+    // Python: tests/test_providers/test_chat_response_reading.py::test_an_id_that_is_no_text_on_a_call_already_named_is_ignored
+    #[test]
+    fn an_id_that_is_no_text_on_a_call_already_named_is_ignored() {
+        for id in [
+            serde_json::json!(7),
+            serde_json::json!(true),
+            serde_json::json!([1]),
+            serde_json::json!({ "a": 1 }),
+        ] {
+            let first = serde_json::json!({ "index": 0, "type": "function",
+                "function": { "name": "lookup", "arguments": "{\"q\"" } });
+            let second = serde_json::json!({ "index": 0, "id": id,
+                "function": { "arguments": ": 1}" } });
+            assert_eq!(
+                streamed(&[first, second]),
+                Ok(vec![RawCall::new("", "lookup", r#"{"q": 1}"#)]),
+                "{id}"
+            );
+        }
+    }
+
+    // Python: tests/test_providers/test_chat_response_reading.py::test_an_id_that_is_no_text_on_an_entry_without_a_function_is_no_call
+    #[test]
+    fn an_id_that_is_no_text_on_an_entry_without_a_function_is_no_call() {
+        for id in [serde_json::json!(7), serde_json::json!(true)] {
+            let entry = serde_json::json!({ "index": 0, "id": id, "type": "custom" });
+            let named = serde_json::json!({ "index": 1, "id": "c2", "type": "function",
+                "function": { "name": "lookup", "arguments": "{}" } });
+            assert_eq!(
+                streamed(&[entry, named]),
+                Ok(vec![RawCall::new("c2", "lookup", "{}")]),
+                "{id}"
             );
         }
     }
@@ -1359,7 +1539,7 @@ mod tests {
                 {"id": "a", "type": "custom", "custom": {"name": "x"}},
                 {"id": "b", "function": {"name": "now", "arguments": "{}"}}]}}]}"#;
         assert_eq!(
-            response(body, "sk-1", false).unwrap().calls,
+            response(body, "sk-1", false, "m").unwrap().calls,
             [RawCall::new("b", "now", "{}")]
         );
     }
@@ -1405,7 +1585,7 @@ mod tests {
             .iter()
             .flat_map(|chunk| folding.take(chunk, "sk-1").unwrap())
             .collect();
-        let (calls, done) = folding.finish();
+        let (calls, done) = folding.finish().unwrap();
         assert_eq!(
             text,
             [
@@ -1443,19 +1623,9 @@ mod tests {
     }
 
     #[test]
-    fn a_completion_with_no_choice_is_malformed() {
-        assert_eq!(
-            response(br#"{"id": "chatcmpl-1", "choices": []}"#, "sk-1", false),
-            Err(OpenAiError::Malformed {
-                reason: "it has no choice".to_owned()
-            })
-        );
-    }
-
-    #[test]
     fn a_malformed_answer_s_reason_holds_no_key() {
         let body = br#"{"choices": "sk-1"}"#;
-        let error = response(body, "sk-1", false).unwrap_err();
+        let error = response(body, "sk-1", false, "m").unwrap_err();
         assert!(!error.to_string().contains("sk-1"), "{error}");
     }
 }

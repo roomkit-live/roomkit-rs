@@ -8,7 +8,7 @@ use std::pin::Pin;
 use futures_core::Stream;
 use pretty_assertions::assert_eq;
 use roomkit_ai::{
-    AiContentPart, AiContext, AiMessage, AiProvider, AiRole, AiTextPart, ProviderError,
+    AiContentPart, AiContext, AiMessage, AiProvider, AiRole, AiTextPart, ProviderError, StreamEvent,
 };
 use roomkit_openai::{OpenAiAiProvider, OpenAiApi, OpenAiConfig};
 use serde_json::{Value, json};
@@ -88,6 +88,95 @@ async fn generate_success() {
             })
         )
     );
+}
+
+/// What one generation hands its caller, `generate` or `streamed`: the
+/// names of its calls, its usage and its metadata, as its end reads them.
+async fn handed(replies: Vec<Reply>, streamed: bool) -> (Vec<String>, Value, Value) {
+    let (provider, _fake) = provider(replies).await;
+    if !streamed {
+        let response = provider.generate(&hello()).await.unwrap();
+        let calls = response
+            .tool_calls
+            .into_iter()
+            .map(|call| call.name)
+            .collect();
+        return (
+            calls,
+            Value::Object(response.usage),
+            Value::Object(response.metadata),
+        );
+    }
+    let context = hello();
+    let mut events = provider.generate_structured_stream(&context);
+    let mut calls = Vec::new();
+    while let Some(event) = std::future::poll_fn(|cx| Pin::new(&mut events).poll_next(cx)).await {
+        match event.unwrap() {
+            StreamEvent::ToolCall(call) => calls.push(call.name),
+            StreamEvent::Done(done) => {
+                return (
+                    calls,
+                    Value::Object(done.usage),
+                    Value::Object(done.metadata),
+                );
+            }
+            StreamEvent::TextDelta(_) | StreamEvent::ThinkingDelta(_) => {}
+        }
+    }
+    unreachable!("the stream ended without its end");
+}
+
+/// A whole completion of `choices`, answered by `model`, Python's
+/// `_completion` with its `USAGE`.
+fn completion_of(choices: &Value, model: &str) -> Value {
+    json!({
+        "id": "r", "object": "chat.completion", "created": 0, "model": model,
+        "choices": choices,
+        "usage": { "prompt_tokens": 11, "completion_tokens": 0, "total_tokens": 11 },
+    })
+}
+
+// Python: tests/test_providers/test_chat_response_reading.py::test_a_response_with_no_choice_reports_its_usage
+/// A completion with no choice is an empty answer that still billed its
+/// input, whole or streamed.
+#[tokio::test]
+async fn a_response_with_no_choice_reports_its_usage() {
+    let whole = Reply::whole(&completion_of(&json!([]), "m"));
+    let chunk = json!({
+        "id": "c", "object": "chat.completion.chunk", "created": 0, "model": "m", "choices": [],
+        "usage": { "prompt_tokens": 11, "completion_tokens": 0, "total_tokens": 11 },
+    });
+    let expected = (
+        Vec::<String>::new(),
+        json!({ "input_tokens": 11, "output_tokens": 0 }),
+    );
+    for (reply, streamed) in [(whole, false), (Reply::events(&[chunk]), true)] {
+        let (calls, usage, _) = handed(vec![reply], streamed).await;
+        assert_eq!((calls, usage), expected.clone(), "streamed: {streamed}");
+    }
+}
+
+// Python: tests/test_providers/test_chat_response_reading.py::test_a_response_names_the_model_that_answered_else_the_one_asked
+/// Both modes name the model the server says answered, else the one the
+/// configuration asked for.
+#[tokio::test]
+async fn a_response_names_the_model_that_answered_else_the_one_asked() {
+    for (answered, named) in [("m", "m"), ("", "fake-model")] {
+        let choice = json!([{ "index": 0, "finish_reason": "stop",
+            "message": { "role": "assistant", "content": "Hi" } }]);
+        let whole = Reply::whole(&completion_of(&choice, answered));
+        let chunk = json!({ "id": "c", "object": "chat.completion.chunk", "created": 0,
+            "model": answered,
+            "choices": [{ "index": 0, "delta": { "content": "Hi" }, "finish_reason": "stop" }] });
+        for (reply, streamed) in [(whole, false), (Reply::events(&[chunk]), true)] {
+            let (_, _, metadata) = handed(vec![reply], streamed).await;
+            assert_eq!(
+                metadata,
+                json!({ "model": named }),
+                "{answered:?}, streamed: {streamed}"
+            );
+        }
+    }
 }
 
 // Python: tests/text_conformance/test_failures.py::test_a_200_json_error_object_reads_as_its_status
