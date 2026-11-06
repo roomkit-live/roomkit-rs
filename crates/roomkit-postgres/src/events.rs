@@ -208,9 +208,11 @@ ON CONFLICT(room_id) DO NOTHING RETURNING next_index";
 /// A room not there to hold leaves the sequence alone, and its refusal stays the
 /// foreign key's, by a second statement that holds the room it finds instead: then the
 /// next pass takes the sequence. Left open: a room committed after that statement's
-/// snapshot, which its foreign key reads, as the room is created again under the add,
-/// with no sequence yet: that one is taken before the room (RMK-1394). Another pass
-/// needs another session's deletion, creation and write in between.
+/// snapshot, which its foreign key reads, as the room's id is created again under the
+/// add, with no sequence yet: that sequence is taken before the room, and against a
+/// commit holding the new room the server kills one of them, the add or the commit
+/// (RMK-1394, HITL d49b8b14). Another pass needs another session's deletion, creation
+/// and write in between.
 async fn write_sequence(
     transaction: &Transaction<'_>,
     statement: &str,
