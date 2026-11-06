@@ -545,7 +545,8 @@ pub(super) struct Stuck {
     declaration: ChannelConfig,
     reads: usize,
     returns: bool,
-    holds_answers: bool,
+    /// The channel whose events' delivery never ends, if any.
+    holds: Option<&'static str>,
     reading_on: Option<ReadingOn>,
 }
 
@@ -652,7 +653,7 @@ impl Stuck {
             declaration,
             reads,
             returns: false,
-            holds_answers: false,
+            holds: None,
             reading_on: None,
         }
     }
@@ -668,9 +669,19 @@ impl Stuck {
     /// A transport that does not stream, and whose delivery of an agent's
     /// answer never ends.
     pub(super) fn holding_answers() -> Self {
+        Self::holding("ai")
+    }
+
+    /// A transport that does not stream, and whose delivery of a message
+    /// written by SMS never ends.
+    pub(super) fn holding_messages() -> Self {
+        Self::holding("sms")
+    }
+
+    fn holding(source: &'static str) -> Self {
         let mut held = Self::new(0);
         held.declaration.supports_streaming_delivery = false;
-        held.holds_answers = true;
+        held.holds = Some(source);
         held
     }
 
@@ -756,7 +767,7 @@ impl Channel for Stuck {
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
-        if self.holds_answers && event.source.channel_id.as_str() == "ai" {
+        if self.holds == Some(event.source.channel_id.as_str()) {
             std::future::pending::<()>().await;
         }
         Ok(ChannelOutput::empty())

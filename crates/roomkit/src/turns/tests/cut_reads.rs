@@ -318,6 +318,29 @@ async fn a_cancelled_cascade_waits_for_the_end_of_a_stream_it_never_read() {
     }
 }
 
+// Python: core/mixins/lane_execution.py hands its cascade a delivery set's
+// streams once the set ran (add_streams), and a cascade cancelled by then drops
+// them unread (drop_unread_streams): its cleanup closes none of them nor waits
+// for their end. A cut while a transport still delivers the message finds both
+// agents answered and returns at once, its executor deaf to the close (RMK-1442).
+#[tokio::test(start_paused = true)]
+async fn a_cut_while_its_delivery_set_runs_waits_for_no_stream_the_set_answered() {
+    let kit = kit_with(Streaming::scripted(ending())).await;
+    bind(&kit, Streaming::scripted(ending()).named("ai2")).await;
+    bind(&kit, Stuck::holding_messages()).await;
+    stuck_executor(&kit);
+    let handle = deferred(&kit).await;
+    // Paused time: both agents answer while the transport holds the set.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let start = Instant::now();
+    let cancel = handle.cancel(with_timeout(Duration::from_secs(1))).await;
+    let elapsed = start.elapsed();
+    kit.close().await.unwrap();
+    let reason = cancel.unwrap().cancellation_reason;
+    assert_eq!(reason.as_deref(), Some("caller_cancelled"));
+    assert!(at(elapsed, Duration::ZERO), "{elapsed:?}");
+}
+
 // Python: core/mixins/lane_execution.py reads an awaited call's streams through
 // _read_streams, which returns at the cut: the cleanup's close of a stream the
 // call never read is no part of its wait (RMK-1442).
