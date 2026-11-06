@@ -23,6 +23,7 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
+use roomkit::tasks::WaitOptions;
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DelegateOptions,
@@ -774,9 +775,9 @@ async fn a_headless_turn_failing_after_a_round_is_no_roomkit_warning() {
     }
 }
 
-// Python: tests/test_inbound_stream_error_propagation.py::test_a_delegated_turn_failure_is_one_line_at_its_level
-#[tokio::test]
-async fn a_delegated_turn_failure_is_one_line_at_its_level() {
+/// A kit whose room `r1` binds nothing, and the agent `w1` answering
+/// whole, whose provider refuses with 503: a delegated task's worker.
+async fn delegating() -> RoomKit {
     let rounds = vec![refusal(
         ScriptedRound::answering(""),
         Some(503),
@@ -796,21 +797,48 @@ async fn a_delegated_turn_failure_is_one_line_at_its_level() {
     })
     .await
     .unwrap();
+    kit
+}
+
+// Python: tests/test_inbound_stream_error_propagation.py::test_a_delegated_turn_failure_is_one_line_at_its_level
+#[tokio::test]
+async fn a_delegated_turn_failure_is_one_line_at_its_level() {
+    let kit = delegating().await;
     let (lines, _capturing) = Lines::capture();
-    kit.delegate(
-        &room_id(),
-        &channel("w1"),
-        "go",
-        DelegateOptions {
-            wait: true,
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
+    let task = kit
+        .delegate(
+            &room_id(),
+            &channel("w1"),
+            "go",
+            DelegateOptions {
+                wait: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     roomkit::testing::idle(&kit).await;
     kit.close().await.unwrap();
     let records = lines.roomkit(Level::WARN);
     assert_eq!(lines.warnings(), [Level::ERROR], "{records:?}");
-    assert!(records[0].1.contains("status=503"), "{records:?}");
+    let line = format!("Inline task {} failed (provider=mock, status=503)", task.id);
+    assert!(records[0].1.contains(&line), "{records:?}");
+}
+
+// Python: tests/test_inbound_stream_error_propagation.py::test_a_background_task_failure_is_one_line_at_its_level
+#[tokio::test]
+async fn a_background_task_failure_is_one_line_at_its_level() {
+    let kit = delegating().await;
+    let (lines, _capturing) = Lines::capture();
+    let task = kit
+        .delegate(&room_id(), &channel("w1"), "go", DelegateOptions::default())
+        .await
+        .unwrap();
+    task.wait(WaitOptions::default()).await.unwrap();
+    roomkit::testing::idle(&kit).await;
+    kit.close().await.unwrap();
+    let records = lines.roomkit(Level::WARN);
+    assert_eq!(lines.warnings(), [Level::ERROR], "{records:?}");
+    let line = format!("Task {} failed (provider=mock, status=503)", task.id);
+    assert!(records[0].1.contains(&line), "{records:?}");
 }
