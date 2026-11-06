@@ -50,12 +50,14 @@ pub(crate) struct Connector {
 
 /// Whether `error` says its address could not be reached, which asyncpg passes
 /// for the next: the socket's connect (no socket, no route, refused, a timeout,
-/// a host not of the session asked for) or its TLS upgrade (refused, a
-/// handshake that failed), an `OSError` there; or a server that cannot take a
-/// connection yet (`57P03`). Past those, a server that answered and refused, or
-/// a connection lost, ends the list, as asyncpg's `ConnectionDoesNotExistError`
-/// does. The client tells these phases apart by its error's kind alone, which it
-/// shows only in its text.
+/// a host not of the session asked for) or its TLS upgrade refused or failed
+/// (`N` under `require`, a handshake), an `OSError` there; or a server that
+/// cannot take a connection yet (`57P03`). A server that answered and
+/// refused, or a connection lost, ends the list, as asyncpg's
+/// `ConnectionDoesNotExistError` does. The client tells these apart by its
+/// error's kind alone, which it shows only in its text, and reports a
+/// connection lost on the TLS request itself as one lost later: asyncpg passes
+/// that host, this list ends there (HITL 22f38d15).
 fn unreachable(error: &Error) -> bool {
     if error.code() == Some(&SqlState::CANNOT_CONNECT_NOW) {
         return true;

@@ -455,6 +455,40 @@ async fn a_password_file_others_can_read_is_not_read() {
     );
 }
 
+/// Python: `test_an_empty_pgpassword_is_a_password`. asyncpg takes an empty
+/// `PGPASSWORD` for the password, and reads no password file then: a
+/// matching `~/.pgpass` is not read, and the server refuses the empty one.
+#[tokio::test]
+async fn an_empty_pgpassword_is_a_password() {
+    if ran_as_child().await {
+        return;
+    }
+    let Some(server) = Server::new().await else {
+        return;
+    };
+    if !server.asks_a_password().await {
+        return;
+    }
+    let home = TempDir::new();
+    home.file(".pgpass", &format!("*:*:*:*:{}\n", server.password), 0o600);
+    let dsn = format!(
+        "postgresql://{}{}:{}/{}{}",
+        server.user(),
+        server.host,
+        server.port,
+        server.database,
+        server.query
+    );
+    let opened = open_in_child(
+        "an_empty_pgpassword_is_a_password",
+        &home.0,
+        &dsn,
+        &[("PGPASSWORD", "")],
+    );
+    assert!(!opened.connected, "{opened:?}");
+    assert!(opened.refusal.contains("password"), "{opened:?}");
+}
+
 /// Python: `test_a_host_list_goes_past_a_dead_host`. A host list, in the
 /// string or in `PGHOST` and `PGPORT`, is tried in its order: a host nothing
 /// listens on is passed for the next.

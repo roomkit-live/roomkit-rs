@@ -226,6 +226,15 @@ async fn tls_for(
     Ok(Some(Tls(MakeRustlsConnect::new(tls))))
 }
 
+/// What a connection of `config` is given whichever hosts it tries: asyncpg's
+/// 60 s, or the string's `connect_timeout`, which bounds each host, when it is
+/// longer.
+fn whole_timeout(config: &Config) -> Duration {
+    config
+        .get_connect_timeout()
+        .map_or(CONNECT_TIMEOUT, |each| (*each).max(CONNECT_TIMEOUT))
+}
+
 /// A pool for `dsn`, with what a cancel request connects with when TLS may be
 /// in use; `min_size` of its connections opened at once, so that a server out
 /// of reach fails here rather than at the first operation, as asyncpg's
@@ -255,9 +264,7 @@ pub(crate) async fn open(
     } = target(dsn)?;
     password_file_checked(passfile.clone()).await?;
     let tls = tls_for(&addresses, encryption, files).await?;
-    let timeout = config
-        .get_connect_timeout()
-        .map_or(CONNECT_TIMEOUT, |each| (*each).max(CONNECT_TIMEOUT));
+    let timeout = whole_timeout(&config);
     let connector = Connector {
         addresses: addresses.tried,
         tls: tls.clone(),
@@ -419,6 +426,24 @@ mod tests {
             panic!("a mysql string was read");
         };
         assert!(!refused.to_string().contains("secret"), "{refused}");
+    }
+
+    /// A `connect_timeout` bounds each host, the whole given 60 s unless it is
+    /// longer.
+    #[test]
+    fn a_connection_is_given_60_s_whichever_hosts_it_tries() {
+        for (named, whole) in [
+            ("", 60),
+            ("?connect_timeout=2", 60),
+            ("?connect_timeout=90", 90),
+        ] {
+            let read = target(Some(&format!("postgresql://u:p@h1,h2/d{named}"))).unwrap();
+            assert_eq!(
+                whole_timeout(&read.config),
+                Duration::from_secs(whole),
+                "{named}"
+            );
+        }
     }
 
     /// A connection that never answers does not hang `init`: asyncpg's 60 s.

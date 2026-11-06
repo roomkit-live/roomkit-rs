@@ -192,14 +192,18 @@ pub(crate) fn read(dsn: &str) -> Result<Query, StoreError> {
         ..Query::default()
     };
     let mut kept = Vec::new();
-    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+    // An empty query has no parameter; in one, an empty field is refused, as
+    // asyncpg's strict `parse_qs` refuses it (`a=1&`).
+    let pairs = query.split('&').filter(|_| !query.is_empty());
+    for pair in pairs {
         let pair = pair.replace('+', "%20");
         let Some((key, value)) = pair.split_once('=') else {
             return Err(StoreError::Value(
                 "invalid DSN: a parameter has no value".to_owned(),
             ));
         };
-        if !is_param_name(key) {
+        let key = percent_decoded(key);
+        if !is_param_name(&key) {
             return Err(StoreError::Value(
                 "invalid DSN: a parameter has no name; a ? in a password must be written %3F"
                     .to_owned(),
@@ -209,7 +213,7 @@ pub(crate) fn read(dsn: &str) -> Result<Query, StoreError> {
             continue;
         }
         let value = percent_decoded(value);
-        match key {
+        match key.as_str() {
             "sslmode" => read.mode = Some(value),
             "sslrootcert" => read.root_certificate = Some(value),
             "sslcrl" => read.revocation_list = Some(value),
@@ -264,10 +268,24 @@ mod tests {
         assert_eq!(query.dsn, "postgresql:///d");
         assert_eq!((query.mode, query.hosts.host), (None, None));
         assert_eq!(query.settings, [("x".to_owned(), "1".to_owned())]);
-        assert!(matches!(
-            read("postgresql://h/d?sslmode"),
-            Err(StoreError::Value(_))
-        ));
+        assert_eq!(
+            read("postgresql://h/d?ssl%6Dode=disable")
+                .unwrap()
+                .mode
+                .as_deref(),
+            Some("disable")
+        );
+        for refused in [
+            "postgresql://h/d?sslmode",
+            "postgresql://h/d?a=1&",
+            "postgresql://h/d?a=1&&b=2",
+        ] {
+            assert!(
+                matches!(read(refused), Err(StoreError::Value(_))),
+                "{refused}"
+            );
+        }
+        assert!(read("postgresql://h/d?").is_ok());
     }
 
     /// Python: `urlsplit` refuses a bracket that does not hold an IPv6 address
