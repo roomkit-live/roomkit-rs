@@ -360,13 +360,18 @@ impl Discussion {
         kit: &RoomKit<S>,
         room_id: &RoomId,
     ) -> Result<(), RoomKitError> {
+        // Until its configuration is forgotten, its own driver's turn under
+        // way reads it stored: this process follows it no more.
+        let leaving = kit.inner.discussions.leaving_room(room_id);
         let Some(running) = kit.inner.discussions.release(room_id) else {
             return Ok(());
         };
         for hook in [SILENT, NAMES] {
             kit.hook_engine().remove_room_hook(room_id, hook);
         }
-        running.forget().await
+        let forgotten = running.forget().await;
+        drop(leaving);
+        forgotten
     }
 }
 

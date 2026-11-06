@@ -7,7 +7,7 @@
 //! cannot do, the discussion's own queue. A room held with no discussion
 //! running here is answered as told, with no turn to give.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
@@ -165,7 +165,22 @@ pub struct TalkAgainOptions {
 #[derive(Default)]
 pub(crate) struct DiscussionSeams {
     rooms: Mutex<HashMap<RoomId, Arc<dyn DiscussionSeam>>>,
+    /// The rooms whose discussion this process is uninstalling: one its
+    /// own work reads stored meanwhile is not followed (rule 16).
+    leaving: Mutex<HashSet<RoomId>>,
     me: OnceLock<String>,
+}
+
+/// A room whose discussion this process is uninstalling, until dropped.
+pub(crate) struct Leaving<'seams> {
+    seams: &'seams DiscussionSeams,
+    room_id: RoomId,
+}
+
+impl Drop for Leaving<'_> {
+    fn drop(&mut self) {
+        self.seams.leaving().remove(&self.room_id);
+    }
 }
 
 impl fmt::Debug for DiscussionSeams {
@@ -179,6 +194,21 @@ impl fmt::Debug for DiscussionSeams {
 impl DiscussionSeams {
     fn rooms(&self) -> MutexGuard<'_, HashMap<RoomId, Arc<dyn DiscussionSeam>>> {
         self.rooms.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn leaving(&self) -> MutexGuard<'_, HashSet<RoomId>> {
+        self.leaving.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `room_id`'s discussion is being uninstalled here until the guard is
+    /// dropped: until its configuration is forgotten, a context of the room
+    /// this process builds, its own driver's turn's included, follows none.
+    pub(crate) fn leaving_room(&self, room_id: &RoomId) -> Leaving<'_> {
+        self.leaving().insert(room_id.clone());
+        Leaving {
+            seams: self,
+            room_id: room_id.clone(),
+        }
     }
 
     /// Who this process is, as a lease names it: Python's `kit._instance_id`.
@@ -213,7 +243,7 @@ impl DiscussionSeams {
         seam: Arc<dyn DiscussionSeam>,
     ) -> bool {
         let mut rooms = self.rooms();
-        if !same_seam(rooms.get(&room_id), held) {
+        if !same_seam(rooms.get(&room_id), held) || self.leaving().contains(&room_id) {
             return false;
         }
         rooms.insert(room_id, seam);
@@ -364,10 +394,12 @@ impl<S: ConversationStore> RoomKit<S> {
         let Some(held) = self.inner.discussions.get(&room.id) else {
             return Ok(false);
         };
+        let leaving = self.inner.discussions.leaving_room(&room.id);
         if !self.leave_discussion(&room.id, &held) {
             return Ok(false);
         }
         held.forget().await?;
+        drop(leaving);
         let attached = DiscussionConfig::stored(&room.metadata)
             .map(|config| config.attached)
             .unwrap_or_default();
@@ -1675,5 +1707,25 @@ mod tests {
         assert_eq!(discussion_notes(&event), vec!["one".to_owned()]);
         crate::retire_mark(&mark);
         assert_eq!(discussion_notes(&event), Vec::<String>::new());
+    }
+
+    // An uninstall releases the room's discussion, then forgets its stored
+    // configuration: a context its own driver's turn reads in between is
+    // followed by no new seam, which would outlive the uninstall.
+    #[tokio::test]
+    async fn a_room_whose_discussion_is_uninstalled_here_is_followed_by_none() {
+        let held = Arc::new(Held::default());
+        let (kit, _) = held_room(&held).await;
+        let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+        kit.inner.discussions.release(&room_id());
+
+        let leaving = kit.inner.discussions.leaving_room(&room_id());
+        kit.follow_discussion(&room);
+        assert!(kit.inner.discussions.get(&room_id()).is_none());
+        drop(leaving);
+        // Stored still once the uninstall gave up: followed again.
+        kit.follow_discussion(&room);
+        assert!(kit.inner.discussions.get(&room_id()).is_some());
+        kit.close().await.unwrap();
     }
 }
