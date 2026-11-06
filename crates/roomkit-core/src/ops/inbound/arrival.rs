@@ -593,6 +593,7 @@ impl Arrival {
         // left the one it was in.
         if self.bound.has_passed(cx.env.now()) {
             self.room = None;
+            self.tell_route(cx, RouteEnd::TimedOut);
             return Progress::Done(Err(Stopped::Expired));
         }
         self.given_last_room = true;

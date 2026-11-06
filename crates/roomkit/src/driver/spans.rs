@@ -202,6 +202,11 @@ impl RunSpans {
                     .span
                     .fail_error(ROOM_TAKEN, String::new(), Metadata::new());
             }
+            RouteEnd::TimedOut => {
+                routing
+                    .span
+                    .fail_error(ROUTING_TIMEOUT, String::new(), Metadata::new());
+            }
         }
     }
 

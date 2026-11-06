@@ -293,6 +293,9 @@ pub enum RouteEnd {
     PastTheBudget,
     /// No room opened for it is still its own (RMK-1396).
     RoomTaken,
+    /// The call's deadline passed before step 2 opened its last new room
+    /// (RFC §13.6, RMK-1396).
+    TimedOut,
 }
 
 /// The work the body of an ASYNC hook is while it runs, when a cascade

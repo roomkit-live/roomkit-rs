@@ -10,7 +10,7 @@
 
 use std::future::{Future, pending, ready};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -411,4 +411,70 @@ async fn a_lock_wait_past_the_deadline_reads_its_timeout() {
             "{routed}"
         );
     }
+}
+
+/// A router that answers a new missing room id each time it is asked.
+struct Fresh(Arc<AtomicUsize>);
+
+impl InboundRoomRouter for Fresh {
+    fn route<'a>(
+        &'a self,
+        _channel_id: &'a ChannelId,
+        _channel_type: &'a ChannelType,
+        _options: RouteOptions,
+    ) -> RouterFuture<'a> {
+        let asked = self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(ready(Ok(Some(
+            RoomId::new(format!("new-{asked}")).unwrap(),
+        ))))
+    }
+}
+
+// Python: `_still_within` raises _RoutingTimeoutError before the last new
+// room, the deadline passed in the second new room's creation hooks, each
+// room bound by a hook to another number (RMK-1396).
+#[tokio::test]
+async fn a_deadline_passed_before_the_last_new_room_reads_its_timeout() {
+    let (kit, mock) = kit_of(RoomKitOptions {
+        inbound_router: Some(Arc::new(Fresh(Arc::default()))),
+        process_timeout: Duration::from_millis(40),
+        ..RoomKitOptions::default()
+    });
+    let created = Arc::new(AtomicUsize::new(0));
+    let binding = kit.clone();
+    kit.hook(
+        HookTrigger::OnRoomCreated,
+        move |event: RoomEvent, _| {
+            let (kit, created) = (binding.clone(), Arc::clone(&created));
+            async move {
+                let options = AttachChannelOptions {
+                    participant_id: Some(
+                        roomkit::model::ParticipantId::new("+15550000002").unwrap(),
+                    ),
+                    ..AttachChannelOptions::default()
+                };
+                kit.attach_channel(&event.room_id, &id("sms"), options)
+                    .await
+                    .unwrap();
+                if created.fetch_add(1, Ordering::SeqCst) == 1 {
+                    tokio::time::sleep(Duration::from_millis(80)).await;
+                }
+            }
+        },
+        HookOptions {
+            name: "bind".to_owned(),
+            ..HookOptions::default()
+        },
+    )
+    .unwrap();
+    let result = kit
+        .process_inbound(hello(), ProcessInboundOptions::default())
+        .await
+        .unwrap();
+    kit.close().await.unwrap();
+    assert_eq!(
+        (result.blocked, result.reason.as_deref()),
+        (true, Some("process_timeout"))
+    );
+    assert_eq!(routes(&mock), vec![failed("_RoutingTimeoutError")]);
 }
