@@ -56,7 +56,7 @@ use super::queues::Lineage;
 use super::record::{RecordPass, RecordReport};
 use super::work_read::{Read, WorkRead};
 use super::{InboundError, InboundResult, Machine, MessageAnswers, result};
-use crate::model::{InboundMessage, InjectedEvent, Post, RoomEvent, RoomId};
+use crate::model::{ErrorRecord, InboundMessage, InjectedEvent, Post, RoomEvent, RoomId};
 use crate::ops::io::{Bound, Io};
 use crate::ops::protocol::{EffectId, Entry, EntryId, Notice, Outcome, SpanNote};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
@@ -89,6 +89,10 @@ struct Adopted {
     /// Whether the entry is a direct injection, whose refusal before its
     /// commit is an error (RFC §10.5).
     direct: bool,
+    /// The first failure of the release of a lock the entry's step 2 took,
+    /// once its message arrived: its result's error when it met none
+    /// before (RFC §13.5), as Python's nested call collects its own.
+    release_error: Option<ErrorRecord>,
 }
 
 /// One adopted entry at work.
@@ -192,6 +196,19 @@ impl AdoptedRun {
             RunState::Passing(pass) => pass.awaits(effect),
             RunState::Recording(record) => record.awaits(effect),
         }
+    }
+
+    /// The failure of a release the entry's step 2 met, taken from its
+    /// arrival once its message arrived or stopped arriving (`advanced`):
+    /// its result's error (RFC §13.5).
+    fn arrival_release_error(&mut self, advanced: &Advanced) -> Option<ErrorRecord> {
+        let RunState::Arriving(arrival) = &mut self.state else {
+            return None;
+        };
+        if matches!(advanced, Advanced::Waiting) {
+            return None;
+        }
+        arrival.take_release_error()
     }
 
     /// Hands the entry the answer to one of its effects.
@@ -307,6 +324,7 @@ impl Machine {
             origin,
             nested,
             direct: matches!(entry, Entry::Direct { .. } | Entry::Post { .. }),
+            release_error: None,
         };
         self.adopted.adopted.push((adopted, Box::new(entry)));
         Ok(id)
@@ -544,8 +562,11 @@ impl Machine {
             return;
         };
         let mut run = self.adopted.running.remove(index);
-        let adopted = run.entry.clone();
+        let mut adopted = run.entry.clone();
         let advanced = within(cx, &adopted, |cx| run.accept(cx, effect, outcome));
+        adopted.release_error = run
+            .arrival_release_error(&advanced)
+            .or(adopted.release_error);
         match advanced {
             Advanced::Waiting => self.adopted.running.insert(index, run),
             Advanced::Arrived(event, Identified::Proceed(participation)) => {
@@ -631,7 +652,12 @@ impl Machine {
         let result = if adopted.direct {
             result.and_then(result::committed)
         } else {
-            result
+            // Step 2's release came before anything the entry met since
+            // (RFC §13.5).
+            result.map(|mut result| {
+                result.error = adopted.release_error.clone().or(result.error);
+                result
+            })
         };
         cx.io.settle(adopted.id, result);
         for (effect, outcome) in self.adopted.released(adopted.origin) {
