@@ -227,6 +227,19 @@ mod tests {
         );
     }
 
+    // HITL 08856192: what the SDK reads of a wait and this crate leaves to its
+    // backoff, written in docs/architecture.md.
+    #[test]
+    fn a_wait_the_sdk_reads_and_this_crate_does_not() {
+        let read = |after: &str| retry_after(&headers(&[("retry-after", after)]), 1_000_000.0);
+        // Python's `float()` reads an underscore between digits.
+        assert_eq!(read("1_000"), None);
+        // `parsedate_tz` reads a date with no time zone, and a four-digit year in
+        // the obsolete form.
+        assert_eq!(read("Mon, 12 Jan 1970 00:00:00"), None);
+        assert_eq!(read("Mon, 12-Jan-1970 00:00:00 GMT"), None);
+    }
+
     // openai._base_client: _should_retry.
     #[test]
     fn a_status_is_worth_a_retry_as_the_sdk_reads_it() {

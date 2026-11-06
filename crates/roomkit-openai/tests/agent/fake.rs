@@ -256,6 +256,8 @@ pub(crate) struct Request {
     pub(crate) accept_encoding: Option<String>,
     /// Each of its `Authorization` headers, in order.
     pub(crate) authorizations: Vec<String>,
+    /// The name of each of its headers, in lower case.
+    pub(crate) header_names: Vec<String>,
     /// Its body, as JSON.
     pub(crate) body: Value,
 }
@@ -356,6 +358,7 @@ async fn exchange(mut stream: TcpStream, reply: &Reply, requests: &Mutex<Vec<Req
             .filter(|(key, _)| key == "authorization")
             .map(|(_, value)| value.clone())
             .collect(),
+        header_names: headers.iter().map(|(key, _)| key.clone()).collect(),
         body,
     };
     requests

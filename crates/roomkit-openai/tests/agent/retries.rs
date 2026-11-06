@@ -140,6 +140,30 @@ async fn a_status_worth_a_retry_is_tried_again_until_it_answers() {
     }
 }
 
+/// HITL 08856192: a try again carries no `x-stainless-retry-count`, which the SDK
+/// sends, nor any `x-stainless-*` header, written in docs/architecture.md.
+#[tokio::test]
+async fn a_try_again_carries_no_sdk_header() {
+    let replies = vec![
+        soon(Reply::status(503, "{}")),
+        answering(false, "Recovered"),
+    ];
+    let (provider, fake) = on(replies, 1).await;
+    assert_eq!(answer(&provider, false).await.unwrap(), "Recovered");
+    let requests = fake.requests();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        assert!(
+            !request
+                .header_names
+                .iter()
+                .any(|name| name.starts_with("x-stainless")),
+            "{:?}",
+            request.header_names
+        );
+    }
+}
+
 #[tokio::test]
 async fn retries_spent_the_last_try_s_failure_is_the_request_s() {
     let first = Reply::status(503, r#"{"error": {"message": "first"}}"#);
