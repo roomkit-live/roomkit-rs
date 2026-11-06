@@ -20,6 +20,8 @@ pub struct PostgresStoreOptions {
     /// A certificate that is its own root and a CA (the recipe of Postgres's
     /// documentation) is refused under a mode that checks the chain: rustls
     /// takes no CA as an end entity; give the server one issued by that CA.
+    /// `None` takes the whole connection from the `PG*` environment variables,
+    /// `PGPASSWORD` included, as Python's asyncpg does (HITL 78cd4240).
     pub dsn: Option<String>,
     /// A pool of the integrator's, which stays theirs: the store never closes
     /// it.

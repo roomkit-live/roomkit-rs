@@ -1572,6 +1572,61 @@ async fn two_processes_commit_to_one_room_with_no_index_given_twice() {
     assert_eq!((stored.event_count, stored.latest_index), (30, Some(29)));
 }
 
+/// The child of [`a_store_with_no_dsn_reads_the_pg_variables`]: its environment holds
+/// the connection, set by the parent, which a test may not set in its own process.
+const NO_DSN_CHILD: &str = "ROOMKIT_TEST_NO_DSN_CHILD";
+
+/// Python: `test_a_store_with_no_dsn_reads_the_pg_variables` (HITL 78cd4240): with
+/// `dsn: None` the connection comes from the `PG*` environment variables,
+/// `PGPASSWORD` included. The test runs itself again in a process whose environment
+/// holds them, and no `POSTGRES_DSN`.
+#[tokio::test]
+async fn a_store_with_no_dsn_reads_the_pg_variables() {
+    if std::env::var_os(NO_DSN_CHILD).is_some() {
+        let store = PostgresStore::new(PostgresStoreOptions::default());
+        store.init(SMALL_POOL).await.unwrap();
+        assert!(!store.room_exists(&room_id("nobody")).await.unwrap());
+        store.close().await;
+        return;
+    }
+    let Some(server) = dsn() else {
+        return;
+    };
+    let config: tokio_postgres::Config = server.parse().unwrap();
+    let host = match &config.get_hosts()[0] {
+        tokio_postgres::config::Host::Tcp(host) => host.clone(),
+        tokio_postgres::config::Host::Unix(path) => path.display().to_string(),
+    };
+    let password = config
+        .get_password()
+        .map(|password| String::from_utf8(password.to_vec()).unwrap())
+        .unwrap_or_default();
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "a_store_with_no_dsn_reads_the_pg_variables",
+            "--test-threads=1",
+        ])
+        .env(NO_DSN_CHILD, "1")
+        .env_remove("POSTGRES_DSN")
+        .env("PGHOST", host)
+        .env(
+            "PGPORT",
+            config.get_ports().first().unwrap_or(&5432).to_string(),
+        )
+        .env("PGUSER", config.get_user().unwrap_or_default())
+        .env("PGPASSWORD", password)
+        .env("PGDATABASE", config.get_dbname().unwrap_or_default())
+        .output()
+        .unwrap();
+    let ran = String::from_utf8_lossy(&child.stdout);
+    assert!(
+        child.status.success() && ran.contains("1 passed"),
+        "{ran}{}",
+        String::from_utf8_lossy(&child.stderr)
+    );
+}
+
 /// The kit runs on the store, its close closing the pool the store opened.
 #[tokio::test]
 async fn the_kit_closes_the_store_it_runs_on() {
