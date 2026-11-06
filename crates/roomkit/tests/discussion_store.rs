@@ -20,7 +20,8 @@ use roomkit::testing::{
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, Discussion, HookOptions,
     HookTrigger, InMemoryStore, InstallStrategyOptions, ProcessInboundOptions, RoomKit,
-    RoomKitOptions, SpeakQueueChange, SpeakQueueEvent, StoreError, UninstallStrategyOptions,
+    RoomKitOptions, RoomStrategyIsCurrentOptions, RoomStrategyOptions, SpeakQueueChange,
+    SpeakQueueEvent, StoreError, UninstallStrategyOptions,
 };
 
 /// Refuses the write of a queue that gave at least `refuse_from` turns, and
@@ -37,6 +38,10 @@ struct FlakyStore {
     write_held: Arc<AtomicBool>,
     writing: Arc<Notify>,
     write_on: Arc<Notify>,
+    /// Holds the next write of a discussion's configuration until told.
+    config_held: Arc<AtomicBool>,
+    config_writing: Arc<Notify>,
+    config_on: Arc<Notify>,
 }
 
 macro_rules! forward {
@@ -73,6 +78,13 @@ impl ConversationStore for FlakyStore {
         if given > 0 && self.write_held.swap(false, Ordering::SeqCst) {
             self.writing.notify_one();
             self.write_on.notified().await;
+        }
+        let configures = patch
+            .get("_discussion")
+            .is_some_and(|config| !config.is_null());
+        if configures && self.config_held.swap(false, Ordering::SeqCst) {
+            self.config_writing.notify_one();
+            self.config_on.notified().await;
         }
         let refuse_from = self.refuse_from.load(Ordering::SeqCst);
         if refuse_from > 0 && given >= refuse_from {
@@ -585,4 +597,70 @@ async fn the_queue_outlives_the_process_but_not_who_speaks() {
         (vec![id("b")], None, true)
     );
     again.close().await.unwrap();
+}
+
+// Python: core/mixins/discussion.py `_discussion_is_current`, which reads the
+// discussion an install registers once its configuration is stored: an
+// install under way is not current yet, and room_strategy_is_current leaves
+// it be.
+#[tokio::test]
+async fn an_install_under_way_is_not_current_and_stays() {
+    let store = FlakyStore::default();
+    let (held, writing, on) = (
+        Arc::clone(&store.config_held),
+        Arc::clone(&store.config_writing),
+        Arc::clone(&store.config_on),
+    );
+    let kit = RoomKit::new(RoomKitOptions::with_store(store));
+    kit.register_channel(RecordingTransport::new(
+        id("ops"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    kit.register_channel(EchoAgent::new(
+        id("a"),
+        "a answers",
+        EchoAgentOptions::default(),
+    ))
+    .unwrap();
+    let room = RoomId::new("r1").unwrap();
+    let created = CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    };
+    kit.create_room(created).await.unwrap();
+    held.store(true, Ordering::SeqCst);
+    let installing = {
+        let (kit, room) = (kit.clone(), room.clone());
+        tokio::spawn(async move {
+            let discussion =
+                Discussion::new(vec![id("a").into()], DiscussionOptions::default()).unwrap();
+            let options = InstallStrategyOptions::default();
+            kit.install_strategy(&room, Arc::new(discussion), options)
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), writing.notified())
+        .await
+        .expect("the install stores its configuration");
+
+    let kind = std::any::TypeId::of::<Discussion>();
+    let options = RoomStrategyIsCurrentOptions::default();
+    let during = kit.room_strategy_is_current(&room, kind, options).await;
+    on.notify_one();
+    installing.await.unwrap().unwrap();
+
+    assert!(!during.unwrap());
+    assert!(
+        kit.room_strategy(&room, RoomStrategyOptions::default())
+            .is_some()
+    );
+    let options = RoomStrategyIsCurrentOptions::default();
+    assert!(
+        kit.room_strategy_is_current(&room, kind, options)
+            .await
+            .unwrap()
+    );
+    kit.close().await.unwrap();
 }
