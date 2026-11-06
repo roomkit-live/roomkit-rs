@@ -201,8 +201,14 @@ async fn a_wait_dropped_on_a_socket_beside_a_tcp_host_is_cancelled() {
     second.init().await.unwrap();
     let held = first.locked(&room("r1")).await.unwrap();
     let waited = room("r1");
-    let cut = tokio::time::timeout(Duration::from_millis(100), second.locked(&waited)).await;
-    assert!(cut.is_err(), "the wait was granted while the lock was held");
+    // Boxed, so that the drop below drops the wait itself.
+    let mut waiting = Box::pin(second.locked(&waited));
+    // Cut once the server shows the wait: one cut before it proves nothing.
+    tokio::select! {
+        _ = &mut waiting => panic!("the wait was granted while the lock was held"),
+        () = until_locks_are(&schema, (1, 1)) => {}
+    }
+    drop(waiting);
     until_locks_are(&schema, (1, 0)).await;
     held.release().await.unwrap();
     until_locks_are(&schema, (0, 0)).await;
