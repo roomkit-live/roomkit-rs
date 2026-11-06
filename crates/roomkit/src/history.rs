@@ -196,9 +196,9 @@ async fn stored<S: ConversationStore>(store: &S, event: &RoomEvent) -> RoomEvent
 /// turn); a discussion's turn reads
 /// its event at its place, before what was said after it, so the room's
 /// latest whatever `event` (RFC §19.7.5). An instruction, never
-/// stored, holds the index the room's next event takes; an event the store
-/// never numbered (index 0) bounds nothing when the pipeline handed no
-/// read, and the read's newest event otherwise.
+/// stored, holds the index the room's next event takes; an event at index
+/// 0, the room's first or one the store never numbered, bounds nothing when
+/// the pipeline handed no read, and the read's newest event otherwise.
 fn messages_up_to(
     event: &RoomEvent,
     filter: EventFilter,
@@ -215,9 +215,9 @@ fn messages_up_to(
         // The window before the event, and the event itself.
         limit: u64::try_from(window).unwrap_or(u64::MAX).saturating_add(1),
         event_filter: Some(filter),
-        // An event the store never numbered bounds nothing, unless the
-        // pipeline handed its turn a read: the room's first message, a
-        // regeneration's or a release's, reads no message committed after it.
+        // Index 0, the room's first event or one the store never numbered,
+        // bounds nothing unless the pipeline handed the turn a read: then the
+        // turn reads no message committed after that read.
         before_index: ((event.index > 0 || read_through.is_some()) && !discussion_turn(event))
             .then_some(bound),
         newest_first: true,
@@ -362,9 +362,9 @@ mod tests {
         assert_eq!(read.recent_events.last(), Some(&unknown));
     }
 
-    /// A regeneration's turn reads the room as the regeneration's read
-    /// under the lock found it (Python's context): the answers given since
-    /// its message, never a message committed after that read.
+    /// The indexes a turn on `trigger` reads, its pipeline having handed it
+    /// `read`: a regeneration's read under the lock, or an ordinary turn's
+    /// context, never a message committed after that read.
     async fn regenerated(
         store: &InMemoryStore,
         trigger: &RoomEvent,
