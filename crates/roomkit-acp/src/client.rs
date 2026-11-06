@@ -10,8 +10,8 @@ use agent_client_protocol_schema::v1::{
 use crate::error::AcpError;
 
 /// What an ACP agent calls back into: the Python SDK's `acp.Client`, reduced
-/// to the two calls RoomKit's client serves (a trait rather than an opaque
-/// struct: asked in HITL e6f3decd, not answered yet).
+/// to the two calls RoomKit's client serves, a trait as the SDK's (HITL
+/// e6f3decd).
 ///
 /// A connection hands each `session/update` notification to
 /// [`session_update`](Self::session_update), each session's in the order

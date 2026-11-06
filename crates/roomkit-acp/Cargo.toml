@@ -21,8 +21,8 @@ tokio = { workspace = true, features = ["process", "io-util", "time"] }
 tracing.workspace = true
 
 # `SIGTERM` to the agent's process at its close, as the Python SDK's
-# `terminate()` sends it: the dependency asked in HITL 4286294b, not
-# answered yet.
+# `terminate()` sends it, as roomkit-mcp uses it (decided in HITL
+# 4286294b).
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
 
