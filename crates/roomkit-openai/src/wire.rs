@@ -742,19 +742,21 @@ impl Folding {
 /// `reasoning_tokens`, a detail of the output, which counts it, when it is
 /// not 0. With `cache_hits`, the cache as DeepSeek reports it, where it does
 /// (Python's `DeepSeekAIProvider._usage_from`): its misses are the input, its
-/// hits the cache read, a miss count it leaves out the prompt less the hits.
+/// hits the cache read, a miss count it leaves out the prompt less the hits;
+/// a count it leaves out, and a miss count with no prompt to derive it from,
+/// stay unknown (RMK-1441).
 fn usage_of(usage: &Usage, cache_hits: bool) -> Metadata {
     let mut counted = Metadata::new();
     if cache_hits && let Some(hit) = usage.prompt_cache_hit_tokens {
-        let prompt = usage.prompt_tokens.unwrap_or_default();
         let miss = usage
             .prompt_cache_miss_tokens
-            .unwrap_or_else(|| prompt.saturating_sub(hit));
-        counted.insert("input_tokens".to_owned(), Value::from(miss));
-        counted.insert(
-            "output_tokens".to_owned(),
-            Value::from(usage.completion_tokens.unwrap_or_default()),
-        );
+            .or_else(|| usage.prompt_tokens.map(|prompt| prompt.saturating_sub(hit)));
+        if let Some(miss) = miss {
+            counted.insert("input_tokens".to_owned(), Value::from(miss));
+        }
+        if let Some(output) = usage.completion_tokens {
+            counted.insert("output_tokens".to_owned(), Value::from(output));
+        }
         if hit > 0 {
             counted.insert("cache_read_input_tokens".to_owned(), Value::from(hit));
         }
@@ -1180,6 +1182,57 @@ mod tests {
                 })
             )
         );
+    }
+
+    // Python: tests/test_providers/test_openai.py::TestOpenAIAIProvider::test_a_count_the_server_leaves_out_stays_unknown
+    #[test]
+    fn a_count_the_server_leaves_out_stays_unknown() {
+        let read = |usage: Value| {
+            let body = serde_json::json!({
+                "choices": [{"message": {"content": "Hi"}, "finish_reason": "stop"}],
+                "usage": usage,
+            });
+            let read = response(body.to_string().as_bytes(), "sk-1", false, "m").unwrap();
+            Value::Object(read.done.usage)
+        };
+        let cases = [
+            (
+                serde_json::json!({"completion_tokens": 7}),
+                serde_json::json!({"output_tokens": 7}),
+            ),
+            (
+                serde_json::json!({"prompt_tokens": 42}),
+                serde_json::json!({"input_tokens": 42}),
+            ),
+            // A cache read the prompt cannot hold is bounded by it.
+            (
+                serde_json::json!({"prompt_tokens": 10, "completion_tokens": 7,
+                    "prompt_tokens_details": {"cached_tokens": 40}}),
+                serde_json::json!({"input_tokens": 0, "output_tokens": 7,
+                    "cache_read_input_tokens": 10}),
+            ),
+            // The read is a share of the prompt: unknown with it. A write is
+            // reported apart, and kept.
+            (
+                serde_json::json!({"completion_tokens": 7,
+                    "prompt_tokens_details": {"cached_tokens": 40}}),
+                serde_json::json!({"output_tokens": 7}),
+            ),
+            (
+                serde_json::json!({"completion_tokens": 7,
+                    "prompt_tokens_details": {"cache_write_tokens": 5}}),
+                serde_json::json!({"output_tokens": 7, "cache_creation_input_tokens": 5}),
+            ),
+            // A counter of another shape is none.
+            (
+                serde_json::json!({"prompt_tokens": 100, "completion_tokens": 7,
+                    "prompt_tokens_details": {"cache_write_tokens": "12"}}),
+                serde_json::json!({"input_tokens": 100, "output_tokens": 7}),
+            ),
+        ];
+        for (usage, counted) in cases {
+            assert_eq!(read(usage), counted);
+        }
     }
 
     /// An OpenAI-compatible server may write `null` for any member it

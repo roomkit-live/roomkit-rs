@@ -73,6 +73,21 @@ fn reasoning_tokens_are_exposed_as_a_detail_of_output() {
     );
 }
 
+// Python: tests/test_providers/test_deepseek.py::TestDeepSeekUsage::test_a_count_the_server_leaves_out_stays_unknown
+#[test]
+fn a_count_the_server_leaves_out_stays_unknown() {
+    assert_eq!(
+        [
+            usage(&json!({ "prompt_cache_hit_tokens": 960, "prompt_cache_miss_tokens": 40 })),
+            usage(&json!({ "completion_tokens": 50, "prompt_cache_hit_tokens": 600 })),
+        ],
+        [
+            json!({ "input_tokens": 40, "cache_read_input_tokens": 960 }),
+            json!({ "output_tokens": 50, "cache_read_input_tokens": 600 }),
+        ]
+    );
+}
+
 /// What a generic provider reads of `usage`, OpenAI's shape.
 fn generic(usage: &Value) -> Value {
     let body = json!({
