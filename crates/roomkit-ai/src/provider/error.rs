@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 /// A provider's call that failed (RFC §6.7): Python's
 /// `ProviderError(message, *, retryable=False, provider='', status_code=None,
-/// context_overflow=None)`. The turn records its message; it never reaches
+/// context_overflow=None, before_request=False)`. The turn records its message; it never reaches
 /// the room nor a model. The error it was raised from, when there is one,
 /// is its [`source`](Error::source), as Python's `raise ... from`.
 #[derive(Clone, Debug)]
@@ -23,6 +23,10 @@ pub struct ProviderError {
     /// Whether the request was past the model's context window, when the
     /// vendor said.
     pub context_overflow: Option<bool>,
+    /// Whether the provider refused before sending any request: nothing
+    /// reached the vendor, so the failure says nothing of what the request
+    /// carried (RFC §6.4).
+    pub before_request: bool,
     source: Option<Arc<dyn Error + Send + Sync>>,
 }
 
@@ -38,6 +42,8 @@ pub struct ProviderErrorOptions {
     pub status_code: Option<u16>,
     /// Whether the request was past the model's context window.
     pub context_overflow: Option<bool>,
+    /// Whether the provider refused before sending any request.
+    pub before_request: bool,
 }
 
 impl ProviderError {
@@ -48,6 +54,7 @@ impl ProviderError {
             provider,
             status_code,
             context_overflow,
+            before_request,
         } = options;
         Self {
             message: message.into(),
@@ -55,6 +62,7 @@ impl ProviderError {
             provider,
             status_code,
             context_overflow,
+            before_request,
             source: None,
         }
     }
@@ -135,12 +143,14 @@ impl PartialEq for ProviderError {
             &self.provider,
             self.status_code,
             self.context_overflow,
+            self.before_request,
         ) == (
             &other.message,
             other.retryable,
             &other.provider,
             other.status_code,
             other.context_overflow,
+            other.before_request,
         )
     }
 }

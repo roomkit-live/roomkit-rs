@@ -106,6 +106,7 @@ async fn a_provider_without_support_refuses_before_sending() {
         .await
         .expect_err("refused");
     assert_eq!(reason(&error), Some(ResponseSchemaFailure::Unsupported));
+    assert!(error.before_request);
     assert_eq!(provider.calls().len(), 0, "no request kept");
 }
 
@@ -187,9 +188,15 @@ fn the_error_is_a_provider_error_never_retried() {
     };
     let failure = ResponseSchemaError::new("x", ResponseSchemaFailure::Refusal, options);
     let error = ProviderError::from(failure);
+    // Only an unsupported schema is refused before any request.
     assert_eq!(
-        (error.retryable, error.provider.as_str(), reason(&error)),
-        (false, "mock", Some(ResponseSchemaFailure::Refusal))
+        (
+            error.retryable,
+            error.provider.as_str(),
+            reason(&error),
+            error.before_request
+        ),
+        (false, "mock", Some(ResponseSchemaFailure::Refusal), false)
     );
 }
 

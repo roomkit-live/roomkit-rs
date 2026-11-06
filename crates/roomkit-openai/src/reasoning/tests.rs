@@ -198,6 +198,7 @@ async fn tools_for_a_model_that_takes_none_fail_before_the_request() {
             "{error}"
         );
         assert!(!error.retryable);
+        assert!(error.before_request);
     }
 }
 
@@ -219,6 +220,7 @@ async fn a_responses_only_model_fails_before_the_request() {
         let first = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await;
         let error = first.unwrap().unwrap_err();
         assert!(error.to_string().contains("Responses API only"), "{error}");
+        assert!(error.before_request);
     }
 }
 

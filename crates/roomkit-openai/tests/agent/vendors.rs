@@ -455,17 +455,16 @@ async fn a_vendor_s_tool_names_are_checked_on_its_own_endpoint_alone() {
                 .generate(&context)
                 .await
                 .err()
-                .map(|error| error.provider)
+                .map(|error| (error.provider, error.before_request))
         }
     };
     let long = "a".repeat(129);
+    // Refused before the request (Python: tests/text_conformance/test_requests.py
+    // test_a_name_the_vendor_refuses_fails_before_the_request).
+    let refused = || Some(("kimi".to_owned(), true));
     assert_eq!(
         [kimi("a.b").await, kimi("1abc").await, kimi(&long).await,],
-        [
-            Some("kimi".to_owned()),
-            Some("kimi".to_owned()),
-            Some("kimi".to_owned())
-        ]
+        [refused(), refused(), refused()]
     );
     // Behind another URL the server decides: a dotted name goes on.
     let (body, answered) = sent(

@@ -395,16 +395,30 @@ impl SentImages {
 /// anything streamed, can say so: a later round, or a stream under way,
 /// shows the content was taken. Python's `refuses_content`.
 ///
-/// A response schema outside the portable subset, which a provider refuses
-/// before any request, says nothing of the content either: Python refuses
-/// it where it is set, in the hook or the context that writes it, and no
-/// provider sees it (HITL 17bfa822).
+/// A refusal before any request says nothing of the content either: the
+/// provider sent nothing ([`ProviderError::before_request`], HITL fb46b635,
+/// d91b8137). Nor does a response schema outside the portable subset, which
+/// a provider refuses before any request: Python refuses it where it is
+/// set, in the hook or the context that writes it, and no provider sees it
+/// (HITL 17bfa822).
 pub(crate) fn refuses_content(error: &ProviderError) -> bool {
     !error.retryable
         && !error
             .status_code
             .is_some_and(|status| NOT_CONTENT_STATUSES.contains(&status))
+        && !refused_before_request(error)
         && !outside_the_subset(error)
+}
+
+/// Whether `error`, or a provider error it was raised from, is a refusal
+/// before any request, however deep a provider wrapped it.
+fn refused_before_request(error: &ProviderError) -> bool {
+    error.before_request
+        || std::iter::successors(error.source(), |&source| source.source()).any(|source| {
+            source
+                .downcast_ref::<ProviderError>()
+                .is_some_and(|inner| inner.before_request)
+        })
 }
 
 /// Whether `error` is a provider's refusal of a response schema outside the
@@ -772,6 +786,39 @@ mod tests {
         let direct = ProviderError::new(refused.to_string(), options()).with_source(refused);
         let wrapped = ProviderError::new("an integrator's provider", options()).with_source(direct);
         assert!(!refuses_content(&wrapped));
+    }
+
+    // Python: tests/test_author_images.py::TestRefusal::test_a_refusal_before_any_request_refuses_nothing
+    // (a provider's own refusals, flagged where each is raised: the
+    // schema's below, the model's and a tool name's in roomkit-openai)
+    #[test]
+    fn a_refusal_before_any_request_is_no_content_refusal() {
+        let options = crate::provider::ProviderErrorOptions::default;
+        let before = || {
+            ProviderError::new(
+                "refused",
+                crate::provider::ProviderErrorOptions {
+                    before_request: true,
+                    ..options()
+                },
+            )
+        };
+        let unsupported = ProviderError::from(crate::ResponseSchemaError::new(
+            "mock does not support a response schema",
+            crate::ResponseSchemaFailure::Unsupported,
+            crate::ResponseSchemaErrorOptions::default(),
+        ));
+        let wrapped =
+            ProviderError::new("an integrator's provider", options()).with_source(before());
+        let invalid = ProviderError::from(crate::ResponseSchemaError::new(
+            "the answer is not a JSON document",
+            crate::ResponseSchemaFailure::InvalidJson,
+            crate::ResponseSchemaErrorOptions::default(),
+        ));
+        assert_eq!(
+            [&before(), &unsupported, &wrapped, &invalid].map(refuses_content),
+            [false, false, false, true]
+        );
     }
 
     // Python: tests/test_attached_media.py::TestNotSeen::test_a_reader_that_fails_names_none

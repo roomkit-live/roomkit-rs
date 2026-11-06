@@ -294,11 +294,17 @@ impl From<OpenAiError> for ProviderError {
             | OpenAiError::StreamLineTooLong { .. }
             | OpenAiError::StreamEventTooLong { .. } => (false, None, None),
         };
+        // Refused before the request, which never went (RFC §6.4).
+        let before_request = matches!(
+            error,
+            OpenAiError::ToolName { .. } | OpenAiError::ModelRefused { .. }
+        );
         let options = ProviderErrorOptions {
             retryable,
             provider: "openai".to_owned(),
             status_code,
             context_overflow,
+            before_request,
         };
         Self::new(error.to_string(), options).with_source(error)
     }

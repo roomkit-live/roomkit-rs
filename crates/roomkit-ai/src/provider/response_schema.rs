@@ -125,10 +125,13 @@ impl Error for ResponseSchemaError {}
 
 impl From<ResponseSchemaError> for ProviderError {
     /// The provider's failure, never retryable, its message and its
-    /// provider the schema's failure's, which is its source.
+    /// provider the schema's failure's, which is its source; an
+    /// [`Unsupported`](ResponseSchemaFailure::Unsupported) one is refused
+    /// before any request.
     fn from(failure: ResponseSchemaError) -> Self {
         let options = ProviderErrorOptions {
             provider: failure.provider.clone(),
+            before_request: failure.reason == ResponseSchemaFailure::Unsupported,
             ..ProviderErrorOptions::default()
         };
         Self::new(failure.message.clone(), options).with_source(failure)
@@ -170,6 +173,7 @@ pub fn schema_for_generate<'a>(
     if let Err(refused) = check_portable_schema(&Value::Object(schema.clone())) {
         let options = ProviderErrorOptions {
             provider: provider.to_owned(),
+            before_request: true,
             ..ProviderErrorOptions::default()
         };
         return Err(ProviderError::new(refused.to_string(), options).with_source(refused));

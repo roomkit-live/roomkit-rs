@@ -259,6 +259,7 @@ impl ScriptedRound {
                 status_code: Some(*status),
                 context_overflow: self.context_overflow,
                 provider: self.provider.clone(),
+                ..ProviderErrorOptions::default()
             };
             ProviderError::new(message.clone(), options)
         })
