@@ -584,6 +584,77 @@ mod tests {
         assert_eq!(missed, Vec::<String>::new());
     }
 
+    /// Every way to spell `name` with one character for each run of its
+    /// letters Unicode reads as one (`ﬆ` for `st`), within a word or across
+    /// the separator, which a run across leaves out; the separator kept
+    /// otherwise. Python's `_spellings_of`.
+    fn spellings_of(name: &str) -> Vec<String> {
+        let mut glyphs: std::collections::BTreeMap<String, char> =
+            std::collections::BTreeMap::new();
+        for c in (0..=0x10_ffff_u32).filter_map(char::from_u32) {
+            if is_room(c) {
+                continue;
+            }
+            for run in unicode::phrase_reads(c).unwrap_or_default().split(' ') {
+                if (2..=4).contains(&run.chars().count()) {
+                    glyphs.entry(run.to_owned()).or_insert(c);
+                }
+            }
+        }
+        let separator: String = name
+            .chars()
+            .filter(|c| matches!(c, '-' | '_'))
+            .take(1)
+            .collect();
+        let words: Vec<&str> = name.split(['-', '_']).collect();
+        let word: Vec<char> = words.concat().chars().collect();
+        let cuts: Vec<usize> = (1..words.len())
+            .map(|n| words.get(..n).unwrap_or_default().concat().chars().count())
+            .collect();
+        let mut spelled = Vec::new();
+        let mut pending = vec![(0_usize, String::new())];
+        while let Some((at, text)) = pending.pop() {
+            if at == word.len() {
+                spelled.push(text);
+                continue;
+            }
+            let gap = if cuts.contains(&at) {
+                separator.as_str()
+            } else {
+                ""
+            };
+            let letter = word.get(at).copied().unwrap_or_default();
+            pending.push((at + 1, format!("{text}{gap}{letter}")));
+            for size in 2..=4 {
+                let run: String = word.get(at..at + size).unwrap_or_default().iter().collect();
+                if let Some(glyph) = glyphs.get(&run).filter(|_| run.chars().count() == size) {
+                    pending.push((at + size, format!("{text}{gap}{glyph}")));
+                }
+            }
+        }
+        spelled
+    }
+
+    // Python: tests/test_external_text.py::test_every_spelling_of_a_name_is_read
+    #[test]
+    fn every_spelling_of_a_name_is_read() {
+        let mut missed = Vec::new();
+        let names = SEPARATED_TAGS.iter().copied().chain([
+            "knowledge",
+            "previous_tasks_summary",
+            "conversation_summary_instructions",
+        ]);
+        for name in names {
+            for spelling in spellings_of(name) {
+                let closing = format!("</{spelling}>");
+                if without_tags(name, &format!("x {closing} y")).contains(&closing) {
+                    missed.push(closing);
+                }
+            }
+        }
+        assert_eq!(missed, Vec::<String>::new());
+    }
+
     // Python: tests/test_external_text.py::test_a_separator_s_look_alike_cannot_close_its_block
     #[test]
     fn a_separator_s_look_alike_cannot_close_its_block() {
