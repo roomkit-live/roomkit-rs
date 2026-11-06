@@ -791,19 +791,11 @@ pub(crate) fn recording(
         let named = form.answered_recipient.as_ref().unwrap_or(address);
         update.participant_id = Some(ParticipantId::new(named.clone()).ok());
     }
-    // On a transport naming the sender by their address, where a reply goes,
-    // under each key the binding holds no value under: a value that is not a
-    // recipient is kept, as a recipient is (RFC §5.7). A binding naming the
-    // sender otherwise (their identity) names a conversation that address is
-    // not, as Python's `_lacks_recipient` reads it.
-    let named = update
-        .participant_id
-        .as_ref()
-        .unwrap_or(&binding.participant_id);
-    let addressed = binding.category == ChannelCategory::Transport
-        && named
-            .as_ref()
-            .is_some_and(|named| form.normalize(named.as_str()) == *address);
+    // On a transport, where a reply goes, under each key the binding holds
+    // no value under: a value that is not a recipient is kept, as a
+    // recipient is (RFC §5.7). A binding naming the sender by their identity
+    // gets their address too (HITL b75a9c93).
+    let addressed = binding.category == ChannelCategory::Transport;
     for (key, value) in sender.reply_metadata.iter().filter(|_| addressed) {
         if matches!(addresses::held(binding.metadata.get(key)), Held::Nothing) {
             update
@@ -1837,32 +1829,38 @@ mod tests {
             );
         }
 
-        /// RFC §5.7: only a binding naming the sender by their address gets
-        /// it as its recipient.
         #[test]
-        fn a_binding_naming_the_sender_s_identity_keeps_it_and_writes_nothing() {
+        fn a_binding_naming_the_sender_s_identity_keeps_it_and_gets_their_address() {
             let mut jeans = binding();
             jeans.participant_id = Some(ParticipantId::new("id_jean").unwrap());
             let sender = Sender {
                 identity_id: Some(IdentityId::new("id_jean").unwrap()),
                 ..sender(ALICE)
             };
+            let Recording::Write(update) = recording(&jeans, &sender, &sms_form(), &[]) else {
+                panic!("the recipient is written");
+            };
             assert_eq!(
-                recording(&jeans, &sender, &sms_form(), &[]),
-                Recording::Kept
+                update.apply(&jeans).participant_id,
+                Some(ParticipantId::new("id_jean").unwrap())
             );
         }
 
-        /// RFC §10.4, §5.7: the binding names a participant who is the sender,
-        /// so it is theirs, and writes no address beside that name.
+        /// RFC §10.4: the binding names a participant who is the sender, so
+        /// it is theirs, and gets their address as its recipient.
         #[test]
         fn a_binding_naming_a_member_who_is_the_sender_is_theirs() {
             let mut jeans = binding();
             jeans.participant_id = Some(ParticipantId::new("p_jean").unwrap());
             let room = with_jean(room("room_1", 0), "sms");
+            let Recording::Write(update) =
+                recording(&jeans, &from_jean().sender, &sms_form(), &room.participants)
+            else {
+                panic!("the recipient is written");
+            };
             assert_eq!(
-                recording(&jeans, &from_jean().sender, &sms_form(), &room.participants),
-                Recording::Kept
+                (update.participant_id, Value::Object(update.metadata)),
+                (None, json!({ "phone_number": ALICE }))
             );
         }
 
