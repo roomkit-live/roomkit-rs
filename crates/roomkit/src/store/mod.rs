@@ -948,6 +948,11 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// moves, and the room's next index is kept past it. Python's
     /// `add_event`, a write below the pipeline's commit.
     ///
+    /// On a room a kit serves, an index this takes at or past the room's next
+    /// opens a hole in the delivery cursor that no lane runs: the room's next
+    /// delivery waits `delivery_gap_timeout` before it skips it (RFC §13.5,
+    /// HITL ab765c3d).
+    ///
     /// # Errors
     ///
     /// [`StoreError::RoomNotFound`] for a room the store lacks, nothing
@@ -965,6 +970,10 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// then [`add_event`](Self::add_event), which is not atomic and reuses
     /// a deleted index: a store overrides it with one write that reserves
     /// the index, as the Python implementation's stores do.
+    ///
+    /// On a room a kit serves, the index taken is a hole of the delivery
+    /// cursor that no lane runs: the room's next delivery waits
+    /// `delivery_gap_timeout` before it skips it (RFC §13.5, HITL ab765c3d).
     ///
     /// # Errors
     ///
