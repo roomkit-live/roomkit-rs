@@ -48,7 +48,9 @@ impl<P: AiProvider> Loop<P> {
             }
             Gated::Refused(refused) => (self.refused_again(called, refused), None),
         };
-        let own = ended.result.clone();
+        let (ended, parts) = self.shaped(ended);
+        // A skill's activation the hooks left as it served it is read whole.
+        let own = kept_whole(&ended.call.name).then(|| ended.result.clone());
         let ended = match &self.turn {
             Some(turn) => turn.on_tool_call(ended).await,
             None => ended,
@@ -58,11 +60,16 @@ impl<P: AiProvider> Loop<P> {
         }
         let result = self.for_model(read_tool_result(&ended.result));
         let outcome = ended.outcome.unwrap_or(ToolCallOutcome::Failed);
+        // What tells a repeat (Python's `outcome.answer`): the tool's own
+        // text, or a hook's, not parts a model that takes no image reads as
+        // text, which are told by the copy the model reads.
+        let answer = match &result {
+            ToolResult::Text(text) if parts.as_ref() != Some(&ended.result) => Some(text.clone()),
+            ToolResult::Text(_) | ToolResult::Json(_) | ToolResult::Parts(_) => None,
+        };
         // The call's own answer, neither replaced nor withheld by a hook.
-        let served = outcome == ToolCallOutcome::Served && ended.result == own;
-        // The observers read the whole outcome, as the hooks did; the model
-        // and the end row its bounded copy (RFC §21.5).
-        let shown = self.bounded(&ended.call, result.clone(), served);
+        let served = outcome == ToolCallOutcome::Served && own.as_ref() == Some(&ended.result);
+        let shown = self.model_copy(called, &ended.call, &result, served);
         let reported = ended.ended(outcome, result.clone().into_value());
         log_failure(&reported);
         if let Some(turn) = &self.turn {
@@ -76,7 +83,7 @@ impl<P: AiProvider> Loop<P> {
             self.search
                 .settle(&reported.call.id, &reported.call.name, outcome);
             self.remember(&reported.call.name, &asked, outcome, &result);
-            self.with_repeat_note(&reported.call.name, shown, &result)
+            self.with_repeat_note(&reported.call.name, shown, answer.as_deref())
         } else {
             shown
         };
@@ -121,17 +128,48 @@ impl<P: AiProvider> Loop<P> {
     }
 
     /// `result`, what the model reads of a call past its gate, noted when its
-    /// tool already gave `answer` this turn; a result of parts a model that
-    /// sees reads is not compared (Python's `_model_part`).
-    fn with_repeat_note(&self, name: &str, result: ToolResult, answer: &ToolResult) -> ToolResult {
-        let answer = match answer {
-            ToolResult::Text(answer) => Some(answer.as_str()),
-            ToolResult::Json(_) | ToolResult::Parts(_) => None,
-        };
+    /// tool already gave that answer this turn: counted on `answer`, the
+    /// tool's own, when it is a text, else on `result` itself, a stored
+    /// copy's placeholder included; a result of parts a model that sees reads
+    /// is not compared (Python's `_model_part`).
+    fn with_repeat_note(&self, name: &str, result: ToolResult, answer: Option<&str>) -> ToolResult {
         match result {
             ToolResult::Text(text) => ToolResult::Text(self.repeat_guard.noted(name, text, answer)),
             ToolResult::Json(_) | ToolResult::Parts(_) => result,
         }
+    }
+
+    /// `ended`, its result of parts read as text for a model that takes no
+    /// image (RFC §6.4), so that the hooks read the shape the model reads,
+    /// and that text, when it was so read. Python's `_shape_for_model`,
+    /// before `_apply_tool_call_hook`.
+    fn shaped(&self, mut ended: ToolCallReport) -> (ToolCallReport, Option<Value>) {
+        let ToolResult::Parts(parts) = read_tool_result(&ended.result) else {
+            return (ended, None);
+        };
+        if self.provider.supports_vision() {
+            return (ended, None);
+        }
+        let text = Value::String(ToolResult::Parts(parts).as_text());
+        ended.result = text.clone();
+        (ended, Some(text))
+    }
+
+    /// `result`, the model's copy of an outcome of `call` as `called`
+    /// reached it: bounded, the observers reading it whole as the hooks did
+    /// (RFC §21.5), save a call refused before any gate for coming under an
+    /// id its round holds, which Python's `_refuse_id_in_flight` never bounds.
+    fn model_copy(
+        &self,
+        called: &Called,
+        call: &ToolCall,
+        result: &ToolResult,
+        served: bool,
+    ) -> ToolResult {
+        if called.duplicate {
+            return result.clone();
+        }
+        self.bounded(call, result.clone(), served)
     }
 
     /// `result`, the model's copy of an outcome of `call`, bounded as every
@@ -335,7 +373,7 @@ impl<P: AiProvider> Loop<P> {
             None => Ok(answer.await),
         };
         match answered {
-            Ok(Ok(output)) => served(call, self.for_model(output.with_parts_read())),
+            Ok(Ok(output)) => served(call, output.with_parts_read()),
             Ok(Err(error)) => failure(call, error),
             Err(bound) => timed_out(call, bound),
         }

@@ -92,8 +92,9 @@ pub(crate) struct ToolEviction {
 
 #[derive(Debug, Default)]
 struct Store {
-    /// The stored results, the least recently stored or read first.
-    results: Vec<(Key, String)>,
+    /// The stored results, the least recently stored or read first, each
+    /// with its characters.
+    results: Vec<(Key, Arc<str>, usize)>,
     /// Their characters.
     chars: usize,
     /// The ids handed out, the oldest first.
@@ -118,7 +119,7 @@ impl ToolEviction {
 
     /// Whether `room` stores a result: Python's `has_evicted`.
     pub(crate) fn has_evicted(&self, room: &str) -> bool {
-        self.lock().results.iter().any(|((at, _), _)| at == room)
+        self.lock().results.iter().any(|((at, _), _, _)| at == room)
     }
 
     /// `result`, the model's copy of an outcome of a call in `room`,
@@ -161,13 +162,13 @@ impl ToolEviction {
         } else {
             format!("evicted_{call_id}")
         };
+        let (stored, chars): (Arc<str>, usize) = (Arc::from(result), char_len(result));
         let result_id = {
             let mut store = self.lock();
             let result_id = store.free_id(room, &base);
-            store.chars += char_len(result);
-            store
-                .results
-                .push(((room.to_owned(), result_id.clone()), result.to_owned()));
+            store.chars += chars;
+            let key = (room.to_owned(), result_id.clone());
+            store.results.push((key, stored, chars));
             store.bound(room);
             result_id
         };
@@ -260,15 +261,15 @@ impl ToolEviction {
                 let available: Vec<&str> = store
                     .results
                     .iter()
-                    .filter(|((at, _), _)| at == room)
-                    .map(|((_, id), _)| id.as_str())
+                    .filter(|((at, _), _, _)| at == room)
+                    .map(|((_, id), _, _)| id.as_str())
                     .collect();
                 let error = format!("Result '{result_id}' not found");
                 return Err(dumps(&json!({"error": error, "available": available})));
             };
             // Read back, it is in use: the room's least recently read go first.
             let entry = store.results.remove(at);
-            let stored = entry.1.clone();
+            let stored = Arc::clone(&entry.1);
             store.results.push(entry);
             stored
         };
@@ -312,7 +313,7 @@ impl Store {
     fn position(&self, room: &str, result_id: &str) -> Option<usize> {
         self.results
             .iter()
-            .position(|((at, id), _)| at == room && id == result_id)
+            .position(|((at, id), _, _)| at == room && id == result_id)
     }
 
     /// `base`, numbered when the room was already given it: an id is not
@@ -350,10 +351,10 @@ impl Store {
         let in_room = self
             .results
             .iter()
-            .filter(|((at, _), _)| at == room)
+            .filter(|((at, _), _, _)| at == room)
             .count();
         for _ in MAX_EVICTED..in_room {
-            if let Some(at) = self.results.iter().position(|((at, _), _)| at == room) {
+            if let Some(at) = self.results.iter().position(|((at, _), _, _)| at == room) {
                 self.drop_at(at);
             }
         }
@@ -369,7 +370,7 @@ impl Store {
     /// is, the first of them in store order on a tie.
     fn oldest_of_fullest_room(&self) -> usize {
         let mut counts: Vec<(&str, usize)> = Vec::new();
-        for ((room, _), _) in &self.results {
+        for ((room, _), _, _) in &self.results {
             match counts.iter_mut().find(|(known, _)| known == room) {
                 Some((_, count)) => *count += 1,
                 None => counts.push((room, 1)),
@@ -386,13 +387,13 @@ impl Store {
             .unwrap_or_default();
         self.results
             .iter()
-            .position(|((room, _), _)| *room == fullest)
+            .position(|((room, _), _, _)| *room == fullest)
             .unwrap_or(0)
     }
 
     fn drop_at(&mut self, at: usize) {
-        let (_, result) = self.results.remove(at);
-        self.chars -= char_len(&result);
+        let (_, _, chars) = self.results.remove(at);
+        self.chars -= chars;
     }
 }
 

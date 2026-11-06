@@ -2,7 +2,8 @@
 //! of `ToolEviction` check them: `tests/test_tool_eviction_preview.py`,
 //! `tests/test_tool_eviction_room_scope.py`,
 //! `tests/test_channels/test_stored_result_search.py` and
-//! `tests/test_channels/test_ai_tool_loop.py::TestToolResultEviction`.
+//! `tests/test_channels/test_ai_tool_loop.py` (`TestToolResultTruncation`,
+//! `TestEvictedResultReading`).
 
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
@@ -39,7 +40,7 @@ impl ToolEviction {
         let store = self.lock();
         store
             .position(room, id)
-            .map(|at| store.results[at].1.clone())
+            .map(|at| store.results[at].1.to_string())
     }
 }
 
@@ -425,7 +426,7 @@ fn holding(text: &str, threshold: u64) -> (ToolEviction, String) {
     (eviction, id)
 }
 
-// Python: tests/test_channels/test_ai_tool_loop.py::TestToolResultEviction::test_small_result_unchanged,
+// Python: tests/test_channels/test_ai_tool_loop.py::TestToolResultTruncation::test_small_result_unchanged,
 // test_result_at_exact_limit_unchanged
 #[test]
 fn a_result_up_to_the_threshold_is_unchanged() {
@@ -436,7 +437,7 @@ fn a_result_up_to_the_threshold_is_unchanged() {
     assert!(!eviction.has_evicted(""));
 }
 
-// Python: tests/test_channels/test_ai_tool_loop.py::TestToolResultEviction::test_single_line_json_paginates
+// Python: tests/test_channels/test_ai_tool_loop.py::TestEvictedResultReading::test_single_line_json_paginates
 #[test]
 fn single_line_json_paginates() {
     let emails: Vec<Value> = (0..80)
@@ -460,7 +461,7 @@ fn single_line_json_paginates() {
     assert!(pages.len() > 1);
 }
 
-// Python: tests/test_channels/test_ai_tool_loop.py::TestToolResultEviction::test_read_output_never_reevicted
+// Python: tests/test_channels/test_ai_tool_loop.py::TestEvictedResultReading::test_read_output_never_reevicted
 #[test]
 fn read_output_never_reevicted() {
     let large = dumps(&json!({"k": "\"".repeat(3000)}));
