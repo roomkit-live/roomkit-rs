@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 
 use self::preview::preview;
 use self::stored_read::{REREAD_DESCRIPTION, page, reread_parameters, search};
-use self::text::char_len;
+pub(crate) use self::text::char_len;
 use crate::dumps;
 use crate::memory::estimate_tokens;
 use crate::provider::AiTextPart;
@@ -299,7 +299,7 @@ fn count(value: Option<&Value>) -> Option<usize> {
 }
 
 /// The texts of `parts`, in order.
-fn texts_of(parts: &[ToolResultPart]) -> Vec<&str> {
+pub(crate) fn texts_of(parts: &[ToolResultPart]) -> Vec<&str> {
     parts
         .iter()
         .filter_map(|part| match part {

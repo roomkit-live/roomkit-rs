@@ -4,12 +4,11 @@
 //! `resilience` replays the call.
 //!
 //! The turn's input stays whole. When it falls in the older half of the
-//! messages, the history before it is summarized; otherwise the older half
-//! is, never parting a call from its result. The summary joins the user
-//! message after it. Python also stores the long results of the rounds
-//! between the input and the half for re-reading, as a large result is
-//! (RFC §21.5), which roomkit-rs does not have yet: those rounds are kept
-//! as they are (RMK-1228).
+//! messages, the history before it is summarized and the long results of
+//! the rounds between the input and the half are stored for re-reading, as
+//! a large result is (RFC §21.5), a preview in their place; otherwise the
+//! older half is summarized, never parting a call from its result. The
+//! summary joins the user message after it.
 
 use roomkit_core::rules::transcript::{
     COMPACTION_HEADER, FENCED_TAGS, Message, named_blocks, quoted,
@@ -19,8 +18,12 @@ use super::Loop;
 use super::generation::Failed;
 use crate::provider::{
     AiContentPart, AiContext, AiMessage, AiMessageContent, AiProvider, AiRole, AiTextPart,
-    ProviderError,
+    AiToolResultPart, ProviderError,
 };
+use crate::tool_eviction::{
+    REREAD_TOOL, ToolEviction, char_len, is_placeholder, kept_whole, texts_of,
+};
+use crate::tools::ToolResult;
 
 /// How much of each summarized message the summary quotes.
 const SUMMARY_MESSAGE_CHARS: usize = 500;
@@ -28,6 +31,11 @@ const SUMMARY_MESSAGE_CHARS: usize = 500;
 const SUMMARY_PART_CHARS: usize = 200;
 /// A context this short has nothing to compact.
 const MIN_COMPACTED: usize = 5;
+/// A result of an older round longer than this, in characters, is stored
+/// at compaction, with a preview this long: its placeholder costs less
+/// than what it replaces.
+const STORED_OVER_CHARS: usize = 2000;
+const STORED_PREVIEW_CHARS: usize = 1000;
 
 impl<P: AiProvider> Loop<P> {
     /// Keeps where the turn's input is among the messages of its first
@@ -57,8 +65,14 @@ impl<P: AiProvider> Loop<P> {
         error: &ProviderError,
     ) -> Result<(), Failed> {
         tracing::warn!(target: "roomkit::ai", %error, "context overflow: compacting and replaying");
-        let (compacted, turn_input) = compacted(&context.messages, self.adopted.turn_input)
-            .map_err(Failed::before_streaming)?;
+        let room = self.context.room_id.as_str();
+        let (compacted, turn_input) = compacted(
+            &context.messages,
+            self.adopted.turn_input,
+            &self.eviction,
+            room,
+        )
+        .map_err(Failed::before_streaming)?;
         // Counted as the provider reads them: a round's results are one message.
         let shown = self.shown(messages).len();
         self.adopted.messages = Some((compacted.clone(), shown));
@@ -69,37 +83,41 @@ impl<P: AiProvider> Loop<P> {
 }
 
 /// `messages` compacted to make room, the turn's input, at `turn_input`,
-/// kept whole, and where the input now is (Python's `_compact_context`).
+/// kept whole, and where the input now is (Python's `_compact_context`):
+/// the long results it shortens are stored in `room` of `eviction`.
 ///
 /// # Errors
 ///
 /// A context of four messages or fewer, or one with nothing before its
-/// input to summarize, cannot be compacted: an error not retried, of no
-/// status.
+/// input to summarize and no result to store, cannot be compacted: an
+/// error not retried, of no status.
 fn compacted(
     messages: &[AiMessage],
     turn_input: Option<usize>,
+    eviction: &ToolEviction,
+    room: &str,
 ) -> Result<(Vec<AiMessage>, Option<usize>), ProviderError> {
     if messages.len() < MIN_COMPACTED {
         return Err(ProviderError::from(
             "Context too large but cannot compact further (<=4 messages)",
         ));
     }
-    // What Python shortens, up to the half, is kept as it is (RMK-1228).
-    let (summarized, _shortened) = compaction_cut(messages, turn_input);
-    let (before, kept) = messages.split_at(summarized);
-    if before.is_empty() {
+    let (summarized, shortened) = compaction_cut(messages, turn_input);
+    let (before, after) = messages.split_at(summarized);
+    let (rounds, rest) = after.split_at(shortened - summarized);
+    let (mut kept, stored) = with_results_stored(rounds, eviction, room);
+    // A result stored frees room even with nothing before the input.
+    if before.is_empty() && !stored {
         return Err(ProviderError::from(
             "Context too large but nothing left to compact before the turn's input",
         ));
     }
+    kept.extend_from_slice(rest);
+    let summary = summary_text(before);
     // A summary before an assistant's message is a user message of its own.
-    let apart = kept.first().is_none_or(|first| first.role != AiRole::User);
+    let apart = summary.is_some() && kept.first().is_none_or(|first| first.role != AiRole::User);
     let turn_input = turn_input.map(|at| at - summarized + usize::from(apart));
-    Ok((
-        with_leading_text(summary_text(before), kept.to_vec()),
-        turn_input,
-    ))
+    Ok((with_leading_text(summary, kept), turn_input))
 }
 
 /// Where the summarized messages end, and where the shortened ones end
@@ -125,6 +143,105 @@ fn past_results(messages: &[AiMessage], mut index: usize) -> usize {
         index += 1;
     }
     index
+}
+
+/// `messages` with each long tool result stored in `room` for re-reading, a
+/// preview in its place, and whether one was (Python's
+/// `with_results_stored`): a message none of whose results changes is kept
+/// as it is.
+fn with_results_stored(
+    messages: &[AiMessage],
+    eviction: &ToolEviction,
+    room: &str,
+) -> (Vec<AiMessage>, bool) {
+    let mut stored = false;
+    let messages = messages
+        .iter()
+        .map(|message| {
+            with_stored_results(message, eviction, room).map_or_else(
+                || message.clone(),
+                |shortened| {
+                    stored = true;
+                    shortened
+                },
+            )
+        })
+        .collect();
+    (messages, stored)
+}
+
+/// `message` with its long results stored, or `None` when none is.
+fn with_stored_results(
+    message: &AiMessage,
+    eviction: &ToolEviction,
+    room: &str,
+) -> Option<AiMessage> {
+    let AiMessageContent::Parts(parts) = &message.content else {
+        return None;
+    };
+    if message.role != AiRole::Tool {
+        return None;
+    }
+    let mut changed = false;
+    let parts = parts
+        .iter()
+        .map(|part| {
+            let AiContentPart::ToolResult(answer) = part else {
+                return part.clone();
+            };
+            stored_result(answer, eviction, room).map_or_else(
+                || part.clone(),
+                |result| {
+                    changed = true;
+                    AiContentPart::ToolResult(AiToolResultPart {
+                        result,
+                        ..answer.clone()
+                    })
+                },
+            )
+        })
+        .collect();
+    changed.then(|| AiMessage {
+        content: AiMessageContent::Parts(parts),
+        ..message.clone()
+    })
+}
+
+/// What stands for `answer`'s result once stored, when it is a long one a
+/// model may page through; `None` to keep it as it is (Python's `_stored`).
+///
+/// A skill's instructions are read whole, a page of `read_stored_result`
+/// already comes from the store, and a placeholder is never stored again.
+/// A JSON result, which the loop never hands a provider, is kept.
+fn stored_result(
+    answer: &AiToolResultPart,
+    eviction: &ToolEviction,
+    room: &str,
+) -> Option<ToolResult> {
+    if kept_whole(&answer.name) || answer.name == REREAD_TOOL {
+        return None;
+    }
+    let call_id = answer.tool_call_id.as_str();
+    match &answer.result {
+        ToolResult::Text(text) => (char_len(text) > STORED_OVER_CHARS && !is_placeholder(text))
+            .then(|| {
+                ToolResult::Text(eviction.evict(room, text, call_id, Some(STORED_PREVIEW_CHARS)))
+            }),
+        ToolResult::Parts(parts) => {
+            let texts = texts_of(parts);
+            (char_len(&texts.join("\n")) > STORED_OVER_CHARS
+                && !texts.iter().any(|text| is_placeholder(text)))
+            .then(|| {
+                ToolResult::Parts(eviction.evict_parts(
+                    room,
+                    parts.clone(),
+                    call_id,
+                    Some(STORED_PREVIEW_CHARS),
+                ))
+            })
+        }
+        ToolResult::Json(_) => None,
+    }
 }
 
 /// The summary of `messages`, one line each after its header, or `None`

@@ -3,6 +3,47 @@ use serde_json::Map;
 
 use super::*;
 use crate::provider::{AiImagePart, AiToolCallPart, AiToolResultPart};
+use crate::tools::ToolResultPart;
+
+/// The room the stored results go to.
+const ROOM: &str = "r1";
+
+/// `messages` compacted, the turn's input at `turn_input`, over a store of
+/// its own.
+fn compact(
+    messages: &[AiMessage],
+    turn_input: Option<usize>,
+) -> Result<(Vec<AiMessage>, Option<usize>), ProviderError> {
+    compacted(messages, turn_input, &ToolEviction::new(5000), ROOM)
+}
+
+/// A tool's message answering the call `id` to `name` with `result`.
+fn answered(id: &str, name: &str, result: impl Into<ToolResult>) -> AiMessage {
+    let part = AiToolResultPart::new(id, name, result);
+    AiMessage::new(
+        AiRole::Tool,
+        AiMessageContent::Parts(vec![AiContentPart::ToolResult(part)]),
+    )
+}
+
+/// The results of `messages`' tool messages, by call id.
+fn results(messages: &[AiMessage]) -> Vec<(String, ToolResult)> {
+    messages
+        .iter()
+        .filter(|message| message.role == AiRole::Tool)
+        .filter_map(|message| match &message.content {
+            AiMessageContent::Parts(parts) => Some(parts),
+            AiMessageContent::Text(_) => None,
+        })
+        .flatten()
+        .filter_map(|part| {
+            let AiContentPart::ToolResult(answer) = part else {
+                return None;
+            };
+            Some((answer.tool_call_id.clone(), answer.result.clone()))
+        })
+        .collect()
+}
 
 fn text(role: AiRole, said: &str) -> AiMessage {
     AiMessage::new(role, said)
@@ -55,7 +96,7 @@ fn texts(messages: &[AiMessage]) -> Vec<String> {
 
 /// The last message is the turn's input.
 fn compacted_at_end(messages: &[AiMessage]) -> Result<Vec<AiMessage>, ProviderError> {
-    compacted(messages, Some(messages.len() - 1)).map(|(compacted, _)| compacted)
+    compact(messages, Some(messages.len() - 1)).map(|(compacted, _)| compacted)
 }
 
 // Python: tests/test_channels/test_compact_context_tool_pairs.py::test_a_cut_landing_on_a_tool_message_keeps_the_pair_whole
@@ -72,7 +113,7 @@ fn a_cut_landing_on_a_tool_message_keeps_the_pair_whole() {
         text(AiRole::User, "q4"),
     ];
 
-    let (compacted, input) = compacted(&messages, Some(7)).unwrap();
+    let (compacted, input) = compact(&messages, Some(7)).unwrap();
 
     let summary = summary_text(&messages[..5]).unwrap();
     assert_eq!(
@@ -99,7 +140,7 @@ fn a_cut_between_plain_messages_is_untouched() {
 // Python: tests/test_channels/test_ai_tool_loop.py::TestContextOverflowRecovery::test_compact_context_raises_when_too_few_messages
 #[test]
 fn too_small_to_compact_still_raises() {
-    let refused = compacted(&vec![text(AiRole::User, "q"); 4], Some(3)).unwrap_err();
+    let refused = compact(&vec![text(AiRole::User, "q"); 4], Some(3)).unwrap_err();
 
     assert_eq!(
         refused,
@@ -134,11 +175,60 @@ fn nothing_left_to_compact_before_the_input_is_refused() {
     }
 
     assert_eq!(
-        compacted(&messages, Some(0)).unwrap_err(),
+        compact(&messages, Some(0)).unwrap_err(),
         ProviderError::from(
             "Context too large but nothing left to compact before the turn's input"
         )
     );
+}
+
+// Python: tests/test_channels/test_compaction_keeps_input.py::test_a_skill_body_and_a_page_read_back_stay_whole
+#[test]
+fn a_skill_body_and_a_page_read_back_stay_whole() {
+    let body = "RULE ".repeat(1000);
+    let messages: Vec<AiMessage> = ["activate_skill", "read_stored_result", "lookup"]
+        .into_iter()
+        .map(|name| answered(&format!("id_{name}"), name, body.as_str()))
+        .collect();
+
+    let (kept, stored) = with_results_stored(&messages, &ToolEviction::new(5000), ROOM);
+
+    assert!(stored);
+    assert_eq!(kept[..2], messages[..2]);
+    let results = results(&kept);
+    let ToolResult::Text(lookup) = &results[2].1 else {
+        panic!("{results:?}");
+    };
+    assert!(
+        lookup.contains("Full output saved as 'evicted_id_lookup'"),
+        "{lookup}"
+    );
+}
+
+// Python: tests/test_channels/test_compaction_keeps_input.py::test_a_result_of_parts_stores_its_text_and_keeps_its_image
+#[test]
+fn a_result_of_parts_stores_its_text_and_keeps_its_image() {
+    let image = ToolResultPart::Image(AiImagePart {
+        url: "https://example.com/a.png".to_owned(),
+        mime_type: None,
+    });
+    let parts = vec![
+        ToolResultPart::Text(AiTextPart::new("x".repeat(3000))),
+        image.clone(),
+    ];
+    let messages = vec![answered("c1", "screenshot", ToolResult::Parts(parts))];
+
+    let (kept, _) = with_results_stored(&messages, &ToolEviction::new(5000), ROOM);
+
+    let results = results(&kept);
+    let ToolResult::Parts(stored) = &results[0].1 else {
+        panic!("{results:?}");
+    };
+    let [ToolResultPart::Text(text), kept_image] = stored.as_slice() else {
+        panic!("{stored:?}");
+    };
+    assert!(text.text.contains("Full output saved as"), "{}", text.text);
+    assert_eq!(kept_image, &image);
 }
 
 /// The input in the older half: only what precedes it is summarized, and
@@ -149,7 +239,7 @@ fn an_input_in_the_older_half_is_kept_with_what_follows_it() {
     messages.push(text(AiRole::User, "the input"));
     messages.extend([call("c1"), result("c1"), call("c2"), result("c2")]);
 
-    let (compacted, input) = compacted(&messages, Some(2)).unwrap();
+    let (compacted, input) = compact(&messages, Some(2)).unwrap();
 
     let summary = summary_text(&messages[..2]).unwrap();
     assert_eq!(

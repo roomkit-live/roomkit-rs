@@ -2,7 +2,7 @@
 //! at every break `str.splitlines` knows.
 
 /// The characters in `text`: Python's `len`.
-pub(super) fn char_len(text: &str) -> usize {
+pub(crate) fn char_len(text: &str) -> usize {
     text.chars().count()
 }
 
