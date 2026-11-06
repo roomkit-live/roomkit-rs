@@ -216,6 +216,8 @@ async fn a_schema_outside_the_subset_is_refused_before_any_request() {
         error.to_string().contains("additionalProperties"),
         "{error}"
     );
+    // Refused before any request: it refuses none of the turn's images.
+    assert!(error.before_request);
     assert_eq!(provider.calls().len(), 0, "no request kept");
 }
 

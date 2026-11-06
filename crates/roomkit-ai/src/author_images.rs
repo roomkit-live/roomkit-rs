@@ -397,7 +397,8 @@ impl SentImages {
 ///
 /// A refusal before any request says nothing of the content either: the
 /// provider sent nothing ([`ProviderError::before_request`], HITL fb46b635,
-/// d91b8137). Nor does a response schema outside the portable subset, which
+/// d91b8137), read on the error raised alone, as Python reads it. Nor does
+/// a response schema outside the portable subset, which
 /// a provider refuses before any request: Python refuses it where it is
 /// set, in the hook or the context that writes it, and no provider sees it
 /// (HITL 17bfa822).
@@ -406,19 +407,8 @@ pub(crate) fn refuses_content(error: &ProviderError) -> bool {
         && !error
             .status_code
             .is_some_and(|status| NOT_CONTENT_STATUSES.contains(&status))
-        && !refused_before_request(error)
+        && !error.before_request
         && !outside_the_subset(error)
-}
-
-/// Whether `error`, or a provider error it was raised from, is a refusal
-/// before any request, however deep a provider wrapped it.
-fn refused_before_request(error: &ProviderError) -> bool {
-    error.before_request
-        || std::iter::successors(error.source(), |&source| source.source()).any(|source| {
-            source
-                .downcast_ref::<ProviderError>()
-                .is_some_and(|inner| inner.before_request)
-        })
 }
 
 /// Whether `error` is a provider's refusal of a response schema outside the
@@ -790,7 +780,9 @@ mod tests {
 
     // Python: tests/test_author_images.py::TestRefusal::test_a_refusal_before_any_request_refuses_nothing
     // (a provider's own refusals, flagged where each is raised: the
-    // schema's below, the model's and a tool name's in roomkit-openai)
+    // schema's below, the model's and a tool name's in roomkit-openai) and
+    // test_a_refusal_raised_from_one_before_any_request_is_its_own (an
+    // error raised from one is read as itself)
     #[test]
     fn a_refusal_before_any_request_is_no_content_refusal() {
         let options = crate::provider::ProviderErrorOptions::default;
@@ -817,7 +809,7 @@ mod tests {
         ));
         assert_eq!(
             [&before(), &unsupported, &wrapped, &invalid].map(refuses_content),
-            [false, false, false, true]
+            [false, false, true, true]
         );
     }
 

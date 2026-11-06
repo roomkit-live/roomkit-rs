@@ -52,7 +52,8 @@ pub struct ErrorRecord {
     pub message: String,
     /// The error's attributes JSON carries, as Python's `error_record`
     /// keeps them (RFC §10.6.8): a provider error's `retryable`,
-    /// `provider`, `status_code` and `context_overflow`. Empty for an
+    /// `provider`, `status_code`, `context_overflow` and
+    /// `before_request`. Empty for an
     /// error that has none. Boxed: a record rides many errors, which
     /// stay small.
     #[serde(default, skip_serializing_if = "no_attributes")]

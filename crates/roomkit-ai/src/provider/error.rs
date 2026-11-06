@@ -23,9 +23,12 @@ pub struct ProviderError {
     /// Whether the request was past the model's context window, when the
     /// vendor said.
     pub context_overflow: Option<bool>,
-    /// Whether the provider refused before sending any request: nothing
-    /// reached the vendor, so the failure says nothing of what the request
-    /// carried (RFC §6.4).
+    /// Whether the provider refused before sending any request, for
+    /// something other than the content the request carries (a response
+    /// schema the model does not take, a model or tools its endpoint does
+    /// not serve, a tool name the vendor refuses): nothing reached the
+    /// vendor, so the failure says nothing of the turn's images (RFC
+    /// §6.4). An image the provider cannot send is not one.
     pub before_request: bool,
     source: Option<Arc<dyn Error + Send + Sync>>,
 }
