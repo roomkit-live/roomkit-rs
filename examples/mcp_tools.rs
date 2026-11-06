@@ -176,7 +176,8 @@ async fn shop_room(
 }
 
 /// The server's tools the model is told of, the one the policy denies left
-/// out.
+/// out, then the re-read of stored results, which the policy does not govern
+/// (RFC §21.5).
 fn check_the_declarations(checks: &mut Checks, requests: &[Value]) {
     let declared: Vec<&str> = requests
         .first()
@@ -187,8 +188,9 @@ fn check_the_declarations(checks: &mut Checks, requests: &[Value]) {
         .filter_map(|tool| tool.pointer("/function/name").and_then(Value::as_str))
         .collect();
     checks.expect(
-        "the server's tools are declared to the model, wipe_orders, which the policy denies, left out",
-        declared == ["lookup_order", "cancel_order"],
+        "the server's tools are declared to the model, wipe_orders, which the policy denies, left \
+         out, then read_stored_result",
+        declared == ["lookup_order", "cancel_order", "read_stored_result"],
     );
 }
 

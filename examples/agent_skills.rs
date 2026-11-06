@@ -279,7 +279,7 @@ fn print_the_turns(requests: &[Value]) {
 }
 
 /// The checks of the first request: the system prompt, then the manifest,
-/// and the two tools.
+/// and the two tools, the re-read of stored results after them (RFC §21.5).
 fn check_the_prompt(checks: &mut Checks, requests: &[Value]) {
     let first = requests.first().cloned().unwrap_or_default();
     let prompt = system(&first);
@@ -294,13 +294,19 @@ fn check_the_prompt(checks: &mut Checks, requests: &[Value]) {
         })
         .unwrap_or_default();
     checks.expect(
-        "the system prompt lists the skills after the shop's own, and the two tools are declared",
+        "the system prompt lists the skills after the shop's own, and the two tools are declared, \
+         then read_stored_result",
         prompt.starts_with(&format!(
             "{SYSTEM_PROMPT}\n\nYou have access to Agent Skills"
         )) && prompt.contains("<available_skills>\n  <skill name=\"gift-wrapping\">")
             && prompt.contains("  <skill name=\"order-returns\">\n    <description>Handles")
             && !prompt.contains(ACTIVE)
-            && tools == ["activate_skill", "read_skill_reference"],
+            && tools
+                == [
+                    "activate_skill",
+                    "read_skill_reference",
+                    "read_stored_result",
+                ],
     );
 }
 

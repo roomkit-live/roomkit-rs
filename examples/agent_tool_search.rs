@@ -144,11 +144,13 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     };
     let mut checks = Checks::default();
     checks.expect(
-        "the first round declares the pinned tool and the discovery tools alone",
-        rounds.first().is_some_and(|tools| tools.len() == 3)
+        "the first round declares the pinned tool and the discovery tools alone, then \
+         read_stored_result",
+        rounds.first().is_some_and(|tools| tools.len() == 4)
             && holds(0, "get_help")
             && holds(0, "find_tools")
-            && holds(0, "list_tools"),
+            && holds(0, "list_tools")
+            && holds(0, "read_stored_result"),
     );
     checks.expect(
         "the round after the search declares what it found, no other tool of the catalogue",
