@@ -1013,10 +1013,10 @@ rust = "roomkit_acp::ClientSideConnection"
 approved = "2026-11-06"
 reason = "the Python ACP SDK's ClientSideConnection, JSON-RPC over a byte stream, which roomkit-acp writes itself on tokio (HITL 0e261e51, 3592a76c; architecture: ACP)"
 
-[[exception]]
+[[pending]]
 rust = "roomkit_acp::AcpClient"
-approved = "2026-11-06"
-reason = "the Python ACP SDK's acp.Client interface the agent calls back into, reduced to session_update and request_permission (HITL 3592a76c, e6f3decd; architecture: ACP)"
+lot = "?"
+reason = "the Python ACP SDK's acp.Client interface the agent calls back into, reduced to session_update and request_permission (HITL 3592a76c); its form as a trait is asked in HITL e6f3decd, not answered yet: it becomes an [[exception]], approved on the answer's date, once answered (architecture: ACP)"
 
 [[exception]]
 rust = "roomkit_acp::AcpError"
