@@ -51,6 +51,9 @@ pub(crate) struct Observed {
     /// Per room and scripted channel, its room callbacks (RFC §6.1).
     pub(crate) room_callbacks: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     pub(crate) turns: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
+    /// Per room and scripted agent with a scripted memory, the events its
+    /// memory was handed.
+    pub(crate) ingested: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     pub(crate) observations: BTreeMap<String, Vec<Value>>,
     pub(crate) thinking_events: BTreeMap<String, Vec<Value>>,
     pub(crate) text_events: BTreeMap<String, Vec<Value>>,
@@ -287,6 +290,7 @@ fn observed_values(observed: &Observed) -> Value {
     for per_room in observed
         .turns
         .values()
+        .chain(observed.ingested.values())
         .chain(observed.deliveries.values())
         .chain(observed.streamed.values())
         .chain(observed.room_callbacks.values())

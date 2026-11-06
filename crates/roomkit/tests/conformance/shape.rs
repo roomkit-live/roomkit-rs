@@ -337,6 +337,7 @@ const EXPECT: &[&str] = &[
     "deliveries",
     "contexts",
     "turns",
+    "ingested",
     "observations",
     "thinking_events",
     "text_events",

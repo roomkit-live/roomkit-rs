@@ -309,7 +309,7 @@ async fn other_call(
     spec: &Value,
 ) -> Result<Called, Unreadable> {
     if crate::discussion_calls::arguments(name).is_some() {
-        return crate::discussion_calls::call(run, name, spec);
+        return crate::discussion_calls::call(run, name, spec).await;
     }
     if crate::handoff_calls::arguments(name).is_some() {
         return crate::handoff_calls::call(run, name, spec).await;

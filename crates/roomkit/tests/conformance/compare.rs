@@ -165,6 +165,7 @@ impl Comparison<'_> {
             ("streamed", &self.observed.streamed),
             ("room_callbacks", &self.observed.room_callbacks),
             ("turns", &self.observed.turns),
+            ("ingested", &self.observed.ingested),
         ] {
             for (alias, channels) in expect[kind].as_object().into_iter().flatten() {
                 let per_room = recorded.get(&self.room_of(alias));

@@ -243,6 +243,7 @@ pub(crate) fn scripted_agent(spec: &Value, run: &Arc<Run>) -> Result<(Scripted, 
             memory,
             options.max_context_events,
             summarizer,
+            (id.clone(), run),
         )?);
     }
     options.tool_handler = undeclared_tools(spec, run);

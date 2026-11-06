@@ -5,24 +5,27 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use roomkit::ChannelError;
-use roomkit::model::{RoomContext, RoomEvent, RoomId};
+use roomkit::model::{ChannelId, RoomContext, RoomEvent, RoomId};
 use roomkit_ai::knowledge::{KnowledgeResult, KnowledgeSource, SearchOptions};
 use roomkit_ai::memory::{
     BudgetAwareMemory, BudgetAwareMemoryOptions, CompactingMemory, CompactingMemoryOptions,
-    MemoryProvider, MemoryResult, RetrievalMemory, RetrievalMemoryOptions, RetrieveOptions,
-    SlidingWindowMemory, SlidingWindowMemoryOptions, SummarizingMemory, SummarizingMemoryOptions,
+    IngestOptions, MemoryProvider, MemoryResult, RetrievalMemory, RetrievalMemoryOptions,
+    RetrieveOptions, SlidingWindowMemory, SlidingWindowMemoryOptions, SummarizingMemory,
+    SummarizingMemoryOptions,
 };
 use roomkit_ai::testing::ScriptedProvider;
 use roomkit_ai::{AiMessage, AiRole};
 use serde_json::Value;
 
 use crate::agents::write_record;
+use crate::run::Run;
 
 /// The room's latest events, as `SlidingWindowMemory` reads them, and
-/// what the scenario says the memory built, retrieved and names.
+/// what the scenario says the memory built, retrieved and names; each
+/// event it is handed is recorded as the agent's (`expect.ingested`).
 struct Scripted {
     window: SlidingWindowMemory,
     messages: Vec<AiMessage>,
@@ -30,6 +33,9 @@ struct Scripted {
     speakers: Vec<String>,
     /// What each read writes on the turn's record.
     spec: Value,
+    /// The agent whose memory it is, and the run recording what it is handed.
+    owner: ChannelId,
+    run: Weak<Run>,
 }
 
 impl MemoryProvider for Scripted {
@@ -58,16 +64,30 @@ impl MemoryProvider for Scripted {
             })
         })
     }
+
+    fn ingest<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+        event: &'a RoomEvent,
+        _options: IngestOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ChannelError>> + Send + 'a>> {
+        if let Some(run) = self.run.upgrade() {
+            run.record_ingested(room_id, event, &self.owner);
+        }
+        Box::pin(std::future::ready(Ok(())))
+    }
 }
 
 /// The memory `spec` describes, its wrappers from the innermost;
 /// `max_events` is its window by default, the agent's
 /// `max_context_events`, and `summarizer` the model a compacting or
-/// summarizing memory summarizes with.
+/// summarizing memory summarizes with; what it is handed is recorded on
+/// `run` as `owner`'s.
 pub(crate) fn scripted_memory(
     spec: &Value,
     max_events: usize,
     summarizer: Option<ScriptedProvider>,
+    (owner, run): (ChannelId, &Arc<Run>),
 ) -> Result<Arc<dyn MemoryProvider>, String> {
     let max_events = match spec.get("max_events") {
         Some(count) => count_of(count, "max_events")?,
@@ -85,6 +105,8 @@ pub(crate) fn scripted_memory(
         notes: texts(&spec["notes"]),
         speakers: texts(&spec["speakers"]),
         spec: spec.clone(),
+        owner,
+        run: Arc::downgrade(run),
     });
     let memory = match spec.get("budget_aware") {
         Some(budget) => budget_aware(budget, memory)?,

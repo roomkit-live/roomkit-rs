@@ -291,6 +291,25 @@ impl Run {
             .push(serde_json::to_value(event).unwrap_or_default());
     }
 
+    /// One event a scripted memory of `channel_id` was handed in `room_id`.
+    pub(crate) fn record_ingested(
+        &self,
+        room_id: &RoomId,
+        event: &RoomEvent,
+        channel_id: &ChannelId,
+    ) {
+        if !self.recording.load(Ordering::SeqCst) {
+            return;
+        }
+        lock(&self.observed)
+            .ingested
+            .entry(room_id.to_string())
+            .or_default()
+            .entry(channel_id.to_string())
+            .or_default()
+            .push(serde_json::to_value(event).unwrap_or_default());
+    }
+
     /// One room callback a scripted channel was called with (RFC §6.1),
     /// also named in the hooks' order as `<channel_id>.<call>`.
     pub(crate) fn record_room_callback(

@@ -3,8 +3,9 @@
 //! `Discussion` from its keywords, each agent a channel id or an agent given
 //! live, and reads it, installed nowhere. A setup's strategy with a
 //! `discussion` is one installed through the kit, its `done` read from the
-//! `discussion.done` call; `speak_queue` reads its queue, and an
-//! `ON_SPEAK_QUEUE` hook records each change it is handed.
+//! `discussion.done` call; `speak_queue` reads its queue, `listen_only` and
+//! `talk_again` change it, and an `ON_SPEAK_QUEUE` hook records each change
+//! it is handed.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -34,6 +35,7 @@ pub(crate) fn arguments(name: &str) -> Option<&'static [&'static str]> {
             "rules",
         ]),
         "speak_queue" => Some(&["room_id", "organization_id"]),
+        "listen_only" | "talk_again" => Some(&["room_id", "channel_ids", "organization_id"]),
         "discussion.done" => Some(&["strategy", "holds"]),
         _ => None,
     }
@@ -141,7 +143,7 @@ pub(crate) fn speak_queue_event(event: &roomkit::SpeakQueueEvent) -> Value {
 }
 
 /// Makes the discussion's call `name`.
-pub(crate) fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+pub(crate) async fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
     if name == "speak_queue" {
         let room: roomkit::model::RoomId = field(spec, "room_id")?;
         let options = roomkit::SpeakQueueOptions {
@@ -155,6 +157,9 @@ pub(crate) fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, U
             Ok::<_, roomkit::RoomKitError>(result),
             Clone::clone,
         ));
+    }
+    if name == "listen_only" || name == "talk_again" {
+        return listening(run, name, spec).await;
     }
     if name == "discussion.done" {
         let id: String = field(spec, "strategy")?;
@@ -175,4 +180,25 @@ pub(crate) fn call(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, U
             .collect();
         json!({ "agents": agents, "handles": discussion.handles() })
     }))
+}
+
+/// Makes `listen_only` or `talk_again`, as `name` says.
+async fn listening(run: &Arc<Run>, name: &str, spec: &Value) -> Result<Called, Unreadable> {
+    let room: roomkit::model::RoomId = field(spec, "room_id")?;
+    let agents: Vec<ChannelId> = field(spec, "channel_ids")?;
+    let organization_id: Option<String> = optional(spec, "organization_id")?;
+    let kit = run.kit();
+    let outcome = if name == "listen_only" {
+        let options = roomkit::ListenOnlyOptions { organization_id };
+        kit.listen_only(&room, &agents, options).await
+    } else {
+        let options = roomkit::TalkAgainOptions { organization_id };
+        kit.talk_again(&room, &agents, options).await
+    };
+    Ok(finish(
+        run,
+        name,
+        outcome.map(|()| Value::Null),
+        Clone::clone,
+    ))
 }
