@@ -13,7 +13,10 @@
 //! runs in the room's lane, outside the lock's execution context, so the
 //! record's lock and its release are asked of the room's lock itself,
 //! never answered as a nested section's, and the record waits for the
-//! section that holds it. A record that cannot be written is logged and
+//! section that holds it. Not yet as Python's for a call run on a lease:
+//! once the call lets its hand go, the driver grants the record's lock at
+//! once on that lease, where Python's set waits for the code that holds
+//! it (RMK-1526). A record that cannot be written is logged and
 //! changes nothing the set delivered. Past the close's grace the lock is
 //! refused: a set the close cut leaves no record, its caller reading what
 //! it delivered (RFC §12.10.4, Python's `_report_cut`).
