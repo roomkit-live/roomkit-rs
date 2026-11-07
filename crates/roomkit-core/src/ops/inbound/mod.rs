@@ -463,6 +463,7 @@ impl Inbound {
                 side_effects: SideEffects::default(),
                 outcome: None,
                 answers_before_its_entries: false,
+                stores_at_its_end: false,
             }),
         }
     }
@@ -626,8 +627,13 @@ struct Machine {
     outcome: Option<Result<InboundResult, InboundError>>,
     /// Whether the call, once its own work is over, answers its caller
     /// without waiting for the entries it adopted: a call past its deadline
-    /// (RFC §13.6, §9.5.1 Reentrance).
+    /// (RFC §13.6, §9.5.1 Reentrance), and a call whose own cascade is over
+    /// while theirs still deliver (`answer_once_its_own_cascade_is_over`).
     answers_before_its_entries: bool,
+    /// Whether a pass or a record left tasks or observations that the call
+    /// stores at its end (RFC §10.1 step 15): its caller is then answered
+    /// only once they are stored.
+    stores_at_its_end: bool,
 }
 
 /// What the call is, learned as it goes: its room, its kind, its channel,

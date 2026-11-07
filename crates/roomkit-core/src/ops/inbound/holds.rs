@@ -8,7 +8,10 @@
 //! A call ends once every entry it adopted is settled and every event it
 //! committed delivered (gap G-070): an adopted entry's caller is answered
 //! exactly once, and the call does not end while an entry still works in
-//! the room or a committed event waits for its delivery set.
+//! the room or a committed event waits for its delivery set. Its own caller
+//! is answered before then once its own cascade is over and only the
+//! entries' sets and streams are left, as at its deadline
+//! (`answer_once_its_own_cascade_is_over`).
 //!
 //! The ticket is released once the trigger's pass is over, the room lock
 //! released already: committed, blocked, refused, a duplicate, an edit
@@ -99,6 +102,35 @@ impl Machine {
             return self.release_ticket(cx, AfterTicket::End(Box::new(outcome)));
         }
         self.end_after_the_cascade(cx, outcome);
+    }
+
+    /// Answers the call's caller once its own cascade is over, its result
+    /// what it ends with, though the entries it adopted still deliver or
+    /// read their answers' streams: those are their own cascades, as
+    /// Python's adopted call runs one of its own and its adopter returns
+    /// without waiting for it (RFC §9.5.1 Reentrance). Not before every
+    /// entry is answered and every pass is over, which may fold a failure
+    /// into the result, the ticket and a handed lock released, and nothing
+    /// left that the call stores at its end; never for a call whose own
+    /// delivery was cancelled. The operation still ends once their work is
+    /// over.
+    pub(super) fn answer_once_its_own_cascade_is_over(&mut self, cx: &mut Cx<'_>) {
+        if self.answers_before_its_entries
+            || !matches!(self.stage.current(), Stage::Cascade)
+            || !self.adopted.is_idle()
+            || !self.adopted.answers_none()
+            || !self.cascade.leaves_entries_deliveries_only()
+            || self.trigger.ticket.is_some()
+            || self.trigger.handed.is_some()
+            || self.trigger.releasing_hand.is_some()
+            || self.trigger.result.cancellation_reason.is_some()
+            || self.stores_at_its_end
+        {
+            return;
+        }
+        self.answers_before_its_entries = true;
+        let answered = self.for_caller(Ok(self.trigger.result.clone()));
+        cx.io.notify(Notice::Answered(Box::new(answered)));
     }
 
     /// Ends with `outcome` once the last adopted entry is settled and the

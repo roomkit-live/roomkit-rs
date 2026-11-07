@@ -207,6 +207,7 @@ impl Machine {
         if delivered {
             hook_effects = (report.tasks, report.observations);
         } else {
+            self.stores_at_its_end |= !report.tasks.is_empty() || !report.observations.is_empty();
             self.side_effects
                 .collect(report.tasks, report.observations, context, made_for);
         }
@@ -355,6 +356,7 @@ impl Machine {
         // (`DeliverySet::observe_not_asked`); a discussion's stopped turn's
         // is stored at the cascade's end.
         if !observed {
+            self.stores_at_its_end = true;
             let id = cx.env.new_observation_id();
             let now = cx.env.now();
             self.side_effects

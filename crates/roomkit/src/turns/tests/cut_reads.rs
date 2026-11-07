@@ -669,26 +669,14 @@ async fn a_wait_past_the_kit_s_close_on_an_adopted_call_whose_turn_s_end_is_owed
     });
     stuck_executor(&kit);
     let kept = keeping_its_read(&kit, &target);
-    let said = tokio::spawn({
-        let kit = kit.clone();
-        async move { says(&kit, "hello").await }
-    });
-    // Paused time: the hook keeps the handle once the target reads.
-    let mut handle = None;
-    for _ in 0..1000 {
-        handle = kept.lock().unwrap().take();
-        if handle.is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(1)).await;
-    }
-    let handle = handle.expect("a handle");
-    kit.close().await.unwrap();
-    tokio::time::timeout(Duration::from_secs(100), said)
+    // Blocked once its hook kept the handle, the call returns while the
+    // adopted call's turn reads on (RMK-1512).
+    tokio::time::timeout(Duration::from_secs(5), says(&kit, "hello"))
         .await
         .unwrap()
-        .unwrap()
         .unwrap();
+    let handle = kept.lock().unwrap().take().expect("a handle");
+    kit.close().await.unwrap();
     let waits = [handle.wait().await, handle.wait().await];
     for waited in waits {
         assert!(matches!(waited, Err(RoomKitError::Timeout)), "{waited:?}");

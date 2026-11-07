@@ -361,6 +361,24 @@ impl Cascade {
             .any(|job| job.owed() == Some(entry))
     }
 
+    /// Whether all that is left is the delivery of the entries the call
+    /// adopted, their sets and their streams: no pass nor record queued or
+    /// running, of any cascade, held with a set or waiting as a row, and
+    /// nothing of the call's own cascade (RFC §9.5.1 Reentrance).
+    pub(super) fn leaves_entries_deliveries_only(&self) -> bool {
+        let holds_a_pass = self
+            .sets
+            .iter()
+            .chain(&self.delivery)
+            .any(|delivery| !delivery.then.is_empty());
+        !self.is_idle()
+            && self.passes.is_empty()
+            && self.pass.is_none()
+            && self.rows.is_empty()
+            && !holds_a_pass
+            && !self.holds(Lineage::Call)
+    }
+
     /// Whether the cascade has nothing queued nor running, no stream to
     /// read included.
     pub(super) fn is_idle(&self) -> bool {
@@ -554,6 +572,8 @@ impl Machine {
             && self.adopted.is_idle()
         {
             self.persist_side_effects(cx);
+        } else {
+            self.answer_once_its_own_cascade_is_over(cx);
         }
     }
 }
