@@ -154,9 +154,9 @@ impl FrameSender {
         drop(self.turn.frames.put(&frame));
     }
 
-    /// Sends, as `tool_ended`, each end in `ended` told before its end was
-    /// read, by its call's place among the calls open under its id: the
-    /// owner closes the call with it at a cut (RFC §12.2 step 13s).
+    /// Sends, as `tool_ended`, each end in `ended` told before its end item,
+    /// by its call's place among the calls open under its id: the owner
+    /// closes the call with it at a cut (RFC §12.2 step 13s).
     pub(crate) fn report_ended(&self, ended: &[(usize, ToolCallContent)]) {
         let mut sent = lock(&self.state);
         if sent.silenced {

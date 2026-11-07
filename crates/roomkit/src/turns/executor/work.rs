@@ -228,6 +228,7 @@ impl Pump<'_> {
     /// is dropped.
     fn closed_on(&self, read: Read) {
         if let Some(Ok(ResponseItem::ToolCallEnd(end))) = read {
+            self.host.end_sent(&end.tool_id);
             self.sender.send_ended(end);
         }
     }
@@ -252,7 +253,7 @@ impl Pump<'_> {
             }
             Some(Ok(ResponseItem::ToolCallStart(start))) => self.sender.send_start(start),
             Some(Ok(ResponseItem::ToolCallEnd(end))) => {
-                self.host.forget_ran_with(&end.tool_id);
+                self.host.end_sent(&end.tool_id);
                 self.sender.send_end(end)
             }
             Some(Ok(ResponseItem::Thinking(thinking))) => self
@@ -273,6 +274,9 @@ impl Pump<'_> {
             }
             Some(Ok(ResponseItem::Usage(marker))) => self.send_usage(marker),
             Some(Err(error)) => {
+                // The ends told early cross before the failure, as Python's
+                // executor reports what changed before its last frame.
+                self.sender.report_ended(&self.host.take_told_ends());
                 let error = stream_failure(&*error);
                 refuse_or_send(self.sender, &Frame::Error { error });
                 return false;

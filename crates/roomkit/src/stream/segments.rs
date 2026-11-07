@@ -18,7 +18,7 @@
 //! the response's rows have in common, which a later turn's history pairs
 //! a call's start and end by (RFC §6.4).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use roomkit_core::model::{
     EventContent, EventId, EventSource, EventType, Metadata, ResponseMetadata, RoomEvent,
@@ -235,7 +235,6 @@ impl Segments {
         ended: impl Fn(&str, usize) -> Option<ToolCallContent>,
     ) -> Vec<RoomEvent> {
         let mut rows = Vec::new();
-        let mut ran = HashSet::new();
         let mut under_id: HashMap<String, usize> = HashMap::new();
         for open in std::mem::take(&mut self.open) {
             if !open.written {
@@ -246,13 +245,12 @@ impl Segments {
             }
             let place = under_id.entry(open.start.tool_id.clone()).or_default();
             let nth = std::mem::replace(place, *place + 1);
-            let first = ran.insert(open.start.tool_id.clone());
             if let Some(end) = ended(&open.start.tool_id, nth) {
                 rows.push(self.draft(EventType::ToolCallEnd, EventContent::ToolCall(end)));
                 continue;
             }
             let mut end = open.start;
-            let fixed = first.then(|| ran_with(&end.tool_id));
+            let fixed = (nth == 0).then(|| ran_with(&end.tool_id));
             if let Some(arguments) = fixed.flatten() {
                 end.arguments = arguments;
             }

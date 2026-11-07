@@ -190,7 +190,7 @@ impl OwnerTurn {
         }
         let (seq, start) = self.open.remove(0);
         // A call that ended before the cut ends so (`tool_ended`).
-        let told = lock(&self.state.ended).remove(&seq);
+        let told = lock(&self.state.told_ends).remove(&seq);
         let end = told.unwrap_or_else(|| ToolCallContent {
             status: ToolCallStatus::Failed,
             outcome: Some(ToolCallOutcome::Cancelled),
@@ -348,7 +348,7 @@ impl OwnerTurn {
     pub(crate) fn ended_early(&self, tool_id: &str, nth: usize) -> Option<ToolCallContent> {
         let mut open = self.open.iter().filter(|(_, open)| open.tool_id == tool_id);
         let (seq, _) = open.nth(nth)?;
-        lock(&self.state.ended).get(seq).cloned()
+        lock(&self.state.told_ends).get(seq).cloned()
     }
 
     /// The arguments the open call `tool_id` runs with once its gate fixed

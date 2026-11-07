@@ -91,7 +91,7 @@ pub(super) struct OwnerState {
     pub(super) ran_with: Mutex<HashMap<u64, Metadata>>,
     /// The end of each call told before its end item, by its start's frame
     /// (`tool_ended`).
-    pub(super) ended: Mutex<HashMap<u64, ToolCallContent>>,
+    pub(super) told_ends: Mutex<HashMap<u64, ToolCallContent>>,
     /// The items the reader granted, in all: an executor that sends more
     /// fails its turn.
     pub(super) granted: AtomicU64,
@@ -171,7 +171,7 @@ pub(crate) fn open(
         facts,
         waiting: Mutex::new(ExecutionContext::default()),
         ran_with: Mutex::new(HashMap::new()),
-        ended: Mutex::new(HashMap::new()),
+        told_ends: Mutex::new(HashMap::new()),
         granted: AtomicU64::new(0),
         cancel: watch::Sender::new(None),
         over: watch::Sender::new(false),

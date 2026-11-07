@@ -112,16 +112,16 @@ struct Shared {
     publisher: Arc<publish::Publisher>,
 }
 
-/// The calls of a turn its gate let run.
+/// The calls of a turn: those its gate let run, and the ends told early.
 #[derive(Debug, Default)]
 struct Calls {
     /// The arguments each call runs with, by its id: what the gate left.
     ran_with: HashMap<String, Metadata>,
     /// The calls running: let run, not reported yet.
     running: Vec<ToolCall>,
-    /// The ends told before they were read, each with the call's place
-    /// among the open calls under its id.
-    ended: Vec<(usize, ToolCallContent)>,
+    /// The ends told before their end item was sent, each with the call's
+    /// place among the open calls under its id.
+    told_ends: Vec<(usize, ToolCallContent)>,
 }
 
 /// What a call the turn's cut stopped reads (RFC §9.3), as the Python
@@ -611,16 +611,16 @@ impl TurnHost {
         read(&self.calls().ran_with)
     }
 
-    /// The end of the call `call_id` was sent: what it ran with is kept no
-    /// more, nor the end told of it early, the earliest under its id, the
-    /// others under it each one place up.
-    pub(crate) fn forget_ran_with(&self, call_id: &str) {
+    /// The end of the call `call_id`, the earliest open under its id, was
+    /// sent: what it ran with is kept no more, nor the end told of it early,
+    /// the others under its id each one place up.
+    pub(crate) fn end_sent(&self, call_id: &str) {
         let mut calls = self.calls();
         calls.ran_with.remove(call_id);
         calls
-            .ended
+            .told_ends
             .retain(|(nth, end)| end.tool_id != call_id || *nth != 0);
-        for (nth, end) in &mut calls.ended {
+        for (nth, end) in &mut calls.told_ends {
             if end.tool_id == call_id {
                 *nth = nth.saturating_sub(1);
             }
@@ -635,13 +635,13 @@ impl TurnHost {
     /// For an AI channel's turn, not a public verb.
     #[doc(hidden)]
     pub fn call_ended(&self, nth: usize, end: ToolCallContent) {
-        self.calls().ended.push((nth, end));
+        self.calls().told_ends.push((nth, end));
     }
 
-    /// Runs `read` on the ends told early whose end was not sent yet, each
-    /// with its call's place among the calls open under its id.
-    pub(crate) fn with_ended<T>(&self, read: impl FnOnce(&[(usize, ToolCallContent)]) -> T) -> T {
-        read(&self.calls().ended)
+    /// Takes the ends told early whose end item was not sent, each with its
+    /// call's place among the calls open under its id: they are sent once.
+    pub(crate) fn take_told_ends(&self) -> Vec<(usize, ToolCallContent)> {
+        std::mem::take(&mut self.calls().told_ends)
     }
 
     fn calls(&self) -> std::sync::MutexGuard<'_, Calls> {

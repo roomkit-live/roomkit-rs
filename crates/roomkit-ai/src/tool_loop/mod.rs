@@ -727,15 +727,10 @@ impl<P: AiProvider> Loop<P> {
                 .collect()
         } else {
             let calls = &generation.calls;
-            let serving = calls.iter().enumerate().map(|(position, called)| {
-                let id = &called.call.id;
-                let nth = calls
-                    .iter()
-                    .take(position)
-                    .filter(|earlier| &earlier.call.id == id)
-                    .count();
-                self.serve(called, nth)
-            });
+            let serving = calls
+                .iter()
+                .enumerate()
+                .map(|(position, called)| self.serve(called, place_under_its_id(calls, position)));
             join_all(serving.collect()).await
         };
         let mut ran = Ran::default();
@@ -773,6 +768,19 @@ impl<P: AiProvider> Loop<P> {
         self.search.next_round();
         (read, ran)
     }
+}
+
+/// The place of the `position`-th of `calls` among those under its id, `0`
+/// for the earliest: two calls under one id are two calls (RFC §6.4).
+fn place_under_its_id(calls: &[Called], position: usize) -> usize {
+    let Some(called) = calls.get(position) else {
+        return 0;
+    };
+    calls
+        .iter()
+        .take(position)
+        .filter(|earlier| earlier.call.id == called.call.id)
+        .count()
 }
 
 /// What a loop's end reads: its limits, its steering, its reader.

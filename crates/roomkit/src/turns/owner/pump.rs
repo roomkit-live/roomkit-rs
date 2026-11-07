@@ -165,7 +165,7 @@ impl Pump {
             // A call's end told before its end item: a cut closes the call
             // with it (RFC §12.2 step 13s).
             Frame::ToolEnded { start, end } => {
-                lock(&self.state.ended).insert(start, decode_end(end));
+                lock(&self.state.told_ends).insert(start, decode_end(end));
             }
             Frame::Error { error } => self.hand(Main::Error(error)),
             Frame::End => {

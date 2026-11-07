@@ -299,7 +299,7 @@ impl Executor {
         link.close();
         if !matches!(cut, Some(Cut::LetGo | Cut::Lost(_))) {
             // A call that ended before its end was read is closed so.
-            host.with_ended(|ended| self.sender.report_ended(ended));
+            self.sender.report_ended(&host.take_told_ends());
         }
         match cut {
             Some(Cut::LetGo) => {
