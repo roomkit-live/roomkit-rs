@@ -1,8 +1,9 @@
-//! The spans of a room's delivery cursor (RFC §13.5): its reads and writes
-//! sit in the trace of the message they deliver, under its
-//! `framework.inbound`, as every other store span of the message. Python's
-//! `tests/test_telemetry.py::TestStoreQuerySpan`, on an in-memory store that
-//! opens the `store.<operation>` spans `roomkit-postgres` opens.
+//! The spans of a room's delivery cursor (RFC §13.5, §15.7): its reads and
+//! writes sit in the trace of a message they deliver, under its
+//! `framework.inbound`, never a root, as every other store span of the
+//! message. Python's `tests/test_telemetry.py::TestStoreQuerySpan`, on an
+//! in-memory store that opens the `store.<operation>` spans
+//! `roomkit-postgres` opens.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
@@ -358,8 +359,11 @@ async fn a_blocked_message_s_cursor_spans_sit_under_a_message() {
 
     let inbounds = inbounds(&spans);
     assert_eq!(inbounds.len(), 2);
+    let cursor = cursor(&spans);
+    let names: BTreeSet<&str> = cursor.iter().map(|span| span.name.as_str()).collect();
+    assert_eq!(names, BTreeSet::from(CURSOR));
     let under: BTreeSet<Option<String>> = inbounds.into_iter().map(Some).collect();
-    let parents = parents(&cursor(&spans));
+    let parents = parents(&cursor);
     assert!(parents.is_subset(&under), "{parents:?} not under {under:?}");
 }
 
