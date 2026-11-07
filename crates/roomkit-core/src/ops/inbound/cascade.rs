@@ -180,7 +180,8 @@ impl Machine {
     /// What every pass adds to the cascade, whichever cascade it belongs
     /// to: its tasks and observations, its delivery set, and the events its
     /// hooks injected, which follow the set or, for a record stored blocked,
-    /// which has none, are queued at once. The answers to the event may go
+    /// which has none, are queued at once, as are those an adopted entry's
+    /// answer waits for. The answers to the event may go
     /// where its `response_visibility` says, which binds every pass of its
     /// cascade, the responses to its responses included (RFC §8.5, gap
     /// G-073).
@@ -274,9 +275,18 @@ impl Machine {
         if self.cascade.is_cut(lineage) {
             set.cut();
         }
+        // What an adopted entry's answer waits for commits at once, apart
+        // from the room's lane, as Python's sections do (RFC §9.4): queued
+        // behind the set, the answer would wait for the set and for every
+        // set ahead of it in the lane, and the event that awaits it with it.
+        let (owed, then): (Vec<Job>, Vec<Job>) =
+            injected.into_iter().partition(|job| job.owed().is_some());
+        for job in owed {
+            self.cascade.queue(job);
+        }
         self.cascade.queue_set(Delivery {
             set: Box::new(set),
-            then: injected,
+            then,
         });
     }
 
@@ -630,7 +640,9 @@ impl Machine {
             .adopted_deliveries
             .keys()
             .copied()
-            .filter(|entry| !self.cascade.holds(Lineage::Entry(*entry)))
+            .filter(|entry| {
+                !self.cascade.holds(Lineage::Entry(*entry)) && !self.adopted.is_pending(*entry)
+            })
             .collect();
         for entry in over {
             if let Some(delivered) = self.adopted_deliveries.remove(&entry) {

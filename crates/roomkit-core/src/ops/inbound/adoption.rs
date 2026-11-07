@@ -44,8 +44,9 @@
 //! past the budget (RFC §10.1 step 1). Its caller receives its result at
 //! its commit (detached completion: no delivery results, no completion
 //! handle), an entry beside the work once the events its hooks injected are
-//! committed too, their failed release its error (HITL b779fc14), and its
-//! event takes its place in the room's lane at that commit. A message's arrival runs its step 2, then its channel's parse. A
+//! committed too, a message's result carrying their failed release (HITL
+//! b779fc14), and its event takes its place in the room's lane at that
+//! commit. A message's arrival runs its step 2, then its channel's parse. A
 //! direct injection is admitted and stamped at once, and its room, then its
 //! key, when it carries one, read before it draws on the budget: a call its
 //! room refuses and a replay draw nothing (RFC §9.5.1 Past the cap, §13.4,
@@ -216,7 +217,9 @@ impl Adoptions {
 
     /// Notes `error`, the failed release of a pass the answer of `entry`
     /// waits for, on that answer, when it met no failure before (RFC
-    /// §13.5); whether that answer waits.
+    /// §13.5); whether it did. A direct injection's answer is its event: the
+    /// failure is left to its caller's call, as Python's `send_event`
+    /// collects none of its own.
     pub(super) fn note_pending_error(
         &mut self,
         entry: EntryId,
@@ -225,7 +228,7 @@ impl Adoptions {
         let Some(pending) = self
             .pending
             .iter_mut()
-            .find(|pending| pending.entry.id == entry)
+            .find(|pending| pending.entry.id == entry && !pending.entry.direct)
         else {
             return false;
         };
