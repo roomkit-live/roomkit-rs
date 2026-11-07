@@ -43,20 +43,56 @@ pub fn python_float(value: f64) -> String {
     if value.is_infinite() {
         return if value > 0.0 { "inf" } else { "-inf" }.to_owned();
     }
-    // Rust's `{:e}` writes the shortest digits that read back.
-    let scientific = format!("{value:e}");
+    // Rust's `{:e}` writes the shortest digits that read back. At 17
+    // digits, the value exactly halfway between two that both read back, it
+    // rounds up where Python rounds to the even one; `{:.16e}` writes those
+    // 17 digits rounded half to even (RMK-1525).
+    let mut scientific = format!("{value:e}");
+    if significant_digits(&scientific) == 17 {
+        scientific = format!("{value:.16e}");
+    }
     let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
     let exponent: i32 = exponent.parse().unwrap_or(0);
     if (-4..16).contains(&exponent) {
-        let positional = format!("{value}");
-        return if positional.contains('.') {
-            positional
-        } else {
-            format!("{positional}.0")
-        };
+        return positional(mantissa, exponent);
     }
     let sign = if exponent < 0 { '-' } else { '+' };
     format!("{mantissa}e{sign}{:02}", exponent.unsigned_abs())
+}
+
+/// How many significant digits `scientific` (`-d.ddde-x`) writes.
+fn significant_digits(scientific: &str) -> usize {
+    scientific
+        .split('e')
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(char::is_ascii_digit)
+        .count()
+}
+
+/// `mantissa` (`-d.ddd`) times ten to `exponent`, from -4 to 15, written
+/// without an exponent as Python's `repr` writes it: `.0` after a whole
+/// number (`1000.0`, `0.0001`, `-1.5`).
+fn positional(mantissa: &str, exponent: i32) -> String {
+    let (sign, unsigned) = mantissa
+        .strip_prefix('-')
+        .map_or(("", mantissa), |unsigned| ("-", unsigned));
+    let digits: Vec<char> = unsigned.chars().filter(char::is_ascii_digit).collect();
+    let whole = usize::try_from(exponent + 1).unwrap_or(0);
+    if whole == 0 {
+        let zeros = usize::try_from(-(exponent + 1)).unwrap_or(0);
+        let digits: String = digits.into_iter().collect();
+        return format!("{sign}0.{}{digits}", "0".repeat(zeros));
+    }
+    let integer: String = digits.iter().take(whole).collect();
+    let fraction: String = digits.iter().skip(whole).collect();
+    let padding = "0".repeat(whole.saturating_sub(digits.len()));
+    if fraction.is_empty() {
+        format!("{sign}{integer}{padding}.0")
+    } else {
+        format!("{sign}{integer}.{fraction}")
+    }
 }
 
 /// Deserializers for bounded fields, one per field, named after it: each
@@ -86,6 +122,10 @@ mod tests {
 
     /// Python's `repr()` of each value (`python3 -c "print(repr(v))"`).
     #[test]
+    #[expect(
+        clippy::excessive_precision,
+        reason = "the exact values of the ties, halfway between two 17-digit forms"
+    )]
     fn a_float_is_written_as_python_s_repr_writes_it() {
         let values = [
             0.0,
@@ -101,6 +141,12 @@ mod tests {
             f64::INFINITY,
             f64::NEG_INFINITY,
             2.5e-7,
+            1e15,
+            0.300_000_000_000_000_04,
+            // Halfway between two 17-digit forms that both read back:
+            // Python keeps the even one (RMK-1525).
+            -1_548_782_250_018_927.25,
+            -155_559_142_687_939.625,
         ];
         assert_eq!(
             values.map(python_float),
@@ -117,7 +163,11 @@ mod tests {
                 "nan",
                 "inf",
                 "-inf",
-                "2.5e-07"
+                "2.5e-07",
+                "1000000000000000.0",
+                "0.30000000000000004",
+                "-1548782250018927.2",
+                "-155559142687939.62"
             ]
         );
     }
