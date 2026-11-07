@@ -1,6 +1,7 @@
 //! The side effects a delivery set stores (RFC §10.1 step 15) when the
-//! store fails one of their writes: what no shared scenario can script, a
-//! store that fails (Python's `tests/test_hook_side_effects.py`).
+//! store fails one of their writes, and when the room's lane drops the set
+//! as stale: what no shared scenario can script, a store that fails or
+//! another worker's lane (Python's `tests/test_hook_side_effects.py`).
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 #![expect(clippy::panic, reason = "a store's driver that breaks panics")]
@@ -515,4 +516,102 @@ async fn a_delegated_turn_s_failed_metadata_write_is_logged() {
             warnings.containing("")
         );
     }
+}
+
+// Python: tests/test_hook_side_effects.py::TestDroppedSetSideEffects::test_a_set_the_lane_drops_as_stale_still_stores_its_hooks_side_effects
+// (RMK-1499): a delivery set the room's lane drops before it ran, its index
+// declared lost by another worker, still stores the task its event's hook
+// gave before the call returns, and the task's ON_TASK_CREATED fires, as
+// after a set that ran.
+#[tokio::test]
+async fn a_set_the_lane_drops_as_stale_still_stores_its_hooks_side_effects() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    for (id, kind) in [("sms1", ChannelType::SMS), ("ws1", ChannelType::WEBSOCKET)] {
+        let transport =
+            RecordingTransport::new(channel(id), kind, RecordingTransportOptions::default());
+        kit.register_channel(transport).unwrap();
+    }
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for bound in ["sms1", "ws1"] {
+        kit.attach_channel(&room_id(), &channel(bound), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |_: RoomEvent, _| async {
+            let id = TaskId::new("t1").unwrap();
+            let task = Task::new(id, room_id(), "Call the customer back");
+            Ok::<_, ChannelError>(HookResult {
+                tasks: vec![task],
+                ..HookResult::allow(AllowOptions::default())
+            })
+        },
+        HookOptions {
+            name: "triage".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let created = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&created);
+    kit.hook(
+        HookTrigger::OnTaskCreated,
+        move |event: RoomEvent, _| {
+            let task_id = event.metadata.get("task_id").and_then(|id| id.as_str());
+            seen.lock().unwrap().extend(task_id.map(str::to_owned));
+            async {}
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "follow_up".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Another worker's lane declares the next index lost before this
+    // process delivers it.
+    let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+    let next = room.latest_index.map_or(0, |index| index + 1);
+    let options = store::AdvanceDeliveredIndexOptions { force: true };
+    kit.store()
+        .advance_delivered_index(&room_id(), next, options)
+        .await
+        .unwrap();
+    let message = InboundMessage::new(
+        channel("sms1"),
+        "+15550001",
+        TextContent::new("Call me back"),
+    );
+    let options = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    let result = kit.process_inbound(message, options).await.unwrap();
+    let tasks = kit
+        .store()
+        .list_tasks(&room_id(), store::ListTasksOptions::default())
+        .await
+        .unwrap();
+    roomkit::testing::idle(&kit).await;
+    kit.close().await.unwrap();
+
+    assert_eq!(
+        (
+            result.cancellation_reason.as_deref(),
+            sorted(tasks.into_iter().map(|task| task.id)),
+            created.lock().unwrap().clone(),
+        ),
+        (
+            Some("delivery_stale"),
+            sorted(["t1"]),
+            vec!["t1".to_owned()]
+        )
+    );
 }
