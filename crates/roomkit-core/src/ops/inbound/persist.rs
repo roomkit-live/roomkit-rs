@@ -5,10 +5,11 @@
 //! G-049), under the room's lock (`metadata_write`), as Python's
 //! `_persist_side_effects` writes them in that order, before its event's
 //! `AFTER_BROADCAST` hooks run (step 16): those hooks read them stored, as
-//! Python's `_post_plan_effects` writes them before it starts them. Each stored task's `ON_TASK_CREATED` observers
-//! run once it is. What no set stores, a record's side effects, an event's
-//! whose set delivered nothing, the call's own observations, is stored once
-//! the cascade's passes and sets are over; then the operation ends.
+//! Python's `_post_plan_effects` writes them before it starts them. Each
+//! stored task's `ON_TASK_CREATED` observers run once it is. What no set
+//! stores, a record's side effects, an event's whose set delivered nothing,
+//! the call's own observations, is stored once the cascade's passes and
+//! sets are over; then the operation ends.
 //!
 //! A write the store fails is logged, at ERROR (RFC §15.2), and the call
 //! goes on, a failed write never its error: each task and observation is
