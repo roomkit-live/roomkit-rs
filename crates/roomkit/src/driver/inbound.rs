@@ -128,6 +128,14 @@ pub(crate) struct Record {
     /// Whether the closing of the streams the call's cut left unread is
     /// over; nothing to close reads as over.
     unread_closed: watch::Sender<bool>,
+    /// What a call that deferred its delivery ends with once its own
+    /// cascade is over, the run going on for the entries it adopted and did
+    /// not wait for (RFC §9.5.1 Reentrance): its handle's wait ends then,
+    /// as Python's waits for the call's own cascade only. Taken by that
+    /// wait.
+    own_end: Mutex<Option<InboundOutput>>,
+    /// Whether [`own_end`](Self::own_end) was told.
+    own_end_told: watch::Sender<bool>,
 }
 
 /// What the read a call's cut stopped left the call.
@@ -298,7 +306,27 @@ impl Record {
             cleanup_owed: AtomicBool::new(false),
             closed_under_way: AtomicBool::new(false),
             unread_closed: watch::Sender::new(true),
+            own_end: Mutex::new(None),
+            own_end_told: watch::Sender::new(false),
         }
+    }
+
+    /// The call, which deferred its delivery, ends with `output` now that
+    /// its own cascade is over, though the entries it adopted still deliver
+    /// or read their answers' streams; told once.
+    fn own_cascade_over(&self, output: InboundOutput) {
+        let mut own_end = self.own_end.lock().unwrap_or_else(PoisonError::into_inner);
+        if *self.own_end_told.borrow() {
+            return;
+        }
+        *own_end = Some(output);
+        self.own_end_told.send_replace(true);
+    }
+
+    /// Whether the call's own cascade is over, its run going on for the
+    /// entries it adopted.
+    pub(crate) fn own_cascade_is_over(&self) -> bool {
+        *self.own_end_told.borrow()
     }
 
     /// The call's tail, to change or to end.
@@ -516,6 +544,27 @@ pub(crate) async fn cancelled_end(record: &Record) -> InboundResult {
         Ok(result) => result.unwrap_or_default(),
         // The record outlives every wait on it: never closed.
         Err(_closed) => std::future::pending().await,
+    }
+}
+
+/// What the call `record` records ends with once its own cascade is over,
+/// its run going on for the entries it adopted and did not wait for
+/// ([`Record::own_cascade_is_over`]): taken by the one wait that reads it;
+/// never, for a call that ends with its run.
+pub(crate) async fn own_end(record: &Record) -> InboundOutput {
+    let mut told = record.own_end_told.subscribe();
+    if told.wait_for(|told| *told).await.is_err() {
+        // The record outlives every wait on it: never closed.
+        return std::future::pending().await;
+    }
+    let taken = record
+        .own_end
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    match taken {
+        Some(output) => output,
+        None => std::future::pending().await,
     }
 }
 
@@ -863,10 +912,15 @@ impl Caller {
         // The call returned: its key names no delivery any more, as
         // Python's name is released once its call returned.
         drop(self.named.take());
+        let output = closed_at_its_end(Ok(outcome), closing);
         let Some(answer) = self.answer.take() else {
+            // Answered at its decision, a call that deferred its delivery:
+            // its handle's wait ends now, the call's own delivery over.
+            if self.defer {
+                self.record.own_cascade_over(output);
+            }
             return;
         };
-        let output = closed_at_its_end(Ok(outcome), closing);
         if answer.send(output).is_err() {
             tracing::debug!(
                 target: "roomkit::driver",

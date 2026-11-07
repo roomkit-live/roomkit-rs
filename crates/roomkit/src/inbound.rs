@@ -264,7 +264,9 @@ impl DeliveryHandle {
         let shared = &self.shared;
         let over = shared.ended.initialized()
             || match &shared.following {
-                Following::Run { finished, .. } => finished.is_finished(),
+                Following::Run {
+                    finished, record, ..
+                } => finished.is_finished() || record.own_cascade_is_over(),
                 Following::Adopted(completion) => {
                     let delivered = &completion.delivered;
                     delivered.borrow().is_some() || delivered.has_changed().is_err()
@@ -341,7 +343,11 @@ impl DeliveryHandle {
     }
 
     /// Waits until the delivery is over, then reports the call as one that
-    /// waited for it would have: its `delivery_results`, `error`,
+    /// waited for it would have: the call's own delivery, as its caller
+    /// would have waited for it, not that of a call its admission work
+    /// adopted and did not wait for (an off-lock hook's unwaited call), whose
+    /// answers and the reading of their streams are their own (RFC §9.5.1
+    /// Reentrance); its `delivery_results`, `error`,
     /// `response_metadata`, `response_events` and `cancellation_reason`
     /// filled, its `unavailable_targets` refreshed, the handle on the
     /// result. It may be called again, and from any clone: each reads
@@ -482,6 +488,22 @@ impl Shared {
                             return Ended::CleanupIncomplete;
                         }
                         return Ended::Over(Box::new(result));
+                    }
+                    // The call's own cascade over, the run goes on for the
+                    // entries it adopted and did not wait for: their answers
+                    // and the reading of their streams are their own (RFC
+                    // §9.5.1 Reentrance).
+                    output = driver::own_end(record) => {
+                        if record.cleanup_incomplete().is_some() {
+                            return Ended::CleanupIncomplete;
+                        }
+                        return match output {
+                            Ok(Ok(result)) => Ended::Over(Box::new(result)),
+                            Ok(Err(error)) => {
+                                Ended::Failed(std::sync::Mutex::new(Some(error.into())))
+                            }
+                            Err(error) => Ended::Failed(std::sync::Mutex::new(Some(error))),
+                        };
                     }
                 };
                 *run = None;
