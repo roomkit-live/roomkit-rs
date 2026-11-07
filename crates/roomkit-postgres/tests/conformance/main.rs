@@ -90,16 +90,6 @@ use crate::support::TempSchema;
 /// depend on the machine's speed and may pass.
 pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[
     (
-        "memory/a-compacting-memory-summarizes-what-it-trims",
-        "§20.3: the copy, synced from roomkit-specs d7b0ce2, is behind; roomkit-specs f5949ff \
-         replaces this scenario, which the next sync brings (RMK-450)",
-    ),
-    (
-        "memory/a-summary-stands-for-the-older-turns",
-        "§20.3: the copy, synced from roomkit-specs d7b0ce2, is behind; roomkit-specs f5949ff \
-         replaces this scenario, which the next sync brings (RMK-450)",
-    ),
-    (
         "orchestration/a-team-worker-past-its-task-timeout-is-read-as-timed-out-beside-the-others",
         "timing: the worker that answers has 50 ms, which a debug build's round trips to a server \
          pass, and is cut with the one that must be (RMK-1334)",
