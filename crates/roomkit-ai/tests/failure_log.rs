@@ -10,6 +10,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Write as _};
 use std::future::Future;
 use std::pin::Pin;
@@ -19,18 +20,20 @@ use std::task::{Context, Poll};
 
 use futures_core::Stream;
 use pretty_assertions::assert_eq;
+use roomkit::identity::{MockIdentityResolver, MockIdentityResolverOptions};
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    ErrorRecord, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId, TextContent,
+    ErrorRecord, Identity, IdentityId, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId,
+    TextContent, VerificationPolicy,
 };
 use roomkit::orchestration::DiscussionOptions;
 use roomkit::tasks::WaitOptions;
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DelegateOptions,
-    DeliveryStream, Discussion, HookExecution, HookOptions, HookTrigger, InboundResult,
-    InstallStrategyOptions, ProcessInboundOptions, ResponseItem, RoomKit, RoomKitOptions,
-    SendEventOptions, current_turn_host,
+    AttachChannelOptions, Channel, ChannelError, CompleteVerificationOptions, CreateRoomOptions,
+    DelegateOptions, DeliveryStream, Discussion, HookExecution, HookOptions, HookTrigger,
+    InboundResult, InstallStrategyOptions, ProcessInboundOptions, RequestVerificationOptions,
+    ResponseItem, RoomKit, RoomKitOptions, SendEventOptions, current_turn_host,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -469,6 +472,46 @@ async fn turn(agent: (bool, Vec<ScriptedRound>, bool), streaming: bool) -> (Inbo
     (result, errors.load(Ordering::SeqCst))
 }
 
+/// Alice's number, which the kit's resolver reads as `id-alice`.
+const ALICE: &str = "+15550000001";
+
+/// A kit verifying its senders, Alice's number resolving to `id-alice`,
+/// its room `r1` binding the SMS transport `sms1` and `agent` (Python's
+/// `RoomKit(identity_resolver=..., verification_policy=VerificationPolicy())`).
+async fn verifying_kit(agent: impl Channel) -> RoomKit {
+    let resolver = MockIdentityResolver::new(MockIdentityResolverOptions {
+        mapping: BTreeMap::from([(
+            ALICE.to_owned(),
+            Identity::new(IdentityId::new("id-alice").unwrap()),
+        )]),
+        ..MockIdentityResolverOptions::default()
+    });
+    let kit = RoomKit::new(RoomKitOptions {
+        identity_resolver: Some(Arc::new(resolver)),
+        verification_policy: Some(VerificationPolicy::default()),
+        ..RoomKitOptions::default()
+    });
+    let sms = RecordingTransport::new(
+        channel("sms1"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms).unwrap();
+    kit.register_channel(agent).unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["sms1", "ai1"] {
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    kit
+}
+
 /// The error the call carries: its type and its message.
 fn error_of(result: &InboundResult) -> (String, String) {
     let error = result.error.as_ref().unwrap();
@@ -659,6 +702,59 @@ async fn a_send_event_caller_that_never_gets_the_failure_sees_it_logged() {
             [Level::ERROR],
             "streams={streams}: {:?}",
             lines.roomkit(Level::WARN)
+        );
+    }
+}
+
+// Python: tests/test_inbound_stream_error_propagation.py::test_a_verification_release_s_failed_turn_is_logged_at_its_level
+// (RMK-1500): a held message's release reads no result (RFC §11.7.6), so
+// the failed turn of the agent it runs is logged at the failure's own
+// level, as a send_event's, not the DEBUG kept for a caller that receives
+// the error.
+#[tokio::test]
+async fn a_verification_release_s_failed_turn_is_logged_at_its_level() {
+    for streams in [true, false] {
+        let rounds = vec![refusal(
+            ScriptedRound::answering(""),
+            Some(404),
+            "model gone",
+        )];
+        let model = ScriptedProvider::new(rounds);
+        let kit = if streams {
+            verifying_kit(agent(model, false)).await
+        } else {
+            verifying_kit(agent(Whole(model), false)).await
+        };
+        let message = InboundMessage::new(channel("sms1"), ALICE, TextContent::new("go"));
+        let options = ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        };
+        let held = kit.process_inbound(message, options).await.unwrap();
+        let options = RequestVerificationOptions {
+            window_start: Some(held.event.unwrap().created_at),
+            ..RequestVerificationOptions::default()
+        };
+        let alice = IdentityId::new("id-alice").unwrap();
+        let (request, secret) = kit
+            .request_verification(&alice, &room_id(), &channel("sms1"), options)
+            .await
+            .unwrap();
+        let (lines, _capturing) = Lines::capture();
+        kit.complete_verification(&request.id, &secret, CompleteVerificationOptions::default())
+            .await
+            .unwrap();
+        roomkit::testing::idle(&kit).await;
+        kit.close().await.unwrap();
+        let records = lines.roomkit(Level::WARN);
+        assert_eq!(
+            lines.warnings(),
+            [Level::ERROR],
+            "streams={streams}: {records:?}"
+        );
+        assert!(
+            records[0].1.contains("stream consumption (no targets)"),
+            "{records:?}"
         );
     }
 }

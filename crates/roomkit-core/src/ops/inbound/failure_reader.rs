@@ -9,11 +9,11 @@ use super::Call;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FailureReader {
     /// Nobody: a direct injection's or a host post's caller has the stored
-    /// event, a greeting's and a discussion turn's have nothing.
+    /// event, a greeting's and a discussion turn's have nothing, and a
+    /// verification's release reads no result (RMK-1500).
     Nobody,
     /// The caller, on its result, unless a streaming target rendered it,
-    /// whose line is kept (RMK-403): a message's, a regeneration's, a
-    /// verification's release.
+    /// whose line is kept (RMK-403): a message's, a regeneration's.
     Caller,
     /// The caller, rendered or not: a delegation, whose task logs every
     /// failure of its turn.
@@ -24,11 +24,13 @@ impl FailureReader {
     /// Who receives the failure of `call`'s own stream.
     pub(super) fn of(call: &Call) -> Self {
         match call {
-            Call::Message { .. } | Call::Rerun { .. } | Call::Regenerate { .. } => Self::Caller,
+            Call::Message { .. } | Call::Regenerate { .. } => Self::Caller,
             Call::Responses { .. } => Self::Delegation,
-            Call::Direct { .. } | Call::Post { .. } | Call::Turn { .. } | Call::Greeting { .. } => {
-                Self::Nobody
-            }
+            Call::Direct { .. }
+            | Call::Post { .. }
+            | Call::Turn { .. }
+            | Call::Greeting { .. }
+            | Call::Rerun { .. } => Self::Nobody,
         }
     }
 
@@ -55,36 +57,30 @@ mod tests {
         RoomId::new("r1").unwrap()
     }
 
-    /// Python's `regenerate_response` and a verification's release read
-    /// their streams with `caller_logs=True`, as `process_inbound` does.
+    /// Python's `regenerate_response` reads its streams with
+    /// `caller_logs=True`, as `process_inbound` does.
     #[test]
-    fn a_rerun_s_and_a_regeneration_s_caller_receives_a_failure_no_target_rendered() {
-        let rerun = Call::Rerun {
-            room_id: room_id(),
-            event_id: EventId::new("evt_1").unwrap(),
-            floor: 0,
-        };
+    fn a_regeneration_s_caller_receives_a_failure_no_target_rendered() {
         let regeneration = Call::Regenerate {
             room_id: room_id(),
             trigger_id: None,
             floor: 0,
         };
-        let readers = [FailureReader::of(&rerun), FailureReader::of(&regeneration)];
-        let received: Vec<(bool, bool)> = readers
-            .iter()
-            .map(|reader| (reader.receives(true, false), reader.receives(true, true)))
-            .collect();
+        let reader = FailureReader::of(&regeneration);
         assert_eq!(
-            (readers, received),
             (
-                [FailureReader::Caller, FailureReader::Caller],
-                vec![(true, false), (true, false)]
-            )
+                reader,
+                reader.receives(true, false),
+                reader.receives(true, true)
+            ),
+            (FailureReader::Caller, true, false)
         );
     }
 
+    /// A verification's release reads no result (Python's
+    /// `_rerun_agents_on` with `caller_logs=False`, RMK-1500).
     #[test]
-    fn a_discussion_turn_s_and_a_greeting_s_caller_receives_none() {
+    fn a_discussion_turn_s_a_greeting_s_and_a_release_s_caller_receives_none() {
         let turn = Call::Turn { room_id: room_id() };
         let greeting = Call::Greeting {
             room_id: room_id(),
@@ -92,9 +88,18 @@ mod tests {
             text: "Hello".to_owned(),
             chain_depth: 0,
         };
+        let rerun = Call::Rerun {
+            room_id: room_id(),
+            event_id: EventId::new("evt_1").unwrap(),
+            floor: 0,
+        };
         assert_eq!(
-            [FailureReader::of(&turn), FailureReader::of(&greeting)],
-            [FailureReader::Nobody, FailureReader::Nobody]
+            [
+                FailureReader::of(&turn),
+                FailureReader::of(&greeting),
+                FailureReader::of(&rerun)
+            ],
+            [FailureReader::Nobody; 3]
         );
         assert!(!FailureReader::Nobody.receives(true, false));
     }
