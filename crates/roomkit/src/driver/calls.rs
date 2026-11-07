@@ -16,7 +16,7 @@ use roomkit_core::ops::{
     AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, DiscussionOutcome,
     DiscussionRequest, EffectId, FrameworkEvent as CoreEvent, HookAnswer, HookRequest,
     IdentityAnswer, IdentityRequest, KIT_CLOSED, NextTurn, Notice, Outcome, RecentEvents,
-    StoreOutcome, StoreRequest,
+    StoreOutcome, StoreRequest, Unpersisted,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookTrigger};
@@ -129,9 +129,9 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
             tasks,
             observations,
             ..
-        } => persist_side_effects(store, tasks, observations)
-            .await
-            .map(|()| StoreOutcome::Persisted),
+        } => Ok(StoreOutcome::Persisted(
+            persist_side_effects(store, tasks, observations).await,
+        )),
         // A room the pipeline creates for its router's id is refused one
         // holding a NUL character, as `create_room` refuses it (RFC §13.5).
         StoreRequest::CreateRoom { room } if room.id.as_str().contains('\0') => Err(
@@ -432,18 +432,33 @@ async fn update_event<S: ConversationStore>(
 
 /// Stores a pass's side effects one by one (RFC §10.1 step 15), as
 /// Python's `_persist_side_effects` does.
+/// Writes each of `tasks` then each of `observations`, one the store fails
+/// leaving the others to write, as Python's `_persist_side_effects` does
+/// (RFC §10.1 step 15): those not written, each with the store's error.
 async fn persist_side_effects<S: ConversationStore>(
     store: &S,
     tasks: Vec<Task>,
     observations: Vec<Observation>,
-) -> Result<(), StoreError> {
+) -> Vec<Unpersisted> {
+    let mut unpersisted = Vec::new();
     for task in tasks {
-        store.add_task(task).await?;
+        let task_id = task.id.clone();
+        if let Err(error) = store.add_task(task).await {
+            let error = error.to_record();
+            unpersisted.push(Unpersisted::Task { task_id, error });
+        }
     }
     for observation in observations {
-        store.add_observation(observation).await?;
+        let observation_id = observation.id.clone();
+        if let Err(error) = store.add_observation(observation).await {
+            let error = error.to_record();
+            unpersisted.push(Unpersisted::Observation {
+                observation_id,
+                error,
+            });
+        }
     }
-    Ok(())
+    unpersisted
 }
 
 /// Calls a channel (RFC §6.1): a parse, a turn, a delivery or the read of

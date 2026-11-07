@@ -5,6 +5,7 @@
 use super::{
     ChannelOutcome, ChannelRequest, EffectId, HoldOutcome, HoldRequest, HookAnswer, HookRequest,
     IdentityAnswer, IdentityRequest, Outcome, ProtocolError, Request, StoreOutcome, StoreRequest,
+    Unpersisted,
 };
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, DeliveryError, ErrorRecord, Identity,
@@ -219,7 +220,9 @@ impl RequestKind {
             Self::ListEvents => matches!(outcome, Outcome::Store(StoreOutcome::Events(_))),
             Self::DeleteEvent => matches!(outcome, Outcome::Store(StoreOutcome::Deleted(_))),
             Self::Commit => matches!(outcome, Outcome::Store(StoreOutcome::Committed(_))),
-            Self::PersistSideEffects => matches!(outcome, Outcome::Store(StoreOutcome::Persisted)),
+            Self::PersistSideEffects => {
+                matches!(outcome, Outcome::Store(StoreOutcome::Persisted(_)))
+            }
             Self::Write => matches!(outcome, Outcome::Store(StoreOutcome::Stored)),
             Self::ResolveIdentity => matches!(outcome, Outcome::Store(StoreOutcome::Resolved(_))),
             Self::HandleInbound => matches!(outcome, Outcome::Channel(ChannelOutcome::Parsed(_))),
@@ -406,9 +409,10 @@ impl Outcome {
         }
     }
 
-    pub(crate) fn into_persisted(self) -> Result<(), ErrorRecord> {
+    /// The side effects the store did not write, the others stored.
+    pub(crate) fn into_persisted(self) -> Result<Vec<Unpersisted>, ErrorRecord> {
         match self {
-            Self::Store(StoreOutcome::Persisted) => Ok(()),
+            Self::Store(StoreOutcome::Persisted(unpersisted)) => Ok(unpersisted),
             other => Err(other.into_failure()),
         }
     }
@@ -583,7 +587,7 @@ impl Outcome {
                 StoreOutcome::Deleted(_) => "Deleted",
                 StoreOutcome::Events(_) => "Events",
                 StoreOutcome::Committed(_) => "Committed",
-                StoreOutcome::Persisted => "Persisted",
+                StoreOutcome::Persisted(_) => "Persisted",
                 StoreOutcome::Stored => "Stored",
                 StoreOutcome::Resolved(_) => "Resolved",
             },

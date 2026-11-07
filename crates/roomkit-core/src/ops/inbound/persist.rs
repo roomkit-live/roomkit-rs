@@ -8,6 +8,12 @@
 //! run once it is. What no set stores, a record's side effects, an event's
 //! whose set delivered nothing, the call's own observations, is stored once
 //! the cascade's passes and sets are over; then the operation ends.
+//!
+//! A write the store fails is logged, at ERROR (RFC §15.2), and the call
+//! goes on, its error its turn's: each task and observation is written on
+//! its own, those the store fails leaving the others written, and only a
+//! task stored fires `ON_TASK_CREATED`, as Python's `_persist_side_effects`
+//! and `_write_metadata_updates` do.
 
 use super::{Machine, Stage, report};
 use std::collections::HashMap;
@@ -15,8 +21,93 @@ use std::collections::HashMap;
 use crate::model::{
     ErrorRecord, Metadata, Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, TaskId,
 };
-use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
+use crate::ops::protocol::{EffectId, KIT_CLOSED, Outcome, StoreRequest, Unpersisted};
 use crate::ops::{Cx, Progress};
+
+/// Of `tasks`, those a write of side effects answered by `answer` stored,
+/// whose `ON_TASK_CREATED` observers run. Each task and observation it did
+/// not write is logged at ERROR, as Python's `_persist_side_effects` logs
+/// it; a write refused whole, cut by the kit's close or broken, stored
+/// none, and is logged once, at DEBUG when the close cut it.
+pub(crate) fn stored_tasks(
+    room_id: &RoomId,
+    mut tasks: Vec<Task>,
+    answer: Result<Vec<Unpersisted>, ErrorRecord>,
+) -> Vec<Task> {
+    let unpersisted = match answer {
+        Ok(unpersisted) => unpersisted,
+        Err(error) => {
+            refused_whole(room_id, &error);
+            return Vec::new();
+        }
+    };
+    for failure in unpersisted {
+        match failure {
+            Unpersisted::Task { task_id, error } => {
+                tracing::error!(
+                    target: "roomkit::framework",
+                    room_id = %room_id,
+                    task_id = %task_id,
+                    error_type = %error.error_type,
+                    error = %error.message,
+                    "Failed to persist task {task_id}"
+                );
+                if let Some(position) = tasks.iter().position(|task| task.id == task_id) {
+                    tasks.remove(position);
+                }
+            }
+            Unpersisted::Observation {
+                observation_id,
+                error,
+            } => tracing::error!(
+                target: "roomkit::framework",
+                room_id = %room_id,
+                observation_id = %observation_id,
+                error_type = %error.error_type,
+                error = %error.message,
+                "Failed to persist observation {observation_id}"
+            ),
+        }
+    }
+    tasks
+}
+
+/// Logs a write of side effects the driver refused whole: expected once
+/// the kit's close cut it.
+fn refused_whole(room_id: &RoomId, error: &ErrorRecord) {
+    if error.error_type == KIT_CLOSED {
+        tracing::debug!(
+            target: "roomkit::framework",
+            room_id = %room_id,
+            "the kit closed before the side effects were stored"
+        );
+        return;
+    }
+    tracing::error!(
+        target: "roomkit::framework",
+        room_id = %room_id,
+        error_type = %error.error_type,
+        error = %error.message,
+        "Failed to persist the side effects of room {room_id}"
+    );
+}
+
+/// Logs that the room metadata updates under `keys` were not written, as
+/// Python's `_write_metadata_updates` does: the delivery set stands.
+fn metadata_not_written(room_id: &RoomId, keys: &[String], error: &ErrorRecord) {
+    let keys = keys
+        .iter()
+        .map(|key| format!("'{key}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    tracing::error!(
+        target: "roomkit::framework",
+        room_id = %room_id,
+        error_type = %error.error_type,
+        error = %error.message,
+        "Failed to write the room metadata updates [{keys}]"
+    );
+}
 
 /// What the call's passes and sets left for the end of its cascade: the
 /// tasks and observations no set stored, and the room as the last pass or
@@ -87,22 +178,23 @@ pub(super) struct SetEffects {
     /// The tasks and observations its event's `BEFORE_BROADCAST` hooks
     /// gave, which its pass handed the set.
     hooks: (Vec<Task>, Vec<Observation>),
+    /// The room its writes are made in.
+    room_id: Option<RoomId>,
     /// The write of its tasks and observations under way, with its tasks.
     stored: Option<(EffectId, Vec<Task>)>,
-    /// The write of its room metadata updates under way.
-    updated: Option<EffectId>,
+    /// The write of its room metadata updates under way, with their keys.
+    updated: Option<(EffectId, Vec<String>)>,
     /// What the writes leave the set's outcome: the tasks stored, whose
-    /// `ON_TASK_CREATED` observers run, and the first write's failure.
+    /// `ON_TASK_CREATED` observers run.
     written: Written,
 }
 
-/// What a set's writes left: the tasks stored, and the first failure.
+/// What a set's writes left: the tasks stored. A write that failed is
+/// logged, never the call's error.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Written {
     /// The tasks stored, whose `ON_TASK_CREATED` observers run.
     pub(super) tasks: Vec<Task>,
-    /// The first write that failed, the call's error.
-    pub(super) error: Option<ErrorRecord>,
 }
 
 impl SetEffects {
@@ -135,6 +227,7 @@ impl SetEffects {
         let (mut all_tasks, mut all_observations) = self.take_hooks();
         all_tasks.extend(tasks);
         all_observations.extend(observations);
+        self.room_id = Some(room_id.clone());
         if !all_tasks.is_empty() || !all_observations.is_empty() {
             let effect = cx.io.issue(StoreRequest::PersistSideEffects {
                 room_id: room_id.clone(),
@@ -144,16 +237,18 @@ impl SetEffects {
             self.stored = Some((effect, all_tasks));
         }
         if !metadata.is_empty() {
+            let keys = metadata.keys().cloned().collect();
             // Its keys only: it never overwrites the counters of an event
             // committed meanwhile, so it needs no lock.
-            self.updated = Some(cx.io.issue(StoreRequest::UpdateRoom {
+            let effect = cx.io.issue(StoreRequest::UpdateRoom {
                 room_id: room_id.clone(),
                 updates: RoomUpdates {
                     updated_at: Some(cx.env.now()),
                     metadata,
                     ..RoomUpdates::default()
                 },
-            }));
+            });
+            self.updated = Some((effect, keys));
         }
         self.progress()
     }
@@ -163,7 +258,10 @@ impl SetEffects {
         self.stored
             .as_ref()
             .is_some_and(|(stored, _)| *stored == effect)
-            || self.updated == Some(effect)
+            || self
+                .updated
+                .as_ref()
+                .is_some_and(|(updated, _)| *updated == effect)
     }
 
     /// Whether a write is under way.
@@ -171,19 +269,17 @@ impl SetEffects {
         self.stored.is_some() || self.updated.is_some()
     }
 
-    /// Takes the answer of one of the writes.
+    /// Takes the answer of one of the writes; one that failed is logged.
     pub(super) fn accept(&mut self, effect: EffectId, outcome: Outcome) -> Progress<Written> {
+        let Some(room_id) = self.room_id.clone() else {
+            return self.progress();
+        };
         if let Some((_, tasks)) = self.stored.take_if(|(stored, _)| *stored == effect) {
-            match outcome.into_persisted() {
-                Ok(()) => self.written.tasks = tasks,
-                Err(error) => {
-                    self.written.error.get_or_insert(error);
-                }
-            }
-        } else if self.updated.take_if(|updated| *updated == effect).is_some()
+            self.written.tasks = stored_tasks(&room_id, tasks, outcome.into_persisted());
+        } else if let Some((_, keys)) = self.updated.take_if(|(updated, _)| *updated == effect)
             && let Err(error) = outcome.into_stored()
         {
-            self.written.error.get_or_insert(error);
+            metadata_not_written(&room_id, &keys, &error);
         }
         self.progress()
     }
@@ -233,7 +329,7 @@ impl Machine {
             });
             return;
         }
-        self.on_persisted(cx, outcome, &tasks);
+        self.on_persisted(cx, outcome, tasks);
         self.await_persisted(cx, None);
     }
 
@@ -246,16 +342,16 @@ impl Machine {
         self.stage.enter(Stage::Persisting { side_effects });
     }
 
-    /// The side effects are stored: each task's `ON_TASK_CREATED` observers
-    /// run (RFC §10.1 step 15).
-    fn on_persisted(&mut self, cx: &mut Cx<'_>, outcome: Outcome, tasks: &[Task]) {
-        match outcome.into_persisted() {
-            Ok(()) => {
-                if let Some(context) = self.side_effects.task_context() {
-                    report::tasks_created(cx, tasks, &self.side_effects.made_for, context);
-                }
-            }
-            Err(error) => self.trigger.note_error(Some(error)),
+    /// The side effects are stored, but those the store failed, logged:
+    /// each stored task's `ON_TASK_CREATED` observers run (RFC §10.1 step
+    /// 15).
+    fn on_persisted(&mut self, cx: &mut Cx<'_>, outcome: Outcome, tasks: Vec<Task>) {
+        let Some(room_id) = self.call.room_id.as_ref() else {
+            return;
+        };
+        let tasks = stored_tasks(room_id, tasks, outcome.into_persisted());
+        if let Some(context) = self.side_effects.task_context() {
+            report::tasks_created(cx, &tasks, &self.side_effects.made_for, context);
         }
     }
 }

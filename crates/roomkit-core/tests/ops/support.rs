@@ -1795,7 +1795,7 @@ impl Sim {
                 ));
                 self.tasks.extend(tasks);
                 self.observations.extend(observations);
-                Outcome::Store(StoreOutcome::Persisted)
+                Outcome::Store(StoreOutcome::Persisted(Vec::new()))
             }
             StoreRequest::CreateRoom { room } => self.create_room(room),
             StoreRequest::UpdateRoom { room_id, updates } => {

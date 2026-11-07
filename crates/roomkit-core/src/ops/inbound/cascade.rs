@@ -408,9 +408,9 @@ impl Machine {
         };
         // What the set stored, its event's hooks' side effects included:
         // their observers run before its AFTER_BROADCAST hooks, which read
-        // them stored (RFC §10.1 steps 15 and 16).
+        // them stored (RFC §10.1 steps 15 and 16). A write that failed was
+        // logged, and is not the call's error.
         let written = std::mem::take(&mut outcome.written);
-        self.trigger.note_error(written.error);
         let made_for = written
             .tasks
             .iter()

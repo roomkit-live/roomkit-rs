@@ -23,7 +23,7 @@ use self::collected::{Buffered, Collected, Failure, Streamed};
 use self::nested::Nested;
 use super::events::{CommitRecord, MutationError};
 use super::failure_log::{self, Log};
-use super::inbound::{Inbound, InboundError, error_event, stamp_response};
+use super::inbound::{Inbound, InboundError, error_event, stamp_response, stored_tasks};
 use super::protocol::{
     ChannelOutcome, ChannelRequest, Delivered, Effect, EffectId, Entry, EntryId, InboundResult,
     Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, SpanNote, Step,
@@ -767,10 +767,14 @@ impl Operation for DelegatedTurn {
         if let Some(position) = self.persisting.iter().position(|write| *write == id) {
             self.persisting.remove(position);
             let filed = self.filing.take_if(|(write, _)| *write == id);
-            if let Outcome::Failed(error) = outcome {
+            if let Outcome::Failed(error) = &outcome {
                 tracing::warn!(target: "roomkit::tasks", room_id = %self.room_id, error = %error.message, "a delegated turn's side effects were not stored");
-            } else if let Some((_, tasks)) = filed {
-                self.created.extend(tasks);
+            } else if let Outcome::Store(StoreOutcome::Persisted(unpersisted)) = outcome {
+                // Each side effect the store failed is logged, the others
+                // stored, as Python's `_persist_side_effects` does.
+                let tasks = filed.map(|(_, tasks)| tasks).unwrap_or_default();
+                let stored = stored_tasks(&self.room_id, tasks, Ok(unpersisted));
+                self.created.extend(stored);
             }
             return Ok(());
         }

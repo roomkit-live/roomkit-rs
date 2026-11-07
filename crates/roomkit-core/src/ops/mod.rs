@@ -80,7 +80,7 @@ pub use protocol::{
     EntryId, HoldOutcome, HoldRequest, HookAnswer, HookRequest, IdentityAnswer, IdentityRequest,
     KIT_CLOSED, LANE_CANCELLED, Next, NextTurn, Notice, Operation, Outcome, ProtocolError,
     ROW_HIDDEN, ROW_WITHHELD, Raised, Request, RouteEnd, Settled, SpanNote, Step, StoppedTurn,
-    StoreOutcome, StoreRequest, StreamTarget, TURN_CUT,
+    StoreOutcome, StoreRequest, StreamTarget, TURN_CUT, Unpersisted,
 };
 
 use crate::model::{ErrorRecord, EventId, RoomContext, RoomEvent, RoomId};

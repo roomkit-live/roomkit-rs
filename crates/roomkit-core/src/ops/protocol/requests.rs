@@ -9,8 +9,8 @@ use super::EffectId;
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, ChannelType, DeliveryError, ErrorRecord, EventId,
     EventUpdates, Identity, IdentityHookResult, IdentityId, IdentityResult, InboundMessage,
-    Metadata, Observation, Participant, ProviderResult, Room, RoomContext, RoomEvent, RoomId,
-    RoomUpdates, Task, Timestamp, Verification,
+    Metadata, Observation, ObservationId, Participant, ProviderResult, Room, RoomContext,
+    RoomEvent, RoomId, RoomUpdates, Task, TaskId, Timestamp, Verification,
 };
 use crate::ops::RecentEvents;
 use crate::rules::hook_chain::HookOutcome;
@@ -330,8 +330,10 @@ pub enum StoreRequest {
         /// `author_register`).
         author_register: Option<Metadata>,
     },
-    /// Store side effects (RFC §10.1 step 15). Answer
-    /// [`StoreOutcome::Persisted`].
+    /// Store side effects (RFC §10.1 step 15), each written on its own:
+    /// one the store fails to write leaves the others to write, as
+    /// Python's `_persist_side_effects` does. Answer
+    /// [`StoreOutcome::Persisted`], naming those not stored.
     PersistSideEffects {
         /// The room they belong to.
         room_id: RoomId,
@@ -821,12 +823,32 @@ pub enum StoreOutcome {
     /// The commit is durable: the event as the store holds it, its index
     /// the store's.
     Committed(Box<RoomEvent>),
-    /// The side effects are stored.
-    Persisted,
+    /// The side effects are stored, but those named, whose write failed.
+    Persisted(Vec<Unpersisted>),
     /// The record is stored.
     Stored,
     /// The identity the address belongs to, if any.
     Resolved(Option<Identity>),
+}
+
+/// A side effect of a [`StoreRequest::PersistSideEffects`] the store did
+/// not write, with the store's error.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Unpersisted {
+    /// A task.
+    Task {
+        /// The task's id.
+        task_id: TaskId,
+        /// Why the store did not write it.
+        error: ErrorRecord,
+    },
+    /// An observation.
+    Observation {
+        /// The observation's id.
+        observation_id: ObservationId,
+        /// Why the store did not write it.
+        error: ErrorRecord,
+    },
 }
 
 /// The driver's answer to a [`ChannelRequest`].
