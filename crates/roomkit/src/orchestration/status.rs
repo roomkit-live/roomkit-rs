@@ -16,6 +16,7 @@ use super::memory::{InMemoryStatusBackend, InMemoryStatusBackendOptions};
 use crate::context::ExecutionContext;
 use crate::environment::SystemEnvironment;
 use crate::error::{RoomKitError, repr};
+use crate::start_order::StartOrder;
 
 /// How many entries [`StatusBus::recent`] reads by default, Python's
 /// `n=10`.
@@ -234,6 +235,9 @@ pub struct HasCompletedOptions {
 #[derive(Clone)]
 pub struct StatusBus {
     backend: Arc<dyn StatusBackend>,
+    /// The line the publications of the posts start in: in the order of
+    /// their posts, as Python's tasks do on its one loop.
+    publications: Arc<StartOrder>,
 }
 
 impl fmt::Debug for StatusBus {
@@ -258,13 +262,17 @@ impl StatusBus {
                 ..InMemoryStatusBackendOptions::default()
             }))
         });
-        Self { backend }
+        Self {
+            backend,
+            publications: Arc::default(),
+        }
     }
 
     /// Posts `agent_id`'s `action` at `status` and returns its entry at
     /// once: its publication, which hands it to the subscribers, runs on
     /// the current tokio runtime in the background, and none runs outside
     /// one, as Python's `post` publishes nothing without a running loop.
+    /// The publications of a bus's posts start in the order of the posts.
     pub fn post(
         &self,
         agent_id: impl Into<String>,
@@ -312,7 +320,9 @@ impl StatusBus {
     /// its poster, read now: a hook it fires sends at least that deep, as
     /// Python's `post` publishes in a task that copies the poster's context,
     /// so that a status hook that tells an agent again ends at the depth
-    /// limit (RFC §8.3, RMK-1187).
+    /// limit (RFC §8.3, RMK-1187). It starts once the publication of the
+    /// bus's post before it started, as Python's tasks start in the order
+    /// they were created.
     pub(crate) fn publication(
         &self,
         entry: StatusEntry,
@@ -320,7 +330,8 @@ impl StatusBus {
         let backend = Arc::clone(&self.backend);
         let poster = ExecutionContext::current().turn_depth().unwrap_or(0);
         let within = ExecutionContext::default().at_least(poster);
-        within.scope(async move { backend.publish(entry).await })
+        self.publications
+            .in_turn(within.scope(async move { backend.publish(entry).await }))
     }
 
     /// Hands every entry posted from now on to `callback`.
@@ -568,6 +579,52 @@ mod tests {
         assert!(heard.lock().unwrap().is_empty());
         tokio::task::yield_now().await;
         assert_eq!(heard.lock().unwrap().clone(), vec![entry]);
+    }
+
+    // Python: tests/orchestration/test_status_bus.py::test_bus_post_sync_schedules,
+    // on several workers: Python's tasks start in the order they were created.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn posts_are_published_in_the_order_they_were_posted_on_several_workers() {
+        let bus = bus();
+        let (tells, mut told) = tokio::sync::mpsc::unbounded_channel();
+        let callback: StatusCallback = Arc::new(move |entry: StatusEntry| {
+            drop(tells.send(entry.action));
+            Box::pin(async {})
+        });
+        bus.subscribe(callback).await;
+        let posted: Vec<String> = (0..200).map(|post| post.to_string()).collect();
+        for action in &posted {
+            bus.post(
+                "worker",
+                action,
+                StatusLevel::Pending,
+                PostOptions::default(),
+            );
+        }
+        let mut heard = Vec::new();
+        while heard.len() < posted.len() {
+            let action = tokio::time::timeout(std::time::Duration::from_secs(10), told.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            heard.push(action);
+        }
+        let recent = bus
+            .recent(RecentOptions {
+                n: 0,
+                ..RecentOptions::default()
+            })
+            .await;
+        assert_eq!(
+            (
+                heard,
+                recent
+                    .into_iter()
+                    .map(|entry| entry.action)
+                    .collect::<Vec<_>>()
+            ),
+            (posted.clone(), posted)
+        );
     }
 
     // Python: tests/orchestration/test_status_bus.py::test_bus_subscribe_async_callback, test_bus_subscribe_sync_callback

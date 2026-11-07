@@ -71,6 +71,7 @@ use tokio::sync::{Notify, watch};
 use tokio::task::{self, AbortHandle, JoinHandle};
 use tokio::time::Instant;
 
+use crate::start_order::StartOrder;
 use crate::telemetry::within_current_span;
 
 pub(crate) use self::marks::{Marks, Unit};
@@ -146,6 +147,10 @@ pub(crate) struct Tasks {
     /// The cuts of the held tasks' works, which their turns' reads stop
     /// on (RFC §23.3).
     pub(crate) task_cuts: Arc<TaskCuts>,
+    /// The line the observer hooks the driver fires start in, in the order
+    /// they were fired: a change's `ON_EVENT_DELETED` hooks in the order of
+    /// the ids it returned (RFC §10.3), on any runtime.
+    pub(crate) observer_starts: StartOrder,
 }
 
 impl Default for Tasks {
@@ -156,6 +161,7 @@ impl Default for Tasks {
             changed: Notify::new(),
             cut_at: Mutex::new(None),
             task_cuts: Arc::default(),
+            observer_starts: StartOrder::default(),
         }
     }
 }

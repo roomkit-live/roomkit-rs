@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use crate::channel::BoxFuture;
+use crate::start_order::StartOrder;
 use crate::tasks::{Kind, Tasks};
 use crate::unwind::{message, unwinding};
 
@@ -182,6 +183,9 @@ pub(crate) type Handler = Arc<dyn Fn(FrameworkEvent) -> BoxFuture<'static, ()> +
 #[derive(Default)]
 pub(crate) struct Handlers {
     registered: RwLock<Vec<(String, Handler)>>,
+    /// The line each event's handlers start in: in the order the events
+    /// were emitted, as Python's emitter runs them in its own call.
+    starts: StartOrder,
 }
 
 impl std::fmt::Debug for Handlers {
@@ -253,7 +257,7 @@ impl Handlers {
             }
             ended.send_replace(true);
         };
-        tasks.spawn_alone(Kind::Observer, running)?;
+        tasks.spawn_alone(Kind::Observer, self.starts.in_turn(running))?;
         Some(Handled(end))
     }
 }
@@ -413,5 +417,40 @@ mod tests {
                 (r#type.to_owned(), room_id, channel_id, event_id, data)
             );
         }
+    }
+
+    /// The events' handlers run in the order the events were emitted, on
+    /// several workers too, as Python's emitter runs them in its own call:
+    /// an observer's `hook_timeout` before the event that follows its end.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_handlers_run_in_the_order_the_events_were_emitted_on_several_workers() {
+        let handlers = Handlers::default();
+        let tasks = Arc::new(Tasks::default());
+        let (tells, mut told) = tokio::sync::mpsc::unbounded_channel();
+        handlers.add(
+            "room_created".to_owned(),
+            Arc::new(move |event: FrameworkEvent| {
+                drop(tells.send(event.room_id));
+                Box::pin(async {})
+            }),
+        );
+        let rooms: Vec<RoomId> = (0..200)
+            .map(|room| RoomId::new(format!("r{room}")).unwrap())
+            .collect();
+        for room in &rooms {
+            handlers.emit(
+                &tasks,
+                FrameworkEvent::of(Notice::room_created(room.clone()), at()),
+            );
+        }
+        let mut heard = Vec::new();
+        while heard.len() < rooms.len() {
+            let room = tokio::time::timeout(std::time::Duration::from_secs(10), told.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            heard.push(room.unwrap());
+        }
+        assert_eq!(heard, rooms);
     }
 }

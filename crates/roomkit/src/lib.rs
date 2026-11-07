@@ -77,6 +77,7 @@ mod registered;
 mod room_turns;
 mod router;
 mod sends;
+mod start_order;
 mod steering;
 pub mod store;
 mod stream;

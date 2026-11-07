@@ -1116,6 +1116,9 @@ pub(crate) fn perform<S: ConversationStore>(
                         handled.wait().await;
                     }
                 };
+                // The observers start in the order they were fired, as the
+                // Python implementation's tasks do (RFC §10.3).
+                let observing = inner.tasks.observer_starts.in_turn(observing);
                 // Nothing waits for an observer: a close one calls spares it
                 // alone; the kit's close gives it its grace, then cuts it.
                 if inner.tasks.spawn_alone(Kind::Observer, observing).is_none() {

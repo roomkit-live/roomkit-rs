@@ -820,14 +820,20 @@ mod a_direct_call {
         );
     }
 
-    #[tokio::test]
+    /// RFC §10.3: once per event removed, in the order of the ids returned,
+    /// on Rust's default runtime too, whose workers would start each hook's
+    /// task in any order.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn delete_fires_on_event_deleted_for_each_event_removed() {
         let room = room().await;
-        let mut reply = InboundMessage::new(channel("wa"), CUSTOMER, TextContent::new("Ok?"));
-        reply.parent_event_id = Some(EventId::new("evt_1").unwrap());
-        send(&room.kit, reply).await;
+        for _ in 0..100 {
+            let mut reply = InboundMessage::new(channel("wa"), CUSTOMER, TextContent::new("Ok?"));
+            reply.parent_event_id = Some(EventId::new("evt_1").unwrap());
+            send(&room.kit, reply).await;
+        }
         let mut deleted = observed(&room.kit, HookTrigger::OnEventDeleted);
-        room.kit
+        let removed = room
+            .kit
             .delete_event(
                 &room_id(),
                 &EventId::new("evt_1").unwrap(),
@@ -835,15 +841,11 @@ mod a_direct_call {
             )
             .await
             .unwrap();
-        let mut ids = vec![next(&mut deleted).await.id, next(&mut deleted).await.id];
-        ids.sort();
-        assert_eq!(
-            ids,
-            [
-                EventId::new("evt_1").unwrap(),
-                EventId::new("evt_2").unwrap()
-            ]
-        );
+        let mut fired = Vec::new();
+        for _ in 0..removed.len() {
+            fired.push(next(&mut deleted).await.id);
+        }
+        assert_eq!((removed.len(), fired), (101, removed));
     }
 
     /// Gap G-064: an index is never given again.
