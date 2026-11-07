@@ -148,8 +148,9 @@ fn index(
 pub(crate) fn create(connection: &Connection, identity: &Identity) -> Result<(), Failure> {
     let organization = identity.organization_id.as_deref();
     // An identity of an organization is refused so over a record the model cannot
-    // read, which proves no organization: the fixed error would tell that the id
-    // exists (RFC §17.2, HITL cc6072ea). One of none keeps the fixed error.
+    // read, which proves no organization, as over a readable one of another: the
+    // fixed error would tell another organization that the record cannot be read
+    // (RFC §17.2, HITL cc6072ea). One of none keeps the fixed error.
     let held = match stored(connection, &identity.id) {
         Err(Failure::Unreadable(_)) if !scope(organization).is_empty() => {
             return Err(StoreError::IdentityNotFound(identity.id.clone()).into());

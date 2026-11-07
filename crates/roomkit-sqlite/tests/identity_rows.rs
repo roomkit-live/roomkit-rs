@@ -67,6 +67,41 @@ async fn with_unreadable(record: &Column) -> (TempFile, SqliteStore) {
     (file, store)
 }
 
+/// The address row of i1 for globex, `+1555`.
+fn globex_s_address() -> (String, String, String) {
+    ("+1555".to_owned(), "i1".to_owned(), "globex".to_owned())
+}
+
+/// Files [`globex_s_address`] in the store's file.
+fn hold_globex_s_address(file: &TempFile) {
+    Connection::open(file.path())
+        .unwrap()
+        .execute(
+            "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id)
+             VALUES ('sms', '+1555', 'i1', 'globex')",
+            [],
+        )
+        .unwrap();
+}
+
+/// The file's address rows and i1's record: what a refusal leaves as it was.
+fn held_rows(file: &TempFile) -> (Vec<(String, String, String)>, Column) {
+    let connection = Connection::open(file.path()).unwrap();
+    let rows = connection
+        .prepare("SELECT address, identity_id, organization_id FROM identity_addresses")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let held = connection
+        .query_row("SELECT data FROM identities WHERE id = 'i1'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    (rows, held)
+}
+
 /// `error`'s message, each of its causes' after it.
 fn full_text(error: &dyn std::error::Error) -> String {
     let mut text = error.to_string();
@@ -659,14 +694,7 @@ async fn link_and_unlink_for_an_organization_find_no_unreadable_identity() {
     for door in ["link_address", "unlink_address"] {
         for organization in ["globex", "acme"] {
             let (file, store) = with_unreadable(record).await;
-            Connection::open(file.path())
-                .unwrap()
-                .execute(
-                    "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id)
-                     VALUES ('sms', '+1555', 'i1', 'globex')",
-                    [],
-                )
-                .unwrap();
+            hold_globex_s_address(&file);
             let organization_id = Some(organization.to_owned());
             // A link of an address no row holds, an unlink of the one it holds: a
             // write before the refusal would show in the rows.
@@ -687,23 +715,9 @@ async fn link_and_unlink_for_an_organization_find_no_unreadable_identity() {
                 Err(StoreError::IdentityNotFound(i1.clone())),
                 "{door}, {organization}"
             );
-            let connection = Connection::open(file.path()).unwrap();
-            let rows: Vec<(String, String, String)> = connection
-                .prepare("SELECT address, identity_id, organization_id FROM identity_addresses")
-                .unwrap()
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-                .unwrap()
-                .collect::<Result<_, _>>()
-                .unwrap();
-            let held: Column = connection
-                .query_row("SELECT data FROM identities WHERE id = 'i1'", [], |row| {
-                    row.get(0)
-                })
-                .unwrap();
-            let only = ("+1555".to_owned(), "i1".to_owned(), "globex".to_owned());
             assert_eq!(
-                (rows, &held),
-                (vec![only], record),
+                held_rows(&file),
+                (vec![globex_s_address()], record.clone()),
                 "{door}, {organization}"
             );
         }
@@ -714,22 +728,15 @@ async fn link_and_unlink_for_an_organization_find_no_unreadable_identity() {
 /// cc6072ea): an identity created for an organization over an id whose record the model
 /// cannot read reads `IdentityNotFound`, as over a readable record of another
 /// organization: the record proves no organization, even the caller's own, and the
-/// store's fixed error would tell another organization that the id exists (RFC §17.2).
-/// Nothing is written.
+/// store's fixed error would tell another organization that the record cannot be read
+/// (RFC §17.2). Nothing is written.
 #[tokio::test]
 async fn create_identity_for_an_organization_finds_no_unreadable_identity() {
     let i1 = IdentityId::new("i1").unwrap();
     let record = &unreadable_records()[2];
     for organization in ["globex", "acme"] {
         let (file, store) = with_unreadable(record).await;
-        Connection::open(file.path())
-            .unwrap()
-            .execute(
-                "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id)
-                 VALUES ('sms', '+1555', 'i1', 'globex')",
-                [],
-            )
-            .unwrap();
+        hold_globex_s_address(&file);
         let mut replacing = Identity::new(i1.clone());
         replacing.organization_id = Some(organization.to_owned());
         replacing
@@ -742,20 +749,10 @@ async fn create_identity_for_an_organization_finds_no_unreadable_identity() {
             Err(StoreError::IdentityNotFound(i1.clone())),
             "{organization}"
         );
-        let connection = Connection::open(file.path()).unwrap();
-        let rows: Vec<(String, String, String)> = connection
-            .prepare("SELECT address, identity_id, organization_id FROM identity_addresses")
-            .unwrap()
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
-        let held: Column = connection
-            .query_row("SELECT data FROM identities WHERE id = 'i1'", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        let only = ("+1555".to_owned(), "i1".to_owned(), "globex".to_owned());
-        assert_eq!((rows, &held), (vec![only], record), "{organization}");
+        assert_eq!(
+            held_rows(&file),
+            (vec![globex_s_address()], record.clone()),
+            "{organization}"
+        );
     }
 }
