@@ -44,8 +44,10 @@
 //! past the budget (RFC §10.1 step 1). Its caller receives its result at
 //! its commit (detached completion: no delivery results, no completion
 //! handle), an entry beside the work once the events its hooks injected are
-//! committed too, a message's result carrying their failed release (HITL
-//! b779fc14), and its event takes its place in the room's lane at that
+//! committed too, with those the hooks of a call nested in the section of
+//! its pass or of theirs injected, and a message held for its sender once
+//! its challenge is, a message's result carrying their failed release (HITL
+//! b779fc14, RMK-1516), and its event takes its place in the room's lane at that
 //! commit. A message's arrival runs its step 2, then its channel's parse. A
 //! direct injection is admitted and stamped at once, and its room, then its
 //! key, when it carries one, read before it draws on the budget: a call its
@@ -96,11 +98,11 @@ pub(super) struct Adoptions {
     /// The entries committed whose answer waits for the commits of the
     /// events their hooks injected (`Machine::answer_owed`).
     pending: Vec<Pending>,
-    /// Each entry nested in the section of an adopted entry's pass, and the
-    /// entry beside the operation's work whose answer waits for what its
-    /// hooks inject: that section's entry, or the one that entry is owed
-    /// to, as Python's nested call queues them on that section (RFC §9.4,
-    /// §9.5.1 Reentrance).
+    /// Each entry nested in the section of an adopted entry's pass, or of a
+    /// pass an entry's answer waits for, and the entry beside the
+    /// operation's work whose answer waits for what its hooks inject: that
+    /// section's entry, or the one it is owed to, as Python's nested call
+    /// queues them on that section (RFC §9.4, §9.5.1 Reentrance).
     owners: Vec<(EntryId, EntryId)>,
 }
 
@@ -544,10 +546,14 @@ impl Machine {
         let nested = nested.then(|| room_id.clone());
         let id = self.adopted.next_id();
         // Nested in an adopted entry's own section, its origin works within
-        // that entry's bound.
-        if let Bound::Adopted(section, _) = io.bound_of(origin)
-            && nested.is_some()
-            && let Some(owner) = self.adopted.owing(section)
+        // that entry's bound; nested in the section of a pass an entry's
+        // answer waits for, its origin is that pass's.
+        let owner = match io.bound_of(origin) {
+            Bound::Adopted(section, _) => self.adopted.owing(section),
+            Bound::Unbounded | Bound::Call(_) => self.cascade.owed_by_the_section_of(origin),
+        };
+        if nested.is_some()
+            && let Some(owner) = owner
         {
             self.adopted.owners.push((id, owner));
         }

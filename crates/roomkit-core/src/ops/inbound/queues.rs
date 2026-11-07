@@ -345,6 +345,17 @@ impl Cascade {
             || !self.rows.is_empty()
     }
 
+    /// The adopted entry the running pass is owed to, when `effect` is one
+    /// of that pass's: what a call `effect`'s code makes under the lock
+    /// injects joins that pass's section, which the entry waits for (RFC
+    /// §9.4, §9.5.1 Reentrance).
+    pub(super) fn owed_by_the_section_of(&self, effect: EffectId) -> Option<EntryId> {
+        self.pass
+            .as_ref()
+            .filter(|job| job.awaits(effect))
+            .and_then(Job::owed)
+    }
+
     /// Whether a pass or a record whose commit the answer of the adopted
     /// entry `entry` waits for is queued or running, held with a set or not
     /// (`Job::owed`).
