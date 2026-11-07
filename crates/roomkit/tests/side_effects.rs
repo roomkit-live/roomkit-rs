@@ -7,7 +7,7 @@
 #![expect(clippy::panic, reason = "a store's driver that breaks panics")]
 
 use std::future::{Future, ready};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
@@ -55,6 +55,8 @@ enum Failing {
     PanickingObservation,
     /// The room's delivery cursor's next write once `armed`, once.
     Cursor,
+    /// The room's delivery cursor's second write once `armed`, once.
+    SecondCursor,
 }
 
 /// An in-memory store that fails the write `failing` names.
@@ -64,6 +66,10 @@ struct FailingWrites {
     failing: Failing,
     /// For [`Failing::Cursor`]: the next cursor write fails, then none.
     armed: AtomicBool,
+    /// For [`Failing::SecondCursor`]: the cursor writes made since `armed`,
+    /// and the index of the one that failed.
+    cursor_writes: AtomicUsize,
+    failed_index: AtomicU64,
 }
 
 /// The store's failure, as a database gone answers.
@@ -94,7 +100,7 @@ impl ConversationStore for FailingWrites {
             match self.failing {
                 Failing::Observation => return Err(down()),
                 Failing::PanickingObservation => panic!("the store's driver broke"),
-                Failing::Task | Failing::Metadata | Failing::Cursor => {}
+                Failing::Task | Failing::Metadata | Failing::Cursor | Failing::SecondCursor => {}
             }
         }
         self.store.add_observation(observation).await
@@ -121,6 +127,14 @@ impl ConversationStore for FailingWrites {
         options: store::AdvanceDeliveredIndexOptions,
     ) -> Result<bool, StoreError> {
         if self.failing == Failing::Cursor && self.armed.swap(false, Ordering::SeqCst) {
+            return Err(down());
+        }
+        if self.failing == Failing::SecondCursor
+            && self.armed.load(Ordering::SeqCst)
+            && self.cursor_writes.fetch_add(1, Ordering::SeqCst) == 1
+        {
+            self.armed.store(false, Ordering::SeqCst);
+            self.failed_index.store(index, Ordering::SeqCst);
             return Err(down());
         }
         self.store
@@ -334,6 +348,8 @@ async fn kit_on(failing: Failing, channels: &[&str]) -> RoomKit<FailingWrites> {
         store: InMemoryStore::default(),
         failing,
         armed: AtomicBool::new(false),
+        cursor_writes: AtomicUsize::new(0),
+        failed_index: AtomicU64::new(0),
     };
     let kit = RoomKit::new(RoomKitOptions::with_store(store));
     let sms = RecordingTransport::new(
@@ -446,7 +462,7 @@ async fn a_failed_side_effect_write_is_logged_and_the_call_goes_on() {
                 "Failed to persist observation o1"
             }
             Failing::Metadata => METADATA_LINE,
-            Failing::Cursor => unreachable!("no case fails the cursor"),
+            Failing::Cursor | Failing::SecondCursor => unreachable!("no case fails the cursor"),
         };
         let lines = warnings.containing("ERROR");
         assert_eq!(
@@ -633,20 +649,32 @@ async fn a_set_the_lane_drops_as_stale_still_stores_its_hooks_side_effects() {
 }
 
 /// Hooks on `kit`: one giving the task `t1` to the message `Call me back`,
-/// and what each later `ON_TASK_CREATED` and `AFTER_BROADCAST` reads, as
+/// `t2` to `Call me later`, and what each later `ON_TASK_CREATED` and `AFTER_BROADCAST` reads, as
 /// `task_created t1` and `after_broadcast <text>`.
 fn hooks_noting_what_follows(kit: &RoomKit<FailingWrites>) -> Arc<Mutex<Vec<String>>> {
     kit.hook(
         HookTrigger::BeforeBroadcast,
         |event: RoomEvent, _| async move {
-            let first =
-                matches!(&event.content, EventContent::Text(text) if text.body == "Call me back");
-            let tasks = if first {
-                let id = TaskId::new("t1").unwrap();
-                vec![Task::new(id, room_id(), "Call the customer back")]
+            let body = if let EventContent::Text(text) = &event.content {
+                Some(text.body.as_str())
             } else {
-                Vec::new()
+                None
             };
+            let task = match body {
+                Some("Call me back") => Some("t1"),
+                Some("Call me later") => Some("t2"),
+                Some(_) | None => None,
+            };
+            let tasks = task
+                .map(|id| {
+                    Task::new(
+                        TaskId::new(id).unwrap(),
+                        room_id(),
+                        "Call the customer back",
+                    )
+                })
+                .into_iter()
+                .collect();
             Ok::<_, ChannelError>(HookResult {
                 tasks,
                 ..HookResult::allow(AllowOptions::default())
@@ -701,14 +729,14 @@ fn hooks_noting_what_follows(kit: &RoomKit<FailingWrites>) -> Arc<Mutex<Vec<Stri
 }
 
 // Python: tests/test_hook_side_effects.py::TestARoundThatFailsMidway::test_a_set_whose_cursor_write_fails_once_it_ran
-// (RMK-1515, today's behaviour): the store fails the room's delivery
+// (RMK-1515, HITL b7ba30c9): the store fails the room's delivery
 // cursor write once, after the event's delivery set ran. The cursor's
 // writer logs it and the set goes on (cursors.rs catch_up): its aftermath
 // runs, the hook's task stored, its ON_TASK_CREATED and the event's
 // AFTER_BROADCAST fired, nothing cancelled. The index stays this
 // process's: the room's next message is delivered at once, the cursor
-// moved past both, nothing skipped. Python drops that set's aftermath and
-// skips the index once its gap timeout passed.
+// moved past both, nothing skipped. Python's lane, which dropped that
+// set's aftermath and skipped the index, now does the same.
 #[tokio::test]
 async fn a_set_whose_cursor_write_fails_once_it_ran() {
     let kit = kit_on(Failing::Cursor, &["sms1", "crm"]).await;
@@ -778,5 +806,156 @@ async fn a_set_whose_cursor_write_fails_once_it_ran() {
             latest,
         ),
         (None, Vec::<String>::new(), latest, latest)
+    );
+}
+
+/// A transport whose delivery of `Call me back` waits until the test
+/// opens it.
+struct Gated {
+    reached: Arc<tokio::sync::Notify>,
+    opened: Arc<tokio::sync::Notify>,
+}
+
+impl Channel for Gated {
+    fn channel_id(&self) -> ChannelId {
+        channel("ws1")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::WEBSOCKET
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let held =
+            matches!(&event.content, EventContent::Text(text) if text.body == "Call me back");
+        let (reached, opened) = (Arc::clone(&self.reached), Arc::clone(&self.opened));
+        async move {
+            if held {
+                reached.notify_one();
+                opened.notified().await;
+            }
+            Ok(ChannelOutput::default())
+        }
+    }
+}
+
+// Python: tests/test_hook_side_effects.py::TestARoundThatFailsMidway::test_two_sets_whose_second_cursor_write_fails_both_keep_their_aftermath
+// (RMK-1515, the review's case): the second message is sent while the
+// first's delivery waits, and only the second's cursor write fails. Both
+// sets keep their aftermath, neither is cancelled, the room's next message
+// is delivered, and the cursor catches up with all three.
+#[tokio::test]
+async fn two_sets_whose_second_cursor_write_fails_both_keep_their_aftermath() {
+    let kit = kit_on(Failing::SecondCursor, &["sms1"]).await;
+    let (reached, opened) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let gated = Gated {
+        reached: Arc::clone(&reached),
+        opened: Arc::clone(&opened),
+    };
+    kit.register_channel(gated).unwrap();
+    kit.attach_channel(&room_id(), &channel("ws1"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let later = hooks_noting_what_follows(&kit);
+    let skipped = roomkit::testing::EventTap::on(&kit, &["delivery_skipped"]);
+    let send = |body: &'static str| {
+        let kit = kit.clone();
+        async move {
+            let message = InboundMessage::new(channel("sms1"), "+15550001", TextContent::new(body));
+            let options = ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            };
+            kit.process_inbound(message, options).await.unwrap()
+        }
+    };
+
+    // The room's records are accounted for: the next cursor writes are the
+    // messages' own.
+    kit.store().armed.store(true, Ordering::SeqCst);
+    let (warnings, _capturing) = Warnings::capture();
+    let first = tokio::spawn(send("Call me back"));
+    tokio::time::timeout(std::time::Duration::from_secs(5), reached.notified())
+        .await
+        .unwrap();
+    let latest = || async {
+        let room = kit.store().get_room(&room_id()).await.unwrap();
+        room.and_then(|room| room.latest_index)
+    };
+    let before = latest().await;
+    let second = tokio::spawn(send("Call me later"));
+    // The second message is committed, its set placed behind the first's,
+    // whose delivery waits.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while latest().await <= before {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    opened.notify_one();
+    let (first, second) = (first.await.unwrap(), second.await.unwrap());
+    let tasks = kit
+        .store()
+        .list_tasks(&room_id(), store::ListTasksOptions::default())
+        .await
+        .unwrap();
+    roomkit::testing::idle(&kit).await;
+    let third = send("Hi").await;
+    roomkit::testing::idle(&kit).await;
+    let cursor = kit.store().get_delivered_index(&room_id()).await.unwrap();
+    let latest = latest().await;
+    let failed = (
+        kit.store().failed_index.load(Ordering::SeqCst),
+        warnings
+            .containing("the room's delivery cursor could not be moved")
+            .len(),
+    );
+    kit.close().await.unwrap();
+
+    // The second message's cursor write failed, the first's went through.
+    let second_index = second.event.as_ref().map(|event| event.index);
+    assert_eq!((Some(failed.0), failed.1), (second_index, 1));
+    assert_eq!(
+        (
+            [
+                first.cancellation_reason.as_deref(),
+                second.cancellation_reason.as_deref(),
+                third.cancellation_reason.as_deref(),
+            ],
+            sorted(tasks.into_iter().map(|task| task.id)),
+            sorted(later.lock().unwrap().clone()),
+        ),
+        (
+            [None, None, None],
+            sorted(["t1", "t2"]),
+            sorted([
+                "after_broadcast Call me back",
+                "after_broadcast Call me later",
+                "after_broadcast Hi",
+                "task_created t1",
+                "task_created t2",
+            ]),
+        )
+    );
+    assert_eq!(
+        (skipped.types(), u64::try_from(cursor).ok()),
+        (Vec::<String>::new(), latest)
     );
 }
