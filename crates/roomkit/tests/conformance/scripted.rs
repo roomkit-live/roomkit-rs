@@ -571,7 +571,8 @@ impl Channel for ScriptedChannel {
     }
 
     /// Reads the stream it is handed, recording each delta and row, to its
-    /// end, or until the delta its reaction's `stop_after` names.
+    /// end, or until the delta its reaction's `stop_after` names, or the
+    /// row its `stop_after_rows` counts.
     async fn deliver_stream(
         &self,
         mut stream: DeliveryStream,
@@ -593,6 +594,7 @@ impl Channel for ScriptedChannel {
         }
         perform(&run, &held, &Scope::in_room(&room_id)).await?;
         let stop_after = reaction.get("stop_after").and_then(Value::as_str);
+        let mut rows_left = reaction.get("stop_after_rows").and_then(Value::as_u64);
         let channel_id = &self.declaration.channel_id;
         while let Some(item) = stream.next().await {
             match item {
@@ -627,6 +629,12 @@ impl Channel for ScriptedChannel {
                 Ok(StreamItem::Row(row)) => {
                     let row = serde_json::to_value(&*row).unwrap_or_default();
                     run.record_streamed(&room_id, channel_id, json!({ "row": row }));
+                    if let Some(left) = rows_left.as_mut() {
+                        *left = left.saturating_sub(1);
+                        if *left == 0 {
+                            break;
+                        }
+                    }
                 }
                 Ok(_) => {}
                 Err(error) => {
