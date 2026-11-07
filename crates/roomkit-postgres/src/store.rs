@@ -6,7 +6,7 @@ use std::future::Future;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
-use deadpool_postgres::{Object, Pool};
+use deadpool_postgres::Pool;
 use roomkit::RoomFilter;
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Metadata, Observation,
@@ -23,7 +23,9 @@ use roomkit::store::{
 use roomkit::telemetry::TelemetryProvider;
 use roomkit::{ConversationStore, StoreError, written};
 
+use crate::connect::Tls;
 use crate::error::{Failure, NoConnection};
+use crate::lent::{Lent, cancellable};
 use crate::options::{
     DedupeEventIndicesOptions, DropLegacyParentIndexOptions, InitOptions, MigrateOptions,
     PostgresStoreOptions,
@@ -56,6 +58,8 @@ pub struct PostgresStore {
 struct Shared {
     dsn: Option<String>,
     pool: RwLock<Option<Pool>>,
+    /// What a cancel request connects with, for a pool the store opened.
+    tls: RwLock<Option<Tls>>,
     owns_pool: bool,
     telemetry: QuerySpans,
 }
@@ -81,6 +85,7 @@ impl PostgresStore {
                 dsn,
                 owns_pool: pool.is_none(),
                 pool: RwLock::new(pool),
+                tls: RwLock::new(None),
                 telemetry: QuerySpans::default(),
             }),
         }
@@ -115,23 +120,31 @@ impl PostgresStore {
     /// else what failed; [`StoreError::Value`] for sizes or a connection
     /// string asyncpg refuses.
     pub async fn init(&self, options: InitOptions) -> Result<(), StoreError> {
-        if self.pool().is_none() {
-            let (pool, _) = pool::open(
-                self.shared.dsn.as_deref(),
-                options.min_size,
-                options.max_size,
-            )
-            .await?;
-            // Kept before the schema is read, as Python keeps it: a schema
-            // `init` refuses is one `migrate` moves, on this pool.
-            *self
-                .shared
-                .pool
-                .write()
-                .unwrap_or_else(PoisonError::into_inner) = Some(pool);
-        }
-        let mut client = self.client().await?;
-        Ok(schema::prepare(&mut client).await?)
+        cancellable(async {
+            if self.pool().is_none() {
+                let (pool, tls) = pool::open(
+                    self.shared.dsn.as_deref(),
+                    options.min_size,
+                    options.max_size,
+                )
+                .await?;
+                *self
+                    .shared
+                    .tls
+                    .write()
+                    .unwrap_or_else(PoisonError::into_inner) = tls;
+                // Kept before the schema is read, as Python keeps it: a schema
+                // `init` refuses is one `migrate` moves, on this pool.
+                *self
+                    .shared
+                    .pool
+                    .write()
+                    .unwrap_or_else(PoisonError::into_inner) = Some(pool);
+            }
+            let mut client = self.client().await?;
+            Ok(schema::prepare(&mut client).await?)
+        })
+        .await
     }
 
     /// The explicit, opt-in schema migration, which never runs on its own:
@@ -147,8 +160,11 @@ impl PostgresStore {
     /// [`PostgresSchemaError`](crate::PostgresSchemaError) for a run without
     /// `confirm`, else what failed.
     pub async fn migrate(&self, options: MigrateOptions) -> Result<Metadata, StoreError> {
-        let mut client = self.client().await?;
-        Ok(schema::migrate(&mut client, options.dry_run, options.confirm).await?)
+        cancellable(async {
+            let mut client = self.client().await?;
+            Ok(schema::migrate(&mut client, options.dry_run, options.confirm).await?)
+        })
+        .await
     }
 
     /// Repairs duplicate event indexes a release before could leave, then
@@ -166,8 +182,11 @@ impl PostgresStore {
         &self,
         options: DedupeEventIndicesOptions,
     ) -> Result<Metadata, StoreError> {
-        let mut client = self.client().await?;
-        Ok(schema::dedupe_event_indices(&mut client, options.dry_run).await?)
+        cancellable(async {
+            let mut client = self.client().await?;
+            Ok(schema::dedupe_event_indices(&mut client, options.dry_run).await?)
+        })
+        .await
     }
 
     /// Drops the single-column `idx_events_parent` the composite index
@@ -182,8 +201,11 @@ impl PostgresStore {
         &self,
         options: DropLegacyParentIndexOptions,
     ) -> Result<Metadata, StoreError> {
-        let mut client = self.client().await?;
-        Ok(schema::drop_legacy_parent_index(&mut client, options.dry_run).await?)
+        cancellable(async {
+            let mut client = self.client().await?;
+            Ok(schema::drop_legacy_parent_index(&mut client, options.dry_run).await?)
+        })
+        .await
     }
 
     /// The pool, if the store holds one.
@@ -195,24 +217,35 @@ impl PostgresStore {
             .clone()
     }
 
-    /// `work` under its `store.<operation>` span: Python's `_query_span`. A plain
-    /// function: another future around `around`'s would triple what a call holds.
+    /// `work` under its `store.<operation>` span, Python's `_query_span`, its
+    /// statement cancelled on the server if its caller cuts it. A plain function:
+    /// another future around `around`'s would triple what a call holds.
     fn spanned<'a, T: 'a>(
         &'a self,
         operation: &'a str,
         table: &'a str,
         work: impl Future<Output = Result<T, StoreError>> + 'a,
     ) -> impl Future<Output = Result<T, StoreError>> + 'a {
-        self.shared.telemetry.around(operation, table, work)
+        self.shared
+            .telemetry
+            .around(operation, table, cancellable(work))
     }
 
-    /// A connection of the pool, waited for at most [`ACQUIRE_TIMEOUT`].
-    async fn client(&self) -> Result<Object, StoreError> {
+    /// A connection of the pool, waited for at most [`ACQUIRE_TIMEOUT`], lent to
+    /// the operation running: one its caller cuts has its statement cancelled on
+    /// the server, as asyncpg cancels it (HITL 3ebe4596).
+    async fn client(&self) -> Result<Lent, StoreError> {
         let Some(pool) = self.pool() else {
             return Err(StoreError::unavailable(NoConnection::NotInitialized));
         };
+        let tls = self
+            .shared
+            .tls
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         match tokio::time::timeout(ACQUIRE_TIMEOUT, pool.get()).await {
-            Ok(client) => client.map_err(StoreError::unavailable),
+            Ok(client) => Ok(Lent::new(client.map_err(StoreError::unavailable)?, tls)),
             Err(_) => Err(StoreError::unavailable(NoConnection::TimedOut)),
         }
     }
@@ -260,7 +293,7 @@ impl ConversationStore for PostgresStore {
     async fn create_room(&self, room: Room) -> Result<Room, StoreError> {
         self.spanned("create_room", "rooms", async {
             let client = self.client().await?;
-            after_the_span(rooms::create(&client, &room).await)
+            after_the_span(rooms::create(&*client, &room).await)
         })
         .await??;
         Ok(room)
@@ -269,7 +302,7 @@ impl ConversationStore for PostgresStore {
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
         self.spanned("get_room", "rooms", async {
             let client = self.client().await?;
-            decoded_after_the_span(rooms::get(&client, room_id).await)
+            decoded_after_the_span(rooms::get(&*client, room_id).await)
         })
         .await?
     }
@@ -291,7 +324,7 @@ impl ConversationStore for PostgresStore {
     async fn room_exists(&self, room_id: &RoomId) -> Result<bool, StoreError> {
         self.spanned("room_exists", "rooms", async {
             let client = self.client().await?;
-            Ok(rooms::exists(&client, room_id).await?)
+            Ok(rooms::exists(&*client, room_id).await?)
         })
         .await
     }
@@ -299,7 +332,7 @@ impl ConversationStore for PostgresStore {
     async fn update_room(&self, room: Room) -> Result<Room, StoreError> {
         self.spanned("update_room", "rooms", async {
             let client = self.client().await?;
-            Ok(rooms::write(&client, room).await?)
+            Ok(rooms::write(&*client, room).await?)
         })
         .await
     }
@@ -315,7 +348,7 @@ impl ConversationStore for PostgresStore {
         self.spanned("patch_room_metadata", "rooms", async {
             let client = self.client().await?;
             Ok(
-                rooms::patch_metadata(&client, room_id, patch, &options.unset, written::now())
+                rooms::patch_metadata(&*client, room_id, patch, &options.unset, written::now())
                     .await?,
             )
         })
@@ -325,7 +358,7 @@ impl ConversationStore for PostgresStore {
     async fn delete_room(&self, room_id: &RoomId) -> Result<bool, StoreError> {
         self.spanned("delete_room", "rooms", async {
             let client = self.client().await?;
-            Ok(rooms::delete(&client, room_id).await?)
+            Ok(rooms::delete(&*client, room_id).await?)
         })
         .await
     }
@@ -333,7 +366,7 @@ impl ConversationStore for PostgresStore {
     async fn list_rooms(&self, options: ListRoomsOptions) -> Result<Vec<Room>, StoreError> {
         self.spanned("list_rooms", "rooms", async {
             let client = self.client().await?;
-            decoded_after_the_span(lookups::list(&client, options.offset, options.limit).await)
+            decoded_after_the_span(lookups::list(&*client, options.offset, options.limit).await)
         })
         .await?
     }
@@ -341,7 +374,7 @@ impl ConversationStore for PostgresStore {
     async fn find_rooms(&self, options: FindRoomsOptions) -> Result<Vec<Room>, StoreError> {
         self.spanned("find_rooms", "rooms", async {
             let client = self.client().await?;
-            decoded_after_the_span(lookups::find(&client, options).await)
+            decoded_after_the_span(lookups::find(&*client, options).await)
         })
         .await?
     }
@@ -351,8 +384,11 @@ impl ConversationStore for PostgresStore {
         participant_id: &ParticipantId,
         options: FindLatestRoomOptions,
     ) -> Result<Option<Room>, StoreError> {
-        let client = self.client().await?;
-        Ok(lookups::find_latest(&client, participant_id, &options).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(lookups::find_latest(&*client, participant_id, &options).await?)
+        })
+        .await
     }
 
     async fn find_room_id_by_channel(
@@ -377,8 +413,11 @@ impl ConversationStore for PostgresStore {
         channel_id: &ChannelId,
         options: FindRoomIdsByChannelOptions,
     ) -> Result<Vec<RoomId>, StoreError> {
-        let client = self.client().await?;
-        Ok(lookups::find_ids_by_channel(&client, channel_id, &options).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(lookups::find_ids_by_channel(&*client, channel_id, &options).await?)
+        })
+        .await
     }
 
     async fn find_room_id_by_binding(
@@ -387,8 +426,11 @@ impl ConversationStore for PostgresStore {
         participant_id: &str,
         options: FindRoomIdByBindingOptions,
     ) -> Result<Option<RoomId>, StoreError> {
-        let client = self.client().await?;
-        Ok(lookups::find_by_binding(&client, channel_id, participant_id, &options).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(lookups::find_by_binding(&*client, channel_id, participant_id, &options).await?)
+        })
+        .await
     }
 
     async fn find_room_id_by_participant(
@@ -397,14 +439,20 @@ impl ConversationStore for PostgresStore {
         participant_id: &str,
         options: FindRoomIdByParticipantOptions,
     ) -> Result<Option<RoomId>, StoreError> {
-        let client = self.client().await?;
-        Ok(lookups::find_by_participant(&client, channel_id, participant_id, &options).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(
+                lookups::find_by_participant(&*client, channel_id, participant_id, &options)
+                    .await?,
+            )
+        })
+        .await
     }
 
     async fn get_delivered_index(&self, room_id: &RoomId) -> Result<i64, StoreError> {
         self.spanned("get_delivered_index", "rooms", async {
             let client = self.client().await?;
-            Ok(rooms::delivered_index(&client, room_id).await?)
+            Ok(rooms::delivered_index(&*client, room_id).await?)
         })
         .await
     }
@@ -417,7 +465,7 @@ impl ConversationStore for PostgresStore {
     ) -> Result<bool, StoreError> {
         self.spanned("advance_delivered_index", "rooms", async {
             let client = self.client().await?;
-            Ok(rooms::advance(&client, room_id, index, options.force).await?)
+            Ok(rooms::advance(&*client, room_id, index, options.force).await?)
         })
         .await
     }
@@ -429,7 +477,7 @@ impl ConversationStore for PostgresStore {
     ) -> Result<Option<Metadata>, StoreError> {
         self.spanned("get_private_state", "private_state", async {
             let client = self.client().await?;
-            Ok(rooms::private_state(&client, room_id, key).await?)
+            Ok(rooms::private_state(&*client, room_id, key).await?)
         })
         .await
     }
@@ -442,7 +490,7 @@ impl ConversationStore for PostgresStore {
     ) -> Result<(), StoreError> {
         self.spanned("set_private_state", "private_state", async {
             let client = self.client().await?;
-            Ok(rooms::set_private_state(&client, room_id, key, value.as_ref()).await?)
+            Ok(rooms::set_private_state(&*client, room_id, key, value.as_ref()).await?)
         })
         .await
     }
@@ -451,7 +499,7 @@ impl ConversationStore for PostgresStore {
         written::binding(&binding)?;
         self.spanned("add_binding", "bindings", async {
             let client = self.client().await?;
-            members::add_binding(&client, &binding).await?;
+            members::add_binding(&*client, &binding).await?;
             Ok(binding)
         })
         .await
@@ -464,7 +512,7 @@ impl ConversationStore for PostgresStore {
     ) -> Result<Option<ChannelBinding>, StoreError> {
         self.spanned("get_binding", "bindings", async {
             let client = self.client().await?;
-            decoded_after_the_span(members::binding(&client, room_id, channel_id).await)
+            decoded_after_the_span(members::binding(&*client, room_id, channel_id).await)
         })
         .await?
     }
@@ -476,7 +524,7 @@ impl ConversationStore for PostgresStore {
     ) -> Result<bool, StoreError> {
         self.spanned("binding_exists", "bindings", async {
             let client = self.client().await?;
-            Ok(members::binding_exists(&client, room_id, channel_id).await?)
+            Ok(members::binding_exists(&*client, room_id, channel_id).await?)
         })
         .await
     }
@@ -485,7 +533,7 @@ impl ConversationStore for PostgresStore {
         written::binding(&binding)?;
         self.spanned("update_binding", "bindings", async {
             let client = self.client().await?;
-            members::update_binding(&client, &binding).await?;
+            members::update_binding(&*client, &binding).await?;
             Ok(binding)
         })
         .await
@@ -498,7 +546,7 @@ impl ConversationStore for PostgresStore {
     ) -> Result<bool, StoreError> {
         self.spanned("remove_binding", "bindings", async {
             let client = self.client().await?;
-            Ok(members::remove_binding(&client, room_id, channel_id).await?)
+            Ok(members::remove_binding(&*client, room_id, channel_id).await?)
         })
         .await
     }
@@ -506,7 +554,7 @@ impl ConversationStore for PostgresStore {
     async fn list_bindings(&self, room_id: &RoomId) -> Result<Vec<ChannelBinding>, StoreError> {
         self.spanned("list_bindings", "bindings", async {
             let client = self.client().await?;
-            decoded_after_the_span(members::bindings(&client, room_id).await)
+            decoded_after_the_span(members::bindings(&*client, room_id).await)
         })
         .await?
     }
@@ -516,13 +564,13 @@ impl ConversationStore for PostgresStore {
         self.spanned("load_room_context", "rooms", async {
             let client = self.client().await?;
             let read: Result<RoomRead, Failure> = async {
-                let Some(room) = rooms::get(&client, room_id).await? else {
+                let Some(room) = rooms::get(&*client, room_id).await? else {
                     return Ok((None, Vec::new(), Vec::new()));
                 };
                 Ok((
                     Some(room),
-                    members::bindings(&client, room_id).await?,
-                    members::participants(&client, room_id).await?,
+                    members::bindings(&*client, room_id).await?,
+                    members::participants(&*client, room_id).await?,
                 ))
             }
             .await;
@@ -534,7 +582,7 @@ impl ConversationStore for PostgresStore {
     async fn add_participant(&self, participant: Participant) -> Result<Participant, StoreError> {
         self.spanned("add_participant", "participants", async {
             let client = self.client().await?;
-            members::add_participant(&client, &participant).await?;
+            members::add_participant(&*client, &participant).await?;
             Ok(participant)
         })
         .await
@@ -547,7 +595,7 @@ impl ConversationStore for PostgresStore {
     ) -> Result<Option<Participant>, StoreError> {
         self.spanned("get_participant", "participants", async {
             let client = self.client().await?;
-            decoded_after_the_span(members::participant(&client, room_id, participant_id).await)
+            decoded_after_the_span(members::participant(&*client, room_id, participant_id).await)
         })
         .await?
     }
@@ -558,7 +606,7 @@ impl ConversationStore for PostgresStore {
     ) -> Result<Participant, StoreError> {
         self.spanned("update_participant", "participants", async {
             let client = self.client().await?;
-            after_the_span(members::update_participant(&client, &participant).await)
+            after_the_span(members::update_participant(&*client, &participant).await)
         })
         .await??;
         Ok(participant)
@@ -571,7 +619,7 @@ impl ConversationStore for PostgresStore {
     ) -> Result<(), StoreError> {
         self.spanned("delete_participant", "participants", async {
             let client = self.client().await?;
-            Ok(members::delete_participant(&client, room_id, participant_id).await?)
+            Ok(members::delete_participant(&*client, room_id, participant_id).await?)
         })
         .await
     }
@@ -579,20 +627,26 @@ impl ConversationStore for PostgresStore {
     async fn list_participants(&self, room_id: &RoomId) -> Result<Vec<Participant>, StoreError> {
         self.spanned("list_participants", "participants", async {
             let client = self.client().await?;
-            decoded_after_the_span(members::participants(&client, room_id).await)
+            decoded_after_the_span(members::participants(&*client, room_id).await)
         })
         .await?
     }
 
     async fn create_identity(&self, identity: Identity) -> Result<Identity, StoreError> {
-        let mut client = self.client().await?;
-        identities::create(&mut client, &identity).await?;
-        Ok(identity)
+        cancellable(async {
+            let mut client = self.client().await?;
+            identities::create(&mut client, &identity).await?;
+            Ok(identity)
+        })
+        .await
     }
 
     async fn get_identity(&self, identity_id: &IdentityId) -> Result<Option<Identity>, StoreError> {
-        let client = self.client().await?;
-        Ok(identities::get(&client, identity_id).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(identities::get(&*client, identity_id).await?)
+        })
+        .await
     }
 
     async fn resolve_identity(
@@ -601,14 +655,17 @@ impl ConversationStore for PostgresStore {
         address: &str,
         options: ResolveIdentityOptions,
     ) -> Result<Option<Identity>, StoreError> {
-        let client = self.client().await?;
-        Ok(identities::resolve(
-            &client,
-            channel_type,
-            address,
-            options.organization_id.as_deref(),
-        )
-        .await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(identities::resolve(
+                &*client,
+                channel_type,
+                address,
+                options.organization_id.as_deref(),
+            )
+            .await?)
+        })
+        .await
     }
 
     async fn link_address(
@@ -618,15 +675,18 @@ impl ConversationStore for PostgresStore {
         address: &str,
         options: LinkAddressOptions,
     ) -> Result<(), StoreError> {
-        let mut client = self.client().await?;
-        Ok(identities::link(
-            &mut client,
-            identity_id,
-            channel_type,
-            address,
-            options.organization_id.as_deref(),
-        )
-        .await?)
+        cancellable(async {
+            let mut client = self.client().await?;
+            Ok(identities::link(
+                &mut client,
+                identity_id,
+                channel_type,
+                address,
+                options.organization_id.as_deref(),
+            )
+            .await?)
+        })
+        .await
     }
 
     async fn unlink_address(
@@ -636,15 +696,18 @@ impl ConversationStore for PostgresStore {
         address: &str,
         options: UnlinkAddressOptions,
     ) -> Result<(), StoreError> {
-        let mut client = self.client().await?;
-        Ok(identities::unlink(
-            &mut client,
-            identity_id,
-            channel_type,
-            address,
-            options.organization_id.as_deref(),
-        )
-        .await?)
+        cancellable(async {
+            let mut client = self.client().await?;
+            Ok(identities::unlink(
+                &mut client,
+                identity_id,
+                channel_type,
+                address,
+                options.organization_id.as_deref(),
+            )
+            .await?)
+        })
+        .await
     }
 
     async fn get_verification(
@@ -652,48 +715,69 @@ impl ConversationStore for PostgresStore {
         identity_id: &IdentityId,
         options: GetVerificationOptions,
     ) -> Result<Option<Verification>, StoreError> {
-        let client = self.client().await?;
-        Ok(verifications::get(&client, identity_id, options.organization_id.as_deref()).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(
+                verifications::get(&*client, identity_id, options.organization_id.as_deref())
+                    .await?,
+            )
+        })
+        .await
     }
 
     async fn put_verification(
         &self,
         verification: Verification,
     ) -> Result<Verification, StoreError> {
-        let client = self.client().await?;
-        verifications::put(&client, &verification).await?;
-        Ok(verification)
+        cancellable(async {
+            let client = self.client().await?;
+            verifications::put(&*client, &verification).await?;
+            Ok(verification)
+        })
+        .await
     }
 
     async fn list_verifications_in_force(&self) -> Result<Vec<Verification>, StoreError> {
-        let client = self.client().await?;
-        Ok(verifications::in_force(&client).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(verifications::in_force(&*client).await?)
+        })
+        .await
     }
 
     async fn create_verification_request(
         &self,
         request: VerificationRequest,
     ) -> Result<VerificationRequest, StoreError> {
-        let client = self.client().await?;
-        verifications::create_request(&client, &request).await?;
-        Ok(request)
+        cancellable(async {
+            let client = self.client().await?;
+            verifications::create_request(&*client, &request).await?;
+            Ok(request)
+        })
+        .await
     }
 
     async fn get_verification_request(
         &self,
         request_id: &str,
     ) -> Result<Option<VerificationRequest>, StoreError> {
-        let client = self.client().await?;
-        Ok(verifications::request(&client, request_id).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(verifications::request(&*client, request_id).await?)
+        })
+        .await
     }
 
     async fn update_verification_request(
         &self,
         request: VerificationRequest,
     ) -> Result<VerificationRequest, StoreError> {
-        let client = self.client().await?;
-        verifications::update_request(&client, &request).await?;
-        Ok(request)
+        cancellable(async {
+            let client = self.client().await?;
+            verifications::update_request(&*client, &request).await?;
+            Ok(request)
+        })
+        .await
     }
 
     async fn check_idempotency(
@@ -702,8 +786,11 @@ impl ConversationStore for PostgresStore {
         key: &str,
         channel_id: Option<&ChannelId>,
     ) -> Result<bool, StoreError> {
-        let client = self.client().await?;
-        Ok(events::key_held(&client, room_id, channel_id, key).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(events::key_held(&*client, room_id, channel_id, key).await?)
+        })
+        .await
     }
 
     async fn get_event_by_idempotency_key(
@@ -714,7 +801,7 @@ impl ConversationStore for PostgresStore {
     ) -> Result<Option<RoomEvent>, StoreError> {
         self.spanned("get_event_by_idempotency_key", "events", async {
             let client = self.client().await?;
-            decoded_after_the_span(events::by_key(&client, room_id, channel_id, key).await)
+            decoded_after_the_span(events::by_key(&*client, room_id, channel_id, key).await)
         })
         .await?
     }
@@ -773,7 +860,7 @@ impl ConversationStore for PostgresStore {
     ) -> Result<(), StoreError> {
         self.spanned("record_delivery_results", "events", async {
             let client = self.client().await?;
-            Ok(events::record_results(&client, room_id, event_id, results).await?)
+            Ok(events::record_results(&*client, room_id, event_id, results).await?)
         })
         .await
     }
@@ -794,7 +881,7 @@ impl ConversationStore for PostgresStore {
     async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
         self.spanned("get_event", "events", async {
             let client = self.client().await?;
-            decoded_after_the_span(events::get(&client, event_id).await)
+            decoded_after_the_span(events::get(&*client, event_id).await)
         })
         .await?
     }
@@ -832,7 +919,7 @@ impl ConversationStore for PostgresStore {
         }
         self.spanned("get_event_count", "events", async {
             let client = self.client().await?;
-            Ok(timeline::count(&client, room_id, filter.as_ref()).await?)
+            Ok(timeline::count(&*client, room_id, filter.as_ref()).await?)
         })
         .await
     }
@@ -845,7 +932,7 @@ impl ConversationStore for PostgresStore {
         options.validate()?;
         self.spanned("list_events", "events", async {
             let client = self.client().await?;
-            decoded_after_the_span(timeline::page(&client, room_id, &options).await)
+            decoded_after_the_span(timeline::page(&*client, room_id, &options).await)
         })
         .await?
     }
@@ -860,7 +947,7 @@ impl ConversationStore for PostgresStore {
         }
         self.spanned("get_thread_summaries", "events", async {
             let client = self.client().await?;
-            Ok(timeline::thread_summaries(&client, room_id, root_event_ids).await?)
+            Ok(timeline::thread_summaries(&*client, room_id, root_event_ids).await?)
         })
         .await
     }
@@ -871,8 +958,11 @@ impl ConversationStore for PostgresStore {
         channel_id: &ChannelId,
         event_id: &EventId,
     ) -> Result<(), StoreError> {
-        let client = self.client().await?;
-        Ok(markers::mark(&client, room_id, channel_id, event_id).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(markers::mark(&*client, room_id, channel_id, event_id).await?)
+        })
+        .await
     }
 
     async fn mark_all_read(
@@ -880,8 +970,11 @@ impl ConversationStore for PostgresStore {
         room_id: &RoomId,
         channel_id: &ChannelId,
     ) -> Result<(), StoreError> {
-        let client = self.client().await?;
-        Ok(markers::mark_all(&client, room_id, channel_id).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(markers::mark_all(&*client, room_id, channel_id).await?)
+        })
+        .await
     }
 
     async fn get_unread_count(
@@ -889,39 +982,57 @@ impl ConversationStore for PostgresStore {
         room_id: &RoomId,
         channel_id: &ChannelId,
     ) -> Result<u64, StoreError> {
-        let client = self.client().await?;
-        Ok(markers::unread(&client, room_id, channel_id).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(markers::unread(&*client, room_id, channel_id).await?)
+        })
+        .await
     }
 
     async fn list_read_markers(
         &self,
         room_id: &RoomId,
     ) -> Result<BTreeMap<ChannelId, u64>, StoreError> {
-        let client = self.client().await?;
-        Ok(markers::list(&client, room_id).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(markers::list(&*client, room_id).await?)
+        })
+        .await
     }
 
     async fn add_task(&self, task: Task) -> Result<Task, StoreError> {
-        let client = self.client().await?;
-        side_effects::add_task(&client, &task).await?;
-        Ok(task)
+        cancellable(async {
+            let client = self.client().await?;
+            side_effects::add_task(&*client, &task).await?;
+            Ok(task)
+        })
+        .await
     }
 
     async fn get_task(&self, task_id: &TaskId) -> Result<Option<Task>, StoreError> {
-        let client = self.client().await?;
-        Ok(side_effects::task(&client, task_id).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(side_effects::task(&*client, task_id).await?)
+        })
+        .await
     }
 
     async fn update_task(&self, task: Task) -> Result<Task, StoreError> {
-        let client = self.client().await?;
-        side_effects::update_task(&client, &task).await?;
-        Ok(task)
+        cancellable(async {
+            let client = self.client().await?;
+            side_effects::update_task(&*client, &task).await?;
+            Ok(task)
+        })
+        .await
     }
 
     async fn add_observation(&self, observation: Observation) -> Result<Observation, StoreError> {
-        let client = self.client().await?;
-        side_effects::add_observation(&client, &observation).await?;
-        Ok(observation)
+        cancellable(async {
+            let client = self.client().await?;
+            side_effects::add_observation(&*client, &observation).await?;
+            Ok(observation)
+        })
+        .await
     }
 
     async fn list_tasks(
@@ -929,13 +1040,19 @@ impl ConversationStore for PostgresStore {
         room_id: &RoomId,
         options: ListTasksOptions,
     ) -> Result<Vec<Task>, StoreError> {
-        let client = self.client().await?;
-        Ok(side_effects::tasks(&client, room_id, options.status).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(side_effects::tasks(&*client, room_id, options.status).await?)
+        })
+        .await
     }
 
     async fn list_observations(&self, room_id: &RoomId) -> Result<Vec<Observation>, StoreError> {
-        let client = self.client().await?;
-        Ok(side_effects::observations(&client, room_id).await?)
+        cancellable(async {
+            let client = self.client().await?;
+            Ok(side_effects::observations(&*client, room_id).await?)
+        })
+        .await
     }
 
     /// Closes the pool if the store opened it, the connections still in use

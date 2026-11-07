@@ -128,28 +128,58 @@ impl TempSchema {
 
 /// Returns once a session waits on a lock `holder`'s transaction holds.
 pub(crate) async fn until_blocked_by(schema: &TempSchema, holder: &tokio_postgres::Client) {
+    sessions_blocked_by(schema, holder).await;
+}
+
+/// The sessions that wait on a lock `holder`'s transaction holds, once one does.
+pub(crate) async fn sessions_blocked_by(
+    schema: &TempSchema,
+    holder: &tokio_postgres::Client,
+) -> Vec<i32> {
     let pid: i32 = holder
         .query_one("SELECT pg_backend_pid()", &[])
         .await
         .unwrap()
         .get(0);
     let watcher = schema.client().await;
-    let mut blocked = 0_i64;
+    let mut blocked = Vec::new();
     for _ in 0..400 {
         blocked = watcher
             .query_one(
-                "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+                "SELECT coalesce(array_agg(pid), '{}') FROM pg_stat_activity \
+                 WHERE $1 = ANY(pg_blocking_pids(pid))",
                 &[&pid],
             )
             .await
             .unwrap()
             .get(0);
-        if blocked > 0 {
+        if !blocked.is_empty() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    assert!(blocked > 0, "no session ever waited on the holder");
+    assert!(!blocked.is_empty(), "no session ever waited on the holder");
+    blocked
+}
+
+/// Returns once none of `sessions` runs a statement, each idle or gone, or after
+/// two seconds: the test then reads what they left.
+pub(crate) async fn until_ended(schema: &TempSchema, sessions: &[i32]) {
+    let watcher = schema.client().await;
+    for _ in 0..400 {
+        let running: i64 = watcher
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE pid = ANY($1) AND state = 'active'",
+                &[&sessions],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if running == 0 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
 }
 
 /// Returns once a session waits on one that waits on `holder`.

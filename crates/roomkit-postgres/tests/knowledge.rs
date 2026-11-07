@@ -27,7 +27,7 @@ use roomkit_postgres::{
 use serde_json::{Value, json};
 use tokio_postgres::NoTls;
 
-use crate::support::{SMALL_POOL, TempSchema, dsn, full_text};
+use crate::support::{SMALL_POOL, TempSchema, dsn, full_text, sessions_blocked_by, until_ended};
 
 fn metadata(value: Value) -> Metadata {
     serde_json::from_value(value).unwrap()
@@ -368,6 +368,47 @@ async fn a_document_indexed_again_is_replaced_as_python_s() {
     assert_eq!(found[0].content, "Exchanges later");
     assert_eq!(found[0].source, "faq");
     assert_eq!(found[0].metadata["v"], json!(2));
+}
+
+/// Python: `test_a_cancelled_index_writes_nothing` (HITL 3ebe4596, RMK-1398): an
+/// index its caller cuts while a lock holds the document is cancelled on the server,
+/// as asyncpg cancels it: once the lock goes, the document is as it was. The call is
+/// cut where its caller drops it, beside the wait that saw it blocked.
+#[tokio::test]
+async fn a_cancelled_index_writes_nothing() {
+    let Some((schema, source)) = fresh("english").await else {
+        return;
+    };
+    index(&source, "Refund before", json!({"id": "d1"}))
+        .await
+        .unwrap();
+    let holder = schema.client().await;
+    holder
+        .batch_execute("BEGIN; SELECT 1 FROM knowledge_documents WHERE id = 'd1' FOR UPDATE")
+        .await
+        .unwrap();
+    // Boxed, so that the drop below drops the call itself.
+    let mut indexing = Box::pin(index(&source, "Refund cancelled", json!({"id": "d1"})));
+    // Cut once the server shows the write waiting: one cut before proves nothing.
+    let waiting = tokio::select! {
+        _ = &mut indexing => panic!("the index ran while the document was held"),
+        waiting = sessions_blocked_by(&schema, &holder) => waiting,
+    };
+    drop(indexing);
+    // The cancel leaves once the call is dropped: the lock goes once the server ended
+    // the statement, as Python's caller has its hand back only then.
+    until_ended(&schema, &waiting).await;
+    holder.batch_execute("COMMIT").await.unwrap();
+    until_ended(&schema, &waiting).await;
+    let content: String = holder
+        .query_one(
+            "SELECT content FROM knowledge_documents WHERE id = 'd1'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(content, "Refund before");
 }
 
 /// Python's `search`: the best first, at most its limit, a room's only when it names

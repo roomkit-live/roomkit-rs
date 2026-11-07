@@ -11,6 +11,10 @@
 //!   64 bits excepted, which `serde_json` reads as a float;
 //! - every statement is parameterized, as Python's are; a statement's text
 //!   holds only this crate's own names;
+//! - a call its caller cuts (a task cancelled, a timeout, a future dropped) has
+//!   the statement it left running cancelled on the server, as asyncpg cancels
+//!   it, and its connection closed, never handed back to the pool; the cancel
+//!   leaves once the call is dropped, so the statement ends a moment later;
 //! - a DSN holds a password: nothing here logs or prints one.
 //!
 //! One condition holds for Python to read a row this crate wrote: every
@@ -58,6 +62,7 @@ mod events;
 mod hosts;
 mod identities;
 mod knowledge;
+mod lent;
 mod lock;
 mod lookups;
 mod markers;

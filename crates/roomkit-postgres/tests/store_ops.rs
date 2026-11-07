@@ -27,7 +27,8 @@ use serde_json::{Value, json};
 use tokio_postgres::NoTls;
 
 use crate::support::{
-    SMALL_POOL, TempSchema, dsn, full_text, until_blocked_behind, until_blocked_by,
+    SMALL_POOL, TempSchema, dsn, full_text, sessions_blocked_by, until_blocked_behind,
+    until_blocked_by, until_ended,
 };
 
 fn room_id(id: &str) -> RoomId {
@@ -198,6 +199,71 @@ async fn a_private_state_write_racing_the_room_s_deletion_writes_nothing() {
             .unwrap(),
         None
     );
+}
+
+/// Python: `test_a_cancelled_update_writes_nothing` (HITL 3ebe4596, RMK-1398): a
+/// write its caller cuts while a lock holds it is cancelled on the server, as
+/// asyncpg cancels it, on the store's own pool as on one handed in: once the lock
+/// goes, nothing is written, and the store's one connection served the next call
+/// meanwhile. The task is cut on a runtime of two workers, where its drop runs on
+/// either.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_update_writes_nothing() {
+    use deadpool_postgres::{Manager, Pool};
+    if dsn().is_none() {
+        return;
+    }
+    for pool_kind in ["owned", "handed in"] {
+        let schema = TempSchema::new().await;
+        let pool = (pool_kind == "handed in").then(|| {
+            let config: tokio_postgres::Config = schema.dsn().parse().unwrap();
+            Pool::builder(Manager::new(config, NoTls))
+                .max_size(1)
+                .build()
+                .unwrap()
+        });
+        let store = PostgresStore::new(PostgresStoreOptions {
+            dsn: Some(schema.dsn()),
+            pool,
+        });
+        store
+            .init(InitOptions {
+                min_size: 1,
+                max_size: 1,
+            })
+            .await
+            .unwrap();
+        store.create_room(Room::new(room_id("r1"))).await.unwrap();
+        let holder = schema.client().await;
+        holder
+            .batch_execute("BEGIN; SELECT 1 FROM rooms WHERE id = 'r1' FOR UPDATE")
+            .await
+            .unwrap();
+        let update = tokio::spawn({
+            let store = store.clone();
+            let mut cut = Room::new(room_id("r1"));
+            cut.metadata.insert("cut".to_owned(), json!(true));
+            async move { store.update_room(cut).await }
+        });
+        // Cut once the server shows the write waiting: one cut before proves nothing.
+        let waiting = sessions_blocked_by(&schema, &holder).await;
+        update.abort();
+        assert!(update.await.unwrap_err().is_cancelled(), "{pool_kind}");
+        let other = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            store.get_room(&room_id("r2")),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{pool_kind}: the next call waited behind the cut one"));
+        assert_eq!(other.unwrap(), None);
+        // The cancel leaves once the call is dropped: the lock goes once the server
+        // ended the statement, as Python's caller has its hand back only then.
+        until_ended(&schema, &waiting).await;
+        holder.batch_execute("COMMIT").await.unwrap();
+        until_ended(&schema, &waiting).await;
+        let room = store.get_room(&room_id("r1")).await.unwrap().unwrap();
+        assert_eq!(room.metadata, Metadata::new(), "{pool_kind}");
+    }
 }
 
 /// Python: `test_a_held_id_is_the_driver_s_refusal_whatever_the_index_order`:

@@ -19,7 +19,9 @@ use serde_json::Value;
 use tokio_postgres::Row;
 use tokio_postgres::error::SqlState;
 
+use crate::connect::Tls;
 use crate::error::Failure;
+use crate::lent::{Lent, cancellable};
 use crate::options::{InitOptions, PostgresKnowledgeSourceOptions};
 use crate::pool;
 use crate::values::{execute, query, query_opt};
@@ -102,6 +104,8 @@ pub struct PostgresKnowledgeSource {
 struct Shared {
     dsn: Option<String>,
     pool: RwLock<Option<Pool>>,
+    /// What a cancel request connects with, for a pool the source opened.
+    tls: RwLock<Option<Tls>>,
     owns_pool: bool,
     source_name: String,
     language: String,
@@ -135,6 +139,7 @@ impl PostgresKnowledgeSource {
                 dsn,
                 owns_pool: pool.is_none(),
                 pool: RwLock::new(pool),
+                tls: RwLock::new(None),
                 source_name,
                 language,
             }),
@@ -152,7 +157,7 @@ impl PostgresKnowledgeSource {
     /// refuses so; [`StoreError::Unavailable`] for what else fails.
     pub async fn init(&self, options: InitOptions) -> Result<(), StoreError> {
         if self.pool().is_none() {
-            let (pool, _) = pool::open(
+            let (pool, tls) = pool::open(
                 self.shared.dsn.as_deref(),
                 options.min_size,
                 options.max_size,
@@ -160,17 +165,24 @@ impl PostgresKnowledgeSource {
             .await?;
             *self
                 .shared
+                .tls
+                .write()
+                .unwrap_or_else(PoisonError::into_inner) = tls;
+            *self
+                .shared
                 .pool
                 .write()
                 .unwrap_or_else(PoisonError::into_inner) = Some(pool);
         }
-        let client = self.client().await?;
-        client
-            .batch_execute(SCHEMA)
-            .await
-            .map_err(StoreError::unavailable)?;
-        let known = self.language_known(&client).await?;
-        drop(client);
+        let known = cancellable(async {
+            let client = self.client().await?;
+            client
+                .batch_execute(SCHEMA)
+                .await
+                .map_err(StoreError::unavailable)?;
+            self.language_known(&client).await
+        })
+        .await?;
         if known {
             return Ok(());
         }
@@ -207,13 +219,21 @@ impl PostgresKnowledgeSource {
             .clone()
     }
 
-    /// A connection of the pool, waited for at most [`ACQUIRE_TIMEOUT`].
-    async fn client(&self) -> Result<Object, StoreError> {
+    /// A connection of the pool, waited for at most [`ACQUIRE_TIMEOUT`], lent to
+    /// the operation running: one its caller cuts has its statement cancelled on
+    /// the server, as asyncpg cancels it (HITL 3ebe4596).
+    async fn client(&self) -> Result<Lent, StoreError> {
         let Some(pool) = self.pool() else {
             return Err(StoreError::unavailable(NOT_INITIALIZED));
         };
+        let tls = self
+            .shared
+            .tls
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         match tokio::time::timeout(ACQUIRE_TIMEOUT, pool.get()).await {
-            Ok(client) => client.map_err(StoreError::unavailable),
+            Ok(client) => Ok(Lent::new(client.map_err(StoreError::unavailable)?, tls)),
             Err(_) => Err(StoreError::unavailable(
                 "no connection of the pool came free in time",
             )),
@@ -257,7 +277,7 @@ impl PostgresKnowledgeSource {
         let rows = match &options.room_id {
             Some(room_id) => {
                 query(
-                    &client,
+                    &*client,
                     SEARCH_ROOM,
                     &[
                         &query_text,
@@ -270,7 +290,7 @@ impl PostgresKnowledgeSource {
             }
             None => {
                 query(
-                    &client,
+                    &*client,
                     SEARCH_ALL,
                     &[&query_text, &self.shared.language, &limit],
                 )
@@ -323,7 +343,7 @@ impl PostgresKnowledgeSource {
         };
         let written = serde_json::to_string(&metadata)?;
         execute(
-            &client,
+            &*client,
             INSERT,
             &[
                 &id,
@@ -407,7 +427,7 @@ impl KnowledgeSource for PostgresKnowledgeSource {
         query: &'a str,
         options: SearchOptions,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<KnowledgeResult>, ChannelError>> + Send + 'a>> {
-        Box::pin(self.found(query, options))
+        Box::pin(cancellable(self.found(query, options)))
     }
 
     fn index<'a>(
@@ -415,7 +435,7 @@ impl KnowledgeSource for PostgresKnowledgeSource {
         content: &'a str,
         options: IndexOptions,
     ) -> Pin<Box<dyn Future<Output = Result<(), ChannelError>> + Send + 'a>> {
-        Box::pin(self.indexed(content, options))
+        Box::pin(cancellable(self.indexed(content, options)))
     }
 
     /// Closes the pool if the source opened it, once the connections in use came
@@ -470,7 +490,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let kept = source.client().await.unwrap();
+        let kept = source.pool().unwrap().get().await.unwrap();
         tokio::time::timeout(
             Duration::from_secs(5),
             source.close_within(Duration::from_millis(20)),

@@ -15,12 +15,23 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::hosts::Address;
 use crate::passfile::{self, Lookup};
+use crate::tls::{Encryption, Files, tls_config};
 
 /// What a connection over TCP, and a cancel request, connect with: rustls. A
 /// Unix socket's connection is asked no TLS (`SslMode::Disable`), and is
 /// given a name for a connector it never uses: it has none.
 #[derive(Clone)]
 pub(crate) struct Tls(pub(crate) MakeRustlsConnect);
+
+impl Tls {
+    /// TLS that checks no certificate, `sslmode=prefer`'s: what a cancel request
+    /// connects with for a pool whose own the crate does not know, one handed in.
+    /// The connection's mode still decides whether the request asks for it.
+    pub(crate) fn unchecked() -> Option<Self> {
+        let config = tls_config(Encryption::Prefer, &Files::default()).ok()?;
+        Some(Self(MakeRustlsConnect::new(config)))
+    }
+}
 
 impl MakeTlsConnect<Socket> for Tls {
     type Stream = <MakeRustlsConnect as MakeTlsConnect<Socket>>::Stream;

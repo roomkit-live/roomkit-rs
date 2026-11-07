@@ -14,9 +14,9 @@ use deadpool_postgres::{GenericClient, Object, Pool};
 use roomkit::model::{ErrorRecord, RoomId};
 use roomkit::{RoomKitError, RoomLock, RoomLockManager, StoreError};
 use tokio::sync::Notify;
-use tokio_postgres::NoTls;
 
 use crate::connect::Tls;
+use crate::lent::cancel_then_close;
 use crate::options::PostgresAdvisoryLockManagerOptions;
 use crate::pool;
 use crate::values::Param;
@@ -29,9 +29,9 @@ const NOT_INITIALIZED: &str = "PostgresAdvisoryLockManager.init() must be called
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 const TAKE: &str = "SELECT pg_advisory_lock($1)";
-/// On a pool handed in, whose TLS the manager cannot cancel through, has the
-/// server notice a client gone while it waits (Postgres 14 on; a server that
-/// cannot is told nothing, and ends such a wait when its lock comes).
+/// On a pool handed in, whose TLS the manager does not know, has the server also
+/// notice a client gone while it waits, should the cancel fail (Postgres 14 on; a
+/// server that cannot is told nothing, and ends such a wait when its lock comes).
 const CHECK_THE_CLIENT: &str = "SELECT set_config('client_connection_check_interval', '1000', \
      false) WHERE current_setting('server_version_num')::int >= 140000";
 const GIVE_BACK: &str = "SELECT pg_advisory_unlock($1)";
@@ -84,26 +84,12 @@ impl Waiting {
 }
 
 impl Drop for Waiting {
+    /// A cancel that fails leaves the session closing: the server ends it when its
+    /// lock comes.
     fn drop(&mut self) {
-        let Some(client) = self.client.take() else {
-            return;
-        };
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            close_connection(client);
-            return;
-        };
-        let cancel = client.cancel_token();
-        let tls = self.tls.take();
-        runtime.spawn(async move {
-            // A cancel that fails leaves the session closing below: the server
-            // ends it when its lock comes.
-            let cancelled = match tls {
-                Some(tls) => cancel.cancel_query(tls).await,
-                None => cancel.cancel_query(NoTls).await,
-            };
-            drop(cancelled);
-            close_connection(client);
-        });
+        if let Some(client) = self.client.take() {
+            cancel_then_close(client, self.tls.take());
+        }
     }
 }
 
