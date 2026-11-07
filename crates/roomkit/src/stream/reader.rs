@@ -167,6 +167,22 @@ pub(crate) async fn read<S: ConversationStore>(
     ChannelOutcome::Output(Box::new(output)).into()
 }
 
+/// What a failure of `target`'s handling of `source`'s stream in `room_id`
+/// is reported as.
+fn handling_of<'a>(
+    target: Option<&'a StreamTarget>,
+    source: &'a ChannelId,
+    room_id: &'a impl std::fmt::Display,
+) -> impl Fn() -> String + 'a {
+    move || {
+        let target = target.map(|target| target.binding.channel_id.to_string());
+        let target = target.unwrap_or_default();
+        format!(
+            "streaming channel {target} handling the failed response of {source} in room {room_id}"
+        )
+    }
+}
+
 /// Reads `kept` as [`read`] does: its output, and, for a strategy's first
 /// pass (`first_pass`), what the pass gave. A first pass has no target,
 /// its text is kept out of the room, its calls stored as any turn's, and
@@ -256,14 +272,7 @@ pub(super) async fn read_kept<S: ConversationStore>(
         .read_by(reader, pulled, reader_done, inner, stops)
         .await;
     let room_id = producer.room_id.clone();
-    let handling = || {
-        let target = target.as_ref().map(|target| &target.binding.channel_id);
-        let target = target.map(ToString::to_string).unwrap_or_default();
-        let source = &responder.channel_id;
-        format!(
-            "streaming channel {target} handling the failed response of {source} in room {room_id}"
-        )
-    };
+    let handling = handling_of(target.as_ref(), &responder.channel_id, &room_id);
     let mut output = producer.finish(read, handling, inner).await;
     // The turn's record reaches the operation once its stream is read, how
     // it ended under the caller's `turns`, as Python's `_add_turn` puts it
