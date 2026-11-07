@@ -7,8 +7,13 @@
 //! live `delivery_failed` has gone, so the whole map is written, successes
 //! included. It is written alone, under the room's lock: the event as it
 //! stood at its commit would undo an edit or a delete made during its
-//! delivery. A record that cannot be written is logged and changes nothing
-//! the set delivered. Past the close's grace the lock is refused: a set the
+//! delivery. That holds for a set its own call runs while the call holds
+//! the lock, a keyed publication's adopted entry among them: Python's set
+//! runs in the room's lane, outside the lock's execution context, so the
+//! record's lock and its release are asked of the room's lock itself,
+//! never answered as a nested section's, and the record waits for the
+//! section that holds it. A record that cannot be written is logged and
+//! changes nothing the set delivered. Past the close's grace the lock is refused: a set the
 //! close cut leaves no record, its caller reading what it delivered (RFC
 //! §12.10.4, Python's `_report_cut`).
 
@@ -62,7 +67,7 @@ impl DeliveryRecord {
             room_id: room_id.clone(),
         };
         Some(Self {
-            state: State::Locking(cx.io.issue(request)),
+            state: State::Locking(cx.io.issue_unnested(request)),
             room_id,
             event_id: event.id.clone(),
             results,
@@ -127,7 +132,7 @@ impl DeliveryRecord {
         let request = HoldRequest::ReleaseLock {
             room_id: self.room_id.clone(),
         };
-        self.state = State::Releasing(cx.io.issue(request));
+        self.state = State::Releasing(cx.io.issue_unnested(request));
         Progress::Waiting
     }
 

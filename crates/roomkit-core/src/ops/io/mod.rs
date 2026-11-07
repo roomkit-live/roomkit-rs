@@ -372,6 +372,19 @@ impl Io {
         Some(answer.into())
     }
 
+    /// Asks the driver for `request`, a lock request, outside any section
+    /// the section being advanced runs nested in: a lock the operation
+    /// holds, its own section's or one its caller handed it, holds it back
+    /// until its release, as the room's lock holds back a Python call made
+    /// outside the lock's execution context (a delivery set in the room's
+    /// lane).
+    pub(crate) fn issue_unnested(&mut self, request: HoldRequest) -> EffectId {
+        let outer = self.nest(None);
+        let effect = self.issue(request);
+        self.nest(outer);
+        effect
+    }
+
     /// The acquires of a room's lock the operation holds back behind
     /// another of its sections, by room ([`Operation::locks_held_back`]).
     ///

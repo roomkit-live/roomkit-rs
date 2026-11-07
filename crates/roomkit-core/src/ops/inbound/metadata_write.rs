@@ -56,7 +56,7 @@ impl MetadataWrite {
             room_id: room_id.clone(),
         };
         Self {
-            state: State::Locking(unnested(cx, request)),
+            state: State::Locking(cx.io.issue_unnested(request)),
             room_id: room_id.clone(),
             keys: metadata.keys().cloned().collect(),
             metadata,
@@ -117,7 +117,7 @@ impl MetadataWrite {
         let request = HoldRequest::ReleaseLock {
             room_id: self.room_id.clone(),
         };
-        self.state = State::Releasing(unnested(cx, request));
+        self.state = State::Releasing(cx.io.issue_unnested(request));
         Progress::Waiting
     }
 
@@ -128,14 +128,4 @@ impl MetadataWrite {
             metadata_not_written(&self.room_id, &self.keys, error);
         }
     }
-}
-
-/// Issues `request`, a lock request, outside any section the set runs
-/// nested in: a lock the call holds, its own or handed, holds it back
-/// until its release, as the room's lock holds back Python's lane.
-fn unnested(cx: &mut Cx<'_>, request: HoldRequest) -> EffectId {
-    let outer = cx.io.nest(None);
-    let effect = cx.io.issue(request);
-    cx.io.nest(outer);
-    effect
 }
