@@ -272,6 +272,24 @@ async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Runs `work`, telling `started` once its first poll returned: it ran to
+/// its first wait, or to its end.
+async fn first_polled<T>(
+    work: impl Future<Output = T>,
+    started: tokio::sync::oneshot::Sender<()>,
+) -> T {
+    let mut work = std::pin::pin!(work);
+    let mut started = Some(started);
+    std::future::poll_fn(move |cx| {
+        let polled = work.as_mut().poll(cx);
+        if let Some(started) = started.take() {
+            let _ = started.send(());
+        }
+        polled
+    })
+    .await
+}
+
 /// Runs one step; returns the outcomes of the calls it made, in order.
 async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
     let mut outcomes = Vec::new();
@@ -286,8 +304,16 @@ async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
     if step.get("call").is_some() {
         if step.get("background") == Some(&Value::Bool(true)) {
             let label = step["as"].as_str().unwrap_or_default().to_owned();
-            let handle = tokio::spawn(run.invoke(step.clone(), Scope::default()));
+            let (started, starting) = tokio::sync::oneshot::channel();
+            let handle = tokio::spawn(first_polled(
+                run.invoke(step.clone(), Scope::default()),
+                started,
+            ));
             lock(&run.background).insert(label, handle);
+            // The call runs to its first wait before the next step (README,
+            // "Steps"), as a task Python's loop started runs its first step
+            // before what the next step wakes.
+            let _ = starting.await;
             return outcomes;
         }
         let outcome = run.invoke(step.clone(), Scope::default()).await;

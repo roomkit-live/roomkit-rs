@@ -61,6 +61,33 @@ impl Comparison<'_> {
             .unwrap_or_else(|| alias.to_owned())
     }
 
+    /// The records of the rooms the run created and the scenario does not
+    /// name, in the order of their `room_created`: `$created` in `rooms`
+    /// (README, "Normalization"), null for one with no record.
+    fn created(&self) -> Value {
+        let mut minted: Vec<(u64, &String)> = self
+            .rooms
+            .iter()
+            .filter_map(|(alias, room)| {
+                let rank = alias.strip_prefix("$r")?.parse().ok()?;
+                Some((rank, room))
+            })
+            .collect();
+        minted.sort_unstable();
+        Value::Array(
+            minted
+                .into_iter()
+                .map(|(_, room)| {
+                    self.observed
+                        .rooms
+                        .get(room)
+                        .cloned()
+                        .unwrap_or(Value::Null)
+                })
+                .collect(),
+        )
+    }
+
     fn check(&mut self, expected: &Value, actual: Option<&Value>, path: &str) {
         let actual = actual.map(|actual| self.normalizer.value(actual));
         self.found
@@ -86,6 +113,11 @@ impl Comparison<'_> {
             );
         }
         for (alias, expected) in expect["rooms"].as_object().into_iter().flatten() {
+            if alias == "$created" {
+                let created = self.created();
+                self.check(expected, Some(&created), "rooms.$created");
+                continue;
+            }
             let room = self.observed.rooms.get(&self.room_of(alias));
             self.check(expected, room, &format!("rooms.{alias}"));
         }
