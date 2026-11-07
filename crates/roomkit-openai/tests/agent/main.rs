@@ -339,7 +339,7 @@ async fn a_call_s_result_goes_back_in_the_next_completion() {
                     "tool_calls": [{
                         "id": "call_1",
                         "type": "function",
-                        "function": { "name": "lookup_order", "arguments": r#"{"order":"42"}"# },
+                        "function": { "name": "lookup_order", "arguments": r#"{"order": "42"}"# },
                     }],
                 }),
                 json!({ "role": "tool", "tool_call_id": "call_1", "content": r#"{"status": "shipped"}"# }),

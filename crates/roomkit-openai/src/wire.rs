@@ -186,7 +186,7 @@ fn wire_message<'a>(
             kind: "function",
             function: WireFunction {
                 name: &call.name,
-                arguments: Value::Object(call.arguments.clone()).to_string(),
+                arguments: crate::arguments::dumps(&call.arguments),
             },
         })
         .collect();
@@ -1187,6 +1187,38 @@ mod tests {
                     "cache_read_input_tokens": 40
                 })
             )
+        );
+    }
+
+    // Python: tests/test_providers/test_chat_request.py::test_a_replayed_call_s_arguments_on_the_chat_wire
+    // A replayed call's arguments as the chat wire writes them: json.dumps'
+    // default form, as Python's, the keys in their order (RMK-1508, HITL
+    // 9f5e61ba).
+    #[test]
+    fn a_replayed_call_s_arguments_on_the_chat_wire() {
+        use roomkit_ai::{AiContentPart, AiContext, AiMessage, AiRole, AiToolCallPart};
+        let config = OpenAiConfig::new("sk-1", "m");
+        let mut call = AiToolCallPart::new("c1", "lookup");
+        call.arguments.insert("q".to_owned(), Value::from("café"));
+        call.arguments.insert("n".to_owned(), Value::from(42));
+        let context = AiContext {
+            messages: vec![AiMessage::new(
+                AiRole::Assistant,
+                vec![AiContentPart::ToolCall(call)],
+            )],
+            ..AiContext::default()
+        };
+        let request = Request::of(&context).unwrap();
+        let body = serde_json::to_value(CompletionRequest::new(
+            &config,
+            &request,
+            false,
+            crate::dialect::OPENAI_CHAT,
+        ))
+        .unwrap();
+        assert_eq!(
+            body["messages"][0]["tool_calls"][0]["function"]["arguments"],
+            Value::from("{\"q\": \"caf\\u00e9\", \"n\": 42}")
         );
     }
 

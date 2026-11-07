@@ -111,5 +111,5 @@ fn replay(input: &mut Vec<Value>, message: &Message, output: &Value) -> Result<(
 }
 
 fn function_call(call: &ToolCall) -> Value {
-    json!({"type":"function_call", "call_id":call.id, "name":call.name, "arguments":Value::Object(call.arguments.clone()).to_string()})
+    json!({"type":"function_call", "call_id":call.id, "name":call.name, "arguments":crate::arguments::dumps(&call.arguments)})
 }
