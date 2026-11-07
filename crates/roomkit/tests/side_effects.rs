@@ -7,15 +7,16 @@
 #![expect(clippy::panic, reason = "a store's driver that breaks panics")]
 
 use std::future::{Future, ready};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, EventDirection,
-    EventId, EventSource, HookResult, Identity, IdentityId, InboundMessage, Metadata, Observation,
-    ObservationId, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, Task, TaskId,
-    TaskStatus, TextContent,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, EventContent,
+    EventDirection, EventId, EventSource, HookResult, Identity, IdentityId, InboundMessage,
+    Metadata, Observation, ObservationId, Participant, ParticipantId, Room, RoomContext, RoomEvent,
+    RoomId, Task, TaskId, TaskStatus, TextContent,
 };
 use roomkit::store::PatchRoomMetadataOptions;
 use roomkit::tasks::WaitOptions;
@@ -52,6 +53,8 @@ enum Failing {
     Metadata,
     /// The observation `o1`, by a panic.
     PanickingObservation,
+    /// The room's delivery cursor's next write once `armed`, once.
+    Cursor,
 }
 
 /// An in-memory store that fails the write `failing` names.
@@ -59,6 +62,8 @@ enum Failing {
 struct FailingWrites {
     store: InMemoryStore,
     failing: Failing,
+    /// For [`Failing::Cursor`]: the next cursor write fails, then none.
+    armed: AtomicBool,
 }
 
 /// The store's failure, as a database gone answers.
@@ -89,7 +94,7 @@ impl ConversationStore for FailingWrites {
             match self.failing {
                 Failing::Observation => return Err(down()),
                 Failing::PanickingObservation => panic!("the store's driver broke"),
-                Failing::Task | Failing::Metadata => {}
+                Failing::Task | Failing::Metadata | Failing::Cursor => {}
             }
         }
         self.store.add_observation(observation).await
@@ -109,6 +114,20 @@ impl ConversationStore for FailingWrites {
             .await
     }
 
+    async fn advance_delivered_index(
+        &self,
+        room_id: &RoomId,
+        index: u64,
+        options: store::AdvanceDeliveredIndexOptions,
+    ) -> Result<bool, StoreError> {
+        if self.failing == Failing::Cursor && self.armed.swap(false, Ordering::SeqCst) {
+            return Err(down());
+        }
+        self.store
+            .advance_delivered_index(room_id, index, options)
+            .await
+    }
+
     forward! {
         get_room(room_id: &RoomId) -> Option<Room>;
         list_participants(room_id: &RoomId) -> Vec<Participant>;
@@ -118,11 +137,6 @@ impl ConversationStore for FailingWrites {
         list_rooms(options: store::ListRoomsOptions) -> Vec<Room>;
         find_rooms(options: store::FindRoomsOptions) -> Vec<Room>;
         get_delivered_index(room_id: &RoomId) -> i64;
-        advance_delivered_index(
-            room_id: &RoomId,
-            index: u64,
-            options: store::AdvanceDeliveredIndexOptions
-        ) -> bool;
         add_binding(binding: ChannelBinding) -> ChannelBinding;
         get_binding(room_id: &RoomId, channel_id: &ChannelId) -> Option<ChannelBinding>;
         update_binding(binding: ChannelBinding) -> ChannelBinding;
@@ -319,6 +333,7 @@ async fn kit_on(failing: Failing, channels: &[&str]) -> RoomKit<FailingWrites> {
     let store = FailingWrites {
         store: InMemoryStore::default(),
         failing,
+        armed: AtomicBool::new(false),
     };
     let kit = RoomKit::new(RoomKitOptions::with_store(store));
     let sms = RecordingTransport::new(
@@ -431,6 +446,7 @@ async fn a_failed_side_effect_write_is_logged_and_the_call_goes_on() {
                 "Failed to persist observation o1"
             }
             Failing::Metadata => METADATA_LINE,
+            Failing::Cursor => unreachable!("no case fails the cursor"),
         };
         let lines = warnings.containing("ERROR");
         assert_eq!(
@@ -613,5 +629,145 @@ async fn a_set_the_lane_drops_as_stale_still_stores_its_hooks_side_effects() {
             sorted(["t1"]),
             vec!["t1".to_owned()]
         )
+    );
+}
+
+// Python: tests/test_hook_side_effects.py::TestARoundThatFailsMidway::test_a_set_whose_cursor_write_fails_once_it_ran
+// (RMK-1515, today's behaviour): the store fails the room's delivery
+// cursor write once, after the event's delivery set ran. The cursor's
+// writer logs it and the set goes on (cursors.rs catch_up): its aftermath
+// runs, the hook's task stored, its ON_TASK_CREATED and the event's
+// AFTER_BROADCAST fired, nothing cancelled. The index stays this
+// process's: the room's next message is delivered at once, the cursor
+// moved past both, nothing skipped. Python drops that set's aftermath and
+// skips the index once its gap timeout passed.
+#[tokio::test]
+async fn a_set_whose_cursor_write_fails_once_it_ran() {
+    let kit = kit_on(Failing::Cursor, &["sms1", "crm"]).await;
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        |event: RoomEvent, _| async move {
+            let first =
+                matches!(&event.content, EventContent::Text(text) if text.body == "Call me back");
+            let tasks = if first {
+                let id = TaskId::new("t1").unwrap();
+                vec![Task::new(id, room_id(), "Call the customer back")]
+            } else {
+                Vec::new()
+            };
+            Ok::<_, ChannelError>(HookResult {
+                tasks,
+                ..HookResult::allow(AllowOptions::default())
+            })
+        },
+        HookOptions {
+            name: "triage".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let later = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&later);
+    kit.hook(
+        HookTrigger::OnTaskCreated,
+        move |event: RoomEvent, _| {
+            let task_id = event.metadata.get("task_id").and_then(|id| id.as_str());
+            seen.lock()
+                .unwrap()
+                .extend(task_id.map(|id| format!("task_created {id}")));
+            async {}
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "follow_up".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let seen = Arc::clone(&later);
+    kit.hook(
+        HookTrigger::AfterBroadcast,
+        move |event: RoomEvent, _| {
+            let body = match &event.content {
+                EventContent::Text(text) => Some(text.body.clone()),
+                _ => None,
+            };
+            seen.lock()
+                .unwrap()
+                .extend(body.map(|body| format!("after_broadcast {body}")));
+            async {}
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "audit".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let skipped = roomkit::testing::EventTap::on(&kit, &["delivery_skipped"]);
+    let options = || ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+
+    // The room's records are accounted for: the next cursor write is the
+    // one after the message's set ran.
+    kit.store().armed.store(true, Ordering::SeqCst);
+    let (warnings, _capturing) = Warnings::capture();
+    let message = InboundMessage::new(
+        channel("sms1"),
+        "+15550001",
+        TextContent::new("Call me back"),
+    );
+    let first = kit.process_inbound(message, options()).await.unwrap();
+    let tasks = kit
+        .store()
+        .list_tasks(&room_id(), store::ListTasksOptions::default())
+        .await
+        .unwrap();
+    roomkit::testing::idle(&kit).await;
+    let after_first = sorted(later.lock().unwrap().clone());
+    let message = InboundMessage::new(channel("sms1"), "+15550001", TextContent::new("Hi"));
+    let second = kit.process_inbound(message, options()).await.unwrap();
+    roomkit::testing::idle(&kit).await;
+    let cursor = kit.store().get_delivered_index(&room_id()).await.unwrap();
+    let latest = kit
+        .store()
+        .get_room(&room_id())
+        .await
+        .unwrap()
+        .unwrap()
+        .latest_index;
+    let failed = (
+        kit.store().armed.load(Ordering::SeqCst),
+        warnings
+            .containing("the room's delivery cursor could not be moved")
+            .len(),
+    );
+    kit.close().await.unwrap();
+
+    // The cursor write failed once, logged as a WARN.
+    assert_eq!(failed, (false, 1));
+
+    assert_eq!(
+        (
+            first.cancellation_reason.as_deref(),
+            sorted(tasks.into_iter().map(|task| task.id)),
+            after_first,
+        ),
+        (
+            None,
+            sorted(["t1"]),
+            sorted(["after_broadcast Call me back", "task_created t1"]),
+        )
+    );
+    assert_eq!(
+        (
+            second.cancellation_reason.as_deref(),
+            skipped.types(),
+            u64::try_from(cursor).ok(),
+            latest,
+        ),
+        (None, Vec::<String>::new(), latest, latest)
     );
 }
