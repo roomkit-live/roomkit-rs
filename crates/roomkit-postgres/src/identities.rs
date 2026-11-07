@@ -299,10 +299,10 @@ async fn locked_addresses(
         return Err(not_found().into());
     }
     // A row the model cannot read is refused, the id alone, as `SqliteStore`
-    // refuses it; to a caller naming an organization, as not found: the fixed
-    // error would tell that the id exists (RFC §17.2, HITL 7cb63f4f). The
-    // addresses are rewritten from the row itself, a JSON string read as the
-    // value it holds, as the read just did.
+    // refuses it; to a caller naming an organization, as not found, as
+    // `SqliteStore` answers it (HITL 7cb63f4f): the column above already refused
+    // another organization's. The addresses are rewritten from the row itself, a
+    // JSON string read as the value it holds, as the read just did.
     match identity_of(&row) {
         Err(Failure::Unreadable(_)) if !organization.unwrap_or_default().is_empty() => {
             return Err(not_found().into());

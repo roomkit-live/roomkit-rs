@@ -429,8 +429,8 @@ async fn a_record_the_model_cannot_read_serves_no_read() {
 /// 47b7dfc6): the read fails with a fixed error, the id alone, whatever the caller's
 /// organization: the record may be another organization's. Python's `ValueError` is
 /// [`StoreError::Value`], and the kit's `RoomKitError::Value`. The kit's
-/// `resolve_participant`, `link_address` and `unlink_address` name no organization, as
-/// a caller naming one learns nothing of the record
+/// `resolve_participant` and the store's `link_address` and `unlink_address` name no
+/// organization, as a caller naming one learns nothing of the record
 /// (`resolve_participant_for_an_organization_finds_no_unreadable_identity`,
 /// `link_and_unlink_for_an_organization_find_no_unreadable_identity`).
 #[tokio::test]
@@ -659,7 +659,17 @@ async fn link_and_unlink_for_an_organization_find_no_unreadable_identity() {
     for door in ["link_address", "unlink_address"] {
         for organization in ["globex", "acme"] {
             let (file, store) = with_unreadable(record).await;
+            Connection::open(file.path())
+                .unwrap()
+                .execute(
+                    "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id)
+                     VALUES ('sms', '+1555', 'i1', 'globex')",
+                    [],
+                )
+                .unwrap();
             let organization_id = Some(organization.to_owned());
+            // A link of an address no row holds, an unlink of the one it holds: a
+            // write before the refusal would show in the rows.
             let refused = if door == "link_address" {
                 let options = LinkAddressOptions { organization_id };
                 store
@@ -668,7 +678,7 @@ async fn link_and_unlink_for_an_organization_find_no_unreadable_identity() {
             } else {
                 let options = UnlinkAddressOptions { organization_id };
                 store
-                    .unlink_address(&i1, &ChannelType::SMS, "+2", options)
+                    .unlink_address(&i1, &ChannelType::SMS, "+1555", options)
                     .await
             };
             store.close().await;
@@ -678,17 +688,24 @@ async fn link_and_unlink_for_an_organization_find_no_unreadable_identity() {
                 "{door}, {organization}"
             );
             let connection = Connection::open(file.path()).unwrap();
-            let rows: i64 = connection
-                .query_row("SELECT count(*) FROM identity_addresses", [], |row| {
-                    row.get(0)
-                })
+            let rows: Vec<(String, String, String)> = connection
+                .prepare("SELECT address, identity_id, organization_id FROM identity_addresses")
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
                 .unwrap();
             let held: Column = connection
                 .query_row("SELECT data FROM identities WHERE id = 'i1'", [], |row| {
                     row.get(0)
                 })
                 .unwrap();
-            assert_eq!((rows, &held), (0, record), "{door}, {organization}");
+            let only = ("+1555".to_owned(), "i1".to_owned(), "globex".to_owned());
+            assert_eq!(
+                (rows, &held),
+                (vec![only], record),
+                "{door}, {organization}"
+            );
         }
     }
 }

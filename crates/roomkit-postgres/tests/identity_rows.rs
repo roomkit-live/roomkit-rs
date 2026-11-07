@@ -183,8 +183,9 @@ async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
 
 /// Python: `test_link_and_unlink_for_an_organization_find_no_unreadable_identity` (HITL
 /// 7cb63f4f): a caller naming an organization reads `IdentityNotFound` for a row the
-/// model cannot read, even its own organization's, as on `SqliteStore`: the store's
-/// fixed error would tell that the id exists (RFC §17.2). Nothing is written.
+/// model cannot read, its own organization's included, as `SqliteStore` answers (RFC
+/// §17.2): the row's organization already refused another organization's caller.
+/// Nothing is written.
 #[tokio::test]
 async fn link_and_unlink_for_an_organization_find_no_unreadable_identity() {
     if support::dsn().is_none() {
@@ -196,6 +197,8 @@ async fn link_and_unlink_for_an_organization_find_no_unreadable_identity() {
         for organization in ["globex", "acme"] {
             let (schema, store) = with_unreadable(column, value).await;
             let organization_id = Some(organization.to_owned());
+            // A link of an address no row holds, an unlink of the one it holds: a
+            // write before the refusal would show in the rows.
             let refused = if door == "link_address" {
                 let options = LinkAddressOptions { organization_id };
                 store
@@ -204,7 +207,7 @@ async fn link_and_unlink_for_an_organization_find_no_unreadable_identity() {
             } else {
                 let options = UnlinkAddressOptions { organization_id };
                 store
-                    .unlink_address(&i1, &ChannelType::SMS, "+2", options)
+                    .unlink_address(&i1, &ChannelType::SMS, "+1555", options)
                     .await
             };
             store.close().await;
