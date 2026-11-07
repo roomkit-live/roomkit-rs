@@ -36,13 +36,28 @@ fn scenario_id(root: &Path, path: &Path) -> String {
     relative.to_string_lossy().replace('\\', "/")
 }
 
-/// Every scenario runs; those this implementation fails are exactly the
-/// known failures.
+/// A runtime of one thread, which runs every task: the pass every store's
+/// runner makes.
+pub(crate) fn current_thread() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+}
+
+/// Every scenario runs on a runtime `runtime` builds, the pass named
+/// `pass`; those this implementation fails there are exactly `known`, the
+/// known failures (roomkit-specs `conformance/README.md`, "Known
+/// failures").
 #[expect(
     clippy::print_stdout,
     reason = "the suite prints its known failures and its count, as a test does"
 )]
-pub(crate) fn every_scenario_gives_what_the_rfc_says() {
+pub(crate) fn every_scenario_gives_what_the_rfc_says(
+    pass: &str,
+    runtime: fn() -> tokio::runtime::Runtime,
+    known: &[(&str, &str)],
+) {
     let root = suite().join("scenarios");
     let mut paths = Vec::new();
     scenarios(&root, &mut paths);
@@ -67,22 +82,18 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says() {
             ));
             continue;
         }
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let problems = runtime.block_on(async {
+        let problems = runtime().block_on(async {
             tokio::time::timeout(crate::SCENARIO_BOUND, harness::run(&scenario))
                 .await
                 .unwrap_or_else(|_| {
                     vec![format!("did not finish within {:?}", crate::SCENARIO_BOUND)]
                 })
         });
-        let known = crate::KNOWN_FAILURES.iter().find(|(known, _)| *known == id);
+        let listed = known.iter().find(|(listed, _)| *listed == id);
         if !problems.is_empty() {
             failing.push(id.clone());
         }
-        match (problems.is_empty(), known) {
+        match (problems.is_empty(), listed) {
             // A failure that depends on the machine's speed may pass.
             (true, Some((_, reason))) if reason.starts_with("timing:") => {}
             (true, Some(_)) => {
@@ -93,13 +104,13 @@ pub(crate) fn every_scenario_gives_what_the_rfc_says() {
             (true, None) => {}
         }
     }
-    for (known, _) in crate::KNOWN_FAILURES {
-        if !paths.iter().any(|path| scenario_id(&root, path) == *known) {
-            report.push(format!("known failure {known} names no scenario"));
+    for (listed, _) in known {
+        if !paths.iter().any(|path| scenario_id(&root, path) == *listed) {
+            report.push(format!("known failure {listed} names no scenario"));
         }
     }
     println!(
-        "{} scenarios, {} failing: {failing:?}",
+        "{pass}: {} scenarios, {} failing: {failing:?}",
         paths.len(),
         failing.len()
     );

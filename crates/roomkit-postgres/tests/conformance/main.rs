@@ -160,5 +160,9 @@ fn every_scenario_gives_what_the_rfc_says() {
         eprintln!("POSTGRES_DSN is not set: the conformance suite is skipped on Postgres");
         return;
     }
-    scenarios::every_scenario_gives_what_the_rfc_says();
+    scenarios::every_scenario_gives_what_the_rfc_says(
+        "one thread",
+        scenarios::current_thread,
+        KNOWN_FAILURES,
+    );
 }
