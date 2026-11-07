@@ -412,9 +412,10 @@ impl Stops {
     }
 }
 
-/// What a target's failure no operation takes is reported as (RFC §12.2
+/// What a target's failure no operation reports is reported as (RFC §12.2
 /// step 13s): one of a target left to end alone, or of a read whose work, a
-/// held task's that was cut, is dropped before it takes the read's answer.
+/// held task's that was cut, may be dropped before it takes the read's
+/// answer.
 #[derive(Clone, Debug)]
 struct Failing {
     responder: ChannelBinding,
@@ -440,8 +441,8 @@ impl Failing {
     }
 
     /// Whether the held task the read runs within was cut: its work is
-    /// dropped once none of its reads runs, before it takes this read's
-    /// answer (`tasks::cut`).
+    /// dropped once none of its reads runs, maybe before it takes this
+    /// read's answer (`tasks::cut`).
     fn task_cut(&self) -> bool {
         self.task
             .as_ref()
