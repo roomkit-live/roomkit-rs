@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use deadpool_postgres::Object;
-use tokio_postgres::NoTls;
+use tokio_postgres::{CancelToken, NoTls};
 
 use crate::connect::Tls;
 
@@ -22,7 +22,8 @@ tokio::task_local! {
 /// timeout, a future its caller let go), each connection it holds has its
 /// statement cancelled on the server and is closed, never handed back to its
 /// pool: the pool's next user would wait behind that statement, or have its own
-/// cut by a late cancel. Boxed, so that an operation's future is held once.
+/// cut by a late cancel. The operation's future is boxed, so that this one adds
+/// no copy of it to its caller's.
 pub(crate) fn cancellable<F: Future>(work: F) -> impl Future<Output = F::Output> {
     let polled = Arc::new(AtomicBool::new(false));
     let mut work = Box::pin(POLLED.scope(Arc::clone(&polled), work));
@@ -42,7 +43,7 @@ pub(crate) struct Lent {
     client: Option<Object>,
     /// The operation's mark, none outside [`cancellable`].
     polled: Option<Arc<AtomicBool>>,
-    /// What a cancel request connects with, when the pool's owner knows it.
+    /// What a cancel request connects with, when the crate knows it.
     tls: Option<Tls>,
 }
 
@@ -98,26 +99,51 @@ impl Drop for Lent {
 }
 
 /// Cancels on the server what `client` runs, then closes it: a statement its
-/// caller left goes no further, and the connection serves no one else. It leaves
-/// its pool at once, which opens another for its next user. Without a runtime to
-/// send the cancel from, it only closes: the statement runs on to its end. `tls`,
-/// when the pool's owner does not know it (a pool handed in), is TLS that checks
-/// no certificate, as the request carries the connection's key alone, and the
-/// connection closes after it.
+/// caller left goes no further, and the connection serves no one else. Its place
+/// in the pool is kept until it closes, as asyncpg keeps it until its cancel is
+/// done, so the pool never holds more sessions than its size. Without a runtime
+/// to send the cancel from, it only closes: the statement runs on to its end.
 pub(crate) fn cancel_then_close(client: Object, tls: Option<Tls>) {
-    let client = Object::take(client);
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-        drop(client);
+        drop(Object::take(client));
         return;
     };
-    let cancel = client.cancel_token();
+    let token = client.cancel_token();
+    let closing = Closing(Some(client));
     runtime.spawn(async move {
-        // A cancel that fails leaves the connection closing below.
-        let cancelled = match tls.or_else(Tls::unchecked) {
-            Some(tls) => cancel.cancel_query(tls).await,
-            None => cancel.cancel_query(NoTls).await,
-        };
-        drop(cancelled);
-        drop(client);
+        cancel(&token, tls).await;
+        drop(closing);
     });
+}
+
+/// A connection on its way out of its pool, closed when dropped: never handed
+/// back, even when the task closing it is dropped with its runtime.
+struct Closing(Option<Object>);
+
+impl Drop for Closing {
+    fn drop(&mut self) {
+        if let Some(client) = self.0.take() {
+            drop(Object::take(client));
+        }
+    }
+}
+
+/// Sends the cancel request of `token`'s connection; one that fails leaves the
+/// connection closing, its statement running on to its end. `tls` is the pool's,
+/// when the crate knows it; otherwise (a pool handed in) the request asks for TLS
+/// that checks no certificate when the connection's mode asks for TLS, as it
+/// carries the connection's key alone and the connection closes after it, then
+/// goes in clear if that fails (an address with no host name, a host rustls
+/// cannot name).
+async fn cancel(token: &CancelToken, tls: Option<Tls>) {
+    if let Some(tls) = tls {
+        drop(token.cancel_query(tls).await);
+        return;
+    }
+    if let Some(unchecked) = Tls::unchecked()
+        && token.cancel_query(unchecked).await.is_ok()
+    {
+        return;
+    }
+    drop(token.cancel_query(NoTls).await);
 }

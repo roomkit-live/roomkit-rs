@@ -266,6 +266,48 @@ async fn a_cancelled_update_writes_nothing() {
     }
 }
 
+/// A connection whose call its caller cut keeps its place in the pool until its
+/// cancel is done and it closes, as asyncpg's pool keeps it
+/// (`PoolConnectionHolder.release` waits for the cancellation): the pool never
+/// holds more sessions than its size, the cut one still running on the server.
+#[tokio::test]
+async fn a_cut_connection_keeps_its_place_in_the_pool_until_it_closes() {
+    use deadpool_postgres::{Manager, Pool};
+    if dsn().is_none() {
+        return;
+    }
+    let schema = TempSchema::new().await;
+    let config: tokio_postgres::Config = schema.dsn().parse().unwrap();
+    let pool = Pool::builder(Manager::new(config, NoTls))
+        .max_size(1)
+        .build()
+        .unwrap();
+    let store = PostgresStore::new(PostgresStoreOptions {
+        pool: Some(pool.clone()),
+        ..PostgresStoreOptions::default()
+    });
+    store.init(SMALL_POOL).await.unwrap();
+    store.create_room(Room::new(room_id("r1"))).await.unwrap();
+    let holder = schema.client().await;
+    holder
+        .batch_execute("BEGIN; SELECT 1 FROM rooms WHERE id = 'r1' FOR UPDATE")
+        .await
+        .unwrap();
+    // Boxed, so that the drop below drops the call itself.
+    let mut update = Box::pin(store.update_room(Room::new(room_id("r1"))));
+    let waiting = tokio::select! {
+        _ = &mut update => panic!("the update ran while the row was held"),
+        waiting = sessions_blocked_by(&schema, &holder) => waiting,
+    };
+    drop(update);
+    // Nothing ran since the drop on this runtime of one thread: the cancel has
+    // not left yet.
+    assert_eq!(pool.status().size, 1);
+    until_ended(&schema, &waiting).await;
+    assert_eq!(store.get_room(&room_id("r2")).await.unwrap(), None);
+    holder.batch_execute("COMMIT").await.unwrap();
+}
+
 /// Python: `test_a_held_id_is_the_driver_s_refusal_whatever_the_index_order`:
 /// after a reindex the primary key is the newest index, checked last: a second
 /// write of a stored event stays the driver's refusal, and another event under

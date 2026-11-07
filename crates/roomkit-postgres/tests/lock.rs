@@ -323,9 +323,9 @@ async fn a_lock_granted_on_a_pool_closed_meanwhile_is_refused() {
     until_locks_are(&schema, (0, 0)).await;
 }
 
-/// A wait dropped on a pool handed in, whose TLS the manager cannot cancel
-/// through, ends on the server when it sees the client gone: its session asks
-/// to look.
+/// A wait dropped on a pool handed in, whose TLS the manager does not know, ends
+/// on the server when it sees the client gone, should the cancel fail: its
+/// session asks to look.
 #[tokio::test]
 async fn a_pool_handed_in_has_the_server_watch_for_a_client_gone() {
     use deadpool_postgres::{Manager, Pool};

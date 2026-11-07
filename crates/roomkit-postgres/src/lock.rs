@@ -98,6 +98,8 @@ impl Drop for Waiting {
 struct AdvisoryLock {
     held: Arc<Held>,
     key: i64,
+    /// What a release's cancel request connects with, as the wait's.
+    tls: Option<Tls>,
 }
 
 impl RoomLock for AdvisoryLock {
@@ -119,7 +121,7 @@ impl RoomLock for AdvisoryLock {
             };
             let releasing = Waiting {
                 client: Some(client),
-                tls: None,
+                tls: self.tls.clone(),
             };
             let Some(client) = releasing.client.as_ref() else {
                 return Ok(());
@@ -265,7 +267,7 @@ impl PostgresAdvisoryLockManager {
         let statement = client.prepare_cached(TAKE).await.map_err(failure)?;
         let waiting = Waiting {
             client: Some(client),
-            tls,
+            tls: tls.clone(),
         };
         let (Some(client), false) = (waiting.client.as_ref(), pool.is_closed()) else {
             return Err(RoomKitError::Runtime(NOT_INITIALIZED.to_owned()));
@@ -292,7 +294,7 @@ impl PostgresAdvisoryLockManager {
             .unwrap_or_else(PoisonError::into_inner);
         granted.retain(|lock| lock.strong_count() > 0);
         granted.push(Arc::downgrade(&held));
-        Ok(Box::new(AdvisoryLock { held, key }))
+        Ok(Box::new(AdvisoryLock { held, key, tls }))
     }
 
     /// Closes the connections of the locks still held, which releases them on

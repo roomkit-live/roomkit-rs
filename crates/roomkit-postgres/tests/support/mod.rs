@@ -162,12 +162,13 @@ pub(crate) async fn sessions_blocked_by(
     blocked
 }
 
-/// Returns once none of `sessions` runs a statement, each idle or gone, or after
-/// two seconds: the test then reads what they left.
+/// Returns once none of `sessions` runs a statement, each idle or gone; fails
+/// when one still runs after two seconds.
 pub(crate) async fn until_ended(schema: &TempSchema, sessions: &[i32]) {
     let watcher = schema.client().await;
+    let mut running = 0_i64;
     for _ in 0..400 {
-        let running: i64 = watcher
+        running = watcher
             .query_one(
                 "SELECT count(*) FROM pg_stat_activity WHERE pid = ANY($1) AND state = 'active'",
                 &[&sessions],
@@ -180,6 +181,7 @@ pub(crate) async fn until_ended(schema: &TempSchema, sessions: &[i32]) {
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
+    assert_eq!(running, 0, "a statement of {sessions:?} still runs");
 }
 
 /// Returns once a session waits on one that waits on `holder`.
