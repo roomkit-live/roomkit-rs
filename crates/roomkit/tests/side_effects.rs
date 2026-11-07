@@ -632,18 +632,10 @@ async fn a_set_the_lane_drops_as_stale_still_stores_its_hooks_side_effects() {
     );
 }
 
-// Python: tests/test_hook_side_effects.py::TestARoundThatFailsMidway::test_a_set_whose_cursor_write_fails_once_it_ran
-// (RMK-1515, today's behaviour): the store fails the room's delivery
-// cursor write once, after the event's delivery set ran. The cursor's
-// writer logs it and the set goes on (cursors.rs catch_up): its aftermath
-// runs, the hook's task stored, its ON_TASK_CREATED and the event's
-// AFTER_BROADCAST fired, nothing cancelled. The index stays this
-// process's: the room's next message is delivered at once, the cursor
-// moved past both, nothing skipped. Python drops that set's aftermath and
-// skips the index once its gap timeout passed.
-#[tokio::test]
-async fn a_set_whose_cursor_write_fails_once_it_ran() {
-    let kit = kit_on(Failing::Cursor, &["sms1", "crm"]).await;
+/// Hooks on `kit`: one giving the task `t1` to the message `Call me back`,
+/// and what each later `ON_TASK_CREATED` and `AFTER_BROADCAST` reads, as
+/// `task_created t1` and `after_broadcast <text>`.
+fn hooks_noting_what_follows(kit: &RoomKit<FailingWrites>) -> Arc<Mutex<Vec<String>>> {
     kit.hook(
         HookTrigger::BeforeBroadcast,
         |event: RoomEvent, _| async move {
@@ -688,9 +680,10 @@ async fn a_set_whose_cursor_write_fails_once_it_ran() {
     kit.hook(
         HookTrigger::AfterBroadcast,
         move |event: RoomEvent, _| {
-            let body = match &event.content {
-                EventContent::Text(text) => Some(text.body.clone()),
-                _ => None,
+            let body = if let EventContent::Text(text) = &event.content {
+                Some(text.body.clone())
+            } else {
+                None
             };
             seen.lock()
                 .unwrap()
@@ -704,6 +697,22 @@ async fn a_set_whose_cursor_write_fails_once_it_ran() {
         },
     )
     .unwrap();
+    later
+}
+
+// Python: tests/test_hook_side_effects.py::TestARoundThatFailsMidway::test_a_set_whose_cursor_write_fails_once_it_ran
+// (RMK-1515, today's behaviour): the store fails the room's delivery
+// cursor write once, after the event's delivery set ran. The cursor's
+// writer logs it and the set goes on (cursors.rs catch_up): its aftermath
+// runs, the hook's task stored, its ON_TASK_CREATED and the event's
+// AFTER_BROADCAST fired, nothing cancelled. The index stays this
+// process's: the room's next message is delivered at once, the cursor
+// moved past both, nothing skipped. Python drops that set's aftermath and
+// skips the index once its gap timeout passed.
+#[tokio::test]
+async fn a_set_whose_cursor_write_fails_once_it_ran() {
+    let kit = kit_on(Failing::Cursor, &["sms1", "crm"]).await;
+    let later = hooks_noting_what_follows(&kit);
     let skipped = roomkit::testing::EventTap::on(&kit, &["delivery_skipped"]);
     let options = || ProcessInboundOptions {
         room_id: Some(room_id()),
