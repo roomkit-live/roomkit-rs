@@ -506,3 +506,28 @@ async fn a_merge_over_a_jsonb_string_keeps_what_the_model_does_not_read() {
     assert_eq!(timers["later"], json!(1));
     assert_eq!(addresses["SMS"], json!(["+9"]));
 }
+
+/// Python: `test_an_event_update_over_a_jsonb_string_returns_its_delivery_results`
+/// (HITL f9737c41): an update over an event whose delivery results the row
+/// holds as a JSON string returns them as the value the string holds, which
+/// this crate reads back from the row.
+#[tokio::test]
+async fn an_event_update_over_a_jsonb_string_returns_its_delivery_results() {
+    if support::dsn().is_none() {
+        return;
+    }
+    let schema = TempSchema::new().await;
+    let store = schema.initialized_store().await;
+    a_row_of_each_table(&store).await;
+    let event = store
+        .get_event(&EventId::new("e1").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    held_as_a_string(&schema, Table::Events, "delivery_results").await;
+    let updated = store.update_event(event).await.unwrap();
+    assert_eq!(
+        Value::Object(updated.delivery_results),
+        json!({"ch2": {"status": "sent"}})
+    );
+}
