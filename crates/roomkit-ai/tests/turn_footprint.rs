@@ -542,3 +542,105 @@ async fn the_window_holds_the_turn_its_history_and_its_reply() {
     // A reply of 6,000 tokens in a window of 32,000.
     assert_eq!(overflowing, Vec::<String>::new());
 }
+
+/// A window of the room's latest `window` events that records the footprint
+/// the channel measured when it reads the room.
+#[derive(Clone)]
+struct MeasuredSliding {
+    inner: Arc<SlidingWindowMemory>,
+    seen: Arc<Mutex<Vec<Option<TurnFootprint>>>>,
+}
+
+impl MeasuredSliding {
+    fn new(window: usize) -> Self {
+        let options = SlidingWindowMemoryOptions { max_events: window };
+        Self {
+            inner: Arc::new(SlidingWindowMemory::new(options)),
+            seen: Arc::default(),
+        }
+    }
+}
+
+impl MemoryProvider for MeasuredSliding {
+    fn recent_events_window(&self) -> usize {
+        self.inner.recent_events_window()
+    }
+
+    fn retrieve<'a>(
+        &'a self,
+        room_id: &'a RoomId,
+        current_event: &'a RoomEvent,
+        context: &'a RoomContext,
+        options: RetrieveOptions,
+    ) -> Pin<Box<dyn Future<Output = Result<MemoryResult, ChannelError>> + Send + 'a>> {
+        self.seen.lock().unwrap().push(current_turn_footprint());
+        self.inner
+            .retrieve(room_id, current_event, context, options)
+    }
+}
+
+// Python: channels/_ai_context.py `_replayed_costs` over the rows of
+// turns/_wiring.py `build_tool_history_loader`, read from the room's message
+// before the history's first on (RMK-1370).
+/// RFC §20: the footprint measures the rounds the history's rows hold, from
+/// the room's message before its first on: an older round, which the
+/// channel still reads for its tool memory among its latest 60 tool rows,
+/// is none of them.
+#[tokio::test]
+async fn the_footprint_measures_no_round_older_than_the_history() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("c1", "lookup", r#"{"q": "a"}"#)]),
+        ScriptedRound::answering("one"),
+        ScriptedRound::answering("two"),
+        ScriptedRound::answering("three"),
+        ScriptedRound::answering("four"),
+    ]);
+    let handler = ToolHandler::new(|_name, _arguments| async { Ok(ToolResult::Text("x".into())) });
+    let memory = MeasuredSliding::new(2);
+    let options = AiChannelOptions {
+        tools: vec![AiTool::new("lookup", "Looks up").unwrap().into()],
+        tool_handler: Some(handler),
+        memory: Some(Arc::new(memory.clone())),
+        ..AiChannelOptions::default()
+    };
+    let agent = AiChannel::new(channel("agent"), model.clone(), options).unwrap();
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let member = RecordingTransport::new(
+        channel("member"),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(member).unwrap();
+    kit.register_channel(agent).unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["member", "agent"] {
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    for body in ["first", "second", "third", "fourth"] {
+        let message = InboundMessage::new(channel("member"), "u1", TextContent::new(body));
+        let options = ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        };
+        kit.process_inbound(message, options).await.unwrap();
+        roomkit::testing::idle(&kit).await;
+    }
+    kit.close().await.unwrap();
+
+    let seen = memory.seen.lock().unwrap().clone();
+    let replayed: Vec<usize> = seen
+        .iter()
+        .map(|footprint| footprint.as_ref().unwrap().replayed.len())
+        .collect();
+    // The second turn's history reads the first's round; the third's and the
+    // fourth's start past the room's message before them, the round older,
+    // which their tool memory still reads.
+    assert_eq!(replayed, [0, 1, 0, 0]);
+}

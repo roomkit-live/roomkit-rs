@@ -917,8 +917,9 @@ fn a_later_turn_replays_an_instruction_at_its_place() {
     assert_eq!(room.read(&alone, 50), vec![marked("Summarize the room.")]);
 }
 
-// Python: channels/_tool_history.py with_tool_rounds: an instruction whose
-// turn the history holds may open it, the round of its turn after it.
+// Python: tests/test_channels/test_tool_history.py::test_an_instruction_that_opened_the_room_replays_with_its_rounds
+// (channels/_tool_history.py with_tool_rounds: an instruction whose turn the
+// history holds may open it, the round of its turn after it).
 /// RFC §10.1.1: an instruction that opened the room, before any message,
 /// opens the history of the agent's later turns when its turn's answer is
 /// in it, the round its turn made after it; a round of another turn before

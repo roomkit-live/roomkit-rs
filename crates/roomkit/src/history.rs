@@ -20,7 +20,9 @@
 //! executor whole, so a turn run apart reads the same rows.
 
 use roomkit_core::model::{ChannelBinding, EventType, RoomContext, RoomEvent, RoomId};
+use roomkit_core::rules::transcript::TOOL_MEMORY_ONLY;
 use roomkit_core::rules::visible_events;
+use serde_json::Value;
 
 use crate::discussion_turn::discussion_turn;
 use crate::store::{ConversationStore, EventFilter, ListEventsOptions, StoreError};
@@ -166,8 +168,14 @@ async fn read<S: ConversationStore>(
         .map(|known| known.index)
         .chain(answered_index(event))
         .min();
-    let replayed = match first {
-        Some(first) => replayed_rows(store, binding, &event.room_id, first).await?,
+    // Where the rows the history replays start: after the room's message
+    // before its first event; none for a history with no event.
+    let from = match first {
+        Some(first) => Some(message_before(store, &event.room_id, first).await?),
+        None => None,
+    };
+    let replayed = match from {
+        Some(after) => replayed_rows(store, binding, &event.room_id, after).await?,
         None => Vec::new(),
     };
     let latest_rows = ListEventsOptions {
@@ -176,7 +184,17 @@ async fn read<S: ConversationStore>(
         newest_first: true,
         ..ListEventsOptions::default()
     };
-    history.extend(store.list_events(&event.room_id, latest_rows).await?);
+    let replays = |index: u64| from.is_some_and(|after| after.is_none_or(|after| index > after));
+    let latest = store.list_events(&event.room_id, latest_rows).await?;
+    history.extend(latest.into_iter().map(|mut row| {
+        // One older than the history's rows is the tool memory's alone.
+        row.metadata.shift_remove(TOOL_MEMORY_ONLY);
+        if !replays(row.index) {
+            row.metadata
+                .insert(TOOL_MEMORY_ONLY.to_owned(), Value::Bool(true));
+        }
+        row
+    }));
     history.extend(replayed);
     history.sort_by_key(|event| event.index);
     history.dedup_by(|later, earlier| later.id == earlier.id);
@@ -223,17 +241,17 @@ fn answered_index(event: &RoomEvent) -> Option<u64> {
 }
 
 /// Every row of `binding`'s channel's own that a turn's history replays,
-/// from the room's message before `first`, the history's first event, on:
-/// the rounds its history holds and the instructions its turns read, the
-/// one that opened the first of them included, read page by page. Python's
-/// `build_tool_history_loader`.
+/// after `after`, the room's message before the history's first event (from
+/// the room's first with none): the rounds its history holds and the
+/// instructions its turns read, the one that opened the first of them
+/// included, read page by page, none held for the tool memory alone.
+/// Python's `build_tool_history_loader`.
 async fn replayed_rows<S: ConversationStore>(
     store: &S,
     binding: &ChannelBinding,
     room_id: &RoomId,
-    first: u64,
+    mut after: Option<u64>,
 ) -> Result<Vec<RoomEvent>, StoreError> {
-    let mut after = message_before(store, room_id, first).await?;
     let mut rows = Vec::new();
     loop {
         let page = ListEventsOptions {
@@ -245,7 +263,10 @@ async fn replayed_rows<S: ConversationStore>(
         let page = store.list_events(room_id, page).await?;
         let full = u64::try_from(page.len()).is_ok_and(|read| read >= HISTORY_ROWS_PAGE);
         after = page.last().map(|last| last.index).or(after);
-        rows.extend(page);
+        rows.extend(page.into_iter().map(|mut row| {
+            row.metadata.shift_remove(TOOL_MEMORY_ONLY);
+            row
+        }));
         if !full {
             return Ok(rows);
         }
@@ -435,8 +456,9 @@ mod tests {
         assert_eq!((indexes, messages), (expected, 49));
     }
 
-    // Python: turns/_wiring.py build_tool_history_loader, _wiring_env.py
-    // read_message_before: the agent's rows from the room's message before
+    // Python: tests/test_channels/test_tool_history.py::test_the_history_reads_every_row_page_by_page
+    // (turns/_wiring.py build_tool_history_loader, _wiring_env.py
+    // read_message_before): the agent's rows from the room's message before
     // the history's first on, every one, page by page (RMK-1370), and its
     // latest 60 for its tool memory; an older row neither reads is left out.
     #[tokio::test]
@@ -455,6 +477,36 @@ mod tests {
         let mut expected = vec![3];
         expected.extend(4..616);
         assert_eq!((indexes, messages), (expected, 51));
+    }
+
+    // Python: turns/_wiring.py build_tool_usage_loader, which reads the latest
+    // 60 tool rows for the tool memory, beside build_tool_history_loader,
+    // which reads the history's from the room's message before its first on
+    // (RMK-1370).
+    /// A tool row among the latest 60 but older than the room's message
+    /// before the history's first is held for the tool memory alone, marked
+    /// so; one after that message is the history's, unmarked, whatever a
+    /// stored row carried under the key.
+    #[tokio::test]
+    async fn an_older_tool_row_is_held_for_the_tool_memory_alone() {
+        let mut gap = event(3, Some("agent"));
+        gap.metadata
+            .insert(TOOL_MEMORY_ONLY.to_owned(), Value::Bool(true));
+        let mut events = vec![event(0, None), event(1, Some("agent")), event(2, None), gap];
+        events.extend((4..55).map(|index| event(index, None)));
+        let trigger = events[54].clone();
+        let store = store(events).await;
+        let agent = binding("agent", ChannelType::AI);
+        let mut context = RoomContext::new(Room::new(room_id()));
+        context.bindings = vec![binding("sms", ChannelType::SMS), agent.clone()];
+        let read = turn_context(&store, &agent, &trigger, context, 50).await;
+        let rows: Vec<(u64, bool)> = read
+            .recent_events
+            .iter()
+            .filter(|event| event.r#type == EventType::ToolCallStart)
+            .map(|row| (row.index, row.metadata.contains_key(TOOL_MEMORY_ONLY)))
+            .collect();
+        assert_eq!(rows, [(1, true), (3, false)]);
     }
 
     /// A stored trigger that is no message, a delete here, is the history's

@@ -74,7 +74,8 @@ pub(super) fn tool_rounds(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<T
 /// history handed it whole or withheld its content, as a channel's history
 /// does (RFC §7.5 rule 8, `visible_events`): it ends a round, as the
 /// reference implementation's withheld row does, and so does an
-/// instruction it kept (RFC §10.1.1), a row of no call.
+/// instruction it kept (RFC §10.1.1), a row of no call. A row a turn holds
+/// for the tool memory alone is none of its history's.
 fn own_rows<'a>(
     events: &'a [RoomEvent],
     channel_id: &'a ChannelId,
@@ -93,7 +94,7 @@ fn own_rows<'a>(
         } else {
             None
         };
-        (is_tool_row && own).then_some((event, row))
+        (is_tool_row && own && !super::is_tool_memory_only(event)).then_some((event, row))
     })
 }
 

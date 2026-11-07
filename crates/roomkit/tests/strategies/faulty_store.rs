@@ -21,6 +21,9 @@ pub(crate) struct AbstractOnly {
     pub(crate) fail_updates: std::sync::atomic::AtomicBool,
     /// The next `get_event` fails once set.
     pub(crate) fail_next_event_read: std::sync::atomic::AtomicBool,
+    /// `commit_event` of an agent's copy of an instruction (RFC §10.1.1)
+    /// fails while set.
+    pub(crate) fail_kept_instructions: std::sync::atomic::AtomicBool,
     /// `add_binding` waits while a test holds it written.
     pub(crate) binding_gate: tokio::sync::RwLock<()>,
     /// Told as an `add_binding` reaches the gate.
@@ -180,6 +183,14 @@ impl ConversationStore for AbstractOnly {
         event: RoomEvent,
         options: store::CommitEventOptions,
     ) -> Result<RoomEvent, StoreError> {
+        let kept = event.r#type == roomkit::model::EventType::InstructionRead;
+        if kept
+            && self
+                .fail_kept_instructions
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(StoreError::Value("the database is gone".into()));
+        }
         self.store.commit_event(room_id, event, options).await
     }
 

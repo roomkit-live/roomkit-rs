@@ -680,6 +680,23 @@ fn joined_notes(blocks: &[String]) -> Option<String> {
     Some(format!("{NOTES_HEADER}\n\n{}", blocks.join("\n\n")))
 }
 
+/// The metadata key the kit's history read writes on its copy of a tool-call
+/// row it hands a turn for the channel's tool memory alone (one of its
+/// latest 60, which Python's usage loader reads), older than the room's
+/// message before the history's first: no round replays it and the turn's
+/// footprint measures none of it, as Python's history reads its rows from
+/// that message on (RFC §6.4, RMK-1370). The read clears it from every row
+/// it reads first, so that no stored row carries it into a turn.
+#[doc(hidden)]
+pub const TOOL_MEMORY_ONLY: &str = "_tool_memory_only";
+
+/// Whether `event` is a row a turn holds for its channel's tool memory alone
+/// ([`TOOL_MEMORY_ONLY`]).
+#[doc(hidden)]
+pub fn is_tool_memory_only(event: &RoomEvent) -> bool {
+    event.metadata.get(TOOL_MEMORY_ONLY) == Some(&serde_json::Value::Bool(true))
+}
+
 /// A piece of the channel's earlier turns its history replays beside their
 /// messages (RFC §6.4, §10.1.1): a round of tool calls, or an instruction a
 /// turn read, as a memory charges it to the history event it reads with
