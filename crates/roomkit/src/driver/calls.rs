@@ -1059,7 +1059,7 @@ pub(crate) async fn outcome_of(written: &mut Written) -> Outcome {
 /// calls into the room draw on the work's hook calls, at least one deeper
 /// than its event (RFC §8.3, §9.5.1, §10.1 step 16, gap G-087). Once the
 /// kit is shut down, none runs.
-pub(super) fn perform<S: ConversationStore>(
+pub(crate) fn perform<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     notice: Notice,
 ) -> Option<Handled> {

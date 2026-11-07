@@ -207,6 +207,52 @@ async fn cut(stuck: Stuck, turns: Turns) -> Cut {
 
 /// [`cut`], its target taking `delivers_in` for each delivery.
 async fn cut_with(stuck: Stuck, turns: Turns, delivers_in: Duration) -> Cut {
+    let bench = bench(stuck, turns, delivers_in, true).await;
+    let kit = bench.kit;
+    let mut one = message("one");
+    one.delivery_key = Some("k".to_owned());
+    let sender = kit.clone();
+    let opts = options(&bench.a);
+    let first = tokio::spawn(async move { sender.process_inbound(one, opts).await });
+    timeout(LONG, bench.told.notified()).await.unwrap();
+    if !matches!(stuck, Stuck::BetweenReads) {
+        timeout(LONG, bench.running.notified()).await.unwrap();
+    }
+    let cancelled = kit
+        .cancel_delivery("k", roomkit::CancelDeliveryOptions::default())
+        .await;
+    assert_eq!(cancelled, 1);
+    Cut {
+        kit,
+        read: bench.read,
+        delivered: bench.delivered,
+        reported: bench.reported,
+        first,
+        a: bench.a,
+        b: bench.b,
+    }
+}
+
+/// A kit with `stuck`'s target and an agent that writes "Hello." and calls a
+/// tool that never returns, then answers; rooms `a` and `b` bind the target,
+/// and the agent when `agent_bound`.
+struct Bench {
+    kit: RoomKit,
+    /// Told once the target read its first item.
+    told: Arc<Notify>,
+    /// Told once the tool runs.
+    running: Arc<Notify>,
+    read: Arc<Mutex<Vec<String>>>,
+    delivered: Arc<Mutex<Vec<EventType>>>,
+    /// Told of each `ON_ERROR`.
+    reported: Arc<Notify>,
+    /// Each `ON_ERROR`'s payload.
+    errors: Arc<Mutex<Vec<RoomEvent>>>,
+    a: RoomId,
+    b: RoomId,
+}
+
+async fn bench(stuck: Stuck, turns: Turns, delivers_in: Duration, agent_bound: bool) -> Bench {
     let kit = RoomKit::new(RoomKitOptions::default());
     let told = Arc::new(Notify::new());
     let read = Arc::new(Mutex::new(Vec::new()));
@@ -245,10 +291,13 @@ async fn cut_with(stuck: Stuck, turns: Turns, delivers_in: Duration) -> Cut {
     kit.register_channel(AiChannel::new(channel("ai"), model, agent_options).unwrap())
         .unwrap();
     let reported = Arc::new(Notify::new());
+    let errors = Arc::new(Mutex::new(Vec::new()));
     let on_error = Arc::clone(&reported);
+    let kept = Arc::clone(&errors);
     kit.hook(
         HookTrigger::OnError,
-        move |_event: RoomEvent, _context| {
+        move |event: RoomEvent, _context| {
+            kept.lock().unwrap().push(event);
             on_error.notify_one();
             async {}
         },
@@ -260,6 +309,7 @@ async fn cut_with(stuck: Stuck, turns: Turns, delivers_in: Duration) -> Cut {
     )
     .unwrap();
     let (a, b) = (RoomId::new("a").unwrap(), RoomId::new("b").unwrap());
+    let bound: &[&str] = if agent_bound { &["ws", "ai"] } else { &["ws"] };
     for room in [&a, &b] {
         kit.create_room(CreateRoomOptions {
             room_id: Some(room.clone()),
@@ -267,34 +317,48 @@ async fn cut_with(stuck: Stuck, turns: Turns, delivers_in: Duration) -> Cut {
         })
         .await
         .unwrap();
-        for id in ["ws", "ai"] {
+        for id in bound {
             kit.attach_channel(room, &channel(id), AttachChannelOptions::default())
                 .await
                 .unwrap();
         }
     }
-    let mut one = message("one");
-    one.delivery_key = Some("k".to_owned());
-    let sender = kit.clone();
-    let opts = options(&a);
-    let first = tokio::spawn(async move { sender.process_inbound(one, opts).await });
-    timeout(LONG, told.notified()).await.unwrap();
-    if !matches!(stuck, Stuck::BetweenReads) {
-        timeout(LONG, running.notified()).await.unwrap();
-    }
-    let cancelled = kit
-        .cancel_delivery("k", roomkit::CancelDeliveryOptions::default())
-        .await;
-    assert_eq!(cancelled, 1);
-    Cut {
+    Bench {
         kit,
+        told,
+        running,
         read,
         delivered,
         reported,
-        first,
+        errors,
         a,
         b,
     }
+}
+
+/// What each `ON_ERROR` payload says: its source, its error, its category.
+fn reported(errors: &Mutex<Vec<RoomEvent>>) -> Vec<(String, Value, Value)> {
+    errors
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|error| {
+            (
+                error.source.channel_id.to_string(),
+                error.metadata["error"].clone(),
+                error.metadata["error_category"].clone(),
+            )
+        })
+        .collect()
+}
+
+/// What a target that fails past its stream's end reports, once.
+fn the_flush_failed() -> Vec<(String, Value, Value)> {
+    vec![(
+        "ai".to_owned(),
+        json!("the flush failed"),
+        json!("streaming"),
+    )]
 }
 
 /// Longer than anything a test here waits for, on its clock.
@@ -528,6 +592,59 @@ async fn a_target_that_fails_at_once_stays_as_python() {
         unrecorded[1].2 = None;
         assert_eq!(rows_of(&cut.kit, &cut.a).await, unrecorded);
         cut.kit.close().await.unwrap();
+    }
+}
+
+// RFC §12.2 step 13s (RMK-1330, HITL 267527a7): the kit's close cuts the turn a
+// target reads and leaves the target to end alone; one that fails past its
+// stream's end, at once or once it flushed, is reported to ON_ERROR once, as the
+// response's source, as Python's target whose `finally` fails.
+#[tokio::test(start_paused = true)]
+async fn a_target_that_fails_past_the_close_s_cut_fires_on_error() {
+    for stuck in [Stuck::FailsAtOnce, Stuck::FailsFlushing] {
+        let bench = bench(stuck, Turns::Ordinary, Duration::ZERO, true).await;
+        let sender = bench.kit.clone();
+        let opts = options(&bench.a);
+        let first = tokio::spawn(async move { sender.process_inbound(message("one"), opts).await });
+        timeout(LONG, bench.told.notified()).await.unwrap();
+        timeout(LONG, bench.running.notified()).await.unwrap();
+
+        bench.kit.close().await.unwrap();
+        timeout(LONG, first).await.unwrap().unwrap().unwrap();
+
+        assert_eq!(reported(&bench.errors), the_flush_failed(), "{stuck:?}");
+    }
+}
+
+// RFC §12.2 step 13s, §23.3 (RMK-1330, HITL 267527a7): cancel_task cuts the
+// worker's turn a shared target reads and leaves the target to end alone; one
+// that fails past its stream's end, at once or once it flushed, is reported to
+// ON_ERROR once, as the response's source, as Python's.
+#[tokio::test(start_paused = true)]
+async fn a_target_that_fails_past_a_task_s_cancel_fires_on_error() {
+    for stuck in [Stuck::FailsAtOnce, Stuck::FailsFlushing] {
+        let bench = bench(stuck, Turns::Ordinary, Duration::ZERO, false).await;
+        let shared = roomkit::DelegateOptions {
+            share_channels: Some(vec![channel("ws")]),
+            ..roomkit::DelegateOptions::default()
+        };
+        let task = bench
+            .kit
+            .delegate(&bench.a, &channel("ai"), "Go.", shared)
+            .await
+            .unwrap();
+        timeout(LONG, bench.told.notified()).await.unwrap();
+        timeout(LONG, bench.running.notified()).await.unwrap();
+
+        let cancel = bench
+            .kit
+            .cancel_task(&task.id, roomkit::CancelTaskOptions::default());
+        assert!(timeout(LONG, cancel).await.unwrap(), "{stuck:?}");
+        timeout(LONG, bench.reported.notified()).await.unwrap();
+        roomkit::testing::idle(&bench.kit).await;
+
+        assert_eq!(reported(&bench.errors), the_flush_failed(), "{stuck:?}");
+        bench.kit.close().await.unwrap();
     }
 }
 

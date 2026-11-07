@@ -33,11 +33,11 @@ use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, EventDirection, EventSource, EventType,
     RoomContext, RoomEvent, TextContent, Visibility,
 };
-use crate::ops::Cx;
 use crate::ops::protocol::{
     ChannelRequest, EffectId, EntryId, Outcome, ROW_HIDDEN, ROW_WITHHELD, StoreRequest,
     StreamTarget, TURN_CUT,
 };
+use crate::ops::{Cx, Environment};
 use crate::rules::chain_depth::{self, ReentryBudget};
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions::{self, DeliveryPlan};
@@ -502,29 +502,60 @@ fn delivers_to(plan: &DeliveryPlan, channel_id: &ChannelId) -> bool {
 }
 
 /// Fires `ON_ERROR` for the failure of `job`'s stream, `error` (RFC §9.2,
-/// §12.2 step 13s), its payload one hop deeper than the event the stream
-/// answers, as a failed turn's, carrying the stream's `correlation_id`.
+/// §12.2 step 13s), as [`stream_failure`] reports it.
 pub(super) fn report_failure(
     cx: &mut Cx<'_>,
     job: &StreamJob,
     context: &RoomContext,
     error: &ErrorRecord,
 ) {
-    let id = cx.env.new_event_id();
-    let now = cx.env.now();
-    let within = job.answers_within.as_ref();
-    let mut payload = stamp::error_event(
-        id,
-        &job.responder,
-        &job.answers,
-        within,
+    let failure = StreamFailure {
+        responder: &job.responder,
+        answers: &job.answers,
+        correlation_id: job.correlation_id.as_deref(),
         error,
-        "streaming",
-        now,
-    );
-    payload.correlation_id.clone_from(&job.correlation_id);
-    let seen = permissions::context_for(&job.responder, context);
+    };
+    let (payload, seen) = stream_failure(&failure, cx.env, context);
     cx.fire_observers(HookTrigger::OnError, &payload, &seen);
+}
+
+/// The failure of a turn's streamed response, the response's own or its
+/// streaming target's (RFC §12.2 step 13s).
+#[derive(Clone, Copy, Debug)]
+pub struct StreamFailure<'a> {
+    /// The intelligence channel whose response it is.
+    pub responder: &'a ChannelBinding,
+    /// The event the response answers.
+    pub answers: &'a RoomEvent,
+    /// The response's own id, once its read was asked.
+    pub correlation_id: Option<&'a str>,
+    /// The failure.
+    pub error: &'a ErrorRecord,
+}
+
+/// What `ON_ERROR` is handed for `failure` (RFC §9.2, §12.2 step 13s): its
+/// payload, one hop deeper than the event the stream answers, as a failed
+/// turn's, carrying the stream's `correlation_id`, and the room as
+/// `context` holds it, as the responder may know it. A driver reports so a
+/// streaming target that fails once the read that was cut left it to end
+/// alone, the read's operation over by then.
+pub fn stream_failure(
+    failure: &StreamFailure<'_>,
+    environment: &dyn Environment,
+    context: &RoomContext,
+) -> (RoomEvent, RoomContext) {
+    let mut payload = stamp::error_event(
+        environment.new_event_id(),
+        failure.responder,
+        failure.answers,
+        failure.answers.response_visibility.as_ref(),
+        failure.error,
+        "streaming",
+        environment.now(),
+    );
+    payload.correlation_id = failure.correlation_id.map(str::to_owned);
+    let seen = permissions::context_for(failure.responder, context);
+    (payload, seen)
 }
 
 /// The result a row's entry is settled with when it is not committed: its

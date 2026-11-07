@@ -54,6 +54,7 @@ use tokio::time::Instant;
 
 pub(crate) use self::calls::cut_by_close;
 pub(crate) use self::calls::load_context;
+pub(crate) use self::calls::perform;
 use self::calls::{WentOn, Written};
 use self::holds::{Answer, Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::in_flight::InFlight;
@@ -872,7 +873,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 failure_log::log_failure(log, &error, &what, receives);
             }
             notice @ (Notice::FrameworkEvent(_) | Notice::AsyncHooks { .. }) => {
-                if let Some(handled) = calls::perform(self.inner, notice) {
+                if let Some(handled) = perform(self.inner, notice) {
                     handled.wait().await;
                 }
             }
