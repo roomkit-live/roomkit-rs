@@ -530,6 +530,20 @@ pub trait Operation {
     fn locks_held_back(&self) -> Vec<(RoomId, usize)> {
         Vec::new()
     }
+
+    /// The kit's close sealed the rooms' delivery lanes (RFC §12.10.4): a
+    /// delivery set the operation holds queued with a place there, not yet
+    /// waiting for its turn, is dropped as the lane drops the sets it holds,
+    /// and stores what its event's hooks gave within the close's grace
+    /// (RFC §10.1 step 15), whatever set of the operation still delivers
+    /// ahead of it; but the set of an event of `runs`, placed first in its
+    /// lane while the lane was idle, which runs from its placement. A driver
+    /// tells it as the close starts, then polls; an operation that delivers
+    /// nothing ignores it.
+    #[doc(hidden)]
+    fn lanes_sealed(&mut self, runs: &[EventId]) {
+        let _ = runs;
+    }
 }
 
 /// A driver broke the protocol.

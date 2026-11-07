@@ -551,6 +551,15 @@ impl Operation for Inbound {
     fn locks_held_back(&self) -> Vec<(RoomId, usize)> {
         self.io.locks_held_back()
     }
+
+    /// Drops, on the next poll, every delivery set the operation holds
+    /// queued with a place in its room's lane, the kit's close having
+    /// sealed it (RFC §12.10.4), but the set of an event of `runs`, which
+    /// runs from its placement: each stores what its event's hooks gave
+    /// within the close's grace (RFC §10.1 step 15).
+    fn lanes_sealed(&mut self, runs: &[EventId]) {
+        self.machine.cascade.seal_lanes(runs.to_vec());
+    }
 }
 
 /// What the call brings into the room.

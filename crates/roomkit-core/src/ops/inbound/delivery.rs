@@ -27,7 +27,8 @@ use super::queues::Lineage;
 use super::{reply_record, report, stamp};
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, DeliveryError, DeliveryResult, DeliveryResultStatus,
-    ErrorRecord, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task, Visibility,
+    ErrorRecord, EventId, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task,
+    Visibility,
 };
 use crate::ops::protocol::{
     CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, EntryId, HoldOutcome,
@@ -410,6 +411,40 @@ impl DeliverySet {
         Progress::Waiting
     }
 
+    /// Whether the set, queued and not started, is dropped by its room's
+    /// lane, sealed by the kit's close (RFC §12.10.4): a set the lane took
+    /// no place for, the kit closing, and, once `sealed` names the events
+    /// whose set runs from its placement (placed first in an idle lane),
+    /// a set holding another place, as the lane drops the sets it holds.
+    pub(super) fn drops_in_a_sealed_lane(&self, sealed: Option<&[EventId]>) -> bool {
+        match self.place {
+            Place::Closed => true,
+            Place::Taken => sealed.is_some_and(|runs| !runs.contains(&self.event.id)),
+            Place::Missing
+            | Place::Awaiting(_)
+            | Place::Turn
+            | Place::Checking(_)
+            | Place::Leaving(_)
+            | Place::Left => false,
+        }
+    }
+
+    /// Drops the set, queued and not started, its room's lane sealed by the
+    /// kit's close (RFC §12.10.4): it delivers nothing, its cascade
+    /// cancelled [`KIT_CLOSED`], leaves the place it holds, as a set the
+    /// lane answers [`HoldOutcome::LaneClosed`] does, then stores what its
+    /// event's hooks gave ([`store_dropped`](Self::store_dropped)), whatever
+    /// set of its operation still delivers ahead of it.
+    pub(super) fn drop_unstarted(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
+        self.outcome.cancelled = Some(KIT_CLOSED);
+        if self.place != Place::Taken {
+            self.place = Place::Left;
+            return self.finish(cx);
+        }
+        self.place = Place::Turn;
+        self.progress(cx)
+    }
+
     /// Calls every registered target's `on_event()` at once; a target
     /// whose channel is not registered is not called (gap G-048).
     fn deliver(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
@@ -650,8 +685,10 @@ impl DeliverySet {
     /// that ran stores it (RFC §10.1 step 15), Python's
     /// `_store_dropped_side_effects`: the call that made the set, the
     /// operation's own or an entry it adopted, is told of the drop once its
-    /// tasks are stored, and the write is made within the kit's close's
-    /// grace, not at the cascade's end.
+    /// tasks are stored, and the write is made at the drop, within the
+    /// kit's close's grace, not at the cascade's end: a set queued behind
+    /// another of its operation is dropped as the close starts
+    /// ([`drop_unstarted`](Self::drop_unstarted)).
     fn store_dropped(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
         let own = (
             std::mem::take(&mut self.outcome.tasks),

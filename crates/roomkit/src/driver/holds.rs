@@ -241,6 +241,14 @@ impl<'kit> Held<'kit> {
         self.running.contains(&(room_id.clone(), event_id.clone()))
     }
 
+    /// The events whose set runs from its placement (`runs`), in any room.
+    pub(super) fn running_events(&self) -> Vec<EventId> {
+        self.running
+            .iter()
+            .map(|(_, event_id)| event_id.clone())
+            .collect()
+    }
+
     /// Carries out `request` for `effect`: a release, a place or a ticket at
     /// once, a wait as a future, within `deadline`.
     pub(super) fn hold(

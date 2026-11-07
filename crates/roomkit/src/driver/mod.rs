@@ -740,6 +740,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// `kit_closed`, so that it reports what it delivered.
     async fn closing<O: Operation>(&mut self, operation: &mut O, phase: Phase) -> Result<(), Stop> {
         self.drop_queued(operation)?;
+        // And the sets it holds queued behind one still delivering, but the
+        // one placed first in an idle lane, which runs from its placement.
+        operation.lanes_sealed(&self.held.running_events());
         if self.inner.tasks.spares(&self.marks) {
             return Ok(());
         }

@@ -42,7 +42,7 @@ use super::pass::{CommitPass, PassOrigin};
 use super::record::RecordPass;
 use super::stream::{self, PendingRow, Read, StreamEnd, StreamJob, StreamRead};
 use super::{Machine, Stage};
-use crate::model::{Metadata, RoomEvent, RoomId};
+use crate::model::{EventId, Metadata, RoomEvent, RoomId};
 use crate::ops::failure_log::Log;
 use crate::ops::io::Io;
 use crate::ops::protocol::{AnswerOf, EffectId, Entry, EntryId, Notice, Outcome, SpanNote};
@@ -96,6 +96,14 @@ pub(super) struct Cascade {
     pass: Option<Job>,
     sets: VecDeque<Delivery>,
     delivery: Option<Delivery>,
+    /// The sets dropped before they started, their room's lane sealed by
+    /// the kit's close, storing what their events' hooks gave while the
+    /// running set delivers on (RFC §10.1 step 15, §12.10.4).
+    dropping: Vec<Delivery>,
+    /// Once the kit's close sealed the rooms' delivery lanes, the events
+    /// whose set runs from its placement, placed first in an idle lane: a
+    /// set queued holding another place there is dropped at once.
+    lanes_sealed: Option<Vec<EventId>>,
     /// Whether the cascade stopped, failed or past its deadline: no pass
     /// runs any more, committed events are still delivered.
     stopping: bool,
@@ -139,6 +147,8 @@ impl Cascade {
             pass: None,
             sets: VecDeque::new(),
             delivery: None,
+            dropping: Vec::new(),
+            lanes_sealed: None,
             stopping: false,
             stopped: Vec::new(),
             cut: Vec::new(),
@@ -225,7 +235,7 @@ impl Cascade {
         self.stopping = true;
         self.passes.clear();
         self.streams.clear();
-        for delivery in self.sets.iter_mut().chain(self.delivery.as_mut()) {
+        for delivery in self.all_sets_mut() {
             delivery.then.clear();
         }
     }
@@ -240,7 +250,7 @@ impl Cascade {
         }
         self.passes.retain(|job| job.lineage() != lineage);
         self.streams.retain(|job| job.lineage != lineage);
-        for delivery in self.sets.iter_mut().chain(self.delivery.as_mut()) {
+        for delivery in self.all_sets_mut() {
             if delivery.set.lineage() == lineage {
                 delivery.then.clear();
             }
@@ -332,9 +342,7 @@ impl Cascade {
             Job::Pass(pass, _) | Job::Row(pass, _) => pass.lineage() == lineage,
             Job::Record(..) => false,
         };
-        self.sets
-            .iter()
-            .chain(&self.delivery)
+        self.all_sets()
             .any(|delivery| delivery.set.lineage() == lineage)
             || self.passes.iter().chain(&self.pass).any(of)
             || self.streams.iter().any(|job| job.lineage == lineage)
@@ -360,11 +368,7 @@ impl Cascade {
     /// entry `entry` waits for is queued or running, held with a set or not
     /// (`Job::owed`).
     pub(super) fn owes(&self, entry: EntryId) -> bool {
-        let then = self
-            .sets
-            .iter()
-            .chain(&self.delivery)
-            .flat_map(|delivery| &delivery.then);
+        let then = self.all_sets().flat_map(|delivery| &delivery.then);
         self.passes
             .iter()
             .chain(&self.pass)
@@ -377,11 +381,7 @@ impl Cascade {
     /// running, of any cascade, held with a set or waiting as a row, and
     /// nothing of the call's own cascade (RFC §9.5.1 Reentrance).
     pub(super) fn leaves_entries_deliveries_only(&self) -> bool {
-        let holds_a_pass = self
-            .sets
-            .iter()
-            .chain(&self.delivery)
-            .any(|delivery| !delivery.then.is_empty());
+        let holds_a_pass = self.all_sets().any(|delivery| !delivery.then.is_empty());
         !self.is_idle()
             && self.passes.is_empty()
             && self.pass.is_none()
@@ -397,6 +397,7 @@ impl Cascade {
             && self.sets.is_empty()
             && self.pass.is_none()
             && self.delivery.is_none()
+            && self.dropping.is_empty()
             && self.streams.is_empty()
             && self.stream.is_none()
             && self.rows.is_empty()
@@ -409,6 +410,7 @@ impl Cascade {
             && self.sets.is_empty()
             && self.pass.is_none()
             && self.delivery.is_none()
+            && self.dropping.is_empty()
             && self.stream.is_none()
             && self.rows.is_empty()
     }
@@ -456,11 +458,50 @@ impl Cascade {
         self.pass.as_ref().is_some_and(|job| job.awaits(effect))
     }
 
-    /// Whether the running set waits for `effect`.
+    /// Whether the running set, or a set dropped before it started,
+    /// waits for `effect`.
     pub(super) fn set_awaits(&self, effect: EffectId) -> bool {
         self.delivery
-            .as_ref()
-            .is_some_and(|delivery| delivery.set.awaits(effect))
+            .iter()
+            .chain(&self.dropping)
+            .any(|delivery| delivery.set.awaits(effect))
+    }
+
+    /// Every set the cascade holds: queued, running, or dropped before it
+    /// started and storing what its event's hooks gave.
+    fn all_sets(&self) -> impl Iterator<Item = &Delivery> {
+        self.sets.iter().chain(&self.delivery).chain(&self.dropping)
+    }
+
+    /// Every set the cascade holds, as [`all_sets`](Self::all_sets).
+    fn all_sets_mut(&mut self) -> impl Iterator<Item = &mut Delivery> {
+        self.sets
+            .iter_mut()
+            .chain(self.delivery.as_mut())
+            .chain(&mut self.dropping)
+    }
+
+    /// The kit's close sealed the rooms' delivery lanes (RFC §12.10.4):
+    /// the sets queued holding a place there are dropped at once, but those
+    /// of the events of `runs`, which run from their placement.
+    pub(super) fn seal_lanes(&mut self, runs: Vec<EventId>) {
+        self.lanes_sealed = Some(runs);
+    }
+
+    /// Takes out the queued sets the room's lane, sealed, drops: those
+    /// holding a place there once the kit's close sealed it, but a set that
+    /// runs from its placement, and those it took no place for, the kit
+    /// closing; the others stay queued in their order.
+    fn take_sealed_out(&mut self) -> Vec<Delivery> {
+        let sealed = self.lanes_sealed.as_deref();
+        let drops = |delivery: &Delivery| delivery.set.drops_in_a_sealed_lane(sealed);
+        if !self.sets.iter().any(drops) {
+            return Vec::new();
+        }
+        let (dropped, kept): (Vec<Delivery>, Vec<Delivery>) =
+            std::mem::take(&mut self.sets).into_iter().partition(drops);
+        self.sets = kept.into();
+        dropped
     }
 }
 
@@ -510,6 +551,19 @@ impl Machine {
 
     /// Hands the running set the answer to one of its effects.
     pub(super) fn on_set_outcome(&mut self, cx: &mut Cx<'_>, effect: EffectId, outcome: Outcome) {
+        let dropped = self
+            .cascade
+            .dropping
+            .iter()
+            .position(|delivery| delivery.set.awaits(effect));
+        if let Some(position) = dropped {
+            let mut delivery = self.cascade.dropping.remove(position);
+            match delivery.set.accept(cx, effect, outcome) {
+                Progress::Waiting => self.cascade.dropping.insert(position, delivery),
+                Progress::Done(outcome) => self.set_over(cx, outcome, delivery),
+            }
+            return;
+        }
         let Some(mut delivery) = self.cascade.delivery.take() else {
             debug_assert!(false, "inbound received {effect:?} with no set running");
             return;
@@ -518,6 +572,24 @@ impl Machine {
             Progress::Waiting => self.cascade.delivery = Some(delivery),
             Progress::Done(outcome) => self.set_over(cx, outcome, delivery),
         }
+    }
+
+    /// Drops at once the queued sets the room's lane, sealed by the kit's
+    /// close, drops, as Python's sealed lane drops the entries it holds
+    /// (`_abort_pending`): each stores what its event's hooks gave within
+    /// the close's grace, whatever set of the operation still delivers
+    /// ahead of it, then its call is told (RFC §10.1 step 15, §12.10.4).
+    /// Whether it dropped one.
+    fn drop_sealed_sets(&mut self, cx: &mut Cx<'_>) -> bool {
+        let dropped = self.cascade.take_sealed_out();
+        let any = !dropped.is_empty();
+        for mut delivery in dropped {
+            match delivery.set.drop_unstarted(cx) {
+                Progress::Waiting => self.cascade.dropping.push(delivery),
+                Progress::Done(outcome) => self.set_over(cx, outcome, delivery),
+            }
+        }
+        any
     }
 
     /// A set is over: the passes it held join the queue, then what the set
@@ -553,6 +625,9 @@ impl Machine {
             {
                 job.start(cx);
                 self.cascade.pass = Some(job);
+                continue;
+            }
+            if self.drop_sealed_sets(cx) {
                 continue;
             }
             if self.cascade.delivery.is_none()
