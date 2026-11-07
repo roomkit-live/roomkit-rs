@@ -188,6 +188,68 @@ impl StoredAnswers {
     }
 }
 
+/// What the cut of an entry the room's work adopted leaves its handle to wait
+/// for: the closing of the streams it left unread, each one's end, and
+/// whether a turn among them is over without its executor's end (RFC §10.1
+/// "Explicit delivery cancellation", §10.6.8), as Python's adopted call's own
+/// cascade cleanup.
+#[derive(Debug)]
+pub(crate) struct EntryCleanup {
+    /// Whether the streams the cut left unread are closed, or there were
+    /// none.
+    closed: watch::Sender<bool>,
+    /// Whether a turn among them is over without its executor's end.
+    owed: AtomicBool,
+}
+
+impl Default for EntryCleanup {
+    fn default() -> Self {
+        Self {
+            closed: watch::Sender::new(true),
+            owed: AtomicBool::new(false),
+        }
+    }
+}
+
+impl EntryCleanup {
+    /// Closes `unread`, the streams the entry's cut left unread, one after
+    /// the other: told before it starts, over however the closing ends.
+    pub(super) fn close(self: Arc<Self>, unread: Vec<KeptStream>) -> impl Future<Output = ()> {
+        self.closed.send_replace(false);
+        let closing = EntryClosing(self);
+        async move {
+            if close_unread(unread).await {
+                closing.0.owed.store(true, Ordering::Release);
+            }
+            drop(closing);
+        }
+    }
+
+    /// Whether the streams the entry's cut left unread are closed.
+    pub(crate) fn are_closed(&self) -> bool {
+        *self.closed.borrow()
+    }
+
+    /// Returns once the streams the entry's cut left unread are closed:
+    /// whether its cleanup is then incomplete, a turn among them over
+    /// without its executor's end.
+    pub(crate) async fn incomplete_once_closed(&self) -> bool {
+        let mut closed = self.closed.subscribe();
+        // The cleanup holds the sender: never closed.
+        drop(closed.wait_for(|closed| *closed).await);
+        self.owed.load(Ordering::Acquire)
+    }
+}
+
+/// The closing of the streams an entry's cut left unread: over once dropped.
+struct EntryClosing(Arc<EntryCleanup>);
+
+impl Drop for EntryClosing {
+    fn drop(&mut self) {
+        self.0.closed.send_replace(true);
+    }
+}
+
 impl Record {
     /// The record of a call whose delivery `named` names, if any: its cut
     /// is the one the key asks for, until the run is over.

@@ -434,7 +434,8 @@ impl Shared {
     fn unread_are_closed(&self) -> bool {
         match &self.following {
             Following::Run { record, .. } => record.unread_are_closed(),
-            Following::Adopted(_) | Following::Nothing => true,
+            Following::Adopted(completion) => completion.cleanup.are_closed(),
+            Following::Nothing => true,
         }
     }
 
@@ -442,8 +443,12 @@ impl Shared {
     /// one's end come: whether the cleanup is then incomplete, a turn among
     /// those the call read or closed over without its executor's end.
     async fn cleanup_incomplete_once_closed(&self) -> bool {
-        let Following::Run { record, .. } = &self.following else {
-            return false;
+        let record = match &self.following {
+            Following::Run { record, .. } => record,
+            Following::Adopted(completion) => {
+                return completion.cleanup.incomplete_once_closed().await;
+            }
+            Following::Nothing => return false,
         };
         record.unread_closed().await;
         record.cleanup_incomplete().is_some()

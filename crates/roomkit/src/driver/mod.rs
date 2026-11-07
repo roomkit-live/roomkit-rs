@@ -60,8 +60,8 @@ use self::holds::{Answer, Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::in_flight::InFlight;
 use self::inbound::Caller;
 pub(crate) use self::inbound::{
-    CALLER_CANCELLED, InboundOutput, Ran, Record, StoredAnswers, cancelled_end, ended, run_inbound,
-    run_rerun,
+    CALLER_CANCELLED, EntryCleanup, InboundOutput, Ran, Record, StoredAnswers, cancelled_end,
+    ended, run_inbound, run_rerun,
 };
 use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
@@ -385,6 +385,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         muted: Vec::new(),
         deliveries: HashMap::new(),
         entry_answers: HashMap::new(),
+        entry_cleanups: HashMap::new(),
         entry_cancels: HashMap::new(),
         entry_cut: HashMap::new(),
         entry_named: HashMap::new(),
@@ -458,6 +459,8 @@ struct Driver<'kit, S> {
     /// The answers of each adopted entry's cascade, which its handle reads
     /// when the run ends without telling its delivery's end.
     entry_answers: HashMap<EntryId, Arc<StoredAnswers>>,
+    /// What each adopted entry's cut leaves its handle to wait for.
+    entry_cleanups: HashMap<EntryId, Arc<EntryCleanup>>,
     /// The cut each adopted entry's caller may ask of its turns, until
     /// asked (RFC §10.1 "Explicit delivery cancellation").
     entry_cancels: HashMap<EntryId, Arc<CancelRequest>>,
@@ -697,7 +700,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                     self.entry_cut.insert(entry, reason);
                     let cut = operation.cancel_entry_turns(entry);
                     self.give_up(&cut);
-                    self.close_unread_alone();
+                    self.close_unread_of(entry);
                     return Ok(());
                 }
                 Some(Event::Waited(id, waited)) => {
@@ -931,9 +934,27 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         drop(self.inner.tasks.spawn_alone(Kind::Turn, ending));
     }
 
+    /// Closes the streams the cut of the adopted entry `entry` left unread
+    /// one after the other, each waiting for its end, on a task of the
+    /// kit's, which the entry's handle waits for, as Python's adopted call's
+    /// own cascade cleanup (RFC §10.1 "Explicit delivery cancellation").
+    fn close_unread_of(&mut self, entry: EntryId) {
+        let Some(cleanup) = self.entry_cleanups.get(&entry).map(Arc::clone) else {
+            return self.close_unread_alone();
+        };
+        let unread = std::mem::take(&mut self.unread);
+        if unread.is_empty() {
+            return;
+        }
+        let closing = cleanup.close(unread);
+        // Refused, the closing is dropped, and with it what the handle waits
+        // for.
+        drop(self.inner.tasks.spawn_alone(Kind::Turn, closing));
+    }
+
     /// Closes the streams the cut left unread one after the other, each
     /// waiting for its end, on a task of the kit's nobody waits for: the
-    /// cut of a call no caller reads as cancelled, or of an adopted entry.
+    /// cut of a call no caller reads as cancelled.
     fn close_unread_alone(&mut self) {
         let unread = std::mem::take(&mut self.unread);
         if unread.is_empty() {
@@ -1441,6 +1462,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             delivered,
             answers,
             cancel,
+            cleanup,
             named,
             late,
             span,
@@ -1462,6 +1484,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 self.deliveries.insert(id, delivered);
                 self.entry_answers.insert(id, answers);
                 self.entry_cancels.insert(id, cancel);
+                self.entry_cleanups.insert(id, cleanup);
             }
             Err(entry) => {
                 tracing::debug!(
@@ -1483,6 +1506,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let Delivered { entry, mut result } = delivered;
         self.entry_answers.remove(&entry);
         self.entry_cancels.remove(&entry);
+        self.entry_cleanups.remove(&entry);
         let closing = self.inner.tasks.is_closing() && !self.inner.tasks.spares(&self.marks);
         let reason = self
             .entry_cut

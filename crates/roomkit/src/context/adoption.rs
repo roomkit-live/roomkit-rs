@@ -10,7 +10,7 @@ use tokio::task;
 
 use super::{ExecutionContext, Frame};
 use crate::delivery_keys::{CancelRequest, Named};
-use crate::driver::StoredAnswers;
+use crate::driver::{EntryCleanup, StoredAnswers};
 use crate::telemetry::{Late, current_late_span, get_current_span};
 
 /// What an adopted entry's caller receives (RFC §10.1 step 18).
@@ -29,6 +29,9 @@ pub(crate) struct Completion {
     /// The cut of its turns its caller asks for: its delivery cancelled
     /// (RFC §10.1 "Explicit delivery cancellation").
     pub(crate) cancel: Arc<CancelRequest>,
+    /// What that cut leaves to wait for: the closing of the streams it left
+    /// unread.
+    pub(crate) cleanup: Arc<EntryCleanup>,
 }
 
 /// A call into a room, handed to the run whose work made it.
@@ -47,6 +50,8 @@ pub(crate) struct Adoption {
     /// The cut of its turns its caller asks for, which the run carries out
     /// once asked.
     pub(crate) cancel: Arc<CancelRequest>,
+    /// What that cut leaves its caller to wait for, which the run tells.
+    pub(crate) cleanup: Arc<EntryCleanup>,
     /// The name its delivery key gives it, if its call has a key: the run
     /// that adopts it names its delivery from its settling, under the
     /// room's lock, so that an event held for verification is held by the
@@ -123,10 +128,12 @@ async fn hand(frame: &Frame, entry: Entry, named: Option<Arc<Named>>) -> Adoptin
     let (delivered, told) = watch::channel(None);
     let answers = Arc::new(StoredAnswers::default());
     let cancel = Arc::new(CancelRequest::default());
+    let cleanup = Arc::new(EntryCleanup::default());
     let completion = Completion {
         delivered: told,
         answers: Arc::clone(&answers),
         cancel: Arc::clone(&cancel),
+        cleanup: Arc::clone(&cleanup),
     };
     let adoption = Adoption {
         entry,
@@ -135,6 +142,7 @@ async fn hand(frame: &Frame, entry: Entry, named: Option<Arc<Named>>) -> Adoptin
         delivered,
         answers,
         cancel,
+        cleanup,
         named,
         late: current_late_span(),
         span: get_current_span(),
