@@ -39,12 +39,11 @@ use std::task::Poll;
 
 use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, EventContent, EventDirection, EventId,
-    EventSource, EventType, EventUpdates, Metadata, RoomEvent, RoomId,
+    EventSource, EventType, EventUpdates, Metadata, RoomContext, RoomEvent, RoomId,
 };
 use roomkit_core::ops::failure_log::{self, Log};
 use roomkit_core::ops::{
     ChannelOutcome, Entry, Notice, Outcome, ROW_HIDDEN, ROW_WITHHELD, StreamFailure, StreamTarget,
-    stream_failure,
 };
 use roomkit_core::rules::hook_registry::HookTrigger;
 use serde_json::Value;
@@ -158,17 +157,7 @@ pub(crate) async fn read<S: ConversationStore>(
     if let Some(then) = kept.then.take() {
         return super::passes::read(inner, kept, then, stops, read).await;
     }
-    let task = stops.task.clone();
-    let failing = Failing::of(&read);
-    let (mut output, _) = Box::pin(read_kept(inner, kept, stops, read, false)).await;
-    // The work of a held task that was cut is dropped once none of its reads
-    // runs, before it takes this answer (`tasks::cut`): the read reports its
-    // failure itself, as the operation would have (RFC §12.2 step 13s).
-    if task.is_some_and(|task| task.borrow().is_some())
-        && let Some(error) = output.error.take()
-    {
-        failing.report(inner, &error).await;
-    }
+    let (output, _) = Box::pin(read_kept(inner, kept, stops, read, false)).await;
     ChannelOutcome::Output(Box::new(output)).into()
 }
 
@@ -268,7 +257,7 @@ pub(super) async fn read_kept<S: ConversationStore>(
             "streaming channel {target} handling the failed response of {source} in room {room_id}"
         )
     };
-    let mut output = producer.finish(read, handling).await;
+    let mut output = producer.finish(read, handling, inner).await;
     // The turn's record reaches the operation once its stream is read, how
     // it ended under the caller's `turns`, as Python's `_add_turn` puts it
     // there (RFC §6.4); a `turns` the turn wrote is not its caller's, nor
@@ -347,13 +336,6 @@ fn address_of(error: &ChannelError) -> usize {
         .addr()
 }
 
-/// Whether `error` is the response's own failure, handed to the reader at
-/// `failed_at`, raised again.
-fn raised_again(failed_at: Option<usize>, error: &ChannelError) -> bool {
-    let the_kit_s = error.is::<RemoteError>() || error.is::<TurnError>();
-    the_kit_s && failed_at == Some(address_of(error))
-}
-
 /// The driver's reader of a stream no channel streams: read to its end.
 async fn drain(mut stream: DeliveryStream) -> Result<ChannelOutput, ChannelError> {
     while let Some(item) = stream.next().await {
@@ -430,15 +412,17 @@ impl Stops {
     }
 }
 
-/// What a stream's failure is reported as when no operation takes it: a
-/// target's left to end alone, or a read's in a held task's work that was
-/// cut.
+/// What a target's failure no operation takes is reported as (RFC §12.2
+/// step 13s): one of a target left to end alone, or of a read whose work, a
+/// held task's that was cut, is dropped before it takes the read's answer.
 #[derive(Clone, Debug)]
 struct Failing {
     responder: ChannelBinding,
     answers: RoomEvent,
     correlation_id: String,
     target: Option<ChannelId>,
+    /// The cut of the held task the read runs within, if any.
+    task: Option<watch::Receiver<Option<&'static str>>>,
 }
 
 impl Failing {
@@ -451,62 +435,109 @@ impl Failing {
                 .target
                 .as_ref()
                 .map(|target| target.binding.channel_id.clone()),
+            task: None,
         }
     }
 
-    /// Logs `error`, the response's failure or its target's, and fires
-    /// `ON_ERROR` for it as the core reports a read's (RFC §9.2, §12.2 step
-    /// 13s), with the room as it stands; none for a room the store lacks or
-    /// fails to read.
-    async fn report<S: ConversationStore>(&self, inner: &Arc<Inner<S>>, error: &ErrorRecord) {
-        let source = &self.responder.channel_id;
-        let room_id = &self.answers.room_id;
-        let what = match &self.target {
-            Some(target) => {
-                format!("streaming delivery of {source} to {target} for room {room_id}")
-            }
-            None => format!("stream consumption (no targets) of {source} for room {room_id}"),
-        };
-        failure_log::log_failure(Log::Framework, error, &what, false);
-        let config = inner.config();
-        let recent_events = config.recent_events().read_by_the_caller();
-        let context = match crate::driver::load_context(&*inner.store, room_id, recent_events).await
-        {
-            Ok(Some(context)) => context,
-            Ok(None) => return,
-            Err(error) => {
-                tracing::debug!(target: "roomkit::hooks", %room_id, %error, "no context for ON_ERROR");
-                return;
-            }
-        };
+    /// Whether the held task the read runs within was cut: its work is
+    /// dropped once none of its reads runs, before it takes this read's
+    /// answer (`tasks::cut`).
+    fn task_cut(&self) -> bool {
+        self.task
+            .as_ref()
+            .is_some_and(|task| task.borrow().is_some())
+    }
+
+    /// Logs `error`, the target's, and fires `ON_ERROR` for it as the core
+    /// reports a read's (RFC §9.2, §12.2 step 13s), with the room as it
+    /// stands; a failure that is the kit's own close is only noted, as
+    /// Python's `_report_stream_failure` (RFC §12.10.4).
+    async fn report<S: ConversationStore>(&self, inner: &Arc<Inner<S>>, error: &ChannelError) {
+        if ended_by_close(inner, error) {
+            tracing::debug!(target: "roomkit::driver", %error, "{} ended as the kit closed", self.what());
+            return;
+        }
+        let error = target_record(error);
+        failure_log::log_failure(Log::Framework, &error, &self.what(), false);
         let failure = StreamFailure {
             responder: &self.responder,
             answers: &self.answers,
             correlation_id: Some(&self.correlation_id),
-            error,
+            error: &error,
         };
-        let environment = inner.environment();
-        let (payload, seen) = stream_failure(&failure, &*environment, &context);
-        let hooks = config.hooks.observers(HookTrigger::OnError, &payload);
+        let payload = failure.payload(&*inner.environment());
+        let hooks = inner
+            .config()
+            .hooks
+            .observers(HookTrigger::OnError, &payload);
         if hooks.is_empty() {
             return;
         }
+        let Some(room) = self.room(inner).await else {
+            return;
+        };
         let notice = Notice::AsyncHooks {
             trigger: HookTrigger::OnError,
             hooks,
             event: Box::new(payload),
-            context: Box::new(seen),
+            context: Box::new(failure.context(&room)),
             after_delivery: None,
             then: None,
         };
         drop(crate::driver::perform(inner, notice));
     }
+
+    /// What failed, as the log names it.
+    fn what(&self) -> String {
+        let source = &self.responder.channel_id;
+        let room_id = &self.answers.room_id;
+        match &self.target {
+            Some(target) => {
+                format!("streaming delivery of {source} to {target} for room {room_id}")
+            }
+            None => format!("stream consumption (no targets) of {source} for room {room_id}"),
+        }
+    }
+
+    /// The room as it stands, its observers' context; none for a room the
+    /// store lacks or fails to read.
+    async fn room<S: ConversationStore>(&self, inner: &Arc<Inner<S>>) -> Option<RoomContext> {
+        let room_id = &self.answers.room_id;
+        let recent_events = inner.config().recent_events().read_by_the_caller();
+        match crate::driver::load_context(&*inner.store, room_id, recent_events).await {
+            Ok(context) => context,
+            Err(error) => {
+                tracing::debug!(target: "roomkit::hooks", %room_id, %error, "no context for ON_ERROR");
+                None
+            }
+        }
+    }
+}
+
+/// Whether `error`, a target's, is the kit's close ending the work that met
+/// it, as Python's `ended_by_close` tells it: once the close started, a call
+/// into the kit it refused, or a turn link it closed (RFC §12.10.4).
+fn ended_by_close<S>(inner: &Inner<S>, error: &ChannelError) -> bool {
+    let refused = matches!(
+        error.downcast_ref::<RoomKitError>(),
+        Some(RoomKitError::KitClosed)
+    );
+    let link_closed = error
+        .downcast_ref::<TurnError>()
+        .is_some_and(|error| error.kind == "backend_closed");
+    inner.tasks.is_closing() && (refused || link_closed)
+}
+
+/// A streaming target's own failure as its record reads: a boxed Rust error
+/// has no class name.
+fn target_record(error: &ChannelError) -> ErrorRecord {
+    ErrorRecord::new("ChannelError", error.to_string())
 }
 
 /// The answering side of a stream's pulls.
 struct Producer {
     room_id: RoomId,
-    /// What reports a failure of the target left to end alone.
+    /// What reports a target's failure no operation takes.
     failing: Failing,
     segments: Segments,
     /// The turn's response, until it is closed.
@@ -576,6 +607,7 @@ impl Producer {
         inner: &Arc<Inner<S>>,
         mut stops: Stops,
     ) -> Result<ChannelOutput, ChannelError> {
+        self.failing.task.clone_from(&stops.task);
         let mut reader = Box::pin(reader);
         let mut pulls = pulls;
         {
@@ -674,25 +706,18 @@ impl Producer {
     /// then drops it, even a close called from the turn whose run the read
     /// works for, which spares that run; a close `reader` called itself spares
     /// that unit, and returns to it. A failure of its own fires `ON_ERROR`,
-    /// as the read's would have (RFC §12.2 step 13s); the response's own
-    /// failure, which it raises again, was the read's.
+    /// as the read's would have (RFC §12.2 step 13s).
     fn leave_to_end_alone<R, S>(&self, reader: Pin<Box<R>>, inner: &Arc<Inner<S>>)
     where
         R: Future<Output = Result<ChannelOutput, ChannelError>> + Send + 'static,
         S: ConversationStore,
     {
         let failing = self.failing.clone();
-        let handed = self.failed_at;
         let kit = Arc::clone(inner);
         let work = ExecutionContext::current().scope(async move {
-            let Err(error) = reader.await else {
-                return;
-            };
-            if raised_again(handed, &error) {
-                return;
+            if let Err(error) = reader.await {
+                failing.report(&kit, &error).await;
             }
-            let error = ErrorRecord::new("ChannelError", error.to_string());
-            failing.report(&kit, &error).await;
         });
         drop(
             inner
@@ -927,29 +952,30 @@ impl Producer {
     /// be another error's, made by the reader where it freed the one it was
     /// handed.
     fn handed_back(&self, error: &ChannelError) -> bool {
-        raised_again(self.failed_at, error)
+        let the_kit_s = error.is::<RemoteError>() || error.is::<TurnError>();
+        the_kit_s && self.failed_at == Some(address_of(error))
     }
 
     /// Settles the response once its reader is done, read `read` returned
     /// with, unless a cut did already. Returns what answers the operation's
-    /// read: its `error` the response's failure, else the target's. The
+    /// read: its `error` the response's failure, else the target's, which
+    /// the read reports itself when the held task it runs within was cut,
+    /// that task's work dropped before it takes the answer. The
     /// target, `handling` the response when it raises another error than
     /// the response's failure, has that error logged (Python's
     /// `_stream_to_target`): the turn's failure stays the response's.
-    async fn finish(
+    async fn finish<S: ConversationStore>(
         &mut self,
         read: Result<ChannelOutput, ChannelError>,
         handling: impl FnOnce() -> String,
+        inner: &Arc<Inner<S>>,
     ) -> ChannelOutput {
         let (mut output, target_error) = match read {
             Ok(output) => (output, None),
             // The response's own failure, raised again: no error of the
             // reader's.
             Err(error) if self.handed_back(&error) => (ChannelOutput::default(), None),
-            Err(error) => {
-                let record = ErrorRecord::new("ChannelError", error.to_string());
-                (ChannelOutput::default(), Some(record))
-            }
+            Err(error) => (ChannelOutput::default(), Some(error)),
         };
         let failure = if self.settled {
             self.settled_on.take()
@@ -963,11 +989,17 @@ impl Producer {
                 if let Some(target_error) = &target_error
                     && self.reads != Reads::Nobody
                 {
-                    failure_log::log_failure(Log::Framework, target_error, &handling(), false);
+                    let target_error = target_record(target_error);
+                    failure_log::log_failure(Log::Framework, &target_error, &handling(), false);
                 }
                 output.error = Some(failure);
             }
-            (None, Some(target_error)) => output.error = Some(target_error),
+            // The work of a held task that was cut is dropped before it
+            // takes this answer: the read reports its target's failure.
+            (None, Some(target_error)) if self.failing.task_cut() => {
+                self.failing.report(inner, &target_error).await;
+            }
+            (None, Some(target_error)) => output.error = Some(target_record(&target_error)),
             (None, None) => {}
         }
         output

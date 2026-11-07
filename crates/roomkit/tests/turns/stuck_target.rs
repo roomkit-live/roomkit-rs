@@ -1100,3 +1100,189 @@ mod a_read_in_flight {
         kit.close().await.unwrap();
     }
 }
+
+/// A target that, past the end of its first stream, flushes, then calls back
+/// into its kit and fails as the kit refuses the call.
+struct RefusedPastTheEnd {
+    kit: Arc<std::sync::OnceLock<RoomKit>>,
+    first: AtomicBool,
+    told: Arc<Notify>,
+    refused: Arc<Mutex<Option<String>>>,
+}
+
+impl Channel for RefusedPastTheEnd {
+    streaming_channel_declaration!();
+
+    async fn deliver_stream(
+        &self,
+        mut stream: DeliveryStream,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        let first = self.first.swap(false, Ordering::SeqCst);
+        while stream.next().await.is_some() {
+            if first {
+                self.told.notify_one();
+            }
+        }
+        if !first {
+            return Ok(ChannelOutput::empty());
+        }
+        tokio::time::sleep(FLUSH).await;
+        let kit = self.kit.get().unwrap().clone();
+        let late = CreateRoomOptions {
+            room_id: Some(RoomId::new("late").unwrap()),
+            ..Default::default()
+        };
+        let error = kit.create_room(late).await.unwrap_err();
+        *self.refused.lock().unwrap() = Some(format!("{error:?}"));
+        Err(error.into())
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
+    }
+}
+
+/// Registers an agent that writes "Hello." and calls a tool that never
+/// returns: what tells once the tool runs.
+fn waiting_agent(kit: &RoomKit) -> Arc<Notify> {
+    let running = Arc::new(Notify::new());
+    let on_run = Arc::clone(&running);
+    let wait = move |_call, _context| {
+        let on_run = Arc::clone(&on_run);
+        async move {
+            on_run.notify_one();
+            std::future::pending::<Result<roomkit_ai::ToolResult, roomkit_ai::ToolError>>().await
+        }
+    };
+    let options = AiChannelOptions {
+        tools: roomkit_ai::Tools::new()
+            .tool(roomkit_ai::AiTool::new("wait", "d").unwrap(), wait)
+            .into(),
+        ..AiChannelOptions::default()
+    };
+    let model = ScriptedProvider::new([ScriptedRound::calling("Hello.", [("t1", "wait", "{}")])]);
+    kit.register_channel(AiChannel::new(channel("ai"), model, options).unwrap())
+        .unwrap();
+    running
+}
+
+/// Keeps each `ON_ERROR` payload `kit` fires.
+fn errors_of(kit: &RoomKit) -> Arc<Mutex<Vec<RoomEvent>>> {
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&errors);
+    let on_error = move |event: RoomEvent, _context| {
+        kept.lock().unwrap().push(event);
+        async {}
+    };
+    let options = HookOptions {
+        execution: HookExecution::Async,
+        name: "error".to_owned(),
+        ..Default::default()
+    };
+    kit.hook(HookTrigger::OnError, on_error, options).unwrap();
+    errors
+}
+
+/// A room `a` binding `ids`.
+async fn room_binding(kit: &RoomKit, ids: &[&str]) -> RoomId {
+    let a = RoomId::new("a").unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(a.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ids {
+        kit.attach_channel(&a, &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    a
+}
+
+// RFC §12.10.4 (RMK-1330 review): a target left to end alone by the close's cut,
+// whose failure past it is the kit's own close, a call back into the kit it
+// refused, is no failure ON_ERROR reports, as Python's `ended_by_close`.
+#[tokio::test(start_paused = true)]
+async fn a_target_the_close_refuses_past_its_cut_fires_no_on_error() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let held = Arc::new(std::sync::OnceLock::new());
+    held.set(kit.clone()).unwrap();
+    let (told, refused) = (Arc::new(Notify::new()), Arc::new(Mutex::new(None)));
+    kit.register_channel(RefusedPastTheEnd {
+        kit: held,
+        first: AtomicBool::new(true),
+        told: Arc::clone(&told),
+        refused: Arc::clone(&refused),
+    })
+    .unwrap();
+    let running = waiting_agent(&kit);
+    let errors = errors_of(&kit);
+    let a = room_binding(&kit, &["ws", "ai"]).await;
+    let sender = kit.clone();
+    let first =
+        tokio::spawn(async move { sender.process_inbound(message("one"), options(&a)).await });
+    timeout(LONG, told.notified()).await.unwrap();
+    timeout(LONG, running.notified()).await.unwrap();
+
+    kit.close().await.unwrap();
+    timeout(LONG, first).await.unwrap().unwrap().unwrap();
+
+    assert_eq!(refused.lock().unwrap().as_deref(), Some("KitClosed"));
+    assert_eq!(errors.lock().unwrap().len(), 0);
+}
+
+// RFC §12.2 step 13s, §23.3 (RMK-1330 review): the worker's response failed, its
+// shared target still working on the failed text's row when cancel_task cuts
+// the task: the cut wins, no ON_ERROR fires, as Python's.
+#[tokio::test(start_paused = true)]
+async fn a_response_failed_before_a_task_s_cut_fires_no_on_error() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let (told, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    kit.register_channel(WaitsOnARow {
+        first: AtomicBool::new(true),
+        told: Arc::clone(&told),
+        release: Arc::clone(&release),
+    })
+    .unwrap();
+    let model = ScriptedProvider::new([ScriptedRound::writing(["Hello."]).failing("boom")]);
+    kit.register_channel(
+        AiChannel::new(channel("ai"), model, AiChannelOptions::default()).unwrap(),
+    )
+    .unwrap();
+    let errors = errors_of(&kit);
+    let a = room_binding(&kit, &["ws"]).await;
+    let shared = roomkit::DelegateOptions {
+        share_channels: Some(vec![channel("ws")]),
+        ..roomkit::DelegateOptions::default()
+    };
+    let task = kit
+        .delegate(&a, &channel("ai"), "Go.", shared)
+        .await
+        .unwrap();
+    timeout(LONG, told.notified()).await.unwrap();
+
+    let cancel = kit.cancel_task(&task.id, roomkit::CancelTaskOptions::default());
+    assert!(timeout(LONG, cancel).await.unwrap());
+    release.notify_one();
+    roomkit::testing::idle(&kit).await;
+
+    assert_eq!(errors.lock().unwrap().len(), 0);
+    kit.close().await.unwrap();
+}

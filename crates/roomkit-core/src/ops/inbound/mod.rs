@@ -113,7 +113,7 @@ use self::stage::{CallStage, Stage};
 pub use self::stamp::default_inbound_event;
 pub(crate) use self::stamp::error_event;
 pub(crate) use self::stamp::stamp_response;
-pub use self::stream::{StreamFailure, stream_failure};
+pub use self::stream::StreamFailure;
 use super::io::Io;
 use super::protocol::{
     Decided, EffectId, Entry, EntryId, Notice, Operation, Outcome, ProtocolError, Step,

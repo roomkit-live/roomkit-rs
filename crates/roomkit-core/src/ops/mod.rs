@@ -66,7 +66,7 @@ pub use events::{CommitRecord, DeleteEvent, MutationError, RestoreHeld, Restored
 pub use framework_events::{ChainDepthData, FrameworkEvent, RefusedOperation, TransitionReason};
 pub use inbound::{
     Inbound, InboundError, InboundResult, InboundTarget, MessageAnswers, StreamFailure,
-    TurnResponses, default_inbound_event, stream_failure,
+    TurnResponses, default_inbound_event,
 };
 pub use lifecycle::{
     AnnounceRoomCreated, ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom,

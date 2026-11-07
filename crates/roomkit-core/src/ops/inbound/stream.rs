@@ -502,7 +502,7 @@ fn delivers_to(plan: &DeliveryPlan, channel_id: &ChannelId) -> bool {
 }
 
 /// Fires `ON_ERROR` for the failure of `job`'s stream, `error` (RFC §9.2,
-/// §12.2 step 13s), as [`stream_failure`] reports it.
+/// §12.2 step 13s), as [`StreamFailure`] reports it.
 pub(super) fn report_failure(
     cx: &mut Cx<'_>,
     job: &StreamJob,
@@ -515,12 +515,15 @@ pub(super) fn report_failure(
         correlation_id: job.correlation_id.as_deref(),
         error,
     };
-    let (payload, seen) = stream_failure(&failure, cx.env, context);
-    cx.fire_observers(HookTrigger::OnError, &payload, &seen);
+    let payload = failure.payload(cx.env);
+    cx.fire_observers(HookTrigger::OnError, &payload, &failure.context(context));
 }
 
 /// The failure of a turn's streamed response, the response's own or its
-/// streaming target's (RFC §12.2 step 13s).
+/// streaming target's (RFC §12.2 step 13s), and what `ON_ERROR` is handed
+/// for it. A driver reports so a streaming target's failure no operation
+/// takes: once the read that was cut left the target to end alone, or the
+/// read's work, a held task's that was cut, is dropped before it takes it.
 #[derive(Clone, Copy, Debug)]
 pub struct StreamFailure<'a> {
     /// The intelligence channel whose response it is.
@@ -533,29 +536,29 @@ pub struct StreamFailure<'a> {
     pub error: &'a ErrorRecord,
 }
 
-/// What `ON_ERROR` is handed for `failure` (RFC §9.2, §12.2 step 13s): its
-/// payload, one hop deeper than the event the stream answers, as a failed
-/// turn's, carrying the stream's `correlation_id`, and the room as
-/// `context` holds it, as the responder may know it. A driver reports so a
-/// streaming target that fails once the read that was cut left it to end
-/// alone, the read's operation over by then.
-pub fn stream_failure(
-    failure: &StreamFailure<'_>,
-    environment: &dyn Environment,
-    context: &RoomContext,
-) -> (RoomEvent, RoomContext) {
-    let mut payload = stamp::error_event(
-        environment.new_event_id(),
-        failure.responder,
-        failure.answers,
-        failure.answers.response_visibility.as_ref(),
-        failure.error,
-        "streaming",
-        environment.now(),
-    );
-    payload.correlation_id = failure.correlation_id.map(str::to_owned);
-    let seen = permissions::context_for(failure.responder, context);
-    (payload, seen)
+impl StreamFailure<'_> {
+    /// The payload of `ON_ERROR` (RFC §9.2): one hop deeper than the event
+    /// the stream answers, as a failed turn's, carrying the stream's
+    /// `correlation_id`.
+    pub fn payload(&self, environment: &dyn Environment) -> RoomEvent {
+        let mut payload = stamp::error_event(
+            environment.new_event_id(),
+            self.responder,
+            self.answers,
+            self.answers.response_visibility.as_ref(),
+            self.error,
+            "streaming",
+            environment.now(),
+        );
+        payload.correlation_id = self.correlation_id.map(str::to_owned);
+        payload
+    }
+
+    /// The room as `context` holds it, as the responder may know it, which
+    /// the hooks are handed.
+    pub fn context(&self, context: &RoomContext) -> RoomContext {
+        permissions::context_for(self.responder, context)
+    }
 }
 
 /// The result a row's entry is settled with when it is not committed: its
