@@ -18,6 +18,7 @@
 //! blocks after it.
 
 use roomkit_core::model::{ChannelId, EventContent, EventType, Metadata, RoomContext};
+use roomkit_core::rules::discussion::people::labelled;
 use roomkit_core::rules::transcoding::text_of;
 use roomkit_core::rules::transcript::{
     fence, json_text_line, turn_labels, without_quote_lookalikes, without_tags,
@@ -74,10 +75,11 @@ fn reads(context: &RoomContext, reader: &ChannelId) -> bool {
 
 /// The last `count` messages of `context`'s room that every one of
 /// `readers` may read (RFC §7.5), oldest first, each under the label the
-/// transcript gives its author and quoted as a JSON string, set apart as
+/// transcript gives its author, `(a participant)` after a name that reads
+/// as an agent's own label, and quoted as a JSON string, set apart as
 /// data; `None` when there are none or `count` is 0. A reader whose access
 /// does not read (RFC §7.5 rule 1) may read none. Python's
-/// `conversation_block`.
+/// `conversation_block`, whose `turn_labels` marks such a name.
 pub(crate) fn conversation_block(
     context: &RoomContext,
     readers: &[ChannelId],
@@ -109,7 +111,7 @@ pub(crate) fn conversation_block(
         .zip(labels)
         .filter_map(|((_, text), label)| {
             let line = quoted_line(CONVERSATION_TAG, text);
-            label.map(|label| format!("{label}: {line}"))
+            label.map(|label| format!("{}: {line}", labelled(label)))
         })
         .collect();
     let kept = usize::try_from(count).unwrap_or(usize::MAX);
