@@ -2,7 +2,9 @@
 //! as its first round will send it, before the memory reads the room (RFC
 //! §20): Python's `AIChannel._measure_turn`.
 
-use roomkit_core::rules::transcript::{Message, SPEAKER_ATTRIBUTION_NOTE, people_note, turn_notes};
+use roomkit_core::rules::transcript::{
+    Message, Replayed, SPEAKER_ATTRIBUTION_NOTE, people_note, turn_notes,
+};
 
 use super::Loop;
 use crate::memory::{
@@ -23,11 +25,13 @@ impl<P: AiProvider> Loop<P> {
     /// declares, measured on their own schemas (the intent property is the
     /// request's), the notes the channel adds to its input (room for the
     /// speaker attribution and a cut answer's note, and the note naming the
-    /// `people` taking part when two or more do), the earlier `rounds` of
-    /// tool calls its history replays, all of them (the window may drop
-    /// some, never add one), and the images its input replays; its reply
-    /// budget apart.
-    pub(crate) fn footprint(&self, rounds: &[Vec<Message>], people: &[String]) -> TurnFootprint {
+    /// `people` taking part when two or more do), and the images its input
+    /// replays; its reply budget apart; and each piece of its `earlier`
+    /// turns its history replays (a round of tool calls, an instruction a
+    /// turn read), measured apart by its index and its turn, all of them,
+    /// for the memory to charge to the history event it reads with (RFC
+    /// §20, Python's `_replayed_costs`).
+    pub(crate) fn footprint(&self, earlier: &[Replayed], people: &[String]) -> TurnFootprint {
         let prompt = estimate_tokens(self.system_prompt.as_deref().unwrap_or(""));
         let declared = self.first_declaration();
         let tools: usize = declared.iter().map(estimate_tool_tokens).sum();
@@ -37,10 +41,19 @@ impl<P: AiProvider> Loop<P> {
             .chain([CUT_NOTE.to_owned()])
             .collect();
         let notes = estimate_tokens(&turn_notes(&room).unwrap_or_default());
-        let replayed: usize = rounds.iter().map(|round| self.round_tokens(round)).sum();
         let images = self.turn_images_tokens();
         let reply = self.max_tokens.map_or(0, |tokens| tokens as usize);
-        TurnFootprint::new(prompt + tools + notes + replayed + images, reply)
+        let replayed = earlier
+            .iter()
+            .map(|piece| {
+                let tokens = self.round_tokens(&piece.messages);
+                (piece.index, piece.turn.clone(), tokens)
+            })
+            .collect();
+        TurnFootprint {
+            replayed,
+            ..TurnFootprint::new(prompt + tools + notes + images, reply)
+        }
     }
 
     /// What the images the turn's input replays cost, as a message of
@@ -53,8 +66,9 @@ impl<P: AiProvider> Loop<P> {
         estimate_message_tokens(&AiMessage::new(AiRole::User, replayed.to_vec()))
     }
 
-    /// What a replayed round costs, as the provider reads it: its calls,
-    /// then its results together in one message.
+    /// What a replayed piece costs, as the provider reads it: a round's
+    /// calls, then its results together in one message; an instruction's
+    /// message.
     fn round_tokens(&self, round: &[Message]) -> usize {
         ai_messages(&self.shown_messages(round))
             .iter()

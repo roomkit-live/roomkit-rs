@@ -90,6 +90,12 @@ pub(crate) struct KeptStream {
 /// What a read of the turn's response gave.
 type Read = Option<Result<RemoteItem, ChannelError>>;
 
+/// Writes the agent's own copy of the instruction its turn read (RFC
+/// §10.1.1), a draft its id and instant are given to: a record of the room
+/// committed outside the pipeline, as `commit_event` writes one (RFC §10.5).
+type InstructionKeeper =
+    Box<dyn Fn(RoomEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
 /// The reason a read the operation stops cuts its turn with (RFC §10.1
 /// "Explicit delivery cancellation").
 pub(crate) const CALLER_CANCELLED: &str = "caller_cancelled";
@@ -227,6 +233,7 @@ pub(super) async fn read_kept<S: ConversationStore>(
         kept_out: first_pass.then(String::new),
         hold,
         precounted: false,
+        keeper: instruction_keeper(inner),
     };
     let placeholder = producer.segments.placeholder();
     let reader_marks = Marks::current().with(producer.reader_unit);
@@ -312,6 +319,36 @@ fn first_pass_of(
         end,
         record,
     }
+}
+
+/// The keeper of the instructions the turns `inner` reads read: each written
+/// as a record no member receives (RFC §10.5 `commit_event`), with the
+/// room's next index, no hook, no delivery and no activity, its id and its
+/// instant the kit's; best effort, a failure logged, the turn going on.
+fn instruction_keeper<S: ConversationStore>(inner: &Arc<Inner<S>>) -> InstructionKeeper {
+    let inner = Arc::clone(inner);
+    Box::new(move |mut record: RoomEvent| {
+        let inner = Arc::clone(&inner);
+        Box::pin(async move {
+            let environment = inner.environment();
+            record.id = environment.new_event_id();
+            record.created_at = environment.now();
+            let room_id = record.room_id.clone();
+            let kit = RoomKit {
+                inner: Arc::clone(&inner),
+            };
+            let kept = kit
+                .commit_event(&room_id, record, crate::CommitEventOptions::default())
+                .await;
+            if let Err(error) = kept {
+                if inner.tasks.is_closing() {
+                    tracing::debug!(target: "roomkit::driver", room_id = %room_id, %error, "the instruction the turn read was not kept: the kit closed");
+                } else {
+                    tracing::warn!(target: "roomkit::driver", room_id = %room_id, %error, "the instruction the turn read could not be kept");
+                }
+            }
+        })
+    })
 }
 
 /// Puts `channel_id`'s turn `entry` under `record`'s `turns`, beside the
@@ -580,6 +617,8 @@ struct Producer {
     /// Whether the next text the reader is handed was counted as read when
     /// it was held.
     precounted: bool,
+    /// Where the instruction the turn read is kept (RFC §10.1.1).
+    keeper: InstructionKeeper,
 }
 
 impl Producer {
@@ -838,6 +877,7 @@ impl Producer {
                         | ResponseItem::ToolCallEnd(_)
                         | ResponseItem::LoopEnd(_)
                         | ResponseItem::SegmentBreak
+                        | ResponseItem::InstructionRead(_)
                 )))
         );
         if marks_a_segment {
@@ -903,6 +943,13 @@ impl Producer {
                 Reads::Nobody | Reads::Lost => self.segments.handed(),
             },
             Some(Ok(RemoteItem::Item(ResponseItem::Usage(marker)))) => self.take_usage(marker),
+            // The agent's own copy of the instruction its turn read, kept
+            // before anything else of the turn, delivered to no channel and
+            // handed to no reader (RFC §10.1.1); the turn began.
+            Some(Ok(RemoteItem::Item(ResponseItem::InstructionRead(text)))) => {
+                self.segments.handed();
+                (self.keeper)(self.segments.instruction_read(text)).await;
+            }
             Some(Ok(RemoteItem::Item(ResponseItem::ToolCallStart(start)))) => {
                 self.segments.call_started();
                 let rows = self.segments.start(start);
@@ -1143,7 +1190,8 @@ impl Producer {
                             | ResponseItem::Thinking(_)
                             | ResponseItem::Usage(_)
                             | ResponseItem::LoopEnd(_)
-                            | ResponseItem::SegmentBreak,
+                            | ResponseItem::SegmentBreak
+                            | ResponseItem::InstructionRead(_),
                         )
                         | RemoteItem::SegmentBreak,
                     ))

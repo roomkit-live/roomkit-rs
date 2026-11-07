@@ -360,6 +360,7 @@ fn event_type_serializes_to_python_s_values() {
             ("OBSERVATION", EventType::Observation),
             ("TOOL_CALL_START", EventType::ToolCallStart),
             ("TOOL_CALL_END", EventType::ToolCallEnd),
+            ("INSTRUCTION_READ", EventType::InstructionRead),
         ],
     );
 }

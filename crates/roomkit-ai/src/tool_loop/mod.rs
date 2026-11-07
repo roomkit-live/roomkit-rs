@@ -102,6 +102,9 @@ pub(crate) enum TurnItem {
     Thinking(String),
     /// What a generation used, told after it (RFC §6.4).
     Usage(UsageMarker),
+    /// The application's instruction the turn read, handed first, which the
+    /// kit keeps as the agent's own row for its later turns (RFC §10.1.1).
+    InstructionRead(String),
 }
 
 /// How a call ended.
@@ -227,6 +230,10 @@ pub(crate) struct Loop<P> {
     /// hooks then see `read_stored_result`, which every round declares
     /// either way (RFC §6.4).
     pub(crate) reread_shown: bool,
+    /// The application's instruction the turn read, which its stream hands
+    /// the kit first, to keep for its later turns (RFC §10.1.1); none for a
+    /// turn no instruction opened, or one that stands alone.
+    pub(crate) instruction: Option<String>,
 }
 
 impl<P: AiProvider> Loop<P> {
@@ -305,6 +312,7 @@ impl<P: AiProvider> Loop<P> {
             let ending = (&limits, &steering, &out);
             return self.end(LoopEndReason::Cancelled, 0, spent, ending).await;
         }
+        self.hand_instruction(&out).await;
         for round in 0..=self.bounds.max_rounds {
             if steering.cancelled() {
                 let ending = (&limits, &steering, &out);
@@ -392,6 +400,14 @@ impl<P: AiProvider> Loop<P> {
         let ending = (&limits, &steering, &out);
         self.end(LoopEndReason::MaxRounds, tool_rounds, spent, ending)
             .await;
+    }
+
+    /// Hands the kit the instruction the turn read, before anything else
+    /// of the turn, to keep for its later turns (RFC §10.1.1).
+    async fn hand_instruction(&mut self, out: &Yielder<Result<TurnItem, ProviderError>>) {
+        if let Some(instruction) = self.instruction.take() {
+            out.give(Ok(TurnItem::InstructionRead(instruction))).await;
+        }
     }
 
     /// Whether a message steered in while the model wrote `generation`, its

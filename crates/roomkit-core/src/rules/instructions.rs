@@ -109,6 +109,19 @@ pub fn is_standalone(event: &RoomEvent) -> bool {
         && event.metadata.get(STANDALONE) == Some(&Value::Bool(true))
 }
 
+/// The text of `event` the turn it opens keeps for its later turns (RFC
+/// §10.1.1): an instruction's, as the turn reads it (its text form, before
+/// the runtime marks it), never a standalone one's, whose turn reads nothing
+/// of the room and is no part of its conversation (rules 6 and 7); `None`
+/// for any other event, or a text that reads as nothing. Python's
+/// `kept_instruction`.
+pub fn kept_instruction(event: &RoomEvent) -> Option<String> {
+    if event.r#type != EventType::Instruction || is_standalone(event) {
+        return None;
+    }
+    Some(transcoding::text_of(&event.content)).filter(|text| !text.is_empty())
+}
+
 /// Puts back on `modified`, a hook's replacement of `original`, what the
 /// pipeline checked and wrote for an instruction (RFC §9.4, §10.1.1):
 ///
@@ -242,7 +255,8 @@ impl Fingerprint {
 /// under the key, so the instruction's text never rides there. For any
 /// other trigger the key is removed: a response to a message records no
 /// instruction (gap G-065).
-pub(crate) fn mark_response(response: &mut RoomEvent, trigger: &RoomEvent) {
+#[doc(hidden)]
+pub fn mark_response(response: &mut RoomEvent, trigger: &RoomEvent) {
     if trigger.r#type != EventType::Instruction {
         return clear_fingerprint(response);
     }

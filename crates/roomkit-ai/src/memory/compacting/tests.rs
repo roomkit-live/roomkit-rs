@@ -8,7 +8,10 @@ use super::*;
 use crate::memory::footprint::{TurnFootprint, measured};
 use crate::memory::summary::is_summary;
 use crate::memory::testing::{Summarizer, context, event, room};
-use crate::memory::token_estimator::{estimate_message_tokens, estimate_notes_tokens};
+use crate::memory::token_estimator::{
+    EstimateEventTokensOptions, estimate_event_tokens, estimate_message_tokens,
+    estimate_notes_tokens,
+};
 use crate::memory::{
     MockMemoryProvider, MockMemoryProviderOptions, SlidingWindowMemory, SlidingWindowMemoryOptions,
 };

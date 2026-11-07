@@ -71,6 +71,9 @@ pub enum EventType {
     ToolCallStart,
     /// A tool call ended.
     ToolCallEnd,
+    /// The application's instruction an agent's turn read, kept by that
+    /// agent alone, which its later turns replay at its place (RFC §10.1.1).
+    InstructionRead,
 }
 
 /// What became of an event (RFC §5.2).
@@ -394,6 +397,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(EventType::ToolCallEnd).unwrap(),
             json!("tool_call_end")
+        );
+        assert_eq!(
+            serde_json::to_value(EventType::InstructionRead).unwrap(),
+            json!("instruction_read")
         );
     }
 }

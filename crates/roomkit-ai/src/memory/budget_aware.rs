@@ -9,7 +9,7 @@ use std::sync::Arc;
 use roomkit::ChannelError;
 use roomkit::model::{RoomContext, RoomEvent, RoomId};
 
-use super::footprint::turn_history_budget;
+use super::footprint::{history_event_costs, turn_history_budget};
 use super::token_estimator::{EstimateEventTokensOptions, estimate_event_tokens};
 use super::{IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
 use crate::provider::{ProviderError, ProviderErrorOptions};
@@ -123,8 +123,10 @@ impl BudgetAwareMemory {
     fn trimmed(&self, mut events: Vec<RoomEvent>, budget: usize) -> Vec<RoomEvent> {
         let mut total = 0;
         let mut keep_from = 0;
-        for (at, event) in events.iter().enumerate().rev() {
-            let cost = estimate_event_tokens(event, EstimateEventTokensOptions::default());
+        // Each event with what the history replays with it: a turn is kept or
+        // cut whole, its rounds of tool calls with it (RFC §20).
+        let costs = history_event_costs(&events);
+        for (at, cost) in costs.iter().copied().enumerate().rev() {
             if total + cost > budget && events.len() - at > self.options.min_events {
                 keep_from = at + 1;
                 break;

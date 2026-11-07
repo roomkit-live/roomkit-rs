@@ -14,7 +14,9 @@
 //!   included. A one-to-one conversation reads as it was written.
 //! - An instruction is the turn's input, marked as the application's and
 //!   never attributed to a speaker; one that stands alone reads nothing of
-//!   the room (rule 7).
+//!   the room (rule 7). The agent keeps the one its turn read as a row of
+//!   its own, and its later turns replay it where that turn read it, marked
+//!   the same way, before what the turn wrote.
 //! - A copy of one of the runtime's marks in a text it did not write is
 //!   replaced before the runtime places its own.
 //! - Text from outside that a channel sets apart in a block of its own, as
@@ -47,10 +49,13 @@
 //! ([`Message::tool_result`]). A later turn's history replays them the same
 //! way.
 
+use std::collections::BTreeSet;
+
 mod content;
 mod data_uri;
 mod fence;
 mod images;
+mod kept;
 pub use self::content::{Part, TurnContent};
 pub use self::data_uri::{DataUriError, parse_data_uri, to_data_uri};
 pub use images::{Image, media_type};
@@ -72,6 +77,7 @@ pub use self::fence::fence;
 #[doc(hidden)]
 pub use self::fence::named_blocks;
 pub use self::fence::without_tags;
+use self::kept::{KeptInstruction, kept_instructions};
 #[doc(hidden)]
 pub use self::marks::COMPACTION_HEADER;
 pub use self::marks::SPEAKER_NOTE as SPEAKER_ATTRIBUTION_NOTE;
@@ -305,11 +311,14 @@ pub fn conversation_with_memory(
     // A standalone turn reads nothing of the room (RFC §10.1.1 rule 7). An input
     // read at its place, saying something, may be all the history a round reads
     // after; else a round with no turn before it opens no history.
-    let rounds =
+    let earlier =
         if is_standalone(event) || (turns.is_empty() && (!in_place || input.content.is_blank())) {
-            Vec::new()
+            Earlier::default()
         } else {
-            tool_rounds(&context.recent_events, channel_id)
+            Earlier {
+                rounds: tool_rounds(&context.recent_events, channel_id),
+                instructions: kept_instructions(&context.recent_events, channel_id),
+            }
         };
     if in_place {
         turns.push(input);
@@ -317,9 +326,9 @@ pub fn conversation_with_memory(
         // place.
         tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
         read_at_its_place(&mut turns, event.index);
-        place(&mut turns, rounds, None);
+        place(&mut turns, earlier, None);
     } else {
-        place(&mut turns, rounds, rounds_before(event));
+        place(&mut turns, earlier, rounds_before(event));
         turns.push(input);
         tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
     }
@@ -418,6 +427,22 @@ impl Turn {
         }
     }
 
+    /// A kept instruction an earlier turn read, as a turn of the history:
+    /// the application's, marked as the turn's input was, attributed to no
+    /// one (RFC §10.1.1).
+    fn kept(instruction: &KeptInstruction) -> Self {
+        Self {
+            role: Role::User,
+            content: instruction.content(),
+            speaker: None,
+            instruction: true,
+            index: instruction.index,
+            written_in: None,
+            rounds: Vec::new(),
+            said_with_round: false,
+        }
+    }
+
     /// Whether `round`, read right after this turn, is the round its text
     /// was sent with: the channel's own text of the round's turn (Python's
     /// `_spoken_with`).
@@ -483,17 +508,74 @@ fn rounds_before(event: &RoomEvent) -> Option<u64> {
     (event.index > 0).then_some(event.index)
 }
 
-/// `rounds`, each read after the last of `turns`, oldest first, that came
-/// before it: none older than the first turn, so that the history never
-/// opens on the assistant's calls, nor at or after `before`. A round read
-/// right after the text the model wrote with its calls is sent with it.
-fn place(turns: &mut [Turn], rounds: Vec<ToolRound>, before: Option<u64>) {
-    for round in rounds {
-        if before.is_some_and(|before| round.index >= before) {
-            continue;
-        }
-        // An instruction holds the index of what follows it, a round at that
-        // index among them: it reads before that round.
+/// What a turn's history replays of the channel's earlier turns beside
+/// their messages, read from its own rows: their rounds of tool calls and
+/// the instructions they read. Python's `EarlierTurns`.
+#[derive(Default)]
+struct Earlier {
+    rounds: Vec<ToolRound>,
+    instructions: Vec<KeptInstruction>,
+}
+
+/// `earlier`'s rounds and instructions placed among `turns`, oldest first,
+/// each after the last turn that came before it, none at or after `before`
+/// (Python's `with_tool_rounds`). A round older than the first turn is left
+/// out, so that the history never opens on the assistant's calls, unless
+/// its turn's instruction is placed. An instruction reads where its turn
+/// read it, before what the turn wrote: one after the first turn, or one
+/// whose turn has a message or a round in the history, which may then open
+/// the history (an instruction that opened the room). A round read right
+/// after the text the model wrote with its calls is sent with it.
+fn place(turns: &mut Vec<Turn>, earlier: Earlier, before: Option<u64>) {
+    let Some(first) = turns.first() else {
+        return;
+    };
+    // An instruction holds the index of what follows it, a round at that
+    // index among them: it reads before that round.
+    let (first_index, first_instruction) = (first.index, first.instruction);
+    let after_first =
+        |index: u64| first_index < index || (first_instruction && first_index == index);
+    let in_time = |index: u64| before.is_none_or(|before| index < before);
+    let (mut placed, older): (Vec<ToolRound>, Vec<ToolRound>) = earlier
+        .rounds
+        .into_iter()
+        .filter(|round| in_time(round.index))
+        .partition(|round| after_first(round.index));
+    let held: BTreeSet<String> = turns
+        .iter()
+        .filter_map(|turn| turn.written_in.clone())
+        .chain(placed.iter().filter_map(|round| round.turn.clone()))
+        .collect();
+    let read: Vec<KeptInstruction> = earlier
+        .instructions
+        .into_iter()
+        .filter(|kept| in_time(kept.index))
+        .filter(|kept| {
+            after_first(kept.index) || kept.turn.as_ref().is_some_and(|turn| held.contains(turn))
+        })
+        .collect();
+    // The turns whose instruction opens the history: their rounds read
+    // after it, older than the first turn as they are.
+    let opened: BTreeSet<&String> = read
+        .iter()
+        .filter(|kept| !after_first(kept.index))
+        .filter_map(|kept| kept.turn.as_ref())
+        .collect();
+    placed.extend(older.into_iter().filter(|round| {
+        round
+            .turn
+            .as_ref()
+            .is_some_and(|turn| opened.contains(turn))
+    }));
+    placed.sort_by_key(|round| round.index);
+    for kept in &read {
+        let at = turns
+            .iter()
+            .rposition(|turn| turn.index < kept.index)
+            .map_or(0, |at| at + 1);
+        turns.insert(at, Turn::kept(kept));
+    }
+    for round in placed {
         let before_it = |turn: &&mut Turn| {
             turn.index < round.index || (turn.instruction && turn.index == round.index)
         };
@@ -598,16 +680,48 @@ fn joined_notes(blocks: &[String]) -> Option<String> {
     Some(format!("{NOTES_HEADER}\n\n{}", blocks.join("\n\n")))
 }
 
-/// The channel `channel_id`'s earlier rounds of tool calls among `events`,
-/// each as the messages it is replayed as (RFC §6.4 "The tools of earlier
-/// turns"): its assistant's message making the calls, then a tool message
-/// per result, as [`conversation`] replays them, every round its rows hold,
-/// wherever the history it is placed in starts.
-pub fn replayed_rounds(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<Vec<Message>> {
-    tool_rounds(events, channel_id)
+/// A piece of the channel's earlier turns its history replays beside their
+/// messages (RFC §6.4, §10.1.1): a round of tool calls, or an instruction a
+/// turn read, as a memory charges it to the history event it reads with
+/// (RFC §20).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Replayed {
+    /// The timeline index of its first row.
+    pub index: u64,
+    /// The turn it belongs to: its rows' `correlation_id`.
+    pub turn: Option<String>,
+    /// The messages it is replayed as.
+    pub messages: Vec<Message>,
+}
+
+/// What the channel `channel_id`'s own rows among `events` replay of its
+/// earlier turns, each piece as the messages [`conversation`] replays it as,
+/// every one its rows hold, wherever the history it is placed in starts:
+/// each round of tool calls (RFC §6.4 "The tools of earlier turns"), its
+/// assistant's message making the calls then a tool message per result,
+/// then each instruction a turn read (RFC §10.1.1), the user message marked
+/// exactly as the turn's input was. Python's `EarlierTurns`, as the turn's
+/// footprint measures it (`_replayed_costs`).
+pub fn earlier_turns(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<Replayed> {
+    let rounds = tool_rounds(events, channel_id)
         .into_iter()
-        .map(|round| round.messages)
-        .collect()
+        .map(|round| Replayed {
+            index: round.index,
+            turn: round.turn,
+            messages: round.messages,
+        });
+    let instructions = kept_instructions(events, channel_id)
+        .into_iter()
+        .map(|kept| Replayed {
+            messages: vec![Message::new(
+                Role::User,
+                mark_instruction(&without_mark_copies(&kept.text)),
+            )],
+            index: kept.index,
+            turn: kept.turn,
+        });
+    rounds.chain(instructions).collect()
 }
 
 /// What a turn's notes say (RFC §6.4): how speakers are named when the

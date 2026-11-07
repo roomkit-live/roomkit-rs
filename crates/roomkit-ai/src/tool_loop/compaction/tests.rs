@@ -331,3 +331,12 @@ fn a_summary_names_a_reasoning_block() {
     let part = AiContentPart::Thinking(crate::provider::AiThinkingPart::new("secret"));
     assert_eq!(part_said(&part), "[thinking]");
 }
+
+// Python: tests/test_speaker_attribution.py::TestEachLineCarriesItsLabel::test_a_summary_quotes_a_replayed_instruction_as_the_application_s
+#[test]
+fn a_summary_quotes_a_replayed_instruction_as_the_application_s() {
+    let replayed = text(AiRole::User, &mark_instruction("Greet the caller."));
+    let summary = summary_text(&[replayed]).unwrap();
+    let lines: Vec<&str> = summary.lines().skip(1).collect();
+    assert_eq!(lines, ["[application]: \u{201c}Greet the caller.\u{201d}"]);
+}

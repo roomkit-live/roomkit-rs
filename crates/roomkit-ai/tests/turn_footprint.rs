@@ -237,9 +237,12 @@ async fn a_later_turn_is_measured_again_with_the_rounds_it_replays() {
         .filter(|message| matches!(message.content, roomkit_ai::AiMessageContent::Parts(_)))
         .collect();
     let footprints = memory.0.lock().unwrap().clone();
-    let (first, second) = (footprints[0].unwrap(), footprints[1].unwrap());
-    // The rest of the turn is the same as the first's: the difference is
-    // the round, its results as one message.
+    let (first, second) = (
+        footprints[0].clone().unwrap(),
+        footprints[1].clone().unwrap(),
+    );
+    // The rest of the turn is the same as the first's; the round is apart,
+    // by its index and its turn, its results as one message (RMK-1370).
     let calls = estimate_message_tokens(replayed[0]);
     let results: usize = replayed[1..]
         .iter()
@@ -249,10 +252,13 @@ async fn a_later_turn_is_measured_again_with_the_rounds_it_replays() {
         replayed[1].content,
         roomkit_ai::AiMessageContent::Parts(ref parts) if matches!(parts[0], AiContentPart::ToolResult(_))
     ));
-    assert_eq!(
-        second.input_tokens - first.input_tokens,
-        calls + 4 + results
-    );
+    assert_eq!(second.input_tokens, first.input_tokens);
+    assert_eq!(first.replayed, []);
+    let [(_, turn, tokens)] = second.replayed.as_slice() else {
+        panic!("one round replayed: {:?}", second.replayed);
+    };
+    assert!(turn.is_some());
+    assert_eq!(*tokens, calls + 4 + results);
     assert_eq!(seen_in_handler.lock().unwrap().clone(), vec![None]);
 }
 
@@ -357,7 +363,7 @@ async fn the_turn_s_measure_counts_the_people_note() {
             .on_event(event, binding, context_of(people))
             .await
             .unwrap();
-        sizes.push(memory.0.lock().unwrap()[0].unwrap().input_tokens);
+        sizes.push(memory.0.lock().unwrap()[0].as_ref().unwrap().input_tokens);
     }
     assert_eq!(sizes[0], estimate_tokens("") + NOTES_ROOM);
     assert!(sizes[1] > sizes[0], "{sizes:?}");
@@ -416,7 +422,10 @@ async fn the_replayed_images_count_in_the_turn_s_measure() {
         drop(output);
     }
     let footprints = memory.0.lock().unwrap().clone();
-    let (first, second) = (footprints[0].unwrap(), footprints[1].unwrap());
+    let (first, second) = (
+        footprints[0].as_ref().unwrap(),
+        footprints[1].as_ref().unwrap(),
+    );
     assert!(second.input_tokens - first.input_tokens >= 1000);
 }
 

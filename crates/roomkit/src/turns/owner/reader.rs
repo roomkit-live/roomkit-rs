@@ -292,6 +292,10 @@ impl OwnerTurn {
                 provider,
             }),
             Item::StreamEnd => Read::Ended,
+            Item::InstructionRead { text } => {
+                self.window.read_other();
+                Read::Item(RemoteItem::Item(ResponseItem::InstructionRead(text)))
+            }
         }
     }
 

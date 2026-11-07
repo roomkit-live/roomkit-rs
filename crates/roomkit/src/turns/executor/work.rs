@@ -273,6 +273,12 @@ impl Pump<'_> {
                 self.sender.send(&Frame::Item { item }).map(drop)
             }
             Some(Ok(ResponseItem::Usage(marker))) => self.send_usage(marker),
+            Some(Ok(ResponseItem::InstructionRead(text))) => self
+                .sender
+                .send(&Frame::Item {
+                    item: Item::InstructionRead { text },
+                })
+                .map(drop),
             Some(Err(error)) => {
                 // The ends told early cross before the failure, as Python's
                 // executor reports what changed before its last frame.

@@ -11,7 +11,7 @@
 //! summary joins the user message after it.
 
 use roomkit_core::rules::transcript::{
-    COMPACTION_HEADER, FENCED_TAGS, Message, named_blocks, quoted,
+    COMPACTION_HEADER, FENCED_TAGS, Message, mark_instruction, named_blocks, quoted,
 };
 
 use super::Loop;
@@ -250,15 +250,29 @@ fn summary_text(messages: &[AiMessage]) -> Option<String> {
     if messages.is_empty() {
         return None;
     }
-    let lines = messages
-        .iter()
-        .map(|message| format!("[{}]: {}", message.role.as_str(), said(message)));
+    let lines = messages.iter().map(line);
     Some(
         std::iter::once(COMPACTION_HEADER.to_owned())
             .chain(lines)
             .collect::<Vec<_>>()
             .join("\n"),
     )
+}
+
+/// One summarized message: who it is from, then what it said (Python's
+/// `_line`). The application's instruction a later turn replays is the
+/// application's, never a user's: it is quoted under that name, without its
+/// mark (RFC §10.1.1).
+fn line(message: &AiMessage) -> String {
+    let opening = mark_instruction("");
+    if message.role == AiRole::User
+        && let AiMessageContent::Text(text) = &message.content
+        && let Some(said) = text.strip_prefix(&opening)
+    {
+        let said = named_blocks(said, FENCED_TAGS);
+        return format!("[application]: {}", quoted(&said, SUMMARY_MESSAGE_CHARS));
+    }
+    format!("[{}]: {}", message.role.as_str(), said(message))
 }
 
 /// What the summary quotes of `message`: its text, a line per part, each

@@ -135,6 +135,42 @@ impl Timeline {
         self.commit(row);
     }
 
+    /// The agent's own copy of an instruction its turn `turn` read, kept as
+    /// its turn's first row (RFC §10.1.1), committed.
+    fn keeps(&mut self, text: &str, turn: &str) -> RoomEvent {
+        let mut row = self.event(EventType::InstructionRead, AGENT, None, None, text);
+        row.source.direction = EventDirection::Outbound;
+        row.correlation_id = Some(turn.to_owned());
+        self.commit(row)
+    }
+
+    /// An agent's message of the turn `turn`, committed.
+    fn answers_in(&mut self, text: &str, turn: &str) -> RoomEvent {
+        let mut said = self.event(EventType::Message, AGENT, None, None, text);
+        said.correlation_id = Some(turn.to_owned());
+        self.commit(said)
+    }
+
+    /// The agent's rows of one round of the turn `turn`: each call's start,
+    /// then its end serving `result`, committed.
+    fn round_of_turn(&mut self, turn: &str, id: &str, result: &str) {
+        let start = ToolCallContent::new("lookup_order", id);
+        let mut end = start.clone();
+        end.result = Value::String(result.to_owned());
+        end.status = ToolCallStatus::Completed;
+        end.outcome = Some(ToolCallOutcome::Served);
+        for (event_type, call) in [
+            (EventType::ToolCallStart, start),
+            (EventType::ToolCallEnd, end),
+        ] {
+            let mut row = self.event(event_type, AGENT, None, None, "");
+            row.source.direction = EventDirection::Outbound;
+            row.correlation_id = Some(turn.to_owned());
+            row.content = EventContent::ToolCall(call);
+            self.commit(row);
+        }
+    }
+
     /// An instruction for the agent, never stored.
     fn instruction(&mut self, text: &str, standalone: bool) -> RoomEvent {
         let mut event = self.event(EventType::Instruction, "host", None, None, text);
@@ -834,4 +870,75 @@ fn an_instruction_with_no_turn_before_it_keeps_a_round_at_its_own_index_alone() 
         let read: Vec<_> = messages.iter().map(|message| message.role).collect();
         assert_eq!(read, roles, "{messages:?}");
     }
+}
+
+fn marked(text: &str) -> Message {
+    user(&format!("{INSTRUCTION_MARK}\n{text}"))
+}
+
+// Python: tests/test_channels/test_tool_history.py::test_a_later_turn_replays_an_instruction_at_its_place
+/// RFC §10.1.1: the instruction a turn read reads, in a later turn, where
+/// that turn read it, before what it wrote, marked as the application's
+/// exactly as the turn's input was, after the history's first turn;
+/// another channel's copy and one deleted are not read; a standalone turn
+/// reads none.
+#[test]
+fn a_later_turn_replays_an_instruction_at_its_place() {
+    let mut room = Timeline::new();
+    room.says("sms", "+15550001", Some("Alice"), "Where is my order?");
+    room.answers_in("Let me ask the team.", "t1");
+    room.keeps("Look order 42 up.", "t2");
+    let mut theirs = room.event(EventType::InstructionRead, "web", None, None, "Not yours.");
+    theirs.source.direction = EventDirection::Outbound;
+    room.commit(theirs);
+    let mut deleted = room.event(EventType::InstructionRead, AGENT, None, None, "Gone.");
+    deleted.source.direction = EventDirection::Outbound;
+    deleted
+        .metadata
+        .insert("deleted".to_owned(), Value::Bool(true));
+    room.commit(deleted);
+    room.round_of_turn("t2", "c1", "shipped");
+    room.answers_in("It arrives on Thursday.", "t2");
+    let event = room.says("sms", "+15550001", Some("Alice"), "Thanks.");
+    let read = room.read(&event, 50);
+    assert_eq!(
+        read,
+        vec![
+            user("Where is my order?"),
+            assistant("Let me ask the team."),
+            marked("Look order 42 up."),
+            calls(&[("c1", "lookup_order", json!({}))]),
+            Message::tool_result("c1", "shipped"),
+            assistant("It arrives on Thursday."),
+            user("Thanks."),
+        ]
+    );
+    let alone = room.instruction("Summarize the room.", true);
+    assert_eq!(room.read(&alone, 50), vec![marked("Summarize the room.")]);
+}
+
+// Python: channels/_tool_history.py with_tool_rounds: an instruction whose
+// turn the history holds may open it, the round of its turn after it.
+/// RFC §10.1.1: an instruction that opened the room, before any message,
+/// opens the history of the agent's later turns when its turn's answer is
+/// in it, the round its turn made after it; a round of another turn before
+/// the history's first message stays out.
+#[test]
+fn an_instruction_that_opened_the_room_opens_its_later_history() {
+    let mut room = Timeline::new();
+    room.round_of_turn("t0", "c0", "older");
+    room.keeps("Introduce yourself.", "t1");
+    room.round_of_turn("t1", "c1", "Paul");
+    room.answers_in("Hello, I am Paul.", "t1");
+    let event = room.says("sms", "+15550001", Some("Alice"), "Hi Paul.");
+    assert_eq!(
+        room.read(&event, 50),
+        vec![
+            marked("Introduce yourself."),
+            calls(&[("c1", "lookup_order", json!({}))]),
+            Message::tool_result("c1", "Paul"),
+            assistant("Hello, I am Paul."),
+            user("Hi Paul."),
+        ]
+    );
 }

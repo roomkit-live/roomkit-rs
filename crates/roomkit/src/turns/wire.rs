@@ -228,6 +228,9 @@ pub(crate) enum Item {
     LoopEnd(WireLoopEnd),
     /// The stream's end.
     StreamEnd,
+    /// The application's instruction the turn read, which the owner keeps
+    /// as the agent's own row (RFC §10.1.1): Python's `instruction_read`.
+    InstructionRead { text: String },
 }
 
 /// What a loop's end crosses the wire with: Python's `LoopEndMarker` fields.
@@ -704,6 +707,21 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    // Python: tests/test_turns_backend.py::test_every_stream_item_crosses_as_a_new_equal_object
+    // (InstructionReadMarker, roomkit/turns/_codec.py `instruction_read`).
+    #[test]
+    fn the_instruction_a_turn_read_crosses_as_python_writes_it() {
+        let item = Item::InstructionRead {
+            text: "Introduce yourself.".to_owned(),
+        };
+        let written = serde_json::to_value(&item).unwrap();
+        assert_eq!(
+            written,
+            json!({"kind": "instruction_read", "text": "Introduce yourself."})
+        );
+        assert_eq!(serde_json::from_value::<Item>(written).unwrap(), item);
+    }
 
     // Python: roomkit/turns/wire.py CommittedEvent, as ChannelControlEnvelope's
     // model_dump(mode="json") writes it (roomkit origin/main e9d11fda).

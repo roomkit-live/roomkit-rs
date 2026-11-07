@@ -13,15 +13,12 @@ use roomkit::ChannelError;
 use roomkit::model::{EventContent, RoomContext, RoomEvent, RoomId, TextContent};
 use tokio::time::Instant;
 
-use super::footprint::turn_history_budget;
+use super::footprint::{history_event_costs, turn_history_budget};
 use super::summary::{
     SUMMARIZER_PROMPT, SUMMARY_FAILED, SummaryLines, is_summary, prior_summary, summary_message,
     unavailable,
 };
-use super::token_estimator::{
-    EstimateEventTokensOptions, estimate_event_tokens, estimate_message_tokens,
-    estimate_notes_tokens,
-};
+use super::token_estimator::{estimate_message_tokens, estimate_notes_tokens};
 use super::{IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
 use crate::provider::{AiContext, AiMessage, AiProvider, AiRole};
 
@@ -190,9 +187,9 @@ impl<P: AiProvider> SummarizingMemory<P> {
         budget: usize,
         mut lines: SummaryLines<'_>,
     ) -> MemoryResult {
-        let costs: Vec<i64> = events
-            .iter()
-            .map(|event| to_i64(event_tokens(event)))
+        let costs: Vec<i64> = history_event_costs(&events)
+            .into_iter()
+            .map(to_i64)
             .collect();
         let event_budget = to_i64(budget) - i64::from(self.options.summary_max_tokens);
         let mut keep_from = 0;
@@ -332,12 +329,9 @@ fn to_i64(tokens: usize) -> i64 {
     i64::try_from(tokens).unwrap_or(i64::MAX)
 }
 
-fn event_tokens(event: &RoomEvent) -> usize {
-    estimate_event_tokens(event, EstimateEventTokensOptions::default())
-}
-
+/// `events`' tokens, with what the history replays with them (RFC §20).
 fn events_tokens(events: &[RoomEvent]) -> usize {
-    events.iter().map(event_tokens).sum()
+    history_event_costs(events).into_iter().sum()
 }
 
 /// What `result` puts in the window besides its events: its messages and

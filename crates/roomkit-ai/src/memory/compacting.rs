@@ -12,11 +12,10 @@ use roomkit::ChannelError;
 use roomkit::model::{ChannelId, RoomContext, RoomEvent, RoomId};
 use tokio::time::Instant;
 
-use super::footprint::turn_history_budget;
+use super::footprint::{history_event_costs, turn_history_budget};
 use super::summary::{
     SUMMARIZER_PROMPT, SUMMARY_FAILED, SummaryLines, summary_message, unavailable,
 };
-use super::token_estimator::{EstimateEventTokensOptions, estimate_event_tokens};
 use super::{IngestOptions, MemoryProvider, MemoryResult, RetrieveOptions};
 use crate::provider::{AiContext, AiMessage, AiProvider, AiRole};
 
@@ -111,15 +110,10 @@ impl<P: AiProvider> CompactingMemory<P> {
         mut lines: SummaryLines<'_>,
     ) -> MemoryResult {
         let budget = to_i64(budget);
-        let costs: Vec<i64> = inner
-            .events
-            .iter()
-            .map(|event| {
-                to_i64(estimate_event_tokens(
-                    event,
-                    EstimateEventTokensOptions::default(),
-                ))
-            })
+        // An event costs what the history replays with it too (RFC §20).
+        let costs: Vec<i64> = history_event_costs(&inner.events)
+            .into_iter()
+            .map(to_i64)
             .collect();
         if costs.iter().sum::<i64>() <= budget {
             return inner;

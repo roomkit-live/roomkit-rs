@@ -10,6 +10,9 @@ use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, ModifyOptions};
 use roomkit::model::{EventContent, EventType, HookResult, RoomEvent};
 use roomkit::{HookOptions, HookTrigger, ToolCallEvent, UpdateEventOptions};
+use roomkit_ai::memory::{
+    BudgetAwareMemory, BudgetAwareMemoryOptions, SlidingWindowMemory, SlidingWindowMemoryOptions,
+};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiChannel, AiChannelOptions, AiContext, AiMessage, AiProvider, AiResponse, AiRole, AiTool,
@@ -488,4 +491,112 @@ async fn a_deleted_start_row_ends_its_round_in_the_next_turn() {
     expected.extend(round_of(&ids[2..]));
     expected.extend(["assistant Answer one.", "user second question"].map(str::to_owned));
     assert_eq!(shape(model.requests().last().unwrap()), expected);
+}
+
+/// What the model receives of a request, each message by its role and
+/// what it says: the calls a round makes, a result's call, a text.
+fn roles(request: &AiContext) -> Vec<AiRole> {
+    request
+        .messages
+        .iter()
+        .map(|message| message.role)
+        .collect()
+}
+
+// Python: tests/test_channels/test_tool_history.py::test_a_budget_memory_keeps_whole_turns_with_their_rounds
+/// RFC §20: each round costs the history with the turn it reads in: a
+/// budget memory keeps the latest turns whole, each with its round, and
+/// opens on a question. Reserved up front, every round cut the messages,
+/// and the rounds of the turns cut went with them: two questions were left
+/// of twelve (RMK-1370).
+#[tokio::test]
+async fn a_budget_memory_keeps_whole_turns_with_their_rounds() {
+    let boards: Arc<str> = (1..=160)
+        .map(|n| format!("Board {n} holds the cards of its team."))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .into();
+    let big = AiTool::new("big", "The boards").unwrap();
+    let tools = Tools::new().tool(big, move |_call, _context| {
+        let boards = Arc::clone(&boards);
+        async move { Ok(roomkit_ai::ToolResult::Text(boards.to_string())) }
+    });
+    let ids: Vec<String> = (0..12).map(|n| format!("c{n}")).collect();
+    let mut script = Vec::new();
+    for (n, id) in ids.iter().enumerate() {
+        script.push(ScriptedRound::calling("", [(id.as_str(), "big", "{}")]));
+        script.push(ScriptedRound::answering(format!("Answer {n}.")));
+    }
+    let model = ScriptedProvider::new(script);
+    let window = Arc::new(SlidingWindowMemory::new(SlidingWindowMemoryOptions {
+        max_events: 50,
+    }));
+    let memory = Arc::new(BudgetAwareMemory::new(
+        window,
+        16_000,
+        BudgetAwareMemoryOptions::default(),
+    ));
+    let room = Room::equipped(model.clone(), tools, |options| AiChannelOptions {
+        memory: Some(memory),
+        ..options
+    })
+    .await;
+    for n in 0..12 {
+        room.says(&format!("question {n}")).await;
+    }
+    room.kit.close().await.unwrap();
+    let last = roles(model.requests().last().unwrap());
+    let asked = last.iter().filter(|role| **role == AiRole::User).count();
+    let results = last.iter().filter(|role| **role == AiRole::Tool).count();
+    assert_eq!(last.first(), Some(&AiRole::User));
+    assert!(asked >= 6, "{last:?}");
+    // Each turn with its round.
+    assert_eq!(results, asked, "{last:?}");
+}
+
+// Python: tests/test_channels/test_tool_history.py::test_a_context_narrower_than_the_room_reads_the_instruction_before_it
+/// RFC §10.1.1: the agent's rows are read from the room's message before
+/// its history's first: the instruction and the round of the turn whose
+/// answer opens the history read before it.
+#[tokio::test]
+async fn a_context_narrower_than_the_room_reads_the_instruction_before_it() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::answering("Zero."),
+        ScriptedRound::calling("", [("c1", "lookup_order", r#"{"order": "1"}"#)]),
+        ScriptedRound::answering("One."),
+        ScriptedRound::answering("Two."),
+        ScriptedRound::answering("Three."),
+    ]);
+    let room = Room::equipped(model.clone(), served(), |options| AiChannelOptions {
+        max_context_events: 4,
+        ..options
+    })
+    .await;
+    room.says("q0").await;
+    let mut instruction = roomkit::model::InboundMessage::new(
+        channel("sms"),
+        "app",
+        roomkit::model::TextContent::new("Look it up."),
+    );
+    instruction.event_type = EventType::Instruction;
+    instruction.addressed_to = Some(vec![channel("assistant")]);
+    let options = roomkit::ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    room.kit
+        .process_inbound(instruction, options)
+        .await
+        .unwrap();
+    roomkit::testing::idle(&room.kit).await;
+    room.says("q2").await;
+    room.says("q3").await;
+    room.kit.close().await.unwrap();
+    let requests = model.requests();
+    // The instructed turn's first request: its instruction last, after the
+    // first turn; then its round.
+    let instructed = shape(&requests[2]);
+    let mut expected = instructed[2..].to_vec();
+    expected.push("assistant One.".to_owned());
+    assert_eq!(shape(requests.last().unwrap())[..4], expected);
 }

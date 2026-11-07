@@ -101,7 +101,7 @@
     "update_binding": ["def", "room_id", "binding"]
   },
   "roomkit.AIChannelTurnConfig": {
-    "__init__": ["def", "system_prompt=None", "tools=None", "temperature=None", "max_tokens=None", "thinking_budget=None", "enable_thinking=None", "reasoning_effort=None", "response_schema=None", "turn_budget_tokens=None", "turn_budget_usd=None", "tool_handler=None", "skills=None"]
+    "__init__": ["def", "system_prompt=None", "tools=None", "temperature=None", "max_tokens=None", "thinking_budget=None", "enable_thinking=None", "reasoning_effort=None", "response_schema=None", "turn_budget_tokens=None", "turn_budget_usd=None", "tool_handler=None", "skills=None", "tool_timeouts=None"]
   },
   "roomkit.AIGenerationEvent": {
     "__init__": ["def", "ai_context", "channel_id", "room_id=None", "provider_name=None", "timestamp=<factory>", "trigger=None", "purpose='answer'"]
@@ -908,6 +908,7 @@
     "DTMF": ["member", "'dtmf'"],
     "EDIT": ["member", "'edit'"],
     "INSTRUCTION": ["member", "'instruction'"],
+    "INSTRUCTION_READ": ["member", "'instruction_read'"],
     "MESSAGE": ["member", "'message'"],
     "OBSERVATION": ["member", "'observation'"],
     "PARTICIPANT_IDENTIFIED": ["member", "'participant_identified'"],
@@ -1837,6 +1838,7 @@
     "connect_voice": ["async def", "room_id", "participant_id", "channel_id", "*", "metadata=None", "auto_greet=False"],
     "connect_websocket": ["async def", "channel_id", "connection_id", "send_fn", "*", "room_id", "stream_send_fn=None", "organization_id=None"],
     "create_room": ["async def", "room_id=None", "metadata=None", "recorders=None", "orchestration=<object object>", "organization_id=None", "timers=None", "agent_response_policy=None"],
+    "declare_host_verb": ["def", "name", "verb", "*", "between_turns=False"],
     "delegate": ["async def", "room_id", "agent_id", "task", "*", "wait=False", "context=None", "share_channels=None", "notify=None", "on_complete=None", "require_structured_result=False", "max_result_retries=3", "result_tool=None", "post_status=True", "brief=None", "conversation=0", "hand_back='relay'", "organization_id=None"],
     "delete_event": ["async def", "room_id", "event_id", "*", "cascade_replies=True", "organization_id=None"],
     "deliver": ["async def", "room_id", "content", "*", "channel_id=None", "strategy=None", "metadata=None", "addressed_to=None", "idempotency_key=None", "session_id=None", "chain_depth=0", "instruction=False", "organization_id=None"],
@@ -1860,6 +1862,7 @@
     "identity_hook": ["def", "trigger", "channel_types=None", "channel_ids=None", "directions=None"],
     "identity_resolver": ["property"],
     "identity_timeout": ["property"],
+    "input_request": ["def", "request_id", "*", "organization_id=None"],
     "install_strategy": ["async def", "room_id", "strategy", "*", "organization_id=None"],
     "is_member": ["async def", "room_id", "identity_id", "*", "organization_id=None"],
     "join": ["async def", "room_id", "channel_id", "*", "session=None", "participant_id=None", "metadata=None", "backend=None", "connection=None", "organization_id=None"],
@@ -1895,6 +1898,7 @@
     "regenerate_target": ["async def", "room_id", "*", "organization_id=None"],
     "register_channel": ["def", "channel"],
     "reject_input": ["async def", "request_id", "reason=''"],
+    "release_channel": ["async def", "channel_id"],
     "remove_member": ["async def", "room_id", "participant_id", "*", "status=<ParticipantStatus.LEFT: 'left'>", "organization_id=None"],
     "remove_room_hook": ["async def", "room_id", "name", "*", "organization_id=None"],
     "rename_member": ["async def", "room_id", "participant_id", "display_name", "*", "organization_id=None"],
@@ -2422,6 +2426,7 @@
     "control": ["async def", "message"],
     "disable_room_hook": ["def", "room_id", "name"],
     "enable_room_hook": ["def", "room_id", "name"],
+    "input_request": ["def", "request_id", "*", "organization_id=None"],
     "room_call": ["async def", "message"],
     "room_hook_names": ["def", "room_id"],
     "room_publication": ["async def", "message"],
@@ -2452,11 +2457,12 @@
     "wiring": ["property"]
   },
   "roomkit.TurnFootprint": {
-    "__init__": ["def", "input_tokens", "reply_tokens"]
+    "__init__": ["def", "input_tokens", "reply_tokens", "replayed=()"]
   },
   "roomkit.TurnHost": {
     "__init__": ["def", "call", "*", "between_turns=None", "errors=<roomkit.turns._error_codec.ErrorClasses object>"],
     "add_observation": ["async def", "observation"],
+    "call": ["async def", "verb", "arguments=None"],
     "delegate": ["async def", "room_id", "agent_id", "task", "**options"],
     "open": ["property"],
     "post_status": ["async def", "agent_id", "action", "status", "*", "detail=''", "metadata=None"],
@@ -2800,7 +2806,8 @@
     "update_binding_metadata": ["async def", "room_id", "channel_id", "metadata", "*", "organization_id=None"]
   },
   "roomkit.core.mixins.ChannelStateMixin": {
-    "channel_call": ["async def", "channel_id", "room_id", "verb", "*", "organization_id=None", "**arguments"]
+    "channel_call": ["async def", "channel_id", "room_id", "verb", "*", "organization_id=None", "**arguments"],
+    "release_channel": ["async def", "channel_id"]
   },
   "roomkit.core.mixins.DelegationMixin": {
     "cancel_task": ["async def", "task_id", "*", "organization_id=None"],
@@ -5625,6 +5632,9 @@
     "__call__": ["def"]
   },
   "roomkit.tools.current_tool_call": {
+    "__call__": ["def"]
+  },
+  "roomkit.tools.current_tool_chain_depth": {
     "__call__": ["def"]
   },
   "roomkit.tools.current_tool_requester": {

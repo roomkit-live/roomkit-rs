@@ -192,6 +192,21 @@ fn tool_rows(binding: &ChannelBinding) -> EventFilter {
     }
 }
 
+/// `binding`'s channel's own rows its history replays: its tool calls and
+/// the instructions its turns read (RFC §6.4, §10.1.1). Python's
+/// `read_history_rows`.
+fn history_rows(binding: &ChannelBinding) -> EventFilter {
+    EventFilter {
+        event_types: Some(vec![
+            EventType::ToolCallStart,
+            EventType::ToolCallEnd,
+            EventType::InstructionRead,
+        ]),
+        source_channel_id: Some(binding.channel_id.clone()),
+        ..EventFilter::default()
+    }
+}
+
 /// The index a discussion's turn on `event` answers, which its history's
 /// rounds read after (RFC §19.7.5): one less for an instruction, which,
 /// never stored, holds the index of what followed it; none for any other
@@ -209,7 +224,8 @@ fn answered_index(event: &RoomEvent) -> Option<u64> {
 
 /// Every row of `binding`'s channel's own that a turn's history replays,
 /// from the room's message before `first`, the history's first event, on:
-/// the rounds its history holds, read page by page. Python's
+/// the rounds its history holds and the instructions its turns read, the
+/// one that opened the first of them included, read page by page. Python's
 /// `build_tool_history_loader`.
 async fn replayed_rows<S: ConversationStore>(
     store: &S,
@@ -222,7 +238,7 @@ async fn replayed_rows<S: ConversationStore>(
     loop {
         let page = ListEventsOptions {
             limit: HISTORY_ROWS_PAGE,
-            event_filter: Some(tool_rows(binding)),
+            event_filter: Some(history_rows(binding)),
             after_index: after,
             ..ListEventsOptions::default()
         };

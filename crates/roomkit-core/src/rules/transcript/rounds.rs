@@ -67,13 +67,14 @@ pub(super) fn tool_rounds(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<T
         .collect()
 }
 
-/// `channel_id`'s tool rows among `events`, with their content: rows it
-/// wrote (outbound; one that entered the room inbound under its id is no
-/// call it made), told by their type and source. A deleted one keeps its
-/// place with no content, whether the history handed it whole or withheld
-/// its content, as a channel's history does (RFC §7.5 rule 8,
-/// `visible_events`): it ends a round, as the reference implementation's
-/// withheld row does.
+/// `channel_id`'s own rows among `events` its history replays, with the
+/// content of its tool rows: rows it wrote (outbound; one that entered the
+/// room inbound under its id is no call it made), told by their type and
+/// source. A deleted one keeps its place with no content, whether the
+/// history handed it whole or withheld its content, as a channel's history
+/// does (RFC §7.5 rule 8, `visible_events`): it ends a round, as the
+/// reference implementation's withheld row does, and so does an
+/// instruction it kept (RFC §10.1.1), a row of no call.
 fn own_rows<'a>(
     events: &'a [RoomEvent],
     channel_id: &'a ChannelId,
@@ -81,7 +82,7 @@ fn own_rows<'a>(
     events.iter().filter_map(move |event| {
         let is_tool_row = matches!(
             event.r#type,
-            EventType::ToolCallStart | EventType::ToolCallEnd
+            EventType::ToolCallStart | EventType::ToolCallEnd | EventType::InstructionRead
         );
         let own = &event.source.channel_id == channel_id
             && event.source.direction == EventDirection::Outbound;

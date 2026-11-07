@@ -79,6 +79,14 @@ pub enum ResponseItem {
     /// What a generation used, told after it: Python's `UsageMarker` (RFC
     /// §6.4). Never stored.
     Usage(UsageMarker),
+    /// The application's instruction the turn read, its text as the turn
+    /// read it, the first item of a turn an instruction that does not stand
+    /// alone opened (RFC §10.1.1): the kit keeps it as the agent's own
+    /// `instruction_read` record, which its later turns replay, and hands
+    /// it to no reader. Python's private `InstructionReadMarker`, which
+    /// roomkit-ai writes.
+    #[doc(hidden)]
+    InstructionRead(String),
 }
 
 /// A turn's response as its channel writes it: a stream ended by its last

@@ -18,8 +18,9 @@ use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ClassedError, TurnRecord, current_turn_host,
 };
 use roomkit_core::rules::edits::opens_no_turn;
+use roomkit_core::rules::instructions::kept_instruction;
 use roomkit_core::rules::transcript::{
-    Message, TurnMemory, conversation_with_memory, people_taking_part, replayed_rounds,
+    Message, Replayed, TurnMemory, conversation_with_memory, earlier_turns, people_taking_part,
 };
 use serde_json::{Map, Value};
 
@@ -1084,7 +1085,7 @@ impl<P: AiProvider> AiChannel<P> {
         let (rows, viewed): (Vec<&RoomEvent>, Vec<&RoomEvent>) = context
             .recent_events
             .iter()
-            .partition(|past| self.is_own_tool_row(past));
+            .partition(|past| self.is_own_tool_row(past) || self.is_own_instruction(past));
         let MemoryResult {
             messages,
             events,
@@ -1139,20 +1140,22 @@ impl<P: AiProvider> AiChannel<P> {
         people_taking_part(context, &self.channel_id)
     }
 
-    /// The channel's earlier rounds of tool calls in `context`, which the
-    /// turn's history replays (RFC §6.4); none for an instruction that
-    /// stands alone, which reads none of the room (RFC §10.1.1 rule 7).
-    fn replayed(&self, context: &RoomContext, stands_alone: bool) -> Vec<Vec<Message>> {
+    /// What the turn's history replays of the channel's earlier turns in
+    /// `context`, each piece as its messages: their rounds of tool calls
+    /// (RFC §6.4), then the instructions they read (RFC §10.1.1); none for
+    /// an instruction that stands alone, which reads none of the room (rule
+    /// 7). Python's `EarlierTurns`, as `_measure_turn` counts it.
+    fn replayed(&self, context: &RoomContext, stands_alone: bool) -> Vec<Replayed> {
         if stands_alone {
             return Vec::new();
         }
         let rows: Vec<RoomEvent> = context
             .recent_events
             .iter()
-            .filter(|past| self.is_own_tool_row(past))
+            .filter(|past| self.is_own_tool_row(past) || self.is_own_instruction(past))
             .cloned()
             .collect();
-        replayed_rounds(&rows, &self.channel_id)
+        earlier_turns(&rows, &self.channel_id)
     }
 
     /// The images this channel's tool calls in `room` returned that ride
@@ -1214,6 +1217,13 @@ impl<P: AiProvider> AiChannel<P> {
             .nth(TOOL_MEMORY_ROWS - 1)
             .map_or(0, |(at, _)| at);
         events.get(from..).unwrap_or_default()
+    }
+
+    /// Whether `event` is one of the channel's own copies of an instruction
+    /// its turn read (RFC §10.1.1), which its history replays and no memory
+    /// reads.
+    fn is_own_instruction(&self, event: &RoomEvent) -> bool {
+        event.source.channel_id == self.channel_id && event.r#type == EventType::InstructionRead
     }
 
     /// Whether `event` is one of the channel's tool-call rows.
@@ -1567,6 +1577,7 @@ impl<P: AiProvider> AiChannel<P> {
             said: HashMap::new(),
             repeat_guard: RepeatGuard::default(),
             reread_shown: self.eviction.has_evicted(context.room.id.as_str()),
+            instruction: kept_instruction(&event),
             eviction: Arc::clone(&self.eviction),
         };
         // Measured as the first round sends it, before the memory reads the

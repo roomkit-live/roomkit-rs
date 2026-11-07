@@ -21,9 +21,11 @@
 use std::collections::HashMap;
 
 use roomkit_core::model::{
-    EventContent, EventId, EventSource, EventType, Metadata, ResponseMetadata, RoomEvent,
-    TextContent, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    EventContent, EventId, EventSource, EventStatus, EventType, Metadata, ResponseMetadata,
+    RoomEvent, TextContent, ToolCallContent, ToolCallOutcome, ToolCallStatus, Visibility,
 };
+use roomkit_core::rules::chain_depth::response_depth;
+use roomkit_core::rules::instructions::mark_response;
 use roomkit_core::rules::transcript::is_blank;
 use roomkit_core::rules::turn_end::recorded_turn_end;
 use serde_json::Value;
@@ -143,6 +145,29 @@ impl Segments {
     /// The text of the segment read so far.
     pub(super) fn segment_text(&self) -> &str {
         &self.text
+    }
+
+    /// The agent's own copy of the instruction its turn read, `text` (RFC
+    /// §10.1.1): a record of its own, visible to it alone, the turn's id and
+    /// the instruction's fingerprint on it, as the response's rows carry
+    /// them, answering the instruction one hop deeper. Its id and its
+    /// instant are the writer's to give; the store holds it apart from the
+    /// response's rows, no reader handed it, the turn's record never on it.
+    pub(super) fn instruction_read(&self, text: String) -> RoomEvent {
+        let mut row = self.draft(EventType::InstructionRead, TextContent::new(text).into());
+        row.status = EventStatus::Delivered;
+        row.chain_depth = response_depth(&self.answers);
+        row.responds_to = Some(self.answers.id.clone());
+        row.parent_event_id
+            .clone_from(&self.answers.parent_event_id);
+        // The trigger's answer scope rides it, as it rides every row of the
+        // turn (RFC §5.12).
+        row.response_visibility
+            .clone_from(&self.answers.response_visibility);
+        row.visibility =
+            Visibility::channels([self.source.channel_id.clone()]).unwrap_or(Visibility::None);
+        mark_response(&mut row, &self.answers);
+        row
     }
 
     /// A call starts: the text before it, a segment of its own, then its

@@ -240,7 +240,8 @@ impl Pump {
             | Item::SegmentBreak
             | Item::Usage { .. }
             | Item::LoopEnd(_)
-            | Item::StreamEnd => 1,
+            | Item::StreamEnd
+            | Item::InstructionRead { .. } => 1,
         };
         self.received = self.received.saturating_add(counted);
         if self.received > self.state.granted.load(Ordering::Acquire) {
