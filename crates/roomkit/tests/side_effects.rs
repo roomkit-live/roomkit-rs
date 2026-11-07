@@ -1,7 +1,8 @@
 //! The side effects a delivery set stores (RFC §10.1 step 15) when the
 //! store fails one of their writes, and when the room's lane drops the set
-//! as stale: what no shared scenario can script, a store that fails or
-//! another worker's lane (Python's `tests/test_hook_side_effects.py`).
+//! as stale or as the kit closes: what no shared scenario can script, a
+//! store that fails, another worker's lane, a close past its grace
+//! (Python's `tests/test_hook_side_effects.py`).
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 #![expect(clippy::panic, reason = "a store's driver that breaks panics")]
@@ -57,6 +58,9 @@ enum Failing {
     Cursor,
     /// The room's delivery cursor's second write once `armed`, once.
     SecondCursor,
+    /// None: the write of the task `tA` waits until the test opens it,
+    /// telling it once it started.
+    HeldTask,
 }
 
 /// An in-memory store that fails the write `failing` names.
@@ -70,6 +74,9 @@ struct FailingWrites {
     /// and the index of the one that failed.
     cursor_writes: AtomicUsize,
     failed_index: AtomicU64,
+    /// For [`Failing::HeldTask`]: told once `tA`'s write started, and
+    /// what lets it go on.
+    held: (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>),
 }
 
 /// The store's failure, as a database gone answers.
@@ -92,6 +99,11 @@ impl ConversationStore for FailingWrites {
         if self.failing == Failing::Task && task.id.as_str() == "t1" {
             return Err(down());
         }
+        if self.failing == Failing::HeldTask && task.id.as_str() == "tA" {
+            let (reached, opened) = &self.held;
+            reached.notify_one();
+            opened.notified().await;
+        }
         self.store.add_task(task).await
     }
 
@@ -100,7 +112,11 @@ impl ConversationStore for FailingWrites {
             match self.failing {
                 Failing::Observation => return Err(down()),
                 Failing::PanickingObservation => panic!("the store's driver broke"),
-                Failing::Task | Failing::Metadata | Failing::Cursor | Failing::SecondCursor => {}
+                Failing::Task
+                | Failing::Metadata
+                | Failing::Cursor
+                | Failing::SecondCursor
+                | Failing::HeldTask => {}
             }
         }
         self.store.add_observation(observation).await
@@ -350,6 +366,7 @@ async fn kit_on(failing: Failing, channels: &[&str]) -> RoomKit<FailingWrites> {
         armed: AtomicBool::new(false),
         cursor_writes: AtomicUsize::new(0),
         failed_index: AtomicU64::new(0),
+        held: Default::default(),
     };
     let kit = RoomKit::new(RoomKitOptions::with_store(store));
     let sms = RecordingTransport::new(
@@ -462,7 +479,9 @@ async fn a_failed_side_effect_write_is_logged_and_the_call_goes_on() {
                 "Failed to persist observation o1"
             }
             Failing::Metadata => METADATA_LINE,
-            Failing::Cursor | Failing::SecondCursor => unreachable!("no case fails the cursor"),
+            Failing::Cursor | Failing::SecondCursor | Failing::HeldTask => {
+                unreachable!("no case fails the cursor or holds a write")
+            }
         };
         let lines = warnings.containing("ERROR");
         assert_eq!(
@@ -646,6 +665,354 @@ async fn a_set_the_lane_drops_as_stale_still_stores_its_hooks_side_effects() {
             vec!["t1".to_owned()]
         )
     );
+}
+
+/// The text of `event`, when it is a text.
+fn text_of(event: &RoomEvent) -> Option<&str> {
+    if let EventContent::Text(text) = &event.content {
+        Some(text.body.as_str())
+    } else {
+        None
+    }
+}
+
+/// The message `body` from `+15550001` on `sms1`.
+fn sms(body: &str) -> InboundMessage {
+    InboundMessage::new(channel("sms1"), "+15550001", TextContent::new(body))
+}
+
+/// Room `r1` on `kit` binding `sms1`, a recording SMS transport, and
+/// `ws1`, registered.
+async fn sms_and<S: ConversationStore>(kit: &RoomKit<S>, ws1: impl Channel + 'static) {
+    let sms1 = RecordingTransport::new(
+        channel("sms1"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(sms1).unwrap();
+    kit.register_channel(ws1).unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for bound in ["sms1", "ws1"] {
+        kit.attach_channel(&room_id(), &channel(bound), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+}
+
+/// A locked hook on `kit` giving the task `id` to the message `text`.
+fn gives_task<S: ConversationStore>(kit: &RoomKit<S>, text: &'static str, id: &'static str) {
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| async move {
+            let tasks = (text_of(&event) == Some(text))
+                .then(|| Task::new(TaskId::new(id).unwrap(), room_id(), "Call back"))
+                .into_iter()
+                .collect();
+            Ok::<_, ChannelError>(HookResult {
+                tasks,
+                ..HookResult::allow(AllowOptions::default())
+            })
+        },
+        HookOptions {
+            name: "triage".to_owned(),
+            priority: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
+/// The ids of the tasks whose `ON_TASK_CREATED` ran on `kit`.
+fn notes_created<S: ConversationStore>(kit: &RoomKit<S>) -> Arc<Mutex<Vec<String>>> {
+    let created = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&created);
+    kit.hook(
+        HookTrigger::OnTaskCreated,
+        move |event: RoomEvent, _| {
+            let task_id = event.metadata.get("task_id").and_then(|id| id.as_str());
+            seen.lock().unwrap().extend(task_id.map(str::to_owned));
+            async {}
+        },
+        HookOptions {
+            execution: HookExecution::Async,
+            name: "follow_up".to_owned(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    created
+}
+
+/// `kit`'s call of the message `hello` into `r1`, started in a task.
+fn hello_from<S: ConversationStore>(
+    kit: &RoomKit<S>,
+) -> tokio::task::JoinHandle<Result<roomkit::InboundResult, roomkit::RoomKitError>> {
+    let caller = kit.clone();
+    tokio::spawn(async move {
+        let options = ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        };
+        caller.process_inbound(sms("hello"), options).await
+    })
+}
+
+/// The options of a call into `r1` that defers its delivery.
+fn deferred() -> ProcessInboundOptions {
+    ProcessInboundOptions {
+        room_id: Some(room_id()),
+        defer_delivery: true,
+        ..Default::default()
+    }
+}
+
+/// A transport whose delivery of `Hold on` never answers, telling the test
+/// when it started.
+struct Stuck {
+    reached: Arc<tokio::sync::Notify>,
+}
+
+impl Channel for Stuck {
+    fn channel_id(&self) -> ChannelId {
+        channel("ws1")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::WEBSOCKET
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let held = text_of(&event) == Some("Hold on");
+        let reached = Arc::clone(&self.reached);
+        async move {
+            if held {
+                reached.notify_one();
+                std::future::pending::<()>().await;
+            }
+            Ok(ChannelOutput::default())
+        }
+    }
+}
+
+// Python: tests/test_hook_side_effects.py::TestDroppedSetSideEffects::test_a_dropped_set_s_task_is_stored_while_its_call_outlasts_the_close_s_grace
+// (RMK-1514): hello's off-lock hook makes two deferred calls into its
+// room, `Hold on`, whose transport never answers, then `Call me back`,
+// whose hook gives `t1` and whose set waits in the room's lane behind the
+// first. The kit's close drops that set and stores its task within its
+// grace, though the set ahead of it, an entry of the same call, outlasts
+// the grace and is cut; the task's ON_TASK_CREATED fires.
+#[tokio::test(start_paused = true)]
+async fn a_dropped_set_s_task_is_stored_while_its_call_outlasts_the_close_s_grace() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let stuck = Stuck {
+        reached: Arc::clone(&reached),
+    };
+    sms_and(&kit, stuck).await;
+    let made = Arc::new(tokio::sync::Notify::new());
+    let (hook_kit, hook_made) = (kit.clone(), Arc::clone(&made));
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, made) = (hook_kit.clone(), Arc::clone(&hook_made));
+            async move {
+                if text_of(&event) == Some("hello") {
+                    for body in ["Hold on", "Call me back"] {
+                        kit.process_inbound(sms(body), deferred()).await?;
+                    }
+                    made.notify_one();
+                }
+                Ok::<_, ChannelError>(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        HookOptions {
+            name: "adopts".to_owned(),
+            needs_lock: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    gives_task(&kit, "Call me back", "t1");
+    let created = notes_created(&kit);
+
+    let hello = hello_from(&kit);
+    let bound = std::time::Duration::from_secs(5);
+    tokio::time::timeout(bound, async {
+        tokio::join!(reached.notified(), made.notified())
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(60), kit.close())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(tokio::time::timeout(bound, hello).await.unwrap());
+    let tasks = kit
+        .store()
+        .list_tasks(&room_id(), store::ListTasksOptions::default())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            sorted(tasks.into_iter().map(|task| task.id)),
+            created.lock().unwrap().clone()
+        ),
+        (sorted(["t1"]), vec!["t1".to_owned()])
+    );
+}
+
+// Python: tests/test_hook_side_effects.py::TestDroppedSetSideEffects::test_an_adopted_call_dropped_as_stale_reads_its_task_stored
+// (RMK-1514): hello's off-lock hook has another worker declare the room's
+// next index lost, then makes a deferred call, `Call me back`, whose hook
+// gives `t1`: the room's lane drops its set as stale, and its handle,
+// waited from that hook, answers `delivery_stale` once `t1` is stored.
+#[tokio::test]
+async fn an_adopted_call_dropped_as_stale_reads_its_task_stored() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let ws1 = RecordingTransport::new(
+        channel("ws1"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    sms_and(&kit, ws1).await;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (hook_kit, hook_seen) = (kit.clone(), Arc::clone(&seen));
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, seen) = (hook_kit.clone(), Arc::clone(&hook_seen));
+            async move {
+                if text_of(&event) != Some("hello") {
+                    return Ok::<_, ChannelError>(HookResult::allow(AllowOptions::default()));
+                }
+                // Another worker's lane declares the next index lost.
+                let room = kit.store().get_room(&room_id()).await?.unwrap();
+                let next = room.latest_index.map_or(0, |index| index + 1);
+                let options = store::AdvanceDeliveredIndexOptions { force: true };
+                kit.store()
+                    .advance_delivered_index(&room_id(), next, options)
+                    .await?;
+                let side = kit.process_inbound(sms("Call me back"), deferred()).await?;
+                let waited = side.delivery.unwrap().wait().await?;
+                let tasks = kit
+                    .store()
+                    .list_tasks(&room_id(), store::ListTasksOptions::default())
+                    .await?;
+                seen.lock().unwrap().push((
+                    waited.cancellation_reason,
+                    sorted(tasks.into_iter().map(|task| task.id)),
+                ));
+                Ok(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        HookOptions {
+            name: "adopts".to_owned(),
+            needs_lock: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    gives_task(&kit, "Call me back", "t1");
+
+    let result = hello_from(&kit).await.unwrap().unwrap();
+    kit.close().await.unwrap();
+
+    assert_eq!(
+        (result.cancellation_reason, seen.lock().unwrap().clone()),
+        (
+            None,
+            vec![(Some("delivery_stale".to_owned()), sorted(["t1"]))]
+        )
+    );
+}
+
+// Python: tests/test_hook_side_effects.py::TestDroppedSetSideEffects::test_a_set_placed_first_in_an_idle_lane_runs_at_the_close
+// (RMK-1514, from the review of its second half): hello's off-lock hook
+// makes a deferred call, `first`, whose hook gives `tA`, then, once `first`
+// delivered and its write of `tA` started, `second`, placed first in the
+// idle lane. The kit's close starts while `tA`'s write waits: `second`'s
+// set runs from its placement, delivered within the grace, as the lane
+// drops only what waits behind another place (RFC §12.10.4).
+#[tokio::test]
+async fn a_set_placed_first_in_an_idle_lane_runs_at_the_close() {
+    let kit = kit_on(Failing::HeldTask, &["sms1"]).await;
+    let (reached, opened) = kit.store().held.clone();
+    let ws1 = RecordingTransport::new(
+        channel("ws1"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(ws1.clone()).unwrap();
+    kit.attach_channel(&room_id(), &channel("ws1"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let made = Arc::new(tokio::sync::Notify::new());
+    let (hook_kit, hook_made, hook_reached) =
+        (kit.clone(), Arc::clone(&made), Arc::clone(&reached));
+    kit.hook(
+        HookTrigger::BeforeBroadcast,
+        move |event: RoomEvent, _| {
+            let (kit, made, reached) = (
+                hook_kit.clone(),
+                Arc::clone(&hook_made),
+                Arc::clone(&hook_reached),
+            );
+            async move {
+                if text_of(&event) == Some("hello") {
+                    kit.process_inbound(sms("first"), deferred()).await?;
+                    reached.notified().await;
+                    kit.process_inbound(sms("second"), deferred()).await?;
+                    made.notify_one();
+                }
+                Ok::<_, ChannelError>(HookResult::allow(AllowOptions::default()))
+            }
+        },
+        HookOptions {
+            name: "adopts".to_owned(),
+            needs_lock: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    gives_task(&kit, "first", "tA");
+
+    let hello = hello_from(&kit);
+    let bound = std::time::Duration::from_secs(5);
+    tokio::time::timeout(bound, made.notified()).await.unwrap();
+    let closer = kit.clone();
+    let close = tokio::spawn(async move { closer.close().await });
+    // The close starts and its runs read it, then `tA`'s write goes on.
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    opened.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(60), close)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop(tokio::time::timeout(bound, hello).await.unwrap());
+
+    assert_eq!(ws1.texts(), ["first", "second"]);
 }
 
 /// Hooks on `kit`: one giving the task `t1` to the message `Call me back`,
