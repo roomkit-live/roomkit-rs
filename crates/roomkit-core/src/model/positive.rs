@@ -43,13 +43,18 @@ pub fn python_float(value: f64) -> String {
     if value.is_infinite() {
         return if value > 0.0 { "inf" } else { "-inf" }.to_owned();
     }
-    // Rust's `{:e}` writes the shortest digits that read back. At 17
+    // Rust's `{:e}` writes the shortest digits that read back. At 16 or 17
     // digits, the value exactly halfway between two that both read back, it
-    // rounds up where Python rounds to the even one; `{:.16e}` writes those
-    // 17 digits rounded half to even (RMK-1525).
+    // rounds up where Python keeps the even one: `{:.*e}` writes as many
+    // digits rounded half to even, kept when they read back (beside a power
+    // of two the lower one may not), RMK-1525. Fewer digits never tie.
     let mut scientific = format!("{value:e}");
-    if significant_digits(&scientific) == 17 {
-        scientific = format!("{value:.16e}");
+    let digits = significant_digits(&scientific);
+    if digits >= 16 {
+        let even = format!("{value:.*e}", digits - 1);
+        if even.parse::<f64>() == Ok(value) {
+            scientific = even;
+        }
     }
     let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
     let exponent: i32 = exponent.parse().unwrap_or(0);
@@ -124,7 +129,7 @@ mod tests {
     #[test]
     #[expect(
         clippy::excessive_precision,
-        reason = "the exact values of the ties, halfway between two 17-digit forms"
+        reason = "the exact values of the ties, halfway between two 16- or 17-digit forms"
     )]
     fn a_float_is_written_as_python_s_repr_writes_it() {
         let values = [
@@ -143,10 +148,15 @@ mod tests {
             2.5e-7,
             1e15,
             0.300_000_000_000_000_04,
-            // Halfway between two 17-digit forms that both read back:
-            // Python keeps the even one (RMK-1525).
+            // Halfway between two 17-digit, then 16-digit, forms that both
+            // read back: Python keeps the even one (RMK-1525); beside a power
+            // of two the even one may not read back.
             -1_548_782_250_018_927.25,
             -155_559_142_687_939.625,
+            842_093_581_598_402.25,
+            820.833_068_847_656_25,
+            6.151_199_340_820_312_5e-5,
+            5.960_464_477_539_062_5e-8,
         ];
         assert_eq!(
             values.map(python_float),
@@ -167,7 +177,11 @@ mod tests {
                 "1000000000000000.0",
                 "0.30000000000000004",
                 "-1548782250018927.2",
-                "-155559142687939.62"
+                "-155559142687939.62",
+                "842093581598402.2",
+                "820.8330688476562",
+                "6.151199340820312e-05",
+                "5.960464477539063e-08"
             ]
         );
     }
