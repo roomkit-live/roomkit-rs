@@ -186,7 +186,7 @@ fn wire_message<'a>(
             kind: "function",
             function: WireFunction {
                 name: &call.name,
-                arguments: crate::arguments::dumps(&call.arguments),
+                arguments: roomkit_ai::dumps(&Value::Object(call.arguments.clone())),
             },
         })
         .collect();

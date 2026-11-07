@@ -71,7 +71,6 @@
 //! # Ok::<(), roomkit_ai::ProviderError>(())
 //! ```
 
-mod arguments;
 mod call_slots;
 mod config;
 mod credentials;
