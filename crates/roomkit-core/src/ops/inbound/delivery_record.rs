@@ -8,14 +8,15 @@
 //! included. It is written alone, under the room's lock: the event as it
 //! stood at its commit would undo an edit or a delete made during its
 //! delivery. That holds for a set its own call runs while the call holds
-//! the lock, a keyed publication's adopted entry among them: Python's set
+//! the lock (`Inbound::under_lock`: a keyed publication's section, a call
+//! run on a lease), a set of an entry it adopted among them: Python's set
 //! runs in the room's lane, outside the lock's execution context, so the
 //! record's lock and its release are asked of the room's lock itself,
 //! never answered as a nested section's, and the record waits for the
 //! section that holds it. A record that cannot be written is logged and
-//! changes nothing the set delivered. Past the close's grace the lock is refused: a set the
-//! close cut leaves no record, its caller reading what it delivered (RFC
-//! §12.10.4, Python's `_report_cut`).
+//! changes nothing the set delivered. Past the close's grace the lock is
+//! refused: a set the close cut leaves no record, its caller reading what
+//! it delivered (RFC §12.10.4, Python's `_report_cut`).
 
 use std::collections::BTreeMap;
 
