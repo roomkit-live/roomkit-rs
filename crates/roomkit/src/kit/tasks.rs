@@ -37,10 +37,7 @@ use crate::tasks::{
     DelegatedTask, DelegatedTaskOptions, DelegatedTaskResult, OnCompleteCallback, ResultTool,
     SubmitOptions, TaskReach, TaskRunner, cut_short_message, task_work,
 };
-use crate::{
-    AttachChannelOptions, CreateRoomOptions, GetRoomOptions, SendEventOptions,
-    UpdateBindingMetadataOptions, driver,
-};
+use crate::{AttachChannelOptions, CreateRoomOptions, GetRoomOptions, SendEventOptions, driver};
 
 /// The fewest of the parent room's latest messages a delegation's
 /// conversation is read from: Python's `recent_limit` floor.
@@ -526,25 +523,19 @@ impl<S: ConversationStore> RoomKit<S> {
         else {
             return Ok(());
         };
+        // Attached with its metadata, as Python's: one attach record, and
+        // the channel's `on_room_attached` handed the whole binding.
         let options = AttachChannelOptions {
             category: Some(parent.category),
             access: parent.access,
             visibility: parent.visibility.clone(),
             muted: parent.muted,
             direction: Some(parent.direction),
+            metadata: parent.metadata.clone(),
             ..AttachChannelOptions::default()
         };
         self.attach_channel(&task.child_room_id, channel_id, options)
             .await?;
-        if !parent.metadata.is_empty() {
-            self.update_binding_metadata(
-                &task.child_room_id,
-                channel_id,
-                parent.metadata.clone(),
-                UpdateBindingMetadataOptions::default(),
-            )
-            .await?;
-        }
         Ok(())
     }
 
