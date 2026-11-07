@@ -1,5 +1,6 @@
 //! Every scenario of the suite, run on the kit the including crate makes
-//! (`crate::new_kit`), its known failures `crate::KNOWN_FAILURES`.
+//! (`crate::new_kit`), on the runtime and against the known failures each
+//! pass hands in.
 
 use std::path::{Path, PathBuf};
 
