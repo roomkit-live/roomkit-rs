@@ -49,8 +49,8 @@ const MAX_CONTEXT_CHARS: usize = 4000;
 /// `PREVIOUS_TASKS_TAG`.
 const PREVIOUS_TASKS_TAG: &str = "previous_tasks";
 
-/// The tag a `delegate_task` call's task is set apart in, once a block
-/// follows it: Python's `TASK_TAG`.
+/// The tag a worker's task is set apart in once a block follows it, a
+/// `delegate_task` call's or a background task's: Python's `TASK_TAG`.
 const TASK_TAG: &str = "task";
 
 /// How many of the room's last messages a background task is handed:
@@ -249,9 +249,12 @@ pub(crate) fn worker_description(
     }
 }
 
-/// What a background task's worker is told: the task, then how to work
-/// and where its findings go. `agent_name` is the agent the task is for,
-/// as the room addresses it. Python's `worker_brief`.
+/// What a background task's worker is told: the task, set apart as it was
+/// asked, then how to work and where its findings go. `agent_name` is the
+/// agent the task is for, as the room addresses it. A model, the host or a
+/// person wrote the task, and the runtime's text and the room's
+/// conversation follow it: set apart, it cannot read as either (RFC §6.4).
+/// Python's `worker_brief`.
 pub(crate) fn worker_brief(task: &str, agent_name: &str, hand_back: &str) -> String {
     let agent = identifier(agent_name, "agent");
     let place = if hand_back == "post" {
@@ -262,11 +265,12 @@ pub(crate) fn worker_brief(task: &str, agent_name: &str, hand_back: &str) -> Str
     } else {
         format!("handed back to @{agent}, who shares it in the conversation")
     };
+    let task = fence(TASK_TAG, task);
     format!(
-        "{task}\n\nYou are doing this task in the background for @{agent}, away from the \
-         conversation: nobody there sees this work, and you address no one from here. Do the \
-         work now with your tools, then end with what you found, in a few short lines: it is \
-         {place}."
+        "Your task, as it was asked:\n{task}\n\nYou are doing this task in the background for \
+         @{agent}, away from the conversation: nobody there sees this work, and you address no \
+         one from here. Do the work now with your tools, then end with what you found, in a few \
+         short lines: it is {place}."
     )
 }
 
