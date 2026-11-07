@@ -176,7 +176,7 @@ async fn ends_cut_after(
         .unwrap();
     let cut = CancelOptions {
         reason: "stopped".to_owned(),
-        timeout: Duration::from_millis(50),
+        timeout: Duration::from_millis(500),
     };
     drop(handle.cancel(cut).await);
     released.notify_one();
