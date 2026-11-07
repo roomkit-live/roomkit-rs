@@ -3,23 +3,28 @@
 //! store that fails (Python's `tests/test_hook_side_effects.py`).
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+#![expect(clippy::panic, reason = "a store's driver that breaks panics")]
 
 use std::future::{Future, ready};
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
-use roomkit::model::hook::AllowOptions;
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ChannelType, EventId, HookResult, Identity,
-    IdentityId, InboundMessage, Metadata, Observation, ObservationId, Participant, ParticipantId,
-    Room, RoomContext, RoomEvent, RoomId, Task, TaskId, TextContent,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, EventDirection,
+    EventId, EventSource, HookResult, Identity, IdentityId, InboundMessage, Metadata, Observation,
+    ObservationId, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, Task, TaskId,
+    TaskStatus, TextContent,
 };
 use roomkit::store::PatchRoomMetadataOptions;
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
+use roomkit::tasks::WaitOptions;
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
-    HookExecution, HookOptions, HookTrigger, InMemoryStore, ProcessInboundOptions, RoomKit,
-    RoomKitOptions, StoreError, StoreFailure, store,
+    DelegateOptions, HookExecution, HookOptions, HookTrigger, InMemoryStore, ProcessInboundOptions,
+    RoomKit, RoomKitOptions, StoreError, StoreFailure, store,
 };
 
 #[path = "support/warnings.rs"]
@@ -44,6 +49,8 @@ enum Failing {
     Observation,
     /// The room's metadata `stage`.
     Metadata,
+    /// The observation `o1`, by a panic.
+    PanickingObservation,
 }
 
 /// An in-memory store that fails the write `failing` names.
@@ -77,8 +84,12 @@ impl ConversationStore for FailingWrites {
     }
 
     async fn add_observation(&self, observation: Observation) -> Result<Observation, StoreError> {
-        if self.failing == Failing::Observation && observation.id.as_str() == "o1" {
-            return Err(down());
+        if observation.id.as_str() == "o1" {
+            match self.failing {
+                Failing::Observation => return Err(down()),
+                Failing::PanickingObservation => panic!("the store's driver broke"),
+                Failing::Task | Failing::Metadata => {}
+            }
         }
         self.store.add_observation(observation).await
     }
@@ -172,8 +183,8 @@ impl ConversationStore for FailingWrites {
     }
 }
 
-/// A transport whose delivery writes the room's `stage`, Python's
-/// `UpdatingChannel("crm", {"stage": "qualified"})`.
+/// A transport whose delivery writes the room's `stage` then its `owner`,
+/// Python's `UpdatingChannel("crm", {"stage": "qualified", "owner": "ana"})`.
 struct Crm;
 
 impl Channel for Crm {
@@ -199,16 +210,81 @@ impl Channel for Crm {
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        let mut output = ChannelOutput::default();
-        output
-            .metadata_updates
-            .insert("stage".to_owned(), "qualified".into());
-        ready(Ok(output))
+        ready(Ok(crm_updates()))
     }
 }
 
-/// A hook's two tasks and two observations, `t1`, `t2`, `o1`, `o2`.
-fn triage() -> HookResult {
+/// The CRM's updates as its output carries them: `stage` then `owner`.
+fn crm_updates() -> ChannelOutput {
+    let mut output = ChannelOutput::default();
+    output
+        .metadata_updates
+        .insert("stage".to_owned(), "qualified".into());
+    output
+        .metadata_updates
+        .insert("owner".to_owned(), "ana".into());
+    output
+}
+
+/// An agent that answers `done`, its output carrying the CRM's updates:
+/// Python's `_AnsweringUpdater("worker", ...)`.
+struct Worker;
+
+impl Channel for Worker {
+    fn channel_id(&self) -> ChannelId {
+        channel("worker")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(self, &message, &context)))
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let source = EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(channel("worker"), ChannelType::AI)
+        };
+        let answer = RoomEvent::new(event.room_id, source, TextContent::new("done"));
+        ready(Ok(ChannelOutput {
+            responded: true,
+            response_events: vec![answer],
+            ..crm_updates()
+        }))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
+}
+
+/// The line a failed metadata write logs, its keys sorted.
+const METADATA_LINE: &str = "Failed to write the room metadata updates ['owner', 'stage']";
+
+/// A hook's two tasks and two observations, `t1`, `t2`, `o1`, `o2`, with
+/// which it blocks the event when `blocks`.
+fn triage(blocks: bool) -> HookResult {
     let tasks = (1..=2)
         .map(|i| {
             let id = TaskId::new(format!("t{i}")).unwrap();
@@ -221,6 +297,14 @@ fn triage() -> HookResult {
             Observation::new(id, room_id(), channel("sms1"), format!("note {i}"))
         })
         .collect();
+    if blocks {
+        let options = BlockOptions {
+            tasks: Some(tasks),
+            observations: Some(observations),
+            ..BlockOptions::default()
+        };
+        return HookResult::block("spam", options);
+    }
     HookResult {
         tasks,
         observations,
@@ -228,10 +312,9 @@ fn triage() -> HookResult {
     }
 }
 
-/// A kit on a store failing `failing`, its room `r1` binding `sms1` and
-/// the CRM, a hook giving [`triage`]'s side effects, and the ids of the
-/// tasks whose `ON_TASK_CREATED` ran.
-async fn triaging_room(failing: Failing) -> (RoomKit<FailingWrites>, Arc<Mutex<Vec<String>>>) {
+/// A kit on a store failing `failing`, binding `channels` in its room
+/// `r1`.
+async fn kit_on(failing: Failing, channels: &[&str]) -> RoomKit<FailingWrites> {
     let store = FailingWrites {
         store: InMemoryStore::default(),
         failing,
@@ -250,14 +333,25 @@ async fn triaging_room(failing: Failing) -> (RoomKit<FailingWrites>, Arc<Mutex<V
     })
     .await
     .unwrap();
-    for bound in ["sms1", "crm"] {
+    for bound in channels {
         kit.attach_channel(&room_id(), &channel(bound), AttachChannelOptions::default())
             .await
             .unwrap();
     }
+    kit
+}
+
+/// A kit on a store failing `failing`, its room `r1` binding `sms1` and
+/// the CRM, a hook giving [`triage`]'s side effects, and the ids of the
+/// tasks whose `ON_TASK_CREATED` ran.
+async fn triaging_room(
+    failing: Failing,
+    blocks: bool,
+) -> (RoomKit<FailingWrites>, Arc<Mutex<Vec<String>>>) {
+    let kit = kit_on(failing, &["sms1", "crm"]).await;
     kit.hook(
         HookTrigger::BeforeBroadcast,
-        |_: RoomEvent, _| async { Ok::<_, ChannelError>(triage()) },
+        move |_: RoomEvent, _| async move { Ok::<_, ChannelError>(triage(blocks)) },
         HookOptions {
             name: "triage".to_owned(),
             ..Default::default()
@@ -283,14 +377,30 @@ async fn triaging_room(failing: Failing) -> (RoomKit<FailingWrites>, Arc<Mutex<V
     (kit, created)
 }
 
+/// `ids` sorted, as owned strings.
+fn sorted(ids: impl IntoIterator<Item = impl ToString>) -> Vec<String> {
+    let mut ids: Vec<String> = ids.into_iter().map(|id| id.to_string()).collect();
+    ids.sort();
+    ids
+}
+
 // Python: tests/test_hook_side_effects.py::TestSideEffectWriteFailures::test_a_failed_side_effect_write_is_logged_and_the_call_goes_on
 // (RMK-1498): a side effect the store fails to write is one ERROR line, the
-// others still written; the call goes on, its error its turn's, and only a
-// task stored fires ON_TASK_CREATED.
+// others still written, a blocked event's too; the call goes on, its error
+// its turn's, and only a task stored fires ON_TASK_CREATED.
 #[tokio::test]
 async fn a_failed_side_effect_write_is_logged_and_the_call_goes_on() {
-    for failing in [Failing::Task, Failing::Observation, Failing::Metadata] {
-        let (kit, created) = triaging_room(failing).await;
+    let cases = [
+        (Failing::Task, false),
+        (Failing::Observation, false),
+        (Failing::Metadata, false),
+        (Failing::Task, true),
+        // A store's driver that panics fails that write alone, as a
+        // Python store's exception, whatever its class, does.
+        (Failing::PanickingObservation, false),
+    ];
+    for (failing, blocks) in cases {
+        let (kit, created) = triaging_room(failing, blocks).await;
         let (warnings, capturing) = Warnings::capture();
         let message = InboundMessage::new(channel("sms1"), "+15550001", TextContent::new("hi"));
         let options = ProcessInboundOptions {
@@ -301,27 +411,25 @@ async fn a_failed_side_effect_write_is_logged_and_the_call_goes_on() {
         roomkit::testing::idle(&kit).await;
         drop(capturing);
         let store = kit.store();
-        let ids = |ids: Vec<String>| {
-            let mut ids = ids;
-            ids.sort();
-            ids
-        };
         let tasks = store
             .list_tasks(&room_id(), store::ListTasksOptions::default())
             .await
             .unwrap();
-        let tasks = ids(tasks.into_iter().map(|task| task.id.to_string()).collect());
+        let tasks = sorted(tasks.into_iter().map(|task| task.id));
         let observations = store.list_observations(&room_id()).await.unwrap();
-        let observations = ids(observations.into_iter().map(|o| o.id.to_string()).collect());
+        let observations = sorted(observations.into_iter().map(|o| o.id));
         let room = store.get_room(&room_id()).await.unwrap().unwrap();
         let stage = room.metadata.get("stage").and_then(|stage| stage.as_str());
-        let created = ids(created.lock().unwrap().clone());
+        let created = sorted(created.lock().unwrap().clone());
         kit.close().await.unwrap();
 
+        let case = format!("{failing:?} blocks={blocks}");
         let expected = match failing {
             Failing::Task => "Failed to persist task t1",
-            Failing::Observation => "Failed to persist observation o1",
-            Failing::Metadata => "Failed to write the room metadata updates ['stage']",
+            Failing::Observation | Failing::PanickingObservation => {
+                "Failed to persist observation o1"
+            }
+            Failing::Metadata => METADATA_LINE,
         };
         let lines = warnings.containing("ERROR");
         assert_eq!(
@@ -331,29 +439,80 @@ async fn a_failed_side_effect_write_is_logged_and_the_call_goes_on() {
                 lines.len(),
                 lines.iter().all(|line| line.contains(expected)),
             ),
-            (true, false, 1, true),
-            "{failing:?}: {result:?} {lines:?}"
+            (true, blocks, 1, true),
+            "{case}: {result:?} {lines:?}"
         );
         let all_tasks = if failing == Failing::Task {
-            vec!["t2"]
+            sorted(["t2"])
         } else {
-            vec!["t1", "t2"]
+            sorted(["t1", "t2"])
         };
-        let all_observations = if failing == Failing::Observation {
-            vec!["o2"]
+        let all_observations = if matches!(
+            failing,
+            Failing::Observation | Failing::PanickingObservation
+        ) {
+            sorted(["o2"])
         } else {
-            vec!["o1", "o2"]
+            sorted(["o1", "o2"])
         };
-        let all_stage = (failing != Failing::Metadata).then_some("qualified");
+        let all_stage = (failing != Failing::Metadata && !blocks).then_some("qualified");
         assert_eq!(
             (tasks, created, observations, stage),
+            (all_tasks.clone(), all_tasks, all_observations, all_stage),
+            "{case}"
+        );
+    }
+}
+
+// Python: tests/test_hook_side_effects.py::TestSideEffectWriteFailures::test_a_delegated_turn_s_failed_metadata_write_is_logged
+// (RMK-1498): the metadata updates a task's child room is given, by a
+// transport shared into it or by the agent's own output, are written as a
+// room's are, a failure one ERROR line, and the task still completes.
+#[tokio::test]
+async fn a_delegated_turn_s_failed_metadata_write_is_logged() {
+    for shared in [true, false] {
+        let kit = if shared {
+            let kit = kit_on(Failing::Metadata, &["crm"]).await;
+            let worker = EchoAgent::new(channel("worker"), "done", EchoAgentOptions::default());
+            kit.register_channel(worker).unwrap();
+            kit
+        } else {
+            let kit = kit_on(Failing::Metadata, &[]).await;
+            kit.register_channel(Worker).unwrap();
+            kit
+        };
+        let (warnings, capturing) = Warnings::capture();
+        let options = DelegateOptions {
+            share_channels: shared.then(|| vec![channel("crm")]),
+            wait: true,
+            ..DelegateOptions::default()
+        };
+        let task = kit
+            .delegate(&room_id(), &channel("worker"), "go", options)
+            .await
+            .unwrap();
+        let result = task.wait(WaitOptions::default()).await.unwrap();
+        roomkit::testing::idle(&kit).await;
+        drop(capturing);
+        let child = kit
+            .store()
+            .get_room(&task.child_room_id)
+            .await
+            .unwrap()
+            .unwrap();
+        kit.close().await.unwrap();
+
+        let lines = warnings.containing("ERROR");
+        assert_eq!(
             (
-                all_tasks.iter().map(|id| (*id).to_owned()).collect(),
-                all_tasks.iter().map(|id| (*id).to_owned()).collect(),
-                all_observations.iter().map(|id| (*id).to_owned()).collect(),
-                all_stage,
+                result.status,
+                lines.len(),
+                lines.iter().all(|line| line.contains(METADATA_LINE)),
+                child.metadata.get("stage"),
             ),
-            "{failing:?}"
+            (TaskStatus::Completed, 1, true, None),
+            "shared={shared}: {:?}",
+            warnings.containing("")
         );
     }
 }

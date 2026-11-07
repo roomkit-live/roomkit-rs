@@ -430,11 +430,10 @@ async fn update_event<S: ConversationStore>(
     Ok(())
 }
 
-/// Stores a pass's side effects one by one (RFC §10.1 step 15), as
-/// Python's `_persist_side_effects` does.
 /// Writes each of `tasks` then each of `observations`, one the store fails
-/// leaving the others to write, as Python's `_persist_side_effects` does
-/// (RFC §10.1 step 15): those not written, each with the store's error.
+/// or panics on leaving the others to write, as Python's
+/// `_persist_side_effects` does (RFC §10.1 step 15): those not written,
+/// each with its error.
 async fn persist_side_effects<S: ConversationStore>(
     store: &S,
     tasks: Vec<Task>,
@@ -443,15 +442,13 @@ async fn persist_side_effects<S: ConversationStore>(
     let mut unpersisted = Vec::new();
     for task in tasks {
         let task_id = task.id.clone();
-        if let Err(error) = store.add_task(task).await {
-            let error = error.to_record();
+        if let Some(error) = failure_of(store.add_task(task)).await {
             unpersisted.push(Unpersisted::Task { task_id, error });
         }
     }
     for observation in observations {
         let observation_id = observation.id.clone();
-        if let Err(error) = store.add_observation(observation).await {
-            let error = error.to_record();
+        if let Some(error) = failure_of(store.add_observation(observation)).await {
             unpersisted.push(Unpersisted::Observation {
                 observation_id,
                 error,
@@ -459,6 +456,15 @@ async fn persist_side_effects<S: ConversationStore>(
         }
     }
     unpersisted
+}
+
+/// How the store's `write` failed, or panicked, if it did.
+async fn failure_of<T>(write: impl Future<Output = Result<T, StoreError>>) -> Option<ErrorRecord> {
+    match unwinding(write).await {
+        Ok(Ok(_)) => None,
+        Ok(Err(error)) => Some(error.to_record()),
+        Err(_panic) => Some(panicked()),
+    }
 }
 
 /// Calls a channel (RFC §6.1): a parse, a turn, a delivery or the read of

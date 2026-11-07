@@ -661,7 +661,7 @@ impl DeliverySet {
 
     /// Takes the answer of one of the set's writes.
     fn on_written(&mut self, effect: EffectId, outcome: Outcome) -> Progress<SetOutcome> {
-        match self.effects.accept(effect, outcome) {
+        match self.effects.accept(&self.event.room_id, effect, outcome) {
             Progress::Waiting => Progress::Waiting,
             Progress::Done(written) => self.written(written),
         }

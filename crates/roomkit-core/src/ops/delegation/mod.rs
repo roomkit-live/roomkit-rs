@@ -23,7 +23,9 @@ use self::collected::{Buffered, Collected, Failure, Streamed};
 use self::nested::Nested;
 use super::events::{CommitRecord, MutationError};
 use super::failure_log::{self, Log};
-use super::inbound::{Inbound, InboundError, error_event, stamp_response, stored_tasks};
+use super::inbound::{
+    Inbound, InboundError, error_event, metadata_not_written, stamp_response, stored_tasks,
+};
 use super::protocol::{
     ChannelOutcome, ChannelRequest, Delivered, Effect, EffectId, Entry, EntryId, InboundResult,
     Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, SpanNote, Step,
@@ -110,6 +112,9 @@ pub struct DelegatedTurn {
     /// stored whose `ON_TASK_CREATED` has not fired yet.
     filing: Option<(EffectId, Vec<Task>)>,
     created: Vec<Task>,
+    /// The write of the room metadata updates the turns returned, with
+    /// their keys.
+    updating: Option<(EffectId, Vec<String>)>,
     /// The agent the task is given to, whose turn a stream's failure ends
     /// when several agents streamed.
     agent_id: Option<ChannelId>,
@@ -158,6 +163,7 @@ impl DelegatedTurn {
             persisting: Vec::new(),
             asked_context: None,
             filing: None,
+            updating: None,
             created: Vec::new(),
             agent_id: None,
             reached: 0,
@@ -339,6 +345,7 @@ impl DelegatedTurn {
             effects.push(write);
         }
         if !metadata.is_empty() {
+            let keys = metadata.keys().cloned().collect();
             let write = self.issue(StoreRequest::UpdateRoom {
                 room_id: self.room_id.clone(),
                 updates: RoomUpdates {
@@ -348,8 +355,31 @@ impl DelegatedTurn {
                 },
             });
             self.persisting.push(write.id);
+            self.updating = Some((write.id, keys));
             effects.push(write);
         }
+    }
+
+    /// Takes the answer of a write of the turns' side effects (RFC §23.3
+    /// step 5, written as a room's are, §10.1 step 15): each one the store
+    /// failed is logged, as Python's `_persist_side_effects` and
+    /// `_write_metadata_updates` log it, and the tasks stored are kept for
+    /// their `ON_TASK_CREATED`.
+    fn persisted(&mut self, id: EffectId, outcome: Outcome) {
+        self.persisting.retain(|write| *write != id);
+        if let Some((_, keys)) = self.updating.take_if(|(write, _)| *write == id) {
+            if let Err(error) = outcome.into_stored() {
+                metadata_not_written(&self.room_id, &keys, &error);
+            }
+            return;
+        }
+        let tasks = self
+            .filing
+            .take_if(|(write, _)| *write == id)
+            .map(|(_, tasks)| tasks)
+            .unwrap_or_default();
+        let stored = stored_tasks(&self.room_id, tasks, outcome.into_persisted());
+        self.created.extend(stored);
     }
 
     /// The answers kept as the trace: the buffered answers' rows to commit,
@@ -764,18 +794,8 @@ impl Operation for DelegatedTurn {
         if let Some(path) = self.room_path.as_mut().filter(|path| path.owns(id)) {
             return path.complete(id, outcome);
         }
-        if let Some(position) = self.persisting.iter().position(|write| *write == id) {
-            self.persisting.remove(position);
-            let filed = self.filing.take_if(|(write, _)| *write == id);
-            if let Outcome::Failed(error) = &outcome {
-                tracing::warn!(target: "roomkit::tasks", room_id = %self.room_id, error = %error.message, "a delegated turn's side effects were not stored");
-            } else if let Outcome::Store(StoreOutcome::Persisted(unpersisted)) = outcome {
-                // Each side effect the store failed is logged, the others
-                // stored, as Python's `_persist_side_effects` does.
-                let tasks = filed.map(|(_, tasks)| tasks).unwrap_or_default();
-                let stored = stored_tasks(&self.room_id, tasks, Ok(unpersisted));
-                self.created.extend(stored);
-            }
+        if self.persisting.contains(&id) {
+            self.persisted(id, outcome);
             return Ok(());
         }
         Err(ProtocolError::UnknownEffect(id))

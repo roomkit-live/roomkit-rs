@@ -108,7 +108,7 @@ pub use self::arrival::InboundTarget;
 use self::cascade::Trigger;
 use self::failure_reader::FailureReader;
 use self::persist::SideEffects;
-pub(crate) use self::persist::stored_tasks;
+pub(crate) use self::persist::{metadata_not_written, stored_tasks};
 use self::queues::{Cascade, Lineage};
 use self::stage::{CallStage, Stage};
 pub use self::stamp::default_inbound_event;

@@ -27,8 +27,9 @@ use crate::ops::{Cx, Progress};
 /// Of `tasks`, those a write of side effects answered by `answer` stored,
 /// whose `ON_TASK_CREATED` observers run. Each task and observation it did
 /// not write is logged at ERROR, as Python's `_persist_side_effects` logs
-/// it; a write refused whole, cut by the kit's close or broken, stored
-/// none, and is logged once, at DEBUG when the close cut it.
+/// it. A write the driver refused whole, cut by the kit's close before it
+/// started, is announced as storing none, and logged once, at DEBUG when
+/// the close cut it.
 pub(crate) fn stored_tasks(
     room_id: &RoomId,
     mut tasks: Vec<Task>,
@@ -92,9 +93,25 @@ fn refused_whole(room_id: &RoomId, error: &ErrorRecord) {
     );
 }
 
+/// The store's error for a room it does not hold, which Python's
+/// `patch_room_metadata` answers with `None`, raising nothing.
+const ROOM_NOT_FOUND: &str = "RoomNotFound";
+
 /// Logs that the room metadata updates under `keys` were not written, as
-/// Python's `_write_metadata_updates` does: the delivery set stands.
-fn metadata_not_written(room_id: &RoomId, keys: &[String], error: &ErrorRecord) {
+/// Python's `_write_metadata_updates` does, the keys sorted: the delivery
+/// set stands. A room gone meanwhile is no failure: Python's write of it
+/// returns `None`, and logs nothing.
+pub(crate) fn metadata_not_written(room_id: &RoomId, keys: &[String], error: &ErrorRecord) {
+    if error.error_type == ROOM_NOT_FOUND {
+        tracing::debug!(
+            target: "roomkit::framework",
+            room_id = %room_id,
+            "the room was gone before its metadata updates were written"
+        );
+        return;
+    }
+    let mut keys: Vec<&String> = keys.iter().collect();
+    keys.sort();
     let keys = keys
         .iter()
         .map(|key| format!("'{key}'"))
@@ -178,8 +195,6 @@ pub(super) struct SetEffects {
     /// The tasks and observations its event's `BEFORE_BROADCAST` hooks
     /// gave, which its pass handed the set.
     hooks: (Vec<Task>, Vec<Observation>),
-    /// The room its writes are made in.
-    room_id: Option<RoomId>,
     /// The write of its tasks and observations under way, with its tasks.
     stored: Option<(EffectId, Vec<Task>)>,
     /// The write of its room metadata updates under way, with their keys.
@@ -227,7 +242,6 @@ impl SetEffects {
         let (mut all_tasks, mut all_observations) = self.take_hooks();
         all_tasks.extend(tasks);
         all_observations.extend(observations);
-        self.room_id = Some(room_id.clone());
         if !all_tasks.is_empty() || !all_observations.is_empty() {
             let effect = cx.io.issue(StoreRequest::PersistSideEffects {
                 room_id: room_id.clone(),
@@ -269,17 +283,20 @@ impl SetEffects {
         self.stored.is_some() || self.updated.is_some()
     }
 
-    /// Takes the answer of one of the writes; one that failed is logged.
-    pub(super) fn accept(&mut self, effect: EffectId, outcome: Outcome) -> Progress<Written> {
-        let Some(room_id) = self.room_id.clone() else {
-            return self.progress();
-        };
+    /// Takes the answer of one of the writes, made in `room_id`; one that
+    /// failed is logged.
+    pub(super) fn accept(
+        &mut self,
+        room_id: &RoomId,
+        effect: EffectId,
+        outcome: Outcome,
+    ) -> Progress<Written> {
         if let Some((_, tasks)) = self.stored.take_if(|(stored, _)| *stored == effect) {
-            self.written.tasks = stored_tasks(&room_id, tasks, outcome.into_persisted());
+            self.written.tasks = stored_tasks(room_id, tasks, outcome.into_persisted());
         } else if let Some((_, keys)) = self.updated.take_if(|(updated, _)| *updated == effect)
             && let Err(error) = outcome.into_stored()
         {
-            metadata_not_written(&room_id, &keys, &error);
+            metadata_not_written(room_id, &keys, &error);
         }
         self.progress()
     }
