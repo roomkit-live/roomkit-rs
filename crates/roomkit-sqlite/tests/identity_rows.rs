@@ -429,8 +429,10 @@ async fn a_record_the_model_cannot_read_serves_no_read() {
 /// 47b7dfc6): the read fails with a fixed error, the id alone, whatever the caller's
 /// organization: the record may be another organization's. Python's `ValueError` is
 /// [`StoreError::Value`], and the kit's `RoomKitError::Value`. The kit's
-/// `resolve_participant` names no organization, as a caller naming one learns nothing
-/// of the record (`resolve_participant_for_an_organization_finds_no_unreadable_identity`).
+/// `resolve_participant`, `link_address` and `unlink_address` name no organization, as
+/// a caller naming one learns nothing of the record
+/// (`resolve_participant_for_an_organization_finds_no_unreadable_identity`,
+/// `link_and_unlink_for_an_organization_find_no_unreadable_identity`).
 #[tokio::test]
 async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
     const FIXED: &str = "Identity i1 has a record the model cannot read";
@@ -461,14 +463,7 @@ async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
                 }
                 "link_address" => {
                     let refused = store
-                        .link_address(
-                            &i1,
-                            &ChannelType::SMS,
-                            "+2",
-                            LinkAddressOptions {
-                                organization_id: acme(),
-                            },
-                        )
+                        .link_address(&i1, &ChannelType::SMS, "+2", LinkAddressOptions::default())
                         .await
                         .unwrap_err();
                     assert_eq!(refused, fixed, "{record:?}");
@@ -480,9 +475,7 @@ async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
                             &i1,
                             &ChannelType::SMS,
                             "+2",
-                            UnlinkAddressOptions {
-                                organization_id: acme(),
-                            },
+                            UnlinkAddressOptions::default(),
                         )
                         .await
                         .unwrap_err();
@@ -651,5 +644,51 @@ async fn resolve_participant_for_an_organization_finds_no_unreadable_identity() 
             "{organization}: {refused:?}"
         );
         assert_eq!(after, before, "{organization}");
+    }
+}
+
+/// Python: `test_link_and_unlink_for_an_organization_find_no_unreadable_identity` (HITL
+/// 7cb63f4f): a caller naming an organization reads `IdentityNotFound` for a record the
+/// model cannot read, which proves no organization, even its own: the store's fixed
+/// error would tell another organization that the id exists (RFC §17.2). Nothing is
+/// written.
+#[tokio::test]
+async fn link_and_unlink_for_an_organization_find_no_unreadable_identity() {
+    let i1 = IdentityId::new("i1").unwrap();
+    let record = &unreadable_records()[2];
+    for door in ["link_address", "unlink_address"] {
+        for organization in ["globex", "acme"] {
+            let (file, store) = with_unreadable(record).await;
+            let organization_id = Some(organization.to_owned());
+            let refused = if door == "link_address" {
+                let options = LinkAddressOptions { organization_id };
+                store
+                    .link_address(&i1, &ChannelType::SMS, "+2", options)
+                    .await
+            } else {
+                let options = UnlinkAddressOptions { organization_id };
+                store
+                    .unlink_address(&i1, &ChannelType::SMS, "+2", options)
+                    .await
+            };
+            store.close().await;
+            assert_eq!(
+                refused,
+                Err(StoreError::IdentityNotFound(i1.clone())),
+                "{door}, {organization}"
+            );
+            let connection = Connection::open(file.path()).unwrap();
+            let rows: i64 = connection
+                .query_row("SELECT count(*) FROM identity_addresses", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            let held: Column = connection
+                .query_row("SELECT data FROM identities WHERE id = 'i1'", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!((rows, &held), (0, record), "{door}, {organization}");
+        }
     }
 }

@@ -230,14 +230,20 @@ fn drop_addresses_no_longer_held(
 }
 
 /// The identity `identity_id` of `organization`, refused
-/// [`StoreError::IdentityNotFound`] otherwise.
+/// [`StoreError::IdentityNotFound`] otherwise. A caller naming an organization
+/// is refused so for a record the model cannot read, which proves no
+/// organization: the fixed error would tell that the id exists (RFC §17.2,
+/// HITL 7cb63f4f). A caller naming none keeps the fixed error.
 fn of_organization(
     connection: &Connection,
     identity_id: &IdentityId,
     organization: Option<&str>,
 ) -> Result<(Identity, String), Failure> {
-    stored(connection, identity_id)?
-        .filter(|(identity, _)| scope(identity.organization_id.as_deref()) == scope(organization))
+    let read = match stored(connection, identity_id) {
+        Err(Failure::Unreadable(_)) if !scope(organization).is_empty() => None,
+        read => read?,
+    };
+    read.filter(|(identity, _)| scope(identity.organization_id.as_deref()) == scope(organization))
         .ok_or_else(|| StoreError::IdentityNotFound(identity_id.clone()).into())
 }
 
