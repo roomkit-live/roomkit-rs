@@ -428,11 +428,12 @@ async fn a_record_the_model_cannot_read_serves_no_read() {
 /// Python: `test_a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it` (HITL
 /// 47b7dfc6): the read fails with a fixed error, the id alone, whatever the caller's
 /// organization: the record may be another organization's. Python's `ValueError` is
-/// [`StoreError::Value`], and the kit's `RoomKitError::Value`. The kit's
-/// `resolve_participant` and the store's `link_address` and `unlink_address` name no
-/// organization, as a caller naming one learns nothing of the record
+/// [`StoreError::Value`], and the kit's `RoomKitError::Value`. `create_identity`, the
+/// kit's `resolve_participant` and the store's `link_address` and `unlink_address` name
+/// no organization, as a caller naming one learns nothing of the record
 /// (`resolve_participant_for_an_organization_finds_no_unreadable_identity`,
-/// `link_and_unlink_for_an_organization_find_no_unreadable_identity`).
+/// `link_and_unlink_for_an_organization_find_no_unreadable_identity`,
+/// `create_identity_for_an_organization_finds_no_unreadable_identity`).
 #[tokio::test]
 async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
     const FIXED: &str = "Identity i1 has a record the model cannot read";
@@ -455,8 +456,7 @@ async fn a_read_by_id_of_a_record_the_model_cannot_read_quotes_none_of_it() {
                     full_text(&refused)
                 }
                 "create_identity" => {
-                    let mut again = Identity::new(i1.clone());
-                    again.organization_id = acme();
+                    let again = Identity::new(i1.clone());
                     let refused = store.create_identity(again).await.unwrap_err();
                     assert_eq!(refused, fixed, "{record:?}");
                     full_text(&refused)
@@ -707,5 +707,55 @@ async fn link_and_unlink_for_an_organization_find_no_unreadable_identity() {
                 "{door}, {organization}"
             );
         }
+    }
+}
+
+/// Python: `test_create_identity_for_an_organization_finds_no_unreadable_identity` (HITL
+/// cc6072ea): an identity created for an organization over an id whose record the model
+/// cannot read reads `IdentityNotFound`, as over a readable record of another
+/// organization: the record proves no organization, even the caller's own, and the
+/// store's fixed error would tell another organization that the id exists (RFC §17.2).
+/// Nothing is written.
+#[tokio::test]
+async fn create_identity_for_an_organization_finds_no_unreadable_identity() {
+    let i1 = IdentityId::new("i1").unwrap();
+    let record = &unreadable_records()[2];
+    for organization in ["globex", "acme"] {
+        let (file, store) = with_unreadable(record).await;
+        Connection::open(file.path())
+            .unwrap()
+            .execute(
+                "INSERT INTO identity_addresses (channel_type, address, identity_id, organization_id)
+                 VALUES ('sms', '+1555', 'i1', 'globex')",
+                [],
+            )
+            .unwrap();
+        let mut replacing = Identity::new(i1.clone());
+        replacing.organization_id = Some(organization.to_owned());
+        replacing
+            .channel_addresses
+            .insert(ChannelType::SMS, vec!["+2".to_owned()]);
+        let refused = store.create_identity(replacing).await;
+        store.close().await;
+        assert_eq!(
+            refused,
+            Err(StoreError::IdentityNotFound(i1.clone())),
+            "{organization}"
+        );
+        let connection = Connection::open(file.path()).unwrap();
+        let rows: Vec<(String, String, String)> = connection
+            .prepare("SELECT address, identity_id, organization_id FROM identity_addresses")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let held: Column = connection
+            .query_row("SELECT data FROM identities WHERE id = 'i1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let only = ("+1555".to_owned(), "i1".to_owned(), "globex".to_owned());
+        assert_eq!((rows, &held), (vec![only], record), "{organization}");
     }
 }

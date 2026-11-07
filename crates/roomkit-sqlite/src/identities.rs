@@ -146,8 +146,16 @@ fn index(
 /// store does (`INSERT OR REPLACE`); an address another identity of its
 /// organization uses is refused [`StoreError::AddressLinked`].
 pub(crate) fn create(connection: &Connection, identity: &Identity) -> Result<(), Failure> {
-    let held = stored(connection, &identity.id)?;
     let organization = identity.organization_id.as_deref();
+    // An identity of an organization is refused so over a record the model cannot
+    // read, which proves no organization: the fixed error would tell that the id
+    // exists (RFC §17.2, HITL cc6072ea). One of none keeps the fixed error.
+    let held = match stored(connection, &identity.id) {
+        Err(Failure::Unreadable(_)) if !scope(organization).is_empty() => {
+            return Err(StoreError::IdentityNotFound(identity.id.clone()).into());
+        }
+        held => held?,
+    };
     // Within its organization only (RFC §5.6, §17.2): an identity of another is
     // never overwritten, as Python's store refuses it.
     if let Some((stored, _)) = &held
