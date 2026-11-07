@@ -156,7 +156,9 @@ impl FrameSender {
 
     /// Sends, as `tool_ended`, each end in `ended` told before its end item,
     /// by its call's place among the calls open under its id: the owner
-    /// closes the call with it at a cut (RFC §12.2 step 13s).
+    /// closes the call with it at a cut or a reader's stop (RFC §12.2 step
+    /// 13s). Each call stays open until its end item is sent, which names
+    /// its start.
     pub(crate) fn report_ended(&self, ended: &[(usize, ToolCallContent)]) {
         let mut sent = lock(&self.state);
         if sent.silenced {
@@ -174,7 +176,6 @@ impl FrameSender {
             return;
         }
         for (start, end) in starts {
-            sent.open.retain(|(seq, _)| *seq != start);
             let frame = Frame::ToolEnded {
                 start,
                 end: encode_end(end.clone()),

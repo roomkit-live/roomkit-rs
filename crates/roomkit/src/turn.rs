@@ -644,6 +644,17 @@ impl TurnHost {
         std::mem::take(&mut self.calls().told_ends)
     }
 
+    /// [`take_told_ends`](Self::take_told_ends) but the end of the earliest
+    /// call open under `ending`, whose end item is about to be sent.
+    pub(crate) fn take_told_ends_but(&self, ending: Option<&str>) -> Vec<(usize, ToolCallContent)> {
+        let mut calls = self.calls();
+        let (kept, taken) = std::mem::take(&mut calls.told_ends)
+            .into_iter()
+            .partition(|(nth, end)| *nth == 0 && Some(end.tool_id.as_str()) == ending);
+        calls.told_ends = kept;
+        taken
+    }
+
     fn calls(&self) -> std::sync::MutexGuard<'_, Calls> {
         self.shared
             .calls

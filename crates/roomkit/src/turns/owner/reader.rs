@@ -336,13 +336,14 @@ impl OwnerTurn {
 
     /// The call the end of `tool_id` closes: the start it names, else the
     /// earliest open under its id (two calls under one id are two calls,
-    /// RFC §6.4).
+    /// RFC §6.4). Its end told early is its no more.
     fn close_start(&mut self, start: Option<u64>, tool_id: &str) {
         let position = self.open.iter().position(|(seq, open)| {
             start == Some(*seq) || (start.is_none() && open.tool_id == tool_id)
         });
         if let Some(position) = position {
-            self.open.remove(position);
+            let (seq, _) = self.open.remove(position);
+            lock(&self.state.told_ends).remove(&seq);
         }
     }
 

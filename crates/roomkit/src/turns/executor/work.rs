@@ -168,6 +168,7 @@ impl Pump<'_> {
             if let Err(why) = reported {
                 return refuse(self.sender, "tool arguments", &why);
             }
+            self.report_told_ends(&read);
             // An item read once the reader closed is the reader's no more;
             // the stream's end or its failure still crosses.
             if closing && matches!(read, Some(Ok(_))) {
@@ -177,6 +178,19 @@ impl Pump<'_> {
                 return;
             }
         }
+    }
+
+    /// Sends, as `tool_ended`, each call's end the channel told before its
+    /// end item but the end `read` is, so that a reader's stop before that
+    /// item closes the call with it, as Python's executor sends a call's
+    /// `ended` before each item (RFC §10.6.4, §12.2 step 13s).
+    fn report_told_ends(&self, read: &Read) {
+        let ending = match read {
+            Some(Ok(ResponseItem::ToolCallEnd(end))) => Some(end.tool_id.as_str()),
+            _ => None,
+        };
+        self.sender
+            .report_ended(&self.host.take_told_ends_but(ending));
     }
 
     /// Sends the burst kept, the stream about to wait for a pull: whether
