@@ -138,10 +138,10 @@ fn a_rerun_whose_room_read_fails_at_its_turn_runs_no_agent() {
 
 // Python: core/lanes.py::_execute, whose failed plan returns no result, so
 // that _finish runs none of its aftermath (tests/test_lanes.py::
-// test_execution_failure_resolves_wait_and_records_error): a regeneration
-// past the depth limit whose room's read fails at its turn stores no
-// record nor observation of the agent the limit stops (RMK-1502), as one
-// whose room closed meanwhile stores none.
+// test_execution_failure_resolves_wait_and_records_error): a rerun (a held
+// message's release) past the depth limit whose room's read fails at its
+// turn stores no record nor observation of the agent the limit stops
+// (RMK-1502), as one whose room closed meanwhile stores none.
 #[test]
 fn a_rerun_past_the_depth_limit_whose_room_read_fails_at_its_turn_stores_nothing() {
     let mut sim = Sim::new();
