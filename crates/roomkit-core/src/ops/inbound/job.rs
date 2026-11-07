@@ -49,6 +49,13 @@ pub(super) enum RecordNote {
     },
     /// A response the room refused without asking anyone.
     Refused,
+    /// An event a hook injected, past the reentry budget, stored `BLOCKED`
+    /// in place of its pass; `owed`, as an injected pass's
+    /// (`PassOrigin::Injected`).
+    Injected {
+        /// The adopted entry whose answer waits for its commit.
+        owed: Option<EntryId>,
+    },
     /// The call's own event, past the reentry budget it draws on (gap
     /// G-070): the record is the call's result.
     Trigger,
@@ -74,6 +81,16 @@ impl Job {
         match self {
             Self::Pass(pass, _) | Self::Row(pass, _) => pass.start(cx),
             Self::Record(pass, _) => pass.start(cx),
+        }
+    }
+
+    /// The adopted entry whose answer waits for the commit of the event a
+    /// hook injected, this job's (`PassOrigin::Injected`).
+    pub(super) fn owed(&self) -> Option<EntryId> {
+        match self {
+            Self::Pass(_, PassOrigin::Injected { owed, .. })
+            | Self::Record(_, RecordNote::Injected { owed }) => *owed,
+            Self::Pass(..) | Self::Record(..) | Self::Row(..) => None,
         }
     }
 

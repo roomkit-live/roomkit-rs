@@ -43,8 +43,9 @@
 //! first thing, before its channel is looked up, and refused with no event
 //! past the budget (RFC §10.1 step 1). Its caller receives its result at
 //! its commit (detached completion: no delivery results, no completion
-//! handle), and its event takes its place in the room's lane at that
-//! commit. A message's arrival runs its step 2, then its channel's parse. A
+//! handle), an entry beside the work once the events its hooks injected are
+//! committed too, their failed release its error (HITL b779fc14), and its
+//! event takes its place in the room's lane at that commit. A message's arrival runs its step 2, then its channel's parse. A
 //! direct injection is admitted and stamped at once, and its room, then its
 //! key, when it carries one, read before it draws on the budget: a call its
 //! room refuses and a replay draw nothing (RFC §9.5.1 Past the cap, §13.4,
@@ -91,6 +92,22 @@ pub(super) struct Adoptions {
     /// The entries whose caller is gone (`Machine::entry_caller_gone`): cut
     /// before their commit, they end without a report.
     gone: BTreeSet<EntryId>,
+    /// The entries committed whose answer waits for the commits of the
+    /// events their hooks injected (`Machine::answer_owed`).
+    pending: Vec<Pending>,
+}
+
+/// An adopted entry committed, whose answer waits for the commits of the
+/// events its hooks injected, and of those their hooks injected, as
+/// Python's adopted call commits them before it returns (RFC §9.4, §9.5.1
+/// Reentrance, HITL b779fc14): what it answers then.
+#[derive(Debug)]
+struct Pending {
+    entry: Adopted,
+    result: InboundResult,
+    /// Whether the entry's delivery set follows; with none, its delivery is
+    /// over with its answer.
+    delivers: bool,
 }
 
 /// What the operation knows of an entry it adopted.
@@ -185,6 +202,37 @@ impl Adoptions {
     /// Whether no entry is adopted, running or cut and not settled yet.
     pub(super) fn is_idle(&self) -> bool {
         self.adopted.is_empty() && self.running.is_empty() && self.cut.is_empty()
+    }
+
+    /// Whether no entry's answer waits for what its hooks injected.
+    pub(super) fn answers_none(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    /// Whether the answer of `entry` waits for what its hooks injected.
+    pub(super) fn is_pending(&self, entry: EntryId) -> bool {
+        self.pending.iter().any(|pending| pending.entry.id == entry)
+    }
+
+    /// Notes `error`, the failed release of a pass the answer of `entry`
+    /// waits for, on that answer, when it met no failure before (RFC
+    /// §13.5); whether that answer waits.
+    pub(super) fn note_pending_error(
+        &mut self,
+        entry: EntryId,
+        error: Option<ErrorRecord>,
+    ) -> bool {
+        let Some(pending) = self
+            .pending
+            .iter_mut()
+            .find(|pending| pending.entry.id == entry)
+        else {
+            return false;
+        };
+        if pending.result.error.is_none() {
+            pending.result.error = error;
+        }
+        true
     }
 
     /// Whether a running entry waits for `effect`.
@@ -769,7 +817,7 @@ impl Machine {
     /// answered with the refusal, nothing of the message stored.
     fn hold_entry(&mut self, cx: &mut Cx<'_>, adopted: &Adopted, held: Held, event: &RoomEvent) {
         let challenge: Vec<InjectedEvent> = held.challenge.into_iter().map(|c| *c).collect();
-        for job in self.injected(cx, challenge, event, Lineage::Entry(adopted.id)) {
+        for job in self.injected(cx, challenge, event, Lineage::Entry(adopted.id), None) {
             self.cascade.queue(job);
         }
         let refused = InboundResult {
@@ -781,18 +829,84 @@ impl Machine {
         self.settle_entry(cx, adopted, Ok(refused));
     }
 
-    /// The entry's pass is over: its caller is answered, and the pass adds
-    /// to the cascade as any pass does, its delivery set in the place its
-    /// event took at its commit (RFC §10.1 step 18).
+    /// The entry's pass is over: the pass adds to the cascade as any pass
+    /// does, its delivery set in the place its event took at its commit
+    /// (RFC §10.1 step 18), and its caller is answered. An entry the room's
+    /// admission order adopted answers once the events its hooks injected
+    /// are committed, each in a section of its own, and carries their
+    /// failed release, as Python's adopted call commits them before it
+    /// returns (RFC §9.4, §9.5.1 Reentrance, HITL b779fc14); one nested
+    /// under a lock answers at its commit, what it injected committed after
+    /// the section it is nested in, as Python's.
     fn on_adopted_pass(&mut self, cx: &mut Cx<'_>, adopted: &Adopted, mut report: PassReport) {
         let mut result = entry_result(&report.result);
         result.error = report.release_error.take();
-        if matches!(report.result, PassResult::Delivered { .. }) {
+        let delivers = matches!(report.result, PassResult::Delivered { .. });
+        let committed = matches!(
+            report.result,
+            PassResult::Delivered { .. } | PassResult::Blocked { .. } | PassResult::Stored { .. }
+        );
+        if adopted.nested.is_none() && committed && !report.injected_events.is_empty() {
+            self.adopted.pending.push(Pending {
+                entry: adopted.clone(),
+                result,
+                delivers,
+            });
+            self.add_to_cascade(cx, report, &PassOrigin::Adopted(adopted.id));
+            return self.answer_owed(cx);
+        }
+        if delivers {
             self.answer_entry(cx, adopted, Ok(result));
         } else {
             self.settle_entry(cx, adopted, Ok(result));
         }
         self.add_to_cascade(cx, report, &PassOrigin::Adopted(adopted.id));
+    }
+
+    /// Answers each entry whose answer waited for the commits of the events
+    /// its hooks injected once none of them is queued or running: committed,
+    /// refused, or dropped with a cascade that stopped.
+    pub(super) fn answer_owed(&mut self, cx: &mut Cx<'_>) {
+        let (owed, answered): (Vec<_>, Vec<_>) = mem::take(&mut self.adopted.pending)
+            .into_iter()
+            .partition(|pending| self.cascade.owes(pending.entry.id));
+        self.adopted.pending = owed;
+        for Pending {
+            entry,
+            result,
+            delivers,
+        } in answered
+        {
+            if delivers {
+                self.answer_entry(cx, &entry, Ok(result));
+            } else {
+                self.settle_entry(cx, &entry, Ok(result));
+            }
+        }
+    }
+
+    /// The adopted entry whose answer waits for the commits of what the
+    /// hooks of the pass from `origin` inject: the entry itself, or the
+    /// entry an injected event's pass is owed to, while it waits.
+    pub(super) fn owed_by(&self, origin: &PassOrigin) -> Option<EntryId> {
+        let entry = match origin {
+            PassOrigin::Adopted(entry) => Some(*entry),
+            PassOrigin::Injected { owed, .. } => *owed,
+            PassOrigin::Trigger | PassOrigin::Response { .. } => None,
+        };
+        entry.filter(|entry| self.adopted.is_pending(*entry))
+    }
+
+    /// Notes `error`, a pass's failed release, on the answer of `owed`, the
+    /// entry that waits for that pass, or else on the call's result (RFC
+    /// §13.5).
+    pub(super) fn note_release_error(&mut self, owed: Option<EntryId>, error: Option<ErrorRecord>) {
+        if let Some(entry) = owed
+            && self.adopted.note_pending_error(entry, error.clone())
+        {
+            return;
+        }
+        self.trigger.note_error(error);
     }
 
     /// The entry was stored blocked past its caller's reentry budget, or

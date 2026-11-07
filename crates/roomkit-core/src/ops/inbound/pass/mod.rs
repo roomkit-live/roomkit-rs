@@ -81,10 +81,24 @@ pub(super) enum PassOrigin {
     Injected {
         /// The channels it is delivered to; `None` stores it only.
         targets: Option<Vec<ChannelId>>,
+        /// The adopted entry whose answer waits for its commit: the entry
+        /// whose own pass injected it, or whose answer the pass that did
+        /// waits for, as Python's adopted call commits what its hooks
+        /// injected before it returns (RFC §9.5.1 Reentrance).
+        owed: Option<EntryId>,
     },
 }
 
 impl PassOrigin {
+    /// The adopted entry whose answer waits for the pass's commit, an
+    /// injected event's (`PassOrigin::Injected`).
+    pub(super) fn owed(&self) -> Option<EntryId> {
+        match self {
+            Self::Injected { owed, .. } => *owed,
+            Self::Trigger | Self::Adopted(_) | Self::Response { .. } => None,
+        }
+    }
+
     /// Whether the pass is an entry's, a caller's, rather than the
     /// framework's re-injection: its key is checked (RFC §13.4), a refusal
     /// is reported to its caller, and the room's refusal is `inbound`.

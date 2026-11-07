@@ -383,7 +383,7 @@ impl CommitPass {
     /// its hooks narrowed them (gaps G-031, G-036).
     fn stored_visibility(&self, event: &RoomEvent, context: &RoomContext) -> Visibility {
         match &self.origin {
-            PassOrigin::Injected { targets } => {
+            PassOrigin::Injected { targets, .. } => {
                 self.injected_visibility(event, targets.as_deref(), &context.bindings)
             }
             PassOrigin::Trigger | PassOrigin::Adopted(_) | PassOrigin::Response { .. } => {
@@ -426,7 +426,7 @@ impl CommitPass {
         // An injected event is the hook's, not a channel's: it takes no source
         // check and reaches the transport targets its visibility admits only
         // (gaps G-021, G-031).
-        if let PassOrigin::Injected { targets } = &self.origin {
+        if let PassOrigin::Injected { targets, .. } = &self.origin {
             event.visibility = self.injected_visibility(event, targets.as_deref(), bindings);
             if let Some(accepted) = &self.accepted {
                 accepted.narrow(event, bindings);

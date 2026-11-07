@@ -345,6 +345,22 @@ impl Cascade {
             || !self.rows.is_empty()
     }
 
+    /// Whether a pass or a record whose commit the answer of the adopted
+    /// entry `entry` waits for is queued or running, held with a set or not
+    /// (`Job::owed`).
+    pub(super) fn owes(&self, entry: EntryId) -> bool {
+        let then = self
+            .sets
+            .iter()
+            .chain(&self.delivery)
+            .flat_map(|delivery| &delivery.then);
+        self.passes
+            .iter()
+            .chain(&self.pass)
+            .chain(then)
+            .any(|job| job.owed() == Some(entry))
+    }
+
     /// Whether the cascade has nothing queued nor running, no stream to
     /// read included.
     pub(super) fn is_idle(&self) -> bool {

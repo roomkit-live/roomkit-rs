@@ -695,6 +695,7 @@ impl Machine {
             self.settle_cut_entries(cx);
             self.start_adopted(cx);
             self.run_queues(cx);
+            self.answer_owed(cx);
             self.report_adopted_deliveries(cx);
             self.end_once_settled();
             if !cx.io.has_outcomes() {

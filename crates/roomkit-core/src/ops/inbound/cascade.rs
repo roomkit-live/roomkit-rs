@@ -209,12 +209,15 @@ impl Machine {
             self.side_effects
                 .collect(report.tasks, report.observations, context, made_for);
         }
-        self.trigger.note_error(report.release_error);
+        // The failed release of a pass an adopted entry's answer waits for
+        // is that entry's, as Python's adopted call collects its own.
+        self.note_release_error(origin.owed(), report.release_error);
+        let owed = self.owed_by(origin);
         let injected = match &report.result {
             PassResult::Delivered { event, .. }
             | PassResult::Blocked { event, .. }
             | PassResult::Stored { event, .. } => {
-                self.injected(cx, report.injected_events, event, report.lineage)
+                self.injected(cx, report.injected_events, event, report.lineage, owed)
             }
             PassResult::Refused { .. }
             | PassResult::DiscussionOver
@@ -278,37 +281,32 @@ impl Machine {
     }
 
     /// The passes of the events a pass's hooks injected, each within the
-    /// cascade's reentry budget (gap G-021), but an instruction (gap G-042).
+    /// cascade's reentry budget (gap G-021), but an instruction (gap G-042);
+    /// `owed`, the adopted entry whose answer waits for their commits.
     pub(super) fn injected(
         &mut self,
         cx: &mut Cx<'_>,
         injected: Vec<InjectedEvent>,
         trigger: &RoomEvent,
         lineage: Lineage,
+        owed: Option<EntryId>,
     ) -> Vec<Job> {
         let mut jobs = Vec::new();
         for injected in instructions::without_instructions(injected, trigger) {
             let targets = injected.target_channel_ids.clone();
             let event = stamp::stamp_injected(injected, trigger, cx.env.new_event_id());
             let job = if self.cascade.budget.take_pass() {
+                let origin = PassOrigin::Injected { targets, owed };
                 Job::Pass(
-                    Box::new(
-                        CommitPass::new(
-                            PassOrigin::Injected {
-                                targets: targets.clone(),
-                            },
-                            event,
-                        )
-                        .within(lineage),
-                    ),
-                    PassOrigin::Injected { targets },
+                    Box::new(CommitPass::new(origin.clone(), event).within(lineage)),
+                    origin,
                 )
             } else {
                 let mut event = event;
                 event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
                 Job::Record(
                     Box::new(RecordPass::injected(event, targets).within(lineage)),
-                    RecordNote::Refused,
+                    RecordNote::Injected { owed },
                 )
             };
             jobs.push(job);
@@ -328,10 +326,15 @@ impl Machine {
             limit,
         } = note
         else {
-            if matches!(note, RecordNote::Trigger) {
-                return self.settle_capped_trigger(cx, report);
+            match note {
+                RecordNote::Trigger => return self.settle_capped_trigger(cx, report),
+                RecordNote::Injected { owed } => {
+                    return self.note_release_error(owed, report.release_error);
+                }
+                RecordNote::Refused | RecordNote::NotAsked { .. } => {
+                    return self.trigger.note_error(report.release_error);
+                }
             }
-            return self.trigger.note_error(report.release_error);
         };
         self.trigger.note_error(report.release_error);
         let RecordResult::Committed(record) = report.result else {

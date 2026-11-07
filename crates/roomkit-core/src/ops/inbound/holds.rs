@@ -137,7 +137,10 @@ impl Machine {
     /// Whether every entry the call adopted is settled, every event it
     /// committed delivered, and the lock its caller handed it released.
     fn is_settled(&self) -> bool {
-        self.adopted.is_idle() && self.cascade.is_idle() && self.trigger.releasing_hand.is_none()
+        self.adopted.is_idle()
+            && self.adopted.answers_none()
+            && self.cascade.is_idle()
+            && self.trigger.releasing_hand.is_none()
     }
 
     /// Lets go of the room's lock the call's caller handed it

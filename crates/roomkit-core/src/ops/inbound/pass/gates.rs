@@ -134,7 +134,7 @@ impl CommitPass {
     /// step 8.
     fn after_status(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
         self.event.index = context.room.event_count;
-        if let PassOrigin::Injected { targets } = &self.origin {
+        if let PassOrigin::Injected { targets, .. } = &self.origin {
             self.event.visibility =
                 permissions::targets_visibility(targets.as_deref(), &context.bindings);
         }

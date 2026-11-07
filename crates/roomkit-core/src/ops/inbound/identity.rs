@@ -631,7 +631,7 @@ impl Machine {
         };
         self.trigger.decided = true;
         let challenge: Vec<InjectedEvent> = held.challenge.into_iter().map(|c| *c).collect();
-        for job in self.injected(cx, challenge, event, Lineage::Call) {
+        for job in self.injected(cx, challenge, event, Lineage::Call, None) {
             self.cascade.queue(job);
         }
         self.stage.enter(Stage::Cascade);
