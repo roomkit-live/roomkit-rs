@@ -1184,3 +1184,28 @@ rust = "roomkit_ai::CallIds"
 members = ["call"]
 approved = "2026-11-04"
 reason = "Rust has no object to call: Python's ids(server_id, name) is ids.call(server_id, name), a server's id read as text before it, none as empty (HITL 8a3d3780)"
+
+[[missing]]
+python = "roomkit.RoomKit"
+members = ["declare_host_verb"]
+reason = "not yet in Rust: a host's own verbs for its turns' host, Python's RMK-1470, whose lot ports it and takes this entry off (HITL 40019981)"
+
+[[missing]]
+python = "roomkit.TurnHost"
+members = ["call"]
+reason = "not yet in Rust: a host verb a turn calls, Python's RMK-1470, whose lot ports it and takes this entry off (HITL 40019981)"
+
+[[missing]]
+python = "roomkit.RoomKit"
+members = ["input_request"]
+reason = "not yet in Rust: the owner reads an open human-input request, Python's RMK-1467, whose lot ports it and takes this entry off (HITL 40019981)"
+
+[[missing]]
+python = "roomkit.RoomKit"
+members = ["release_channel"]
+reason = "not yet in Rust: a declared channel built anew, Python's RMK-1477, whose lot ports it and takes this entry off (HITL 40019981)"
+
+[[missing]]
+python = "roomkit.AIChannelTurnConfig.__init__"
+params = ["tool_timeouts"]
+reason = "not yet in Rust: a turn's configuration bounds its calls with its tools, Python's RMK-1469, whose lot ports it and takes this entry off (HITL 40019981)"
