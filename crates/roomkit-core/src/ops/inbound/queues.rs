@@ -45,7 +45,7 @@ use super::{Machine, Stage};
 use crate::model::{Metadata, RoomEvent, RoomId};
 use crate::ops::failure_log::Log;
 use crate::ops::io::Io;
-use crate::ops::protocol::{EffectId, Entry, EntryId, Notice, Outcome, SpanNote};
+use crate::ops::protocol::{AnswerOf, EffectId, Entry, EntryId, Notice, Outcome, SpanNote};
 use crate::ops::{Cx, Progress, RefusedOperation};
 use crate::rules::chain_depth::{self, Draw, ReentryBudget};
 use crate::rules::hook_chain::HookChain;
@@ -64,6 +64,17 @@ pub(super) enum Lineage {
     Call,
     /// The cascade of the entry the operation adopted.
     Entry(EntryId),
+}
+
+impl Lineage {
+    /// The call whose cascade it is, as an effect names it
+    /// (`Effect::answers`).
+    pub(super) fn answers(self) -> AnswerOf {
+        match self {
+            Self::Call => AnswerOf::Call,
+            Self::Entry(entry) => AnswerOf::Entry(entry),
+        }
+    }
 }
 
 /// A committed event's delivery set, and the passes that follow it.

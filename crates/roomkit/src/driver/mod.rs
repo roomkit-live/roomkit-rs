@@ -44,9 +44,9 @@ use std::task::Poll;
 use roomkit_core::model::{ErrorRecord, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::failure_log;
 use roomkit_core::ops::{
-    AnswerOf, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest,
-    InboundError, InboundResult, KIT_CLOSED, Next, Notice, Operation, Outcome, ProtocolError,
-    Request, Settled, StoreOutcome, StoreRequest,
+    AnswerOf, ChannelRequest, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome,
+    HoldRequest, InboundError, InboundResult, KIT_CLOSED, Next, Notice, Operation, Outcome,
+    ProtocolError, Request, Settled, StoreOutcome, StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinHandle, JoinSet};
@@ -1093,6 +1093,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 calls::store_followed(&inner, request).await
             }),
             Request::Channel(request) => {
+                self.reads_for_entry(id, &request, answers);
                 let shared = Arc::clone(&self.shared);
                 self.spawn(id, work, deadline, span, async move {
                     Box::pin(calls::channel(&inner, &shared, id, request)).await
@@ -1112,6 +1113,24 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }),
         }
         None
+    }
+
+    /// Makes `effect`'s read, `request`, of the cascade of the adopted entry
+    /// `answers` names, tell that entry's cleanup whether its turn owes its
+    /// end (`Effect::answers`, RFC §10.6.8).
+    fn reads_for_entry(
+        &self,
+        effect: EffectId,
+        request: &ChannelRequest,
+        answers: Option<AnswerOf>,
+    ) {
+        let (ChannelRequest::ReadStream { .. }, Some(AnswerOf::Entry(entry))) = (request, answers)
+        else {
+            return;
+        };
+        if let Some(cleanup) = self.entry_cleanups.get(&entry) {
+            self.shared.reads_for_entry(effect, cleanup.read_turns());
+        }
     }
 
     /// Carries out the hold `request` for `effect`, within `deadline`: at
@@ -1507,12 +1526,13 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let Delivered { entry, mut result } = delivered;
         self.entry_answers.remove(&entry);
         self.entry_cancels.remove(&entry);
-        self.entry_cleanups.remove(&entry);
+        let cleanup = self.entry_cleanups.remove(&entry);
+        let cut = self.entry_cut.remove(&entry);
+        if let (Some(_), Some(cleanup)) = (&cut, cleanup) {
+            cleanup.cut_over();
+        }
         let closing = self.inner.tasks.is_closing() && !self.inner.tasks.spares(&self.marks);
-        let reason = self
-            .entry_cut
-            .remove(&entry)
-            .or_else(|| closing.then(|| KIT_CLOSED.to_owned()));
+        let reason = cut.or_else(|| closing.then(|| KIT_CLOSED.to_owned()));
         if let Some(reason) = reason {
             result.cancellation_reason.get_or_insert(reason);
         }

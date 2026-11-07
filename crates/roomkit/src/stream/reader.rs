@@ -209,7 +209,11 @@ pub(super) async fn read_kept<S: ConversationStore>(
     // A strategy's first pass is read as Python reads it, under a cascade of
     // its own: its turn's end is not its caller's (RFC §10.6.8, §19.7.3).
     if !first_pass {
-        stops.read_turns.reads(kept.turn.canceller().owed_end());
+        let owed = kept.turn.canceller().owed_end();
+        if let Some(entry_turns) = &stops.entry_turns {
+            entry_turns.reads(owed.clone());
+        }
+        stops.read_turns.reads(owed);
     }
     let target = target.filter(|_| !first_pass);
     let (pulls, pulled) = mpsc::unbounded_channel();
@@ -415,6 +419,9 @@ pub(crate) struct Stops {
     pub(crate) task: Option<watch::Receiver<Option<&'static str>>>,
     /// Where the read tells whether its turn owes its end (RFC §10.6.8).
     pub(crate) read_turns: ReadTurns,
+    /// Where it tells it too, for a read of an adopted entry's cascade: the
+    /// entry's own cleanup.
+    pub(crate) entry_turns: Option<ReadTurns>,
 }
 
 impl Stops {

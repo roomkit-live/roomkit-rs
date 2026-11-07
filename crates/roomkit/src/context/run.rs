@@ -68,6 +68,10 @@ pub(crate) struct RunShared {
     /// a cut call reads it (RFC §10.6.8). Never cleared, a cut call's end
     /// reading it once the run is over.
     read_turns: ReadTurns,
+    /// Where each read of an adopted entry's cascade also tells whether its
+    /// turn owes its end, by the read's effect, until the read takes it:
+    /// the entry's own cleanup, which its cut reads (RFC §10.6.8).
+    entry_reads: Mutex<HashMap<EffectId, ReadTurns>>,
 }
 
 /// Whether each turn whose stream a run read owes its end (RFC §10.6.8),
@@ -119,6 +123,7 @@ impl RunShared {
             turns: Mutex::new(HashMap::new()),
             queued: Mutex::new(HashMap::new()),
             read_turns: ReadTurns::default(),
+            entry_reads: Mutex::new(HashMap::new()),
         });
         (shared, received)
     }
@@ -243,6 +248,25 @@ impl RunShared {
     /// Where each read of the run tells whether its turn owes its end.
     pub(crate) fn read_turns(&self) -> ReadTurns {
         self.read_turns.clone()
+    }
+
+    /// Makes the read of `effect`, a read of an adopted entry's cascade,
+    /// tell `entry` too whether its turn owes its end.
+    pub(crate) fn reads_for_entry(&self, effect: EffectId, entry: ReadTurns) {
+        self.entry_reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(effect, entry);
+    }
+
+    /// Where the read of `effect` tells whether its turn owes its end,
+    /// beside the run: its entry's, for a read of an adopted entry's
+    /// cascade, taken.
+    pub(crate) fn entry_read_turns(&self, effect: EffectId) -> Option<ReadTurns> {
+        self.entry_reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&effect)
     }
 
     /// Whether a turn whose stream the run read is over for its owner

@@ -190,16 +190,20 @@ impl StoredAnswers {
 
 /// What the cut of an entry the room's work adopted leaves its handle to wait
 /// for: the closing of the streams it left unread, each one's end, and
-/// whether a turn among them is over without its executor's end (RFC §10.1
-/// "Explicit delivery cancellation", §10.6.8), as Python's adopted call's own
-/// cascade cleanup.
+/// whether a turn among them, or a turn whose stream its cascade read, is
+/// over without its executor's end (RFC §10.1 "Explicit delivery
+/// cancellation", §10.6.8), as Python's adopted call's own cascade cleanup.
 #[derive(Debug)]
 pub(crate) struct EntryCleanup {
     /// Whether the streams the cut left unread are closed, or there were
     /// none.
     closed: watch::Sender<bool>,
-    /// Whether a turn among them is over without its executor's end.
+    /// Whether a turn among them, or one its cascade read, is over without
+    /// its executor's end.
     owed: AtomicBool,
+    /// Whether each turn whose stream the entry's cascade read, or reads,
+    /// owes its end.
+    read_turns: ReadTurns,
 }
 
 impl Default for EntryCleanup {
@@ -207,11 +211,28 @@ impl Default for EntryCleanup {
         Self {
             closed: watch::Sender::new(true),
             owed: AtomicBool::new(false),
+            read_turns: ReadTurns::default(),
         }
     }
 }
 
 impl EntryCleanup {
+    /// Where each read of the entry's cascade tells whether its turn owes
+    /// its end.
+    pub(super) fn read_turns(&self) -> ReadTurns {
+        self.read_turns.clone()
+    }
+
+    /// The entry's cascade is over, cut: a turn whose stream it read over
+    /// without its executor's end leaves its cleanup incomplete, as Python's
+    /// cleanup reads `end_owed` on every stream of the adopted call's
+    /// cascade. Told before its handle reads the end.
+    pub(super) fn cut_over(&self) {
+        if self.read_turns.any_owed() {
+            self.owed.store(true, Ordering::Release);
+        }
+    }
+
     /// The closing of `unread`, the streams the entry's cut left unread, one
     /// after the other: the streams read as closing from now, closed however
     /// that closing ends.

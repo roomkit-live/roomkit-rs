@@ -600,6 +600,7 @@ async fn read_stream<S: ConversationStore>(
         kit: inner.turns.cutting(),
         task: task_cut.as_ref().map(|cut| cut.signal()),
         read_turns: shared.read_turns(),
+        entry_turns: shared.entry_read_turns(effect),
     };
     let kept = match shared.take_queued(turn) {
         Some(queued) => match queued.start(inner, &mut stops).await {

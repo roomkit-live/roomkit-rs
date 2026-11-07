@@ -320,7 +320,10 @@ impl StreamRead {
             correlation_id,
             as_trace: false,
         };
-        self.state = ReadStage::Reading(cx.io.issue_drawing_on(request, budget));
+        let reading = cx.io.issue_drawing_on(request, budget);
+        // The cascade whose cleanup reads the end of the turn it reads.
+        cx.io.answers(reading, self.job.lineage.answers());
+        self.state = ReadStage::Reading(reading);
         self.context = Some(context);
     }
 

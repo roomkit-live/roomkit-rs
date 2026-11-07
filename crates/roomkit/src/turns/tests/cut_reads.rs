@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit_core::model::hook::AllowOptions;
+use roomkit_core::model::hook::{AllowOptions, BlockOptions};
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventContent, HookResult, InboundMessage, RoomContext, RoomEvent, TextContent,
@@ -485,30 +485,50 @@ fn adopting(kit: &RoomKit, target: &ReadingOn) -> Cancelled {
 
 /// [`adopting`], the handle cancelled within `bound`.
 fn adopting_within(kit: &RoomKit, target: &ReadingOn, bound: Duration) -> Cancelled {
+    adopting_until(kit, Arc::clone(&target.past_the_end), bound, false)
+}
+
+/// Registers an off-lock hook whose body, on `hello`, makes a deferred call
+/// into the room, adopted beside the event, then cancels its handle within
+/// `bound` once `target` read the first item of its stream, and blocks
+/// `hello`: nothing more is delivered.
+fn cutting_its_read(kit: &RoomKit, target: &ReadingOn, bound: Duration) -> Cancelled {
+    adopting_until(kit, Arc::clone(&target.read), bound, true)
+}
+
+/// The hook of [`adopting`]: the handle cancelled within `bound` once
+/// `told`, `hello` blocked after when `blocks`.
+fn adopting_until(
+    kit: &RoomKit,
+    told: Arc<tokio::sync::Notify>,
+    bound: Duration,
+    blocks: bool,
+) -> Cancelled {
     let cancelled = Cancelled::default();
     let (kit_of_hook, seen) = (kit.clone(), Arc::clone(&cancelled));
-    let past_the_end = Arc::clone(&target.past_the_end);
     let body = move |event: RoomEvent, _: RoomContext| {
-        let (kit, seen, past_the_end) = (
-            kit_of_hook.clone(),
-            Arc::clone(&seen),
-            Arc::clone(&past_the_end),
-        );
+        let (kit, seen, told) = (kit_of_hook.clone(), Arc::clone(&seen), Arc::clone(&told));
         async move {
             let hello = matches!(&event.content, EventContent::Text(text) if text.body == "hello");
-            if hello {
-                let handle = deferred_saying(&kit, "side").await;
-                past_the_end.notified().await;
-                let start = Instant::now();
-                let cancel = handle.cancel(with_timeout(bound)).await;
-                let reason = match cancel {
-                    Ok(result) => Some(result.cancellation_reason),
-                    Err(RoomKitError::Timeout) => None,
-                    Err(error) => panic!("{error:?}"),
-                };
-                *seen.lock().unwrap() = Some((reason, start.elapsed()));
+            if !hello {
+                return Ok(HookResult::allow(AllowOptions::default()));
             }
-            Ok::<_, crate::HookError>(HookResult::allow(AllowOptions::default()))
+            let handle = deferred_saying(&kit, "side").await;
+            told.notified().await;
+            let start = Instant::now();
+            let cancel = handle.cancel(with_timeout(bound)).await;
+            let reason = match cancel {
+                Ok(result) => Some(result.cancellation_reason),
+                Err(RoomKitError::Timeout) => None,
+                Err(error) => panic!("{error:?}"),
+            };
+            *seen.lock().unwrap() = Some((reason, start.elapsed()));
+            Ok::<_, crate::HookError>(if blocks {
+                // Nothing more to deliver: the test is the side call's.
+                HookResult::block("adopted", BlockOptions::default())
+            } else {
+                HookResult::allow(AllowOptions::default())
+            })
         }
     };
     let options = HookOptions {
@@ -570,6 +590,39 @@ async fn an_adopted_call_whose_unread_turn_s_end_is_owed_times_out() {
     let (reason, elapsed) = cancelled.lock().unwrap().take().expect("cancelled");
     assert_eq!(reason, None, "Timeout");
     assert!(elapsed < bound, "{elapsed:?}");
+}
+
+// Python: tests/test_turns_cleanup.py::test_an_adopted_call_whose_read_turn_s_end_is_owed_times_out
+// A deferred call an off-lock hook's body makes is adopted beside the event
+// with a cascade of its own: cut by its handle while its target reads its
+// agent's stream, its executor deaf to the cut, the turn is over for its owner
+// at its cancel bound without its executor's end, the cleanup incomplete
+// (lanes.py _cleanup reads end_owed on every stream of the cascade): Python's
+// cancel raises TimeoutError at that bound, well within its own timeout, as a
+// deferred call's; its executor ending the turn, the cancel returns at once
+// (RMK-1510).
+#[tokio::test(start_paused = true)]
+async fn an_adopted_call_whose_read_turn_s_end_is_owed_times_out() {
+    let mut seen = Vec::new();
+    for stuck in [true, false] {
+        let target = ReadingOn::flushing(Duration::ZERO);
+        let kit = room(holding(), &target).await;
+        if stuck {
+            stuck_executor(&kit);
+        }
+        let cancelled = cutting_its_read(&kit, &target, Duration::from_secs(30));
+        let said = tokio::time::timeout(Duration::from_secs(100), says(&kit, "hello")).await;
+        said.unwrap().unwrap();
+        kit.close().await.unwrap();
+        seen.push(cancelled.lock().unwrap().take().expect("cancelled"));
+    }
+    let [(stuck, stuck_at), (ends, ends_at)] = seen.try_into().unwrap();
+    assert_eq!(
+        (stuck, ends),
+        (None, Some(Some("caller_cancelled".to_owned())))
+    );
+    assert!(at(stuck_at, Duration::from_secs(5)), "{stuck_at:?}");
+    assert!(at(ends_at, Duration::ZERO), "{ends_at:?}");
 }
 
 /// Makes `kit`'s turns run on an executor stuck in a blocking call, which
