@@ -387,14 +387,16 @@ impl Machine {
     /// result, an entry's kept for its caller.
     pub(super) fn on_set(&mut self, cx: &mut Cx<'_>, mut outcome: SetOutcome, set: &DeliverySet) {
         if let Some(reason) = outcome.cancelled {
-            // What its event's hooks gave is stored at the cascade's end.
-            let context = Some(set.context());
-            self.side_effects.collect(
-                outcome.tasks,
-                outcome.observations,
-                context,
-                Some(set.event()),
-            );
+            // What its event's hooks gave, stored by the set at its drop:
+            // their tasks' observers run before its caller is told.
+            let event = set.event();
+            let made_for = outcome
+                .written
+                .tasks
+                .iter()
+                .map(|task| (task.id.clone(), event.clone()))
+                .collect();
+            report::tasks_created(cx, &outcome.written.tasks, &made_for, set.context());
             return self.dropped(cx, reason, set);
         }
         let event = set.event();
@@ -456,9 +458,9 @@ impl Machine {
     }
 
     /// A set that delivered nothing, the room's lane taking no place for it
-    /// as the kit closes (RFC §10.1 step 18): no hook runs for it, and the
-    /// cascade it belongs to reports `reason`, the call's own or an adopted
-    /// entry's.
+    /// as the kit closes (RFC §10.1 step 18): no hook runs for it but its
+    /// tasks' `ON_TASK_CREATED`, and the cascade it belongs to reports
+    /// `reason`, the call's own or an adopted entry's.
     fn dropped(&mut self, cx: &mut Cx<'_>, reason: &'static str, set: &DeliverySet) {
         let cancelled = InboundResult {
             cancellation_reason: Some(reason.to_owned()),

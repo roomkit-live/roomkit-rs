@@ -626,16 +626,12 @@ impl DeliverySet {
 
     /// Ends the set, over: what it and its event's hooks collected is
     /// stored first, before its event's `AFTER_BROADCAST` hooks run (RFC
-    /// §10.1 steps 15 and 16, Python's `_post_plan_effects`). A set that
-    /// delivered nothing stores nothing: its event's hooks' side effects
-    /// go back in its outcome, for the end of the cascade.
+    /// §10.1 steps 15 and 16, Python's `_post_plan_effects`).
     fn finish(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
-        let (tasks, observations) = self.effects.take_hooks();
         if self.outcome.cancelled.is_some() {
-            self.outcome.tasks.splice(0..0, tasks);
-            self.outcome.observations.splice(0..0, observations);
-            return Progress::Done(std::mem::take(&mut self.outcome));
+            return self.store_dropped(cx);
         }
+        let (tasks, observations) = self.effects.take_hooks();
         self.effects = SetEffects::of_hooks(tasks, observations);
         self.observe_not_asked(cx);
         let own = (
@@ -644,6 +640,27 @@ impl DeliverySet {
         );
         let metadata = std::mem::take(&mut self.outcome.metadata_updates);
         match self.effects.write(cx, &self.event.room_id, own, metadata) {
+            Progress::Waiting => Progress::Waiting,
+            Progress::Done(written) => self.written(written),
+        }
+    }
+
+    /// Ends a set the room's lane dropped before it ran: it delivered
+    /// nothing, and what its event's hooks gave is stored at once, as a set
+    /// that ran stores it (RFC §10.1 step 15), Python's
+    /// `_store_dropped_side_effects`: the call that made the set, the
+    /// operation's own or an entry it adopted, is told of the drop once its
+    /// tasks are stored, and the write is made within the kit's close's
+    /// grace, not at the cascade's end.
+    fn store_dropped(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
+        let own = (
+            std::mem::take(&mut self.outcome.tasks),
+            std::mem::take(&mut self.outcome.observations),
+        );
+        match self
+            .effects
+            .write(cx, &self.event.room_id, own, Metadata::new())
+        {
             Progress::Waiting => Progress::Waiting,
             Progress::Done(written) => self.written(written),
         }

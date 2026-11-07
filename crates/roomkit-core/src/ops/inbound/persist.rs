@@ -6,10 +6,11 @@
 //! `_persist_side_effects` writes them in that order, before its event's
 //! `AFTER_BROADCAST` hooks run (step 16): those hooks read them stored, as
 //! Python's `_post_plan_effects` writes them before it starts them. Each
-//! stored task's `ON_TASK_CREATED` observers run once it is. What no set
-//! stores, a record's side effects, an event's whose set delivered nothing,
-//! the call's own observations, is stored once the cascade's passes and
-//! sets are over; then the operation ends.
+//! stored task's `ON_TASK_CREATED` observers run once it is. A set the
+//! room's lane dropped before it ran stores what its event's hooks gave at
+//! its drop (Python's `_store_dropped_side_effects`). What no set stores, a
+//! record's side effects, the call's own observations, is stored once the
+//! cascade's passes and sets are over; then the operation ends.
 //!
 //! A write the store fails is logged, at ERROR (RFC §15.2), and the call
 //! goes on, a failed write never its error: each task and observation is
@@ -231,8 +232,7 @@ impl SetEffects {
         }
     }
 
-    /// What the event's hooks gave, taken: a set that delivered nothing
-    /// stores none of it, and hands it to the end of the cascade.
+    /// What the event's hooks gave, taken.
     pub(super) fn take_hooks(&mut self) -> (Vec<Task>, Vec<Observation>) {
         std::mem::take(&mut self.hooks)
     }
