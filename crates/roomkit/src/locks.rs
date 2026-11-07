@@ -225,6 +225,53 @@ impl KitLocks {
     pub(crate) fn waiting(&self, key: &RoomId) -> usize {
         waiters(&self.waiting).get(key).copied().unwrap_or(0)
     }
+
+    /// Where a run counts the acquires its operation holds back behind
+    /// another of its own sections among the waiters, none yet.
+    pub(crate) fn held_back(&self) -> HeldBack {
+        HeldBack {
+            waiting: Arc::clone(&self.waiting),
+            told: Vec::new(),
+            waiters: Vec::new(),
+        }
+    }
+}
+
+/// The acquires of a room's lock one run's operation holds back behind
+/// another of its own sections (`Operation::locks_held_back`), counted
+/// among the room's waiters as a caller waiting for the manager is, until
+/// the run tells others or ends: a section of the operation waits for that
+/// lock as surely, though the manager never sees it.
+pub(crate) struct HeldBack {
+    waiting: Arc<Mutex<HashMap<RoomId, usize>>>,
+    /// What the operation last told, by room.
+    told: Vec<(RoomId, usize)>,
+    waiters: Vec<Waiter>,
+}
+
+impl HeldBack {
+    /// Counts `held_back`, by room, in place of what was told before.
+    pub(crate) fn tell(&mut self, held_back: Vec<(RoomId, usize)>) {
+        if held_back == self.told {
+            return;
+        }
+        self.waiters.clear();
+        for (room_id, count) in &held_back {
+            for _ in 0..*count {
+                self.waiters.push(Waiter::new(&self.waiting, room_id));
+            }
+        }
+        self.told = held_back;
+    }
+}
+
+impl fmt::Debug for HeldBack {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HeldBack")
+            .field("told", &self.told)
+            .finish_non_exhaustive()
+    }
 }
 
 impl fmt::Debug for KitLocks {

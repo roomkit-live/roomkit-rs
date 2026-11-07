@@ -520,6 +520,16 @@ pub trait Operation {
         let _ = entry;
         Vec::new()
     }
+
+    /// The acquires of a room's lock the operation holds back now, behind
+    /// another of its sections that holds the lock or waits for it (one
+    /// tenure of a room's lock at a time): by room, how many. They never
+    /// reach the driver until that section lets the lock go; a driver
+    /// counts them among the room's lock waiters all the same. An
+    /// operation of one section holds back none.
+    fn locks_held_back(&self) -> Vec<(RoomId, usize)> {
+        Vec::new()
+    }
 }
 
 /// A driver broke the protocol.

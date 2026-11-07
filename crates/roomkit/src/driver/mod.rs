@@ -69,6 +69,7 @@ use crate::delivery_keys::{CancelRequest, Named, NamedGuard};
 use crate::error::RoomKitError;
 use crate::gaps::{CursorTurn, Turned};
 use crate::kit::Inner;
+use crate::locks::HeldBack;
 use crate::store::ConversationStore;
 use crate::stream::KeptStream;
 use crate::tasks::{CUT_UNWIND, Kind, Marks, Phase};
@@ -375,6 +376,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         context: ExecutionContext::current(),
         marks: Marks::current(),
         held,
+        held_back: inner.locks.held_back(),
         indexes: Indexes::default(),
         shared,
         adoptions,
@@ -433,6 +435,9 @@ struct Driver<'kit, S> {
     /// within too (RFC §12.10.4).
     marks: Marks,
     held: Held<'kit>,
+    /// The acquires of a room's lock its operation holds back behind
+    /// another of its own sections, counted among the room's waiters.
+    held_back: HeldBack,
     /// The indexes the run commits, until their turn is over.
     indexes: Indexes,
     shared: Arc<RunShared>,
@@ -572,6 +577,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     async fn drive<O: Operation>(mut self, mut operation: O) -> Result<O::Output, Stop> {
         loop {
             let step = operation.poll(&*self.environment);
+            self.held_back.tell(operation.locks_held_back());
             for notice in step.notices {
                 self.notice(notice).await;
             }

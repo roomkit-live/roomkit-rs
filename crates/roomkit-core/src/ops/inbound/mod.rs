@@ -547,6 +547,10 @@ impl Operation for Inbound {
             .cascade
             .cut_turns(&mut self.io, Lineage::Entry(entry))
     }
+
+    fn locks_held_back(&self) -> Vec<(RoomId, usize)> {
+        self.io.locks_held_back()
+    }
 }
 
 /// What the call brings into the room.

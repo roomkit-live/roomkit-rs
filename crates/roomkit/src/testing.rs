@@ -79,8 +79,13 @@ pub fn set_turn_timeouts<S>(kit: &RoomKit<S>, timeouts: TurnTimeouts) {
 
 /// How many calls wait for the lock of the room `room_id` in `kit` now: the
 /// conformance runner's `wait_for_lock` step, which knows calls started in
-/// the background meet only once they wait for it. A test seam: the Python
-/// implementation's kit has no such call.
+/// the background meet only once they wait for it. A call waiting for the
+/// kit's lock manager counts, and so does a section a call holds back
+/// behind another of its own that holds the lock (a delivery set of an
+/// event a keyed publication's hook sent, writing its record or its room
+/// metadata updates), as Python's set waits in the room's lane for the
+/// lock the publication holds. A test seam: the Python implementation's kit
+/// has no such call.
 #[doc(hidden)]
 pub fn room_lock_waiters<S>(kit: &RoomKit<S>, room_id: &RoomId) -> usize {
     kit.inner.locks.waiting(room_id)

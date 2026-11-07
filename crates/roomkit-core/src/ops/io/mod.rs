@@ -372,6 +372,14 @@ impl Io {
         Some(answer.into())
     }
 
+    /// The acquires of a room's lock the operation holds back behind
+    /// another of its sections, by room ([`Operation::locks_held_back`]).
+    ///
+    /// [`Operation::locks_held_back`]: crate::ops::Operation::locks_held_back
+    pub(crate) fn locks_held_back(&self) -> Vec<(RoomId, usize)> {
+        self.locks.held_back()
+    }
+
     /// Records that the operation holds `room_id`'s lock from its start, the
     /// lock its caller handed it (`Inbound::under_lock`): once it asks for
     /// that lock's release, an acquire of the room waits for its answer.

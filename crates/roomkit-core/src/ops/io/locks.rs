@@ -103,6 +103,16 @@ impl RoomLocks {
         true
     }
 
+    /// The acquires held back, by room: how many wait behind the section
+    /// of the operation that holds the room's lock, or waits for it.
+    pub(super) fn held_back(&self) -> Vec<(RoomId, usize)> {
+        self.rooms
+            .iter()
+            .filter(|(_, held_back)| !held_back.is_empty())
+            .map(|(room_id, held_back)| (room_id.clone(), held_back.len()))
+            .collect()
+    }
+
     /// The room `effect` releases the lock of, when it is a release.
     pub(super) fn release_of(&self, effect: EffectId) -> Option<RoomId> {
         match self.requests.get(&effect) {
@@ -221,6 +231,22 @@ mod tests {
         assert_eq!(
             (released, held_back, after_release, while_held),
             (Some(release(0)), None, vec![acquire(1)], None)
+        );
+    }
+
+    /// RMK-1522: an acquire held back behind the operation's own section
+    /// counts among the room's lock waiters, until it goes out.
+    #[test]
+    fn the_acquires_held_back_are_told_by_room() {
+        let mut locks = RoomLocks::default();
+        locks.hold(room_id());
+        locks.admit(acquire(0));
+        let held_back = locks.held_back();
+        locks.admit(release(1));
+        locks.answered(release(1).id, &HoldOutcome::Released.into());
+        assert_eq!(
+            (held_back, locks.held_back()),
+            (vec![(room_id(), 1)], vec![])
         );
     }
 
