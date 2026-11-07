@@ -1326,19 +1326,20 @@ fn is_labelled(message: &(String, String), label: &str, text: &str) -> bool {
 /// Alice.
 fn goes_on(request: &Value) -> bool {
     let sent = sent(request);
-    // The lookup's call and result, at 5 and 6, are read whole below.
-    let [system, alice, first, bob, looking, _, _, second, again] = sent.as_slice() else {
+    // The lookup's round, at 4 and 5, is read whole below: the text the model
+    // wrote with its call and the call, one message as the turn sent it.
+    let [system, alice, first, bob, looking, _, second, again] = sent.as_slice() else {
         return false;
     };
     let answered = |message: &(String, String), reply: &str| {
         message == &("assistant".to_owned(), reply.to_owned())
     };
     let all = messages(request);
-    let replays_the_lookup = all.get(5).is_some_and(|call| {
+    let replays_the_lookup = all.get(4).is_some_and(|call| {
         call["role"] == "assistant"
-            && call["content"].is_null()
+            && call["content"] == LOOKING_UP
             && call.pointer("/tool_calls/0/id") == Some(&json!(LOOKUP_CALL))
-    }) && all.get(6).is_some_and(|result| {
+    }) && all.get(5).is_some_and(|result| {
         result["role"] == "tool"
             && result["tool_call_id"] == LOOKUP_CALL
             && result["content"] == ORDER_42
