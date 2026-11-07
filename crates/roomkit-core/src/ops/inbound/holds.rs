@@ -124,6 +124,7 @@ impl Machine {
             || self.trigger.handed.is_some()
             || self.trigger.releasing_hand.is_some()
             || self.trigger.result.cancellation_reason.is_some()
+            || self.cascade.is_cut(Lineage::Call)
             || self.stores_at_its_end
         {
             return;
