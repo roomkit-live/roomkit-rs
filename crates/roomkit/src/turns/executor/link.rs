@@ -46,6 +46,10 @@ struct Sent {
     open: Vec<(u64, String)>,
     /// The fixed arguments sent for each open call's start, by its frame.
     fixed: HashMap<u64, Metadata>,
+    /// The open calls whose end crossed as `tool_ended` before their end
+    /// item, by their start's frame: it crosses once, as Python's
+    /// `_ends_sent`.
+    told: HashSet<u64>,
     /// The text deltas kept for the burst, in order.
     burst: Vec<String>,
 }
@@ -128,6 +132,9 @@ impl FrameSender {
         }
         self.send_burst(&mut sent)?;
         let start = take_open(&mut sent, &end.tool_id);
+        if let Some(start) = start {
+            sent.told.remove(&start);
+        }
         let item = encode_end_item(end, start);
         self.turn.frames.put(&Frame::Item { item })?;
         Ok(())
@@ -147,6 +154,10 @@ impl FrameSender {
         let Some(start) = take_open(&mut sent, &end.tool_id) else {
             return;
         };
+        // Its end crossed already, told before its end item.
+        if sent.told.remove(&start) {
+            return;
+        }
         let frame = Frame::ToolEnded {
             start,
             end: encode_end(end),
@@ -176,6 +187,9 @@ impl FrameSender {
             return;
         }
         for (start, end) in starts {
+            if !sent.told.insert(start) {
+                continue;
+            }
             let frame = Frame::ToolEnded {
                 start,
                 end: encode_end(end.clone()),
