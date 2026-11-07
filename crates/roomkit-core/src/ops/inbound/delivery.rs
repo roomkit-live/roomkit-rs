@@ -557,10 +557,10 @@ impl DeliverySet {
     /// status for a room gone; a read that failed is logged at ERROR and
     /// recorded as the set's error, and no agent runs, as Python's lane
     /// logs and records a plan that raised (`_refuse_closed_rerun`,
-    /// `_execute`). Either way nobody was
-    /// asked, nor left unasked: the set stores no record nor observation
-    /// of an agent the depth limit stops, as Python's refused rerun returns
-    /// an empty result and its failed one none.
+    /// `_execute`). Either way nobody was asked, nor left unasked: the set
+    /// stores no record nor observation of an agent the depth limit stops,
+    /// as Python's refused rerun returns an empty result and its failed one
+    /// none.
     fn on_checked(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<SetOutcome> {
         self.place = Place::Turn;
         let status = match outcome.into_context() {
