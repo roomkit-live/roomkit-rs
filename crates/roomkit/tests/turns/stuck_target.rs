@@ -1101,13 +1101,15 @@ mod a_read_in_flight {
     }
 }
 
-/// A target that, past the end of its first stream, flushes, then calls back
-/// into its kit and fails as the kit refuses the call.
+/// A target that, past the end of its first stream, flushes for its `flush`,
+/// then calls back into its kit and fails as the kit refuses the call.
 struct RefusedPastTheEnd {
     kit: Arc<std::sync::OnceLock<RoomKit>>,
     first: AtomicBool,
     told: Arc<Notify>,
     refused: Arc<Mutex<Option<String>>>,
+    /// How long it flushes first.
+    flush: Duration,
 }
 
 impl Channel for RefusedPastTheEnd {
@@ -1129,7 +1131,7 @@ impl Channel for RefusedPastTheEnd {
         if !first {
             return Ok(ChannelOutput::empty());
         }
-        tokio::time::sleep(FLUSH).await;
+        tokio::time::sleep(self.flush).await;
         let kit = self.kit.get().unwrap().clone();
         let late = CreateRoomOptions {
             room_id: Some(RoomId::new("late").unwrap()),
@@ -1221,37 +1223,45 @@ async fn room_binding(kit: &RoomKit, ids: &[&str]) -> RoomId {
 // refused, is no failure ON_ERROR reports, as Python's `ended_by_close`.
 #[tokio::test(start_paused = true)]
 async fn a_target_the_close_refuses_past_its_cut_fires_no_on_error() {
-    let kit = RoomKit::new(RoomKitOptions::default());
-    let held = Arc::new(std::sync::OnceLock::new());
-    held.set(kit.clone()).unwrap();
-    let (told, refused) = (Arc::new(Notify::new()), Arc::new(Mutex::new(None)));
-    kit.register_channel(RefusedPastTheEnd {
-        kit: held,
-        first: AtomicBool::new(true),
-        told: Arc::clone(&told),
-        refused: Arc::clone(&refused),
-    })
-    .unwrap();
-    let running = waiting_agent(&kit);
-    let errors = errors_of(&kit);
-    let a = room_binding(&kit, &["ws", "ai"]).await;
-    let sender = kit.clone();
-    let first =
-        tokio::spawn(async move { sender.process_inbound(message("one"), options(&a)).await });
-    timeout(LONG, told.notified()).await.unwrap();
-    timeout(LONG, running.notified()).await.unwrap();
+    for flush in [Duration::ZERO, FLUSH] {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let held = Arc::new(std::sync::OnceLock::new());
+        held.set(kit.clone()).unwrap();
+        let (told, refused) = (Arc::new(Notify::new()), Arc::new(Mutex::new(None)));
+        kit.register_channel(RefusedPastTheEnd {
+            kit: held,
+            first: AtomicBool::new(true),
+            told: Arc::clone(&told),
+            refused: Arc::clone(&refused),
+            flush,
+        })
+        .unwrap();
+        let running = waiting_agent(&kit);
+        let errors = errors_of(&kit);
+        let a = room_binding(&kit, &["ws", "ai"]).await;
+        let sender = kit.clone();
+        let first =
+            tokio::spawn(async move { sender.process_inbound(message("one"), options(&a)).await });
+        timeout(LONG, told.notified()).await.unwrap();
+        timeout(LONG, running.notified()).await.unwrap();
 
-    kit.close().await.unwrap();
-    timeout(LONG, first).await.unwrap().unwrap().unwrap();
+        kit.close().await.unwrap();
+        timeout(LONG, first).await.unwrap().unwrap().unwrap();
 
-    assert_eq!(refused.lock().unwrap().as_deref(), Some("KitClosed"));
-    assert_eq!(errors.lock().unwrap().len(), 0);
+        assert_eq!(
+            refused.lock().unwrap().as_deref(),
+            Some("KitClosed"),
+            "{flush:?}"
+        );
+        assert_eq!(errors.lock().unwrap().len(), 0, "{flush:?}");
+    }
 }
 
 // RFC §12.2 step 13s, §23.3 (RMK-1330 review): the worker's response failed, its
 // shared target still working on the failed text's row when cancel_task cuts
-// the task: the cut wins, no ON_ERROR fires, as Python's.
-#[tokio::test(start_paused = true)]
+// the task: the cut wins, no ON_ERROR fires, as Python's; on several threads
+// too, where the cut task's operation may still take the read's answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_response_failed_before_a_task_s_cut_fires_no_on_error() {
     let kit = RoomKit::new(RoomKitOptions::default());
     let (told, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));

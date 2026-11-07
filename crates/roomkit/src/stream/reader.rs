@@ -958,9 +958,7 @@ impl Producer {
 
     /// Settles the response once its reader is done, read `read` returned
     /// with, unless a cut did already. Returns what answers the operation's
-    /// read: its `error` the response's failure, else the target's, which
-    /// the read reports itself when the held task it runs within was cut,
-    /// that task's work dropped before it takes the answer. The
+    /// read, its `error` as [`read_error`](Self::read_error) chooses it. The
     /// target, `handling` the response when it raises another error than
     /// the response's failure, has that error logged (Python's
     /// `_stream_to_target`): the turn's failure stays the response's.
@@ -982,6 +980,30 @@ impl Producer {
         } else {
             self.settle(target_error.is_some()).await
         };
+        let error = self
+            .read_error(inner, (failure, target_error), handling)
+            .await;
+        if error.is_some() || self.failing.task_cut() {
+            output.error = error;
+        }
+        output
+    }
+
+    /// The error the read answers with, of the response's `failure` and the
+    /// `target_error`: the response's failure, else the target's. A read of
+    /// a held task's work that was cut answers with none, the cut winning
+    /// over the response's failure, as Python's, and reports its target's
+    /// failure itself: the operation, cut, may never take the answer
+    /// (`tasks::cut`). A target's failure that is the kit's own close is no
+    /// error of the call's, nor `ON_ERROR`'s, as Python's `ended_by_close`
+    /// (RFC §12.10.4).
+    async fn read_error<S: ConversationStore>(
+        &self,
+        inner: &Arc<Inner<S>>,
+        (failure, target_error): (Option<ErrorRecord>, Option<ChannelError>),
+        handling: impl FnOnce() -> String,
+    ) -> Option<ErrorRecord> {
+        let task_cut = self.failing.task_cut();
         match (failure, target_error) {
             (Some(failure), target_error) => {
                 // Only a streaming target raises an error of its own:
@@ -992,17 +1014,15 @@ impl Producer {
                     let target_error = target_record(target_error);
                     failure_log::log_failure(Log::Framework, &target_error, &handling(), false);
                 }
-                output.error = Some(failure);
+                (!task_cut).then_some(failure)
             }
-            // The work of a held task that was cut is dropped before it
-            // takes this answer: the read reports its target's failure.
-            (None, Some(target_error)) if self.failing.task_cut() => {
+            (None, Some(target_error)) if task_cut || ended_by_close(inner, &target_error) => {
                 self.failing.report(inner, &target_error).await;
+                None
             }
-            (None, Some(target_error)) => output.error = Some(target_record(&target_error)),
-            (None, None) => {}
+            (None, Some(target_error)) => Some(target_record(&target_error)),
+            (None, None) => None,
         }
-        output
     }
 
     /// Stores what the response leaves: read through, it ended or failed;
