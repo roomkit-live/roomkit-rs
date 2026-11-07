@@ -554,9 +554,10 @@ impl DeliverySet {
     /// The room of a rerun's set, read once its turn came: a status that
     /// refuses new events, or a room gone, refuses it before any agent runs,
     /// `room_refused_event` naming the `regenerate` operation, with no
-    /// status for a room gone; a read that failed is recorded as the set's
-    /// error, and no agent runs, as Python's lane records a plan that
-    /// raised (`_refuse_closed_rerun`, `_execute`). Either way nobody was
+    /// status for a room gone; a read that failed is logged at ERROR and
+    /// recorded as the set's error, and no agent runs, as Python's lane
+    /// logs and records a plan that raised (`_refuse_closed_rerun`,
+    /// `_execute`). Either way nobody was
     /// asked, nor left unasked: the set stores no record nor observation
     /// of an agent the depth limit stops, as Python's refused rerun returns
     /// an empty result and its failed one none.
@@ -565,12 +566,15 @@ impl DeliverySet {
         let status = match outcome.into_context() {
             Ok(context) => context.map(|context| context.room.status),
             Err(error) => {
-                tracing::warn!(
-                    target: "roomkit::core::delivery",
+                // Python's lane logs the plan that raised, at ERROR (RFC
+                // §15.2, `lanes._execute`): a rerun's entry has no index.
+                tracing::error!(
+                    target: "roomkit::lanes",
                     room_id = %self.event.room_id,
                     error_type = %error.error_type,
-                    message = %error.message,
-                    "reading the room of a rerun once its turn came failed; no agent runs"
+                    error = %error.message,
+                    "Delivery execution failed for room {} index None",
+                    self.event.room_id
                 );
                 self.outcome.error.get_or_insert(error);
                 self.outcome.not_asked.clear();

@@ -10,6 +10,7 @@ use roomkit_core::model::{EventStatus, RoomStatus};
 use roomkit_core::ops::{FrameworkEvent, Inbound, Operation, RefusedOperation};
 
 use crate::support::{Sim, notice_event, room_id};
+use crate::warnings::Warnings;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -250,6 +251,42 @@ fn a_rerun_cut_before_its_set_is_planned_asks_no_agent() {
 
 fn regenerate(sim: &Sim) -> Inbound {
     Inbound::regenerate(sim.shared_config(), room_id(), None, 0)
+}
+
+// Python: tests/test_regenerate_off_lock.py::test_a_regeneration_whose_room_read_fails_in_the_lane_is_logged_at_error
+// (RMK-1513): the room's read failing when the lane takes the
+// regeneration, Python's lane logs the plan that raised once, at ERROR
+// with its traceback (core/lanes.py::_execute), and the failure is the
+// call's error.
+#[test]
+fn a_regeneration_whose_room_read_fails_in_the_lane_is_logged_at_error() {
+    let mut sim = room();
+    sim.failing_effect = Some("unlocked load_context room_1");
+    let operation = regenerate(&sim);
+    let (warnings, _capturing) = Warnings::capture();
+
+    let result = sim.run(operation).unwrap();
+
+    let lines: Vec<(String, bool)> = warnings
+        .containing("")
+        .into_iter()
+        .map(|line| {
+            let named = line.contains("Delivery execution failed for room room_1 index None");
+            (line.split(' ').next().unwrap_or_default().to_owned(), named)
+        })
+        .collect();
+    assert_eq!(
+        (
+            result.error.as_ref().map(|error| error.error_type.as_str()),
+            sim.traced("on_event"),
+            lines,
+        ),
+        (
+            Some("StoreUnavailable"),
+            Vec::<&str>::new(),
+            vec![("ERROR".to_owned(), true)]
+        )
+    );
 }
 
 // Python: tests/test_regenerate_off_lock.py::test_a_room_read_past_process_timeout_refuses_the_regeneration

@@ -22,3 +22,10 @@ mod rerun;
 mod routing;
 mod support;
 mod timeout;
+// The lines `tracing` emits, for a test that checks one is logged.
+#[expect(
+    clippy::disallowed_types,
+    reason = "the test binary's log capture, shared with roomkit's tests: no room lock"
+)]
+#[path = "../../../roomkit/tests/support/warnings.rs"]
+mod warnings;
