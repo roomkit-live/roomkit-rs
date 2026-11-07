@@ -556,7 +556,10 @@ impl DeliverySet {
     /// `room_refused_event` naming the `regenerate` operation, with no
     /// status for a room gone; a read that failed is recorded as the set's
     /// error, and no agent runs, as Python's lane records a plan that
-    /// raised (`_refuse_closed_rerun`, `_execute`).
+    /// raised (`_refuse_closed_rerun`, `_execute`). Either way nobody was
+    /// asked, nor left unasked: the set stores no record nor observation
+    /// of an agent the depth limit stops, as Python's refused rerun returns
+    /// an empty result and its failed one none.
     fn on_checked(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<SetOutcome> {
         self.place = Place::Turn;
         let status = match outcome.into_context() {
@@ -570,6 +573,7 @@ impl DeliverySet {
                     "reading the room of a rerun once its turn came failed; no agent runs"
                 );
                 self.outcome.error.get_or_insert(error);
+                self.outcome.not_asked.clear();
                 return self.progress(cx);
             }
         };
@@ -578,9 +582,6 @@ impl DeliverySet {
         }
         report::room_refused_as(cx, &self.event, RefusedOperation::Regenerate, status);
         self.outcome.refused = true;
-        // Nobody was asked, nor left unasked: Python's refused rerun returns
-        // an empty result, with no record nor observation of the depth
-        // limit (`_refuse_closed_rerun`).
         self.outcome.not_asked.clear();
         self.progress(cx)
     }
